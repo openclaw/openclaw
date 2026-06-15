@@ -7,7 +7,7 @@
  */
 
 import { Buffer } from "node:buffer";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type * as LanceDB from "@lancedb/lancedb";
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import {
@@ -70,6 +70,12 @@ type MemorySearchResult = {
 type AutoCaptureCursor = {
   nextIndex: number;
   lastMessageFingerprint?: string;
+};
+
+type AutoRecallScopeContext = {
+  agentId?: string;
+  sessionKey?: string;
+  sessionId?: string;
 };
 
 type OpenAiEmbeddingClient = {
@@ -212,6 +218,33 @@ const DEFAULT_TOOL_RECALL_OVERFETCH_EXTRA = 10;
 const DEFAULT_AUTO_RECALL_OVERFETCH_LIMIT = 10;
 const DEFAULT_AUTO_RECALL_RESULT_CAP = 3;
 const DUPLICATE_SEARCH_LIMIT = 5;
+
+function normalizeScopePart(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized || undefined;
+}
+
+function resolveAgentIdFromSessionKey(sessionKey: string | undefined): string | undefined {
+  const parts = sessionKey?.split(":") ?? [];
+  if (parts[0] !== "agent") {
+    return undefined;
+  }
+  return normalizeScopePart(parts[1]);
+}
+
+function resolveAutoRecallScopeKey(ctx: AutoRecallScopeContext): string | undefined {
+  const sessionKey = normalizeScopePart(ctx.sessionKey) ?? normalizeScopePart(ctx.sessionId);
+  const agentId = normalizeScopePart(ctx.agentId) ?? resolveAgentIdFromSessionKey(sessionKey);
+  if (!agentId || !sessionKey) {
+    return undefined;
+  }
+  return `${agentId}\0${sessionKey}`;
+}
+
+function buildScopedAutoRecallDbPath(basePath: string, scopeKey: string): string {
+  const digest = createHash("sha256").update(scopeKey).digest("hex").slice(0, 24);
+  return `${basePath.replace(/[\\/]+$/u, "")}/auto-recall/${digest}`;
+}
 
 function parsePositiveIntegerOption(value: string | undefined, flag: string): number | undefined {
   if (value === undefined) {
@@ -1443,9 +1476,27 @@ export default definePluginEntry({
 
     const vectorDim = dimensions ?? vectorDimsForModel(model);
     const db = new MemoryDB(resolvedDbPath, vectorDim, cfg.storageOptions);
+    const scopedAutoRecallDbs = new Map<string, MemoryDB>();
     const embeddings = createEmbeddings(api, cfg);
     const autoCaptureCursors = new Map<string, AutoCaptureCursor>();
     let memoryRecallCooldown: { until: number; error: string } | undefined;
+    const resolveScopedAutoRecallDb = (ctx: AutoRecallScopeContext): MemoryDB | undefined => {
+      const scopeKey = resolveAutoRecallScopeKey(ctx);
+      if (!scopeKey) {
+        return undefined;
+      }
+      const existing = scopedAutoRecallDbs.get(scopeKey);
+      if (existing) {
+        return existing;
+      }
+      const scopedDb = new MemoryDB(
+        buildScopedAutoRecallDbPath(resolvedDbPath, scopeKey),
+        vectorDim,
+        cfg.storageOptions,
+      );
+      scopedAutoRecallDbs.set(scopeKey, scopedDb);
+      return scopedDb;
+    };
     const resolveCurrentHookConfig = () => {
       const runtimePluginConfig = resolveLivePluginConfigObject(
         api.runtime.config?.current
@@ -1880,13 +1931,17 @@ export default definePluginEntry({
     // Lifecycle Hooks
     // ========================================================================
 
-    // Auto-recall: inject relevant memories as plugin system context during prompt build
-    api.on("before_prompt_build", async (event) => {
+    // Auto-recall: inject relevant session-scoped memories during prompt build
+    api.on("before_prompt_build", async (event, ctx) => {
       const currentCfg = resolveCurrentHookConfig();
       if (!currentCfg.autoRecall) {
         return undefined;
       }
       if (!event.prompt || event.prompt.length < 5) {
+        return undefined;
+      }
+      const autoRecallDb = resolveScopedAutoRecallDb(ctx);
+      if (!autoRecallDb) {
         return undefined;
       }
 
@@ -1904,7 +1959,7 @@ export default definePluginEntry({
             });
             // Overfetch to compensate for sludge filtering: if contaminated
             // entries occupy the top slots we still surface enough clean ones.
-            return await db.search(vector, DEFAULT_AUTO_RECALL_OVERFETCH_LIMIT, 0.3);
+            return await autoRecallDb.search(vector, DEFAULT_AUTO_RECALL_OVERFETCH_LIMIT, 0.3);
           },
         });
         if (recall.status === "timeout") {
@@ -1931,7 +1986,7 @@ export default definePluginEntry({
         }
 
         return {
-          prependSystemContext: context,
+          prependContext: context,
         };
       } catch (err) {
         api.logger.warn(`memory-lancedb: recall failed: ${String(err)}`);
@@ -1946,6 +2001,10 @@ export default definePluginEntry({
         return;
       }
       if (!event.success || !event.messages || event.messages.length === 0) {
+        return;
+      }
+      const autoRecallDb = resolveScopedAutoRecallDb(ctx);
+      if (!autoRecallDb) {
         return;
       }
 
@@ -1982,12 +2041,12 @@ export default definePluginEntry({
               const category = detectCategory(sanitized);
               const vector = await embeddings.embed(sanitized);
 
-              const existing = await findCleanDuplicateMemory(db, vector);
+              const existing = await findCleanDuplicateMemory(autoRecallDb, vector);
               if (existing) {
                 continue;
               }
 
-              await db.store({
+              await autoRecallDb.store({
                 text: sanitized,
                 vector,
                 importance: 0.7,
