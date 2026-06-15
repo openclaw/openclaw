@@ -442,6 +442,82 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
     expect(fs.existsSync(authPath)).toBe(true);
     expect(fs.existsSync(`${authPath}.sqlite-import.464.bak`)).toBe(false);
   });
+
+  it("imports default-agent config auth profiles into sqlite when no legacy files exist", async () => {
+    const state = await makeTestState();
+    const cfg = {
+      auth: {
+        profiles: {
+          "openai:default": {
+            provider: "openai",
+            mode: "api_key",
+            key: "sk-config",
+          },
+          "anthropic:default": {
+            provider: "anthropic",
+            mode: "token",
+            token: {
+              source: "env",
+              provider: "default",
+              id: "ANTHROPIC_TOKEN",
+            },
+          },
+          "router:default": {
+            provider: "router",
+            mode: "api_key",
+            displayName: "routing only",
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await maybeMigrateAuthProfileJsonStoresToSqlite({
+      cfg,
+      prompter: makePrompter(true),
+      now: () => 465,
+    });
+
+    const authPath = `${state.agentDir()}/auth-profiles.json`;
+    expect(result.detected).toEqual([authPath]);
+    expect(result.configChanged).toBe(true);
+    expect(result.warnings).toStrictEqual([]);
+    expect(cfg.auth?.profiles?.["openai:default"]).toEqual({
+      provider: "openai",
+      mode: "api_key",
+    });
+    expect(cfg.auth?.profiles?.["anthropic:default"]).toEqual({
+      provider: "anthropic",
+      mode: "token",
+    });
+    expect(cfg.auth?.profiles?.["router:default"]).toEqual({
+      provider: "router",
+      mode: "api_key",
+      displayName: "routing only",
+    });
+    expect(loadPersistedAuthProfileStore(state.agentDir())).toMatchObject({
+      profiles: {
+        "openai:default": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-config",
+        },
+        "anthropic:default": {
+          type: "token",
+          provider: "anthropic",
+          tokenRef: {
+            source: "env",
+            provider: "default",
+            id: "ANTHROPIC_TOKEN",
+          },
+        },
+      },
+    });
+    expect(
+      loadPersistedAuthProfileStore(state.agentDir())?.profiles["router:default"],
+    ).toBeUndefined();
+    expect(fs.existsSync(authPath)).toBe(false);
+    expect(fs.existsSync(`${authPath}.sqlite-import.465.bak`)).toBe(false);
+  });
 });
 
 describe("maybeRepairLegacyFlatAuthProfileStores", () => {
