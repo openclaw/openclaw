@@ -378,6 +378,7 @@ export function buildAuthHealthSummary(params: {
     let hasExpired = false;
     let hasMissing = false;
     let hasExpiring = false;
+    let hasHealthyOAuth = false;
     let earliestExpiry: number | undefined;
     for (const profile of effectiveProfiles) {
       if (profile.type === "api_key") {
@@ -400,6 +401,8 @@ export function buildAuthHealthSummary(params: {
         hasMissing = true;
       } else if (profile.status === "expiring") {
         hasExpiring = true;
+      } else if (profile.type === "oauth" && profile.status === "ok") {
+        hasHealthyOAuth = true;
       }
     }
 
@@ -413,7 +416,18 @@ export function buildAuthHealthSummary(params: {
       provider.remainingMs = provider.expiresAt - now;
     }
 
-    if (hasExpired) {
+    // When effective profiles include both expired inventory (e.g. a stale
+    // token credential) and a healthy OAuth profile that is currently used
+    // at runtime, prefer the healthy status over the expired one.  The
+    // aggregated provider status drives the Control UI badge; marking the
+    // provider as expired when a usable credential exists is misleading.
+    if (hasHealthyOAuth) {
+      if (hasExpiring) {
+        provider.status = "expiring";
+      } else {
+        provider.status = "ok";
+      }
+    } else if (hasExpired) {
       provider.status = "expired";
     } else if (hasMissing) {
       provider.status = "missing";

@@ -239,8 +239,14 @@ export function aggregateOAuthStatus(
   const statuses = new Set<AuthProfileHealthStatus>(oauth.map((p) => p.status));
   // Priority: expired/missing > expiring > ok > static. Exhaustive — if a
   // new AuthProfileHealthStatus variant is added, the `never` check fires.
+  // When expired profiles coexist with healthy ones (e.g. stale token
+  // alongside a refreshed OAuth), prefer the healthy status so the
+  // Control UI badge does not falsely report expired.
   let status: AuthProviderHealthStatus;
-  if (statuses.has("expired")) {
+  const hasHealthy = oauth.some((p) => p.status === "ok" || p.status === "expiring");
+  if (hasHealthy) {
+    status = oauth.some((p) => p.status === "expiring") ? "expiring" : "ok";
+  } else if (statuses.has("expired")) {
     status = "expired";
   } else if (statuses.has("missing")) {
     status = "missing";
