@@ -1258,9 +1258,11 @@ async function runEmbeddedAgentInternal(
           provider,
           requestedModel: requestedModelId,
           resolvedModel: modelId,
-          tokenBudget: settingsParams.tokenBudget,
+          selectedContextEngineId: contextEngine.info.id,
+          contextEngineSelectionSource:
+            contextEngine.info.id === "legacy" ? "default" : "configured",
+          promptTokenBudget: settingsParams.tokenBudget,
           maxOutputTokens: settingsParams.maxOutputTokens,
-          fallbackActive: modelId !== requestedModelId || Boolean(fallbackReason),
           fallbackReason,
           degradedReason: settingsParams.degradedReason,
         });

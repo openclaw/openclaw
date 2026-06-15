@@ -35,9 +35,9 @@ type HarnessRuntimeSettingsParams = {
   modelFamily?: string | null;
   tokenBudget?: number | null;
   maxOutputTokens?: number | null;
-  fallbackActive?: boolean;
   fallbackReason?: string | null;
   degradedReason?: string | null;
+  contextEngine?: HarnessContextEngine;
 };
 
 function buildHarnessContextEngineRuntimeSettings(
@@ -45,23 +45,28 @@ function buildHarnessContextEngineRuntimeSettings(
 ): ContextEngineRuntimeSettings {
   return (
     params.runtimeSettings ??
-    buildContextEngineRuntimeSettings({
-      contextEngineHost: params.contextEngineHostSupport ?? OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
-      harnessId: params.harnessId,
-      runtimeId: params.runtimeId,
-      provider: params.providerId,
-      requestedModel: params.requestedModelId,
-      resolvedModel: params.modelId ?? params.requestedModelId,
-      // model.family is a real family value when the caller supplies one; it is
-      // never derived from the model id, which would put a concrete id in a
-      // field named "family". Defaults to null until a family value exists.
-      modelFamily: params.modelFamily ?? null,
-      tokenBudget: params.tokenBudget,
-      maxOutputTokens: params.maxOutputTokens,
-      fallbackActive: params.fallbackActive,
-      fallbackReason: params.fallbackReason,
-      degradedReason: params.degradedReason,
-    })
+    (() => {
+      const selectedId = params.contextEngine?.info.id;
+      return buildContextEngineRuntimeSettings({
+        contextEngineHost: params.contextEngineHostSupport ?? OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
+        harnessId: params.harnessId,
+        runtimeId: params.runtimeId,
+        provider: params.providerId,
+        requestedModel: params.requestedModelId,
+        resolvedModel: params.modelId ?? params.requestedModelId,
+        // model.family is a real family value when the caller supplies one; it is
+        // never derived from the model id, which would put a concrete id in a
+        // field named "family". Defaults to null until a family value exists.
+        modelFamily: params.modelFamily ?? null,
+        selectedContextEngineId: selectedId,
+        contextEngineSelectionSource:
+          selectedId === "legacy" ? "default" : selectedId ? "configured" : "unknown",
+        promptTokenBudget: params.tokenBudget,
+        maxOutputTokens: params.maxOutputTokens,
+        fallbackReason: params.fallbackReason,
+        degradedReason: params.degradedReason,
+      });
+    })()
   );
 }
 
@@ -84,7 +89,6 @@ export async function bootstrapHarnessContextEngine(params: {
   requestedModelId?: string | null;
   modelId?: string | null;
   maxOutputTokens?: number | null;
-  fallbackActive?: boolean;
   fallbackReason?: string | null;
   degradedReason?: string | null;
   runMaintenance?: typeof runHarnessContextEngineMaintenance;
@@ -144,7 +148,6 @@ export async function assembleHarnessContextEngine(params: {
   requestedModelId?: string | null;
   modelFamily?: string | null;
   maxOutputTokens?: number | null;
-  fallbackActive?: boolean;
   fallbackReason?: string | null;
   degradedReason?: string | null;
 }) {
@@ -225,7 +228,6 @@ export async function finalizeHarnessContextEngineTurn(params: {
   requestedModelId?: string | null;
   modelId?: string | null;
   maxOutputTokens?: number | null;
-  fallbackActive?: boolean;
   fallbackReason?: string | null;
   degradedReason?: string | null;
   runMaintenance?: typeof runHarnessContextEngineMaintenance;
@@ -374,7 +376,6 @@ export async function runHarnessContextEngineMaintenance(params: {
   modelId?: string | null;
   tokenBudget?: number | null;
   maxOutputTokens?: number | null;
-  fallbackActive?: boolean;
   fallbackReason?: string | null;
   degradedReason?: string | null;
   executionMode?: "foreground" | "background";

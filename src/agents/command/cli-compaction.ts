@@ -294,7 +294,9 @@ async function compactCliTranscript(params: {
     provider: params.provider,
     requestedModel: params.model,
     resolvedModel: params.model,
-    tokenBudget: params.contextTokenBudget,
+    selectedContextEngineId: params.contextEngine.info.id,
+    contextEngineSelectionSource: "configured",
+    promptTokenBudget: params.contextTokenBudget,
   });
 
   let compactResult: Awaited<ReturnType<typeof params.contextEngine.compact>>;

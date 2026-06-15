@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "./host-compat.js";
 import { buildContextEngineRuntimeSettings } from "./runtime-settings.js";
-import {
-  ContextEngineRuntimeSettingsUnavailableError,
-  ContextEngineRuntimeSettingsUnsupportedError,
-} from "./types.js";
 
 describe("context engine runtime settings", () => {
   it("builds declared normal runtime settings from host and model inputs", () => {
@@ -15,7 +11,9 @@ describe("context engine runtime settings", () => {
       provider: "openai",
       requestedModel: "gpt-5.5",
       resolvedModel: "gpt-5.5",
-      tokenBudget: 128_000,
+      selectedContextEngineId: "hypermem",
+      contextEngineSelectionSource: "configured",
+      promptTokenBudget: 128_000,
       maxOutputTokens: 8192,
     });
 
@@ -31,21 +29,23 @@ describe("context engine runtime settings", () => {
         requested: "gpt-5.5",
         resolved: "gpt-5.5",
         provider: "openai",
-        fallbackActive: false,
+      },
+      contextEngineSelection: {
+        selectedId: "hypermem",
+        source: "configured",
+      },
+      executionHost: {
+        id: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST.id,
+        label: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST.label,
       },
       limits: {
-        tokenBudget: 128_000,
+        promptTokenBudget: 128_000,
         maxOutputTokens: 8192,
       },
       diagnostics: {
         fallbackReason: null,
         degradedReason: null,
       },
-    });
-    expect(settings.contextEngine).toEqual({
-      hostId: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST.id,
-      hostLabel: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST.label,
-      capabilities: [...OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST.capabilities],
     });
   });
 
@@ -57,21 +57,29 @@ describe("context engine runtime settings", () => {
     });
 
     expect(settings.runtime.mode).toBe("fallback");
-    expect(settings.model.fallbackActive).toBe(true);
-    expect(settings.diagnostics.fallbackReason).toBe("primary_unavailable");
+    expect(settings.diagnostics.fallbackReason).toBe("provider_unavailable");
   });
 
-  it("keeps fallbackReason and fallbackActive internally consistent", () => {
+  it("preserves known fallback reason codes", () => {
     const settings = buildContextEngineRuntimeSettings({
       contextEngineHost: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
       resolvedModel: "gpt-5-mini",
-      fallbackActive: false,
-      fallbackReason: "primary_unavailable",
+      fallbackReason: "provider_timeout",
     });
 
     expect(settings.runtime.mode).toBe("fallback");
-    expect(settings.model.fallbackActive).toBe(true);
-    expect(settings.diagnostics.fallbackReason).toBe("primary_unavailable");
+    expect(settings.diagnostics.fallbackReason).toBe("provider_timeout");
+  });
+
+  it("marks fallback mode when resolved model differs from the requested model", () => {
+    const settings = buildContextEngineRuntimeSettings({
+      contextEngineHost: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
+      requestedModel: "openai/gpt-5.5",
+      resolvedModel: "anthropic/claude-sonnet-4-6",
+    });
+
+    expect(settings.runtime.mode).toBe("fallback");
+    expect(settings.diagnostics.fallbackReason).toBeNull();
   });
 
   it("marks degraded mode when a degraded reason is present", () => {
@@ -82,28 +90,21 @@ describe("context engine runtime settings", () => {
     });
 
     expect(settings.runtime.mode).toBe("degraded");
-    expect(settings.diagnostics.degradedReason).toBe("context_pressure_high");
+    expect(settings.diagnostics.degradedReason).toBe("context_overflow");
   });
 
-  it("fails closed when host support is missing a host id", () => {
-    expect(() =>
-      buildContextEngineRuntimeSettings({
-        contextEngineHost: {
-          ...OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
-          id: "",
-        },
-      }),
-    ).toThrow(ContextEngineRuntimeSettingsUnavailableError);
-  });
+  it("keeps host and selection ids nullable when unknown", () => {
+    const settings = buildContextEngineRuntimeSettings({
+      contextEngineHost: {
+        ...OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
+        id: "",
+      },
+    });
 
-  it("fails closed when host capabilities are not an array", () => {
-    expect(() =>
-      buildContextEngineRuntimeSettings({
-        contextEngineHost: {
-          ...OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
-          capabilities: "assemble-before-prompt" as never,
-        },
-      }),
-    ).toThrow(ContextEngineRuntimeSettingsUnsupportedError);
+    expect(settings.contextEngineSelection).toEqual({
+      selectedId: null,
+      source: "unknown",
+    });
+    expect(settings.executionHost.id).toBeNull();
   });
 });

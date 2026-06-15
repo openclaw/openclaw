@@ -227,19 +227,22 @@ Optional members:
 ### Runtime settings
 
 Lifecycle hooks that run inside OpenClaw receive an optional
-`runtimeSettings` object. It is a versioned, read-only snapshot of host and
-model facts for the current operation:
+`runtimeSettings` object. It is a versioned, read-only internal
+producer/consumer API surface: OpenClaw produces it for the selected context
+engine, and the context engine consumes it inside lifecycle hooks. It is not
+rendered directly to users and does not create a dedicated reporting surface.
 
 - `schemaVersion`: currently `1`
 - `runtime`: OpenClaw host, runtime mode (`normal`, `fallback`, or
   `degraded`), and optional harness/runtime ids
-- `model`: requested model, resolved model, provider, optional model family,
-  and whether fallback is active
-- `contextEngine`: host id, label, and supported capabilities
-- `limits`: token budget and max output tokens when known
-- `diagnostics`: fallback and degraded reasons when known
+- `contextEngineSelection`: selected context engine id and selection source
+- `executionHost`: host id and label for the surface invoking the hook
+- `model`: requested model, resolved model, provider, and optional model family
+- `limits`: prompt token budget and max output tokens when known
+- `diagnostics`: closed fallback and degraded reason codes when known
 
-Treat every field other than `schemaVersion` as nullable. Older engines remain
+Fields that can be unknown are represented as `null`; discriminator fields such
+as runtime mode and selection source remain non-nullable. Older engines remain
 compatible: if a strict legacy engine rejects `runtimeSettings` as an unknown
 property, OpenClaw retries the lifecycle call without it instead of quarantining
 the engine.

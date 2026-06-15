@@ -200,11 +200,14 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
           provider: "claude-cli",
           requested: null,
           resolved: "sonnet-4.6",
-          fallbackActive: false,
         },
-        contextEngine: {
-          hostId: "cli:claude-cli",
-          hostLabel: 'CLI backend "claude-cli"',
+        contextEngineSelection: {
+          selectedId: expect.any(String),
+          source: "configured",
+        },
+        executionHost: {
+          id: "cli:claude-cli",
+          label: 'CLI backend "claude-cli"',
         },
       },
     });

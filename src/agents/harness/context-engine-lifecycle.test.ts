@@ -113,13 +113,16 @@ describe("harness context engine lifecycle", () => {
       model: {
         resolved: "gpt-5.5",
         provider: "openai",
-        fallbackActive: false,
       },
-      contextEngine: {
-        hostId: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST.id,
+      contextEngineSelection: {
+        selectedId: expect.any(String),
+        source: "configured",
+      },
+      executionHost: {
+        id: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST.id,
       },
       limits: {
-        tokenBudget: 4096,
+        promptTokenBudget: 4096,
       },
     });
   });
@@ -213,7 +216,9 @@ describe("harness context engine lifecycle", () => {
       provider: "openai",
       requestedModel: "openai/gpt-5.5",
       resolvedModel: "anthropic/claude-sonnet-4-6",
-      tokenBudget: 2048,
+      selectedContextEngineId: engineId,
+      contextEngineSelectionSource: "configured",
+      promptTokenBudget: 2048,
       fallbackReason: "primary_provider_5xx",
     });
     await compactContextEngineWithSafetyTimeout(
@@ -240,10 +245,13 @@ describe("harness context engine lifecycle", () => {
           resolved: "anthropic/claude-sonnet-4-6",
           provider: "openai",
           family: null,
-          fallbackActive: true,
+        },
+        contextEngineSelection: {
+          selectedId: engineId,
+          source: "configured",
         },
         diagnostics: {
-          fallbackReason: "primary_provider_5xx",
+          fallbackReason: "provider_unavailable",
         },
       });
     }

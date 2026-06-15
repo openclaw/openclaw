@@ -301,7 +301,9 @@ export async function compactEmbeddedAgentSession(
     provider: ceProvider,
     requestedModel: params.model,
     resolvedModel: ceModelId,
-    tokenBudget: contextTokenBudget,
+    selectedContextEngineId: contextEngine.info.id,
+    contextEngineSelectionSource: contextEngine.info.id === "legacy" ? "default" : "configured",
+    promptTokenBudget: contextTokenBudget,
   });
   const contextEngineOwnsCompaction = contextEngine.info.ownsCompaction === true;
   const harnessResult =

@@ -2237,7 +2237,6 @@ export async function runEmbeddedAttempt(
           providerId: params.provider,
           requestedModelId: params.requestedModelId,
           modelId: params.modelId,
-          fallbackActive: params.fallbackActive,
           fallbackReason: params.fallbackReason,
           degradedReason: params.degradedReason,
           runMaintenance: async (contextParams) =>
@@ -3302,7 +3301,6 @@ export async function runEmbeddedAttempt(
               contextEngineHostSupport: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
               providerId: params.provider,
               requestedModelId: params.requestedModelId,
-              fallbackActive: params.fallbackActive,
               fallbackReason: params.fallbackReason,
               degradedReason: params.degradedReason,
               ...(params.prompt !== undefined ? { prompt: params.prompt } : {}),
@@ -5096,7 +5094,6 @@ export async function runEmbeddedAttempt(
             providerId: params.provider,
             requestedModelId: params.requestedModelId,
             modelId: params.modelId,
-            fallbackActive: params.fallbackActive,
             fallbackReason: params.fallbackReason,
             degradedReason: params.degradedReason,
             runMaintenance: async (contextParams) =>

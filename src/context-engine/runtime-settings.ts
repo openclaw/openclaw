@@ -1,12 +1,22 @@
 import type { ContextEngineHostSupport } from "./host-compat.js";
 import {
-  ContextEngineRuntimeSettingsUnavailableError,
-  ContextEngineRuntimeSettingsUnsupportedError,
+  type ContextEngineRuntimeReasonCode,
+  type ContextEngineSelectionSource,
   type ContextEngineRuntimeMode,
   type ContextEngineRuntimeSettings,
 } from "./types.js";
 
 type OptionalString = string | null | undefined;
+type OptionalReason = ContextEngineRuntimeReasonCode | string | null | undefined;
+
+const RUNTIME_REASON_CODES = new Set<ContextEngineRuntimeReasonCode>([
+  "provider_timeout",
+  "provider_unavailable",
+  "rate_limited",
+  "context_overflow",
+  "runtime_unavailable",
+  "unknown",
+]);
 
 function normalizeNullableString(value: OptionalString): string | null {
   if (typeof value !== "string") {
@@ -20,6 +30,34 @@ function normalizeNullableNumber(value: number | null | undefined): number | nul
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+function normalizeReasonCode(value: OptionalReason): ContextEngineRuntimeReasonCode | null {
+  const normalized = normalizeNullableString(value);
+  if (!normalized) {
+    return null;
+  }
+  if (RUNTIME_REASON_CODES.has(normalized as ContextEngineRuntimeReasonCode)) {
+    return normalized as ContextEngineRuntimeReasonCode;
+  }
+
+  const lower = normalized.toLowerCase();
+  if (lower.includes("timeout")) {
+    return "provider_timeout";
+  }
+  if (lower.includes("rate") || lower.includes("limit") || lower.includes("429")) {
+    return "rate_limited";
+  }
+  if (lower.includes("overflow") || lower.includes("context") || lower.includes("pressure")) {
+    return "context_overflow";
+  }
+  if (lower.includes("runtime")) {
+    return "runtime_unavailable";
+  }
+  if (lower.includes("provider") || lower.includes("primary") || lower.includes("unavailable")) {
+    return "provider_unavailable";
+  }
+  return "unknown";
+}
+
 export function buildContextEngineRuntimeSettings(params: {
   mode?: ContextEngineRuntimeMode;
   harnessId?: OptionalString;
@@ -28,30 +66,28 @@ export function buildContextEngineRuntimeSettings(params: {
   resolvedModel?: OptionalString;
   provider?: OptionalString;
   modelFamily?: OptionalString;
-  fallbackActive?: boolean;
-  fallbackReason?: OptionalString;
-  degradedReason?: OptionalString;
-  tokenBudget?: number | null;
+  selectedContextEngineId?: OptionalString;
+  contextEngineSelectionSource?: ContextEngineSelectionSource;
+  fallbackReason?: OptionalReason;
+  degradedReason?: OptionalReason;
+  promptTokenBudget?: number | null;
   maxOutputTokens?: number | null;
   contextEngineHost: ContextEngineHostSupport;
 }): ContextEngineRuntimeSettings {
   const hostId = normalizeNullableString(params.contextEngineHost.id);
-  if (!hostId) {
-    throw new ContextEngineRuntimeSettingsUnavailableError(
-      "Context-engine runtime settings require a host id.",
-    );
-  }
-  if (!Array.isArray(params.contextEngineHost.capabilities)) {
-    throw new ContextEngineRuntimeSettingsUnsupportedError(
-      "Context-engine runtime settings require host capabilities.",
-    );
-  }
+  const selectedId = normalizeNullableString(params.selectedContextEngineId);
+  const selectionSource =
+    params.contextEngineSelectionSource ?? (selectedId ? "configured" : "unknown");
 
-  const fallbackReason = normalizeNullableString(params.fallbackReason);
-  const degradedReason = normalizeNullableString(params.degradedReason);
-  const fallbackActive = Boolean(fallbackReason) || params.fallbackActive === true;
+  const requestedModel = normalizeNullableString(params.requestedModel);
+  const resolvedModel = normalizeNullableString(params.resolvedModel);
+  const fallbackReason = normalizeReasonCode(params.fallbackReason);
+  const degradedReason = normalizeReasonCode(params.degradedReason);
+  const resolvedViaFallback =
+    requestedModel !== null && resolvedModel !== null && requestedModel !== resolvedModel;
   const mode =
-    params.mode ?? (degradedReason ? "degraded" : fallbackActive ? "fallback" : "normal");
+    params.mode ??
+    (degradedReason ? "degraded" : fallbackReason || resolvedViaFallback ? "fallback" : "normal");
 
   return {
     schemaVersion: 1,
@@ -62,19 +98,21 @@ export function buildContextEngineRuntimeSettings(params: {
       runtimeId: normalizeNullableString(params.runtimeId),
     },
     model: {
-      requested: normalizeNullableString(params.requestedModel),
-      resolved: normalizeNullableString(params.resolvedModel),
+      requested: requestedModel,
+      resolved: resolvedModel,
       provider: normalizeNullableString(params.provider),
       family: normalizeNullableString(params.modelFamily),
-      fallbackActive,
     },
-    contextEngine: {
-      hostId,
-      hostLabel: normalizeNullableString(params.contextEngineHost.label),
-      capabilities: [...params.contextEngineHost.capabilities],
+    contextEngineSelection: {
+      selectedId,
+      source: selectionSource,
+    },
+    executionHost: {
+      id: hostId,
+      label: normalizeNullableString(params.contextEngineHost.label),
     },
     limits: {
-      tokenBudget: normalizeNullableNumber(params.tokenBudget),
+      promptTokenBudget: normalizeNullableNumber(params.promptTokenBudget),
       maxOutputTokens: normalizeNullableNumber(params.maxOutputTokens),
     },
     diagnostics: {

@@ -49,6 +49,16 @@ export type ContextEngineOperation = "agent-run" | "manual-compact" | "subagent-
 
 export type ContextEngineRuntimeMode = "normal" | "fallback" | "degraded";
 
+export type ContextEngineSelectionSource = "configured" | "default" | "unknown";
+
+export type ContextEngineRuntimeReasonCode =
+  | "provider_timeout"
+  | "provider_unavailable"
+  | "rate_limited"
+  | "context_overflow"
+  | "runtime_unavailable"
+  | "unknown";
+
 export type ContextEngineHostCapability =
   | "bootstrap"
   | "assemble-before-prompt"
@@ -78,20 +88,22 @@ export type ContextEngineRuntimeSettings = {
     resolved: string | null;
     provider: string | null;
     family: string | null;
-    fallbackActive: boolean;
   };
-  contextEngine: {
-    hostId: string;
-    hostLabel: string | null;
-    capabilities: ContextEngineHostCapability[];
+  contextEngineSelection: {
+    selectedId: string | null;
+    source: ContextEngineSelectionSource;
+  };
+  executionHost: {
+    id: string | null;
+    label: string | null;
   };
   limits: {
-    tokenBudget: number | null;
+    promptTokenBudget: number | null;
     maxOutputTokens: number | null;
   };
   diagnostics: {
-    fallbackReason: string | null;
-    degradedReason: string | null;
+    fallbackReason: ContextEngineRuntimeReasonCode | null;
+    degradedReason: ContextEngineRuntimeReasonCode | null;
   };
 };
 
