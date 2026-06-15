@@ -531,34 +531,59 @@ describe("plugins cli update", () => {
     expect(writeConfigFile).not.toHaveBeenCalled();
   });
 
-  it("blocks possible ClawHub id migration before updater side effects", async () => {
-    const cfg = {
-      plugins: {
-        entries: {
-          "voice-call": { enabled: true },
-        },
-      },
-    } as OpenClawConfig;
-    primeBlockedUpdateConfig("plugins", cfg);
-    setInstalledPluginIndexInstallRecords({
-      "voice-call": {
+  it.each([
+    {
+      label: "ClawHub",
+      record: {
         source: "clawhub",
         spec: "clawhub:@openclaw/voice-call",
         clawhubPackage: "@openclaw/voice-call",
         installPath: "/tmp/voice-call",
       },
-    });
+    },
+    {
+      label: "git",
+      record: {
+        source: "git",
+        spec: "https://github.com/openclaw/voice-call.git",
+        installPath: "/tmp/voice-call",
+      },
+    },
+    {
+      label: "marketplace",
+      record: {
+        source: "marketplace",
+        marketplaceSource: "acme",
+        marketplacePlugin: "voice-call",
+        installPath: "/tmp/voice-call",
+      },
+    },
+  ] as const)(
+    "blocks possible $label id migration before updater side effects",
+    async ({ record }) => {
+      const cfg = {
+        plugins: {
+          entries: {
+            "voice-call": { enabled: true },
+          },
+        },
+      } as OpenClawConfig;
+      primeBlockedUpdateConfig("plugins", cfg);
+      setInstalledPluginIndexInstallRecords({
+        "voice-call": record,
+      });
 
-    await expect(runPluginsCommand(["plugins", "update", "voice-call"])).rejects.toThrow(
-      "__exit__:1",
-    );
+      await expect(runPluginsCommand(["plugins", "update", "voice-call"])).rejects.toThrow(
+        "__exit__:1",
+      );
 
-    expect(runtimeErrors.at(-1)).toContain(
-      "Config plugins are stored in an external or unresolved top-level $include",
-    );
-    expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
-    expect(writeConfigFile).not.toHaveBeenCalled();
-  });
+      expect(runtimeErrors.at(-1)).toContain(
+        "Config plugins are stored in an external or unresolved top-level $include",
+      );
+      expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
+      expect(writeConfigFile).not.toHaveBeenCalled();
+    },
+  );
 
   it("blocks possible legacy id migration when an included plugins section is unresolved", async () => {
     const externalPath = path.join(

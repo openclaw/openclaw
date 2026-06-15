@@ -148,13 +148,10 @@ export function pluginInstallRecordMayMigrateConfigId(params: {
   if (!isPluginInstallRecordUpdateSource(params.record)) {
     return false;
   }
-  if (params.record?.source === "clawhub") {
-    // ClawHub npm-pack archives can resolve an unscoped tracked key to a
-    // scoped package id; the exact archive identity is unavailable preflight.
-    return !params.pluginId.includes("/");
-  }
   if (params.record?.source !== "npm") {
-    return false;
+    // Generic package/archive installers can resolve an unscoped tracked key
+    // to a scoped package id; the exact package identity is unavailable preflight.
+    return !params.pluginId.includes("/");
   }
   const packageName =
     resolveNpmSpecPackageName(params.specOverride ?? params.record.spec) ??
