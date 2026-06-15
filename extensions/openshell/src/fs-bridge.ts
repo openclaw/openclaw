@@ -140,11 +140,8 @@ class OpenShellFsBridge implements SandboxFsBridge {
       recursive: params.recursive ?? false,
       force: params.force !== false,
     });
-    await this.backend.runRemoteShellScript({
-      script: params.recursive
-        ? 'rm -rf -- "$1"'
-        : 'if [ -d "$1" ] && [ ! -L "$1" ]; then rmdir -- "$1"; elif [ -e "$1" ] || [ -L "$1" ]; then rm -f -- "$1"; fi',
-      args: [target.containerPath],
+    await this.backend.removeRemotePath(target.containerPath, {
+      recursive: params.recursive ?? false,
       signal: params.signal,
       allowFailure: params.force !== false,
     });

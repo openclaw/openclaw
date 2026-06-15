@@ -91,6 +91,12 @@ export const PINNED_REMOTE_PATH_MUTATION_SCRIPT = [
   '    target="$parent/$4"',
   '    if [ -d "$target" ] && [ ! -L "$target" ]; then rm -rf -- "$target"; elif [ -e "$target" ] || [ -L "$target" ]; then rm -f -- "$target"; fi',
   "    ;;",
+  "  removefile)",
+  '    parent="$(pin_dir "$2" "$3" 0)"',
+  '    validate_basename "$4"',
+  '    target="$parent/$4"',
+  '    if [ -d "$target" ] && [ ! -L "$target" ]; then rmdir -- "$target"; elif [ -e "$target" ] || [ -L "$target" ]; then rm -f -- "$target"; fi',
+  "    ;;",
   "  rename)",
   '    src_parent="$(pin_dir "$2" "$3" 0)"',
   '    validate_basename "$4"',
@@ -251,6 +257,8 @@ async function createOpenShellSandboxBackend(params: {
     remoteAgentWorkspaceDir: params.pluginConfig.remoteAgentWorkspaceDir,
     runRemoteShellScript: async (command) => await impl.runRemoteShellScript(command),
     mkdirpRemotePath: async (remotePath, signal) => await impl.mkdirpRemotePath(remotePath, signal),
+    removeRemotePath: async (remotePath, removeParams) =>
+      await impl.removeRemotePath(remotePath, removeParams),
     renameRemotePath: async (fromRemotePath, toRemotePath, signal) =>
       await impl.renameRemotePath(fromRemotePath, toRemotePath, signal),
     syncLocalPathToRemote: async (localPath, remotePath) =>
@@ -309,6 +317,8 @@ class OpenShellSandboxBackendImpl {
       runRemoteShellScript: async (command) => await this.runRemoteShellScript(command),
       mkdirpRemotePath: async (remotePath, signal) =>
         await this.mkdirpRemotePath(remotePath, signal),
+      removeRemotePath: async (remotePath, removeParams) =>
+        await this.removeRemotePath(remotePath, removeParams),
       renameRemotePath: async (fromRemotePath, toRemotePath, signal) =>
         await this.renameRemotePath(fromRemotePath, toRemotePath, signal),
       syncLocalPathToRemote: async (localPath, remotePath) =>
@@ -382,6 +392,29 @@ class OpenShellSandboxBackendImpl {
     await this.runPinnedRemotePathMutation({
       args: ["mkdirp", target.root, target.relativePath],
       signal,
+    });
+  }
+
+  async removeRemotePath(
+    remotePath: string,
+    params?: {
+      recursive?: boolean;
+      signal?: AbortSignal;
+      allowFailure?: boolean;
+    },
+  ): Promise<void> {
+    const target = this.resolveRemoteTarget(remotePath);
+    await this.runPinnedRemotePathMutation({
+      args: [
+        params?.recursive ? "remove" : "removefile",
+        target.root,
+        path.posix.dirname(target.relativePath) === "."
+          ? ""
+          : path.posix.dirname(target.relativePath),
+        path.posix.basename(target.relativePath),
+      ],
+      signal: params?.signal,
+      allowFailure: params?.allowFailure,
     });
   }
 

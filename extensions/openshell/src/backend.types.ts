@@ -9,6 +9,14 @@ export type OpenShellSandboxBackend = SandboxBackendHandle &
   RemoteShellSandboxHandle & {
     mode: "mirror" | "remote";
     mkdirpRemotePath(remotePath: string, signal?: AbortSignal): Promise<void>;
+    removeRemotePath(
+      remotePath: string,
+      params?: {
+        recursive?: boolean;
+        signal?: AbortSignal;
+        allowFailure?: boolean;
+      },
+    ): Promise<void>;
     renameRemotePath(
       fromRemotePath: string,
       toRemotePath: string,

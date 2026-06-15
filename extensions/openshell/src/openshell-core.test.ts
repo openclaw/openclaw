@@ -532,6 +532,7 @@ function createMirrorBackendMock(): OpenShellSandboxBackend {
     }),
     mkdirpRemotePath: vi.fn().mockResolvedValue(undefined),
     renameRemotePath: vi.fn().mockResolvedValue(undefined),
+    removeRemotePath: vi.fn().mockResolvedValue(undefined),
     syncLocalPathToRemote: vi.fn().mockResolvedValue(undefined),
   } as unknown as OpenShellSandboxBackend;
 }
@@ -575,6 +576,15 @@ describe("openshell fs bridges", () => {
         "payload",
       );
       await expectPathMissing(path.join(outsideDir, "escaped.txt"));
+
+      await fs.writeFile(path.join(remoteRoot, "victim.txt"), "delete me", "utf8");
+      expect(runPinnedMutation(["removefile", remoteRoot, "alias", "victim.txt"]).status).not.toBe(
+        0,
+      );
+      await expect(fs.readFile(path.join(remoteRoot, "victim.txt"), "utf8")).resolves.toBe(
+        "delete me",
+      );
+      await expectPathMissing(path.join(outsideDir, "victim.txt"));
     },
   );
 
@@ -651,6 +661,32 @@ describe("openshell fs bridges", () => {
       "/sandbox/nested/target.txt",
       undefined,
     );
+    expect(backend["runRemoteShellScript"]).not.toHaveBeenCalled();
+  });
+
+  it("removes remote mirror paths through the pinned backend operation", async () => {
+    const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
+    await fs.writeFile(path.join(workspaceDir, "target.txt"), "payload", "utf8");
+    const backend = createMirrorBackendMock();
+    const sandbox = createSandboxTestContext({
+      overrides: {
+        backendId: "openshell",
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        containerWorkdir: "/sandbox",
+      },
+    });
+
+    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
+    const bridge = createOpenShellFsBridge({ sandbox, backend });
+    await bridge.remove({ filePath: "target.txt", force: true });
+
+    await expectPathMissing(path.join(workspaceDir, "target.txt"));
+    expect(backend["removeRemotePath"]).toHaveBeenCalledWith("/sandbox/target.txt", {
+      recursive: false,
+      signal: undefined,
+      allowFailure: true,
+    });
     expect(backend["runRemoteShellScript"]).not.toHaveBeenCalled();
   });
 
