@@ -70,6 +70,7 @@ installModelsConfigTestHooks();
 
 let clearConfigCache: typeof import("../config/io.js").clearConfigCache;
 let clearRuntimeConfigSnapshot: typeof import("../config/io.js").clearRuntimeConfigSnapshot;
+let buildModelsJsonSourceFingerprint: typeof import("./models-config.js").buildModelsJsonSourceFingerprint;
 let ensureOpenClawModelsJson: typeof import("./models-config.js").ensureOpenClawModelsJson;
 let resetModelsJsonReadyCacheForTest: typeof import("./models-config.js").resetModelsJsonReadyCacheForTest;
 
@@ -100,8 +101,11 @@ function writeAuthProfiles(agentDir: string, profiles: unknown): void {
 beforeAll(async () => {
   await fixtureSuite.setup();
   ({ clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/io.js"));
-  ({ ensureOpenClawModelsJson, resetModelsJsonReadyCacheForTest } =
-    await import("./models-config.js"));
+  ({
+    buildModelsJsonSourceFingerprint,
+    ensureOpenClawModelsJson,
+    resetModelsJsonReadyCacheForTest,
+  } = await import("./models-config.js"));
 });
 
 afterEach(() => {
@@ -391,6 +395,11 @@ describe("ensureOpenClawModelsJson fingerprint cache", () => {
     await fs.rm(`${authDbPath}-wal`, { force: true });
     await fs.rm(`${authDbPath}-shm`, { force: true });
 
+    await expect(buildModelsJsonSourceFingerprint(cfg, agentDir)).resolves.toEqual({
+      agentDir,
+      cacheable: false,
+    });
+
     // First corrupt read: cache miss → re-plan.
     await ensureOpenClawModelsJson(cfg, agentDir);
     expect(resolveImplicitProvidersCallCount).toBe(2);
@@ -469,6 +478,11 @@ describe("ensureOpenClawModelsJson fingerprint cache", () => {
     } finally {
       rawDb.close();
     }
+
+    await expect(buildModelsJsonSourceFingerprint(cfg, agentDir)).resolves.toEqual({
+      agentDir,
+      cacheable: false,
+    });
 
     // The malformed cell reads `unreadable` → `uncacheable`: every call
     // re-plans.  Under the buggy code this would read `absent` and stay a hit

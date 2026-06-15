@@ -248,12 +248,14 @@ describe("loadModelCatalog", () => {
     }));
     prepareOpenClawModelsJsonSourceMock = vi.fn().mockResolvedValue({
       agentDir: "/tmp/openclaw",
+      cacheable: true,
       fingerprint: "source-fingerprint",
       workspaceDir: "/tmp/openclaw-workspace",
       wrote: false,
     });
     buildModelsJsonSourceFingerprintMock = vi.fn().mockResolvedValue({
       agentDir: "/tmp/openclaw",
+      cacheable: true,
       fingerprint: "source-fingerprint",
       workspaceDir: "/tmp/openclaw-workspace",
     });
@@ -336,6 +338,7 @@ describe("loadModelCatalog", () => {
     prepareOpenClawModelsJsonSourceMock.mockReset();
     prepareOpenClawModelsJsonSourceMock.mockResolvedValue({
       agentDir: "/tmp/openclaw",
+      cacheable: true,
       fingerprint: "source-fingerprint",
       workspaceDir: "/tmp/openclaw-workspace",
       wrote: false,
@@ -348,6 +351,7 @@ describe("loadModelCatalog", () => {
     buildModelsJsonSourceFingerprintMock.mockClear();
     buildModelsJsonSourceFingerprintMock.mockResolvedValue({
       agentDir: "/tmp/openclaw",
+      cacheable: true,
       fingerprint: "source-fingerprint",
       workspaceDir: "/tmp/openclaw-workspace",
     });
@@ -496,6 +500,31 @@ describe("loadModelCatalog", () => {
     });
   });
 
+  it("skips persisted state catalog read and write when the source fingerprint is uncacheable", async () => {
+    buildModelsJsonSourceFingerprintMock.mockResolvedValue({
+      agentDir: "/tmp/openclaw",
+      cacheable: false,
+      workspaceDir: "/tmp/openclaw-workspace",
+    });
+    prepareOpenClawModelsJsonSourceMock.mockResolvedValue({
+      agentDir: "/tmp/openclaw",
+      cacheable: false,
+      workspaceDir: "/tmp/openclaw-workspace",
+      wrote: false,
+    });
+    readCachedAgentModelCatalogMock.mockReturnValue([
+      { id: "cached-stale", name: "Cached Stale", provider: "openai" },
+    ]);
+    mockAgentDiscoveryModels([{ id: "runtime-fast", name: "Runtime Fast", provider: "openai" }]);
+
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig });
+
+    expect(result).toEqual([{ id: "runtime-fast", name: "Runtime Fast", provider: "openai" }]);
+    expect(readCachedAgentModelCatalogMock).not.toHaveBeenCalled();
+    expect(writeCachedAgentModelCatalogMock).not.toHaveBeenCalled();
+    expect(buildAgentModelCatalogCacheKeyMock).not.toHaveBeenCalled();
+  });
+
   it("preserves runtime model params in the internal catalog", async () => {
     mockAgentDiscoveryModels([
       {
@@ -521,11 +550,13 @@ describe("loadModelCatalog", () => {
   it("writes runtime discovery results under the refreshed models.json fingerprint", async () => {
     buildModelsJsonSourceFingerprintMock.mockResolvedValue({
       agentDir: "/tmp/openclaw",
+      cacheable: true,
       fingerprint: "pre-refresh-source",
       workspaceDir: "/tmp/openclaw-workspace",
     });
     prepareOpenClawModelsJsonSourceMock.mockResolvedValue({
       agentDir: "/tmp/openclaw",
+      cacheable: true,
       fingerprint: "post-refresh-source",
       workspaceDir: "/tmp/openclaw-workspace",
       wrote: true,
@@ -554,11 +585,13 @@ describe("loadModelCatalog", () => {
     const cached = [{ id: "cached-fast", name: "Cached Fast", provider: "openai" }];
     buildModelsJsonSourceFingerprintMock.mockResolvedValue({
       agentDir: "/tmp/openclaw",
+      cacheable: true,
       fingerprint: "pre-refresh-source",
       workspaceDir: "/tmp/openclaw-workspace",
     });
     prepareOpenClawModelsJsonSourceMock.mockResolvedValue({
       agentDir: "/tmp/openclaw",
+      cacheable: true,
       fingerprint: "post-refresh-source",
       workspaceDir: "/tmp/openclaw-workspace",
       wrote: true,
@@ -592,11 +625,13 @@ describe("loadModelCatalog", () => {
     buildModelsJsonSourceFingerprintMock
       .mockResolvedValueOnce({
         agentDir: "/tmp/openclaw",
+        cacheable: true,
         fingerprint: "old-source",
         workspaceDir: "/tmp/openclaw-workspace",
       })
       .mockResolvedValueOnce({
         agentDir: "/tmp/openclaw",
+        cacheable: true,
         fingerprint: "new-source",
         workspaceDir: "/tmp/openclaw-workspace",
       });

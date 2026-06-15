@@ -1818,6 +1818,19 @@ export async function ensureOpenClawModelsJson(
 // and list.provider-catalog.ts.  The refactored internals inlined these into
 // ensureOpenClawModelsJson; we re-expose them here so callers that only need
 // the fingerprint (for cache keying) don't have to trigger a full write.
+export type ModelsJsonSourceFingerprint =
+  | { agentDir: string; cacheable: true; fingerprint: string; workspaceDir?: string }
+  | { agentDir: string; cacheable: false; workspaceDir?: string };
+
+export type PreparedOpenClawModelsJsonSource =
+  | {
+      agentDir: string;
+      cacheable: true;
+      fingerprint: string;
+      workspaceDir?: string;
+      wrote: boolean;
+    }
+  | { agentDir: string; cacheable: false; workspaceDir?: string; wrote: boolean };
 
 export async function buildModelsJsonSourceFingerprint(
   config?: OpenClawConfig,
@@ -1829,7 +1842,7 @@ export async function buildModelsJsonSourceFingerprint(
     providerDiscoveryTimeoutMs?: number;
     providerDiscoveryEntriesOnly?: boolean;
   } = {},
-): Promise<{ agentDir: string; fingerprint: string; workspaceDir?: string }> {
+): Promise<ModelsJsonSourceFingerprint> {
   const resolved = resolveModelsConfigInput(config);
   const cfg = resolved.config;
   const workspaceDir =
@@ -1849,12 +1862,12 @@ export async function buildModelsJsonSourceFingerprint(
   const agentDir = agentDirOverride?.trim() ? agentDirOverride.trim() : resolveDefaultAgentDir(cfg);
   const authProfilesOutcome = readAuthProfilesStableOutcome(agentDir);
   if (authProfilesOutcome.kind === "uncacheable") {
-    // Uncacheable auth state means no stable fingerprint is possible; return a
-    // unique-per-dir sentinel so callers treat this as a cache miss rather than
-    // a hit or an error.
+    // Uncacheable auth state means no stable fingerprint is possible.  Report
+    // that explicitly so persisted catalog-cache consumers skip read/write
+    // instead of keying stale rows under a stable sentinel for this agent dir.
     return {
       agentDir,
-      fingerprint: `uncacheable:${agentDir}`,
+      cacheable: false,
       ...(workspaceDir ? { workspaceDir } : {}),
     };
   }
@@ -1875,20 +1888,28 @@ export async function buildModelsJsonSourceFingerprint(
       ? { providerDiscoveryEntriesOnly: true }
       : {}),
   });
-  return { agentDir, fingerprint, ...(workspaceDir ? { workspaceDir } : {}) };
+  return { agentDir, cacheable: true, fingerprint, ...(workspaceDir ? { workspaceDir } : {}) };
 }
 
 export async function prepareOpenClawModelsJsonSource(
   config?: OpenClawConfig,
   agentDirOverride?: string,
   options: EnsureOpenClawModelsJsonOptions = {},
-): Promise<{ agentDir: string; fingerprint: string; workspaceDir?: string; wrote: boolean }> {
+): Promise<PreparedOpenClawModelsJsonSource> {
   const [sourceInfo, result] = await Promise.all([
     buildModelsJsonSourceFingerprint(config, agentDirOverride, options),
     ensureOpenClawModelsJson(config, agentDirOverride, options),
   ]);
+  if (!sourceInfo.cacheable) {
+    return {
+      ...result,
+      cacheable: false,
+      ...(sourceInfo.workspaceDir ? { workspaceDir: sourceInfo.workspaceDir } : {}),
+    };
+  }
   return {
     ...result,
+    cacheable: true,
     fingerprint: sourceInfo.fingerprint,
     ...(sourceInfo.workspaceDir ? { workspaceDir: sourceInfo.workspaceDir } : {}),
   };

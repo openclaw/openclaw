@@ -598,14 +598,16 @@ export async function loadModelCatalog(params?: {
         pluginMetadataSnapshot: params?.metadataSnapshot,
         workspaceDir,
       });
-      let catalogKey = buildLoadModelCatalogStateCacheKey({
-        agentDir,
-        config: cfg,
-        metadataSnapshot: params?.metadataSnapshot,
-        sourceFingerprint: sourceFingerprint.fingerprint,
-        workspaceDir,
-      });
-      if (!readOnly && params?.useCache !== false) {
+      let catalogKey = sourceFingerprint.cacheable
+        ? buildLoadModelCatalogStateCacheKey({
+            agentDir,
+            config: cfg,
+            metadataSnapshot: params?.metadataSnapshot,
+            sourceFingerprint: sourceFingerprint.fingerprint,
+            workspaceDir,
+          })
+        : undefined;
+      if (!readOnly && params?.useCache !== false && catalogKey) {
         const cached = readCachedAgentModelCatalog({ agentDir, catalogKey }) as
           | ModelCatalogEntry[]
           | undefined;
@@ -619,15 +621,17 @@ export async function loadModelCatalog(params?: {
           pluginMetadataSnapshot: params?.metadataSnapshot,
           workspaceDir,
         });
-        const preparedCatalogKey = buildLoadModelCatalogStateCacheKey({
-          agentDir,
-          config: cfg,
-          metadataSnapshot: params?.metadataSnapshot,
-          sourceFingerprint: preparedSource.fingerprint,
-          workspaceDir: preparedSource.workspaceDir ?? workspaceDir,
-        });
         logStage("models-json-ready");
-        if (preparedCatalogKey !== catalogKey) {
+        const preparedCatalogKey = preparedSource.cacheable
+          ? buildLoadModelCatalogStateCacheKey({
+              agentDir,
+              config: cfg,
+              metadataSnapshot: params?.metadataSnapshot,
+              sourceFingerprint: preparedSource.fingerprint,
+              workspaceDir: preparedSource.workspaceDir ?? workspaceDir,
+            })
+          : undefined;
+        if (preparedCatalogKey && preparedCatalogKey !== catalogKey) {
           catalogKey = preparedCatalogKey;
           if (params?.useCache !== false) {
             const cached = readCachedAgentModelCatalog({ agentDir, catalogKey }) as
@@ -780,7 +784,7 @@ export async function loadModelCatalog(params?: {
       }
 
       const sorted = sortModels(models);
-      if (!readOnly) {
+      if (!readOnly && catalogKey) {
         writeCachedAgentModelCatalog({
           agentDir,
           catalogKey,
