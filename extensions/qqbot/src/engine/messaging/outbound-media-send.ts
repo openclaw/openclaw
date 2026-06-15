@@ -483,7 +483,7 @@ export async function sendVoice(
   directUploadFormats?: string[],
   transcodeEnabled = true,
 ): Promise<OutboundResult> {
-  let stagedHostReadVoice: string | null = null;
+  let stagedHostReadVoice: string | null;
   try {
     stagedHostReadVoice = await stageHostReadVoice(ctx, voicePath);
   } catch (err) {
