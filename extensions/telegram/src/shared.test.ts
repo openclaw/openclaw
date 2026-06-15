@@ -28,6 +28,13 @@ function resolveAccount(cfg: OpenClawConfig, accountId: string): ResolvedTelegra
   return telegramPluginBase.config.resolveAccount(cfg, accountId);
 }
 
+describe("createTelegramPluginBase capabilities", () => {
+  it("advertises the preview-streaming session override so /stream is supported", () => {
+    // Gates handleStreamCommand: without this flag /stream silently replies "unsupported".
+    expect(telegramPluginBase.capabilities?.previewStreamingSessionOverride).toBe(true);
+  });
+});
+
 describe("createTelegramPluginBase config duplicate token guard", () => {
   it("wires the top-level models menu adapter into the production plugin", () => {
     const channelData = telegramPluginBase.commands?.buildModelsMenuChannelData?.({

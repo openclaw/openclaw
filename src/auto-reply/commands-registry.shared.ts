@@ -905,6 +905,24 @@ export function buildBuiltinChatCommands(
       argsMenu: "auto",
     }),
     defineChatCommand({
+      key: "stream",
+      nativeName: "stream",
+      nativeAliases: ["streaming"],
+      description: "Set chat streaming mode.",
+      textAliases: ["/stream", "/streaming"],
+      category: "options",
+      tier: "standard",
+      args: [
+        {
+          name: "mode",
+          description: "Streaming mode",
+          type: "string",
+          choices: ["status", "off", "partial", "block", "progress", "default"],
+        },
+      ],
+      argsMenu: "auto",
+    }),
+    defineChatCommand({
       key: "reasoning",
       nativeName: "reasoning",
       description: "Toggle reasoning visibility.",

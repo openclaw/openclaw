@@ -129,6 +129,7 @@ export function createDiscordPluginBase(params: {
         },
       },
       nativeCommands: true,
+      previewStreamingSessionOverride: true,
     },
     commands: {
       nativeCommandsAutoEnabled: true,
