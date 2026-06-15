@@ -10,6 +10,7 @@ import {
   isDangerousHostEnvVarName,
   normalizeEnvVarKey,
 } from "./host-env-security.js";
+import { tryProcessCwd } from "./safe-cwd.js";
 
 const logger = createSubsystemLogger("infra:dotenv");
 
@@ -297,8 +298,10 @@ export { loadGlobalRuntimeDotEnvFiles };
 
 export function loadDotEnv(opts?: { quiet?: boolean }) {
   const quiet = opts?.quiet ?? true;
-  const cwdEnvPath = path.join(process.cwd(), ".env");
-  loadWorkspaceDotEnvFile(cwdEnvPath, { quiet });
+  const cwd = tryProcessCwd();
+  if (cwd) {
+    loadWorkspaceDotEnvFile(path.join(cwd, ".env"), { quiet });
+  }
 
   // Then load global fallback: ~/.openclaw/.env (or OPENCLAW_STATE_DIR/.env),
   // without overriding any env vars already present.

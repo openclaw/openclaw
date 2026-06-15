@@ -11,6 +11,7 @@ import { isMainModule } from "../infra/is-main.js";
 import type { ProxyHandle } from "../infra/net/proxy/proxy-lifecycle.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
+import { tryProcessCwd } from "../infra/safe-cwd.js";
 import type { PluginManifestCommandAliasRegistry } from "../plugins/manifest-command-aliases.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import { normalizeGeneratedHelpCommandArgv, normalizeRootHelpTargetArgv } from "./argv.js";
@@ -296,7 +297,8 @@ export function resolveMissingPluginCommandMessage(
 }
 
 function shouldLoadCliDotEnv(env: NodeJS.ProcessEnv = process.env): boolean {
-  if (existsSync(path.join(process.cwd(), ".env"))) {
+  const cwd = tryProcessCwd();
+  if (cwd && existsSync(path.join(cwd, ".env"))) {
     return true;
   }
   return existsSync(path.join(resolveStateDir(env), ".env"));
