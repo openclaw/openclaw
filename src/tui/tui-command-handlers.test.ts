@@ -175,7 +175,7 @@ function createHarness(params?: {
     refreshAgents: vi.fn(),
     abortActive,
     setActivityStatus,
-    formatSessionKey: (key) => key,
+    formatSessionKey: vi.fn(),
     applySessionInfoFromPatch: applySessionInfoFromPatch as never,
     applySessionMutationResult: applySessionMutationResult as never,
     noteLocalRunId,
@@ -1153,21 +1153,6 @@ describe("tui command handlers", () => {
     expect(addUser).not.toHaveBeenCalled();
   });
 
-  it("sends slash stop to the backend when there is no tracked run", async () => {
-    const abortActive = vi.fn().mockResolvedValue(undefined);
-    const { handleCommand, sendChat, addPendingUser } = createHarness({ abortActive });
-
-    await handleCommand("/stop");
-
-    expect(abortActive).not.toHaveBeenCalled();
-    expect(sendChat).toHaveBeenCalledTimes(1);
-    expectSendChatFields(sendChat, {
-      message: "/stop",
-      sessionKey: "agent:main:main",
-    });
-    expect(addPendingUser).toHaveBeenCalledWith(expect.any(String), "/stop");
-  });
-
   it("reports idle local slash stop without sending to the embedded model", async () => {
     const abortActive = vi.fn().mockResolvedValue(undefined);
     const { handleCommand, sendChat, addUser, addSystem } = createHarness({
@@ -1181,6 +1166,21 @@ describe("tui command handlers", () => {
     expect(sendChat).not.toHaveBeenCalled();
     expect(addUser).not.toHaveBeenCalled();
     expect(addSystem).toHaveBeenCalledWith("no active run to stop");
+  });
+
+  it("sends slash stop to the backend when there is no tracked run", async () => {
+    const abortActive = vi.fn().mockResolvedValue(undefined);
+    const { handleCommand, sendChat, addPendingUser } = createHarness({ abortActive });
+
+    await handleCommand("/stop");
+
+    expect(abortActive).not.toHaveBeenCalled();
+    expect(sendChat).toHaveBeenCalledTimes(1);
+    expectSendChatFields(sendChat, {
+      message: "/stop",
+      sessionKey: "agent:main:main",
+    });
+    expect(addPendingUser).toHaveBeenCalledWith(expect.any(String), "/stop");
   });
 
   it("sends broad stop-like text as a normal prompt when idle", async () => {
@@ -1347,6 +1347,68 @@ describe("tui command handlers", () => {
     expect(applySessionInfoFromPatch).toHaveBeenCalledWith({ model: "openrouter/auto" });
     expect(refreshSessionInfo).toHaveBeenCalledTimes(1);
     expect(closeOverlay).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows resolved canonical model ref after /model alias, not raw alias string", async () => {
+    // When the user types `/model gpt4` (a bare alias), the gateway resolves it
+    // server-side and returns the canonical ref in result.resolved. The TUI must
+    // display the canonical ref, not the raw alias, so the user knows which model
+    // was actually applied.
+    const patchSession = vi.fn().mockResolvedValue({
+      ok: true,
+      path: "/sessions/patch",
+      key: "agent:main:main",
+      entry: {},
+      resolved: { modelProvider: "openai", model: "gpt-5.5" },
+    });
+    const refreshSessionInfo = vi.fn().mockResolvedValue(undefined);
+    const applySessionInfoFromPatch = vi.fn();
+    const { handleCommand, addSystem } = createHarness({
+      patchSession,
+      refreshSessionInfo,
+      applySessionInfoFromPatch,
+    });
+
+    await handleCommand("/model gpt4");
+
+    expect(patchSession).toHaveBeenCalledWith(expect.objectContaining({ model: "gpt4" }));
+    // Should show the canonical resolved ref, not the raw alias "gpt4"
+    expect(addSystem).toHaveBeenCalledWith("model set to openai/gpt-5.5");
+  });
+
+  it("falls back to raw input in /model confirmation when resolved ref unavailable", async () => {
+    // Older gateway versions may not return resolved; fall back to raw arg.
+    const patchSession = vi.fn().mockResolvedValue({
+      ok: true,
+      path: "/sessions/patch",
+      key: "agent:main:main",
+      entry: {},
+      // No `resolved` field
+    });
+    const { handleCommand, addSystem } = createHarness({ patchSession });
+
+    await handleCommand("/model openai/gpt-5.5");
+
+    expect(addSystem).toHaveBeenCalledWith("model set to openai/gpt-5.5");
+  });
+  it("preserves provider prefix for nested model ids in /model confirmation", async () => {
+    // Some providers route to nested model ids that themselves contain a slash
+    // (e.g. resolved.model: "moonshotai/kimi-k2.5" with modelProvider: "nvidia").
+    // The confirmation must still show the full nvidia/moonshotai/kimi-k2.5 ref
+    // to match the footer/status bar, not strip the provider just because the
+    // model id already contains a slash.
+    const patchSession = vi.fn().mockResolvedValue({
+      ok: true,
+      path: "/sessions/patch",
+      key: "agent:main:main",
+      entry: {},
+      resolved: { modelProvider: "nvidia", model: "moonshotai/kimi-k2.5" },
+    });
+    const { handleCommand, addSystem } = createHarness({ patchSession });
+
+    await handleCommand("/model nvidia/moonshotai/kimi-k2.5");
+
+    expect(addSystem).toHaveBeenCalledWith("model set to nvidia/moonshotai/kimi-k2.5");
   });
 
   it("renders model listing feedback before the backend list resolves", async () => {

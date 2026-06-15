@@ -528,7 +528,14 @@ export function createCommandHandlers(context: CommandHandlerContext) {
               ...currentSessionPatchTarget(),
               model: args,
             });
-            chatLog.addSystem(`model set to ${args}`);
+            const resolvedModel = result.resolved?.model;
+            const resolvedProvider = result.resolved?.modelProvider;
+            const resolvedModelRef = resolvedModel
+              ? resolvedProvider
+                ? modelKey(resolvedProvider, resolvedModel)
+                : resolvedModel
+              : args;
+            chatLog.addSystem(`model set to ${resolvedModelRef}`);
             applySessionInfoFromPatch(result);
             await refreshSessionInfo();
           } catch (err) {
@@ -762,15 +769,15 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       case "side":
         await sendMessage(raw);
         break;
-      case "settings":
-        openSettings();
-        break;
       case "compact":
         if (opts.local === true) {
           renderUnsupportedLocalCommand(name);
           break;
         }
         await sendMessage(raw);
+        break;
+      case "settings":
+        openSettings();
         break;
       case "exit":
       case "quit":
