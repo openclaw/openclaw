@@ -60,6 +60,7 @@ import {
   parseThreadSessionSuffix,
 } from "../../routing/session-key.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
+import { extractInlineButtons } from "../../shared/text/extract-inline-buttons.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { listAllChannelSupportedActions, listChannelSupportedActions } from "../channel-tools.js";
@@ -1263,6 +1264,44 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       ]) {
         const suppressionReason = sanitizeStringParam(params, field, bootPromptForSession);
         suppressedVisiblePayloadReason ??= suppressionReason;
+
+        // Extract inline button JSON (e.g. [[{"text":"X","callback_data":"Y"}]])
+        // that some models emit as text instead of using the interactive blocks.
+        // Covers "message", "text", and "content" since models may use any of
+        // these field names for the outbound message body.
+        if (
+          (field === "message" || field === "text" || field === "content") &&
+          typeof params[field] === "string"
+        ) {
+          const fieldValue = params[field] as string;
+          const extracted = extractInlineButtons(fieldValue);
+          if (extracted.buttons.length > 0) {
+            params[field] = extracted.text;
+            const existingInteractive = params.interactive &&
+              typeof params.interactive === "object" && !Array.isArray(params.interactive)
+              ? (params.interactive as Record<string, unknown>)
+              : {};
+            const existingBlocks = Array.isArray(existingInteractive.blocks)
+              ? (existingInteractive.blocks as Array<Record<string, unknown>>)
+              : [];
+            // Each row in extracted.buttons maps to one interactive "buttons" block.
+            for (const row of extracted.buttons) {
+              const buttonBlock = {
+                type: "buttons",
+                buttons: row.map((btn) => ({
+                  label: btn.text,
+                  value: btn.callback_data,
+                  ...(btn.style ? { style: btn.style } : {}),
+                })),
+              };
+              existingBlocks.push(buttonBlock);
+            }
+            params.interactive = {
+              ...existingInteractive,
+              blocks: existingBlocks,
+            };
+          }
+        }
       }
       for (const field of ["pollQuestion", "poll_question"]) {
         const suppressionReason = sanitizeStringParam(params, field, bootPromptForSession);
