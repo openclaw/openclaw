@@ -41,8 +41,40 @@ const readSchema = Type.Object({
     Type.Number({ description: "Line number to start reading from (1-indexed)" }),
   ),
   limit: Type.Optional(Type.Number({ description: "Maximum number of lines to read" })),
+  encoding: Type.Optional(
+    Type.String({
+      description:
+        "File encoding (e.g. 'utf-8', 'gbk', 'gb2312', 'shift_jis'). Default: 'utf-8'. Use 'auto' to auto-detect.",
+    }),
+  ),
 });
 export type { ReadToolDetails, ReadToolInput } from "./tool-contracts.js";
+
+/**
+ * Decode a buffer using the specified encoding.
+ * Supports 'auto' to detect BOM or default to utf-8.
+ */
+function decodeBuffer(buffer: Buffer, encoding?: string): string {
+  if (!encoding || encoding === "utf-8" || encoding === "utf8") {
+    return buffer.toString("utf-8");
+  }
+  if (encoding === "auto") {
+    // Check for BOM
+    if (buffer[0] === 0xef && buffer[1] === 0xbb && buffer[2] === 0xbf) {
+      return buffer.toString("utf-8");
+    }
+    if (buffer[0] === 0xff && buffer[1] === 0xfe) {
+      return buffer.toString("utf-16le");
+    }
+    if (buffer[0] === 0xfe && buffer[1] === 0xff) {
+      return buffer.toString("utf-16be");
+    }
+    // Default to utf-8
+    return buffer.toString("utf-8");
+  }
+  // Use the specified encoding
+  return buffer.toString(encoding as BufferEncoding);
+}
 
 interface CompactReadClassification {
   kind: "docs" | "resource" | "skill";
@@ -344,8 +376,9 @@ export function createReadToolDefinition(
             } else {
               // Read text content.
               const buffer = await ops.readFile(absolutePath);
-              const textContent =
-                ops.decodeText?.({ buffer, absolutePath }) ?? buffer.toString("utf8");
+              const textContent = encoding
+                ? decodeBuffer(buffer, encoding)
+                : (ops.decodeText?.({ buffer, absolutePath }) ?? buffer.toString("utf8"));
               const allLines = textContent.split("\n");
               const totalFileLines = allLines.length;
               // Apply offset if specified. Convert from 1-indexed input to 0-indexed array access.
