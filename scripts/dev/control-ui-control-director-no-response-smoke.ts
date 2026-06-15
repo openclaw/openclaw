@@ -18,7 +18,7 @@ export const CONTROL_DIRECTOR_EXPECTED_VISIBLE_MARKERS = Object.freeze([
   "Next build gap",
   "Completion Grade:",
   "Criticality:",
-  "Status: blocked",
+  "Status: continuing",
 ]);
 export const CONTROL_DIRECTOR_NO_RESPONSE_PROOF_SCRIPT = "ui:smoke:control-director-no-response";
 export const MOBILE_WEB_VIEWPORT_PROOF_KIND = "mobile web viewport proof";
@@ -760,7 +760,7 @@ async function waitForVisibleBlockedResponse(page: Page): Promise<string> {
     await page.waitForTimeout(500);
   }
   throw new Error(
-    `Timed out waiting for Control Director visible blocked response. Last visible text: ${normalizeVisibleText(
+    `Timed out waiting for Control Director visible recovery response. Last visible text: ${normalizeVisibleText(
       lastVisibleText,
     )}`,
   );
@@ -943,8 +943,8 @@ async function runSmoke() {
     const summary: ControlDirectorNoResponseSmokeSummary = {
       ok: true,
       proofKind: mobileDecision.proofKind,
-      webVisibleStatus: "visible blocked status",
-      mobileVisibleStatus: "visible blocked status",
+      webVisibleStatus: "visible recovery status",
+      mobileVisibleStatus: "visible recovery status",
       livenessAuditPresent: diagnostics.livenessAuditPresent,
       missionLedgerPresent: diagnostics.missionLedgerPresent,
       unsupportedCompleteDelivered: false,

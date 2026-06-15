@@ -589,7 +589,7 @@ describe("Control Director contract", () => {
     expect(guarded).toEqual({ payloads, changed: false });
   });
 
-  it("turns empty Control Director output into a visible blocked continuation report", () => {
+  it("turns empty Control Director output into a visible continuing recovery report", () => {
     const guarded = applyControlDirectorLivenessWatchdog({
       agentId: "main",
       payloads: [],
@@ -614,8 +614,8 @@ describe("Control Director contract", () => {
     });
     const payload = guarded.payloads[0] as { text: string } | undefined;
     expect(payload?.text).toContain("Verified state:");
-    expect(payload?.text).toContain("Safe continuation queued: yes");
-    expect(payload?.text).toContain("Status: blocked");
+    expect(payload?.text).toContain("Recovery queued: yes");
+    expect(payload?.text).toContain("Status: continuing");
   });
 
   it("blocks Control Director continuation after the safe retry limit", () => {

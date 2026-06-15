@@ -28,6 +28,9 @@ const state = vi.hoisted(() => ({
   resolveEffectiveModelFallbacksMock: vi.fn().mockReturnValue(undefined),
   emitAgentEventMock: vi.fn(),
   enqueueSystemEventMock: vi.fn((..._args: unknown[]) => true),
+  enqueueSessionDeliveryMock: vi.fn(
+    async (..._args: unknown[]) => "control-director-recovery-queue-id",
+  ),
   requestHeartbeatMock: vi.fn(),
   registerAgentRunContextMock: vi.fn(),
   clearAgentRunContextMock: vi.fn(),
@@ -218,6 +221,10 @@ vi.mock("../infra/heartbeat-wake.js", () => ({
 
 vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent: (...args: unknown[]) => state.enqueueSystemEventMock(...args),
+}));
+
+vi.mock("../infra/session-delivery-queue.js", () => ({
+  enqueueSessionDelivery: (...args: unknown[]) => state.enqueueSessionDeliveryMock(...args),
 }));
 
 vi.mock("../infra/outbound/session-context.js", () => ({
@@ -1061,10 +1068,18 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       | { payloads?: Array<{ text?: string }> }
       | undefined;
     expect(deliveryArg?.payloads?.[0]?.text).toContain("liveness watchdog");
-    expect(deliveryArg?.payloads?.[0]?.text).toContain("Safe continuation queued: yes");
-    expect(deliveryArg?.payloads?.[0]?.text).toContain("Status: blocked");
+    expect(deliveryArg?.payloads?.[0]?.text).toContain("Recovery queued: yes");
+    expect(deliveryArg?.payloads?.[0]?.text).toContain("Status: continuing");
+    expect(state.enqueueSessionDeliveryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "systemEvent",
+        sessionKey: "agent:main",
+        text: expect.stringContaining("Control Director recovery supervisor request."),
+        idempotencyKey: "control-director:run-control-liveness:control-director-recovery:1",
+      }),
+    );
     expect(state.enqueueSystemEventMock).toHaveBeenCalledWith(
-      expect.stringContaining("Control Director safe continuation request."),
+      expect.stringContaining("Control Director recovery supervisor request."),
       expect.objectContaining({
         sessionKey: "agent:main",
         contextKey: "control-director:run-control-liveness:continuation:1",
@@ -1085,6 +1100,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         action: "queued_safe_continuation",
         classification: "empty",
         continuationQueued: true,
+        continuationQueueId: "control-director-recovery-queue-id",
         payloadsSynthesized: 1,
       }),
     ]);
@@ -1094,7 +1110,80 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         runId: "run-control-liveness",
         status: "continuation_queued",
         continuationCount: 1,
+        continuationQueued: true,
+        continuationQueueId: "control-director-recovery-queue-id",
         watchdogActions: ["queued_safe_continuation:queued"],
+      }),
+    ]);
+  });
+
+  it("blocks with the exact queue failure when Control Director recovery cannot be queued", async () => {
+    state.runtimeConfigMock = {
+      agents: {
+        defaults: {
+          models: {
+            "ollama/openclaw-control-qwen36-27b:latest": {},
+          },
+          model: "ollama/openclaw-control-qwen36-27b:latest",
+        },
+      },
+    };
+    const sessionEntry = {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+      skillsSnapshot: { prompt: "", skills: [], version: 0 },
+    };
+    const sessionStore: Record<string, typeof sessionEntry & Record<string, unknown>> = {
+      "agent:main": sessionEntry,
+    };
+    state.sessionEntryMock = sessionEntry;
+    state.sessionStoreMock = sessionStore;
+    state.storePathMock = "/tmp/session-store.json";
+    state.enqueueSessionDeliveryMock.mockRejectedValueOnce(new Error("disk full"));
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      const result = await params.run(params.provider, params.model);
+      return {
+        result,
+        provider: params.provider,
+        model: params.model,
+        attempts: [],
+      };
+    });
+    state.runAgentAttemptMock.mockResolvedValue(
+      makeEmptyResult("ollama", "openclaw-control-qwen36-27b:latest"),
+    );
+
+    await agentCommand({
+      message: "Keep working until this is complete.",
+      to: "+1234567890",
+      senderIsOwner: true,
+      agentId: "main",
+      runId: "run-control-liveness-queue-failed",
+    });
+
+    const deliveryArg = state.deliverAgentCommandResultMock.mock.calls[0]?.[0] as
+      | { payloads?: Array<{ text?: string }> }
+      | undefined;
+    expect(deliveryArg?.payloads?.[0]?.text).toContain("recovery supervisor could not start");
+    expect(deliveryArg?.payloads?.[0]?.text).toContain("durable session delivery enqueue failed");
+    expect(deliveryArg?.payloads?.[0]?.text).toContain("Status: blocked");
+    expect(state.enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(sessionStore["agent:main"]?.controlDirectorLivenessAudit).toEqual([
+      expect.objectContaining({
+        runId: "run-control-liveness-queue-failed",
+        action: "blocked_continuation_queue_failed",
+        classification: "empty",
+        continuationQueued: false,
+        continuationQueueError: expect.stringContaining("durable session delivery enqueue failed"),
+      }),
+    ]);
+    expect(sessionStore["agent:main"]?.controlDirectorMissionLedger).toEqual([
+      expect.objectContaining({
+        missionId: "control-director:run-control-liveness-queue-failed",
+        status: "blocked",
+        continuationQueued: false,
+        continuationQueueError: expect.stringContaining("durable session delivery enqueue failed"),
+        watchdogActions: ["blocked_continuation_queue_failed"],
       }),
     ]);
   });

@@ -11,7 +11,7 @@ export const CONTROL_DIRECTOR_PRIMARY_DISPLAY_LABEL = "OpenClaw Control Qwen3.6 
 export const CONTROL_DIRECTOR_FIRST_FALLBACK_MODEL = "ollama/openclaw-control-qwen25-32b:latest";
 export const CONTROL_DIRECTOR_EFFECTIVE_CONTEXT_TOKENS = 64_000;
 
-export type ControlDirectorFinalStatus = "complete" | "blocked" | "needs_user_input";
+export type ControlDirectorFinalStatus = "complete" | "blocked" | "needs_user_input" | "continuing";
 export type ControlDirectorThinkingEscalationLevel = "off" | "medium" | "high";
 
 export type ControlDirectorThinkingEscalation = {
@@ -138,6 +138,7 @@ export type ControlDirectorLivenessWatchdogAction =
   | "synthesized_blocked_no_visible_output"
   | "synthesized_blocked_incomplete_classification"
   | "queued_safe_continuation"
+  | "blocked_continuation_queue_failed"
   | "blocked_continuation_limit"
   | "blocked_unsafe_continuation";
 
@@ -145,9 +146,11 @@ export type ControlDirectorLivenessWatchdogAudit = {
   action: ControlDirectorLivenessWatchdogAction;
   reason: string;
   classification?: ControlDirectorLivenessClassification;
-  nextStatus: "blocked";
+  nextStatus: "blocked" | "continuing";
   continuationCount: number;
   continuationQueued: boolean;
+  continuationQueueId?: string;
+  continuationQueueError?: string;
   payloadsChecked: number;
   payloadsSynthesized: number;
 };
@@ -175,6 +178,7 @@ export type ControlDirectorMissionLedgerStatus =
   | "complete"
   | "blocked"
   | "needs_user_input"
+  | "continuing"
   | "continuation_queued";
 
 export type ControlDirectorMissionSummary = {
@@ -203,8 +207,9 @@ export type ControlDirectorReadinessScorecard = {
   nextBuildGap: string;
 };
 
-const STATUS_PATTERN = /\bstatus\s*:\s*(complete|blocked|needs[_ -]user[_ -]input)\b/i;
-const STATUS_PATTERN_GLOBAL = /\bstatus\s*:\s*(complete|blocked|needs[_ -]user[_ -]input)\b/gi;
+const STATUS_PATTERN = /\bstatus\s*:\s*(complete|blocked|needs[_ -]user[_ -]input|continuing)\b/i;
+const STATUS_PATTERN_GLOBAL =
+  /\bstatus\s*:\s*(complete|blocked|needs[_ -]user[_ -]input|continuing)\b/gi;
 const FINISHED_PATTERN = /\b(finished|complete|completed|done)\b/i;
 const BLOCKED_PATTERN = /\bblocked\b/i;
 const NEEDS_INPUT_PATTERN = /\b(needs? user input|needs? input|needs? clarification)\b/i;
@@ -344,7 +349,7 @@ export function buildControlDirectorSystemPromptSection(
     "When reporting Completion Grade or Criticality, use numeric `/10` values unless the user explicitly asks for another scale.",
     "If the user gives an exact response format, follow that format exactly. Do not ask what task the format applies to when the current prompt itself defines a smoke, verification, or implementation task.",
     "Thinking policy: default to non-thinking for routine turns, but use thinking only as needed for implementation, evaluation, debugging, verification, rollback, model, runtime, service, or production-risk work.",
-    "End task reports with an explicit status line using one of: `Status: complete`, `Status: blocked`, or `Status: needs_user_input`.",
+    "End task reports with an explicit status line using one of: `Status: complete`, `Status: blocked`, or `Status: needs_user_input`. Runtime recovery/progress handoffs may use `Status: continuing` only when a durable recovery turn has been queued.",
     "",
   ];
 }
@@ -406,7 +411,8 @@ function parseExplicitControlDirectorFinalStatus(text: string): ControlDirectorF
     if (
       normalized === "complete" ||
       normalized === "blocked" ||
-      normalized === "needs_user_input"
+      normalized === "needs_user_input" ||
+      normalized === "continuing"
     ) {
       explicit = normalized;
     }
@@ -476,7 +482,11 @@ function resolveGuardedControlDirectorStatus(
   ) {
     return "complete";
   }
-  if (evaluation.status === "blocked" || evaluation.status === "needs_user_input") {
+  if (
+    evaluation.status === "blocked" ||
+    evaluation.status === "needs_user_input" ||
+    evaluation.status === "continuing"
+  ) {
     return evaluation.status;
   }
   return "blocked";
@@ -515,6 +525,24 @@ function collectControlDirectorVisiblePayloadText(
     .trim();
 }
 
+function summarizeControlDirectorPromptRequest(
+  text: string | undefined | null,
+): string | undefined {
+  const normalized = (text ?? "").replace(/\s+/gu, " ").trim();
+  if (!normalized) {
+    return undefined;
+  }
+  return normalized.length <= 240 ? normalized : `${normalized.slice(0, 239)}…`;
+}
+
+function hashControlDirectorPromptRequest(text: string | undefined | null): string | undefined {
+  const normalized = (text ?? "").replace(/\s+/gu, " ").trim();
+  if (!normalized) {
+    return undefined;
+  }
+  return createHash("sha256").update(normalized).digest("hex");
+}
+
 function normalizeControlDirectorLivenessClassification(
   classification: string | undefined | null,
 ): ControlDirectorLivenessClassification | undefined {
@@ -529,13 +557,20 @@ function buildControlDirectorContinuationPrompt(params: {
   missionId?: string;
   reason: string;
   nextContinuationCount: number;
+  requestBody?: string | undefined;
 }): string {
+  const requestSummary = summarizeControlDirectorPromptRequest(params.requestBody);
+  const requestHash = hashControlDirectorPromptRequest(params.requestBody);
   return [
-    "Control Director safe continuation request.",
+    "Control Director recovery supervisor request.",
     params.missionId ? `Mission id: ${params.missionId}` : undefined,
+    requestHash ? `Original request hash: ${requestHash}` : undefined,
+    requestSummary ? `Original request summary: ${requestSummary}` : undefined,
     `Continuation attempt: ${params.nextContinuationCount}/${CONTROL_DIRECTOR_MAX_SAFE_CONTINUATIONS}`,
     `Reason: ${params.reason}`,
+    "This is a liveness recovery turn. Bypass continuation-skip behavior and load the needed bootstrap/context before acting.",
     "Continue from the current state. Do not repeat completed or mutating actions unless the action is idempotent and needed for verification.",
+    "Diagnose why the prior turn produced no user-visible terminal output, then continue or delegate safely.",
     "Verify evidence before claiming complete. If evidence is missing, report the exact blocker or next build gap.",
     "Include Verified state, Next build gap, Completion Grade: x/10, Criticality: x/10, and explicit Status: complete|blocked|needs_user_input.",
   ]
@@ -550,6 +585,7 @@ export function decideControlDirectorContinuation(params: {
   classification?: string | null | undefined;
   continuationCount?: number | undefined;
   missionId?: string | undefined;
+  requestBody?: string | undefined;
   canQueueContinuation?: boolean | undefined;
   needsUserInput?: boolean | undefined;
   approvalPending?: boolean | undefined;
@@ -644,6 +680,7 @@ export function decideControlDirectorContinuation(params: {
       missionId: params.missionId,
       reason,
       nextContinuationCount,
+      requestBody: params.requestBody,
     }),
   };
 }
@@ -679,6 +716,17 @@ function buildControlDirectorLivenessBlockedText(params: {
   const visibilityText = params.noVisiblePayload
     ? "No user-visible payload was available for delivery."
     : "The harness classified the final turn as non-terminal.";
+  if (params.decision.shouldQueue) {
+    return [
+      "Control Director liveness watchdog prevented a silent or non-terminal final response.",
+      "",
+      `Verified state: ${visibilityText} Classification: ${classificationText}. Recovery queued: ${queuedText}.`,
+      "Next build gap: Run the queued recovery continuation and verify concrete evidence before any complete claim.",
+      "Completion Grade: 7/10",
+      "Criticality: 10/10",
+      "Status: continuing",
+    ].join("\n");
+  }
   const nextGap = params.decision.shouldQueue
     ? "Run the queued safe continuation and verify concrete evidence before any complete claim."
     : `Resolve the liveness blocker before claiming completion. Reason: ${params.decision.reason}.`;
@@ -702,6 +750,7 @@ export function applyControlDirectorLivenessWatchdog<
   classification?: string | null | undefined;
   continuationCount?: number | undefined;
   missionId?: string | undefined;
+  requestBody?: string | undefined;
   canQueueContinuation?: boolean | undefined;
   needsUserInput?: boolean | undefined;
   approvalPending?: boolean | undefined;
@@ -735,6 +784,7 @@ export function applyControlDirectorLivenessWatchdog<
     classification,
     continuationCount: params.continuationCount,
     missionId: params.missionId,
+    requestBody: params.requestBody,
     canQueueContinuation: params.canQueueContinuation,
     needsUserInput: params.needsUserInput,
     approvalPending: params.approvalPending,
@@ -762,7 +812,7 @@ export function applyControlDirectorLivenessWatchdog<
       }),
       reason: decision.reason,
       ...(classification ? { classification } : {}),
-      nextStatus: "blocked",
+      nextStatus: decision.shouldQueue ? "continuing" : "blocked",
       continuationCount: decision.continuationCount,
       continuationQueued: decision.shouldQueue,
       payloadsChecked: payloads.length,
@@ -780,7 +830,9 @@ export function summarizeControlDirectorMissionFinalText(
       ? "complete"
       : finalStatus === "needs_user_input"
         ? "needs_user_input"
-        : "blocked";
+        : finalStatus === "continuing"
+          ? "continuing"
+          : "blocked";
   return {
     finalStatus,
     status,
