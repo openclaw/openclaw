@@ -354,6 +354,24 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
+  it("continues when initial presence update stalls on connect", async () => {
+    const sock = getSock();
+    sock.sendPresenceUpdate.mockImplementationOnce(async () => await new Promise(() => {}));
+    vi.useFakeTimers();
+    try {
+      const startPromise = startInboxMonitor(vi.fn(async () => {}) as InboxOnMessage);
+
+      await vi.advanceTimersByTimeAsync(DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs);
+
+      const { listener } = await startPromise;
+      expect(sock.sendPresenceUpdate).toHaveBeenNthCalledWith(1, "available");
+
+      await listener.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("omits group context when a group message has no group facts", async () => {
     const sock = getSock();
     sock.groupFetchAllParticipating.mockRejectedValueOnce(new Error("no groups"));
@@ -941,6 +959,68 @@ describe("web monitor inbox", () => {
       vi.useRealTimers();
       await listener.close();
     }
+  });
+
+  it("suppresses self-echo when a timed-out socket send is later accepted", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const socketRef = createSocketRef();
+    const { listener, sock, inbound } = await primeInboundReplyHandle({
+      onMessage,
+      socketRef,
+      upsertId: "late-accept",
+      retryPolicy: {
+        initialMs: 1,
+        maxMs: 1,
+        factor: 1,
+        jitter: 0,
+        maxAttempts: 2,
+      },
+    });
+    let acceptLateSend: ((value: { key: { id: string } }) => void) | undefined;
+    vi.useFakeTimers();
+    try {
+      sock.sendMessage.mockImplementationOnce(
+        async () =>
+          await new Promise((resolve) => {
+            acceptLateSend = resolve;
+          }),
+      );
+
+      const replyPromise = inbound.platform.reply("pong");
+      const replyRejection = expect(replyPromise).rejects.toMatchObject({
+        name: "WhatsAppSocketOperationTimeoutError",
+        operation: "sendMessage",
+      });
+      await vi.advanceTimersByTimeAsync(DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs);
+      await replyRejection;
+    } finally {
+      vi.useRealTimers();
+    }
+
+    acceptLateSend?.({ key: { id: "late-accepted" } });
+    await settleInboundWork();
+    sock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: {
+            id: "late-accepted",
+            fromMe: true,
+            remoteJid: "999@s.whatsapp.net",
+          },
+          message: { conversation: "pong" },
+          messageTimestamp: 1_700_000_001,
+          pushName: "Tester",
+        },
+      ],
+    });
+    await settleInboundWork();
+
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    expect(socketRef.current).toBe(sock);
+    expect(sleepWithAbortMock).not.toHaveBeenCalled();
+
+    await listener.close();
   });
 
   it("times out stalled send-api presence updates", async () => {
