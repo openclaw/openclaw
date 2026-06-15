@@ -184,10 +184,10 @@ async function migrateLinearTranscriptToParentLinked(transcriptPath: string): Pr
 async function ensureTranscriptHeader(
   transcriptPath: string,
   params: { sessionId?: string; cwd?: string } = {},
-): Promise<void> {
+): Promise<string | undefined> {
   const stat = await fs.stat(transcriptPath).catch(() => null);
   if (stat?.isFile() && stat.size > 0) {
-    return;
+    return undefined;
   }
   await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
   const header = createSessionTranscriptHeader(params);
@@ -195,6 +195,7 @@ async function ensureTranscriptHeader(
     mode: 0o600,
     flag: stat?.isFile() ? "w" : "wx",
   });
+  return serializeJsonlLine(header);
 }
 
 async function resolveTranscriptAppendQueueKey(transcriptPath: string): Promise<string> {
@@ -280,14 +281,23 @@ export async function appendSessionTranscriptMessage<TMessage>(
     // Active prompt-stream writes must acquire the session lock before joining
     // the append FIFO; otherwise a hook that already owns the lock can deadlock
     // behind the prompt append it is blocking.
+    let publishedHeader: string | undefined;
     return await activeLockRunner(
       () =>
         withTranscriptAppendQueue(params.transcriptPath, () =>
-          appendSessionTranscriptMessageLocked(params),
+          appendSessionTranscriptMessageLocked({
+            ...params,
+            onHeaderCreated: (header) => {
+              publishedHeader = header;
+            },
+          }),
         ),
       {
         publishOwnedWrite: true,
-        resolvePublishedEntryIds: (result) => (result?.appended === true ? [result.messageId] : []),
+        resolvePublishedEntries: (result) => [
+          ...(publishedHeader ? [{ kind: "header" as const, serialized: publishedHeader }] : []),
+          ...(result?.appended === true ? [{ kind: "id" as const, id: result.messageId }] : []),
+        ],
       },
     );
   }
@@ -317,7 +327,9 @@ export async function appendSessionTranscriptEvent(
         ),
       {
         publishOwnedWrite: true,
-        resolvePublishedEntryIds: (result) => (result.entryId ? [result.entryId] : []),
+        resolvePublishedEntries: (result) => [
+          { kind: "serialized", serialized: result.serializedEntry },
+        ],
       },
     );
     return;
@@ -345,30 +357,26 @@ async function withSessionTranscriptWriteLock<T>(
 
 async function appendSessionTranscriptEventLocked(
   params: AppendSessionTranscriptEventParams,
-): Promise<{ entryId?: string }> {
+): Promise<{ serializedEntry: string }> {
   await fs.mkdir(path.dirname(params.transcriptPath), { recursive: true });
   const serializedEvent = serializeJsonlEntry(params.event);
   await appendSerializedJsonlEntry(params.transcriptPath, serializedEvent);
-  try {
-    const persisted = JSON.parse(serializedEvent) as unknown;
-    const entryId =
-      persisted && typeof persisted === "object" && !Array.isArray(persisted)
-        ? (persisted as { id?: unknown }).id
-        : undefined;
-    return typeof entryId === "string" && entryId.trim().length > 0 ? { entryId } : {};
-  } catch {
-    return {};
-  }
+  return { serializedEntry: serializedEvent.slice(0, -1) };
 }
 
 async function appendSessionTranscriptMessageLocked<TMessage>(
-  params: AppendSessionTranscriptMessageParams<TMessage>,
+  params: AppendSessionTranscriptMessageParams<TMessage> & {
+    onHeaderCreated?: (serializedHeader: string) => void;
+  },
 ): Promise<AppendSessionTranscriptMessageResult<TMessage> | undefined> {
   const now = params.now ?? Date.now();
-  await ensureTranscriptHeader(params.transcriptPath, {
+  const serializedHeader = await ensureTranscriptHeader(params.transcriptPath, {
     ...(params.sessionId ? { sessionId: params.sessionId } : {}),
     ...(params.cwd ? { cwd: params.cwd } : {}),
   });
+  if (serializedHeader) {
+    params.onHeaderCreated?.(serializedHeader);
+  }
   const idempotencyKey = readMessageIdempotencyKey(params.message);
   const existing =
     idempotencyKey && params.idempotencyLookup === "scan"

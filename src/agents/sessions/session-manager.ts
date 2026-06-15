@@ -23,6 +23,7 @@ import {
   appendJsonlEntrySync,
   appendSerializedJsonlEntrySync,
   serializeJsonlEntry,
+  serializeJsonlLine,
   writeJsonlEntriesSync,
 } from "../../config/sessions/transcript-jsonl.js";
 import {
@@ -130,11 +131,17 @@ export interface SessionInfoEntry extends SessionEntryBase {
   name?: string;
 }
 
+export interface PromptReleasedOpaqueEntry {
+  type: "prompt_released_opaque";
+  record: unknown;
+}
+
 export type PromptReleasedSessionEntry =
   | SessionMessageEntry
   | CustomEntry
   | LabelEntry
-  | SessionInfoEntry;
+  | SessionInfoEntry
+  | PromptReleasedOpaqueEntry;
 
 /**
  * Custom message entry for extensions to inject messages into LLM context.
@@ -241,7 +248,10 @@ function generateId(byId: { has(id: string): boolean }): string {
 }
 
 /** Migrate v1 → v2: add id/parentId tree structure. Mutates in place. */
-function migrateV1ToV2(entries: FileEntry[]): void {
+function migrateV1ToV2(
+  entries: FileEntry[],
+  entriesByOriginalIndex?: readonly (FileEntry | undefined)[],
+): void {
   const ids = new Set<string>();
   let prevId: string | null = null;
 
@@ -260,7 +270,8 @@ function migrateV1ToV2(entries: FileEntry[]): void {
     if (entry.type === "compaction") {
       const comp = entry as CompactionEntry & { firstKeptEntryIndex?: number };
       if (typeof comp.firstKeptEntryIndex === "number") {
-        const targetEntry = entries[comp.firstKeptEntryIndex];
+        const targetEntry =
+          entriesByOriginalIndex?.[comp.firstKeptEntryIndex] ?? entries[comp.firstKeptEntryIndex];
         if (targetEntry && targetEntry.type !== "session") {
           comp.firstKeptEntryId = targetEntry.id;
         }
@@ -292,7 +303,10 @@ function migrateV2ToV3(entries: FileEntry[]): void {
  * Run all necessary migrations to bring entries to current version.
  * Mutates entries in place. Returns true if any migration was applied.
  */
-function migrateToCurrentVersion(entries: FileEntry[]): boolean {
+function migrateToCurrentVersion(
+  entries: FileEntry[],
+  entriesByOriginalIndex?: readonly (FileEntry | undefined)[],
+): boolean {
   const header = entries.find((e) => e.type === "session");
   const version = header?.version ?? 1;
 
@@ -301,7 +315,7 @@ function migrateToCurrentVersion(entries: FileEntry[]): boolean {
   }
 
   if (version < 2) {
-    migrateV1ToV2(entries);
+    migrateV1ToV2(entries, entriesByOriginalIndex);
   }
   if (version < 3) {
     migrateV2ToV3(entries);
@@ -933,6 +947,77 @@ function hasReadableSessionHeader(entries: FileEntry[]): boolean {
   return header?.type === "session" && typeof (header as { id?: unknown }).id === "string";
 }
 
+function isJsonRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isSessionEntryType(type: unknown): boolean {
+  switch (type) {
+    case "message":
+    case "thinking_level_change":
+    case "model_change":
+    case "compaction":
+    case "branch_summary":
+    case "custom":
+    case "custom_message":
+    case "label":
+    case "session_info":
+      return true;
+    default:
+      return false;
+  }
+}
+
+function isIndexedSessionEntry(entry: unknown): entry is SessionEntry {
+  if (!isJsonRecord(entry)) {
+    return false;
+  }
+  return isSessionEntryType(entry.type) && typeof entry.id === "string" && entry.id.length > 0;
+}
+
+type PreservedOpaqueFileEntry = {
+  index: number;
+  record: unknown;
+};
+
+function partitionSessionFileEntries(entries: readonly FileEntry[]): {
+  fileEntries: FileEntry[];
+  opaqueEntries: PreservedOpaqueFileEntry[];
+  fileEntriesByOriginalIndex: Array<FileEntry | undefined>;
+} {
+  const fileEntries: FileEntry[] = [];
+  const opaqueEntries: PreservedOpaqueFileEntry[] = [];
+  const fileEntriesByOriginalIndex: Array<FileEntry | undefined> = [];
+  const header = entries.find(
+    (entry) => isJsonRecord(entry) && entry.type === "session" && typeof entry.id === "string",
+  ) as SessionHeader | undefined;
+  const acceptsLegacyEntries = (header?.version ?? 1) < 2;
+  let hasHeader = false;
+  for (const [originalIndex, entry] of entries.entries()) {
+    if (
+      !hasHeader &&
+      isJsonRecord(entry) &&
+      entry.type === "session" &&
+      typeof entry.id === "string"
+    ) {
+      fileEntries.push(entry as unknown as SessionHeader);
+      fileEntriesByOriginalIndex[originalIndex] = entry;
+      hasHeader = true;
+      continue;
+    }
+    if (
+      isIndexedSessionEntry(entry) ||
+      (acceptsLegacyEntries && isJsonRecord(entry) && isSessionEntryType(entry.type))
+    ) {
+      fileEntries.push(entry);
+      fileEntriesByOriginalIndex[originalIndex] = entry;
+      continue;
+    }
+    opaqueEntries.push({ index: fileEntries.length, record: entry });
+  }
+  return { fileEntries, opaqueEntries, fileEntriesByOriginalIndex };
+}
+
 function buildCorruptSessionBackupPath(filePath: string): string {
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
   return `${filePath}.corrupt-${timestamp}-${randomUUID().slice(0, 8)}.jsonl`;
@@ -1244,6 +1329,7 @@ export class SessionManager {
   private shouldPersist: boolean;
   private flushed = false;
   private fileEntries: FileEntry[] = [];
+  private opaqueFileEntries: PreservedOpaqueFileEntry[] = [];
   private byId: Map<string, SessionEntry> = new Map();
   private labelsById: Map<string, string> = new Map();
   private labelTimestampsById: Map<string, string> = new Map();
@@ -1294,7 +1380,9 @@ export class SessionManager {
     this.sessionFileSnapshot = undefined;
     this.recoveredCorruptHeader = false;
     if (existsSync(this.sessionFile)) {
-      this.fileEntries = loaded.entries;
+      const partitioned = partitionSessionFileEntries(loaded.entries);
+      this.fileEntries = partitioned.fileEntries;
+      this.opaqueFileEntries = partitioned.opaqueEntries;
       this.sessionFileSnapshot = loaded.snapshot;
 
       // If file was empty or corrupted (no valid header), truncate and start fresh
@@ -1302,9 +1390,12 @@ export class SessionManager {
       if (this.fileEntries.length === 0) {
         const recoveredEntries = recoverCorruptSessionEntries(this.sessionFile, this.cwd);
         if (recoveredEntries && hasReadableSessionHeader(recoveredEntries)) {
-          this.fileEntries = recoveredEntries;
+          const recovered = partitionSessionFileEntries(recoveredEntries);
+          this.fileEntries = recovered.fileEntries;
+          this.opaqueFileEntries = recovered.opaqueEntries;
           const header = this.fileEntries.find((e) => e.type === "session");
           this.sessionId = header?.id ?? createSessionId();
+          migrateToCurrentVersion(this.fileEntries, recovered.fileEntriesByOriginalIndex);
           this.buildIndex();
           this.rewriteFile();
           this.recoveredCorruptHeader = true;
@@ -1323,7 +1414,7 @@ export class SessionManager {
       const header = this.fileEntries.find((e) => e.type === "session");
       this.sessionId = header?.id ?? createSessionId();
 
-      if (migrateToCurrentVersion(this.fileEntries)) {
+      if (migrateToCurrentVersion(this.fileEntries, partitioned.fileEntriesByOriginalIndex)) {
         this.rewriteFile();
       }
 
@@ -1350,6 +1441,7 @@ export class SessionManager {
       parentSession: options?.parentSession,
     };
     this.fileEntries = [header];
+    this.opaqueFileEntries = [];
     this.byId.clear();
     this.labelsById.clear();
     this.leafId = null;
@@ -1368,7 +1460,7 @@ export class SessionManager {
     this.labelTimestampsById.clear();
     this.leafId = null;
     for (const entry of this.fileEntries) {
-      if (entry.type === "session") {
+      if (!isIndexedSessionEntry(entry)) {
         continue;
       }
       this.byId.set(entry.id, entry);
@@ -1385,11 +1477,58 @@ export class SessionManager {
     }
   }
 
+  private getPersistedFileEntries(): unknown[] {
+    // Tail cleanup removes canonical entries before rewriting. Clamp opaque
+    // anchors now so later appends stay after records that the rewrite moved
+    // to the new tail instead of crossing them on the next full rewrite.
+    let previousOpaqueIndex = 0;
+    for (const opaqueEntry of this.opaqueFileEntries) {
+      opaqueEntry.index = Math.max(
+        previousOpaqueIndex,
+        Math.min(opaqueEntry.index, this.fileEntries.length),
+      );
+      previousOpaqueIndex = opaqueEntry.index;
+    }
+
+    const entries: unknown[] = [];
+    let opaqueIndex = 0;
+    for (let index = 0; index <= this.fileEntries.length; index += 1) {
+      while (this.opaqueFileEntries[opaqueIndex]?.index === index) {
+        entries.push(this.opaqueFileEntries[opaqueIndex]?.record);
+        opaqueIndex += 1;
+      }
+      const entry = this.fileEntries[index];
+      if (entry) {
+        entries.push(entry);
+      }
+    }
+    while (opaqueIndex < this.opaqueFileEntries.length) {
+      entries.push(this.opaqueFileEntries[opaqueIndex]?.record);
+      opaqueIndex += 1;
+    }
+    return entries;
+  }
+
+  getSerializedFileLinesForRewrite(): string[] {
+    return this.getPersistedFileEntries().map(serializeJsonlLine);
+  }
+
+  clearPreservedOpaqueFileEntries(): void {
+    this.opaqueFileEntries = [];
+  }
+
+  private writeFullFile(): string {
+    if (!this.sessionFile) {
+      return "";
+    }
+    return writeJsonlEntriesSync(this.sessionFile, this.getPersistedFileEntries());
+  }
+
   private rewriteFile(): void {
     if (!this.shouldPersist || !this.sessionFile) {
       return;
     }
-    const content = writeJsonlEntriesSync(this.sessionFile, this.fileEntries);
+    const content = this.writeFullFile();
     const rememberedWrite = rememberWrittenSessionEntries(this.sessionFile, content);
     this.sessionFileSnapshot = rememberedWrite.snapshot;
     if (rememberedWrite.verifiedWrite) {
@@ -1436,7 +1575,7 @@ export class SessionManager {
     }
 
     if (!this.flushed) {
-      const content = writeJsonlEntriesSync(this.sessionFile, this.fileEntries);
+      const content = this.writeFullFile();
       this.flushed = true;
       const rememberedWrite = rememberWrittenSessionEntries(this.sessionFile, content);
       this.sessionFileSnapshot = rememberedWrite.snapshot;
@@ -1508,6 +1647,13 @@ export class SessionManager {
   mergePromptReleasedSessionEntries(entries: readonly PromptReleasedSessionEntry[]): void {
     let sideBranchParentId = this.leafId;
     for (const sourceEntry of entries) {
+      if (sourceEntry.type === "prompt_released_opaque") {
+        this.opaqueFileEntries.push({
+          index: this.fileEntries.length,
+          record: sourceEntry.record,
+        });
+        continue;
+      }
       if (this.byId.has(sourceEntry.id)) {
         throw new Error(`Entry ${sourceEntry.id} already exists`);
       }
@@ -1957,6 +2103,7 @@ export class SessionManager {
       }
 
       this.fileEntries = [header, ...pathWithoutLabels, ...labelEntries];
+      this.opaqueFileEntries = [];
       this.sessionId = newSessionId;
       this.sessionFile = newSessionFile;
       this.sessionFileSnapshot = undefined;
@@ -1996,6 +2143,7 @@ export class SessionManager {
       parentId = labelEntry.id;
     }
     this.fileEntries = [header, ...pathWithoutLabels, ...labelEntries];
+    this.opaqueFileEntries = [];
     this.sessionId = newSessionId;
     this.buildIndex();
     return undefined;

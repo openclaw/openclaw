@@ -58,6 +58,8 @@ export async function prepareSessionManagerForRun(params: {
     labelsById?: Map<string, unknown>;
     leafId?: string | null;
     wasRecoveredFromCorruptHeader?: () => boolean;
+    clearPreservedOpaqueFileEntries?: () => void;
+    getSerializedFileLinesForRewrite?: () => string[];
     syncSnapshotAfterHeaderRewrite?: (expectedContent?: string) => void;
   };
 
@@ -82,7 +84,7 @@ export async function prepareSessionManagerForRun(params: {
       sm.cwd = params.cwd;
       const content = await writeJsonlLines(
         params.sessionFile,
-        sm.fileEntries.map(serializeJsonlLine),
+        sm.getSerializedFileLinesForRewrite?.() ?? sm.fileEntries.map(serializeJsonlLine),
         {
           mode: 0o600,
         },
@@ -101,6 +103,7 @@ export async function prepareSessionManagerForRun(params: {
     sm.sessionId = params.sessionId;
     sm.cwd = params.cwd;
     sm.fileEntries = [header];
+    sm.clearPreservedOpaqueFileEntries?.();
     sm.byId?.clear?.();
     sm.labelsById?.clear?.();
     sm.leafId = null;
@@ -120,7 +123,7 @@ export async function prepareSessionManagerForRun(params: {
     }
     const content = await writeJsonlLines(
       params.sessionFile,
-      sm.fileEntries.map(serializeJsonlLine),
+      sm.getSerializedFileLinesForRewrite?.() ?? sm.fileEntries.map(serializeJsonlLine),
       {
         mode: 0o600,
       },

@@ -1322,6 +1322,91 @@ describe("SessionManager.open", () => {
     }
   });
 
+  it("preserves opaque transcript rows during embedded header normalization", async () => {
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "session.jsonl");
+    const metadata = { type: "metadata", payload: { source: "plugin" } };
+    const assistantEntry = {
+      type: "message",
+      id: "assistant-1",
+      parentId: null,
+      timestamp: "2026-06-04T00:00:01.000Z",
+      message: { role: "assistant", content: "carried context" },
+    };
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify(buildSessionHeader(dir, "original-session")),
+        JSON.stringify(metadata),
+        JSON.stringify(assistantEntry),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+
+    const sessionManager = SessionManager.open(sessionFile, dir, dir);
+    await prepareSessionManagerForRun({
+      sessionManager,
+      sessionFile,
+      hadSessionFile: true,
+      sessionId: "run-session",
+      cwd: "/tmp/task-repo",
+    });
+
+    const records = (await fs.readFile(sessionFile, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as unknown);
+    expect(records).toContainEqual(metadata);
+    expect(sessionManager.getEntries()).toEqual([assistantEntry]);
+  });
+
+  it("preserves trailing opaque rows when cleanup removes the preceding entry", async () => {
+    const dir = await makeTempDir();
+    const sessionManager = SessionManager.create(dir, dir);
+    sessionManager.appendMessage({ role: "user", content: "question", timestamp: 1 });
+    const baseAnswerId = sessionManager.appendMessage(buildAssistantMessage("base answer"));
+    const temporaryErrorId = sessionManager.appendMessage(buildAssistantMessage("temporary error"));
+    const metadata = { type: "metadata", payload: { source: "plugin" } };
+    sessionManager.mergePromptReleasedSessionEntries([
+      { type: "prompt_released_opaque", record: metadata },
+    ]);
+
+    const mutableManager = sessionManager as unknown as {
+      fileEntries: Array<{ id?: string }>;
+      byId: Map<string, unknown>;
+      leafId: string | null;
+      rewriteFile: () => void;
+    };
+    mutableManager.fileEntries.pop();
+    mutableManager.byId.delete(temporaryErrorId);
+    mutableManager.leafId = baseAnswerId;
+    mutableManager.rewriteFile();
+    const replacementId = sessionManager.appendMessage(buildAssistantMessage("replacement answer"));
+    mutableManager.rewriteFile();
+
+    const sessionFile = sessionManager.getSessionFile();
+    expect(sessionFile).toBeDefined();
+    const records = (await fs.readFile(sessionFile!, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as unknown);
+    const metadataIndex = records.findIndex(
+      (record) => JSON.stringify(record) === JSON.stringify(metadata),
+    );
+    const replacementIndex = records.findIndex(
+      (record) =>
+        typeof record === "object" &&
+        record !== null &&
+        "id" in record &&
+        record.id === replacementId,
+    );
+    expect(metadataIndex).toBeGreaterThan(-1);
+    expect(replacementIndex).toBeGreaterThan(metadataIndex);
+    expect(SessionManager.open(sessionFile!, dir, dir).buildSessionContext().messages).toHaveLength(
+      3,
+    );
+  });
+
   it("keeps the warm cache after prepareSessionManagerForRun rewrites then appends", async () => {
     const dir = await makeTempDir();
     const sessionFile = path.join(dir, "session.jsonl");

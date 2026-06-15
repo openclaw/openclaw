@@ -8,6 +8,7 @@ import fs from "node:fs/promises";
 import { isDeepStrictEqual } from "node:util";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
+  type OwnedSessionTranscriptPublishedEntry,
   type OwnedSessionTranscriptWriteOptions,
   type OwnedSessionTranscriptCacheSnapshot,
   withOwnedSessionTranscriptWrites,
@@ -18,6 +19,7 @@ import type { acquireSessionWriteLock } from "../../session-write-lock.js";
 import type {
   CustomEntry,
   LabelEntry,
+  PromptReleasedOpaqueEntry,
   SessionInfoEntry,
   SessionMessageEntry,
 } from "../../sessions/session-manager.js";
@@ -28,7 +30,7 @@ type AcquireSessionWriteLock = typeof acquireSessionWriteLock;
 type ActiveWriteLockState = {
   active: boolean;
   publishingOwnedWrite: boolean;
-  publishedEntryIds?: string[];
+  publishedEntries?: OwnedSessionTranscriptPublishedEntry[];
 };
 
 type LockOptions = {
@@ -182,7 +184,10 @@ function hasSessionEntryBase(record: Record<string, unknown>): boolean {
 
 export type PromptReleasedSessionMetadataEntry = CustomEntry | LabelEntry | SessionInfoEntry;
 
-export type PromptReleasedSessionEntry = SessionMessageEntry | PromptReleasedSessionMetadataEntry;
+export type PromptReleasedSessionEntry =
+  | SessionMessageEntry
+  | PromptReleasedSessionMetadataEntry
+  | PromptReleasedOpaqueEntry;
 
 function parsePromptReleasedGlobalMetadataLine(
   line: string,
@@ -237,41 +242,117 @@ function parsePromptReleasedGlobalMetadataLine(
   }
 }
 
+function parsePromptReleasedOpaqueLine(line: string): PromptReleasedOpaqueEntry | undefined {
+  try {
+    const record = JSON.parse(line) as unknown;
+    return !isJsonRecord(record) || record.type !== "message"
+      ? { type: "prompt_released_opaque", record }
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 type PromptReleasedSessionChange =
   | {
       kind: "transcript-only";
       entries: SessionMessageEntry[];
+      publishedEntries: OwnedSessionTranscriptPublishedEntry[];
     }
   | {
       kind: "global-metadata";
       entries: PromptReleasedSessionEntry[];
+      publishedEntries: OwnedSessionTranscriptPublishedEntry[];
+    }
+  | {
+      kind: "opaque";
+      entries: PromptReleasedSessionEntry[];
+      publishedEntries: OwnedSessionTranscriptPublishedEntry[];
     };
 
 function classifyPromptReleasedSessionLines(
   lines: string[],
-  options?: { allowAnyMessage?: boolean },
+  options?: {
+    allowAnyMessage?: boolean;
+    expectedPublishedEntries?: readonly OwnedSessionTranscriptPublishedEntry[];
+    initialParentId?: string | null;
+  },
 ): PromptReleasedSessionChange | undefined {
   if (lines.length === 0) {
     return undefined;
   }
   const entries: PromptReleasedSessionEntry[] = [];
+  const publishedEntries: OwnedSessionTranscriptPublishedEntry[] = [];
   let hasGlobalMetadata = false;
+  let hasOpaqueEntries = false;
+  let expectedParentId = options?.initialParentId ?? null;
   for (const line of lines) {
+    const expectedPublishedEntry = options?.expectedPublishedEntries?.[publishedEntries.length];
+    if (expectedPublishedEntry?.kind === "serialized") {
+      if (expectedPublishedEntry.serialized === line) {
+        try {
+          const exactEntry = JSON.parse(line) as unknown;
+          if (isJsonRecord(exactEntry)) {
+            expectedParentId = normalizeTranscriptEntryId(exactEntry.id) ?? expectedParentId;
+          }
+        } catch {
+          return undefined;
+        }
+      } else {
+        const lineMatch = lineMatchesLinearTranscriptMigration({
+          previousLine: expectedPublishedEntry.serialized,
+          currentLine: line,
+          expectedParentId,
+        });
+        if (!lineMatch.ok) {
+          return undefined;
+        }
+        expectedParentId = lineMatch.nextPreviousId ?? expectedParentId;
+      }
+    }
+    const publishIdentity = (id: string): OwnedSessionTranscriptPublishedEntry => {
+      if (expectedPublishedEntry?.kind === "serialized") {
+        return expectedPublishedEntry;
+      }
+      expectedParentId = id;
+      return { kind: "id", id };
+    };
     const transcriptEntry = parsePromptReleasedMessageLine(line, options);
     if (transcriptEntry) {
       entries.push(transcriptEntry);
+      publishedEntries.push(publishIdentity(transcriptEntry.id));
       continue;
     }
     const metadataEntry = parsePromptReleasedGlobalMetadataLine(line);
-    if (!metadataEntry) {
+    if (metadataEntry) {
+      entries.push(metadataEntry);
+      publishedEntries.push(publishIdentity(metadataEntry.id));
+      hasGlobalMetadata = true;
+      continue;
+    }
+    const opaqueEntry = options?.allowAnyMessage ? parsePromptReleasedOpaqueLine(line) : undefined;
+    if (!opaqueEntry) {
       return undefined;
     }
-    entries.push(metadataEntry);
-    hasGlobalMetadata = true;
+    entries.push(opaqueEntry);
+    publishedEntries.push(
+      expectedPublishedEntry?.kind === "serialized"
+        ? expectedPublishedEntry
+        : { kind: "serialized", serialized: line },
+    );
+    hasOpaqueEntries = true;
   }
-  return hasGlobalMetadata
-    ? { kind: "global-metadata", entries }
-    : { kind: "transcript-only", entries: entries as SessionMessageEntry[] };
+  if (hasOpaqueEntries) {
+    return { kind: "opaque", entries, publishedEntries };
+  }
+  if (hasGlobalMetadata) {
+    return { kind: "global-metadata", entries, publishedEntries };
+  }
+  return {
+    kind: "transcript-only",
+    entries: entries as SessionMessageEntry[],
+    publishedEntries,
+  };
 }
 
 function normalizeTranscriptEntryId(value: unknown): string | undefined {
@@ -420,6 +501,7 @@ async function classifySessionFenceAdvance(params: {
   previous: SessionFileFenceSnapshot | undefined;
   current: SessionFileFingerprint;
   allowAnyMessage?: boolean;
+  expectedPublishedEntries?: readonly OwnedSessionTranscriptPublishedEntry[];
 }): Promise<PromptReleasedSessionChange | undefined> {
   if (
     !params.previous?.fingerprint.exists ||
@@ -441,6 +523,64 @@ async function classifySessionFenceAdvance(params: {
   }
   const lines = normalizeStringEntries(text.split("\n"));
   return classifyPromptReleasedSessionLines(lines, params);
+}
+
+async function classifyOwnedSessionFileInitialization(params: {
+  sessionFile: string;
+  previous: SessionFileFenceSnapshot | undefined;
+  current: SessionFileFingerprint;
+  expectedPublishedEntries: readonly OwnedSessionTranscriptPublishedEntry[];
+}): Promise<PromptReleasedSessionChange | undefined> {
+  if (
+    !params.current.exists ||
+    (params.previous?.fingerprint.exists === true && params.previous.fingerprint.size > 0n) ||
+    params.current.size > MAX_SAFE_FILE_OFFSET
+  ) {
+    return undefined;
+  }
+  let text: string;
+  try {
+    text = await fs.readFile(params.sessionFile, "utf8");
+  } catch {
+    return undefined;
+  }
+  if (!text.endsWith("\n")) {
+    return undefined;
+  }
+  const lines = normalizeStringEntries(text.split("\n"));
+  const expectedHeader =
+    params.expectedPublishedEntries[0]?.kind === "header"
+      ? params.expectedPublishedEntries[0]
+      : undefined;
+  if (expectedHeader) {
+    if (lines[0] !== expectedHeader.serialized) {
+      return undefined;
+    }
+    lines.shift();
+  }
+  const remainingExpectedEntries = expectedHeader
+    ? params.expectedPublishedEntries.slice(1)
+    : params.expectedPublishedEntries;
+  const change = classifyPromptReleasedSessionLines(lines, {
+    allowAnyMessage: true,
+    expectedPublishedEntries: remainingExpectedEntries,
+  });
+  if (!change && lines.length > 0) {
+    return undefined;
+  }
+  const resolvedChange =
+    change ??
+    ({
+      kind: "transcript-only",
+      entries: [],
+      publishedEntries: [],
+    } satisfies PromptReleasedSessionChange);
+  return expectedHeader
+    ? {
+        ...resolvedChange,
+        publishedEntries: [expectedHeader, ...resolvedChange.publishedEntries],
+      }
+    : resolvedChange;
 }
 
 async function sessionFenceCtimeDriftIsBenign(params: {
@@ -475,6 +615,7 @@ async function classifySessionFenceRewrite(params: {
   previous: SessionFileFenceSnapshot | undefined;
   current: SessionFileFingerprint;
   allowAnyMessage?: boolean;
+  expectedPublishedEntries?: readonly OwnedSessionTranscriptPublishedEntry[];
 }): Promise<PromptReleasedSessionChange | undefined> {
   if (
     !params.previous?.fingerprint.exists ||
@@ -514,22 +655,35 @@ async function classifySessionFenceRewrite(params: {
     expectedParentId = lineMatch.nextPreviousId ?? expectedParentId;
   }
   const appendedLines = currentLines.slice(previousLines.length);
-  return classifyPromptReleasedSessionLines(appendedLines, params);
+  return classifyPromptReleasedSessionLines(appendedLines, {
+    ...params,
+    initialParentId: expectedParentId,
+  });
 }
 
 async function classifySessionFenceChange(params: {
   sessionFile: string;
   previous: SessionFileFenceSnapshot | undefined;
   current: SessionFileFingerprint;
-  allowAnyMessage?: boolean;
+  expectedPublishedEntries?: readonly OwnedSessionTranscriptPublishedEntry[];
 }): Promise<PromptReleasedSessionChange | undefined> {
-  return (await classifySessionFenceAdvance(params)) ?? (await classifySessionFenceRewrite(params));
+  const allowAnyMessage = params.expectedPublishedEntries !== undefined;
+  return (
+    (params.expectedPublishedEntries
+      ? await classifyOwnedSessionFileInitialization({
+          ...params,
+          expectedPublishedEntries: params.expectedPublishedEntries,
+        })
+      : undefined) ??
+    (await classifySessionFenceAdvance({ ...params, allowAnyMessage })) ??
+    (await classifySessionFenceRewrite({ ...params, allowAnyMessage }))
+  );
 }
 
 type OwnedSessionFileWrite = {
   generation: number;
   fingerprint: SessionFileFingerprint;
-  entryIds?: readonly string[];
+  publishedEntries?: readonly OwnedSessionTranscriptPublishedEntry[];
 };
 
 type OwnedSessionFileWriteHistory = {
@@ -745,13 +899,13 @@ function pruneOwnedSessionFileWriteHistory(
 function recordOwnedSessionFileWrite(
   sessionFileKey: string,
   fingerprint: SessionFileFingerprint,
-  entryIds?: readonly string[],
+  publishedEntries?: readonly OwnedSessionTranscriptPublishedEntry[],
 ): number {
   ownedSessionFileWriteGeneration += 1;
   const state = {
     generation: ownedSessionFileWriteGeneration,
     fingerprint,
-    ...(entryIds ? { entryIds: [...entryIds] } : {}),
+    ...(publishedEntries ? { publishedEntries: [...publishedEntries] } : {}),
   };
   const history = resolveOwnedSessionFileWriteHistory(sessionFileKey);
   history.writes.push(state);
@@ -931,11 +1085,13 @@ export async function createEmbeddedAttemptSessionLockController(params: {
   async function mergePromptReleasedSessionChange(
     previous: SessionFileFenceSnapshot | undefined,
     current: SessionFileFingerprint,
-    options?: { expectedEntryIds?: readonly string[] },
+    options?: {
+      expectedPublishedEntries?: readonly OwnedSessionTranscriptPublishedEntry[];
+    },
   ): Promise<
     | {
         snapshot: SessionFileFenceSnapshot;
-        entryIds: string[];
+        publishedEntries: OwnedSessionTranscriptPublishedEntry[];
       }
     | undefined
   > {
@@ -946,17 +1102,14 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       sessionFile: params.lockOptions.sessionFile,
       previous,
       current,
-      allowAnyMessage: options?.expectedEntryIds !== undefined,
+      expectedPublishedEntries: options?.expectedPublishedEntries,
     });
     if (!change) {
       return undefined;
     }
     if (
-      options?.expectedEntryIds &&
-      !isDeepStrictEqual(
-        change.entries.map((entry) => entry.id),
-        [...options.expectedEntryIds],
-      )
+      options?.expectedPublishedEntries &&
+      !isDeepStrictEqual(change.publishedEntries, [...options.expectedPublishedEntries])
     ) {
       return undefined;
     }
@@ -973,7 +1126,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     }
     return {
       snapshot: refreshedSnapshot,
-      entryIds: change.entries.map((entry) => entry.id),
+      publishedEntries: change.publishedEntries,
     };
   }
 
@@ -1089,15 +1242,15 @@ export async function createEmbeddedAttemptSessionLockController(params: {
         (write) => write.generation > fenceGeneration,
       );
       const canValidateExactEntries = unseenOwnedWrites.every(
-        (write) => write.entryIds !== undefined,
+        (write) => write.publishedEntries !== undefined,
       );
-      const expectedEntryIds = canValidateExactEntries
-        ? unseenOwnedWrites.flatMap((write) => write.entryIds ?? [])
+      const expectedPublishedEntries = canValidateExactEntries
+        ? unseenOwnedWrites.flatMap((write) => write.publishedEntries ?? [])
         : undefined;
       const mergedChange = await mergePromptReleasedSessionChange(
         fenceSnapshot,
         current,
-        expectedEntryIds ? { expectedEntryIds } : undefined,
+        expectedPublishedEntries ? { expectedPublishedEntries } : undefined,
       );
       if (params.mergePromptReleasedSessionEntries && !mergedChange) {
         takeoverDetected = true;
@@ -1177,7 +1330,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
 
   async function publishOwnedSessionFileFence(
     beforeWrite: SessionFileFenceSnapshot,
-    expectedEntryIds?: readonly string[],
+    expectedPublishedEntries?: readonly OwnedSessionTranscriptPublishedEntry[],
   ): Promise<void> {
     if (takeoverDetected) {
       return;
@@ -1195,14 +1348,14 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     const mergedChange = await mergePromptReleasedSessionChange(
       beforeWrite,
       current,
-      expectedEntryIds ? { expectedEntryIds } : undefined,
+      expectedPublishedEntries ? { expectedPublishedEntries } : undefined,
     );
     if (params.mergePromptReleasedSessionEntries && !mergedChange) {
       takeoverDetected = true;
       throw new EmbeddedAttemptSessionTakeoverError(params.lockOptions.sessionFile);
     }
-    const publishedEntryIds = expectedEntryIds ?? mergedChange?.entryIds;
-    const generation = recordOwnedSessionFileWrite(sessionFileFenceKey, current, publishedEntryIds);
+    const publishedEntries = expectedPublishedEntries ?? mergedChange?.publishedEntries;
+    const generation = recordOwnedSessionFileWrite(sessionFileFenceKey, current, publishedEntries);
     if (fenceActive) {
       fenceFingerprint = current;
       fenceSnapshot =
@@ -1366,15 +1519,15 @@ export async function createEmbeddedAttemptSessionLockController(params: {
 
   async function runPublishingOwnedSessionFileWrite<T>(
     run: () => Promise<T> | T,
-    resolvePublishedEntryIds?: (result: T) => readonly string[],
+    resolvePublishedEntries?: (result: T) => readonly OwnedSessionTranscriptPublishedEntry[],
   ): Promise<T> {
     const parentLockState = activeWriteLock.getStore();
     if (parentLockState?.publishingOwnedWrite) {
       const result = await run();
-      const nestedEntryIds = resolvePublishedEntryIds?.(result);
-      if (nestedEntryIds !== undefined) {
-        parentLockState.publishedEntryIds ??= [];
-        parentLockState.publishedEntryIds.push(...nestedEntryIds);
+      const nestedEntries = resolvePublishedEntries?.(result);
+      if (nestedEntries !== undefined) {
+        parentLockState.publishedEntries ??= [];
+        parentLockState.publishedEntries.push(...nestedEntries);
       }
       return result;
     }
@@ -1393,24 +1546,24 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       const publicationLockState: ActiveWriteLockState = {
         active: parentLockState?.active ?? true,
         publishingOwnedWrite: true,
-        publishedEntryIds: undefined,
+        publishedEntries: undefined,
       };
       try {
         return await activeWriteLock.run(publicationLockState, async () => {
-          let expectedEntryIds: readonly string[] | undefined;
+          let expectedPublishedEntries: readonly OwnedSessionTranscriptPublishedEntry[] | undefined;
           try {
             const result = await run();
-            const ownEntryIds = resolvePublishedEntryIds?.(result);
-            const nestedEntryIds = publicationLockState.publishedEntryIds;
-            expectedEntryIds =
-              nestedEntryIds === undefined
-                ? ownEntryIds
-                : ownEntryIds === undefined
-                  ? nestedEntryIds
-                  : [...nestedEntryIds, ...ownEntryIds];
+            const ownEntries = resolvePublishedEntries?.(result);
+            const nestedEntries = publicationLockState.publishedEntries;
+            expectedPublishedEntries =
+              nestedEntries === undefined
+                ? ownEntries
+                : ownEntries === undefined
+                  ? nestedEntries
+                  : [...nestedEntries, ...ownEntries];
             return result;
           } finally {
-            await publishOwnedSessionFileFence(beforeWrite, expectedEntryIds);
+            await publishOwnedSessionFileFence(beforeWrite, expectedPublishedEntries);
           }
         });
       } finally {
@@ -1543,7 +1696,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
         if (options?.publishOwnedWrite !== true) {
           return await run();
         }
-        return await runPublishingOwnedSessionFileWrite(run, options.resolvePublishedEntryIds);
+        return await runPublishingOwnedSessionFileWrite(run, options.resolvePublishedEntries);
       }
       const { lock, owned, releaseRetainedUse } = await acquireWriteLock();
       try {
@@ -1551,10 +1704,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
           await assertSessionFileFence();
           const runWithLock = async () => {
             if (options?.publishOwnedWrite === true) {
-              return await runPublishingOwnedSessionFileWrite(
-                run,
-                options.resolvePublishedEntryIds,
-              );
+              return await runPublishingOwnedSessionFileWrite(run, options.resolvePublishedEntries);
             }
             const beforeWrite = await readSessionFileFingerprint(params.lockOptions.sessionFile);
             try {

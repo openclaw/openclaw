@@ -15,8 +15,13 @@ type OwnedSessionTranscriptWriteContext = {
 
 export type OwnedSessionTranscriptWriteOptions<T> = {
   publishOwnedWrite?: boolean;
-  resolvePublishedEntryIds?: (result: T) => readonly string[];
+  resolvePublishedEntries?: (result: T) => readonly OwnedSessionTranscriptPublishedEntry[];
 };
+
+export type OwnedSessionTranscriptPublishedEntry =
+  | { kind: "id"; id: string }
+  | { kind: "header"; serialized: string }
+  | { kind: "serialized"; serialized: string };
 
 export type OwnedSessionTranscriptCacheSnapshot = {
   dev: bigint;
