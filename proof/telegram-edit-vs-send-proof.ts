@@ -126,8 +126,36 @@ function createLoggingApi(chatId: string): Bot["api"] {
   } as unknown as Bot["api"];
 }
 
+// MULTI_SEGMENTS>=2 replays a multi-tool turn: text -> tool -> more text -> tool ...
+// Partials carry the FULL cumulative snapshot (no delta), exactly as the runtime
+// emits them (onPartialReply({text}) — see agent-runner-execution.ts). One
+// onAssistantMessageStart at the turn start; a tool boundary between each segment.
+const multiSegments = Number(process.env.MULTI_SEGMENTS ?? 0);
+
+const replayMultiToolTurn = async ({ dispatcherOptions, replyOptions }: any) => {
+  await replyOptions?.onAssistantMessageStart?.();
+  let cumulative = "";
+  for (let i = 0; i < multiSegments; i += 1) {
+    const segment = `Segment ${i + 1}: distinct answer content number ${i + 1} here.`;
+    cumulative = cumulative ? `${cumulative} ${segment}` : segment;
+    await replyOptions?.onPartialReply?.({ text: cumulative });
+    if (i < multiSegments - 1) {
+      if (toolDelayMs > 0) {
+        await sleep(toolDelayMs);
+      }
+      await replyOptions?.onToolStart?.({ name: "read_file", phase: "start" });
+    }
+  }
+  await dispatcherOptions.deliver({ text: cumulative }, { kind: "final" });
+  return { queuedFinal: true };
+};
+
 // Replay the bug-triggering assistant event sequence into the real dispatch pipeline.
-const replayDispatcher = (async ({ dispatcherOptions, replyOptions }: any) => {
+const replayDispatcher = (async (args: any) => {
+  if (multiSegments >= 2) {
+    return replayMultiToolTurn(args);
+  }
+  const { dispatcherOptions, replyOptions } = args;
   await replyOptions?.onAssistantMessageStart?.();
   await replyOptions?.onPartialReply?.({ text: PREAMBLE });
   // Fast timing (toolDelayMs=0): the tool fires while the preamble send is still
