@@ -644,6 +644,97 @@ describe("handleTelegramAction", () => {
     });
   });
 
+  it("emits internal message:sent once for durable sendMessage action deliveries", async () => {
+    const stateDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-telegram-action-message-sent-"),
+    );
+    const { clearInternalHooks, registerInternalHook, setInternalHooksEnabled } =
+      await import("../../../src/hooks/internal-hooks.js");
+    const { createOutboundTestPlugin, createTestRegistry, setActivePluginRegistry } =
+      await import("openclaw/plugin-sdk/plugin-test-runtime");
+    const events: unknown[] = [];
+    const sendText = vi.fn(async () => ({
+      channel: "telegram",
+      messageId: "tg-123",
+      chatId: "-100123",
+    }));
+
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    telegramActionRuntime.sendDurableMessageBatch =
+      originalTelegramActionRuntime.sendDurableMessageBatch;
+    setInternalHooksEnabled(true);
+    clearInternalHooks();
+    registerInternalHook("message:sent", (event) => {
+      events.push(event);
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "telegram",
+            outbound: {
+              deliveryMode: "direct",
+              deliveryCapabilities: {
+                durableFinal: {
+                  text: true,
+                  media: true,
+                  payload: true,
+                  silent: true,
+                  replyTo: true,
+                  thread: true,
+                  messageSendingHooks: true,
+                  batch: true,
+                },
+              },
+              sendText,
+            },
+          }),
+        },
+      ]),
+    );
+
+    try {
+      await handleTelegramAction(
+        {
+          action: "sendMessage",
+          accountId: "klawbi",
+          to: "-100123",
+          content: "native sent hook",
+        },
+        telegramConfig({ accounts: { klawbi: { botToken: "acct-tok" } } }),
+        {
+          gatewayClientScopes: ["operator.write"],
+          sessionKey: "agent:main:telegram:group:-100123",
+        },
+      );
+
+      expect(sendText).toHaveBeenCalledTimes(1);
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        type: "message",
+        action: "sent",
+        sessionKey: "agent:main:telegram:group:-100123",
+        messages: [],
+        context: {
+          to: "-100123",
+          content: "native sent hook",
+          success: true,
+          channelId: "telegram",
+          accountId: "klawbi",
+          conversationId: "-100123",
+          messageId: "tg-123",
+        },
+      });
+      expect((events[0] as { timestamp?: unknown }).timestamp).toBeInstanceOf(Date);
+    } finally {
+      clearInternalHooks();
+      setActivePluginRegistry(createTestRegistry([]));
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("persists sendMessage action deliveries before Telegram platform send", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-action-durable-"));
     const {
