@@ -1,3 +1,4 @@
+// Zai tests cover index plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -88,8 +89,21 @@ describe("zai provider plugin", () => {
 
     const cases = [
       {
-        modelId: "glm-5.1",
+        modelId: "glm-5.2",
+        providerBaseUrl: "https://api.z.ai/api/coding/paas/v4",
         expected: {
+          baseUrl: "https://api.z.ai/api/coding/paas/v4",
+          input: ["text"],
+          reasoning: true,
+          contextWindow: 1_000_000,
+          maxTokens: 131_072,
+        },
+      },
+      {
+        modelId: "glm-5.1",
+        providerBaseUrl: "https://api.z.ai/api/paas/v4",
+        expected: {
+          baseUrl: "https://api.z.ai/api/paas/v4",
           input: ["text"],
           reasoning: true,
           contextWindow: 202800,
@@ -98,7 +112,9 @@ describe("zai provider plugin", () => {
       },
       {
         modelId: "glm-5v-turbo",
+        providerBaseUrl: "https://api.z.ai/api/paas/v4",
         expected: {
+          baseUrl: "https://api.z.ai/api/paas/v4",
           input: ["text", "image"],
           reasoning: true,
           contextWindow: 202800,
@@ -114,14 +130,34 @@ describe("zai provider plugin", () => {
         modelRegistry: {
           find: (_provider: string, modelId: string) => (modelId === "glm-4.7" ? template : null),
         },
+        providerConfig: { baseUrl: testCase.providerBaseUrl },
       } as never) as Record<string, unknown> | undefined;
       expectModelFields(resolved, {
         provider: "zai",
         api: "openai-completions",
-        baseUrl: "https://api.z.ai/api/paas/v4",
         id: testCase.modelId,
         ...testCase.expected,
       });
+    }
+  });
+
+  it("keeps selected Coding Plan and proxy endpoints for dynamic GLM-5 models", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const template = createGlm47Template();
+
+    for (const baseUrl of [
+      "https://open.bigmodel.cn/api/coding/paas/v4",
+      "https://proxy.example.test/zai",
+    ]) {
+      const resolved = provider.resolveDynamicModel?.({
+        provider: "zai",
+        modelId: "glm-5.2",
+        modelRegistry: {
+          find: (_provider: string, modelId: string) => (modelId === "glm-4.7" ? template : null),
+        },
+        providerConfig: { baseUrl },
+      } as never) as Record<string, unknown> | undefined;
+      expect(resolved?.baseUrl).toBe(baseUrl);
     }
   });
 
@@ -374,7 +410,7 @@ describe("zai provider plugin", () => {
     void wrapped?.(model, context, {});
 
     expect(capturedPayload?.thinking).toEqual({ type: "enabled", clear_thinking: false });
-    const assistantMessage = (capturedPayload?.messages as Array<Record<string, unknown>>)[1];
+    const assistantMessage = (capturedPayload!.messages as Array<Record<string, unknown>>)[1];
     expect(assistantMessage?.role).toBe("assistant");
     expect(assistantMessage?.content).toBe("visible reply");
     expect(assistantMessage?.reasoning_content).toBe("prior reasoning");

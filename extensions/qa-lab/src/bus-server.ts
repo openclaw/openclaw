@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements bus server behavior.
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -192,11 +193,13 @@ export async function handleQaBusRequest(params: {
 }
 
 export function createQaBusServer(state: QaBusState): Server {
-  return createServer(async (req, res) => {
-    const handled = await handleQaBusRequest({ req, res, state });
-    if (!handled) {
-      writeError(res, 404, "not found");
-    }
+  return createServer((req, res) => {
+    void (async () => {
+      const handled = await handleQaBusRequest({ req, res, state });
+      if (!handled) {
+        writeError(res, 404, "not found");
+      }
+    })();
   });
 }
 

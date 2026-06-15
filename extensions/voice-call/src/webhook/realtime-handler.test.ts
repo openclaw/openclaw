@@ -1,3 +1,4 @@
+// Voice Call tests cover realtime handler plugin behavior.
 import http from "node:http";
 import type {
   RealtimeVoiceBridge,
@@ -331,6 +332,37 @@ describe("RealtimeCallHandler path routing", () => {
           ws.close();
         }
       }
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("rejects stream sessions when token expiry would exceed the Date range", async () => {
+    const processEvent = vi.fn();
+    const createBridge = vi.fn(() => makeBridge());
+    const handler = makeHandler(undefined, {
+      manager: {
+        processEvent,
+      },
+      provider: {
+        name: "telnyx",
+      },
+      realtimeProvider: makeRealtimeProvider(createBridge),
+    });
+    handler.setPublicUrl("https://public.example/voice/webhook");
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
+    const session = handler.issueStreamSession({
+      providerName: "telnyx",
+      callId: "call-overflow",
+      direction: "inbound",
+    });
+    nowSpy.mockRestore();
+    const server = await startStreamSessionServer(handler, session.streamUrl);
+
+    try {
+      await expect(connectWs(server.url)).rejects.toThrow("Unexpected server response: 401");
+      expect(createBridge).not.toHaveBeenCalled();
+      expect(processEvent).not.toHaveBeenCalled();
     } finally {
       await server.close();
     }

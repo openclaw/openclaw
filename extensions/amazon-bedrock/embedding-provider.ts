@@ -1,3 +1,7 @@
+/**
+ * Amazon Bedrock embedding provider runtime. It normalizes model-specific
+ * request/response shapes across Titan, Cohere, Nova, and TwelveLabs models.
+ */
 import {
   debugEmbeddingsLog,
   sanitizeAndNormalizeEmbedding,
@@ -20,6 +24,7 @@ type BedrockEmbeddingClient = {
   dimensions?: number;
 };
 
+/** Default Bedrock embedding model used when no explicit model is configured. */
 export const DEFAULT_BEDROCK_EMBEDDING_MODEL = "amazon.titan-embed-text-v2:0";
 
 /** Request/response format family — each has a different API shape. */
@@ -365,29 +370,29 @@ export async function createBedrockEmbeddingProvider(
 
   const embedQuery = async (
     text: string,
-    options?: { signal?: AbortSignal },
+    optionsValue?: { signal?: AbortSignal },
   ): Promise<number[]> => {
     if (!text.trim()) {
       return [];
     }
     if (isCohere) {
-      return (await embedCohere([text], "search_query", options?.signal))[0] ?? [];
+      return (await embedCohere([text], "search_query", optionsValue?.signal))[0] ?? [];
     }
-    return embedSingle(text, options?.signal);
+    return embedSingle(text, optionsValue?.signal);
   };
 
   const embedBatch = async (
     texts: string[],
-    options?: { signal?: AbortSignal },
+    optionsLocal?: { signal?: AbortSignal },
   ): Promise<number[][]> => {
     if (texts.length === 0) {
       return [];
     }
     if (isCohere) {
-      return embedCohere(texts, "search_document", options?.signal);
+      return embedCohere(texts, "search_document", optionsLocal?.signal);
     }
     return Promise.all(
-      texts.map((t) => (t.trim() ? embedSingle(t, options?.signal) : Promise.resolve([]))),
+      texts.map((t) => (t.trim() ? embedSingle(t, optionsLocal?.signal) : Promise.resolve([]))),
     );
   };
 

@@ -1,3 +1,5 @@
+// Session creation tests protect dashboard-origin session records, transcript
+// creation, parent linkage, and model/provider overrides exposed by the gateway API.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
@@ -10,7 +12,8 @@ import {
   sessionLifecycleHookMocks,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
+const { createSessionStoreDir, createSelectedGlobalSessionStore, openClient } =
+  setupGatewaySessionsTestHarness();
 
 function requireNonEmptyString(value: string | undefined, label: string): string {
   if (!value) {
@@ -302,13 +305,7 @@ test("sessions.create preserves global and unknown sentinel keys", async () => {
 });
 
 test("sessions.create stores selected global sessions in the requested agent store", async () => {
-  const { dir } = await createSessionStoreDir();
-  const storeTemplate = path.join(dir, "{agentId}", "sessions.json");
-  const mainStorePath = storeTemplate.replace("{agentId}", "main");
-  const workStorePath = storeTemplate.replace("{agentId}", "work");
-  testState.sessionStorePath = storeTemplate;
-  testState.sessionConfig = { scope: "global" };
-  testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "work" }] };
+  const { mainStorePath, workStorePath } = await createSelectedGlobalSessionStore();
   const broadcastToConnIds = vi.fn();
 
   const created = await directSessionReq<{
@@ -350,13 +347,7 @@ test("sessions.create stores selected global sessions in the requested agent sto
 });
 
 test("sessions.create loads selected global parent from the requested agent store", async () => {
-  const { dir } = await createSessionStoreDir();
-  const storeTemplate = path.join(dir, "{agentId}", "sessions.json");
-  const mainStorePath = storeTemplate.replace("{agentId}", "main");
-  const workStorePath = storeTemplate.replace("{agentId}", "work");
-  testState.sessionStorePath = storeTemplate;
-  testState.sessionConfig = { scope: "global" };
-  testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "work" }] };
+  const { mainStorePath, workStorePath } = await createSelectedGlobalSessionStore();
   try {
     await writeSessionStore({
       storePath: mainStorePath,
@@ -430,10 +421,7 @@ test("sessions.create loads selected global parent from the requested agent stor
 });
 
 test("sessions.get reads selected global messages from the requested agent store", async () => {
-  const { dir } = await createSessionStoreDir();
-  const storeTemplate = path.join(dir, "{agentId}", "sessions.json");
-  const mainStorePath = storeTemplate.replace("{agentId}", "main");
-  const workStorePath = storeTemplate.replace("{agentId}", "work");
+  const { mainStorePath, workStorePath } = await createSelectedGlobalSessionStore();
   const mainTranscriptPath = path.join(path.dirname(mainStorePath), "sess-main-global.jsonl");
   const workTranscriptPath = path.join(path.dirname(workStorePath), "sess-work-global.jsonl");
   await fs.mkdir(path.dirname(mainTranscriptPath), { recursive: true });
@@ -448,9 +436,6 @@ test("sessions.get reads selected global messages from the requested agent store
     `${JSON.stringify({ type: "message", id: "work-msg", message: { role: "user", content: "work global" } })}\n`,
     "utf-8",
   );
-  testState.sessionStorePath = storeTemplate;
-  testState.sessionConfig = { scope: "global" };
-  testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "work" }] };
   try {
     await writeSessionStore({
       storePath: mainStorePath,
@@ -487,11 +472,7 @@ test("sessions.get reads selected global messages from the requested agent store
 });
 
 test("sessions.create sends selected global initial tasks to the requested agent", async () => {
-  const { dir } = await createSessionStoreDir();
-  const storeTemplate = path.join(dir, "{agentId}", "sessions.json");
-  testState.sessionStorePath = storeTemplate;
-  testState.sessionConfig = { scope: "global" };
-  testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "work" }] };
+  const { mainStorePath, workStorePath } = await createSelectedGlobalSessionStore();
   const { ws } = await openClient();
 
   const created = await rpcReq<{
@@ -510,8 +491,6 @@ test("sessions.create sends selected global initial tasks to the requested agent
   const runId = requireNonEmptyString(created.payload?.runId, "selected global run id");
   const wait = await rpcReq(ws, "agent.wait", { runId, timeoutMs: 1_000 });
   expect(wait.ok).toBe(true);
-  const workStorePath = storeTemplate.replace("{agentId}", "work");
-  const mainStorePath = storeTemplate.replace("{agentId}", "main");
   const workStore = JSON.parse(await fs.readFile(workStorePath, "utf-8")) as Record<
     string,
     { sessionFile?: string }

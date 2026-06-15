@@ -1,3 +1,4 @@
+// Secret input schema helpers validate plugin-declared credential prompts and storage metadata.
 import { z } from "zod";
 import { ENV_SECRET_REF_ID_RE } from "../config/types.secrets.js";
 import { sensitive } from "../config/zod-schema.sensitive.js";
@@ -8,6 +9,10 @@ import {
   SECRET_PROVIDER_ALIAS_PATTERN,
 } from "../secrets/ref-contract.js";
 
+/**
+ * Returns the shared secret-input schema for plaintext values and env/file/exec refs.
+ * Reusing this singleton preserves sensitive-path registration for config redaction.
+ */
 export function buildSecretInputSchema() {
   return secretInputSchema;
 }

@@ -1,3 +1,4 @@
+// Covers browser sandbox security audit findings.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { collectSandboxBrowserHashLabelFindings } from "./audit-extra.async.js";
@@ -105,11 +106,11 @@ describe("security audit sandbox browser findings", () => {
       execDockerRawFn: async (_args, opts) => {
         probeSignal = opts?.signal;
         markProbeStarted();
-        return await new Promise((_, reject) =>
+        return await new Promise((_, reject) => {
           opts?.signal?.addEventListener("abort", () => reject(new Error("aborted")), {
             once: true,
-          }),
-        );
+          });
+        });
       },
     });
     await probeStarted;
@@ -146,11 +147,11 @@ describe("security audit sandbox browser findings", () => {
           };
         }
         markHungProbeStarted();
-        return await new Promise((_, reject) =>
+        return await new Promise((_, reject) => {
           opts?.signal?.addEventListener("abort", () => reject(new Error("aborted")), {
             once: true,
-          }),
-        );
+          });
+        });
       },
     });
     await hungProbeStarted;

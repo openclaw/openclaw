@@ -1,3 +1,8 @@
+/**
+ * Broad coverage for createOpenClawCodingTools.
+ * Verifies plugin tools, tool policy, schema cleanup, sandbox fs tools, and
+ * assembled tool allowlist behavior.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -15,6 +20,7 @@ import { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
 import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
+import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import * as openClawPluginTools from "./openclaw-plugin-tools.js";
@@ -208,6 +214,36 @@ describe("createOpenClawCodingTools", () => {
     );
   });
 
+  it("re-wraps existing before_tool_call hooks once with the current context", async () => {
+    const beforeToolCall = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    const wrapped = wrapToolWithBeforeToolCallHook(
+      {
+        name: "already_wrapped",
+        label: "Already wrapped",
+        description: "Already wrapped tool",
+        parameters: {},
+        execute,
+      },
+      { agentId: "main", sessionId: "session-original" },
+    );
+    vi.mocked(createOpenClawTools).mockReturnValueOnce([wrapped as never]);
+
+    const tools = createOpenClawCodingTools({ agentId: "main", sessionId: "session-new" });
+    const tool = requireTool(tools, "already_wrapped");
+    await requireToolExecute(tool)("call-wrapped", {});
+
+    expect(beforeToolCall).toHaveBeenCalledTimes(1);
+    expect(beforeToolCall.mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({ agentId: "main", sessionId: "session-new" }),
+    );
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(tool.parameters).toEqual({ type: "object", properties: {} });
+  });
+
   it("adds Tool Search control tools when explicitly requested", () => {
     const tools = createOpenClawCodingTools({
       includeToolSearchControls: true,
@@ -359,6 +395,81 @@ describe("createOpenClawCodingTools", () => {
     const tools = createOpenClawCodingTools({
       config: { tools: { profile: "minimal" } },
       runtimeToolAllowlist: ["message"],
+      toolConstructionPlan: {
+        includeBaseCodingTools: false,
+        includeShellTools: false,
+        includeChannelTools: false,
+        includeOpenClawTools: true,
+        includePluginTools: false,
+      },
+    });
+
+    expect(toolNameList(tools)).toContain("message");
+  });
+
+  it("preserves runtime-allowed message through local model lean filtering", () => {
+    const tools = createOpenClawCodingTools({
+      config: {
+        agents: {
+          defaults: {
+            experimental: {
+              localModelLean: true,
+            },
+          },
+        },
+        tools: { profile: "minimal" },
+      },
+      runtimeToolAllowlist: ["message"],
+      toolConstructionPlan: {
+        includeBaseCodingTools: false,
+        includeShellTools: false,
+        includeChannelTools: false,
+        includeOpenClawTools: true,
+        includePluginTools: false,
+      },
+    });
+
+    expect(toolNameList(tools)).toContain("message");
+  });
+
+  it("preserves forced message through local model lean filtering without runtime allowlist", () => {
+    const tools = createOpenClawCodingTools({
+      config: {
+        agents: {
+          defaults: {
+            experimental: {
+              localModelLean: true,
+            },
+          },
+        },
+        tools: { profile: "minimal" },
+      },
+      forceMessageTool: true,
+      toolConstructionPlan: {
+        includeBaseCodingTools: false,
+        includeShellTools: false,
+        includeChannelTools: false,
+        includeOpenClawTools: true,
+        includePluginTools: false,
+      },
+    });
+
+    expect(toolNameList(tools)).toContain("message");
+  });
+
+  it("preserves message-tool-only replies through local model lean filtering without runtime allowlist", () => {
+    const tools = createOpenClawCodingTools({
+      config: {
+        agents: {
+          defaults: {
+            experimental: {
+              localModelLean: true,
+            },
+          },
+        },
+        tools: { profile: "minimal" },
+      },
+      sourceReplyDeliveryMode: "message_tool_only",
       toolConstructionPlan: {
         includeBaseCodingTools: false,
         includeShellTools: false,
@@ -687,7 +798,7 @@ describe("createOpenClawCodingTools", () => {
     const defaultTools = createOpenClawCodingTools({ config: testConfig });
     expect(toolNameList(defaultTools)).toContain("exec");
     expect(toolNameList(defaultTools)).toContain("process");
-    expect(toolNameList(defaultTools)).not.toContain("apply_patch");
+    expect(toolNameList(defaultTools)).toContain("apply_patch");
 
     const openAiTools = createOpenClawCodingTools({
       config: testConfig,
@@ -698,7 +809,7 @@ describe("createOpenClawCodingTools", () => {
 
     const codexTools = createOpenClawCodingTools({
       config: testConfig,
-      modelProvider: "openai-codex",
+      modelProvider: "openai",
       modelId: "gpt-5.4",
     });
     expect(toolNameList(codexTools)).toContain("apply_patch");
@@ -755,7 +866,7 @@ describe("createOpenClawCodingTools", () => {
     expect(names.has("read")).toBe(true);
     expect(names.has("write")).toBe(true);
     expect(names.has("edit")).toBe(true);
-    expect(names.has("apply_patch")).toBe(false);
+    expect(names.has("apply_patch")).toBe(true);
   });
 
   it("provides top-level object schemas for all tools", () => {
@@ -786,6 +897,28 @@ describe("createOpenClawCodingTools", () => {
     expect(names.has("whatsapp")).toBe(false);
   });
 
+  it("separates the canonical message provider from transport tool policy", () => {
+    vi.mocked(createOpenClawTools).mockClear();
+
+    const tools = createOpenClawCodingTools({
+      config: {
+        tools: {
+          toolsBySender: {
+            "channel:discord:speaker-1": { deny: ["exec"] },
+          },
+        },
+      },
+      messageProvider: "discord",
+      toolPolicyMessageProvider: "discord-voice",
+      senderId: "speaker-1",
+    });
+    const names = new Set(tools.map((tool) => tool.name));
+
+    expect(names.has("exec")).toBe(false);
+    expect(names.has("tts")).toBe(false);
+    expect(latestCreateOpenClawToolsOptions().agentChannel).toBe("discord");
+  });
+
   it("filters session tools for sub-agent sessions by default", () => {
     const tools = createOpenClawCodingTools({
       sessionKey: "agent:main:subagent:test",
@@ -800,7 +933,7 @@ describe("createOpenClawCodingTools", () => {
     expect(names.has("read")).toBe(true);
     expect(names.has("exec")).toBe(true);
     expect(names.has("process")).toBe(true);
-    expect(names.has("apply_patch")).toBe(false);
+    expect(names.has("apply_patch")).toBe(true);
   });
 
   it("uses stored spawnDepth to apply leaf tool policy for flat depth-2 session keys", async () => {
@@ -1048,6 +1181,14 @@ describe("createOpenClawCodingTools", () => {
     });
 
     expect(toolNameList(tools)).toContain("heartbeat_respond");
+  });
+
+  it("keeps skill_workshop available under the coding profile", () => {
+    const tools = createOpenClawCodingTools({
+      config: { tools: { profile: "coding" } },
+    });
+
+    expect(toolNameList(tools)).toContain("skill_workshop");
   });
 
   it("can keep message available when a cron route needs it under a provider coding profile", () => {

@@ -1,3 +1,4 @@
+// Tests info-style commands that report context, status, skills, and trajectory exports.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -230,6 +231,39 @@ describe("info command handlers", () => {
 
     expect(result).toBeNull();
     expect(params.loadSkillCommands).toHaveBeenCalledOnce();
+    expect(listSkillCommandsForAgentsMock).not.toHaveBeenCalled();
+  });
+
+  it("loads skills when named /skill receives an empty precomputed command list", async () => {
+    const params = buildInfoParams("/skill demo_skill input", {
+      commands: { text: true },
+    } as OpenClawConfig);
+    params.skillCommands = [];
+    params.loadSkillCommands = vi.fn(async () => [
+      {
+        name: "demo_skill",
+        skillName: "demo-skill",
+        description: "Demo skill",
+      },
+    ]);
+
+    const result = await handleSkillCommandUsage(params, true);
+
+    expect(result).toBeNull();
+    expect(params.loadSkillCommands).toHaveBeenCalledOnce();
+    expect(listSkillCommandsForAgentsMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps an empty precomputed /skill command list authoritative without a loader", async () => {
+    const params = buildInfoParams("/skill demo_skill input", {
+      commands: { text: true },
+    } as OpenClawConfig);
+    params.skillCommands = [];
+
+    const result = await handleSkillCommandUsage(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("Unknown skill: demo_skill");
     expect(listSkillCommandsForAgentsMock).not.toHaveBeenCalled();
   });
 

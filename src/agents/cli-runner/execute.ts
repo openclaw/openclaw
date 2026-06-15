@@ -1,6 +1,13 @@
+/**
+ * Executes prepared CLI backend runs, including env isolation, streaming parse,
+ * live-session routing, and diagnostics.
+ */
 import crypto from "node:crypto";
 import { shouldLogVerbose } from "../../globals.js";
-import { emitAgentEvent } from "../../infra/agent-events.js";
+import {
+  assertAgentRunLifecycleGenerationCurrent,
+  emitAgentEvent,
+} from "../../infra/agent-events.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import {
   resolveEventSessionKeyForPolicy,
@@ -27,11 +34,13 @@ import { runClaudeLiveSessionTurn, shouldUseClaudeLiveSession } from "./claude-l
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
 import {
   buildCliSupervisorScopeKey,
+  buildClaudeOwnerKey,
   buildCliArgs,
   resolveCliRunQueueKey,
   enqueueCliRun,
   prepareCliPromptImagePayload,
   resolveCliNoOutputTimeoutMs,
+  resolveCliRunTimeoutOverrideMs,
   resolvePromptInput,
   resolveSessionIdToSend,
   resolveSystemPromptUsage,
@@ -96,6 +105,7 @@ function appendCliOutputParseBuffer(
   };
 }
 
+/** Overrides process/event dependencies for CLI runner execution tests. */
 export function setCliRunnerExecuteTestDeps(overrides: Partial<typeof executeDeps>): void {
   Object.assign(executeDeps, overrides);
 }
@@ -223,6 +233,7 @@ function fingerprintCliSessionId(sessionId?: string): string {
   return crypto.createHash("sha256").update(trimmed).digest("hex").slice(0, 12);
 }
 
+/** Builds the compact execution summary logged before a CLI backend run. */
 export function buildCliExecLogLine(params: {
   provider: string;
   model: string;
@@ -253,6 +264,7 @@ export function buildCliExecLogLine(params: {
   ].join(" ");
 }
 
+/** Summarizes auth-related env keys preserved or cleared for a CLI child process. */
 export function buildCliEnvAuthLog(childEnv: Record<string, string>): string {
   const hostKeys = listPresentCliAuthEnvKeys(process.env);
   const childKeys = listPresentCliAuthEnvKeys(childEnv);
@@ -265,6 +277,7 @@ export function buildCliEnvAuthLog(childEnv: Record<string, string>): string {
   ].join(" ");
 }
 
+/** Executes a prepared CLI run context and returns normalized CLI output. */
 export async function executePreparedCliRun(
   context: PreparedCliRunContext,
   cliSessionIdToUse?: string,
@@ -344,6 +357,7 @@ export async function executePreparedCliRun(
       modelId: context.modelId,
       authProfileId: context.effectiveAuthProfileId,
       thinkingLevel: params.thinkLevel,
+      executionMode: params.executionMode ?? "agent",
       useResume,
       baseArgs: baseArgsWithSkills,
     }) ?? baseArgsWithSkills;
@@ -365,10 +379,20 @@ export async function executePreparedCliRun(
     runId: params.runId,
     workspaceDir: context.workspaceDir,
     cliSessionId: useResume ? resolvedSessionId : undefined,
+    ownerKey: buildClaudeOwnerKey({
+      agentAccountId: params.agentAccountId,
+      agentId: params.agentId,
+      authProfileId: context.effectiveAuthProfileId,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+    }),
   });
 
   try {
     return await enqueueCliRun(queueKey, async () => {
+      if (params.lifecycleGeneration) {
+        assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
+      }
       const cliTurnStartedAt = Date.now();
       const restoreSkillEnv = params.skillsSnapshot
         ? applySkillEnvOverridesFromSnapshot({
@@ -441,19 +465,32 @@ export async function executePreparedCliRun(
           }
         }
 
+        const runTimeoutOverrideMs = resolveCliRunTimeoutOverrideMs({
+          config: params.config,
+          lane: params.lane,
+          timeoutMs: params.timeoutMs,
+          runTimeoutOverrideMs: params.runTimeoutOverrideMs,
+        });
         const noOutputTimeoutMs = resolveCliNoOutputTimeoutMs({
           backend,
           timeoutMs: params.timeoutMs,
+          runTimeoutOverrideMs,
           useResume,
           trigger: params.trigger,
         });
         const outputMode = useResume ? (backend.resumeOutput ?? backend.output) : backend.output;
         const hasJsonlOutput = outputMode === "jsonl";
+        let observedCliActivity = false;
+        const emitLiveEvents = params.executionMode !== "side-question";
         const emitCliToolUseStart = (event: {
           toolCallId: string;
           name: string;
           args: Record<string, unknown>;
         }) => {
+          observedCliActivity = true;
+          if (!emitLiveEvents) {
+            return;
+          }
           emitAgentEvent({
             runId: params.runId,
             stream: "tool",
@@ -471,6 +508,10 @@ export async function executePreparedCliRun(
           isError: boolean;
           result?: unknown;
         }) => {
+          observedCliActivity = true;
+          if (!emitLiveEvents) {
+            return;
+          }
           emitAgentEvent({
             runId: params.runId,
             stream: "tool",
@@ -480,6 +521,29 @@ export async function executePreparedCliRun(
               toolCallId: event.toolCallId,
               isError: event.isError,
               result: sanitizeToolResult(event.result),
+            },
+          });
+        };
+        let commentaryCounter = 0;
+        const emitCliCommentaryText = (text: string) => {
+          if (!emitLiveEvents) {
+            return;
+          }
+          commentaryCounter += 1;
+          const transformedText = applyPluginTextReplacements(
+            text,
+            context.backendResolved.textTransforms?.output,
+          );
+          emitAgentEvent({
+            runId: params.runId,
+            stream: "item",
+            data: {
+              kind: "preamble",
+              itemId: `commentary-${params.runId}-${commentaryCounter}`,
+              phase: "update",
+              title: "commentary",
+              status: "running",
+              progressText: transformedText,
             },
           });
         };
@@ -505,6 +569,12 @@ export async function executePreparedCliRun(
             noOutputTimeoutMs,
             getProcessSupervisor: executeDeps.getProcessSupervisor,
             onAssistantDelta: ({ text, delta }) => {
+              if (text || delta) {
+                observedCliActivity = true;
+              }
+              if (!emitLiveEvents) {
+                return;
+              }
               emitAgentEvent({
                 runId: params.runId,
                 stream: "assistant",
@@ -522,6 +592,10 @@ export async function executePreparedCliRun(
             },
             onToolUseStart: emitCliToolUseStart,
             onToolResult: emitCliToolResult,
+            onCommentaryText:
+              emitLiveEvents && context.params.emitCommentaryText
+                ? emitCliCommentaryText
+                : undefined,
             cleanup: async () => {
               try {
                 await fallbackClaudeSkillsPlugin?.cleanup();
@@ -546,6 +620,12 @@ export async function executePreparedCliRun(
               backend,
               providerId: context.backendResolved.id,
               onAssistantDelta: ({ text, delta }) => {
+                if (text || delta) {
+                  observedCliActivity = true;
+                }
+                if (!emitLiveEvents) {
+                  return;
+                }
                 emitAgentEvent({
                   runId: params.runId,
                   stream: "assistant",
@@ -563,6 +643,10 @@ export async function executePreparedCliRun(
               },
               onToolUseStart: emitCliToolUseStart,
               onToolResult: emitCliToolResult,
+              onCommentaryText:
+                emitLiveEvents && context.params.emitCommentaryText
+                  ? emitCliCommentaryText
+                  : undefined,
             })
           : null;
         const supervisor = executeDeps.getProcessSupervisor();
@@ -677,7 +761,18 @@ export async function executePreparedCliRun(
             cliBackendLog.warn(
               `cli watchdog timeout: provider=${params.provider} model=${context.modelId} session=${resolvedSessionId ?? params.sessionId} noOutputTimeoutMs=${noOutputTimeoutMs} pid=${managedRun.pid ?? "unknown"}`,
             );
-            if (params.sessionKey) {
+            const retryableNoOutputTimeout =
+              !observedCliActivity &&
+              stdoutDiagnostic.length === 0 &&
+              stderrDiagnostic.length === 0;
+            const deferWatchdogNoticeForFreshRetry =
+              retryableNoOutputTimeout &&
+              Boolean(cliSessionIdToUse) &&
+              Boolean(resolvedSessionId) &&
+              Boolean(context.openClawHistoryPrompt) &&
+              Boolean(params.sessionKey) &&
+              params.timeoutMs - (Date.now() - context.started) > 0;
+            if (params.sessionKey && emitLiveEvents && !deferWatchdogNoticeForFreshRetry) {
               const stallNotice = [
                 `CLI agent (${params.provider}) produced no output for ${Math.round(noOutputTimeoutMs / 1000)}s and was terminated.`,
                 "It may have been waiting for interactive input or an approval prompt.",
@@ -711,6 +806,7 @@ export async function executePreparedCliRun(
               sessionId: params.sessionId,
               lane: params.lane,
               status: resolveFailoverStatus("timeout"),
+              code: retryableNoOutputTimeout ? "cli_no_output_timeout" : undefined,
             });
           }
           if (result.reason === "overall-timeout") {
@@ -722,6 +818,7 @@ export async function executePreparedCliRun(
               sessionId: params.sessionId,
               lane: params.lane,
               status: resolveFailoverStatus("timeout"),
+              code: "cli_overall_timeout",
             });
           }
           const errorCandidates = [stderr, stdout, stderrDiagnostic, stdoutDiagnostic].filter(
@@ -746,6 +843,13 @@ export async function executePreparedCliRun(
           const err = structuredError || classifiedErrorText || errorCandidates[0] || "CLI failed.";
           reason = reason ?? "unknown";
           const status = resolveFailoverStatus(reason);
+          const retryCode =
+            reason === "unknown" &&
+            result.reason === "exit" &&
+            errorCandidates.length === 0 &&
+            !observedCliActivity
+              ? "cli_unknown_empty_failure"
+              : undefined;
           throw new FailoverError(err, {
             reason,
             provider: params.provider,
@@ -753,6 +857,7 @@ export async function executePreparedCliRun(
             sessionId: params.sessionId,
             lane: params.lane,
             status,
+            code: retryCode,
           });
         }
 

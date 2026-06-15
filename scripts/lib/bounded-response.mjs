@@ -1,9 +1,16 @@
+// Reads response bodies with byte limits, abort handling, and timeout cancellation.
 function defaultTooLargeMessage(label, maxBytes) {
   return `${label} response body exceeded ${maxBytes} bytes`;
 }
 
 function defaultTooLargeError(message) {
   return new Error(message);
+}
+
+function cancelReaderSoon(reader) {
+  void Promise.resolve()
+    .then(() => reader.cancel())
+    .catch(() => undefined);
 }
 
 async function readResponseChunk(reader, label, signal, markCanceled) {
@@ -20,10 +27,13 @@ async function readResponseChunk(reader, label, signal, markCanceled) {
   const abortPromise = new Promise((_resolve, reject) => {
     const onAbort = () => {
       markCanceled();
-      void reader.cancel().catch(() => undefined);
       reject(
-        signal.reason instanceof Error ? signal.reason : new Error(`${label} request aborted`),
+        toLintErrorObject(
+          signal.reason instanceof Error ? signal.reason : new Error(`${label} request aborted`),
+          "Non-Error rejection",
+        ),
       );
+      cancelReaderSoon(reader);
     };
     signal.addEventListener("abort", onAbort, { once: true });
     removeAbortListener = () => signal.removeEventListener("abort", onAbort);
@@ -36,6 +46,29 @@ async function readResponseChunk(reader, label, signal, markCanceled) {
   }
 }
 
+async function readResponseChunkWithTimeout(reader, label, signal, timeoutPromise, markCanceled) {
+  const readPromise = readResponseChunk(reader, label, signal, markCanceled);
+  if (!timeoutPromise) {
+    return await readPromise;
+  }
+
+  let waitingForRead = true;
+  const timeoutReadPromise = timeoutPromise.catch((error) => {
+    if (waitingForRead) {
+      markCanceled();
+      cancelReaderSoon(reader);
+    }
+    throw toLintErrorObject(error, `${label} response body read timed out`);
+  });
+
+  try {
+    return await Promise.race([readPromise, timeoutReadPromise]);
+  } finally {
+    waitingForRead = false;
+  }
+}
+
+/** Read response text while enforcing max bytes before and during streaming. */
 export async function readBoundedResponseText(response, label, maxBytes, options = {}) {
   const formatTooLargeMessage = options.formatTooLargeMessage ?? defaultTooLargeMessage;
   const createTooLargeError = options.createTooLargeError ?? defaultTooLargeError;
@@ -58,16 +91,15 @@ export async function readBoundedResponseText(response, label, maxBytes, options
 
   try {
     for (;;) {
-      const { done, value } = await (options.timeoutPromise
-        ? Promise.race([
-            readResponseChunk(reader, label, options.signal, () => {
-              canceled = true;
-            }),
-            options.timeoutPromise,
-          ])
-        : readResponseChunk(reader, label, options.signal, () => {
-            canceled = true;
-          }));
+      const { done, value } = await readResponseChunkWithTimeout(
+        reader,
+        label,
+        options.signal,
+        options.timeoutPromise,
+        () => {
+          canceled = true;
+        },
+      );
       if (done) {
         const tail = decoder.decode();
         if (tail) {
@@ -91,4 +123,18 @@ export async function readBoundedResponseText(response, label, maxBytes, options
   }
 
   return chunks.join("");
+}
+
+function toLintErrorObject(value, fallbackMessage) {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

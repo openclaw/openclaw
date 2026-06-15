@@ -1,3 +1,4 @@
+// Gradium plugin module implements tts behavior.
 import { assertOkOrThrowProviderError } from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -52,8 +53,8 @@ export async function gradiumTTS(params: {
     await assertOkOrThrowProviderError(response, "Gradium API error");
 
     return await readResponseWithLimit(response, maxBytes, {
-      onOverflow: ({ maxBytes }) =>
-        new Error(`Gradium TTS audio response exceeds ${maxBytes} bytes`),
+      onOverflow: ({ maxBytes: maxBytesLocal }) =>
+        new Error(`Gradium TTS audio response exceeds ${maxBytesLocal} bytes`),
     });
   } finally {
     await release();

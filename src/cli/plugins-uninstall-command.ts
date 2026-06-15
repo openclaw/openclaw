@@ -1,5 +1,7 @@
+// Plugin uninstall command implementation and confirmation-driven removal plan execution.
 import os from "node:os";
 import path from "node:path";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import { assertConfigWriteAllowedInCurrentMode, readConfigFileSnapshot } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -8,7 +10,6 @@ import {
   tracePluginLifecyclePhaseAsync,
 } from "../plugins/plugin-lifecycle-trace.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
-import { theme } from "../terminal/theme.js";
 import { shortenHomePath } from "../utils.js";
 
 export type PluginUninstallOptions = {
@@ -17,6 +18,7 @@ export type PluginUninstallOptions = {
   keepConfig?: boolean;
   force?: boolean;
   dryRun?: boolean;
+  invalidateRuntimeCache?: boolean;
 };
 
 function isPromptInputClosedError(
@@ -31,6 +33,7 @@ export async function runPluginUninstallCommand(
   opts: PluginUninstallOptions = {},
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
+  // Uninstall mutates config/install records and optionally managed files, so guard write mode first.
   assertConfigWriteAllowedInCurrentMode();
 
   const {
@@ -194,6 +197,7 @@ export async function runPluginUninstallCommand(
     config: nextConfig,
     reason: "source-changed",
     installRecords: nextInstallRecords,
+    invalidateRuntimeCache: opts.invalidateRuntimeCache,
     traceCommand: "uninstall",
     logger: {
       warn: (message) => runtime.log(theme.warn(message)),

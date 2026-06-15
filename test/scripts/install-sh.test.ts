@@ -1,3 +1,4 @@
+// Install Sh tests cover install sh script behavior.
 import { spawnSync } from "node:child_process";
 import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -7,14 +8,22 @@ import { describe, expect, it } from "vitest";
 const SCRIPT_PATH = "scripts/install.sh";
 
 function runInstallShell(script: string, env: NodeJS.ProcessEnv = {}) {
-  return spawnSync("bash", ["-c", script], {
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      OPENCLAW_INSTALL_SH_NO_RUN: "1",
-      ...env,
-    },
-  });
+  const home = mkdtempSync(join(tmpdir(), "openclaw-install-home-"));
+  try {
+    return spawnSync("bash", ["-c", script], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        HOME: home,
+        ...env,
+        BASH_ENV: "",
+        ENV: "",
+        OPENCLAW_INSTALL_SH_NO_RUN: "1",
+      },
+    });
+  } finally {
+    rmSync(home, { force: true, recursive: true });
+  }
 }
 
 function writeNpmFreshnessConflictFixture(path: string, argsLog: string) {
@@ -88,6 +97,23 @@ function writeNpmBeforePolicyFixture(path: string, argsLog: string) {
 describe("install.sh", () => {
   const script = readFileSync(SCRIPT_PATH, "utf8");
 
+  it("runs installer snippets without inherited shell startup files", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-shell-env-"));
+    const bashEnvPath = join(tmp, "bash_env");
+    writeFileSync(bashEnvPath, "export OPENCLAW_BASH_ENV_LEAKED=1\n");
+
+    try {
+      const result = runInstallShell('printf "leaked=%s\\n" "${OPENCLAW_BASH_ENV_LEAKED:-0}"', {
+        BASH_ENV: bashEnvPath,
+      });
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toBe("leaked=0\n");
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+  });
+
   it("runs apt-get through noninteractive wrappers", () => {
     expect(script).toContain("apt_get()");
     expect(script).toContain('DEBIAN_FRONTEND="${DEBIAN_FRONTEND:-noninteractive}"');
@@ -134,12 +160,14 @@ describe("install.sh", () => {
     expect(script).toContain("is_alpine_linux()");
     expect(script).toContain("install_node_with_apk()");
     expect(script).toContain('ui_info "Installing Node.js via apk (Alpine Linux detected)"');
-    expect(script).toContain('run_quiet_step "Installing Node.js" apk add --no-cache nodejs npm');
     expect(script).toContain(
-      'run_quiet_step "Installing Node.js" sudo apk add --no-cache nodejs npm',
+      'run_required_step "Installing Node.js" apk add --no-cache nodejs npm',
     );
     expect(script).toContain(
-      'run_quiet_step "Installing nodejs-current" apk add --no-cache nodejs-current npm',
+      'run_required_step "Installing Node.js" sudo apk add --no-cache nodejs npm',
+    );
+    expect(script).toContain(
+      'run_required_step "Installing nodejs-current" apk add --no-cache nodejs-current npm',
     );
     expect(script).toContain("if ! node_is_at_least_required; then");
 
@@ -258,6 +286,84 @@ describe("install.sh", () => {
       "error:Alpine apk repositories did not provide Node.js v22.19+",
     );
     expect(result.stdout).toContain("Use Alpine 3.21+ or install Node.js 24 manually");
+  });
+
+  it("stops when NodeSource repository setup fails", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      OS=linux
+      require_sudo() { :; }
+      install_build_tools_linux() { return 0; }
+      is_root() { return 0; }
+      is_alpine_linux() { return 1; }
+      apt-get() { :; }
+      download_file() { :; }
+      ui_info() { printf 'info:%s\\n' "$*"; }
+      ui_success() { printf 'success:%s\\n' "$*"; }
+      ui_error() { printf 'error:%s\\n' "$*"; }
+      run_quiet_step() {
+        printf 'step:%s|%s\\n' "$1" "\${*:2}"
+        if [[ "$1" == "Configuring NodeSource repository" ]]; then
+          return 64
+        fi
+        return 0
+      }
+      node() {
+        if [[ "\${1:-}" == "-v" ]]; then
+          printf 'v24.0.0\\n'
+        fi
+      }
+      activate_supported_node_on_path() { :; }
+      if install_node; then
+        echo "install_node returned success"
+      fi
+    `);
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("step:Configuring NodeSource repository|bash");
+    expect(result.stdout).not.toContain("step:Installing Node.js|apt_get_install nodejs");
+    expect(result.stdout).not.toContain("success:Node.js v24.0.0 installed");
+    expect(result.stdout).not.toContain("install_node returned success");
+  });
+
+  it("stops when apt cannot install the Node.js package", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      OS=linux
+      require_sudo() { :; }
+      install_build_tools_linux() { return 0; }
+      is_root() { return 0; }
+      is_alpine_linux() { return 1; }
+      apt-get() { :; }
+      download_file() { :; }
+      ui_info() { printf 'info:%s\\n' "$*"; }
+      ui_success() { printf 'success:%s\\n' "$*"; }
+      ui_error() { printf 'error:%s\\n' "$*"; }
+      run_quiet_step() {
+        printf 'step:%s|%s\\n' "$1" "\${*:2}"
+        if [[ "$1" == "Installing Node.js" ]]; then
+          return 65
+        fi
+        return 0
+      }
+      node() {
+        if [[ "\${1:-}" == "-v" ]]; then
+          printf 'v24.0.0\\n'
+        fi
+      }
+      activate_supported_node_on_path() { :; }
+      if install_node; then
+        echo "install_node returned success"
+      fi
+    `);
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("step:Configuring NodeSource repository|bash");
+    expect(result.stdout).toContain("step:Installing Node.js|apt_get_install nodejs");
+    expect(result.stdout).not.toContain("success:Node.js v24.0.0 installed");
+    expect(result.stdout).not.toContain("install_node returned success");
   });
 
   it("installs Git with apk on Alpine", () => {
@@ -677,7 +783,7 @@ describe("install.sh", () => {
     writeNpmFreshnessConflictFixture(join(bin, "npm"), argsLog);
 
     let result: ReturnType<typeof runInstallShell> | undefined;
-    let argsOutput = "";
+    let argsOutput;
     try {
       result = runInstallShell(
         [
@@ -714,7 +820,7 @@ describe("install.sh", () => {
     writeNpmBeforePolicyFixture(join(bin, "npm"), argsLog);
 
     let result: ReturnType<typeof runInstallShell> | undefined;
-    let argsOutput = "";
+    let argsOutput;
     try {
       result = runInstallShell(
         [
@@ -743,7 +849,7 @@ describe("install.sh", () => {
       /detect_os_or_die\s+if \[\[ "\$OS" == "linux" \]\]; then\s+export DEBIAN_FRONTEND="\$\{DEBIAN_FRONTEND:-noninteractive\}"\s+export NEEDRESTART_MODE="\$\{NEEDRESTART_MODE:-a\}"\s+fi/m,
     );
     expect(script).toContain(
-      'run_quiet_step "Configuring NodeSource repository" sudo -E bash "$tmp"',
+      'run_required_step "Configuring NodeSource repository" sudo -E bash "$tmp"',
     );
   });
 
@@ -767,22 +873,43 @@ describe("install.sh", () => {
   });
 
   it("bounds installer npm prefix probes during finalization helpers", () => {
-    const result = runInstallShell(
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-npm-probe-"));
+    const npm = join(tmp, "npm");
+    writeFileSync(
+      npm,
       [
-        `source ${JSON.stringify(SCRIPT_PATH)}`,
-        "npm() {",
-        '  if [[ "$1" == "prefix" && "$2" == "-g" ]]; then sleep 2; return 0; fi',
-        '  if [[ "$1" == "config" && "$2" == "get" && "$3" == "prefix" ]]; then printf "/tmp/openclaw-npm\\n"; return 0; fi',
-        "  return 1",
-        "}",
-        "npm_global_bin_dir",
+        "#!/usr/bin/env bash",
+        'if [[ "$1" == "prefix" && "$2" == "-g" ]]; then',
+        "  sleep 3",
+        "  exit 0",
+        "fi",
+        'if [[ "$1" == "config" && "$2" == "get" && "$3" == "prefix" ]]; then',
+        '  printf "/tmp/openclaw-npm\\n"',
+        "  exit 0",
+        "fi",
+        "exit 1",
+        "",
       ].join("\n"),
-      { OPENCLAW_INSTALL_PROBE_TIMEOUT_SECONDS: "0.1" },
     );
+    chmodSync(npm, 0o755);
 
-    expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe("/tmp/openclaw-npm/bin");
-    expect(result.stderr).toContain("timed out during installer finalization probe: npm prefix -g");
+    try {
+      const result = runInstallShell(
+        [`source ${JSON.stringify(SCRIPT_PATH)}`, "npm_global_bin_dir"].join("\n"),
+        {
+          OPENCLAW_INSTALL_PROBE_TIMEOUT_SECONDS: "1",
+          PATH: `${tmp}:${process.env.PATH ?? ""}`,
+        },
+      );
+
+      expect(result.status).toBe(0);
+      expect(result.stdout.trim()).toBe("/tmp/openclaw-npm/bin");
+      expect(result.stderr).toContain(
+        "timed out during installer finalization probe: npm prefix -g",
+      );
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
   });
 
   it("bounds daemon status probes during finalization helpers", () => {
@@ -957,6 +1084,64 @@ describe("install.sh", () => {
     expect(output).toContain("active=0");
     expect(output).toContain(`path=${supportedNode}`);
     expect(output).toContain("version=v22.22.0");
+  });
+
+  it("uses the package engine floor when accepting existing Node runtimes", () => {
+    const pkg = JSON.parse(readFileSync("package.json", "utf8")) as {
+      engines?: { node?: string };
+    };
+    const engineMatch = /^>=22\.(\d+)\.0$/.exec(pkg.engines?.node ?? "");
+    expect(engineMatch).not.toBeNull();
+
+    const minMinor = Number(engineMatch?.[1]);
+    expect(script).toContain(`NODE_MIN_MINOR=${minMinor}`);
+
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-node-floor-"));
+    const bin = join(tmp, "bin");
+    mkdirSync(bin, { recursive: true });
+
+    const nodePath = join(bin, "node");
+    writeFileSync(
+      nodePath,
+      ["#!/bin/sh", 'printf "%s\\n" "${FAKE_NODE_VERSION:-v0.0.0}"', ""].join("\n"),
+    );
+    chmodSync(nodePath, 0o755);
+
+    let result: ReturnType<typeof runInstallShell> | undefined;
+    try {
+      result = runInstallShell(
+        [
+          `cd ${JSON.stringify(process.cwd())}`,
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          "set +e",
+          `PATH=${JSON.stringify(`${bin}:/usr/bin:/bin`)}`,
+          "export PATH",
+          "unset -f node 2>/dev/null || true",
+          "unalias node 2>/dev/null || true",
+          'node() { printf "%s\\n" "${FAKE_NODE_VERSION:-v0.0.0}"; }',
+          `FAKE_NODE_VERSION="v22.${minMinor - 1}.0"`,
+          "export FAKE_NODE_VERSION",
+          "node_is_at_least_required",
+          "node_below_floor=$?",
+          `FAKE_NODE_VERSION="v22.${minMinor}.0"`,
+          "export FAKE_NODE_VERSION",
+          "node_is_at_least_required",
+          "node_at_floor=$?",
+          'printf "node_below_floor=%s\\nnode_at_floor=%s\\n" "$node_below_floor" "$node_at_floor"',
+          "exit 0",
+        ].join("\n"),
+        {
+          PATH: `${bin}:/usr/bin:/bin`,
+          TERM: "dumb",
+        },
+      );
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+
+    expect(result?.status).toBe(0);
+    expect(result?.stdout).toContain("node_below_floor=1");
+    expect(result?.stdout).toContain("node_at_floor=0");
   });
 
   it("persists a supported Linux Node path before noninteractive shell guards", () => {

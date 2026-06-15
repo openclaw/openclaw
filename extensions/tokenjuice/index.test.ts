@@ -1,13 +1,14 @@
+// Tokenjuice tests cover index plugin behavior.
 import fs from "node:fs";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { tokenjuiceFactory, createTokenjuiceOpenClawEmbeddedExtension } = vi.hoisted(() => {
-  const tokenjuiceFactory = vi.fn();
-  const createTokenjuiceOpenClawEmbeddedExtension = vi.fn(() => tokenjuiceFactory);
+  const tokenjuiceFactoryLocal = vi.fn();
+  const createTokenjuiceOpenClawEmbeddedExtensionLocal = vi.fn(() => tokenjuiceFactoryLocal);
   return {
-    tokenjuiceFactory,
-    createTokenjuiceOpenClawEmbeddedExtension,
+    tokenjuiceFactory: tokenjuiceFactoryLocal,
+    createTokenjuiceOpenClawEmbeddedExtension: createTokenjuiceOpenClawEmbeddedExtensionLocal,
   };
 });
 

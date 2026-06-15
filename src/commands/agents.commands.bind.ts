@@ -1,3 +1,5 @@
+// Implements agent route binding list/add/remove subcommands.
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { listAgentEntries, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { isRouteBinding, listRouteBindings } from "../config/bindings.js";
@@ -8,7 +10,6 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { describeBinding } from "./agents.binding-format.js";
 import { requireValidConfig, requireValidConfigFileSnapshot } from "./agents.command-shared.js";
 
@@ -173,6 +174,7 @@ async function resolveConfigAndTargetAgentIdOrExit(params: {
   return { cfg, agentId, baseHash: configSnapshot.hash };
 }
 
+/** List configured agent route bindings, optionally filtered by target agent. */
 export async function agentsBindingsCommand(
   opts: AgentsBindingsListOptions,
   runtime: RuntimeEnv = defaultRuntime,
@@ -228,6 +230,7 @@ export async function agentsBindingsCommand(
   );
 }
 
+/** Add route bindings for an agent and fail when another agent already owns the route. */
 export async function agentsBindCommand(
   opts: AgentsBindOptions,
   runtime: RuntimeEnv = defaultRuntime,
@@ -309,6 +312,7 @@ export async function agentsBindCommand(
   }
 }
 
+/** Remove selected route bindings, or all bindings owned by an agent with `--all`. */
 export async function agentsUnbindCommand(
   opts: AgentsUnbindOptions,
   runtime: RuntimeEnv = defaultRuntime,
@@ -333,6 +337,20 @@ export async function agentsUnbindCommand(
     const keptRoutes = existing.filter((binding) => normalizeAgentId(binding.agentId) !== agentId);
     const nonRoutes = (cfg.bindings ?? []).filter((binding) => !isRouteBinding(binding));
     if (removed.length === 0) {
+      if (
+        emitJsonPayload({
+          runtime,
+          json: opts.json,
+          payload: {
+            agentId,
+            removed: [] as string[],
+            missing: [] as string[],
+            conflicts: [] as string[],
+          },
+        })
+      ) {
+        return;
+      }
       runtime.log(`No bindings to remove for agent "${agentId}".`);
       return;
     }

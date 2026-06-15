@@ -1,3 +1,4 @@
+/** Tests ACP spawn planning, policy gates, bindings, cleanup, and parent stream setup. */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -55,6 +56,7 @@ const hoisted = vi.hoisted(() => {
   const startAcpSpawnParentStreamRelayMock = vi.fn();
   const resolveAcpSpawnStreamLogPathMock = vi.fn();
   const loadSessionStoreMock = vi.fn();
+  const readAcpSessionMetaMock = vi.fn();
   const resolveStorePathMock = vi.fn();
   const resolveSessionTranscriptFileMock = vi.fn();
   const areHeartbeatsEnabledMock = vi.fn();
@@ -84,6 +86,7 @@ const hoisted = vi.hoisted(() => {
     startAcpSpawnParentStreamRelayMock,
     resolveAcpSpawnStreamLogPathMock,
     loadSessionStoreMock,
+    readAcpSessionMetaMock,
     resolveStorePathMock,
     resolveSessionTranscriptFileMock,
     areHeartbeatsEnabledMock,
@@ -107,7 +110,17 @@ vi.mock("../acp/control-plane/spawn.js", () => ({
   cleanupFailedAcpSpawn: hoisted.cleanupFailedAcpSpawnMock,
 }));
 
+vi.mock("../acp/runtime/session-meta.js", () => ({
+  readAcpSessionMeta: (params: unknown) => hoisted.readAcpSessionMetaMock(params),
+}));
+
 vi.mock("../channels/plugins/index.js", () => ({
+  getChannelPlugin: hoisted.getChannelPluginMock,
+  getLoadedChannelPlugin: hoisted.getLoadedChannelPluginMock,
+  normalizeChannelId: hoisted.normalizeChannelIdMock,
+}));
+
+vi.mock("../channels/plugins/registry.js", () => ({
   getChannelPlugin: hoisted.getChannelPluginMock,
   getLoadedChannelPlugin: hoisted.getLoadedChannelPluginMock,
   normalizeChannelId: hoisted.normalizeChannelIdMock,
@@ -440,19 +453,19 @@ function resolveMatrixRoomTargetForTest(value: string | undefined): string | und
 }
 
 function enableMatrixAcpThreadBindings(): void {
-  replaceSpawnConfig({
-    ...hoisted.state.cfg,
-    channels: {
-      ...hoisted.state.cfg.channels,
-      matrix: {
-        threadBindings: {
-          enabled: true,
-          spawnSessions: true,
-        },
+  hoisted.state.cfg.channels = {
+    ...hoisted.state.cfg.channels,
+    matrix: {
+      threadBindings: {
+        enabled: true,
+        spawnSessions: true,
       },
     },
-  });
+  };
   const matrixPlugin = {
+    conversationBindings: {
+      defaultTopLevelPlacement: "child",
+    },
     messaging: {
       resolveDeliveryTarget: ({
         conversationId,
@@ -723,6 +736,7 @@ describe("spawnAcpDirect", () => {
       .mockReset()
       .mockReturnValue("/tmp/sess-main.acp-stream.jsonl");
     hoisted.resolveStorePathMock.mockReset().mockReturnValue("/tmp/codex-sessions.json");
+    hoisted.readAcpSessionMetaMock.mockReset().mockReturnValue(undefined);
     hoisted.loadSessionStoreMock.mockReset().mockImplementation(() => {
       const store: Record<string, { sessionId: string; updatedAt: number }> = {};
       return new Proxy(store, {
@@ -824,27 +838,33 @@ describe("spawnAcpDirect", () => {
 
   it("allows ACP resume IDs recorded for the requester session", async () => {
     const resumeSessionId = "codex-inner-resume";
+    const ownedSessionKey = "agent:codex:acp:owned";
     hoisted.loadSessionStoreMock.mockReturnValue({
-      "agent:codex:acp:owned": {
+      [ownedSessionKey]: {
         sessionId: "sess-owned",
         updatedAt: Date.now(),
         spawnedBy: "agent:main:main",
-        acp: {
-          backend: "acpx",
-          agent: "codex",
-          runtimeSessionName: "codex",
-          identity: {
-            state: "resolved",
-            source: "ensure",
-            agentSessionId: resumeSessionId,
-            acpxSessionId: "acpx-owned",
-            lastUpdatedAt: Date.now(),
-          },
-          mode: "oneshot",
-          state: "idle",
-          lastActivityAt: Date.now(),
-        },
       } satisfies SessionEntry,
+    });
+    hoisted.readAcpSessionMetaMock.mockImplementation((paramsUnknown: unknown) => {
+      const params = paramsUnknown as { sessionKey?: string };
+      return params.sessionKey === ownedSessionKey
+        ? {
+            backend: "acpx",
+            agent: "codex",
+            runtimeSessionName: "codex",
+            identity: {
+              state: "resolved",
+              source: "ensure",
+              agentSessionId: resumeSessionId,
+              acpxSessionId: "acpx-owned",
+              lastUpdatedAt: Date.now(),
+            },
+            mode: "oneshot",
+            state: "idle",
+            lastActivityAt: Date.now(),
+          }
+        : undefined;
     });
 
     const result = await spawnAcpDirect(
@@ -863,27 +883,33 @@ describe("spawnAcpDirect", () => {
   });
 
   it("rejects ACP resume IDs not recorded for the requester session", async () => {
+    const otherSessionKey = "agent:codex:acp:other";
     hoisted.loadSessionStoreMock.mockReturnValue({
-      "agent:codex:acp:other": {
+      [otherSessionKey]: {
         sessionId: "sess-other",
         updatedAt: Date.now(),
         spawnedBy: "agent:other:main",
-        acp: {
-          backend: "acpx",
-          agent: "codex",
-          runtimeSessionName: "codex",
-          identity: {
-            state: "resolved",
-            source: "ensure",
-            agentSessionId: "codex-inner-other",
-            acpxSessionId: "acpx-other",
-            lastUpdatedAt: Date.now(),
-          },
-          mode: "oneshot",
-          state: "idle",
-          lastActivityAt: Date.now(),
-        },
       } satisfies SessionEntry,
+    });
+    hoisted.readAcpSessionMetaMock.mockImplementation((paramsUnknown: unknown) => {
+      const params = paramsUnknown as { sessionKey?: string };
+      return params.sessionKey === otherSessionKey
+        ? {
+            backend: "acpx",
+            agent: "codex",
+            runtimeSessionName: "codex",
+            identity: {
+              state: "resolved",
+              source: "ensure",
+              agentSessionId: "codex-inner-other",
+              acpxSessionId: "acpx-other",
+              lastUpdatedAt: Date.now(),
+            },
+            mode: "oneshot",
+            state: "idle",
+            lastActivityAt: Date.now(),
+          }
+        : undefined;
     });
 
     const result = await spawnAcpDirect(
@@ -910,7 +936,7 @@ describe("spawnAcpDirect", () => {
       {
         task: "Investigate flaky tests",
         agentId: "codex",
-        model: "openai-codex/gpt-5.4",
+        model: "openai/gpt-5.4",
         thinking: "high",
       },
       {
@@ -922,11 +948,139 @@ describe("spawnAcpDirect", () => {
     const initInput = expectInitializeSessionFields({
       agent: "codex",
       runtimeOptions: {
-        model: "openai-codex/gpt-5.4",
+        model: "openai/gpt-5.4",
         thinking: "high",
       },
     });
     expect(initInput.sessionKey).toMatch(/^agent:codex:acp:/);
+  });
+
+  it("applies existing subagent model and model-profile thinking defaults to ACP runtime options", async () => {
+    replaceSpawnConfig({
+      ...createDefaultSpawnConfig(),
+      agents: {
+        defaults: {
+          subagents: {
+            allowAgents: ["codex"],
+            maxSpawnDepth: 2,
+            model: "openai/gpt-5.4",
+          },
+          models: {
+            "openai/gpt-5.4": {
+              params: { thinking: "high" },
+            },
+          },
+        },
+      },
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expectAcceptedSpawn(result);
+    expectInitializeSessionFields({
+      agent: "codex",
+      runtimeOptions: {
+        model: "openai/gpt-5.4",
+        thinking: "high",
+      },
+    });
+  });
+
+  it("uses configured runtime=acp agent defaults before launching the external ACP agent", async () => {
+    replaceSpawnConfig({
+      ...createDefaultSpawnConfig(),
+      agents: {
+        list: [
+          {
+            id: "codex-acp",
+            runtime: {
+              type: "acp",
+              acp: { agent: "codex" },
+            },
+            subagents: {
+              model: "openai/gpt-5.5",
+              thinking: "low",
+            },
+          },
+        ],
+        defaults: {
+          subagents: {
+            allowAgents: ["codex"],
+            maxSpawnDepth: 2,
+          },
+        },
+      },
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex-acp",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expectAcceptedSpawn(result);
+    expectInitializeSessionFields({
+      agent: "codex",
+      runtimeOptions: {
+        model: "openai/gpt-5.5",
+        thinking: "low",
+      },
+    });
+  });
+
+  it("uses configured runtime=acp agent primary model as an ACP startup model", async () => {
+    replaceSpawnConfig({
+      ...createDefaultSpawnConfig(),
+      agents: {
+        list: [
+          {
+            id: "codex-acp",
+            runtime: {
+              type: "acp",
+              acp: { agent: "codex" },
+            },
+            model: "anthropic/claude-sonnet-4-6",
+          },
+        ],
+        defaults: {
+          subagents: {
+            allowAgents: ["codex"],
+            maxSpawnDepth: 2,
+          },
+        },
+      },
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex-acp",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expectAcceptedSpawn(result);
+    expectInitializeSessionFields({
+      agent: "codex",
+      runtimeOptions: {
+        model: "anthropic/claude-sonnet-4-6",
+        thinking: "adaptive",
+      },
+    });
   });
 
   it("applies ACP spawn run timeout to runtime options and dispatch", async () => {
@@ -942,6 +1096,7 @@ describe("spawnAcpDirect", () => {
     );
 
     expectAcceptedSpawn(result);
+    expect(result).toHaveProperty("runTimeoutSeconds", 45);
     const initInput = expectInitializeSessionFields({
       agent: "codex",
       runtimeOptions: {
@@ -952,6 +1107,98 @@ describe("spawnAcpDirect", () => {
     const agentCall = findAgentGatewayCall();
     expect(agentCall?.params?.lane).toBe("subagent");
     expect(agentCall?.params?.timeout).toBe(45);
+  });
+
+  it("passes zero timeout through to the gateway no-timeout path", async () => {
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        runTimeoutSeconds: 0,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expectAcceptedSpawn(result);
+    expect(result).toHaveProperty("runTimeoutSeconds", 0);
+    const initInput = expectInitializeSessionFields({ agent: "codex" });
+    expect(initInput.runtimeOptions).toBeUndefined();
+    const agentCall = findAgentGatewayCall();
+    expect(agentCall?.params?.timeout).toBe(0);
+  });
+
+  it("uses configured subagent timeout for ACP spawns", async () => {
+    replaceSpawnConfig({
+      ...createDefaultSpawnConfig(),
+      agents: {
+        defaults: {
+          subagents: {
+            allowAgents: ["codex"],
+            maxSpawnDepth: 2,
+            runTimeoutSeconds: 120,
+          },
+        },
+      },
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expectAcceptedSpawn(result);
+    expect(result).toHaveProperty("runTimeoutSeconds", 120);
+    expectInitializeSessionFields({
+      agent: "codex",
+      runtimeOptions: {
+        timeoutSeconds: 120,
+      },
+    });
+    const agentCall = findAgentGatewayCall();
+    expect(agentCall?.params?.timeout).toBe(120);
+  });
+
+  it("caps configured ACP runtime timeout without shortening spawn tracking", async () => {
+    replaceSpawnConfig({
+      ...createDefaultSpawnConfig(),
+      agents: {
+        defaults: {
+          subagents: {
+            allowAgents: ["codex"],
+            maxSpawnDepth: 2,
+            runTimeoutSeconds: 172_800,
+          },
+        },
+      },
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expectAcceptedSpawn(result);
+    expect(result).toHaveProperty("runTimeoutSeconds", 172_800);
+    expectInitializeSessionFields({
+      agent: "codex",
+      runtimeOptions: {
+        timeoutSeconds: 86_400,
+      },
+    });
+    const agentCall = findAgentGatewayCall();
+    expect(agentCall?.params?.timeout).toBe(172_800);
   });
 
   it("rejects OpenClaw config agent ids when runtime=acp targets a native agent", async () => {
@@ -1426,7 +1673,7 @@ describe("spawnAcpDirect", () => {
             channel: "matrix",
             accountId: input.conversation.accountId,
             conversationId: "child-thread",
-            parentConversationId: input.conversation.parentConversationId ?? "!room:example",
+            parentConversationId: input.conversation.parentConversationId ?? "!room:example.org",
           },
           metadata: {
             boundBy:
@@ -1443,12 +1690,14 @@ describe("spawnAcpDirect", () => {
         agentId: "codex",
         mode: "session",
         thread: true,
+        cwd: os.tmpdir(),
       },
       {
-        agentSessionKey: "agent:main:matrix:channel:!room:example",
+        agentSessionKey: "agent:main:matrix:channel:!room:example.org",
         agentChannel: "matrix",
         agentAccountId: "default",
-        agentTo: "channel:!room:example",
+        agentTo: "room:!room:example.org",
+        agentGroupId: "!room:example.org",
       },
     );
     expect(result.status, JSON.stringify(result)).toBe("accepted");
@@ -1457,13 +1706,13 @@ describe("spawnAcpDirect", () => {
       conversation: {
         channel: "matrix",
         accountId: "default",
-        conversationId: "!room:example",
+        conversationId: "!room:example.org",
       },
     });
     expectAgentGatewayCall({
       deliver: true,
       channel: "matrix",
-      to: "room:!room:example",
+      to: "room:!room:example.org",
       threadId: "child-thread",
     });
   });

@@ -1,9 +1,10 @@
+/** Applies agent compaction settings and small-context overflow guards. */
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { AgentCompactionMode } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ContextEngineInfo } from "../context-engine/types.js";
 import { MIN_PROMPT_BUDGET_RATIO, MIN_PROMPT_BUDGET_TOKENS } from "./agent-compaction-constants.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
-import { normalizeProviderId } from "./provider-id.js";
 
 export const DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR = 20_000;
 
@@ -43,6 +44,7 @@ export function ensureAgentCompactionReserveTokens(params: {
   return { didOverride: true, reserveTokens: minReserveTokens };
 }
 
+/** Resolves the configured reserve-token floor for agent compaction. */
 export function resolveCompactionReserveTokensFloor(cfg?: OpenClawConfig): number {
   const raw = cfg?.agents?.defaults?.compaction?.reserveTokensFloor;
   if (typeof raw === "number" && Number.isFinite(raw) && raw >= 0) {
@@ -65,6 +67,7 @@ function toPositiveInt(value: unknown): number | undefined {
   return Math.floor(value);
 }
 
+/** Applies configured compaction reserve/keep-recent settings to an agent settings manager. */
 export function applyAgentCompactionSettingsFromConfig(params: {
   settingsManager: AgentSettingsManagerLike;
   cfg?: OpenClawConfig;

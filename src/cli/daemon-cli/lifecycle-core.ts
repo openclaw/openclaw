@@ -1,3 +1,4 @@
+// Gateway service lifecycle command core: install, uninstall, start, stop, restart.
 import type { Writable } from "node:stream";
 import { readBestEffortConfig, readConfigFileSnapshot } from "../../config/config.js";
 import { resolveFutureConfigActionBlock } from "../../config/future-version-guard.js";
@@ -121,6 +122,7 @@ async function resolveServiceLoadedOrFail(params: {
   service: GatewayService;
   fail: ReturnType<typeof createDaemonActionContext>["fail"];
 }): Promise<boolean | null> {
+  // Returning null keeps failure emission centralized in the caller's action context.
   try {
     return await params.service.isLoaded({ env: process.env });
   } catch (err) {
@@ -203,7 +205,7 @@ export async function runServiceUninstall(params: {
     }
   }
 
-  let loaded = false;
+  let loaded;
   try {
     loaded = await params.service.isLoaded({ env: process.env });
   } catch {
@@ -222,8 +224,6 @@ export async function runServiceUninstall(params: {
     fail(`${params.serviceNoun} uninstall failed: ${String(err)}`);
     return;
   }
-
-  loaded = false;
   try {
     loaded = await params.service.isLoaded({ env: process.env });
   } catch {
@@ -367,7 +367,6 @@ export async function runServiceStart(params: {
   } catch (err) {
     const hints = params.renderStartHints();
     fail(`${params.serviceNoun} start failed: ${String(err)}`, hints);
-    return;
   }
 }
 
@@ -448,7 +447,7 @@ export async function runServiceStop(params: {
     return;
   }
 
-  let stopped = false;
+  let stopped;
   try {
     stopped = await params.service.isLoaded({ env: process.env });
   } catch {

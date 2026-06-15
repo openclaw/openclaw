@@ -1,3 +1,4 @@
+/** Executes isolated cron prompts with model fallbacks and interim-ack retries. */
 import { createHash } from "node:crypto";
 import type { BootstrapContextMode } from "../../agents/bootstrap-files.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
@@ -84,6 +85,7 @@ function resolveIsolatedCronPromptCacheKey(params: {
   return `openclaw-cron-${digest}`;
 }
 
+/** Detects single-line cron prompts that look like shell commands or command invocations. */
 export function isCommandStyleCronMessage(message: string): boolean {
   const trimmed = message.trim();
   if (!trimmed || trimmed.includes("\n")) {
@@ -95,6 +97,8 @@ export function isCommandStyleCronMessage(message: string): boolean {
 function resolveCronBootstrapContextMode(
   payload: AgentTurnPayload,
 ): BootstrapContextMode | undefined {
+  // Command-like cron prompts benefit from lightweight bootstrap context so
+  // simple scheduled command tasks do not spend budget on full repo context.
   if (payload?.lightContext === true) {
     return "lightweight";
   }
@@ -104,6 +108,7 @@ function resolveCronBootstrapContextMode(
   return isCommandStyleCronMessage(payload?.message ?? "") ? "lightweight" : undefined;
 }
 
+/** Result envelope returned after an isolated cron prompt completes. */
 export type CronExecutionResult = {
   runResult: CronPromptRunResult;
   fallbackProvider: string;
@@ -113,6 +118,7 @@ export type CronExecutionResult = {
   liveSelection: CronLiveSelection;
 };
 
+/** Creates the model-fallback executor for one isolated cron prompt run. */
 export function createCronPromptExecutor(params: {
   cfg: OpenClawConfig;
   cfgWithAgentDefaults: OpenClawConfig;
@@ -135,20 +141,23 @@ export function createCronPromptExecutor(params: {
     to?: string;
     threadId?: string | number;
   };
+  deliveryRequested?: boolean;
   sourceDelivery: SourceDeliveryPlan;
   skillsSnapshot: SkillSnapshot;
   agentPayload: AgentTurnPayload;
   useSubagentFallbacks: boolean;
+  inheritDefaultFallbacksForAgentStringModel?: boolean;
   modelFallbacksOverride?: string[];
   liveSelection: CronLiveSelection;
   cronSession: MutableCronSession;
   abortSignal?: AbortSignal;
   abortReason: () => string;
-  onExecutionStarted?: () => void;
+  onExecutionStarted?: (info?: { lifecycleGeneration?: string }) => void;
   onExecutionPhase?: (
     info: Pick<CronAgentExecutionPhaseUpdate, "phase"> &
       Partial<Omit<CronAgentExecutionPhaseUpdate, "jobId" | "phase">>,
   ) => void;
+  onLaneWait?: (info?: { waiting?: boolean }) => void;
 }) {
   const sessionFile =
     params.cronSession.sessionEntry.sessionFile?.trim() ||
@@ -164,6 +173,7 @@ export function createCronPromptExecutor(params: {
       job: params.job,
       agentId: params.agentId,
       useSubagentFallbacks: params.useSubagentFallbacks,
+      inheritDefaultFallbacksForAgentStringModel: params.inheritDefaultFallbacksForAgentStringModel,
     });
   let runResult: CronPromptRunResult | undefined;
   let fallbackProvider = params.liveSelection.provider;
@@ -212,6 +222,8 @@ export function createCronPromptExecutor(params: {
           }) ?? providerOverride;
         const bootstrapPromptWarningSignature =
           bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
+        // CLI providers can resume provider-native sessions; embedded providers
+        // use OpenClaw's transcript/session file plus prompt-cache affinity.
         if (isCliProvider(executionProvider, params.cfgWithAgentDefaults)) {
           const cliSessionId = params.cronSession.isNewSession
             ? undefined
@@ -263,6 +275,8 @@ export function createCronPromptExecutor(params: {
           to: params.resolvedDelivery.to,
           threadId: params.resolvedDelivery.threadId,
         });
+        // Embedded runs receive both the explicit route and the current-channel
+        // id so message-tool policy can target the same chat as fallback delivery.
         const result = await runEmbeddedAgent({
           sessionId: params.cronSession.sessionEntry.sessionId,
           sessionKey: params.runSessionKey,
@@ -291,6 +305,9 @@ export function createCronPromptExecutor(params: {
           authProfileIdSource: params.liveSelection.authProfileId
             ? params.liveSelection.authProfileIdSource
             : undefined,
+          // Scheduled run: keep bursty cron overloaded/rate_limit local, while
+          // still sharing real credential/account failures across auth profiles.
+          authProfileFailurePolicy: "local_transient",
           thinkLevel: params.thinkLevel,
           fastMode: resolveFastModeState({
             cfg: params.cfgWithAgentDefaults,
@@ -320,6 +337,7 @@ export function createCronPromptExecutor(params: {
           abortSignal: params.abortSignal,
           onExecutionStarted: params.onExecutionStarted,
           onExecutionPhase: params.onExecutionPhase,
+          onLaneWait: params.onLaneWait,
           bootstrapPromptWarningSignaturesSeen,
           bootstrapPromptWarningSignature,
         });
@@ -349,6 +367,7 @@ export function createCronPromptExecutor(params: {
   };
 }
 
+/** Executes an isolated cron prompt, including live model-switch and interim-ack retries. */
 export async function executeCronRun(params: {
   cfg: OpenClawConfig;
   cfgWithAgentDefaults: OpenClawConfig;
@@ -365,10 +384,12 @@ export async function executeCronRun(params: {
     to?: string;
     threadId?: string | number;
   };
+  deliveryRequested?: boolean;
   sourceDelivery: SourceDeliveryPlan;
   skillsSnapshot: SkillSnapshot;
   agentPayload: AgentTurnPayload;
   useSubagentFallbacks: boolean;
+  inheritDefaultFallbacksForAgentStringModel?: boolean;
   modelFallbacksOverride?: string[];
   agentVerboseDefault: AgentDefaultsConfig["verboseDefault"];
   liveSelection: CronLiveSelection;
@@ -378,11 +399,12 @@ export async function executeCronRun(params: {
   abortSignal?: AbortSignal;
   abortReason: () => string;
   isAborted: () => boolean;
-  onExecutionStarted?: () => void;
+  onExecutionStarted?: (info?: { lifecycleGeneration?: string }) => void;
   onExecutionPhase?: (
     info: Pick<CronAgentExecutionPhaseUpdate, "phase"> &
       Partial<Omit<CronAgentExecutionPhaseUpdate, "jobId" | "phase">>,
   ) => void;
+  onLaneWait?: (info?: { waiting?: boolean }) => void;
   thinkLevel: ThinkLevel | undefined;
   timeoutMs: number;
   /** Set when the cron payload's `timeoutSeconds` was explicitly configured. */
@@ -396,6 +418,7 @@ export async function executeCronRun(params: {
     "off";
   registerAgentRunContext(params.cronSession.sessionEntry.sessionId, {
     sessionKey: params.runSessionKey,
+    sessionId: params.cronSession.sessionEntry.sessionId,
     verboseLevel: resolvedVerboseLevel,
   });
   const executor = createCronPromptExecutor({
@@ -414,10 +437,12 @@ export async function executeCronRun(params: {
     runTimeoutOverrideMs: params.runTimeoutOverrideMs,
     suppressExecNotifyOnExit: params.suppressExecNotifyOnExit,
     resolvedDelivery: params.resolvedDelivery,
+    deliveryRequested: params.deliveryRequested,
     sourceDelivery: params.sourceDelivery,
     skillsSnapshot: params.skillsSnapshot,
     agentPayload: params.agentPayload,
     useSubagentFallbacks: params.useSubagentFallbacks,
+    inheritDefaultFallbacksForAgentStringModel: params.inheritDefaultFallbacksForAgentStringModel,
     modelFallbacksOverride: params.modelFallbacksOverride,
     liveSelection: params.liveSelection,
     cronSession: params.cronSession,
@@ -425,6 +450,7 @@ export async function executeCronRun(params: {
     abortReason: params.abortReason,
     onExecutionStarted: params.onExecutionStarted,
     onExecutionPhase: params.onExecutionPhase,
+    onLaneWait: params.onLaneWait,
   });
 
   const runStartedAt = params.runStartedAt ?? Date.now();
@@ -456,6 +482,8 @@ export async function executeCronRun(params: {
         liveSelection: params.liveSelection,
       });
       try {
+        // Persist the switched model before retrying so later delivery/session
+        // metadata agrees with the model that actually handled the run.
         await params.persistSessionEntry();
       } catch (persistErr) {
         logWarn(
@@ -483,7 +511,9 @@ export async function executeCronRun(params: {
       failureSignal: runResult.meta?.failureSignal,
       finalAssistantVisibleText: runResult.meta?.finalAssistantVisibleText,
       preferFinalAssistantVisibleText: (
-        await resolveCronChannelOutputPolicy(params.resolvedDelivery.channel)
+        await resolveCronChannelOutputPolicy(params.resolvedDelivery.channel, {
+          deliveryRequested: params.deliveryRequested,
+        })
       ).preferFinalAssistantVisibleText,
     });
     const interimText = interimOutputText?.trim() ?? "";
@@ -509,6 +539,8 @@ export async function executeCronRun(params: {
     }
 
     if (shouldRetryInterimAck && !hasFreshDescendants && !hasActiveDescendants) {
+      // Retry a bare acknowledgement only when no descendant subagent was
+      // spawned; otherwise delivery waits for the subagent follow-up path.
       const continuationPrompt = [
         "Your previous response was only an acknowledgement and did not complete this cron task.",
         "Complete the original task now.",

@@ -1,3 +1,4 @@
+// Matrix plugin module implements sdk behavior.
 import { EventEmitter } from "node:events";
 import {
   ClientEvent,
@@ -9,6 +10,7 @@ import {
   type MatrixClient as MatrixJsClient,
   type MatrixEvent,
 } from "matrix-js-sdk/lib/matrix.js";
+import type { Direction } from "matrix-js-sdk/lib/models/event-timeline.js";
 import { VerificationMethod } from "matrix-js-sdk/lib/types.js";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
@@ -19,7 +21,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SsrFPolicy } from "../runtime-api.js";
 import { resolveMatrixRoomKeyBackupReadinessError } from "./backup-health.js";
-import { FileBackedMatrixSyncStore } from "./client/file-sync-store.js";
+import { SqliteBackedMatrixSyncStore } from "./client/file-sync-store.js";
 import { createMatrixJsSdkClientLogger } from "./client/logging.js";
 import {
   formatMatrixErrorMessage,
@@ -327,7 +329,7 @@ export class MatrixClient {
   private readonly syncFilter?: IFilterDefinition;
   private readonly encryptionEnabled: boolean;
   private readonly password?: string;
-  private readonly syncStore?: FileBackedMatrixSyncStore;
+  private readonly syncStore?: SqliteBackedMatrixSyncStore;
   private readonly idbSnapshotPath?: string;
   private readonly cryptoDatabasePrefix?: string;
   private bridgeRegistered = false;
@@ -368,7 +370,7 @@ export class MatrixClient {
       encryption?: boolean;
       initialSyncLimit?: number;
       syncFilter?: IFilterDefinition;
-      storagePath?: string;
+      storageRootDir?: string;
       recoveryKeyPath?: string;
       idbSnapshotPath?: string;
       cryptoDatabasePrefix?: string;
@@ -388,7 +390,9 @@ export class MatrixClient {
     this.syncFilter = opts.syncFilter;
     this.encryptionEnabled = opts.encryption === true;
     this.password = opts.password;
-    this.syncStore = opts.storagePath ? new FileBackedMatrixSyncStore(opts.storagePath) : undefined;
+    this.syncStore = opts.storageRootDir
+      ? new SqliteBackedMatrixSyncStore(opts.storageRootDir)
+      : undefined;
     this.idbSnapshotPath = opts.idbSnapshotPath;
     this.cryptoDatabasePrefix = opts.cryptoDatabasePrefix;
     this.selfUserId = opts.userId?.trim() || null;
@@ -1077,7 +1081,9 @@ export class MatrixClient {
     relationType: string | null,
     eventType?: string | null,
     opts: {
+      dir?: Direction;
       from?: string;
+      limit?: number;
     } = {},
   ): Promise<MatrixRelationsPage> {
     const result = await this.client.relations(roomId, eventId, relationType, eventType, opts);
@@ -1357,7 +1363,7 @@ export class MatrixClient {
       return await fail("Matrix recovery key is required");
     }
 
-    let stagedKeyId: string | null = null;
+    let stagedKeyId: string | null;
     try {
       stagedKeyId = (await this.resolveDefaultSecretStorageKeyId(crypto)) ?? null;
       this.recoveryKeyStore.stageEncodedRecoveryKey({
@@ -2051,10 +2057,8 @@ export class MatrixClient {
       this.emitter.emit("room.event", roomId, raw);
       if (isEncryptedEvent) {
         this.emitter.emit("room.encrypted_event", roomId, raw);
-      } else {
-        if (decryptBridge.shouldEmitUnencryptedMessage(roomId, raw.event_id)) {
-          this.emitter.emit("room.message", roomId, raw);
-        }
+      } else if (decryptBridge.shouldEmitUnencryptedMessage(roomId, raw.event_id)) {
+        this.emitter.emit("room.message", roomId, raw);
       }
 
       const stateKey = raw.state_key ?? "";

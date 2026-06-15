@@ -1,3 +1,4 @@
+/** Tests interactive and noninteractive secrets configure flows. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -37,6 +38,7 @@ const { runSecretsConfigureInteractive } = await import("./configure.js");
 
 function makeTempDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-secrets-configure-"));
+  fs.chmodSync(dir, 0o700);
   tempDirs.push(dir);
   return dir;
 }
@@ -97,6 +99,7 @@ describe("runSecretsConfigureInteractive", () => {
     const pluginRoot = makeTempDir();
     const resolverPath = path.join(pluginRoot, "vault-secret-ref-resolver.js");
     fs.writeFileSync(resolverPath, "process.stdin.resume();\n");
+    fs.chmodSync(resolverPath, 0o600);
     selectMock.mockResolvedValueOnce("preset");
     selectMock.mockResolvedValueOnce("vault:vault:vault");
     selectMock.mockResolvedValueOnce("continue");

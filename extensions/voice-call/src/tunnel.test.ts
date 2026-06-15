@@ -1,3 +1,4 @@
+// Voice Call tests cover tunnel plugin behavior.
 import { EventEmitter } from "node:events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -103,7 +104,9 @@ describe("voice-call tunnels", () => {
 
     const settled = await Promise.race([
       result.then(() => true),
-      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 20)),
+      new Promise<boolean>((resolve) => {
+        setTimeout(() => resolve(false), 20);
+      }),
     ]);
     expect(settled).toBe(true);
 

@@ -1,3 +1,4 @@
+// Install Ps1 tests cover install ps1 script behavior.
 import { spawnSync } from "node:child_process";
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -111,6 +112,9 @@ describe("install.ps1 failure handling", () => {
     expect(npmInstallBody).toContain(
       "$env:NODE_LLAMA_CPP_SKIP_DOWNLOAD = $prevNodeLlamaSkipDownload",
     );
+    expect(npmInstallBody).toContain("Write-NpmInstallFailureDetails -Output $npmOutput");
+    expect(source).toContain("function Get-LatestNpmDebugLogPath {");
+    expect(source).toContain("Get-Content -LiteralPath $latestLog -Tail 120");
   });
 
   it("runs Windows command shims from a Windows-local cwd", () => {
@@ -353,8 +357,56 @@ describe("install.ps1 failure handling", () => {
     expect(interactiveCommandBody).toContain("-NoNewWindow");
     expect(interactiveCommandBody).toContain("-Wait");
     expect(interactiveCommandBody).toContain("-PassThru");
+    expect(interactiveCommandBody).toContain("$process.ExitCode -ne 0");
+    expect(interactiveCommandBody).toContain("failed with exit code");
     expect(mainBody).toContain('Write-Host "Starting setup..." -ForegroundColor Cyan');
     expect(mainBody).toContain("Invoke-InteractiveOpenClawCommand onboard");
+  });
+
+  runIfPowerShell("fails install when interactive onboarding exits non-zero", () => {
+    const tempDir = harness.createTempDir("openclaw-install-ps1-");
+    const scriptPath = join(tempDir, "install.ps1");
+    const scriptWithoutEntryPoint = source.replace(ENTRYPOINT_RE, "");
+    writeFileSync(
+      scriptPath,
+      [
+        scriptWithoutEntryPoint,
+        "",
+        "function Write-Banner { }",
+        "function Ensure-ExecutionPolicy { return $true }",
+        "function Check-Node { return $true }",
+        "function Check-ExistingOpenClaw { return $false }",
+        "function Get-NpmCommandPath { return 'npm.cmd' }",
+        "function Install-OpenClaw { return $true }",
+        "function Ensure-OpenClawOnPath { return $true }",
+        "function Add-ToUserPath { param([string]$Path) }",
+        "function Get-OpenClawCommandPath { return 'cmd.exe' }",
+        "function Start-Process {",
+        "  param([string]$FilePath, [string[]]$ArgumentList, [switch]$NoNewWindow, [switch]$Wait, [switch]$PassThru)",
+        "  [pscustomobject]@{ ExitCode = 17 }",
+        "}",
+        "$InstallMethod = 'npm'",
+        "$NoOnboard = $false",
+        "",
+        ...ENTRYPOINT_LINES,
+        "",
+      ].join("\n"),
+    );
+    chmodSync(scriptPath, 0o755);
+
+    const result = runPowerShell([
+      "-NoLogo",
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      scriptPath,
+    ]);
+
+    expect(result.status).toBe(1);
+    expect(`${result.stdout}\n${result.stderr}`).toContain(
+      "openclaw onboard failed with exit code 17",
+    );
   });
 
   runIfPowerShell("exits non-zero when run as a script file", () => {

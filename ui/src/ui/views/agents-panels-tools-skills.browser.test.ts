@@ -1,3 +1,4 @@
+// Control UI tests cover agents panels tools skills behavior.
 import { render } from "lit";
 import { describe, expect, it } from "vitest";
 import { renderAgentTools } from "./agents-panels-tools-skills.ts";
@@ -411,7 +412,9 @@ describe("agents tools panel (browser)", () => {
     expect(tool.open).toBe(false);
 
     chip.click();
-    await new Promise((resolve) => requestAnimationFrame(resolve));
+    await new Promise((resolve) => {
+      requestAnimationFrame(resolve);
+    });
 
     expect(group.open).toBe(true);
     expect(tool.open).toBe(true);

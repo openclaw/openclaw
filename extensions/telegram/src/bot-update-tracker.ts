@@ -1,3 +1,4 @@
+// Telegram plugin module implements bot update tracker behavior.
 import {
   createMessageReceiveContext,
   type MessageAckPolicy,
@@ -118,7 +119,7 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
     }
     highestPersistenceRequestedUpdateId = updateId;
     persistTargetUpdateId = updateId;
-    void drainPersistQueue().catch((err) => {
+    void drainPersistQueue().catch((err: unknown) => {
       options.onPersistError?.(err);
     });
   };
@@ -174,7 +175,7 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
     if (!receiveContext?.shouldAckAfter(stage)) {
       return;
     }
-    void receiveContext.ack().catch((err) => {
+    void receiveContext.ack().catch((err: unknown) => {
       options.onPersistError?.(err);
     });
   };
@@ -251,7 +252,7 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
         failedUpdateIds.add(update.updateId);
         void update.receiveContext
           ?.nack(new Error("Telegram update handler did not complete"))
-          .catch((err) => {
+          .catch((err: unknown) => {
             options.onPersistError?.(err);
           });
       }

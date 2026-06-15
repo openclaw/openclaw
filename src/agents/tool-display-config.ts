@@ -1,3 +1,9 @@
+/**
+ * Tool display metadata registry.
+ *
+ * Agent UIs use this config to map tool names/actions to stable titles,
+ * icons, and detail keys without embedding presentation data in tool handlers.
+ */
 import type { ToolDisplaySpec as ToolDisplaySpecBase } from "./tool-display-common.js";
 
 type ToolDisplaySpec = ToolDisplaySpecBase & {
@@ -10,6 +16,7 @@ type ToolDisplayConfig = {
   tools: Record<string, ToolDisplaySpec>;
 };
 
+/** Static display metadata for known tools plus fallback detail-key selection. */
 export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
   version: 1,
   fallback: {
@@ -268,6 +275,11 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       emoji: "🗺️",
       title: "Update Plan",
       detailKeys: ["explanation", "plan.0.step"],
+    },
+    skill_workshop: {
+      emoji: "🧰",
+      title: "Skill Workshop",
+      detailKeys: ["action", "name", "proposal_id"],
     },
     gateway: {
       emoji: "🔌",

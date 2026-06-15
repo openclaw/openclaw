@@ -1,4 +1,5 @@
 #!/usr/bin/env -S pnpm tsx
+// Release Beta Smoke script supports OpenClaw repository automation.
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -50,6 +51,7 @@ Options:
 }
 
 export function parseArgs(argv: string[]): Options {
+  const args = stripLeadingPackageManagerSeparator(argv);
   const options: Options = {
     beta: "beta",
     model: "openai/gpt-5.4",
@@ -59,25 +61,25 @@ export function parseArgs(argv: string[]): Options {
     skipParallels: false,
     skipTelegram: false,
   };
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
+  parseArgv: for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
     switch (arg) {
       case "--":
-        break;
+        break parseArgv;
       case "--beta":
-        options.beta = requireValue(argv, ++i, arg);
+        options.beta = requireValue(args, ++i, arg);
         break;
       case "--model":
-        options.model = requireValue(argv, ++i, arg);
+        options.model = requireValue(args, ++i, arg);
         break;
       case "--provider-mode":
-        options.providerMode = requireValue(argv, ++i, arg);
+        options.providerMode = requireValue(args, ++i, arg);
         break;
       case "--ref":
-        options.ref = requireValue(argv, ++i, arg);
+        options.ref = requireValue(args, ++i, arg);
         break;
       case "--repo":
-        options.repo = requireValue(argv, ++i, arg);
+        options.repo = requireValue(args, ++i, arg);
         break;
       case "--skip-parallels":
         options.skipParallels = true;
@@ -99,6 +101,10 @@ export function parseArgs(argv: string[]): Options {
   return options;
 }
 
+function stripLeadingPackageManagerSeparator(argv: string[]): string[] {
+  return argv[0] === "--" ? argv.slice(1) : argv;
+}
+
 function requireValue(argv: string[], index: number, flag: string): string {
   const value = argv[index];
   if (!value || value.startsWith("-")) {
@@ -111,23 +117,36 @@ const CAPTURE_MAX_BUFFER_BYTES = 32 * 1024 * 1024;
 const DEFAULT_COMMAND_TIMEOUT_MS = readPositiveInt(
   process.env.OPENCLAW_RELEASE_BETA_SMOKE_COMMAND_MS,
   10 * 60_000,
+  "OPENCLAW_RELEASE_BETA_SMOKE_COMMAND_MS",
 );
 const TELEGRAM_POLL_INTERVAL_MS = readPositiveInt(
   process.env.OPENCLAW_RELEASE_BETA_SMOKE_POLL_INTERVAL_MS,
   30_000,
+  "OPENCLAW_RELEASE_BETA_SMOKE_POLL_INTERVAL_MS",
 );
 const TELEGRAM_POLL_TIMEOUT_MS = readPositiveInt(
   process.env.OPENCLAW_RELEASE_BETA_SMOKE_POLL_TIMEOUT_MS,
   4 * 60 * 60_000,
+  "OPENCLAW_RELEASE_BETA_SMOKE_POLL_TIMEOUT_MS",
 );
 
-function readPositiveInt(raw: string | undefined, fallback: number): number {
+export function readPositiveInt(
+  raw: string | undefined,
+  fallback: number,
+  label = "value",
+): number {
   const text = (raw ?? "").trim();
-  if (!/^\d+$/u.test(text)) {
+  if (!text) {
     return fallback;
   }
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${label} must be a positive integer. Got: ${JSON.stringify(raw)}`);
+  }
   const parsed = Number(text);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`${label} must be a positive integer. Got: ${JSON.stringify(raw)}`);
+  }
+  return parsed;
 }
 
 export function run(command: string, args: string[], input?: RunOptions): string {
@@ -300,7 +319,9 @@ async function findDispatchedWorkflowRunId(params: {
     if (runId) {
       return runId;
     }
-    await new Promise((resolve) => setTimeout(resolve, 5_000));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 5_000);
+    });
   }
   throw new Error(`could not find dispatched run for ${params.workflow}`);
 }
@@ -350,7 +371,11 @@ export async function pollRun(
   const timeoutMs = Math.max(1, options.timeoutMs ?? TELEGRAM_POLL_TIMEOUT_MS);
   const pollIntervalMs = Math.max(1, options.pollIntervalMs ?? TELEGRAM_POLL_INTERVAL_MS);
   const sleep =
-    options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+    options.sleep ??
+    ((ms: number) =>
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, ms);
+      }));
   const readRun =
     options.readRun ??
     ((currentRepo: string, currentRunId: string) =>

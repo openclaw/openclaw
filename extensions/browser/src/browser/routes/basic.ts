@@ -1,6 +1,12 @@
+/**
+ * Basic browser control routes.
+ *
+ * Serves status, doctor, start/stop, profile management, and simple health
+ * endpoints for the browser control server.
+ */
 import { redactCdpUrl } from "../cdp.helpers.js";
 import { snapshotAria } from "../cdp.js";
-import { getChromeMcpPid } from "../chrome-mcp.js";
+import { getChromeMcpPid, takeChromeMcpSnapshot } from "../chrome-mcp.js";
 import { resolveBrowserExecutableForPlatform } from "../chrome.executables.js";
 import { resolveManagedBrowserHeadlessMode } from "../config.js";
 import { buildBrowserDoctorReport } from "../doctor.js";
@@ -198,7 +204,7 @@ async function buildBrowserStatus(req: BrowserRequest, ctx: BrowserRouteContext)
       ? getChromeMcpPid(profileCtx.profile.name)
       : (profileState?.running?.pid ?? null),
     cdpPort: capabilities.usesChromeMcp ? null : profileCtx.profile.cdpPort,
-    cdpUrl: capabilities.usesChromeMcp ? null : (redactCdpUrl(profileCtx.profile.cdpUrl) ?? null),
+    cdpUrl: profileCtx.profile.cdpUrl ? (redactCdpUrl(profileCtx.profile.cdpUrl) ?? null) : null,
     chosenBrowser: profileState?.running?.exe.kind ?? null,
     detectedBrowser,
     detectedExecutablePath,
@@ -227,7 +233,6 @@ async function runBrowserLiveProbe(req: BrowserRequest, ctx: BrowserRouteContext
   try {
     const tab = await profileCtx.ensureTabAvailable();
     if (capabilities.usesChromeMcp) {
-      const { takeChromeMcpSnapshot } = await import("../chrome-mcp.js");
       await takeChromeMcpSnapshot({
         profileName: profileCtx.profile.name,
         profile: profileCtx.profile,
@@ -270,7 +275,7 @@ async function runBrowserLiveProbe(req: BrowserRequest, ctx: BrowserRouteContext
 }
 
 function hasQueryKey(query: BrowserRequest["query"], key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(query ?? {}, key);
+  return Object.hasOwn(query ?? {}, key);
 }
 
 function parseHeadlessStartOverride(params: {
@@ -305,6 +310,7 @@ function parseHeadlessStartOverride(params: {
   return { ok: true, headless };
 }
 
+/** Register basic browser lifecycle, status, doctor, and profile endpoints. */
 export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: BrowserRouteContext) {
   // List all profiles with their status
   app.get(

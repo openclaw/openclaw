@@ -1,3 +1,5 @@
+// Media-understanding defaults tests keep bundled provider metadata priorities,
+// default models, and native document support aligned with manifests.
 import { describe, expect, it, vi } from "vitest";
 
 const mediaMetadataPlugins = vi.hoisted(() => [
@@ -11,7 +13,7 @@ const mediaMetadataPlugins = vi.hoisted(() => [
         "mistral",
         "moonshot",
         "openai",
-        "openai-codex",
+        "openai",
         "opencode",
         "opencode-go",
         "openrouter",
@@ -58,11 +60,6 @@ const mediaMetadataPlugins = vi.hoisted(() => [
         autoPriority: { video: 30 },
       },
       openai: {
-        capabilities: ["image", "audio"],
-        defaultModels: { image: "gpt-5.4-mini", audio: "gpt-4o-transcribe" },
-        autoPriority: { image: 10, audio: 10 },
-      },
-      "openai-codex": {
         capabilities: ["image", "audio"],
         defaultModels: { image: "gpt-5.5", audio: "gpt-4o-transcribe" },
         autoPriority: { image: 20, audio: 20 },
@@ -118,7 +115,7 @@ describe("resolveDefaultMediaModel", () => {
     expect(resolveDefaultMediaModel({ providerId: "mistral", capability: "audio" })).toBe(
       "voxtral-mini-latest",
     );
-    expect(resolveDefaultMediaModel({ providerId: "openai-codex", capability: "audio" })).toBe(
+    expect(resolveDefaultMediaModel({ providerId: "openai", capability: "audio" })).toBe(
       "gpt-4o-transcribe",
     );
     expect(resolveDefaultMediaModel({ providerId: "openrouter", capability: "audio" })).toBe(
@@ -130,9 +127,7 @@ describe("resolveDefaultMediaModel", () => {
     expect(resolveDefaultMediaModel({ providerId: "minimax-portal", capability: "image" })).toBe(
       "MiniMax-VL-01",
     );
-    expect(resolveDefaultMediaModel({ providerId: "openai-codex", capability: "image" })).toBe(
-      "gpt-5.5",
-    );
+    expect(resolveDefaultMediaModel({ providerId: "openai", capability: "image" })).toBe("gpt-5.5");
     expect(resolveDefaultMediaModel({ providerId: "moonshot", capability: "image" })).toBe(
       "kimi-k2.6",
     );
@@ -176,7 +171,6 @@ describe("resolveAutoMediaKeyProviders", () => {
   it("keeps the bundled audio fallback order", () => {
     expect(resolveAutoMediaKeyProviders({ capability: "audio" })).toEqual([
       "openai",
-      "openai-codex",
       "xai",
       "openrouter",
       "google",
@@ -186,9 +180,8 @@ describe("resolveAutoMediaKeyProviders", () => {
 
   it("keeps the bundled image fallback order", () => {
     expect(resolveAutoMediaKeyProviders({ capability: "image" })).toEqual([
-      "openai",
       "anthropic",
-      "openai-codex",
+      "openai",
       "google",
       "minimax",
       "minimax-portal",

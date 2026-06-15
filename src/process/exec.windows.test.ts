@@ -1,3 +1,4 @@
+// Windows exec tests cover command invocation behavior on Windows paths.
 import type { execFile as execFileType } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
@@ -10,16 +11,16 @@ import {
 import { withMockedWindowsPlatform, withRestoredMocks } from "../test-utils/vitest-spies.js";
 
 const { spawnMock, spawnSyncMock, execFileMock, execFilePromisifyMock } = vi.hoisted(() => {
-  const execFilePromisifyMock = vi.fn();
-  const execFileMock = Object.assign(vi.fn(), {
-    [Symbol.for("nodejs.util.promisify.custom")]: execFilePromisifyMock,
-    __promisify__: execFilePromisifyMock,
+  const execFilePromisifyMockLocal = vi.fn();
+  const execFileMockLocal = Object.assign(vi.fn(), {
+    [Symbol.for("nodejs.util.promisify.custom")]: execFilePromisifyMockLocal,
+    __promisify__: execFilePromisifyMockLocal,
   });
   return {
     spawnMock: vi.fn(),
     spawnSyncMock: vi.fn(),
-    execFileMock,
-    execFilePromisifyMock,
+    execFileMock: execFileMockLocal,
+    execFilePromisifyMock: execFilePromisifyMockLocal,
   };
 });
 
@@ -458,7 +459,7 @@ describe("windows command wrapper behavior", () => {
         child.emit("close", null, "SIGKILL");
         const result = await resultPromise;
         expect(result.termination).toBe("timeout");
-        expect(result.code).not.toBe(0);
+        expect(result.code).toBe(124);
       });
     } finally {
       vi.useRealTimers();

@@ -1,9 +1,11 @@
+// Release Beta Smoke tests cover release beta smoke script behavior.
 import { describe, expect, it } from "vitest";
 import {
   mergeTelegramProofIntoReleaseBody,
   parseArgs,
   parseWorkflowRunIdFromOutput,
   pollRun,
+  readPositiveInt,
   run,
   selectNewestDispatchedRunId,
 } from "../../scripts/release-beta-smoke.ts";
@@ -13,6 +15,35 @@ describe("release-beta-smoke", () => {
     expect(() => parseArgs(["--skip-parallels", "--skip-telegram"])).toThrow(
       "--skip-parallels and --skip-telegram cannot be used together",
     );
+  });
+
+  it("stops parsing options after the argument terminator", () => {
+    expect(
+      parseArgs(["--beta", "beta-a", "--", "--skip-parallels", "--skip-telegram"]),
+    ).toMatchObject({
+      beta: "beta-a",
+      skipParallels: false,
+      skipTelegram: false,
+    });
+  });
+
+  it("accepts package-manager argument separators before script options", () => {
+    expect(parseArgs(["--", "--beta", "beta-a", "--skip-parallels"])).toMatchObject({
+      beta: "beta-a",
+      skipParallels: true,
+    });
+  });
+
+  it("rejects malformed positive integer environment limits", () => {
+    expect(readPositiveInt(undefined, 60, "OPENCLAW_RELEASE_BETA_SMOKE_COMMAND_MS")).toBe(60);
+    expect(readPositiveInt("", 60, "OPENCLAW_RELEASE_BETA_SMOKE_COMMAND_MS")).toBe(60);
+    expect(readPositiveInt("25", 60, "OPENCLAW_RELEASE_BETA_SMOKE_COMMAND_MS")).toBe(25);
+
+    for (const raw of ["1e3", "25ms", "1.5", "0", "-1", String(Number.MAX_SAFE_INTEGER + 1)]) {
+      expect(() => readPositiveInt(raw, 60, "OPENCLAW_RELEASE_BETA_SMOKE_COMMAND_MS")).toThrow(
+        "OPENCLAW_RELEASE_BETA_SMOKE_COMMAND_MS must be a positive integer",
+      );
+    }
   });
 
   it("parses workflow run urls when gh includes them in dispatch output", () => {

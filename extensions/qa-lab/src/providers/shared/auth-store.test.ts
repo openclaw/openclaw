@@ -1,3 +1,4 @@
+// Qa Lab tests cover auth store plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -144,11 +145,11 @@ describe("QA auth profile store", () => {
           },
           legacyOAuthProfile: {
             type: "oauth",
-            provider: "openai-codex",
+            provider: "openai",
             expires: 1_900_000_000_000,
             oauthRef: {
               source: "openclaw-credentials",
-              provider: "openai-codex",
+              provider: "openai",
               id: "0123456789abcdef0123456789abcdef",
             },
           },
@@ -185,11 +186,11 @@ describe("QA auth profile store", () => {
     });
     expect(written.profiles?.legacyOAuthProfile).toEqual({
       type: "oauth",
-      provider: "openai-codex",
+      provider: "openai",
       expires: 1_900_000_000_000,
       oauthRef: {
         source: "openclaw-credentials",
-        provider: "openai-codex",
+        provider: "openai",
         id: "0123456789abcdef0123456789abcdef",
       },
     });

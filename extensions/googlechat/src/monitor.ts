@@ -1,3 +1,4 @@
+// Googlechat plugin module implements monitor behavior.
 import {
   recordChannelBotPairLoopAndCheckSuppression,
   type ChannelBotLoopProtectionFacts,
@@ -9,9 +10,10 @@ import {
   resolveInboundRouteEnvelopeBuilderWithRuntime,
   resolveWebhookPath,
 } from "../runtime-api.js";
-import { type ResolvedGoogleChatAccount } from "./accounts.js";
+import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { downloadGoogleChatMedia, sendGoogleChatMessage } from "./api.js";
-import { type GoogleChatAudienceType } from "./auth.js";
+import { maybeHandleGoogleChatApprovalCardClick } from "./approval-card-click.js";
+import type { GoogleChatAudienceType } from "./auth.js";
 import { applyGoogleChatInboundAccessPolicy } from "./monitor-access.js";
 import { resolveGoogleChatDurableReplyOptions } from "./monitor-durable.js";
 import { deliverGoogleChatReply } from "./monitor-reply-delivery.js";
@@ -120,6 +122,10 @@ function shouldSuppressGoogleChatBotLoop(params: {
 
 async function processGoogleChatEvent(event: GoogleChatEvent, target: WebhookTarget) {
   const eventType = event.type ?? (event as { eventType?: string }).eventType;
+  if (eventType === "CARD_CLICKED") {
+    await maybeHandleGoogleChatApprovalCardClick({ event, target });
+    return;
+  }
   if (eventType !== "MESSAGE") {
     return;
   }
@@ -221,7 +227,7 @@ async function processMessageWithPipeline(params: {
     senderEmail,
     rawBody,
     statusSink,
-    logVerbose: (message) => logVerbose(core, runtime, message),
+    logVerbose: (messageLocal) => logVerbose(core, runtime, messageLocal),
   });
   if (!access.ok) {
     return;

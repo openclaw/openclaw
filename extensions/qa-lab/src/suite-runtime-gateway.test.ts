@@ -1,3 +1,4 @@
+// Qa Lab tests cover suite runtime gateway plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   getGatewayRetryAfterMs,
@@ -208,9 +209,13 @@ describe("qa suite gateway helpers", () => {
       response: { ok: true },
       release,
     });
+    const snapshots = [
+      { hash: "hash-1", config: { tools: {} } },
+      { hash: "hash-2", config: { tools: { deny: ["read"] } } },
+    ];
     const gatewayCall = vi.fn(async (method: string) => {
       if (method === "config.get") {
-        return { hash: "hash-1", config: { tools: {} } };
+        return snapshots.shift() ?? snapshots.at(-1);
       }
       throw new Error("service restart");
     });
@@ -230,7 +235,57 @@ describe("qa suite gateway helpers", () => {
     expect(waitReady.mock.calls[0]?.[0].timeoutMs).toBeGreaterThan(60_000);
   });
 
+  it("retries when a restart race settles before the config mutation is visible", async () => {
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: { ok: true },
+      release,
+    });
+    const snapshots = [
+      { hash: "hash-1", config: { tools: {} } },
+      { hash: "hash-2", config: { tools: {} } },
+      { hash: "hash-2", config: { tools: {} } },
+    ];
+    const gatewayCall = vi.fn(async (method: string) => {
+      if (method === "config.get") {
+        return snapshots.shift() ?? { hash: "hash-3", config: { tools: { deny: ["read"] } } };
+      }
+      if (method === "config.patch" && gatewayCall.mock.calls.length < 4) {
+        throw new Error("service restart");
+      }
+      return { ok: true };
+    });
+    const { env } = createConfigMutationEnv(gatewayCall);
+
+    await expect(
+      patchConfig({
+        env,
+        patch: { tools: { deny: ["read"] } },
+        replacePaths: ["tools.deny"],
+        restartDelayMs: 0,
+      }),
+    ).resolves.toEqual({ ok: true });
+
+    expect(gatewayCall).toHaveBeenCalledWith(
+      "config.patch",
+      expect.objectContaining({
+        baseHash: "hash-1",
+        replacePaths: ["tools.deny"],
+      }),
+      { timeoutMs: 180_000 },
+    );
+    expect(gatewayCall).toHaveBeenCalledWith(
+      "config.patch",
+      expect.objectContaining({
+        baseHash: "hash-2",
+        replacePaths: ["tools.deny"],
+      }),
+      { timeoutMs: 180_000 },
+    );
+  });
+
   it("waits for transport readiness after gateway restart health", async () => {
+    vi.useFakeTimers();
     const release = vi.fn(async () => {});
     fetchWithSsrFGuardMock.mockResolvedValue({
       response: { ok: true },
@@ -238,7 +293,10 @@ describe("qa suite gateway helpers", () => {
     });
     const waitReady = vi.fn(async () => {});
 
-    await waitForConfigRestartSettle(createRestartSettleEnv(waitReady), 0, 1_000);
+    const settling = waitForConfigRestartSettle(createRestartSettleEnv(waitReady), 0, 5_000);
+
+    await vi.advanceTimersByTimeAsync(750);
+    await settling;
 
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
       expect.objectContaining({

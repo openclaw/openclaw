@@ -1,7 +1,9 @@
+// Covers core TUI state transitions and backend event rendering.
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
+import { withEnv } from "../test-utils/env.js";
 import { getSlashCommands, parseCommand } from "./commands.js";
 import {
   createBackspaceDeduper,
@@ -16,11 +18,13 @@ import {
   resolveFinalAssistantText,
   resolveGatewayDisconnectState,
   resolveInitialTuiAgentId,
+  resolveTuiToolsToggleActivityStatus,
   isTuiBusyActivityStatus,
   resolveLocalAuthCliInvocation,
   resolveLocalAuthSpawnCwd,
   resolveLocalAuthSpawnOptions,
   resolveTuiCtrlCAction,
+  resolveTuiFooterHostLabel,
   resolveTuiShutdownHardExitMs,
   resolveTuiSessionKey,
   scheduleProcessExitAfterTuiReturn,
@@ -59,6 +63,40 @@ describe("resolveFinalAssistantText", () => {
         errorMessage: MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
       }),
     ).toBe("LLM streaming response contained a malformed fragment. Please try again.");
+  });
+});
+
+describe("resolveTuiFooterHostLabel", () => {
+  it("hides connection host by default", () => {
+    expect(
+      resolveTuiFooterHostLabel({
+        config: {},
+        connectionUrl: "wss://gateway.example.com/ws",
+      }),
+    ).toBeNull();
+  });
+
+  it("renders only remote hosts when explicitly enabled", () => {
+    const config = { tui: { footer: { showRemoteHost: true } } } satisfies OpenClawConfig;
+
+    expect(
+      resolveTuiFooterHostLabel({
+        config,
+        connectionUrl: "wss://user:secret@gateway.example.com/ws?token=hidden",
+      }),
+    ).toBe("host gateway.example.com");
+    expect(
+      resolveTuiFooterHostLabel({
+        config,
+        connectionUrl: "ws://127.0.0.1:18789",
+      }),
+    ).toBeNull();
+    expect(
+      resolveTuiFooterHostLabel({
+        config,
+        connectionUrl: "local embedded",
+      }),
+    ).toBeNull();
   });
 });
 
@@ -154,37 +192,50 @@ describe("isTuiBusyActivityStatus", () => {
   });
 });
 
+describe("resolveTuiToolsToggleActivityStatus", () => {
+  it("preserves busy status while an active run exists", () => {
+    expect(
+      resolveTuiToolsToggleActivityStatus({
+        currentStatus: "streaming",
+        toolsExpanded: true,
+      }),
+    ).toBe("streaming");
+  });
+
+  it("preserves finishing context after the active run id clears", () => {
+    expect(
+      resolveTuiToolsToggleActivityStatus({
+        currentStatus: "finishing context",
+        toolsExpanded: false,
+      }),
+    ).toBe("finishing context");
+  });
+
+  it("uses the tool toggle status when activity is idle", () => {
+    expect(
+      resolveTuiToolsToggleActivityStatus({
+        currentStatus: "idle",
+        toolsExpanded: false,
+      }),
+    ).toBe("tools collapsed");
+  });
+});
+
 describe("resolveTuiShutdownHardExitMs", () => {
   it("keeps gateway shutdown bounded by the hard-exit timer", () => {
     expect(resolveTuiShutdownHardExitMs({ localMode: false })).toBe(2000);
   });
 
   it("adds local run shutdown grace before forcing embedded shutdown", () => {
-    const previous = process.env.OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS;
-    process.env.OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS = "3456";
-    try {
+    withEnv({ OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS: "3456" }, () => {
       expect(resolveTuiShutdownHardExitMs({ localMode: true })).toBe(5456);
-    } finally {
-      if (previous === undefined) {
-        delete process.env.OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS;
-      } else {
-        process.env.OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS = previous;
-      }
-    }
+    });
   });
 
   it("ignores partial local run shutdown grace values", () => {
-    const previous = process.env.OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS;
-    process.env.OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS = "3456abc";
-    try {
+    withEnv({ OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS: "3456abc" }, () => {
       expect(resolveTuiShutdownHardExitMs({ localMode: true })).toBe(122000);
-    } finally {
-      if (previous === undefined) {
-        delete process.env.OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS;
-      } else {
-        process.env.OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS = previous;
-      }
-    }
+    });
   });
 });
 

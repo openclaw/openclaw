@@ -1,7 +1,14 @@
+// Gateway Control UI HTTP handler.
+// Serves bundled UI assets, bootstrap config, avatars, assistant media, and auth checks.
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
+import { detectMime } from "@openclaw/media-core/mime";
+import {
+  asDateTimestampMs,
+  resolveTimestampMsToIsoString,
+} from "@openclaw/normalization-core/number-coercion";
 import { resolveAgentAvatar, resolvePublicAgentAvatarSource } from "../agents/identity-avatar.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { matchRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
@@ -17,7 +24,6 @@ import { isWithinDir } from "../infra/path-safety.js";
 import { assertLocalMediaAllowed, getDefaultLocalRoots } from "../media/local-media-access.js";
 import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 import { resolveMediaReferenceLocalPath } from "../media/media-reference.js";
-import { detectMime } from "../media/mime.js";
 import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
@@ -408,7 +414,14 @@ function signAssistantMediaTicketPayload(encodedPayload: string): string {
 }
 
 function createAssistantMediaTicket(source: string, nowMs = Date.now()) {
-  const exp = nowMs + CONTROL_UI_ASSISTANT_MEDIA_TICKET_TTL_MS;
+  const now = asDateTimestampMs(nowMs);
+  if (now === undefined) {
+    return {};
+  }
+  const exp = asDateTimestampMs(now + CONTROL_UI_ASSISTANT_MEDIA_TICKET_TTL_MS);
+  if (exp === undefined) {
+    return {};
+  }
   const payload: AssistantMediaTicketPayload = {
     scope: CONTROL_UI_ASSISTANT_MEDIA_TICKET_SCOPE,
     source,
@@ -418,11 +431,15 @@ function createAssistantMediaTicket(source: string, nowMs = Date.now()) {
   const sig = signAssistantMediaTicketPayload(encodedPayload);
   return {
     mediaTicket: `v1.${encodedPayload}.${sig}`,
-    mediaTicketExpiresAt: new Date(exp).toISOString(),
+    mediaTicketExpiresAt: resolveTimestampMsToIsoString(exp),
   };
 }
 
 function verifyAssistantMediaTicket(ticket: string | null, source: string, nowMs = Date.now()) {
+  const now = asDateTimestampMs(nowMs);
+  if (now === undefined) {
+    return false;
+  }
   const parts = ticket?.split(".");
   if (!parts || parts.length !== 3 || parts[0] !== "v1") {
     return false;
@@ -446,7 +463,7 @@ function verifyAssistantMediaTicket(ticket: string | null, source: string, nowMs
       payload.source === source &&
       typeof payload.exp === "number" &&
       Number.isFinite(payload.exp) &&
-      payload.exp >= nowMs
+      payload.exp >= now
     );
   } catch {
     return false;
@@ -573,7 +590,7 @@ export async function handleControlUiAssistantMediaRequest(
   }
 
   let opened: Awaited<ReturnType<typeof openLocalFileSafely>> | null = null;
-  let localPath = source;
+  let localPath;
   let handleClosed = false;
   const closeOpenedHandle = async () => {
     if (!opened || handleClosed) {
@@ -739,6 +756,22 @@ function serveResolvedIndexHtml(res: ServerResponse, body: string) {
   res.end(body);
 }
 
+function readOpenedFile(fd: number): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    fs.readFile(fd, (error, data) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve(data);
+    });
+  });
+}
+
+async function readOpenedFileText(fd: number): Promise<string> {
+  return (await readOpenedFile(fd)).toString("utf8");
+}
+
 function isExpectedSafePathError(error: unknown): boolean {
   const code =
     typeof error === "object" && error !== null && "code" in error ? String(error.code) : "";
@@ -802,6 +835,64 @@ function isSafeRelativePath(relPath: string) {
   return true;
 }
 
+// Path served by the gateway under the default Control UI namespace when no
+// `gateway.controlUi.basePath` is configured. The SPA is mounted at
+// `/__openclaw__/`, so a browser that opens the default entry infers
+// `/__openclaw__` as its base path (see `inferBasePathFromPathname`) and fetches
+// `/__openclaw__/control-ui-config.json`. Accept that namespaced alias so the
+// default entry resolves its bootstrap config instead of 404ing.
+const CONTROL_UI_DEFAULT_NAMESPACE_BOOTSTRAP_CONFIG_PATH = `${CONTROL_UI_NAMESPACE_PREFIX.replace(
+  /\/$/,
+  "",
+)}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`;
+
+// Single-underscore `/__openclaw` prefix used by the pre-base-path-relative
+// bootstrap endpoint. Before #66946 made the config path base-path-relative,
+// `CONTROL_UI_BOOTSTRAP_CONFIG_PATH` was hard-coded to
+// `/__openclaw/control-ui-config.json`, so current main and the v2026.6.1
+// release serve and document that exact path under an empty base path.
+const LEGACY_CONTROL_UI_NAMESPACE_PREFIX = "/__openclaw";
+
+// The old documented no-base-path bootstrap endpoint
+// (`/__openclaw/control-ui-config.json`, single underscore). It is derived from
+// the legacy `/__openclaw` namespace joined with the canonical config constant
+// so it tracks any rename of the config filename. Kept as an empty-base-path
+// compatibility alias so older bundles and clients that fetch the previously
+// documented endpoint keep receiving config after upgrading instead of 404ing.
+const LEGACY_BOOTSTRAP_CONFIG_PATH = `${LEGACY_CONTROL_UI_NAMESPACE_PREFIX}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`;
+
+/**
+ * Whether `pathname` should be served the Control UI bootstrap config payload.
+ *
+ * The canonical endpoint is the configured base path joined with the shared
+ * bootstrap constant (or the bare constant when no base path is configured).
+ * For every base path (configured or empty) we additionally accept the legacy
+ * single-underscore suffix `${basePath}/__openclaw/control-ui-config.json` that
+ * current main and v2026.6.1 serve and document, so older bundles and clients
+ * that still request the pre-#66946 endpoint keep receiving config after an
+ * upgrade instead of 404ing. When no base path is configured we further accept
+ * the default-namespace alias `/__openclaw__/control-ui-config.json`, which is
+ * what the default `/__openclaw__/` entry requests after inferring its base path
+ * from the URL. All compatibility endpoints are preserved; no path is removed.
+ */
+function matchesControlUiBootstrapConfigPath(pathname: string, basePath: string): boolean {
+  // Canonical and legacy suffixes apply under both an empty and a configured
+  // base path. `LEGACY_BOOTSTRAP_CONFIG_PATH` already starts with the legacy
+  // `/__openclaw` namespace, so joining it with the base path yields
+  // `${basePath}/__openclaw/control-ui-config.json` (or the bare legacy path
+  // when no base path is configured).
+  if (
+    pathname === `${basePath}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}` ||
+    pathname === `${basePath}${LEGACY_BOOTSTRAP_CONFIG_PATH}`
+  ) {
+    return true;
+  }
+  // The default `/__openclaw__/` namespace alias only applies when no base path
+  // is configured; with a configured base path the canonical endpoint already
+  // lives under that base path and this inferred alias does not apply.
+  return basePath === "" && pathname === CONTROL_UI_DEFAULT_NAMESPACE_BOOTSTRAP_CONFIG_PATH;
+}
+
 export async function handleControlUiHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -838,10 +929,7 @@ export async function handleControlUiHttpRequest(
 
   applyControlUiSecurityHeaders(res);
 
-  const bootstrapConfigPath = basePath
-    ? `${basePath}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`
-    : CONTROL_UI_BOOTSTRAP_CONFIG_PATH;
-  if (pathname === bootstrapConfigPath) {
+  if (matchesControlUiBootstrapConfigPath(pathname, basePath)) {
     if (
       !(await authorizeControlUiReadRequest(req, res, {
         auth: opts?.auth,
@@ -980,10 +1068,10 @@ export async function handleControlUiHttpRequest(
         return true;
       }
       if (path.basename(safeFile.path) === "index.html") {
-        serveResolvedIndexHtml(res, fs.readFileSync(safeFile.fd, "utf8"));
+        serveResolvedIndexHtml(res, await readOpenedFileText(safeFile.fd));
         return true;
       }
-      serveResolvedFile(res, safeFile.path, fs.readFileSync(safeFile.fd));
+      serveResolvedFile(res, safeFile.path, await readOpenedFile(safeFile.fd));
       return true;
     } finally {
       fs.closeSync(safeFile.fd);
@@ -1008,7 +1096,7 @@ export async function handleControlUiHttpRequest(
       if (respondHeadForFile(req, res, safeIndex.path)) {
         return true;
       }
-      serveResolvedIndexHtml(res, fs.readFileSync(safeIndex.fd, "utf8"));
+      serveResolvedIndexHtml(res, await readOpenedFileText(safeIndex.fd));
       return true;
     } finally {
       fs.closeSync(safeIndex.fd);

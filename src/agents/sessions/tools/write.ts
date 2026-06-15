@@ -1,3 +1,8 @@
+/**
+ * Built-in write session tool.
+ *
+ * Writes files through queued local or injected operations with readback/idempotency metadata.
+ */
 import {
   mkdir as fsMkdir,
   readFile as fsReadFile,
@@ -452,8 +457,8 @@ export function createWriteToolDefinition(
       );
       return component;
     },
-    renderResult(result, options, theme, context) {
-      void options;
+    renderResult(result, optionsLocal, theme, context) {
+      void optionsLocal;
       const output = formatWriteResult({ ...result, isError: context.isError }, theme);
       if (!output) {
         const component = (context.lastComponent as Container | undefined) ?? new Container();

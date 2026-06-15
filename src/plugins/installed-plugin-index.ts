@@ -1,3 +1,4 @@
+/** Public installed-plugin-index API for load, refresh, policy hash, and invalidation checks. */
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
@@ -39,6 +40,10 @@ export type {
 } from "./installed-plugin-index-types.js";
 export { extractPluginInstallRecordsFromInstalledPluginIndex } from "./installed-plugin-index-install-records.js";
 export { diffInstalledPluginIndexInvalidationReasons } from "./installed-plugin-index-invalidation.js";
+export {
+  CONFIG_PATH_ACTIVATION_COMPAT_CODE,
+  hasMissingConfigPathActivationMetadata,
+} from "./installed-plugin-index-config-path-scope.js";
 export { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 
 function buildInstalledPluginIndex(

@@ -1,3 +1,4 @@
+// Help cold import tests cover root help output without loading heavy command modules.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -332,6 +333,7 @@ describe("subcommand help cold imports", () => {
     expect(loaded.modules).not.toContain("agents-delete-command");
     expect(loaded.modules).not.toContain("agents-identity-command");
     expect(loaded.modules).not.toContain("agents-list-command");
+    expect(loaded.modules).not.toContain("default-runtime");
   });
 
   it("keeps secrets help out of secrets action modules", async () => {

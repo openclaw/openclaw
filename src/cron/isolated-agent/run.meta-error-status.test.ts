@@ -1,3 +1,4 @@
+// Run meta error tests cover status reporting when cron run metadata fails.
 import { describe, expect, it } from "vitest";
 import { CommandLaneTaskTimeoutError } from "../../process/command-queue.js";
 import {
@@ -71,7 +72,7 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
     abortController.abort("cron: job execution timed out (last phase: model_call_started)");
     runWithModelFallbackMock.mockRejectedValueOnce(
       new Error(
-        'All models failed (2): openai-codex/gpt-5.5: Command lane "cron-nested" task timed out after 330000ms (timeout)',
+        'All models failed (2): openai/gpt-5.5: Command lane "cron-nested" task timed out after 330000ms (timeout)',
       ),
     );
 

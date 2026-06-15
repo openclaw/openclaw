@@ -1,5 +1,15 @@
-import { MAX_TIMER_TIMEOUT_SECONDS } from "../../shared/number-coercion.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+/**
+ * Shared web tool cache, timeout, and response helpers.
+ *
+ * Keeps web_fetch and web_search providers aligned on bounded IO and cache semantics.
+ */
+import {
+  asDateTimestampMs,
+  MAX_TIMER_TIMEOUT_SECONDS,
+  resolveExpiresAtMsFromDurationMs,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 export type CacheEntry<T> = {
   value: T;
@@ -40,7 +50,8 @@ export function readCache<T>(
   if (!entry) {
     return null;
   }
-  if (Date.now() > entry.expiresAt) {
+  const now = asDateTimestampMs(Date.now());
+  if (now === undefined || now > entry.expiresAt) {
     cache.delete(key);
     return null;
   }
@@ -56,6 +67,11 @@ export function writeCache<T>(
   if (ttlMs <= 0) {
     return;
   }
+  const now = Date.now();
+  const expiresAt = resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: now });
+  if (expiresAt === undefined) {
+    return;
+  }
   if (cache.size >= DEFAULT_CACHE_MAX_ENTRIES) {
     const oldest = cache.keys().next();
     if (!oldest.done) {
@@ -64,8 +80,8 @@ export function writeCache<T>(
   }
   cache.set(key, {
     value,
-    expiresAt: Date.now() + ttlMs,
-    insertedAt: Date.now(),
+    expiresAt,
+    insertedAt: now,
   });
 }
 
@@ -74,7 +90,7 @@ export function withTimeout(signal: AbortSignal | undefined, timeoutMs: number):
     return signal ?? new AbortController().signal;
   }
   const controller = new AbortController();
-  const timer = setTimeout(controller.abort.bind(controller), timeoutMs);
+  const timer = setTimeout(controller.abort.bind(controller), resolveTimerTimeoutMs(timeoutMs, 1));
   if (signal) {
     signal.addEventListener(
       "abort",

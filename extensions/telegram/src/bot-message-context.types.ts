@@ -1,3 +1,4 @@
+// Telegram type declarations define plugin contracts.
 import type { Bot } from "grammy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
@@ -24,6 +25,7 @@ export type TelegramMessageContextOptions = {
   receivedAtMs?: number;
   ingressBuffer?: "inbound-debounce" | "text-fragment";
   promptContextMinTimestampMs?: number;
+  spooledReplay?: boolean;
 };
 
 export type TelegramPromptContextEntry = NonNullable<

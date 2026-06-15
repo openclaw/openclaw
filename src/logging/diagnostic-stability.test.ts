@@ -1,3 +1,4 @@
+// Diagnostic stability tests cover stable diagnostic output under repeated events.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   emitDiagnosticEvent,
@@ -69,7 +70,9 @@ describe("diagnostic stability recorder", () => {
       durationMs: 12,
       byteLength: 345,
     });
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
     const snapshot = getDiagnosticStabilitySnapshot({ limit: 10 });
 
@@ -237,7 +240,9 @@ describe("diagnostic stability recorder", () => {
       contextTokenBudget: 200_000,
       reserveTokens: 20_000,
     });
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
     const snapshot = getDiagnosticStabilitySnapshot({ limit: 10 });
 
@@ -284,7 +289,9 @@ describe("diagnostic stability recorder", () => {
         arrayBuffersBytes: 10,
       },
     });
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
     const snapshot = getDiagnosticStabilitySnapshot({ limit: 10 });
 
@@ -427,7 +434,9 @@ describe("diagnostic stability recorder", () => {
       });
     }
 
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
     const midDrainSnapshot = getDiagnosticStabilitySnapshot({ limit: 1000 });
     expect(midDrainSnapshot.lastSeq).toBe(100);

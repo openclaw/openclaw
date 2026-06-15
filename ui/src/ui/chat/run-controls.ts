@@ -1,3 +1,4 @@
+// Control UI chat module implements run controls behavior.
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
 import { icons } from "../icons.ts";
@@ -14,14 +15,15 @@ export type ChatRunControlsProps = {
   onNewSession: () => void;
   onSend: () => void;
   onStoreDraft: (draft: string) => void;
+  showSecondary?: boolean;
 };
 
 export function renderChatRunControls(props: ChatRunControlsProps) {
+  const showSecondary = props.showSecondary ?? true;
   return html`
     <div class="agent-chat__toolbar-right">
-      ${props.canAbort
-        ? nothing
-        : html`
+      ${showSecondary && !props.canAbort
+        ? html`
             <button
               class="btn btn--ghost"
               @click=${props.onNewSession}
@@ -31,18 +33,22 @@ export function renderChatRunControls(props: ChatRunControlsProps) {
               ${icons.plus}
               <span class="agent-chat__control-label">${t("chat.runControls.newSession")}</span>
             </button>
-          `}
-      <button
-        class="btn btn--ghost"
-        @click=${props.onExport}
-        title=${t("chat.runControls.export")}
-        aria-label=${t("chat.runControls.exportChat")}
-        ?disabled=${!props.hasMessages}
-      >
-        ${icons.download}
-        <span class="agent-chat__control-label">${t("chat.runControls.export")}</span>
-      </button>
-
+          `
+        : nothing}
+      ${showSecondary
+        ? html`
+            <button
+              class="btn btn--ghost"
+              @click=${props.onExport}
+              title=${t("chat.runControls.export")}
+              aria-label=${t("chat.runControls.exportChat")}
+              ?disabled=${!props.hasMessages}
+            >
+              ${icons.download}
+              <span class="agent-chat__control-label">${t("chat.runControls.export")}</span>
+            </button>
+          `
+        : nothing}
       ${props.canAbort
         ? html`
             <button

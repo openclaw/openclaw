@@ -1,9 +1,8 @@
+/** Manifest-backed model catalog row loaders for `openclaw models list`. */
+import { normalizeModelCatalogProviderId } from "@openclaw/model-catalog-core/model-catalog-refs";
+import type { NormalizedModelCatalogRow } from "@openclaw/model-catalog-core/model-catalog-types";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  normalizeModelCatalogProviderId,
-  planManifestModelCatalogRows,
-} from "../../model-catalog/index.js";
-import type { NormalizedModelCatalogRow } from "../../model-catalog/index.js";
+import { planManifestModelCatalogRows } from "../../model-catalog/index.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import type { PluginManifestRegistry } from "../../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
@@ -147,6 +146,7 @@ function loadManifestCatalogRowsForList(params: {
   });
 }
 
+/** Loads authoritative static manifest catalog rows for model-list output. */
 export function loadStaticManifestCatalogRowsForList(params: {
   cfg: OpenClawConfig;
   providerFilter?: string;
@@ -159,6 +159,7 @@ export function loadStaticManifestCatalogRowsForList(params: {
   });
 }
 
+/** Loads supplemental non-runtime manifest catalog rows for fallback list sources. */
 export function loadSupplementalManifestCatalogRowsForList(params: {
   cfg: OpenClawConfig;
   providerFilter?: string;

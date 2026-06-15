@@ -1,3 +1,4 @@
+// Filterable select list component supports filtered keyboard selection.
 import type { Component } from "@earendil-works/pi-tui";
 import {
   Input,
@@ -6,8 +7,8 @@ import {
   SelectList,
   type SelectListTheme,
 } from "@earendil-works/pi-tui";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import chalk from "chalk";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { fuzzyFilterLower, prepareSearchItems } from "./fuzzy-filter.js";
 
 export interface FilterableSelectItem extends SelectItem {

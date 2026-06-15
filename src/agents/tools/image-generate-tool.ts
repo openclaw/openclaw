@@ -1,3 +1,8 @@
+/**
+ * image_generate built-in tool.
+ *
+ * Loads references, resolves providers/options, saves generated images, and supports detached background runs.
+ */
 import { Type } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -70,6 +75,7 @@ import {
   createDefaultMediaGenerateBackgroundScheduler,
   notifyMediaGenerationAsyncTaskStarted,
   scheduleMediaGenerationTaskCompletion,
+  shouldDetachMediaGenerationTask,
   type MediaGenerateAsyncStartCallback,
   type MediaGenerateBackgroundScheduler,
 } from "./media-generate-background-shared.js";
@@ -80,6 +86,7 @@ import {
   hasGenerationToolAvailability,
   normalizeMediaReferenceInputs,
   readGenerationTimeoutMs,
+  REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS,
   resolveRemoteMediaSsrfPolicy,
   resolveCapabilityModelConfigForTool,
   resolveGenerateAction,
@@ -617,6 +624,7 @@ async function loadReferenceImages(params: {
             maxBytes: params.maxBytes,
             localRoots,
             ssrfPolicy: params.ssrfPolicy,
+            ...(isHttpUrl ? { readIdleTimeoutMs: REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS } : {}),
           });
     if (media.kind !== "image") {
       throw new ToolInputError(`Unsupported media type: ${media.kind}`);
@@ -876,7 +884,7 @@ export function createImageGenerateTool(options?: {
     label: "Image Generation",
     name: "image_generate",
     description:
-      'Create/edit images. Session chats: background task; do not call image_generate again for same request; wait completion, then report through the current visible-reply contract with generated media attached or MEDIA: paths. Transparent: outputFormat="png" or "webp" + background="transparent"; OpenAI also supports openai.background and routes default model to gpt-image-1.5. Use action="list" for providers/models/readiness/auth, "status" for active task.',
+      'Create/edit images. Session chats: background task; do not call image_generate again for same request; wait completion, then report through the current visible-reply contract with generated media attached using structured media fields. Transparent: outputFormat="png" or "webp" + background="transparent"; OpenAI also supports openai.background and routes default model to gpt-image-1.5. Use action="list" for providers/models/readiness/auth, "status" for active task.',
     parameters: ImageGenerateToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -893,12 +901,17 @@ export function createImageGenerateTool(options?: {
         return createImageGenerateStatusActionResult(options?.agentSessionKey);
       }
 
-      const imageGenerationModelConfig = resolveImageGenerationModelConfigForTool({
-        cfg,
-        workspaceDir: options?.workspaceDir,
-        agentDir: options?.agentDir,
-        authStore: options?.authProfileStore,
-      });
+      const model = readStringParam(params, "model");
+      const configuredImageGenerationModelConfig = coerceToolModelConfig(
+        cfg.agents?.defaults?.imageGenerationModel,
+      );
+      const imageGenerationModelConfig =
+        resolveImageGenerationModelConfigForTool({
+          cfg,
+          workspaceDir: options?.workspaceDir,
+          agentDir: options?.agentDir,
+          authStore: options?.authProfileStore,
+        }) ?? (model ? { ...configuredImageGenerationModelConfig, primary: model } : null);
       if (!imageGenerationModelConfig) {
         throw new ToolInputError("No image-generation model configured.");
       }
@@ -917,7 +930,6 @@ export function createImageGenerateTool(options?: {
       }
 
       const imageInputs = normalizeReferenceImages(params);
-      const model = readStringParam(params, "model");
       const filename = readStringParam(params, "filename");
       const size = readStringParam(params, "size");
       const aspectRatio = normalizeAspectRatio(readStringParam(params, "aspectRatio"));
@@ -1018,7 +1030,9 @@ export function createImageGenerateTool(options?: {
         prompt,
         providerId: selectedProvider?.id,
       });
-      const shouldDetach = Boolean(taskHandle && options?.agentSessionKey?.trim());
+      const shouldDetach = Boolean(
+        taskHandle && shouldDetachMediaGenerationTask(options?.agentSessionKey),
+      );
 
       if (shouldDetach && taskHandle) {
         recordRecentMediaGenerationTaskStartForSession({

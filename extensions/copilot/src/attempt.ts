@@ -1,3 +1,4 @@
+// Copilot plugin module implements attempt behavior.
 import fsp from "node:fs/promises";
 import type { MessageOptions, SessionConfig, Tool as SdkTool } from "@github/copilot-sdk";
 import type {
@@ -50,6 +51,21 @@ const SUPPORTED_PROVIDERS = new Set(["github-copilot"]);
 
 type AttemptResultWithSdkSessionId = AgentHarnessAttemptResult & { sdkSessionId?: string };
 type PromptErrorWithCode = Error & { code?: string; cause?: unknown };
+export type CopilotSessionConfig = Pick<
+  SessionConfig,
+  | "availableTools"
+  | "enableSessionTelemetry"
+  | "gitHubToken"
+  | "hooks"
+  | "instructionDirectories"
+  | "infiniteSessions"
+  | "model"
+  | "onPermissionRequest"
+  | "reasoningEffort"
+  | "systemMessage"
+  | "tools"
+  | "workingDirectory"
+>;
 // NOTE(plugin-sdk-widening): AttemptParamsLike can be removed once
 // openclaw/plugin-sdk/agent-harness-runtime declares auth, messages,
 // onAssistantDelta, and initialReplayState.sdkSessionId fields. Tracked by
@@ -107,7 +123,11 @@ export interface CopilotAttemptDeps {
    * thrown from this callback are swallowed so they cannot break the
    * attempt.
    */
-  onSessionEstablished?: (info: { sdkSessionId: string; pooledClient: PooledClient }) => void;
+  onSessionEstablished?: (info: {
+    sdkSessionId: string;
+    pooledClient: PooledClient;
+    sessionConfig: CopilotSessionConfig;
+  }) => void;
 }
 
 export async function runCopilotAttempt(
@@ -415,7 +435,7 @@ export async function runCopilotAttempt(
     sessionIdUsed = sdkSessionId ?? input.sessionId;
     if (sdkSessionId && deps.onSessionEstablished) {
       try {
-        deps.onSessionEstablished({ sdkSessionId, pooledClient: handle });
+        deps.onSessionEstablished({ sdkSessionId, pooledClient: handle, sessionConfig });
       } catch {
         // never let session-tracking callbacks break attempts
       }
@@ -714,21 +734,7 @@ function createSessionConfig(
   workspaceBootstrapInstructions: string | undefined,
   effectiveWorkspaceDir: string | undefined,
   effectiveCwd: string | undefined,
-): Pick<
-  SessionConfig,
-  | "availableTools"
-  | "enableSessionTelemetry"
-  | "gitHubToken"
-  | "hooks"
-  | "instructionDirectories"
-  | "infiniteSessions"
-  | "model"
-  | "onPermissionRequest"
-  | "reasoningEffort"
-  | "systemMessage"
-  | "tools"
-  | "workingDirectory"
-> {
+): CopilotSessionConfig {
   const permissionPolicy = params.permissionPolicy ?? rejectAllPolicy;
   const hooks = createHooksBridge(params.hooksConfig);
   const infiniteSessions = createInfiniteSessionConfig(params.infiniteSessionConfig);
@@ -1097,7 +1103,6 @@ export function resolvePoolAcquire(params: AttemptParamsLike): {
     },
     options: {
       copilotHome: resolved.copilotHome,
-      cwd: readString(params.cwd) ?? readString(params.workspaceDir),
       gitHubToken: resolved.authMode === "gitHubToken" ? resolved.gitHubToken : undefined,
       useLoggedInUser: resolved.authMode === "useLoggedInUser",
     },

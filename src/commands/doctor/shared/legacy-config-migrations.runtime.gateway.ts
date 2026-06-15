@@ -1,3 +1,5 @@
+// Legacy gateway runtime config migrations for bind modes, WebChat, and Control UI origins.
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
   buildDefaultControlUiAllowedOrigins,
   hasConfiguredControlUiAllowedOrigins,
@@ -11,7 +13,6 @@ import {
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
 import { DEFAULT_GATEWAY_PORT } from "../../../config/paths.js";
-import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.js";
 
 const GATEWAY_BIND_RULE: LegacyConfigRule = {
   path: ["gateway", "bind"],
@@ -19,6 +20,11 @@ const GATEWAY_BIND_RULE: LegacyConfigRule = {
     'gateway.bind host aliases (for example 0.0.0.0/localhost) are legacy; use bind modes (lan/loopback/custom/tailnet/auto) instead. Run "openclaw doctor --fix".',
   match: (value) => isLegacyGatewayBindHostAlias(value),
   requireSourceLiteral: true,
+};
+
+const GATEWAY_WEBCHAT_RULE: LegacyConfigRule = {
+  path: ["gateway", "webchat"],
+  message: 'gateway.webchat is retired. Run "openclaw doctor --fix".',
 };
 
 function isLegacyGatewayBindHostAlias(value: unknown): boolean {
@@ -62,7 +68,26 @@ function escapeControlForLog(value: string): string {
   return value.replace(/\r/g, "\\r").replace(/\n/g, "\\n").replace(/\t/g, "\\t");
 }
 
+/** Legacy config migration specs for gateway runtime config. */
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec[] = [
+  defineLegacyConfigMigration({
+    id: "gateway.webchat-remove",
+    describe: "Remove retired WebChat gateway config",
+    legacyRules: [GATEWAY_WEBCHAT_RULE],
+    apply: (raw, changes) => {
+      const gateway = getRecord(raw.gateway);
+      if (!gateway || !Object.hasOwn(gateway, "webchat")) {
+        return;
+      }
+      delete gateway.webchat;
+      if (Object.keys(gateway).length > 0) {
+        raw.gateway = gateway;
+      } else {
+        delete raw.gateway;
+      }
+      changes.push("Removed retired gateway.webchat config.");
+    },
+  }),
   defineLegacyConfigMigration({
     id: "gateway.controlUi.allowedOrigins-seed-for-non-loopback",
     describe: "Seed gateway.controlUi.allowedOrigins for existing non-loopback gateway installs",

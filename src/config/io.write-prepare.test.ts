@@ -1,3 +1,4 @@
+// Covers config write preparation diffs and metadata preservation.
 import { describe, expect, it } from "vitest";
 import {
   collectChangedPaths,
@@ -761,7 +762,7 @@ describe("config io write prepare", () => {
         },
       },
     } satisfies OpenClawConfig;
-    (runtimeConfig.channels?.imessage as Record<string, unknown>).runtimeOnlyDefault = true;
+    (runtimeConfig.channels!.imessage as Record<string, unknown>).runtimeOnlyDefault = true;
 
     const nextConfig: OpenClawConfig = structuredClone(runtimeConfig);
     nextConfig.gateway = {

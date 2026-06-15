@@ -1,3 +1,4 @@
+// Network Policy module implements redact sensitive url behavior.
 type ConfigUiHintTags = {
   tags?: string[];
 };
@@ -6,6 +7,7 @@ function normalizeLowercaseStringOrEmpty(value: unknown): string {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
 }
 
+/** Config UI hint tag for URL-like values that may embed credentials or tokens. */
 export const SENSITIVE_URL_HINT_TAG = "url-secret";
 
 const SENSITIVE_URL_QUERY_PARAM_NAMES = new Set([
@@ -20,17 +22,43 @@ const SENSITIVE_URL_QUERY_PARAM_NAMES = new Set([
   "pass",
   "passwd",
   "auth",
+  "jwt",
+  "session",
+  "id_token",
+  "code",
   "client_secret",
+  "app_secret",
   "hook_token",
   "refresh_token",
   "signature",
+  "x_amz_signature",
+  "x_amz_security_token",
+  "private_key",
+  "credential",
+  "authorization",
 ]);
+// Keep in sync with FORM_BODY_KEY_SEPARATOR_RE in src/logging/redact.ts: Hangul fillers are
+// category Lo, so \p{C}\p{Z} alone would let them splice sensitive key names.
+const URL_QUERY_NAME_SEPARATOR_RE = /[\p{C}\p{Z}\u115F\u1160\u3164\uFFA0+]/gu;
 
+function normalizeUrlQueryParamName(name: string): string {
+  const stripped = name.replace(URL_QUERY_NAME_SEPARATOR_RE, "");
+  try {
+    return normalizeLowercaseStringOrEmpty(
+      decodeURIComponent(stripped).replace(URL_QUERY_NAME_SEPARATOR_RE, ""),
+    ).replaceAll("-", "_");
+  } catch {
+    return normalizeLowercaseStringOrEmpty(stripped).replaceAll("-", "_");
+  }
+}
+
+/** True for auth-like URL query parameter names that should be redacted. */
 export function isSensitiveUrlQueryParamName(name: string): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(name).replaceAll("-", "_");
+  const normalized = normalizeUrlQueryParamName(name);
   return SENSITIVE_URL_QUERY_PARAM_NAMES.has(normalized);
 }
 
+/** True for config paths whose URL values may contain credentials or secret query params. */
 export function isSensitiveUrlConfigPath(path: string): boolean {
   if (path.endsWith(".baseUrl") || path.endsWith(".httpUrl")) {
     return true;
@@ -44,10 +72,12 @@ export function isSensitiveUrlConfigPath(path: string): boolean {
   return /^mcp\.servers\.(?:\*|[^.]+)\.url$/.test(path);
 }
 
+/** True when a config UI hint explicitly marks a URL-like value as secret-bearing. */
 export function hasSensitiveUrlHintTag(hint: ConfigUiHintTags | undefined): boolean {
   return hint?.tags?.includes(SENSITIVE_URL_HINT_TAG) === true;
 }
 
+/** Redacts credentials and sensitive query params from parseable URLs. */
 export function redactSensitiveUrl(value: string): string {
   try {
     const parsed = new URL(value);
@@ -69,6 +99,7 @@ export function redactSensitiveUrl(value: string): string {
   }
 }
 
+/** Redacts sensitive URL-looking substrings even when the full value is not a valid URL. */
 export function redactSensitiveUrlLikeString(value: string): string {
   const redactedUrl = redactSensitiveUrl(value);
   if (redactedUrl !== value) {

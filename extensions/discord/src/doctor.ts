@@ -1,4 +1,5 @@
-import { type ChannelDoctorAdapter } from "openclaw/plugin-sdk/channel-contract";
+// Discord plugin module implements doctor behavior.
+import type { ChannelDoctorAdapter } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { collectProviderDangerousNameMatchingScopes } from "openclaw/plugin-sdk/runtime-doctor";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";

@@ -1,3 +1,9 @@
+// Recovers queued session deliveries after process crashes.
+import {
+  resolveDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+  resolveNonNegativeIntegerOption,
+} from "@openclaw/normalization-core/number-coercion";
 import { formatErrorMessage } from "./errors.js";
 import {
   ackSessionDelivery,
@@ -8,6 +14,8 @@ import {
   type QueuedSessionDelivery,
 } from "./session-delivery-queue-storage.js";
 
+// Session delivery recovery replays persisted messages after crashes while
+// bounding retry count, backoff, and concurrent drain work.
 type SessionDeliveryRecoverySummary = {
   recovered: number;
   failed: number;
@@ -72,6 +80,14 @@ function resolveSessionDeliveryMaxRetries(entry: QueuedSessionDelivery): number 
   return entry.maxRetries ?? MAX_SESSION_DELIVERY_RETRIES;
 }
 
+function resolveSessionDeliveryRecoveryDeadlineMs(maxRecoveryMs: number | undefined): number {
+  const durationMs = resolveNonNegativeIntegerOption(maxRecoveryMs, 60_000);
+  if (durationMs <= 0) {
+    return resolveDateTimestampMs(Date.now());
+  }
+  return resolveExpiresAtMsFromDurationMs(durationMs) ?? resolveDateTimestampMs(Date.now());
+}
+
 export function isSessionDeliveryEligibleForRetry(
   entry: QueuedSessionDelivery,
   now: number,
@@ -123,6 +139,7 @@ async function drainQueuedEntry(opts: {
   }
 }
 
+/** Drain matching queued session deliveries with retry/backoff protection. */
 export async function drainPendingSessionDeliveries(opts: {
   drainKey: string;
   logLabel: string;
@@ -198,6 +215,7 @@ export async function drainPendingSessionDeliveries(opts: {
   }
 }
 
+/** Replay pending session deliveries until the recovery budget is exhausted. */
 export async function recoverPendingSessionDeliveries(opts: {
   deliver: DeliverSessionDeliveryFn;
   log: SessionDeliveryRecoveryLogger;
@@ -214,7 +232,7 @@ export async function recoverPendingSessionDeliveries(opts: {
 
   pending.sort((a, b) => a.enqueuedAt - b.enqueuedAt);
   const summary = createEmptyRecoverySummary();
-  const deadline = Date.now() + (opts.maxRecoveryMs ?? 60_000);
+  const deadline = resolveSessionDeliveryRecoveryDeadlineMs(opts.maxRecoveryMs);
 
   for (const entry of pending) {
     if (Date.now() >= deadline) {

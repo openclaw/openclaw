@@ -1,3 +1,4 @@
+// Googlechat plugin module implements actions behavior.
 import {
   createActionGate,
   jsonResult,
@@ -101,7 +102,7 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
     mediaReadFile,
   }) => {
     const account = resolveGoogleChatAccount({
-      cfg: cfg,
+      cfg,
       accountId,
     });
     if (account.credentialSource === "none") {

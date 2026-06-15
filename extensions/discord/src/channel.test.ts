@@ -1,3 +1,4 @@
+// Discord tests cover channel plugin behavior.
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { ChannelType } from "discord-api-types/v10";
@@ -548,8 +549,8 @@ describe("discordPlugin outbound", () => {
         }) => void)
       | undefined;
     probeDiscordMock.mockReturnValue(
-      new Promise((resolve) => {
-        resolveProbe = resolve;
+      new Promise((resolveLocal) => {
+        resolveProbe = resolveLocal;
       }),
     );
     monitorDiscordProviderMock.mockResolvedValue(undefined);

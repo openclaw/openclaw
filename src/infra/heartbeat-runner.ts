@@ -1,6 +1,12 @@
+// Runs heartbeat checks and emits status updates for configured agents.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
@@ -89,10 +95,6 @@ import {
   toAgentStoreSessionKey,
 } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
 import { escapeRegExp } from "../utils.js";
 import { MAX_SAFE_TIMEOUT_DELAY_MS, resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { loadOrCreateDeviceIdentity } from "./device-identity.js";
@@ -894,8 +896,8 @@ function buildCommitmentHeartbeatPrompt(params: {
     reason: commitment.reason,
     suggestedText: commitment.suggestedText,
     due: {
-      earliest: new Date(commitment.dueWindow.earliestMs).toISOString(),
-      latest: new Date(commitment.dueWindow.latestMs).toISOString(),
+      earliest: timestampMsToIsoString(commitment.dueWindow.earliestMs) ?? "n/a",
+      latest: timestampMsToIsoString(commitment.dueWindow.latestMs) ?? "n/a",
       timezone: commitment.dueWindow.timezone,
     },
     sourceMessageId: commitment.sourceMessageId,
@@ -1557,6 +1559,7 @@ export async function runHeartbeatOnce(opts: {
   }
 
   let runSessionKey = sessionKey;
+  let outboundPolicySessionKey: string | undefined;
   if (useIsolatedSession) {
     const configuredSession = resolveHeartbeatSession(cfg, agentId, heartbeat);
     // Collapse only the repeated `:heartbeat` suffixes introduced by wake-triggered
@@ -1626,6 +1629,7 @@ export async function runHeartbeatOnce(opts: {
       }
     }
     runSessionKey = isolatedSessionKey;
+    outboundPolicySessionKey = isolatedBaseSessionKey;
   }
   // Update task last run times AFTER successful heartbeat completion
   const updateTaskTimestamps = async () => {
@@ -1705,7 +1709,8 @@ export async function runHeartbeatOnce(opts: {
   const outboundSession = buildOutboundSessionContext({
     cfg,
     agentId,
-    sessionKey,
+    sessionKey: runSessionKey,
+    policySessionKey: outboundPolicySessionKey,
   });
   const canAttemptHeartbeatOk = Boolean(
     !hasDueCommitments && visibility.showOk && delivery.channel !== "none" && delivery.to,
@@ -2055,15 +2060,20 @@ export async function runHeartbeatOnce(opts: {
     if (send.status === "failed" || send.status === "partial_failed") {
       throw send.error;
     }
-    await markCommitmentsStatus({
-      cfg,
-      ids: dueCommitmentIds,
-      status: shouldSkipMain ? "dismissed" : "sent",
-      nowMs: startedAt,
-    });
+    const visibleSendSucceeded = send.status === "sent";
+    // Suppressed durable sends committed no visible channel message. Keep due
+    // commitments and heartbeat dedupe state active so a later heartbeat can retry.
+    if (shouldSkipMain || visibleSendSucceeded) {
+      await markCommitmentsStatus({
+        cfg,
+        ids: dueCommitmentIds,
+        status: shouldSkipMain ? "dismissed" : "sent",
+        nowMs: startedAt,
+      });
+    }
 
     // Record last delivered heartbeat payload for dedupe.
-    if (!shouldSkipMain && normalized.text.trim()) {
+    if (visibleSendSucceeded && !shouldSkipMain && normalized.text.trim()) {
       await updateSessionStore(storePath, (store) => {
         const current = store[sessionKey];
         if (!current) {
@@ -2088,17 +2098,22 @@ export async function runHeartbeatOnce(opts: {
       });
     }
 
-    const sentStatus = deliveredAgentRunFailure ? "failed" : "sent";
+    const eventStatus = deliveredAgentRunFailure
+      ? "failed"
+      : visibleSendSucceeded
+        ? "sent"
+        : "skipped";
     emitHeartbeatEvent({
-      status: sentStatus,
+      status: eventStatus,
       to: delivery.to,
       ...(deliveredAgentRunFailure ? { reason: "agent-runner-failure" } : {}),
+      ...(!deliveredAgentRunFailure && !visibleSendSucceeded ? { reason: send.reason } : {}),
       preview: previewText?.slice(0, 200),
       durationMs: Date.now() - startedAt,
       hasMedia: mediaUrls.length > 0,
       channel: delivery.channel,
       accountId: delivery.accountId,
-      indicatorType: visibility.useIndicator ? resolveIndicatorType(sentStatus) : undefined,
+      indicatorType: visibility.useIndicator ? resolveIndicatorType(eventStatus) : undefined,
     });
     await updateTaskTimestamps();
     consumeInspectedSystemEvents();
@@ -2179,6 +2194,20 @@ export function startHeartbeatRunner(opts: {
           // for cooldown purposes, so keep the existing now + interval behavior.
           now + agent.intervalMs;
     agent.nextDueMs = seekActiveSlotForAgent(agent, rawDueMs);
+  };
+
+  const advanceStaleScheduleAfterDeferral = (
+    agent: HeartbeatAgentState,
+    now: number,
+    reason?: string,
+    decision?: DeferDecision,
+  ) => {
+    if (!decision?.defer || decision.reason === "not-due" || agent.nextDueMs > now) {
+      return;
+    }
+    // Deferrals that do not have wake-layer retry ownership still need to move
+    // the due slot forward; otherwise scheduleNext() will keep rearming at 0ms.
+    advanceAgentSchedule(agent, now, reason);
   };
 
   // Centralized cooldown gate. Both targeted and broadcast dispatch branches
@@ -2376,6 +2405,7 @@ export function startHeartbeatRunner(opts: {
         }
         const deferral = evaluateWakeDeferral(targetAgent, now, reason, intent);
         if (deferral.defer) {
+          advanceStaleScheduleAfterDeferral(targetAgent, now, reason, deferral);
           return { status: "skipped", reason: deferral.reason };
         }
         try {
@@ -2405,11 +2435,10 @@ export function startHeartbeatRunner(opts: {
             return res;
           }
           // Non-retryable outcome (ran, disabled, failed-but-not-busy). Record
-          // bookkeeping so subsequent wakes within the cooldown window defer.
+          // bookkeeping and move the due slot so scheduleNext() cannot hot-loop
+          // on a stale past-due agent.
           recordRunBookkeeping(targetAgent, now);
-          if (res.status !== "skipped" || res.reason !== "disabled") {
-            advanceAgentSchedule(targetAgent, now, reason);
-          }
+          advanceAgentSchedule(targetAgent, now, reason);
           return res.status === "ran" ? { status: "ran", durationMs: Date.now() - startedAt } : res;
         } catch (err) {
           const errMsg = formatErrorMessage(err);
@@ -2438,6 +2467,7 @@ export function startHeartbeatRunner(opts: {
       const runOneAgent = async (agent: HeartbeatAgentState): Promise<AgentWakeOutcome> => {
         const deferral = evaluateWakeDeferral(agent, now, reason, intent);
         if (deferral.defer) {
+          advanceStaleScheduleAfterDeferral(agent, now, reason, deferral);
           return { ran: false };
         }
 
@@ -2472,9 +2502,7 @@ export function startHeartbeatRunner(opts: {
         }
         // Non-retryable outcome — record bookkeeping for cooldown gates.
         recordRunBookkeeping(agent, now);
-        if (res.status !== "skipped" || res.reason !== "disabled") {
-          advanceAgentSchedule(agent, now, reason);
-        }
+        advanceAgentSchedule(agent, now, reason);
         let agentRan = res.status === "ran";
 
         const defaultSessionKey = resolveHeartbeatSession(

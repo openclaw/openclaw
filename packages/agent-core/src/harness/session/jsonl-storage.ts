@@ -1,3 +1,4 @@
+// Agent Core module implements jsonl storage behavior.
 import type { FileSystem, JsonlSessionMetadata, SessionTreeEntry } from "../types.js";
 import { SessionError, toError } from "../types.js";
 import { getFileSystemResultOrThrow } from "./repo-utils.js";
@@ -125,6 +126,7 @@ function headerToSessionMetadata(header: SessionHeader, path: string): JsonlSess
   };
 }
 
+/** Read only the JSONL session header and convert it to session metadata. */
 export async function loadJsonlSessionMetadata(
   fs: JsonlSessionStorageFileSystem,
   filePath: string,
@@ -168,6 +170,7 @@ async function loadJsonlStorage(
   return { header, entries, leafId };
 }
 
+/** Append-only JSONL-backed storage for one session tree. */
 export class JsonlSessionStorage extends BaseSessionStorage<JsonlSessionMetadata> {
   private readonly fs: JsonlSessionStorageFileSystem;
   private readonly filePath: string;
@@ -192,6 +195,7 @@ export class JsonlSessionStorage extends BaseSessionStorage<JsonlSessionMetadata
     return new JsonlSessionStorage(fs, filePath, loaded.header, loaded.entries, loaded.leafId);
   }
 
+  /** Create a new JSONL file with a session header and no entries. */
   static async create(
     fs: JsonlSessionStorageFileSystem,
     filePath: string,

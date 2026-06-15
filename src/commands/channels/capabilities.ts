@@ -1,3 +1,9 @@
+// Implements `openclaw channels capabilities` account capability/probe reporting.
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import {
   createMessageActionDiscoveryContext,
@@ -23,11 +29,6 @@ import {
 import { danger } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
-import { theme } from "../../terminal/theme.js";
 import { resolveInstallableChannelPlugin } from "../channel-setup/channel-plugin-resolution.js";
 import { formatChannelAccountLabel, requireValidConfig } from "./shared.js";
 
@@ -209,6 +210,7 @@ async function resolveChannelReports(params: {
   return reports;
 }
 
+/** Print or serialize configured channel capabilities, actions, and optional health probe details. */
 export async function channelsCapabilitiesCommand(
   opts: ChannelsCapabilitiesOptions,
   runtime: RuntimeEnv = defaultRuntime,
@@ -290,6 +292,20 @@ export async function channelsCapabilitiesCommand(
         })();
 
   if (!selected || selected.length === 0) {
+    if (!rawChannel || rawChannel === "all") {
+      if (opts.json) {
+        writeRuntimeJson(runtime, { channels: [] });
+        return;
+      }
+      runtime.log(
+        theme.muted(
+          `No configured channel capabilities found. Run ${formatCliCommand(
+            "openclaw channels list --all",
+          )} to see available channels.`,
+        ),
+      );
+      return;
+    }
     runtime.error(danger(formatUnknownChannelMessage({ channel: rawChannel })));
     runtime.exit(1);
     return;

@@ -1,3 +1,4 @@
+// Verifies bundled plugin metadata generation and import boundaries.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -48,7 +49,6 @@ const EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS = [
   "openshell",
   "phone-control",
   "policy",
-  "skill-workshop",
   "talk-voice",
   "thread-ownership",
   "voice-call",
@@ -275,7 +275,7 @@ function collectRepoBundledChannelConfigsForTest(dirName: string) {
   const pluginDir = path.join(repoRoot, "extensions", dirName);
   const manifest = loadPluginManifest(pluginDir, false);
   if (!manifest.ok) {
-    throw manifest.error;
+    throw toLintErrorObject(manifest.error, "Non-Error thrown");
   }
   const configs = collectBundledChannelConfigs({
     pluginDir,
@@ -1152,3 +1152,17 @@ describe("bundled plugin metadata", () => {
     expect(fs.existsSync(markerPath)).toBe(false);
   });
 });
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

@@ -67,7 +67,7 @@ and troubleshooting see the main [FAQ](/help/faq).
     Common heartbeat skip reasons:
 
     - `quiet-hours`: outside the configured active-hours window
-    - `empty-heartbeat-file`: `HEARTBEAT.md` exists but only contains blank/header-only scaffolding
+    - `empty-heartbeat-file`: `HEARTBEAT.md` exists but only contains blank, comment, header, fence, or empty-checklist scaffolding
     - `no-tasks-due`: `HEARTBEAT.md` task mode is active but none of the task intervals are due yet
     - `alerts-disabled`: all heartbeat visibility is disabled (`showOk`, `showAlerts`, and `useIndicator` are all off)
 
@@ -387,7 +387,8 @@ and troubleshooting see the main [FAQ](/help/faq).
     - Add that directory to your user PATH (no `\bin` suffix needed on Windows; on most systems it is `%AppData%\npm`).
     - Close and reopen PowerShell after updating PATH.
 
-    If you want the smoothest Windows setup, use **WSL2** instead of native Windows.
+    For desktop setup, use the native **Windows Hub** app. For terminal-only
+    setup, the PowerShell installer and WSL2 Gateway paths are both supported.
     Docs: [Windows](/platforms/windows).
 
   </Accordion>
@@ -596,26 +597,28 @@ and troubleshooting see the main [FAQ](/help/faq).
   <Accordion title="How does Codex auth work?">
     OpenClaw supports **OpenAI Code (Codex)** via OAuth (ChatGPT sign-in). Use
     `openai/gpt-5.5` for the common setup: ChatGPT/Codex subscription auth plus
-    native Codex app-server execution. `openai-codex/gpt-*` model refs are
+    native Codex app-server execution. Legacy Codex GPT refs are
     legacy config repaired by `openclaw doctor --fix`. Direct OpenAI API-key
     access remains available for non-agent OpenAI API surfaces and for agent
-    models through an ordered `openai-codex` API-key profile.
+    models through an ordered `openai` API-key profile.
     See [Model providers](/concepts/model-providers) and [Onboarding (CLI)](/start/wizard).
   </Accordion>
 
-  <Accordion title="Why does OpenClaw still mention openai-codex?">
-    `openai-codex` is the provider and auth-profile id for ChatGPT/Codex OAuth.
+  <Accordion title="Why does OpenClaw still mention legacy OpenAI Codex prefix?">
+    `openai` is the provider and auth-profile id for both OpenAI API keys and
+    ChatGPT/Codex OAuth. You may still see legacy OpenAI Codex prefix in legacy config and
+    migration warnings.
     Older configs also used it as a model prefix:
 
     - `openai/gpt-5.5` = ChatGPT/Codex subscription auth with native Codex runtime for agent turns
-    - `openai-codex/gpt-5.5` = legacy model route repaired by `openclaw doctor --fix`
-    - `openai/gpt-5.5` plus an ordered `openai-codex` API-key profile = API-key auth for an OpenAI agent model
-    - `openai-codex:...` = auth profile id, not a model ref
+    - legacy Codex GPT-5.5 ref = legacy model route repaired by `openclaw doctor --fix`
+    - `openai/gpt-5.5` plus an ordered `openai` API-key profile = API-key auth for an OpenAI agent model
+    - legacy Codex auth profile ids = legacy auth profile id migrated by `openclaw doctor --fix`
 
     If you want the direct OpenAI Platform billing/limit path, set
     `OPENAI_API_KEY`. If you want ChatGPT/Codex subscription auth, sign in with
-    `openclaw models auth login --provider openai-codex`. Keep the model ref as
-    `openai/gpt-5.5`; `openai-codex/*` model refs are legacy config that
+    `openclaw models auth login --provider openai`. Keep the model ref as
+    `openai/gpt-5.5`; legacy Codex model refs are legacy config that
     `openclaw doctor --fix` rewrites.
 
   </Accordion>
@@ -853,7 +856,8 @@ and troubleshooting see the main [FAQ](/help/faq).
     - **Recommended:** 2GB RAM or more if you run multiple channels, browser automation, or media tools.
     - **OS:** Ubuntu LTS or another modern Debian/Ubuntu.
 
-    If you are on Windows, **WSL2 is the easiest VM style setup** and has the best tooling
+    If you are on Windows, use **Windows Hub** for desktop setup, or WSL2 when
+    you specifically want a Linux-style Gateway VM with broad tooling
     compatibility. See [Windows](/platforms/windows), [VPS hosting](/vps).
     If you are running macOS in a VM, see [macOS VM](/install/macos-vm).
 

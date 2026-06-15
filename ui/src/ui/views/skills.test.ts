@@ -106,6 +106,53 @@ describe("renderSkills", () => {
     }
   });
 
+  it("does not transfer toggle state when a skill leaves the disabled tab", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    dialogRestores.push(() => container.remove());
+
+    const passwordSkill = createSkill({ skillKey: "1password", name: "1Password", disabled: true });
+    const appleNotesSkill = createSkill({
+      skillKey: "apple-notes",
+      name: "Apple Notes",
+      disabled: true,
+    });
+    const report: SkillStatusReport = {
+      workspaceDir: "/tmp/workspace",
+      managedSkillsDir: "/tmp/skills",
+      skills: [passwordSkill, appleNotesSkill],
+    };
+
+    render(renderSkills(createProps({ report, statusFilter: "disabled" })), container);
+    await Promise.resolve();
+
+    const toggles = container.querySelectorAll<HTMLInputElement>(".skill-toggle");
+    expect(toggles).toHaveLength(2);
+    expect(toggles[0].checked).toBe(false);
+    expect(toggles[1].checked).toBe(false);
+
+    // Simulate the user clicking the 1password toggle before the re-render propagates.
+    // Without repeat(), Lit's dirty-check skips re-setting `.checked = false` on the reused
+    // DOM node, so apple-notes inherits this stale user-driven state.
+    toggles[0].checked = true;
+
+    const updatedReport: SkillStatusReport = {
+      workspaceDir: "/tmp/workspace",
+      managedSkillsDir: "/tmp/skills",
+      skills: [{ ...passwordSkill, disabled: false }, appleNotesSkill],
+    };
+
+    render(
+      renderSkills(createProps({ report: updatedReport, statusFilter: "disabled" })),
+      container,
+    );
+    await Promise.resolve();
+
+    const updatedToggles = container.querySelectorAll<HTMLInputElement>(".skill-toggle");
+    expect(updatedToggles).toHaveLength(1);
+    expect(updatedToggles[0].checked).toBe(false);
+  });
+
   it("defers detail dialog opening until the dialog is connected", async () => {
     const container = document.createElement("div");
     const showModal = vi.fn(function (this: HTMLDialogElement) {
