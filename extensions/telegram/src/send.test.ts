@@ -3473,7 +3473,7 @@ describe("editMessageTelegram", () => {
       chat_id: "123",
       message_id: 1,
       rich_message: {
-        html: '<a href="https://example.com">https://example.com</a>',
+        html: "https://example.com",
         skip_entity_detection: true,
       },
     });

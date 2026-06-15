@@ -851,13 +851,13 @@ function renderTelegramRichHtmlDocument(
 
 export function markdownToTelegramRichHtml(
   markdown: string,
-  options: { tableMode?: MarkdownTableMode } = {},
+  options: { tableMode?: MarkdownTableMode; skipEntityDetection?: boolean } = {},
 ): string {
   const tableMode = options.tableMode ?? "block";
   const { ir, tables } = markdownToIRWithMeta(
     preserveTelegramListBoundarySpacing(normalizeTelegramRichMarkdownMedia(markdown ?? "")),
     {
-      linkify: true,
+      linkify: options.skipEntityDetection !== true,
       enableSpoilers: true,
       headingStyle: "none",
       blockquotePrefix: "",

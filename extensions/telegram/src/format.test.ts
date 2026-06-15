@@ -169,6 +169,15 @@ describe("markdownToTelegramHtml", () => {
     expect(html).toContain('<td><a href="https://example.com">docs</a></td>');
   });
 
+  it("does not auto-linkify bare URLs when entity detection is skipped", () => {
+    expect(markdownToTelegramRichHtml("https://example.com", { skipEntityDetection: true })).toBe(
+      "https://example.com",
+    );
+    expect(
+      markdownToTelegramRichHtml("[docs](https://example.com)", { skipEntityDetection: true }),
+    ).toBe('<a href="https://example.com">docs</a>');
+  });
+
   it("normalizes raw code language HTML without leaking tags", () => {
     const commandBlock = '<code class="language-text">/queue followup debounce:0\n</code>';
 
