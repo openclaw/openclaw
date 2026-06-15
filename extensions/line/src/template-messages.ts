@@ -35,12 +35,9 @@ function buildTemplatePayloadAction(action: TemplatePayloadAction): Action {
 function resolveTemplateTextLimit(params: {
   title?: string;
   thumbnailImageUrl?: string;
-  defaultAction?: Action;
   textOnlyLimit: number;
 }): number {
-  return params.title?.trim() || params.thumbnailImageUrl?.trim() || params.defaultAction
-    ? 60
-    : params.textOnlyLimit;
+  return params.title?.trim() || params.thumbnailImageUrl?.trim() ? 60 : params.textOnlyLimit;
 }
 
 function truncateTemplateText(text: string, limit: number): string {
@@ -90,7 +87,6 @@ export function createButtonTemplate(
   const textLimit = resolveTemplateTextLimit({
     title,
     thumbnailImageUrl: options?.thumbnailImageUrl,
-    defaultAction: options?.defaultAction,
     textOnlyLimit: 160,
   });
   const template: ButtonsTemplate = {

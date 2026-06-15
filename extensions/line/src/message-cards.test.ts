@@ -116,16 +116,6 @@ describe("createCarouselColumn", () => {
 
     expect(column.text.length).toBe(60);
   });
-
-  it("truncates text to 60 characters when a default action is set", () => {
-    const column = createCarouselColumn({
-      text: "x".repeat(150),
-      actions: [messageAction("OK")],
-      defaultAction: messageAction("Open"),
-    });
-
-    expect(column.text.length).toBe(60);
-  });
 });
 
 describe("carousel column limits", () => {
