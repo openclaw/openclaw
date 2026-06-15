@@ -902,7 +902,6 @@ async function compactResolvedContextEngine(
         }
         if (
           result.ok &&
-          result.compacted &&
           hookRunner?.hasHooks?.("after_compaction") &&
           hookRunner.runAfterCompaction
         ) {
@@ -912,15 +911,29 @@ async function compactResolvedContextEngine(
               sessionId: postCompactionSessionId,
             };
             await hookRunner.runAfterCompaction(
-              {
-                messageCount: -1,
-                compactedCount: -1,
-                tokenCount: result.result?.tokensAfter,
-                sessionFile: postCompactionSessionFile,
-                ...(postCompactionSessionId !== params.sessionId
-                  ? { previousSessionId: params.sessionId }
-                  : {}),
-              },
+              result.compacted
+                ? {
+                    messageCount: -1,
+                    compactedCount: -1,
+                    tokenCount: result.result?.tokensAfter,
+                    sessionFile: postCompactionSessionFile,
+                    ...(postCompactionSessionId !== params.sessionId
+                      ? { previousSessionId: params.sessionId }
+                      : {}),
+                  }
+                : {
+                    messageCount: -1,
+                    compactedCount: 0,
+                    tokenCount: result.result?.tokensAfter,
+                    sessionFile: postCompactionSessionFile,
+                    ...(postCompactionSessionId !== params.sessionId
+                      ? { previousSessionId: params.sessionId }
+                      : {}),
+                    reason:
+                      typeof result.reason === "string" && result.reason.trim()
+                        ? result.reason
+                        : "policy_skipped",
+                  },
               afterHookCtx,
             );
           } catch (err) {

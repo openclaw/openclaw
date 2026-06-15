@@ -1459,7 +1459,7 @@ describe("GatewayClient connect auth payload", () => {
       connectId: firstConnect.id,
       failureDetails: {},
       failureMessage:
-        "invalid connect params: at /auth: unexpected property 'approvalRuntimeToken'",
+        'invalid connect params: at /auth: unexpected property "approvalRuntimeToken"',
     });
     expectRecordFields(
       retriedAuth,
