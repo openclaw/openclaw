@@ -11,6 +11,7 @@ import {
 type SyncMenuOptions = {
   deleteMyCommands: ReturnType<typeof vi.fn>;
   setMyCommands: ReturnType<typeof vi.fn>;
+  getMyCommands?: ReturnType<typeof vi.fn>;
   commandsToRegister: Parameters<typeof syncTelegramMenuCommands>[0]["commandsToRegister"];
   accountId: string;
   botIdentity: string;
@@ -21,7 +22,11 @@ type SyncMenuOptions = {
 function syncMenuCommandsWithMocks(options: SyncMenuOptions): void {
   syncTelegramMenuCommands({
     bot: {
-      api: { deleteMyCommands: options.deleteMyCommands, setMyCommands: options.setMyCommands },
+      api: {
+        deleteMyCommands: options.deleteMyCommands,
+        setMyCommands: options.setMyCommands,
+        ...(options.getMyCommands ? { getMyCommands: options.getMyCommands } : {}),
+      },
     } as unknown as Parameters<typeof syncTelegramMenuCommands>[0]["bot"],
     runtime: {
       log: options.runtimeLog ?? vi.fn(),
@@ -606,5 +611,54 @@ describe("bot-native-command-menu", () => {
     expect(runtimeLog).toHaveBeenCalledWith(
       "Telegram rejected 10 commands (BOT_COMMANDS_TOO_MUCH); retrying with 8.",
     );
+  });
+
+  it("re-syncs when remote command state is empty despite matching hash (#92944)", async () => {
+    const deleteMyCommands = vi.fn(async () => undefined);
+    const setMyCommands = vi.fn(async () => undefined);
+    const getMyCommands = vi.fn(async () => []);
+    const runtimeLog = vi.fn();
+    const accountId = `test-empty-remote-${Date.now()}`;
+    const commands = [{ command: "test", description: "Test" }];
+
+    // First sync — populates hash
+    syncMenuCommandsWithMocks({
+      deleteMyCommands, setMyCommands, getMyCommands, runtimeLog,
+      commandsToRegister: commands, accountId, botIdentity: "bot-a",
+    });
+    await vi.waitFor(() => expect(setMyCommands).toHaveBeenCalledTimes(2));
+
+    // Second sync — hash matches but getMyCommands returns empty → should re-sync
+    syncMenuCommandsWithMocks({
+      deleteMyCommands, setMyCommands, getMyCommands, runtimeLog,
+      commandsToRegister: commands, accountId, botIdentity: "bot-a",
+    });
+    await vi.waitFor(() => expect(setMyCommands).toHaveBeenCalledTimes(4));
+    expect(getMyCommands).toHaveBeenCalled();
+  });
+
+  it("skips sync when remote command state is non-empty and hash matches", async () => {
+    const deleteMyCommands = vi.fn(async () => undefined);
+    const setMyCommands = vi.fn(async () => undefined);
+    const getMyCommands = vi.fn(async () => [{ command: "test", description: "Test" }]);
+    const runtimeLog = vi.fn();
+    const accountId = `test-populated-remote-${Date.now()}`;
+    const commands = [{ command: "test", description: "Test" }];
+
+    // First sync — populates hash
+    syncMenuCommandsWithMocks({
+      deleteMyCommands, setMyCommands, getMyCommands, runtimeLog,
+      commandsToRegister: commands, accountId, botIdentity: "bot-b",
+    });
+    await vi.waitFor(() => expect(setMyCommands).toHaveBeenCalledTimes(2));
+
+    // Second sync — hash matches AND getMyCommands returns non-empty → skip
+    syncMenuCommandsWithMocks({
+      deleteMyCommands, setMyCommands, getMyCommands, runtimeLog,
+      commandsToRegister: commands, accountId, botIdentity: "bot-b",
+    });
+    // No additional setMyCommands calls — sync was skipped
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(setMyCommands).toHaveBeenCalledTimes(2);
   });
 });
