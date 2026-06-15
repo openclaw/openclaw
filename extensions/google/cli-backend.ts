@@ -28,6 +28,7 @@ const GEMINI_CLI_API_KEY_AUTH_ENV = [
   "GOOGLE_API_KEY",
   "GOOGLE_CLOUD_PROJECT",
   "GOOGLE_CLOUD_PROJECT_ID",
+  "GOOGLE_CLOUD_QUOTA_PROJECT",
   "GOOGLE_CLOUD_LOCATION",
   "GOOGLE_GEMINI_BASE_URL",
   "GEMINI_CLI_CUSTOM_HEADERS",
@@ -54,6 +55,7 @@ type GeminiAuthProfileCredential = {
   refresh?: string;
   expires?: number;
   idToken?: string;
+  projectId?: string;
 };
 
 type GeminiOAuthCredential = GeminiAuthProfileCredential & {
@@ -118,6 +120,7 @@ function requireGeminiOAuthCredential(
     refresh,
     expires: credential.expires,
     idToken: normalizeString(credential.idToken),
+    projectId: normalizeString(credential.projectId),
   };
 }
 
@@ -197,6 +200,18 @@ async function clearGeminiCliCachedCredentials(geminiDir: string): Promise<void>
   await fs.rm(path.join(geminiDir, GEMINI_CLI_CREDENTIALS_FILENAME), { force: true });
 }
 
+function buildGeminiCliProjectEnv(projectId: string | undefined): Record<string, string> {
+  const normalized = normalizeString(projectId);
+  if (!normalized) {
+    return {};
+  }
+  return {
+    GOOGLE_CLOUD_PROJECT: normalized,
+    GOOGLE_CLOUD_PROJECT_ID: normalized,
+    GOOGLE_CLOUD_QUOTA_PROJECT: normalized,
+  };
+}
+
 async function prepareGeminiCliOAuthHome(
   ctx: GeminiCliAuthHomeContext,
   credential: GeminiAuthProfileCredential | undefined,
@@ -227,6 +242,7 @@ async function prepareGeminiCliOAuthHome(
     env: {
       GEMINI_CLI_HOME: home,
       GEMINI_FORCE_FILE_STORAGE: "true",
+      ...buildGeminiCliProjectEnv(oauth.projectId),
     },
     clearEnv: [...GEMINI_CLI_PROFILE_AUTH_ENV],
   };

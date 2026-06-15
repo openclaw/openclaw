@@ -17,6 +17,7 @@ type GeminiPrepareContext = Parameters<
     refresh?: string;
     expires?: number;
     idToken?: string;
+    projectId?: string;
     key?: string;
     email?: string;
   };
@@ -38,6 +39,7 @@ function buildGeminiOAuthPrepareContext(workspaceDir: string): GeminiPrepareCont
       refresh: "refresh-token",
       expires: 1_800_000_000_000,
       idToken: "id-token",
+      projectId: "profile-project",
       email: "user@example.test",
     },
   };
@@ -101,6 +103,9 @@ describe("google gemini cli backend auth bridge", () => {
       home = prepared?.env?.GEMINI_CLI_HOME;
       expect(home).toBeTruthy();
       expect(prepared?.env?.GEMINI_FORCE_FILE_STORAGE).toBe("true");
+      expect(prepared?.env?.GOOGLE_CLOUD_PROJECT).toBe("profile-project");
+      expect(prepared?.env?.GOOGLE_CLOUD_PROJECT_ID).toBe("profile-project");
+      expect(prepared?.env?.GOOGLE_CLOUD_QUOTA_PROJECT).toBe("profile-project");
       expect(home).toContain(path.join(context.agentDir, "cli-runtimes", "google-gemini-cli"));
       expect(home).not.toContain("user@example.test");
 
@@ -214,6 +219,7 @@ describe("google gemini cli backend auth bridge", () => {
     const originalForceEncryptedFileStorage = process.env.GEMINI_FORCE_ENCRYPTED_FILE_STORAGE;
     const originalGeminiApiKey = process.env.GEMINI_API_KEY;
     const originalGoogleApiKey = process.env.GOOGLE_API_KEY;
+    const originalQuotaProject = process.env.GOOGLE_CLOUD_QUOTA_PROJECT;
     let prepared:
       | Awaited<ReturnType<NonNullable<typeof backend.prepareExecution>>>
       | null
@@ -224,6 +230,7 @@ describe("google gemini cli backend auth bridge", () => {
     process.env.GEMINI_FORCE_ENCRYPTED_FILE_STORAGE = "true";
     process.env.GEMINI_API_KEY = "ambient-gemini-key";
     process.env.GOOGLE_API_KEY = "ambient-google-key";
+    process.env.GOOGLE_CLOUD_QUOTA_PROJECT = "ambient-project";
 
     try {
       prepared = await backend.prepareExecution?.(buildGeminiOAuthPrepareContext(workspaceDir));
@@ -238,6 +245,7 @@ describe("google gemini cli backend auth bridge", () => {
         "GOOGLE_API_KEY",
         "GOOGLE_CLOUD_PROJECT",
         "GOOGLE_CLOUD_PROJECT_ID",
+        "GOOGLE_CLOUD_QUOTA_PROJECT",
         "GOOGLE_CLOUD_LOCATION",
         "GOOGLE_GEMINI_BASE_URL",
         "GEMINI_CLI_CUSTOM_HEADERS",
@@ -250,6 +258,7 @@ describe("google gemini cli backend auth bridge", () => {
       restoreEnv("GEMINI_FORCE_ENCRYPTED_FILE_STORAGE", originalForceEncryptedFileStorage);
       restoreEnv("GEMINI_API_KEY", originalGeminiApiKey);
       restoreEnv("GOOGLE_API_KEY", originalGoogleApiKey);
+      restoreEnv("GOOGLE_CLOUD_QUOTA_PROJECT", originalQuotaProject);
       await prepared?.cleanup?.();
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
