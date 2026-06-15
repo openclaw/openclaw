@@ -217,7 +217,9 @@ function swiftType(schema: JsonSchema, required: boolean, allowStructuralNamed =
 
 function stringEnumCases(schema: JsonSchema): string[] | undefined {
   if (schema.type === "string" && schema.enum) {
-    return schema.enum.filter((value): value is string => typeof value === "string");
+    return schema.enum.every((value) => typeof value === "string")
+      ? (schema.enum as string[])
+      : undefined;
   }
 
   const variants = schema.oneOf ?? schema.anyOf;

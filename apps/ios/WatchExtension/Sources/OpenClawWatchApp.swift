@@ -71,21 +71,6 @@ struct OpenClawWatchApp: App {
         }
     }
 
-    private func sendQuickCheckIn() {
-        guard let receiver else { return }
-        let draft = self.inboxStore.makeQuickCheckInDraft(
-            label: "Check in",
-            note: "Give me the shortest useful update for what needs my attention from the watch.")
-        self.inboxStore.markReplySending(actionLabel: "Check in")
-        Task { @MainActor in
-            self.refreshAppSnapshot()
-            let result = await receiver.sendReply(draft)
-            self.inboxStore.markReplyResult(result, actionLabel: "Check in")
-            try? await Task.sleep(nanoseconds: 900_000_000)
-            self.refreshAppSnapshot()
-        }
-    }
-
     private func sendAppCommand(_ command: WatchAppCommand) {
         guard let receiver else { return }
         let message = self.inboxStore.makeAppCommand(command)

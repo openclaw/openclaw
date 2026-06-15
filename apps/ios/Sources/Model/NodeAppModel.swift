@@ -59,6 +59,8 @@ private enum IOSDeepLinkAgentPolicy {
 @Observable
 // swiftlint:disable type_body_length file_length
 final class NodeAppModel {
+    private nonisolated static let watchChatPreviewItemLimit = 5
+
     struct AgentDeepLinkPrompt: Identifiable, Equatable {
         let id: String
         let messagePreview: String
@@ -2823,12 +2825,21 @@ extension NodeAppModel {
     }
 
     private func setOperatorConnected(_ connected: Bool) {
+        let changed = self.operatorConnected != connected
         self.operatorConnected = connected
         self.operatorStatusText = connected ? "Connected" : "Offline"
         self.refreshOperatorAdminScopeFromStore()
-        guard connected else { return }
+        guard connected else {
+            guard changed else { return }
+            Task { [weak self] in
+                await self?.syncWatchAppSnapshot(reason: "operator_offline")
+            }
+            return
+        }
         Task { [weak self] in
             await self?.flushQueuedWatchChatsIfAvailable()
+            guard changed else { return }
+            await self?.syncWatchAppSnapshot(reason: "operator_online")
         }
     }
 
@@ -3405,8 +3416,7 @@ extension NodeAppModel {
                     .requestHistory(sessionKey: self.chatSessionKey)
             }
 
-            let messages = Self.decodeWatchChatMessages(payload.messages ?? [])
-            let items = Self.makeWatchChatItems(messages)
+            let items = Self.makeWatchChatItems(from: payload.messages ?? [])
             return WatchChatPreview(
                 items: items,
                 statusText: items.isEmpty ? "No chat messages yet" : nil)
@@ -3416,23 +3426,27 @@ extension NodeAppModel {
         }
     }
 
-    private nonisolated static func decodeWatchChatMessages(
-        _ raw: [OpenClawKit.AnyCodable]) -> [OpenClawChatMessage]
+    private nonisolated static func decodeWatchChatMessage(
+        _ raw: OpenClawKit.AnyCodable) -> OpenClawChatMessage?
     {
-        raw.compactMap { item in
-            guard let data = try? JSONEncoder().encode(item) else { return nil }
-            return try? JSONDecoder().decode(OpenClawChatMessage.self, from: data)
-        }
+        guard let data = try? JSONEncoder().encode(raw) else { return nil }
+        return try? JSONDecoder().decode(OpenClawChatMessage.self, from: data)
     }
 
     private nonisolated static func makeWatchChatItems(
-        _ messages: [OpenClawChatMessage]) -> [OpenClawWatchChatItem]
+        from raw: [OpenClawKit.AnyCodable]) -> [OpenClawWatchChatItem]
     {
-        let readableMessages = messages.compactMap { message -> (OpenClawChatMessage, String)? in
+        var readableMessages: [(OpenClawChatMessage, String)] = []
+        for item in raw.reversed() {
+            guard let message = self.decodeWatchChatMessage(item) else { continue }
             let text = self.watchChatText(from: message)
-            return text.isEmpty ? nil : (message, text)
+            guard !text.isEmpty else { continue }
+            readableMessages.append((message, text))
+            if readableMessages.count == self.watchChatPreviewItemLimit {
+                break
+            }
         }
-        return readableMessages.suffix(5).enumerated().map { index, entry in
+        return Array(readableMessages.reversed()).enumerated().map { index, entry in
             let timestampMs = self.watchTimestampMs(entry.0.timestamp)
             let stableTime = timestampMs.map(String.init) ?? entry.0.id.uuidString
             return OpenClawWatchChatItem(
@@ -3495,9 +3509,15 @@ extension NodeAppModel {
         chatPreview: WatchChatPreview? = nil) -> OpenClawWatchAppSnapshotMessage
     {
         self.pruneExpiredWatchExecApprovalPrompts()
+        let watchGatewayConnected = self.isAppleReviewDemoModeEnabled
+            || (self.gatewayConnected && self.operatorConnected)
+        let displayStatusText = self.gatewayDisplayStatusText
+        let watchGatewayStatusText = watchGatewayConnected || displayStatusText != "Connected"
+            ? displayStatusText
+            : self.operatorStatusText
         return OpenClawWatchAppSnapshotMessage(
-            gatewayStatusText: self.gatewayDisplayStatusText,
-            gatewayConnected: self.gatewayConnected,
+            gatewayStatusText: watchGatewayStatusText,
+            gatewayConnected: watchGatewayConnected,
             agentName: self.chatAgentName,
             agentAvatarURL: self.chatAgentAvatarURL,
             agentAvatarText: self.chatAgentAvatarText,
@@ -4998,6 +5018,14 @@ extension NodeAppModel {
 
     func _test_setGatewayConnected(_ connected: Bool) {
         self.gatewayConnected = connected
+    }
+
+    func _test_setOperatorConnected(_ connected: Bool) {
+        self.setOperatorConnected(connected)
+    }
+
+    nonisolated static func _test_makeWatchChatItems(from raw: [OpenClawKit.AnyCodable]) -> [OpenClawWatchChatItem] {
+        self.makeWatchChatItems(from: raw)
     }
 
     func _test_isGatewayConnected() -> Bool {

@@ -734,18 +734,6 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
             sentAtMs: Self.nowMs())
     }
 
-    func makeQuickCheckInDraft(label: String, note: String) -> WatchReplyDraft {
-        let snapshotSessionKey = self.appSnapshot?.sessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        return WatchReplyDraft(
-            replyId: UUID().uuidString,
-            promptId: "watch-control",
-            actionId: "watch_check_in",
-            actionLabel: label,
-            sessionKey: (snapshotSessionKey?.isEmpty == false) ? snapshotSessionKey : self.sessionKey,
-            note: note,
-            sentAtMs: Self.nowMs())
-    }
-
     func markReplySending(actionLabel: String) {
         self.isReplySending = true
         self.replyStatusText = "Sending \(actionLabel)…"

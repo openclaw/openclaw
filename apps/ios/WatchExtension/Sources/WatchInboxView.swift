@@ -486,20 +486,6 @@ private struct WatchControlSurfaceView: View {
         }
     }
 
-    private func approvalMetadata(_ record: WatchExecApprovalRecord) -> String {
-        var parts: [String] = []
-        if let host = record.approval.host, !host.isEmpty {
-            parts.append(host)
-        }
-        if let nodeId = record.approval.nodeId, !nodeId.isEmpty {
-            parts.append(nodeId)
-        }
-        if record.isResolving {
-            parts.append("Sending")
-        }
-        return parts.isEmpty ? "Tap to decide" : parts.joined(separator: " · ")
-    }
-
     private func expiryText(_ expiresAtMs: Int?) -> String? {
         guard let expiresAtMs else { return nil }
         let deltaSeconds = max(0, (expiresAtMs - Int(Date().timeIntervalSince1970 * 1000)) / 1000)
@@ -512,7 +498,6 @@ private struct WatchControlSurfaceView: View {
 
 private enum WatchClawStyle {
     static let accent = Color(red: 1.0, green: 0.2, blue: 0.22)
-    static let accentDeep = Color(red: 0.5, green: 0.03, blue: 0.06)
     static let background = Color(red: 0.015, green: 0.015, blue: 0.02)
     static let surface = Color.white.opacity(0.075)
     static let raised = Color.white.opacity(0.115)
@@ -577,6 +562,7 @@ private struct WatchClawAvatar: View {
     var size: CGFloat
     var imageSource: String?
     var text: String?
+    @State private var dataImage: UIImage?
 
     var body: some View {
         ZStack {
@@ -592,10 +578,13 @@ private struct WatchClawAvatar: View {
                 .strokeBorder(WatchClawStyle.accent.opacity(0.32), lineWidth: 1)
         }
         .shadow(color: WatchClawStyle.accent.opacity(0.30), radius: 5, y: 2)
+        .task(id: WatchAvatarSource.normalized(self.imageSource)) {
+            self.dataImage = WatchAvatarSource.dataImage(from: self.imageSource)
+        }
     }
 
     @ViewBuilder private var avatarContent: some View {
-        if let image = WatchAvatarSource.dataImage(from: self.imageSource) {
+        if let image = self.dataImage {
             Image(uiImage: image)
                 .resizable()
                 .scaledToFill()

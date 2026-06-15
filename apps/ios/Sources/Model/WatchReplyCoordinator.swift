@@ -56,6 +56,7 @@ final class WatchChatCoordinator {
     }
 
     private static let persistedQueueKey = "watch.chat.command.queue.v1"
+    private static let maxRecentCommandIds = 128
 
     private struct QueuedCommand: Codable, Equatable {
         var gatewayStableID: String
@@ -64,6 +65,7 @@ final class WatchChatCoordinator {
 
     private let defaults: UserDefaults
     private var queuedCommands: [QueuedCommand] = []
+    private var recentCommandIds: [String] = []
     private var seenCommandIds = Set<String>()
 
     init(defaults: UserDefaults = .standard) {
@@ -84,11 +86,12 @@ final class WatchChatCoordinator {
         if self.seenCommandIds.contains(commandId) {
             return .deduped(commandId: commandId)
         }
-        self.seenCommandIds.insert(commandId)
+        self.rememberRecentCommandId(commandId)
         if !isChatAvailable {
             let owner = gatewayStableID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             guard !owner.isEmpty else { return .dropMissingTarget }
             self.queuedCommands.append(QueuedCommand(gatewayStableID: owner, event: event))
+            self.rebuildSeenCommandIds()
             self.persistQueue()
             return .queue(commandId: commandId)
         }
@@ -109,6 +112,7 @@ final class WatchChatCoordinator {
             $0.gatewayStableID == owner && $0.event.commandId == commandId
         }) else { return }
         self.queuedCommands.remove(at: index)
+        self.rememberRecentCommandId(commandId)
         self.persistQueue()
     }
 
@@ -117,10 +121,11 @@ final class WatchChatCoordinator {
         let owner = gatewayStableID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !owner.isEmpty else { return }
         if !commandId.isEmpty {
-            self.seenCommandIds.insert(commandId)
+            self.rememberRecentCommandId(commandId)
             self.queuedCommands.removeAll { $0.event.commandId == commandId }
         }
         self.queuedCommands.insert(QueuedCommand(gatewayStableID: owner, event: event), at: 0)
+        self.rebuildSeenCommandIds()
         self.persistQueue()
     }
 
@@ -139,20 +144,39 @@ final class WatchChatCoordinator {
             return
         }
 
-        var seen = Set<String>()
+        var seen: [String] = []
+        var seenSet = Set<String>()
         self.queuedCommands = persisted.compactMap { queued in
             let owner = queued.gatewayStableID.trimmingCharacters(in: .whitespacesAndNewlines)
             let commandId = queued.event.commandId.trimmingCharacters(in: .whitespacesAndNewlines)
             let text = queued.event.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            guard !owner.isEmpty, !commandId.isEmpty, !text.isEmpty, seen.insert(commandId).inserted else {
+            guard !owner.isEmpty, !commandId.isEmpty, !text.isEmpty, seenSet.insert(commandId).inserted else {
                 return nil
             }
+            seen.append(commandId)
             return QueuedCommand(gatewayStableID: owner, event: queued.event)
         }
-        self.seenCommandIds = seen
+        self.recentCommandIds = Array(seen.suffix(Self.maxRecentCommandIds))
+        self.rebuildSeenCommandIds()
         if self.queuedCommands.count != persisted.count {
             self.persistQueue()
         }
+    }
+
+    private func rememberRecentCommandId(_ commandId: String) {
+        guard !commandId.isEmpty else { return }
+        self.recentCommandIds.removeAll { $0 == commandId }
+        self.recentCommandIds.append(commandId)
+        if self.recentCommandIds.count > Self.maxRecentCommandIds {
+            self.recentCommandIds.removeFirst(self.recentCommandIds.count - Self.maxRecentCommandIds)
+        }
+        self.rebuildSeenCommandIds()
+    }
+
+    private func rebuildSeenCommandIds() {
+        var ids = Set(self.recentCommandIds)
+        ids.formUnion(self.queuedCommands.map(\.event.commandId))
+        self.seenCommandIds = ids
     }
 
     private func persistQueue() {

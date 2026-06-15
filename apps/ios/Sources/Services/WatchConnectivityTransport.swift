@@ -161,22 +161,6 @@ final class WatchConnectivityTransport: NSObject, @unchecked Sendable {
         }
     }
 
-    func sendApplicationContextPayload(_ payload: [String: Any]) async throws -> WatchNotificationSendResult {
-        await self.ensureActivated()
-        let session = try self.requireReadySession()
-        do {
-            try session.updateApplicationContext(payload)
-            return WatchNotificationSendResult(
-                deliveredImmediately: false,
-                queuedForDelivery: true,
-                transport: "applicationContext")
-        } catch {
-            Self.logger.error(
-                "watch application context failed: \(error.localizedDescription, privacy: .public)")
-            return try await self.sendPayload(payload)
-        }
-    }
-
     private func updateCallbacks(_ update: (inout WatchConnectivityTransportCallbacks) -> Void) {
         self.callbacksLock.lock()
         defer { self.callbacksLock.unlock() }

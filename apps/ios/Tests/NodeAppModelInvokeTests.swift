@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawChatUI
 import OpenClawKit
 import OpenClawProtocol
 import Testing
@@ -31,6 +32,27 @@ private func makeAgentDeepLinkURL(
     }
     components.queryItems = queryItems
     return components.url!
+}
+
+private func makeWatchChatRawMessage(
+    role: String,
+    text: String?,
+    type: String = "text",
+    timestamp: Double) throws -> AnyCodable
+{
+    let message = OpenClawChatMessage(
+        role: role,
+        content: [
+            OpenClawChatMessageContent(
+                type: type,
+                text: text,
+                mimeType: nil,
+                fileName: nil,
+                content: nil),
+        ],
+        timestamp: timestamp)
+    let data = try JSONEncoder().encode(message)
+    return try JSONDecoder().decode(AnyCodable.self, from: data)
 }
 
 @MainActor
@@ -497,6 +519,7 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
         let watchService = MockWatchMessagingService()
         let appModel = NodeAppModel(watchMessagingService: watchService)
         appModel._test_setGatewayConnected(true)
+        appModel._test_setOperatorConnected(true)
         appModel.gatewayStatusText = "Connected"
         appModel.talkMode.setEnabled(true)
         appModel.talkMode.statusText = "Listening"
@@ -506,7 +529,12 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
                 requestId: "app-snapshot-1",
                 sentAtMs: 123,
                 transport: "sendMessage"))
-        await Task.yield()
+        for _ in 0..<20 {
+            if watchService.lastSentAppSnapshot != nil {
+                break
+            }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
 
         let snapshot = try #require(watchService.lastSentAppSnapshot)
         #expect(snapshot.gatewayConnected == true)
@@ -516,6 +544,69 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
         #expect(!snapshot.talkStatusText.isEmpty)
         #expect(snapshot.talkEnabled == true)
         #expect(snapshot.pendingApprovalCount == 0)
+    }
+
+    @Test @MainActor func watchAppSnapshotPublishesOfflineWhenOperatorDisconnects() async {
+        let watchService = MockWatchMessagingService()
+        let appModel = NodeAppModel(watchMessagingService: watchService)
+        appModel._test_setGatewayConnected(true)
+        appModel._test_setOperatorConnected(true)
+        appModel.gatewayStatusText = "Connected"
+
+        watchService.emitAppSnapshotRequest(
+            WatchAppSnapshotRequestEvent(
+                requestId: "app-snapshot-before-disconnect",
+                sentAtMs: 123,
+                transport: "sendMessage"))
+        for _ in 0..<20 {
+            if watchService.lastSentAppSnapshot?.gatewayConnected == true {
+                break
+            }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        #expect(watchService.lastSentAppSnapshot?.gatewayConnected == true)
+
+        appModel.disconnectGateway()
+        for _ in 0..<20 {
+            if watchService.lastSentAppSnapshot?.gatewayConnected == false {
+                break
+            }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        #expect(watchService.lastSentAppSnapshot?.gatewayConnected == false)
+        #expect(watchService.lastSentAppSnapshot?.gatewayStatusText == "Offline")
+    }
+
+    @Test @MainActor func watchAppSnapshotPublishesOnlineWhenOperatorReconnects() async {
+        let watchService = MockWatchMessagingService()
+        let appModel = NodeAppModel(watchMessagingService: watchService)
+        appModel._test_setGatewayConnected(true)
+        appModel.gatewayStatusText = "Connected"
+
+        watchService.emitAppSnapshotRequest(
+            WatchAppSnapshotRequestEvent(
+                requestId: "app-snapshot-before-reconnect",
+                sentAtMs: 124,
+                transport: "sendMessage"))
+        for _ in 0..<20 {
+            if watchService.lastSentAppSnapshot?.gatewayConnected == false {
+                break
+            }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        #expect(watchService.lastSentAppSnapshot?.gatewayConnected == false)
+
+        appModel._test_setOperatorConnected(true)
+        for _ in 0..<20 {
+            if watchService.lastSentAppSnapshot?.gatewayConnected == true {
+                break
+            }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        #expect(watchService.lastSentAppSnapshot?.gatewayConnected == true)
+        #expect(watchService.lastSentAppSnapshot?.gatewayStatusText == "Connected")
     }
 
     @Test @MainActor func watchAppSnapshotUsesConfiguredAgentAvatar() async throws {
@@ -646,6 +737,27 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
         } == true)
     }
 
+    @Test func watchChatPreviewKeepsOlderReadableMessagesAfterInternalEvents() throws {
+        var rawMessages = try [
+            makeWatchChatRawMessage(
+                role: "assistant",
+                text: "Still worth reading",
+                timestamp: 1000),
+        ]
+        for index in 0..<30 {
+            try rawMessages.append(
+                makeWatchChatRawMessage(
+                    role: "assistant",
+                    text: nil,
+                    type: "toolCall",
+                    timestamp: 2000 + Double(index)))
+        }
+
+        let items = NodeAppModel._test_makeWatchChatItems(from: rawMessages)
+
+        #expect(items.map(\.text) == ["Still worth reading"])
+    }
+
     @Test @MainActor func watchAppCommandQueuesChatMessageWhenOperatorOffline() async {
         NodeAppModel._test_resetPersistedWatchChatQueueState()
         defer { NodeAppModel._test_resetPersistedWatchChatQueueState() }
@@ -767,6 +879,114 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
         #expect(
             coordinator.nextQueuedCommand(isChatAvailable: true, gatewayStableID: "gateway-a")?.commandId ==
                 "watch-send-chat-gateway-a-2")
+    }
+
+    @Test @MainActor func watchChatCommandDedupingKeepsOnlyRecentForwardedCommands() throws {
+        let suiteName = "watch-chat-recent-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defaults.removePersistentDomain(forName: suiteName)
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let coordinator = WatchChatCoordinator(defaults: defaults)
+        for index in 0..<140 {
+            let event = WatchAppCommandEvent(
+                commandId: "watch-forward-\(index)",
+                command: .sendChat,
+                sessionKey: "main",
+                text: "Message \(index)",
+                sentAtMs: index,
+                transport: "sendMessage")
+            if case .forward = coordinator.ingest(
+                event,
+                isChatAvailable: true,
+                gatewayStableID: "gateway-a")
+            {
+            } else {
+                Issue.record("expected forwarded command \(index)")
+            }
+        }
+
+        let oldestEvent = WatchAppCommandEvent(
+            commandId: "watch-forward-0",
+            command: .sendChat,
+            sessionKey: "main",
+            text: "Message 0 again",
+            sentAtMs: 999,
+            transport: "sendMessage")
+        if case .forward = coordinator.ingest(
+            oldestEvent,
+            isChatAvailable: true,
+            gatewayStableID: "gateway-a")
+        {
+        } else {
+            Issue.record("expected oldest forwarded command to age out of dedupe")
+        }
+
+        let recentEvent = WatchAppCommandEvent(
+            commandId: "watch-forward-139",
+            command: .sendChat,
+            sessionKey: "main",
+            text: "Message 139 again",
+            sentAtMs: 1000,
+            transport: "sendMessage")
+        if case .deduped = coordinator.ingest(
+            recentEvent,
+            isChatAvailable: true,
+            gatewayStableID: "gateway-a")
+        {
+        } else {
+            Issue.record("expected recent forwarded command to stay deduped")
+        }
+    }
+
+    @Test @MainActor func watchChatCommandDedupingKeepsDeliveredQueuedCommandsRecent() throws {
+        let suiteName = "watch-chat-delivered-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defaults.removePersistentDomain(forName: suiteName)
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let coordinator = WatchChatCoordinator(defaults: defaults)
+        for index in 0..<140 {
+            let event = WatchAppCommandEvent(
+                commandId: "watch-queued-\(index)",
+                command: .sendChat,
+                sessionKey: "main",
+                text: "Queued \(index)",
+                sentAtMs: index,
+                transport: "transferUserInfo")
+            if case .queue = coordinator.ingest(
+                event,
+                isChatAvailable: false,
+                gatewayStableID: "gateway-a")
+            {
+            } else {
+                Issue.record("expected queued command \(index)")
+            }
+        }
+
+        coordinator.removeQueuedCommand(
+            commandId: "watch-queued-0",
+            gatewayStableID: "gateway-a")
+
+        let duplicateDeliveredEvent = WatchAppCommandEvent(
+            commandId: "watch-queued-0",
+            command: .sendChat,
+            sessionKey: "main",
+            text: "Duplicate after delivery",
+            sentAtMs: 999,
+            transport: "transferUserInfo")
+        if case .deduped = coordinator.ingest(
+            duplicateDeliveredEvent,
+            isChatAvailable: true,
+            gatewayStableID: "gateway-a")
+        {
+        } else {
+            Issue.record("expected delivered queued command to stay deduped")
+        }
     }
 
     @Test @MainActor func pendingWatchRecoveryIDsAreIncludedWithoutDeliveredNotifications() async {
