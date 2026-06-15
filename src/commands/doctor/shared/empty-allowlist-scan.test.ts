@@ -37,6 +37,48 @@ describe("doctor empty allowlist policy scan", () => {
     ]);
   });
 
+  it("does not warn on empty parent groupAllowFrom when active accounts have effective group allowlists", () => {
+    const warnings = scanEmptyAllowlistPolicyWarnings(
+      {
+        channels: {
+          telegram: {
+            groupPolicy: "allowlist",
+            groupAllowFrom: [],
+            accounts: {
+              primary: { groupAllowFrom: ["telegram:group:primary"] },
+              backup: { allowFrom: ["telegram:group:backup"] },
+            },
+          },
+        },
+      },
+      { doctorFixCommand: "openclaw doctor --fix" },
+    );
+
+    expect(warnings).toEqual([]);
+  });
+
+  it("keeps parent groupAllowFrom warning when any active account lacks an effective allowlist", () => {
+    const warnings = scanEmptyAllowlistPolicyWarnings(
+      {
+        channels: {
+          telegram: {
+            groupPolicy: "allowlist",
+            groupAllowFrom: [],
+            accounts: {
+              primary: { groupAllowFrom: ["telegram:group:primary"] },
+              backup: {},
+            },
+          },
+        },
+      },
+      { doctorFixCommand: "openclaw doctor --fix" },
+    );
+
+    expect(warnings).toContain(
+      '- channels.telegram.groupPolicy is "allowlist" but groupAllowFrom (and allowFrom) is empty — all group messages will be silently dropped. Add sender IDs to channels.telegram.groupAllowFrom or channels.telegram.allowFrom, or set groupPolicy to "open".',
+    );
+  });
+
   it("allows provider-specific extra warnings without importing providers", () => {
     const warnings = scanEmptyAllowlistPolicyWarnings(
       {
