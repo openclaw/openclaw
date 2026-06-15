@@ -311,7 +311,6 @@ class ChatController(
     }
   }
 
-  /** Applies gateway chat/agent stream events to local transcript and pending-run state. */
   fun handleGatewayEvent(
     event: String,
     payloadJson: String?,
@@ -321,7 +320,6 @@ class ChatController(
         scope.launch { pollHealthIfNeeded(force = false) }
       }
       "health" -> {
-        // If we receive a health snapshot, the gateway is reachable.
         _healthOk.value = true
       }
       "seqGap" -> {
@@ -334,7 +332,7 @@ class ChatController(
       }
       "sessions.changed" -> {
         if (payloadJson.isNullOrBlank()) {
-          scope.launch { fetchSessions(limit = _sessions.value.size.takeIf { it > 0 } ?: 100) }
+          refreshSessionsForCurrentWindow()
         } else {
           handleSessionsChangedEvent(payloadJson)
         }
@@ -398,6 +396,10 @@ class ChatController(
     } catch (_: Throwable) {
       // best-effort
     }
+  }
+
+  private fun refreshSessionsForCurrentWindow() {
+    scope.launch { fetchSessions(limit = _sessions.value.size.takeIf { it > 0 } ?: 100) }
   }
 
   private suspend fun pollHealthIfNeeded(force: Boolean) {
@@ -491,21 +493,24 @@ class ChatController(
       removeSessionEntry(payload["sessionKey"].asStringOrNull() ?: payload["key"].asStringOrNull())
       return
     }
-    val entry = payload["session"].asObjectOrNull()?.let(::parseSessionEntry) ?: parseSessionEntry(payload)
+    val entry = parseEventSessionEntry(payload)
     if (entry != null) {
       upsertSessionEntry(entry)
     } else {
-      scope.launch { fetchSessions(limit = _sessions.value.size.takeIf { it > 0 } ?: 100) }
+      refreshSessionsForCurrentWindow()
     }
   }
 
   private fun handleSessionMessageEvent(payloadJson: String) {
     val payload = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: return
-    val entry = payload["session"].asObjectOrNull()?.let(::parseSessionEntry) ?: parseSessionEntry(payload)
+    val entry = parseEventSessionEntry(payload)
     if (entry != null) {
       upsertSessionEntry(entry)
     }
   }
+
+  private fun parseEventSessionEntry(payload: JsonObject): ChatSessionEntry? =
+    payload["session"].asObjectOrNull()?.let(::parseSessionEntry) ?: parseSessionEntry(payload)
 
   private fun handleAgentEvent(payloadJson: String) {
     val payload = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: return
