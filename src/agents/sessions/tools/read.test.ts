@@ -1,10 +1,11 @@
-// Read tool tests cover bounded file reads, continuation hints, and shell-safe
-// fallback commands in agent sessions.
+// Read tool tests cover bounded file reads, continuation hints, shell-safe
+// fallback commands, and cross-platform encoding fallback in agent sessions.
 import { Buffer } from "node:buffer";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { decodeWindowsOutputBuffer } from "../../../infra/windows-encoding.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { createReadToolDefinition } from "./read.js";
 import { DEFAULT_MAX_BYTES } from "./truncate.js";
@@ -99,5 +100,45 @@ describe("read tool", () => {
     );
 
     expect(textContent(result)).toBe("alpha\n\n[2 more lines in file. Use offset=2 to continue.]");
+  });
+
+  it("decodes GBK-encoded file buffers on simulated Windows via decodeWindowsOutputBuffer", () => {
+    // "中文GBK测试" encoded as GBK bytes
+    const gbkBytes = Buffer.from([
+      0xd6, 0xd0, 0xce, 0xc4, 0x47, 0x42, 0x4b, 0xb2, 0xe2, 0xca, 0xd4,
+    ]);
+    const result = decodeWindowsOutputBuffer({
+      buffer: gbkBytes,
+      platform: "win32",
+      windowsEncoding: "gbk",
+    });
+    expect(result).toBe("中文GBK测试");
+  });
+
+  it("passes valid UTF-8 text through decodeWindowsOutputBuffer unchanged", () => {
+    const utf8Bytes = Buffer.from("正常UTF8文本", "utf-8");
+    const result = decodeWindowsOutputBuffer({ buffer: utf8Bytes });
+    expect(result).toBe("正常UTF8文本");
+  });
+
+  it("reads UTF-8 text files through the read tool without encoding regression", async () => {
+    const tool = createReadToolDefinition("/workspace", {
+      operations: {
+        access: async () => {},
+        detectImageMimeType: async () => null,
+        readFile: async () => Buffer.from("这是中文测试\n另一行", "utf-8"),
+      },
+    });
+
+    const result = await tool.execute(
+      "call-1",
+      { path: "test.txt" },
+      undefined,
+      undefined,
+      {} as never,
+    );
+
+    expect(textContent(result)).toContain("这是中文测试");
+    expect(textContent(result)).toContain("另一行");
   });
 });
