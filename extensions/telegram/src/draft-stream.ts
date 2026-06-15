@@ -8,6 +8,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
 import { isSafeToRetrySendError, isTelegramClientRejection } from "./network-errors.js";
 import { normalizeTelegramReplyToMessageId } from "./outbound-params.js";
+import { recordSentMessage } from "./sent-message-cache.js";
 
 const TELEGRAM_STREAM_MAX_CHARS = 4096;
 const DEFAULT_THROTTLE_MS = 1000;
@@ -133,7 +134,13 @@ export function createTelegramDraftStream(params: {
           parse_mode: sendArgs.renderedParseMode,
         }
       : replyParams;
-    return await params.api.sendMessage(chatId, sendArgs.renderedText, sendParams);
+    const sent = await params.api.sendMessage(chatId, sendArgs.renderedText, sendParams);
+    const sentMessageId = sent?.message_id;
+    if (typeof sentMessageId !== "number" || !Number.isFinite(sentMessageId)) {
+      throw new Error("missing message id from sendMessage");
+    }
+    recordSentMessage(chatId, sentMessageId);
+    return sent;
   };
   const sendMessageTransportPreview = async ({
     renderedText,
