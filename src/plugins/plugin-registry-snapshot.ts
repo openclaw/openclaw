@@ -329,21 +329,35 @@ function hasMismatchedPersistedBundledPluginRoot(
   if (!bundledPluginsDir) {
     return false;
   }
-  const allowedBundledRoots = resolveComparableBundledPluginRoots(bundledPluginsDir);
   return index.plugins.some(
     (plugin) =>
       plugin.origin === "bundled" &&
-      !allowedBundledRoots.some((allowedRoot) => isPathInsideOrEqual(plugin.rootDir, allowedRoot)),
+      !isAllowedPersistedBundledPluginRoot(plugin.rootDir, bundledPluginsDir),
   );
 }
 
-function resolveComparableBundledPluginRoots(bundledPluginsDir: string): string[] {
-  const roots = [resolveComparablePath(bundledPluginsDir)];
-  const legacyRoot = buildLegacyBundledRootPath(bundledPluginsDir);
-  if (legacyRoot && isSourceCheckoutBundledPluginRoot(legacyRoot)) {
-    roots.push(resolveComparablePath(legacyRoot));
+function isAllowedPersistedBundledPluginRoot(
+  pluginRootDir: string,
+  bundledPluginsDir: string,
+): boolean {
+  if (isPathInsideOrEqual(pluginRootDir, bundledPluginsDir)) {
+    return true;
   }
-  return [...new Set(roots)];
+  const legacyRoot = buildLegacyBundledRootPath(bundledPluginsDir);
+  if (!legacyRoot || !isSourceCheckoutBundledPluginRoot(legacyRoot)) {
+    return false;
+  }
+  const relativePluginRoot = path.relative(
+    resolveComparablePath(legacyRoot),
+    resolveComparablePath(pluginRootDir),
+  );
+  if (!isRelativePathInsideOrEqual(relativePluginRoot)) {
+    return false;
+  }
+  // Discovery prefers a built plugin whenever the same child exists in the
+  // packaged root. Keep source-only bundled plugins, but invalidate stale
+  // source records once their built peer appears.
+  return !fs.existsSync(path.join(bundledPluginsDir, relativePluginRoot));
 }
 
 function isSourceCheckoutBundledPluginRoot(extensionsDir: string): boolean {

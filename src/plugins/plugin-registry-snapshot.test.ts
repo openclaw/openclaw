@@ -811,6 +811,41 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     expect(result.snapshot.plugins.map((plugin) => plugin.pluginId)).toEqual(["codex", "whatsapp"]);
   });
 
+  it("treats a persisted source bundled root as stale once its built peer appears", () => {
+    const tempRoot = makeTempDir();
+    const packageRoot = path.join(tempRoot, "openclaw");
+    const bundledRoot = path.join(packageRoot, "dist", "extensions");
+    const sourceRoot = path.join(packageRoot, "extensions");
+    const stateDir = path.join(tempRoot, "state");
+    const env = {
+      OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_VERSION: "2026.4.26",
+      VITEST: "true",
+    };
+
+    fs.mkdirSync(path.join(packageRoot, "src"), { recursive: true });
+    fs.mkdirSync(bundledRoot, { recursive: true });
+    fs.writeFileSync(path.join(packageRoot, ".git"), "gitdir: /tmp/mock\n", "utf8");
+    fs.writeFileSync(path.join(packageRoot, "pnpm-workspace.yaml"), "packages: []\n", "utf8");
+    writeBundledPlugin(path.join(sourceRoot, "whatsapp"), "whatsapp", "index.ts");
+
+    const sourceIndex = loadInstalledPluginIndex({ config: {}, env, stateDir });
+    expect(sourceIndex.plugins.map((plugin) => plugin.rootDir)).toEqual([
+      fs.realpathSync(path.join(sourceRoot, "whatsapp")),
+    ]);
+    writePersistedInstalledPluginIndexSync(sourceIndex, { stateDir });
+    writeBundledPlugin(path.join(bundledRoot, "whatsapp"), "whatsapp", "index.js");
+
+    const result = loadPluginRegistrySnapshotWithMetadata({ config: {}, env, stateDir });
+
+    expect(result.source).toBe("derived");
+    expectDiagnosticsContainCode(result.diagnostics, "persisted-registry-stale-source");
+    expect(result.snapshot.plugins.map((plugin) => plugin.rootDir)).toEqual([
+      fs.realpathSync(path.join(bundledRoot, "whatsapp")),
+    ]);
+  });
+
   it("treats persisted registry as stale when a plugin diagnostic source path no longer exists", () => {
     const tempRoot = makeTempDir();
     const stateDir = path.join(tempRoot, "state");
