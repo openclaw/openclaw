@@ -5,6 +5,7 @@ import {
   validateCronUpdateParams,
 } from "../../packages/gateway-protocol/src/index.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "./normalize.js";
+import { resolveCronPayloadAudit } from "./payload-audit.js";
 import { DEFAULT_TOP_OF_HOUR_STAGGER_MS } from "./stagger.js";
 
 function expectNormalizedAtSchedule(scheduleInput: Record<string, unknown>) {
@@ -416,6 +417,43 @@ describe("normalizeCronJobCreate", () => {
       argv: ["printf", "%s", "  padded value  "],
     });
     expect(validateCronAddParams(normalized)).toBe(true);
+  });
+
+  it("classifies explicit command payloads as deterministic scheduler jobs", () => {
+    const audit = resolveCronPayloadAudit({
+      kind: "command",
+      argv: ["openclaw", "support", "sync", "--json"],
+      cwd: "/srv/openclaw",
+      timeoutSeconds: 60,
+    });
+
+    expect(audit).toEqual({
+      executionKind: "deterministic-command",
+      deterministic: true,
+      warnings: [],
+    });
+  });
+
+  it("warns when a legacy agentTurn payload hides a deterministic script", () => {
+    const audit = resolveCronPayloadAudit({
+      kind: "agentTurn",
+      message: [
+        "Run this exact scheduled job.",
+        "```bash",
+        "node scripts/matt-malory-watchdog.js --json",
+        "```",
+      ].join("\n"),
+    });
+
+    expect(audit.executionKind).toBe("agent-turn");
+    expect(audit.deterministic).toBe(false);
+    expect(audit.warnings).toEqual([
+      expect.objectContaining({
+        code: "hidden-agent-turn-script",
+        severity: "warn",
+      }),
+    ]);
+    expect(audit.warnings[0]?.message).toContain('payload.kind="command"');
   });
 
   it("preserves timeoutSeconds=0 for no-timeout agentTurn payloads", () => {

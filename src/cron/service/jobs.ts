@@ -6,6 +6,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
+import { resolveCronPayloadAudit } from "../payload-audit.js";
 import {
   coerceFiniteScheduleNumber,
   computeNextRunAtMs,
@@ -783,6 +784,7 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
     sessionTarget: input.sessionTarget,
     wakeMode: input.wakeMode,
     payload: input.payload,
+    audit: resolveCronPayloadAudit(input.payload),
     delivery: resolveInitialCronDelivery(input),
     failureAlert: input.failureAlert,
     state: {
@@ -844,6 +846,7 @@ export function applyJobPatch(
   }
   if (patch.payload) {
     job.payload = mergeCronPayload(job.payload, patch.payload);
+    job.audit = resolveCronPayloadAudit(job.payload);
   }
   if (patch.delivery) {
     job.delivery = mergeCronDelivery(job.delivery, patch.delivery);
