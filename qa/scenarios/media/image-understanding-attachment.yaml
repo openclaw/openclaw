@@ -6,7 +6,6 @@ scenario:
   coverage:
     primary:
       - media.image-understanding
-      - image-and-pdf-input-routing
     secondary:
       - channels.qa-channel
   objective: Verify an attached image reaches the agent model and the agent can describe what it sees.
