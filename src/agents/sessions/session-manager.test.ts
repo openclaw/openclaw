@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
+import { isTranscriptOnlyOpenClawAssistantMessage } from "../../shared/transcript-only-openclaw-assistant.js";
 import { prepareSessionManagerForRun } from "../embedded-agent-runner/session-manager-init.js";
 import { repairSessionFileIfNeeded } from "../session-file-repair.js";
 import {
@@ -1630,12 +1631,41 @@ describe("SessionManager.open", () => {
     sessionManager.appendMessage({ role: "user", content: "question", timestamp: 1 });
     const baseAnswerId = sessionManager.appendMessage(buildAssistantMessage("base answer"));
     const temporaryErrorId = sessionManager.appendMessage(buildAssistantMessage("temporary error"));
-    const metadata = { type: "metadata", payload: { source: "plugin" } };
+    const opaqueMetadata = { type: "metadata", payload: { source: "plugin" } };
+    const globalMetadata = {
+      type: "custom" as const,
+      id: "plugin-state",
+      parentId: temporaryErrorId,
+      timestamp: "2026-06-04T00:00:04.000Z",
+      customType: "plugin-state",
+      data: { source: "plugin" },
+    };
+    const deliveryEntry = {
+      type: "message" as const,
+      id: "delivery-mirror",
+      parentId: globalMetadata.id,
+      timestamp: "2026-06-04T00:00:05.000Z",
+      message: {
+        ...buildAssistantMessage("mirrored delivery"),
+        provider: "openclaw",
+        model: "delivery-mirror",
+      },
+    };
     sessionManager.mergePromptReleasedSessionEntries([
-      { type: "prompt_released_opaque", record: metadata },
+      { type: "prompt_released_opaque", record: opaqueMetadata },
+      globalMetadata,
+      deliveryEntry,
     ]);
 
-    expect(sessionManager.removeTrailingEntries((entry) => entry.id === temporaryErrorId)).toBe(1);
+    expect(
+      sessionManager.removeTrailingEntries((entry) => entry.id === temporaryErrorId, {
+        preserveTrailing: (entry) =>
+          entry.type === "custom" ||
+          entry.type === "label" ||
+          entry.type === "session_info" ||
+          (entry.type === "message" && isTranscriptOnlyOpenClawAssistantMessage(entry.message)),
+      }),
+    ).toBe(1);
     expect(sessionManager.getLeafId()).toBe(baseAnswerId);
     const replacementId = sessionManager.appendMessage(buildAssistantMessage("replacement answer"));
 
@@ -1644,19 +1674,19 @@ describe("SessionManager.open", () => {
     const records = (await fs.readFile(sessionFile!, "utf8"))
       .trim()
       .split("\n")
-      .map((line) => JSON.parse(line) as unknown);
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
     const metadataIndex = records.findIndex(
-      (record) => JSON.stringify(record) === JSON.stringify(metadata),
+      (record) => JSON.stringify(record) === JSON.stringify(opaqueMetadata),
     );
-    const replacementIndex = records.findIndex(
-      (record) =>
-        typeof record === "object" &&
-        record !== null &&
-        "id" in record &&
-        record.id === replacementId,
-    );
+    const globalMetadataIndex = records.findIndex((record) => record.id === globalMetadata.id);
+    const deliveryIndex = records.findIndex((record) => record.id === deliveryEntry.id);
+    const replacementIndex = records.findIndex((record) => record.id === replacementId);
     expect(metadataIndex).toBeGreaterThan(-1);
-    expect(replacementIndex).toBeGreaterThan(metadataIndex);
+    expect(globalMetadataIndex).toBeGreaterThan(metadataIndex);
+    expect(deliveryIndex).toBeGreaterThan(globalMetadataIndex);
+    expect(replacementIndex).toBeGreaterThan(deliveryIndex);
+    expect(records[globalMetadataIndex]?.parentId).toBe(baseAnswerId);
+    expect(records[deliveryIndex]?.parentId).toBe(globalMetadata.id);
     expect(SessionManager.open(sessionFile!, dir, dir).buildSessionContext().messages).toHaveLength(
       3,
     );

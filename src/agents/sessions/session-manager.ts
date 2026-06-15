@@ -1727,32 +1727,112 @@ export class SessionManager {
   }
 
   /**
-   * Remove matching entries from the canonical tail and rewrite once.
-   * Opaque records stay in file order, while the next append keeps the raw
-   * parent of the oldest removed entry so branch/control links remain intact.
+   * Remove matching entries near the canonical tail and rewrite once.
+   * Declared trailing metadata can survive above the removed entries; all
+   * surviving canonical/opaque children are reparented to the retained branch.
    */
-  removeTrailingEntries(predicate: (entry: SessionEntry) => boolean): number {
-    let removedParentId: string | null | undefined;
-    let removedCount = 0;
-    while (this.fileEntries.length > 1) {
-      const entry = this.fileEntries.at(-1);
+  removeTrailingEntries(
+    predicate: (entry: SessionEntry) => boolean,
+    options?: { preserveTrailing?: (entry: SessionEntry) => boolean },
+  ): number {
+    let preservedStart = this.fileEntries.length;
+    while (preservedStart > 1) {
+      const entry = this.fileEntries[preservedStart - 1];
+      if (!isIndexedSessionEntry(entry) || !options?.preserveTrailing?.(entry)) {
+        break;
+      }
+      preservedStart -= 1;
+    }
+
+    let removeStart = preservedStart;
+    while (removeStart > 1) {
+      const entry = this.fileEntries[removeStart - 1];
       if (!isIndexedSessionEntry(entry) || !predicate(entry)) {
         break;
       }
-      this.fileEntries.pop();
-      removedParentId = entry.parentId;
-      removedCount += 1;
+      removeStart -= 1;
     }
-    if (removedCount === 0) {
+    if (removeStart === preservedStart) {
       return 0;
     }
 
+    const shiftOpaqueIndexesAfterRemoval = (start: number, count: number): void => {
+      for (const opaqueEntry of this.opaqueFileEntries) {
+        const removedBeforeOpaque = Math.max(0, Math.min(count, opaqueEntry.index - start));
+        opaqueEntry.index -= removedBeforeOpaque;
+      }
+    };
+    const removedCount = preservedStart - removeStart;
+    shiftOpaqueIndexesAfterRemoval(removeStart, removedCount);
+    const removedEntries = this.fileEntries.splice(removeStart, removedCount) as SessionEntry[];
+    const removedParentById = new Map(
+      removedEntries.map((entry) => [entry.id, entry.parentId] as const),
+    );
+    for (let index = removeStart; index < this.fileEntries.length; ) {
+      const entry = this.fileEntries[index];
+      if (
+        isIndexedSessionEntry(entry) &&
+        entry.type === "label" &&
+        removedParentById.has(entry.targetId)
+      ) {
+        removedParentById.set(entry.id, entry.parentId);
+        shiftOpaqueIndexesAfterRemoval(index, 1);
+        this.fileEntries.splice(index, 1);
+        continue;
+      }
+      index += 1;
+    }
+
+    const resolveRetainedParentId = (parentId: string | null): string | null => {
+      const seen = new Set<string>();
+      let currentId = parentId;
+      while (currentId && removedParentById.has(currentId) && !seen.has(currentId)) {
+        seen.add(currentId);
+        currentId = removedParentById.get(currentId) ?? null;
+      }
+      return currentId;
+    };
+    const replacementParentId = resolveRetainedParentId(removedEntries[0]?.parentId ?? null);
+    this.fileEntries = this.fileEntries.map((entry) => {
+      if (!isIndexedSessionEntry(entry)) {
+        return entry;
+      }
+      const parentId = resolveRetainedParentId(entry.parentId);
+      return parentId === entry.parentId ? entry : ({ ...entry, parentId } as SessionEntry);
+    });
+    this.opaqueFileEntries = this.opaqueFileEntries.map((opaqueEntry) => {
+      if (!isJsonRecord(opaqueEntry.record)) {
+        return opaqueEntry;
+      }
+      const record = opaqueEntry.record;
+      const parentId =
+        record.parentId === null || typeof record.parentId === "string"
+          ? resolveRetainedParentId(record.parentId)
+          : undefined;
+      const leafEntry = parseOpaqueLeafEntry(record);
+      const targetId = leafEntry ? resolveRetainedParentId(leafEntry.targetId) : undefined;
+      if (
+        (parentId === undefined || parentId === record.parentId) &&
+        (targetId === undefined || targetId === leafEntry?.targetId)
+      ) {
+        return opaqueEntry;
+      }
+      return {
+        ...opaqueEntry,
+        record: {
+          ...record,
+          ...(parentId !== undefined ? { parentId } : {}),
+          ...(targetId !== undefined ? { targetId } : {}),
+        },
+      };
+    });
+
     this.clampOpaqueFileEntryIndexes();
     this.buildIndex();
-    this.leafId = this.resolveCanonicalParentId(removedParentId ?? null);
-    this.appendParentId = removedParentId ?? null;
+    this.leafId = this.resolveCanonicalParentId(replacementParentId);
+    this.appendParentId = replacementParentId;
     this.rewriteFile();
-    return removedCount;
+    return removedEntries.length;
   }
 
   persist(entry: SessionEntry, options?: AppendPersistenceOptions): void {

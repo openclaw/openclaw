@@ -67,6 +67,7 @@ import {
 import { getPluginToolMeta } from "../../../plugins/tools.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../../sessions/input-provenance.js";
+import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../shared/transcript-only-openclaw-assistant.js";
 import { resolveSkillsPromptForRun } from "../../../skills/loading/workspace.js";
 import { resolveEmbeddedRunSkillEntries } from "../../../skills/runtime/embedded-run-entries.js";
 import {
@@ -708,6 +709,13 @@ function removeTrailingMidTurnPrecheckAssistantError(params: {
   const removedPersistedError =
     params.sessionManager.removeTrailingEntries(
       (entry) => entry.type === "message" && isMidTurnPrecheckAssistantError(entry.message),
+      {
+        preserveTrailing: (entry) =>
+          entry.type === "custom" ||
+          entry.type === "label" ||
+          entry.type === "session_info" ||
+          (entry.type === "message" && isTranscriptOnlyOpenClawAssistantMessage(entry.message)),
+      },
     ) > 0;
   if (removedActiveError && !removedPersistedError) {
     log.warn(

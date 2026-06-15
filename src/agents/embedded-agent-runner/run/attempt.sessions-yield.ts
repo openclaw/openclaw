@@ -1,6 +1,7 @@
 /**
  * Handles sessions-yield interruption, persistence, and artifact cleanup.
  */
+import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../shared/transcript-only-openclaw-assistant.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { log } from "../logger.js";
 import { resolveEmbeddedAbortSettleTimeoutMs } from "./attempt.abort-settle-timeout.js";
@@ -183,9 +184,24 @@ export function stripSessionsYieldArtifacts(activeSession: {
         removeTrailingEntries?: (
           predicate: (entry: {
             type?: string;
-            message?: { role?: string; stopReason?: string };
+            message?: {
+              role?: string;
+              stopReason?: string;
+              provider?: string;
+              model?: string;
+            };
             customType?: string;
           }) => boolean,
+          options?: {
+            preserveTrailing?: (entry: {
+              type?: string;
+              message?: {
+                role?: string;
+                provider?: string;
+                model?: string;
+              };
+            }) => boolean;
+          },
         ) => number;
       }
     | undefined;
@@ -193,13 +209,23 @@ export function stripSessionsYieldArtifacts(activeSession: {
     return;
   }
 
-  sessionManager.removeTrailingEntries((entry) => {
-    const isYieldAbortAssistant =
-      entry.type === "message" &&
-      entry.message?.role === "assistant" &&
-      entry.message?.stopReason === "aborted";
-    const isYieldInterruptMessage =
-      entry.type === "custom_message" && entry.customType === SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE;
-    return isYieldAbortAssistant || isYieldInterruptMessage;
-  });
+  sessionManager.removeTrailingEntries(
+    (entry) => {
+      const isYieldAbortAssistant =
+        entry.type === "message" &&
+        entry.message?.role === "assistant" &&
+        entry.message?.stopReason === "aborted";
+      const isYieldInterruptMessage =
+        entry.type === "custom_message" &&
+        entry.customType === SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE;
+      return isYieldAbortAssistant || isYieldInterruptMessage;
+    },
+    {
+      preserveTrailing: (entry) =>
+        entry.type === "custom" ||
+        entry.type === "label" ||
+        entry.type === "session_info" ||
+        (entry.type === "message" && isTranscriptOnlyOpenClawAssistantMessage(entry.message)),
+    },
+  );
 }
