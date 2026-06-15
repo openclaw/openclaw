@@ -12,6 +12,10 @@ import { normalizeMessageContent } from "./inbound/runtime-api.js";
 import { createWebSendApi } from "./inbound/send-api.js";
 import type { ActiveWebSendOptions } from "./inbound/types.js";
 import { createWaSocket, formatError, getStatusCode, waitForWaConnection } from "./session.js";
+import {
+  DEFAULT_WHATSAPP_SOCKET_TIMING,
+  createWhatsAppSocketOperationTimeoutAdapter,
+} from "./socket-timing.js";
 import { jidToE164 } from "./text-runtime.js";
 
 export type WhatsAppQaDriverObservedMessageKind =
@@ -478,7 +482,10 @@ export async function startWhatsAppQaDriverSession(params: {
   }
 
   const sendApi = createWebSendApi({
-    sock,
+    sock: createWhatsAppSocketOperationTimeoutAdapter(
+      sock,
+      DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs,
+    ),
     defaultAccountId: "qa-driver",
     authDir: params.authDir,
   });

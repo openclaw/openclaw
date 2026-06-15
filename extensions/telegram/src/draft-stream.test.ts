@@ -582,6 +582,46 @@ describe("createTelegramDraftStream", () => {
     });
   });
 
+  it("uses caller-provided rich previews", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api);
+
+    stream.updatePreview({
+      text: "Shelling\n\n`🛠️ Exec`",
+      richMessage: {
+        html: "<b>Shelling</b><br><b>🛠️ Exec</b>",
+        skip_entity_detection: true,
+      },
+    });
+    await stream.flush();
+
+    expect(api.raw.sendRichMessage).toHaveBeenCalledWith({
+      chat_id: 123,
+      rich_message: {
+        html: "<b>Shelling</b><br><b>🛠️ Exec</b>",
+        skip_entity_detection: true,
+      },
+    });
+
+    stream.updatePreview({
+      text: "Shelling\n\n`🛠️ Exec`\n• _Checking files_",
+      richMessage: {
+        html: "<b>Shelling</b><br><b>🛠️ Exec</b><br><i>Checking files</i>",
+        skip_entity_detection: true,
+      },
+    });
+    await stream.flush();
+
+    expect(api.raw.editMessageText).toHaveBeenCalledWith({
+      chat_id: 123,
+      message_id: 17,
+      rich_message: {
+        html: "<b>Shelling</b><br><b>🛠️ Exec</b><br><i>Checking files</i>",
+        skip_entity_detection: true,
+      },
+    });
+  });
+
   it("keeps rich rendered previews above the old text-message limit", async () => {
     const richApi = {
       sendRichMessage: vi.fn(async () => ({ message_id: 17 })),

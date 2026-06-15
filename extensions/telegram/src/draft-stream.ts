@@ -35,6 +35,7 @@ const MAX_PREVIEW_FLOOD_SUSPEND_MS = 60_000;
 
 export type TelegramDraftStream = {
   update: (text: string) => void;
+  updatePreview: (preview: TelegramDraftPreview) => void;
   flush: () => Promise<void>;
   messageId: () => number | undefined;
   visibleSinceMs?: () => number | undefined;
@@ -52,7 +53,7 @@ export type TelegramDraftStream = {
   sendMayHaveLanded?: () => boolean;
 };
 
-type TelegramDraftPreview = {
+export type TelegramDraftPreview = {
   text: string;
   richMessage: TelegramInputRichMessage;
 };
@@ -144,6 +145,7 @@ export function createTelegramDraftStream(params: {
   let lastSentPreviewKey = "";
   let lastDeliveredText = "";
   let lastRequestedText = "";
+  let lastRequestedPreview: TelegramDraftPreview | undefined;
   let previewRevision = 0;
   let generation = 0;
   let deliveredTextOffset = 0;
@@ -230,7 +232,10 @@ export function createTelegramDraftStream(params: {
     if (!currentText) {
       return false;
     }
-    const rendered = renderTelegramDraftPreview(currentText, params.renderText);
+    const rendered =
+      deliveredTextOffset === 0 && lastRequestedPreview?.text === trimmed
+        ? lastRequestedPreview
+        : renderTelegramDraftPreview(currentText, params.renderText);
     const renderedText = rendered.text.trimEnd();
     const renderedPreview = { ...rendered, text: renderedText };
     const renderedPreviewKey = telegramDraftPreviewKey(renderedPreview);
@@ -344,12 +349,25 @@ export function createTelegramDraftStream(params: {
     sendOrEditStreamMessage,
   });
 
-  const update = (text: string) => {
+  const requestDraftUpdate = (text: string, preview?: TelegramDraftPreview) => {
     if (streamState.stopped || streamState.final) {
       return;
     }
+    lastRequestedPreview = preview;
     lastRequestedText = text;
     updateDraft(text);
+  };
+
+  const update = (text: string) => {
+    requestDraftUpdate(text);
+  };
+
+  const updatePreview = (preview: TelegramDraftPreview) => {
+    const text = preview.text.trimEnd();
+    if (!text) {
+      return;
+    }
+    requestDraftUpdate(text, { ...preview, text });
   };
 
   const stop = async () => {
@@ -383,6 +401,7 @@ export function createTelegramDraftStream(params: {
     }
     if (!options?.keepPending) {
       loop.resetPending();
+      lastRequestedPreview = undefined;
     }
     loop.resetThrottleWindow();
   };
@@ -422,6 +441,7 @@ export function createTelegramDraftStream(params: {
 
   return {
     update,
+    updatePreview,
     flush: loop.flush,
     messageId: () => streamMessageId,
     visibleSinceMs: () => streamVisibleSinceMs,

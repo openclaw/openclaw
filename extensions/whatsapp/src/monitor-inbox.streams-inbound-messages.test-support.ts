@@ -14,6 +14,7 @@ import {
   type InboxMonitorOptions,
   buildNotifyMessageUpsert,
   DEFAULT_ACCOUNT_ID,
+  DEFAULT_WEB_INBOX_CONFIG,
   failNextWhatsAppPluginStateRegisterIfAbsent,
   getAuthDir,
   getSock,
@@ -24,6 +25,7 @@ import {
   waitForMessageCalls,
 } from "./monitor-inbox.test-harness.js";
 import type { InboxOnMessage } from "./monitor-inbox.test-harness.js";
+import { DEFAULT_WHATSAPP_SOCKET_TIMING } from "./socket-timing.js";
 
 const { imageOps, sleepWithAbortMock } = vi.hoisted(() => ({
   imageOps: {
@@ -63,10 +65,36 @@ function createSocketRef(): NonNullable<InboxMonitorOptions["socketRef"]> {
   return { current: null };
 }
 
+function fastReconnectPolicy(
+  maxAttempts: number,
+): NonNullable<InboxMonitorOptions["disconnectRetryPolicy"]> {
+  return {
+    initialMs: 1,
+    maxMs: 1,
+    factor: 1,
+    jitter: 0,
+    maxAttempts,
+  };
+}
+
 function inboundMessage(onMessage: ReturnType<typeof vi.fn>, index = 0): WebInboundMessage {
   const msg = onMessage.mock.calls[index]?.[0];
   expect(msg).toBeDefined();
   return msg as WebInboundMessage;
+}
+
+async function expectSocketOperationTimeout(
+  operation: "sendMessage" | "sendPresenceUpdate",
+  promise: Promise<unknown>,
+) {
+  const rejection = expect(promise).rejects.toMatchObject({
+    name: "WhatsAppSocketOperationTimeoutError",
+    operation,
+    timeoutMs: DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs,
+    deliveryState: "unknown",
+  });
+  await vi.advanceTimersByTimeAsync(DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs);
+  await rejection;
 }
 
 async function primeInboundReplyHandle(params: {
@@ -785,13 +813,7 @@ describe("web monitor inbox", () => {
       onMessage,
       socketRef,
       upsertId: "timeout-retry",
-      retryPolicy: {
-        initialMs: 1,
-        maxMs: 1,
-        factor: 1,
-        jitter: 0,
-        maxAttempts: 2,
-      },
+      retryPolicy: fastReconnectPolicy(2),
     });
 
     sock.sendMessage
@@ -812,6 +834,152 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
+  it("lets configured slow socket sends complete beyond thirty seconds", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+      cfg: {
+        ...DEFAULT_WEB_INBOX_CONFIG,
+        web: { whatsapp: { defaultQueryTimeoutMs: 45_000 } },
+      },
+    });
+    vi.useFakeTimers();
+    try {
+      sock.sendMessage.mockImplementationOnce(
+        async () =>
+          await new Promise((resolve) => {
+            setTimeout(() => resolve({ key: { id: "slow-success" } }), 40_000);
+          }),
+      );
+
+      let settled = false;
+      const sendPromise = listener.sendMessage("+1555", "hello").finally(() => {
+        settled = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      await expect(sendPromise).resolves.toMatchObject({ messageId: "slow-success" });
+      expect(vi.getTimerCount()).toBe(0);
+      expect(sock.sendMessage).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+      await listener.close();
+    }
+  });
+
+  it("times out stalled socket sends at the default Baileys query timeout", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    vi.useFakeTimers();
+    try {
+      sock.sendMessage.mockImplementationOnce(() => new Promise(() => {}));
+
+      const sendPromise = listener.sendMessage("+1555", "hello");
+      await expectSocketOperationTimeout("sendMessage", sendPromise);
+      expect(vi.getTimerCount()).toBe(0);
+      expect(sock.sendMessage).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+      await listener.close();
+    }
+  });
+
+  it("does not retry or clear the socket after the local socket send timeout", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const socketRef = createSocketRef();
+    const { listener, sock, inbound } = await primeInboundReplyHandle({
+      onMessage,
+      socketRef,
+      upsertId: "local-timeout-terminal",
+      retryPolicy: fastReconnectPolicy(2),
+    });
+    vi.useFakeTimers();
+    try {
+      sock.sendMessage.mockImplementationOnce(() => new Promise(() => {}));
+
+      const replyPromise = inbound.platform.reply("pong");
+      await expectSocketOperationTimeout("sendMessage", replyPromise);
+      expect(sock.sendMessage).toHaveBeenCalledTimes(1);
+      expect(socketRef.current).toBe(sock);
+      expect(sleepWithAbortMock).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+      await listener.close();
+    }
+  });
+
+  it("suppresses self-echo when a timed-out socket send is later accepted", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const socketRef = createSocketRef();
+    const { listener, sock, inbound } = await primeInboundReplyHandle({
+      onMessage,
+      socketRef,
+      upsertId: "late-accept",
+      retryPolicy: fastReconnectPolicy(2),
+    });
+    let acceptLateSend: ((value: { key: { id: string } }) => void) | undefined;
+    vi.useFakeTimers();
+    try {
+      sock.sendMessage.mockImplementationOnce(
+        async () =>
+          await new Promise((resolve) => {
+            acceptLateSend = resolve;
+          }),
+      );
+
+      const replyPromise = inbound.platform.reply("pong");
+      await expectSocketOperationTimeout("sendMessage", replyPromise);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    acceptLateSend?.({ key: { id: "late-accepted" } });
+    await settleInboundWork();
+    sock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: {
+            id: "late-accepted",
+            fromMe: true,
+            remoteJid: "999@s.whatsapp.net",
+          },
+          message: { conversation: "pong" },
+          messageTimestamp: 1_700_000_001,
+          pushName: "Tester",
+        },
+      ],
+    });
+    await settleInboundWork();
+
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    expect(socketRef.current).toBe(sock);
+    expect(sleepWithAbortMock).not.toHaveBeenCalled();
+
+    await listener.close();
+  });
+
+  it("times out stalled send-api presence updates", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    vi.useFakeTimers();
+    try {
+      sock.sendPresenceUpdate.mockClear();
+      sock.sendPresenceUpdate.mockImplementationOnce(() => new Promise(() => {}));
+
+      const presencePromise = listener.sendComposingTo("+1555");
+      await expectSocketOperationTimeout("sendPresenceUpdate", presencePromise);
+      expect(sock.sendPresenceUpdate).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+      await listener.close();
+    }
+  });
+
   it("bounds reconnect-gap retries even when reconnect attempts are unlimited", async () => {
     const onMessage = vi.fn(async () => undefined);
     const socketRef = createSocketRef();
@@ -819,13 +987,7 @@ describe("web monitor inbox", () => {
       onMessage,
       socketRef,
       upsertId: "unlimited-reconnect-send-bound",
-      retryPolicy: {
-        initialMs: 1,
-        maxMs: 1,
-        factor: 1,
-        jitter: 0,
-        maxAttempts: 0,
-      },
+      retryPolicy: fastReconnectPolicy(0),
       useCurrentSock: true,
     });
 
@@ -856,13 +1018,7 @@ describe("web monitor inbox", () => {
       {
         socketRef: socketRefA,
         shouldRetryDisconnect: () => aShouldRetryDisconnect,
-        disconnectRetryPolicy: {
-          initialMs: 1,
-          maxMs: 1,
-          factor: 1,
-          jitter: 0,
-          maxAttempts: 1,
-        },
+        disconnectRetryPolicy: fastReconnectPolicy(1),
       },
     );
 
@@ -938,13 +1094,7 @@ describe("web monitor inbox", () => {
       {
         socketRef: socketRefA,
         shouldRetryDisconnect: () => aShouldRetryDisconnect,
-        disconnectRetryPolicy: {
-          initialMs: 1,
-          maxMs: 1,
-          factor: 1,
-          jitter: 0,
-          maxAttempts: 1,
-        },
+        disconnectRetryPolicy: fastReconnectPolicy(1),
       },
     );
 
@@ -1003,13 +1153,7 @@ describe("web monitor inbox", () => {
       {
         socketRef: socketRefA,
         shouldRetryDisconnect: () => aShouldRetryDisconnect,
-        disconnectRetryPolicy: {
-          initialMs: 1,
-          maxMs: 1,
-          factor: 1,
-          jitter: 0,
-          maxAttempts: 1,
-        },
+        disconnectRetryPolicy: fastReconnectPolicy(1),
       },
     );
 
