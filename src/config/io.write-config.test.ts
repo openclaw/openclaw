@@ -1393,6 +1393,43 @@ describe("config io write", () => {
     });
   });
 
+  it("rejects a base snapshot from a different config path before overwriting the root config", async () => {
+    await withSuiteHome(async (home) => {
+      const firstConfigPath = path.join(home, ".openclaw", "first.json");
+      const secondConfigPath = path.join(home, ".openclaw", "second.json");
+      await fs.mkdir(path.dirname(firstConfigPath), { recursive: true });
+      const originalRaw = `${JSON.stringify(
+        { gateway: { mode: "local", port: 18789 } },
+        null,
+        2,
+      )}\n`;
+      await fs.writeFile(firstConfigPath, originalRaw, "utf-8");
+      await fs.writeFile(secondConfigPath, originalRaw, "utf-8");
+      const firstIo = createConfigIO({
+        configPath: firstConfigPath,
+        env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+      const secondIo = createConfigIO({
+        configPath: secondConfigPath,
+        env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+      const firstSnapshot = await firstIo.readConfigFileSnapshot();
+
+      await expect(
+        secondIo.writeConfigFile(
+          { gateway: { mode: "local", port: 19002 } },
+          { baseSnapshot: firstSnapshot },
+        ),
+      ).rejects.toThrow("config path changed since last load");
+
+      await expect(fs.readFile(secondConfigPath, "utf-8")).resolves.toBe(originalRaw);
+    });
+  });
+
   it("rejects a base snapshot changed during preflight before replacing the root config", async () => {
     await withSuiteHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");

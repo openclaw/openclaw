@@ -315,6 +315,11 @@ function assertBaseSnapshotStillCurrent(
   configPath: string,
   ioFs: typeof fs,
 ): void {
+  if (snapshot.path !== configPath) {
+    throw new ConfigMutationConflictError("config path changed since last load", {
+      currentHash: null,
+    });
+  }
   const expectedHash = resolveConfigSnapshotHash(snapshot);
   let currentRaw: string | null = null;
   let currentExists = true;
