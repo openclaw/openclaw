@@ -216,6 +216,63 @@ describe("dreaming artifact repair", () => {
     ).resolves.toEqual([]);
   });
 
+  it("clears sqlite daily ingestion state when archiving session corpus", async () => {
+    const workspaceDir = await createWorkspace();
+    const sessionCorpusDir = path.join(workspaceDir, "memory", ".dreams", "session-corpus");
+    await fs.mkdir(sessionCorpusDir, { recursive: true });
+    await fs.writeFile(path.join(sessionCorpusDir, "2026-04-11.txt"), "corpus\n", "utf-8");
+    await writeMemoryCoreWorkspaceEntries({
+      namespace: DREAMING_DAILY_INGESTION_NAMESPACE,
+      workspaceDir,
+      entries: [
+        {
+          key: "2026-06-10",
+          value: { ingestedAt: 1_000, lastDreamingDayIngested: "2026-06-10" },
+        },
+      ],
+    });
+
+    const repair = await repairDreamingArtifacts({ workspaceDir });
+
+    expect(repair.archivedSessionCorpus).toBe(true);
+    await expect(
+      readMemoryCoreWorkspaceEntries({
+        namespace: DREAMING_DAILY_INGESTION_NAMESPACE,
+        workspaceDir,
+      }),
+    ).resolves.toEqual([]);
+  });
+
+  it("re-audit reports ingestion absent after repairing daily-only ingestion state", async () => {
+    const workspaceDir = await createWorkspace();
+    const sessionCorpusDir = path.join(workspaceDir, "memory", ".dreams", "session-corpus");
+    await fs.mkdir(sessionCorpusDir, { recursive: true });
+    await fs.writeFile(path.join(sessionCorpusDir, "2026-04-11.txt"), "corpus\n", "utf-8");
+    await writeMemoryCoreWorkspaceEntries({
+      namespace: DREAMING_DAILY_INGESTION_NAMESPACE,
+      workspaceDir,
+      entries: [
+        {
+          key: "2026-06-10",
+          value: { ingestedAt: 1_000, lastDreamingDayIngested: "2026-06-10" },
+        },
+      ],
+    });
+
+    // Before repair the audit treats the migrated daily namespace as ingestion state.
+    await expect(
+      auditDreamingArtifacts({ workspaceDir }).then((audit) => audit.sessionIngestionExists),
+    ).resolves.toBe(true);
+
+    await repairDreamingArtifacts({ workspaceDir });
+
+    // After repair the daily namespace is cleared, so the immediate re-audit performed by
+    // `memory status --fix` no longer reports a phantom ingestion state.
+    await expect(
+      auditDreamingArtifacts({ workspaceDir }).then((audit) => audit.sessionIngestionExists),
+    ).resolves.toBe(false);
+  });
+
   it("reports ingestion state present from SQLite when legacy JSON is absent", async () => {
     const workspaceDir = await createWorkspace();
     // Write SQLite ingestion entries but NO legacy session-ingestion.json
