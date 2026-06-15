@@ -19,6 +19,7 @@ import {
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { MAX_TIMER_TIMEOUT_MS, resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import type { EmbeddingProvider } from "./embeddings.js";
 import {
   MEMORY_BATCH_FAILURE_LIMIT,
   recordMemoryBatchFailure,
@@ -74,6 +75,7 @@ function resolveEmbeddingSecondsTimeoutMs(seconds: number): number {
 }
 
 type MemoryIndexEntry = MemoryIndexWorkItem["entry"];
+type MemoryEmbeddingBatchFn = NonNullable<MemoryEmbeddingProviderRuntime["batchEmbed"]>;
 
 type PreparedMemoryIndexEntry = {
   entry: MemoryIndexEntry;
@@ -304,19 +306,15 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
 
   private async embedChunksWithBatch(
     chunks: MemoryChunk[],
+    provider: EmbeddingProvider,
+    batchEmbed: MemoryEmbeddingBatchFn,
     _entry: MemoryIndexEntry,
     source: string,
     debugContext: Record<string, unknown> = {},
   ): Promise<number[][]> {
-    const provider = this.provider;
-    const batchEmbed = this.providerRuntime?.batchEmbed;
-    if (!provider || !batchEmbed) {
-      return this.embedChunksInBatches(chunks);
-    }
-    if (chunks.length === 0) {
-      return [];
-    }
-    const { embeddings, missing } = this.collectCachedEmbeddings(chunks);
+    const cached = this.collectCachedEmbeddings(chunks);
+    // oxlint-disable-next-line typescript/no-unnecessary-type-assertion -- Node 24 CI oxlint misreports this cache result destructuring; keep the suppression scoped to the no-op assertion.
+    const { embeddings, missing } = cached as typeof cached;
     if (missing.length === 0) {
       return embeddings;
     }
@@ -888,13 +886,20 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       for (let requestIndex = 0; requestIndex < chunkBatches.length; requestIndex += 1) {
         const chunkBatch = chunkBatches[requestIndex] ?? [];
         embeddings.push(
-          ...(await this.embedChunksWithBatch(chunkBatch, firstEntry, source, {
-            sourceWideFiles: current.length,
-            sourceWideSources: sourceCounts,
-            sourceWideBatchGroup,
-            sourceWideRequestGroup: requestIndex + 1,
-            sourceWideRequestGroups: chunkBatches.length,
-          })),
+          ...(await this.embedChunksWithBatch(
+            chunkBatch,
+            provider,
+            batchEmbed,
+            firstEntry,
+            source,
+            {
+              sourceWideFiles: current.length,
+              sourceWideSources: sourceCounts,
+              sourceWideBatchGroup,
+              sourceWideRequestGroup: requestIndex + 1,
+              sourceWideRequestGroups: chunkBatches.length,
+            },
+          )),
         );
       }
       const sample = embeddings.find((embedding) => embedding.length > 0);
@@ -950,7 +955,8 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     options: { source: MemorySource; content?: string },
   ) {
     // FTS-only mode: no embedding provider, but we can still build a FTS index
-    if (!this.provider) {
+    const provider = this.provider;
+    if (!provider) {
       // Multimodal files require an embedding provider; skip in FTS-only mode.
       if ("kind" in entry && entry.kind === "multimodal") {
         return;
@@ -967,9 +973,17 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
 
     let embeddings: number[][];
     try {
-      embeddings = this.batch.enabled
-        ? await this.embedChunksWithBatch(prepared.chunks, entry, options.source)
-        : await this.embedChunksInBatches(prepared.chunks);
+      const batchEmbed = this.providerRuntime?.batchEmbed;
+      embeddings =
+        this.batch.enabled && batchEmbed
+          ? await this.embedChunksWithBatch(
+              prepared.chunks,
+              provider,
+              batchEmbed,
+              entry,
+              options.source,
+            )
+          : await this.embedChunksInBatches(prepared.chunks);
     } catch (err) {
       const message = formatErrorMessage(err);
       if (
@@ -982,8 +996,8 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         log.warn("memory embeddings: skipping multimodal file rejected as too large", {
           path: entry.path,
           bytes: prepared.structuredInputBytes,
-          provider: this.provider.id,
-          model: this.provider.model,
+          provider: provider.id,
+          model: provider.model,
           error: message,
         });
         this.clearIndexedFileData(entry.path, options.source);
@@ -997,7 +1011,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     this.writeChunks(
       entry,
       options.source,
-      this.provider.model,
+      provider.model,
       prepared.chunks,
       embeddings,
       vectorReady,
