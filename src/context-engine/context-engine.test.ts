@@ -434,6 +434,8 @@ describe("Engine contract tests", () => {
     expect(compactRuntimeParams.tokenBudget).toBe(4096);
     expect(compactRuntimeParams.currentTokenCount).toBe(12345);
     expect(compactRuntimeParams.workspaceDir).toBe("/tmp/workspace");
+    // abortSignal should be undefined when not passed
+    expect(compactRuntimeParams.abortSignal).toBeUndefined();
     expect(result).toEqual({
       ok: true,
       compacted: false,
@@ -446,6 +448,25 @@ describe("Engine contract tests", () => {
         details: undefined,
       },
     });
+  });
+
+  it("forwards abortSignal to the compaction runtime bridge", async () => {
+    const compactRuntimeSpy = installCompactRuntimeSpy();
+    const controller = new AbortController();
+    const abortSignal = controller.signal;
+
+    await delegateCompactionToRuntime({
+      sessionId: "s3",
+      sessionFile: "/tmp/session.json",
+      tokenBudget: 4096,
+      abortSignal,
+      runtimeContext: { workspaceDir: "/tmp/workspace" },
+    });
+
+    const compactRuntimeParams = requireCompactRuntimeParams(0);
+    // abortSignal must be forwarded so the runtime can abort compaction
+    // when the stop button is pressed during overflow auto-compaction
+    expect(compactRuntimeParams.abortSignal).toBe(abortSignal);
   });
 
   it("builds a normalized memory system prompt addition from the active memory prompt path", () => {
