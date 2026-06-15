@@ -69,6 +69,14 @@ type SessionTranscriptStoreEntry = {
   sessionId?: unknown;
 };
 
+function normalizePersistedSessionStoreString(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
 function shouldSkipTranscriptFileForDreaming(absPath: string): boolean {
   const fileName = path.basename(absPath);
   // Compaction checkpoints are always skipped: they are derived snapshots of an
@@ -204,15 +212,16 @@ function resolveSessionStoreTranscriptPath(
   sessionsDir: string,
   entry: { sessionFile?: unknown; sessionId?: unknown } | undefined,
 ): string | null {
-  if (typeof entry?.sessionFile === "string" && entry.sessionFile.trim().length > 0) {
-    const sessionFile = entry.sessionFile.trim();
+  const sessionFile = normalizePersistedSessionStoreString(entry?.sessionFile);
+  if (sessionFile) {
     const resolved = path.isAbsolute(sessionFile)
       ? sessionFile
       : path.resolve(sessionsDir, sessionFile);
     return normalizeComparablePath(resolved);
   }
-  if (typeof entry?.sessionId === "string" && entry.sessionId.trim().length > 0) {
-    return normalizeComparablePath(path.join(sessionsDir, `${entry.sessionId.trim()}.jsonl`));
+  const sessionId = normalizePersistedSessionStoreString(entry?.sessionId);
+  if (sessionId) {
+    return normalizeComparablePath(path.join(sessionsDir, `${sessionId}.jsonl`));
   }
   return null;
 }

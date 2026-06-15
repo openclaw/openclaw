@@ -6,6 +6,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import {
   buildSessionEntry,
   listSessionFilesForAgent,
+  loadSessionTranscriptClassificationForSessionsDir,
   sessionPathForFile,
   type SessionFileEntry,
 } from "./session-files.js";
@@ -22,7 +23,6 @@ function captureStateDirEnv() {
     },
   };
 }
-
 let fixtureRoot: string;
 let tmpDir: string;
 let envSnapshot: ReturnType<typeof captureStateDirEnv> | undefined;
@@ -107,6 +107,36 @@ describe("sessionPathForFile", () => {
 });
 
 describe("buildSessionEntry", () => {
+  it("ignores persisted session entries without a usable sessionId", async () => {
+    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
+    fsSync.mkdirSync(sessionsDir, { recursive: true });
+    fsSync.writeFileSync(
+      path.join(sessionsDir, "sessions.json"),
+      JSON.stringify(
+        {
+          "agent:main:cron:bad-entry": {
+            updatedAt: Date.now(),
+            label: "Cron: dirty entry",
+          },
+          "agent:main:cron:good-entry:run:cron-run-session": {
+            sessionId: "cron-run-session",
+          },
+        },
+        null,
+        2,
+      ),
+    );
+
+    expect(() => loadSessionTranscriptClassificationForSessionsDir(sessionsDir)).not.toThrow();
+    const classification = loadSessionTranscriptClassificationForSessionsDir(sessionsDir);
+    const expectedTranscriptPath = path.join(sessionsDir, "cron-run-session.jsonl");
+    expect([...classification.cronRunTranscriptPaths]).toEqual([
+      process.platform === "win32"
+        ? expectedTranscriptPath.toLowerCase()
+        : expectedTranscriptPath,
+    ]);
+  });
+
   it("returns lineMap tracking original JSONL line numbers", async () => {
     // Simulate a real session JSONL file with metadata records interspersed
     // Lines 1-3: non-message metadata records
