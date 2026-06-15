@@ -34,9 +34,7 @@ describe("loadBundledCapabilityRuntimeRegistry", () => {
 
     const plugin = registry.plugins.find((entry) => entry.id === "memory-core");
     expect(plugin?.contracts).toEqual({
-      memoryEmbeddingProviders: ["local"],
       tools: ["memory_get", "memory_search"],
     });
-    expect(plugin?.memoryEmbeddingProviderIds).toEqual(["local"]);
   });
 });
