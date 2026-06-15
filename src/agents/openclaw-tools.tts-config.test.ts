@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => {
     createImageGenerateToolOptions: vi.fn(),
     createMusicGenerateToolOptions: vi.fn(),
     createVideoGenerateToolOptions: vi.fn(),
+    createSessionsYieldToolOptions: vi.fn(),
     textToSpeech: vi.fn(async () => ({
       success: true,
       audioPath: "/tmp/openclaw/tts-config-test.opus",
@@ -461,5 +462,83 @@ describe("createOpenClawTools cron context wiring", () => {
       },
       selfRemoveOnlyJobId: "job-current",
     });
+  });
+});
+
+describe("createOpenClawTools sessions_yield denylist", () => {
+  beforeEach(() => {
+    mocks.createSessionsYieldToolOptions.mockClear();
+  });
+
+  it("includes sessions_yield by default", () => {
+    testing.setDepsForTest({ config: {} });
+
+    try {
+      const toolNames = createOpenClawTools({
+        disableMessageTool: true,
+        disablePluginTools: true,
+      }).map((t) => t.name);
+
+      expect(toolNames).toContain("sessions_yield");
+    } finally {
+      testing.setDepsForTest();
+    }
+  });
+
+  it("excludes sessions_yield when denied via tools.deny", () => {
+    testing.setDepsForTest({
+      config: {
+        tools: { deny: ["sessions_yield"] },
+      } as OpenClawConfig,
+    });
+
+    try {
+      const toolNames = createOpenClawTools({
+        disableMessageTool: true,
+        disablePluginTools: true,
+      }).map((t) => t.name);
+
+      expect(toolNames).not.toContain("sessions_yield");
+    } finally {
+      testing.setDepsForTest();
+    }
+  });
+
+  it("excludes sessions_yield when denied via group:sessions pattern", () => {
+    testing.setDepsForTest({
+      config: {
+        tools: { deny: ["group:sessions"] },
+      } as OpenClawConfig,
+    });
+
+    try {
+      const toolNames = createOpenClawTools({
+        disableMessageTool: true,
+        disablePluginTools: true,
+      }).map((t) => t.name);
+
+      expect(toolNames).not.toContain("sessions_yield");
+    } finally {
+      testing.setDepsForTest();
+    }
+  });
+
+  it("excludes sessions_yield when denied via wildcard pattern", () => {
+    testing.setDepsForTest({
+      config: {
+        tools: { deny: ["sessions_*"] },
+      } as OpenClawConfig,
+    });
+
+    try {
+      const toolNames = createOpenClawTools({
+        disableMessageTool: true,
+        disablePluginTools: true,
+      }).map((t) => t.name);
+
+      expect(toolNames).not.toContain("sessions_yield");
+    } finally {
+      testing.setDepsForTest();
+    }
   });
 });
