@@ -368,7 +368,7 @@ enum ExecApprovalsStore {
                 tempURL.path,
                 targetURL.path,
                 nil,
-                copyfile_flags_t(COPYFILE_EXCL))
+                copyfile_flags_t(COPYFILE_DATA | COPYFILE_EXCL))
             if copied == -1 {
                 if errno == EEXIST {
                     try? FileManager().removeItem(at: tempURL)
