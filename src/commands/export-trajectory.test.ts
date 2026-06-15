@@ -20,6 +20,11 @@ vi.mock("../config/sessions/paths.js", async (importOriginal) => {
   };
 });
 
+vi.mock("./session-state-migration.js", () => ({
+  ensureExplicitSessionStoreMigratedForCommand: vi.fn(async () => {}),
+  ensureSessionStateMigratedForCommand: vi.fn(async () => {}),
+}));
+
 function createRuntime(): RuntimeEnv {
   return {
     log: vi.fn(),
