@@ -136,9 +136,9 @@ export function buildMemorySearchUnavailableResult(
   const normalizedReason = normalizeLowercaseStringOrEmpty(reason);
   const isQuotaError = /insufficient_quota|quota|429/.test(normalizedReason);
   const isNodeSqliteUnavailable =
-    /node:sqlite/.test(normalizedReason) ||
-    /no such built-in module.*sqlite/.test(normalizedReason) ||
-    /sqlite support is unavailable/.test(normalizedReason);
+    normalizedReason.includes("node:sqlite") ||
+    (normalizedReason.includes("no such built-in module") && normalizedReason.includes("sqlite")) ||
+    normalizedReason.includes("sqlite support is unavailable");
   let defaultWarning = "Memory search is unavailable due to an embedding/provider error.";
   let defaultAction = "Check embedding provider configuration and retry memory_search.";
   if (isNodeSqliteUnavailable) {
