@@ -164,7 +164,7 @@ describe("legacy memory search config migrate", () => {
     ]);
   });
 
-  it("skips already-present model ids when merging legacy codex into canonical openai", () => {
+  it("splits migrated and retained legacy codex models when only some overlap canonical openai", () => {
     const res = migrateLegacyConfigForTest({
       models: {
         providers: {
@@ -195,9 +195,14 @@ describe("legacy memory search config migrate", () => {
         },
       ]),
     );
-    expect(res.config?.models?.providers).not.toHaveProperty("openai-codex");
+    expect(res.config?.models?.providers?.["openai-codex"]).toEqual({
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+      models: [{ id: "gpt-5.5" }],
+    });
     expectMigrationChangesToIncludeFragments(res.changes, [
-      "Merged 1 model(s) from models.providers.openai-codex into models.providers.openai: gpt-5.4",
+      "Merged 1 migrated model(s) from models.providers.openai-codex into models.providers.openai: gpt-5.4",
+      "Retained models.providers.openai-codex because the legacy Codex migration plan has retained routes or credentials.",
     ]);
   });
 
@@ -408,7 +413,7 @@ describe("legacy memory search config migrate", () => {
     expectMigrationChangesToIncludeFragments(res.changes, [
       'Moved models.providers.openai-codex.api "openai-codex-responses" → "openai-chatgpt-responses"',
       'Moved models.providers.openai-codex.models[0].api "openai-codex-responses" → "openai-chatgpt-responses"',
-      "Skipped merging models.providers.openai-codex into models.providers.openai because provider-level defaults cannot be represented safely on merged models: models.providers.openai.apiKey, models.providers.openai.params, models.providers.openai.request",
+      "Retained models.providers.openai-codex because the legacy Codex migration plan has retained routes or credentials.",
     ]);
     expect(findLegacyConfigIssues(res.config).map((issue) => issue.path)).not.toContain(
       "models.providers",
@@ -450,7 +455,7 @@ describe("legacy memory search config migrate", () => {
     expectMigrationChangesToIncludeFragments(res.changes, [
       'Moved models.providers.openai-codex.api "openai-codex-responses" → "openai-chatgpt-responses"',
       'Moved models.providers.openai-codex.models[0].api "openai-codex-responses" → "openai-chatgpt-responses"',
-      "Skipped merging models.providers.openai-codex into models.providers.openai because provider-level defaults cannot be represented safely on merged models: models.providers.openai-codex.auth, models.providers.openai-codex.headers",
+      "Retained models.providers.openai-codex because the legacy Codex migration plan has retained routes or credentials.",
     ]);
   });
 
@@ -515,7 +520,7 @@ describe("legacy memory search config migrate", () => {
     ]);
   });
 
-  it("removes openai-codex when all its models already exist in canonical openai", () => {
+  it("retains openai-codex when all overlapping legacy models carry provider defaults", () => {
     const res = migrateLegacyConfigForTest({
       models: {
         providers: {
@@ -536,10 +541,59 @@ describe("legacy memory search config migrate", () => {
     const openai = res.config?.models?.providers?.openai as Record<string, unknown> | undefined;
     // All legacy models are already present; canonical provider unchanged
     expect(openai?.models).toEqual([{ id: "gpt-5.5" }, { id: "gpt-5.4" }]);
-    expect(res.config?.models?.providers).not.toHaveProperty("openai-codex");
-    expect(res.changes).toContain(
-      "Removed models.providers.openai-codex because models.providers.openai already exists.",
-    );
+    expect(res.config?.models?.providers?.["openai-codex"]).toEqual({
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+      models: [{ id: "gpt-5.5" }, { id: "gpt-5.4" }],
+    });
+    expectMigrationChangesToIncludeFragments(res.changes, [
+      "Retained models.providers.openai-codex because the legacy Codex migration plan has retained routes or credentials.",
+    ]);
+  });
+
+  it("retains legacy codex auth when canonical OpenAI auth order is explicitly empty", () => {
+    const res = migrateLegacyConfigForTest({
+      auth: {
+        order: {
+          openai: [],
+          "openai-codex": ["openai-codex:default"],
+        },
+        profiles: {
+          "openai-codex:default": {
+            provider: "openai-codex",
+            mode: "oauth",
+          },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            api: "openai-chatgpt-responses",
+            models: [{ id: "gpt-5.5" }],
+          },
+          "openai-codex": {
+            api: "openai-codex-responses",
+            models: [{ id: "gpt-5.5", api: "openai-codex-responses" }],
+          },
+        },
+      },
+    });
+
+    expect(res.config?.models?.providers?.openai).toEqual({
+      api: "openai-chatgpt-responses",
+      models: [{ id: "gpt-5.5" }],
+    });
+    expect(res.config?.models?.providers?.["openai-codex"]).toEqual({
+      api: "openai-chatgpt-responses",
+      models: [{ id: "gpt-5.5", api: "openai-chatgpt-responses" }],
+    });
+    expect(res.config?.auth?.order?.openai).toEqual([]);
+    expect(res.config?.auth?.order?.["openai-codex"]).toEqual(["openai-codex:default"]);
+    expectMigrationChangesToIncludeFragments(res.changes, [
+      'Moved models.providers.openai-codex.api "openai-codex-responses" → "openai-chatgpt-responses"',
+      'Moved models.providers.openai-codex.models[0].api "openai-codex-responses" → "openai-chatgpt-responses"',
+      "Retained models.providers.openai-codex because the legacy Codex migration plan has retained routes or credentials.",
+    ]);
   });
 
   it("rewrites top-level legacy auto provider after moving memorySearch into agent defaults", () => {
