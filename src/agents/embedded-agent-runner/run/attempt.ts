@@ -4537,7 +4537,7 @@ export async function runEmbeddedAttempt(
             });
             const truncationResult = await withOwnedSessionWriteLock(() =>
               truncateOversizedToolResultsInSessionManager({
-                sessionManager,
+                sessionManager: activeSessionManager,
                 contextWindowTokens: contextTokenBudget,
                 maxCharsOverride: toolResultMaxChars,
                 sessionFile: params.sessionFile,
