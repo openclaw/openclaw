@@ -2470,22 +2470,35 @@ async function runEmbeddedAgentInternal(
           if (
             contextEngine.info.ownsCompaction !== true ||
             !compactResult.ok ||
-            !compactResult.compacted ||
             !hookRunner?.hasHooks("after_compaction")
           ) {
             return;
           }
           try {
             await hookRunner.runAfterCompaction(
-              {
-                messageCount: -1,
-                compactedCount: -1,
-                tokenCount: compactResult.result?.tokensAfter,
-                sessionFile:
-                  resolveCompactionSuccessorTranscript(compactResult).sessionFile ??
-                  activeSessionFile,
-                ...(previousSessionId ? { previousSessionId } : {}),
-              },
+              compactResult.compacted
+                ? {
+                    messageCount: -1,
+                    compactedCount: -1,
+                    tokenCount: compactResult.result?.tokensAfter,
+                    sessionFile:
+                      resolveCompactionSuccessorTranscript(compactResult).sessionFile ??
+                      activeSessionFile,
+                    ...(previousSessionId ? { previousSessionId } : {}),
+                  }
+                : {
+                    messageCount: -1,
+                    compactedCount: 0,
+                    tokenCount: compactResult.result?.tokensAfter,
+                    sessionFile:
+                      resolveCompactionSuccessorTranscript(compactResult).sessionFile ??
+                      activeSessionFile,
+                    ...(previousSessionId ? { previousSessionId } : {}),
+                    reason:
+                      typeof compactResult.reason === "string" && compactResult.reason.trim()
+                        ? compactResult.reason
+                        : "policy_skipped",
+                  },
               resolveActiveHookContext(),
             );
           } catch (hookErr) {
