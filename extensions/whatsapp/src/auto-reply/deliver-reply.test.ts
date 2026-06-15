@@ -12,6 +12,7 @@ import { createTestWebInboundMessage } from "../inbound/test-message.test-helper
 import type { WebInboundMessage } from "../inbound/types.js";
 import { loadWebMedia } from "../media.js";
 import { cacheInboundMessageMeta } from "../quoted-message.js";
+import { WhatsAppSocketOperationTimeoutError } from "../socket-timing.js";
 
 const hoisted = vi.hoisted(() => ({
   runFfmpeg: vi.fn(),
@@ -426,6 +427,29 @@ describe("deliverWebReply", () => {
 
     expect(msg.platform.reply).toHaveBeenCalledTimes(2);
     expect(sleep).toHaveBeenCalledWith(500);
+  });
+
+  it("does not retry terminal socket operation timeouts", async () => {
+    const msg = makeMsg();
+    const timeout = new WhatsAppSocketOperationTimeoutError("sendMessage", 60_000);
+    (sleep as unknown as { mockClear: () => void }).mockClear();
+    (
+      msg.platform.reply as unknown as { mockRejectedValueOnce: (v: unknown) => void }
+    ).mockRejectedValueOnce(timeout);
+
+    await expect(
+      deliverWebReply({
+        replyResult: { text: "hi" },
+        msg,
+        maxMediaBytes: 1024 * 1024,
+        textLimit: 200,
+        replyLogger,
+        skipLog: true,
+      }),
+    ).rejects.toBe(timeout);
+
+    expect(msg.platform.reply).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
   });
 
   it("sends image media with caption and then remaining text", async () => {
