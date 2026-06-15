@@ -1434,7 +1434,7 @@ describe("processDiscordMessage session routing", () => {
     const alertBody = "System notification: build failed\nReview the deployment dashboard.";
     recordDiscordSelfReplyContextPolicy({
       payload: createSelfQuotePreservablePayload(alertBody),
-      results: [{ channel: "discord", messageId: "m-alert" }],
+      results: [{ messageId: "m-alert" }],
     });
     const ctx = await createBaseContext({
       botUserId: "bot-1",
