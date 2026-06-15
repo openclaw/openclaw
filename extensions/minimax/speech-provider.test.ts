@@ -297,6 +297,19 @@ describe("buildMinimaxSpeechProvider", () => {
       expect(result.warnings).toHaveLength(1);
     });
 
+    it("handles vol=10 (inclusive maximum)", () => {
+      const result = parseDirectiveToken({ key: "vol", value: "10", policy });
+      expect(result.handled).toBe(true);
+      expect(result.warnings).toBeUndefined();
+      expect(result.overrides?.vol).toBe(10);
+    });
+
+    it("warns on vol above the inclusive maximum", () => {
+      const result = parseDirectiveToken({ key: "vol", value: "11", policy });
+      expect(result.handled).toBe(true);
+      expect(result.warnings).toHaveLength(1);
+    });
+
     it("warns on non-decimal volume values", () => {
       const result = parseDirectiveToken({ key: "vol", value: "0x3", policy });
       expect(result.handled).toBe(true);
