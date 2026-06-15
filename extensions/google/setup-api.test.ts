@@ -10,6 +10,7 @@ import setupEntry from "./setup-api.js";
 type GeminiPrepareContext = Parameters<
   NonNullable<ReturnType<typeof buildGoogleGeminiCliBackend>["prepareExecution"]>
 >[0] & {
+  env?: Record<string, string>;
   authCredential?: {
     type: "api_key" | "oauth" | "token";
     provider: string;
@@ -98,10 +99,24 @@ describe("google gemini cli backend auth bridge", () => {
 
     try {
       const context = buildGeminiOAuthPrepareContext(workspaceDir);
+      const inheritedSettingsPath = path.join(workspaceDir, "generated-mcp-settings.json");
+      await fs.writeFile(
+        inheritedSettingsPath,
+        `${JSON.stringify({
+          security: { auth: { selectedType: "vertex-ai" } },
+          mcp: { allowed: ["openclaw"] },
+          mcpServers: { openclaw: { url: "http://127.0.0.1:23119/mcp" } },
+        })}\n`,
+        "utf8",
+      );
+      context.env = { GEMINI_CLI_SYSTEM_SETTINGS_PATH: inheritedSettingsPath };
       const prepared = await backend.prepareExecution?.(context);
 
       home = prepared?.env?.GEMINI_CLI_HOME;
+      const systemSettingsPath = prepared?.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH;
       expect(home).toBeTruthy();
+      expect(systemSettingsPath).toBeTruthy();
+      expect(systemSettingsPath).not.toBe(inheritedSettingsPath);
       expect(prepared?.env?.GEMINI_FORCE_FILE_STORAGE).toBe("true");
       expect(prepared?.env?.GOOGLE_CLOUD_PROJECT).toBe("profile-project");
       expect(prepared?.env?.GOOGLE_CLOUD_PROJECT_ID).toBe("profile-project");
@@ -126,6 +141,12 @@ describe("google gemini cli backend auth bridge", () => {
         security: { auth: { selectedType: "oauth-personal" } },
       });
       expect(JSON.parse(rootSettingsRaw)).toEqual(JSON.parse(nestedSettingsRaw));
+      const systemSettingsRaw = await fs.readFile(systemSettingsPath ?? "", "utf8");
+      expect(JSON.parse(systemSettingsRaw)).toEqual({
+        security: { auth: { selectedType: "oauth-personal" } },
+        mcp: { allowed: ["openclaw"] },
+        mcpServers: { openclaw: { url: "http://127.0.0.1:23119/mcp" } },
+      });
 
       const sessionMarker = path.join(home ?? "", ".gemini", "session-state.json");
       await fs.writeFile(sessionMarker, '{"keep":true}\n', "utf8");

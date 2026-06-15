@@ -78,7 +78,10 @@ type GeminiApiKeyCredential = GeminiAuthProfileCredential & {
 type GeminiCliAuthHomeContext = {
   agentDir?: string;
   authProfileId?: string;
+  systemSettingsPath?: string;
 };
+
+type GeminiCliAuthSelectedType = "oauth-personal" | "gemini-api-key";
 
 function throwUnsupportedGeminiCredential(credential: GeminiAuthProfileCredential): never {
   if (credential.provider === VERCEL_AI_GATEWAY_PROVIDER_ID) {
@@ -195,6 +198,55 @@ function resolveGeminiCliProfileHome(ctx: GeminiCliAuthHomeContext): {
   return { home, geminiDir: path.join(home, ".gemini") };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+async function readGeminiCliJsonObject(
+  filePath: string | undefined,
+): Promise<Record<string, unknown>> {
+  const normalized = normalizeString(filePath);
+  if (!normalized) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(await fs.readFile(normalized, "utf8")) as unknown;
+    if (!isRecord(parsed)) {
+      throw new Error(`Gemini CLI system settings must be a JSON object: ${normalized}`);
+    }
+    return { ...parsed };
+  } catch (error) {
+    if (
+      error &&
+      typeof error === "object" &&
+      "code" in error &&
+      (error as { code?: unknown }).code === "ENOENT"
+    ) {
+      return {};
+    }
+    throw error;
+  }
+}
+
+function buildGeminiCliAuthSettings(
+  selectedType: GeminiCliAuthSelectedType,
+): Record<string, unknown> {
+  return { security: { auth: { selectedType } } };
+}
+
+async function buildGeminiCliSystemSettings(
+  ctx: GeminiCliAuthHomeContext,
+  selectedType: GeminiCliAuthSelectedType,
+): Promise<Record<string, unknown>> {
+  const base = await readGeminiCliJsonObject(ctx.systemSettingsPath);
+  const security = isRecord(base.security) ? { ...base.security } : {};
+  security.auth = { selectedType };
+  return {
+    ...base,
+    security,
+  };
+}
+
 async function writeGeminiCliJson(filePath: string, value: unknown): Promise<void> {
   await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, {
     encoding: "utf8",
@@ -205,20 +257,25 @@ async function writeGeminiCliJson(filePath: string, value: unknown): Promise<voi
 
 async function prepareGeminiCliProfileHome(
   ctx: GeminiCliAuthHomeContext,
-  settings: unknown,
+  selectedType: GeminiCliAuthSelectedType,
 ): Promise<{
   home: string;
   geminiDir: string;
+  systemSettingsPath: string;
 }> {
   const { home, geminiDir } = resolveGeminiCliProfileHome(ctx);
   await fs.mkdir(geminiDir, { recursive: true, mode: 0o700 });
   await fs.chmod(home, 0o700);
   await fs.chmod(geminiDir, 0o700);
+  const settings = buildGeminiCliAuthSettings(selectedType);
+  const systemSettings = await buildGeminiCliSystemSettings(ctx, selectedType);
+  const systemSettingsPath = path.join(home, "system-settings.json");
   await Promise.all([
     writeGeminiCliJson(path.join(geminiDir, "settings.json"), settings),
     writeGeminiCliJson(path.join(home, "settings.json"), settings),
+    writeGeminiCliJson(systemSettingsPath, systemSettings),
   ]);
-  return { home, geminiDir };
+  return { home, geminiDir, systemSettingsPath };
 }
 
 async function clearGeminiCliCachedCredentials(geminiDir: string): Promise<void> {
@@ -248,9 +305,10 @@ async function prepareGeminiCliOAuthHome(
     return null;
   }
 
-  const { home, geminiDir } = await prepareGeminiCliProfileHome(ctx, {
-    security: { auth: { selectedType: "oauth-personal" } },
-  });
+  const { home, geminiDir, systemSettingsPath } = await prepareGeminiCliProfileHome(
+    ctx,
+    "oauth-personal",
+  );
   await clearGeminiCliCachedCredentials(geminiDir);
   const idToken = normalizeString(oauth.idToken);
   const oauthCreds: Record<string, string | number> = {
@@ -268,6 +326,7 @@ async function prepareGeminiCliOAuthHome(
   return {
     env: {
       GEMINI_CLI_HOME: home,
+      GEMINI_CLI_SYSTEM_SETTINGS_PATH: systemSettingsPath,
       GEMINI_FORCE_FILE_STORAGE: "true",
       ...buildGeminiCliProjectEnv(oauth.projectId),
     },
@@ -284,9 +343,10 @@ async function prepareGeminiCliApiKeyHome(
     return null;
   }
 
-  const { home, geminiDir } = await prepareGeminiCliProfileHome(ctx, {
-    security: { auth: { selectedType: "gemini-api-key" } },
-  });
+  const { home, geminiDir, systemSettingsPath } = await prepareGeminiCliProfileHome(
+    ctx,
+    "gemini-api-key",
+  );
   await Promise.all([
     fs.rm(path.join(geminiDir, "oauth_creds.json"), { force: true }),
     clearGeminiCliCachedCredentials(geminiDir),
@@ -294,6 +354,7 @@ async function prepareGeminiCliApiKeyHome(
   return {
     env: {
       GEMINI_CLI_HOME: home,
+      GEMINI_CLI_SYSTEM_SETTINGS_PATH: systemSettingsPath,
       GEMINI_FORCE_FILE_STORAGE: "true",
       GEMINI_API_KEY: apiKey.key,
     },
@@ -339,6 +400,8 @@ export function buildGoogleGeminiCliBackend(): CliBackendPlugin {
         {
           agentDir: ctx.agentDir,
           authProfileId: ctx.authProfileId,
+          systemSettingsPath: (ctx as typeof ctx & { env?: Record<string, string> }).env
+            ?.GEMINI_CLI_SYSTEM_SETTINGS_PATH,
         },
         (ctx as typeof ctx & { authCredential?: GeminiAuthProfileCredential }).authCredential,
       ),

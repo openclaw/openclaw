@@ -670,6 +670,85 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     }
   });
 
+  it("lets Gemini CLI preparation override generated MCP system settings auth", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    const profileSystemSettingsPath = path.join(dir, "profile-system-settings.json");
+    const getActiveMcpLoopbackRuntime = vi.fn(() => ({
+      port: 31783,
+      ownerToken: "loopback-owner-token",
+      nonOwnerToken: "loopback-non-owner-token",
+    }));
+    const prepareExecution = vi.fn(async () => ({
+      env: {
+        GEMINI_CLI_SYSTEM_SETTINGS_PATH: profileSystemSettingsPath,
+      },
+    }));
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "google-gemini-cli",
+          pluginId: "google",
+          bundleMcp: true,
+          bundleMcpMode: "gemini-system-settings",
+          prepareExecution,
+          config: {
+            command: "gemini",
+            args: ["--prompt", "{prompt}"],
+            output: "json",
+            input: "arg",
+            sessionMode: "existing",
+          },
+        },
+      ],
+    });
+    setCliRunnerPrepareTestDeps({
+      getActiveMcpLoopbackRuntime,
+      ensureMcpLoopbackServer: vi.fn(createTestMcpLoopbackServer),
+      createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
+      resolveMcpLoopbackBearerToken: vi.fn(() => "loopback-token"),
+      resolveMcpLoopbackScopedTools: vi.fn(() => ({ agentId: "main", tools: [] })),
+    });
+
+    let cleanup: (() => Promise<void>) | undefined;
+    try {
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:main",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "google-gemini-cli",
+        model: "gemini-3.1-pro-preview",
+        timeoutMs: 1_000,
+        runId: "run-test-gemini-mcp-system-settings",
+        config: {},
+      });
+      cleanup = context.preparedBackend.cleanup;
+
+      const prepareExecutionArg = prepareExecution.mock.calls[0]?.[0] as
+        | { env?: Record<string, string> }
+        | undefined;
+      const generatedSystemSettingsPath = prepareExecutionArg?.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH;
+      expect(typeof generatedSystemSettingsPath).toBe("string");
+      expect(generatedSystemSettingsPath).not.toBe(profileSystemSettingsPath);
+      const generatedSettings = JSON.parse(
+        fs.readFileSync(generatedSystemSettingsPath ?? "", "utf8"),
+      ) as {
+        mcp?: { allowed?: string[] };
+        mcpServers?: Record<string, { url?: string }>;
+      };
+      expect(generatedSettings.mcp?.allowed).toEqual(["openclaw"]);
+      expect(generatedSettings.mcpServers?.openclaw?.url).toBe("http://127.0.0.1:31783/mcp");
+      expect(context.preparedBackend.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH).toBe(
+        profileSystemSettingsPath,
+      );
+    } finally {
+      await cleanup?.();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("prepares side questions without agent-turn context, tools, hooks, or reusable sessions", async () => {
     const { dir, sessionFile } = createSessionFile();
     appendTranscriptEntry(sessionFile, {

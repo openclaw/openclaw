@@ -474,6 +474,7 @@ export async function prepareCliRunContext(
     modelId,
     authProfileId: effectiveAuthProfileId,
     executionMode,
+    env: preparedBackend.env,
   } as Parameters<NonNullable<typeof backendResolved.prepareExecution>>[0];
   const preparedExecution = await backendResolved.prepareExecution?.(
     (backendResolved.id === "google-gemini-cli"
