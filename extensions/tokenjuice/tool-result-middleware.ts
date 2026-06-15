@@ -59,22 +59,30 @@ function normaliseDetails(
   event: AgentToolResultMiddlewareEvent,
   current: OpenClawAgentToolResult,
 ): unknown {
-  if (current.details && typeof current.details === "object") {
+  const isExecLike = event.toolName === "exec" || event.toolName === "bash";
+  const hasObjectDetails = current.details != null && typeof current.details === "object";
+
+  if (!isExecLike || !readCommand(event.args)) {
     return current.details;
   }
-  if ((event.toolName !== "exec" && event.toolName !== "bash") || !readCommand(event.args)) {
+  // Details already contain a completed/failed status — pass through unchanged.
+  if (hasObjectDetails && "status" in (current.details as Record<string, unknown>)) {
     return current.details;
   }
   const aggregated = readTextContent(current.content);
   if (!aggregated.trim()) {
     return current.details;
   }
-  return {
+  const synthesized = {
     status: event.isError ? "failed" : "completed",
     aggregated,
     exitCode: event.isError ? 1 : 0,
     cwd: readCwd(event),
   };
+  // Merge: preserve existing metadata fields, then overlay synthesized exec fields.
+  return hasObjectDetails
+    ? { ...(current.details as Record<string, unknown>), ...synthesized }
+    : synthesized;
 }
 
 export function createTokenjuiceAgentToolResultMiddleware(): AgentToolResultMiddleware {

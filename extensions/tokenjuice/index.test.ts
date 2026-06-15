@@ -55,6 +55,87 @@ describe("tokenjuice plugin", () => {
     expect(registration?.[1]).toEqual({ runtimes: ["openclaw", "codex"] });
   });
 
+  it("synthesises exec fields when bash provides metadata-only details (no status)", async () => {
+    let received:
+      | {
+          details: unknown;
+        }
+      | undefined;
+    tokenjuiceFactory.mockImplementationOnce(
+      (api: { on: (event: string, handler: unknown) => void }) => {
+        api.on("tool_result", async (event: typeof received) => {
+          received = event;
+        });
+      },
+    );
+
+    const middleware = createTokenjuiceAgentToolResultMiddleware();
+    await middleware(
+      {
+        toolCallId: "tool-call-tokenjuice-bash-meta",
+        toolName: "bash",
+        args: { command: "cat /tmp/out.txt", workdir: "/tmp/openclaw-tokenjuice-test" },
+        result: {
+          content: [{ type: "text", text: "file contents\n" }],
+          details: {
+            truncation: { reason: "max_bytes" },
+            fullOutputPath: "/tmp/out.txt",
+          },
+        },
+        isError: false,
+      },
+      { runtime: "openclaw" },
+    );
+
+    expect(received?.details).toMatchObject({
+      status: "completed",
+      aggregated: "file contents\n",
+      exitCode: 0,
+      cwd: "/tmp/openclaw-tokenjuice-test",
+      truncation: { reason: "max_bytes" },
+      fullOutputPath: "/tmp/out.txt",
+    });
+  });
+
+  it("passes through bash details that already have a status field unchanged", async () => {
+    let received:
+      | {
+          details: unknown;
+        }
+      | undefined;
+    tokenjuiceFactory.mockImplementationOnce(
+      (api: { on: (event: string, handler: unknown) => void }) => {
+        api.on("tool_result", async (event: typeof received) => {
+          received = event;
+        });
+      },
+    );
+
+    const existingDetails = {
+      status: "completed",
+      aggregated: "pre-built output",
+      exitCode: 0,
+      cwd: "/existing/cwd",
+    };
+
+    const middleware = createTokenjuiceAgentToolResultMiddleware();
+    await middleware(
+      {
+        toolCallId: "tool-call-tokenjuice-bash-existing",
+        toolName: "bash",
+        args: { command: "echo hi", workdir: "/tmp" },
+        result: {
+          content: [{ type: "text", text: "hi\n" }],
+          details: existingDetails,
+        },
+        isError: false,
+      },
+      { runtime: "openclaw" },
+    );
+
+    expect(received?.details).toBe(existingDetails);
+  });
+
   it("normalises bash results without details before passing them to tokenjuice", async () => {
     let received:
       | {
