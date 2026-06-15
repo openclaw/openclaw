@@ -40,6 +40,7 @@ import {
   PluginApprovalResolutions,
   type PluginApprovalResolution,
   type PluginHookBeforeToolCallResult,
+  type PluginHookExternalContentProvenance,
   type PluginHookToolInputKind,
   type PluginHookToolKind,
 } from "../plugins/types.js";
@@ -61,6 +62,10 @@ import {
   reconcileCodeModeExecBeforeHookParams,
 } from "./code-mode-control-tools.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
+import {
+  detectToolHookExternalContentProvenance,
+  mergeToolHookExternalContentProvenance,
+} from "./tool-hook-external-content.js";
 import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -100,6 +105,7 @@ export type HookContext = {
   runId?: string;
   trace?: DiagnosticTraceContext;
   channelId?: string;
+  externalContent?: PluginHookExternalContentProvenance;
   loopDetection?: ToolLoopDetectionConfig;
   onToolOutcome?: ToolOutcomeObserver;
   skillsSnapshot?: SkillSnapshot;
@@ -202,6 +208,23 @@ const BEFORE_TOOL_CALL_HOOK_FAILURE_REASON =
 const MAX_TRACKED_ADJUSTED_PARAMS = 1024;
 const LOOP_WARNING_BUCKET_SIZE = 10;
 const MAX_LOOP_WARNING_KEYS = 256;
+
+function refreshHookContextExternalContentFromToolResult(
+  ctx: HookContext | undefined,
+  result: unknown,
+): void {
+  if (!ctx) {
+    return;
+  }
+  const resultExternalContent = detectToolHookExternalContentProvenance([result]);
+  if (!resultExternalContent) {
+    return;
+  }
+  ctx.externalContent = mergeToolHookExternalContentProvenance(
+    ctx.externalContent,
+    resultExternalContent,
+  );
+}
 
 /**
  * Error used when before_tool_call intentionally vetoes a tool call.
@@ -908,6 +931,7 @@ export async function runBeforeToolCallHook(args: {
       ...(args.ctx?.trace && { trace: freezeDiagnosticTraceContext(args.ctx.trace) }),
       ...(args.toolCallId && { toolCallId: args.toolCallId }),
       ...(args.ctx?.channelId && { channelId: args.ctx.channelId }),
+      ...(args.ctx?.externalContent && { externalContent: args.ctx.externalContent }),
     });
     const toolContext = buildToolContext(toolIdentity);
     const trustedPolicyResult = shouldRunTrustedPolicies
@@ -918,6 +942,7 @@ export async function runBeforeToolCallHook(args: {
             ...toolIdentity,
             ...(args.ctx?.runId && { runId: args.ctx.runId }),
             ...(args.toolCallId && { toolCallId: args.toolCallId }),
+            ...(args.ctx?.externalContent && { externalContent: args.ctx.externalContent }),
             ...(derivedToolParams.derivedPaths
               ? { derivedPaths: derivedToolParams.derivedPaths }
               : {}),
@@ -1024,6 +1049,7 @@ export async function runBeforeToolCallHook(args: {
         ...policyAdjustedToolIdentity,
         ...(args.ctx?.runId && { runId: args.ctx.runId }),
         ...(args.toolCallId && { toolCallId: args.toolCallId }),
+        ...(args.ctx?.externalContent && { externalContent: args.ctx.externalContent }),
         ...(policyAdjustedDerivedToolParams.derivedPaths
           ? { derivedPaths: policyAdjustedDerivedToolParams.derivedPaths }
           : {}),
@@ -1213,6 +1239,7 @@ export function wrapToolWithBeforeToolCallHook(
       const startedAt = Date.now();
       try {
         const result = await execute(toolCallId, executeParams, signal, onUpdate);
+        refreshHookContextExternalContentFromToolResult(ctx, result);
         const durationMs = Date.now() - startedAt;
         await recordLoopOutcome({
           ctx,

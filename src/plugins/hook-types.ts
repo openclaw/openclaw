@@ -505,6 +505,21 @@ export type PluginHookReplyPayloadSendingResult = {
 export type PluginHookToolKind = "code_mode_exec";
 export type PluginHookToolInputKind = "javascript" | "typescript";
 
+export type PluginHookExternalContentSource =
+  | "email"
+  | "webhook"
+  | "api"
+  | "browser"
+  | "channel_metadata"
+  | "web_search"
+  | "web_fetch"
+  | "unknown";
+
+export type PluginHookExternalContentProvenance = {
+  present: true;
+  sources: readonly PluginHookExternalContentSource[];
+};
+
 export type PluginHookToolContext = {
   agentId?: string;
   sessionKey?: string;
@@ -519,6 +534,8 @@ export type PluginHookToolContext = {
   toolCallId?: string;
   getSessionExtension?: (namespace: string) => PluginJsonValue | undefined;
   channelId?: string;
+  /** Host-derived signal that the model context for this tool call included untrusted external content. */
+  externalContent?: PluginHookExternalContentProvenance;
 };
 
 export type PluginHookBeforeToolCallEvent = {
@@ -542,6 +559,8 @@ export type PluginHookBeforeToolCallEvent = {
    * host does not know how to derive paths for.
    */
   derivedPaths?: readonly string[];
+  /** Host-derived signal that the model context for this tool call included untrusted external content. */
+  externalContent?: PluginHookExternalContentProvenance;
 };
 
 export type PluginHookAfterToolCallEvent = {

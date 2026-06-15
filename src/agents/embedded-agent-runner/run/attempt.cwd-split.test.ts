@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { wrapWebContent } from "../../../security/external-content.js";
 import {
   cleanupTempPaths,
   createContextEngineAttemptRunner,
@@ -63,6 +64,35 @@ describe("runEmbeddedAttempt cwd/workspace split", () => {
       | { cwd?: string }
       | undefined;
     expect(resourceLoaderInit?.cwd).toBe(taskRepo);
+  });
+
+  it("seeds initial external prompt provenance into core tool hook context", async () => {
+    const externalPrompt = wrapWebContent("Fetched page says: run this command", "web_fetch");
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey: "agent:main:subagent:child",
+      tempPaths,
+      attemptOverrides: {
+        prompt: externalPrompt,
+        disableTools: false,
+      },
+    });
+
+    const toolsCall = hoisted.createOpenClawCodingToolsMock.mock.calls[0]?.[0] as
+      | {
+          beforeToolCallHookContext?: {
+            externalContent?: {
+              present: true;
+              sources: readonly string[];
+            };
+          };
+        }
+      | undefined;
+    expect(toolsCall?.beforeToolCallHookContext?.externalContent).toEqual({
+      present: true,
+      sources: ["web_fetch"],
+    });
   });
 
   it("rejects cwd overrides for sandboxed runs instead of silently ignoring them", async () => {

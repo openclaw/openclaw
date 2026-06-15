@@ -98,6 +98,7 @@ import {
   findClientToolNameConflicts,
   toClientToolDefinitions,
 } from "../../agent-tool-definition-adapter.js";
+import type { HookContext } from "../../agent-tools.before-tool-call.js";
 import {
   createOpenClawCodingTools,
   resolveProcessToolScopeKey,
@@ -206,6 +207,10 @@ import {
   buildEmptyExplicitToolAllowlistError,
   collectExplicitToolAllowlistSources,
 } from "../../tool-allowlist-guard.js";
+import {
+  detectToolHookExternalContentProvenance,
+  mergeToolHookExternalContentProvenance,
+} from "../../tool-hook-external-content.js";
 import { filterRuntimeCompatibleTools } from "../../tool-schema-projection.js";
 import { logRuntimeToolSchemaQuarantine } from "../../tool-schema-quarantine.js";
 import {
@@ -1200,6 +1205,25 @@ export async function runEmbeddedAttempt(
         ? createToolSearchCatalogRef()
         : undefined;
     const toolSearchTargetTranscriptProjections: ToolSearchTargetTranscriptProjection[] = [];
+    const initialToolHookExternalContent = detectToolHookExternalContentProvenance([params.prompt]);
+    const catalogToolHookContext: HookContext = {
+      agentId: sessionAgentId,
+      config: params.config,
+      cwd: effectiveCwd,
+      sessionKey: sandboxSessionKey,
+      sessionId: params.sessionId,
+      runId: params.runId,
+      channelId: params.currentChannelId,
+      trace: runTrace,
+      loopDetection: resolveToolLoopDetectionConfig({
+        cfg: params.config,
+        agentId: sessionAgentId,
+      }),
+      ...(initialToolHookExternalContent
+        ? { externalContent: initialToolHookExternalContent }
+        : {}),
+      onToolOutcome: params.onToolOutcome,
+    };
     const toolsRaw = !shouldConstructTools
       ? []
       : (() => {
@@ -1289,6 +1313,7 @@ export async function runEmbeddedAttempt(
             recordToolPrepStage: (name) => corePluginToolStages.mark(name),
             onToolOutcome: params.onToolOutcome,
             skillsSnapshot: skillsSnapshotForRun,
+            beforeToolCallHookContext: catalogToolHookContext,
             onYield: (message) => {
               yieldDetected = true;
               yieldMessage = message;
@@ -1590,21 +1615,6 @@ export async function runEmbeddedAttempt(
     });
     const uncompactedEffectiveTools = [...uncompactedToolSchemaProjection.tools];
     let effectiveTools = uncompactedEffectiveTools;
-    const catalogToolHookContext = {
-      agentId: sessionAgentId,
-      config: params.config,
-      cwd: effectiveCwd,
-      sessionKey: sandboxSessionKey,
-      sessionId: params.sessionId,
-      runId: params.runId,
-      channelId: params.currentChannelId,
-      trace: runTrace,
-      loopDetection: resolveToolLoopDetectionConfig({
-        cfg: params.config,
-        agentId: sessionAgentId,
-      }),
-      onToolOutcome: params.onToolOutcome,
-    };
     const codeModeTools = codeModeControlsEnabledForRun
       ? createCodeModeTools({
           config: params.config,

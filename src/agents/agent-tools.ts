@@ -448,6 +448,8 @@ export function createOpenClawCodingTools(options?: {
   spawnWorkspaceDir?: string;
   config?: OpenClawConfig;
   abortSignal?: AbortSignal;
+  /** Shared before_tool_call context for callers that need same-run context mutation. */
+  beforeToolCallHookContext?: import("./agent-tools.before-tool-call.js").HookContext;
   /** Disable hook-owned diagnostics when an outer runtime owns tool diagnostics. */
   emitBeforeToolCallDiagnostics?: boolean;
   /**
@@ -1155,28 +1157,26 @@ export function createOpenClawCodingTools(options?: {
     }),
   );
   options?.recordToolPrepStage?.("schema-normalization");
+  const hookContext = options?.beforeToolCallHookContext ?? {};
+  hookContext.agentId ??= agentId;
+  if (options?.config) hookContext.config ??= options.config;
+  hookContext.cwd ??= codingRoot;
+  hookContext.workspaceDir ??= workspaceRoot;
+  if (options?.skillsSnapshot) hookContext.skillsSnapshot ??= options.skillsSnapshot;
+  if (sandboxRoot && allowWorkspaceWrites && !hookContext.sandbox) {
+    hookContext.sandbox = { root: sandboxRoot, bridge: sandboxFsBridge! };
+  }
+  hookContext.sessionKey ??= options?.sessionKey;
+  hookContext.sessionId ??= options?.sessionId;
+  hookContext.runId ??= options?.runId;
+  hookContext.channelId ??= options?.hookChannelId ?? options?.currentChannelId;
+  if (options?.trace) hookContext.trace ??= options.trace;
+  hookContext.loopDetection ??= resolveToolLoopDetectionConfig({ cfg: options?.config, agentId });
+  hookContext.onToolOutcome ??= options?.onToolOutcome;
   const withHooks = normalized.map((tool) =>
-    wrapToolWithBeforeToolCallHook(
-      tool,
-      {
-        agentId,
-        ...(options?.config ? { config: options.config } : {}),
-        cwd: codingRoot,
-        workspaceDir: workspaceRoot,
-        ...(options?.skillsSnapshot ? { skillsSnapshot: options.skillsSnapshot } : {}),
-        ...(sandboxRoot && allowWorkspaceWrites
-          ? { sandbox: { root: sandboxRoot, bridge: sandboxFsBridge! } }
-          : {}),
-        sessionKey: options?.sessionKey,
-        sessionId: options?.sessionId,
-        runId: options?.runId,
-        channelId: options?.hookChannelId ?? options?.currentChannelId,
-        ...(options?.trace ? { trace: options.trace } : {}),
-        loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
-        onToolOutcome: options?.onToolOutcome,
-      },
-      { emitDiagnostics: options?.emitBeforeToolCallDiagnostics },
-    ),
+    wrapToolWithBeforeToolCallHook(tool, hookContext, {
+      emitDiagnostics: options?.emitBeforeToolCallDiagnostics,
+    }),
   );
   options?.recordToolPrepStage?.("tool-hooks");
   const withAbort = options?.abortSignal
