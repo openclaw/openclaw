@@ -95,15 +95,15 @@ describe("createCarouselColumn", () => {
     expect(column.text.length).toBe(60);
   });
 
-  it("preserves an emoji at the 60-character boundary", () => {
-    const text = `${"x".repeat(59)}🙂after`;
+  it("preserves an emoji grapheme at the 60-character boundary", () => {
+    const text = `${"x".repeat(59)}👨‍👩‍👧‍👦after`;
     const column = createCarouselColumn({
       title: "Title",
       text,
       actions: [messageAction("OK")],
     });
 
-    expect(column.text).toBe(`${"x".repeat(59)}🙂`);
+    expect(column.text).toBe(`${"x".repeat(59)}👨‍👩‍👧‍👦`);
   });
 
   it("truncates text to 60 characters when a thumbnail image is set", () => {

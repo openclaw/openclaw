@@ -13,6 +13,8 @@ type CarouselColumn = messagingApi.CarouselColumn;
 type ImageCarouselTemplate = messagingApi.ImageCarouselTemplate;
 type ImageCarouselColumn = messagingApi.ImageCarouselColumn;
 
+const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
 type TemplatePayloadAction = {
   type?: "uri" | "postback" | "message";
   uri?: string;
@@ -39,7 +41,9 @@ function resolveTemplateTextLimit(params: {
 }
 
 function truncateTemplateText(text: string, limit: number): string {
-  return Array.from(text).slice(0, limit).join("");
+  return Array.from(graphemeSegmenter.segment(text), (segment) => segment.segment)
+    .slice(0, limit)
+    .join("");
 }
 
 /**
