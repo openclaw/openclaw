@@ -257,6 +257,27 @@ describe("runDoctorLintCli", () => {
     );
   });
 
+  it("rejects registered core-kind checks that reuse ordered core check ids", async () => {
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      config: {},
+      path: "/tmp/openclaw.json",
+    });
+    registerHealthCheck({
+      id: "core/doctor/final-config-validation",
+      kind: "core",
+      description: "colliding core-kind lint check",
+      async detect() {
+        return [];
+      },
+    });
+
+    await expect(runDoctorLintCli(runtime, { json: true })).rejects.toThrow(
+      "health check already registered: core/doctor/final-config-validation",
+    );
+  });
+
   it("rejects extension checks that claim unused reserved core doctor ids", async () => {
     mocks.readConfigFileSnapshot.mockResolvedValue({
       exists: true,
@@ -268,6 +289,27 @@ describe("runDoctorLintCli", () => {
       id: "core/doctor/not-yet-owned",
       kind: "plugin",
       description: "reserved plugin lint check",
+      async detect() {
+        return [];
+      },
+    });
+
+    await expect(runDoctorLintCli(runtime, { json: true })).rejects.toThrow(
+      "health check already registered: core/doctor/not-yet-owned",
+    );
+  });
+
+  it("rejects registered core-kind checks that claim unused reserved core doctor ids", async () => {
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      config: {},
+      path: "/tmp/openclaw.json",
+    });
+    registerHealthCheck({
+      id: "core/doctor/not-yet-owned",
+      kind: "core",
+      description: "reserved core-kind lint check",
       async detect() {
         return [];
       },

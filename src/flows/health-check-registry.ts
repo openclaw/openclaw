@@ -31,13 +31,13 @@ export function listExtensionHealthChecksForDoctor(
   coreChecks: readonly HealthCheck[],
 ): readonly HealthCheck[] {
   const coreIds = new Set(coreChecks.map((check) => check.id));
-  const extensionChecks = listHealthChecks().filter((check) => check.kind !== "core");
-  for (const check of extensionChecks) {
+  const registeredChecks = listHealthChecks();
+  for (const check of registeredChecks) {
     if (check.id.startsWith("core/doctor/") || coreIds.has(check.id)) {
       throw new HealthCheckRegistrationError(check.id);
     }
   }
-  return extensionChecks;
+  return registeredChecks.filter((check) => check.kind !== "core");
 }
 
 /** Looks up a registered health check by its stable id. */

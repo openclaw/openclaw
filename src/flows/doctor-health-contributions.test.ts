@@ -173,15 +173,13 @@ vi.mock("./health-check-registry.js", async (importOriginal) => {
       coreChecks: Parameters<typeof actual.listExtensionHealthChecksForDoctor>[0],
     ) => {
       const coreIds = new Set(coreChecks.map((check) => check.id));
-      const extensionChecks = (mocks.listHealthChecks() as readonly HealthCheck[]).filter(
-        (check) => check.kind !== "core",
-      );
-      for (const check of extensionChecks) {
+      const registeredChecks = mocks.listHealthChecks() as readonly HealthCheck[];
+      for (const check of registeredChecks) {
         if (check.id.startsWith("core/doctor/") || coreIds.has(check.id)) {
           throw new actual.HealthCheckRegistrationError(check.id);
         }
       }
-      return extensionChecks;
+      return registeredChecks.filter((check) => check.kind !== "core");
     },
     getHealthCheck: mocks.getHealthCheck,
     registerHealthCheck: mocks.registerHealthCheck,
@@ -357,7 +355,7 @@ describe("doctor health contributions", () => {
     });
     mocks.listHealthChecks.mockReset();
     mocks.listHealthChecks.mockReturnValue([
-      { id: "core/doctor/shell-completion", kind: "core" },
+      { id: "core/example/internal", kind: "core" },
       { id: "plugin/example/unrelated", kind: "plugin" },
     ]);
     mocks.getHealthCheck.mockReset();
@@ -1228,7 +1226,7 @@ describe("doctor health contributions", () => {
     );
   });
 
-  it("keeps core doctor repairs out of the extension repair pass", async () => {
+  it("keeps core-kind repairs out of the extension repair pass", async () => {
     const contribution = requireDoctorContribution("doctor:structured-health-repairs");
     const ctx = {
       cfg: {},
@@ -1253,6 +1251,30 @@ describe("doctor health contributions", () => {
     mocks.listHealthChecks.mockReturnValue([
       { id: "plugin/example/unrelated", kind: "plugin" },
       { id: "core/doctor/shell-completion", kind: "plugin" },
+    ]);
+    const contribution = requireDoctorContribution("doctor:structured-health-repairs");
+    const ctx = {
+      cfg: {},
+      configResult: { cfg: {} },
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: {},
+      cfgForPersistence: {},
+      configPath: "/tmp/fake-openclaw.json",
+      env: {},
+    } as unknown as Parameters<(typeof contribution)["run"]>[0];
+
+    await expect(contribution.run(ctx)).rejects.toThrow(
+      "health check already registered: core/doctor/shell-completion",
+    );
+    expect(mocks.runDoctorHealthRepairs).not.toHaveBeenCalled();
+  });
+
+  it("rejects registered core-kind repairs that claim reserved core doctor ids", async () => {
+    mocks.listHealthChecks.mockReturnValue([
+      { id: "plugin/example/unrelated", kind: "plugin" },
+      { id: "core/doctor/shell-completion", kind: "core" },
     ]);
     const contribution = requireDoctorContribution("doctor:structured-health-repairs");
     const ctx = {
