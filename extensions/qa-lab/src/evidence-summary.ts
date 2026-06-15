@@ -2,6 +2,7 @@
 import { z } from "zod";
 import { splitQaModelRef } from "./model-selection.js";
 import { getQaProvider, type QaProviderMode } from "./providers/index.js";
+import { readQaScorecardProfileOptions } from "./scorecard-taxonomy.js";
 
 export const QA_EVIDENCE_SUMMARY_KIND = "openclaw.qa.evidence-summary";
 export const QA_EVIDENCE_FILENAME = "qa-evidence.json";
@@ -176,7 +177,7 @@ export const qaEvidenceSummaryEntrySchema = z
     coverage: z.array(qaEvidenceCoverageSchema),
     refs: z.array(qaEvidenceRefSchema).optional(),
     runtimeParityTier: nonEmptyStringSchema.optional(),
-    execution: qaEvidenceExecutionSchema,
+    execution: qaEvidenceExecutionSchema.optional(),
     result: qaEvidenceResultSchema,
   })
   .strict();
@@ -491,15 +492,26 @@ function resultForEvidence(
 
 function buildQaEvidenceSummary(params: {
   entries: QaEvidenceSummaryEntry[];
+  excludeTestExecution?: boolean;
   generatedAt: string;
   profile?: QaEvidenceProfile;
+  scorecard?: QaEvidenceScorecardJson;
 }): QaEvidenceSummaryJson {
+  const profileOptions = readQaScorecardProfileOptions(params.profile);
+  const excludeTestExecution = params.excludeTestExecution ?? profileOptions.excludeTestExecution;
+  const entries = excludeTestExecution
+    ? params.entries.map((entry) => {
+        const { execution: _execution, ...withoutExecution } = entry;
+        return withoutExecution;
+      })
+    : params.entries;
   return qaEvidenceSummarySchema.parse({
     kind: QA_EVIDENCE_SUMMARY_KIND,
     schemaVersion: QA_EVIDENCE_SUMMARY_SCHEMA_VERSION,
     generatedAt: params.generatedAt,
-    entries: params.entries,
+    entries,
     profile: params.profile,
+    scorecard: params.scorecard,
   });
 }
 
@@ -508,12 +520,15 @@ export function validateQaEvidenceSummaryJson(summary: unknown): QaEvidenceSumma
 }
 
 export function attachQaEvidenceScorecard(params: {
+  excludeTestExecution?: boolean;
   summary: QaEvidenceSummaryJson;
   profile: QaEvidenceProfile;
   scorecard: QaEvidenceScorecardJson;
 }): QaEvidenceSummaryJson {
-  return validateQaEvidenceSummaryJson({
-    ...params.summary,
+  return buildQaEvidenceSummary({
+    entries: params.summary.entries,
+    excludeTestExecution: params.excludeTestExecution,
+    generatedAt: params.summary.generatedAt,
     profile: params.profile,
     scorecard: params.scorecard,
   });

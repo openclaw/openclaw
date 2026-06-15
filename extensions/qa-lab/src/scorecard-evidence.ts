@@ -155,6 +155,7 @@ export function buildQaProfileScorecardEvidence(params: {
 
 export async function attachQaProfileScorecardEvidenceToFile(params: {
   evidencePath: string;
+  excludeTestExecution?: boolean;
   profile: string;
   filters: QaProfileScorecardFilters;
   categories: readonly QaScorecardCategoryCoverageReport[];
@@ -170,6 +171,7 @@ export async function attachQaProfileScorecardEvidenceToFile(params: {
   });
   const nextEvidence = attachQaEvidenceScorecard({
     summary: evidence,
+    excludeTestExecution: params.excludeTestExecution,
     profile: params.profile,
     scorecard,
   });

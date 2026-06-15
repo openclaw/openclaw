@@ -440,6 +440,60 @@ describe("evidence summary", () => {
     expect(evidence.profile).toBe("experimental-profile");
   });
 
+  it("omits execution for taxonomy profiles that exclude test execution", () => {
+    const evidence = buildQaSuiteEvidenceSummary({
+      artifactPaths: [{ kind: "summary", path: "qa-suite-summary.json" }],
+      profile: "smoke-ci",
+      scenarioDefinitions: [
+        {
+          id: "dm-chat-baseline",
+          title: "DM baseline conversation",
+          coverage: {
+            primary: ["channels.dm"],
+          },
+        },
+      ],
+      channelId: "qa-channel",
+      generatedAt: "2026-06-07T12:09:00.000Z",
+      primaryModel: "mock-openai/gpt-5.5",
+      providerMode: "mock-openai",
+      scenarioResults: [{ name: "DM baseline conversation", status: "pass" }],
+    });
+
+    expect(validateQaEvidenceSummaryJson(evidence)).toEqual(evidence);
+    expect(evidence.profile).toBe("smoke-ci");
+    expect(evidence.entries[0]).not.toHaveProperty("execution");
+  });
+
+  it("keeps execution for taxonomy profiles that include test execution", () => {
+    const evidence = buildLiveTransportEvidenceSummary({
+      artifactPaths: [{ kind: "summary", path: QA_EVIDENCE_FILENAME }],
+      profile: "release",
+      generatedAt: "2026-06-07T12:09:00.000Z",
+      primaryModel: "openai/gpt-5.5",
+      providerMode: "live-frontier",
+      checks: [
+        {
+          id: "telegram-canary",
+          title: "Telegram canary",
+          details: "Canary passed.",
+          status: "pass",
+        },
+      ],
+      transportId: "telegram",
+    });
+
+    expect(validateQaEvidenceSummaryJson(evidence)).toEqual(evidence);
+    expect(evidence.profile).toBe("release");
+    expect(evidence.entries[0]?.execution).toMatchObject({
+      runner: "host",
+      channel: {
+        id: "telegram",
+        live: true,
+      },
+    });
+  });
+
   it("keeps mock non-OpenAI model refs attributed to their model provider", () => {
     const evidence = buildQaSuiteEvidenceSummary({
       artifactPaths: [{ kind: "summary", path: "qa-suite-summary.json" }],
@@ -460,11 +514,13 @@ describe("evidence summary", () => {
       scenarioResults: [{ name: "Anthropic parity", status: "pass" }],
     });
 
-    expect(evidence.entries[0]?.execution.provider).toMatchObject({
-      id: "anthropic",
-      model: {
-        name: "claude-opus-4-8",
-        ref: "anthropic/claude-opus-4-8",
+    expect(evidence.entries[0]?.execution).toMatchObject({
+      provider: {
+        id: "anthropic",
+        model: {
+          name: "claude-opus-4-8",
+          ref: "anthropic/claude-opus-4-8",
+        },
       },
     });
     expect(evidence.entries[0]).toMatchObject({
@@ -500,7 +556,7 @@ describe("evidence summary", () => {
       transportId: "telegram",
     });
 
-    expect(evidence.entries[0]?.execution.packageSource).toEqual({
+    expect(evidence.entries[0]?.execution?.packageSource).toEqual({
       kind: "packed-tarball",
       spec: "/tmp/openclaw.tgz",
       sha: "abc123",
@@ -530,7 +586,7 @@ describe("evidence summary", () => {
       transportId: "telegram",
     });
 
-    expect(evidence.entries[0]?.execution.packageSource).toEqual({
+    expect(evidence.entries[0]?.execution?.packageSource).toEqual({
       kind: "npm-package",
       spec: "openclaw@beta",
       sha: "def456",
@@ -558,7 +614,7 @@ describe("evidence summary", () => {
       transportId: "telegram",
     });
 
-    expect(evidence.entries[0]?.execution.packageSource).toEqual({
+    expect(evidence.entries[0]?.execution?.packageSource).toEqual({
       kind: "source-checkout",
       spec: undefined,
       sha: undefined,
@@ -589,7 +645,7 @@ describe("evidence summary", () => {
       transportId: "discord",
     });
 
-    expect(evidence.entries[0]?.execution.artifacts).toEqual(
+    expect(evidence.entries[0]?.execution?.artifacts).toEqual(
       expect.arrayContaining([
         {
           kind: "screenshot",

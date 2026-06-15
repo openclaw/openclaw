@@ -441,6 +441,7 @@ describe("qa cli runtime", () => {
       expect(suiteArgs.scenarioIds).not.toContain("thinking-slash-model-remap");
       expect(process.env.OPENCLAW_QA_PROFILE).toBe("release");
       const evidence = JSON.parse(await fs.readFile(suiteEvidencePath, "utf8")) as {
+        entries?: unknown[];
         profile?: unknown;
         scorecard?: {
           run?: { evidenceEntryCount?: unknown };
@@ -468,6 +469,7 @@ describe("qa cli runtime", () => {
           fulfilled: 1,
         },
       });
+      expect(evidence.entries?.[0]).not.toHaveProperty("execution");
       expect(JSON.stringify(evidence.scorecard)).not.toContain("dm-chat-baseline");
       expectWriteContains(stdoutWrite, "QA run profile: smoke-ci; categories: 1; scenarios:");
       expectWriteContains(stdoutWrite, `QA profile scorecard: ${suiteEvidencePath}`);
@@ -478,6 +480,86 @@ describe("qa cli runtime", () => {
         process.env.OPENCLAW_QA_PROFILE = previousProfile;
       }
     }
+  });
+
+  it("lets qa profile runs force compact execution-free evidence", async () => {
+    runQaSuite.mockImplementationOnce(async () => {
+      await fs.writeFile(
+        suiteEvidencePath,
+        JSON.stringify(
+          makeQaEvidence([
+            {
+              test: {
+                kind: "qa-scenario",
+                id: "dm-chat-baseline",
+                title: "DM baseline conversation",
+                source: {
+                  path: "qa/scenarios/channels/dm-chat-baseline.yaml",
+                },
+              },
+              coverage: [
+                {
+                  id: "channels.dm",
+                  role: "primary",
+                },
+              ],
+              execution: {
+                runner: "host",
+                environment: {
+                  ref: null,
+                  os: process.platform,
+                  nodeVersion: process.version,
+                },
+                provider: {
+                  id: "openai",
+                  live: false,
+                  model: {
+                    name: "gpt-5.5",
+                    ref: "mock-openai/gpt-5.5",
+                  },
+                  fixture: "mock-openai",
+                },
+                channel: {
+                  id: "qa-channel",
+                  live: false,
+                },
+                packageSource: {
+                  kind: "source-checkout",
+                },
+                artifacts: [],
+              },
+              result: {
+                status: "pass",
+              },
+            },
+          ]),
+        ),
+        "utf8",
+      );
+      return flowSuiteRuntimeResult({
+        reportPath: suiteReportPath,
+        summaryPath: suiteSummaryPath,
+      });
+    });
+
+    await runQaProfileCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      outputDir: ".artifacts/qa-e2e/release",
+      profile: "release",
+      category: "agent-runtime-and-provider-execution.agent-turn-execution",
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.5",
+      transportId: "qa-channel",
+      allowFailures: true,
+      excludeTestExecutionEvidence: true,
+    });
+
+    const evidence = JSON.parse(await fs.readFile(suiteEvidencePath, "utf8")) as {
+      entries?: unknown[];
+      profile?: unknown;
+    };
+    expect(evidence.profile).toBe("release");
+    expect(evidence.entries?.[0]).not.toHaveProperty("execution");
   });
 
   it("rejects qa profile runs that do not match taxonomy categories", async () => {

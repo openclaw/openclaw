@@ -125,6 +125,7 @@ export type QaProfileCommandOptions = QaScenarioRunCommandOptions & {
   profile: string;
   surface?: string;
   category?: string;
+  excludeTestExecutionEvidence?: boolean;
 };
 
 export type QaSuiteCommandOptions = QaScenarioRunCommandOptions & {
@@ -686,6 +687,7 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
   }
   await attachQaProfileScorecardEvidenceToFile({
     evidencePath,
+    excludeTestExecution: opts.excludeTestExecutionEvidence,
     profile,
     filters: {
       surface: opts.surface,

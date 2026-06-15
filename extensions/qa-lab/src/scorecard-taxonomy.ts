@@ -23,6 +23,7 @@ const qaCoverageEvidenceRoleSchema = z.enum(["primary", "secondary"]);
 const qaScorecardProfileSchema = z.object({
   id: qaScorecardIdSchema,
   description: z.string().trim().min(1),
+  excludeTestExecution: z.boolean().optional(),
   categoryIds: z.array(qaScorecardIdSchema).default([]),
 });
 
@@ -125,6 +126,7 @@ export type QaScorecardCategoryCoverageReport = {
 
 export type QaScorecardProfileReport = {
   id: string;
+  excludeTestExecution: boolean;
   categoryIds: string[];
 };
 
@@ -332,6 +334,18 @@ export function readQaScorecardFeatureCoverageByCategory(repoRoot?: string) {
   );
 }
 
+export function readQaScorecardProfileOptions(profileId: string | undefined, repoRoot?: string) {
+  const profile = profileId?.trim();
+  if (!profile) {
+    return { excludeTestExecution: false };
+  }
+  return {
+    excludeTestExecution:
+      readQaMaturityTaxonomy(repoRoot)?.profiles.find((entry) => entry.id === profile)
+        ?.excludeTestExecution === true,
+  };
+}
+
 function pushMissingPrimaryIssues(params: {
   issues: QaScorecardValidationIssue[];
   category: MaturityCategoryRef;
@@ -467,6 +481,7 @@ export function buildQaScorecardTaxonomyReport(params: {
       }
       return {
         id: profile.id,
+        excludeTestExecution: profile.excludeTestExecution === true,
         categoryIds: validCategoryIds,
       };
     }) ?? [];

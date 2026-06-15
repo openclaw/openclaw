@@ -40,12 +40,14 @@ type QaRunCliOptions = QaLabSelfCheckCommandOptions &
     qaProfile?: QaProfileCommandOptions["profile"];
     surface?: QaProfileCommandOptions["surface"];
     category?: QaProfileCommandOptions["category"];
+    excludeTestExecutionEvidence?: QaProfileCommandOptions["excludeTestExecutionEvidence"];
   };
 
 const QA_RUN_PROFILE_ONLY_OPTIONS = [
   { optionName: "outputDir", flag: "--output-dir" },
   { optionName: "surface", flag: "--surface" },
   { optionName: "category", flag: "--category" },
+  { optionName: "excludeTestExecutionEvidence", flag: "--exclude-test-execution-evidence" },
   { optionName: "transport", flag: "--transport" },
   { optionName: "providerMode", flag: "--provider-mode" },
   { optionName: "model", flag: "--model" },
@@ -368,6 +370,11 @@ export function registerQaLabCli(program: Command) {
     .option("--qa-profile <id>", "Run the QA profile from taxonomy.yaml")
     .option("--surface <id>", "Limit --qa-profile to a taxonomy surface id")
     .option("--category <id>", "Limit --qa-profile to a taxonomy category id")
+    .option(
+      "--exclude-test-execution-evidence",
+      "Omit execution metadata from qa-evidence.json entries for this profile run",
+      false,
+    )
     .option("--transport <id>", "QA transport id", "qa-channel")
     .option("--provider-mode <mode>", formatQaProviderModeHelp())
     .option("--model <ref>", "Primary provider/model ref")
@@ -390,6 +397,9 @@ export function registerQaLabCli(program: Command) {
           profile: opts.qaProfile,
           surface: opts.surface,
           category: opts.category,
+          ...(opts.excludeTestExecutionEvidence === true
+            ? { excludeTestExecutionEvidence: true }
+            : {}),
           transportId: opts.transport,
           providerMode: opts.providerMode,
           primaryModel: opts.model,
