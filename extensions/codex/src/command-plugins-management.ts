@@ -1,3 +1,4 @@
+// Codex plugin module implements command plugins management behavior.
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import { formatCodexDisplayText } from "./command-formatters.js";
 import {
@@ -22,7 +23,7 @@ export type CodexPluginConfigEntry = {
   enabled?: boolean;
   marketplaceName?: string;
   pluginName?: string;
-  allow_destructive_actions?: boolean;
+  allow_destructive_actions?: boolean | "auto";
 };
 
 export type CodexPluginsConfigBlock = {

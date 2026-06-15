@@ -1,3 +1,4 @@
+// Tool send helpers normalize model tool-send requests before provider dispatch.
 import { readStringValue } from "../../packages/normalization-core/src/string-coerce.js";
 
 export type { ChannelToolSend } from "../channels/plugins/types.public.js";
@@ -15,6 +16,8 @@ export function extractToolSend(
   accountId?: string;
   /** Optional thread/topic id, normalized to string for channel send adapters. */
   threadId?: string;
+  /** True when the send explicitly opts out of ambient thread inheritance. */
+  threadSuppressed?: boolean;
 } | null {
   const action = readStringValue(args.action)?.trim() ?? "";
   if (action !== expectedAction) {
@@ -30,5 +33,6 @@ export function extractToolSend(
       ? String(args.threadId)
       : (readStringValue(args.threadId)?.trim() ?? "");
   const threadId = threadIdRaw.length > 0 ? threadIdRaw : undefined;
-  return { to, accountId, threadId };
+  const threadSuppressed = args.topLevel === true || args.threadId === null;
+  return { to, accountId, threadId, ...(threadSuppressed ? { threadSuppressed: true } : {}) };
 }

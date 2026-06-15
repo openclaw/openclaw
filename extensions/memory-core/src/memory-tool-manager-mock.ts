@@ -1,3 +1,4 @@
+// Memory Core plugin module implements memory tool manager mock behavior.
 import type { MemorySearchRuntimeDebug } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { vi } from "vitest";
 
@@ -7,6 +8,7 @@ type SearchImpl = (opts?: {
   sessionKey?: string;
   qmdSearchModeOverride?: "query" | "search" | "vsearch";
   onDebug?: (debug: MemorySearchRuntimeDebug) => void;
+  signal?: AbortSignal;
 }) => Promise<unknown[]>;
 export type MemoryReadParams = { relPath: string; from?: number; lines?: number };
 type MemoryReadResult = {
@@ -24,7 +26,7 @@ let workspaceDir = "/workspace";
 let customStatus: Record<string, unknown> | undefined;
 let searchImpl: SearchImpl = async () => [];
 let getManagerImpl:
-  | ((params: { cfg?: unknown; agentId?: string }) => Promise<{
+  | ((params: { cfg?: unknown; agentId?: string; purpose?: string }) => Promise<{
       manager?: unknown;
       error?: string;
     }>)
@@ -58,8 +60,9 @@ const stubManager = {
   close: vi.fn(),
 };
 
-const getMemorySearchManagerMock = vi.fn(async (params: { cfg?: unknown; agentId?: string }) =>
-  getManagerImpl ? await getManagerImpl(params) : { manager: stubManager },
+const getMemorySearchManagerMock = vi.fn(
+  async (params: { cfg?: unknown; agentId?: string; purpose?: string }) =>
+    getManagerImpl ? await getManagerImpl(params) : { manager: stubManager },
 );
 const readAgentMemoryFileMock = vi.fn(
   async (params: MemoryReadParams) => await readFileImpl(params),
@@ -95,7 +98,7 @@ export function setMemorySearchImpl(next: SearchImpl): void {
 }
 
 export function setMemorySearchManagerImpl(
-  next: (params: { cfg?: unknown; agentId?: string }) => Promise<{
+  next: (params: { cfg?: unknown; agentId?: string; purpose?: string }) => Promise<{
     manager?: unknown;
     error?: string;
   }>,
@@ -138,11 +141,19 @@ export function getMemorySyncMockCalls(): number {
   return stubManager.sync.mock.calls.length;
 }
 
+export function getMemoryCloseMockCalls(): number {
+  return stubManager.close.mock.calls.length;
+}
+
 export function getMemorySearchManagerMockConfigs(): unknown[] {
   return getMemorySearchManagerMock.mock.calls.map(([params]) => params.cfg);
 }
 
-export function getMemorySearchManagerMockParams(): Array<{ cfg?: unknown; agentId?: string }> {
+export function getMemorySearchManagerMockParams(): Array<{
+  cfg?: unknown;
+  agentId?: string;
+  purpose?: string;
+}> {
   return getMemorySearchManagerMock.mock.calls.map(([params]) => params);
 }
 

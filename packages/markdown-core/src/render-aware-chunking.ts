@@ -1,3 +1,4 @@
+// Markdown Core module implements render aware chunking behavior.
 import {
   chunkMarkdownIR,
   sliceMarkdownIR,
@@ -44,6 +45,13 @@ export function renderMarkdownIRChunksWithinLimit<TRendered>(
 ): RenderedMarkdownChunk<TRendered>[] {
   if (!options.ir.text) {
     return [];
+  }
+
+  // Callers pass Infinity to mean "no size cap" (e.g. a media caption that must not be
+  // split). resolveIntegerOption rejects non-finite values and would fall back to 1,
+  // shattering the text into one chunk per character; emit the whole IR as one chunk.
+  if (options.limit === Number.POSITIVE_INFINITY) {
+    return [{ source: options.ir, rendered: options.renderChunk(options.ir) }];
   }
 
   const normalizedLimit = resolveIntegerOption(options.limit, 1, { min: 1 });

@@ -1,3 +1,4 @@
+// Classifies changed files into CI lanes and release metadata scopes.
 import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
@@ -24,6 +25,9 @@ const TEST_PATH_RE =
   /(?:^|\/)(?:test|__tests__)\/|(?:\.|\/)(?:test|spec|e2e|browser\.test)\.[cm]?[jt]sx?$/u;
 const PUBLIC_EXTENSION_CONTRACT_RE =
   /^(?:src\/plugin-sdk\/|src\/plugins\/contracts\/|src\/channels\/plugins\/|scripts\/lib\/plugin-sdk-entrypoints\.json$|scripts\/sync-plugin-sdk-exports\.mjs$|scripts\/generate-plugin-sdk-api-baseline\.ts$)/u;
+/**
+ * Files whose changes are treated as release metadata only.
+ */
 export const RELEASE_METADATA_PATHS = new Set([
   "CHANGELOG.md",
   "apps/android/app/build.gradle.kts",
@@ -49,6 +53,9 @@ export const RELEASE_METADATA_PATHS = new Set([
  * }} ChangedLaneResult
  */
 
+/**
+ * Normalizes a changed file path into repo-relative POSIX form.
+ */
 export function normalizeChangedPath(inputPath) {
   return String(inputPath ?? "")
     .trim()
@@ -56,6 +63,9 @@ export function normalizeChangedPath(inputPath) {
     .replace(/^\.\/+/u, "");
 }
 
+/**
+ * Creates the default changed-lanes result object.
+ */
 export function createEmptyChangedLanes() {
   return {
     core: false,
@@ -75,6 +85,9 @@ export function createEmptyChangedLanes() {
  * @param {string[]} changedPaths
  * @param {{ packageJsonChangeKind?: "liveDockerTooling" | "tooling" | null }} [options]
  * @returns {ChangedLaneResult}
+ */
+/**
+ * Classifies a list of changed paths into docs, app, extension, core, and tooling lanes.
  */
 export function detectChangedLanes(changedPaths, options = {}) {
   const paths = [...new Set(changedPaths.map(normalizeChangedPath).filter(Boolean))]
@@ -217,6 +230,9 @@ export function detectChangedLanes(changedPaths, options = {}) {
  * @param {{ paths: string[]; base: string; head?: string; staged?: boolean; mergeHeadFirstParent?: boolean }} params
  * @returns {ChangedLaneResult}
  */
+/**
+ * Classifies changed paths with optional package.json before/after contents.
+ */
 export function detectChangedLanesForPaths(params) {
   const base = params.staged
     ? params.base
@@ -239,6 +255,9 @@ export function detectChangedLanesForPaths(params) {
 /**
  * @param {{ base: string; head?: string; includeWorktree?: boolean; cwd?: string; mergeHeadFirstParent?: boolean }} params
  * @returns {string[]}
+ */
+/**
+ * Lists changed paths from git for a base/head comparison.
  */
 export function listChangedPathsFromGit(params) {
   const head = params.head ?? "HEAD";
@@ -318,6 +337,9 @@ function runGitLsFiles(extraArgs, cwd = process.cwd()) {
   return output.split("\n").map(normalizeChangedPath).filter(Boolean);
 }
 
+/**
+ * Lists staged changed paths for pre-commit checks.
+ */
 export function listStagedChangedPaths(cwd = process.cwd()) {
   const output = execFileSync("git", ["diff", "--cached", "--name-only", "--diff-filter=ACMRD"], {
     cwd,
@@ -328,6 +350,9 @@ export function listStagedChangedPaths(cwd = process.cwd()) {
   return output.split("\n").map(normalizeChangedPath).filter(Boolean);
 }
 
+/**
+ * Classifies package.json script-only changes from git content.
+ */
 export function classifyPackageJsonChangeFromGit(params) {
   try {
     const { before, after } = readPackageJsonBeforeAfter(params);
@@ -340,6 +365,9 @@ export function classifyPackageJsonChangeFromGit(params) {
   }
 }
 
+/**
+ * Checks whether package scripts changed only live Docker script entries.
+ */
 export function isLiveDockerPackageScriptOnlyChange(before, after) {
   const beforePackage = JSON.parse(before);
   const afterPackage = JSON.parse(after);
@@ -354,6 +382,9 @@ export function isLiveDockerPackageScriptOnlyChange(before, after) {
   );
 }
 
+/**
+ * Checks whether package.json changes are limited to scripts.
+ */
 export function isPackageScriptOnlyChange(before, after) {
   const beforePackage = JSON.parse(before);
   const afterPackage = JSON.parse(after);
@@ -444,6 +475,9 @@ function stableJson(value) {
   return JSON.stringify(value);
 }
 
+/**
+ * Writes changed-lane booleans to the GitHub Actions output file.
+ */
 export function writeChangedLaneGitHubOutput(result, outputPath = process.env.GITHUB_OUTPUT) {
   if (!outputPath) {
     throw new Error("GITHUB_OUTPUT is required");

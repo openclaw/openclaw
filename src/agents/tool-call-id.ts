@@ -10,6 +10,7 @@ import { isAllowedToolCallName, normalizeAllowedToolNames } from "./tool-call-sh
 export type ToolCallIdMode = "strict" | "strict9";
 const NATIVE_ANTHROPIC_TOOL_USE_ID_RE = /^toolu_[A-Za-z0-9_]+$/;
 const NATIVE_KIMI_TOOL_CALL_ID_RE = /^functions\.[A-Za-z0-9_-]+:\d+$/;
+const OPENAI_TOOL_CALL_ID_RE = /^call_[A-Za-z0-9_-]+$/;
 
 const STRICT9_LEN = 9;
 const TOOL_CALL_TYPES = new Set(["toolCall", "toolUse", "functionCall"]);
@@ -286,6 +287,7 @@ function createOccurrenceAwareResolver(
   mode: ToolCallIdMode,
   options?: {
     preserveNativeAnthropicToolUseIds?: boolean;
+    duplicateToolCallIdStyle?: "openai";
     reservedIds?: Iterable<string>;
   },
 ): {
@@ -298,6 +300,7 @@ function createOccurrenceAwareResolver(
   const orphanToolResultOccurrences = new Map<string, number>();
   const pendingByRawId = new Map<string, string[]>();
   const preserveNativeAnthropicToolUseIds = options?.preserveNativeAnthropicToolUseIds === true;
+  const duplicateToolCallIdStyle = options?.duplicateToolCallIdStyle;
 
   const allocate = (seed: string): string => {
     const next = makeUniqueToolId({ id: seed, used, mode });
@@ -305,7 +308,26 @@ function createOccurrenceAwareResolver(
     return next;
   };
 
+  const allocateOpenAIStyleId = (id: string, occurrence: number): string => {
+    for (let attempt = 0; ; attempt += 1) {
+      const candidate = `call_${shortHash(`${id}:${occurrence}:${attempt}`, 24)}`;
+      if (!used.has(candidate)) {
+        used.add(candidate);
+        return candidate;
+      }
+    }
+  };
+
   const allocatePreservingNativeAnthropicId = (id: string, occurrence: number): string => {
+    if (
+      duplicateToolCallIdStyle === "openai" &&
+      occurrence === 1 &&
+      OPENAI_TOOL_CALL_ID_RE.test(id) &&
+      !used.has(id)
+    ) {
+      used.add(id);
+      return id;
+    }
     if (
       preserveNativeAnthropicToolUseIds &&
       isNativeAnthropicToolUseId(id) &&
@@ -321,7 +343,10 @@ function createOccurrenceAwareResolver(
   const resolveAssistantId = (id: string): string => {
     const occurrence = (assistantOccurrences.get(id) ?? 0) + 1;
     assistantOccurrences.set(id, occurrence);
-    const next = allocatePreservingNativeAnthropicId(id, occurrence);
+    const next =
+      duplicateToolCallIdStyle === "openai" && occurrence > 1
+        ? allocateOpenAIStyleId(id, occurrence)
+        : allocatePreservingNativeAnthropicId(id, occurrence);
     const pending = pendingByRawId.get(id);
     if (pending) {
       pending.push(next);
@@ -442,12 +467,14 @@ function rewriteToolResultIds(params: {
  *
  * @param messages - The messages to sanitize
  * @param mode - "strict" (alphanumeric only) or "strict9" (alphanumeric length 9)
+ * @param options.duplicateToolCallIdStyle - Optional provider-safe style for repeated IDs
  */
 export function sanitizeToolCallIdsForCloudCodeAssist(
   messages: AgentMessage[],
   mode: ToolCallIdMode = "strict",
   options?: {
     preserveNativeAnthropicToolUseIds?: boolean;
+    duplicateToolCallIdStyle?: "openai";
     preserveReplaySafeThinkingToolCallIds?: boolean;
     allowedToolNames?: Iterable<string>;
   },

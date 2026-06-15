@@ -7,9 +7,9 @@ import {
   abortReplyRunBySessionId,
   forceClearReplyRunBySessionId,
   isReplyRunActiveForSessionId,
+  isReplyRunAbortableForCompaction,
   isReplyRunStreamingForSessionId,
   queueReplyRunMessage,
-  resolveActiveReplyRunSessionId,
   waitForReplyRunEndBySessionId,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import {
@@ -47,6 +47,7 @@ export {
   getActiveEmbeddedRunCount,
   listActiveEmbeddedRunSessionIds,
   listActiveEmbeddedRunSessionKeys,
+  resolveActiveEmbeddedRunSessionId,
   type ActiveEmbeddedRunSnapshot,
   type EmbeddedAgentQueueHandle,
   type EmbeddedAgentQueueMessageOptions,
@@ -439,11 +440,11 @@ function prepareEmbeddedAgentQueueMessage(
 export function abortEmbeddedAgentRun(sessionId: string): boolean;
 export function abortEmbeddedAgentRun(
   sessionId: undefined,
-  opts: { mode: "all" | "compacting" },
+  opts: { mode: "all" | "compacting"; reason?: "restart" },
 ): boolean;
 export function abortEmbeddedAgentRun(
   sessionId?: string,
-  opts?: { mode?: "all" | "compacting" },
+  opts?: { mode?: "all" | "compacting"; reason?: "restart" },
 ): boolean {
   if (typeof sessionId === "string" && sessionId.length > 0) {
     const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
@@ -456,7 +457,7 @@ export function abortEmbeddedAgentRun(
     }
     diag.debug(`aborting run: sessionId=${sessionId}`);
     try {
-      handle.abort();
+      handle.abort(opts?.reason);
     } catch (err) {
       diag.warn(`abort failed: sessionId=${sessionId} err=${String(err)}`);
       return false;
@@ -475,7 +476,7 @@ export function abortEmbeddedAgentRun(
       }
       diag.debug(params.formatDebugMessage(id));
       try {
-        handle.abort();
+        handle.abort(opts?.reason);
         aborted = true;
       } catch (err) {
         diag.warn(`abort failed: sessionId=${id} err=${String(err)}`);
@@ -520,6 +521,14 @@ export function isEmbeddedAgentRunHandleActive(sessionId: string): boolean {
   return active;
 }
 
+export function isEmbeddedAgentRunAbortableForCompaction(sessionId: string): boolean {
+  const active = ACTIVE_EMBEDDED_RUNS.has(sessionId) || isReplyRunAbortableForCompaction(sessionId);
+  if (active) {
+    diag.debug(`run compact abort check: sessionId=${sessionId} active=true`);
+  }
+  return active;
+}
+
 export function isEmbeddedAgentRunStreaming(sessionId: string): boolean {
   const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
   if (!handle) {
@@ -545,17 +554,6 @@ export function resolveActiveEmbeddedRunHandleSessionIdBySessionFile(
   }
   return ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.get(
     resolveEmbeddedSessionFileKey(normalizedSessionFile),
-  );
-}
-
-export function resolveActiveEmbeddedRunSessionId(sessionKey: string): string | undefined {
-  const normalizedSessionKey = sessionKey.trim();
-  if (!normalizedSessionKey) {
-    return undefined;
-  }
-  return (
-    resolveActiveReplyRunSessionId(normalizedSessionKey) ??
-    ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.get(normalizedSessionKey)
   );
 }
 

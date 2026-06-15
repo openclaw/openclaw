@@ -15,6 +15,11 @@ import {
 } from "../infra/fs-safe.js";
 import { expandHomePrefix, resolveOsHomeDir } from "../infra/home-dir.js";
 import { hasEncodedFileUrlSeparator, trySafeFileURLToPath } from "../infra/local-file-access.js";
+import {
+  classifyMediaReferenceSource,
+  normalizeMediaReferenceSource,
+  resolveMediaReferenceSandboxPath,
+} from "../media/media-reference.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import {
   REQUIRED_PARAM_GROUPS,
@@ -509,7 +514,7 @@ function mapContainerPathToRoot(params: {
     return { filePath: params.filePath, matched: false };
   }
 
-  const normalizedCandidate = candidate.replace(/\\/g, "/");
+  const normalizedCandidate = path.posix.normalize(candidate.replace(/\\/g, "/"));
   if (normalizedCandidate === normalizedRoot) {
     return { filePath: path.resolve(params.root), matched: true };
   }
@@ -773,28 +778,34 @@ export function wrapToolWorkspaceRootGuardWithOptions(
           normalizedRecord[key] = filePath;
         }
         let guardedRoot = root;
-        const workspaceMapping = mapContainerPathToRoot({
-          filePath,
-          root,
-          containerRoot: options?.containerWorkdir,
-        });
-        let sandboxPath = workspaceMapping.filePath;
-        if (!workspaceMapping.matched) {
-          for (const mount of options?.additionalContainerMounts ?? []) {
-            const mountMapping = mapContainerPathToRoot({
-              filePath,
-              root: mount.hostRoot,
-              containerRoot: mount.containerRoot,
-            });
-            if (mountMapping.matched) {
-              guardedRoot = path.resolve(mount.hostRoot);
-              sandboxPath = mountMapping.filePath;
-              break;
-            }
+        let workspaceMapping: ReturnType<typeof mapContainerPathToRoot> | undefined;
+        let sandboxPath = filePath;
+        for (const mount of [...(options?.additionalContainerMounts ?? [])].toSorted(
+          (a, b) => b.containerRoot.length - a.containerRoot.length,
+        )) {
+          const mountMapping = mapContainerPathToRoot({
+            filePath,
+            root: mount.hostRoot,
+            containerRoot: mount.containerRoot,
+          });
+          if (mountMapping.matched) {
+            guardedRoot = path.resolve(mount.hostRoot);
+            sandboxPath = mountMapping.filePath;
+            break;
           }
         }
+        if (guardedRoot === root) {
+          workspaceMapping = mapContainerPathToRoot({
+            filePath,
+            root,
+            containerRoot: options?.containerWorkdir,
+          });
+          sandboxPath = workspaceMapping.filePath;
+        }
         const additionalRoots =
-          guardedRoot === root && !workspaceMapping.matched ? (options?.additionalRoots ?? []) : [];
+          guardedRoot === root && !workspaceMapping?.matched
+            ? (options?.additionalRoots ?? [])
+            : [];
         let sandboxResult: Awaited<ReturnType<typeof assertSandboxPathWithinAnyRoot>>;
         try {
           sandboxResult = await assertSandboxPathWithinAnyRoot({
@@ -899,6 +910,13 @@ export function createOpenClawReadTool(
 
 function createSandboxReadOperations(params: SandboxToolParams) {
   return {
+    resolvePath: (filePath: string) => {
+      const normalizedMediaSource = normalizeMediaReferenceSource(filePath);
+      if (classifyMediaReferenceSource(normalizedMediaSource).isMediaStoreUrl) {
+        return resolveMediaReferenceSandboxPath(normalizedMediaSource, "media/inbound").resolved;
+      }
+      return resolveContainerPathCandidate(filePath) ?? filePath;
+    },
     readFile: (absolutePath: string) =>
       params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),
     access: (absolutePath: string) => assertSandboxFileExists(params, absolutePath),

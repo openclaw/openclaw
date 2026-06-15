@@ -1,3 +1,4 @@
+// Core runtime types define system, config, and task helper contracts for plugins.
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import type { LogLevel } from "../../logging/levels.js";
 import type { MediaUnderstandingRuntime } from "../../media-understanding/runtime-types.js";
@@ -204,8 +205,8 @@ export type PluginRuntimeCore = {
     ensureAgentWorkspace: typeof import("../../agents/workspace.js").ensureAgentWorkspace;
     session: {
       resolveStorePath: typeof import("../../config/sessions/paths.js").resolveStorePath;
-      getSessionEntry: typeof import("../../config/sessions/store.js").getSessionEntry;
-      listSessionEntries: typeof import("../../config/sessions/store.js").listSessionEntries;
+      getSessionEntry: typeof import("../../config/sessions/session-accessor.js").loadSessionEntry;
+      listSessionEntries: typeof import("../../config/sessions/session-accessor.js").listSessionEntries;
       patchSessionEntry: typeof import("../../config/sessions/store.js").patchSessionEntry;
       upsertSessionEntry: typeof import("../../config/sessions/store.js").upsertSessionEntry;
       /**

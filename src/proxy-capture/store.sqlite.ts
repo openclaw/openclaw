@@ -1,10 +1,14 @@
+// Proxy capture SQLite store persists capture metadata and replayable exchanges.
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { normalizeNullableString as normalizeObservedValue } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { configureSqliteWalMaintenance, type SqliteWalMaintenance } from "../infra/sqlite-wal.js";
+import {
+  configureSqliteConnectionPragmas,
+  type SqliteWalMaintenance,
+} from "../infra/sqlite-wal.js";
 import { readCaptureBlobText, writeCaptureBlob } from "./blob-store.js";
 import type {
   CaptureBlobRecord,
@@ -32,8 +36,11 @@ function openDatabase(dbPath: string): OpenedDatabase {
   ensureParentDir(dbPath);
   const { DatabaseSync } = requireNodeSqlite();
   const db = new DatabaseSync(dbPath);
-  const walMaintenance = configureSqliteWalMaintenance(db);
-  db.exec("PRAGMA busy_timeout = 5000");
+  const walMaintenance = configureSqliteConnectionPragmas(db, {
+    busyTimeoutMs: 5000,
+    databaseLabel: "debug-proxy-capture",
+    databasePath: dbPath,
+  });
   db.exec(`
     CREATE TABLE IF NOT EXISTS capture_sessions (
       id TEXT PRIMARY KEY,

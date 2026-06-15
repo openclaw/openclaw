@@ -1,3 +1,5 @@
+// Gateway chat display projection.
+// Converts raw transcript messages into bounded Control UI/history display records.
 import { createHash } from "node:crypto";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
@@ -16,6 +18,7 @@ import {
   parseAssistantTextSignature,
   resolveAssistantMessagePhase,
 } from "../shared/chat-message-content.js";
+import { isOpenClawDeliveryMirrorAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { stripEnvelopeFromMessages } from "./chat-sanitize.js";
 import { isSuppressedControlReplyText } from "./control-reply-text.js";
@@ -32,9 +35,12 @@ type PendingMessageToolVisibleReply = {
   text: string;
   anchor: Record<string, unknown>;
   completionAnchor?: Record<string, unknown>;
+  deliveryMirrorAnchor?: Record<string, unknown>;
+  deliveryMirrorIndex?: number;
   succeeded: boolean;
 };
 
+/** Resolve the text cap used when projecting chat history for display. */
 export function resolveEffectiveChatHistoryMaxChars(_cfg: unknown, maxChars?: number): number {
   if (typeof maxChars === "number") {
     return maxChars;
@@ -55,6 +61,7 @@ function truncateChatHistoryText(
   };
 }
 
+/** Return true for known tool-call/tool-result block type spellings in transcripts. */
 export function isToolHistoryBlockType(type: unknown): boolean {
   if (typeof type !== "string") {
     return false;
@@ -925,6 +932,16 @@ function buildMessageToolVisibleReplyMirror(
   return mirror;
 }
 
+function readMessageToolDeliveryMirrorText(message: Record<string, unknown>): string | undefined {
+  // Delivery mirrors can arrive between a successful message-tool result and
+  // the final NO_REPLY. The pending mirror is the display row; the raw mirror
+  // would duplicate that same send.
+  if (!isOpenClawDeliveryMirrorAssistantMessage(message)) {
+    return undefined;
+  }
+  return displayTextForDuplicateCheck(message);
+}
+
 function mirrorMessageToolVisibleReplies(messages: unknown[]): unknown[] {
   if (messages.length === 0) {
     return messages;
@@ -953,6 +970,24 @@ function mirrorMessageToolVisibleReplies(messages: unknown[]): unknown[] {
     clearPending();
   };
 
+  const flushSelectedMirrors = (items: PendingMessageToolVisibleReply[]) => {
+    if (items.length === 0) {
+      return;
+    }
+    const selected = new Set(items);
+    const remaining: PendingMessageToolVisibleReply[] = [];
+    for (const item of pending) {
+      if (selected.has(item) && item.succeeded) {
+        next.push(buildMessageToolVisibleReplyMirror(item));
+        changed = true;
+        continue;
+      }
+      remaining.push(item);
+    }
+    pending.length = 0;
+    pending.push(...remaining);
+  };
+
   for (const message of messages) {
     const record = readRecord(message);
     if (!record) {
@@ -974,6 +1009,12 @@ function mirrorMessageToolVisibleReplies(messages: unknown[]): unknown[] {
       continue;
     }
 
+    const flushAfterCurrentMessage: PendingMessageToolVisibleReply[] = [];
+    const deliveryMirrorText = readMessageToolDeliveryMirrorText(record);
+    const matchingDeliveryMirrorPending = deliveryMirrorText
+      ? pending.filter((item) => item.text.trim() === deliveryMirrorText)
+      : [];
+    const duplicateDeliveryMirror = matchingDeliveryMirrorPending.some((item) => item.succeeded);
     const visibleReplies = extractMessageToolVisibleReplies(record);
     if (visibleReplies.length > 0) {
       for (const reply of visibleReplies) {
@@ -983,7 +1024,10 @@ function mirrorMessageToolVisibleReplies(messages: unknown[]): unknown[] {
           succeeded: false,
         });
       }
-    } else if (isRenderableAssistantDisplayMessage(record)) {
+    } else if (
+      matchingDeliveryMirrorPending.length === 0 &&
+      isRenderableAssistantDisplayMessage(record)
+    ) {
       clearPending();
     }
 
@@ -991,7 +1035,13 @@ function mirrorMessageToolVisibleReplies(messages: unknown[]): unknown[] {
       for (const item of pending) {
         if (!item.succeeded && isSuccessfulMessageToolResult(record, item)) {
           item.succeeded = true;
-          item.completionAnchor = record;
+          item.completionAnchor = item.deliveryMirrorAnchor ?? record;
+          if (item.deliveryMirrorAnchor) {
+            if (typeof item.deliveryMirrorIndex === "number") {
+              next[item.deliveryMirrorIndex] = { ...item.deliveryMirrorAnchor, display: false };
+            }
+            flushAfterCurrentMessage.push(item);
+          }
         }
       }
       if (isAssistantSilentControlReplyOnly(record)) {
@@ -999,7 +1049,21 @@ function mirrorMessageToolVisibleReplies(messages: unknown[]): unknown[] {
       }
     }
 
+    if (duplicateDeliveryMirror) {
+      for (const item of matchingDeliveryMirrorPending) {
+        item.completionAnchor = record;
+      }
+      flushSelectedMirrors(matchingDeliveryMirrorPending);
+      changed = true;
+      continue;
+    }
+
+    for (const item of matchingDeliveryMirrorPending) {
+      item.deliveryMirrorAnchor = record;
+      item.deliveryMirrorIndex = next.length;
+    }
     next.push(message);
+    flushSelectedMirrors(flushAfterCurrentMessage);
   }
 
   return changed ? next : messages;

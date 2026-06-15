@@ -1,3 +1,4 @@
+// Npm Onboard Channel Agent Assertions tests cover npm onboard channel agent assertions script behavior.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -125,6 +126,61 @@ describe("npm onboard channel agent assertions", () => {
       expect(result.status).toBe(0);
       expect(result.stderr).toBe("");
       expect(fs.existsSync(path.join(agentDir, "auth-profiles.json"))).toBe(false);
+    } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects auth profile stores without a usable OpenAI env ref", () => {
+    const cases: unknown[] = [
+      "OPENAI_API_KEY",
+      {
+        version: 1,
+        profiles: {
+          "openai:api-key": { note: "OPENAI_API_KEY" },
+        },
+      },
+    ];
+
+    for (const store of cases) {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-onboard-assertions-"));
+      const agentDir = path.join(tempDir, ".openclaw", "agents", "main", "agent");
+
+      try {
+        writeOnboardConfig(tempDir);
+        writeAuthProfileStoreSqlite(agentDir, store);
+
+        const result = runOnboardAssert(tempDir);
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("auth profile did not persist OPENAI_API_KEY env ref");
+      } finally {
+        fs.rmSync(tempDir, { force: true, recursive: true });
+      }
+    }
+  });
+
+  it("rejects inline OpenAI keys in the SQLite auth profile store", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-onboard-assertions-"));
+    const agentDir = path.join(tempDir, ".openclaw", "agents", "main", "agent");
+
+    try {
+      writeOnboardConfig(tempDir);
+      writeAuthProfileStoreSqlite(agentDir, {
+        version: 1,
+        profiles: {
+          "openai:api-key": {
+            type: "api_key",
+            provider: "openai",
+            key: "sk-openclaw-npm-onboard-e2e",
+          },
+        },
+      });
+
+      const result = runOnboardAssert(tempDir);
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("auth profile persisted the raw OpenAI test key");
     } finally {
       fs.rmSync(tempDir, { force: true, recursive: true });
     }

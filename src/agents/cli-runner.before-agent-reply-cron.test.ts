@@ -1,3 +1,4 @@
+/** Tests cron before_agent_reply gating at the CLI runner entrypoint. */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { cliBackendLog } from "./cli-runner/log.js";
@@ -74,6 +75,7 @@ const baseRunParams = {
 let runCliAgent: typeof import("./cli-runner.js").runCliAgent;
 
 function makeStubContext(params: typeof baseRunParams & { trigger?: string }) {
+  // Stub only the prepared context shape runCliAgent needs after the hook gate.
   return {
     params,
     started: Date.now(),
@@ -114,6 +116,21 @@ afterEach(() => {
 });
 
 describe("runCliAgent cron before_agent_reply seam", () => {
+  it("rejects stale lifecycle ownership before CLI preparation", async () => {
+    await expect(
+      runCliAgent({
+        ...baseRunParams,
+        lifecycleGeneration: "stale-generation",
+      }),
+    ).rejects.toMatchObject({
+      name: "AbortError",
+      message: "Agent run belongs to a stale gateway lifecycle",
+    });
+
+    expect(prepareCliRunContextMock).not.toHaveBeenCalled();
+    expect(executePreparedCliRunMock).not.toHaveBeenCalled();
+  });
+
   it("lets before_agent_reply claim cron runs before the CLI subprocess is invoked", async () => {
     const logInfoSpy = vi.spyOn(cliBackendLog, "info").mockImplementation(() => undefined);
     hasHooksMock.mockImplementation((hookName) => hookName === "before_agent_reply");
@@ -152,6 +169,7 @@ describe("runCliAgent cron before_agent_reply seam", () => {
       const syntheticTurnLog = logInfoSpy.mock.calls
         .map(([message]) => message)
         .find((message) => message.startsWith("cli synthetic turn:"));
+      // Synthetic turn logs prove the branch without leaking hook reply text.
       expect(syntheticTurnLog).toContain("provider=codex-cli");
       expect(syntheticTurnLog).toContain("model=<synthetic>");
       expect(syntheticTurnLog).toContain("requestedModel=gpt-5.5");

@@ -1,3 +1,4 @@
+// Release configured plugin install tests cover doctor checks for release-time plugin installs.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -391,6 +392,9 @@ describe("configured plugin install release step", () => {
         'Skipped package-manager repair for configured plugin "codex" during package update; rerun "openclaw doctor --fix" after the update completes.',
       ],
       warnings: [],
+      deferredRepairDetails: [
+        'Skipped package-manager repair for configured plugin "codex" during package update; rerun "openclaw doctor --fix" after the update completes.',
+      ],
     });
 
     const { maybeRunConfiguredPluginInstallReleaseStep } =
@@ -425,13 +429,60 @@ describe("configured plugin install release step", () => {
       warnings: [],
       completed: false,
       touchedConfig: false,
+      postInstallDoctorResult: {
+        status: "advisory",
+        advisory: expect.objectContaining({
+          kind: "package-post-install-doctor",
+          reason: "deferred-configured-plugin-repair",
+          details: [
+            'Skipped package-manager repair for configured plugin "codex" during package update; rerun "openclaw doctor --fix" after the update completes.',
+          ],
+        }),
+      },
+    });
+  });
+
+  it("does not report an advisory for update-time repair changes that were not deferred", async () => {
+    mocks.repairMissingPluginInstallsForIds.mockResolvedValue({
+      changes: ['Removed stale managed install record for bundled plugin "matrix".'],
+      warnings: [],
+    });
+
+    const { maybeRunConfiguredPluginInstallReleaseStep } =
+      await import("./release-configured-plugin-installs.js");
+    const result = await maybeRunConfiguredPluginInstallReleaseStep({
+      cfg: {
+        plugins: {
+          entries: {
+            matrix: { enabled: true },
+          },
+        },
+      },
+      currentVersion: "2026.5.2-beta.1",
+      touchedVersion: "2026.5.1",
+      env: {
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
+        OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR: "1",
+      },
+    });
+
+    expect(result).toEqual({
+      changes: ['Removed stale managed install record for bundled plugin "matrix".'],
+      warnings: [],
+      completed: false,
+      touchedConfig: false,
     });
   });
 
   it("defers package-manager plugin release completion for writable legacy parents", async () => {
     mocks.repairMissingPluginInstallsForIds.mockResolvedValue({
-      changes: ['Installed missing configured plugin "discord".'],
+      changes: [
+        'Skipped package-manager repair for configured plugin "discord" during package update; rerun "openclaw doctor --fix" after the update completes.',
+      ],
       warnings: [],
+      deferredRepairDetails: [
+        'Skipped package-manager repair for configured plugin "discord" during package update; rerun "openclaw doctor --fix" after the update completes.',
+      ],
     });
 
     const { maybeRunConfiguredPluginInstallReleaseStep } =
@@ -457,10 +508,22 @@ describe("configured plugin install release step", () => {
       OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
     });
     expect(result).toEqual({
-      changes: ['Installed missing configured plugin "discord".'],
+      changes: [
+        'Skipped package-manager repair for configured plugin "discord" during package update; rerun "openclaw doctor --fix" after the update completes.',
+      ],
       warnings: [],
       completed: false,
       touchedConfig: false,
+      postInstallDoctorResult: {
+        status: "advisory",
+        advisory: expect.objectContaining({
+          kind: "package-post-install-doctor",
+          reason: "deferred-configured-plugin-repair",
+          details: [
+            'Skipped package-manager repair for configured plugin "discord" during package update; rerun "openclaw doctor --fix" after the update completes.',
+          ],
+        }),
+      },
     });
   });
 

@@ -3,6 +3,7 @@
   "activation": {
     "onStartup": false
   },
+  "providerCatalogEntry": "./provider-discovery.ts",
   "enabledByDefault": true,
   "providers": ["opencode-go"],
   "providerEndpoints": [
@@ -66,7 +67,7 @@
       }
     },
     "discovery": {
-      "opencode-go": "refreshable"
+      "opencode-go": "runtime"
     }
   },
   "setup": {

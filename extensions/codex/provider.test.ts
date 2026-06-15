@@ -1,3 +1,4 @@
+// Codex tests cover provider plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "./prompt-overlay.js";
 import { codexProviderDiscovery } from "./provider-discovery.js";
@@ -359,6 +360,101 @@ describe("codex provider", () => {
       source: "codex-app-server",
       mode: "token",
     });
+  });
+
+  it("fetches usage from native Codex app-server rate limits for synthetic auth", async () => {
+    const readRateLimits = vi.fn(async () => ({
+      rateLimitsByLimitId: {
+        codex: {
+          limitId: "codex",
+          primary: {
+            usedPercent: 9,
+            windowDurationMins: 300,
+            resetsAt: 1_700_003_600,
+          },
+        },
+      },
+    }));
+    const provider = buildCodexProvider({ readRateLimits });
+
+    await expect(
+      provider.fetchUsageSnapshot?.({
+        provider: "openai",
+        token: "codex-app-server",
+        timeoutMs: 3500,
+        config: {},
+        env: {},
+        fetchFn: fetch,
+      } as never),
+    ).resolves.toEqual({
+      provider: "openai",
+      displayName: "OpenAI",
+      windows: [{ label: "5h", usedPercent: 9, resetAt: 1_700_003_600_000 }],
+      plan: undefined,
+    });
+    expect(readRateLimits).toHaveBeenCalledWith({
+      timeoutMs: 3500,
+      agentDir: undefined,
+      config: {},
+      startOptions: expect.objectContaining({
+        command: "codex",
+        commandSource: "managed",
+      }),
+    });
+  });
+
+  it("keeps synthetic usage rate-limit reads on the configured Codex auth bridge", async () => {
+    const requestCodexAppServerJson = vi.fn(async (_params: unknown) => ({
+      rateLimitsByLimitId: {},
+    }));
+    vi.doMock("./src/app-server/request.js", () => ({
+      requestCodexAppServerJson,
+    }));
+    try {
+      const provider = buildCodexProvider();
+
+      await provider.fetchUsageSnapshot?.({
+        provider: "openai",
+        token: "codex-app-server",
+        authProfileId: "openai:work",
+        timeoutMs: 3500,
+        config: {
+          plugins: {
+            entries: {
+              codex: {
+                config: TEST_CODEX_APP_SERVER_CONFIG,
+              },
+            },
+          },
+        },
+        env: {},
+        fetchFn: fetch,
+      } as never);
+
+      expect(requestCodexAppServerJson).toHaveBeenCalledWith({
+        method: "account/rateLimits/read",
+        timeoutMs: 3500,
+        agentDir: undefined,
+        authProfileId: "openai:work",
+        config: {
+          plugins: {
+            entries: {
+              codex: {
+                config: TEST_CODEX_APP_SERVER_CONFIG,
+              },
+            },
+          },
+        },
+        startOptions: expect.objectContaining({
+          command: "/tmp/openclaw-test-codex",
+          commandSource: "config",
+          args: ["app-server", "--listen", "stdio://"],
+        }),
+        isolated: true,
+      });
+    } finally {
+      vi.doUnmock("./src/app-server/request.js");
+    }
   });
 
   it("exposes a setup auth choice for installing Codex as an external provider", async () => {

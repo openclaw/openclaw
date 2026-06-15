@@ -1,3 +1,4 @@
+// Feishu plugin module implements monitor.account behavior.
 import * as crypto from "node:crypto";
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv, HistoryEntry } from "../runtime-api.js";
@@ -142,6 +143,7 @@ export async function resolveReactionSyntheticEvent(
     },
     message: {
       message_id: `${messageId}:reaction:${emoji}:${uuid()}`,
+      typing_target_message_id: messageId,
       chat_id: syntheticChatId,
       chat_type: syntheticChatType,
       message_type: "text",

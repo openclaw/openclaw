@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Measures gateway watch idle CPU and dist/runtime artifact churn.
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
@@ -44,10 +45,17 @@ const WATCH_GATEWAY_SKIP_ENV = {
   NODE_ENV: "test",
 };
 
+/**
+ * Maximum retained stdout/stderr text for gateway watch diagnostics.
+ */
 export const WATCH_LOG_CAPTURE_MAX_CHARS = 2 * 1024 * 1024;
 const WATCH_BUILD_DETECTION_MAX_CHARS = 4096;
 const NON_NEGATIVE_INTEGER_PATTERN = /^(0|[1-9]\d*)$/u;
+const ANSI_ESCAPE_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`, "g");
 
+/**
+ * Appends watch output while preserving only the diagnostic tail.
+ */
 export function appendBoundedWatchLog(current, chunk, maxChars = WATCH_LOG_CAPTURE_MAX_CHARS) {
   const next = `${current}${String(chunk)}`;
   if (next.length <= maxChars) {
@@ -62,6 +70,9 @@ function formatCapturedWatchLog(text, truncated) {
     : text;
 }
 
+/**
+ * Updates bounded watch-build detection state from new output.
+ */
 export function updateWatchBuildDetection(state, chunk) {
   const combined = `${state.buffer ?? ""}${String(chunk)}`;
   const next = appendBoundedWatchLog("", combined, WATCH_BUILD_DETECTION_MAX_CHARS);
@@ -74,6 +85,9 @@ export function updateWatchBuildDetection(state, chunk) {
   };
 }
 
+/**
+ * Parses a safe non-negative integer CLI value.
+ */
 export function readNonNegativeInteger(value, label) {
   const raw = String(value).trim();
   if (!NON_NEGATIVE_INTEGER_PATTERN.test(raw)) {
@@ -86,6 +100,9 @@ export function readNonNegativeInteger(value, label) {
   return parsed;
 }
 
+/**
+ * Parses gateway watch regression CLI arguments.
+ */
 export function parseArgs(argv) {
   const args = stripLeadingPackageManagerSeparator(argv);
   const options = { ...DEFAULTS };
@@ -396,8 +413,12 @@ function readProcessTreeCpuMs(rootPid) {
   return totalCpuMs;
 }
 
+/**
+ * Reports whether gateway watch output contains a ready marker.
+ */
 export function hasGatewayReadyLog(text) {
-  return /\[gateway\] (?:http server listening|ready \()/.test(text);
+  const normalized = text.replaceAll(ANSI_ESCAPE_PATTERN, "");
+  return /\[gateway\] (?:http server listening|ready(?:\b|\s*\())/.test(normalized);
 }
 
 async function waitForGatewayReady(readText, timeoutMs) {
@@ -504,6 +525,9 @@ function parseTimingFile(timeFilePath) {
   };
 }
 
+/**
+ * Runs a bounded gateway watch process and captures timing/log artifacts.
+ */
 export async function runTimedWatch(options, outputDir, deps = {}) {
   const allocatePort = deps.allocateLoopbackPort ?? allocateLoopbackPort;
   const parseTiming = deps.parseTimingFile ?? parseTimingFile;
@@ -642,6 +666,9 @@ export async function runTimedWatch(options, outputDir, deps = {}) {
   }
 }
 
+/**
+ * Stops the timed watch child process with TERM/KILL fallback.
+ */
 export async function stopTimedWatchChild(child, watchPid, options, deps = {}) {
   const killProcess = deps.killProcess ?? ((pid, signal) => process.kill(pid, signal));
   const currentExit = () =>
@@ -749,6 +776,9 @@ function buildRunNodeDeps(env) {
   };
 }
 
+/**
+ * Reports whether restored CI artifacts need fresh build stamps.
+ */
 export function shouldRefreshBuildStampForRestoredArtifacts(params) {
   return (
     params.skipBuild === true &&
@@ -757,10 +787,72 @@ export function shouldRefreshBuildStampForRestoredArtifacts(params) {
   );
 }
 
+/**
+ * Writes build and runtime-postbuild stamps for the current artifact set.
+ */
 export function writeBuildAndRuntimePostBuildStamps(params = {}) {
   const cwd = params.cwd ?? process.cwd();
   writeBuildStamp({ cwd });
   writeRuntimePostBuildStamp({ cwd });
+}
+
+/**
+ * Collects pass/fail findings for the bounded gateway watch regression run.
+ */
+export function collectGatewayWatchFindings(params) {
+  const {
+    cpuMs,
+    distRuntimeByteGrowth,
+    distRuntimeFileGrowth,
+    options,
+    watchBuildReason,
+    watchResult,
+    watchTriggeredBuild,
+  } = params;
+  const failures = [];
+  const warnings = [];
+  if (watchResult.spawnError) {
+    failures.push(`gateway:watch failed to start: ${watchResult.spawnError}`);
+  }
+  if (!watchResult.readyBeforeWindow) {
+    failures.push("gateway:watch did not report ready before the idle CPU window");
+  }
+  if (watchResult.timingFileMissing && !Number.isFinite(watchResult.idleCpuMs)) {
+    failures.push(
+      "failed to collect CPU timing from the bounded gateway:watch run; timing artifact is missing",
+    );
+  } else if (watchResult.timingFileMissing) {
+    warnings.push(
+      "bounded gateway:watch timing artifact is missing; using process-tree idle CPU sample",
+    );
+  }
+  if (watchTriggeredBuild && watchBuildReason === "dirty_watched_tree") {
+    failures.push(
+      "gateway:watch invalid local run: dirty watched source tree forced a rebuild during the watch window",
+    );
+  }
+  if (distRuntimeFileGrowth > options.distRuntimeFileGrowthMax) {
+    failures.push(
+      `dist-runtime file growth ${distRuntimeFileGrowth} exceeded max ${options.distRuntimeFileGrowthMax}`,
+    );
+  }
+  if (distRuntimeByteGrowth > options.distRuntimeByteGrowthMax) {
+    failures.push(
+      `dist-runtime apparent byte growth ${distRuntimeByteGrowth} exceeded max ${options.distRuntimeByteGrowthMax}`,
+    );
+  }
+  if (!Number.isFinite(cpuMs)) {
+    failures.push("failed to parse CPU timing from the bounded gateway:watch run");
+  } else if (cpuMs > options.cpuFailMs) {
+    failures.push(
+      `LOUD ALARM: gateway:watch used ${cpuMs}ms CPU in ${options.windowMs}ms window, above loud-alarm threshold ${options.cpuFailMs}ms`,
+    );
+  } else if (cpuMs > options.cpuWarnMs) {
+    warnings.push(
+      `gateway:watch used ${cpuMs}ms CPU in ${options.windowMs}ms window, above target ${options.cpuWarnMs}ms`,
+    );
+  }
+  return { failures, warnings };
 }
 
 async function main() {
@@ -867,46 +959,15 @@ async function main() {
 
   console.log(JSON.stringify(summary, null, 2));
 
-  const failures = [];
-  const warnings = [];
-  if (watchResult.spawnError) {
-    failures.push(`gateway:watch failed to start: ${watchResult.spawnError}`);
-  }
-  if (watchResult.timingFileMissing && !Number.isFinite(watchResult.idleCpuMs)) {
-    failures.push(
-      "failed to collect CPU timing from the bounded gateway:watch run; timing artifact is missing",
-    );
-  } else if (watchResult.timingFileMissing) {
-    warnings.push(
-      "bounded gateway:watch timing artifact is missing; using process-tree idle CPU sample",
-    );
-  }
-  if (watchTriggeredBuild && watchBuildReason === "dirty_watched_tree") {
-    failures.push(
-      "gateway:watch invalid local run: dirty watched source tree forced a rebuild during the watch window",
-    );
-  }
-  if (distRuntimeFileGrowth > options.distRuntimeFileGrowthMax) {
-    failures.push(
-      `dist-runtime file growth ${distRuntimeFileGrowth} exceeded max ${options.distRuntimeFileGrowthMax}`,
-    );
-  }
-  if (distRuntimeByteGrowth > options.distRuntimeByteGrowthMax) {
-    failures.push(
-      `dist-runtime apparent byte growth ${distRuntimeByteGrowth} exceeded max ${options.distRuntimeByteGrowthMax}`,
-    );
-  }
-  if (!Number.isFinite(cpuMs)) {
-    failures.push("failed to parse CPU timing from the bounded gateway:watch run");
-  } else if (cpuMs > options.cpuFailMs) {
-    failures.push(
-      `LOUD ALARM: gateway:watch used ${cpuMs}ms CPU in ${options.windowMs}ms window, above loud-alarm threshold ${options.cpuFailMs}ms`,
-    );
-  } else if (cpuMs > options.cpuWarnMs) {
-    warnings.push(
-      `gateway:watch used ${cpuMs}ms CPU in ${options.windowMs}ms window, above target ${options.cpuWarnMs}ms`,
-    );
-  }
+  const { failures, warnings } = collectGatewayWatchFindings({
+    cpuMs,
+    distRuntimeByteGrowth,
+    distRuntimeFileGrowth,
+    options,
+    watchBuildReason,
+    watchResult,
+    watchTriggeredBuild,
+  });
 
   for (const message of warnings) {
     warn(message);

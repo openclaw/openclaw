@@ -1,3 +1,5 @@
+// Gateway HTTP session history endpoint.
+// Serves JSON and SSE history snapshots backed by transcript files.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -31,7 +33,7 @@ import {
 import { resolveTranscriptPathForComparison } from "./session-transcript-path.js";
 import {
   readRecentSessionMessagesWithStatsAsync,
-  readSessionMessagesAsync,
+  readSessionMessagesWithSourceAsync,
   resolveFreshestSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTarget,
   resolveSessionTranscriptCandidates,
@@ -81,6 +83,7 @@ function sseWrite(res: ServerResponse, event: string, payload: unknown): void {
   res.write(`data: ${JSON.stringify(payload)}\n\n`);
 }
 
+/** Handle `/sessions/:sessionKey/history` JSON/SSE requests. */
 export async function handleSessionHistoryHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -145,19 +148,28 @@ export async function handleSessionHistoryHttpRequest(
           entry.sessionId,
           target.storePath,
           entry.sessionFile,
-          resolveSessionHistoryTailReadOptions(limit),
+          {
+            ...resolveSessionHistoryTailReadOptions(limit),
+            allowResetArchiveFallback: true,
+          },
         )
       : undefined;
   // Cursor reads still need an arbitrary historical window. The common first
   // page path is bounded above so `limit=1` cannot materialize huge transcripts.
-  const rawSnapshot =
-    boundedSnapshot?.messages ??
-    (entry?.sessionId
-      ? await readSessionMessagesAsync(entry.sessionId, target.storePath, entry.sessionFile, {
-          mode: "full",
-          reason: "session history cursor pagination",
-        })
-      : []);
+  const fullSnapshot =
+    boundedSnapshot === undefined && entry?.sessionId
+      ? await readSessionMessagesWithSourceAsync(
+          entry.sessionId,
+          target.storePath,
+          entry.sessionFile,
+          {
+            mode: "full",
+            reason: "session history cursor pagination",
+            allowResetArchiveFallback: true,
+          },
+        )
+      : undefined;
+  const rawSnapshot = boundedSnapshot?.messages ?? fullSnapshot?.messages ?? [];
   const historySnapshot = buildSessionHistorySnapshot({
     rawMessages: rawSnapshot,
     maxChars: effectiveMaxChars,
@@ -199,6 +211,7 @@ export async function handleSessionHistoryHttpRequest(
     rawMessages: rawSnapshot,
     rawTranscriptSeq: boundedSnapshot?.totalMessages,
     totalRawMessages: boundedSnapshot?.totalMessages,
+    transcriptPath: boundedSnapshot?.transcriptPath ?? fullSnapshot?.transcriptPath,
     maxChars: effectiveMaxChars,
     limit,
     cursor,
@@ -306,6 +319,14 @@ export async function handleSessionHistoryHttpRequest(
       }
       if (update.message !== undefined) {
         if (limit === undefined && cursor === undefined) {
+          if (sseState.shouldRefreshForTranscriptPath(updatePath)) {
+            sentHistory = await sseState.refreshAsync();
+            sseWrite(res, "history", {
+              sessionKey: target.canonicalKey,
+              ...sentHistory,
+            });
+            return;
+          }
           const nextEvent = sseState.appendInlineMessage({
             message: update.message,
             messageId: update.messageId,
