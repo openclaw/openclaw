@@ -172,7 +172,8 @@ vi.mock("./dotenv.js", () => ({
   loadCliDotEnv: loadDotEnvMock,
 }));
 
-vi.mock("../infra/env.js", () => ({
+vi.mock("../infra/env.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/env.js")>()),
   isTruthyEnvValue: (value?: string) =>
     typeof value === "string" && ["1", "on", "true", "yes"].includes(value.trim().toLowerCase()),
   normalizeEnv: normalizeEnvMock,
@@ -2083,6 +2084,39 @@ describe("runCli exit behavior", () => {
     const finalStartOrder = startProxyMock.mock.invocationCallOrder[1] ?? 0;
     expect(finalEnvironmentReadOrder).toBeGreaterThan(earlyStopOrder);
     expect(finalStartOrder).toBeGreaterThan(earlyStopOrder);
+  });
+
+  it("removes early proxy signal handlers when the final config disables the proxy", async () => {
+    const earlyHandle = makeProxyHandle();
+    const earlyProxy = { enabled: true, proxyUrl: "http://127.0.0.1:19876" };
+    const finalProxy = { enabled: false };
+    loadConfigMock.mockReturnValueOnce({ proxy: earlyProxy });
+    startProxyMock.mockResolvedValueOnce(earlyHandle).mockResolvedValueOnce(null);
+    const processOnceSpy = vi.spyOn(process, "once");
+    const processOffSpy = vi.spyOn(process, "off");
+    commanderParseAsyncMock.mockImplementationOnce(async () => {
+      const sigtermHandler = processOnceSpy.mock.calls.find(([event]) => event === "SIGTERM")?.[1];
+      const sigintHandler = processOnceSpy.mock.calls.find(([event]) => event === "SIGINT")?.[1];
+      const exitHandler = processOnceSpy.mock.calls.find(([event]) => event === "exit")?.[1];
+
+      await getGatewayRunRuntimeHooks().refreshManagedProxy?.(finalProxy);
+
+      expect(processOffSpy).toHaveBeenCalledWith("SIGTERM", sigtermHandler);
+      expect(processOffSpy).toHaveBeenCalledWith("SIGINT", sigintHandler);
+      expect(processOffSpy).toHaveBeenCalledWith("exit", exitHandler);
+    });
+
+    try {
+      await runCli(["node", "openclaw", "gateway", "run"]);
+    } finally {
+      processOffSpy.mockRestore();
+      processOnceSpy.mockRestore();
+    }
+
+    expect(startProxyMock).toHaveBeenNthCalledWith(1, earlyProxy);
+    expect(startProxyMock).toHaveBeenNthCalledWith(2, finalProxy);
+    expect(stopProxyMock).toHaveBeenCalledOnce();
+    expect(stopProxyMock).toHaveBeenCalledWith(earlyHandle);
   });
 
   it("starts the managed proxy for metadata-owned plugin commands by default", async () => {

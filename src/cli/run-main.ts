@@ -601,7 +601,22 @@ export async function runCli(argv: string[] = process.argv) {
     }
     return await bestEffortConfigPromise;
   };
+  const uninstallProxySignalHandlers = () => {
+    if (onSigterm) {
+      process.off("SIGTERM", onSigterm);
+      onSigterm = null;
+    }
+    if (onSigint) {
+      process.off("SIGINT", onSigint);
+      onSigint = null;
+    }
+    if (onExit) {
+      process.off("exit", onExit);
+      onExit = null;
+    }
+  };
   const stopStartedProxy = async () => {
+    uninstallProxySignalHandlers();
     const handle = proxyHandle;
     proxyHandle = null;
     if (handle) {
@@ -619,12 +634,6 @@ export async function runCli(argv: string[] = process.argv) {
       return;
     }
     const shutdown = (exitCode: number) => {
-      if (onSigterm) {
-        process.off("SIGTERM", onSigterm);
-      }
-      if (onSigint) {
-        process.off("SIGINT", onSigint);
-      }
       void stopStartedProxy().finally(() => {
         process.exit(exitCode);
       });
@@ -988,15 +997,6 @@ export async function runCli(argv: string[] = process.argv) {
     }
   } finally {
     uninstallGatewayRunRuntimeHooks?.();
-    if (onSigterm) {
-      process.off("SIGTERM", onSigterm);
-    }
-    if (onSigint) {
-      process.off("SIGINT", onSigint);
-    }
-    if (onExit) {
-      process.off("exit", onExit);
-    }
     await stopStartedProxy();
     await disposeCliAgentHarnesses();
     await closeCliMemoryManagers();
