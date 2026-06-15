@@ -687,11 +687,6 @@ function resolveSystemctlUserScope(env: GatewayServiceEnv): {
   const effectiveUser = readSystemctlEffectiveUser();
   const isEffectiveRoot = effectiveUid === null ? effectiveUser === "root" : effectiveUid === 0;
   const isSudoToRoot = isEffectiveRoot && isNonRootUser(sudoUser);
-  // When the gateway unit file already exists under the current (root) HOME,
-  // the service is installed for root, not the sudo user.  A stale SUDO_USER
-  // from a prior sudo escalation must not redirect systemctl --user away from
-  // root's own user manager (#81410).
-  const preferMachineScope = isSudoToRoot && !isGatewayUnitInstalledForCurrentUser(env);
   const machineUser = isSudoToRoot
     ? sudoUser
     : isNonRootUser(envUser)
@@ -701,17 +696,8 @@ function resolveSystemctlUserScope(env: GatewayServiceEnv): {
         : effectiveUser || envUser || sudoUser || null;
   return {
     machineUser,
-    preferMachineScope,
+    preferMachineScope: isSudoToRoot,
   };
-}
-
-function isGatewayUnitInstalledForCurrentUser(env: GatewayServiceEnv): boolean {
-  try {
-    const unitPath = resolveSystemdUnitPath(env);
-    return fsSync.existsSync(unitPath);
-  } catch {
-    return false;
-  }
 }
 
 function resolveSystemctlMachineUserScopeArgs(user: string): string[] {
@@ -738,12 +724,21 @@ async function execSystemctlUser(
 ): Promise<{ stdout: string; stderr: string; code: number }> {
   const { machineUser, preferMachineScope } = resolveSystemctlUserScope(env);
 
-  // Under sudo-to-root, prefer the invoking non-root user's scope directly via machine scope.
+  // Under sudo-to-root, prefer the invoking non-root user's scope via machine scope.
+  // If the machine scope fails with a unit-not-found error, fall back to bare --user:
+  // a stale SUDO_USER from a prior sudo escalation must not prevent commands from
+  // reaching root's own user manager when the unit was installed there (#81410).
   if (preferMachineScope && machineUser) {
     const machineScopeArgs = resolveSystemctlMachineUserScopeArgs(machineUser);
     if (machineScopeArgs.length > 0) {
-      // Do not fall through to bare --user: under sudo that can target root's user manager.
-      return await execSystemctl([...machineScopeArgs, ...args], env);
+      const machineResult = await execSystemctl([...machineScopeArgs, ...args], env);
+      if (
+        machineResult.code === 0 ||
+        !isSystemdUnitMissingDetail(readSystemctlDetail(machineResult))
+      ) {
+        return machineResult;
+      }
+      // Unit not found in the sudo user's scope; fall through to bare --user.
     }
   }
 

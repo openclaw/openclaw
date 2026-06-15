@@ -2049,14 +2049,33 @@ describe("systemd service control", () => {
     await assertRestartSuccess({ SUDO_USER: "debian" });
   });
 
-  it("falls back to bare --user when root unit file exists despite stale SUDO_USER (#81410)", async () => {
+  it("falls back to bare --user when machine scope has no unit despite stale SUDO_USER (#81410)", async () => {
     mockEffectiveUid(0);
-    existsSyncMock.mockReturnValue(true); // unit file exists in root's HOME
     execFileMock
+      // assertSystemdAvailable: machine scope fails → unit not found
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertMachineUserSystemctlArgs(args, "debian", "status");
+        const err = createExecFileError("Failed to get unit file state", {
+          stderr: "Unit file openclaw-gateway.service does not exist.",
+        });
+        err.code = 1;
+        cb(err, "", "Unit file openclaw-gateway.service does not exist.");
+      })
+      // assertSystemdAvailable: fallback bare --user succeeds
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
         assertUserSystemctlArgs(args, "status");
         cb(null, "", "");
       })
+      // restart: machine scope fails → unit not found
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertMachineRestartArgs(args);
+        const err = createExecFileError("Failed to get unit file state", {
+          stderr: "Unit file openclaw-gateway.service does not exist.",
+        });
+        err.code = 1;
+        cb(err, "", "Unit file openclaw-gateway.service does not exist.");
+      })
+      // restart: fallback bare --user succeeds
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
         assertUserSystemctlArgs(args, "restart", GATEWAY_SERVICE);
         cb(null, "", "");
