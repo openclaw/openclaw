@@ -276,6 +276,31 @@ describe("validateConfigObjectRawWithPlugins channel metadata", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("names the external plugin owner for unsupported channel properties", () => {
+    mockLoadPluginManifestRegistry.mockReturnValue(createExternalFeishuSchemaRegistry());
+
+    const result = validateConfigObjectRawWithPlugins({
+      channels: {
+        feishu: {
+          appId: "app-id",
+          appSecret: "secret",
+          unsupportedField: true,
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues).toContainEqual(
+        expect.objectContaining({
+          path: "channels.feishu",
+          message:
+            'invalid config for plugin openclaw-lark: must not have additional properties: "unsupportedField"',
+        }),
+      );
+    }
+  });
+
   it("keeps raw channel validation diagnostics plugin-agnostic", () => {
     const result = validateConfigObjectRawWithPlugins({
       channels: {

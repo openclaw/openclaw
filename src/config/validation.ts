@@ -1072,6 +1072,13 @@ function validateConfigObjectWithPluginsBase(
     return `${baseLocal}.${errorPath}`;
   };
 
+  const formatChannelConfigIssueMessage = (message: string, pluginId?: string): string => {
+    if (pluginId) {
+      return `invalid config for plugin ${pluginId}: ${message}`;
+    }
+    return formatRawChannelConfigIssueMessage(message);
+  };
+
   type RegistryInfo = {
     registry: PluginManifestRegistry;
     knownIds?: Set<string>;
@@ -1081,6 +1088,7 @@ function validateConfigObjectWithPluginsBase(
       string,
       {
         schema?: Record<string, unknown>;
+        pluginId?: string;
       }
     >;
   };
@@ -1211,6 +1219,7 @@ function validateConfigObjectWithPluginsBase(
     string,
     {
       schema?: Record<string, unknown>;
+      pluginId?: string;
     }
   > => {
     const info = ensureRegistry();
@@ -1220,10 +1229,32 @@ function validateConfigObjectWithPluginsBase(
           (entry) => [entry.channelId, { schema: entry.schema }] as const,
         ),
       );
+      const ownerByChannelId = new Map<
+        string,
+        { pluginId: string; origin: string; originRank: number }
+      >();
+      const originRank: Record<string, number> = { config: 0, workspace: 1, global: 2, bundled: 3 };
+      for (const record of info.registry.plugins) {
+        const rank = originRank[record.origin] ?? Number.MAX_SAFE_INTEGER;
+        for (const channelId of Object.keys(record.channelConfigs ?? {})) {
+          const current = ownerByChannelId.get(channelId);
+          if (!current || rank <= current.originRank) {
+            ownerByChannelId.set(channelId, {
+              pluginId: record.id,
+              origin: record.origin,
+              originRank: rank,
+            });
+          }
+        }
+      }
       for (const entry of collectChannelSchemaMetadata(info.registry)) {
         const current = info.channelSchemas.get(entry.id);
         if (entry.configSchema) {
-          info.channelSchemas.set(entry.id, { schema: entry.configSchema });
+          const owner = ownerByChannelId.get(entry.id);
+          info.channelSchemas.set(entry.id, {
+            schema: entry.configSchema,
+            pluginId: owner?.origin === "bundled" ? undefined : owner?.pluginId,
+          });
           continue;
         }
         if (!current) {
@@ -1531,12 +1562,12 @@ function validateConfigObjectWithPluginsBase(
         continue;
       }
 
-      const channelSchema = ensureChannelSchemas().get(trimmed)?.schema;
-      if (!channelSchema) {
+      const channelSchema = ensureChannelSchemas().get(trimmed);
+      if (!channelSchema?.schema) {
         continue;
       }
       const result = validateJsonSchemaValue({
-        schema: channelSchema,
+        schema: channelSchema.schema,
         cacheKey: `channel:${trimmed}`,
         value: config.channels[trimmed],
         applyDefaults: true, // Always apply defaults for AJV schema validation;
@@ -1548,7 +1579,7 @@ function validateConfigObjectWithPluginsBase(
             error.path === "<root>" ? `channels.${trimmed}` : `channels.${trimmed}.${error.path}`;
           issues.push({
             path: pathResult,
-            message: formatRawChannelConfigIssueMessage(error.message),
+            message: formatChannelConfigIssueMessage(error.message, channelSchema.pluginId),
             allowedValues: error.allowedValues,
             allowedValuesHiddenCount: error.allowedValuesHiddenCount,
           });
