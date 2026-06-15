@@ -72,6 +72,7 @@ overrides:
   hono: 4.12.18
   "@hono/node-server": 1.19.14
   axios: 1.16.0
+  esbuild: 0.28.1
   fast-uri: 3.1.2
   follow-redirects: 1.16.0
   defu: 6.1.5
