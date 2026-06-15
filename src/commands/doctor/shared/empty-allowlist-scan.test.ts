@@ -59,6 +59,64 @@ describe("doctor empty allowlist policy scan", () => {
     ]);
   });
 
+  it("does not warn about parent groupAllowFrom when every account overrides it", () => {
+    const warnings = scanEmptyAllowlistPolicyWarnings(
+      {
+        channels: {
+          signal: {
+            dmPolicy: "open",
+            groupPolicy: "allowlist",
+            accounts: {
+              work: {
+                groupPolicy: "allowlist",
+                groupAllowFrom: ["+1234567890"],
+              },
+              personal: {
+                groupPolicy: "allowlist",
+                groupAllowFrom: ["+1987654321"],
+              },
+            },
+          },
+        },
+      },
+      { doctorFixCommand: "openclaw doctor --fix" },
+    );
+
+    // Parent has empty groupAllowFrom, but every account has its own populated
+    // groupAllowFrom — runtime never reads the parent. No warnings expected.
+    expect(warnings).toStrictEqual([]);
+  });
+
+  it("still warns about parent groupAllowFrom when some accounts lack it", () => {
+    const warnings = scanEmptyAllowlistPolicyWarnings(
+      {
+        channels: {
+          signal: {
+            groupPolicy: "allowlist",
+            accounts: {
+              work: {
+                groupPolicy: "allowlist",
+                groupAllowFrom: ["+1234567890"],
+              },
+              personal: {
+                groupPolicy: "allowlist",
+                // No groupAllowFrom — will fall back to parent
+              },
+            },
+          },
+        },
+      },
+      { doctorFixCommand: "openclaw doctor --fix" },
+    );
+
+    // One account lacks its own groupAllowFrom, so the parent fallback matters.
+    // The personal account also gets its own per-account warning.
+    expect(warnings).toStrictEqual([
+      '- channels.signal.groupPolicy is "allowlist" but groupAllowFrom (and allowFrom) is empty — all group messages will be silently dropped. Add sender IDs to channels.signal.groupAllowFrom or channels.signal.allowFrom, or set groupPolicy to "open".',
+      '- channels.signal.accounts.personal.groupPolicy is "allowlist" but groupAllowFrom (and allowFrom) is empty — all group messages will be silently dropped. Add sender IDs to channels.signal.accounts.personal.groupAllowFrom or channels.signal.accounts.personal.allowFrom, or set groupPolicy to "open".',
+    ]);
+  });
+
   it("skips disabled channel and account entries", () => {
     const extraWarningsForAccount = vi.fn(({ prefix }) => [`extra:${prefix}`]);
 

@@ -2,6 +2,7 @@
 import type { ChannelDoctorEmptyAllowlistAccountContext } from "../../../channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { DoctorAccountRecord, DoctorAllowFromList } from "../types.js";
+import { hasAllowFromEntries } from "./allowlist.js";
 import { collectEmptyAllowlistPolicyWarningsForAccount } from "./empty-allowlist-policy.js";
 import { asObjectRecord } from "./object.js";
 
@@ -88,9 +89,35 @@ export function scanEmptyAllowlistPolicyWarnings(
     if (isDisabledRecord(channelConfig)) {
       continue;
     }
-    checkAccount(channelConfig, `channels.${channelName}`, channelName);
+    // When every child account has its own populated groupAllowFrom, the runtime
+    // resolves account ?? parent and never reads an empty parent list. Skip the
+    // false group-policy warning at parent scope while still checking DM policy.
+    const channelAccounts = asObjectRecord(channelConfig.accounts);
+    const allAccountsOverrideGroupAllowFrom =
+      channelAccounts &&
+      Object.keys(channelAccounts).length > 0 &&
+      Object.values(channelAccounts).every(
+        (acc) =>
+          acc &&
+          typeof acc === "object" &&
+          hasAllowFromEntries(
+            (acc as DoctorAccountRecord).groupAllowFrom as DoctorAllowFromList | undefined,
+          ),
+      );
 
-    const accounts = asObjectRecord(channelConfig.accounts);
+    if (allAccountsOverrideGroupAllowFrom) {
+      // Strip groupPolicy so collectEmptyAllowlistPolicyWarningsForAccount skips
+      // the group-allowlist check — only DM-level warnings remain for the parent.
+      checkAccount(
+        { ...channelConfig, groupPolicy: undefined } as DoctorAccountRecord,
+        `channels.${channelName}`,
+        channelName,
+      );
+    } else {
+      checkAccount(channelConfig, `channels.${channelName}`, channelName);
+    }
+
+    const accounts = channelAccounts;
     if (!accounts) {
       continue;
     }
