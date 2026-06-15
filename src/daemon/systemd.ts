@@ -112,6 +112,11 @@ export type InstalledSystemdGatewayScope = InstalledSystemdGatewayConflict & {
   conflictingUnit?: InstalledSystemdGatewayConflict;
 };
 
+type RetiredSystemdGatewayConflict = InstalledSystemdGatewayConflict & {
+  active: boolean;
+  enabled: boolean;
+};
+
 async function findMarkerOwnedSystemSystemdUnit(): Promise<{
   unitName: string;
   unitPath: string;
@@ -141,6 +146,18 @@ async function findMarkerOwnedSystemSystemdUnit(): Promise<{
     }
   }
   return null;
+}
+
+async function readSystemdUnitLiveState(
+  env: GatewayServiceEnv,
+  unitName: string,
+  scope: SystemdUnitScope,
+): Promise<{ active: boolean; enabled: boolean }> {
+  const run = (args: string[]) =>
+    scope === "system" ? execSystemctl(args, env) : execSystemctlUser(env, args);
+  const active = await run(["is-active", "--quiet", unitName]);
+  const enabled = await run(["is-enabled", unitName]);
+  return { active: active.code === 0, enabled: enabled.code === 0 };
 }
 
 async function isSystemdUnitActiveOrEnabled(
@@ -856,7 +873,7 @@ async function assertSystemdAvailable(env: GatewayServiceEnv = process.env as Ga
 
 async function readLiveConflictingSystemScopeUnitBeforeUserUnitInstall(
   env: GatewayServiceEnv,
-): Promise<InstalledSystemdGatewayConflict | null> {
+): Promise<RetiredSystemdGatewayConflict | null> {
   if (isNodeSystemdEnvironment(env)) {
     return null;
   }
@@ -865,17 +882,17 @@ async function readLiveConflictingSystemScopeUnitBeforeUserUnitInstall(
   if (!unitPath) {
     return null;
   }
-  const isLiveConflict = await isSystemdUnitActiveOrEnabled(env, unitName, "system");
-  if (!isLiveConflict) {
+  const state = await readSystemdUnitLiveState(env, unitName, "system");
+  if (!state.active && !state.enabled) {
     return null;
   }
-  return { scope: "system", unitName, unitPath };
+  return { scope: "system", unitName, unitPath, ...state };
 }
 
 async function retireConflictingSystemScopeUnitBeforeUserUnitInstall(
   env: GatewayServiceEnv,
-  unit: InstalledSystemdGatewayConflict | null,
-): Promise<InstalledSystemdGatewayConflict | null> {
+  unit: RetiredSystemdGatewayConflict | null,
+): Promise<RetiredSystemdGatewayConflict | null> {
   if (!unit) {
     return null;
   }
@@ -1185,13 +1202,21 @@ async function restartPreparedSystemdService(params: { env: GatewayServiceEnv })
 
 async function restoreRetiredSystemUnitAfterUserActivationFailure(
   env: GatewayServiceEnv,
-  unit: InstalledSystemdGatewayConflict,
+  unit: RetiredSystemdGatewayConflict,
 ): Promise<string | null> {
   const userDisable = await execSystemctlUser(env, ["disable", "--now", unit.unitName]);
   if (userDisable.code !== 0) {
     return `failed to disable replacement user unit ${unit.unitName}: ${readSystemctlDetail(userDisable) || "unknown error"}`;
   }
-  const restore = await execSystemctl(["enable", "--now", unit.unitName], env);
+  if (!unit.enabled && !unit.active) {
+    return null;
+  }
+  const restoreArgs = unit.enabled
+    ? unit.active
+      ? ["enable", "--now", unit.unitName]
+      : ["enable", unit.unitName]
+    : ["start", unit.unitName];
+  const restore = await execSystemctl(restoreArgs, env);
   if (restore.code !== 0) {
     return `failed to restore system-scope ${unit.unitName}: ${readSystemctlDetail(restore) || "unknown error"}`;
   }
@@ -1329,6 +1354,10 @@ async function runSystemdServiceAction(params: {
         `${unitName} is a system-scope unit (${installed.unitPath}); run \`sudo systemctl ${params.action} ${unitName}\` to ${params.action} it`,
       );
     }
+    const res = await execSystemctl([params.action, unitName], env);
+    if (res.code !== 0) {
+      throw new Error(`systemctl ${params.action} failed: ${res.stderr || res.stdout}`.trim());
+    }
     const retiredUserUnit = await retireConflictingUserScopeUnitForSystemUnit(
       env,
       installed.conflictingUnit,
@@ -1337,10 +1366,6 @@ async function runSystemdServiceAction(params: {
       params.stdout.write(
         `${formatLine("Retired conflicting systemd service", `${retiredUserUnit.unitName} (${retiredUserUnit.unitPath})`)}\n`,
       );
-    }
-    const res = await execSystemctl([params.action, unitName], env);
-    if (res.code !== 0) {
-      throw new Error(`systemctl ${params.action} failed: ${res.stderr || res.stdout}`.trim());
     }
     params.stdout.write(`${formatLine(params.label, unitName)}\n`);
     return;
