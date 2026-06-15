@@ -135,6 +135,19 @@ describe("launchTuiCli", () => {
     expect(options.stdio).toBe("inherit");
   });
 
+  it("keeps parent stdin paused after the relaunched TUI exits", async () => {
+    const child = createChildProcess();
+    spawnMock.mockImplementation((_cmd: string, _args: string[], _opts: SpawnOptions) => {
+      queueMicrotask(() => child.emit("exit", 0, null));
+      return child;
+    });
+
+    await launchTuiCli({ deliver: false });
+
+    expect(process.stdin.pause).toHaveBeenCalledOnce();
+    expect(process.stdin.resume).not.toHaveBeenCalled();
+  });
+
   it("launches compiled CLI shapes without repeating the current command", async () => {
     process.argv[1] = "setup";
     const child = createChildProcess();
