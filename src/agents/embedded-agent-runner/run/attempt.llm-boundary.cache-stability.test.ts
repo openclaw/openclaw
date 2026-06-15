@@ -32,6 +32,8 @@ import { normalizeMessagesForLlmBoundary } from "./attempt.llm-boundary.js";
 type AgentMsg = Parameters<typeof normalizeMessagesForLlmBoundary>[0][number];
 
 const TZ = "UTC";
+// The provider hooks below abort before any network call; keep this fixture
+// non-provider-shaped so changed-path scanners do not treat it as a real key.
 const TEST_PROVIDER_TOKEN = ["test", "provider", "token"].join("-");
 
 /** A user message as it sits in the JSONL transcript: BARE string + timestamp. */
