@@ -708,6 +708,65 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     expect(chatFallbackCall[2]).toBeTypeOf("string");
   });
 
+  it("uses both compaction.model and compaction.fallbacks when both are set", async () => {
+    // Regression: the original `||` condition caused explicit compaction.model
+    // to always bypass the fallback path, making `compaction.fallbacks` useless
+    // with the documented config shape (model + fallbacks). Now when both are
+    // set, the fallback path is entered and the compact function is called
+    // twice (primary fails → fallback succeeds).
+    resolveModelMock.mockImplementation((provider = "openai", modelId = "fake") => ({
+      model: { provider, api: "responses", id: modelId, input: [] },
+      error: null,
+      authStorage: { setRuntimeApiKey: vi.fn() },
+      modelRegistry: {},
+    }));
+    sessionCompactImpl
+      .mockRejectedValueOnce(
+        Object.assign(new Error("explicit compaction model rate limited"), {
+          status: 429,
+          code: "rate_limit_exceeded",
+        }),
+      )
+      .mockResolvedValueOnce({
+        summary: "fallback after explicit model",
+        firstKeptEntryId: "entry-explicit-fb",
+        tokensBefore: 100,
+        details: { ok: true },
+      });
+
+    const result = await compactEmbeddedAgentSessionDirect({
+      sessionId: "session-1",
+      sessionKey: TEST_SESSION_KEY,
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+      provider: "openai",
+      model: "gpt-primary",
+      trigger: "overflow",
+      config: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-primary",
+              fallbacks: ["openai/chat-fallback"],
+            },
+            compaction: {
+              model: "openai/explicit-compaction-model",
+              fallbacks: ["openai/explicit-model-fallback"],
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.result?.summary).toBe("fallback after explicit model");
+
+    // sessionCompactImpl was called exactly twice: primary (rate-limited),
+    // then fallback (success). If only one call, the fallback path was
+    // not entered despite compaction.fallbacks being set.
+    expect(sessionCompactImpl).toHaveBeenCalledTimes(2);
+  });
+
   it("preserves Codex OAuth across same-provider OpenAI compaction fallbacks", async () => {
     resolveModelMock.mockImplementation((provider = "openai", modelId = "fake") => ({
       model: { provider, api: "responses", id: modelId, input: [] },

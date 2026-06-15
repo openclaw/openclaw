@@ -394,6 +394,19 @@ function hasCompactionModelFallbackCandidates(params: CompactEmbeddedAgentSessio
   return (fallbacksOverride ?? defaultFallbacks).length > 0;
 }
 
+/**
+ * Checks whether an explicit compaction.model has explicit compaction.fallbacks.
+ * Used to decide whether to enter the model-fallback path when compaction.model
+ * is set. Unlike hasCompactionModelFallbackCandidates, this only checks
+ * compaction.fallbacks — not the chat model's model.fallbacks — because an
+ * explicit compaction.model is intentionally decoupled from the chat model's
+ * fallback chain.
+ */
+function hasExplicitCompactionFallbacks(params: CompactEmbeddedAgentSessionParams): boolean {
+  const explicit = resolveCompactionFallbacksOverride(params);
+  return Array.isArray(explicit) && explicit.length > 0;
+}
+
 function classifyCompactionFallbackResult(
   result: EmbeddedAgentCompactResult,
   provider: string,
@@ -430,7 +443,10 @@ function fallbackFailureToCompactionResult(err: unknown): EmbeddedAgentCompactRe
 export async function compactEmbeddedAgentSessionDirect(
   params: CompactEmbeddedAgentSessionParams,
 ): Promise<EmbeddedAgentCompactResult> {
-  if (hasExplicitCompactionModel(params) || !hasCompactionModelFallbackCandidates(params)) {
+  if (hasExplicitCompactionModel(params) && !hasExplicitCompactionFallbacks(params)) {
+    return await compactEmbeddedAgentSessionDirectOnce(params);
+  }
+  if (!hasExplicitCompactionModel(params) && !hasCompactionModelFallbackCandidates(params)) {
     return await compactEmbeddedAgentSessionDirectOnce(params);
   }
   const resolvedCompactionTarget = resolveEmbeddedCompactionTarget({
