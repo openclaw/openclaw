@@ -333,6 +333,22 @@ function loadPluginDoctorContractEntry(
   };
 }
 
+function matchesDoctorContractScope(
+  record: PluginManifestRegistryRecord,
+  scopedPluginIds: Set<string> | null,
+): boolean {
+  if (!scopedPluginIds) {
+    return true;
+  }
+  if (scopedPluginIds.has(record.id)) {
+    return true;
+  }
+  if (record.channels.some((channelId) => scopedPluginIds.has(channelId))) {
+    return true;
+  }
+  return record.providers.some((providerId) => scopedPluginIds.has(providerId));
+}
+
 function resolvePluginDoctorContracts(params?: {
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -354,17 +370,18 @@ function resolvePluginDoctorContracts(params?: {
   const entries: PluginDoctorContractEntry[] = [];
   const scopedPluginIds = params?.pluginIds ? new Set(params.pluginIds) : null;
   for (const record of manifestRegistry.plugins) {
-    if (
-      scopedPluginIds &&
-      !scopedPluginIds.has(record.id) &&
-      !record.channels.some((channelId) => scopedPluginIds.has(channelId)) &&
-      !record.providers.some((providerId) => scopedPluginIds.has(providerId))
-    ) {
+    try {
+      if (!matchesDoctorContractScope(record, scopedPluginIds)) {
+        continue;
+      }
+      const entry = loadPluginDoctorContractEntry(record);
+      if (entry) {
+        entries.push(entry);
+      }
+    } catch {
+      // Manifest rows are plugin-owned metadata. One unreadable doctor row must
+      // not block doctor repairs or diagnostics from unrelated plugins.
       continue;
-    }
-    const entry = loadPluginDoctorContractEntry(record);
-    if (entry) {
-      entries.push(entry);
     }
   }
 

@@ -347,6 +347,73 @@ describe("doctor-contract-registry module loader", () => {
     expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledTimes(2);
   });
 
+  it("skips unreadable manifest rows while loading doctor contracts", () => {
+    const pluginRoot = makeTempDir();
+    fs.writeFileSync(
+      path.join(pluginRoot, "doctor-contract-api.cjs"),
+      "module.exports = { legacyConfigRules: [{ path: ['plugins', 'entries', 'healthy', 'legacy'], message: 'healthy contract' }] };\n",
+      "utf-8",
+    );
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "broken",
+          get rootDir() {
+            throw new Error("doctor contract root exploded");
+          },
+        },
+        { id: "healthy", rootDir: pluginRoot },
+      ],
+      diagnostics: [],
+    });
+
+    expect(listPluginDoctorLegacyConfigRules({ workspaceDir: "/workspace", env: {} })).toEqual([
+      {
+        path: ["plugins", "entries", "healthy", "legacy"],
+        message: "healthy contract",
+      },
+    ]);
+  });
+
+  it("skips unreadable manifest rows during scoped doctor contract lookup", () => {
+    const pluginRoot = makeTempDir();
+    fs.writeFileSync(
+      path.join(pluginRoot, "doctor-contract-api.cjs"),
+      "module.exports = { legacyConfigRules: [{ path: ['channels', 'healthy-channel', 'legacy'], message: 'healthy channel contract' }] };\n",
+      "utf-8",
+    );
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "broken",
+          get channels() {
+            throw new Error("doctor contract channels exploded");
+          },
+        },
+        {
+          id: "healthy",
+          channels: ["healthy-channel"],
+          providers: [],
+          rootDir: pluginRoot,
+        },
+      ],
+      diagnostics: [],
+    });
+
+    expect(
+      listPluginDoctorLegacyConfigRules({
+        workspaceDir: "/workspace",
+        env: {},
+        pluginIds: ["healthy-channel"],
+      }),
+    ).toEqual([
+      {
+        path: ["channels", "healthy-channel", "legacy"],
+        message: "healthy channel contract",
+      },
+    ]);
+  });
+
   it("narrows touched-path doctor ids for scoped dry-run validation", () => {
     expect(
       collectRelevantDoctorPluginIdsForTouchedPaths({
