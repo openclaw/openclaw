@@ -138,13 +138,6 @@ export const LEGACY_CLI_EXIT_COMPAT_CHUNKS = [
     dest: "dist/memory-state-DwGdReW4.js",
     contents: "export function hasMemoryRuntime() {\n  return false;\n}\n",
   },
-  // Chrome browser-copilot extension — shipped bundled + version-matched so the
-  // tray app can hand the user a load path without a manual "load unpacked".
-  // This is a DIRECTORY; copyStaticExtensionAssets copies it recursively.
-  {
-    src: "extensions/chrome-extension",
-    dest: "dist/extensions/chrome-extension",
-  },
 ];
 
 /**
