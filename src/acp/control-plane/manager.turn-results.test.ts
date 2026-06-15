@@ -1059,6 +1059,93 @@ describe("AcpSessionManager turn results", () => {
     expect(states).not.toContain("error");
   });
 
+  it("does not retry after a persistent resume wrapper with generic Internal error without SessionResumeRequiredError", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    const sessionKey =
+      "agent:kiro:acp:binding:discord:default:no-retry-generic-internal";
+    let currentMeta: SessionAcpMeta = {
+      ...readySessionMeta({
+        agent: "kiro",
+      }),
+      runtimeSessionName: sessionKey,
+      identity: {
+        state: "resolved",
+        source: "status",
+        acpxSessionId: "acpx-sid-stale",
+        lastUpdatedAt: Date.now(),
+      },
+    };
+    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+      const key = (paramsUnknown as { sessionKey?: string }).sessionKey ?? sessionKey;
+      return {
+        sessionKey: key,
+        storeSessionKey: key,
+        acp: currentMeta,
+      };
+    });
+    hoisted.upsertAcpSessionMetaMock.mockImplementation(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as {
+        mutate: (
+          current: SessionAcpMeta | undefined,
+          entry: { acp?: SessionAcpMeta } | undefined,
+        ) => SessionAcpMeta | null | undefined;
+      };
+      const next = params.mutate(currentMeta, { acp: currentMeta });
+      if (next) {
+        currentMeta = next;
+      }
+      return {
+        sessionId: "session-kiro-1",
+        updatedAt: Date.now(),
+        acp: currentMeta,
+      };
+    });
+    runtimeState.ensureSession.mockImplementation(async (inputUnknown: unknown) => {
+      const input = inputUnknown as {
+        sessionKey: string;
+        mode: "persistent" | "oneshot";
+        resumeSessionId?: string;
+      };
+      return {
+        sessionKey: input.sessionKey,
+        backend: "acpx",
+        runtimeSessionName: `${input.sessionKey}:${input.mode}:runtime`,
+        backendSessionId: input.resumeSessionId ? "acpx-sid-stale" : "acpx-sid-fresh",
+      };
+    });
+    runtimeState.getStatus.mockResolvedValue({
+      summary: "status=alive",
+      backendSessionId: "acpx-sid-fresh",
+      details: { status: "alive" },
+    });
+    runtimeState.runTurn.mockImplementationOnce(async function* () {
+      yield {
+        type: "error" as const,
+        code: "NO_SESSION",
+        message:
+          "Persistent ACP session acpx-sid-stale could not be resumed: Internal error",
+      };
+    });
+
+    const manager = new AcpSessionManager();
+    const turnPromise = manager.runTurn({
+      cfg: baseCfg,
+      sessionKey,
+      text: "do kiro work",
+      mode: "prompt",
+      requestId: "run-kiro-generic-internal",
+    });
+    await expect(turnPromise).rejects.toMatchObject({
+      code: "ACP_TURN_FAILED",
+    });
+
+    expect(runtimeState.prepareFreshSession).not.toHaveBeenCalled();
+  });
+
   it("retries once with a fresh persistent session after a kiro-style SessionResumeRequiredError with Internal error", async () => {
     const runtimeState = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({

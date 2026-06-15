@@ -21,7 +21,10 @@ function isRecoverableMissingManagerPersistentSessionError(message: string): boo
   const normalized = message.trim();
   return (
     /persistent acp session .* could not be resumed/i.test(normalized) &&
-    /(resource not found|no matching session|internal error)/i.test(normalized)
+    (
+      /(resource not found|no matching session)/i.test(normalized) ||
+      /(session resume required|SessionResumeRequiredError)/i.test(normalized)
+    )
   );
 }
 
