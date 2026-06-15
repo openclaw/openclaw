@@ -141,6 +141,14 @@ describe("markdownToTelegramHtml", () => {
     expect(markdownToTelegramRichHtml(table(2), { tableMode: "code" })).not.toContain("<table>");
   });
 
+  it("renders block-mode tables as code in legacy Telegram HTML", () => {
+    const table = "| A | B |\n| --- | --- |\n| 1 | 2 |";
+
+    expect(markdownToTelegramHtml(table, { tableMode: "block" })).toBe(
+      "<pre><code>| A | B |\n| --- | --- |\n| 1 | 2 |\n</code></pre>",
+    );
+  });
+
   it("preserves inline markdown inside rich table cells", () => {
     const html = markdownToTelegramRichHtml(
       "| Name | Link |\n| --- | --- |\n| **API** | [docs](https://example.com) |",

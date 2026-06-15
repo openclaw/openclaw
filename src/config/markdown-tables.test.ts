@@ -60,14 +60,22 @@ describe("resolveMarkdownTableMode", () => {
     expect(resolveMarkdownTableMode({ cfg, channel: "slack" })).toBe("code");
   });
 
-  it("allows block mode for channels that advertise block support", () => {
-    expect(resolveMarkdownTableMode({ channel: "signal" })).toBe("block");
+  it("keeps block mode behind renderer capability", () => {
+    expect(resolveMarkdownTableMode({ channel: "signal" })).toBe("code");
+    expect(resolveMarkdownTableMode({ channel: "signal", supportsBlockTables: true })).toBe(
+      "block",
+    );
     const cfg = { channels: { signal: { markdown: { tables: "code" as const } } } };
-    expect(resolveMarkdownTableMode({ cfg, channel: "signal" })).toBe("code");
+    expect(resolveMarkdownTableMode({ cfg, channel: "signal", supportsBlockTables: true })).toBe(
+      "code",
+    );
   });
 
-  it("allows explicit block mode for non-slack channels", () => {
+  it("allows explicit block mode only for block-aware renderers", () => {
     const cfg = { channels: { telegram: { markdown: { tables: "block" as const } } } };
-    expect(resolveMarkdownTableMode({ cfg, channel: "telegram" })).toBe("block");
+    expect(resolveMarkdownTableMode({ cfg, channel: "telegram" })).toBe("code");
+    expect(resolveMarkdownTableMode({ cfg, channel: "telegram", supportsBlockTables: true })).toBe(
+      "block",
+    );
   });
 });

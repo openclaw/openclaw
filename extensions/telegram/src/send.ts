@@ -605,6 +605,7 @@ export async function sendMessageTelegram(
     cfg,
     channel: "telegram",
     accountId: account.accountId,
+    supportsBlockTables: true,
   });
   const richMessageOptions = {
     skipEntityDetection: account.config.linkPreview === false,
@@ -1352,6 +1353,7 @@ export async function editMessageTelegram(
     cfg,
     channel: "telegram",
     accountId: account.accountId,
+    supportsBlockTables: true,
   });
   const htmlText = renderTelegramHtmlText(text, { textMode, tableMode });
   const plainText = textMode === "html" ? telegramHtmlToPlainTextFallback(htmlText) : text;

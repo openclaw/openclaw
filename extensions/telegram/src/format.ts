@@ -144,12 +144,13 @@ export function markdownToTelegramHtml(
   markdown: string,
   options: { tableMode?: MarkdownTableMode; wrapFileRefs?: boolean } = {},
 ): string {
+  const tableMode = options.tableMode === "block" ? "code" : options.tableMode;
   const ir = markdownToIR(preserveTelegramListBoundarySpacing(markdown ?? ""), {
     linkify: true,
     enableSpoilers: true,
     headingStyle: "none",
     blockquotePrefix: "",
-    tableMode: options.tableMode,
+    tableMode,
   });
   const html = renderTelegramHtml(ir);
   const telegramHtml = preserveSupportedTelegramHtmlTags(html);
