@@ -12,6 +12,22 @@ const createEventDispatcherMock = vi.hoisted(() => vi.fn());
 const monitorWebSocketMock = vi.hoisted(() => vi.fn(async () => {}));
 const monitorWebhookMock = vi.hoisted(() => vi.fn(async () => {}));
 const createFeishuThreadBindingManagerMock = vi.hoisted(() => vi.fn(() => ({ stop: vi.fn() })));
+const sendMessageFeishuMock = vi.hoisted(() => vi.fn(async (_params?: unknown) => ({})));
+const pairingMocks = vi.hoisted(() => ({
+  readAllowFromStore: vi.fn(async () => []),
+  issueChallenge: vi.fn(async (params: { sendPairingReply?: (text: string) => Promise<void> }) => {
+    await params.sendPairingReply?.("pairing challenge");
+  }),
+}));
+const createChannelPairingControllerMock = vi.hoisted(() =>
+  vi.fn(() => ({
+    readAllowFromStore: pairingMocks.readAllowFromStore,
+    issueChallenge: pairingMocks.issueChallenge,
+  })),
+);
+const resolveFeishuDmIngressAccessMock = vi.hoisted(() =>
+  vi.fn(async () => ({ ingress: { admission: "dispatch" } })),
+);
 const dedupMocks = vi.hoisted(() => ({
   warmupDedupFromPluginState: vi.fn(async () => 0),
   hasProcessedFeishuMessage: vi.fn(async () => false),
@@ -28,9 +44,29 @@ vi.mock("./bot.js", async () => {
   };
 });
 
+vi.mock("openclaw/plugin-sdk/channel-pairing", () => ({
+  createChannelPairingController: createChannelPairingControllerMock,
+}));
+
 vi.mock("./client.js", () => ({
   createEventDispatcher: createEventDispatcherMock,
 }));
+
+vi.mock("./policy.js", async () => {
+  const actual = await vi.importActual<typeof import("./policy.js")>("./policy.js");
+  return {
+    ...actual,
+    resolveFeishuDmIngressAccess: resolveFeishuDmIngressAccessMock,
+  };
+});
+
+vi.mock("./send.js", async () => {
+  const actual = await vi.importActual<typeof import("./send.js")>("./send.js");
+  return {
+    ...actual,
+    sendMessageFeishu: sendMessageFeishuMock,
+  };
+});
 
 vi.mock("./monitor.transport.js", () => ({
   monitorWebSocket: monitorWebSocketMock,
@@ -159,6 +195,14 @@ describe("createFeishuVcMeetingInvitedHandler", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     handleFeishuMessageMock.mockResolvedValue(undefined);
+    sendMessageFeishuMock.mockResolvedValue({});
+    pairingMocks.readAllowFromStore.mockResolvedValue([]);
+    pairingMocks.issueChallenge.mockImplementation(
+      async (params: { sendPairingReply?: (text: string) => Promise<void> }) => {
+        await params.sendPairingReply?.("pairing challenge");
+      },
+    );
+    resolveFeishuDmIngressAccessMock.mockResolvedValue({ ingress: { admission: "dispatch" } });
     dedupMocks.warmupDedupFromPluginState.mockResolvedValue(0);
     dedupMocks.hasProcessedFeishuMessage.mockResolvedValue(false);
     dedupMocks.recordProcessedFeishuMessage.mockResolvedValue(true);
@@ -234,6 +278,7 @@ describe("createFeishuVcMeetingInvitedHandler", () => {
     const handler = createFeishuVcMeetingInvitedHandler({
       cfg: buildConfig(),
       accountId: "default",
+      channelRuntime: buildChannelRuntime(),
       fireAndForget: false,
     });
 
@@ -255,10 +300,35 @@ describe("createFeishuVcMeetingInvitedHandler", () => {
     expect(params.event?.sender?.sender_id).toEqual({ user_id: "u_inviter_1" });
   });
 
+  it("sends pairing challenges to the inviter user target before synthetic dispatch", async () => {
+    resolveFeishuDmIngressAccessMock.mockResolvedValueOnce({
+      ingress: { admission: "pairing-required" },
+    });
+    const handler = createFeishuVcMeetingInvitedHandler({
+      cfg: { channels: { feishu: { enabled: true } } } as ClawdbotConfig,
+      accountId: "default",
+      channelRuntime: buildChannelRuntime(),
+      fireAndForget: false,
+    });
+
+    await handler(vcEvent);
+
+    expect(handleFeishuMessageMock).not.toHaveBeenCalled();
+    expect(pairingMocks.issueChallenge).toHaveBeenCalledTimes(1);
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "user:ou_inviter_1",
+        text: "pairing challenge",
+        accountId: "default",
+      }),
+    );
+  });
+
   it("does not dispatch malformed invite events", async () => {
     const handler = createFeishuVcMeetingInvitedHandler({
       cfg: buildConfig(),
       accountId: "default",
+      channelRuntime: buildChannelRuntime(),
       fireAndForget: false,
     });
 
