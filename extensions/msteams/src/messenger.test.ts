@@ -232,6 +232,31 @@ describe("msteams messenger", () => {
       });
       expect(messages.length).toBeGreaterThan(1);
     });
+
+    it("renders tables as Adaptive Cards in adaptive mode", () => {
+      const markdown = "Here is a table:\n\n| Name | Age |\n|---|---|\n| Alice | 30 |\n\nDone.";
+      const messages = renderReplyPayloadsToMessages([{ text: markdown }], {
+        textChunkLimit: 4000,
+        tableMode: "adaptive",
+      });
+
+      expect(messages.length).toBe(3);
+      expect(messages[0]).toEqual({ text: "Here is a table:" });
+      expect(messages[1]?.adaptiveCard).toBeDefined();
+      expect(messages[1]?.adaptiveCard?.type).toBe("AdaptiveCard");
+      expect(messages[1]?.adaptiveCard?.version).toBe("1.5");
+      const table = (messages[1]?.adaptiveCard?.body as unknown[])?.[0] as Record<string, unknown>;
+      expect(table?.type).toBe("Table");
+      expect(messages[2]).toEqual({ text: "Done." });
+    });
+
+    it("passes text through unchanged when no tables in adaptive mode", () => {
+      const messages = renderReplyPayloadsToMessages([{ text: "Just text, no tables" }], {
+        textChunkLimit: 4000,
+        tableMode: "adaptive",
+      });
+      expect(messages).toEqual([{ text: "Just text, no tables" }]);
+    });
   });
 
   describe("sendMSTeamsMessages", () => {
@@ -343,6 +368,33 @@ describe("msteams messenger", () => {
       expect(texts).toEqual(["hello"]);
       expect(ids).toEqual(["id:hello"]);
       expect(capturedConversationId).toBe("19:abc@thread.tacv2");
+    });
+
+    it("keeps adaptive-card-only messages in proactive send batches", async () => {
+      const sent: Array<Record<string, unknown>> = [];
+      const card = { type: "AdaptiveCard", version: "1.5", body: [{ type: "Table" }] };
+
+      const ids = await sendMSTeamsMessages({
+        replyStyle: "top-level",
+        app: createMockApp({
+          createFn: async (activity: unknown) => {
+            sent.push(activity as Record<string, unknown>);
+            return { id: "id:card" };
+          },
+        }),
+        appId: "app123",
+        conversationRef: baseRef,
+        messages: [{ adaptiveCard: card }],
+      });
+
+      expect(ids).toEqual(["id:card"]);
+      expect(sent).toHaveLength(1);
+      expect(sent[0]?.attachments).toEqual([
+        {
+          contentType: "application/vnd.microsoft.card.adaptive",
+          content: card,
+        },
+      ]);
     });
 
     it("preserves parsed mentions when appending OneDrive fallback file links", async () => {
@@ -803,6 +855,15 @@ describe("msteams messenger", () => {
       const activity = await buildActivity({ text: "hello" }, baseRef);
       const channelData = activity.channelData as Record<string, unknown>;
       expect(channelData.feedbackLoopEnabled).toBe(false);
+    });
+
+    it("sends adaptive card as attachment when adaptiveCard field is set", async () => {
+      const card = { type: "AdaptiveCard", version: "1.5", body: [{ type: "Table" }] };
+      const activity = await buildActivity({ adaptiveCard: card }, baseRef);
+      const attachments = activity.attachments as Array<Record<string, unknown>>;
+      expect(attachments).toHaveLength(1);
+      expect(attachments[0]?.contentType).toBe("application/vnd.microsoft.card.adaptive");
+      expect(attachments[0]?.content).toBe(card);
     });
   });
 
