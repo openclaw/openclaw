@@ -1,6 +1,6 @@
 // Telegram plugin module implements delivery.send behavior.
 import { type Bot, GrammyError } from "grammy";
-import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
+import type { MarkdownTableMode, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import { createTelegramRetryRunner } from "openclaw/plugin-sdk/retry-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -119,6 +119,7 @@ export async function sendTelegramText(
     tableMode?: MarkdownTableMode;
     silent?: boolean;
     replyMarkup?: ReturnType<typeof buildInlineKeyboard>;
+    replyToMode?: ReplyToMode;
   },
 ): Promise<number> {
   const baseParams = buildTelegramSendParams({
@@ -167,7 +168,9 @@ export async function sendTelegramText(
     }
     const isLastChunk = index === chunks.length - 1;
     const visibleChunkParams =
-      index === 0 ? messageParams : stripTelegramReplyContext(messageParams);
+      index === 0 || opts?.replyToMode === "all"
+        ? messageParams
+        : stripTelegramReplyContext(messageParams);
     const res = await sendTelegramWithThreadFallback({
       operation: "sendMessage",
       runtime,

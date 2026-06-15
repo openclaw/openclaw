@@ -1445,6 +1445,33 @@ describe("deliverReplies", () => {
     expect(mockCallArg(sendMessage, 1, 2)).not.toHaveProperty("allow_sending_without_reply");
   });
 
+  it("replyToMode 'all' applies reply-to to every legacy Telegram chunk", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 20,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+
+    await deliverReplies({
+      replies: [{ text: "A".repeat(5000), replyToId: "800" }],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "all",
+      textLimit: 100_000,
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    for (const call of sendMessage.mock.calls) {
+      expectRecordFields(call[2], {
+        reply_to_message_id: 800,
+        allow_sending_without_reply: true,
+      });
+    }
+  });
+
   it("clamps reply chunks to Telegram rich message limit", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn().mockResolvedValue({
