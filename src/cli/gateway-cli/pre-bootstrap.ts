@@ -478,10 +478,12 @@ export async function applyFinalGatewayRunConfigEnv(params: {
     { applyConfigEnvVars, collectConfigRuntimeEnvVars },
     { normalizeEnv },
     { normalizeStateDirEnv },
+    { clearShellEnvAppliedKeys },
   ] = await Promise.all([
     import("../../config/env-vars.js"),
     import("../../infra/env.js"),
     import("../../config/paths.js"),
+    import("../../infra/shell-env.js"),
   ]);
   const finalConfigEnv = collectConfigRuntimeEnvVars(params.snapshot.sourceConfig);
   if (
@@ -497,13 +499,10 @@ export async function applyFinalGatewayRunConfigEnv(params: {
     return false;
   }
   restoreAppliedGatewayRunConfigEnvironment();
-  const finalConfigEnvKeys = new Set(Object.keys(finalConfigEnv).map((key) => key.toUpperCase()));
-  for (const [key, value] of Object.entries(params.lowerPrecedenceEnv ?? {})) {
-    if (finalConfigEnvKeys.has(key.toUpperCase()) && process.env[key] === value) {
-      delete process.env[key];
-    }
-  }
-  applyConfigEnvVars(params.snapshot.sourceConfig, process.env);
+  applyConfigEnvVars(params.snapshot.sourceConfig, process.env, {
+    lowerPrecedenceEnv: params.lowerPrecedenceEnv,
+    onLowerPrecedenceKeysReplaced: clearShellEnvAppliedKeys,
+  });
   normalizeStateDirEnv(process.env);
   normalizeEnv();
   applyInvocationDestructiveOverride(invocationDestructiveOverride);

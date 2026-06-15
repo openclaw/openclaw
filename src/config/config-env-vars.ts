@@ -1,3 +1,8 @@
+import {
+  expandEnvNormalizationKeys,
+  normalizeZaiEnv,
+  resolveEnvNormalizationKeys,
+} from "../infra/env.js";
 // Defines environment-variable config metadata and preservation rules.
 import {
   isDangerousHostEnvOverrideVarName,
@@ -150,18 +155,61 @@ export function createConfigRuntimeEnv(
 export function applyConfigEnvVars(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
-  options: { lowerPrecedenceEnv?: Readonly<Record<string, string>> } = {},
+  options: {
+    lowerPrecedenceEnv?: Readonly<Record<string, string>>;
+    onLowerPrecedenceKeysReplaced?: (keys: readonly string[]) => void;
+  } = {},
 ): void {
   const entries = collectConfigRuntimeEnvVars(cfg);
+  const lowerPrecedenceEntries = Object.entries(options.lowerPrecedenceEnv ?? {});
+  const normalizeKey = (key: string) => (process.platform === "win32" ? key.toUpperCase() : key);
   const lowerPrecedenceEnv = new Map(
-    Object.entries(options.lowerPrecedenceEnv ?? {}).map(([key, value]) => [
-      key.toUpperCase(),
-      value,
-    ]),
+    lowerPrecedenceEntries.map(([key, value]) => [normalizeKey(key), value]),
   );
+  const configEnvKeys = expandEnvNormalizationKeys(Object.keys(entries));
+  const configValuesByKey = new Map<string, Set<string>>();
   for (const [key, value] of Object.entries(entries)) {
+    for (const normalizedKey of resolveEnvNormalizationKeys(key)) {
+      const values = configValuesByKey.get(normalizedKey) ?? new Set<string>();
+      values.add(value);
+      configValuesByKey.set(normalizedKey, values);
+    }
+  }
+  const higherPrecedenceValues = new Map<string, string>();
+  for (const key of Object.keys(entries)) {
+    const normalizedKeys = resolveEnvNormalizationKeys(key);
+    const winningValue = normalizedKeys
+      .map((normalizedKey) => [normalizedKey, env[normalizedKey]] as const)
+      .find(
+        ([normalizedKey, currentValue]) =>
+          currentValue?.trim() &&
+          lowerPrecedenceEnv.get(normalizedKey) !== currentValue &&
+          !configValuesByKey.get(normalizedKey)?.has(currentValue),
+      )?.[1];
+    if (winningValue !== undefined) {
+      for (const normalizedKey of normalizedKeys) {
+        higherPrecedenceValues.set(normalizedKey, winningValue);
+      }
+    }
+  }
+  const replacedLowerPrecedenceKeys: string[] = [];
+  for (const [key, value] of lowerPrecedenceEntries) {
+    if (configEnvKeys.has(normalizeKey(key)) && env[key] === value) {
+      delete env[key];
+      replacedLowerPrecedenceKeys.push(key);
+    }
+  }
+  if (replacedLowerPrecedenceKeys.length > 0) {
+    options.onLowerPrecedenceKeysReplaced?.(replacedLowerPrecedenceKeys);
+  }
+  for (const [key, value] of Object.entries(entries)) {
+    const higherPrecedenceValue = higherPrecedenceValues.get(normalizeKey(key));
+    if (higherPrecedenceValue !== undefined) {
+      env[key] = higherPrecedenceValue;
+      continue;
+    }
     const currentValue = env[key];
-    if (currentValue?.trim() && lowerPrecedenceEnv.get(key.toUpperCase()) !== currentValue) {
+    if (currentValue?.trim() && lowerPrecedenceEnv.get(normalizeKey(key)) !== currentValue) {
       continue;
     }
     // Skip values containing unresolved ${VAR} references — applyConfigEnvVars runs
@@ -173,4 +221,5 @@ export function applyConfigEnvVars(
     }
     env[key] = value;
   }
+  normalizeZaiEnv(env);
 }

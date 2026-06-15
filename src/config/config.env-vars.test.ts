@@ -44,6 +44,60 @@ describe("config env vars", () => {
     expect(changedEnv.OPENROUTER_API_KEY).toBe("changed-key");
   });
 
+  it("applies config env above normalized lower-precedence aliases", () => {
+    const onLowerPrecedenceKeysReplaced = vi.fn();
+    const env = { ZAI_API_KEY: "shell-key" };
+
+    applyConfigEnvVars({ env: { vars: { Z_AI_API_KEY: "config-key" } } } as OpenClawConfig, env, {
+      lowerPrecedenceEnv: { ZAI_API_KEY: "shell-key" },
+      onLowerPrecedenceKeysReplaced,
+    });
+
+    expect(env).toEqual({
+      ZAI_API_KEY: "config-key",
+      Z_AI_API_KEY: "config-key",
+    });
+    expect(onLowerPrecedenceKeysReplaced).toHaveBeenCalledWith(["ZAI_API_KEY"]);
+  });
+
+  it("preserves a higher-precedence normalized alias", () => {
+    const env = {
+      ZAI_API_KEY: "shell-key",
+      Z_AI_API_KEY: "invocation-key",
+    };
+
+    applyConfigEnvVars({ env: { vars: { ZAI_API_KEY: "config-key" } } } as OpenClawConfig, env, {
+      lowerPrecedenceEnv: { ZAI_API_KEY: "shell-key" },
+    });
+
+    expect(env).toEqual({
+      ZAI_API_KEY: "invocation-key",
+      Z_AI_API_KEY: "invocation-key",
+    });
+  });
+
+  it("mirrors a higher-precedence canonical value into a config-declared alias", () => {
+    const env = { ZAI_API_KEY: "invocation-key" };
+
+    applyConfigEnvVars({ env: { vars: { Z_AI_API_KEY: "config-key" } } } as OpenClawConfig, env);
+
+    expect(env).toEqual({
+      ZAI_API_KEY: "invocation-key",
+      Z_AI_API_KEY: "invocation-key",
+    });
+  });
+
+  it.runIf(process.platform !== "win32")("keeps unrelated POSIX env casing distinct", () => {
+    const env = { FOO: "host-key" };
+
+    applyConfigEnvVars({ env: { vars: { foo: "config-key" } } } as OpenClawConfig, env);
+
+    expect(env).toEqual({
+      FOO: "host-key",
+      foo: "config-key",
+    });
+  });
+
   it("applies env vars from env.vars when missing", async () => {
     await withEnvOverride({ GROQ_API_KEY: undefined }, async () => {
       applyConfigEnvVars({ env: { vars: { GROQ_API_KEY: "gsk-config" } } } as OpenClawConfig);

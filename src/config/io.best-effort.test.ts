@@ -80,6 +80,77 @@ describe("readBestEffortConfig", () => {
     });
   });
 
+  it("resolves config env above normalized lower-precedence aliases in isolated snapshots", async () => {
+    await withTempHome(async (home) => {
+      const previousCanonical = process.env.ZAI_API_KEY;
+      const previousLegacy = process.env.Z_AI_API_KEY;
+      process.env.ZAI_API_KEY = "shell-token";
+      delete process.env.Z_AI_API_KEY;
+      try {
+        await writeOpenClawConfig(home, {
+          env: { vars: { Z_AI_API_KEY: "config-token" } },
+          gateway: { auth: { mode: "token", token: "${ZAI_API_KEY}" }, mode: "local" },
+        });
+
+        const snapshot = await readConfigFileSnapshot({
+          isolateEnv: true,
+          lowerPrecedenceEnv: { ZAI_API_KEY: "shell-token" },
+          observe: false,
+        });
+
+        expect(snapshot.config.gateway?.auth?.token).toBe("config-token");
+        expect(process.env.ZAI_API_KEY).toBe("shell-token");
+        expect(process.env.Z_AI_API_KEY).toBeUndefined();
+      } finally {
+        if (previousCanonical === undefined) {
+          delete process.env.ZAI_API_KEY;
+        } else {
+          process.env.ZAI_API_KEY = previousCanonical;
+        }
+        if (previousLegacy === undefined) {
+          delete process.env.Z_AI_API_KEY;
+        } else {
+          process.env.Z_AI_API_KEY = previousLegacy;
+        }
+      }
+    });
+  });
+
+  it("resolves config aliases from a higher-precedence canonical value in isolated snapshots", async () => {
+    await withTempHome(async (home) => {
+      const previousCanonical = process.env.ZAI_API_KEY;
+      const previousLegacy = process.env.Z_AI_API_KEY;
+      process.env.ZAI_API_KEY = "invocation-token";
+      delete process.env.Z_AI_API_KEY;
+      try {
+        await writeOpenClawConfig(home, {
+          env: { vars: { Z_AI_API_KEY: "config-token" } },
+          gateway: { auth: { mode: "token", token: "${Z_AI_API_KEY}" }, mode: "local" },
+        });
+
+        const snapshot = await readConfigFileSnapshot({
+          isolateEnv: true,
+          observe: false,
+        });
+
+        expect(snapshot.config.gateway?.auth?.token).toBe("invocation-token");
+        expect(process.env.ZAI_API_KEY).toBe("invocation-token");
+        expect(process.env.Z_AI_API_KEY).toBeUndefined();
+      } finally {
+        if (previousCanonical === undefined) {
+          delete process.env.ZAI_API_KEY;
+        } else {
+          process.env.ZAI_API_KEY = previousCanonical;
+        }
+        if (previousLegacy === undefined) {
+          delete process.env.Z_AI_API_KEY;
+        } else {
+          process.env.Z_AI_API_KEY = previousLegacy;
+        }
+      }
+    });
+  });
+
   it("can read best-effort config without applying env vars or recording observation", async () => {
     await withTempHome(async (home) => {
       const key = "OPENCLAW_ISOLATED_BEST_EFFORT_CONFIG_TEST";

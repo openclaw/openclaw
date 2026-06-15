@@ -456,6 +456,7 @@ describe("gateway run option collisions", () => {
       );
       expect(readConfigFileSnapshotWithPluginMetadata).toHaveBeenCalledTimes(2);
       expect(process.env.OPENCLAW_GATEWAY_TOKEN).toBe("config-token");
+      expect(clearShellEnvAppliedKeys).toHaveBeenCalledWith(["OPENCLAW_GATEWAY_TOKEN"]);
       const shellEnvOrder = loadShellEnvFallback.mock.invocationCallOrder[0] ?? 0;
       const initialConfigReadOrder =
         readConfigFileSnapshotWithPluginMetadata.mock.invocationCallOrder[0] ?? 0;
@@ -467,6 +468,38 @@ describe("gateway run option collisions", () => {
       expect(finalConfigReadOrder).toBeGreaterThan(shellEnvOrder);
       expect(refreshOrder).toBeGreaterThan(shellEnvOrder);
       expect(startOrder).toBeGreaterThan(refreshOrder);
+    });
+  });
+
+  it("lets config env aliases replace canonical shell fallback values", async () => {
+    await withEnvAsync({ ZAI_API_KEY: undefined, Z_AI_API_KEY: undefined }, async () => {
+      const finalConfig = {
+        env: {
+          shellEnv: { enabled: true },
+          vars: { Z_AI_API_KEY: "config-key" },
+        },
+        gateway: { auth: { mode: "none" }, mode: "local" },
+      };
+      configState.snapshot = {
+        config: finalConfig,
+        exists: true,
+        parsed: finalConfig,
+        path: "/tmp/openclaw.json",
+        sourceConfig: finalConfig,
+        valid: true,
+      };
+      resolveShellEnvExpectedKeys
+        .mockReturnValueOnce(["ZAI_API_KEY"])
+        .mockReturnValueOnce(["ZAI_API_KEY"]);
+      loadShellEnvFallback.mockImplementationOnce((opts?: unknown) => {
+        (opts as { env: NodeJS.ProcessEnv }).env.ZAI_API_KEY = "shell-key";
+      });
+
+      await runGatewayCli(["gateway"]);
+
+      expect(process.env.Z_AI_API_KEY).toBe("config-key");
+      expect(process.env.ZAI_API_KEY).toBe("config-key");
+      expect(clearShellEnvAppliedKeys).toHaveBeenCalledWith(["ZAI_API_KEY"]);
     });
   });
 
