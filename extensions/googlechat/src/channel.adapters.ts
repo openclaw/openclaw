@@ -315,19 +315,44 @@ export const googlechatOutboundAdapter = {
           });
       const { sendGoogleChatMessage, uploadGoogleChatAttachment } =
         await loadGoogleChatChannelRuntime();
-      const upload = await uploadGoogleChatAttachment({
-        account,
-        space,
-        filename: loaded.fileName ?? "attachment",
-        buffer: loaded.buffer,
-        contentType: loaded.contentType,
-      });
+      let upload: { attachmentUploadToken?: string } | undefined;
+      try {
+        upload = await uploadGoogleChatAttachment({
+          account,
+          space,
+          filename: loaded.fileName ?? "attachment",
+          buffer: loaded.buffer,
+          contentType: loaded.contentType,
+        });
+      } catch (uploadErr) {
+        if (/\b403\b/.test(String(uploadErr))) {
+          if (!/^https?:\/\//i.test(mediaUrl)) {
+            throw uploadErr;
+          }
+          // App-auth service accounts lack the chat.messages.create scope
+          // required for media uploads. Fall back to sending the URL as text.
+          const fallbackText = text ? `${text}\n${mediaUrl}` : (mediaUrl ?? "");
+          const result = await sendGoogleChatMessage({
+            account,
+            space,
+            text: fallbackText,
+            thread,
+          });
+          const messageId = result?.messageName ?? "";
+          return {
+            messageId,
+            chatId: space,
+            receipt: createGoogleChatSendReceipt({ messageId, chatId: space, kind: "text" }),
+          };
+        }
+        throw uploadErr;
+      }
       const result = await sendGoogleChatMessage({
         account,
         space,
         text,
         thread,
-        attachments: upload.attachmentUploadToken
+        attachments: upload?.attachmentUploadToken
           ? [
               {
                 attachmentUploadToken: upload.attachmentUploadToken,

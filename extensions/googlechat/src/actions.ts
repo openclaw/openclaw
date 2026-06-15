@@ -141,19 +141,37 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
           readStringParam(params, "title") ??
           loaded.fileName ??
           "attachment";
-        const upload = await uploadGoogleChatAttachment({
-          account,
-          space,
-          filename: uploadFileName,
-          buffer: loaded.buffer,
-          contentType: loaded.contentType,
-        });
+        let upload: { attachmentUploadToken?: string } | undefined;
+        try {
+          upload = await uploadGoogleChatAttachment({
+            account,
+            space,
+            filename: uploadFileName,
+            buffer: loaded.buffer,
+            contentType: loaded.contentType,
+          });
+        } catch (uploadErr) {
+          if (/\b403\b/.test(String(uploadErr))) {
+            if (/^https?:\/\//i.test(mediaUrl)) {
+              // App-auth scope insufficient; fall back to URL as text.
+              const fallbackText = content ? `${content}\n${mediaUrl}` : mediaUrl;
+              await sendGoogleChatMessage({
+                account,
+                space,
+                text: fallbackText,
+                thread: threadId ?? undefined,
+              });
+              return jsonResult({ ok: true, to: space });
+            }
+          }
+          throw uploadErr;
+        }
         await sendGoogleChatMessage({
           account,
           space,
           text: content,
           thread: threadId ?? undefined,
-          attachments: upload.attachmentUploadToken
+          attachments: upload?.attachmentUploadToken
             ? [
                 {
                   attachmentUploadToken: upload.attachmentUploadToken,
