@@ -416,6 +416,7 @@ async function ensureSessionRuntimeCleanup(params: {
   // doesn't terminate within the grace window, stale processes must not
   // survive to hold file locks or occupy ports for the next session.
   // The aborted run will be GC'd by the process supervisor regardless.
+  logVerbose(`sessions cleanup: retiring MCP runtime for session ${params.sessionId} (fix #92569)`);
   await retireSessionMcpRuntime({
     sessionId: params.sessionId,
     reason: "gateway-session-cleanup",
