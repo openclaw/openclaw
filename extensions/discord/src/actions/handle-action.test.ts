@@ -139,6 +139,42 @@ describe("handleDiscordMessageAction", () => {
     expect(handleDiscordActionMock).not.toHaveBeenCalled();
   });
 
+  it("keeps no-context Discord guild admin actions on the manual runtime path", async () => {
+    const cfg = discordConfig({ channels: true });
+    await handleDiscordMessageAction({
+      action: "channel-delete",
+      params: {
+        channelId: "channel-1",
+      },
+      cfg,
+      senderIsOwner: true,
+    });
+
+    expectDiscordActionCall({
+      payload: {
+        action: "channelDelete",
+        accountId: undefined,
+        channelId: "channel-1",
+      },
+      cfg,
+    });
+  });
+
+  it("rejects no-context Discord guild admin actions without owner trust", async () => {
+    const cfg = discordConfig({ channels: true });
+    await expect(
+      handleDiscordMessageAction({
+        action: "channel-delete",
+        params: {
+          channelId: "channel-1",
+        },
+        cfg,
+      }),
+    ).rejects.toThrow("trusted Discord sender identity");
+
+    expect(handleDiscordActionMock).not.toHaveBeenCalled();
+  });
+
   it("rejects non-Discord requester ids for Discord moderation actions", async () => {
     const cfg = discordConfig({ moderation: true });
     await expect(

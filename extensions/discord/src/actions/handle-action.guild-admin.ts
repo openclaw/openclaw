@@ -27,6 +27,7 @@ type Ctx = Pick<
   | "cfg"
   | "accountId"
   | "requesterSenderId"
+  | "senderIsOwner"
   | "toolContext"
   | "mediaLocalRoots"
   | "mediaReadFile"
@@ -37,7 +38,10 @@ function readDiscordRequesterSenderId(ctx: Ctx): string | undefined {
   if (currentProvider?.toLowerCase() === "discord") {
     return normalizeOptionalString(ctx.requesterSenderId);
   }
-  if (isTrustedRequesterGuildAdminAction(ctx.action)) {
+  if (
+    isTrustedRequesterGuildAdminAction(ctx.action) &&
+    (currentProvider || ctx.senderIsOwner !== true)
+  ) {
     throw new Error("Discord guild admin actions require a trusted Discord sender identity.");
   }
   return undefined;
