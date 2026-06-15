@@ -232,13 +232,13 @@ export function resolveGatewayScopedTools(params: {
     ...(Array.isArray(gatewayToolsCfg?.deny) ? gatewayToolsCfg.deny : []),
     ...excludedToolNames,
   ]);
-  const tools = policyFiltered.filter((tool) => !gatewayDenySet.has(tool.name));
+  const denyFiltered = policyFiltered.filter((tool) => !gatewayDenySet.has(tool.name));
   if (shouldInheritEffectiveToolAllowlist) {
-    replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, tools);
+    replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, denyFiltered);
   }
 
-  const denyFiltered = policyFiltered.filter((tool) => !gatewayDenySet.has(tool.name));
-
+  // byClientId restriction (params.allowToolNames) applies LAST — after the full
+  // policy pipeline + gatewayDenySet + inherited allowlist — and can only narrow.
   const allowSet = params.allowToolNames ? new Set(params.allowToolNames) : undefined;
   const tools =
     allowSet && allowSet.size > 0
