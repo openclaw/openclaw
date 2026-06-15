@@ -3,7 +3,7 @@ import { isRecord, readStringValue as readString } from "openclaw/plugin-sdk/str
 import type { ClawdbotConfig, HistoryEntry, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import { resolveFeishuMessageDedupeKey } from "./dedupe-key.js";
 import type { FeishuMessageEvent } from "./event-types.js";
-import { isMentionForwardRequest } from "./mention.js";
+import { shouldExposeMentionTargets } from "./mention.js";
 import {
   releaseFeishuMessageProcessing,
   tryBeginFeishuMessageProcessing,
@@ -126,7 +126,7 @@ function dedupeFeishuDebounceEntriesByDedupeKey(
   return deduped;
 }
 
-function resolveFeishuDebounceMentions(params: {
+export function resolveFeishuDebounceMentions(params: {
   entries: FeishuMessageEvent[];
   botOpenId?: string;
 }): FeishuMessageEvent["message"]["mentions"] | undefined {
@@ -134,9 +134,13 @@ function resolveFeishuDebounceMentions(params: {
   if (entries.length === 0) {
     return undefined;
   }
+  // A mention-forward request (the message explicitly @mentions the bot plus
+  // other users) must keep its full mention set so shouldExposeMentionTargets
+  // can hand the agent the other users' stable open_ids. Take the most recent
+  // such entry as-is; otherwise fall through to the bot-only filter below.
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const entry = entries[index];
-    if (isMentionForwardRequest(entry, botOpenId)) {
+    if (shouldExposeMentionTargets(entry, botOpenId)) {
       return mergeFeishuDebounceMentions([entry]);
     }
   }
