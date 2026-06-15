@@ -220,14 +220,37 @@ const shouldSuppressSignalForwardingFallback =
   });
 
 function buildSignalExecPendingPayload(params: { request: ExecApprovalRequest; nowMs: number }) {
-  return buildApprovalReactionPendingContentForRequest(params).manualFallbackPayload;
+  return withCanonicalApprovalIdHeader(
+    buildApprovalReactionPendingContentForRequest(params).manualFallbackPayload,
+    params.request.id,
+  );
 }
 
 function buildSignalPluginPendingPayload(params: {
   request: PluginApprovalRequest;
   nowMs: number;
 }) {
-  return buildApprovalReactionPendingContentForRequest(params).manualFallbackPayload;
+  return withCanonicalApprovalIdHeader(
+    buildApprovalReactionPendingContentForRequest(params).manualFallbackPayload,
+    params.request.id,
+  );
+}
+
+function withCanonicalApprovalIdHeader(payload: ReplyPayload, approvalId: string): ReplyPayload {
+  const text = payload.text ?? "";
+  if (!text.trim() || new RegExp(`^\\s*ID:\\s*${escapeRegExp(approvalId)}\\s*$`, "im").test(text)) {
+    return payload;
+  }
+  const lines = text.split(/\r?\n/);
+  const [firstLine, ...rest] = lines;
+  return {
+    ...payload,
+    text: [firstLine, `ID: ${approvalId}`, ...rest].join("\n"),
+  };
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 export const signalApprovalCapability: ChannelApprovalCapability = createChannelApprovalCapability({

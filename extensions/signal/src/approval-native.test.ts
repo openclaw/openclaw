@@ -260,7 +260,7 @@ describe("signal approval capability", () => {
     ).toBe(false);
   });
 
-  it("renders target-mode exec prompts without unbound reaction choices", () => {
+  it("renders target-mode exec prompts with canonical ids for send-time reactions", () => {
     const cfg = buildConfig({
       signal: { allowFrom: ["+15551230000"] },
       approvals: {
@@ -285,6 +285,7 @@ describe("signal approval capability", () => {
     });
     const text = payload?.text ?? "";
 
+    expect(text).toContain("Approval required.\nID: exec-1");
     expect(text).toContain("/approve exec-1 allow-once");
     expect(text).not.toContain("React with:");
     expect(text).not.toContain("👍 Allow Once");
@@ -293,6 +294,36 @@ describe("signal approval capability", () => {
     expect(text).not.toContain("1️⃣ Allow Once");
     expect(text).not.toContain("2️⃣ Allow Always");
     expect(text).not.toContain("3️⃣ Deny");
+  });
+
+  it("renders target-mode plugin prompts with canonical ids for send-time reactions", () => {
+    const cfg = buildConfig({
+      signal: { allowFrom: ["+15551230000"] },
+      approvals: {
+        plugin: {
+          enabled: true,
+          mode: "targets",
+          targets: [{ channel: "signal", to: "+15551230000" }],
+        },
+      },
+    });
+    const request = buildPluginRequest("+15551230000");
+
+    const payload = signalApprovalCapability.render?.plugin?.buildPendingPayload?.({
+      cfg,
+      request,
+      target: { channel: "signal", to: "+15551230000", source: "target" },
+      nowMs: 0,
+    });
+    const text = payload?.text ?? "";
+
+    expect(text).toContain("Plugin approval required");
+    expect(text).toContain("ID: plugin:approval-1");
+    expect(text).toContain("/approve plugin:approval-1 allow-once");
+    expect(text).not.toContain("React with:");
+    expect(text).not.toContain("👍 Allow Once");
+    expect(text).not.toContain("👎 Deny");
+    expect(text).not.toContain("<id>");
   });
 
   it("does not show reaction choices when Signal has no explicit approvers", () => {
@@ -315,6 +346,7 @@ describe("signal approval capability", () => {
     });
     const text = payload?.text ?? "";
 
+    expect(text).toContain("Approval required.\nID: exec-1");
     expect(text).toContain("/approve exec-1 allow-once");
     expect(text).not.toContain("React with:");
     expect(text).not.toContain("👍 Allow Once");

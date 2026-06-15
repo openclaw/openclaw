@@ -1,6 +1,7 @@
 // Signal tests cover real send-path approval reaction behavior.
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { signalApprovalCapability } from "./approval-native.js";
 import {
   clearSignalApprovalReactionTargetsForTest,
   maybeResolveSignalApprovalReaction,
@@ -81,6 +82,11 @@ function buildCfg(baseUrl: string) {
       },
     },
     approvals: {
+      exec: {
+        enabled: true,
+        mode: "targets" as const,
+        targets: [{ channel: "signal", to: "+15551230000" }],
+      },
       plugin: {
         enabled: true,
         mode: "targets" as const,
@@ -179,6 +185,71 @@ describe("sendMessageSignal approval reaction behavior", () => {
     expect(resolverMocks.resolveSignalApproval).toHaveBeenCalledWith({
       cfg,
       approvalId: "plugin:abc",
+      decision: "allow-once",
+      senderId: "+15551230000",
+      gatewayUrl: undefined,
+    });
+  });
+
+  it("preserves rendered target-mode exec approval reactions through send and reaction resolution", async () => {
+    const calls: RpcCall[] = [];
+    const server = await withSignalRpcServer(async (req, res) => {
+      expect(req.method).toBe("POST");
+      expect(req.url).toBe("/api/v1/rpc");
+      const body = JSON.parse(await readRequestBody(req)) as RpcCall & { id?: unknown };
+      calls.push(body);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({ jsonrpc: "2.0", result: { timestamp: 1700000001012 }, id: body.id }),
+      );
+    });
+    closeServer = server.close;
+    const cfg = buildCfg(server.baseUrl);
+    const payload = signalApprovalCapability.render?.exec?.buildPendingPayload?.({
+      cfg,
+      request: {
+        id: "exec-1",
+        request: {
+          command: "echo hi",
+          agentId: "main",
+          turnSourceChannel: "slack",
+          turnSourceTo: "C123",
+          turnSourceAccountId: "default",
+          sessionKey: "agent:main:slack:C123",
+        },
+        createdAtMs: 0,
+        expiresAtMs: 60_000,
+      },
+      target: { channel: "signal", to: "+15551230000", source: "target" },
+      nowMs: 0,
+    });
+    const text = payload?.text ?? "";
+
+    expect(text).toContain("Approval required.\nID: exec-1");
+    expect(text).toContain("/approve exec-1 allow-once");
+    expect(text).not.toContain("React with:");
+
+    await sendMessageSignal("+15551230000", text, { cfg });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.method).toBe("send");
+    expect(calls[0]?.params?.message).toContain("Approval required.\nID: exec-1");
+    expect(calls[0]?.params?.message).toContain("React with:");
+
+    await expect(
+      maybeResolveSignalApprovalReaction({
+        cfg,
+        accountId: "default",
+        conversationKey: "+15551230000",
+        messageId: "1700000001012",
+        reactionKey: "\u{1F44D}",
+        actorId: "+15551230000",
+        targetAuthor: "+15550001111",
+      }),
+    ).resolves.toBe(true);
+    expect(resolverMocks.resolveSignalApproval).toHaveBeenCalledWith({
+      cfg,
+      approvalId: "exec-1",
       decision: "allow-once",
       senderId: "+15551230000",
       gatewayUrl: undefined,
