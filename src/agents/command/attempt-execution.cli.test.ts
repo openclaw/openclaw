@@ -10,8 +10,21 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { saveAuthProfileStore } from "../auth-profiles/store.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { FailoverError } from "../failover-error.js";
-import { persistCliTurnTranscript, runAgentAttempt } from "./attempt-execution.js";
+import {
+  persistCliTurnTranscript,
+  runAgentAttempt as runAgentAttemptImpl,
+} from "./attempt-execution.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
+
+type RunAgentAttemptParams = Parameters<typeof runAgentAttemptImpl>[0];
+const runAgentAttempt = (
+  params: Omit<RunAgentAttemptParams, "lifecycleGeneration"> &
+    Partial<Pick<RunAgentAttemptParams, "lifecycleGeneration">>,
+) =>
+  runAgentAttemptImpl({
+    ...params,
+    lifecycleGeneration: params.lifecycleGeneration ?? "test-generation",
+  });
 
 const runCliAgentMock = vi.hoisted(() => vi.fn());
 const runEmbeddedAgentMock = vi.hoisted(() => vi.fn());

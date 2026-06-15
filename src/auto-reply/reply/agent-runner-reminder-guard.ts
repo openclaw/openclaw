@@ -1,6 +1,7 @@
 /** Detects reminder commitments that were not backed by scheduled cron jobs. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { loadCronJobsStore, resolveCronJobsStorePath } from "../../cron/store.js";
+import { copyReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 
 const UNSCHEDULED_REMINDER_NOTE =
@@ -60,9 +61,9 @@ export function appendUnscheduledReminderNote(payloads: ReplyPayload[]): ReplyPa
     }
     appended = true;
     const trimmed = payload.text.trimEnd();
-    return {
+    return copyReplyPayloadMetadata(payload, {
       ...payload,
       text: `${trimmed}\n\n${UNSCHEDULED_REMINDER_NOTE}`,
-    };
+    });
   });
 }

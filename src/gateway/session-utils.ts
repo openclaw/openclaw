@@ -61,7 +61,6 @@ import { resolveStateDir } from "../config/paths.js";
 import {
   buildGroupDisplayName,
   getSessionStoreCacheVersion,
-  loadSessionStore,
   resolveAllAgentSessionStoreTargetsSync,
   resolveAgentMainSessionKey,
   resolveFreshSessionTotalTokens,
@@ -71,6 +70,7 @@ import {
   type SessionStoreTarget,
   type SessionScope,
 } from "../config/sessions.js";
+import { listSessionEntries as listAccessorSessionEntries } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
@@ -129,6 +129,8 @@ export {
   readSessionTitleFieldsFromTranscriptAsync,
   readSessionPreviewItemsFromTranscript,
   readSessionMessagesAsync,
+  readSessionMessagesWithSourceAsync,
+  resolveSessionHistoryTranscriptPathAsync,
   visitSessionMessagesAsync,
   resolveSessionTranscriptCandidates,
 } from "./session-utils.fs.js";
@@ -1410,6 +1412,18 @@ function resolveGatewaySessionStoreCandidates(
   return [...targets.values()];
 }
 
+function loadGatewaySessionLookupStore(
+  storePath: string,
+  clone: boolean | undefined,
+): Record<string, SessionEntry> {
+  return Object.fromEntries(
+    listAccessorSessionEntries({
+      ...(clone === false ? { clone: false } : {}),
+      storePath,
+    }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+  );
+}
+
 function resolveGatewaySessionStoreLookup(params: {
   cfg: OpenClawConfig;
   key: string;
@@ -1428,9 +1442,9 @@ function resolveGatewaySessionStoreLookup(params: {
     agentId: params.agentId,
     storePath: resolveStorePath(params.cfg.session?.store, { agentId: params.agentId }),
   };
-  const loadOptions = params.clone === false ? { clone: false } : undefined;
+  const loadStore = (storePath: string) => loadGatewaySessionLookupStore(storePath, params.clone);
   let selectedStorePath = fallback.storePath;
-  let selectedStore = params.initialStore ?? loadSessionStore(fallback.storePath, loadOptions);
+  let selectedStore = params.initialStore ?? loadStore(fallback.storePath);
   let selectedMatch = findFreshestStoreMatch(selectedStore, ...scanTargets);
   let selectedUpdatedAt = selectedMatch?.entry.updatedAt ?? Number.NEGATIVE_INFINITY;
 
@@ -1439,7 +1453,7 @@ function resolveGatewaySessionStoreLookup(params: {
     if (!candidate) {
       continue;
     }
-    const store = loadSessionStore(candidate.storePath, loadOptions);
+    const store = loadStore(candidate.storePath);
     const match = findFreshestStoreMatch(store, ...scanTargets);
     if (!match) {
       continue;
@@ -1497,12 +1511,11 @@ function resolveExplicitDeletedLegacyMainStoreTarget(params: {
         match: { entry: SessionEntry; key: string };
       }
     | undefined;
-  const loadOptions = params.clone === false ? { clone: false } : undefined;
   for (const target of resolveAllAgentSessionStoreTargetsSync(params.cfg)) {
     if (target.agentId !== legacyAgentId) {
       continue;
     }
-    const store = loadSessionStore(target.storePath, loadOptions);
+    const store = loadGatewaySessionLookupStore(target.storePath, params.clone);
     const match = findFreshestStoreMatch(store, ...lookupSeeds);
     if (!match) {
       continue;
@@ -2037,8 +2050,8 @@ export function buildGatewaySessionRow(params: {
   );
   const runtimeModelPresent =
     Boolean(entry?.model?.trim()) || Boolean(entry?.modelProvider?.trim());
-  const needsTranscriptTotalTokens =
-    resolvePositiveNumber(resolveFreshSessionTotalTokens(entry)) === undefined;
+  const freshSessionTotalTokens = resolveNonNegativeNumber(resolveFreshSessionTotalTokens(entry));
+  const needsTranscriptTotalTokens = freshSessionTotalTokens === undefined;
   const needsTranscriptContextTokens = resolvePositiveNumber(entry?.contextTokens) === undefined;
   const needsTranscriptEstimatedCostUsd =
     !skipTranscriptUsage &&
@@ -2082,10 +2095,10 @@ export function buildGatewaySessionRow(params: {
     : resolvedModelIdentity;
   const { provider: modelProvider, model } = modelIdentity;
   const totalTokens =
-    resolvePositiveNumber(resolveFreshSessionTotalTokens(entry)) ??
-    resolvePositiveNumber(transcriptUsage?.totalTokens);
+    freshSessionTotalTokens ?? resolveNonNegativeNumber(transcriptUsage?.totalTokens);
   const totalTokensFresh =
-    typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0
+    freshSessionTotalTokens !== undefined ||
+    (typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0)
       ? true
       : transcriptUsage?.totalTokensFresh === true;
   const goal = entry?.goal
@@ -2745,7 +2758,7 @@ export function listSessionsFromStore(params: {
       : undefined;
   const sharedRowContext =
     fullRowContext ??
-    (entries.length > 1 ? buildSessionListRowMetadataContext({ now }) : undefined);
+    (entries.length > 0 ? buildSessionListRowMetadataContext({ now }) : undefined);
 
   const sessions = entries.map(([key, entry], index) => {
     const includeTranscriptFields = index < sessionListTranscriptFieldRows;
@@ -2835,7 +2848,7 @@ export async function listSessionsFromStoreAsync(params: {
       : undefined;
   const sharedRowContext =
     fullRowContext ??
-    (entries.length > 1 ? buildSessionListRowMetadataContext({ now }) : undefined);
+    (entries.length > 0 ? buildSessionListRowMetadataContext({ now }) : undefined);
 
   const sessions: GatewaySessionRow[] = [];
   for (let i = 0; i < entries.length; i++) {

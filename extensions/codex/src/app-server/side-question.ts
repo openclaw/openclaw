@@ -31,6 +31,7 @@ import {
   shouldAutoApproveCodexAppServerApprovals,
   type CodexAppServerRuntimeOptions,
 } from "./config.js";
+import { resolveCodexMessageToolProvider } from "./dynamic-tool-build.js";
 import {
   emitDynamicToolErrorDiagnostic,
   emitDynamicToolStartedDiagnostic,
@@ -596,6 +597,7 @@ async function createCodexSideToolBridge(input: {
   const runtimeModel =
     input.params.runtimeModel ??
     ({ id: input.params.model, provider: input.params.provider } as never);
+  const messageToolProvider = resolveCodexMessageToolProvider(input.params);
   let tools: AnyAgentTool[] = [];
   if (supportsModelTools(runtimeModel)) {
     const createOpenClawCodingTools = (await import("openclaw/plugin-sdk/agent-harness"))
@@ -637,7 +639,10 @@ async function createCodexSideToolBridge(input: {
         workspaceDir: input.cwd,
       }),
       ...(input.params.messageProvider || input.params.messageChannel
-        ? { messageProvider: input.params.messageProvider ?? input.params.messageChannel }
+        ? {
+            messageProvider: messageToolProvider,
+            toolPolicyMessageProvider: input.params.messageProvider ?? input.params.messageChannel,
+          }
         : {}),
       ...(input.params.currentChannelId ? { currentChannelId: input.params.currentChannelId } : {}),
       hookChannelId: buildAgentHookContextChannelFields({
@@ -673,6 +678,7 @@ async function createCodexSideToolBridge(input: {
       sessionId: input.params.sessionId,
       sessionKey: input.params.sessionKey,
       runId: input.params.opts?.runId ?? `codex-btw:${input.params.sessionId}`,
+      currentChannelProvider: messageToolProvider,
       ...hookChannelFields,
     },
   });

@@ -1031,7 +1031,9 @@ function contextForTrustedTraceContext(
   evt: DiagnosticEventPayload,
   metadata: DiagnosticEventMetadata,
 ) {
-  return metadata.trusted ? contextForTraceContext(evt.trace) : undefined;
+  return metadata.trusted || metadata.trustedTraceContext === true
+    ? contextForTraceContext(evt.trace)
+    : undefined;
 }
 
 function addTraceAttributes(
@@ -1626,7 +1628,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             if (evt.code?.functionName) {
               assignOtelLogAttribute(attributes, "code.function", evt.code.functionName);
             }
-            if (metadata.trusted) {
+            if (metadata.trusted || metadata.trustedTraceContext === true) {
               addTraceAttributes(attributes, evt.trace);
             }
 
