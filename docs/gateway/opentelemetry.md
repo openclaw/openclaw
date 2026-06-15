@@ -92,7 +92,7 @@ are exported only when `diagnostics.otel.logs` is explicitly `true`.
       tracesEndpoint: "http://otel-collector:4318/v1/traces",
       metricsEndpoint: "http://otel-collector:4318/v1/metrics",
       logsEndpoint: "http://otel-collector:4318/v1/logs",
-      protocol: "http/protobuf", // grpc is ignored
+      protocol: "http/protobuf", // grpc is rejected at config validation
       serviceName: "openclaw-gateway",
       headers: { "x-collector-token": "..." },
       traces: true,
