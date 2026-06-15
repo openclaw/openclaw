@@ -1195,11 +1195,23 @@ export const dispatchTelegramMessage = async ({
   // forceNewMessage(), so the preamble is always committed to its own message and the
   // resumed text starts a fresh one. Defer to the tool-progress path when it already
   // owns the rotation; skip when no preamble was emitted.
+  //
+  // Gate on send-dispatched, not just hasStreamedMessage: a preamble shorter than the
+  // preview debounce (minInitialChars) is suppressed and never sent. Rotating it here
+  // would stop()->flush it into a spurious standalone message. Rotate only when the
+  // send has landed (messageId is a number) or is in flight (sendMayHaveLanded); a
+  // never-attempted preamble stays pending so the resumed text remains one message.
   const rotateInFlightAnswerPreambleForToolBoundary = async () => {
     if (activeAnswerDraftIsToolProgressOnly) {
       return;
     }
     if (!answerLane.hasStreamedMessage || answerLane.finalized) {
+      return;
+    }
+    const stream = answerLane.stream;
+    const sendDispatched =
+      typeof stream?.messageId() === "number" || stream?.sendMayHaveLanded?.() === true;
+    if (!sendDispatched) {
       return;
     }
     await rotateAnswerLaneForNewMessage();

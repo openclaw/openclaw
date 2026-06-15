@@ -25,7 +25,10 @@ import { createTelegramDraftStream } from "../extensions/telegram/src/draft-stre
 import { buildTelegramRichMarkdown } from "../extensions/telegram/src/rich-message.js";
 import { setTelegramRuntime } from "../extensions/telegram/src/runtime.js";
 
-const PREAMBLE = "Let me check the current state of that file.";
+// PREAMBLE_TEXT can override the preamble — e.g. a string shorter than the ~30
+// char preview debounce (minInitialChars) to exercise the never-sent case, which
+// must NOT produce a spurious standalone message at the tool boundary.
+const PREAMBLE = process.env.PREAMBLE_TEXT ?? "Let me check the current state of that file.";
 const POST_TOOL = "Done — the stale version was already removed earlier.";
 
 const label = process.argv[2] ?? "run";

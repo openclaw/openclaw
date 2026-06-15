@@ -4971,5 +4971,32 @@ describe("dispatchTelegramMessage draft streaming", () => {
         edits: editRichMessageText.mock.calls.length,
       }).toEqual({ sends: 2, edits: 0 });
     });
+
+    // P2 regression: a preamble shorter than the preview debounce (minInitialChars)
+    // is never sent. The tool-boundary rotation must NOT flush it into a spurious
+    // standalone message — only the resumed text becomes a message.
+    it("does not create a spurious message for a below-debounce never-sent preamble", async () => {
+      const { bot, sendRichMessage, editRichMessageText } = await setupRealDraftStream();
+      const SHORT = "Checking."; // under the ~30 char preview debounce -> never sent
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+        async ({ dispatcherOptions, replyOptions }) => {
+          await replyOptions?.onAssistantMessageStart?.();
+          await replyOptions?.onPartialReply?.({ text: SHORT });
+          await replyOptions?.onToolStart?.({ name: "read_file", phase: "start" });
+          await replyOptions?.onPartialReply?.({ text: POST_TOOL, replace: true });
+          await dispatcherOptions.deliver({ text: POST_TOOL }, { kind: "final" });
+          return { queuedFinal: true };
+        },
+      );
+
+      await dispatchWithContext({ context: createContext(), bot });
+
+      const sentTexts = sendRichMessage.mock.calls.map((c) => c[0]?.rich_message?.markdown);
+      expect({
+        sends: sendRichMessage.mock.calls.length,
+        edits: editRichMessageText.mock.calls.length,
+        spuriousPreamble: sentTexts.includes(SHORT),
+      }).toEqual({ sends: 1, edits: 0, spuriousPreamble: false });
+    });
   });
 });
