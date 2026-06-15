@@ -191,6 +191,33 @@ describe("message action threading helpers", () => {
     expect(resolveAutoThreadId).not.toHaveBeenCalled();
   });
 
+  it("canonicalizes explicit threadId and replyTo for one-root providers", () => {
+    const actionParams: Record<string, unknown> = {
+      channel: "forum",
+      target: "forum:123",
+      message: "hi",
+      threadId: "root-42",
+      replyTo: "child-777",
+    };
+
+    const resolveAutoThreadId = vi.fn(() => "unexpected");
+    const resolved = resolveAndApplyOutboundThreadId(actionParams, {
+      cfg: forumConfig,
+      to: "forum:123",
+      toolContext: defaultForumToolContext,
+      resolveAutoThreadId,
+      resolveReplyTransport: ({ replyToId }) => ({
+        replyToId,
+        threadId: replyToId,
+      }),
+    });
+
+    expect(actionParams.threadId).toBe("root-42");
+    expect(actionParams.replyTo).toBe("root-42");
+    expect(resolved).toBe("root-42");
+    expect(resolveAutoThreadId).not.toHaveBeenCalled();
+  });
+
   it.each([
     { name: "threadId null", params: { threadId: null } },
     { name: "topLevel true", params: { topLevel: true } },

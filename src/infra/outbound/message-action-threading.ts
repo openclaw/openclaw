@@ -51,11 +51,13 @@ export function resolveAndApplyOutboundThreadId(
   const resolvedThreadId = threadId ?? autoResolvedThreadId;
   if (autoResolvedThreadId && !actionParams.threadId) {
     actionParams.threadId = autoResolvedThreadId;
+  }
+  if (replyToId && resolvedThreadId) {
     const canonicalReplyToId = context.resolveReplyTransport?.({
       cfg: context.cfg,
       accountId: context.accountId,
-      threadId: autoResolvedThreadId,
-      replyToId: autoResolvedThreadId,
+      threadId: resolvedThreadId,
+      replyToId: resolvedThreadId,
     })?.replyToId;
     // Providers that use one canonical root for reply and thread routing opt in
     // through resolveReplyTransport. Other transports keep message replies intact.
