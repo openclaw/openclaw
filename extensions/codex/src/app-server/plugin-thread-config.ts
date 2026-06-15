@@ -13,6 +13,7 @@ import {
 } from "./app-inventory-cache.js";
 import {
   resolveCodexPluginsPolicy,
+  type CodexPluginDestructiveApprovalMode,
   type ResolvedCodexPluginPolicy,
   type ResolvedCodexPluginsPolicy,
 } from "./config.js";
@@ -36,6 +37,7 @@ export type PluginAppPolicyContextEntry = {
   marketplaceName: ResolvedCodexPluginPolicy["marketplaceName"];
   pluginName: string;
   allowDestructiveActions: boolean;
+  destructiveApprovalMode?: CodexPluginDestructiveApprovalMode;
   mcpServerNames: string[];
 };
 
@@ -246,6 +248,7 @@ export async function buildCodexPluginThreadConfig(
         marketplaceName: record.policy.marketplaceName,
         pluginName: record.policy.pluginName,
         allowDestructiveActions: record.policy.allowDestructiveActions,
+        destructiveApprovalMode: record.policy.destructiveApprovalMode,
         mcpServerNames: [...(record.detail?.mcpServers ?? [])].toSorted(),
       };
     }
@@ -425,12 +428,14 @@ function policyFingerprint(policy: ResolvedCodexPluginsPolicy): JsonValue {
   return {
     enabled: policy.enabled,
     allowDestructiveActions: policy.allowDestructiveActions,
+    destructiveApprovalMode: policy.destructiveApprovalMode,
     plugins: policy.pluginPolicies.map((plugin) => ({
       configKey: plugin.configKey,
       marketplaceName: plugin.marketplaceName,
       pluginName: plugin.pluginName,
       enabled: plugin.enabled,
       allowDestructiveActions: plugin.allowDestructiveActions,
+      destructiveApprovalMode: plugin.destructiveApprovalMode,
     })),
   };
 }
