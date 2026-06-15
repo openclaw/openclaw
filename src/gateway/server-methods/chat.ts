@@ -53,7 +53,10 @@ import {
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
-import { stageSandboxMedia } from "../../auto-reply/reply/stage-sandbox-media.js";
+import {
+  stageSandboxMedia,
+  type StageSandboxMediaResult,
+} from "../../auto-reply/reply/stage-sandbox-media.js";
 import type { MsgContext, TemplateContext } from "../../auto-reply/templating.js";
 import { resolveSessionFilePath, updateSessionStoreEntry } from "../../config/sessions.js";
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
@@ -1344,14 +1347,14 @@ function isPdfOffloadedRef(ref: OffloadedRef): boolean {
   return path.extname(ref.path.split(/[?#]/u)[0] ?? "").toLowerCase() === ".pdf";
 }
 
-// A managed inbound PDF saved to the media store is safe to hand the agent as
-// its media path without sandbox staging: host-side media-understanding extracts
-// its text (see resolveFileExtractionLimits), and copying a large PDF into every
-// sandbox is wasteful. Files above the 5MB staging cap are otherwise rejected as
-// a 4xx (see prestageMediaPathOffloads), so pass managed PDFs through instead so
-// locked-down agents still receive the document text. #90097
-function shouldPassThroughManagedInboundPdfOffloadRef(ref: OffloadedRef): boolean {
-  if (ref.sizeBytes <= MEDIA_MAX_BYTES || !isPdfOffloadedRef(ref)) {
+// A managed inbound PDF saved to the media store is safe to hand the agent as its
+// media path without sandbox staging: host-side media-understanding extracts its
+// text (see resolveFileExtractionLimits) by reading the media-store root, so even
+// locked-down agents receive the document. This gates both the up-front bypass for
+// oversized PDFs and the fallback to the managed path when sandbox staging fails
+// for an already-managed PDF. #90097
+function isManagedInboundPdfOffloadRef(ref: OffloadedRef): boolean {
+  if (!isPdfOffloadedRef(ref)) {
     return false;
   }
   try {
@@ -1361,18 +1364,29 @@ function shouldPassThroughManagedInboundPdfOffloadRef(ref: OffloadedRef): boolea
   }
 }
 
+// Oversized managed PDFs skip sandbox staging up front: copying a large PDF into
+// every sandbox is wasteful, and files above the 5MB staging cap would otherwise
+// be rejected as a 4xx (see prestageMediaPathOffloads).
+function shouldPassThroughManagedInboundPdfOffloadRef(ref: OffloadedRef): boolean {
+  return ref.sizeBytes > MEDIA_MAX_BYTES && isManagedInboundPdfOffloadRef(ref);
+}
+
 // Stages media-path offloads into the agent sandbox synchronously so chat.send
-// can surface 5xx before respond(). Throws MediaOffloadError on any staging
-// failure (ENOSPC / EPERM / partial-stage) so the outer chat.send handler can
-// map it to UNAVAILABLE (5xx); plain Error would be misclassified as 4xx. All
-// offloaded refs are cleaned up from the media store before rethrow.
+// can surface 5xx before respond(). Throws MediaOffloadError when staging fails
+// for a ref that cannot fall back (ENOSPC / EPERM / partial-stage of a non-PDF or
+// unmanaged ref) so the outer chat.send handler maps it to UNAVAILABLE (5xx);
+// plain Error would be misclassified as 4xx. Already-managed inbound PDFs instead
+// fall back to their managed media path on staging failure (#90097), since
+// host-side media-understanding reads them from the media-store root. Offloaded
+// refs are cleaned up from the media store before rethrow.
 // Callers MUST set ctx.MediaStaged=true when this runs so the dispatch
 // pipeline skips its own stageSandboxMedia pass.
 //
-// Returned paths are absolute media-store paths when no sandbox is active or for
-// oversized managed PDFs that pass through staging (#90097), and sandbox-relative
-// paths plus `workspaceDir` for files staged into the sandbox. Host-side
-// media-understanding resolves both via MediaWorkspaceDir and the media-store root.
+// Returned paths are absolute media-store paths when no sandbox is active, for
+// oversized managed PDFs that bypass staging, or for already-managed PDFs that
+// fall back when staging fails (#90097); files staged into the sandbox use
+// sandbox-relative paths plus `workspaceDir`. Host-side media-understanding
+// resolves both via MediaWorkspaceDir and the media-store root.
 async function prestageMediaPathOffloads(params: {
   offloadedRefs: OffloadedRef[];
   includeImageRefs?: boolean;
@@ -1437,25 +1451,41 @@ async function prestageMediaPathOffloads(params: {
       MediaType: refsToStage[0].mimeType,
       MediaTypes: refsToStage.map((ref) => ref.mimeType),
     };
-    const stageResult = await stageSandboxMedia({
-      ctx: stagingCtx,
-      sessionCtx: stagingCtx as TemplateContext,
-      cfg: params.cfg,
-      sessionKey: params.sessionKey,
-      workspaceDir,
-    });
+    let stageResult: StageSandboxMediaResult;
+    try {
+      stageResult = await stageSandboxMedia({
+        ctx: stagingCtx,
+        sessionCtx: stagingCtx as TemplateContext,
+        cfg: params.cfg,
+        sessionKey: params.sessionKey,
+        workspaceDir,
+      });
+    } catch (stageErr) {
+      // stageSandboxMedia threw before copying anything (e.g. workspace mkdir
+      // ENOSPC/EPERM), so nothing reached the sandbox. Already-managed inbound
+      // PDFs still reach the agent via their managed media path (host-side
+      // media-understanding reads the media-store root); fail the send only when a
+      // ref cannot fall back. #90097
+      if (refsToStage.some((ref) => !isManagedInboundPdfOffloadRef(ref))) {
+        throw stageErr;
+      }
+      return refsByManagedPath(mediaPathRefs);
+    }
 
     // stageSandboxMedia silently keeps unstaged entries as their original
     // absolute path, so length parity does not prove every file landed in the
     // sandbox. The RPC max (20MB via resolveChatAttachmentMaxBytes) admits files
     // above the staging cap (STAGED_MEDIA_MAX_BYTES = 5MB); check the returned
-    // `staged` map so any missing source becomes a 5xx MediaOffloadError the
-    // client can retry.
+    // `staged` map for missing sources. Already-managed inbound PDFs fall back to
+    // their absolute managed path (host-side media-understanding reads the
+    // media-store root); any other missing source is a 5xx MediaOffloadError the
+    // client can retry. #90097
     const stagedSources = stageResult.staged;
     const missing = refsToStage.filter((ref) => !stagedSources.has(ref.path));
-    if (missing.length > 0) {
+    const unstageable = missing.filter((ref) => !isManagedInboundPdfOffloadRef(ref));
+    if (unstageable.length > 0) {
       throw new Error(
-        `attachment staging incomplete: ${stagedSources.size}/${refsToStage.length} paths staged into sandbox workspace (missing: ${missing.map((ref) => ref.path).join(", ")})`,
+        `attachment staging incomplete: ${stagedSources.size}/${refsToStage.length} paths staged into sandbox workspace (missing: ${unstageable.map((ref) => ref.path).join(", ")})`,
       );
     }
     const stagedPaths = stagingCtx.MediaPaths ?? [];
@@ -1463,9 +1493,10 @@ async function prestageMediaPathOffloads(params: {
 
     // Map each ref to its post-staging path. Staged files become sandbox-relative
     // (e.g. `media/inbound/foo.pdf`) so the agent inside the container can read
-    // them; pass-through PDFs keep their absolute managed path. Host-side
-    // media-understanding resolves both via ctx.MediaWorkspaceDir plus the
-    // media-store root. Preserve the original attachment order.
+    // them; pass-through PDFs and managed PDFs that fell back from staging keep
+    // their absolute managed path (stagedPaths preserves the absolute path for any
+    // unstaged entry). Host-side media-understanding resolves both via
+    // ctx.MediaWorkspaceDir plus the media-store root. Preserve attachment order.
     const resolvedByRef = new Map<OffloadedRef, { path: string; mimeType: string }>();
     refsToStage.forEach((ref, index) => {
       resolvedByRef.set(ref, {
