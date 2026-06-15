@@ -19,8 +19,8 @@ import {
 // own a young temp DB without losing its in-flight rebuild.
 const reindexTempFileWithoutLockMinAgeMs = 24 * 60 * 60_000;
 const reindexTempUuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-const memoryIndexFileSuffixes = ["", "-wal", "-shm"] as const;
-const reindexTempEntrySuffixes = ["-wal", "-shm", ""] as const;
+const memoryIndexFileSuffixes = ["", "-wal", "-shm", "-journal"] as const;
+const reindexTempEntrySuffixes = ["-wal", "-shm", "-journal", ""] as const;
 
 function resolveReindexTempBaseName(dbBaseName: string, entryName: string): string | undefined {
   for (const suffix of reindexTempEntrySuffixes) {

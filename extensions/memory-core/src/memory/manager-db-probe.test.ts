@@ -121,6 +121,54 @@ describe("openMemoryDatabaseAtPath readOnly probe", () => {
     await expectPathMissing(`${orphanBase}-shm`);
   });
 
+  it("removes aged orphan reindex temp files including the rollback-journal sidecar", async () => {
+    const dbPath = path.join(fixtureRoot, `case-${caseId++}`, "index.sqlite");
+    const dir = path.dirname(dbPath);
+    await fs.mkdir(dir, { recursive: true });
+    const seed = new DatabaseSync(dbPath);
+    seed.exec("CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT)");
+    seed.close();
+
+    // NFS-backed stores keep journal_mode=DELETE, so a hard crash during a
+    // reindex leaves a rollback-journal sidecar (.tmp-<uuid>-journal) rather
+    // than -wal/-shm. Cleanup must remove it alongside the temp main file.
+    const orphanBase = `${dbPath}.tmp-22222222-3333-4444-5555-666666666666`;
+    for (const suffix of ["", "-journal"]) {
+      const filePath = `${orphanBase}${suffix}`;
+      await fs.writeFile(filePath, "orphan");
+      const old = new Date(Date.now() - 48 * 60 * 60_000);
+      await fs.utimes(filePath, old, old);
+    }
+
+    const db = openMemoryDatabaseAtPath(dbPath, false);
+    db.close();
+
+    await expectPathMissing(orphanBase);
+    await expectPathMissing(`${orphanBase}-journal`);
+  });
+
+  it("removes a stranded rollback-journal sidecar whose temp main file is already gone", async () => {
+    const dbPath = path.join(fixtureRoot, `case-${caseId++}`, "index.sqlite");
+    const dir = path.dirname(dbPath);
+    await fs.mkdir(dir, { recursive: true });
+    const seed = new DatabaseSync(dbPath);
+    seed.exec("CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT)");
+    seed.close();
+
+    // Only the rollback journal survives (its temp main file was already
+    // removed). The discovery set must still recognize the orphan by its
+    // -journal suffix, otherwise it leaks forever.
+    const strandedJournal = `${dbPath}.tmp-33333333-4444-5555-6666-777777777777-journal`;
+    await fs.writeFile(strandedJournal, "stranded journal");
+    const old = new Date(Date.now() - 48 * 60 * 60_000);
+    await fs.utimes(strandedJournal, old, old);
+
+    const db = openMemoryDatabaseAtPath(dbPath, false);
+    db.close();
+
+    await expectPathMissing(strandedJournal);
+  });
+
   it("keeps young reindex temp files during live database startup", async () => {
     const dbPath = path.join(fixtureRoot, `case-${caseId++}`, "index.sqlite");
     const dir = path.dirname(dbPath);
