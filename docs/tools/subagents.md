@@ -143,6 +143,7 @@ session to confirm the effective tool list.
 - **Thinking:** native sub-agents inherit the caller unless you set `agents.defaults.subagents.thinking` (or per-agent `agents.list[].subagents.thinking`). ACP runtime spawns also apply `agents.defaults.models["provider/model"].params.thinking` for the selected model. An explicit `sessions_spawn.thinking` still wins.
 - **Run timeout:** OpenClaw uses `agents.defaults.subagents.runTimeoutSeconds` when set; otherwise it falls back to `0` (no timeout). `sessions_spawn` does not accept per-call timeout overrides.
 - **Task delivery:** native sub-agents receive the delegated task in their first visible `[Subagent Task]` message. The sub-agent system prompt carries runtime rules and routing context, not a hidden duplicate of the task.
+- **Execution:** `sessions_spawn.execution` can explicitly request an execution backend/profile. The current implementation validates and records local process placement for registry/list readback; unsupported backend types return an error instead of silently falling back.
 
 Accepted native sub-agent spawns include the resolved child model metadata in
 the tool result: `resolvedModel` contains the applied model ref and
@@ -201,6 +202,15 @@ Per-agent overrides use `agents.list[].subagents.delegationMode`.
 </ParamField>
 <ParamField path="streamTo" type='"parent"'>
   ACP-only. Streams ACP run output to the parent session when `runtime: "acp"`; omit for native sub-agent spawns.
+</ParamField>
+<ParamField path="execution" type="object">
+  Optional execution placement request for the child run. The current release supports local process execution and rejects unsupported backend types at spawn time instead of silently falling back.
+</ParamField>
+<ParamField path="execution.backend" type="string" default='"local"'>
+  Execution placement backend id. Defaults to the built-in local process backend.
+</ParamField>
+<ParamField path="execution.profile" type="string">
+  Optional profile id within the selected execution backend. Profiles are validated and recorded for status/readback.
 </ParamField>
 <ParamField path="model" type="string">
   Override the sub-agent model. Invalid values are skipped and the sub-agent runs on the default model with a warning in the tool result.
