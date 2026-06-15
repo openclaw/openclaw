@@ -53,7 +53,11 @@ script aliases; both forms are supported.
 
 Profile-backed `qa run` reads membership from `taxonomy.yaml`, then dispatches
 the resolved scenarios through `qa suite`. `--surface` and
-`--category` filter the selected profile instead of defining separate lanes:
+`--category` filter the selected profile instead of defining separate lanes.
+The resulting `qa-evidence.json` includes a profile scorecard summary with
+selected-category counts and missing coverage IDs; the individual evidence
+entries remain the source of truth for the tests, coverage roles, artifacts,
+and results:
 
 ```bash
 pnpm openclaw qa run \
@@ -937,7 +941,9 @@ Every `qa suite` run writes top-level `qa-evidence.json`,
 `qa-suite-summary.json`, and `qa-suite-report.md` artifacts for the selected
 scenario set. Scenarios that declare `execution.kind: vitest` or
 `execution.kind: playwright` run the matching test path and also write
-per-scenario logs.
+per-scenario logs. When `qa suite` is reached through
+`qa run --qa-profile`, the same `qa-evidence.json` also includes the profile
+scorecard summary for the selected taxonomy categories.
 Treat it as a discovery aid, not a gate replacement; the selected scenario still needs the right provider mode, live transport, Multipass, Testbox, or release lane for the behavior under test.
 
 For character and style checks, run the same scenario across multiple live model

@@ -42,6 +42,45 @@ When you touch tests or want extra confidence:
 - Coverage gate: `pnpm test:coverage`
 - E2E suite: `pnpm test:e2e`
 
+## Test Temp Directories
+
+Prefer the shared helpers in `test/helpers/temp-dir.ts` for test-owned
+temporary directories. They make ownership explicit and keep cleanup in the same
+test lifecycle:
+
+```ts
+import { afterEach } from "vitest";
+import { createTempDirTracker } from "../helpers/temp-dir.js";
+
+const tempDirs = createTempDirTracker();
+
+afterEach(tempDirs.cleanup);
+
+it("uses a temp workspace", () => {
+  const workspace = tempDirs.make("openclaw-example-");
+  // use workspace
+});
+```
+
+Use `makeTempDir(tempDirs, prefix)` and `cleanupTempDirs(tempDirs)` when a test
+already owns an array or set of paths. Avoid new bare `fs.mkdtemp*` calls in
+tests unless a case is explicitly verifying raw temp-dir behavior. Add an
+auditable allow comment with a concrete reason when a test intentionally needs a
+bare temp directory:
+
+```ts
+// openclaw-temp-dir: allow verifies raw fs cleanup behavior
+const workspace = fs.mkdtempSync(prefix);
+```
+
+For migration visibility, `node scripts/report-test-temp-creations.mjs` reports
+new bare temp-dir creation in added diff lines without blocking existing cleanup
+styles. Its file scope intentionally follows the same test-path classification
+used by `scripts/changed-lanes.mjs` instead of maintaining a separate test-helper
+filename heuristic, while skipping the shared helper implementation itself.
+`check:changed` runs this report for changed test paths as a warning-only CI
+signal; findings are GitHub warning annotations, not failures.
+
 When debugging real providers/models (requires real creds):
 
 - Live suite (models + gateway tool/image probes): `pnpm test:live`
@@ -148,6 +187,8 @@ inside every shard.
   - Writes top-level `qa-evidence.json`, `qa-suite-summary.json`, and
     `qa-suite-report.md` artifacts for the selected scenario set, including
     mixed flow, Vitest, and Playwright scenario selections.
+  - When dispatched by `pnpm openclaw qa run --qa-profile <profile>`, embeds the
+    selected taxonomy profile scorecard in the same `qa-evidence.json`.
   - Runs multiple selected scenarios in parallel by default with isolated
     gateway workers. `qa-channel` defaults to concurrency 4 (bounded by the
     selected scenario count). Use `--concurrency <count>` to tune the worker

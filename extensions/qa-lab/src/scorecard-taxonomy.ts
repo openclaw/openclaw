@@ -322,6 +322,16 @@ function buildMaturityRefs(taxonomy: QaMaturityTaxonomy | null) {
   return { categories, coverageIds };
 }
 
+export function readQaScorecardFeatureCoverageByCategory(repoRoot?: string) {
+  const maturityRefs = buildMaturityRefs(readQaMaturityTaxonomy(repoRoot));
+  return new Map(
+    [...maturityRefs.categories.entries()].map(([categoryId, category]) => [
+      categoryId,
+      category.features.map((feature) => feature.coverageIds),
+    ]),
+  );
+}
+
 function pushMissingPrimaryIssues(params: {
   issues: QaScorecardValidationIssue[];
   category: MaturityCategoryRef;
