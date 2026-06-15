@@ -22,7 +22,7 @@ import {
   getAgentRunContext,
   releaseAgentRunContext,
 } from "../../infra/agent-events.js";
-import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
+import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import {
   createSourceDeliveryPlan,
   resolveSourceDeliveryOutcome,
@@ -1045,6 +1045,35 @@ async function finalizeCronRun(params: {
     // Fixes #69347: cost was inflated 1x-72x by accumulating on every persist.
     if (runEstimatedCostUsd !== undefined) {
       prepared.cronSession.sessionEntry.estimatedCostUsd = runEstimatedCostUsd;
+    }
+    // Emit model.usage diagnostic event so OTel subscribers see cron-fired
+    // spend alongside auto-reply spend (#92338).
+    if (isDiagnosticsEnabled(prepared.cfgWithAgentDefaults)) {
+      const usagePromptTokens = input + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
+      const totalUsageTokens = totalTokens ?? usagePromptTokens + output;
+      emitTrustedDiagnosticEvent({
+        type: "model.usage",
+        sessionKey: prepared.agentSessionKey,
+        sessionId: prepared.runSessionId,
+        agentId: prepared.agentId,
+        provider: providerUsed,
+        model: modelUsed,
+        usage: {
+          input,
+          output,
+          cacheRead: usage.cacheRead ?? 0,
+          cacheWrite: usage.cacheWrite ?? 0,
+          promptTokens: usagePromptTokens,
+          total: totalUsageTokens,
+        },
+        lastCallUsage,
+        context: {
+          contextTokens,
+          promptTokens,
+        },
+        costUsd: runEstimatedCostUsd,
+        durationMs: finalRunResult.meta?.durationMs,
+      });
     }
     telemetry = {
       model: modelUsed,
