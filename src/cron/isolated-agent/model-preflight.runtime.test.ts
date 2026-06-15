@@ -270,6 +270,44 @@ describe("preflightCronModelProvider", () => {
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
   });
 
+  it("does not cache a failure from a deadline-clamped probe", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    fetchWithSsrFGuardMock.mockRejectedValueOnce(new DOMException("timed out", "TimeoutError"));
+
+    const cfg = {
+      models: {
+        providers: {
+          ollama: {
+            api: "ollama" as const,
+            baseUrl: "http://127.0.0.1:11434",
+            models: [],
+          },
+        },
+      },
+    };
+
+    const first = await preflightCronModelProvider({
+      cfg,
+      provider: "ollama",
+      model: "qwen3:14b",
+      deadlineMs: 1_200,
+    });
+
+    expect(first.status).toBe("unavailable");
+    expect(requireFetchPreflightRequest().timeoutMs).toBe(200);
+
+    mockReachableResponse(200);
+    const nextRun = await preflightCronModelProvider({
+      cfg,
+      provider: "ollama",
+      model: "qwen3:14b",
+    });
+
+    expect(nextRun).toEqual({ status: "available" });
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
+  });
+
   it("retries an unavailable endpoint after the cache ttl", async () => {
     fetchWithSsrFGuardMock.mockRejectedValueOnce(new Error("ECONNREFUSED")).mockResolvedValueOnce({
       response: { status: 200 },

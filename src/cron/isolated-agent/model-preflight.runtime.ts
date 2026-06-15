@@ -263,6 +263,7 @@ export async function preflightCronModelProvider(params: {
   let lastError: unknown;
   let attempts = 0;
   let budgetExhausted = false;
+  let cacheableFailure = true;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     const remainingBudgetMs = resolveRemainingBudgetMs(params.deadlineMs);
     if (remainingBudgetMs !== undefined && remainingBudgetMs <= 0) {
@@ -271,18 +272,24 @@ export async function preflightCronModelProvider(params: {
       break;
     }
     attempts = attempt;
+    const probeTimeoutMs =
+      remainingBudgetMs === undefined ? timeoutMs : Math.min(timeoutMs, remainingBudgetMs);
     try {
       await probeLocalProviderEndpoint({
         api,
         baseUrl,
-        timeoutMs:
-          remainingBudgetMs === undefined ? timeoutMs : Math.min(timeoutMs, remainingBudgetMs),
+        timeoutMs: probeTimeoutMs,
       });
       const result: EndpointPreflightResult = { status: "available" };
       preflightCache.set(cacheKey, { checkedAtMs: nowMs, result });
       return { status: "available" };
     } catch (error) {
       lastError = error;
+      // A deadline-clamped probe did not receive the configured health-check
+      // window, so its failure must not poison the endpoint cache.
+      if (probeTimeoutMs < timeoutMs) {
+        cacheableFailure = false;
+      }
       if (attempt < maxAttempts) {
         const remainingDelayBudgetMs = resolveRemainingBudgetMs(params.deadlineMs);
         if (remainingDelayBudgetMs !== undefined && remainingDelayBudgetMs <= 0) {
@@ -305,7 +312,7 @@ export async function preflightCronModelProvider(params: {
     error: lastError ?? new Error("cron model preflight chain budget exhausted"),
     attempts,
   };
-  if (!budgetExhausted) {
+  if (!budgetExhausted && cacheableFailure) {
     preflightCache.set(cacheKey, { checkedAtMs: nowMs, result });
   }
   return buildUnavailableResult({
