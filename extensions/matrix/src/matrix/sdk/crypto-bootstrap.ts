@@ -72,11 +72,10 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
     const crossSigning = await this.bootstrapCrossSigning(crypto, {
       forceResetCrossSigning: forceReset,
       allowAutomaticCrossSigningReset: options.allowAutomaticCrossSigningReset !== false,
-      // SSSS was already fixed upfront for forced reset with password, so prevent the repair
-      // block from doing a second reset after recreating secret storage (gh-78396). For
-      // passwordless forced reset, SSSS was deferred so allow the existing repair path.
+      // Prevent the repair block from doing a second reset after recreating secret storage
+      // for all forced reset modes, including passwordless with stale SSSS (gh-78396).
       allowSecretStorageRecreateWithoutRecoveryKey:
-        forceReset && hasPassword
+        forceReset
           ? false
           : options.allowSecretStorageRecreateWithoutRecoveryKey === true,
       strict,
