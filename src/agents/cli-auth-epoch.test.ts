@@ -154,10 +154,14 @@ describe("resolveCliAuthEpoch", () => {
     access = "access-b";
     refresh = "refresh-b";
     store.profiles["google-gemini-cli:primary"] = {
-      ...store.profiles["google-gemini-cli:primary"]!,
+      type: "oauth",
+      provider: "google-gemini-cli",
       access,
       refresh,
       expires: 2,
+      email: "user@example.test",
+      accountId: "google-account-1",
+      projectId: "project-1",
     };
     const primaryAfterRefresh = await resolveCliAuthEpoch({
       provider: "google-gemini-cli",

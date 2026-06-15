@@ -610,7 +610,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     const { dir, sessionFile } = createSessionFile();
     const agentDir = path.join(dir, "agents", "main", "agent");
     const authProfileId = "test-cli:secret";
-    const prepareExecution = vi.fn(async () => undefined);
+    const prepareExecution = vi.fn(async (_ctx: unknown) => undefined);
     fs.mkdirSync(agentDir, { recursive: true });
     saveAuthProfileStore(
       {
@@ -678,7 +678,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       ownerToken: "loopback-owner-token",
       nonOwnerToken: "loopback-non-owner-token",
     }));
-    const prepareExecution = vi.fn(async () => ({
+    const prepareExecution = vi.fn(async (_ctx: unknown) => ({
       env: {
         GEMINI_CLI_SYSTEM_SETTINGS_PATH: profileSystemSettingsPath,
       },
@@ -757,8 +757,9 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       ownerToken: "loopback-owner-token",
       nonOwnerToken: "loopback-non-owner-token",
     }));
-    const prepareExecution = vi.fn(async (ctx: { env?: Record<string, string> }) => {
-      generatedSystemSettingsPath = ctx.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH;
+    const prepareExecution = vi.fn(async (ctx: unknown) => {
+      generatedSystemSettingsPath = (ctx as { env?: Record<string, string> }).env
+        ?.GEMINI_CLI_SYSTEM_SETTINGS_PATH;
       throw new Error("Gemini auth profile was selected but no credential material was found");
     });
     cliBackendsTesting.setDepsForTest({
