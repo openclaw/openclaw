@@ -1701,6 +1701,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       ok: true,
       compacted: false,
       reason: "no_real_conversation_messages",
+      result: undefined,
     });
 
     const result = await compactEmbeddedAgentSession(
@@ -1733,6 +1734,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       ok: true,
       compacted: false,
       reason: undefined,
+      result: undefined,
     });
 
     const result = await compactEmbeddedAgentSession(wrappedCompactionArgs({}));
