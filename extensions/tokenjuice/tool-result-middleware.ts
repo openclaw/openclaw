@@ -29,6 +29,54 @@ function readCwd(event: AgentToolResultMiddlewareEvent): string {
   return process.cwd();
 }
 
+function readTextContent(content: OpenClawAgentToolResult["content"]): string {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  return content
+    .map((item) => {
+      if (typeof item === "string") {
+        return item;
+      }
+      if (item && typeof item === "object" && "text" in item && typeof item.text === "string") {
+        return item.text;
+      }
+      return "";
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+function readCommand(args: Record<string, unknown>): string {
+  const command = args.command;
+  return typeof command === "string" ? command : "";
+}
+
+function normaliseDetails(
+  event: AgentToolResultMiddlewareEvent,
+  current: OpenClawAgentToolResult,
+): unknown {
+  if (current.details && typeof current.details === "object") {
+    return current.details;
+  }
+  if ((event.toolName !== "exec" && event.toolName !== "bash") || !readCommand(event.args)) {
+    return current.details;
+  }
+  const aggregated = readTextContent(current.content);
+  if (!aggregated.trim()) {
+    return current.details;
+  }
+  return {
+    status: event.isError ? "failed" : "completed",
+    aggregated,
+    exitCode: event.isError ? 1 : 0,
+    cwd: readCwd(event),
+  };
+}
+
 export function createTokenjuiceAgentToolResultMiddleware(): AgentToolResultMiddleware {
   const handlers: TokenjuiceToolResultHandler[] = [];
   createTokenjuiceOpenClawEmbeddedExtension()({
@@ -47,7 +95,7 @@ export function createTokenjuiceAgentToolResultMiddleware(): AgentToolResultMidd
           toolName: event.toolName,
           input: event.args,
           content: current.content,
-          details: current.details,
+          details: normaliseDetails(event, current),
           isError: event.isError,
         },
         { cwd: readCwd(event) },

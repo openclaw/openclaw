@@ -17,6 +17,7 @@ vi.mock("./runtime-api.js", () => ({
 }));
 
 import plugin from "./index.js";
+import { createTokenjuiceAgentToolResultMiddleware } from "./tool-result-middleware.js";
 
 describe("tokenjuice plugin", () => {
   beforeEach(() => {
@@ -52,5 +53,46 @@ describe("tokenjuice plugin", () => {
     const registration = registerAgentToolResultMiddleware.mock.calls[0];
     expect(typeof registration?.[0]).toBe("function");
     expect(registration?.[1]).toEqual({ runtimes: ["openclaw", "codex"] });
+  });
+
+  it("normalises bash results without details before passing them to tokenjuice", async () => {
+    let received:
+      | {
+          toolName: string;
+          input: Record<string, unknown>;
+          content: unknown;
+          details: unknown;
+          isError?: boolean;
+        }
+      | undefined;
+    tokenjuiceFactory.mockImplementationOnce(
+      (api: { on: (event: string, handler: unknown) => void }) => {
+        api.on("tool_result", async (event: typeof received) => {
+          received = event;
+          return { content: [{ type: "text", text: "compacted" }] };
+        });
+      },
+    );
+
+    const middleware = createTokenjuiceAgentToolResultMiddleware();
+    const result = await middleware(
+      {
+        toolCallId: "tool-call-tokenjuice-bash",
+        toolName: "bash",
+        args: { command: "printf 'hello\\n'", workdir: "/tmp/openclaw-tokenjuice-test" },
+        result: { content: [{ type: "text", text: "hello\n" }], details: undefined },
+        isError: false,
+      },
+      { runtime: "openclaw" },
+    );
+
+    expect(received?.toolName).toBe("bash");
+    expect(received?.details).toMatchObject({
+      status: "completed",
+      aggregated: "hello\n",
+      exitCode: 0,
+      cwd: "/tmp/openclaw-tokenjuice-test",
+    });
+    expect(result?.result.content).toEqual([{ type: "text", text: "compacted" }]);
   });
 });
