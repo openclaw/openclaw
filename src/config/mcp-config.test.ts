@@ -9,6 +9,12 @@ import {
   unsetConfiguredMcpServer,
 } from "./mcp-config.js";
 
+const mockedLogWarn = vi.fn();
+
+vi.mock("../logger.js", () => ({
+  logWarn: (...args: unknown[]) => mockedLogWarn(...args),
+}));
+
 function validationOk(raw: unknown) {
   return { ok: true as const, config: raw, warnings: [] };
 }
@@ -153,6 +159,72 @@ describe("config mcp config", () => {
           "X-Debug": true,
         },
       });
+    });
+  });
+
+  it("warns once when saving a stdio server with blocked env keys", async () => {
+    mockedLogWarn.mockClear();
+    await withMcpConfigHome({}, async () => {
+      const setResult = await setConfiguredMcpServer({
+        name: "blocked-env",
+        server: {
+          command: "python",
+          args: ["server.py"],
+          env: {
+            PYTHONPATH: "/tmp/workspace",
+            NODE_OPTIONS: "--require=./evil.js",
+            PYTHONUNBUFFERED: "1",
+          },
+        },
+      });
+
+      expect(setResult.ok).toBe(true);
+      expect(mockedLogWarn).toHaveBeenCalledTimes(2);
+      expect(mockedLogWarn).toHaveBeenCalledWith(
+        'bundle-mcp: server "blocked-env": env "PYTHONPATH" is blocked for stdio startup safety and will be ignored at runtime. Remove it from the config or handle it inside the server script.',
+      );
+      expect(mockedLogWarn).toHaveBeenCalledWith(
+        'bundle-mcp: server "blocked-env": env "NODE_OPTIONS" is blocked for stdio startup safety and will be ignored at runtime. Remove it from the config or handle it inside the server script.',
+      );
+    });
+  });
+
+  it("does not warn for stdio servers with no blocked env keys", async () => {
+    mockedLogWarn.mockClear();
+    await withMcpConfigHome({}, async () => {
+      const setResult = await setConfiguredMcpServer({
+        name: "clean-env",
+        server: {
+          command: "node",
+          args: ["server.js"],
+          env: {
+            PYTHONUNBUFFERED: "1",
+            GITHUB_TOKEN: "token",
+          },
+        },
+      });
+
+      expect(setResult.ok).toBe(true);
+      expect(mockedLogWarn).not.toHaveBeenCalled();
+    });
+  });
+
+  it("does not warn for HTTP servers with blocked env keys", async () => {
+    mockedLogWarn.mockClear();
+    await withMcpConfigHome({}, async () => {
+      const setResult = await setConfiguredMcpServer({
+        name: "http-server",
+        server: {
+          url: "https://mcp.example.com/sse",
+          env: {
+            PYTHONPATH: "/tmp/workspace",
+          },
+        },
+      });
+
+      expect(setResult.ok).toBe(true);
+      // env is only checked for stdio servers (with a command field).
+      expect(mockedLogWarn).not.toHaveBeenCalled();
     });
   });
 

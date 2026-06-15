@@ -68,6 +68,7 @@ describe("resolveMcpTransportConfig", () => {
       },
     });
 
+    // Blocked keys are silently dropped at runtime.
     expect(resolved).toEqual({
       kind: "stdio",
       transportType: "stdio",
@@ -86,21 +87,7 @@ describe("resolveMcpTransportConfig", () => {
       requestTimeoutMs: 60_000,
       supportsParallelToolCalls: false,
     });
-    expect(logWarn).toHaveBeenCalledWith(
-      'bundle-mcp: server "probe": env "NODE_OPTIONS" is blocked for stdio startup safety and was ignored.',
-    );
-    expect(logWarn).toHaveBeenCalledWith(
-      'bundle-mcp: server "probe": env "LD_PRELOAD" is blocked for stdio startup safety and was ignored.',
-    );
-    expect(logWarn).toHaveBeenCalledWith(
-      'bundle-mcp: server "probe": env "BASH_ENV" is blocked for stdio startup safety and was ignored.',
-    );
-    expect(logWarn).toHaveBeenCalledWith(
-      'bundle-mcp: server "probe": env "ANSIBLE_CONFIG" is blocked for stdio startup safety and was ignored.',
-    );
-    expect(logWarn).toHaveBeenCalledWith(
-      'bundle-mcp: server "probe": env "TF_CLI_CONFIG_FILE" is blocked for stdio startup safety and was ignored.',
-    );
+    expect(logWarn).not.toHaveBeenCalled();
   });
 
   it("uses an explicit empty stdio env when all configured env keys are blocked", () => {
@@ -126,17 +113,21 @@ describe("resolveMcpTransportConfig", () => {
     });
   });
 
-  it("sanitizes config-controlled names in stdio env warnings", () => {
-    resolveMcpTransportConfig("probe\nWARN forged\u001b[31m", {
+  it("silently drops blocked env keys regardless of key formatting", () => {
+    const resolved = resolveMcpTransportConfig("probe", {
       command: "node",
       env: {
-        "LD_PRELOAD\nWARN forged\u001b[31m": "/tmp/pwn.so",
+        LD_PRELOAD: "/tmp/pwn.so",
+        GITHUB_TOKEN: "token",
       },
     });
 
-    expect(logWarn).toHaveBeenCalledWith(
-      'bundle-mcp: server "probeWARN forged": env "LD_PRELOADWARN forged" is blocked for stdio startup safety and was ignored.',
+    expect(resolved).toEqual(
+      expect.objectContaining({
+        env: { GITHUB_TOKEN: "token" },
+      }),
     );
+    expect(logWarn).not.toHaveBeenCalled();
   });
 
   it("resolves SSE config by default", () => {

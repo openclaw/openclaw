@@ -1,4 +1,6 @@
 // Normalizes MCP server config for runtime launch and validation.
+import { isDangerousMcpStdioEnvVarName, isMcpConfigRecord } from "../agents/mcp-config-shared.js";
+import { logWarn } from "../logger.js";
 import { isRecord } from "../utils.js";
 import { readSourceConfigSnapshot } from "./io.js";
 import {
@@ -188,6 +190,23 @@ export async function updateConfiguredMcpServer(params: {
   };
 }
 
+function warnBlockedMcpStdioEnvKeys(serverName: string, server: Record<string, unknown>): void {
+  // Only stdio servers with a command and env block are relevant.
+  if (typeof server.command !== "string" || !server.command.trim()) {
+    return;
+  }
+  if (!isMcpConfigRecord(server.env)) {
+    return;
+  }
+  for (const key of Object.keys(server.env)) {
+    if (isDangerousMcpStdioEnvVarName(key)) {
+      logWarn(
+        `bundle-mcp: server "${serverName}": env "${key}" is blocked for stdio startup safety and will be ignored at runtime. Remove it from the config or handle it inside the server script.`,
+      );
+    }
+  }
+}
+
 export async function setConfiguredMcpServer(params: {
   name: string;
   server: unknown;
@@ -208,6 +227,11 @@ export async function setConfiguredMcpServer(params: {
   const next = structuredClone(loaded.config);
   const servers = normalizeConfiguredMcpServers(next.mcp?.servers);
   servers[name] = canonicalizeConfiguredMcpServer(params.server);
+
+  // Warn once about blocked stdio env keys at config-write time instead of
+  // repeating the warning on every spawn / probe / status / doctor call.
+  warnBlockedMcpStdioEnvKeys(name, servers[name]);
+
   next.mcp = {
     ...next.mcp,
     servers,
