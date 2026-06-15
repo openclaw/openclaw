@@ -422,6 +422,7 @@ const TARGET_KEYS = [
   "agents.defaults.compaction.postCompactionSections",
   "agents.defaults.compaction.timeoutSeconds",
   "agents.defaults.compaction.model",
+  "agents.defaults.compaction.fallbacks",
   "agents.defaults.compaction.truncateAfterCompaction",
   "agents.defaults.compaction.maxActiveTranscriptBytes",
   "agents.defaults.compaction.memoryFlush",
@@ -938,6 +939,9 @@ describe("config help copy quality", () => {
 
     const compactionModel = FIELD_HELP["agents.defaults.compaction.model"];
     expect(/provider\/model|different model|primary agent model/i.test(compactionModel)).toBe(true);
+
+    const compactionFallbacks = FIELD_HELP["agents.defaults.compaction.fallbacks"];
+    expect(/replacement|fallback models|strict/i.test(compactionFallbacks)).toBe(true);
 
     const transcriptBytes = FIELD_HELP["agents.defaults.compaction.maxActiveTranscriptBytes"];
     expect(/transcript|bytes|compaction/i.test(transcriptBytes)).toBe(true);

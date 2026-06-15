@@ -90,7 +90,26 @@ This works with local models too, for example a second Ollama model dedicated to
 }
 ```
 
-When unset, compaction starts with the active session model. If summarization fails with a model-fallback-eligible provider error, OpenClaw retries that compaction attempt through the session's existing model fallback chain. The fallback choice is temporary and is not written back to session state. An explicit `agents.defaults.compaction.model` override remains exact and does not inherit the session fallback chain.
+When unset, compaction starts with the active session model. If summarization fails with a model-fallback-eligible provider error, OpenClaw retries that compaction attempt through the session's existing model fallback chain. The fallback choice is temporary and is not written back to session state.
+
+Set `agents.defaults.compaction.fallbacks` when compaction should use its own replacement fallback chain:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "compaction": {
+        "model": "openrouter/anthropic/claude-sonnet-4-6",
+        "fallbacks": ["openai/gpt-5.5"]
+      }
+    }
+  }
+}
+```
+
+When `compaction.model` is set and `compaction.fallbacks` is unset, the override remains exact and does not inherit the session fallback chain. When `compaction.fallbacks` is set, OpenClaw tries the resolved compaction model first, then the listed fallback models in order. Set `fallbacks: []` to keep compaction strict after the primary compaction model fails.
+
+Codex-backed agents compact through Codex native app-server thread state, so OpenClaw ignores `compaction.model`, `compaction.provider`, and `compaction.fallbacks` there. Context engines that declare they own compaction also own their summary fallback behavior.
 
 ### Identifier preservation
 

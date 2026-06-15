@@ -126,10 +126,10 @@ Use `openai/gpt-*` model refs for Codex-backed OpenAI agent turns. Prefer
 legacy Codex auth profile ids and legacy Codex auth order are doctor-only
 legacy state; do not write new legacy Codex GPT refs.
 
-Do not set `compaction.model` or `compaction.provider` on Codex-backed agents.
-Codex compacts through its native app-server thread state, so OpenClaw ignores
-those local summarizer overrides at runtime and `openclaw doctor --fix` removes
-them when the agent uses Codex.
+Do not set `compaction.model`, `compaction.provider`, or
+`compaction.fallbacks` on Codex-backed agents. Codex compacts through its native
+app-server thread state, so OpenClaw ignores those local summarizer overrides at
+runtime and `openclaw doctor --fix` removes them when the agent uses Codex.
 
 Lossless remains supported as a context engine for assembly, ingestion, and
 maintenance around Codex turns. Configure it through

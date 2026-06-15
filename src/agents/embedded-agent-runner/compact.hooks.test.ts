@@ -987,6 +987,99 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     }
   });
 
+  it("uses compaction.fallbacks as the explicit compaction replacement chain", async () => {
+    resolveModelMock.mockImplementation((provider = "openai", modelId = "fake") => ({
+      model: { provider, api: "responses", id: modelId, input: [] },
+      error: null,
+      authStorage: { setRuntimeApiKey: vi.fn() },
+      modelRegistry: {},
+    }));
+    sessionCompactImpl
+      .mockRejectedValueOnce(Object.assign(new Error("400 invalid request body"), { status: 400 }))
+      .mockResolvedValueOnce({
+        summary: "compaction fallback summary",
+        firstKeptEntryId: "entry-fallback",
+        tokensBefore: 120,
+        details: { ok: true },
+      });
+
+    const result = await compactEmbeddedAgentSessionDirect({
+      sessionId: "session-1",
+      sessionKey: TEST_SESSION_KEY,
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+      provider: "openai",
+      model: "gpt-primary",
+      config: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-primary",
+              fallbacks: ["anthropic/chat-fallback"],
+            },
+            compaction: {
+              model: "azure/compact-primary",
+              fallbacks: ["openai/compact-fallback"],
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.result?.summary).toBe("compaction fallback summary");
+    expect(resolveModelMock).toHaveBeenCalledTimes(2);
+    expect(mockCallArg(resolveModelMock)).toBe("azure");
+    expect(mockCallArg(resolveModelMock, 0, 1)).toBe("compact-primary");
+    expect(mockCallArg(resolveModelMock, 1)).toBe("openai");
+    expect(mockCallArg(resolveModelMock, 1, 1)).toBe("compact-fallback");
+    expect(
+      resolveModelMock.mock.calls.some(
+        ([provider, modelId]) => provider === "anthropic" && modelId === "chat-fallback",
+      ),
+    ).toBe(false);
+  });
+
+  it("treats empty compaction.fallbacks as strict compaction model selection", async () => {
+    resolveModelMock.mockImplementation((provider = "openai", modelId = "fake") => ({
+      model: { provider, api: "responses", id: modelId, input: [] },
+      error: null,
+      authStorage: { setRuntimeApiKey: vi.fn() },
+      modelRegistry: {},
+    }));
+    sessionCompactImpl.mockRejectedValueOnce(
+      Object.assign(new Error("400 invalid request body"), { status: 400 }),
+    );
+
+    const result = await compactEmbeddedAgentSessionDirect({
+      sessionId: "session-1",
+      sessionKey: TEST_SESSION_KEY,
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+      provider: "openai",
+      model: "gpt-primary",
+      config: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-primary",
+              fallbacks: ["anthropic/chat-fallback"],
+            },
+            compaction: {
+              model: "azure/compact-primary",
+              fallbacks: [],
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(resolveModelMock).toHaveBeenCalledTimes(1);
+    expect(mockCallArg(resolveModelMock)).toBe("azure");
+    expect(mockCallArg(resolveModelMock, 0, 1)).toBe("compact-primary");
+  });
+
   it("preserves compaction failure status and code metadata", async () => {
     resolveModelMock.mockImplementation((provider = "openai", modelId = "fake") => ({
       model: { provider, api: "responses", id: modelId, input: [] },

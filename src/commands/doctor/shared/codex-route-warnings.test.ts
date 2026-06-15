@@ -198,6 +198,7 @@ describe("collectCodexRouteWarnings", () => {
             model: "openai/gpt-5.5",
             compaction: {
               model: "openai/gpt-5.4",
+              fallbacks: ["openai/gpt-5.4-mini"],
               provider: "custom-summary",
             },
           },
@@ -209,6 +210,7 @@ describe("collectCodexRouteWarnings", () => {
       [
         "- Codex runtime uses native server-side compaction and ignores OpenClaw compaction summarizer overrides.",
         "- agents.defaults.compaction.model: openai/gpt-5.4 is ignored while this agent uses Codex runtime.",
+        '- agents.defaults.compaction.fallbacks: ["openai/gpt-5.4-mini"] is ignored while this agent uses Codex runtime.',
         "- agents.defaults.compaction.provider: custom-summary is ignored while this agent uses Codex runtime.",
         "- Run `openclaw doctor --fix`: it removes unsupported Codex compaction overrides.",
       ].join("\n"),
@@ -273,6 +275,7 @@ describe("collectCodexRouteWarnings", () => {
             model: "openai/gpt-5.5",
             compaction: {
               model: "openai/gpt-5.4",
+              fallbacks: [],
               provider: "custom-summary",
               keepRecentTokens: 10_000,
             },
@@ -285,6 +288,7 @@ describe("collectCodexRouteWarnings", () => {
     expect(result.warnings).toStrictEqual([]);
     expect(result.changes).toStrictEqual([
       "Removed agents.defaults.compaction.model; Codex runtime uses native server-side compaction.",
+      "Removed agents.defaults.compaction.fallbacks; Codex runtime uses native server-side compaction.",
       "Removed agents.defaults.compaction.provider; Codex runtime uses native server-side compaction.",
     ]);
     expect(result.cfg.agents?.defaults?.compaction).toEqual({

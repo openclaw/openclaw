@@ -60,6 +60,7 @@ export function resolveEmbeddedCompactionTarget(params: {
   harnessRuntime?: string | null;
   defaultProvider?: string;
   defaultModel?: string;
+  applyConfiguredCompactionModel?: boolean;
 }): {
   provider: string | undefined;
   runtimeProvider?: string;
@@ -69,7 +70,10 @@ export function resolveEmbeddedCompactionTarget(params: {
 } {
   const provider = params.provider?.trim() || params.defaultProvider;
   const model = params.modelId?.trim() || params.defaultModel;
-  const override = params.config?.agents?.defaults?.compaction?.model?.trim();
+  const override =
+    params.applyConfiguredCompactionModel === false
+      ? undefined
+      : params.config?.agents?.defaults?.compaction?.model?.trim();
   const resolveTargetProviders = (
     targetProvider: string | undefined,
     authProfileId: string | undefined,

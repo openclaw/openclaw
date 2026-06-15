@@ -68,6 +68,11 @@ export function collectConfiguredModelRefs(
     );
     if (isRecord(agent.compaction)) {
       pushModelRef(`${path}.compaction.model`, agent.compaction.model);
+      if (Array.isArray(agent.compaction.fallbacks)) {
+        for (const [index, entry] of agent.compaction.fallbacks.entries()) {
+          pushModelRef(`${path}.compaction.fallbacks.${index}`, entry);
+        }
+      }
       pushModelRef(
         `${path}.compaction.memoryFlush.model`,
         isRecord(agent.compaction.memoryFlush) ? agent.compaction.memoryFlush.model : undefined,

@@ -25,7 +25,7 @@ type CodexRouteHit = {
   canonicalModel: string;
   runtime?: string;
 };
-type CompactionOverrideKey = "model" | "provider";
+type CompactionOverrideKey = "model" | "fallbacks" | "provider";
 type UnsupportedCodexCompactionOverride = {
   path: string;
   key: CompactionOverrideKey;
@@ -57,7 +57,11 @@ export type DisabledCodexPluginRouteIssue = {
 type SharedDefaultCompactionOverrideConsumers = Record<CompactionOverrideKey, boolean>;
 
 type MutableRecord = Record<string, unknown>;
-const COMPACTION_OVERRIDE_KEYS: readonly CompactionOverrideKey[] = ["model", "provider"];
+const COMPACTION_OVERRIDE_KEYS: readonly CompactionOverrideKey[] = [
+  "model",
+  "fallbacks",
+  "provider",
+];
 const AGENT_MEDIA_MODEL_CONFIG_KEYS = ["imageGenerationModel", "videoGenerationModel"] as const;
 const LOSSLESS_CONTEXT_ENGINE_ID = "lossless-claw";
 type SessionRouteRepairResult = {
@@ -512,7 +516,10 @@ function collectUnsupportedCodexCompactionOverridesForAgent(params: {
   }
   const candidates = COMPACTION_OVERRIDE_KEYS.map((key) => {
     const localValue = compaction?.[key];
-    const hasLocalValue = typeof localValue === "string" && localValue.trim();
+    const hasLocalValue =
+      key === "fallbacks"
+        ? Array.isArray(localValue)
+        : typeof localValue === "string" && localValue.trim();
     return {
       key,
       value: hasLocalValue ? localValue : inheritedCompaction?.[key],
@@ -523,9 +530,10 @@ function collectUnsupportedCodexCompactionOverridesForAgent(params: {
           : `${params.path}.compaction.${key}`,
     };
   });
-  return candidates.flatMap(({ key, path, value }) =>
-    typeof value === "string" && value.trim() ? [{ path, key, value: value.trim() }] : [],
-  );
+  return candidates.flatMap(({ key, path, value }) => {
+    const formatted = formatCompactionOverrideValue(key, value);
+    return formatted ? [{ path, key, value: formatted }] : [];
+  });
 }
 
 function collectLegacyLosslessCompactionForAgent(params: {
@@ -661,6 +669,16 @@ function dedupeUnsupportedCompactionOverrides(
   });
 }
 
+function formatCompactionOverrideValue(
+  key: CompactionOverrideKey,
+  value: unknown,
+): string | undefined {
+  if (key === "fallbacks") {
+    return Array.isArray(value) ? JSON.stringify(value) : undefined;
+  }
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
 function collectUnsupportedCodexCompactionOverrides(params: {
   cfg: OpenClawConfig;
   ignoreLegacyAgentRuntimePins?: boolean;
@@ -712,7 +730,11 @@ function getSharedDefaultCompactionOverrideConsumers(params: {
   cfg: OpenClawConfig;
   ignoreLegacyAgentRuntimePins?: boolean;
 }): SharedDefaultCompactionOverrideConsumers {
-  const consumers: SharedDefaultCompactionOverrideConsumers = { model: false, provider: false };
+  const consumers: SharedDefaultCompactionOverrideConsumers = {
+    model: false,
+    fallbacks: false,
+    provider: false,
+  };
   const defaults = params.cfg.agents?.defaults;
   const defaultCompaction = asMutableRecord(defaults?.compaction);
   if (!defaultCompaction) {
@@ -720,9 +742,10 @@ function getSharedDefaultCompactionOverrideConsumers(params: {
   }
   const hasDefaultModel =
     typeof defaultCompaction.model === "string" && defaultCompaction.model.trim();
+  const hasDefaultFallbacks = Array.isArray(defaultCompaction.fallbacks);
   const hasDefaultProvider =
     typeof defaultCompaction.provider === "string" && defaultCompaction.provider.trim();
-  if (!hasDefaultModel && !hasDefaultProvider) {
+  if (!hasDefaultModel && !hasDefaultFallbacks && !hasDefaultProvider) {
     return consumers;
   }
   const defaultsRuntime = readLegacyDefaultsRuntime(defaults);
@@ -736,8 +759,13 @@ function getSharedDefaultCompactionOverrideConsumers(params: {
   });
   if (!defaultUsesCodexCompaction) {
     consumers.model ||= Boolean(hasDefaultModel);
+    consumers.fallbacks ||= Boolean(hasDefaultFallbacks);
     consumers.provider ||= Boolean(hasDefaultProvider);
-    if ((!hasDefaultModel || consumers.model) && (!hasDefaultProvider || consumers.provider)) {
+    if (
+      (!hasDefaultModel || consumers.model) &&
+      (!hasDefaultFallbacks || consumers.fallbacks) &&
+      (!hasDefaultProvider || consumers.provider)
+    ) {
       return consumers;
     }
   }
@@ -754,10 +782,12 @@ function getSharedDefaultCompactionOverrideConsumers(params: {
     const inheritsDefaultModel =
       Boolean(hasDefaultModel) &&
       !(typeof compaction?.model === "string" && compaction.model.trim());
+    const inheritsDefaultFallbacks =
+      Boolean(hasDefaultFallbacks) && !Array.isArray(compaction?.fallbacks);
     const inheritsDefaultProvider =
       Boolean(hasDefaultProvider) &&
       !(typeof compaction?.provider === "string" && compaction.provider.trim());
-    if (!inheritsDefaultModel && !inheritsDefaultProvider) {
+    if (!inheritsDefaultModel && !inheritsDefaultFallbacks && !inheritsDefaultProvider) {
       continue;
     }
     const id =
@@ -778,8 +808,13 @@ function getSharedDefaultCompactionOverrideConsumers(params: {
     });
     if (!usesCodexCompaction) {
       consumers.model ||= inheritsDefaultModel;
+      consumers.fallbacks ||= inheritsDefaultFallbacks;
       consumers.provider ||= inheritsDefaultProvider;
-      if ((!hasDefaultModel || consumers.model) && (!hasDefaultProvider || consumers.provider)) {
+      if (
+        (!hasDefaultModel || consumers.model) &&
+        (!hasDefaultFallbacks || consumers.fallbacks) &&
+        (!hasDefaultProvider || consumers.provider)
+      ) {
         break;
       }
     }
@@ -1791,7 +1826,7 @@ function removeUnsupportedCodexCompactionOverrides(params: {
       continue;
     }
     const value = params.compaction[key];
-    if (typeof value !== "string" || !value.trim()) {
+    if (key === "fallbacks" ? !Array.isArray(value) : typeof value !== "string" || !value.trim()) {
       continue;
     }
     delete params.compaction[key];
@@ -1865,7 +1900,7 @@ function removeMigratedLosslessCompactionKey(params: {
 }
 
 function readCompactionOwnerPathForKeyPath(path: string): string {
-  return path.replace(/\.(model|provider)$/, "").replace(/\.compaction$/, "");
+  return path.replace(/\.(model|fallbacks|provider)$/, "").replace(/\.compaction$/, "");
 }
 
 function legacyLosslessSummaryModels(hits: readonly LegacyLosslessCompactionConfig[]): string[] {
@@ -2614,7 +2649,7 @@ function rewriteConfigModelRefsWithCompactionPolicy(params: {
 function configRepairWouldClearLegacyRuntimePins(params: { cfg: OpenClawConfig }): boolean {
   const dryRun = rewriteConfigModelRefsWithCompactionPolicy({
     cfg: params.cfg,
-    preserveSharedDefaultCompactionOverrides: { model: true, provider: true },
+    preserveSharedDefaultCompactionOverrides: { model: true, fallbacks: true, provider: true },
     ignoreLegacyAgentRuntimePins: false,
   });
   return dryRun.changes.some((hit) => !isCompactionOnlyRouteHit(hit));
@@ -2797,11 +2832,14 @@ export function collectCodexRouteWarnings(params: {
       !sharedDefaultCompactionConsumers[hit.key],
   );
   if (preservedSharedDefaultHits.length > 0) {
+    const sharedDefaultKeys = new Set(preservedSharedDefaultHits.map((hit) => hit.key));
+    const sharedDefaultKeyLabel = sharedDefaultKeys.has("fallbacks")
+      ? COMPACTION_OVERRIDE_KEYS.filter((key) => sharedDefaultKeys.has(key)).join("/")
+      : "model/provider";
     warnings.push(
       formatUnsupportedCompactionWarning({
         hits: preservedSharedDefaultHits,
-        fixHint:
-          "- Move or remove shared `agents.defaults.compaction.model/provider` settings manually; doctor keeps shared defaults while non-Codex agents can inherit them.",
+        fixHint: `- Move or remove shared \`agents.defaults.compaction.${sharedDefaultKeyLabel}\` settings manually; doctor keeps shared defaults while non-Codex agents can inherit them.`,
       }),
     );
   }

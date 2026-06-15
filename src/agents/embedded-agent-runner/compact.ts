@@ -406,6 +406,13 @@ function hasExplicitCompactionModel(params: CompactEmbeddedAgentSessionParams): 
 function resolveCompactionFallbacksOverride(
   params: CompactEmbeddedAgentSessionParams,
 ): string[] | undefined {
+  const configured = params.config?.agents?.defaults?.compaction?.fallbacks;
+  if (Array.isArray(configured)) {
+    return configured;
+  }
+  if (hasExplicitCompactionModel(params)) {
+    return [];
+  }
   return (
     params.modelFallbacksOverride ??
     resolveRunModelFallbacksOverride({
@@ -457,7 +464,7 @@ function fallbackFailureToCompactionResult(err: unknown): EmbeddedAgentCompactRe
 export async function compactEmbeddedAgentSessionDirect(
   params: CompactEmbeddedAgentSessionParams,
 ): Promise<EmbeddedAgentCompactResult> {
-  if (hasExplicitCompactionModel(params) || !hasCompactionModelFallbackCandidates(params)) {
+  if (!hasCompactionModelFallbackCandidates(params)) {
     return await compactEmbeddedAgentSessionDirectOnce(params);
   }
   const resolvedCompactionTarget = resolveEmbeddedCompactionTarget({
@@ -506,12 +513,15 @@ export async function compactEmbeddedAgentSessionDirect(
         const preservesPrimaryAuth =
           provider === primaryProvider || provider === requestedPrimaryProvider;
         const authProfileId = preservesPrimaryAuth ? params.authProfileId : undefined;
-        return await compactEmbeddedAgentSessionDirectOnce({
-          ...params,
-          provider,
-          model,
-          authProfileId,
-        });
+        return await compactEmbeddedAgentSessionDirectOnce(
+          {
+            ...params,
+            provider,
+            model,
+            authProfileId,
+          },
+          { applyConfiguredCompactionModel: false },
+        );
       },
     });
     return fallbackResult.result;
@@ -522,6 +532,7 @@ export async function compactEmbeddedAgentSessionDirect(
 
 async function compactEmbeddedAgentSessionDirectOnce(
   params: CompactEmbeddedAgentSessionParams,
+  options: { applyConfiguredCompactionModel?: boolean } = {},
 ): Promise<EmbeddedAgentCompactResult> {
   const startedAt = Date.now();
   const diagId = params.diagId?.trim() || createCompactionDiagId();
@@ -554,6 +565,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
     authProfileId: params.authProfileId,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
+    applyConfiguredCompactionModel: options.applyConfiguredCompactionModel,
   });
   const configuredHarnessPolicy = resolveAgentHarnessPolicy({
     provider: policyCompactionTarget.provider ?? DEFAULT_PROVIDER,
@@ -577,6 +589,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
     harnessRuntime: selectedHarnessRuntime,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
+    applyConfiguredCompactionModel: options.applyConfiguredCompactionModel,
   });
   // Keep the configured provider for harness policy, while auth/model loading below can
   // route OpenAI compaction through Codex OAuth when that runtime owns the session credentials.

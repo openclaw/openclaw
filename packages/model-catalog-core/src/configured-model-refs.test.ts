@@ -13,7 +13,11 @@ describe("configured model refs", () => {
         agents: {
           defaults: {
             model: { primary: "openai/gpt-5.5", fallbacks: ["anthropic/claude-sonnet-4-6"] },
-            compaction: { memoryFlush: { model: "openai/gpt-5.5-mini" } },
+            compaction: {
+              model: "openai/gpt-5.5-nano",
+              fallbacks: ["anthropic/claude-haiku-4-6"],
+              memoryFlush: { model: "openai/gpt-5.5-mini" },
+            },
           },
           list: [{ id: "custom", model: "xai/grok-4-fast" }],
         },
@@ -34,6 +38,8 @@ describe("configured model refs", () => {
     ).toEqual([
       { path: "agents.defaults.model.primary", value: "openai/gpt-5.5" },
       { path: "agents.defaults.model.fallbacks.0", value: "anthropic/claude-sonnet-4-6" },
+      { path: "agents.defaults.compaction.model", value: "openai/gpt-5.5-nano" },
+      { path: "agents.defaults.compaction.fallbacks.0", value: "anthropic/claude-haiku-4-6" },
       { path: "agents.defaults.compaction.memoryFlush.model", value: "openai/gpt-5.5-mini" },
       { path: "agents.list.0.model", value: "xai/grok-4-fast" },
       { path: "channels.modelByChannel.discord.guild", value: "anthropic/claude-opus-4-8" },

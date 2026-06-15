@@ -541,6 +541,8 @@ export type AgentCompactionConfig = {
    * When set, compaction uses this model instead of the agent's primary model.
    * Falls back to the primary model when unset. */
   model?: string;
+  /** Ordered replacement fallback chain used only for compaction summarization. */
+  fallbacks?: string[];
   /** Maximum time in seconds for a single compaction operation (default: 180). */
   timeoutSeconds?: number;
   /**

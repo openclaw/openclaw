@@ -30,6 +30,8 @@ describe("config compaction settings", () => {
       midTurnPrecheck: {
         enabled: true,
       },
+      model: "openai/gpt-5.5",
+      fallbacks: ["anthropic/claude-sonnet-4-6"],
       memoryFlush: {
         enabled: false,
         model: "ollama/qwen3:8b",
@@ -49,6 +51,8 @@ describe("config compaction settings", () => {
     expect(compaction?.qualityGuard?.enabled).toBe(true);
     expect(compaction?.qualityGuard?.maxRetries).toBe(2);
     expect(compaction?.midTurnPrecheck?.enabled).toBe(true);
+    expect(compaction?.model).toBe("openai/gpt-5.5");
+    expect(compaction?.fallbacks).toEqual(["anthropic/claude-sonnet-4-6"]);
     expect(compaction?.memoryFlush?.enabled).toBe(false);
     expect(compaction?.memoryFlush?.model).toBe("ollama/qwen3:8b");
     expect(compaction?.memoryFlush?.softThresholdTokens).toBe(1234);

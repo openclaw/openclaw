@@ -722,6 +722,7 @@ describe("maybeCompactCodexAppServerSession", () => {
           defaults: {
             compaction: {
               model: "openai/gpt-5.4",
+              fallbacks: ["openai/gpt-5.4-mini"],
               provider: "custom-summary",
             },
           },
@@ -735,7 +736,11 @@ describe("maybeCompactCodexAppServerSession", () => {
       {
         sessionId: "session-1",
         sessionKey: "agent:main:session-1",
-        ignoredConfig: ["agents.defaults.compaction.model", "agents.defaults.compaction.provider"],
+        ignoredConfig: [
+          "agents.defaults.compaction.model",
+          "agents.defaults.compaction.fallbacks",
+          "agents.defaults.compaction.provider",
+        ],
       },
     );
     warn.mockRestore();
@@ -760,6 +765,7 @@ describe("maybeCompactCodexAppServerSession", () => {
               id: "sara",
               compaction: {
                 model: "openai/gpt-5.4-mini",
+                fallbacks: [],
                 provider: "openai",
               },
             },
@@ -776,6 +782,7 @@ describe("maybeCompactCodexAppServerSession", () => {
         sessionKey: "agent:sara:session-1",
         ignoredConfig: [
           "agents.list.sara.compaction.model",
+          "agents.list.sara.compaction.fallbacks",
           "agents.list.sara.compaction.provider",
         ],
       },

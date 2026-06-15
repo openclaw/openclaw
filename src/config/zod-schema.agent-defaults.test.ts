@@ -108,6 +108,17 @@ describe("agent defaults schema", () => {
     );
   });
 
+  it("accepts compaction fallback models", () => {
+    const defaults = AgentDefaultsSchema.parse({
+      compaction: {
+        model: "openai/gpt-5.5",
+        fallbacks: ["anthropic/claude-sonnet-4-6"],
+      },
+    })!;
+
+    expect(defaults.compaction?.fallbacks).toEqual(["anthropic/claude-sonnet-4-6"]);
+  });
+
   it("keeps subagent model config to model selection only", () => {
     const defaults = AgentDefaultsSchema.parse({
       subagents: {

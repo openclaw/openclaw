@@ -345,6 +345,11 @@ OpenClaw also enforces a safety floor for embedded runs:
   and keeps OpenClaw runtime's recent-tail cut point. Without an explicit keep budget,
   manual compaction remains a hard checkpoint and rebuilt context starts from
   the new summary.
+- `agents.defaults.compaction.model` is exact when
+  `agents.defaults.compaction.fallbacks` is unset and does not inherit the
+  session model fallback chain. Set `fallbacks` to an ordered replacement chain
+  for compaction summarization only; set `fallbacks: []` to keep compaction
+  strict after the primary compaction model fails.
 - Set `agents.defaults.compaction.midTurnPrecheck.enabled: true` to run the
   optional tool-loop precheck after new tool results and before the next model
   call. This is a trigger only; summary generation still uses the configured
