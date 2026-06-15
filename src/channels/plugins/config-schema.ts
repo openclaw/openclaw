@@ -184,20 +184,22 @@ export function buildChannelConfigSchema(
  * configs, group policies, and similar per-channel shapes.
  */
 function relaxDefaultedRequired(schema: JsonSchemaObject): JsonSchemaObject {
-  return relaxDefaultedRequiredInPlace(structuredClone(schema));
+  const clone = structuredClone(schema) as JsonSchemaObject;
+  relaxDefaultedRequiredInPlace(clone);
+  return clone;
 }
 
-function relaxDefaultedRequiredInPlace(schema: unknown): JsonSchemaObject {
+function relaxDefaultedRequiredInPlace(schema: unknown): void {
   if (Array.isArray(schema)) {
     for (const entry of schema) {
       if (entry && typeof entry === "object") {
         relaxDefaultedRequiredInPlace(entry);
       }
     }
-    return schema as JsonSchemaObject;
+    return;
   }
   if (!schema || typeof schema !== "object") {
-    return schema as JsonSchemaObject;
+    return;
   }
   const node = schema as Record<string, unknown>;
   if (Array.isArray(node.required) && node.required.length > 0 && isRecord(node.properties)) {
@@ -267,7 +269,7 @@ function relaxDefaultedRequiredInPlace(schema: unknown): JsonSchemaObject {
       }
     }
   }
-  return node as JsonSchemaObject;
+  return;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
