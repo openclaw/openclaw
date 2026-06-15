@@ -2791,7 +2791,7 @@ describe("config io write", () => {
       const rename = fsNode.promises.rename.bind(fsNode.promises);
       let committed = false;
       let rollbackReadUsedInjectedFs = false;
-      const injectedFs: typeof fsNode = {
+      const injectedFs = {
         ...fsNode,
         promises: {
           ...fsNode.promises,
@@ -2809,7 +2809,7 @@ describe("config io write", () => {
             }
           },
         },
-      };
+      } as typeof fsNode;
       const io = createConfigIO({ env, fs: injectedFs, homedir: () => home, logger: silentLogger });
       const prepared = await io.readConfigFileSnapshotForWrite();
 

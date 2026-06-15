@@ -21,6 +21,10 @@ type ListMarketplacePluginsFn =
   (typeof import("../plugins/marketplace.js"))["listMarketplacePlugins"];
 type ResolveMarketplaceInstallShortcutFn =
   (typeof import("../plugins/marketplace.js"))["resolveMarketplaceInstallShortcut"];
+type UpdateNpmInstalledPluginsFn =
+  (typeof import("../plugins/update.js"))["updateNpmInstalledPlugins"];
+type UpdateNpmInstalledHookPacksFn =
+  (typeof import("../hooks/update.js"))["updateNpmInstalledHookPacks"];
 type PluginInstallRecordMap = Record<string, PluginInstallRecord>;
 
 let mockInstalledPluginIndexInstallRecords: PluginInstallRecordMap = {};
@@ -74,8 +78,8 @@ export const applyExclusiveSlotSelection: UnknownMock = vi.fn();
 export const planPluginUninstall: UnknownMock = vi.fn();
 export const applyPluginUninstallDirectoryRemoval: AsyncUnknownMock = vi.fn();
 const uninstallPlugin: AsyncUnknownMock = vi.fn();
-export const updateNpmInstalledPlugins: AsyncUnknownMock = vi.fn();
-export const updateNpmInstalledHookPacks: AsyncUnknownMock = vi.fn();
+export const updateNpmInstalledPlugins: Mock<UpdateNpmInstalledPluginsFn> = vi.fn();
+export const updateNpmInstalledHookPacks: Mock<UpdateNpmInstalledHookPacksFn> = vi.fn();
 export const promptYesNo: AsyncUnknownMock = vi.fn();
 export class PromptInputClosedError extends Error {
   constructor() {

@@ -1020,7 +1020,7 @@ describe("plugins cli update", () => {
     });
     setInstalledPluginIndexInstallRecords(cfg.plugins?.installs ?? {});
     updateNpmInstalledPlugins.mockResolvedValue({
-      outcomes: [{ status: "ok", message: "Updated alpha -> 1.1.0" }],
+      outcomes: [{ pluginId: "alpha", status: "updated", message: "Updated alpha -> 1.1.0" }],
       changed: true,
       config: nextRuntimeConfig,
     });

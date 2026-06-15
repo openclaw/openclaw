@@ -13,8 +13,8 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { resolvePathViaExistingAncestorSync } from "@openclaw/fs-safe/advanced";
 import { canUseRootFileOpen, openRootFileSync } from "../infra/boundary-file-read.js";
+import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { isPlainObject } from "../utils.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
