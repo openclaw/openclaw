@@ -1704,12 +1704,15 @@ export async function executeActViaPlaywright(opts: {
   results?: Array<{ ok: boolean; error?: string }>;
   blockedByDialog?: boolean;
   browserState?: unknown;
+  downloads?: { count: number; recent: Array<{ suggestedFilename: string; savedPath: string }> };
 }> {
   const page = await getPageForTargetId({
     cdpUrl: opts.cdpUrl,
     targetId: opts.targetId,
     ssrfPolicy: opts.ssrfPolicy,
   });
+  const state = ensurePageState(page);
+  const downloadCountBefore = state.recentDownloads.length;
   const dialogAbort = createObservedDialogAbortSignalForPage({
     page,
     parentSignal: opts.signal,
@@ -1725,7 +1728,12 @@ export async function executeActViaPlaywright(opts: {
         evaluateEnabled: opts.evaluateEnabled,
         signal: dialogAbort.signal,
       });
-      return { results: batch.results };
+      const newDownloads = state.recentDownloads.slice(downloadCountBefore);
+      const downloads = newDownloads.length > 0
+        ? { count: newDownloads.length,
+            recent: newDownloads.map((d) => ({ suggestedFilename: d.suggestedFilename, savedPath: d.savedPath })) }
+        : undefined;
+      return { results: batch.results, downloads };
     }
     const result = await executeSingleAction(
       opts.action,
@@ -1736,10 +1744,15 @@ export async function executeActViaPlaywright(opts: {
       0,
       dialogAbort.signal,
     );
+    const newDownloads = state.recentDownloads.slice(downloadCountBefore);
+    const downloads = newDownloads.length > 0
+      ? { count: newDownloads.length,
+          recent: newDownloads.map((d) => ({ suggestedFilename: d.suggestedFilename, savedPath: d.savedPath })) }
+      : undefined;
     if (opts.action.kind === "evaluate") {
-      return { result };
+      return { result, downloads };
     }
-    return {};
+    return { downloads };
   } catch (err) {
     if (isBrowserObservedDialogBlockedError(err)) {
       return { blockedByDialog: true, browserState: err.browserState };

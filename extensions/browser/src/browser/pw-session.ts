@@ -102,6 +102,12 @@ export type BrowserObservedDialogState = {
 /** Browser state currently observable by agent responses. */
 export type BrowserObservedState = {
   dialogs: BrowserObservedDialogState;
+  downloads?: BrowserObservedDownloadState;
+};
+
+/** Download state that agents can inspect. */
+export type BrowserObservedDownloadState = {
+  recent: RecentPageDownload[];
 };
 
 /** Raised when an action is blocked by an observed modal dialog. */
@@ -145,6 +151,13 @@ type ConnectedBrowser = {
   onDisconnected?: () => void;
 };
 
+/** A download recorded by the background auto-save handler. */
+export type RecentPageDownload = {
+  suggestedFilename: string;
+  savedPath: string;
+  timestampMs: number;
+};
+
 type PageState = {
   console: BrowserConsoleMessage[];
   errors: BrowserPageError[];
@@ -154,6 +167,8 @@ type PageState = {
   armIdUpload: number;
   armIdDownload: number;
   downloadWaiterDepth: number;
+  /** Downloads auto-saved by the background handler (not waiter-managed). */
+  recentDownloads: RecentPageDownload[];
   nextObservedDialogId: number;
   pendingDialogs: PendingObservedDialog[];
   recentDialogs: BrowserObservedDialogRecord[];
@@ -194,6 +209,7 @@ const MAX_CONSOLE_MESSAGES = 500;
 const MAX_PAGE_ERRORS = 200;
 const MAX_NETWORK_REQUESTS = 500;
 const MAX_RECENT_DIALOGS = 20;
+const MAX_RECENT_DOWNLOADS = 20;
 const OBSERVED_DIALOG_TIMEOUT_MS = 120_000;
 
 const cachedByCdpUrl = new Map<string, ConnectedBrowser>();
@@ -299,6 +315,9 @@ function serializeObservedBrowserState(state: PageState): BrowserObservedState {
       pending: state.pendingDialogs.map(serializePendingDialog),
       recent: state.recentDialogs.map(serializeDialogRecord),
     },
+    downloads: state.recentDownloads.length > 0
+      ? { recent: state.recentDownloads.slice() }
+      : undefined,
   };
 }
 
@@ -603,6 +622,7 @@ export function ensurePageState(page: Page): PageState {
     armIdUpload: 0,
     armIdDownload: 0,
     downloadWaiterDepth: 0,
+    recentDownloads: [],
     nextObservedDialogId: 0,
     pendingDialogs: [],
     recentDialogs: [],
@@ -701,6 +721,14 @@ export function ensurePageState(page: Page): PageState {
               await download.saveAs?.(tempPath);
             },
           });
+          state.recentDownloads.push({
+            suggestedFilename: suggested,
+            savedPath: managedPath,
+            timestampMs: Date.now(),
+          });
+          if (state.recentDownloads.length > MAX_RECENT_DOWNLOADS) {
+            state.recentDownloads.shift();
+          }
           return managedPath;
         })();
         managedSave.catch(() => {});
