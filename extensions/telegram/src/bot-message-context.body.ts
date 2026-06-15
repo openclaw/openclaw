@@ -6,6 +6,7 @@ import {
   logInboundDrop,
   matchesMentionWithExplicit,
   resolveInboundMentionDecision,
+  type BuildChannelInboundEventContextParams,
   type BuildMentionRegexesOptions,
   type NormalizedLocation,
 } from "openclaw/plugin-sdk/channel-inbound";
@@ -50,6 +51,9 @@ import { resolveTelegramCommandIngressAuthorization } from "./ingress.js";
 
 type StickerVisionRuntime = typeof import("./sticker-vision.runtime.js");
 type MediaUnderstandingRuntime = typeof import("./media-understanding.runtime.js");
+type TelegramMentionFacts = NonNullable<
+  NonNullable<BuildChannelInboundEventContextParams["access"]>["mentions"]
+>;
 
 let stickerVisionRuntimePromise: Promise<StickerVisionRuntime> | undefined;
 let mediaUnderstandingRuntimePromise: Promise<MediaUnderstandingRuntime> | undefined;
@@ -70,8 +74,7 @@ export type TelegramInboundBodyResult = {
   historyKey?: string;
   commandAuthorized: boolean;
   effectiveWasMentioned: boolean;
-  explicitlyMentionedBot: boolean;
-  mentionSource?: MsgContext["MentionSource"];
+  mentionFacts: TelegramMentionFacts;
   canDetectMention: boolean;
   shouldBypassMention: boolean;
   hasControlCommand: boolean;
@@ -120,6 +123,40 @@ function formatSavedMediaPlaceholder(allMedia: TelegramMediaRef[]): string | und
     return `<media:audio> (${allMedia.length} audio attachments)`;
   }
   return `<media:document> (${allMedia.length} attachments)`;
+}
+
+function resolveTelegramMentionFacts(params: {
+  canDetectMention: boolean;
+  wasMentioned: boolean;
+  effectiveWasMentioned: boolean;
+  explicitlyMentionedBot: boolean;
+  computedWasMentioned: boolean;
+  implicitMentionKinds: TelegramMentionFacts["implicitMentionKinds"];
+  requireMention: boolean;
+  shouldBypassMention: boolean;
+  shouldSkip: boolean;
+}): TelegramMentionFacts {
+  let mentionSource: TelegramMentionFacts["mentionSource"];
+  if (params.explicitlyMentionedBot) {
+    mentionSource = "explicit_bot";
+  } else if (params.computedWasMentioned) {
+    mentionSource = "mention_pattern";
+  } else if (params.implicitMentionKinds && params.implicitMentionKinds.length > 0) {
+    mentionSource = "implicit_thread";
+  } else if (params.shouldBypassMention) {
+    mentionSource = "command_bypass";
+  }
+
+  return {
+    canDetectMention: params.canDetectMention,
+    wasMentioned: params.wasMentioned,
+    explicitlyMentionedBot: params.explicitlyMentionedBot,
+    mentionSource,
+    implicitMentionKinds: params.implicitMentionKinds,
+    effectiveWasMentioned: params.effectiveWasMentioned,
+    requireMention: params.requireMention,
+    shouldSkip: params.shouldSkip,
+  };
 }
 
 async function resolveStickerVisionSupport(params: {
@@ -444,16 +481,17 @@ export async function resolveTelegramInboundBody(params: {
     historyKey,
     commandAuthorized,
     effectiveWasMentioned,
-    explicitlyMentionedBot: explicitlyMentioned,
-    mentionSource: explicitlyMentioned
-      ? "explicit_bot"
-      : computedWasMentioned
-        ? "mention_pattern"
-        : implicitMentionKinds.length > 0
-          ? "implicit_thread"
-          : mentionDecision.shouldBypassMention
-            ? "command_bypass"
-            : undefined,
+    mentionFacts: resolveTelegramMentionFacts({
+      canDetectMention,
+      wasMentioned,
+      effectiveWasMentioned,
+      explicitlyMentionedBot: explicitlyMentioned,
+      computedWasMentioned,
+      implicitMentionKinds,
+      requireMention: Boolean(requireMention),
+      shouldBypassMention: mentionDecision.shouldBypassMention,
+      shouldSkip: mentionDecision.shouldSkip,
+    }),
     canDetectMention,
     shouldBypassMention: mentionDecision.shouldBypassMention,
     hasControlCommand: hasControlCommandInMessage,

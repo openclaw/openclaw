@@ -1,6 +1,7 @@
 // Telegram plugin module implements bot message context.session behavior.
 import path from "node:path";
 import {
+  type BuildChannelInboundEventContextParams,
   type BuildChannelInboundEventContextAsyncParams,
   type BuiltChannelInboundEventContext,
   classifyChannelInboundEvent,
@@ -21,7 +22,6 @@ import type {
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
-import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
@@ -34,6 +34,10 @@ import type {
   TelegramMessageContextSessionRuntimeOverrides,
   TelegramPromptContextEntry,
 } from "./bot-message-context.types.js";
+
+type TelegramMentionFacts = NonNullable<
+  NonNullable<BuildChannelInboundEventContextParams["access"]>["mentions"]
+>;
 import {
   buildGroupLabel,
   buildSenderLabel,
@@ -221,10 +225,7 @@ export async function buildTelegramInboundContextPayload(params: {
   groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
   topicConfig?: TelegramTopicConfig;
   effectiveWasMentioned: boolean;
-  canDetectMention: boolean;
-  explicitlyMentionedBot: boolean;
-  mentionSource?: MsgContext["MentionSource"];
-  requireMention: boolean;
+  mentionFacts: TelegramMentionFacts;
   hasControlCommand: boolean;
   stickerCacheHit?: boolean;
   audioTranscribedMediaIndex?: number;
@@ -275,10 +276,7 @@ export async function buildTelegramInboundContextPayload(params: {
     groupConfig,
     topicConfig,
     effectiveWasMentioned,
-    canDetectMention,
-    explicitlyMentionedBot,
-    mentionSource,
-    requireMention,
+    mentionFacts,
     hasControlCommand,
     stickerCacheHit,
     audioTranscribedMediaIndex,
@@ -553,15 +551,7 @@ export async function buildTelegramInboundContextPayload(params: {
       commands: {
         authorized: commandAuthorized,
       },
-      mentions: {
-        canDetectMention,
-        wasMentioned: effectiveWasMentioned,
-        explicitlyMentionedBot,
-        mentionSource,
-        effectiveWasMentioned,
-        requireMention,
-        shouldSkip: false,
-      },
+      mentions: mentionFacts,
     },
     command:
       commandSource === "native"
