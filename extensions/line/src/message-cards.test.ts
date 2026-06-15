@@ -95,7 +95,7 @@ describe("createCarouselColumn", () => {
     expect(column.text.length).toBe(60);
   });
 
-  it("preserves an emoji grapheme at the 60-character boundary", () => {
+  it("does not split an emoji grapheme at the 60-code-unit boundary", () => {
     const text = `${"x".repeat(59)}👨‍👩‍👧‍👦after`;
     const column = createCarouselColumn({
       title: "Title",
@@ -103,7 +103,17 @@ describe("createCarouselColumn", () => {
       actions: [messageAction("OK")],
     });
 
-    expect(column.text).toBe(`${"x".repeat(59)}👨‍👩‍👧‍👦`);
+    expect(column.text).toBe("x".repeat(59));
+  });
+
+  it("uses the compact limit when a whitespace-only title is present", () => {
+    const column = createCarouselColumn({
+      title: " ",
+      text: "x".repeat(150),
+      actions: [messageAction("OK")],
+    });
+
+    expect(column.text).toBe("x".repeat(60));
   });
 
   it("truncates text to 60 characters when a thumbnail image is set", () => {

@@ -37,13 +37,20 @@ function resolveTemplateTextLimit(params: {
   thumbnailImageUrl?: string;
   textOnlyLimit: number;
 }): number {
-  return params.title?.trim() || params.thumbnailImageUrl?.trim() ? 60 : params.textOnlyLimit;
+  return params.title !== undefined || params.thumbnailImageUrl !== undefined
+    ? 60
+    : params.textOnlyLimit;
 }
 
 function truncateTemplateText(text: string, limit: number): string {
-  return Array.from(graphemeSegmenter.segment(text), (segment) => segment.segment)
-    .slice(0, limit)
-    .join("");
+  let result = "";
+  for (const { segment } of graphemeSegmenter.segment(text)) {
+    if (result.length + segment.length > limit) {
+      break;
+    }
+    result += segment;
+  }
+  return result;
 }
 
 /**
