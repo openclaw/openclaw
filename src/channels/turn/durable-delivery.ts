@@ -72,8 +72,8 @@ export function resolveDurableInboundReplyToId(
   return (
     normalizeOptionalString(params.replyToId) ??
     normalizeOptionalString(params.payload.replyToId) ??
-    normalizeOptionalString(params.ctxPayload.ReplyToIdFull) ??
-    normalizeOptionalString(params.ctxPayload.ReplyToId)
+    normalizeOptionalString(params.ctxPayload.MessageSidFull) ??
+    normalizeOptionalString(params.ctxPayload.MessageSid)
   );
 }
 

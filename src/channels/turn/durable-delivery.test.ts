@@ -93,20 +93,30 @@ describe("durable inbound reply delivery", () => {
         replyToId: null,
         payload: { text: "plain reply" },
         ctxPayload: ctxPayload({
-          ReplyToIdFull: "context-full-reply",
-          ReplyToId: "context-reply",
+          MessageSidFull: "context-full-message",
+          MessageSid: "context-message",
+        }),
+      }),
+    ).toBeNull();
+
+    expect(
+      resolveDurableInboundReplyToId({
+        payload: { text: "plain reply", replyToId: null },
+        ctxPayload: ctxPayload({
+          MessageSidFull: "context-full-message",
+          MessageSid: "context-message",
         }),
       }),
     ).toBeNull();
   });
 
-  it("falls back to payload and context reply targets when no explicit null is provided", () => {
+  it("falls back to payload and current-message context ids when no explicit null is provided", () => {
     expect(
       resolveDurableInboundReplyToId({
         payload: { text: "payload reply", replyToId: "payload-reply" },
         ctxPayload: ctxPayload({
-          ReplyToIdFull: "context-full-reply",
-          ReplyToId: "context-reply",
+          MessageSidFull: "context-full-message",
+          MessageSid: "context-message",
         }),
       }),
     ).toBe("payload-reply");
@@ -115,11 +125,46 @@ describe("durable inbound reply delivery", () => {
       resolveDurableInboundReplyToId({
         payload: { text: "context reply" },
         ctxPayload: ctxPayload({
-          ReplyToIdFull: "context-full-reply",
-          ReplyToId: "context-reply",
+          MessageSidFull: "context-full-message",
+          MessageSid: "context-message",
         }),
       }),
-    ).toBe("context-full-reply");
+    ).toBe("context-full-message");
+
+    expect(
+      resolveDurableInboundReplyToId({
+        payload: { text: "context reply" },
+        ctxPayload: ctxPayload({
+          MessageSid: "context-message",
+        }),
+      }),
+    ).toBe("context-message");
+  });
+
+  it("anchors to the current inbound message id, not an earlier reply-to target", () => {
+    // ReplyToId* can point at the assistant message Moeed replied to; the durable
+    // fallback must anchor to the current inbound message instead.
+    expect(
+      resolveDurableInboundReplyToId({
+        payload: { text: "reply" },
+        ctxPayload: ctxPayload({
+          ReplyToIdFull: "earlier-assistant-message-full",
+          ReplyToId: "earlier-assistant-message",
+          MessageSidFull: "current-message-full",
+          MessageSid: "current-message",
+        }),
+      }),
+    ).toBe("current-message-full");
+
+    expect(
+      resolveDurableInboundReplyToId({
+        payload: { text: "reply" },
+        ctxPayload: ctxPayload({
+          ReplyToIdFull: "earlier-assistant-message-full",
+          ReplyToId: "earlier-assistant-message",
+        }),
+      }),
+    ).toBeUndefined();
   });
 
   it("preserves explicit null thread targets instead of falling back to context thread", async () => {
