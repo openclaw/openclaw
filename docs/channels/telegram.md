@@ -340,6 +340,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     - `progress` keeps one editable status draft for tool progress, shows the stable status label when answer activity arrives before tool progress, clears it at completion, and sends the final answer as a normal message
     - `streaming.preview.toolProgress` controls whether tool/progress updates reuse the same edited preview message (default: `true` when preview streaming is active)
     - `streaming.preview.commandText` controls command/exec detail inside those tool-progress lines: `raw` (default, preserves released behavior) or `status` (tool label only)
+    - `streaming.progress.assistantPreview` (default: `false`) opts into a second temporary draft for assistant answer partials while the progress/status draft stays visible
     - `streaming.progress.commentary` (default: `false`) opts into assistant commentary/preamble text in the temporary progress draft
     - legacy `channels.telegram.streamMode`, boolean `streaming` values, and retired native draft preview keys are detected; run `openclaw doctor --fix` to migrate them to current streaming config
 
@@ -390,6 +391,23 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
             "progress": {
               "toolProgress": true,
               "commandText": "status"
+            }
+          }
+        }
+      }
+    }
+    ```
+
+    To keep the progress draft visible while answer text streams in a separate temporary assistant preview, opt into the Telegram-only assistant preview lane:
+
+    ```json
+    {
+      "channels": {
+        "telegram": {
+          "streaming": {
+            "mode": "progress",
+            "progress": {
+              "assistantPreview": true
             }
           }
         }

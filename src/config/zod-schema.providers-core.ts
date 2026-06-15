@@ -98,11 +98,13 @@ const ChannelStreamingProgressSchema = z
     maxLineChars: z.number().int().positive().optional(),
     render: z.enum(["text", "rich"]).optional(),
     toolProgress: z.boolean().optional(),
-    assistantPreview: z.boolean().optional(),
     commandText: z.enum(["raw", "status"]).optional(),
     commentary: z.boolean().optional(),
   })
   .strict();
+const TelegramStreamingProgressSchema = ChannelStreamingProgressSchema.extend({
+  assistantPreview: z.boolean().optional(),
+}).strict();
 const SlackStreamingProgressSchema = ChannelStreamingProgressSchema.extend({
   nativeTaskCards: z.boolean().optional(),
 }).strict();
@@ -124,6 +126,7 @@ const ChannelPreviewStreamingConfigSchema = z
   .strict();
 const TelegramPreviewStreamingConfigSchema = ChannelPreviewStreamingConfigSchema.extend({
   preview: ChannelStreamingPreviewSchema.optional(),
+  progress: TelegramStreamingProgressSchema.optional(),
 }).strict();
 const DiscordPreviewStreamingConfigSchema = ChannelPreviewStreamingConfigSchema;
 const SlackStreamingConfigSchema = ChannelPreviewStreamingConfigSchema.extend({
