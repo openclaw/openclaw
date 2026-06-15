@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import type { CliBackendPlugin } from "openclaw/plugin-sdk/cli-backend";
 import {
@@ -42,6 +43,7 @@ const GEMINI_CLI_PROFILE_SETTINGS_ENV = ["GEMINI_CLI_SYSTEM_SETTINGS_PATH"];
 type PreparedGeminiCliExecution = {
   env: Record<string, string>;
   clearEnv: string[];
+  cleanup?: () => Promise<void>;
 };
 
 function normalizeString(value: string | undefined): string | undefined {
@@ -262,6 +264,7 @@ async function prepareGeminiCliProfileHome(
   home: string;
   geminiDir: string;
   systemSettingsPath: string;
+  cleanup: () => Promise<void>;
 }> {
   const { home, geminiDir } = resolveGeminiCliProfileHome(ctx);
   await fs.mkdir(geminiDir, { recursive: true, mode: 0o700 });
@@ -269,13 +272,22 @@ async function prepareGeminiCliProfileHome(
   await fs.chmod(geminiDir, 0o700);
   const settings = buildGeminiCliAuthSettings(selectedType);
   const systemSettings = await buildGeminiCliSystemSettings(ctx, selectedType);
-  const systemSettingsPath = path.join(home, "system-settings.json");
+  const systemSettingsDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gemini-cli-"));
+  await fs.chmod(systemSettingsDir, 0o700);
+  const systemSettingsPath = path.join(systemSettingsDir, "settings.json");
   await Promise.all([
     writeGeminiCliJson(path.join(geminiDir, "settings.json"), settings),
     writeGeminiCliJson(path.join(home, "settings.json"), settings),
     writeGeminiCliJson(systemSettingsPath, systemSettings),
   ]);
-  return { home, geminiDir, systemSettingsPath };
+  return {
+    home,
+    geminiDir,
+    systemSettingsPath,
+    cleanup: async () => {
+      await fs.rm(systemSettingsDir, { recursive: true, force: true });
+    },
+  };
 }
 
 async function clearGeminiCliCachedCredentials(geminiDir: string): Promise<void> {
@@ -305,7 +317,7 @@ async function prepareGeminiCliOAuthHome(
     return null;
   }
 
-  const { home, geminiDir, systemSettingsPath } = await prepareGeminiCliProfileHome(
+  const { home, geminiDir, systemSettingsPath, cleanup } = await prepareGeminiCliProfileHome(
     ctx,
     "oauth-personal",
   );
@@ -331,6 +343,7 @@ async function prepareGeminiCliOAuthHome(
       ...buildGeminiCliProjectEnv(oauth.projectId),
     },
     clearEnv: [...GEMINI_CLI_PROFILE_AUTH_ENV, ...GEMINI_CLI_PROFILE_SETTINGS_ENV],
+    cleanup,
   };
 }
 
@@ -343,7 +356,7 @@ async function prepareGeminiCliApiKeyHome(
     return null;
   }
 
-  const { home, geminiDir, systemSettingsPath } = await prepareGeminiCliProfileHome(
+  const { home, geminiDir, systemSettingsPath, cleanup } = await prepareGeminiCliProfileHome(
     ctx,
     "gemini-api-key",
   );
@@ -359,6 +372,7 @@ async function prepareGeminiCliApiKeyHome(
       GEMINI_API_KEY: apiKey.key,
     },
     clearEnv: [...GEMINI_CLI_PROFILE_AUTH_ENV, ...GEMINI_CLI_PROFILE_SETTINGS_ENV],
+    cleanup,
   };
 }
 
