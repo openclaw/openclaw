@@ -310,7 +310,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   }
 
   protected computeProviderKey(): string {
-    return this.resolveProviderIndexIdentities()[0]!.providerKey;
+    return this.resolveProviderIndexIdentities()[0].providerKey;
   }
 
   protected resolveProviderIndexIdentities(): MemoryIndexProviderIdentity[] {
