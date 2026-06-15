@@ -759,7 +759,7 @@ function getSharedDefaultCompactionOverrideConsumers(params: {
   });
   if (!defaultUsesCodexCompaction) {
     consumers.model ||= Boolean(hasDefaultModel);
-    consumers.fallbacks ||= Boolean(hasDefaultFallbacks);
+    consumers.fallbacks ||= hasDefaultFallbacks;
     consumers.provider ||= Boolean(hasDefaultProvider);
     if (
       (!hasDefaultModel || consumers.model) &&
@@ -782,8 +782,7 @@ function getSharedDefaultCompactionOverrideConsumers(params: {
     const inheritsDefaultModel =
       Boolean(hasDefaultModel) &&
       !(typeof compaction?.model === "string" && compaction.model.trim());
-    const inheritsDefaultFallbacks =
-      Boolean(hasDefaultFallbacks) && !Array.isArray(compaction?.fallbacks);
+    const inheritsDefaultFallbacks = hasDefaultFallbacks && !Array.isArray(compaction?.fallbacks);
     const inheritsDefaultProvider =
       Boolean(hasDefaultProvider) &&
       !(typeof compaction?.provider === "string" && compaction.provider.trim());
