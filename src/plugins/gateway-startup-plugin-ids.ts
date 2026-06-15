@@ -1947,6 +1947,11 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
         plugin,
         manifestLookup,
         configuredChannelIds,
+      }) ||
+      hasExplicitlyEnabledChannelEntry({
+        plugin,
+        manifestLookup,
+        activationSourcePlugins,
       })
     ) {
       const canStartConfiguredChannel = canStartConfiguredChannelPlugin({
@@ -1963,16 +1968,6 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
           configuredDeferredChannelPluginIds.push(plugin.pluginId);
         }
       }
-      continue;
-    }
-    if (
-      hasExplicitlyEnabledChannelEntry({
-        plugin,
-        manifestLookup,
-        activationSourcePlugins,
-      })
-    ) {
-      pluginIds.push(plugin.pluginId);
       continue;
     }
     if (
