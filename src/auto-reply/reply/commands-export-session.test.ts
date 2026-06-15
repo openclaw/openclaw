@@ -9,7 +9,7 @@ const hoisted = await vi.hoisted(async () => {
     ...createExportCommandSessionMocks(vi),
     resolveCommandsSystemPromptBundleMock: vi.fn(async () => ({
       systemPrompt: "system prompt",
-      tools: [],
+      tools: [] as unknown[],
       skillsPrompt: "",
       bootstrapFiles: [],
       injectedFiles: [],
@@ -164,6 +164,16 @@ function writtenHtml(): string {
   return value;
 }
 
+function decodedSessionData(): { tools?: unknown } {
+  const match = writtenHtml().match(/<script\b[^>]*\bid="session-data"[^>]*>([^<]*)<\/script>/u);
+  if (!match) {
+    throw new Error("Expected encoded session data");
+  }
+  return JSON.parse(Buffer.from(match[1], "base64").toString("utf8")) as {
+    tools?: unknown;
+  };
+}
+
 describe("buildExportSessionReply", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -184,7 +194,7 @@ describe("buildExportSessionReply", () => {
     });
     hoisted.resolveCommandsSystemPromptBundleMock.mockResolvedValue({
       systemPrompt: "system prompt",
-      tools: [],
+      tools: [] as unknown[],
       skillsPrompt: "",
       bootstrapFiles: [],
       injectedFiles: [],
@@ -271,6 +281,60 @@ describe("buildExportSessionReply", () => {
       ).toString("base64"),
     );
     expect(html).toContain('const base64 = document.getElementById("session-data").textContent;');
+  });
+
+  it("skips unexportable tool schemas while preserving healthy siblings", async () => {
+    const unreadableParameters = {
+      name: "fuzzplugin_unreadable_parameters",
+      description: "unreadable parameters",
+    };
+    Object.defineProperty(unreadableParameters, "parameters", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin export tool parameters getter exploded");
+      },
+    });
+    const cyclicParameters: Record<string, unknown> = { type: "object" };
+    cyclicParameters.self = cyclicParameters;
+    const cyclicTool = {
+      name: "fuzzplugin_cyclic_schema",
+      description: "cyclic parameters",
+      parameters: cyclicParameters,
+    };
+    hoisted.resolveCommandsSystemPromptBundleMock.mockResolvedValue({
+      systemPrompt: "system prompt",
+      tools: [
+        unreadableParameters,
+        cyclicTool,
+        {
+          name: "healthy_reader",
+          description: "Read context",
+          parameters: {
+            type: "object",
+            properties: { path: { type: "string" } },
+          },
+        },
+      ],
+      skillsPrompt: "",
+      bootstrapFiles: [],
+      injectedFiles: [],
+      sandboxRuntime: { sandboxed: false, mode: "off" },
+    });
+
+    const reply = await buildExportSessionReply(makeParams());
+
+    expect(reply.text).toContain("✅ Session exported!");
+    expect(reply.text).toContain("🔧 Tools: 1");
+    expect(decodedSessionData().tools).toEqual([
+      {
+        name: "healthy_reader",
+        description: "Read context",
+        parameters: {
+          type: "object",
+          properties: { path: { type: "string" } },
+        },
+      },
+    ]);
   });
 
   it("suffixes colliding default export filenames instead of overwriting", async () => {
