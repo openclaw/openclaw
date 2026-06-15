@@ -185,7 +185,6 @@ describe("TTS core", () => {
     };
     const auth = { kind: "api-key" as const, apiKey: "test-key" };
 
-    // Test multiple reasoning blocks
     const assistant = {
       role: "assistant" as const,
       content: [
@@ -232,5 +231,73 @@ describe("TTS core", () => {
     expect(result.summary).not.toContain("<thinking>");
     expect(result.summary).not.toContain("First thought");
     expect(result.summary).not.toContain("Second thought");
+  });
+
+  it("strips tool calls and reasoning from summarization output", async () => {
+    const config = {
+      provider: "openai",
+      model: {
+        id: "gpt-5.5",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+      },
+    } as unknown as ResolvedTtsConfig;
+    const testUsage: Usage = {
+      input: 10,
+      output: 20,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 30,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    };
+    const auth = { kind: "api-key" as const, apiKey: "test-key" };
+
+    const assistant = {
+      role: "assistant" as const,
+      content: [
+        {
+          type: "text",
+          text: '<thinking>Let me search for this.</thinking><tool_call>{"name":"search","arguments":{"query":"test"}}</tool_call>The search results show that the answer is 42.',
+        },
+      ],
+      api: "openai-completions",
+      provider: "openai",
+      model: "gpt-5.5",
+      stopReason: "stop",
+      usage: testUsage,
+      timestamp: Date.now(),
+    } satisfies AssistantMessage;
+
+    const result = await summarizeText(
+      {
+        text: "Find the answer to everything.",
+        targetLength: 120,
+        cfg: {},
+        config,
+        timeoutMs: MAX_TIMER_TIMEOUT_MS + 1,
+      },
+      {
+        completeSimple: vi.fn(async () => assistant),
+        prepareSimpleCompletionModel: vi.fn(
+          async () =>
+            ({
+              model: {
+                id: "gpt-5.5",
+                api: "openai-completions",
+                provider: "openai",
+                baseUrl: "https://api.openai.com/v1",
+              },
+              auth,
+            }) as unknown as PreparedSimpleCompletionModel,
+        ),
+        requireApiKey: vi.fn(() => "key"),
+      },
+    );
+
+    expect(result.summary).toBe("The search results show that the answer is 42.");
+    expect(result.summary).not.toContain("<think>");
+    expect(result.summary).not.toContain("<tool_call>");
+    expect(result.summary).not.toContain('"search"');
   });
 });

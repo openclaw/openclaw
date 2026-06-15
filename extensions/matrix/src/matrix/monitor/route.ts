@@ -1,12 +1,12 @@
 // Matrix plugin module implements route behavior.
 import { resolveConfiguredAcpBindingRecord } from "openclaw/plugin-sdk/acp-binding-resolve-runtime";
+import { resolveRuntimeConversationBindingRoute } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   buildAgentSessionKey,
   deriveLastRoutePolicy,
   resolveAgentIdFromSessionKey,
 } from "openclaw/plugin-sdk/routing";
-import { getSessionBindingService } from "openclaw/plugin-sdk/session-binding-runtime";
 import type { CoreConfig } from "../../types.js";
 import { resolveMatrixThreadSessionKeys } from "./threads.js";
 
@@ -74,45 +74,26 @@ export function resolveMatrixInboundRoute(params: {
   });
   const bindingConversationId = params.threadId ?? params.roomId;
   const bindingParentConversationId = params.threadId ? params.roomId : undefined;
-  const sessionBindingService = getSessionBindingService();
-  const runtimeBinding = sessionBindingService.resolveByConversation({
-    channel: "matrix",
+  const conversation = {
+    channel: "matrix" as const,
     accountId: params.accountId,
     conversationId: bindingConversationId,
     parentConversationId: bindingParentConversationId,
+  };
+
+  // Resolve configured ACP binding through the compiled binding registry.
+  // This follows the same binding resolution chain used by Discord and Telegram:
+  // both use the compiled-configured-binding registry to match per-conversation ACP bindings.
+  const configuredBinding = resolveConfiguredAcpBindingRecord({
+    cfg: params.cfg,
+    channel: conversation.channel,
+    accountId: conversation.accountId,
+    conversationId: conversation.conversationId,
+    parentConversationId: conversation.parentConversationId,
   });
-  const boundSessionKey = runtimeBinding?.targetSessionKey?.trim();
-
-  if (runtimeBinding && boundSessionKey) {
-    return {
-      route: {
-        ...baseRoute,
-        sessionKey: boundSessionKey,
-        agentId: resolveAgentIdFromSessionKey(boundSessionKey) || baseRoute.agentId,
-        lastRoutePolicy: deriveLastRoutePolicy({
-          sessionKey: boundSessionKey,
-          mainSessionKey: baseRoute.mainSessionKey,
-        }),
-        matchedBy: "binding.channel",
-      },
-      configuredBinding: null,
-      runtimeBindingId: runtimeBinding.bindingId,
-    };
-  }
-
-  const configuredBinding =
-    runtimeBinding == null
-      ? resolveConfiguredAcpBindingRecord({
-          cfg: params.cfg,
-          channel: "matrix",
-          accountId: params.accountId,
-          conversationId: bindingConversationId,
-          parentConversationId: bindingParentConversationId,
-        })
-      : null;
   const configuredSessionKey = configuredBinding?.record.targetSessionKey?.trim();
 
-  const effectiveRoute =
+  let route: MatrixResolvedRoute =
     configuredBinding && configuredSessionKey
       ? {
           ...baseRoute,
@@ -129,23 +110,33 @@ export function resolveMatrixInboundRoute(params: {
         }
       : baseRoute;
 
+  // Check for runtime session bindings (e.g. from thread bind commands or plugin-owned bindings).
+  // This uses the shared resolveRuntimeConversationBindingRoute from the conversation-binding-runtime
+  // module, matching the pattern used by Discord and Telegram.
+  const runtimeRoute = resolveRuntimeConversationBindingRoute({
+    route,
+    conversation,
+  });
+  route = runtimeRoute.route;
+  const runtimeBindingId = runtimeRoute.bindingRecord?.bindingId ?? null;
+
   const dmSessionKey = shouldApplyMatrixPerRoomDmSessionScope({
     isDirectMessage: params.isDirectMessage,
     configuredSessionKey,
   })
     ? resolveMatrixDmSessionKey({
         accountId: params.accountId,
-        agentId: effectiveRoute.agentId,
+        agentId: route.agentId,
         roomId: params.roomId,
         dmSessionScope: params.dmSessionScope,
-        fallbackSessionKey: effectiveRoute.sessionKey,
+        fallbackSessionKey: route.sessionKey,
       })
-    : effectiveRoute.sessionKey;
+    : route.sessionKey;
   const routeWithDmScope =
-    dmSessionKey === effectiveRoute.sessionKey
-      ? effectiveRoute
+    dmSessionKey === route.sessionKey
+      ? route
       : {
-          ...effectiveRoute,
+          ...route,
           sessionKey: dmSessionKey,
           lastRoutePolicy: "session" as const,
         };
@@ -168,13 +159,13 @@ export function resolveMatrixInboundRoute(params: {
         }),
       },
       configuredBinding,
-      runtimeBindingId: null,
+      runtimeBindingId,
     };
   }
 
   return {
     route: routeWithDmScope,
     configuredBinding,
-    runtimeBindingId: null,
+    runtimeBindingId,
   };
 }

@@ -199,7 +199,129 @@ describe("resolveMatrixInboundRoute", () => {
     expect(route.matchedBy).toBe("binding.channel");
     expect(route.sessionKey).toBe("agent:bound:session-1");
     expect(route.lastRoutePolicy).toBe("session");
-    expect(touch).not.toHaveBeenCalled();
+    // resolveRuntimeConversationBindingRoute touches the binding internally
+    expect(touch).toHaveBeenCalledWith("ops:!dm:example.org", undefined);
+  });
+});
+
+describe("resolveMatrixInboundRoute room bindings", () => {
+  beforeEach(() => {
+    sessionBindingTesting.resetSessionBindingAdaptersForTests();
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "matrix", source: "test", plugin: matrixPlugin }]),
+    );
+  });
+
+  function resolveRoomRoute(cfg: OpenClawConfig, roomId = "!room:example.org") {
+    return resolveMatrixInboundRoute({
+      cfg,
+      accountId: "ops",
+      roomId,
+      senderId: "@bob:example.org",
+      isDirectMessage: false,
+      resolveAgentRoute,
+    });
+  }
+
+  function roomPeer(id = "!room:example.org"): RoutePeer {
+    return { kind: "channel", id };
+  }
+
+  it("resolves per-room route bindings for room messages", () => {
+    const cfg = {
+      ...baseCfg,
+      bindings: [matrixBinding("room-agent", roomPeer())],
+    } satisfies OpenClawConfig;
+
+    const { route, configuredBinding } = resolveRoomRoute(cfg);
+
+    expect(configuredBinding).toBeNull();
+    expect(route.agentId).toBe("room-agent");
+    expect(route.matchedBy).toBe("binding.peer");
+  });
+
+  it("resolves per-room ACP bindings for room messages", () => {
+    const cfg = {
+      ...baseCfg,
+      bindings: [matrixBinding("acp-agent", roomPeer(), "acp")],
+    } satisfies OpenClawConfig;
+
+    const { route, configuredBinding } = resolveRoomRoute(cfg);
+
+    expect(configuredBinding).not.toBeNull();
+    expect(configuredBinding?.spec.agentId).toBe("acp-agent");
+    expect(route.agentId).toBe("acp-agent");
+    expect(route.matchedBy).toBe("binding.channel");
+    expect(route.sessionKey).toContain("agent:acp-agent:acp:binding:matrix:ops:");
+  });
+
+  it("routes room messages to default agent when no binding matches", () => {
+    const cfg = {
+      ...baseCfg,
+      bindings: [matrixBinding("room-agent", roomPeer("!other:example.org"))],
+    } satisfies OpenClawConfig;
+
+    const { route, configuredBinding } = resolveRoomRoute(cfg);
+
+    expect(configuredBinding).toBeNull();
+    expect(route.agentId).toBe("main");
+    expect(route.matchedBy).toBe("default");
+  });
+
+  it("supports wildcard room bindings via channel-level binding", () => {
+    const cfg = {
+      ...baseCfg,
+      bindings: [
+        {
+          agentId: "room-agent",
+          match: { channel: "matrix", accountId: "*" },
+        },
+      ],
+    } satisfies OpenClawConfig;
+
+    const { route, configuredBinding } = resolveRoomRoute(cfg);
+
+    expect(configuredBinding).toBeNull();
+    expect(route.agentId).toBe("room-agent");
+    expect(route.matchedBy).toBe("binding.channel");
+  });
+
+  it("lets runtime bindings override room route bindings", () => {
+    registerSessionBindingAdapter({
+      channel: "matrix",
+      accountId: "ops",
+      listBySession: () => [],
+      resolveByConversation: (ref) =>
+        ref.conversationId === "!room:example.org"
+          ? {
+              bindingId: "ops:!room:example.org",
+              targetSessionKey: "agent:bound:session-2",
+              targetKind: "session",
+              conversation: {
+                channel: "matrix",
+                accountId: "ops",
+                conversationId: "!room:example.org",
+              },
+              status: "active",
+              boundAt: Date.now(),
+              metadata: { boundBy: "user-1" },
+            }
+          : null,
+      touch: vi.fn(),
+    });
+
+    const cfg = {
+      ...baseCfg,
+      bindings: [matrixBinding("room-agent", roomPeer())],
+    } satisfies OpenClawConfig;
+
+    const { route, configuredBinding, runtimeBindingId } = resolveRoomRoute(cfg);
+
+    expect(configuredBinding).toBeNull();
+    expect(runtimeBindingId).toBe("ops:!room:example.org");
+    expect(route.agentId).toBe("bound");
+    expect(route.matchedBy).toBe("binding.channel");
+    expect(route.sessionKey).toBe("agent:bound:session-2");
   });
 });
 

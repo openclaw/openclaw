@@ -1,6 +1,5 @@
 // TTS core coordinates text preparation, provider selection, and speech output.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { stripAssistantInternalScaffolding } from "../shared/text/assistant-visible-text.js";
 import { requireApiKey } from "../agents/model-auth.js";
 import {
   buildModelAliasIndex,
@@ -13,6 +12,7 @@ import type { OpenClawConfig } from "../config/types.js";
 import { completeSimple } from "../llm/stream.js";
 import type { TextContent } from "../llm/types.js";
 import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
+import { sanitizeForTts } from "../shared/text/assistant-visible-text.js";
 import type { ResolvedTtsConfig } from "./tts-types.js";
 export {
   normalizeApplyTextNormalization,
@@ -136,7 +136,7 @@ export async function summarizeText(
           signal: controller.signal,
         },
       );
-      const summary = stripAssistantInternalScaffolding(
+      const summary = sanitizeForTts(
         res.content
           .filter(isTextContentBlock)
           .map((block) => block.text.trim())
