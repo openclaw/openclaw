@@ -1,5 +1,4 @@
 // Memory Core plugin module implements manager reindex state behavior.
-import { DEFAULT_LOCAL_MODEL } from "openclaw/plugin-sdk/memory-core-host-embedding-registry";
 import {
   hashText,
   normalizeExtraMemoryPaths,
@@ -31,58 +30,41 @@ export type MemoryIndexIdentityState =
       reason: string;
     };
 
-const LOCAL_EMBEDDING_PROVIDER_ID = "local";
-const DEFAULT_LOCAL_MODEL_FILE_NAME =
-  DEFAULT_LOCAL_MODEL.split(/[\\/]/).at(-1) ?? DEFAULT_LOCAL_MODEL;
+export type MemoryIndexProviderIdentity = {
+  provider: string;
+  model: string;
+  providerKey: string;
+};
 
-function resolveModelFileName(model: string): string {
-  const trimmed = model.trim();
-  const normalized = trimmed.replace(/\\/g, "/");
-  const separatorIndex = normalized.lastIndexOf("/");
-  return separatorIndex >= 0 ? normalized.slice(separatorIndex + 1) || trimmed : trimmed;
-}
-
-function isDefaultLocalModelPath(model: string): boolean {
-  const trimmed = model.trim();
-  return (
-    trimmed !== DEFAULT_LOCAL_MODEL &&
-    !trimmed.startsWith("hf:") &&
-    /[\\/]/.test(trimmed) &&
-    resolveModelFileName(trimmed) === DEFAULT_LOCAL_MODEL_FILE_NAME
-  );
-}
-
-function areLocalDefaultModelIdentitiesCompatible(params: {
-  metaProvider: string;
-  expectedProvider: string;
-  metaModel: string;
-  expectedModel: string;
-}): boolean {
-  if (
-    params.metaProvider !== LOCAL_EMBEDDING_PROVIDER_ID ||
-    params.expectedProvider !== LOCAL_EMBEDDING_PROVIDER_ID
-  ) {
-    return false;
+export function resolveMemoryIndexProviderIdentities(params: {
+  provider: { id: string; model: string } | null;
+  cacheKeyData?: Record<string, unknown>;
+  aliases?: Array<{ model: string; cacheKeyData: Record<string, unknown> }>;
+}): MemoryIndexProviderIdentity[] {
+  const provider = params.provider ?? { id: "none", model: "fts-only" };
+  const candidates = [
+    {
+      model: provider.model,
+      cacheKeyData: params.cacheKeyData ?? { provider: provider.id, model: provider.model },
+    },
+    ...(params.provider ? (params.aliases ?? []) : []),
+  ];
+  const seen = new Set<string>();
+  const identities: MemoryIndexProviderIdentity[] = [];
+  for (const [index, candidate] of candidates.entries()) {
+    const providerKey = hashText(JSON.stringify(candidate.cacheKeyData));
+    const key = `${candidate.model}\u0000${providerKey}`;
+    if ((index > 0 && !candidate.model) || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    identities.push({
+      provider: provider.id,
+      model: candidate.model,
+      providerKey,
+    });
   }
-  return (
-    (params.metaModel === DEFAULT_LOCAL_MODEL && isDefaultLocalModelPath(params.expectedModel)) ||
-    (params.expectedModel === DEFAULT_LOCAL_MODEL && isDefaultLocalModelPath(params.metaModel))
-  );
-}
-
-function localProviderKey(model: string): string {
-  return hashText(JSON.stringify({ provider: LOCAL_EMBEDDING_PROVIDER_ID, model }));
-}
-
-function areLocalDefaultProviderKeysCompatible(params: {
-  meta: MemoryIndexMeta;
-  expectedModel: string;
-  expectedProviderKey?: string;
-}): boolean {
-  return (
-    params.meta.providerKey === localProviderKey(params.meta.model) &&
-    params.expectedProviderKey === localProviderKey(params.expectedModel)
-  );
+  return identities;
 }
 
 export function resolveConfiguredSourcesForMeta(sources: Iterable<MemorySource>): MemorySource[] {
@@ -146,6 +128,7 @@ export function isMemoryIndexIdentityDirty(params: {
   meta: MemoryIndexMeta | null;
   provider: { id: string; model: string } | null;
   providerKey?: string;
+  providerAliases?: Array<Pick<MemoryIndexProviderIdentity, "model" | "providerKey">>;
   providerKeyKnown?: boolean;
   configuredSources: MemorySource[];
   configuredScopeHash: string;
@@ -162,6 +145,7 @@ export function resolveMemoryIndexIdentityState(params: {
   meta: MemoryIndexMeta | null;
   provider: { id: string; model: string } | null;
   providerKey?: string;
+  providerAliases?: Array<Pick<MemoryIndexProviderIdentity, "model" | "providerKey">>;
   providerKeyKnown?: boolean;
   configuredSources: MemorySource[];
   configuredScopeHash: string;
@@ -176,19 +160,17 @@ export function resolveMemoryIndexIdentityState(params: {
     return { status: "missing", reason: "index metadata is missing" };
   }
   const expectedModel = params.provider ? params.provider.model : "fts-only";
-  const expectedProvider = params.provider ? params.provider.id : "none";
-  const localDefaultModelCompatible = areLocalDefaultModelIdentitiesCompatible({
-    metaProvider: meta.provider,
-    expectedProvider,
-    metaModel: meta.model,
-    expectedModel,
-  });
-  if (meta.model !== expectedModel && !localDefaultModelCompatible) {
+  const matchingModelIdentities = [
+    { model: expectedModel, providerKey: params.providerKey },
+    ...(params.providerAliases ?? []),
+  ].filter((identity) => identity.model === meta.model);
+  if (matchingModelIdentities.length === 0) {
     return {
       status: "mismatched",
       reason: `index was built for model ${meta.model}, expected ${expectedModel}`,
     };
   }
+  const expectedProvider = params.provider ? params.provider.id : "none";
   if (meta.provider !== expectedProvider) {
     return {
       status: "mismatched",
@@ -197,15 +179,7 @@ export function resolveMemoryIndexIdentityState(params: {
   }
   if (
     params.providerKeyKnown !== false &&
-    meta.providerKey !== params.providerKey &&
-    !(
-      localDefaultModelCompatible &&
-      areLocalDefaultProviderKeysCompatible({
-        meta,
-        expectedModel,
-        expectedProviderKey: params.providerKey,
-      })
-    )
+    !matchingModelIdentities.some((identity) => identity.providerKey === meta.providerKey)
   ) {
     return {
       status: "mismatched",

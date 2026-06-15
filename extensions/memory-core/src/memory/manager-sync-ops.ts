@@ -41,6 +41,7 @@ import {
   createEmbeddingProvider,
   resolveEmbeddingProviderAdapterId,
   resolveEmbeddingProviderFallbackModel,
+  resolveEmbeddingProviderIndexIdentity,
   type EmbeddingProvider,
   type EmbeddingProviderId,
   type EmbeddingProviderRuntime,
@@ -57,15 +58,18 @@ import {
   applyMemoryFallbackProviderState,
   resolveMemoryFallbackProviderRequest,
   resolveFallbackCurrentProviderId,
+  resolveMemoryPrimaryProviderRequest,
   type MemoryProviderLifecycleState,
 } from "./manager-provider-state.js";
 import { acquireMemoryReindexLock, type MemoryReindexLockHandle } from "./manager-reindex-lock.js";
 import {
   resolveConfiguredScopeHash,
   resolveConfiguredSourcesForMeta,
+  resolveMemoryIndexProviderIdentities,
   resolveMemoryIndexIdentityState,
-  type MemoryIndexMeta,
   type MemoryIndexIdentityState,
+  type MemoryIndexMeta,
+  type MemoryIndexProviderIdentity,
 } from "./manager-reindex-state.js";
 import { shouldSyncSessionsForReindex } from "./manager-session-reindex.js";
 import {
@@ -301,6 +305,7 @@ export abstract class MemoryManagerSyncOps {
   protected abstract readonly cache: { enabled: boolean; maxEntries?: number };
   protected abstract db: DatabaseSync;
   protected abstract computeProviderKey(): string;
+  protected abstract resolveProviderIndexIdentities(): MemoryIndexProviderIdentity[];
   protected abstract sync(params?: {
     reason?: string;
     force?: boolean;
@@ -493,19 +498,27 @@ export abstract class MemoryManagerSyncOps {
     hasIndexedChunks?: boolean;
   }): MemoryIndexIdentityState {
     const hasProviderOverride = params && "provider" in params;
+    const configuredIndexIdentity =
+      !hasProviderOverride && !this.provider && this.settings.provider !== "none"
+        ? resolveEmbeddingProviderIndexIdentity({
+            config: this.cfg,
+            agentDir: resolveAgentDir(this.cfg, this.agentId),
+            ...resolveMemoryPrimaryProviderRequest({ settings: this.settings }),
+          })
+        : undefined;
     // Plain status can compare identity before provider init. Mirror provider
     // init's empty-model fallback so adapter defaults do not look mismatched.
     const configuredProvider =
       this.settings.provider === "none"
         ? null
-        : {
+        : (configuredIndexIdentity?.provider ?? {
             id:
               resolveEmbeddingProviderAdapterId(this.settings.provider, this.cfg) ??
               this.settings.provider,
             model:
               this.settings.model.trim() ||
               resolveEmbeddingProviderFallbackModel(this.settings.provider, "", this.cfg),
-          };
+          });
     const provider = hasProviderOverride
       ? params.provider!
       : this.provider
@@ -515,11 +528,35 @@ export abstract class MemoryManagerSyncOps {
       params && "vectorReady" in params
         ? Boolean(params.vectorReady)
         : this.vector.available === true;
+    const initializedProviderIdentities =
+      provider &&
+      this.provider &&
+      provider.id === this.provider.id &&
+      provider.model === this.provider.model
+        ? this.resolveProviderIndexIdentities()
+        : [];
+    const configuredProviderIdentities = configuredIndexIdentity
+      ? resolveMemoryIndexProviderIdentities({
+          provider: configuredIndexIdentity.provider,
+          cacheKeyData: configuredIndexIdentity.cacheKeyData,
+          aliases: configuredIndexIdentity.aliases,
+        })
+      : [];
+    const providerIdentities =
+      initializedProviderIdentities.length > 0
+        ? initializedProviderIdentities
+        : configuredProviderIdentities;
+    const configuredProviderKeyKnown = configuredProviderIdentities.length > 0;
     return resolveMemoryIndexIdentityState({
       meta: params && "meta" in params ? params.meta! : this.readMeta(),
       provider,
-      providerKey: params?.providerKeyKnown === false ? undefined : (this.providerKey ?? undefined),
-      providerKeyKnown: params?.providerKeyKnown,
+      providerKey: configuredProviderKeyKnown
+        ? providerIdentities[0]?.providerKey
+        : params?.providerKeyKnown === false
+          ? undefined
+          : (this.providerKey ?? undefined),
+      providerAliases: providerIdentities.slice(1),
+      providerKeyKnown: configuredProviderKeyKnown ? true : params?.providerKeyKnown,
       configuredSources: resolveConfiguredSourcesForMeta(this.sources),
       configuredScopeHash: resolveConfiguredScopeHash({
         workspaceDir: this.workspaceDir,
@@ -2143,6 +2180,7 @@ export abstract class MemoryManagerSyncOps {
       // Also detects provider→FTS-only transitions so orphaned old-model FTS rows are cleaned up.
       provider: this.provider ? { id: this.provider.id, model: this.provider.model } : null,
       providerKey: this.providerKey ?? undefined,
+      providerAliases: this.resolveProviderIndexIdentities().slice(1),
       configuredSources: resolveConfiguredSourcesForMeta(this.sources),
       configuredScopeHash: resolveConfiguredScopeHash({
         workspaceDir: this.workspaceDir,

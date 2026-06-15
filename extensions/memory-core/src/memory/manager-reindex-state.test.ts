@@ -1,10 +1,10 @@
 // Memory Core tests cover manager reindex state plugin behavior.
-import { DEFAULT_LOCAL_MODEL } from "openclaw/plugin-sdk/memory-core-host-embedding-registry";
-import { hashText, type MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it } from "vitest";
 import {
   resolveConfiguredScopeHash,
   resolveConfiguredSourcesForMeta,
+  resolveMemoryIndexProviderIdentities,
   resolveMemoryIndexIdentityState,
   isMemoryIndexIdentityDirty,
   type MemoryIndexMeta,
@@ -29,6 +29,7 @@ function createIdentityParams(
     meta?: MemoryIndexMeta | null;
     provider?: { id: string; model: string } | null;
     providerKey?: string;
+    providerAliases?: Array<{ model: string; providerKey: string }>;
     providerKeyKnown?: boolean;
     configuredSources?: MemorySource[];
     configuredScopeHash?: string;
@@ -54,11 +55,15 @@ function createIdentityParams(
   };
 }
 
-function localProviderKey(model: string): string {
-  return hashText(JSON.stringify({ provider: "local", model }));
-}
-
 describe("memory reindex state", () => {
+  it("retains the primary provider identity when its model is empty", () => {
+    expect(
+      resolveMemoryIndexProviderIdentities({
+        provider: { id: "empty-model-provider", model: "" },
+      }),
+    ).toMatchObject([{ provider: "empty-model-provider", model: "" }]);
+  });
+
   it("marks identity dirty when the embedding model changes", () => {
     expect(
       isMemoryIndexIdentityDirty(
@@ -110,43 +115,19 @@ describe("memory reindex state", () => {
     ).toEqual({ status: "valid" });
   });
 
-  it("accepts local default model identity across hf uri and downloaded gguf path formats", () => {
-    const downloadedModelPath = `/home/user/.cache/openclaw/models/${DEFAULT_LOCAL_MODEL.split("/").at(-1)}`;
-
-    for (const [indexedModel, currentModel] of [
-      [DEFAULT_LOCAL_MODEL, downloadedModelPath],
-      [downloadedModelPath, DEFAULT_LOCAL_MODEL],
-    ]) {
-      expect(
-        resolveMemoryIndexIdentityState(
-          createIdentityParams({
-            provider: { id: "local", model: currentModel },
-            providerKey: localProviderKey(currentModel),
-            meta: createMeta({
-              provider: "local",
-              model: indexedModel,
-              providerKey: localProviderKey(indexedModel),
-              vectorDims: 768,
-            }),
-            vectorReady: true,
-          }),
-        ),
-      ).toEqual({ status: "valid" });
-    }
-  });
-
-  it("keeps local model identity strict for a different gguf path", () => {
-    const differentModelPath = "/home/user/models/other-embedding-model.gguf";
+  it("keeps model identity strict when paths share a basename", () => {
+    const indexedModel = "/models/default/model.gguf";
+    const currentModel = "/models/custom/model.gguf";
 
     expect(
       resolveMemoryIndexIdentityState(
         createIdentityParams({
-          provider: { id: "local", model: differentModelPath },
-          providerKey: localProviderKey(differentModelPath),
+          provider: { id: "local", model: currentModel },
+          providerKey: "provider-key-current",
           meta: createMeta({
             provider: "local",
-            model: DEFAULT_LOCAL_MODEL,
-            providerKey: localProviderKey(DEFAULT_LOCAL_MODEL),
+            model: indexedModel,
+            providerKey: "provider-key-indexed",
             vectorDims: 768,
           }),
           vectorReady: true,
@@ -154,7 +135,47 @@ describe("memory reindex state", () => {
       ),
     ).toEqual({
       status: "mismatched",
-      reason: `index was built for model ${DEFAULT_LOCAL_MODEL}, expected ${differentModelPath}`,
+      reason: `index was built for model ${indexedModel}, expected ${currentModel}`,
+    });
+  });
+
+  it("accepts only provider-declared model and provider-key alias pairs", () => {
+    const alias = {
+      model: "/models/default/model.gguf",
+      providerKey: "provider-key-alias",
+    };
+
+    expect(
+      resolveMemoryIndexIdentityState(
+        createIdentityParams({
+          provider: { id: "local", model: "hf:owner/default/model.gguf" },
+          providerKey: "provider-key-current",
+          providerAliases: [alias],
+          meta: createMeta({
+            provider: "local",
+            model: alias.model,
+            providerKey: alias.providerKey,
+          }),
+        }),
+      ),
+    ).toEqual({ status: "valid" });
+
+    expect(
+      resolveMemoryIndexIdentityState(
+        createIdentityParams({
+          provider: { id: "local", model: "hf:owner/default/model.gguf" },
+          providerKey: "provider-key-current",
+          providerAliases: [alias],
+          meta: createMeta({
+            provider: "local",
+            model: alias.model,
+            providerKey: "provider-key-arbitrary",
+          }),
+        }),
+      ),
+    ).toEqual({
+      status: "mismatched",
+      reason: "index provider settings changed",
     });
   });
 

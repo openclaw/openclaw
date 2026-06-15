@@ -8,6 +8,7 @@ import {
   listRegisteredMemoryEmbeddingProviderAdapters as listRegisteredAdapters,
   registerMemoryEmbeddingProvider as registerAdapter,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import { hashText } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-runtime-mocks.js";
@@ -17,10 +18,7 @@ import { splitSourceWideEmbeddingChunks } from "./manager-embedding-ops.js";
 import { LOCAL_EMBEDDING_WORKER_ERROR_CODES } from "./manager-local-worker-errors.js";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
 import { closeMemoryIndexManagersForAgent, EMBEDDING_PROBE_CACHE_TTL_MS } from "./manager.js";
-import {
-  DEFAULT_LOCAL_MODEL,
-  registerBuiltInMemoryEmbeddingProviders,
-} from "./provider-adapters.js";
+import { registerBuiltInMemoryEmbeddingProviders } from "./provider-adapters.js";
 
 // This suite performs real sqlite/media indexing and can exceed the global
 // timeout when it shares a packed CI extension shard.
@@ -43,6 +41,12 @@ let providerCloseGate: Promise<void> | null = null;
 let providerInitGate: Promise<void> | null = null;
 let providerCalls: Array<{ provider?: string; model?: string; outputDimensionality?: number }> = [];
 let forceNoProvider = false;
+
+const identityAliasFixture = vi.hoisted(() => ({
+  provider: "identity-alias-test",
+  canonicalModel: "hf:fixture/default-model.gguf",
+  cacheModel: "/fixture/cache/default-model.gguf",
+}));
 
 function createLocalWorkerExitError(): Error {
   return Object.assign(new Error("Local embedding worker exited unexpectedly (exit code 134)"), {
@@ -76,6 +80,28 @@ vi.mock("./embeddings.js", () => {
     ) => config?.models?.providers?.[providerId]?.api ?? providerId,
     resolveEmbeddingProviderAdapterTransport: (providerId: string) =>
       providerId === "local" ? "local" : "remote",
+    resolveEmbeddingProviderIndexIdentity: (options: { provider?: string; model?: string }) =>
+      options.provider === identityAliasFixture.provider
+        ? {
+            provider: {
+              id: identityAliasFixture.provider,
+              model: identityAliasFixture.canonicalModel,
+            },
+            cacheKeyData: {
+              provider: identityAliasFixture.provider,
+              model: identityAliasFixture.canonicalModel,
+            },
+            aliases: [
+              {
+                model: identityAliasFixture.cacheModel,
+                cacheKeyData: {
+                  provider: identityAliasFixture.provider,
+                  model: identityAliasFixture.cacheModel,
+                },
+              },
+            ],
+          }
+        : undefined,
     createEmbeddingProvider: async (options: {
       provider?: string;
       model?: string;
@@ -99,11 +125,17 @@ vi.mock("./embeddings.js", () => {
         options.provider === "fallback-provider" ||
         options.provider === "batch-test" ||
         options.provider === "batch-wide-test" ||
-        options.provider === "ollama" ||
-        options.provider === "local"
+        options.provider === identityAliasFixture.provider ||
+        options.provider === "ollama"
           ? options.provider
           : "mock";
-      const model = options.model ?? "mock-embed";
+      const requestedModel = options.model ?? "mock-embed";
+      const model =
+        providerId === identityAliasFixture.provider &&
+        (requestedModel === identityAliasFixture.canonicalModel ||
+          requestedModel === identityAliasFixture.cacheModel)
+          ? identityAliasFixture.canonicalModel
+          : requestedModel;
       return {
         requestedProvider: options.provider ?? "openai",
         provider: {
@@ -153,45 +185,64 @@ vi.mock("./embeddings.js", () => {
               }
             : {}),
         },
-        ...(providerId === "batch-test" || providerId === "batch-wide-test"
+        ...(providerId === identityAliasFixture.provider
           ? {
               runtime: {
                 id: providerId,
-                ...(providerId === "batch-wide-test" ? { sourceWideBatchEmbed: true } : {}),
-                batchEmbed: async (batch: { chunks: Array<{ text: string }> }) => {
-                  providerRuntimeActiveBatchCalls += 1;
-                  providerRuntimeMaxActiveBatchCalls = Math.max(
-                    providerRuntimeMaxActiveBatchCalls,
-                    providerRuntimeActiveBatchCalls,
-                  );
-                  try {
-                    await providerRuntimeBatchGate;
-                    providerRuntimeBatchCalls.push(batch.chunks.map((chunk) => chunk.text));
-                    if (providerRuntimeBatchFailuresRemaining > 0) {
-                      providerRuntimeBatchFailuresRemaining -= 1;
-                      throw new Error("provider runtime batch failed");
-                    }
-                    return batch.chunks.map((chunk) => embedText(chunk.text));
-                  } finally {
-                    providerRuntimeActiveBatchCalls -= 1;
-                  }
+                cacheKeyData: {
+                  provider: providerId,
+                  model: identityAliasFixture.canonicalModel,
                 },
+                indexIdentityAliases: [
+                  {
+                    model: identityAliasFixture.cacheModel,
+                    cacheKeyData: {
+                      provider: providerId,
+                      model: identityAliasFixture.cacheModel,
+                    },
+                  },
+                ],
               },
             }
-          : providerId === "gemini" || providerId === "fallback-provider"
+          : providerId === "batch-test" || providerId === "batch-wide-test"
             ? {
                 runtime: {
                   id: providerId,
-                  cacheKeyData: {
-                    provider: providerId,
-                    baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-                    model,
-                    outputDimensionality: options.outputDimensionality,
-                    headers: [],
+                  ...(providerId === "batch-wide-test" ? { sourceWideBatchEmbed: true } : {}),
+                  batchEmbed: async (batch: { chunks: Array<{ text: string }> }) => {
+                    providerRuntimeActiveBatchCalls += 1;
+                    providerRuntimeMaxActiveBatchCalls = Math.max(
+                      providerRuntimeMaxActiveBatchCalls,
+                      providerRuntimeActiveBatchCalls,
+                    );
+                    try {
+                      await providerRuntimeBatchGate;
+                      providerRuntimeBatchCalls.push(batch.chunks.map((chunk) => chunk.text));
+                      if (providerRuntimeBatchFailuresRemaining > 0) {
+                        providerRuntimeBatchFailuresRemaining -= 1;
+                        throw new Error("provider runtime batch failed");
+                      }
+                      return batch.chunks.map((chunk) => embedText(chunk.text));
+                    } finally {
+                      providerRuntimeActiveBatchCalls -= 1;
+                    }
                   },
                 },
               }
-            : {}),
+            : providerId === "gemini" || providerId === "fallback-provider"
+              ? {
+                  runtime: {
+                    id: providerId,
+                    cacheKeyData: {
+                      provider: providerId,
+                      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+                      model,
+                      outputDimensionality: options.outputDimensionality,
+                      headers: [],
+                    },
+                  },
+                }
+              : {}),
       };
     },
   };
@@ -384,6 +435,33 @@ describe("memory index", () => {
   ): Promise<MemoryIndexManager> {
     const { getRequiredMemoryIndexManager } = await import("./test-manager-helpers.js");
     return await getRequiredMemoryIndexManager({ cfg, agentId: "main", purpose });
+  }
+
+  function rewritePersistedProviderIdentity(manager: MemoryIndexManager, model: string): void {
+    const providerKey = hashText(
+      JSON.stringify({
+        provider: identityAliasFixture.provider,
+        model,
+      }),
+    );
+    const db = Reflect.get(manager, "db") as {
+      prepare: (sql: string) => {
+        get: (...params: unknown[]) => { value?: string } | undefined;
+        run: (...params: unknown[]) => void;
+      };
+    };
+    const metaRow = db.prepare("SELECT value FROM meta WHERE key = ?").get("memory_index_meta_v1");
+    const meta = JSON.parse(metaRow?.value ?? "{}") as MemoryIndexMeta;
+    db.prepare("UPDATE meta SET value = ? WHERE key = ?").run(
+      JSON.stringify({ ...meta, model, providerKey }),
+      "memory_index_meta_v1",
+    );
+    db.prepare("UPDATE chunks SET model = ?").run(model);
+    db.prepare("UPDATE embedding_cache SET model = ?, provider_key = ? WHERE provider = ?").run(
+      model,
+      providerKey,
+      identityAliasFixture.provider,
+    );
   }
 
   async function expectHybridKeywordSearchFindsMemory(cfg: TestCfg) {
@@ -756,48 +834,74 @@ describe("memory index", () => {
     }
   });
 
-  it("keeps local default model index usable when config moves from hf uri to downloaded gguf path", async () => {
-    const dbPath = path.join(workspaceDir, "index-local-default-model-path-upgrade.sqlite");
-    const downloadedModelPath = path.join(
-      workspaceDir,
-      "models",
-      path.basename(DEFAULT_LOCAL_MODEL),
-    );
-    const oldCfg = createCfg({
-      storePath: dbPath,
-      provider: "local",
-      model: DEFAULT_LOCAL_MODEL,
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
-    });
-    const oldManager = await getFreshManager(oldCfg);
-    await oldManager.sync({ reason: "test", force: true });
-    await oldManager.close?.();
+  it.each([
+    {
+      direction: "HF to exact cache path",
+      indexedModel: identityAliasFixture.canonicalModel,
+      configuredModel: identityAliasFixture.cacheModel,
+    },
+    {
+      direction: "exact cache path to HF",
+      indexedModel: identityAliasFixture.cacheModel,
+      configuredModel: identityAliasFixture.canonicalModel,
+    },
+  ])(
+    "keeps $direction indexes and embedding caches usable",
+    async ({ indexedModel, configuredModel }) => {
+      const dbPath = path.join(
+        workspaceDir,
+        `index-provider-identity-alias-${configuredModel === identityAliasFixture.canonicalModel ? "hf" : "path"}.sqlite`,
+      );
+      const indexedCfg = createCfg({
+        storePath: dbPath,
+        provider: identityAliasFixture.provider,
+        model: identityAliasFixture.canonicalModel,
+        cacheEnabled: true,
+        vectorEnabled: false,
+        onSearch: false,
+        hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+      });
+      const indexedManager = await getFreshManager(indexedCfg);
+      await indexedManager.sync({ reason: "test", force: true });
+      if (indexedModel !== identityAliasFixture.canonicalModel) {
+        rewritePersistedProviderIdentity(indexedManager, indexedModel);
+      }
+      await indexedManager.close?.();
 
-    const nextCfg = createCfg({
-      storePath: dbPath,
-      provider: "local",
-      model: downloadedModelPath,
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
-    });
-    const statusManager = await getFreshManager(nextCfg, "status");
-    try {
-      expect(statusManager.status().dirty).toBe(false);
-      expect(statusManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
-    } finally {
-      await statusManager.close?.();
-    }
+      const embedsBeforeReuse = embedBatchCalls;
+      const nextCfg = createCfg({
+        storePath: dbPath,
+        provider: identityAliasFixture.provider,
+        model: configuredModel,
+        cacheEnabled: true,
+        vectorEnabled: false,
+        onSearch: false,
+        hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+      });
+      const statusManager = await getFreshManager(nextCfg, "status");
+      try {
+        expect(statusManager.status().dirty).toBe(false);
+        expect(statusManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+      } finally {
+        await statusManager.close?.();
+      }
 
-    const nextManager = await getFreshManager(nextCfg);
-    try {
-      const results = await nextManager.search("zebra");
+      const nextManager = await getFreshManager(nextCfg);
+      try {
+        const results = await nextManager.search("zebra");
 
-      expect(results.length).toBeGreaterThan(0);
-      expect(results[0]?.path).toContain("memory/2026-01-12.md");
-      expect(nextManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
-    } finally {
-      await nextManager.close?.();
-    }
-  });
+        expect(results.length).toBeGreaterThan(0);
+        expect(results[0]?.path).toContain("memory/2026-01-12.md");
+        expect(nextManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+
+        await nextManager.sync({ reason: "test", force: true });
+
+        expect(embedBatchCalls).toBe(embedsBeforeReuse);
+      } finally {
+        await nextManager.close?.();
+      }
+    },
+  );
 
   it("keeps status clean when configured provider alias resolves to indexed adapter", async () => {
     const dbPath = path.join(workspaceDir, "index-provider-alias-status.sqlite");
