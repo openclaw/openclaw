@@ -25,6 +25,11 @@ export { buildTelegramSendParams } from "../reply-parameters.js";
 
 const QUOTE_PARAM_RE = /\bquote not found\b|\bQUOTE_TEXT_INVALID\b|\bquote text invalid\b/i;
 const TELEGRAM_TEXT_CHUNK_LIMIT = 4096;
+const TELEGRAM_REPLY_PARAM_KEYS = [
+  "reply_parameters",
+  "reply_to_message_id",
+  "allow_sending_without_reply",
+] as const;
 const GrammyErrorCtor: typeof GrammyError | undefined =
   typeof GrammyError === "function" ? GrammyError : undefined;
 
@@ -40,6 +45,14 @@ function createTelegramDeliverySendRetry() {
     shouldRetry: (err) => isSafeToRetrySendError(err) || isTelegramRateLimitError(err),
     strictShouldRetry: true,
   });
+}
+
+function stripTelegramReplyContext(params: Record<string, unknown>): Record<string, unknown> {
+  const stripped = { ...params };
+  for (const key of TELEGRAM_REPLY_PARAM_KEYS) {
+    delete stripped[key];
+  }
+  return stripped;
 }
 
 export async function sendTelegramWithThreadFallback<T>(params: {
@@ -153,11 +166,13 @@ export async function sendTelegramText(
       continue;
     }
     const isLastChunk = index === chunks.length - 1;
+    const visibleChunkParams =
+      index === 0 ? messageParams : stripTelegramReplyContext(messageParams);
     const res = await sendTelegramWithThreadFallback({
       operation: "sendMessage",
       runtime,
       thread: opts?.thread,
-      requestParams: messageParams,
+      requestParams: visibleChunkParams,
       send: (effectiveParams) =>
         bot.api.sendMessage(chatId, chunk.html, {
           parse_mode: "HTML",
