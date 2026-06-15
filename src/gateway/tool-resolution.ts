@@ -37,6 +37,7 @@ import {
   DEFAULT_GATEWAY_HTTP_TOOL_DENY,
   GATEWAY_OWNER_ONLY_CORE_TOOLS,
 } from "../security/dangerous-tools.js";
+import { resolveNodeScopedToolPolicy } from "./session-node-id-registry.js";
 
 type GatewayScopedToolSurface = "http" | "loopback";
 
@@ -117,6 +118,12 @@ export function resolveGatewayScopedTools(params: {
   const excludedToolNames = params.excludeToolNames ? Array.from(params.excludeToolNames) : [];
   const surface = params.surface ?? "http";
   const gatewayToolsCfg = params.cfg.gateway?.tools;
+  // Per-node tool restriction (gateway.tools.byNode), keyed off the AUTHENTICATED
+  // node hosting this turn (recorded at node-originated agent.request dispatch).
+  // The nodeId comes from the node's authenticated connection, so a client cannot
+  // forge it; the policy can only narrow the toolset, never escalate. The same
+  // helper is applied in the embedded agent tool builder so both paths match.
+  const { nodeAllow, nodeDeny } = resolveNodeScopedToolPolicy(params.sessionKey, params.cfg);
   const defaultGatewayDeny =
     surface === "http"
       ? DEFAULT_GATEWAY_HTTP_TOOL_DENY.filter((name) => !gatewayToolsCfg?.allow?.includes(name))
@@ -144,23 +151,27 @@ export function resolveGatewayScopedTools(params: {
     ownerOnlyGatewayDeny.length > 0 ? { deny: ownerOnlyGatewayDeny } : undefined,
     Array.isArray(gatewayToolsCfg?.deny) ? { deny: gatewayToolsCfg.deny } : undefined,
   ]);
-  const inheritedToolDenylist = [...explicitDenylist];
+  const inheritedToolDenylist = [...explicitDenylist, ...nodeDeny];
   // Passed by reference to sessions_spawn and populated after the final policy
   // pass so child sessions inherit the actual parent tool surface.
   const inheritedToolAllowlist: string[] = [];
   const cronCreatorToolAllowlist: CronCreatorToolAllowlistEntry[] = [];
-  const shouldInheritEffectiveToolAllowlist = [
-    profilePolicy,
-    providerProfilePolicy,
-    globalPolicy,
-    globalProviderPolicy,
-    agentPolicy,
-    agentProviderPolicy,
-    groupPolicy,
-    subagentPolicy,
-    inheritedToolPolicy,
-    gatewayRequestedTools.length > 0 ? { allow: gatewayRequestedTools } : undefined,
-  ].some(hasRestrictiveAllowPolicy);
+  const shouldInheritEffectiveToolAllowlist =
+    [
+      profilePolicy,
+      providerProfilePolicy,
+      globalPolicy,
+      globalProviderPolicy,
+      agentPolicy,
+      agentProviderPolicy,
+      groupPolicy,
+      subagentPolicy,
+      inheritedToolPolicy,
+      gatewayRequestedTools.length > 0 ? { allow: gatewayRequestedTools } : undefined,
+    ].some(hasRestrictiveAllowPolicy) ||
+    // A byNode allow list narrows the surface too, so spawned subagents must
+    // inherit the narrowed allowlist.
+    (nodeAllow !== undefined && nodeAllow.length > 0);
   const shouldCaptureCronCreatorToolAllowlist =
     shouldInheritEffectiveToolAllowlist ||
     explicitDenylist.length > 0 ||
@@ -235,8 +246,18 @@ export function resolveGatewayScopedTools(params: {
     ...ownerOnlyGatewayDeny,
     ...(Array.isArray(gatewayToolsCfg?.deny) ? gatewayToolsCfg.deny : []),
     ...excludedToolNames,
+    ...nodeDeny,
   ]);
-  const tools = policyFiltered.filter((tool) => !gatewayDenySet.has(tool.name));
+  const denyFiltered = policyFiltered.filter((tool) => !gatewayDenySet.has(tool.name));
+
+  // byNode allow list applies after the full policy pipeline + gatewayDenySet and
+  // can only narrow. An explicitly-present allow (even empty) is fail-CLOSED:
+  // empty => no tools. An ABSENT allow means "no allow restriction".
+  const allowSet = nodeAllow ? new Set(nodeAllow) : undefined;
+  const tools = allowSet ? denyFiltered.filter((tool) => allowSet.has(tool.name)) : denyFiltered;
+
+  // Capture the inherited allowlist from the FINAL (byNode-restricted) set so
+  // spawned subagents inherit the narrowed surface, not the unrestricted parent.
   if (shouldInheritEffectiveToolAllowlist) {
     replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, tools);
   }
