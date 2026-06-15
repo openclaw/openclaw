@@ -33,6 +33,7 @@ import {
 import {
   createMattermostClient,
   fetchMattermostMe,
+  fetchMattermostThread,
   normalizeMattermostBaseUrl,
   updateMattermostPost,
   type MattermostClient,
@@ -489,6 +490,64 @@ export function resolveMattermostReactionChannelId(
     normalizeOptionalString(payload.broadcast?.channel_id) ??
     normalizeOptionalString(payload.data?.channel_id)
   );
+}
+
+/**
+ * Backfill in-memory thread history from the server when the local history window
+ * for a thread is empty (e.g. after a gateway restart or a session clear). Without
+ * this, a user who @mentions the bot inside an existing thread to wake it gets a
+ * reply with no thread context. Fetches the full thread via
+ * `GET /posts/{threadRootId}/thread`, maps posts to history entries (resolving
+ * usernames), and seeds the most recent entries up to `historyLimit`. Failures are
+ * logged and swallowed so inbound handling continues.
+ */
+export async function backfillMattermostThreadHistory(params: {
+  client: MattermostClient;
+  threadRootId: string;
+  historyKey: string;
+  channelHistories: Map<string, HistoryEntry[]>;
+  historyLimit: number;
+  currentPostId?: string;
+  resolveUserInfo: (userId: string) => Promise<MattermostUser | null>;
+  log?: (message: string) => void;
+}): Promise<void> {
+  if (params.historyLimit <= 0) {
+    return;
+  }
+  if ((params.channelHistories.get(params.historyKey)?.length ?? 0) > 0) {
+    return;
+  }
+  try {
+    const thread = await fetchMattermostThread(params.client, params.threadRootId);
+    const order = Array.isArray(thread?.order) ? thread.order : [];
+    const posts = thread?.posts ?? {};
+    const entries: HistoryEntry[] = [];
+    for (const postId of order) {
+      const threadPost = posts[postId];
+      if (!threadPost || threadPost.id === params.currentPostId) {
+        continue;
+      }
+      const userId = normalizeOptionalString(threadPost.user_id);
+      const username = userId
+        ? normalizeOptionalString((await params.resolveUserInfo(userId))?.username)
+        : undefined;
+      entries.push({
+        sender: username ? `@${username}` : (userId ?? "unknown"),
+        body: normalizeOptionalString(threadPost.message) ?? "[attachment]",
+        timestamp: typeof threadPost.create_at === "number" ? threadPost.create_at : undefined,
+        messageId: normalizeOptionalString(threadPost.id),
+      });
+    }
+    if (entries.length > 0) {
+      params.channelHistories.set(params.historyKey, entries.slice(-params.historyLimit));
+    }
+  } catch (err) {
+    params.log?.(
+      `mattermost: thread history backfill failed (thread=${params.threadRootId}): ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
 }
 
 function buildMattermostAttachmentPlaceholder(mediaList: MattermostMediaInfo[]): string {
@@ -1577,6 +1636,18 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           chatType,
           sender: { name: senderName, id: senderId },
         });
+        if (historyKey && threadRootId) {
+          await backfillMattermostThreadHistory({
+            client,
+            threadRootId,
+            historyKey,
+            channelHistories,
+            historyLimit,
+            currentPostId: post.id ?? undefined,
+            resolveUserInfo,
+            log: (message) => logVerboseMessage(message),
+          });
+        }
         let combinedBody = body;
         if (historyKey) {
           const channelHistory = createChannelHistoryWindow({ historyMap: channelHistories });
