@@ -244,7 +244,11 @@ export function aggregateOAuthStatus(
   // expired when a usable OAuth credential exists alongside stale inventory.
   let status: AuthProviderHealthStatus;
   const hasHealthy = oauth.some((p) => p.status === "ok");
-  if (hasHealthy) {
+  // Expiring takes priority over ok so the UI warns about approaching
+  // expiry even when a concurrent profile is still healthy.
+  if (statuses.has("expiring")) {
+    status = "expiring";
+  } else if (hasHealthy) {
     status = "ok";
   } else if (statuses.has("expired")) {
     status = "expired";

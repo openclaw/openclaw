@@ -421,7 +421,11 @@ export function buildAuthHealthSummary(params: {
     // at runtime, prefer the healthy status over the expired one.  The
     // aggregated provider status drives the Control UI badge; marking the
     // provider as expired when a usable credential exists is misleading.
-    if (hasHealthyOAuth) {
+    // Expiring still takes priority over ok so the UI warns about
+    // approaching expiry even when another profile is still healthy.
+    if (hasExpiring) {
+      provider.status = "expiring";
+    } else if (hasHealthyOAuth) {
       provider.status = "ok";
     } else if (hasExpired) {
       provider.status = "expired";
