@@ -12,6 +12,26 @@ import {
 } from "./provider-tools.js";
 
 describe("buildProviderToolCompatFamilyHooks", () => {
+  function createToolWithUnreadableField(field: "name" | "parameters") {
+    const tool = {
+      name: "revoked_tool",
+      description: "",
+      parameters: {
+        type: "object",
+        properties: {
+          mode: { anyOf: [{ type: "string" }, { type: "number" }] },
+        },
+      },
+    };
+    Object.defineProperty(tool, field, {
+      enumerable: true,
+      get() {
+        throw new Error(`${field} revoked`);
+      },
+    });
+    return tool as never;
+  }
+
   function normalizeOpenAIParameters(parameters: unknown): unknown {
     const hooks = buildProviderToolCompatFamilyHooks("openai");
     const tools = [{ name: "demo", description: "", parameters }] as never;
@@ -143,6 +163,108 @@ describe("buildProviderToolCompatFamilyHooks", () => {
         tools: normalized,
       }),
     ).toStrictEqual([]);
+  });
+
+  it("isolates unreadable provider tool schemas during normalize hooks", () => {
+    const hooks = buildProviderToolCompatFamilyHooks("deepseek");
+    const healthyTool = {
+      name: "healthy_tool",
+      description: "",
+      displaySummary: "healthy summary",
+      parameters: {
+        type: "object",
+        properties: {
+          mode: { anyOf: [{ type: "string" }, { type: "number" }] },
+        },
+      },
+      async execute() {
+        return "ok";
+      },
+    };
+
+    const normalized = hooks.normalizeToolSchemas({
+      provider: "deepseek",
+      modelId: "deepseek-v4-pro",
+      modelApi: "openai-completions",
+      model: {
+        provider: "deepseek",
+        api: "openai-completions",
+        id: "deepseek-v4-pro",
+      } as never,
+      tools: [createToolWithUnreadableField("parameters"), healthyTool] as never,
+    });
+
+    expect(normalized.map((tool) => tool.name)).toEqual(["healthy_tool"]);
+    expect(normalized[0]?.parameters).toEqual({
+      type: "object",
+      properties: {
+        mode: { type: "string" },
+      },
+    });
+    expect(Object.keys(normalized[0] as object)).toEqual([
+      "description",
+      "displaySummary",
+      "execute",
+      "name",
+      "parameters",
+    ]);
+    expect({ ...normalized[0] }).toMatchObject({
+      name: "healthy_tool",
+      description: "",
+      displaySummary: "healthy summary",
+      parameters: {
+        type: "object",
+        properties: {
+          mode: { type: "string" },
+        },
+      },
+    });
+    expect(typeof normalized[0]?.execute).toBe("function");
+  });
+
+  it("reports unreadable provider tool schema metadata during inspect hooks", () => {
+    const hooks = buildProviderToolCompatFamilyHooks("gemini");
+
+    const diagnostics = hooks.inspectToolSchemas({
+      provider: "google",
+      modelId: "gemini-3-pro",
+      modelApi: "google",
+      model: {
+        provider: "google",
+        api: "google",
+        id: "gemini-3-pro",
+      } as never,
+      tools: [
+        createToolWithUnreadableField("name"),
+        createToolWithUnreadableField("parameters"),
+        {
+          name: "healthy_tool",
+          description: "",
+          parameters: {
+            type: "object",
+            properties: { count: { type: "integer", minimum: 1 } },
+          },
+        },
+      ] as never,
+    });
+
+    expect(diagnostics).toEqual([
+      {
+        toolName: "tool[0]",
+        toolIndex: 0,
+        violations: ["tool.name is unreadable"],
+      },
+      {
+        toolName: "revoked_tool",
+        toolIndex: 1,
+        violations: ["revoked_tool.parameters is unreadable"],
+      },
+      {
+        toolName: "healthy_tool",
+        toolIndex: 2,
+        violations: ["healthy_tool.parameters.properties.count.minimum"],
+      },
+    ]);
   });
 
   it("preserves string-const unions as a flat enum for the deepseek family", () => {
