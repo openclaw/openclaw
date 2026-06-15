@@ -551,7 +551,7 @@ Set `memory.backend = "qmd"` to enable. All QMD settings live under `memory.qmd`
 
 `searchMode: "search"` is lexical/BM25-only. OpenClaw does not run semantic vector readiness probes or QMD embedding maintenance for that mode, including during `memory status --deep`; `vsearch` and `query` continue to require QMD vector readiness and embeddings.
 
-QMD search results honor `memorySearch.query.hybrid.temporalDecay` (see [Hybrid search config](#hybrid-search-config)): when enabled, dated memory files decay by age before final ranking, and the raw candidate pool is widened (up to a fixed cap) so fresher documents can be rescued by recency re-ranking. Example:
+QMD search results honor `memorySearch.query.hybrid.temporalDecay` (see [Hybrid search config](#hybrid-search-config)): when enabled, dated memory files decay by age before final ranking, and the raw candidate pool is widened (up to a fixed cap) so fresher documents can be rescued by recency re-ranking. In `query` mode the widened pool is passed to QMD's own rerank candidate window (`--candidate-limit` on the direct CLI, `candidateLimit` on the mcporter unified query) as well as the result limit, so fresh hits beyond QMD's default candidate window still reach the decay step; older QMD builds that predate the flag fall back to widening the result limit only. Example:
 
 ```json5
 {
