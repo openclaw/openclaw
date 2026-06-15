@@ -1,4 +1,3 @@
-// Hook request handler validates hook tokens, applies mappings, dedupes requests, and dispatches wake or agent work.
 import { createHash, randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -42,23 +41,12 @@ const LOG_FIELD_MAX_LENGTH = 128;
 const BODY_BYTES_LOG_MAX = 1_000_000;
 
 type HookRejectReason =
-  | "body-timeout"
-  | "body-too-large"
-  | "body-connection-closed"
-  | "body-invalid-json"
-  | "wake-text-required"
-  | "agent-message-required"
-  | "agent-channel-invalid"
-  | "agent-model-required"
-  | "agent-policy"
+  | "body-read"
   | "direct-validation"
+  | "agent-policy"
   | "agent-session-key"
-  | "agent-session-key-prefix"
   | "mapping-validation"
-  | "mapping-channel"
-  | "mapping-agent-policy"
-  | "mapping-session-key"
-  | "mapping-session-key-prefix";
+  | "mapping-dispatch";
 
 export type HookClientIpConfig = Readonly<{
   trustedProxies?: string[];
@@ -273,39 +261,6 @@ export function createHooksRequestHandler(
     pruneHookReplayCache(now);
   };
 
-  const bodyErrorReason = (bodyError: string): HookRejectReason => {
-    if (bodyError === "request body timeout") {
-      return "body-timeout";
-    }
-    if (bodyError === "payload too large") {
-      return "body-too-large";
-    }
-    if (bodyError === "Connection closed") {
-      return "body-connection-closed";
-    }
-    return "body-invalid-json";
-  };
-
-  const directValidationReason = (error: string): HookRejectReason => {
-    if (error === "text required") {
-      return "wake-text-required";
-    }
-    if (error === "message required") {
-      return "agent-message-required";
-    }
-    if (error === "model required") {
-      return "agent-model-required";
-    }
-    if (error === getHookChannelError()) {
-      return "agent-channel-invalid";
-    }
-    return "direct-validation";
-  };
-
-  const isSessionKeyPrefixError = (error: string, prefixes: string[] | undefined): boolean => {
-    return prefixes !== undefined && error === getHookSessionKeyPrefixError(prefixes);
-  };
-
   return async (req, res) => {
     const hooksConfig = getHooksConfig();
     if (!hooksConfig) {
@@ -383,7 +338,7 @@ export function createHooksRequestHandler(
           : body.error === "request body timeout"
             ? 408
             : 400;
-      return rejectJson(status, bodyErrorReason(body.error), body.error, "unparsed");
+      return rejectJson(status, "body-read", body.error, "unparsed");
     }
 
     const requestBodyType = inferHookBodyType(body.value);
@@ -397,7 +352,7 @@ export function createHooksRequestHandler(
     const resolveDispatchSessionKeyOrRespond = (
       sessionKeyValue: string,
       targetAgentId: string,
-      reason: "agent-session-key-prefix" | "mapping-session-key-prefix",
+      reason: "agent-session-key" | "mapping-dispatch",
     ): string | null => {
       const dispatchSessionKey = normalizeHookDispatchSessionKey({
         sessionKey: sessionKeyValue,
@@ -414,12 +369,7 @@ export function createHooksRequestHandler(
     if (subPath === "wake") {
       const normalized = normalizeWakePayload(payload as Record<string, unknown>);
       if (!normalized.ok) {
-        return rejectJson(
-          400,
-          directValidationReason(normalized.error),
-          normalized.error,
-          requestBodyType,
-        );
+        return rejectJson(400, "direct-validation", normalized.error, requestBodyType);
       }
       dispatchWakeHook(normalized.value);
       sendJson(res, 200, { ok: true, mode: normalized.value.mode });
@@ -429,12 +379,7 @@ export function createHooksRequestHandler(
     if (subPath === "agent") {
       const normalized = normalizeAgentPayload(payload as Record<string, unknown>);
       if (!normalized.ok) {
-        return rejectJson(
-          400,
-          directValidationReason(normalized.error),
-          normalized.error,
-          requestBodyType,
-        );
+        return rejectJson(400, "direct-validation", normalized.error, requestBodyType);
       }
       if (!isHookAgentAllowed(hooksConfig, normalized.value.agentId)) {
         return rejectJson(400, "agent-policy", getHookAgentPolicyError(), requestBodyType);
@@ -445,13 +390,7 @@ export function createHooksRequestHandler(
         sessionKey: normalized.value.sessionKey,
       });
       if (!sessionKey.ok) {
-        const reason = isSessionKeyPrefixError(
-          sessionKey.error,
-          hooksConfig.sessionPolicy.allowedSessionKeyPrefixes,
-        )
-          ? "agent-session-key-prefix"
-          : "agent-session-key";
-        return rejectJson(400, reason, sessionKey.error, requestBodyType);
+        return rejectJson(400, "agent-session-key", sessionKey.error, requestBodyType);
       }
       const targetAgentId = resolveHookTargetAgentId(hooksConfig, normalized.value.agentId);
       const effectiveTargetAgentId = resolveEffectiveHookTargetAgentId(
@@ -485,7 +424,7 @@ export function createHooksRequestHandler(
       const dispatchSessionKey = resolveDispatchSessionKeyOrRespond(
         sessionKey.value,
         effectiveTargetAgentId,
-        "agent-session-key-prefix",
+        "agent-session-key",
       );
       if (dispatchSessionKey === null) {
         return true;
@@ -530,15 +469,10 @@ export function createHooksRequestHandler(
           }
           const channel = resolveHookChannel(mapped.action.channel);
           if (!channel) {
-            return rejectJson(400, "mapping-channel", getHookChannelError(), requestBodyType);
+            return rejectJson(400, "mapping-dispatch", getHookChannelError(), requestBodyType);
           }
           if (!isHookAgentAllowed(hooksConfig, mapped.action.agentId)) {
-            return rejectJson(
-              400,
-              "mapping-agent-policy",
-              getHookAgentPolicyError(),
-              requestBodyType,
-            );
+            return rejectJson(400, "mapping-dispatch", getHookAgentPolicyError(), requestBodyType);
           }
           const sessionKey = resolveHookSessionKey({
             hooksConfig,
@@ -547,13 +481,7 @@ export function createHooksRequestHandler(
             sessionKey: mapped.action.sessionKey,
           });
           if (!sessionKey.ok) {
-            const reason = isSessionKeyPrefixError(
-              sessionKey.error,
-              hooksConfig.sessionPolicy.allowedSessionKeyPrefixes,
-            )
-              ? "mapping-session-key-prefix"
-              : "mapping-session-key";
-            return rejectJson(400, reason, sessionKey.error, requestBodyType);
+            return rejectJson(400, "mapping-dispatch", sessionKey.error, requestBodyType);
           }
           const targetAgentId = resolveHookTargetAgentId(hooksConfig, mapped.action.agentId);
           const effectiveTargetAgentId = resolveEffectiveHookTargetAgentId(
@@ -563,7 +491,7 @@ export function createHooksRequestHandler(
           const dispatchSessionKey = resolveDispatchSessionKeyOrRespond(
             sessionKey.value,
             effectiveTargetAgentId,
-            "mapping-session-key-prefix",
+            "mapping-dispatch",
           );
           if (dispatchSessionKey === null) {
             return true;

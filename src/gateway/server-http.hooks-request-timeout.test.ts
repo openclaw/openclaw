@@ -98,7 +98,7 @@ describe("createHooksRequestHandler timeout status mapping", () => {
         error: "Unexpected token 'o', \"not-json\" is not valid JSON",
       }),
     );
-    const warnMessage = expectWarnLog(logWarn, "body-invalid-json");
+    const warnMessage = expectWarnLog(logWarn, "body-read");
     expect(warnMessage).toContain("path=wake");
     expect(warnMessage).toContain("content-type=application/json;_charset=utf-8");
     expect(warnMessage).toContain("body-type=unparsed");
@@ -138,9 +138,9 @@ describe("createHooksRequestHandler timeout status mapping", () => {
     expect(handled).toBe(true);
     expect(res.statusCode).toBe(400);
     expect(end).toHaveBeenCalledWith(JSON.stringify({ ok: false, error: getHookChannelError() }));
-    const warnMessage = expectWarnLog(logWarn, "agent-channel-invalid");
+    const warnMessage = expectWarnLog(logWarn, "direct-validation");
     expect(warnMessage).toContain("path=agent");
-    expect(warnMessage).toContain("reason=agent-channel-invalid");
+    expect(warnMessage).toContain("reason=direct-validation");
     expect(warnMessage).not.toContain("top-secret-token-direct");
     expect(warnMessage).not.toContain(secretMessage);
   });
