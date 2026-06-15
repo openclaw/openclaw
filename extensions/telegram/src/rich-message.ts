@@ -239,6 +239,22 @@ function isSafeRichMarkdownBlockBreak(spans: readonly RichMarkdownFenceSpan[], i
   return !spans.some((span) => index > span.start && index < span.end);
 }
 
+function isRichMarkdownFenceMarker(line: string): boolean {
+  return /^( {0,3})(`{3,}|~{3,})/.test(line);
+}
+
+function isRichMarkdownBlockLine(line: string, isTableLine: boolean): boolean {
+  const trimmed = line.trimStart();
+  return (
+    isTableLine ||
+    isRichMarkdownFenceMarker(line) ||
+    /^#{1,6}\s+\S/.test(trimmed) ||
+    trimmed.startsWith(">") ||
+    /^(?:[-+*]|\d+[.)])\s+\S/.test(trimmed) ||
+    /^[-*_][\s-*_-]{2,}$/.test(trimmed)
+  );
+}
+
 function splitMarkdownTableRow(row: string): string[] {
   const trimmed = row.trim();
   const body = trimmed.startsWith("|") && trimmed.endsWith("|") ? trimmed.slice(1, -1) : trimmed;
@@ -280,7 +296,73 @@ function markdownTableColumnCount(row: string): number {
   return splitMarkdownTableRow(row).length;
 }
 
-function normalizeTelegramRichMarkdown(markdown: string): string {
+function findRichMarkdownTableLineIndexes(
+  markdown: string,
+  lines: readonly string[],
+  fenceSpans: readonly RichMarkdownFenceSpan[],
+): Set<number> {
+  const tableLineIndexes = new Set<number>();
+  let offset = 0;
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+    const nextLine = lines[index + 1];
+    if (
+      nextLine !== undefined &&
+      isSafeRichMarkdownBlockBreak(fenceSpans, offset) &&
+      isMarkdownTableRow(line) &&
+      isMarkdownTableSeparator(nextLine)
+    ) {
+      tableLineIndexes.add(index);
+      tableLineIndexes.add(index + 1);
+      offset += line.length + 1 + nextLine.length + 1;
+      index += 2;
+      while (index < lines.length && isMarkdownTableRow(lines[index] ?? "")) {
+        tableLineIndexes.add(index);
+        offset += (lines[index] ?? "").length + 1;
+        index += 1;
+      }
+      index -= 1;
+      continue;
+    }
+    offset += line.length + 1;
+  }
+  return tableLineIndexes;
+}
+
+function preserveTelegramRichMarkdownLineBreaks(markdown: string): string {
+  if (!markdown.includes("\n")) {
+    return markdown;
+  }
+
+  const fenceSpans = parseRichMarkdownFenceSpans(markdown);
+  const lines = markdown.split("\n");
+  const tableLineIndexes = findRichMarkdownTableLineIndexes(markdown, lines, fenceSpans);
+  const out: string[] = [];
+  let offset = 0;
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+    const nextLine = lines[index + 1];
+    if (nextLine === undefined) {
+      out.push(line);
+      break;
+    }
+
+    const newlineIndex = offset + line.length;
+    const shouldPreserveBreak =
+      line.length > 0 &&
+      nextLine.length > 0 &&
+      !line.endsWith("  ") &&
+      !line.endsWith("\\") &&
+      !isRichMarkdownBlockLine(line, tableLineIndexes.has(index)) &&
+      !isRichMarkdownBlockLine(nextLine, tableLineIndexes.has(index + 1)) &&
+      isSafeRichMarkdownBlockBreak(fenceSpans, newlineIndex);
+    out.push(`${line}${shouldPreserveBreak ? "  " : ""}\n`);
+    offset = newlineIndex + 1;
+  }
+  return out.join("");
+}
+
+function normalizeTelegramRichMarkdownTables(markdown: string): string {
   if (!markdown.includes("|")) {
     return markdown;
   }
@@ -318,6 +400,10 @@ function normalizeTelegramRichMarkdown(markdown: string): string {
     offset += line.length + 1;
   }
   return out.join("\n");
+}
+
+function normalizeTelegramRichMarkdown(markdown: string): string {
+  return preserveTelegramRichMarkdownLineBreaks(normalizeTelegramRichMarkdownTables(markdown));
 }
 
 type RichMarkdownBlockBreak = {
