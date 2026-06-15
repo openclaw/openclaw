@@ -72,6 +72,14 @@ export type TelegramSendRichMessageParams = {
   reply_markup?: TelegramRichMessageReplyMarkup;
 };
 
+export type TelegramSendRichMessageDraftParams = {
+  business_connection_id?: string;
+  chat_id: number;
+  message_thread_id?: number;
+  draft_id: number;
+  rich_message: TelegramInputRichMessage;
+};
+
 export type TelegramRichMessageContextParams = Pick<
   TelegramSendRichMessageParams,
   "disable_notification" | "message_thread_id" | "reply_parameters"
@@ -88,6 +96,7 @@ export type TelegramEditRichMessageTextParams = {
 
 type TelegramRichRawApi = {
   sendRichMessage: (params: TelegramSendRichMessageParams) => Promise<Message>;
+  sendRichMessageDraft?: (params: TelegramSendRichMessageDraftParams) => Promise<true>;
   editMessageText: (params: TelegramEditRichMessageTextParams) => Promise<Message | true>;
 };
 
