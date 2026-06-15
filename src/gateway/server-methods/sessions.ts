@@ -1259,6 +1259,10 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       respond(false, undefined, resolved.error);
       return;
     }
+    if ("missing" in resolved) {
+      respond(true, { ok: false }, undefined);
+      return;
+    }
     respond(true, { ok: true, key: resolved.key }, undefined);
   },
   "sessions.compaction.list": ({ params, respond, context }) => {
