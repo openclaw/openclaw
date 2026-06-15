@@ -124,7 +124,22 @@ function runCatalog(args) {
 
 function runStatic(args) {
   const config = loadConfigFile(args.configPath);
-  const result = evaluateAgentStaticContracts(config);
+  let staticConfig = config;
+  if (args.agentId) {
+    const agents = Array.isArray(config?.agents?.list) ? config.agents.list : [];
+    const selected = agents.filter((agent) => agent?.id === args.agentId);
+    if (selected.length === 0) {
+      throw new Error(`No configured agent exists for ${args.agentId}`);
+    }
+    staticConfig = {
+      ...config,
+      agents: {
+        ...(config.agents ?? {}),
+        list: selected,
+      },
+    };
+  }
+  const result = evaluateAgentStaticContracts(staticConfig);
   if (args.json) {
     console.log(JSON.stringify(result, null, 2));
   } else {

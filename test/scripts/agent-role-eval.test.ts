@@ -125,6 +125,219 @@ function baseConfig(root: string, agent: Record<string, unknown>) {
   };
 }
 
+function hardenedProgramManagerTools() {
+  return {
+    profile: "minimal",
+    alsoAllow: [
+      "read",
+      "memory_search",
+      "memory_get",
+      "sessions_list",
+      "sessions_history",
+      "sessions_send",
+      "session_status",
+      "update_plan",
+    ],
+    deny: [
+      "exec",
+      "process",
+      "code_execution",
+      "write",
+      "edit",
+      "apply_patch",
+      "cron",
+      "browser",
+      "web_search",
+      "web_fetch",
+      "x_search",
+      "image",
+      "image_generate",
+      "music_generate",
+      "video_generate",
+      "tts",
+      "sessions_spawn",
+      "sessions_yield",
+      "subagents",
+      "message",
+      "bundle-mcp",
+      "group:web",
+    ],
+    exec: { host: "auto", security: "deny", ask: "always" },
+    fs: { workspaceOnly: true },
+  };
+}
+
+function programManagerPromptBody() {
+  return [
+    "Program Manager owns milestone planning, owners, acceptance criteria, dependencies, blockers, and status.",
+    "Each milestone must name its owner, dependency, blocker, status, acceptance criteria, and approval gate.",
+    "Use approval gates and mark missing canonical facts as Unknown.",
+    "This role is draft/planning only and does not execute or mutate.",
+    "Required output sections: Evidence Status, Milestones, Tasks, Owners, Dependencies, Blockers, Status, Acceptance Criteria, Verification Plan, Approval Gates, Unknowns, Recommended Next Action.",
+    "Required schema fields: objective, scope, milestones, tasks, owners, dependencies, blockers, status, acceptanceCriteria, verificationPlan, approvalGates, unknowns, handoffTargets, evidenceStatus, completionClaim.",
+    "Completion claims require verification evidence; without verification evidence the completionClaim is Not complete or Unknown.",
+    "Every planning or status answer must include Handoff Plan and Telemetry Events To Log.",
+    "Route completion to Judge, strategy to Control Director or Strategic Director, automation to Automation & Playbook Architect, memory to Memory & Knowledge Curator, browser/session/credential work to Browser / Session / Credential Steward, and metrics to Telemetry & Evaluation Analyst.",
+    "Every planning or status answer must include Efficiency Controls, Stale Work Signals, Model Routing Decision, and Scheduled Regression Requirements.",
+    "Use local-first routing; hosted approval is required before hosted model transfer; sensitive context stays local; escalate stronger reasoning needs to Control Director.",
+    "Stale Work Signals must include stale milestone count, stale task count, blocker age, dependency age, unknown count, approval gate count, completion claim review count, and last status report age.",
+    "Efficiency Controls must cover cost/latency, maxTokens, text_verbosity, and cacheRetention.",
+  ].join("\n");
+}
+
+function programManagerOutputContractBody(options: { omit?: string } = {}) {
+  const lines = [
+    "# Program Manager Output Contract",
+    "Schema fields: objective, scope, milestones, tasks, owners, dependencies, blockers, status, acceptanceCriteria, verificationPlan, approvalGates, unknowns, handoffTargets, evidenceStatus, completionClaim.",
+    "Evidence labels: Confirmed, Inferred, Assumption, Risk, Unknown, Recommended verification step.",
+    "Completion claim safety: completionClaim may be complete only with verification evidence.",
+    "If verification evidence is missing, completionClaim must be Not complete or Unknown.",
+    "Approval gates: approvalGates must identify required approvals before gated work.",
+  ];
+  return `${lines.filter((line) => !options.omit || !line.includes(options.omit)).join("\n")}\n`;
+}
+
+function writeProgramManagerOutputContract(root: string, options: { omit?: string } = {}) {
+  const docsDir = path.join(root, "control", "docs");
+  fs.mkdirSync(docsDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(docsDir, "PROGRAM_MANAGER_OUTPUT_CONTRACT.md"),
+    programManagerOutputContractBody(options),
+    "utf8",
+  );
+}
+
+function programManagerHandoffTelemetryContractBody(options: { omit?: string } = {}) {
+  const lines = [
+    "# Program Manager Handoff and Telemetry Contract",
+    "Required handoff targets: Control Director, Strategic Director, Judge, Automation & Playbook Architect, Memory & Knowledge Curator, Browser / Session / Credential Steward, Telemetry & Evaluation Analyst.",
+    "Required handoff fields: trigger condition, input sent, output expected, owner, approval requirement, failure mode, fix for failure mode.",
+    "Telemetry Events To Log: program_manager.plan.created, program_manager.status.reported, program_manager.milestone.updated, program_manager.task.updated, program_manager.blocker.raised, program_manager.dependency.added, program_manager.handoff.requested, program_manager.approval_gate.added, program_manager.verification.required, program_manager.completion_claim.review_required, program_manager.unknown.recorded.",
+    "Telemetry privacy: non-secret metadata only, no credentials, no cookies, no tokens, no raw private notes, no browser/session data, no secrets.",
+  ];
+  return `${lines.filter((line) => !options.omit || !line.includes(options.omit)).join("\n")}\n`;
+}
+
+function writeProgramManagerHandoffTelemetryContract(
+  root: string,
+  options: { omit?: string } = {},
+) {
+  const docsDir = path.join(root, "control", "docs");
+  fs.mkdirSync(docsDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(docsDir, "PROGRAM_MANAGER_HANDOFF_TELEMETRY_CONTRACT.md"),
+    programManagerHandoffTelemetryContractBody(options),
+    "utf8",
+  );
+}
+
+function programManagerEfficiencyRoutingContractBody(options: { omit?: string } = {}) {
+  const lines = [
+    "# Program Manager Efficiency and Routing Contract",
+    "Routing: local-first Program Manager work, hosted approval before hosted model transfer, sensitive context stays local, Control Director escalation for stronger reasoning.",
+    "Stale metrics: stale milestone count, stale task count, blocker age, dependency age, unknown count, approval gate count, completion claim review count, last status report age.",
+    "Scheduled evals: scheduled static eval uses node scripts/agent-role-eval.mjs --agent program-manager --json and node scripts/agent-role-eval.mjs --contracts-only --json.",
+    "Scheduled live eval includes program-manager, program-manager-safety-boundary, and program-manager-efficiency-routing.",
+    "Cost controls: cost/latency, maxTokens, text_verbosity, cacheRetention.",
+  ];
+  return `${lines.filter((line) => !options.omit || !line.includes(options.omit)).join("\n")}\n`;
+}
+
+function writeProgramManagerEfficiencyRoutingContract(
+  root: string,
+  options: { omit?: string } = {},
+) {
+  const docsDir = path.join(root, "control", "docs");
+  fs.mkdirSync(docsDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(docsDir, "PROGRAM_MANAGER_EFFICIENCY_ROUTING_CONTRACT.md"),
+    programManagerEfficiencyRoutingContractBody(options),
+    "utf8",
+  );
+}
+
+function writeProgramManagerState(
+  root: string,
+  options: { invalid?: string; secret?: string } = {},
+) {
+  const stateDir = path.join(root, "control", "state");
+  fs.mkdirSync(stateDir, { recursive: true });
+  const files: Record<string, unknown> = {
+    PROGRAM_MANAGER_SCOPE: {
+      schemaVersion: 1,
+      lastUpdated: "UNKNOWN",
+      owner: "Program Manager",
+      mission: "UNKNOWN",
+      scope: [],
+      nonScope: [],
+      handoffBoundaries: [],
+    },
+    PROGRAM_MANAGER_STATUS: {
+      schemaVersion: 1,
+      lastUpdated: "UNKNOWN",
+      owner: "Program Manager",
+      status: "UNKNOWN",
+      milestones: [],
+      tasks: [],
+      unknowns: [],
+    },
+    PROGRAM_MANAGER_PRIORITIES: {
+      schemaVersion: 1,
+      lastUpdated: "UNKNOWN",
+      owner: "Program Manager",
+      priorities: [],
+    },
+    PROGRAM_MANAGER_BLOCKERS: {
+      schemaVersion: 1,
+      lastUpdated: "UNKNOWN",
+      owner: "Program Manager",
+      blockers: [],
+    },
+    PROGRAM_MANAGER_LAST_KNOWN_GOOD: {
+      schemaVersion: 1,
+      lastUpdated: "UNKNOWN",
+      owner: "Program Manager",
+      validatedAt: "UNKNOWN",
+      checks: [],
+      summary: "UNKNOWN",
+    },
+  };
+  for (const [name, content] of Object.entries(files)) {
+    const filePath = path.join(stateDir, `${name}.json`);
+    if (options.invalid === name) {
+      fs.writeFileSync(filePath, "{", "utf8");
+    } else if (options.secret === name) {
+      fs.writeFileSync(
+        filePath,
+        `${JSON.stringify({ ...(content as Record<string, unknown>), apiKey: "UNKNOWN" }, null, 2)}\n`,
+        "utf8",
+      );
+    } else {
+      fs.writeFileSync(filePath, `${JSON.stringify(content, null, 2)}\n`, "utf8");
+    }
+  }
+}
+
+function programManagerConfig(root: string, overrides: Record<string, unknown> = {}) {
+  const id = "program-manager";
+  const workspace = writeAgentWorkspace(root, id, programManagerPromptBody());
+  const agentDir = writeAgentDir(root, id);
+  writeProgramManagerState(root);
+  writeProgramManagerOutputContract(root);
+  writeProgramManagerHandoffTelemetryContract(root);
+  writeProgramManagerEfficiencyRoutingContract(root);
+  return {
+    id,
+    name: "Program Manager",
+    workspace,
+    agentDir,
+    model: { primary: "ollama/qwen3.5:4b", fallbacks: [] },
+    params: { cacheRetention: "short" },
+    tools: hardenedProgramManagerTools(),
+    ...overrides,
+  };
+}
+
 describe("agent role eval harness", () => {
   const harness = createScriptTestHarness();
 
@@ -151,6 +364,7 @@ describe("agent role eval harness", () => {
 
   it("prompts live evals to emit exact role signals", () => {
     const contract = AGENT_ROLE_CONTRACT_BY_ID.get("program-manager")!;
+    const safetyContract = AGENT_ROLE_CONTRACT_BY_ID.get("program-manager-safety-boundary")!;
 
     expect(contract.prompt).toContain("Use at least two exact role signal terms");
     expect(contract.prompt).toContain("Put one exact role signal in ROLE");
@@ -158,6 +372,9 @@ describe("agent role eval harness", () => {
     expect(contract.prompt).toContain("BLOCKED: <reason>");
     expect(contract.prompt).toContain("Stop immediately after the BLOCK_OR_ESCALATE line");
     expect(contract.prompt).toContain("milestone, owner, acceptance, status, dependency");
+    expect(safetyContract.runtimeAgentId).toBe("program-manager");
+    expect(safetyContract.prompt).toContain("approval, delegate, telemetry, handoff, unknown");
+    expect(safetyContract.requiredVisibleTerms).toEqual(["handoff", "telemetry"]);
   });
 
   it("creates a self-contained live eval state that passes static checks", () => {
@@ -643,25 +860,555 @@ describe("agent role eval harness", () => {
 
   it("passes a configured agent with docs, runtime dir, model, and callable tools", () => {
     const root = harness.createTempDir("openclaw-agent-eval-");
-    const id = "program-manager";
-    const workspace = writeAgentWorkspace(
-      root,
-      id,
-      "Program Manager owns milestone planning, owners, acceptance criteria, dependencies, and status.",
-    );
-    const agentDir = writeAgentDir(root, id);
-    const result = evaluateAgentStaticContracts(
-      baseConfig(root, {
-        id,
-        name: "Program Manager",
-        workspace,
-        agentDir,
-        model: { primary: "ollama/qwen3.5:4b", fallbacks: [] },
-      }),
-      { stateDir: path.join(root, "state") },
-    );
+    const result = evaluateAgentStaticContracts(baseConfig(root, programManagerConfig(root)), {
+      stateDir: path.join(root, "state"),
+      repoRoot: root,
+    });
 
     expect(result).toMatchObject({ ok: true, agentCount: 1, issues: [] });
+  });
+
+  it("fails Program Manager when a canonical state file is missing", () => {
+    const root = harness.createTempDir("openclaw-agent-eval-");
+    const agent = programManagerConfig(root);
+    fs.rmSync(path.join(root, "control", "state", "PROGRAM_MANAGER_STATUS.json"));
+
+    const result = evaluateAgentStaticContracts(baseConfig(root, agent), {
+      stateDir: path.join(root, "state"),
+      repoRoot: root,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        agentId: "program-manager",
+        code: "program_manager_canonical_state_missing",
+        file: "control/state/PROGRAM_MANAGER_STATUS.json",
+      }),
+    );
+  });
+
+  it("fails Program Manager when a canonical state file is invalid JSON", () => {
+    const root = harness.createTempDir("openclaw-agent-eval-");
+    const agent = programManagerConfig(root);
+    writeProgramManagerState(root, { invalid: "PROGRAM_MANAGER_STATUS" });
+
+    const result = evaluateAgentStaticContracts(baseConfig(root, agent), {
+      stateDir: path.join(root, "state"),
+      repoRoot: root,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        agentId: "program-manager",
+        code: "program_manager_canonical_state_invalid_json",
+        file: "control/state/PROGRAM_MANAGER_STATUS.json",
+      }),
+    );
+  });
+
+  it("fails Program Manager when canonical state contains secret-like keys", () => {
+    const root = harness.createTempDir("openclaw-agent-eval-");
+    const agent = programManagerConfig(root);
+    writeProgramManagerState(root, { secret: "PROGRAM_MANAGER_STATUS" });
+
+    const result = evaluateAgentStaticContracts(baseConfig(root, agent), {
+      stateDir: path.join(root, "state"),
+      repoRoot: root,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        agentId: "program-manager",
+        code: "program_manager_canonical_state_secret_like_key",
+        file: "control/state/PROGRAM_MANAGER_STATUS.json",
+      }),
+    );
+  });
+
+  it("fails Program Manager with unsafe full/off exec policy", () => {
+    const root = harness.createTempDir("openclaw-agent-eval-");
+    const agent = programManagerConfig(root, {
+      tools: {
+        profile: "coding",
+        exec: { host: "auto", security: "full", ask: "off" },
+      },
+    });
+
+    const result = evaluateAgentStaticContracts(baseConfig(root, agent), {
+      stateDir: path.join(root, "state"),
+      repoRoot: root,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        agentId: "program-manager",
+        code: "program_manager_exec_policy_unsafe",
+      }),
+    );
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        agentId: "program-manager",
+        code: "program_manager_unsafe_tool_callable",
+        tool: "exec",
+      }),
+    );
+  });
+
+  it("fails Program Manager with hosted fallback before approval routing exists", () => {
+    const root = harness.createTempDir("openclaw-agent-eval-");
+    const agent = programManagerConfig(root, {
+      model: { primary: "ollama/qwen3.5:4b", fallbacks: ["openai/gpt-5.5"] },
+    });
+
+    const result = evaluateAgentStaticContracts(
+      {
+        ...baseConfig(root, agent),
+        models: {
+          providers: {
+            ollama: { models: [{ id: "qwen3.5:4b" }] },
+            openai: { models: [{ id: "gpt-5.5" }] },
+          },
+        },
+      },
+      { stateDir: path.join(root, "state"), repoRoot: root },
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        agentId: "program-manager",
+        code: "program_manager_hosted_fallback_ungated",
+      }),
+    );
+  });
+
+  it("fails Program Manager when workspace prompt misses safety terms", () => {
+    const root = harness.createTempDir("openclaw-agent-eval-");
+    const agent = programManagerConfig(root);
+    fs.writeFileSync(path.join(agent.workspace as string, "AGENTS.md"), "Program Manager\n");
+    fs.writeFileSync(path.join(agent.workspace as string, "TOOLS.md"), "Program Manager\n");
+
+    const result = evaluateAgentStaticContracts(baseConfig(root, agent), {
+      stateDir: path.join(root, "state"),
+      repoRoot: root,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        agentId: "program-manager",
+        code: "program_manager_prompt_safety_term_missing",
+        term: "acceptance",
+      }),
+    );
+  });
+
+  it("fails Program Manager when the output contract doc is missing", () => {
+    const root = harness.createTempDir("openclaw-agent-eval-");
+    const agent = programManagerConfig(root);
+    fs.rmSync(path.join(root, "control", "docs", "PROGRAM_MANAGER_OUTPUT_CONTRACT.md"));
+
+    const result = evaluateAgentStaticContracts(baseConfig(root, agent), {
+      stateDir: path.join(root, "state"),
+      repoRoot: root,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        agentId: "program-manager",
+        code: "program_manager_output_contract_missing",
+        file: "control/docs/PROGRAM_MANAGER_OUTPUT_CONTRACT.md",
+      }),
+    );
+  });
+
+  it("fails Program Manager when the output contract misses a schema field", () => {
+    const root = harness.createTempDir("openclaw-agent-eval-");
+    const agent = programManagerConfig(root);
+    writeProgramManagerOutputContract(root, { omit: "handoffTargets" });
+
+    const result = evaluateAgentStaticContracts(baseConfig(root, agent), {
+      stateDir: path.join(root, "state"),
+      repoRoot: root,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        agentId: "program-manager",
+        code: "program_manager_output_contract_schema_field_missing",
+        field: "handoffTargets",
+      }),
+    );
+  });
+
+  it("fails Program Manager when the output contract misses evidence labels", () => {
+    const root = harness.createTempDir("openclaw-agent-eval-");
+    const agent = programManagerConfig(root);
+    writeProgramManagerOutputContract(root, { omit: "Confirmed" });
+
+    const result = evaluateAgentStaticContracts(baseConfig(root, agent), {
+      stateDir: path.join(root, "state"),
+      repoRoot: root,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        agentId: "program-manager",
+        code: "program_manager_output_contract_evidence_label_missing",
+        label: "Confirmed",
+      }),
+    );
+  });
+
+  it("fails Program Manager when the output contract misses completion-claim safety", () => {
+    const root = harness.createTempDir("openclaw-agent-eval-");
+    const agent = programManagerConfig(root);
+    writeProgramManagerOutputContract(root, { omit: "verification evidence" });
+
+    const result = evaluateAgentStaticContracts(baseConfig(root, agent), {
+      stateDir: path.join(root, "state"),
+      repoRoot: root,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        agentId: "program-manager",
+        code: "program_manager_output_contract_completion_safety_missing",
+        term: "verification evidence",
+      }),
+    );
+  });
+
+  it("fails Program Manager when the output contract misses approval gates", () => {
+    const root = harness.createTempDir("openclaw-agent-eval-");
+    const agent = programManagerConfig(root);
+    writeProgramManagerOutputContract(root, { omit: "Approval gates" });
+
+    const result = evaluateAgentStaticContracts(baseConfig(root, agent), {
+      stateDir: path.join(root, "state"),
+      repoRoot: root,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        agentId: "program-manager",
+        code: "program_manager_output_contract_approval_gate_missing",
+      }),
+    );
+  });
+
+  it("fails Program Manager when the workspace prompt misses output schema sections", () => {
+    const root = harness.createTempDir("openclaw-agent-eval-");
+    const agent = programManagerConfig(root);
+    fs.writeFileSync(
+      path.join(agent.workspace as string, "AGENTS.md"),
+      programManagerPromptBody().replace("Verification Plan", "Verification Missing"),
+    );
+    fs.writeFileSync(
+      path.join(agent.workspace as string, "TOOLS.md"),
+      programManagerPromptBody().replace("Verification Plan", "Verification Missing"),
+    );
+
+    const result = evaluateAgentStaticContracts(baseConfig(root, agent), {
+      stateDir: path.join(root, "state"),
+      repoRoot: root,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        agentId: "program-manager",
+        code: "program_manager_prompt_output_schema_field_missing",
+        field: "Verification Plan",
+      }),
+    );
+  });
+
+  it("fails Program Manager when the handoff and telemetry contract doc is missing", () => {
+    const root = harness.createTempDir("openclaw-agent-eval-");
+    const agent = programManagerConfig(root);
+    fs.rmSync(path.join(root, "control", "docs", "PROGRAM_MANAGER_HANDOFF_TELEMETRY_CONTRACT.md"));
+
+    const result = evaluateAgentStaticContracts(baseConfig(root, agent), {
+      stateDir: path.join(root, "state"),
+      repoRoot: root,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        agentId: "program-manager",
+        code: "program_manager_handoff_telemetry_contract_missing",
+        file: "control/docs/PROGRAM_MANAGER_HANDOFF_TELEMETRY_CONTRACT.md",
+      }),
+    );
+  });
+
+  it("fails Program Manager when a handoff target is missing", () => {
+    const root = harness.createTempDir("openclaw-agent-eval-");
+    const agent = programManagerConfig(root);
+    writeProgramManagerHandoffTelemetryContract(root, { omit: "Control Director" });
+
+    const result = evaluateAgentStaticContracts(baseConfig(root, agent), {
+      stateDir: path.join(root, "state"),
+      repoRoot: root,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        agentId: "program-manager",
+        code: "program_manager_handoff_target_missing",
+        target: "Control Director",
+      }),
+    );
+  });
+
+  it("fails Program Manager when a handoff field is missing", () => {
+    const root = harness.createTempDir("openclaw-agent-eval-");
+    const agent = programManagerConfig(root);
+    writeProgramManagerHandoffTelemetryContract(root, { omit: "approval requirement" });
+
+    const result = evaluateAgentStaticContracts(baseConfig(root, agent), {
+      stateDir: path.join(root, "state"),
+      repoRoot: root,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        agentId: "program-manager",
+        code: "program_manager_handoff_field_missing",
+        field: "approval requirement",
+      }),
+    );
+  });
+
+  it("fails Program Manager when a telemetry event is missing", () => {
+    const root = harness.createTempDir("openclaw-agent-eval-");
+    const agent = programManagerConfig(root);
+    writeProgramManagerHandoffTelemetryContract(root, {
+      omit: "program_manager.handoff.requested",
+    });
+
+    const result = evaluateAgentStaticContracts(baseConfig(root, agent), {
+      stateDir: path.join(root, "state"),
+      repoRoot: root,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        agentId: "program-manager",
+        code: "program_manager_telemetry_event_missing",
+        eventName: "program_manager.handoff.requested",
+      }),
+    );
+  });
+
+  it("fails Program Manager when telemetry privacy language is missing", () => {
+    const root = harness.createTempDir("openclaw-agent-eval-");
+    const agent = programManagerConfig(root);
+    writeProgramManagerHandoffTelemetryContract(root, { omit: "no credentials" });
+
+    const result = evaluateAgentStaticContracts(baseConfig(root, agent), {
+      stateDir: path.join(root, "state"),
+      repoRoot: root,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        agentId: "program-manager",
+        code: "program_manager_telemetry_privacy_term_missing",
+        term: "no credentials",
+      }),
+    );
+  });
+
+  it("fails Program Manager when workspace prompt misses handoff and telemetry sections", () => {
+    const root = harness.createTempDir("openclaw-agent-eval-");
+    const agent = programManagerConfig(root);
+    fs.writeFileSync(
+      path.join(agent.workspace as string, "AGENTS.md"),
+      programManagerPromptBody().replace("Handoff Plan", "Handoff Missing"),
+    );
+    fs.writeFileSync(
+      path.join(agent.workspace as string, "TOOLS.md"),
+      programManagerPromptBody().replace("Handoff Plan", "Handoff Missing"),
+    );
+
+    const result = evaluateAgentStaticContracts(baseConfig(root, agent), {
+      stateDir: path.join(root, "state"),
+      repoRoot: root,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        agentId: "program-manager",
+        code: "program_manager_prompt_handoff_telemetry_section_missing",
+        section: "Handoff Plan",
+      }),
+    );
+  });
+
+  it("fails Program Manager when the efficiency/routing contract doc is missing", () => {
+    const root = harness.createTempDir("openclaw-agent-eval-");
+    const agent = programManagerConfig(root);
+    fs.rmSync(path.join(root, "control", "docs", "PROGRAM_MANAGER_EFFICIENCY_ROUTING_CONTRACT.md"));
+
+    const result = evaluateAgentStaticContracts(baseConfig(root, agent), {
+      stateDir: path.join(root, "state"),
+      repoRoot: root,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        agentId: "program-manager",
+        code: "program_manager_efficiency_routing_contract_missing",
+        file: "control/docs/PROGRAM_MANAGER_EFFICIENCY_ROUTING_CONTRACT.md",
+      }),
+    );
+  });
+
+  it("fails Program Manager when the efficiency/routing contract misses local-first routing", () => {
+    const root = harness.createTempDir("openclaw-agent-eval-");
+    const agent = programManagerConfig(root);
+    writeProgramManagerEfficiencyRoutingContract(root, { omit: "local-first" });
+
+    const result = evaluateAgentStaticContracts(baseConfig(root, agent), {
+      stateDir: path.join(root, "state"),
+      repoRoot: root,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        agentId: "program-manager",
+        code: "program_manager_efficiency_routing_term_missing",
+        term: "local-first",
+      }),
+    );
+  });
+
+  it("fails Program Manager when hosted approval and escalation routing are missing", () => {
+    const root = harness.createTempDir("openclaw-agent-eval-");
+    const agent = programManagerConfig(root);
+    writeProgramManagerEfficiencyRoutingContract(root, { omit: "hosted approval" });
+
+    const result = evaluateAgentStaticContracts(baseConfig(root, agent), {
+      stateDir: path.join(root, "state"),
+      repoRoot: root,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        agentId: "program-manager",
+        code: "program_manager_efficiency_routing_term_missing",
+        term: "hosted approval",
+      }),
+    );
+  });
+
+  it("fails Program Manager when a stale-work metric is missing", () => {
+    const root = harness.createTempDir("openclaw-agent-eval-");
+    const agent = programManagerConfig(root);
+    writeProgramManagerEfficiencyRoutingContract(root, { omit: "stale task count" });
+
+    const result = evaluateAgentStaticContracts(baseConfig(root, agent), {
+      stateDir: path.join(root, "state"),
+      repoRoot: root,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        agentId: "program-manager",
+        code: "program_manager_stale_metric_missing",
+        metric: "stale task count",
+      }),
+    );
+  });
+
+  it("fails Program Manager when scheduled eval requirements are missing", () => {
+    const root = harness.createTempDir("openclaw-agent-eval-");
+    const agent = programManagerConfig(root);
+    writeProgramManagerEfficiencyRoutingContract(root, {
+      omit: "node scripts/agent-role-eval.mjs --agent program-manager --json",
+    });
+
+    const result = evaluateAgentStaticContracts(baseConfig(root, agent), {
+      stateDir: path.join(root, "state"),
+      repoRoot: root,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        agentId: "program-manager",
+        code: "program_manager_scheduled_eval_requirement_missing",
+        term: "node scripts/agent-role-eval.mjs --agent program-manager --json",
+      }),
+    );
+  });
+
+  it("fails Program Manager when cost/latency controls are missing", () => {
+    const root = harness.createTempDir("openclaw-agent-eval-");
+    const agent = programManagerConfig(root);
+    writeProgramManagerEfficiencyRoutingContract(root, { omit: "cost/latency" });
+
+    const result = evaluateAgentStaticContracts(baseConfig(root, agent), {
+      stateDir: path.join(root, "state"),
+      repoRoot: root,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        agentId: "program-manager",
+        code: "program_manager_cost_latency_term_missing",
+        term: "cost/latency",
+      }),
+    );
+  });
+
+  it("fails Program Manager when workspace prompt misses efficiency sections", () => {
+    const root = harness.createTempDir("openclaw-agent-eval-");
+    const agent = programManagerConfig(root);
+    fs.writeFileSync(
+      path.join(agent.workspace as string, "AGENTS.md"),
+      programManagerPromptBody().replaceAll("Efficiency Controls", "Efficiency Missing"),
+    );
+    fs.writeFileSync(
+      path.join(agent.workspace as string, "TOOLS.md"),
+      programManagerPromptBody().replaceAll("Efficiency Controls", "Efficiency Missing"),
+    );
+
+    const result = evaluateAgentStaticContracts(baseConfig(root, agent), {
+      stateDir: path.join(root, "state"),
+      repoRoot: root,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        agentId: "program-manager",
+        code: "program_manager_prompt_efficiency_section_missing",
+        section: "Efficiency Controls",
+      }),
+    );
   });
 
   it("fails unknown agents so every configured role needs an eval contract", () => {
