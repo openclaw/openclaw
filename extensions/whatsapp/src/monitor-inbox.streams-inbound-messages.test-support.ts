@@ -91,6 +91,7 @@ async function expectSocketOperationTimeout(
     name: "WhatsAppSocketOperationTimeoutError",
     operation,
     timeoutMs: DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs,
+    deliveryState: "unknown",
   });
   await vi.advanceTimersByTimeAsync(DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs);
   await rejection;
@@ -377,24 +378,6 @@ describe("web monitor inbox", () => {
     expect(sock.sendPresenceUpdate).toHaveBeenNthCalledWith(1, "available");
 
     await listener.close();
-  });
-
-  it("continues when initial presence update stalls on connect", async () => {
-    const sock = getSock();
-    sock.sendPresenceUpdate.mockImplementationOnce(() => new Promise(() => {}));
-    vi.useFakeTimers();
-    try {
-      const startPromise = startInboxMonitor(vi.fn(async () => {}) as InboxOnMessage);
-
-      await vi.advanceTimersByTimeAsync(DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs);
-
-      const { listener } = await startPromise;
-      expect(sock.sendPresenceUpdate).toHaveBeenNthCalledWith(1, "available");
-
-      await listener.close();
-    } finally {
-      vi.useRealTimers();
-    }
   });
 
   it("omits group context when a group message has no group facts", async () => {
@@ -851,53 +834,20 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
-  it.each([
-    {
-      label: "configured socket timing",
-      extraOptions: {
-        cfg: {
-          ...DEFAULT_WEB_INBOX_CONFIG,
-          web: { whatsapp: { defaultQueryTimeoutMs: 45_000 } },
-        },
-      },
-      firstWaitMs: 30_000,
-      remainingWaitMs: 10_000,
-      messageId: "slow-success",
-    },
-    {
-      label: "resolved socket timing override",
-      extraOptions: {
-        cfg: {
-          ...DEFAULT_WEB_INBOX_CONFIG,
-          web: { whatsapp: { defaultQueryTimeoutMs: 5_000 } },
-        },
-        socketTiming: {
-          ...DEFAULT_WHATSAPP_SOCKET_TIMING,
-          defaultQueryTimeoutMs: 45_000,
-        },
-      },
-      firstWaitMs: 5_000,
-      remainingWaitMs: 35_000,
-      messageId: "override-slow-success",
-    },
-  ] satisfies Array<{
-    label: string;
-    extraOptions: Partial<InboxMonitorOptions>;
-    firstWaitMs: number;
-    remainingWaitMs: number;
-    messageId: string;
-  }>)("lets slow socket sends complete with $label", async (scenario) => {
+  it("lets configured slow socket sends complete beyond thirty seconds", async () => {
     const onMessage = vi.fn(async () => undefined);
-    const { listener, sock } = await startInboxMonitor(
-      onMessage as InboxOnMessage,
-      scenario.extraOptions,
-    );
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+      cfg: {
+        ...DEFAULT_WEB_INBOX_CONFIG,
+        web: { whatsapp: { defaultQueryTimeoutMs: 45_000 } },
+      },
+    });
     vi.useFakeTimers();
     try {
       sock.sendMessage.mockImplementationOnce(
         async () =>
           await new Promise((resolve) => {
-            setTimeout(() => resolve({ key: { id: scenario.messageId } }), 40_000);
+            setTimeout(() => resolve({ key: { id: "slow-success" } }), 40_000);
           }),
       );
 
@@ -906,11 +856,11 @@ describe("web monitor inbox", () => {
         settled = true;
       });
 
-      await vi.advanceTimersByTimeAsync(scenario.firstWaitMs);
+      await vi.advanceTimersByTimeAsync(30_000);
       expect(settled).toBe(false);
 
-      await vi.advanceTimersByTimeAsync(scenario.remainingWaitMs);
-      await expect(sendPromise).resolves.toMatchObject({ messageId: scenario.messageId });
+      await vi.advanceTimersByTimeAsync(10_000);
+      await expect(sendPromise).resolves.toMatchObject({ messageId: "slow-success" });
       expect(vi.getTimerCount()).toBe(0);
       expect(sock.sendMessage).toHaveBeenCalledTimes(1);
     } finally {

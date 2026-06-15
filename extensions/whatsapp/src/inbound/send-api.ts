@@ -1,15 +1,11 @@
 // Whatsapp API module exposes the plugin public contract.
-import type {
-  AnyMessageContent,
-  MiscMessageGenerationOptions,
-  WAMessage,
-  WAPresence,
-} from "baileys";
+import type { AnyMessageContent } from "baileys";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import { resolveWhatsAppDocumentFileName } from "../document-filename.js";
 import { addWhatsAppImagePreviewFields } from "../image-preview.js";
 import { isWhatsAppNewsletterJid } from "../normalize.js";
 import { buildQuotedMessageOptions } from "../quoted-message.js";
+import type { WhatsAppBoundedSocketOperationAdapter } from "../socket-timing.js";
 import { toWhatsappJid, toWhatsappJidWithLid } from "../text-runtime.js";
 import {
   addWhatsAppOutboundMentionsToContent,
@@ -52,14 +48,7 @@ function supportsForcedDocumentMediaType(mediaType: string): boolean {
 }
 
 export function createWebSendApi(params: {
-  sock: {
-    sendMessage: (
-      jid: string,
-      content: AnyMessageContent,
-      options?: MiscMessageGenerationOptions,
-    ) => Promise<WAMessage | undefined>;
-    sendPresenceUpdate: (presence: WAPresence, jid?: string) => Promise<unknown>;
-  };
+  sock: WhatsAppBoundedSocketOperationAdapter;
   defaultAccountId: string;
   resolveOutboundMentions?: (params: {
     jid: string;

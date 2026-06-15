@@ -23,6 +23,14 @@ export type WhatsAppSocketOperationAdapter = {
   sendPresenceUpdate: (presence: WAPresence, jid?: string) => Promise<unknown>;
 };
 
+export type WhatsAppBoundedSocketOperationAdapter = WhatsAppSocketOperationAdapter & {
+  readonly operationTimeoutMs: number;
+};
+
+type WhatsAppSocketOperationTimeoutHooks = {
+  onSendMessageTimeout?: (params: { jid: string; promise: Promise<WAMessage | undefined> }) => void;
+};
+
 export const DEFAULT_WHATSAPP_SOCKET_TIMING: Required<WhatsAppSocketTimingOptions> = {
   keepAliveIntervalMs: 25_000,
   connectTimeoutMs: 60_000,
@@ -80,6 +88,7 @@ export async function withWhatsAppSocketOperationTimeout<T>(
   operation: string,
   promise: Promise<T>,
   timeoutMs: number,
+  onTimeout?: () => void,
 ): Promise<T> {
   const resolvedTimeoutMs = resolveWhatsAppSocketOperationTimeoutMs(timeoutMs);
   let timeout: ReturnType<typeof setTimeout> | null = null;
@@ -88,6 +97,7 @@ export async function withWhatsAppSocketOperationTimeout<T>(
       promise,
       new Promise<never>((_, reject) => {
         timeout = setTimeout(() => {
+          onTimeout?.();
           reject(new WhatsAppSocketOperationTimeoutError(operation, resolvedTimeoutMs));
         }, resolvedTimeoutMs);
         timeout.unref?.();
@@ -103,20 +113,30 @@ export async function withWhatsAppSocketOperationTimeout<T>(
 export function createWhatsAppSocketOperationTimeoutAdapter(
   sock: WhatsAppSocketOperationAdapter,
   timeoutMs: number,
-): WhatsAppSocketOperationAdapter {
+  hooks?: WhatsAppSocketOperationTimeoutHooks,
+): WhatsAppBoundedSocketOperationAdapter {
+  const operationTimeoutMs = resolveWhatsAppSocketOperationTimeoutMs(timeoutMs);
   return {
+    operationTimeoutMs,
     sendMessage: (jid, content, options) => {
       const send = options
         ? sock.sendMessage(jid, content, options)
         : sock.sendMessage(jid, content);
-      return withWhatsAppSocketOperationTimeout("sendMessage", send, timeoutMs);
+      return withWhatsAppSocketOperationTimeout(
+        "sendMessage",
+        send,
+        operationTimeoutMs,
+        hooks?.onSendMessageTimeout
+          ? () => hooks.onSendMessageTimeout?.({ jid, promise: send })
+          : undefined,
+      );
     },
     sendPresenceUpdate: (presence, jid) => {
       const send =
         jid === undefined
           ? sock.sendPresenceUpdate(presence)
           : sock.sendPresenceUpdate(presence, jid);
-      return withWhatsAppSocketOperationTimeout("sendPresenceUpdate", send, timeoutMs);
+      return withWhatsAppSocketOperationTimeout("sendPresenceUpdate", send, operationTimeoutMs);
     },
   };
 }

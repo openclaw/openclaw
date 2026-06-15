@@ -5,7 +5,6 @@ import type {
   proto,
   GroupMetadata,
   WAMessage,
-  WAPresence,
   WASocket,
 } from "baileys";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
@@ -32,9 +31,10 @@ import { createWaSocket, formatError, getStatusCode, waitForWaConnection } from 
 import {
   createWhatsAppSocketOperationTimeoutAdapter,
   isWhatsAppSocketOperationTimeoutError,
+  resolveWhatsAppSocketOperationTimeoutMs,
   resolveWhatsAppSocketTiming,
+  type WhatsAppBoundedSocketOperationAdapter,
   type WhatsAppSocketTimingOptions,
-  withWhatsAppSocketOperationTimeout,
 } from "../socket-timing.js";
 import { resolveJidToE164 } from "../text-runtime.js";
 import { checkInboundAccessControl } from "./access-control.js";
@@ -253,7 +253,9 @@ export async function attachWebInboxToSocket(
     disconnectRetryPolicy.maxAttempts > 0
       ? disconnectRetryPolicy.maxAttempts
       : DEFAULT_RECONNECT_POLICY.maxAttempts;
-  const sendOperationTimeoutMs = options.socketTiming.defaultQueryTimeoutMs;
+  const sendOperationTimeoutMs = resolveWhatsAppSocketOperationTimeoutMs(
+    options.socketTiming.defaultQueryTimeoutMs,
+  );
 
   let onCloseResolve: ((reason: WebListenerCloseReason) => void) | null = null;
   const onClose = new Promise<WebListenerCloseReason>((resolve) => {
@@ -267,20 +269,13 @@ export async function attachWebInboxToSocket(
     onCloseResolve = null;
     resolver(reason);
   };
-  const sendPresenceWithTimeout = async (
-    currentSock: WASocket,
-    presenceValue: WAPresence,
-    jid?: string,
-  ) => {
-    return await createWhatsAppSocketOperationTimeoutAdapter(
-      currentSock,
-      sendOperationTimeoutMs,
-    ).sendPresenceUpdate(presenceValue, jid);
-  };
   const presence = options.selfChatMode ? "unavailable" : "available";
 
   try {
-    await sendPresenceWithTimeout(sock, presence);
+    await createWhatsAppSocketOperationTimeoutAdapter(
+      sock,
+      sendOperationTimeoutMs,
+    ).sendPresenceUpdate(presence);
     logWhatsAppVerbose(options.verbose, `Sent global '${presence}' presence on connect`);
   } catch (err) {
     logWhatsAppVerbose(
@@ -499,6 +494,16 @@ export async function attachWebInboxToSocket(
       messageId,
     });
   };
+  const trackLateAcceptedSend = (jid: string, promise: Promise<WAMessage | undefined>) => {
+    // The local send has failed terminally, but Baileys may still deliver it.
+    // Track a late message id only to suppress the resulting self-echo.
+    void promise.then(
+      (result) => {
+        rememberOutboundMessage(jid, result);
+      },
+      () => {},
+    );
+  };
 
   const sendTrackedMessage = async (
     jid: string,
@@ -509,29 +514,19 @@ export async function attachWebInboxToSocket(
     for (let attempt = 1; ; attempt++) {
       const currentSock = getCurrentSock();
       if (currentSock) {
-        let pendingSend: Promise<WAMessage | undefined> | undefined;
         try {
-          pendingSend = sendOptions
-            ? currentSock.sendMessage(jid, content, sendOptions)
-            : currentSock.sendMessage(jid, content);
-          const result = await withWhatsAppSocketOperationTimeout(
-            "sendMessage",
-            pendingSend,
+          const result = await createWhatsAppSocketOperationTimeoutAdapter(
+            currentSock,
             sendOperationTimeoutMs,
-          );
+            {
+              onSendMessageTimeout: ({ jid: timedOutJid, promise }) => {
+                trackLateAcceptedSend(timedOutJid, promise);
+              },
+            },
+          ).sendMessage(jid, content, sendOptions);
           rememberOutboundMessage(jid, result);
           return result;
         } catch (err) {
-          if (isWhatsAppSocketOperationTimeoutError(err) && pendingSend) {
-            // The local send has failed terminally, but Baileys may still deliver it.
-            // Track a late message id only to suppress the resulting self-echo.
-            void pendingSend.then(
-              (result) => {
-                rememberOutboundMessage(jid, result);
-              },
-              () => {},
-            );
-          }
           if (!shouldRetryDisconnect() || !isRetryableSendDisconnectError(err)) {
             throw err;
           }
@@ -561,6 +556,20 @@ export async function attachWebInboxToSocket(
         throw lastErr;
       }
     }
+  };
+  const sendApiSocketOperations: WhatsAppBoundedSocketOperationAdapter = {
+    operationTimeoutMs: sendOperationTimeoutMs,
+    sendMessage: (jid, content, sendOptions) => sendTrackedMessage(jid, content, sendOptions),
+    sendPresenceUpdate: async (presenceLocal, jid) => {
+      const currentSock = getCurrentSock();
+      if (!currentSock) {
+        throw new Error(RECONNECT_IN_PROGRESS_ERROR);
+      }
+      return await createWhatsAppSocketOperationTimeoutAdapter(
+        currentSock,
+        sendOperationTimeoutMs,
+      ).sendPresenceUpdate(presenceLocal, jid);
+    },
   };
 
   const summarizeGroupMeta = async (meta: GroupMetadata) => {
@@ -1058,12 +1067,11 @@ export async function attachWebInboxToSocket(
   ) => {
     const chatJid = inbound.remoteJid;
     const sendComposing = async () => {
-      const currentSock = getCurrentSock();
-      if (!currentSock) {
+      if (!getCurrentSock()) {
         return;
       }
       try {
-        await sendPresenceWithTimeout(currentSock, "composing", chatJid);
+        await sendApiSocketOperations.sendPresenceUpdate("composing", chatJid);
       } catch (err) {
         logWhatsAppVerbose(options.verbose, `Presence update failed: ${String(err)}`);
       }
@@ -1374,20 +1382,7 @@ export async function attachWebInboxToSocket(
   })();
 
   const sendApi = createWebSendApi({
-    sock: {
-      sendMessage: (
-        jid: string,
-        content: AnyMessageContent,
-        optionsLocal?: MiscMessageGenerationOptions,
-      ) => sendTrackedMessage(jid, content, optionsLocal),
-      sendPresenceUpdate: async (presenceLocal, jid?: string) => {
-        const currentSock = getCurrentSock();
-        if (!currentSock) {
-          throw new Error(RECONNECT_IN_PROGRESS_ERROR);
-        }
-        return await sendPresenceWithTimeout(currentSock, presenceLocal, jid);
-      },
-    },
+    sock: sendApiSocketOperations,
     defaultAccountId: options.accountId,
     resolveOutboundMentions: ({ jid, text }) => resolveOutboundMentionsForGroup(jid, text),
     authDir: options.authDir,
