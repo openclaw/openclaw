@@ -55,7 +55,7 @@ export function createTempDirTracker(): TestTempDirTracker {
 }
 
 /** Create a temp dir tracker that Vitest cleans up after each test. */
-export function useTempDirTracker(): AutoCleanupTempDirTracker {
+export function useAutoCleanupTempDirTracker(): AutoCleanupTempDirTracker {
   const tracker = createTempDirTracker();
   afterEach(() => {
     tracker.cleanup();

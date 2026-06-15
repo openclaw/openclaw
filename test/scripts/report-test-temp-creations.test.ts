@@ -6,10 +6,10 @@ import {
   collectTempCreationFindingsFromDiff,
   formatGithubWarning,
 } from "../../scripts/report-test-temp-creations.mjs";
-import { useTempDirTracker } from "../helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const repoRoot = process.cwd();
-const tempDirs = useTempDirTracker();
+const tempDirs = useAutoCleanupTempDirTracker();
 const nestedGitEnvKeys = [
   "GIT_ALTERNATE_OBJECT_DIRECTORIES",
   "GIT_DIR",
@@ -248,10 +248,10 @@ describe("report-test-temp-creations", () => {
     const file = "test/scripts/manual-temp.test.ts";
     const source = [
       "import {",
-      "  useTempDirTracker,",
+      "  useAutoCleanupTempDirTracker,",
       "  makeTempDir,",
       '} from "../helpers/temp-dir.js";',
-      "const tempDirs = useTempDirTracker();",
+      "const tempDirs = useAutoCleanupTempDirTracker();",
     ].join("\n");
     const diff = [
       "diff --git a/test/scripts/manual-temp.test.ts b/test/scripts/manual-temp.test.ts",
@@ -259,7 +259,7 @@ describe("report-test-temp-creations", () => {
       "+++ b/test/scripts/manual-temp.test.ts",
       "@@ -1,3 +1,4 @@",
       " import {",
-      "   useTempDirTracker,",
+      "   useAutoCleanupTempDirTracker,",
       "+  makeTempDir,",
       ' } from "../helpers/temp-dir.js";',
     ].join("\n");
@@ -271,7 +271,8 @@ describe("report-test-temp-creations", () => {
         file,
         line: 3,
         reason: "new manual temp-dir helper import",
-        source: 'import { useTempDirTracker, makeTempDir, } from "../helpers/temp-dir.js";',
+        source:
+          'import { useAutoCleanupTempDirTracker, makeTempDir, } from "../helpers/temp-dir.js";',
       },
     ]);
   });
@@ -279,8 +280,8 @@ describe("report-test-temp-creations", () => {
   it("allows the auto-cleaning temp-dir helper", () => {
     const file = "test/scripts/auto-temp.test.ts";
     const source = [
-      'import { useTempDirTracker } from "../helpers/temp-dir.js";',
-      "const tempDirs = useTempDirTracker();",
+      'import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";',
+      "const tempDirs = useAutoCleanupTempDirTracker();",
       'const workspace = tempDirs.make("case-");',
     ].join("\n");
     const diff = [
@@ -288,8 +289,8 @@ describe("report-test-temp-creations", () => {
       "--- a/test/scripts/auto-temp.test.ts",
       "+++ b/test/scripts/auto-temp.test.ts",
       "@@ -1,0 +1,3 @@",
-      '+import { useTempDirTracker } from "../helpers/temp-dir.js";',
-      "+const tempDirs = useTempDirTracker();",
+      '+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";',
+      "+const tempDirs = useAutoCleanupTempDirTracker();",
       '+const workspace = tempDirs.make("case-");',
     ].join("\n");
 
@@ -302,7 +303,7 @@ describe("report-test-temp-creations", () => {
     const fixtureFile = "test/scripts/report-test-temp-creations.test.ts";
     const helperTestFile = "test/helpers/temp-dir.test.ts";
     const fixtureSource = [
-      'import { useTempDirTracker } from "../helpers/temp-dir.js";',
+      'import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";',
       'const fixture = "makeTempDir(tempDirs, \\"case-\\")";',
     ].join("\n");
     const helperTestSource = [
@@ -363,7 +364,7 @@ describe("report-test-temp-creations", () => {
         source: "const tempRoot = fs.mkdtempSync();",
       }),
     ).toBe(
-      "::warning file=test/helpers/temp%2Cfixture.ts,line=12::new mkdtemp temp directory creation: prefer useTempDirTracker() from test/helpers/temp-dir.ts for new test-owned temp directories.",
+      "::warning file=test/helpers/temp%2Cfixture.ts,line=12::new mkdtemp temp directory creation: prefer useAutoCleanupTempDirTracker() from test/helpers/temp-dir.ts for new test-owned temp directories.",
     );
   });
 

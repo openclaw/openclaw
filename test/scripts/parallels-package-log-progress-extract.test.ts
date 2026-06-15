@@ -3,10 +3,10 @@ import { spawnSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { useTempDirTracker } from "../helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT_PATH = "scripts/e2e/lib/parallels-package/log-progress-extract.mjs";
-const tempRoots = useTempDirTracker();
+const tempRoots = useAutoCleanupTempDirTracker();
 
 function makeTempRoot(): string {
   return tempRoots.make("openclaw-parallels-progress-");

@@ -4,10 +4,10 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { RUNTIME_POSTBUILD_STAMP_FILE } from "../../scripts/lib/local-build-metadata-paths.mjs";
 import { writeRuntimePostBuildStamp } from "../../scripts/runtime-postbuild-stamp.mjs";
-import { useTempDirTracker } from "../helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 describe("runtime-postbuild-stamp script", () => {
-  const tempDirs = useTempDirTracker();
+  const tempDirs = useAutoCleanupTempDirTracker();
 
   it("writes dist/.runtime-postbuildstamp with the current git head", () => {
     const rootDir = tempDirs.make("openclaw-runtime-postbuild-stamp-");
