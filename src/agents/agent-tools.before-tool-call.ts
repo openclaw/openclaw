@@ -81,6 +81,8 @@ export type ToolOutcomeObservation = {
   toolName: string;
   argsHash: string;
   resultHash: string;
+  /** Monotonic model-call order within the owning embedded run. */
+  toolCallOrdinal?: number;
   terminalPresentation?: string;
   presentationOnly?: boolean;
 };
@@ -116,6 +118,7 @@ export type HookContext = {
   channelId?: string;
   loopDetection?: ToolLoopDetectionConfig;
   onToolOutcome?: ToolOutcomeObserver;
+  allocateToolOutcomeOrdinal?: () => number;
   skillsSnapshot?: SkillSnapshot;
   skillCommand?: {
     commandName: string;
@@ -224,6 +227,7 @@ const pendingTerminalPresentationByToolCall = new Map<
     observer: ToolOutcomeObserver;
     tool: AnyAgentTool;
     toolParams: unknown;
+    toolCallOrdinal?: number;
   }
 >();
 
@@ -258,6 +262,7 @@ function rememberPendingTerminalPresentation(params: {
   tool: AnyAgentTool;
   toolParams: unknown;
   toolCallId?: string;
+  toolCallOrdinal?: number;
 }): void {
   if (!params.toolCallId || !params.ctx?.onToolOutcome) {
     return;
@@ -270,6 +275,7 @@ function rememberPendingTerminalPresentation(params: {
     observer: params.ctx.onToolOutcome,
     tool: params.tool,
     toolParams: structuredClone(params.toolParams),
+    toolCallOrdinal: params.toolCallOrdinal,
   });
   while (pendingTerminalPresentationByToolCall.size > MAX_PENDING_TERMINAL_PRESENTATIONS) {
     const oldestKey = pendingTerminalPresentationByToolCall.keys().next().value;
@@ -303,6 +309,7 @@ export function finalizeToolTerminalPresentation(params: {
     toolName: pending?.tool.name || params.toolName || "tool",
     argsHash: "",
     resultHash: "",
+    ...(pending?.toolCallOrdinal !== undefined ? { toolCallOrdinal: pending.toolCallOrdinal } : {}),
     terminalPresentation: params.isError
       ? undefined
       : pending
@@ -887,6 +894,7 @@ async function recordLoopOutcome(args: {
   toolCallId?: string;
   result?: unknown;
   error?: unknown;
+  toolCallOrdinal?: number;
   terminalPresentation?: string;
 }): Promise<void> {
   if (!args.ctx?.sessionKey && !args.ctx?.sessionId) {
@@ -913,6 +921,7 @@ async function recordLoopOutcome(args: {
         toolName: record.toolName,
         argsHash: record.argsHash,
         resultHash: record.resultHash,
+        ...(args.toolCallOrdinal !== undefined ? { toolCallOrdinal: args.toolCallOrdinal } : {}),
         ...(args.terminalPresentation ? { terminalPresentation: args.terminalPresentation } : {}),
       };
     }
@@ -1261,6 +1270,9 @@ export function wrapToolWithBeforeToolCallHook(
   const wrappedTool: AnyAgentTool = {
     ...tool,
     execute: async (toolCallId, params, signal, onUpdate) => {
+      // Allocate before any async preparation so parallel completions retain
+      // the assistant message's tool-call order.
+      const toolCallOrdinal = ctx?.allocateToolOutcomeOrdinal?.();
       const prepare = (tool as BeforeToolCallPreparingTool).prepareBeforeToolCallParams;
       const preparedParams = prepare
         ? await prepare(params, {
@@ -1318,6 +1330,7 @@ export function wrapToolWithBeforeToolCallHook(
           toolParams: outcome.params ?? hookParams,
           toolCallId,
           result: blockedResult,
+          toolCallOrdinal,
         });
         return blockedResult;
       }
@@ -1368,6 +1381,7 @@ export function wrapToolWithBeforeToolCallHook(
           toolParams: executeParams,
           toolCallId,
           result,
+          toolCallOrdinal,
           terminalPresentation,
         });
         rememberPendingTerminalPresentation({
@@ -1375,6 +1389,7 @@ export function wrapToolWithBeforeToolCallHook(
           tool,
           toolParams: executeParams,
           toolCallId,
+          toolCallOrdinal,
         });
         const skillMatch = findSkillUsageMatch({
           toolName: normalizedToolName,
@@ -1428,6 +1443,7 @@ export function wrapToolWithBeforeToolCallHook(
           toolParams: executeParams,
           toolCallId,
           error: err,
+          toolCallOrdinal,
         });
         throw err;
       }

@@ -1341,11 +1341,21 @@ async function runEmbeddedAgentInternal(
       );
       let postCompactionAbortController: AbortController | undefined;
       let postCompactionAbortError: PostCompactionLoopPersistedError | undefined;
-      const attemptTerminalToolPresentation = { value: undefined as string | undefined };
+      const attemptTerminalToolPresentation = {
+        ordinal: -1,
+        value: undefined as string | undefined,
+      };
+      let nextToolOutcomeOrdinal = 0;
+      const allocateToolOutcomeOrdinal = (): number => nextToolOutcomeOrdinal++;
       const readAttemptTerminalToolPresentation = (): string | undefined =>
         attemptTerminalToolPresentation.value;
       const observeToolOutcome = (observation: ToolOutcomeObservation): void => {
-        attemptTerminalToolPresentation.value = observation.terminalPresentation;
+        const observationOrdinal =
+          observation.toolCallOrdinal ?? attemptTerminalToolPresentation.ordinal + 1;
+        if (observationOrdinal >= attemptTerminalToolPresentation.ordinal) {
+          attemptTerminalToolPresentation.ordinal = observationOrdinal;
+          attemptTerminalToolPresentation.value = observation.terminalPresentation;
+        }
         if (observation.presentationOnly) {
           return;
         }
@@ -1811,6 +1821,7 @@ async function runEmbeddedAgentInternal(
             beforeAgentStartResult,
             thinkLevel,
             onToolOutcome: observeToolOutcome,
+            allocateToolOutcomeOrdinal,
             onRunProgress: notifyRunProgress,
             fastMode: params.fastMode,
             verboseLevel: params.verboseLevel,

@@ -447,7 +447,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     ]);
   });
 
-  it("does not reuse a presentation after a later tool outcome", async () => {
+  it("keeps model-call order when parallel tool outcomes finish out of order", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams: unknown) => {
       const onToolOutcome = (
@@ -456,20 +456,23 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
             toolName: string;
             argsHash: string;
             resultHash: string;
+            toolCallOrdinal?: number;
             terminalPresentation?: string;
           }) => void;
         }
       ).onToolOutcome;
       onToolOutcome?.({
-        toolName: "web_fetch",
-        argsHash: "fetch-args",
-        resultHash: "fetch-result",
-        terminalPresentation: "Web fetch completed.\nOrigin: https://example.com\nStatus: 200",
-      });
-      onToolOutcome?.({
         toolName: "exec",
         argsHash: "exec-args",
         resultHash: "exec-result",
+        toolCallOrdinal: 1,
+      });
+      onToolOutcome?.({
+        toolName: "web_fetch",
+        argsHash: "fetch-args",
+        resultHash: "fetch-result",
+        toolCallOrdinal: 0,
+        terminalPresentation: "Web fetch completed.\nOrigin: https://example.com\nStatus: 200",
       });
       return makeAttemptResult({
         assistantTexts: [],

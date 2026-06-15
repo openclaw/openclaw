@@ -977,15 +977,33 @@ describe("before_tool_call hook deduplication (#15502)", () => {
     );
   });
 
-  it("clears a parallel terminal presentation when a later finalized tool has none", async () => {
-    let terminalPresentation: string | undefined;
-    const onToolOutcome = vi.fn((outcome: { terminalPresentation?: string }) => {
-      terminalPresentation = outcome.terminalPresentation;
+  it("keeps the later model-ordered result when parallel tools finish out of order", async () => {
+    type ToolResult = { content: []; details: { ok?: boolean; status?: number } };
+    let resolvePresentation!: (result: ToolResult) => void;
+    let resolvePlain!: (result: ToolResult) => void;
+    const presentationExecution = new Promise<ToolResult>((resolve) => {
+      resolvePresentation = resolve;
     });
+    const plainExecution = new Promise<ToolResult>((resolve) => {
+      resolvePlain = resolve;
+    });
+    let terminalPresentation: string | undefined;
+    let latestOrdinal = -1;
+    const onToolOutcome = vi.fn(
+      (outcome: { toolCallOrdinal?: number; terminalPresentation?: string }) => {
+        const ordinal = outcome.toolCallOrdinal ?? latestOrdinal + 1;
+        if (ordinal >= latestOrdinal) {
+          latestOrdinal = ordinal;
+          terminalPresentation = outcome.terminalPresentation;
+        }
+      },
+    );
+    let nextToolOutcomeOrdinal = 0;
     const hookContext = {
       runId: "run-parallel-terminal-presentation",
       sessionId: "session-parallel-terminal-presentation",
       onToolOutcome,
+      allocateToolOutcomeOrdinal: () => nextToolOutcomeOrdinal++,
     };
     const presentationTool = wrapToolWithBeforeToolCallHook(
       setToolTerminalPresentation(
@@ -993,10 +1011,7 @@ describe("before_tool_call hook deduplication (#15502)", () => {
           name: "web_fetch",
           description: "fetch",
           parameters: {},
-          execute: vi.fn().mockResolvedValue({
-            content: [],
-            details: { status: 200 },
-          }),
+          execute: vi.fn(() => presentationExecution),
         } as any,
         () => ({ text: "Fetched with status 200" }),
       ),
@@ -1007,24 +1022,16 @@ describe("before_tool_call hook deduplication (#15502)", () => {
         name: "read_file",
         description: "read",
         parameters: {},
-        execute: vi.fn().mockResolvedValue({
-          content: [],
-          details: { ok: true },
-        }),
+        execute: vi.fn(() => plainExecution),
       } as any,
       hookContext,
     );
 
-    const presentationResult = await presentationTool.execute("call-presentation", {});
-    const plainResult = await plainTool.execute("call-plain", {});
-    finalizeToolTerminalPresentation({
-      toolCallId: "call-presentation",
-      runId: hookContext.runId,
-      result: presentationResult,
-      isError: false,
-    });
-    expect(terminalPresentation).toBe("Fetched with status 200");
+    const presentationResultPromise = presentationTool.execute("call-presentation", {});
+    const plainResultPromise = plainTool.execute("call-plain", {});
 
+    resolvePlain({ content: [], details: { ok: true } });
+    const plainResult = await plainResultPromise;
     finalizeToolTerminalPresentation({
       toolCallId: "call-plain",
       runId: hookContext.runId,
@@ -1032,10 +1039,24 @@ describe("before_tool_call hook deduplication (#15502)", () => {
       isError: false,
     });
     expect(terminalPresentation).toBeUndefined();
+
+    resolvePresentation({ content: [], details: { status: 200 } });
+    const presentationResult = await presentationResultPromise;
+    finalizeToolTerminalPresentation({
+      toolCallId: "call-presentation",
+      runId: hookContext.runId,
+      result: presentationResult,
+      isError: false,
+    });
+
+    expect(terminalPresentation).toBeUndefined();
+    expect(onToolOutcome.mock.calls.map(([outcome]) => outcome.toolCallOrdinal)).toEqual([
+      1, 1, 0, 0,
+    ]);
     expect(onToolOutcome).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        presentationOnly: true,
-        terminalPresentation: undefined,
+        toolCallOrdinal: 0,
+        terminalPresentation: "Fetched with status 200",
       }),
     );
   });

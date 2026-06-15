@@ -1310,6 +1310,7 @@ export async function runEmbeddedAttempt(
             authProfileStore: params.authProfileStore,
             recordToolPrepStage: (name) => corePluginToolStages.mark(name),
             onToolOutcome: params.onToolOutcome,
+            allocateToolOutcomeOrdinal: params.allocateToolOutcomeOrdinal,
             skillsSnapshot: skillsSnapshotForRun,
             onYield: (message) => {
               yieldDetected = true;
@@ -1626,6 +1627,7 @@ export async function runEmbeddedAttempt(
         agentId: sessionAgentId,
       }),
       onToolOutcome: params.onToolOutcome,
+      allocateToolOutcomeOrdinal: params.allocateToolOutcomeOrdinal,
     };
     const codeModeTools = codeModeControlsEnabledForRun
       ? createCodeModeTools({
@@ -2339,6 +2341,7 @@ export async function runEmbeddedAttempt(
               runId: params.runId,
               loopDetection: clientToolLoopDetection,
               onToolOutcome: params.onToolOutcome,
+              allocateToolOutcomeOrdinal: params.allocateToolOutcomeOrdinal,
             },
           )
         : [];
