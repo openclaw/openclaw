@@ -235,13 +235,35 @@ function swiftInitializerParam(params: {
 }
 
 function emitEnum(name: string, schema: JsonSchema): string {
-  const cases = schema.enum ?? [];
+  const cases = stringEnumValues(schema);
   return [
     `public enum ${name}: String, Codable, Sendable {`,
     ...cases.map((value) => `    case ${safeName(value)} = "${value}"`),
     "}",
     "",
   ].join("\n");
+}
+
+function stringEnumValues(schema: JsonSchema): string[] {
+  if (schema.type === "string" && schema.enum) {
+    return schema.enum;
+  }
+  const branches = schema.anyOf ?? schema.oneOf;
+  if (!branches?.length) {
+    return [];
+  }
+  const values: string[] = [];
+  for (const branch of branches) {
+    if (branch.type !== "string" || typeof branch.const !== "string") {
+      return [];
+    }
+    values.push(branch.const);
+  }
+  return values;
+}
+
+function isStringEnumSchema(schema: JsonSchema): boolean {
+  return stringEnumValues(schema).length > 0;
 }
 
 function emitStruct(name: string, schema: JsonSchema): string {
@@ -606,7 +628,7 @@ async function generate() {
     if (name === "GatewayFrame") {
       continue;
     }
-    if (schema.type === "string" && schema.enum) {
+    if (isStringEnumSchema(schema)) {
       parts.push(emitEnum(name, schema));
     }
   }
