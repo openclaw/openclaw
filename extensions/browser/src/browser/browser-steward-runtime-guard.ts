@@ -3,6 +3,7 @@ export type BrowserStewardRuntimeDecision = {
   requestedAction: string;
   affectedBrowserProfile: string;
   affectedSession: string;
+  sessionBoundary: BrowserStewardSessionBoundary;
   credentialClassesInvolved: string[];
   dataSensitivity: "low" | "medium" | "high" | "critical";
   approvalRequired: boolean;
@@ -20,6 +21,18 @@ type BrowserStewardRuntimeRequest = {
 };
 
 const BROWSER_STEWARD_AGENT_ID = "browser-session-credential-steward";
+
+export type BrowserStewardSessionBoundaryKind =
+  | "browser_steward"
+  | "other_agent"
+  | "unscoped"
+  | "unknown";
+
+export type BrowserStewardSessionBoundary = {
+  kind: BrowserStewardSessionBoundaryKind;
+  ownerAgentId: string;
+  affectedSession: string;
+};
 
 const NON_SECRET_READ_ACTIONS = new Set(["status", "profiles", "doctor"]);
 
@@ -40,8 +53,49 @@ const ACTION_CREDENTIAL_CLASSES: Record<string, string[]> = {
   tabs: ["browser session", "tab metadata"],
 };
 
+const UNKNOWN_SESSION_BOUNDARY: BrowserStewardSessionBoundary = {
+  kind: "unknown",
+  ownerAgentId: "UNKNOWN",
+  affectedSession: "UNKNOWN",
+};
+
+export function resolveBrowserStewardSessionBoundary(
+  sessionKey: string | undefined,
+): BrowserStewardSessionBoundary {
+  const normalized = sessionKey?.trim().toLowerCase();
+  if (!normalized) {
+    return UNKNOWN_SESSION_BOUNDARY;
+  }
+  const parts = normalized.split(":");
+  if (parts[0] !== "agent") {
+    return {
+      kind: "unscoped",
+      ownerAgentId: "UNKNOWN",
+      affectedSession: "UNSCOPED",
+    };
+  }
+  const ownerAgentId = parts[1]?.trim();
+  const hasMalformedEmptyTail =
+    parts.length > 2 && !parts.slice(2).some((part) => part.trim().length > 0);
+  if (!ownerAgentId || hasMalformedEmptyTail) {
+    return UNKNOWN_SESSION_BOUNDARY;
+  }
+  if (ownerAgentId === BROWSER_STEWARD_AGENT_ID) {
+    return {
+      kind: "browser_steward",
+      ownerAgentId,
+      affectedSession: `agent:${BROWSER_STEWARD_AGENT_ID}:REDACTED`,
+    };
+  }
+  return {
+    kind: "other_agent",
+    ownerAgentId,
+    affectedSession: `agent:${ownerAgentId}:REDACTED`,
+  };
+}
+
 export function isBrowserStewardSession(sessionKey: string | undefined): boolean {
-  return Boolean(sessionKey?.includes(BROWSER_STEWARD_AGENT_ID));
+  return resolveBrowserStewardSessionBoundary(sessionKey).kind === "browser_steward";
 }
 
 function normalizeProxyPath(value: string): string {
@@ -144,6 +198,7 @@ export function evaluateBrowserStewardRuntimeGuard(
 ): BrowserStewardRuntimeDecision {
   const action = normalizeAction(request.action);
   const profile = request.profile?.trim() || "UNKNOWN";
+  const sessionBoundary = resolveBrowserStewardSessionBoundary(request.agentSessionKey);
   const credentialClasses = ACTION_CREDENTIAL_CLASSES[action] ?? ["browser session"];
   const readOnlyAllowed = NON_SECRET_READ_ACTIONS.has(action) && !containsSecretLikeValue(request);
   const approved = request.approved === true || request.delegated === true;
@@ -152,7 +207,8 @@ export function evaluateBrowserStewardRuntimeGuard(
     boundaryDecision: allow ? "allow" : "approval_required",
     requestedAction: action || "UNKNOWN",
     affectedBrowserProfile: profile,
-    affectedSession: "UNKNOWN",
+    affectedSession: sessionBoundary.affectedSession,
+    sessionBoundary,
     credentialClassesInvolved: credentialClasses,
     dataSensitivity: readOnlyAllowed ? "low" : "high",
     approvalRequired: !allow,

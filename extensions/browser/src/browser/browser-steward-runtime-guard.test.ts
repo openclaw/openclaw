@@ -3,23 +3,100 @@ import { describe, expect, it } from "vitest";
 import {
   evaluateBrowserStewardRuntimeGuard,
   isBrowserStewardSession,
+  resolveBrowserStewardSessionBoundary,
   resolveBrowserStewardProxyAction,
 } from "./browser-steward-runtime-guard.js";
 
 describe("Browser Steward runtime guard", () => {
-  it("recognizes Browser Steward session keys", () => {
+  it("recognizes only exact Browser Steward agent session keys", () => {
     expect(isBrowserStewardSession("agent:browser-session-credential-steward:abc")).toBe(true);
+    expect(isBrowserStewardSession("agent:browser-session-credential-steward")).toBe(true);
+    expect(isBrowserStewardSession("Agent:Browser-Session-Credential-Steward:Main")).toBe(true);
     expect(isBrowserStewardSession("agent:main:abc")).toBe(false);
+    expect(isBrowserStewardSession("agent:not-browser-session-credential-steward:main")).toBe(
+      false,
+    );
+    expect(isBrowserStewardSession("agent:browser-session-credential-stewardish:main")).toBe(false);
+    expect(isBrowserStewardSession("agent:main:browser-session-credential-steward")).toBe(false);
+    expect(isBrowserStewardSession("agent:browser-session-credential-steward:")).toBe(false);
+    expect(isBrowserStewardSession("browser-session-credential-steward")).toBe(false);
+  });
+
+  it("redacts affected session boundaries without leaking peer ids", () => {
+    expect(resolveBrowserStewardSessionBoundary("agent:main:direct:person-123")).toEqual({
+      kind: "other_agent",
+      ownerAgentId: "main",
+      affectedSession: "agent:main:REDACTED",
+    });
+    expect(resolveBrowserStewardSessionBoundary("agent:main")).toEqual({
+      kind: "other_agent",
+      ownerAgentId: "main",
+      affectedSession: "agent:main:REDACTED",
+    });
+    expect(
+      JSON.stringify(resolveBrowserStewardSessionBoundary("agent:main:direct:person-123")),
+    ).not.toContain("person-123");
+    expect(resolveBrowserStewardSessionBoundary("browser-session-credential-steward")).toEqual({
+      kind: "unscoped",
+      ownerAgentId: "UNKNOWN",
+      affectedSession: "UNSCOPED",
+    });
   });
 
   it("defaults sensitive mutation to approval_required", () => {
     expect(
-      evaluateBrowserStewardRuntimeGuard({ action: "navigate", profile: "work" }),
+      evaluateBrowserStewardRuntimeGuard({
+        action: "navigate",
+        profile: "work",
+        agentSessionKey: "agent:main:direct:person-123",
+      }),
     ).toMatchObject({
       boundaryDecision: "approval_required",
       approvalRequired: true,
       affectedBrowserProfile: "work",
+      affectedSession: "agent:main:REDACTED",
+      sessionBoundary: {
+        kind: "other_agent",
+        ownerAgentId: "main",
+        affectedSession: "agent:main:REDACTED",
+      },
       telemetryEvent: "browser_steward.approval_gate",
+    });
+    expect(
+      JSON.stringify(
+        evaluateBrowserStewardRuntimeGuard({
+          action: "navigate",
+          profile: "work",
+          agentSessionKey: "agent:main:direct:person-123",
+        }),
+      ),
+    ).not.toContain("person-123");
+  });
+
+  it("allows approved Browser Steward mutations with redacted session metadata", () => {
+    expect(
+      evaluateBrowserStewardRuntimeGuard({
+        action: "open",
+        approved: true,
+        agentSessionKey: "agent:browser-session-credential-steward:runtime-check",
+      }),
+    ).toMatchObject({
+      boundaryDecision: "allow",
+      affectedSession: "agent:browser-session-credential-steward:REDACTED",
+      sessionBoundary: {
+        kind: "browser_steward",
+        ownerAgentId: "browser-session-credential-steward",
+      },
+    });
+  });
+
+  it("marks missing sessions as unknown", () => {
+    expect(evaluateBrowserStewardRuntimeGuard({ action: "status" })).toMatchObject({
+      affectedSession: "UNKNOWN",
+      sessionBoundary: {
+        kind: "unknown",
+        ownerAgentId: "UNKNOWN",
+      },
     });
   });
 

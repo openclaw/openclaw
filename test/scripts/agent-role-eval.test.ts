@@ -93,6 +93,7 @@ describe("agent role eval harness", () => {
     expect(AGENT_ROLE_CONTRACT_BY_ID.has("main")).toBe(true);
     expect(AGENT_ROLE_CONTRACT_BY_ID.has("judge")).toBe(true);
     expect(AGENT_ROLE_CONTRACT_BY_ID.has("memory-knowledge-curator")).toBe(true);
+    expect(AGENT_ROLE_CONTRACT_BY_ID.has("session-steward")).toBe(true);
     expect(AGENT_ROLE_CONTRACT_BY_ID.has("openbrain-local-smoke")).toBe(true);
   });
 
@@ -102,9 +103,22 @@ describe("agent role eval harness", () => {
     expect(result).toMatchObject({
       ok: true,
       contractCount: AGENT_ROLE_CONTRACTS.length,
-      criticalContractCount: 8,
+      criticalContractCount: 9,
       issues: [],
     });
+  });
+
+  it("prompts Session Steward evals to enforce session boundaries", () => {
+    const contract = AGENT_ROLE_CONTRACT_BY_ID.get("session-steward")!;
+
+    expect(contract.prompt).toContain("session");
+    expect(contract.prompt).toContain("boundary");
+    expect(contract.prompt).toContain("approval");
+    expect(contract.prompt).toContain("redact");
+    expect(contract.prompt).toContain("telemetry");
+    expect(contract.prompt).toContain("Unknown");
+    expect(contract.prompt).toContain("exact session-boundary decision");
+    expect(contract.prompt).toContain("cross-session mutation");
   });
 
   it("prompts live evals to emit exact role signals", () => {

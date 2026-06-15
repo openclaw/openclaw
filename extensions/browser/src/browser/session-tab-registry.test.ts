@@ -210,6 +210,20 @@ describe("session tab registry", () => {
     ).toBe(0);
   });
 
+  it("does not treat other agent ids containing the steward name as Browser Steward sessions", () => {
+    trackSessionBrowserTab({
+      sessionKey: "agent:not-browser-session-credential-steward:runtime-check",
+      targetId: "tab-allowed",
+      profile: "user",
+    });
+
+    expect(
+      countTrackedSessionBrowserTabsForTests(
+        "agent:not-browser-session-credential-steward:runtime-check",
+      ),
+    ).toBe(1);
+  });
+
   it("persists only redacted Browser Steward runtime guard metadata", () => {
     trackSessionBrowserTab({
       sessionKey: "agent:browser-session-credential-steward:runtime-check",
@@ -219,7 +233,12 @@ describe("session tab registry", () => {
         boundaryDecision: "allow",
         requestedAction: "open",
         affectedBrowserProfile: "user",
-        affectedSession: "UNKNOWN",
+        affectedSession: "agent:browser-session-credential-steward:REDACTED",
+        sessionBoundary: {
+          kind: "browser_steward",
+          ownerAgentId: "browser-session-credential-steward",
+          affectedSession: "agent:browser-session-credential-steward:REDACTED",
+        },
         credentialClassesInvolved: ["browser session"],
         dataSensitivity: "high",
         approvalRequired: false,
@@ -239,11 +258,19 @@ describe("session tab registry", () => {
         boundaryDecision: "allow",
         requestedAction: "open",
         affectedBrowserProfile: "user",
-        affectedSession: "UNKNOWN",
+        affectedSession: "agent:browser-session-credential-steward:REDACTED",
+        sessionBoundary: {
+          kind: "browser_steward",
+          ownerAgentId: "browser-session-credential-steward",
+          affectedSession: "agent:browser-session-credential-steward:REDACTED",
+        },
         approvalSource: "runtime",
         telemetryEvent: "browser_steward.boundary_decision",
       },
     });
-    expect(JSON.stringify(tracked)).not.toMatch(/password|token|cookie|secret|privateKey|apiKey/i);
+    expect(JSON.stringify(tracked[0]?.browserStewardRuntimeGuard)).not.toContain("runtime-check");
+    expect(JSON.stringify(tracked[0]?.browserStewardRuntimeGuard)).not.toMatch(
+      /password|token|cookie|secret|privateKey|apiKey/i,
+    );
   });
 });

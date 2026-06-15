@@ -6,7 +6,10 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { BrowserStewardRuntimeDecision } from "./browser-steward-runtime-guard.js";
+import type {
+  BrowserStewardRuntimeDecision,
+  BrowserStewardSessionBoundary,
+} from "./browser-steward-runtime-guard.js";
 import { isBrowserStewardSession } from "./browser-steward-runtime-guard.js";
 import { browserCloseTab } from "./client.js";
 
@@ -15,6 +18,7 @@ type BrowserStewardTrackedGuard = {
   requestedAction: string;
   affectedBrowserProfile: string;
   affectedSession: string;
+  sessionBoundary: BrowserStewardSessionBoundary;
   approvalSource: "runtime";
   telemetryEvent: string;
 };
@@ -75,6 +79,7 @@ function toBrowserStewardTrackedGuard(
     requestedAction: decision.requestedAction,
     affectedBrowserProfile: decision.affectedBrowserProfile,
     affectedSession: decision.affectedSession,
+    sessionBoundary: decision.sessionBoundary,
     approvalSource: "runtime",
     telemetryEvent: decision.telemetryEvent,
   };
