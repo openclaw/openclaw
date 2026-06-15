@@ -387,6 +387,8 @@ export async function runConfigureWizard(
 
     const prepared = await readConfigFileSnapshotForWrite();
     const snapshot = prepared.snapshot;
+    // Keep only path ownership across the interactive wizard. Each commit re-reads under
+    // the mutation lock and must use that fresh snapshot's env/include conflict facts.
     const configWriteOwnership = {
       ...(prepared.writeOptions.assertConfigPathForWrite
         ? { assertConfigPathForWrite: prepared.writeOptions.assertConfigPathForWrite }

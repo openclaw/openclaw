@@ -149,6 +149,34 @@ describe("restoreEnvVarRefs", () => {
     expect(result).toEqual([]);
   });
 
+  it("preserves an env-backed allow entry while removing the same plugin from env-backed deny", () => {
+    const result = restoreEnvVarRefs(
+      {
+        plugins: {
+          allow: ["base-plugin", "demo"],
+          deny: ["keep"],
+        },
+      },
+      {
+        plugins: {
+          allow: ["${BASE_PLUGIN}"],
+          deny: ["${DENIED_PLUGIN}", "keep"],
+        },
+      },
+      {
+        BASE_PLUGIN: "base-plugin",
+        DENIED_PLUGIN: "demo",
+      } as unknown as NodeJS.ProcessEnv,
+    );
+
+    expect(result).toEqual({
+      plugins: {
+        allow: ["${BASE_PLUGIN}", "demo"],
+        deny: ["keep"],
+      },
+    });
+  });
+
   it("allows replacing a unique environment-backed array entry", () => {
     const result = restoreEnvVarRefs(["replacement"], ["${BASE_PLUGIN}"], {
       BASE_PLUGIN: "base-plugin",
