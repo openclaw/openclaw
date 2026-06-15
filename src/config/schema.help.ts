@@ -944,6 +944,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Allow RFC 2544 benchmark-range IPs (198.18.0.0/15) for fake-IP proxy compatibility such as Clash or Surge.",
   "tools.web.fetch.ssrfPolicy.allowIpv6UniqueLocalRange":
     "Allow IPv6 Unique Local Addresses (fc00::/7) for trusted fake-IP proxy compatibility such as sing-box, Clash, or Surge.",
+  "tools.web.fetch.enableEgressFilter":
+    "Block web_fetch provider fallback when tool arguments contain credential-like patterns before any outbound request. Default: true.",
   models:
     "Model catalog root for provider definitions, merge/replace behavior, and optional Bedrock discovery integration. Keep provider definitions explicit and validated before relying on production failover paths.",
   "models.mode":

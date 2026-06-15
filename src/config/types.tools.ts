@@ -682,6 +682,8 @@ export type ToolsConfig = {
         /** Allow IPv6 Unique Local Addresses (fc00::/7) for trusted fake-IP proxy compatibility. */
         allowIpv6UniqueLocalRange?: boolean;
       };
+      /** Block provider fallback when tool args match sensitive credential patterns. Default: true. */
+      enableEgressFilter?: boolean;
     };
   };
   media?: MediaToolsConfig;

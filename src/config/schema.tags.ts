@@ -60,6 +60,7 @@ const TAG_OVERRIDES: Record<string, ConfigTag[]> = {
   "proxy.tls.caFile": ["security", "network", "storage", "advanced"],
   "tools.exec.applyPatch.workspaceOnly": ["tools", "security", "access", "advanced"],
   "tools.exec.mode": ["tools", "security", "access"],
+  "tools.web.fetch.enableEgressFilter": ["security", "tools"],
 };
 
 const PREFIX_RULES: Array<{ prefix: string; tags: ConfigTag[] }> = [

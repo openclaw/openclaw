@@ -453,6 +453,7 @@ const ToolsWebFetchSchema = z
       })
       .strict()
       .optional(),
+    enableEgressFilter: z.boolean().optional(),
     // Keep the legacy Firecrawl fetch shape loadable so existing installs can
     // start and then migrate cleanly through doctor.
     firecrawl: z

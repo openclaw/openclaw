@@ -20,6 +20,10 @@ import {
   resolveWebProviderConfig,
   resolveWebProviderDefinition,
 } from "../web/provider-runtime-shared.js";
+import {
+  resolveWebFetchEgressFilterEnabled,
+  wrapWebFetchProviderToolWithEgressFilter,
+} from "./egress-filter.js";
 
 // Runtime provider selection for the web_fetch tool. It resolves config,
 // credentials, runtime metadata, and sandbox-safe bundled provider scopes.
@@ -213,11 +217,19 @@ export function resolveWebFetchDefinition(
         fetch: toolConfig as WebFetchConfig | undefined,
         providers: providersLocal,
       }),
-    createTool: ({ provider, config, toolConfig, runtimeMetadata }) =>
-      provider.createTool({
+    createTool: ({ provider, config, toolConfig, runtimeMetadata }) => {
+      const definition = provider.createTool({
         config,
         fetchConfig: toolConfig,
         runtimeMetadata,
-      }),
+      });
+      if (!definition) {
+        return null;
+      }
+      return wrapWebFetchProviderToolWithEgressFilter(
+        definition,
+        resolveWebFetchEgressFilterEnabled(toolConfig as WebFetchConfig | undefined),
+      );
+    },
   });
 }
