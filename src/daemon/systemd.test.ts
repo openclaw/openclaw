@@ -538,6 +538,8 @@ describe("system-scope gateway unit detection (openclaw#87577)", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     execFileMock.mockReset();
+    findSystemGatewayServicesMock.mockReset();
+    findSystemGatewayServicesMock.mockResolvedValue([]);
   });
   afterEach(() => {
     vi.restoreAllMocks();
@@ -650,6 +652,19 @@ describe("system-scope gateway unit detection (openclaw#87577)", () => {
       unitName: "openclaw.service",
       unitPath: "/etc/systemd/system/openclaw.service",
     });
+  });
+
+  it("keeps a canonical user unit when the only system unit is marker-owned with a custom name", async () => {
+    mockUnitFileLayout({ user: true, system: false });
+
+    const result = await findInstalledSystemdGatewayScope({ HOME: TEST_MANAGED_HOME });
+
+    expect(result).toEqual({
+      scope: "user",
+      unitName: GATEWAY_SERVICE,
+      unitPath: `${TEST_MANAGED_HOME}/.config/systemd/user/openclaw-gateway.service`,
+    });
+    expect(findSystemGatewayServicesMock).not.toHaveBeenCalled();
   });
 
   it("findInstalledSystemdGatewayScope ignores legacy clawdbot system units in the marker fallback", async () => {
