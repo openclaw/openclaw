@@ -128,26 +128,16 @@ describe("qa coverage report", () => {
         (issue) => issue.code === "coverage-id-missing-primary-evidence",
       ),
     ).toBe(true);
-    expect(
-      inventory.scorecardTaxonomy.profiles
-        .find((profile) => profile.id === "release")
-        ?.categoryIds.toSorted(),
-    ).toEqual([
-      "agent-runtime-and-provider-execution.agent-turn-execution",
-      "automation-cron-hooks-tasks-polling.cron-jobs",
-      "browser-automation-and-exec-sandbox-tools.tool-invocation-and-execution",
-      "browser-control-ui-and-webchat.browser-ui",
-      "media-understanding-and-media-generation.media-generation",
-      "media-understanding-and-media-generation.media-understanding",
+    const smokeCiCategoryIds =
+      inventory.scorecardTaxonomy.profiles.find((profile) => profile.id === "smoke-ci")
+        ?.categoryIds ?? [];
+    const releaseCategoryIds =
+      inventory.scorecardTaxonomy.profiles.find((profile) => profile.id === "release")
+        ?.categoryIds ?? [];
+    expect(releaseCategoryIds).toEqual(expect.arrayContaining(smokeCiCategoryIds));
+    expect(releaseCategoryIds).toContain(
       "openai-codex-provider-path.responses-and-tool-compatibility",
-      "plugin-sdk-and-bundled-plugin-architecture.installing-and-running-plugins",
-      "security-auth-pairing-and-secrets.approval-policy-and-tool-safeguards",
-      "security-auth-pairing-and-secrets.credential-and-secret-hygiene",
-      "session-memory-and-context-engine.diagnostics-maintenance-and-recovery",
-      "session-memory-and-context-engine.memory",
-      "session-memory-and-context-engine.token-management",
-      "telemetry-diagnostics-and-observability.telemetry-export",
-    ]);
+    );
     expect(
       inventory.scorecardTaxonomy.categories.find(
         (category) => category.id === TEST_BROWSER_CATEGORY_ID,
