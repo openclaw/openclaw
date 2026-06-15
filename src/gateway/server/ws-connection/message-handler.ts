@@ -157,7 +157,7 @@ import {
   incrementPresenceVersion,
 } from "../health-state.js";
 import { resolveSharedGatewaySessionGeneration } from "../ws-shared-generation.js";
-import type { GatewayWsClient } from "../ws-types.js";
+import type { GatewayWsClient, WsHandshakePhase } from "../ws-types.js";
 import { resolveConnectAuthDecision, resolveConnectAuthState } from "./auth-context.js";
 import { formatGatewayAuthFailureMessage } from "./auth-messages.js";
 import {
@@ -493,6 +493,7 @@ export type GatewayWsMessageHandlerParams = {
   getClient: () => GatewayWsClient | null;
   setClient: (next: GatewayWsClient) => boolean;
   setHandshakeState: (state: "pending" | "connected" | "failed") => void;
+  advanceHandshakePhase: (phase: WsHandshakePhase) => void;
   setCloseCause: (cause: string, meta?: Record<string, unknown>) => void;
   setLastFrameMeta: (meta: { type?: string; method?: string; id?: string }) => void;
   originCheckMetrics: WsOriginCheckMetrics;
@@ -538,6 +539,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     getClient,
     setClient,
     setHandshakeState,
+    advanceHandshakePhase,
     setCloseCause,
     setLastFrameMeta,
     originCheckMetrics,
@@ -944,6 +946,9 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           deviceTokenCandidate,
           deviceTokenCandidateSource,
         } = connectAuthState;
+        if (hasSharedAuth || bootstrapTokenCandidate || deviceTokenCandidate || device) {
+          advanceHandshakePhase("auth_credentials_received");
+        }
         let { authResult, authOk, authMethod } = connectAuthState;
         const rejectUnauthorized = (failedAuth: GatewayAuthResult) => {
           const { authProvided, canRetryWithDeviceToken, recommendedNextStep } =
@@ -1272,6 +1277,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           rejectUnauthorized(authResult);
           return;
         }
+        advanceHandshakePhase("auth_validated");
         const usesSharedGatewayAuth =
           authMethod === "token" || authMethod === "password" || authMethod === "trusted-proxy";
         const sharedGatewaySessionGeneration = usesSharedGatewayAuth
@@ -2051,6 +2057,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           return;
         }
         setHandshakeState("connected");
+        advanceHandshakePhase("session_attached");
         logWs("in", "connect", {
           connId,
           client: connectParams.client.id,
@@ -2146,6 +2153,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             );
         }
 
+        advanceHandshakePhase("subscriptions_registered");
         const snapshot = buildGatewaySnapshot({
           includeSensitive: scopes.includes(ADMIN_SCOPE),
         });
@@ -2257,6 +2265,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           clientMode: connectParams.client.mode,
           deviceId: device?.id,
         });
+        advanceHandshakePhase("ready");
         if (pendingNodePairingCleanup) {
           const context = buildRequestContext();
           const cleanupClaim = pendingNodePairingCleanup;
