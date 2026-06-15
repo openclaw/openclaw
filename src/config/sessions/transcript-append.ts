@@ -15,6 +15,8 @@ import { redactSecrets } from "../../logging/redact.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import {
   appendJsonlEntry,
+  appendSerializedJsonlEntry,
+  serializeJsonlEntry,
   serializeJsonlLine,
   writeJsonlEntry,
   writeJsonlLines,
@@ -278,10 +280,15 @@ export async function appendSessionTranscriptMessage<TMessage>(
     // Active prompt-stream writes must acquire the session lock before joining
     // the append FIFO; otherwise a hook that already owns the lock can deadlock
     // behind the prompt append it is blocking.
-    return await activeLockRunner(() =>
-      withTranscriptAppendQueue(params.transcriptPath, () =>
-        appendSessionTranscriptMessageLocked(params),
-      ),
+    return await activeLockRunner(
+      () =>
+        withTranscriptAppendQueue(params.transcriptPath, () =>
+          appendSessionTranscriptMessageLocked(params),
+        ),
+      {
+        publishOwnedWrite: true,
+        resolvePublishedEntryIds: (result) => (result?.appended === true ? [result.messageId] : []),
+      },
     );
   }
   return await withTranscriptAppendQueue(params.transcriptPath, () =>
@@ -303,13 +310,19 @@ export async function appendSessionTranscriptEvent(
     sessionFile: params.transcriptPath,
   });
   if (activeLockRunner) {
-    return await activeLockRunner(() =>
-      withTranscriptAppendQueue(params.transcriptPath, () =>
-        appendSessionTranscriptEventLocked(params),
-      ),
+    await activeLockRunner(
+      () =>
+        withTranscriptAppendQueue(params.transcriptPath, () =>
+          appendSessionTranscriptEventLocked(params),
+        ),
+      {
+        publishOwnedWrite: true,
+        resolvePublishedEntryIds: (result) => (result.entryId ? [result.entryId] : []),
+      },
     );
+    return;
   }
-  return await withTranscriptAppendQueue(params.transcriptPath, () =>
+  await withTranscriptAppendQueue(params.transcriptPath, () =>
     withSessionTranscriptWriteLock(params, () => appendSessionTranscriptEventLocked(params)),
   );
 }
@@ -332,9 +345,20 @@ async function withSessionTranscriptWriteLock<T>(
 
 async function appendSessionTranscriptEventLocked(
   params: AppendSessionTranscriptEventParams,
-): Promise<void> {
+): Promise<{ entryId?: string }> {
   await fs.mkdir(path.dirname(params.transcriptPath), { recursive: true });
-  await appendJsonlEntry(params.transcriptPath, params.event);
+  const serializedEvent = serializeJsonlEntry(params.event);
+  await appendSerializedJsonlEntry(params.transcriptPath, serializedEvent);
+  try {
+    const persisted = JSON.parse(serializedEvent) as unknown;
+    const entryId =
+      persisted && typeof persisted === "object" && !Array.isArray(persisted)
+        ? (persisted as { id?: unknown }).id
+        : undefined;
+    return typeof entryId === "string" && entryId.trim().length > 0 ? { entryId } : {};
+  } catch {
+    return {};
+  }
 }
 
 async function appendSessionTranscriptMessageLocked<TMessage>(

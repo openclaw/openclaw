@@ -9,8 +9,13 @@ type OwnedSessionTranscriptWriteContext = {
   publishSessionFileSnapshot?: (snapshot: OwnedSessionTranscriptCacheSnapshot) => boolean;
   withSessionWriteLock: <T>(
     run: () => Promise<T> | T,
-    options?: { publishOwnedWrite?: boolean },
+    options?: OwnedSessionTranscriptWriteOptions<T>,
   ) => Promise<T>;
+};
+
+export type OwnedSessionTranscriptWriteOptions<T> = {
+  publishOwnedWrite?: boolean;
+  resolvePublishedEntryIds?: (result: T) => readonly string[];
 };
 
 export type OwnedSessionTranscriptCacheSnapshot = {
@@ -134,7 +139,7 @@ async function runWithOwnedSessionTranscriptWriteContext<T>(
     sessionKey?: string;
   },
   run: () => Promise<T> | T,
-  options?: { publishOwnedWrite?: boolean },
+  options?: OwnedSessionTranscriptWriteOptions<T>,
 ): Promise<T> {
   const context = ownedTranscriptWriteContext.getStore();
   if (!context || !contextMatches({ context, ...params })) {

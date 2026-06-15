@@ -21,6 +21,7 @@ import { resolveQuotaSuspensionEntryMaintenance } from "../../../config/sessions
 import {
   bindOwnedSessionTranscriptWrites,
   type OwnedSessionTranscriptCacheSnapshot,
+  type OwnedSessionTranscriptWriteOptions,
   withOwnedSessionTranscriptWrites,
 } from "../../../config/sessions/transcript-write-context.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
@@ -2139,7 +2140,7 @@ export async function runEmbeddedAttempt(
         sessionLockController.publishOwnedSessionFileSnapshot(snapshot),
       withSessionWriteLock: <T>(
         operation: () => Promise<T> | T,
-        options?: { publishOwnedWrite?: boolean },
+        options?: OwnedSessionTranscriptWriteOptions<T>,
       ) => sessionLockController.withSessionWriteLock(operation, options),
     };
     const withOwnedSessionWriteLock = <T>(operation: () => Promise<T> | T): Promise<T> =>

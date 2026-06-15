@@ -4,7 +4,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { appendSessionTranscriptMessage } from "../../../config/sessions/transcript-append.js";
+import {
+  appendSessionTranscriptEvent,
+  appendSessionTranscriptMessage,
+} from "../../../config/sessions/transcript-append.js";
 import {
   runWithOwnedSessionTranscriptWriteLock,
   runWithOwnedSessionTranscriptWritePublication,
@@ -1039,69 +1042,57 @@ describe("embedded attempt session lock lifecycle", () => {
 
     await controller.releaseForPrompt();
     const sessionKey = "agent:main:delivery-side-branch";
-    await withOwnedSessionTranscriptWrites(
+    const deliveryId = await withOwnedSessionTranscriptWrites(
       {
         sessionFile,
         sessionKey,
         withSessionWriteLock: (operation, options) =>
           controller.withSessionWriteLock(operation, options),
       },
-      async () =>
-        await runWithOwnedSessionTranscriptWritePublication(
-          { sessionFile, sessionKey },
-          async () => {
-            await fs.appendFile(
-              sessionFile,
-              [
-                JSON.stringify({
-                  type: "message",
-                  id: "delivery-mirror",
-                  parentId: null,
-                  timestamp: new Date().toISOString(),
-                  message: {
-                    role: "assistant",
-                    content: [{ type: "text", text: "mirrored delivery" }],
-                    api: "messages",
-                    provider: "openclaw",
-                    model: "delivery-mirror",
-                    usage: {
-                      input: 0,
-                      output: 0,
-                      cacheRead: 0,
-                      cacheWrite: 0,
-                      totalTokens: 0,
-                      cost: {
-                        input: 0,
-                        output: 0,
-                        cacheRead: 0,
-                        cacheWrite: 0,
-                        total: 0,
-                      },
-                    },
-                    stopReason: "stop",
-                    timestamp: 3,
-                  },
-                }),
-                JSON.stringify({
-                  type: "label",
-                  id: "delivery-label",
-                  parentId: "delivery-mirror",
-                  timestamp: new Date().toISOString(),
-                  targetId: "delivery-mirror",
-                  label: "delivered",
-                }),
-                JSON.stringify({
-                  type: "session_info",
-                  id: "session-info",
-                  parentId: "delivery-label",
-                  timestamp: new Date().toISOString(),
-                  name: "delivery session",
-                }),
-              ].join("\n") + "\n",
-              "utf8",
-            );
+      async () => {
+        const delivery = await appendSessionTranscriptMessage({
+          transcriptPath: sessionFile,
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "owned plugin delivery" }],
+            api: "messages",
+            provider: "anthropic",
+            model: "sonnet-4.6",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "stop",
+            timestamp: 3,
           },
-        ),
+        });
+        await appendSessionTranscriptEvent({
+          transcriptPath: sessionFile,
+          event: {
+            type: "label",
+            id: "delivery-label",
+            parentId: delivery.messageId,
+            timestamp: new Date().toISOString(),
+            targetId: delivery.messageId,
+            label: "delivered",
+          },
+        });
+        await appendSessionTranscriptEvent({
+          transcriptPath: sessionFile,
+          event: {
+            type: "session_info",
+            id: "session-info",
+            parentId: "delivery-label",
+            timestamp: new Date().toISOString(),
+            name: "delivery session",
+          },
+        });
+        return delivery.messageId;
+      },
     );
 
     await controller.withSessionWriteLock(() => {
@@ -1130,11 +1121,11 @@ describe("embedded attempt session lock lifecycle", () => {
     ).rewriteFile();
 
     const reopened = SessionManager.open(sessionFile, dir, dir);
-    expect(reopened.getEntry("delivery-mirror")).toMatchObject({
+    expect(reopened.getEntry(deliveryId)).toMatchObject({
       type: "message",
-      message: expect.objectContaining({ model: "delivery-mirror" }),
+      message: expect.objectContaining({ model: "sonnet-4.6" }),
     });
-    expect(reopened.getLabel("delivery-mirror")).toBe("delivered");
+    expect(reopened.getLabel(deliveryId)).toBe("delivered");
     expect(reopened.getSessionName()).toBe("delivery session");
     expect(reopened.buildSessionContext().messages.map((message) => message.role)).toEqual([
       "user",
@@ -2145,7 +2136,7 @@ describe("embedded attempt session lock lifecycle", () => {
     expect(firstController.hasSessionTakeover()).toBe(false);
   });
 
-  it("allows post-prompt writes after the prompt context publishes an owned transcript write", async () => {
+  it("retains owned transcript publications until every active fence consumes them", async () => {
     const sessionFile = await createTempSessionFile();
     const releases: string[] = [];
     const acquireSessionWriteLockLocal2 = vi.fn(async () => ({
@@ -2176,29 +2167,27 @@ describe("embedded attempt session lock lifecycle", () => {
         },
         run,
       );
-    await promptActiveSession(
-      async () =>
-        await runWithOwnedSessionTranscriptWritePublication(
-          { sessionFile, sessionKey: "agent:main:slack:channel:456" },
-          async () => {
-            await fs.appendFile(
-              sessionFile,
-              `${JSON.stringify({
-                type: "message",
-                id: "same-process",
-                parentId: null,
-                timestamp: new Date().toISOString(),
-                message: {
+    const publishedIds: string[] = [];
+    await promptActiveSession(async () => {
+      for (let index = 0; index < 70; index += 1) {
+        const appended = await appendSessionTranscriptMessage({
+          transcriptPath: sessionFile,
+          message:
+            index === 0
+              ? {
+                  role: "user",
+                  content: [{ type: "text", text: "owned user publication" }],
+                }
+              : {
                   role: "assistant",
-                  provider: "openclaw",
-                  model: "delivery-mirror",
+                  content: [{ type: "text", text: `owned publication ${index}` }],
+                  provider: "anthropic",
+                  model: "sonnet-4.6",
                 },
-              })}\n`,
-              "utf8",
-            );
-          },
-        ),
-    );
+        });
+        publishedIds.push(appended.messageId);
+      }
+    });
     await secondController.releaseForPrompt();
 
     await expect(
@@ -2209,11 +2198,286 @@ describe("embedded attempt session lock lifecycle", () => {
     ).resolves.toBe("post-write");
 
     expect(firstController.hasSessionTakeover()).toBe(false);
-    expect(mergePromptReleasedSessionEntries).toHaveBeenCalledWith([
-      expect.objectContaining({ type: "message", id: "same-process" }),
-    ]);
+    expect(mergePromptReleasedSessionEntries).toHaveBeenCalledWith(
+      publishedIds.map((id) => expect.objectContaining({ type: "message", id })),
+    );
     expect(acquireSessionWriteLockLocal2).toHaveBeenCalledTimes(3);
     expect(releases).toEqual(["release", "release", "release"]);
+  });
+
+  it("serializes concurrent nested owned transcript publications", async () => {
+    const sessionFile = await createTempSessionFile();
+    const mergedIds: string[] = [];
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+      mergePromptReleasedSessionEntries: (entries) => {
+        for (const entry of entries) {
+          if (mergedIds.includes(entry.id)) {
+            throw new Error(`duplicate merged entry ${entry.id}`);
+          }
+          mergedIds.push(entry.id);
+        }
+      },
+    });
+    await controller.releaseForPrompt();
+
+    let releaseFirstWrite!: () => void;
+    const firstWriteCanFinish = new Promise<void>((resolve) => {
+      releaseFirstWrite = resolve;
+    });
+    let markFirstWriteStarted!: () => void;
+    const firstWriteStarted = new Promise<void>((resolve) => {
+      markFirstWriteStarted = resolve;
+    });
+    const appendOwnedAssistant = async (id: string): Promise<string> => {
+      await fs.appendFile(
+        sessionFile,
+        `${JSON.stringify({
+          type: "message",
+          id,
+          parentId: null,
+          timestamp: new Date().toISOString(),
+          message: {
+            role: "assistant",
+            provider: "anthropic",
+            model: "sonnet-4.6",
+          },
+        })}\n`,
+        "utf8",
+      );
+      return id;
+    };
+
+    await controller.withSessionWriteLock(async () => {
+      const firstWrite = controller.withSessionWriteLock(
+        async () => {
+          markFirstWriteStarted();
+          await firstWriteCanFinish;
+          return await appendOwnedAssistant("owned-first");
+        },
+        {
+          publishOwnedWrite: true,
+          resolvePublishedEntryIds: (id) => [id],
+        },
+      );
+      await firstWriteStarted;
+      const secondWrite = controller.withSessionWriteLock(
+        () => appendOwnedAssistant("owned-second"),
+        {
+          publishOwnedWrite: true,
+          resolvePublishedEntryIds: (id) => [id],
+        },
+      );
+      releaseFirstWrite();
+      await Promise.all([firstWrite, secondWrite]);
+    });
+
+    expect(mergedIds).toEqual(["owned-first", "owned-second"]);
+    expect(controller.hasSessionTakeover()).toBe(false);
+    await controller.dispose();
+  });
+
+  it("rejects interleaved assistant rows and stops already-queued publications", async () => {
+    const sessionFile = await createTempSessionFile();
+    const mergePromptReleasedSessionEntries = vi.fn();
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+      mergePromptReleasedSessionEntries,
+    });
+    await controller.releaseForPrompt();
+
+    let releaseFirstWrite!: () => void;
+    const firstWriteCanFinish = new Promise<void>((resolve) => {
+      releaseFirstWrite = resolve;
+    });
+    let markFirstWriteStarted!: () => void;
+    const firstWriteStarted = new Promise<void>((resolve) => {
+      markFirstWriteStarted = resolve;
+    });
+    let secondWriteRan = false;
+    const appendAssistant = async (id: string): Promise<string> => {
+      await fs.appendFile(
+        sessionFile,
+        `${JSON.stringify({
+          type: "message",
+          id,
+          parentId: null,
+          timestamp: new Date().toISOString(),
+          message: {
+            role: "assistant",
+            provider: "anthropic",
+            model: "sonnet-4.6",
+          },
+        })}\n`,
+        "utf8",
+      );
+      return id;
+    };
+
+    await controller.withSessionWriteLock(async () => {
+      const firstWrite = controller.withSessionWriteLock(
+        async () => {
+          markFirstWriteStarted();
+          await firstWriteCanFinish;
+          await appendAssistant("interleaved-external");
+          return await appendAssistant("owned-entry");
+        },
+        {
+          publishOwnedWrite: true,
+          resolvePublishedEntryIds: (id) => [id],
+        },
+      );
+      await firstWriteStarted;
+      const secondWrite = controller.withSessionWriteLock(
+        async () => {
+          secondWriteRan = true;
+          return await appendAssistant("queued-entry");
+        },
+        {
+          publishOwnedWrite: true,
+          resolvePublishedEntryIds: (id) => [id],
+        },
+      );
+      releaseFirstWrite();
+      const results = await Promise.allSettled([firstWrite, secondWrite]);
+      expect(results.map((result) => result.status)).toEqual(["rejected", "rejected"]);
+    });
+
+    expect(secondWriteRan).toBe(false);
+    expect(mergePromptReleasedSessionEntries).not.toHaveBeenCalled();
+    expect(controller.hasSessionTakeover()).toBe(true);
+    await controller.dispose();
+  });
+
+  it("deactivates publication contexts inherited by delayed descendants", async () => {
+    const sessionFile = await createTempSessionFile();
+    const acquireSessionWriteLockLocal = vi.fn(async () => ({
+      release: vi.fn(async () => {}),
+    }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockLocal,
+      lockOptions: { ...lockOptions, sessionFile },
+      mergePromptReleasedSessionEntries: vi.fn(),
+    });
+    await controller.releaseForPrompt();
+
+    let releaseDelayedWrite!: () => void;
+    const delayedWriteCanStart = new Promise<void>((resolve) => {
+      releaseDelayedWrite = resolve;
+    });
+    let delayedWrite!: Promise<string>;
+    await controller.withSessionWriteLock(
+      async () => {
+        delayedWrite = delayedWriteCanStart.then(() =>
+          controller.withSessionWriteLock(() => "delayed-write"),
+        );
+        await fs.appendFile(
+          sessionFile,
+          `${JSON.stringify({
+            type: "message",
+            id: "publication-entry",
+            parentId: null,
+            timestamp: new Date().toISOString(),
+            message: {
+              role: "assistant",
+              provider: "anthropic",
+              model: "sonnet-4.6",
+            },
+          })}\n`,
+          "utf8",
+        );
+        return "publication-entry";
+      },
+      {
+        publishOwnedWrite: true,
+        resolvePublishedEntryIds: (id) => [id],
+      },
+    );
+
+    releaseDelayedWrite();
+    await expect(delayedWrite).resolves.toBe("delayed-write");
+    expect(acquireSessionWriteLockLocal).toHaveBeenCalledTimes(3);
+    expect(controller.hasSessionTakeover()).toBe(false);
+    await controller.dispose();
+  });
+
+  it("publishes the transcript event id returned by serialization", async () => {
+    const sessionFile = await createTempSessionFile();
+    const mergePromptReleasedSessionEntries = vi.fn();
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+      mergePromptReleasedSessionEntries,
+    });
+    await controller.releaseForPrompt();
+
+    const toJSON = vi.fn(() => ({
+      type: "custom",
+      id: "serialized-owned-event",
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      customType: "plugin-event",
+      data: { source: "plugin" },
+    }));
+    await expect(
+      withOwnedSessionTranscriptWrites(
+        {
+          sessionFile,
+          withSessionWriteLock: (operation, options) =>
+            controller.withSessionWriteLock(operation, options),
+        },
+        async () =>
+          await appendSessionTranscriptEvent({
+            transcriptPath: sessionFile,
+            event: { toJSON },
+          }),
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(toJSON).toHaveBeenCalledTimes(1);
+    expect(mergePromptReleasedSessionEntries).toHaveBeenCalledWith([
+      expect.objectContaining({ type: "custom", id: "serialized-owned-event" }),
+    ]);
+    expect(controller.hasSessionTakeover()).toBe(false);
+    await controller.dispose();
+  });
+
+  it("rejects owned transcript events the active manager cannot replay", async () => {
+    const sessionFile = await createTempSessionFile();
+    const mergePromptReleasedSessionEntries = vi.fn();
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+      mergePromptReleasedSessionEntries,
+    });
+    await controller.releaseForPrompt();
+
+    await expect(
+      withOwnedSessionTranscriptWrites(
+        {
+          sessionFile,
+          withSessionWriteLock: (operation, options) =>
+            controller.withSessionWriteLock(operation, options),
+        },
+        async () =>
+          await appendSessionTranscriptEvent({
+            transcriptPath: sessionFile,
+            event: {
+              type: "metadata",
+              id: "owned-metadata",
+              parentId: null,
+              timestamp: new Date().toISOString(),
+              data: { source: "plugin" },
+            },
+          }),
+      ),
+    ).rejects.toBeInstanceOf(EmbeddedAttemptSessionTakeoverError);
+
+    expect(mergePromptReleasedSessionEntries).not.toHaveBeenCalled();
+    expect(controller.hasSessionTakeover()).toBe(true);
+    await controller.dispose();
   });
 
   it("allows prompt-stream announcement writes from another controller but still rejects external edits", async () => {
