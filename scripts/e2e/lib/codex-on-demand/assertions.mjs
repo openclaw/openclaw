@@ -1,5 +1,8 @@
+// Assertions for Codex on-demand plugin E2E scenarios.
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { assertOpenAiEnvAuthProfileStore } from "../auth-profile-store-assertions.mjs";
 import {
   assertPathInside,
   configPath,
@@ -81,11 +84,29 @@ if (providerRuntime && providerRuntime !== "codex") {
   throw new Error(`unexpected OpenAI provider runtime: ${providerRuntime}`);
 }
 
-const authPath = path.join(stateDir(), "agents", "main", "agent", "auth-profiles.json");
-const authRaw = fs.readFileSync(authPath, "utf8");
-if (!authRaw.includes("OPENAI_API_KEY")) {
-  throw new Error("auth profile did not persist OPENAI_API_KEY env ref");
+function readAuthProfileStoreText(agentDir) {
+  const dbPath = path.join(agentDir, "openclaw-agent.sqlite");
+  if (!fs.existsSync(dbPath)) {
+    throw new Error("auth profile SQLite store was not persisted");
+  }
+  let db;
+  try {
+    db = new DatabaseSync(dbPath, { readOnly: true });
+    const row = db
+      .prepare("SELECT store_json FROM auth_profile_store WHERE store_key = ?")
+      .get("primary");
+    return typeof row?.store_json === "string" ? row.store_json : "";
+  } finally {
+    db?.close();
+  }
 }
-if (authRaw.includes("sk-openclaw-codex-on-demand-e2e")) {
-  throw new Error("auth profile persisted the raw OpenAI test key");
+
+const authRaw = readAuthProfileStoreText(path.join(stateDir(), "agents", "main", "agent"));
+if (!authRaw) {
+  throw new Error("auth profile SQLite store row was not persisted");
 }
+assertOpenAiEnvAuthProfileStore(authRaw, {
+  envRefMessage: "auth profile did not persist OPENAI_API_KEY env ref",
+  rawKeyMessage: "auth profile persisted the raw OpenAI test key",
+  rawKeyNeedle: "sk-openclaw-codex-on-demand-e2e",
+});

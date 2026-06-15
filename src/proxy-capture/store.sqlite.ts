@@ -1,10 +1,14 @@
+// Proxy capture SQLite store persists capture metadata and replayable exchanges.
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { normalizeNullableString as normalizeObservedValue } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { configureSqliteWalMaintenance, type SqliteWalMaintenance } from "../infra/sqlite-wal.js";
+import {
+  configureSqliteConnectionPragmas,
+  type SqliteWalMaintenance,
+} from "../infra/sqlite-wal.js";
 import { readCaptureBlobText, writeCaptureBlob } from "./blob-store.js";
 import type {
   CaptureBlobRecord,
@@ -17,6 +21,8 @@ import type {
   CaptureSessionSummary,
 } from "./types.js";
 
+// SQLite-backed debug proxy store. Metadata stays in SQLite; large payloads are
+// compressed into the blob directory and referenced by hash.
 function ensureParentDir(filePath: string) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
 }
@@ -30,8 +36,11 @@ function openDatabase(dbPath: string): OpenedDatabase {
   ensureParentDir(dbPath);
   const { DatabaseSync } = requireNodeSqlite();
   const db = new DatabaseSync(dbPath);
-  const walMaintenance = configureSqliteWalMaintenance(db);
-  db.exec("PRAGMA busy_timeout = 5000");
+  const walMaintenance = configureSqliteConnectionPragmas(db, {
+    busyTimeoutMs: 5000,
+    databaseLabel: "debug-proxy-capture",
+    databasePath: dbPath,
+  });
   db.exec(`
     CREATE TABLE IF NOT EXISTS capture_sessions (
       id TEXT PRIMARY KEY,
@@ -77,6 +86,8 @@ function serializeJson(value: unknown): string | null {
   return value == null ? null : JSON.stringify(value);
 }
 
+// Metadata is optional and user/tool supplied, so parse defensively for coverage
+// summaries instead of assuming every event has valid JSON.
 function parseMetaJson(metaJson: unknown): Record<string, unknown> | null {
   if (typeof metaJson !== "string" || metaJson.trim().length === 0) {
     return null;
@@ -259,6 +270,8 @@ export class DebugProxyCaptureStore {
       }
       if (host) {
         hosts.set(host, (hosts.get(host) ?? 0) + 1);
+        // Local model/provider endpoints are useful to surface separately when
+        // debugging why cloud-provider labels are absent.
         if (
           host === "127.0.0.1:11434" ||
           host.startsWith("127.0.0.1:") ||
@@ -295,6 +308,8 @@ export class DebugProxyCaptureStore {
     const sessionWhere = sessionId ? "AND session_id = ?" : "";
     const args = sessionId ? [sessionId] : [];
     switch (preset) {
+      // Presets are intentionally SQL-only summaries so the CLI can query large
+      // capture sessions without loading every event into memory.
       case "double-sends":
         return this.db
           .prepare(
@@ -431,6 +446,7 @@ export class DebugProxyCaptureStore {
       .map((row) => row.blobId?.trim())
       .filter((blobId): blobId is string => Boolean(blobId));
     const remainingBlobRefs =
+      // Shared blobs are deleted only when no surviving event references them.
       candidateBlobIds.length > 0
         ? new Set(
             (
@@ -487,6 +503,8 @@ export function closeDebugProxyCaptureStore(): void {
   cachedStoreLeases = 0;
 }
 
+// Lease API keeps one cached synchronous SQLite connection alive across related
+// capture operations, then closes it when the last owner releases.
 export function acquireDebugProxyCaptureStore(
   dbPath: string,
   blobDir: string,
@@ -519,6 +537,8 @@ export function persistEventPayload(
   }
   const buffer = Buffer.isBuffer(params.data) ? params.data : Buffer.from(params.data);
   const previewLimit = params.previewLimit ?? 8192;
+  // Store the whole payload as a blob but keep a small UTF-8 preview inline for
+  // fast CLI listings and query output.
   const blob = store.persistPayload(buffer, params.contentType);
   return {
     dataText: buffer.subarray(0, previewLimit).toString("utf8"),

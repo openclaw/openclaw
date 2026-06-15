@@ -1,3 +1,5 @@
+// Covers outbound direct target resolution, heartbeat target derivation,
+// heartbeat sender context, and route-aware heartbeat refinements.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -489,6 +491,55 @@ describe("resolveSessionDeliveryTarget", () => {
 
     expect(resolved.threadId).toBe(42);
     expect(resolved.to).toBe("room:ops:topic:1008013");
+  });
+
+  it("delivers an origin-carrying event when no heartbeat target is configured", () => {
+    // A wake/cron event that explicitly carried its origin delivery context
+    // names its own destination; the reply must not be dropped just because
+    // the deployment never configured agents.defaults.heartbeat.
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg: {},
+      entry: {
+        sessionId: "sess-origin-no-config",
+        updatedAt: 1,
+        lastChannel: "alpha",
+        lastTo: "chat:one",
+      },
+      turnSource: { channel: "alpha", to: "chat:one", threadId: "77" },
+    });
+    expect(resolved.channel).toBe("alpha");
+    expect(resolved.to).toBe("chat:one");
+    expect(resolved.threadId).toBe("77");
+  });
+
+  it("keeps an explicit target:none suppressing origin-carrying events", () => {
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg: {},
+      entry: {
+        sessionId: "sess-origin-target-none",
+        updatedAt: 1,
+        lastChannel: "alpha",
+        lastTo: "chat:one",
+      },
+      heartbeat: { target: "none" },
+      turnSource: { channel: "alpha", to: "chat:one" },
+    });
+    expect(resolved.channel).toBe("none");
+    expect(resolved.reason).toBe("target-none");
+  });
+
+  it("stays suppressed with unset heartbeat config and no origin turn source", () => {
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg: {},
+      entry: {
+        sessionId: "sess-no-config-no-origin",
+        updatedAt: 1,
+        lastChannel: "alpha",
+        lastTo: "chat:one",
+      },
+    });
+    expect(resolved.channel).toBe("none");
+    expect(resolved.reason).toBe("target-none");
   });
 
   const resolveHeartbeatTarget = (entry: SessionEntry, directPolicy?: "allow" | "block") =>

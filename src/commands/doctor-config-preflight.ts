@@ -1,3 +1,4 @@
+/** Config preflight for doctor: legacy config/state migration, recovery, and snapshot loading. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
@@ -15,12 +16,19 @@ import { noteIncludeConfinementWarning } from "./doctor-config-analysis.js";
 import { findDoctorLegacyConfigIssues } from "./doctor/shared/legacy-config-issues.js";
 
 type DoctorStateMigrationsModule = typeof import("./doctor-state-migrations.js");
+type DoctorCronModule = typeof import("./doctor/cron/index.js");
 
 let doctorStateMigrationsPromise: Promise<DoctorStateMigrationsModule> | null = null;
+let doctorCronPromise: Promise<DoctorCronModule> | null = null;
 
 function loadDoctorStateMigrations(): Promise<DoctorStateMigrationsModule> {
   doctorStateMigrationsPromise ??= import("./doctor-state-migrations.js");
   return doctorStateMigrationsPromise;
+}
+
+function loadDoctorCron(): Promise<DoctorCronModule> {
+  doctorCronPromise ??= import("./doctor/cron/index.js");
+  return doctorCronPromise;
 }
 
 async function maybeMigrateLegacyConfig(): Promise<string[]> {
@@ -92,6 +100,7 @@ function addDoctorLegacyIssues(
   return { ...snapshot, legacyIssues };
 }
 
+/** Returns true during updater-managed config rewrites where plugin validation may be stale. */
 export function shouldSkipPluginValidationForDoctorConfigPreflight(
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
@@ -107,6 +116,12 @@ function noteStateMigrationResult(result: { changes: string[]; warnings: string[
   }
 }
 
+/**
+ * Runs early doctor config checks before the main config repair flow.
+ *
+ * It may migrate legacy state/config paths, recover corrupt target config when requested, and
+ * returns the best-effort config snapshot used by later doctor checks.
+ */
 export async function runDoctorConfigPreflight(
   options: {
     migrateState?: boolean;
@@ -166,6 +181,11 @@ export async function runDoctorConfigPreflight(
 
   const baseConfig = snapshot.sourceConfig ?? snapshot.config ?? {};
   if (options.migrateState !== false) {
+    if (snapshot.valid) {
+      const { repairLegacyCronStoreWithoutPrompt } = await loadDoctorCron();
+      const cronResult = await repairLegacyCronStoreWithoutPrompt({ cfg: baseConfig });
+      noteStateMigrationResult(cronResult);
+    }
     const { autoMigrateLegacyState, autoMigrateLegacyTaskStateSidecars } =
       await loadDoctorStateMigrations();
     const stateResult = snapshot.valid

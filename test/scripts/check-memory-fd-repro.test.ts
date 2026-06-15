@@ -1,3 +1,4 @@
+// Check Memory Fd Repro tests cover check memory fd repro script behavior.
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
@@ -264,6 +265,31 @@ describe("check-memory-fd-repro", () => {
     expect(child.kill).not.toHaveBeenCalled();
     expect(findGatewayPidFn).toHaveBeenCalledWith(9);
     expect(killProcess).not.toHaveBeenCalled();
+  });
+
+  it("force-kills a gateway child that survives listener cleanup", async () => {
+    const child = {
+      exitCode: null,
+      kill: vi.fn(),
+      signalCode: null,
+    };
+    const findGatewayPidFn = vi.fn().mockReturnValueOnce(1234).mockReturnValue(null);
+    const killProcess = vi.fn();
+
+    await expect(
+      stopGatewayWithRuntime({
+        child,
+        childExitPolls: 0,
+        findGatewayPidFn,
+        killProcess,
+        listenerSettleDelayMs: 0,
+        port: 9,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(child.kill).toHaveBeenNthCalledWith(1, "SIGINT");
+    expect(killProcess).toHaveBeenCalledWith(1234, "SIGTERM");
+    expect(child.kill).toHaveBeenNthCalledWith(2, "SIGKILL");
   });
 
   it("bounds gateway readiness output while keeping newest logs", () => {

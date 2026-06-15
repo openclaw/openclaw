@@ -1,7 +1,13 @@
+/**
+ * Credential state classification for auth profiles.
+ * Centralizes expiry, missing-secret, and unresolved-reference checks used by
+ * auth selection, refresh, health, and doctor flows.
+ */
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { coerceSecretRef, normalizeSecretInputString } from "../../config/types.secrets.js";
 import type { AuthProfileCredential, OAuthCredential } from "./types.js";
 
+/** Reason code for why a stored auth credential can or cannot be used. */
 export type AuthCredentialReasonCode =
   | "ok"
   | "missing_credential"
@@ -9,10 +15,13 @@ export type AuthCredentialReasonCode =
   | "expired"
   | "unresolved_ref";
 
+/** Default OAuth access-token refresh margin before expiry. */
 export const DEFAULT_OAUTH_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 
+/** Normalized expiry state for token-style credentials. */
 export type TokenExpiryState = "missing" | "valid" | "expiring" | "expired" | "invalid_expires";
 
+/** Classifies a token expiry timestamp for auth selection and refresh logic. */
 export function resolveTokenExpiryState(
   expires: unknown,
   now = Date.now(),
@@ -40,6 +49,7 @@ export function resolveTokenExpiryState(
   return "valid";
 }
 
+/** Returns true when an OAuth credential has a non-expiring access token. */
 export function hasUsableOAuthCredential(
   credential: OAuthCredential | undefined,
   opts?: {
@@ -62,6 +72,8 @@ export function hasUsableOAuthCredential(
   );
 }
 
+// SecretRef and literal secret strings are both valid configured credentials;
+// unresolved refs are classified separately so callers can surface useful copy.
 function hasConfiguredSecretRef(value: unknown): boolean {
   return coerceSecretRef(value) !== null;
 }
@@ -70,6 +82,7 @@ function hasConfiguredSecretString(value: unknown): boolean {
   return normalizeSecretInputString(value) !== undefined;
 }
 
+/** Classifies whether a stored credential is eligible for auth selection. */
 export function evaluateStoredCredentialEligibility(params: {
   credential: AuthProfileCredential;
   now?: number;

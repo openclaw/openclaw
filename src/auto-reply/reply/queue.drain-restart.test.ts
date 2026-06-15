@@ -1,3 +1,4 @@
+// Tests queue drain restart behavior when follow-up runs chain together.
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import type { FollowupRun, QueueSettings } from "./queue.js";
@@ -273,6 +274,39 @@ describe("followup queue drain restart after idle window", () => {
     expect(calls[1]?.prompt).toBe("wait-for-lane");
   });
 
+  it("refreshes the callback used by a deferred active-drain retry", async () => {
+    const key = `test-active-drain-refreshes-retry-${Date.now()}`;
+    const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
+    const firstStarted = createDeferred<void>();
+    const releaseFirst = createDeferred<void>();
+    const retried = createDeferred<void>();
+    const staleCalls: FollowupRun[] = [];
+    const freshCalls: FollowupRun[] = [];
+
+    const staleFollowup = async (run: FollowupRun) => {
+      staleCalls.push(run);
+      firstStarted.resolve();
+      await releaseFirst.promise;
+      throw new FollowupRunDeferredError("reply lane busy");
+    };
+    const freshFollowup = async (run: FollowupRun) => {
+      freshCalls.push(run);
+      retried.resolve();
+    };
+
+    enqueueFollowupRun(key, createRun({ prompt: "wait-for-lane" }), settings);
+    scheduleFollowupDrain(key, staleFollowup);
+    await firstStarted.promise;
+
+    scheduleFollowupDrain(key, freshFollowup);
+    releaseFirst.resolve();
+    await retried.promise;
+
+    expect(staleCalls).toHaveLength(1);
+    expect(freshCalls).toHaveLength(1);
+    expect(freshCalls[0]?.prompt).toBe("wait-for-lane");
+  });
+
   it("preserves overflow summaries across deferred retries", async () => {
     const key = `test-deferred-summary-retry-${Date.now()}`;
     const prompts: string[] = [];
@@ -338,8 +372,8 @@ describe("followup queue drain restart after idle window", () => {
 
     expect(attempts).toBe(2);
     expect(prompts[1]).toContain("Dropped 3 messages");
-    expect(prompts[1]).toContain("original dropped while busy");
     expect(prompts[1]).toContain("newer dropped while waiting");
+    expect(prompts[1]).not.toContain("original dropped while busy");
   });
 
   it("does not process messages after clearSessionQueues clears the callback", async () => {

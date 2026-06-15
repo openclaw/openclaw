@@ -1,9 +1,11 @@
+// Voice Call tests cover outbound plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   addTranscriptEntryMock,
   clearMaxDurationTimerMock,
+  ensureMaxDurationTimerForLiveCallMock,
   generateDtmfRedirectTwimlMock,
   generateNotifyTwimlMock,
   getCallByProviderCallIdMock,
@@ -14,6 +16,11 @@ const {
 } = vi.hoisted(() => ({
   addTranscriptEntryMock: vi.fn(),
   clearMaxDurationTimerMock: vi.fn(),
+  ensureMaxDurationTimerForLiveCallMock: vi.fn(
+    (params: { call: { answeredAt?: number }; liveAt: number }) => {
+      params.call.answeredAt ??= params.liveAt;
+    },
+  ),
   generateDtmfRedirectTwimlMock: vi.fn(),
   generateNotifyTwimlMock: vi.fn(),
   getCallByProviderCallIdMock: vi.fn(),
@@ -35,6 +42,7 @@ vi.mock("./store.js", () => ({
 vi.mock("./timers.js", () => ({
   clearMaxDurationTimer: clearMaxDurationTimerMock,
   clearTranscriptWaiter: vi.fn(),
+  ensureMaxDurationTimerForLiveCall: ensureMaxDurationTimerForLiveCallMock,
   rejectTranscriptWaiter: rejectTranscriptWaiterMock,
   waitForFinalTranscript: vi.fn(),
 }));

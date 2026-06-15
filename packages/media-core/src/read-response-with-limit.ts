@@ -1,3 +1,4 @@
+// Media Core module implements read response with limit behavior.
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 
 async function readChunkWithIdleTimeout(
@@ -23,6 +24,8 @@ async function readChunkWithIdleTimeout(
         onIdleTimeout?.({ chunkTimeoutMs: resolvedChunkTimeoutMs }) ??
         new Error(`Media download stalled: no data received for ${resolvedChunkTimeoutMs}ms`);
       clear();
+      // Cancel the body with the same error so fetch-backed streams release
+      // sockets/buffers instead of idling after the caller times out.
       void reader.cancel(error).catch(() => undefined);
       reject(error);
     }, resolvedChunkTimeoutMs);
@@ -123,6 +126,7 @@ async function readResponsePrefix(
   };
 }
 
+/** Reads a response body under a byte cap, cancelling the stream on overflow or idle timeout. */
 export async function readResponseWithLimit(
   res: Response,
   maxBytes: number,
@@ -146,6 +150,7 @@ export async function readResponseWithLimit(
   return prefix.buffer;
 }
 
+/** Reads a small collapsed text prefix from a response body for diagnostics/errors. */
 export async function readResponseTextSnippet(
   res: Response,
   opts?: {

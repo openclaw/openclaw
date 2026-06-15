@@ -1,3 +1,8 @@
+/**
+ * Live-test provider API-key discovery.
+ * Reads provider-specific and manifest-declared env names without logging or
+ * exposing secret values, with explicit single-key pins for flaky live lanes.
+ */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -105,6 +110,7 @@ function resolveProviderApiKeyConfig(provider: string): ProviderApiKeyConfig {
   };
 }
 
+/** Collect configured API keys for live provider tests without exposing values. */
 export function collectProviderApiKeys(
   provider: string,
   options: CollectProviderApiKeysOptions = {},
@@ -117,6 +123,7 @@ export function collectProviderApiKeys(
     ? normalizeOptionalString(env[config.liveSingle])
     : undefined;
   if (forcedSingle) {
+    // OPENCLAW_LIVE_*_KEY pins a single key so retries do not rotate fixtures.
     return [forcedSingle];
   }
 
@@ -161,14 +168,17 @@ export function collectProviderApiKeys(
   return Array.from(seen);
 }
 
+/** Collect Anthropic API keys for live cache/model tests. */
 export function collectAnthropicApiKeys(): string[] {
   return collectProviderApiKeys("anthropic");
 }
 
+/** Collect Gemini API keys for live cache/model tests. */
 export function collectGeminiApiKeys(): string[] {
   return collectProviderApiKeys("google");
 }
 
+/** Return whether a provider error message indicates API-key rate limiting. */
 export function isApiKeyRateLimitError(message: string): boolean {
   const lower = normalizeLowercaseStringOrEmpty(message);
   if (lower.includes("rate_limit")) {
@@ -192,10 +202,12 @@ export function isApiKeyRateLimitError(message: string): boolean {
   return false;
 }
 
+/** Return whether an Anthropic error message indicates rate limiting. */
 export function isAnthropicRateLimitError(message: string): boolean {
   return isApiKeyRateLimitError(message);
 }
 
+/** Return whether an Anthropic error message indicates billing exhaustion. */
 export function isAnthropicBillingError(message: string): boolean {
   const lower = normalizeLowercaseStringOrEmpty(message);
   if (lower.includes("credit balance")) {

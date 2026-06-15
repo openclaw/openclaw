@@ -1,3 +1,4 @@
+// Codex plugin module implements event projector behavior.
 import {
   classifyAgentHarnessTerminalOutcome,
   embeddedAgentLog,
@@ -178,6 +179,7 @@ export class CodexAppServerEventProjector {
   private readonly toolTrajectoryCallIds = new Set<string>();
   private readonly toolTrajectoryResultIds = new Set<string>();
   private readonly toolTrajectoryNamesById = new Map<string, string>();
+  private readonly toolTrajectoryItemsById = new Map<string, CodexThreadItem>();
   private readonly transcriptToolProgressCallIds = new Set<string>();
   private lastNativeToolError: EmbeddedRunAttemptResult["lastToolError"];
   private readonly nativeGeneratedMediaUrls = new Set<string>();
@@ -207,6 +209,11 @@ export class CodexAppServerEventProjector {
 
   getCompletedTurnStatus(): CodexTurn["status"] | undefined {
     return this.completedTurn?.status;
+  }
+
+  hasCompletedTerminalAssistantText(): boolean {
+    const finalItem = this.resolveFinalAssistantTextItem();
+    return finalItem !== undefined && this.completedItemIds.has(finalItem.itemId);
   }
 
   async handleNotification(notification: CodexServerNotification): Promise<void> {
@@ -292,16 +299,21 @@ export class CodexAppServerEventProjector {
       this.reasoningItemOrder,
     ).join("\n\n");
     const planText = collectTextValues(this.planTextByItem).join("\n\n");
+    const hasAssistantItemText = this.hasAssistantItemTextForSynthesis();
+    const legacyFailClosed =
+      !this.completedTurn || this.completedTurn.status !== "completed" || hasAssistantItemText;
+    const hasDeliverableAssistantOnCompletedTurn =
+      this.completedTurn?.status === "completed" &&
+      assistantTexts.some((text) => text.trim().length > 0);
     this.synthesizeMissingToolResults({
-      failClosed:
-        !this.completedTurn ||
-        this.completedTurn.status !== "completed" ||
-        assistantTexts.length > 0,
+      synthesize: legacyFailClosed,
+      recordPromptError: legacyFailClosed && !hasDeliverableAssistantOnCompletedTurn,
     });
     const lastAssistant =
       assistantTexts.length > 0
         ? this.createAssistantMessage(assistantTexts.join("\n\n"))
         : undefined;
+    const currentAttemptAssistant = this.createCurrentAttemptAssistantMessage();
     // Each snapshot entry is tagged with a stable mirror identity of the
     // shape `${turnId}:${kind}`. The mirror's idempotency key is derived
     // from this identity rather than from snapshot position or content
@@ -374,6 +386,7 @@ export class CodexAppServerEventProjector {
       assistantTexts,
       toolMetas,
       lastAssistant,
+      currentAttemptAssistant,
       ...(this.lastNativeToolError ? { lastToolError: this.lastNativeToolError } : {}),
       didSendViaMessagingTool: toolTelemetry.didSendViaMessagingTool,
       messagingToolSentTexts: toolTelemetry.messagingToolSentTexts,
@@ -603,10 +616,10 @@ export class CodexAppServerEventProjector {
       this.completedItemIds.add(itemId);
     }
     this.rememberAssistantPhase(item);
-    if (item?.type === "agentMessage" && typeof item.text === "string" && item.text) {
+    if (item?.type === "agentMessage" && typeof item.text === "string") {
       this.rememberAssistantItem(item.id);
       this.assistantTextByItem.set(item.id, item.text);
-      if (this.isCommentaryAssistantItem(item.id)) {
+      if (item.text && this.isCommentaryAssistantItem(item.id)) {
         this.emitCommentaryProgress({ itemId: item.id, text: item.text });
       }
     }
@@ -741,7 +754,7 @@ export class CodexAppServerEventProjector {
     }
     for (const item of turn.items ?? []) {
       this.rememberAssistantPhase(item);
-      if (item.type === "agentMessage" && typeof item.text === "string" && item.text) {
+      if (item.type === "agentMessage" && typeof item.text === "string") {
         this.rememberAssistantItem(item.id);
         this.assistantTextByItem.set(item.id, item.text);
       }
@@ -1141,6 +1154,7 @@ export class CodexAppServerEventProjector {
     if (params.phase === "start") {
       this.toolTrajectoryCallIds.add(params.item.id);
       this.toolTrajectoryNamesById.set(params.item.id, params.name);
+      this.toolTrajectoryItemsById.set(params.item.id, params.item);
       this.options.trajectoryRecorder?.recordEvent("tool.call", {
         threadId: this.threadId,
         turnId: this.turnId,
@@ -1443,8 +1457,11 @@ export class CodexAppServerEventProjector {
     );
   }
 
-  private synthesizeMissingToolResults(params: { failClosed: boolean }): void {
-    if (!params.failClosed) {
+  private synthesizeMissingToolResults(params: {
+    synthesize: boolean;
+    recordPromptError: boolean;
+  }): void {
+    if (!params.synthesize) {
       return;
     }
     const missingTranscriptIds = [...this.toolTranscriptCallIds].filter(
@@ -1490,6 +1507,37 @@ export class CodexAppServerEventProjector {
       });
     }
 
+    if (!params.recordPromptError) {
+      const firstMissingId =
+        missingTranscriptIds.find((id) => {
+          const name = this.toolTranscriptNamesById.get(id) ?? this.toolTrajectoryNamesById.get(id);
+          return Boolean(name);
+        }) ??
+        missingTrajectoryIds.find((id) => {
+          const name = this.toolTrajectoryNamesById.get(id) ?? this.toolTranscriptNamesById.get(id);
+          return Boolean(name);
+        });
+      if (firstMissingId) {
+        const name =
+          this.toolTranscriptNamesById.get(firstMissingId) ??
+          this.toolTrajectoryNamesById.get(firstMissingId);
+        if (name) {
+          const item = this.toolTrajectoryItemsById.get(firstMissingId);
+          const meta = item
+            ? itemMeta(item, this.toolProgressDetailMode())
+            : this.toolMetas.get(firstMissingId)?.meta;
+          const actionFingerprint = item ? nativeToolActionFingerprint(item) : undefined;
+          this.lastNativeToolError = {
+            toolName: name,
+            ...(meta ? { meta } : {}),
+            error: formatMissingToolResultError({ id: firstMissingId, name }),
+            ...(item && isMutatingNativeToolItem(item) ? { mutatingAction: true } : {}),
+            ...(actionFingerprint ? { actionFingerprint } : {}),
+          };
+        }
+      }
+      return;
+    }
     const missingCount = new Set([...missingTranscriptIds, ...missingTrajectoryIds]).size;
     this.synthesizedMissingToolResultError =
       missingCount === 1
@@ -1599,7 +1647,28 @@ export class CodexAppServerEventProjector {
     return finalText ? [finalText] : [];
   }
 
+  private hasAssistantItemTextForSynthesis(): boolean {
+    for (let i = this.assistantItemOrder.length - 1; i >= 0; i -= 1) {
+      const itemId = this.assistantItemOrder[i];
+      if (!itemId) {
+        continue;
+      }
+      if (this.assistantPhaseByItem.get(itemId) === "commentary") {
+        continue;
+      }
+      const text = this.assistantTextByItem.get(itemId);
+      if (text && text.length > 0) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   private resolveFinalAssistantText(): string | undefined {
+    return this.resolveFinalAssistantTextItem()?.text;
+  }
+
+  private resolveFinalAssistantTextItem(): { itemId: string; text: string } | undefined {
     for (let i = this.assistantItemOrder.length - 1; i >= 0; i -= 1) {
       const itemId = this.assistantItemOrder[i];
       if (!itemId) {
@@ -1610,7 +1679,7 @@ export class CodexAppServerEventProjector {
         continue;
       }
       if (text && !this.toolProgressTexts.has(text)) {
-        return text;
+        return { itemId, text };
       }
     }
     return undefined;
@@ -1621,6 +1690,26 @@ export class CodexAppServerEventProjector {
       return;
     }
     this.assistantItemOrder.push(itemId);
+  }
+
+  private createCurrentAttemptAssistantMessage(): AssistantMessage | undefined {
+    for (let i = this.assistantItemOrder.length - 1; i >= 0; i -= 1) {
+      const itemId = this.assistantItemOrder[i];
+      if (
+        !itemId ||
+        this.isCommentaryAssistantItem(itemId) ||
+        !this.assistantTextByItem.has(itemId)
+      ) {
+        continue;
+      }
+      const text = this.assistantTextByItem.get(itemId) ?? "";
+      const normalizedText = text.trim();
+      if (normalizedText && this.toolProgressTexts.has(normalizedText)) {
+        continue;
+      }
+      return this.createAssistantMessage(text);
+    }
+    return undefined;
   }
 
   private async readMirroredSessionMessages(): Promise<AgentMessage[]> {

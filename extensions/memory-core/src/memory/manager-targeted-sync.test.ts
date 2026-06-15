@@ -1,3 +1,4 @@
+// Memory Core tests cover manager targeted sync plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   clearMemorySyncedSessionFiles,
@@ -62,5 +63,25 @@ describe("memory targeted session sync", () => {
     expect(result).toEqual({ handled: true, sessionsDirty: true });
     expect(sessionsDirtyFiles.has("/tmp/targeted-fallback.jsonl")).toBe(true);
     expect(sessionsDirtyFiles.has("/tmp/other-dirty.jsonl")).toBe(true);
+  });
+
+  it("preserves the full-retry dirty marker after targeted cleanup", async () => {
+    const syncSessionFiles = vi.fn(async () => undefined);
+    const sessionsDirtyFiles = new Set(["/tmp/targeted-full-retry.jsonl"]);
+
+    const result = await runMemoryTargetedSessionSync({
+      hasSessionSource: true,
+      targetSessionFiles: new Set(["/tmp/targeted-full-retry.jsonl"]),
+      reason: "post-compaction",
+      progress: undefined,
+      sessionsFullRetryDirty: true,
+      sessionsDirtyFiles,
+      syncSessionFiles,
+      shouldFallbackOnError: () => false,
+      activateFallbackProvider: async () => false,
+    });
+
+    expect(result).toEqual({ handled: true, sessionsDirty: true });
+    expect(sessionsDirtyFiles.size).toBe(0);
   });
 });

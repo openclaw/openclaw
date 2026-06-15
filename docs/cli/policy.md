@@ -205,6 +205,8 @@ Each policy field below is optional. A check runs only when the matching rule is
 present in `policy.jsonc`. The observed state is existing OpenClaw config or
 workspace metadata; policy reports drift but does not rewrite runtime behavior
 unless a repair path is explicitly available and enabled.
+Policy files are strict: unsupported sections or rule keys are reported as
+`policy/policy-jsonc-invalid` instead of being ignored.
 
 Policy overlays keep broad top-level rules global, then let named scope blocks
 add stricter normal policy sections for explicit selectors. A scope name is a

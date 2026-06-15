@@ -1,3 +1,4 @@
+// Verifies provider usage telemetry preserves plugin auth context.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -130,6 +131,15 @@ describe("resolveProviderAuths plugin boundary", () => {
       },
     ]);
     expect(ensureAuthProfileStoreMock).not.toHaveBeenCalled();
+  });
+
+  it("does not synthesize Codex app-server auth for generic OpenAI usage", async () => {
+    await expect(
+      resolveProviderAuthsForTest({
+        providers: ["openai"],
+      }),
+    ).resolves.toEqual([]);
+    expect(providerCalls(resolveProviderUsageAuthWithPluginMock)).toEqual(["openai"]);
   });
 
   it("skips plugin usage auth when requested and no direct credential source exists", async () => {

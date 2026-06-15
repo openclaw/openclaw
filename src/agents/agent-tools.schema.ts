@@ -1,8 +1,14 @@
+/**
+ * Tool schema normalization wrappers.
+ * Applies provider-compatible parameter schema cleanup while preserving plugin
+ * and channel metadata on normalized tools.
+ */
 import { copyPluginToolMeta } from "../plugins/tools.js";
 import {
   normalizeToolParameterSchema,
   type ToolParameterSchemaOptions,
 } from "./agent-tools-parameter-schema.js";
+import { copyBeforeToolCallHookMarker } from "./agent-tools.before-tool-call.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { copyChannelAgentToolMeta } from "./channel-tools.js";
 
@@ -59,6 +65,7 @@ function addEmptyObjectArgumentPreparation(tool: AnyAgentTool, parameters: unkno
   };
 }
 
+/** Normalize a tool's parameter schema for the selected provider/model. */
 export function normalizeToolParameters(
   tool: AnyAgentTool,
   options?: ToolParameterSchemaOptions,
@@ -66,6 +73,7 @@ export function normalizeToolParameters(
   function preserveToolMeta(target: AnyAgentTool): AnyAgentTool {
     copyPluginToolMeta(tool, target);
     copyChannelAgentToolMeta(tool as never, target as never);
+    copyBeforeToolCallHookMarker(tool, target);
     return target;
   }
   const schema =

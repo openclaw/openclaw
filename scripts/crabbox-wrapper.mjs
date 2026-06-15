@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Resolves and delegates to the repo-local or PATH crabbox binary.
 import { spawn, spawnSync } from "node:child_process";
 import {
   accessSync,
@@ -489,7 +490,10 @@ function brokerAuthConfigured() {
   } catch {
     return false;
   }
-  return Boolean(parsed?.coordinator && parsed?.brokerAuth === "configured");
+  if (!parsed?.coordinator || parsed?.brokerAuth !== "configured") {
+    return false;
+  }
+  return checkedOutput(binary, ["whoami"]).status === 0;
 }
 
 function enforceBrokeredAws(commandArgs, providerName) {
@@ -1659,7 +1663,7 @@ function remoteAwsMacosJsBootstrap({ packageManager = false } = {}) {
     'mkdir -p "$tool_root" || { status=$?; return "$status"; };',
     'install_lock="$tool_root/.node-${node_version}-${node_arch}.lock";',
     "lock_acquired=0;",
-    'lock_deadline=$((SECONDS + 300));',
+    "lock_deadline=$((SECONDS + 300));",
     "while true; do",
     'if mkdir "$install_lock" 2>/dev/null; then lock_acquired=1; printf "%s\\n" "$$" >"$install_lock/pid" || { status=$?; rm -rf "$install_lock"; return "$status"; }; break; fi;',
     'if [ -x "$node_dir/bin/node" ] && [ -f "$ready_marker" ]; then break; fi;',
@@ -1668,11 +1672,11 @@ function remoteAwsMacosJsBootstrap({ packageManager = false } = {}) {
     'if [ -n "$lock_pid" ] && kill -0 "$lock_pid" 2>/dev/null; then echo "timed out waiting for active macOS Node toolchain install lock: $install_lock pid=$lock_pid" >&2; return 1; fi;',
     'echo "reclaiming stale macOS Node toolchain install lock: $install_lock" >&2;',
     'rm -rf "$install_lock" || return 1;',
-    'lock_deadline=$((SECONDS + 300));',
+    "lock_deadline=$((SECONDS + 300));",
     "fi;",
     "sleep 1;",
     "done;",
-    "release_install_lock() { if [ \"$lock_acquired\" = \"1\" ]; then rm -rf \"$install_lock\" 2>/dev/null || true; fi; };",
+    'release_install_lock() { if [ "$lock_acquired" = "1" ]; then rm -rf "$install_lock" 2>/dev/null || true; fi; };',
     'if [ ! -x "$node_dir/bin/node" ] || [ ! -f "$ready_marker" ]; then',
     'tmp_dir="$(mktemp -d)" || { release_install_lock; return 1; };',
     'pkg="node-v${node_version}-darwin-${node_arch}.tar.gz";',
@@ -1938,15 +1942,20 @@ function fullCheckoutSyncRoot() {
   return root;
 }
 
-function parsePositiveIntegerEnv(name, fallback) {
+function parseNonNegativeIntegerEnv(name, fallback, unit) {
   const raw = process.env[name]?.trim();
   if (!raw) {
     return fallback;
   }
   if (!/^\d+$/u.test(raw)) {
-    throw new Error(`${name} must be a non-negative integer byte count, got ${JSON.stringify(raw)}`);
+    throw new Error(`${name} must be a non-negative integer ${unit}, got ${JSON.stringify(raw)}`);
   }
-  const parsed = Number.parseInt(raw, 10);
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error(
+      `${name} must be a safe non-negative integer ${unit}, got ${JSON.stringify(raw)}`,
+    );
+  }
   return parsed;
 }
 
@@ -1965,9 +1974,10 @@ function formatByteCount(bytes) {
 }
 
 function assertFullCheckoutSyncDisk(root) {
-  const requiredBytes = parsePositiveIntegerEnv(
+  const requiredBytes = parseNonNegativeIntegerEnv(
     "OPENCLAW_CRABBOX_SYNC_MIN_FREE_BYTES",
     1024 * 1024 * 1024,
+    "byte count",
   );
   if (requiredBytes === 0) {
     return;
@@ -2045,6 +2055,13 @@ function prepareFullCheckoutForSync(options = {}) {
       create();
       return true;
     },
+    exists() {
+      try {
+        return statSync(dir).isDirectory();
+      } catch {
+        return false;
+      }
+    },
     cleanup() {
       cleanupFullCheckout(dir, active);
       active = false;
@@ -2052,10 +2069,24 @@ function prepareFullCheckoutForSync(options = {}) {
   };
 }
 
-function startFullCheckoutKeepalive(checkout) {
+function startFullCheckoutKeepalive(checkout, options = {}) {
+  let missingReported = false;
+  const intervalMs = options.intervalMs ?? fullCheckoutKeepaliveIntervalMs();
   const refresh = () => {
     try {
-      checkout.restoreIfMissing();
+      if (!checkout.exists()) {
+        if (options.onMissing) {
+          if (!missingReported) {
+            missingReported = true;
+            console.error(
+              `[crabbox] temporary full checkout disappeared while Crabbox was running; terminating because the child cwd cannot be repaired: ${checkout.dir}`,
+            );
+            options.onMissing();
+          }
+          return;
+        }
+        checkout.restoreIfMissing();
+      }
       const now = new Date();
       utimesSync(checkout.dir, now, now);
     } catch (error) {
@@ -2066,17 +2097,21 @@ function startFullCheckoutKeepalive(checkout) {
   };
 
   refresh();
-  const intervalMs = Number.parseInt(
-    process.env.OPENCLAW_CRABBOX_SYNC_KEEPALIVE_MS ?? "5000",
-    10,
-  );
-  if (!Number.isFinite(intervalMs) || intervalMs <= 0) {
+  if (intervalMs <= 0) {
     return () => {};
   }
 
   const interval = setInterval(refresh, intervalMs);
   interval.unref?.();
   return () => clearInterval(interval);
+}
+
+function fullCheckoutKeepaliveIntervalMs() {
+  return parseNonNegativeIntegerEnv(
+    "OPENCLAW_CRABBOX_SYNC_KEEPALIVE_MS",
+    5000,
+    "millisecond interval",
+  );
 }
 
 function cleanupFullCheckout(dir, active) {
@@ -2093,7 +2128,7 @@ function cleanupFullCheckout(dir, active) {
 function assertFullCheckoutAvailableBeforeExit(dir) {
   try {
     if (statSync(dir).isDirectory()) {
-      return;
+      return true;
     }
   } catch {
     // Report below.
@@ -2102,6 +2137,7 @@ function assertFullCheckoutAvailableBeforeExit(dir) {
   console.error(
     `[crabbox] temporary full checkout vanished before Crabbox finished syncing: ${dir}`,
   );
+  return false;
 }
 
 const version = checkedOutput(binary, ["--version"]);
@@ -2360,8 +2396,14 @@ const childArgs =
         ),
         remoteChangedGateBase,
       );
+let fullCheckoutKeepaliveIntervalMsValue = 0;
 if (fullCheckout) {
-  stopFullCheckoutKeepalive = startFullCheckoutKeepalive(fullCheckout);
+  try {
+    fullCheckoutKeepaliveIntervalMsValue = fullCheckoutKeepaliveIntervalMs();
+  } catch (error) {
+    cleanupOnce();
+    throw error;
+  }
 }
 const childInvocation = spawnInvocation(binary, childArgs, childEnv, process.platform);
 const child = spawn(childInvocation.command, childInvocation.args, {
@@ -2370,6 +2412,24 @@ const child = spawn(childInvocation.command, childInvocation.args, {
   env: childEnv,
   windowsVerbatimArguments: childInvocation.windowsVerbatimArguments,
 });
+if (fullCheckout) {
+  try {
+    stopFullCheckoutKeepalive = startFullCheckoutKeepalive(fullCheckout, {
+      intervalMs: fullCheckoutKeepaliveIntervalMsValue,
+      onMissing: () => {
+        if (!child.killed) {
+          child.kill("SIGTERM");
+        }
+      },
+    });
+  } catch (error) {
+    if (!child.killed) {
+      child.kill("SIGTERM");
+    }
+    cleanupOnce();
+    throw error;
+  }
+}
 
 const signalExitCodes = new Map([
   ["SIGHUP", 129],
@@ -2388,15 +2448,16 @@ for (const signal of signalExitCodes.keys()) {
 process.once("exit", cleanupOnce);
 
 child.on("exit", (code, signal) => {
+  let fullCheckoutAvailable = true;
   if (fullCheckout) {
-    assertFullCheckoutAvailableBeforeExit(fullCheckout.dir);
+    fullCheckoutAvailable = assertFullCheckoutAvailableBeforeExit(fullCheckout.dir);
   }
   cleanupOnce();
   if (signal) {
     process.exit(signalExitCodes.get(signal) ?? 1);
     return;
   }
-  process.exit(code ?? 1);
+  process.exit(fullCheckoutAvailable ? (code ?? 1) : 1);
 });
 
 child.on("error", (error) => {

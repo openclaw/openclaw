@@ -1,3 +1,4 @@
+// Profile CLI tests cover profile selection, persistence, and command wiring.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { formatCliCommand } from "./command-format.js";
@@ -108,6 +109,128 @@ describe("parseCliProfileArgs", () => {
     }
     expect(res.profile).toBeNull();
     expect(res.argv).toEqual(["node", "openclaw", "--no-color", "qa", "matrix", "--profile=fast"]);
+  });
+
+  it("parses qa run --profile smoke-ci as a root profile", () => {
+    const res = parseCliProfileArgs([
+      "node",
+      "openclaw",
+      "qa",
+      "run",
+      "--profile",
+      "smoke-ci",
+      "--category",
+      "agent-runtime-and-provider-execution.agent-turn-execution",
+    ]);
+    if (!res.ok) {
+      throw new Error(res.error);
+    }
+    expect(res.profile).toBe("smoke-ci");
+    expect(res.argv).toEqual([
+      "node",
+      "openclaw",
+      "qa",
+      "run",
+      "--category",
+      "agent-runtime-and-provider-execution.agent-turn-execution",
+    ]);
+  });
+
+  it("parses qa run --profile=release self-check invocations as root profiles", () => {
+    const res = parseCliProfileArgs([
+      "node",
+      "openclaw",
+      "qa",
+      "run",
+      "--profile=release",
+      "--output",
+      "qa-report.md",
+    ]);
+    if (!res.ok) {
+      throw new Error(res.error);
+    }
+    expect(res.profile).toBe("release");
+    expect(res.argv).toEqual(["node", "openclaw", "qa", "run", "--output", "qa-report.md"]);
+  });
+
+  it("preserves qa run --qa-profile for the command parser", () => {
+    const res = parseCliProfileArgs([
+      "node",
+      "openclaw",
+      "qa",
+      "run",
+      "--qa-profile",
+      "smoke-ci",
+      "--surface",
+      "agent-runtime-and-provider-execution",
+    ]);
+    if (!res.ok) {
+      throw new Error(res.error);
+    }
+    expect(res.profile).toBeNull();
+    expect(res.argv).toEqual([
+      "node",
+      "openclaw",
+      "qa",
+      "run",
+      "--qa-profile",
+      "smoke-ci",
+      "--surface",
+      "agent-runtime-and-provider-execution",
+    ]);
+  });
+
+  it("parses arbitrary qa run --profile values as root profiles", () => {
+    const res = parseCliProfileArgs([
+      "node",
+      "openclaw",
+      "qa",
+      "run",
+      "--profile",
+      "work",
+      "--output",
+      "qa-report.md",
+    ]);
+    if (!res.ok) {
+      throw new Error(res.error);
+    }
+    expect(res.profile).toBe("work");
+    expect(res.argv).toEqual(["node", "openclaw", "qa", "run", "--output", "qa-report.md"]);
+  });
+
+  it("parses arbitrary qa run --profile= values as root profiles", () => {
+    const res = parseCliProfileArgs([
+      "node",
+      "openclaw",
+      "qa",
+      "run",
+      "--profile=work",
+      "--output",
+      "qa-report.md",
+    ]);
+    if (!res.ok) {
+      throw new Error(res.error);
+    }
+    expect(res.profile).toBe("work");
+    expect(res.argv).toEqual(["node", "openclaw", "qa", "run", "--output", "qa-report.md"]);
+  });
+
+  it("still parses root --profile before qa run", () => {
+    const res = parseCliProfileArgs([
+      "node",
+      "openclaw",
+      "--profile",
+      "work",
+      "qa",
+      "run",
+      "--qa-profile",
+      "smoke-ci",
+    ]);
+    if (!res.ok) {
+      throw new Error(res.error);
+    }
+    expect(res.profile).toBe("work");
+    expect(res.argv).toEqual(["node", "openclaw", "qa", "run", "--qa-profile", "smoke-ci"]);
   });
 
   it("still parses root --profile before Matrix QA", () => {

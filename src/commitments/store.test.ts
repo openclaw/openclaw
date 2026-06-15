@@ -1,7 +1,9 @@
+// Covers commitment store persistence, updates, and pruning behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
   listCommitments,
   listDueCommitmentsForSession,
@@ -15,11 +17,14 @@ import type { CommitmentRecord } from "./types.js";
 
 describe("commitment store delivery selection", () => {
   const tmpDirs: string[] = [];
+  let stateDirEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
   const nowMs = Date.parse("2026-04-29T17:00:00.000Z");
   const sessionKey = "agent:main:telegram:user-155462274";
 
   afterEach(async () => {
     vi.unstubAllEnvs();
+    stateDirEnvSnapshot?.restore();
+    stateDirEnvSnapshot = undefined;
     await Promise.all(tmpDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
     tmpDirs.length = 0;
   });
@@ -27,7 +32,8 @@ describe("commitment store delivery selection", () => {
   async function useTempStateDir(): Promise<string> {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-commitments-store-"));
     tmpDirs.push(tmpDir);
-    vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
+    stateDirEnvSnapshot ??= captureEnv(["OPENCLAW_STATE_DIR"]);
+    setTestEnvValue("OPENCLAW_STATE_DIR", tmpDir);
     return tmpDir;
   }
 
