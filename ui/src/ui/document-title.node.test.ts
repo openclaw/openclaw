@@ -58,6 +58,18 @@ describe("resolveControlUiDocumentTitle", () => {
     ).toBe("Alpha planning - OpenClaw Control");
   });
 
+  it("prefers fresh sessions tab metadata over stale chat session picker metadata", () => {
+    expect(
+      resolveControlUiDocumentTitle({
+        sessionKey: "agent:alpha",
+        sessionsResult: sessionsResult([sessionRow({ key: "agent:alpha", label: "Fresh name" })]),
+        chatSessionPickerResult: sessionsResult([
+          sessionRow({ key: "agent:alpha", label: "Stale name" }),
+        ]),
+      }),
+    ).toBe("Fresh name - OpenClaw Control");
+  });
+
   it("uses the display name when a custom label is not set", () => {
     expect(
       resolveControlUiDocumentTitle({
@@ -69,9 +81,9 @@ describe("resolveControlUiDocumentTitle", () => {
     ).toBe("Model debugging - OpenClaw Control");
   });
 
-  it("falls back to the readable session key name until session metadata loads", () => {
+  it("keeps the base title until session metadata loads", () => {
     expect(resolveControlUiDocumentTitle({ sessionKey: "agent:main:main" })).toBe(
-      "Main Session - OpenClaw Control",
+      CONTROL_UI_DOCUMENT_TITLE,
     );
   });
 });

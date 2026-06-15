@@ -13,7 +13,7 @@ type DocumentTitleState = {
 };
 
 function findSessionTitleRow(state: DocumentTitleState, sessionKey: string) {
-  return [state.chatSessionPickerResult, state.sessionsResult]
+  return [state.sessionsResult, state.chatSessionPickerResult]
     .filter((result): result is SessionsListResult => Boolean(result))
     .flatMap((result) => result.sessions)
     .find((entry) => areUiSessionKeysEquivalent(entry.key, sessionKey));
@@ -25,6 +25,9 @@ export function resolveControlUiDocumentTitle(state: DocumentTitleState): string
     return CONTROL_UI_DOCUMENT_TITLE;
   }
   const row = findSessionTitleRow(state, sessionKey);
+  if (!row) {
+    return CONTROL_UI_DOCUMENT_TITLE;
+  }
   const sessionName = normalizeOptionalString(resolveSessionDisplayName(sessionKey, row));
   if (!sessionName || sessionName === CONTROL_UI_DOCUMENT_TITLE) {
     return CONTROL_UI_DOCUMENT_TITLE;
