@@ -1054,6 +1054,35 @@ describe("switchChatSession", () => {
     expect(state.sessionKey).toBe("agent:main:review");
   });
 
+  it("preserves searched picker session metadata for title sync after switch reset", () => {
+    const searchedRow = row({
+      key: "agent:main:searched-archive",
+      label: "Searched archive",
+    });
+    const state = createChatSessionState({
+      sessionKey: "main",
+      sessionsResult: {
+        ts: 0,
+        path: "",
+        count: 1,
+        defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+        sessions: [row({ key: "main" })],
+      },
+      chatSessionPickerResult: {
+        ts: 1,
+        path: "",
+        count: 1,
+        defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+        sessions: [searchedRow],
+      },
+    });
+
+    switchChatSession(state, "agent:main:searched-archive");
+
+    expect(state.chatSessionPickerResult).toBeNull();
+    expect(state.activeSessionTitleRow).toBe(searchedRow);
+  });
+
   it("refreshes the chat avatar after clearing session-scoped state", async () => {
     const settings = createSettings();
     const state = {

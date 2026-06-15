@@ -58,6 +58,8 @@ type LifecycleHost = {
   settings?: { gatewayUrl?: string | null };
   sessionKey: string;
   sessionsResult?: SessionsListResult | null;
+  activeSessionTitleRow?: SessionsListResult["sessions"][number] | null;
+  chatSessionPickerResult?: SessionsListResult | null;
   chatMessage: string;
   chatQueue: ChatQueueItem[];
   chatComposerProvisionalRestore?: {
@@ -236,6 +238,7 @@ export function handleUpdated(host: LifecycleHost, changed: Map<PropertyKey, unk
   if (
     changed.has("sessionKey") ||
     changed.has("sessionsResult") ||
+    changed.has("activeSessionTitleRow") ||
     changed.has("chatSessionPickerResult")
   ) {
     syncControlUiDocumentTitle(host);

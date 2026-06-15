@@ -58,6 +58,18 @@ describe("resolveControlUiDocumentTitle", () => {
     ).toBe("Alpha planning - OpenClaw Control");
   });
 
+  it("uses active session metadata preserved from a searched picker selection", () => {
+    expect(
+      resolveControlUiDocumentTitle({
+        sessionKey: "agent:older:searched",
+        activeSessionTitleRow: sessionRow({
+          key: "agent:older:searched",
+          label: "Searched archive session",
+        }),
+      }),
+    ).toBe("Searched archive session - OpenClaw Control");
+  });
+
   it("prefers fresh sessions tab metadata over stale chat session picker metadata", () => {
     expect(
       resolveControlUiDocumentTitle({
@@ -79,6 +91,17 @@ describe("resolveControlUiDocumentTitle", () => {
         ]),
       }),
     ).toBe("Model debugging - OpenClaw Control");
+  });
+
+  it("keeps the base title for rows without explicit safe title metadata", () => {
+    expect(
+      resolveControlUiDocumentTitle({
+        sessionKey: "direct:whatsapp:+49123456789",
+        sessionsResult: sessionsResult([
+          sessionRow({ key: "direct:whatsapp:+49123456789", kind: "direct" }),
+        ]),
+      }),
+    ).toBe(CONTROL_UI_DOCUMENT_TITLE);
   });
 
   it("keeps the base title until session metadata loads", () => {
