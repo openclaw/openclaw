@@ -44,7 +44,10 @@ import type { SessionLockInspection } from "./session-write-lock.js";
 
 const log = createSubsystemLogger("main-session-restart-recovery");
 
-const DEFAULT_RECOVERY_DELAY_MS = 5_000;
+// Immediate recovery ensures sessions are resumed before the gateway accepts user requests.
+// A non-zero delay would allow the gateway to become healthy while sessions are still orphaned,
+// causing the "requires second restart" symptom reported in #92511.
+const DEFAULT_RECOVERY_DELAY_MS = 0;
 const MAX_RECOVERY_RETRIES = 3;
 const RETRY_BACKOFF_MULTIPLIER = 2;
 const UNRESUMABLE_SESSION_NOTICE =
