@@ -202,3 +202,8 @@ export type {
 
 export { checkNetworkEgress, isPrivateIp, checkDnsRebinding } from "./policy/network.js";
 export type { EgressCheckResult } from "./policy/network.js";
+
+// ── Config compiler ──────────────────────────────────────────────────
+
+export { compileManifest, validateRoundTrip } from "./compiler/compiler.js";
+export type { ConfigDiff, CompilerOptions } from "./compiler/compiler.js";
