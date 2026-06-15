@@ -201,6 +201,31 @@ describe("handleCommands /plugins install", () => {
     }
   });
 
+  it("refuses installs through a root include before package installer side effects", async () => {
+    await withTempHome("openclaw-command-plugins-home-", async (home) => {
+      const sharedConfigPath = path.join(home, ".openclaw", "shared.json5");
+      await fs.writeFile(sharedConfigPath, `${JSON.stringify({ plugins: {} }, null, 2)}\n`);
+      await fs.writeFile(
+        path.join(home, ".openclaw", "openclaw.json"),
+        `${JSON.stringify({ $include: "./shared.json5" }, null, 2)}\n`,
+      );
+      const workspaceDir = await workspaceHarness.createWorkspace();
+      const params = buildPluginsParams("/plugins install @acme/demo", workspaceDir);
+
+      const result = await handlePluginsCommand(params, true);
+
+      if (result === null) {
+        throw new Error("expected plugin install result");
+      }
+      expect(result.reply?.text).toContain("unsupported $include shape at the root");
+      expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+      expect(installPluginFromPathMock).not.toHaveBeenCalled();
+      expect(installPluginFromClawHubMock).not.toHaveBeenCalled();
+      expect(installPluginFromGitSpecMock).not.toHaveBeenCalled();
+      expect(persistPluginInstallMock).not.toHaveBeenCalled();
+    });
+  });
+
   it("installs from an explicit git: spec", async () => {
     installPluginFromGitSpecMock.mockResolvedValue({
       ok: true,

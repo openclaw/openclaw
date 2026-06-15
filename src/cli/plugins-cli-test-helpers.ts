@@ -37,6 +37,7 @@ function invokeMock<TArgs extends unknown[], TResult>(mock: unknown, ...args: TA
 
 export const loadConfig: Mock<LoadConfigFn> = vi.fn<LoadConfigFn>(() => ({}) as OpenClawConfig);
 export const readConfigFileSnapshot: AsyncUnknownMock = vi.fn();
+export const readConfigFileSnapshotForWrite: AsyncUnknownMock = vi.fn();
 export const writeConfigFile: AsyncUnknownMock = vi.fn(async () => undefined);
 export const replaceConfigFile: AsyncUnknownMock = vi.fn(
   async (params: { nextConfig: OpenClawConfig }) => await writeConfigFile(params.nextConfig),
@@ -191,6 +192,16 @@ vi.mock("../config/config.js", () => ({
       readConfigFileSnapshot,
       ...args,
     )) as (typeof import("../config/config.js"))["readConfigFileSnapshot"],
+  readConfigFileSnapshotForWrite: ((
+    ...args: Parameters<(typeof import("../config/config.js"))["readConfigFileSnapshotForWrite"]>
+  ) =>
+    invokeMock<
+      Parameters<(typeof import("../config/config.js"))["readConfigFileSnapshotForWrite"]>,
+      ReturnType<(typeof import("../config/config.js"))["readConfigFileSnapshotForWrite"]>
+    >(
+      readConfigFileSnapshotForWrite,
+      ...args,
+    )) as (typeof import("../config/config.js"))["readConfigFileSnapshotForWrite"],
   writeConfigFile: ((config: OpenClawConfig) =>
     invokeMock<
       [OpenClawConfig],
@@ -679,6 +690,7 @@ export function resetPluginsCliTestState() {
   restoreRuntimeCaptureMocks();
   loadConfig.mockReset();
   readConfigFileSnapshot.mockReset();
+  readConfigFileSnapshotForWrite.mockReset();
   writeConfigFile.mockReset();
   replaceConfigFile.mockReset();
   resolveStateDir.mockReset();
@@ -735,6 +747,17 @@ export function resetPluginsCliTestState() {
       issues: [],
       warnings: [],
       legacyIssues: [],
+    };
+  });
+  readConfigFileSnapshotForWrite.mockImplementation(async () => {
+    const snapshot = (await readConfigFileSnapshot()) as { path: string };
+    return {
+      snapshot,
+      writeOptions: {
+        assertConfigPathForWrite: () => {},
+        expectedConfigPath: snapshot.path,
+        ownedConfigPathForWrite: snapshot.path,
+      },
     };
   });
   writeConfigFile.mockResolvedValue(undefined);

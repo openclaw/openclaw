@@ -9,6 +9,7 @@ import {
 } from "../../cli/plugins-command-helpers.js";
 import {
   persistPluginInstall,
+  resolveInstallConfigMutationPreflights,
   selectInstallMutationWriteOptions,
 } from "../../cli/plugins-install-persist.js";
 import type { ConfigSnapshotForInstallPersist } from "../../cli/plugins-install-persist.js";
@@ -381,13 +382,26 @@ async function loadPluginCommandConfig(): Promise<
       error: "Config file is invalid; fix it before using /plugins.",
     };
   }
+  const writeOptions = selectInstallMutationWriteOptions(prepared.writeOptions);
+  const { pluginMutation } = resolveInstallConfigMutationPreflights({
+    parsed: (snapshot.parsed ?? {}) as Record<string, unknown>,
+    snapshotPath: snapshot.path,
+    writeOptions,
+  });
+  if (pluginMutation.mode === "blocked") {
+    return {
+      ok: false,
+      path: snapshot.path,
+      error: pluginMutation.reason,
+    };
+  }
   return {
     ok: true,
     path: snapshot.path,
     snapshot: {
       config: structuredClone(snapshot.sourceConfig),
       baseHash: snapshot.hash,
-      writeOptions: selectInstallMutationWriteOptions(prepared.writeOptions),
+      writeOptions,
     },
   };
 }

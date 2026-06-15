@@ -22,6 +22,7 @@ type PluginInstallInvalidConfigPolicy = "deny" | "allow-plugin-recovery";
 export type PluginInstallRequestContext = {
   rawSpec: string;
   normalizedSpec: string;
+  installKind?: "plugin";
   resolvedPath?: string;
   marketplace?: string;
   bundledPluginId?: string;
@@ -204,6 +205,7 @@ function resolvePluginInstallArgvRequest(commandPath: string[], argv: string[]) 
 export function resolvePluginInstallRequestContext(params: {
   rawSpec: string;
   marketplace?: string;
+  installKind?: "plugin";
 }): PluginInstallRequestResolution {
   if (params.marketplace) {
     return {
@@ -211,6 +213,7 @@ export function resolvePluginInstallRequestContext(params: {
       request: {
         rawSpec: params.rawSpec,
         normalizedSpec: params.rawSpec,
+        installKind: "plugin",
         marketplace: params.marketplace,
       },
     };
@@ -244,6 +247,7 @@ export function resolvePluginInstallRequestContext(params: {
       rawSpec: params.rawSpec,
       normalizedSpec,
       resolvedPath: resolveUserPath(normalizedSpec),
+      ...(params.installKind === "plugin" || recovered.pluginId ? { installKind: "plugin" } : {}),
       ...(recovered.pluginId ? { bundledPluginId: recovered.pluginId } : {}),
       ...(recovered.allowInvalidConfigRecovery !== undefined
         ? { allowInvalidConfigRecovery: recovered.allowInvalidConfigRecovery }
