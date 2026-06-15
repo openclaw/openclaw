@@ -1,0 +1,18 @@
+{
+  "name": "@openclaw/advisor-plugin",
+  "version": "2026.6.2",
+  "private": true,
+  "description": "OpenClaw model-agnostic advisor plugin",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "dependencies": {
+    "typebox": "1.1.39"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

@@ -1,5 +1,6 @@
 // Test routing roots for miscellaneous provider/tool extension suites.
 export const miscExtensionTestRoots = [
+  "extensions/advisor",
   "extensions/arcee",
   "extensions/brave",
   "extensions/device-pair",

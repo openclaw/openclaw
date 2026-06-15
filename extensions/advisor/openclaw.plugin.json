@@ -1,0 +1,22 @@
+{
+  "id": "advisor",
+  "name": "Advisor",
+  "description": "Model-agnostic advisor tool for expert second opinions using any configured LLM.",
+  "activation": {
+    "onStartup": true
+  },
+  "enabledByDefault": false,
+  "contracts": {
+    "tools": ["advisor"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "modelRef": {
+        "type": "string",
+        "description": "Model ref to route advisor calls to (e.g. \"vmlx/gemma-4-26B\", \"lmstudio/qwen3-30b\"). Requires plugins.entries.advisor.llm.allowModelOverride: true."
+      }
+    }
+  }
+}
