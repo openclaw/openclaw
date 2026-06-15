@@ -58,6 +58,7 @@ const gatewayLog = createSubsystemLogger("gateway");
 const SUPERVISED_GATEWAY_LOCK_RETRY_MS = 5000;
 const SUPERVISED_GATEWAY_LOCK_RETRY_TIMEOUT_MS = 30_000;
 const SUPERVISED_GATEWAY_HEALTH_PROBE_TIMEOUT_MS = 1000;
+const GATEWAY_SHELL_ENV_CONVERGENCE_MAX_READS = 4;
 
 type Awaitable<T> = T | Promise<T>;
 type GatewayRunLogger = Pick<ReturnType<typeof createSubsystemLogger>, "info" | "warn">;
@@ -291,54 +292,119 @@ async function readGatewayStartupConfig(params: {
   };
 }
 
-async function loadGatewayRunShellEnvFallback(
+type GatewayRunShellEnvFallbackPlan =
+  | { enabled: false }
+  | {
+      enabled: true;
+      expectedKeys: string[];
+      timeoutMs: number;
+    };
+
+async function resolveGatewayRunShellEnvFallbackPlan(
   cfg: OpenClawConfig,
-): Promise<Record<string, string>> {
-  const [
-    { resolveShellEnvExpectedKeys },
-    {
-      loadShellEnvFallback,
-      resolveShellEnvFallbackTimeoutMs,
-      shouldDeferShellEnvFallback,
-      shouldEnableShellEnvFallback,
-    },
-  ] = await Promise.all([
-    import("../../config/shell-env-expected-keys.js"),
-    import("../../infra/shell-env.js"),
-  ]);
-  const enabled = shouldEnableShellEnvFallback(process.env) || cfg.env?.shellEnv?.enabled === true;
-  if (!enabled || shouldDeferShellEnvFallback(process.env)) {
-    return {};
+): Promise<GatewayRunShellEnvFallbackPlan> {
+  const {
+    resolveShellEnvFallbackTimeoutMs,
+    shouldDeferShellEnvFallback,
+    shouldEnableShellEnvFallback,
+  } = await import("../../infra/shell-env.js");
+  const enabled =
+    (shouldEnableShellEnvFallback(process.env) || cfg.env?.shellEnv?.enabled === true) &&
+    !shouldDeferShellEnvFallback(process.env);
+  if (!enabled) {
+    return { enabled: false };
   }
-  const expectedKeys = resolveShellEnvExpectedKeys(process.env);
-  const valuesBeforeLoad = new Map(expectedKeys.map((key) => [key, process.env[key]]));
+  const { resolveShellEnvExpectedKeys } = await import("../../config/shell-env-expected-keys.js");
+  return {
+    enabled: true,
+    expectedKeys: resolveShellEnvExpectedKeys(process.env),
+    timeoutMs: cfg.env?.shellEnv?.timeoutMs ?? resolveShellEnvFallbackTimeoutMs(process.env),
+  };
+}
+
+async function loadGatewayRunShellEnvFallback(
+  plan: Extract<GatewayRunShellEnvFallbackPlan, { enabled: true }>,
+): Promise<Record<string, string>> {
+  const { loadShellEnvFallback } = await import("../../infra/shell-env.js");
+  const valuesBeforeLoad = new Map(plan.expectedKeys.map((key) => [key, process.env[key]]));
   loadShellEnvFallback({
     enabled: true,
     env: process.env,
-    expectedKeys,
+    expectedKeys: plan.expectedKeys,
     logger: gatewayLog,
-    timeoutMs: cfg.env?.shellEnv?.timeoutMs ?? resolveShellEnvFallbackTimeoutMs(process.env),
+    timeoutMs: plan.timeoutMs,
   });
   return Object.fromEntries(
-    expectedKeys.flatMap((key) => {
+    plan.expectedKeys.flatMap((key) => {
       const value = process.env[key];
       return value !== undefined && value !== valuesBeforeLoad.get(key) ? [[key, value]] : [];
     }),
   );
 }
 
-async function loadGatewayRunShellEnvForFinalConfig(
-  startupTrace: ReturnType<typeof createGatewayCliStartupTrace>,
-): Promise<{
-  lowerPrecedenceEnv: Readonly<Record<string, string>>;
-}> {
-  const { readBestEffortConfig } = await import("../../config/config.js");
-  const preliminaryConfig = await startupTrace.measure("cli.config-shell-env", () =>
-    readBestEffortConfig({ isolateEnv: true, observe: false }),
+async function clearGatewayRunShellEnvFallback(
+  values: Readonly<Record<string, string>>,
+): Promise<void> {
+  const keys = Object.keys(values);
+  if (keys.length === 0) {
+    return;
+  }
+  for (const [key, value] of Object.entries(values)) {
+    if (process.env[key] === value) {
+      delete process.env[key];
+    }
+  }
+  const { clearShellEnvAppliedKeys } = await import("../../infra/shell-env.js");
+  clearShellEnvAppliedKeys(keys);
+}
+
+function gatewayRunShellEnvFallbackPlanSignature(plan: GatewayRunShellEnvFallbackPlan): string {
+  return JSON.stringify(plan);
+}
+
+async function readGatewayStartupConfigWithShellEnv(params: {
+  opts: GatewayRunOpts;
+  startupTrace: ReturnType<typeof createGatewayCliStartupTrace>;
+}): Promise<
+  Awaited<ReturnType<typeof readGatewayStartupConfig>> & {
+    lowerPrecedenceEnv: Readonly<Record<string, string>>;
+  }
+> {
+  let lowerPrecedenceEnv: Record<string, string> = {};
+  let loadedPlanSignature: string | undefined;
+  try {
+    for (let readCount = 0; readCount < GATEWAY_SHELL_ENV_CONVERGENCE_MAX_READS; readCount += 1) {
+      const startupConfig = await readGatewayStartupConfig({
+        lowerPrecedenceEnv,
+        opts: params.opts,
+        startupTrace: params.startupTrace,
+      });
+      const plan = await resolveGatewayRunShellEnvFallbackPlan(startupConfig.cfg);
+      const planSignature = gatewayRunShellEnvFallbackPlanSignature(plan);
+      if (!plan.enabled) {
+        if (Object.keys(lowerPrecedenceEnv).length === 0) {
+          return { ...startupConfig, lowerPrecedenceEnv };
+        }
+        await clearGatewayRunShellEnvFallback(lowerPrecedenceEnv);
+        lowerPrecedenceEnv = {};
+        loadedPlanSignature = undefined;
+        continue;
+      }
+      if (loadedPlanSignature === planSignature) {
+        return { ...startupConfig, lowerPrecedenceEnv };
+      }
+      await clearGatewayRunShellEnvFallback(lowerPrecedenceEnv);
+      lowerPrecedenceEnv = await loadGatewayRunShellEnvFallback(plan);
+      loadedPlanSignature = planSignature;
+    }
+  } catch (err) {
+    await clearGatewayRunShellEnvFallback(lowerPrecedenceEnv);
+    throw err;
+  }
+  await clearGatewayRunShellEnvFallback(lowerPrecedenceEnv);
+  throw new Error(
+    "Gateway shell environment fallback settings changed repeatedly during startup. Retry startup.",
   );
-  return {
-    lowerPrecedenceEnv: await loadGatewayRunShellEnvFallback(preliminaryConfig),
-  };
 }
 
 function isGatewayLockError(err: unknown): err is GatewayLockError {
@@ -564,12 +630,11 @@ export async function runGatewayCommand(opts: GatewayRunOpts, hooks: GatewayRunR
   }
 
   gatewayLog.info("loading configuration…");
-  const shellEnvForFinalConfig = await loadGatewayRunShellEnvForFinalConfig(startupTrace);
-  const { cfg, snapshot, startupConfigSnapshotRead } = await readGatewayStartupConfig({
-    ...shellEnvForFinalConfig,
-    opts,
-    startupTrace,
-  });
+  const { cfg, lowerPrecedenceEnv, snapshot, startupConfigSnapshotRead } =
+    await readGatewayStartupConfigWithShellEnv({
+      opts,
+      startupTrace,
+    });
   if (
     !enforceGatewayRunFutureConfigGuard({
       opts,
@@ -583,7 +648,7 @@ export async function runGatewayCommand(opts: GatewayRunOpts, hooks: GatewayRunR
     const { applyFinalGatewayRunConfigEnv } = await import("./pre-bootstrap.js");
     if (
       !(await applyFinalGatewayRunConfigEnv({
-        lowerPrecedenceEnv: shellEnvForFinalConfig.lowerPrecedenceEnv,
+        lowerPrecedenceEnv,
         runtime: defaultRuntime,
         snapshot,
       }))

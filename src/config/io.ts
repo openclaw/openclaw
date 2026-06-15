@@ -1769,7 +1769,7 @@ export function createConfigIO(
         const defaultAgentId = resolveDefaultAgentId(metadataConfig);
         pluginMetadataSnapshot = resolvePluginMetadataSnapshot({
           config: metadataConfig,
-          workspaceDir: resolveAgentWorkspaceDir(metadataConfig, defaultAgentId),
+          workspaceDir: resolveAgentWorkspaceDir(metadataConfig, defaultAgentId, candidateEnv),
           env: candidateEnv,
           allowWorkspaceScopedCurrent: true,
           pluginIdScope: createConfigValidationMetadataPluginIdScope({
@@ -1875,7 +1875,7 @@ export function createConfigIO(
         const defaultAgentId = resolveDefaultAgentId(metadataConfig);
         pluginMetadataSnapshot = resolvePluginMetadataSnapshot({
           config: metadataConfig,
-          workspaceDir: resolveAgentWorkspaceDir(metadataConfig, defaultAgentId),
+          workspaceDir: resolveAgentWorkspaceDir(metadataConfig, defaultAgentId, deps.env),
           env: deps.env,
           allowWorkspaceScopedCurrent: true,
           pluginIdScope: createConfigValidationMetadataPluginIdScope({
@@ -2143,7 +2143,7 @@ export function createConfigIO(
         const defaultAgentId = resolveDefaultAgentId(metadataConfig);
         pluginMetadataSnapshot = resolvePluginMetadataSnapshot({
           config: metadataConfig,
-          workspaceDir: resolveAgentWorkspaceDir(metadataConfig, defaultAgentId),
+          workspaceDir: resolveAgentWorkspaceDir(metadataConfig, defaultAgentId, deps.env),
           env: deps.env,
           allowWorkspaceScopedCurrent: true,
           pluginIdScope: createConfigValidationMetadataPluginIdScope({

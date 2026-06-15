@@ -41,6 +41,7 @@ const refreshManagedProxy = vi.fn(async () => {
 const loadShellEnvFallback = vi.fn((_opts?: unknown) => {
   callOrder.push("shell-env");
 });
+const clearShellEnvAppliedKeys = vi.fn((_keys: readonly string[]) => undefined);
 const resolveShellEnvExpectedKeys = vi.fn((_env?: NodeJS.ProcessEnv) => ["OPENCLAW_GATEWAY_TOKEN"]);
 const resolveShellEnvFallbackTimeoutMs = vi.fn((_env?: NodeJS.ProcessEnv) => 15_000);
 const shouldDeferShellEnvFallback = vi.fn((_env?: NodeJS.ProcessEnv) => false);
@@ -121,6 +122,7 @@ vi.mock("../../config/shell-env-expected-keys.js", () => ({
 }));
 
 vi.mock("../../infra/shell-env.js", () => ({
+  clearShellEnvAppliedKeys: (keys: readonly string[]) => clearShellEnvAppliedKeys(keys),
   loadShellEnvFallback: (opts?: unknown) => loadShellEnvFallback(opts),
   resolveShellEnvFallbackTimeoutMs: (env?: NodeJS.ProcessEnv) =>
     resolveShellEnvFallbackTimeoutMs(env),
@@ -302,6 +304,7 @@ describe("gateway run option collisions", () => {
     beforeRun.mockClear();
     refreshManagedProxy.mockClear();
     loadShellEnvFallback.mockClear();
+    clearShellEnvAppliedKeys.mockClear();
     resolveShellEnvExpectedKeys.mockClear();
     resolveShellEnvFallbackTimeoutMs.mockClear();
     shouldDeferShellEnvFallback.mockReset();
@@ -396,7 +399,6 @@ describe("gateway run option collisions", () => {
         },
         proxy: { enabled: true, proxyUrl: "http://127.0.0.1:29876" },
       };
-      configState.cfg = finalConfig;
       configState.snapshot = {
         exists: true,
         valid: true,
@@ -405,21 +407,30 @@ describe("gateway run option collisions", () => {
         parsed: finalConfig,
         sourceConfig: finalConfig,
       };
-      readConfigFileSnapshotWithPluginMetadata.mockImplementationOnce(async () => {
-        expect(process.env.OPENCLAW_GATEWAY_TOKEN).toBe("shell-token");
-        return {
-          snapshot: {
-            ...configState.snapshot,
-            config: {
-              ...finalConfig,
-              gateway: {
-                ...finalConfig.gateway,
-                auth: { mode: "token", token: "config-token" },
+      readConfigFileSnapshotWithPluginMetadata
+        .mockImplementationOnce(async (options) => {
+          expect(options?.lowerPrecedenceEnv).toBeUndefined();
+          expect(process.env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
+          return { snapshot: configState.snapshot };
+        })
+        .mockImplementationOnce(async (options) => {
+          expect(options?.lowerPrecedenceEnv).toEqual({
+            OPENCLAW_GATEWAY_TOKEN: "shell-token",
+          });
+          expect(process.env.OPENCLAW_GATEWAY_TOKEN).toBe("shell-token");
+          return {
+            snapshot: {
+              ...configState.snapshot,
+              config: {
+                ...finalConfig,
+                gateway: {
+                  ...finalConfig.gateway,
+                  auth: { mode: "token", token: "config-token" },
+                },
               },
             },
-          },
-        };
-      });
+          };
+        });
       loadShellEnvFallback.mockImplementationOnce((opts?: unknown) => {
         callOrder.push("shell-env");
         (opts as { env: NodeJS.ProcessEnv }).env.OPENCLAW_GATEWAY_TOKEN = "shell-token";
@@ -443,15 +454,64 @@ describe("gateway run option collisions", () => {
           lowerPrecedenceEnv: { OPENCLAW_GATEWAY_TOKEN: "shell-token" },
         }),
       );
+      expect(readConfigFileSnapshotWithPluginMetadata).toHaveBeenCalledTimes(2);
       expect(process.env.OPENCLAW_GATEWAY_TOKEN).toBe("config-token");
       const shellEnvOrder = loadShellEnvFallback.mock.invocationCallOrder[0] ?? 0;
-      const finalConfigReadOrder =
+      const initialConfigReadOrder =
         readConfigFileSnapshotWithPluginMetadata.mock.invocationCallOrder[0] ?? 0;
+      const finalConfigReadOrder =
+        readConfigFileSnapshotWithPluginMetadata.mock.invocationCallOrder[1] ?? 0;
       const refreshOrder = refreshManagedProxy.mock.invocationCallOrder[0] ?? 0;
       const startOrder = startGatewayServer.mock.invocationCallOrder[0] ?? 0;
+      expect(shellEnvOrder).toBeGreaterThan(initialConfigReadOrder);
       expect(finalConfigReadOrder).toBeGreaterThan(shellEnvOrder);
       expect(refreshOrder).toBeGreaterThan(shellEnvOrder);
       expect(startOrder).toBeGreaterThan(refreshOrder);
+    });
+  });
+
+  it("removes shell fallback values when the final accepted config disables fallback", async () => {
+    await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: undefined }, async () => {
+      const enabledConfig = {
+        env: { shellEnv: { enabled: true } },
+        gateway: { auth: { mode: "none" }, mode: "local" },
+      };
+      const disabledConfig = {
+        gateway: { auth: { mode: "none" }, mode: "local" },
+      };
+      const snapshot = (config: Record<string, unknown>) => ({
+        config,
+        exists: true,
+        parsed: config,
+        path: "/tmp/openclaw.json",
+        sourceConfig: config,
+        valid: true,
+      });
+      readConfigFileSnapshotWithPluginMetadata
+        .mockResolvedValueOnce({ snapshot: snapshot(enabledConfig) })
+        .mockImplementationOnce(async (options) => {
+          expect(options?.lowerPrecedenceEnv).toEqual({
+            OPENCLAW_GATEWAY_TOKEN: "shell-token",
+          });
+          expect(process.env.OPENCLAW_GATEWAY_TOKEN).toBe("shell-token");
+          return { snapshot: snapshot(disabledConfig) };
+        })
+        .mockImplementationOnce(async (options) => {
+          expect(options?.lowerPrecedenceEnv).toBeUndefined();
+          expect(process.env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
+          return { snapshot: snapshot(disabledConfig) };
+        });
+      loadShellEnvFallback.mockImplementationOnce((opts?: unknown) => {
+        (opts as { env: NodeJS.ProcessEnv }).env.OPENCLAW_GATEWAY_TOKEN = "shell-token";
+      });
+
+      await runGatewayCli(["gateway"]);
+
+      expect(readConfigFileSnapshotWithPluginMetadata).toHaveBeenCalledTimes(3);
+      expect(loadShellEnvFallback).toHaveBeenCalledOnce();
+      expect(clearShellEnvAppliedKeys).toHaveBeenCalledWith(["OPENCLAW_GATEWAY_TOKEN"]);
+      expect(process.env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
+      expect(startGatewayServer).toHaveBeenCalledOnce();
     });
   });
 
@@ -923,7 +983,8 @@ describe("gateway run option collisions", () => {
       recoverSuspicious: true,
       allowSuspiciousRecovery: expect.any(Function),
     });
-    expect(readBestEffortConfig).toHaveBeenCalledOnce();
+    expect(resolveShellEnvExpectedKeys).not.toHaveBeenCalled();
+    expect(readBestEffortConfig).not.toHaveBeenCalled();
     const options = gatewayStartOptions();
     expect(options.bind).toBe("loopback");
     expect(options.startupConfigSnapshotRead).toEqual({ snapshot: configState.snapshot });
@@ -1047,7 +1108,7 @@ describe("gateway run option collisions", () => {
       `Config write audit: ${path.join("/tmp", "logs", "config-audit.jsonl")}`,
     );
     expect(startGatewayServer).not.toHaveBeenCalled();
-    expect(readBestEffortConfig).toHaveBeenCalledOnce();
+    expect(readBestEffortConfig).not.toHaveBeenCalled();
   });
 
   it("blocks invalid startup config without automatic recovery", async () => {
