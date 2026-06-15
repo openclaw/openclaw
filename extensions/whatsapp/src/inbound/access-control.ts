@@ -191,7 +191,6 @@ export async function checkInboundAccessControl(params: {
       isGroup: params.group,
       conversationId,
       senderId: admissionSenderId,
-      dmSenderId: params.from,
     }),
   };
 }

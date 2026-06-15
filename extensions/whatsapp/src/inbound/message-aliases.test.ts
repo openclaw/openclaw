@@ -23,9 +23,7 @@ function createAdmission(): NonNullable<WebInboundCallbackMessage["admission"]> 
     },
     sender: {
       id: "+15550000002",
-      dmSenderId: "123@g.us",
       isSamePhone: false,
-      isDmSenderSamePhone: false,
     },
     ingress: {
       admission: "dispatch",

@@ -233,7 +233,6 @@ describe("web monitor inbox", () => {
       },
       sender: {
         id: "+999",
-        dmSenderId: "+999",
       },
       senderAccess: {
         allowed: true,

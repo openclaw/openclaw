@@ -187,9 +187,7 @@ describe("checkInboundAccessControl admission contract", () => {
       },
       sender: {
         id: "+15550001111",
-        dmSenderId: "+15550001111",
         isSamePhone: false,
-        isDmSenderSamePhone: false,
       },
       ingress: {
         admission: "dispatch",
@@ -255,7 +253,8 @@ describe("checkInboundAccessControl admission contract", () => {
       groupSessionId: groupJid,
     });
     expect(result.admission.sender.id).toBe(participantJid);
-    expect(result.admission.sender.dmSenderId).toBe(groupJid);
+    expect(result.admission.sender).not.toHaveProperty("dmSenderId");
+    expect(result.admission.conversation.kind).toBe("group");
   });
 
   it("does not authorize unresolved group participant JIDs as phone allowlist entries", async () => {
