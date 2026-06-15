@@ -255,6 +255,48 @@ describe("sendMessageIMessage receipts", () => {
     expect(result.receipt.sentAt).toBeGreaterThan(0);
   });
 
+  it("honors the configured send transport for send-attachment media", async () => {
+    const client = createClient({ message_id: 12345 });
+    const runCliJson = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "p:0/media-guid", transferGuid: "transfer-1" });
+
+    await sendMessageIMessage("chat_guid:chat-1", "", {
+      config: {
+        channels: {
+          imessage: {
+            sendTransport: "auto",
+            accounts: {
+              work: {
+                sendTransport: "applescript",
+              },
+            },
+          },
+        },
+      },
+      accountId: "work",
+      client,
+      mediaUrl: "/tmp/image.png",
+      resolveAttachmentImpl: async () => ({ path: "/tmp/image.png", contentType: "image/png" }),
+      runCliJson,
+    });
+
+    expect(client["request"]).not.toHaveBeenCalled();
+    expect(runCliJson.mock.calls).toEqual([
+      [
+        [
+          "send-attachment",
+          "--chat",
+          "chat-1",
+          "--file",
+          "/tmp/image.png",
+          "--transport",
+          "applescript",
+        ],
+      ],
+    ]);
+  });
+
   it("sends audioAsVoice media through send-attachment audio transport", async () => {
     const client = createClient({ message_id: 12345 });
     const runCliJson = vi.fn().mockResolvedValueOnce({ messageId: "p:0/voice-guid" });

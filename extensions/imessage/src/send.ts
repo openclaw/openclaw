@@ -759,6 +759,7 @@ async function trySendAttachmentForTarget(params: {
   replyToId?: string;
   echoText?: string;
   pendingEchoTtlMs: number;
+  transport?: IMessageSendTransport;
   runCliJson: (args: readonly string[]) => Promise<Record<string, unknown>>;
   resolveMessageGuidImpl?: IMessageSendOpts["resolveMessageGuidImpl"];
 }): Promise<IMessageSendResult | null> {
@@ -803,7 +804,7 @@ async function trySendAttachmentForTarget(params: {
       ...(params.audioAsVoice ? ["--audio"] : []),
       ...(params.replyToId ? ["--reply-to", params.replyToId] : []),
       "--transport",
-      "auto",
+      params.transport ?? "auto",
     ]);
   } catch (error) {
     forgetPersistedIMessageEchoKey(pendingEchoKey);
@@ -969,6 +970,7 @@ export async function sendMessageIMessage(
       ...(resolvedReplyToId ? { replyToId: resolvedReplyToId } : {}),
       echoText: attachmentEchoText,
       pendingEchoTtlMs,
+      transport: sendTransport,
       runCliJson,
       resolveMessageGuidImpl: opts.resolveMessageGuidImpl,
     });
