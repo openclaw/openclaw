@@ -31,6 +31,7 @@ export function resolveAndApplyOutboundThreadId(
     toolContext?: ChannelThreadingToolContext;
     resolveAutoThreadId?: ResolveAutoThreadId;
     resolveReplyTransport?: ResolveReplyTransport;
+    replyToIsExplicit?: boolean;
   },
 ): string | undefined {
   const threadId = readStringParam(actionParams, "threadId");
@@ -57,7 +58,8 @@ export function resolveAndApplyOutboundThreadId(
       cfg: context.cfg,
       accountId: context.accountId,
       threadId: resolvedThreadId,
-      replyToId: resolvedThreadId,
+      replyToId,
+      replyToIsExplicit: context.replyToIsExplicit,
     })?.replyToId;
     // Providers that use one canonical root for reply and thread routing opt in
     // through resolveReplyTransport. Other transports keep message replies intact.
@@ -174,6 +176,7 @@ export async function prepareOutboundMirrorRoute(params: {
   resolvedTarget?: ResolvedMessagingTarget;
   resolveAutoThreadId?: ResolveAutoThreadId;
   resolveReplyTransport?: ResolveReplyTransport;
+  replyToIsExplicit?: boolean;
   resolveOutboundSessionRoute: (
     params: ResolveOutboundSessionRouteParams,
   ) => Promise<OutboundSessionRoute | null>;
@@ -194,6 +197,7 @@ export async function prepareOutboundMirrorRoute(params: {
     toolContext: params.toolContext,
     resolveAutoThreadId: params.resolveAutoThreadId,
     resolveReplyTransport: params.resolveReplyTransport,
+    replyToIsExplicit: params.replyToIsExplicit,
   });
   const replyToId = readStringParam(params.actionParams, "replyTo");
   const outboundRoute =

@@ -924,11 +924,11 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
       const resolvedThreadId =
         replyDelivery?.chatType === "direct"
           ? undefined
-          : replyToIsExplicit
-            ? (replyToId ?? ambientThreadId)
-            : replyDelivery
-              ? (ambientThreadId ?? replyToId ?? undefined)
-              : (replyToId ?? ambientThreadId);
+          : replyDelivery
+            ? replyToIsExplicit
+              ? (replyToId ?? ambientThreadId)
+              : (ambientThreadId ?? replyToId ?? undefined)
+            : (replyToId ?? ambientThreadId);
       return {
         replyToId: replyDelivery?.chatType === "direct" ? null : resolvedThreadId,
         threadId: resolvedThreadId ?? null,

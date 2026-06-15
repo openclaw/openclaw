@@ -1049,6 +1049,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     agentId,
   });
 
+  const replyToIsExplicit = Boolean(readStringParam(params, "replyTo"));
   resolveAndApplyOutboundReplyToId(params, {
     channel,
     toolContext: input.toolContext,
@@ -1067,6 +1068,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     resolvedTarget,
     resolveAutoThreadId: getChannelPlugin(channel)?.threading?.resolveAutoThreadId,
     resolveReplyTransport: getChannelPlugin(channel)?.threading?.resolveReplyTransport,
+    replyToIsExplicit,
     resolveOutboundSessionRoute,
     ensureOutboundSessionEntry,
   });

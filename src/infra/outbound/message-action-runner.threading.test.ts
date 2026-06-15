@@ -118,9 +118,9 @@ describe("message action threading helpers", () => {
       toolContext: defaultForumToolContext,
       agentId: "main",
       resolveAutoThreadId: () => "root-42",
-      resolveReplyTransport: ({ replyToId }) => ({
-        replyToId,
-        threadId: replyToId,
+      resolveReplyTransport: ({ threadId }) => ({
+        replyToId: threadId,
+        threadId: threadId ?? null,
       }),
       resolveOutboundSessionRoute,
       ensureOutboundSessionEntry,
@@ -191,7 +191,7 @@ describe("message action threading helpers", () => {
     expect(resolveAutoThreadId).not.toHaveBeenCalled();
   });
 
-  it("canonicalizes an explicit thread root through Slack-style reply transport", () => {
+  it("preserves an explicit reply target through Slack-style reply transport", () => {
     const actionParams: Record<string, unknown> = {
       channel: "forum",
       target: "forum:123",
@@ -206,16 +206,41 @@ describe("message action threading helpers", () => {
       to: "forum:123",
       toolContext: defaultForumToolContext,
       resolveAutoThreadId,
-      resolveReplyTransport: ({ threadId, replyToId }) => ({
-        replyToId: threadId ?? replyToId,
+      replyToIsExplicit: true,
+      resolveReplyTransport: ({ replyToId }) => ({
+        replyToId,
         threadId: null,
       }),
     });
 
     expect(actionParams.threadId).toBe("root-42");
-    expect(actionParams.replyTo).toBe("root-42");
+    expect(actionParams.replyTo).toBe("child-777");
     expect(resolved).toBe("root-42");
     expect(resolveAutoThreadId).not.toHaveBeenCalled();
+  });
+
+  it("canonicalizes an inherited reply target through a one-root transport", () => {
+    const actionParams: Record<string, unknown> = {
+      channel: "forum",
+      target: "forum:123",
+      message: "hi",
+      threadId: "root-42",
+      replyTo: "child-777",
+    };
+
+    resolveAndApplyOutboundThreadId(actionParams, {
+      cfg: forumConfig,
+      to: "forum:123",
+      toolContext: defaultForumToolContext,
+      replyToIsExplicit: false,
+      resolveReplyTransport: ({ threadId, replyToId, replyToIsExplicit }) => ({
+        replyToId: replyToIsExplicit ? replyToId : threadId,
+        threadId: threadId ?? null,
+      }),
+    });
+
+    expect(actionParams.threadId).toBe("root-42");
+    expect(actionParams.replyTo).toBe("root-42");
   });
 
   it.each([
@@ -277,9 +302,9 @@ describe("message action threading helpers", () => {
       to: "forum:123",
       toolContext: defaultForumToolContext,
       resolveAutoThreadId: () => "root-42",
-      resolveReplyTransport: ({ replyToId }) => ({
-        replyToId,
-        threadId: replyToId,
+      resolveReplyTransport: ({ threadId }) => ({
+        replyToId: threadId,
+        threadId: threadId ?? null,
       }),
     });
 
