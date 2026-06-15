@@ -8,6 +8,15 @@ import {
   writeStore,
 } from "./sessions.test-helpers.js";
 
+vi.mock("../infra/state-migrations.js", () => ({
+  autoMigrateLegacyState: vi.fn(async () => ({
+    migrated: false,
+    skipped: true,
+    changes: [],
+    warnings: [],
+  })),
+}));
+
 /**
  * Catalog #19 — `kind` misclassified as `"direct"` for ACP spawn-child sessions.
  *
