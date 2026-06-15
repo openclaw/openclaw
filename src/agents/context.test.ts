@@ -395,6 +395,32 @@ describe("resolveContextTokensForModel", () => {
     expect(result).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
   });
 
+  it("uses Anthropic configured contextTokens for claude-cli runtime provider", () => {
+    const result = resolveContextTokensForModel({
+      cfg: {
+        models: {
+          providers: {
+            anthropic: {
+              baseUrl: "https://api.anthropic.com",
+              models: [
+                {
+                  ...testModelContextWindow("claude-opus-4-7", 200_000),
+                  contextTokens: 100_000,
+                },
+              ],
+            },
+          },
+        },
+      },
+      provider: "claude-cli",
+      model: "claude-opus-4-7",
+      fallbackContextTokens: 200_000,
+      allowAsyncLoad: false,
+    });
+
+    expect(result).toBe(100_000);
+  });
+
   it("returns 1M context for GA-capable Anthropic 4.x models even without context1m", () => {
     const result = resolveContextTokensForModel({
       cfg: {
