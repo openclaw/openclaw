@@ -1735,11 +1735,13 @@ function canStartExplicitlyEnabledPlugin(params: {
     rootConfig?: OpenClawConfig;
   };
   platform?: NodeJS.Platform;
+  manifestLookup: ManifestRegistryLookup;
 }): boolean {
-  // Include externally-installed plugins that are explicitly enabled via
-  // plugins.entries.<id>.enabled=true but don't match any channel/provider/
-  // hook/harness startup predicate. Bundled plugins are covered by other
-  // manifest-based predicates and do not need this fallback.
+  // Include externally-installed channel plugins that are explicitly enabled
+  // via plugins.entries.<id>.enabled=true but whose channels are not yet
+  // configured in the channel section. Bundled plugins and non-channel
+  // plugins are covered by other manifest-based predicates and startup gates
+  // and do not need this fallback.
   if (params.plugin.origin === "bundled") {
     return false;
   }
@@ -1756,6 +1758,12 @@ function canStartExplicitlyEnabledPlugin(params: {
     params.pluginsConfig.entries[params.plugin.pluginId]?.enabled === false ||
     params.activationSource.plugins.entries[params.plugin.pluginId]?.enabled === false
   ) {
+    return false;
+  }
+  // Only apply to external plugins that provide channels.
+  // Non-channel plugins (web search, context-engine, etc.) stay lazy
+  // and follow their own activation predicates.
+  if (listManifestChannelIds(params.manifestLookup, params.plugin.pluginId).length === 0) {
     return false;
   }
   const activationState = resolveEffectivePluginActivationState({
@@ -2135,6 +2143,7 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
         pluginsConfig,
         activationSource,
         platform: params.platform,
+        manifestLookup,
       })
     ) {
       pluginIds.push(plugin.pluginId);
