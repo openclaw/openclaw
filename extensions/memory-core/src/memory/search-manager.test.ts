@@ -396,44 +396,49 @@ describe("getMemorySearchManager caching", () => {
         ),
       );
       const debug: unknown[] = [];
+      const directReadSpy = vi.spyOn(fs, "readFile");
+      try {
+        const result = await getMemorySearchManager({ cfg, agentId: "main" });
+        const manager = requireManager(result);
+        const results = await manager.search("orbit ramen", {
+          maxResults: 1,
+          minScore: 0,
+          onDebug: (entry) => debug.push(entry),
+        });
 
-      const result = await getMemorySearchManager({ cfg, agentId: "main" });
-      const manager = requireManager(result);
-      const results = await manager.search("orbit ramen", {
-        maxResults: 1,
-        minScore: 0,
-        onDebug: (entry) => debug.push(entry),
-      });
-
-      expect(results).toEqual([
-        expect.objectContaining({
-          path: "memory/preferences.md",
-          startLine: 1,
-          endLine: 4,
-          snippet: expect.stringContaining("ORBIT-22"),
-          source: "memory",
-        }),
-      ]);
-      expect(debug).toEqual([
-        {
-          backend: "builtin",
-          effectiveMode: "keyword-fallback",
-          fallback: "node-sqlite-unavailable",
-        },
-      ]);
-      expect(manager.status()).toEqual(
-        expect.objectContaining({
-          backend: "builtin",
-          provider: "keyword-fallback",
-          requestedProvider: "keyword-fallback",
-          fallback: {
-            from: "builtin-sqlite",
-            reason:
-              "SQLite support is unavailable in this Node runtime (missing node:sqlite). No such built-in module: node:sqlite",
+        expect(results).toEqual([
+          expect.objectContaining({
+            path: "memory/preferences.md",
+            startLine: 1,
+            endLine: 4,
+            snippet: expect.stringContaining("ORBIT-22"),
+            source: "memory",
+          }),
+        ]);
+        expect(debug).toEqual([
+          {
+            backend: "builtin",
+            effectiveMode: "keyword-fallback",
+            fallback: "node-sqlite-unavailable",
           },
-        }),
-      );
-      expect(mockMemoryIndexGet).toHaveBeenCalledTimes(1);
+        ]);
+        expect(manager.status()).toEqual(
+          expect.objectContaining({
+            backend: "builtin",
+            provider: "keyword-fallback",
+            requestedProvider: "keyword-fallback",
+            fallback: {
+              from: "builtin-sqlite",
+              reason:
+                "SQLite support is unavailable in this Node runtime (missing node:sqlite). No such built-in module: node:sqlite",
+            },
+          }),
+        );
+        expect(directReadSpy).not.toHaveBeenCalled();
+        expect(mockMemoryIndexGet).toHaveBeenCalledTimes(1);
+      } finally {
+        directReadSpy.mockRestore();
+      }
     } finally {
       await fs.rm(fixtureRoot, { recursive: true, force: true });
     }

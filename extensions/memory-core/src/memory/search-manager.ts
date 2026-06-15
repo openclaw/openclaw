@@ -465,15 +465,21 @@ class KeywordFallbackMemoryManager implements MemorySearchManager {
       if (opts?.signal?.aborted) {
         throw opts.signal.reason instanceof Error ? opts.signal.reason : new Error("aborted");
       }
-      let content: string;
+      let readResult: MemoryReadResult;
       try {
-        content = await fs.readFile(filePath, "utf8");
+        readResult = await readMemoryFile({
+          workspaceDir: this.params.workspaceDir,
+          extraPaths: this.params.extraPaths,
+          relPath: filePath,
+          lines: Number.MAX_SAFE_INTEGER,
+          maxChars: Number.MAX_SAFE_INTEGER,
+        });
       } catch {
         continue;
       }
-      const relPath = path.relative(this.params.workspaceDir, filePath).replace(/\\/g, "/");
+      const relPath = readResult.path;
       const pathMatches = countKeywordFallbackMatches(relPath, tokens);
-      for (const chunk of chunkMarkdown(content, this.params.chunking)) {
+      for (const chunk of chunkMarkdown(readResult.text, this.params.chunking)) {
         const textMatches = countKeywordFallbackMatches(chunk.text, tokens);
         const matchCount = textMatches + pathMatches;
         if (matchCount === 0) {
