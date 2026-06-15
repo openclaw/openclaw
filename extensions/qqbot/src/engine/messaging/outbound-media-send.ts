@@ -2,6 +2,8 @@
  * Low-level outbound media sends (photo, voice, video, document) and path resolution.
  */
 
+import { randomUUID } from "node:crypto";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import {
@@ -208,6 +210,31 @@ function senderKindForLoadedMedia(
 
 function resolveHostReadQuotaFilePath(ctx: MediaTargetContext, mediaPath: string): string {
   return resolveWorkspacePathCandidate(normalizePath(mediaPath), ctx.mediaAccess?.workspaceDir);
+}
+
+async function stageHostReadVoice(
+  ctx: MediaTargetContext,
+  mediaPath: string,
+): Promise<string | null> {
+  const mediaReadFile = resolveOutboundMediaReadFile(ctx);
+  if (!mediaReadFile || isHttpOrDataSource(mediaPath)) {
+    return null;
+  }
+  const loaded = await loadOutboundMediaFromUrl(mediaPath, {
+    maxBytes: getMaxUploadSize(MediaFileType.VOICE),
+    mediaAccess: ctx.mediaAccess,
+    mediaLocalRoots: ctx.mediaLocalRoots,
+    mediaReadFile,
+    workspaceDir: ctx.mediaAccess?.workspaceDir,
+  });
+  const stagedDir = getQQBotMediaDir("host-read", "voice");
+  await mkdir(stagedDir, { recursive: true });
+  const rawFileName = sanitizeFileName(loaded.fileName || path.basename(mediaPath) || "voice");
+  const ext = path.extname(rawFileName);
+  const baseName = sanitizeFileName(path.basename(rawFileName, ext)) || "voice";
+  const stagedPath = path.join(stagedDir, `${baseName}-${randomUUID()}${ext || ".bin"}`);
+  await writeFile(stagedPath, loaded.buffer);
+  return stagedPath;
 }
 
 async function trySendViaHostRead(
@@ -456,11 +483,19 @@ export async function sendVoice(
   directUploadFormats?: string[],
   transcodeEnabled = true,
 ): Promise<OutboundResult> {
-  const resolvedMediaPath = resolveOutboundMediaPath(voicePath, "voice", {
-    allowMissingLocalPath: true,
-    extraLocalRoots: resolveOutboundMediaLocalRoots(ctx),
-    workspaceDir: ctx.mediaAccess?.workspaceDir,
-  });
+  let stagedHostReadVoice: string | null = null;
+  try {
+    stagedHostReadVoice = await stageHostReadVoice(ctx, voicePath);
+  } catch (err) {
+    return { channel: "qqbot", error: formatErrorMessage(err) };
+  }
+  const resolvedMediaPath = stagedHostReadVoice
+    ? { ok: true as const, mediaPath: stagedHostReadVoice }
+    : resolveOutboundMediaPath(voicePath, "voice", {
+        allowMissingLocalPath: true,
+        extraLocalRoots: resolveOutboundMediaLocalRoots(ctx),
+        workspaceDir: ctx.mediaAccess?.workspaceDir,
+      });
   if (!resolvedMediaPath.ok) {
     return { channel: "qqbot", error: resolvedMediaPath.error };
   }
