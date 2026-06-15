@@ -68,6 +68,30 @@ function assertPattern(
   throw new Error(`${relativePath}: ${message}`);
 }
 
+function stringLiteralUnionValues(schema: unknown): string[] | undefined {
+  if (!schema || typeof schema !== "object") {
+    return undefined;
+  }
+  const candidate = schema as { anyOf?: unknown; oneOf?: unknown };
+  const branches = candidate.oneOf ?? candidate.anyOf;
+  if (!Array.isArray(branches) || branches.length < 2) {
+    return undefined;
+  }
+
+  const values: string[] = [];
+  for (const branch of branches) {
+    if (!branch || typeof branch !== "object" || !("const" in branch)) {
+      return undefined;
+    }
+    const value = branch.const;
+    if (typeof value !== "string") {
+      return undefined;
+    }
+    values.push(value);
+  }
+  return new Set(values).size === values.length ? values : undefined;
+}
+
 describe("native Gateway protocol levels", () => {
   it("match the TypeScript source of truth", async () => {
     if (MIN_CLIENT_PROTOCOL_VERSION > PROTOCOL_VERSION) {
@@ -186,12 +210,8 @@ describe("native Gateway protocol levels", () => {
     const swiftGenerated = await readRepoFile(swiftGeneratedPath);
 
     for (const [name, schema] of Object.entries(ProtocolSchemas)) {
-      const branches = schema.anyOf ?? schema.oneOf;
-      if (!branches || branches.length < 2) {
-        continue;
-      }
-      const values = branches.map((branch) => branch.const);
-      if (values.some((value) => typeof value !== "string")) {
+      const values = stringLiteralUnionValues(schema);
+      if (!values) {
         continue;
       }
 
