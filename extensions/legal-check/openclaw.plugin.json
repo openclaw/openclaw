@@ -1,0 +1,22 @@
+{
+  "id": "legal-check",
+  "name": "Legal Check",
+  "description": "Create 图文/视频违规·不实信息检测 jobs and query their status, by calling the leading-v2.0 PHP API (/legal/save-job, /ai/fetch-job) as the chat user via X-Auth-Token.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "legalApi": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "leading-v2.0 PHP backend the agent calls on behalf of the user.",
+        "properties": {
+          "baseUrl": { "type": "string", "default": "https://v2.businesstimescn.com" },
+          "timeoutMs": { "type": "number", "default": 30000 }
+        },
+        "required": ["baseUrl"]
+      }
+    },
+    "required": ["legalApi"]
+  }
+}

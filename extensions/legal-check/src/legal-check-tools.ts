@@ -1,0 +1,248 @@
+import { Type } from "@sinclair/typebox";
+import { jsonResult, type OpenClawPluginApi } from "../api.js";
+import { extractUrl } from "./extract-url.js";
+import { getJson, LegalApiError, postForm, resolveConfig } from "./http-client.js";
+import type { LegalApiConfig } from "./types.js";
+
+/** Chat agents are named `rabbitmq-<userId>`; that userId is the trusted identity. */
+const RABBITMQ_AGENT_PATTERN = /^rabbitmq-(.+)$/;
+
+function extractUserId(agentId: string | undefined): string | null {
+  const match = RABBITMQ_AGENT_PATTERN.exec(agentId ?? "");
+  return match?.[1] ?? null;
+}
+
+function stringEnum<const T extends readonly string[]>(values: T, description: string) {
+  return Type.Unsafe<T[number]>({ type: "string", enum: [...values], description });
+}
+
+const CreateSchema = Type.Object(
+  {
+    content: Type.String({
+      description:
+        "The 图文/视频 to check: a public URL, OR the pasted title+text. If it contains a URL " +
+        "the backend crawls it; otherwise it analyzes the pasted text. (Web 上传视频 is not supported here.)",
+    }),
+    mode: Type.Optional(
+      stringEnum(
+        ["violation", "rumor"] as const,
+        '"violation" (违规检测, default) flags illegal/non-compliant content; ' +
+          '"rumor" (不实信息检测) checks against a known truth you provide.',
+      ),
+    ),
+    target: Type.Optional(
+      Type.String({ description: "维权主体 (the aggrieved party). Optional." }),
+    ),
+    truth: Type.Optional(
+      Type.String({
+        description:
+          'rumor mode only: the verified truth ("真相详情"). Required when mode="rumor".',
+      }),
+    ),
+    verifiedBy: Type.Optional(
+      Type.String({
+        description:
+          'rumor mode only: the unit that verified the truth ("核实单位"). Required when mode="rumor".',
+      }),
+    ),
+    gov: Type.Optional(
+      Type.Boolean({ description: "Also prepare the government-report letter. Default false." }),
+    ),
+  },
+  { additionalProperties: false },
+);
+
+const StatusSchema = Type.Object(
+  { jobId: Type.Number({ description: "The check job id returned by legal_check_create." }) },
+  { additionalProperties: false },
+);
+
+const STATUS_LABELS: Record<string, string> = {
+  Pending: "排队中",
+  Running: "检测中",
+  Summary: "生成报告中",
+  Done: "已完成",
+  Fail: "失败",
+  Stop: "已停止",
+};
+
+function asString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+/** Map a backend error/login envelope to a tool error, or null when it looks OK. */
+function envelopeError(res: Record<string, unknown>): string | null {
+  if (res.login) {
+    return "Backend rejected the request (not authorized for this account).";
+  }
+  if (res.code === "danger") {
+    return asString(res.message) ?? "Backend returned an error.";
+  }
+  return null;
+}
+
+export function createLegalCheckCreateToolFactory(api: OpenClawPluginApi) {
+  const config = resolveConfig(api.pluginConfig ?? {});
+
+  return (ctx: { agentId?: string }) => {
+    const userId = extractUserId(ctx.agentId);
+    if (!userId) {
+      return null;
+    }
+
+    return {
+      name: "legal_check_create",
+      label: "Create Legal Check",
+      description:
+        "Create a 图文/视频违规检测 or 不实信息检测 task (the same engine as the web 内容检测 page). " +
+        "Returns a jobId; the analysis runs asynchronously — poll legal_check_status with that id. " +
+        "Each check consumes the account's legal-check credit.",
+      parameters: CreateSchema,
+      async execute(_toolCallId: string, rawParams: Record<string, unknown>) {
+        const content = asString(rawParams.content);
+        if (!content) {
+          return jsonResult({
+            success: false,
+            error: "content is required (a URL or the text to check).",
+          });
+        }
+        const mode = rawParams.mode === "rumor" ? "rumor" : "violation";
+        if (mode === "rumor") {
+          if (!asString(rawParams.truth) || !asString(rawParams.verifiedBy)) {
+            return jsonResult({
+              success: false,
+              error: 'mode="rumor" requires both truth (真相详情) and verifiedBy (核实单位).',
+            });
+          }
+        }
+
+        const fields: Record<string, string | number | undefined> = {
+          requirement: content,
+          link: extractUrl(content),
+          upload: 0,
+          rumor: mode === "rumor" ? 1 : 0,
+          target: asString(rawParams.target) ?? "",
+          data: asString(rawParams.truth) ?? "",
+          officialUnit: asString(rawParams.verifiedBy) ?? "",
+          gov: rawParams.gov ? 1 : 0,
+          regular: 1,
+          clientIp: "127.0.0.1",
+          siteId: "legal",
+        };
+
+        let res: Record<string, unknown>;
+        try {
+          res = await postForm(config, "/legal/save-job", fields, userId);
+        } catch (error) {
+          return failure(api, "legal_check_create", userId, error);
+        }
+
+        const envErr = envelopeError(res);
+        if (envErr) {
+          return jsonResult({ success: false, error: envErr });
+        }
+
+        const job = (res.job as Record<string, unknown> | undefined) ?? undefined;
+        const jobId = Number(job?.id);
+        if (!Number.isInteger(jobId) || jobId <= 0) {
+          return jsonResult({ success: false, error: "Backend did not return a job id." });
+        }
+        return jsonResult({
+          success: true,
+          jobId,
+          duplicated: Boolean(res.duplicated),
+          label: asString(job?.label) ?? null,
+          status: asString(job?.status) ?? "Pending",
+          mode,
+          detailPath: `/business/content/${jobId}`,
+        });
+      },
+    };
+  };
+}
+
+export function createLegalCheckStatusToolFactory(api: OpenClawPluginApi) {
+  const config = resolveConfig(api.pluginConfig ?? {});
+
+  return (ctx: { agentId?: string }) => {
+    const userId = extractUserId(ctx.agentId);
+    if (!userId) {
+      return null;
+    }
+
+    return {
+      name: "legal_check_status",
+      label: "Legal Check Status",
+      description:
+        "Get the status and result of a 违规/不实信息检测 job created with legal_check_create. " +
+        "Returns the job stage, the verdict/result when done, and which complaint letters are ready.",
+      parameters: StatusSchema,
+      async execute(_toolCallId: string, rawParams: Record<string, unknown>) {
+        const jobId = Number(rawParams.jobId);
+        if (!Number.isInteger(jobId) || jobId <= 0) {
+          return jsonResult({ success: false, error: "jobId must be a positive integer." });
+        }
+
+        let res: Record<string, unknown>;
+        try {
+          res = await getJson(
+            config,
+            "/ai/fetch-job",
+            { id: jobId, workspace: "pr", all: 1 },
+            userId,
+          );
+        } catch (error) {
+          return failure(api, "legal_check_status", userId, error);
+        }
+
+        const envErr = envelopeError(res);
+        if (envErr) {
+          return jsonResult({ success: false, error: envErr });
+        }
+
+        return jsonResult(summarizeJob(jobId, res));
+      },
+    };
+  };
+}
+
+function summarizeJob(jobId: number, res: Record<string, unknown>): Record<string, unknown> {
+  const job = (res.job as Record<string, unknown> | undefined) ?? {};
+  const detail = (res.detail as Record<string, unknown> | undefined) ?? {};
+  const status = asString(job.status) ?? "";
+  const letterMap = (res.letterMap as Record<string, unknown> | undefined) ?? {};
+  const tableData = detail.tableData;
+  const paragraphCount = Array.isArray(tableData)
+    ? tableData.length
+    : tableData && typeof tableData === "object"
+      ? Object.keys(tableData).length
+      : 0;
+
+  return {
+    success: true,
+    jobId,
+    status,
+    statusLabel: STATUS_LABELS[status] ?? status ?? "未知",
+    done: status === "Done",
+    failed: status === "Fail",
+    stopped: status === "Stop",
+    label: asString(job.label) ?? null,
+    mode: Number(job.rumor) === 1 ? "rumor" : "violation",
+    target: asString(job.target) ?? null,
+    result: detail.result ?? null,
+    paragraphCount,
+    letters: Object.keys(letterMap),
+    detailPath: `/business/content/${jobId}`,
+  };
+}
+
+function failure(api: OpenClawPluginApi, tool: string, userId: string, error: unknown) {
+  if (error instanceof LegalApiError) {
+    api.logger.warn(`[${tool.toUpperCase()}] backend error for ${userId}: ${error.message}`);
+    return jsonResult({ success: false, error: `Backend request failed: ${error.message}` });
+  }
+  api.logger.error(`[${tool.toUpperCase()}] failed for ${userId}: ${String(error)}`);
+  return jsonResult({ success: false, error: "Request to the backend failed; see gateway logs." });
+}
+
+export type { LegalApiConfig };

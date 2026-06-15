@@ -692,25 +692,6 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
-  extensions/infringement:
-    dependencies:
-      '@sinclair/typebox':
-        specifier: 0.34.49
-        version: 0.34.49
-      amqplib:
-        specifier: ^0.10.7
-        version: 0.10.9
-      mysql2:
-        specifier: ^3.12.0
-        version: 3.22.0(@types/node@25.6.0)
-    devDependencies:
-      '@openclaw/plugin-sdk':
-        specifier: workspace:*
-        version: link:../../packages/plugin-sdk
-      '@types/amqplib':
-        specifier: ^0.10.7
-        version: 0.10.8
-
   extensions/irc:
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -724,6 +705,16 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/kimi-coding:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
+  extensions/legal-check:
+    dependencies:
+      '@sinclair/typebox':
+        specifier: 0.34.49
+        version: 0.34.49
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
