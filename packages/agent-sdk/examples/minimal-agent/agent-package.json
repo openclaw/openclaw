@@ -1,0 +1,16 @@
+{
+  "name": "minimal-agent",
+  "version": "1.0.0",
+  "description": "Minimal agent package — just the basics.",
+  "files": {
+    "copy": [
+      { "src": "files/AGENTS.md", "dest": "AGENTS.md" }
+    ],
+    "mutable": [
+      { "dest": "memory/", "description": "Agent working memory." }
+    ]
+  },
+  "policy": {
+    "denyMutableInstructionFiles": true
+  }
+}

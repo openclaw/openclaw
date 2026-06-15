@@ -1,0 +1,47 @@
+{
+  "name": "security-hardened-agent",
+  "version": "1.0.0",
+  "description": "Security-hardened agent — read-only tools, strict network policy, mutation detection.",
+  "files": {
+    "copy": [
+      { "src": "files/AGENTS.md", "dest": "AGENTS.md" },
+      { "src": "files/SOUL.md", "dest": "SOUL.md" }
+    ],
+    "mutable": []
+  },
+  "skills": [
+    { "path": "skills/security-review", "required": true }
+  ],
+  "secrets": {
+    "consumer": [
+      { "name": "SCAN_TOKEN", "required": true, "description": "Security scan API token." }
+    ],
+    "mapping": {
+      "SCAN_TOKEN": { "source": "env", "key": "SECURITY_SCAN_TOKEN" }
+    },
+    "audit": {
+      "logAccess": true,
+      "redactInTranscripts": true
+    }
+  },
+  "tools": {
+    "allow": ["read", "write", "edit", "memory_get", "memory_search"],
+    "deny": ["exec", "browser", "web_fetch", "web_search"],
+    "sandbox": {
+      "network": {
+        "egress": "none",
+        "dnsRebindingCheck": true,
+        "denyPrivateRanges": true
+      },
+      "filesystem": {
+        "readPaths": ["workspace", "package"],
+        "denyPaths": ["/etc", "/proc", "/sys", "/dev"]
+      }
+    }
+  },
+  "policy": {
+    "denyMutableInstructionFiles": true,
+    "allowMutableUserInstructionFiles": false,
+    "onUpgrade": "reset"
+  }
+}

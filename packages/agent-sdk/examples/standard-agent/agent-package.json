@@ -1,0 +1,46 @@
+{
+  "name": "standard-agent",
+  "version": "1.0.0",
+  "description": "Standard agent with tools, secrets, and network policy.",
+  "files": {
+    "copy": [
+      { "src": "files/AGENTS.md", "dest": "AGENTS.md" },
+      { "src": "files/SOUL.md", "dest": "SOUL.md" }
+    ],
+    "mutable": [
+      { "dest": "memory/", "description": "Agent working memory." }
+    ]
+  },
+  "skills": [
+    { "path": "skills/my-skill", "required": true }
+  ],
+  "secrets": {
+    "consumer": [
+      { "name": "API_KEY", "required: true, "description": "External API key." }
+    ],
+    "mapping": {
+      "API_KEY": { "source": "env", "key": "STANDARD_AGENT_API_KEY" }
+    },
+    "audit": {
+      "logAccess": true,
+      "redactInTranscripts": true
+    }
+  },
+  "tools": {
+    "allow": ["exec", "read", "write", "web_search", "web_fetch"],
+    "deny": ["browser"],
+    "sandbox": {
+      "network": {
+        "egress": "restricted",
+        "allowedDomains": ["api.example.com", "hooks.slack.com"],
+        "deniedDomains": ["*.internal.corp"],
+        "dnsRebindingCheck": true,
+        "denyPrivateRanges": true
+      }
+    }
+  },
+  "policy": {
+    "denyMutableInstructionFiles": true,
+    "onUpgrade": "preserve-custom"
+  }
+}
