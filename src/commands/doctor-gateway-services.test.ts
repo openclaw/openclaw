@@ -872,6 +872,64 @@ describe("maybeRepairGatewayServiceConfig", () => {
     expect(mocks.install).toHaveBeenCalledTimes(1);
   });
 
+  it("resolves SecretRef-managed gateway tokens against the service command environment", async () => {
+    await withEnvAsync(
+      {
+        OPENCLAW_GATEWAY_TOKEN: undefined,
+      },
+      async () => {
+        mocks.readCommand.mockResolvedValue({
+          programArguments: gatewayProgramArguments,
+          environment: {
+            OPENCLAW_GATEWAY_TOKEN: "service-env-token",
+          },
+          environmentValueSources: {
+            OPENCLAW_GATEWAY_TOKEN: "file",
+          },
+        });
+        mocks.resolveGatewayAuthTokenForService.mockImplementation(
+          async (_cfg: OpenClawConfig, env: NodeJS.ProcessEnv) => {
+            return env.OPENCLAW_GATEWAY_TOKEN
+              ? { token: env.OPENCLAW_GATEWAY_TOKEN }
+              : {
+                  unavailableReason: "gateway.auth.token SecretRef is configured but unresolved",
+                };
+          },
+        );
+        mocks.auditGatewayServiceConfig.mockResolvedValue({
+          ok: true,
+          issues: [],
+        });
+        mocks.buildGatewayInstallPlan.mockResolvedValue({
+          programArguments: gatewayProgramArguments,
+          workingDirectory: "/tmp",
+          environment: {},
+        });
+
+        const cfg: OpenClawConfig = {
+          gateway: {
+            auth: {
+              mode: "token",
+              token: "${OPENCLAW_GATEWAY_TOKEN}",
+            },
+          },
+        };
+
+        await runRepair(cfg);
+
+        expect(mocks.resolveGatewayAuthTokenForService).toHaveBeenCalledWith(
+          cfg,
+          expect.objectContaining({ OPENCLAW_GATEWAY_TOKEN: "service-env-token" }),
+          { allowExecSecretRefs: false },
+        );
+        expectNoNoteContaining(
+          "Unable to verify gateway service token drift",
+          "Gateway service config",
+        );
+      },
+    );
+  });
+
   it("falls back to embedded service token when config and env tokens are missing", async () => {
     await withEnvAsync(
       {

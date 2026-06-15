@@ -396,15 +396,25 @@ export async function maybeRepairGatewayServiceConfig(
       ].join("\n")
     : null;
 
-  const tokenRefConfigured = Boolean(
-    resolveSecretInputRef({
-      value: cfg.gateway?.auth?.token,
-      defaults: cfg.secrets?.defaults,
-    }).ref,
+  const gatewayTokenRef = resolveSecretInputRef({
+    value: cfg.gateway?.auth?.token,
+    defaults: cfg.secrets?.defaults,
+  }).ref;
+  const tokenRefConfigured = Boolean(gatewayTokenRef);
+  const gatewayTokenResolutionEnv =
+    gatewayTokenRef?.source === "env"
+      ? {
+          ...process.env,
+          ...command.environment,
+        }
+      : process.env;
+  const gatewayTokenResolution = await resolveGatewayAuthTokenForService(
+    cfg,
+    gatewayTokenResolutionEnv,
+    {
+      allowExecSecretRefs: options.allowExecSecretRefs === true,
+    },
   );
-  const gatewayTokenResolution = await resolveGatewayAuthTokenForService(cfg, process.env, {
-    allowExecSecretRefs: options.allowExecSecretRefs === true,
-  });
   if (gatewayTokenResolution.unavailableReason) {
     note(
       `Unable to verify gateway service token drift: ${gatewayTokenResolution.unavailableReason}`,
