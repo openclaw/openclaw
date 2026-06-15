@@ -73,6 +73,14 @@ export const PROVIDER_SPECIFIC_PATTERNS: readonly ProviderErrorPattern[] = [
     test: /model(?:_is)?_deactivated|model has been deactivated/i,
     reason: "model_not_found",
   },
+  // Zhipu (GLM) returns HTTP 200 with error code [1305] when the model is
+  // overloaded ("当前访问量过大").  The generic overloaded text patterns
+  // in failover-matches.ts cover the Chinese message; this pattern catches
+  // the numeric code directly when the error body uses that format.
+  {
+    test: /\[1305\]|该模型当前访问量过大/i,
+    reason: "overloaded",
+  },
 ];
 
 type ProviderRuntimeHooks = {
