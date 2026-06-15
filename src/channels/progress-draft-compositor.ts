@@ -39,6 +39,9 @@ export function createChannelProgressDraftCompositor(params: {
   deleteCurrent?: () => Promise<void> | void;
   tryNativeUpdate?: (text: string) => Promise<boolean> | boolean;
   formatLine?: (line: string) => string;
+  /** Separator between rendered draft lines; forwarded to the draft formatter.
+   *  Telegram passes "\n\n" because its renderer collapses a lone newline. */
+  lineSeparator?: string;
   isEmptyLine?: (line: ProgressDraftLine | undefined) => boolean;
   shouldStartNow?: (line: ProgressDraftLine | undefined) => boolean;
 }) {
@@ -66,6 +69,7 @@ export function createChannelProgressDraftCompositor(params: {
       lines: draftLines,
       seed: params.seed,
       formatLine: options?.formatted === false ? undefined : params.formatLine,
+      lineSeparator: params.lineSeparator,
     });
 
   const clearProgressState = (suppressed: boolean) => {

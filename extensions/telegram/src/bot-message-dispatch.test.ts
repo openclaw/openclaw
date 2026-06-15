@@ -2374,7 +2374,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
 
     expect(answerDraftStream.update).toHaveBeenCalledWith(
-      "Cracking\n\n`🛠️ Exec`\n`🛠️ git rev-parse --abbrev-ref HEAD`",
+      "Cracking\n\n`🛠️ Exec`\n\n`🛠️ git rev-parse --abbrev-ref HEAD`",
     );
     expect(answerDraftStream.update).not.toHaveBeenCalledWith("Branch is up to date");
     expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
@@ -2434,7 +2434,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       expect.stringContaining("stdout line one"),
     );
     expect(answerDraftStream.update).toHaveBeenLastCalledWith(
-      "Shelling\n\n`🛠️ Exec`\n`🔎 Web Search: docs lookup`",
+      "Shelling\n\n`🛠️ Exec`\n\n`🔎 Web Search: docs lookup`",
     );
     expect(deliverReplies).not.toHaveBeenCalled();
   });
@@ -2670,7 +2670,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
 
     expect(createTelegramDraftStream).toHaveBeenCalledTimes(1);
-    expect(draftStream.update).toHaveBeenCalledWith("Shelling\n\n`🛠️ Exec`\n• _Checking files_");
+    expect(draftStream.update).toHaveBeenCalledWith("Shelling\n\n`🛠️ Exec`\n\n• _Checking files_");
   });
 
   it("renders configured Telegram commentary progress from preamble item events", async () => {
@@ -2840,7 +2840,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
 
     expect(draftStream.update).toHaveBeenCalledWith(
-      "Shelling\n\n`🔎 Web Search: docs lookup`\n• `tests passed`",
+      "Shelling\n\n`🔎 Web Search: docs lookup`\n\n• `tests passed`",
     );
     expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
     expect(draftStream.materialize).not.toHaveBeenCalled();
