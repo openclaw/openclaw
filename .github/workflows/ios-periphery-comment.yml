@@ -253,13 +253,28 @@ jobs:
               } catch {}
             }
 
-            const escapeCell = (value) =>
-              String(value ?? "")
-                .replaceAll("&", "&amp;")
-                .replaceAll("<", "&lt;")
-                .replaceAll(">", "&gt;")
-                .replaceAll("|", "\\|")
-                .replaceAll("\n", " ");
+            const sanitizeCell = (value) => {
+              const normalized = String(value ?? "")
+                .replace(/[\u0000-\u001f\u007f-\u009f]/gu, " ")
+                .replace(/[\u200b-\u200f\u202a-\u202e\u2060\u2066-\u2069\ufeff]/gu, "")
+                .replace(/\s+/gu, " ")
+                .trim();
+              const maxEncodedLength = 180;
+              let escaped = "";
+              for (const character of normalized) {
+                const encoded =
+                  character === "`"
+                    ? "'"
+                    : character === "|"
+                      ? "\\|"
+                      : character;
+                if (escaped.length + encoded.length > maxEncodedLength) {
+                  break;
+                }
+                escaped += encoded;
+              }
+              return `\`${escaped || "-"}\``;
+            };
 
             const rows = (findings ?? []).map((finding) => {
               const location = String(finding.location ?? "");
@@ -296,7 +311,7 @@ jobs:
                 "",
                 "| File | Line | Kind | Name |",
                 "| --- | ---: | --- | --- |",
-                ...shown.map((row) => `| ${escapeCell(row.file)} | ${escapeCell(row.line)} | ${escapeCell(row.kind)} | ${escapeCell(row.name)} |`),
+                ...shown.map((row) => `| ${sanitizeCell(row.file)} | ${sanitizeCell(row.line)} | ${sanitizeCell(row.kind)} | ${sanitizeCell(row.name)} |`),
                 rows.length > shown.length ? "" : null,
                 rows.length > shown.length ? `Showing first ${shown.length}; full JSON is in the workflow artifact.` : null,
               ].filter(Boolean).join("\n");
@@ -308,6 +323,16 @@ jobs:
               ].join("\n");
             }
             body += "\n";
+            const maxCommentChars = 60_000;
+            if (body.length > maxCommentChars) {
+              body = [
+                marker,
+                "### iOS Periphery",
+                "",
+                `Found ${rows.length} dead Swift code ${rows.length === 1 ? "symbol" : "symbols"}. The rendered report exceeded the safe comment limit; use the workflow artifact for details.`,
+                "",
+              ].join("\n");
+            }
 
             const comments = await github.paginate(github.rest.issues.listComments, {
               owner,

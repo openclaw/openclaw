@@ -1,8 +1,10 @@
 import { Buffer } from "node:buffer";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import { compileFunction } from "node:vm";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { markdownToIR } from "../../packages/markdown-core/src/ir.js";
 
 const WORKFLOW_PATH = ".github/workflows/ios-periphery-comment.yml";
 
@@ -132,13 +134,12 @@ async function runCommenter(
       repo: "openclaw",
     },
   };
-  const execute = new Function(
+  const execute = compileFunction(`return (async () => {\n${script}\n})();`, [
     "require",
     "context",
     "core",
     "github",
-    `return (async () => {\n${script}\n})();`,
-  ) as (
+  ]) as (
     require: NodeJS.Require,
     context: typeof context,
     core: typeof core,
@@ -257,15 +258,13 @@ function markFirstCentralDirectoryEntryEncrypted(archive: Buffer): Buffer {
 describe("iOS Periphery comment workflow", () => {
   it("parses the workflow YAML and embedded github-script JavaScript", () => {
     expect(() => commenterScript()).not.toThrow();
-    expect(
-      () =>
-        new Function(
-          "require",
-          "context",
-          "core",
-          "github",
-          `return (async () => {\n${commenterScript()}\n})();`,
-        ),
+    expect(() =>
+      compileFunction(`return (async () => {\n${commenterScript()}\n})();`, [
+        "require",
+        "context",
+        "core",
+        "github",
+      ]),
     ).not.toThrow();
   });
 
@@ -369,12 +368,13 @@ describe("iOS Periphery comment workflow", () => {
   });
 
   it("escapes finding text before creating a PR comment", async () => {
+    const longName = `![click](https://example.invalid)\r\n@octocat|next${"a".repeat(260)}`;
     const archive = makeZip({
       "periphery.json": JSON.stringify([
         {
-          kind: "<script>",
+          kind: "<script>*bold*</script>",
           location: "Sources/Test.swift:12",
-          name: "bad|name\nnext",
+          name: longName,
         },
       ]),
       "periphery.status": "1\n",
@@ -390,9 +390,38 @@ describe("iOS Periphery comment workflow", () => {
     );
 
     expect(result.createdBodies).toHaveLength(1);
-    expect(result.createdBodies[0]).toContain("&lt;script&gt;");
-    expect(result.createdBodies[0]).toContain("bad\\|name next");
-    expect(result.createdBodies[0]).not.toContain("<script>");
+    const body = result.createdBodies[0] ?? "";
+    const parsed = markdownToIR(body, { linkify: true, tableMode: "bullets" });
+    expect(body).not.toContain("\r");
+    expect(parsed.text).toContain("<script>*bold*</script>");
+    expect(parsed.text).toContain("![click](https://example.invalid) @octocat|next");
+    expect(parsed.links).toEqual([]);
+  });
+
+  it("bounds the rendered comment after escaping", async () => {
+    const repeated = "{".repeat(500);
+    const archive = makeZip({
+      "periphery.json": JSON.stringify(
+        Array.from({ length: 50 }, (_, index) => ({
+          kind: repeated,
+          location: `${repeated}${index}:${index}`,
+          name: repeated,
+        })),
+      ),
+      "periphery.status": "1\n",
+    });
+    const result = await runCommenter(
+      {
+        expired: false,
+        id: 77,
+        name: "ios-periphery-dead-code-12345",
+        size_in_bytes: archive.length,
+      },
+      archive,
+    );
+
+    expect(result.createdBodies).toHaveLength(1);
+    expect(result.createdBodies[0]?.length).toBeLessThanOrEqual(60_000);
   });
 
   it("does not overwrite a marker comment owned by another bot", async () => {
