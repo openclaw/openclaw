@@ -129,7 +129,7 @@ const sendMessageTelegram: typeof sendMessageTelegramImpl = async (to, text, opt
       : opts,
   );
 
-const TELEGRAM_TEST_CFG = {};
+const TELEGRAM_TEST_CFG = { channels: { telegram: { markdown: { tables: "block" as const } } } };
 let sentMessageStore: NonNullable<Parameters<typeof setTelegramSentMessageStoreForTest>[0]>;
 
 function markdownTable(columns: number): string {
