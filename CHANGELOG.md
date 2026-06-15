@@ -30,6 +30,7 @@ Docs: https://docs.openclaw.ai
 - Memory, state, diagnostics, and config: split header-too-large embedding batches, keep QMD memory search enabled in transient mode, avoid SQLite WAL on NFS volumes, preserve recovery scheduling outside stuck-session warning backoff, and keep shell environment fallbacks contained in config write tests. (#92650, #92618, #92639, #91247, #92752) Thanks @mushuiyu886, @TurboTheTurtle, @849261680, and @gnanam1990.
 - UI/mobile/TUI: preserve dashboard session parent lineage, WebChat backscroll, reset soft command args, sidebar session picker interactivity, collapsed workspace files, resolved `/model` confirmation refs, and stale foreground iOS Gateway reconnects. (#90658, #92622, #91353, #92705, #92779, #92773, #92552) Thanks @luoyanglang, @TurboTheTurtle, @zhouhe-xydt, @NianJiuZst, @shakkernerd, @NarahariRaghava, and @Solvely-Colin.
 - Release and test reliability: extend slow Gateway/full-suite watchdogs, split local full-suite shards when throttled, stabilize plugin auth marker fixtures, avoid brittle provider-ref error text, and keep QA Lab bootstrap selection assertions aligned with flow-only scenarios. (#92652)
+- Agent routing: route subagent RPC callbacks addressed to an agent-shaped `--to` target to the correct session key instead of falling back to the main session, so WeChat (and other channel) session-key callbacks reach the intended subagent session. (#90231) Thanks @zhangguiping-xydt.
 
 ## 2026.6.6
 
