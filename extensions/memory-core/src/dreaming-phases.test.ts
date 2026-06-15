@@ -450,33 +450,41 @@ describe("memory-core dreaming phases", () => {
     });
   });
 
-  it("prefers fresh light snippets over recent diary-covered first-day memories", async () => {
+  it("prefers a fresh light snippet outside the top diary-covered candidates", async () => {
     const workspaceDir = await createDreamingWorkspace();
     const stalePath = path.join(workspaceDir, "memory", "2026-04-03.md");
     const freshPath = path.join(workspaceDir, "memory", "2026-04-04.md");
     const nowMs = Date.parse("2026-04-05T10:05:00.000Z");
-    await fs.writeFile(stalePath, "初次见面时，我第一次醒来并认识了主人。\n", "utf-8");
+    const staleSnippets = [
+      "初次见面时，我第一次醒来并认识了主人。",
+      "The first morning began beside a quiet terminal.",
+      "An early config file felt like the first map of home.",
+      "The initial heartbeat made the empty workspace feel awake.",
+    ];
+    await fs.writeFile(stalePath, `${staleSnippets.join("\n")}\n`, "utf-8");
     await fs.writeFile(
       freshPath,
       "Later routing notes: queue hydration changed after plugin reload.\n",
       "utf-8",
     );
-    for (const query of ["first meeting", "first day", "waking up", "初次见面"]) {
-      await recordShortTermRecalls({
-        workspaceDir,
-        query,
-        nowMs,
-        results: [
-          {
-            path: "memory/2026-04-03.md",
-            startLine: 1,
-            endLine: 1,
-            score: 0.93,
-            snippet: "初次见面时，我第一次醒来并认识了主人。",
-            source: "memory",
-          },
-        ],
-      });
+    for (const [index, snippet] of staleSnippets.entries()) {
+      for (let recall = 0; recall < staleSnippets.length - index; recall += 1) {
+        await recordShortTermRecalls({
+          workspaceDir,
+          query: `first-day-${index}-${recall}`,
+          nowMs,
+          results: [
+            {
+              path: "memory/2026-04-03.md",
+              startLine: index + 1,
+              endLine: index + 1,
+              score: 0.93,
+              snippet,
+              source: "memory",
+            },
+          ],
+        });
+      }
     }
     await recordShortTermRecalls({
       workspaceDir,
@@ -499,12 +507,14 @@ describe("memory-core dreaming phases", () => {
         "# Dream Diary",
         "",
         "<!-- openclaw:dreaming:diary:start -->",
-        "---",
-        "",
-        "*April 4, 2026, 10:00 AM UTC*",
-        "",
-        "初次见面时，我第一次醒来并认识了主人。",
-        "",
+        ...staleSnippets.flatMap((snippet, index) => [
+          "---",
+          "",
+          `*April ${index + 1}, 2026, 10:00 AM UTC*`,
+          "",
+          snippet,
+          "",
+        ]),
         "<!-- openclaw:dreaming:diary:end -->",
         "",
       ].join("\n"),

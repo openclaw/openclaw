@@ -113,7 +113,6 @@ const SESSION_INGESTION_MIN_MESSAGES_PER_FILE = 12;
 const SESSION_INGESTION_MAX_TRACKED_MESSAGES_PER_SESSION = 4096;
 const SESSION_INGESTION_MAX_TRACKED_SCOPES = 2048;
 const SESSION_CHECKPOINT_TRANSCRIPT_FILENAME_RE = /\.checkpoint\..+\.jsonl$/i;
-const LIGHT_DIARY_CANDIDATE_POOL_MULTIPLIER = 3;
 const LIGHT_DIARY_HISTORY_LIMIT = 4;
 const LIGHT_DIARY_SNIPPET_SIMILARITY_THRESHOLD = 0.35;
 const GENERIC_DAY_HEADING_RE =
@@ -1704,20 +1703,14 @@ async function runLightDreaming(params: {
       lookbackDays: params.config.lookbackDays,
     }),
   });
-  const candidatePoolLimit = Math.max(
-    params.config.limit,
-    params.config.limit * LIGHT_DIARY_CANDIDATE_POOL_MULTIPLIER,
-  );
   const rankedEntries = dedupeEntries(
-    recentEntries
-      .toSorted((a, b) => {
-        const byTime = Date.parse(b.lastRecalledAt) - Date.parse(a.lastRecalledAt);
-        if (byTime !== 0) {
-          return byTime;
-        }
-        return b.recallCount - a.recallCount;
-      })
-      .slice(0, candidatePoolLimit),
+    recentEntries.toSorted((a, b) => {
+      const byTime = Date.parse(b.lastRecalledAt) - Date.parse(a.lastRecalledAt);
+      if (byTime !== 0) {
+        return byTime;
+      }
+      return b.recallCount - a.recallCount;
+    }),
     params.config.dedupeSimilarity,
   );
   const recentDiaryEntries = await readRecentDreamDiaryEntries({
