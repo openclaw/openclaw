@@ -106,6 +106,61 @@ describe("buildSystemPromptParams", () => {
     expect(runtimeInfo.repoRoot).toBeUndefined();
   });
 
+  it("threads identity.name into runtimeInfo when configured", () => {
+    const config: OpenClawConfig = {
+      agents: {
+        list: [
+          {
+            id: "main",
+            identity: { name: "Runt", emoji: "⚓" },
+          },
+        ],
+      },
+    };
+
+    const { runtimeInfo } = buildSystemPromptParams({
+      config,
+      agentId: "main",
+      runtime: {
+        host: "host",
+        os: "os",
+        arch: "arch",
+        node: "node",
+        model: "model",
+      },
+    });
+
+    expect(runtimeInfo.agentId).toBe("main");
+    expect(runtimeInfo.identityName).toBe("Runt");
+  });
+
+  it("leaves identityName undefined when identity.name is not configured", () => {
+    const config: OpenClawConfig = {
+      agents: {
+        list: [
+          {
+            id: "main",
+          },
+        ],
+      },
+    };
+
+    const { runtimeInfo } = buildSystemPromptParams({
+      config,
+      agentId: "main",
+      runtime: {
+        host: "host",
+        os: "os",
+        arch: "arch",
+        node: "node",
+        model: "model",
+      },
+    });
+
+    expect(runtimeInfo.agentId).toBe("main");
+    expect(runtimeInfo.identityName).toBeUndefined();
+  });
+
   it("carries session identity into runtime info", () => {
     const { runtimeInfo } = buildSystemPromptParams({
       agentId: "main",
