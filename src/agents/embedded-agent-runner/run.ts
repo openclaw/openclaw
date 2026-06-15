@@ -3343,15 +3343,13 @@ async function runEmbeddedAgentInternal(
                 ? [silentToolResultReplyPayload]
                 : payloadsWithToolMedia;
           const payloadCount = payloadsForTerminalPath?.length ?? 0;
-          const emptyAssistantReplyIsSilent =
-            Boolean(silentToolResultReplyPayload) ||
-            shouldTreatEmptyAssistantReplyAsSilent({
-              allowEmptyAssistantReplyAsSilent: params.allowEmptyAssistantReplyAsSilent,
-              payloadCount,
-              aborted,
-              timedOut,
-              attempt,
-            });
+          const emptyAssistantReplyIsSilent = shouldTreatEmptyAssistantReplyAsSilent({
+            allowEmptyAssistantReplyAsSilent: params.allowEmptyAssistantReplyAsSilent,
+            payloadCount,
+            aborted,
+            timedOut,
+            attempt,
+          });
           const nextReasoningOnlyRetryInstruction = emptyAssistantReplyIsSilent
             ? null
             : resolveReasoningOnlyRetryInstruction({

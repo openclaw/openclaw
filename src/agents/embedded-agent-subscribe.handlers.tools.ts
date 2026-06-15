@@ -906,7 +906,12 @@ async function emitToolResultOutput(params: {
 /** Handles a tool-execution start event and emits UI/telemetry start state. */
 export function handleToolExecutionStart(
   ctx: ToolHandlerContext,
-  evt: AgentEvent & { toolName: string; toolCallId: string; args: unknown },
+  evt: AgentEvent & {
+    toolName: string;
+    toolCallId: string;
+    args: unknown;
+    replaySafe?: boolean;
+  },
 ): void | Promise<void> {
   const continueAfterBlockReplyFlush = (): void | Promise<void> => {
     const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.();

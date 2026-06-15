@@ -2993,7 +2993,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   it("treats post-tool exact NO_REPLY assistant turns as intentional silence", () => {
     const attempt = makeAttemptResult({
       assistantTexts: ["NO_REPLY"],
-      toolMetas: [{ toolName: "process.poll", meta: "pid=123" }],
+      toolMetas: [{ toolName: "process.poll", meta: "pid=123", replaySafe: true }],
       lastAssistant: {
         role: "assistant",
         stopReason: "stop",
@@ -3049,7 +3049,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     });
     const postToolEmptyAttempt = makeAttemptResult({
       assistantTexts: [],
-      toolMetas: [{ toolName: "process.poll", meta: "pid=123" }],
+      toolMetas: [{ toolName: "process.poll", meta: "pid=123", replaySafe: true }],
       lastAssistant: {
         role: "assistant",
         api: "openai-completions",
@@ -3189,7 +3189,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: [],
-        toolMetas: [{ toolName: "process.poll", meta: "pid=123" }],
+        toolMetas: [{ toolName: "process.poll", meta: "pid=123", replaySafe: true }],
         lastAssistant: {
           role: "assistant",
           api: "openai-completions",
@@ -3248,7 +3248,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: ["NO_REPLY"],
-        toolMetas: [{ toolName: "process.poll", meta: "pid=123" }],
+        toolMetas: [{ toolName: "process.poll", meta: "pid=123", replaySafe: true }],
         lastAssistant: {
           role: "assistant",
           api: "openai-completions",
