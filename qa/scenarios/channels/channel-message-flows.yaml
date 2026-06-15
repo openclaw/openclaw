@@ -20,7 +20,6 @@ scenario:
     - docs/channels/qa-channel.md
     - docs/concepts/qa-e2e-automation.md
   codeRefs:
-    - scripts/dev/channel-message-flows.ts
     - test/e2e/qa-lab/channels/channel-message-flows.e2e.test.ts
   execution:
     kind: vitest

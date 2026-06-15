@@ -19,7 +19,6 @@ scenario:
     - docs/cli/plugins.md
     - docs/concepts/qa-e2e-automation.md
   codeRefs:
-    - scripts/e2e/lib/plugin-lifecycle-matrix/probe.mjs
     - test/e2e/qa-lab/plugins/plugin-lifecycle-probe.e2e.test.ts
   execution:
     kind: vitest

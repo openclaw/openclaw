@@ -21,7 +21,6 @@ scenario:
     - docs/help/testing.md
     - docs/concepts/qa-e2e-automation.md
   codeRefs:
-    - scripts/package-openclaw-for-docker.mjs
     - test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts
   execution:
     kind: vitest
