@@ -377,6 +377,7 @@ export const streamOpenAICompletions: StreamFunction<
           // (e.g., chutes.ai returns both reasoning_content and reasoning with same content)
           const reasoningFields = ["reasoning_content", "reasoning", "reasoning_text"];
           const deltaFields = choice.delta as Record<string, unknown>;
+          const shouldEmitReasoning = Boolean(model.reasoning && options?.reasoningEffort);
           let foundReasoningField: string | null = null;
           for (const field of reasoningFields) {
             const value = deltaFields[field];
@@ -396,10 +397,10 @@ export const streamOpenAICompletions: StreamFunction<
             appendPartitionedContent(choice.delta.content, Boolean(foundReasoningField));
           }
 
-          // Always preserve reasoning when present, even without explicit reasoningEffort.
+          // Preserve reasoning when explicitly requested or when present without explicit reasoningEffort.
           // This handles providers like MiniMax M3 via OpenRouter that return reasoning
           // in reasoning/reasoning_details fields regardless of reasoningEffort setting.
-          if (foundReasoningField) {
+          if (shouldEmitReasoning && foundReasoningField) {
             const delta = deltaFields[foundReasoningField];
             if (typeof delta === "string" && delta.length > 0) {
               const thinkingSignature =
