@@ -98,6 +98,10 @@ import {
   resolveStoredSessionKeyForAgentStore,
 } from "./session-store-key.js";
 import {
+  resolveGatewaySessionStorePreservedAliasKeys,
+  syncSessionStoreAliases,
+} from "./session-store-aliases.js";
+import {
   readRecentSessionUsageFromTranscript,
   readSessionTitleFieldsFromTranscriptAsync,
   readSessionTitleFieldsFromTranscript,
@@ -1150,12 +1154,24 @@ export function migrateAndPruneGatewaySessionStoreKey(params: {
       params.store[primaryKey] = freshestMatch.entry;
     }
   }
+  const preservedAliasKeys = resolveGatewaySessionStorePreservedAliasKeys({
+    cfg: params.cfg,
+    key: params.key,
+    canonicalKey: primaryKey,
+    storeKeys: target.storeKeys,
+  });
+  syncSessionStoreAliases({
+    store: params.store,
+    canonicalKey: primaryKey,
+    entry: params.store[primaryKey],
+    aliasKeys: preservedAliasKeys,
+  });
   pruneLegacyStoreKeys({
     store: params.store,
     canonicalKey: primaryKey,
     candidates: target.storeKeys,
   });
-  return { target, primaryKey, entry: params.store[primaryKey] };
+  return { target, primaryKey, entry: params.store[primaryKey], preservedAliasKeys };
 }
 
 export function classifySessionKey(key: string, entry?: SessionEntry): GatewaySessionRow["kind"] {
