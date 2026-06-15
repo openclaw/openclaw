@@ -17,7 +17,7 @@ source scripts/e2e/lib/plugins/fixtures.sh
 
 plugin_id="lifecycle-claw"
 package_name="@openclaw/lifecycle-claw"
-probe="scripts/e2e/lib/plugin-lifecycle-matrix/probe.mjs"
+probe="test/e2e/qa-lab/plugins/plugin-lifecycle-probe.e2e.test.ts"
 measure="scripts/e2e/lib/plugin-lifecycle-matrix/measure.mjs"
 resource_dir="$(mktemp -d "/tmp/openclaw-plugin-lifecycle-matrix.XXXXXX")"
 pack_root=""
@@ -43,6 +43,10 @@ run_measured() {
   node "$measure" "$summary_tsv" "$phase" -- "$@"
 }
 
+run_probe() {
+  tsx "$probe" --probe "$@"
+}
+
 pack_root="$(mktemp -d "$resource_dir/pack.XXXXXX")"
 registry_root="$(mktemp -d "$resource_dir/registry.XXXXXX")"
 pack_fixture_plugin "$pack_root/v1" "$tarball_v1" "$plugin_id" 1.0.0 lifecycle.v1 "Lifecycle Claw"
@@ -51,27 +55,27 @@ start_npm_fixture_registry "$package_name" 1.0.0 "$tarball_v1" "$registry_root" 
 trap cleanup EXIT
 
 run_measured install-v1 node "$entry" plugins install "npm:$package_name@1.0.0"
-node "$probe" assert-version "$plugin_id" 1.0.0
-node "$probe" assert-npm-project-root "$plugin_id" "$package_name"
+run_probe assert-version "$plugin_id" 1.0.0
+run_probe assert-npm-project-root "$plugin_id" "$package_name"
 
 run_measured inspect-v1 bash -c 'node "$1" plugins inspect "$2" --runtime --json >"$3"' bash "$entry" "$plugin_id" "$inspect_v1"
-node "$probe" assert-inspect-loaded "$plugin_id" "$inspect_v1"
+run_probe assert-inspect-loaded "$plugin_id" "$inspect_v1"
 
 run_measured disable node "$entry" plugins disable "$plugin_id"
-node "$probe" assert-enabled "$plugin_id" false
+run_probe assert-enabled "$plugin_id" false
 
 run_measured enable node "$entry" plugins enable "$plugin_id"
-node "$probe" assert-enabled "$plugin_id" true
+run_probe assert-enabled "$plugin_id" true
 
 run_measured upgrade-v2 node "$entry" plugins update "$package_name@2.0.0"
-node "$probe" assert-version "$plugin_id" 2.0.0
-node "$probe" assert-npm-project-root "$plugin_id" "$package_name"
+run_probe assert-version "$plugin_id" 2.0.0
+run_probe assert-npm-project-root "$plugin_id" "$package_name"
 
 run_measured downgrade-v1 node "$entry" plugins update "$package_name@1.0.0"
-node "$probe" assert-version "$plugin_id" 1.0.0
-node "$probe" assert-npm-project-root "$plugin_id" "$package_name"
+run_probe assert-version "$plugin_id" 1.0.0
+run_probe assert-npm-project-root "$plugin_id" "$package_name"
 
-install_path="$(node "$probe" install-path "$plugin_id")"
+install_path="$(run_probe install-path "$plugin_id")"
 rm -rf "$install_path"
 if [[ -e "$install_path" ]]; then
   echo "Failed to remove plugin code before missing-code uninstall: $install_path" >&2
@@ -79,7 +83,7 @@ if [[ -e "$install_path" ]]; then
 fi
 
 run_measured missing-code-uninstall node "$entry" plugins uninstall "$plugin_id" --force
-node "$probe" assert-uninstalled "$plugin_id"
+run_probe assert-uninstalled "$plugin_id"
 
 echo "Plugin lifecycle resource summary:"
 cat "$summary_tsv"

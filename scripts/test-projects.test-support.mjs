@@ -652,10 +652,6 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ["test/scripts/plugin-lifecycle-measure.test.ts"],
   ],
   [
-    "scripts/e2e/lib/plugin-lifecycle-matrix/probe.mjs",
-    ["test/e2e/qa-lab/plugins/plugin-lifecycle-probe.e2e.test.ts"],
-  ],
-  [
     "scripts/e2e/lib/plugin-lifecycle-matrix/sweep.sh",
     ["test/e2e/qa-lab/plugins/plugin-lifecycle-probe.e2e.test.ts"],
   ],

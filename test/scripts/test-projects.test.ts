@@ -650,10 +650,6 @@ describe("scripts/test-projects changed-target routing", () => {
       ["scripts/dev/gateway-smoke.ts", ["test/e2e/qa-lab/runtime/gateway-smoke.e2e.test.ts"]],
       ["scripts/qa-otel-smoke.ts", ["test/e2e/qa-lab/runtime/qa-otel-smoke.e2e.test.ts"]],
       [
-        "scripts/e2e/lib/plugin-lifecycle-matrix/probe.mjs",
-        ["test/e2e/qa-lab/plugins/plugin-lifecycle-probe.e2e.test.ts"],
-      ],
-      [
         "scripts/e2e/lib/plugin-lifecycle-matrix/sweep.sh",
         ["test/e2e/qa-lab/plugins/plugin-lifecycle-probe.e2e.test.ts"],
       ],
