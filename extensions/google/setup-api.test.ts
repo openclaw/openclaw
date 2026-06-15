@@ -259,6 +259,7 @@ describe("google gemini cli backend auth bridge", () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-workspace-"));
     const originalUseGca = process.env.GOOGLE_GENAI_USE_GCA;
     const originalCloudAccessToken = process.env.GOOGLE_CLOUD_ACCESS_TOKEN;
+    const originalGoogleApplicationCredentials = process.env.GOOGLE_APPLICATION_CREDENTIALS;
     const originalForceEncryptedFileStorage = process.env.GEMINI_FORCE_ENCRYPTED_FILE_STORAGE;
     const originalGeminiApiKey = process.env.GEMINI_API_KEY;
     const originalGoogleApiKey = process.env.GOOGLE_API_KEY;
@@ -270,6 +271,7 @@ describe("google gemini cli backend auth bridge", () => {
 
     process.env.GOOGLE_GENAI_USE_GCA = "true";
     process.env.GOOGLE_CLOUD_ACCESS_TOKEN = "ambient-cloud-token";
+    process.env.GOOGLE_APPLICATION_CREDENTIALS = "/tmp/ambient-google-adc.json";
     process.env.GEMINI_FORCE_ENCRYPTED_FILE_STORAGE = "true";
     process.env.GEMINI_API_KEY = "ambient-gemini-key";
     process.env.GOOGLE_API_KEY = "ambient-google-key";
@@ -282,6 +284,7 @@ describe("google gemini cli backend auth bridge", () => {
       expect(prepared?.clearEnv).toEqual([
         "GOOGLE_GENAI_USE_GCA",
         "GOOGLE_CLOUD_ACCESS_TOKEN",
+        "GOOGLE_APPLICATION_CREDENTIALS",
         "GEMINI_FORCE_ENCRYPTED_FILE_STORAGE",
         "GEMINI_FORCE_FILE_STORAGE",
         "GOOGLE_GENAI_USE_VERTEXAI",
@@ -298,6 +301,7 @@ describe("google gemini cli backend auth bridge", () => {
     } finally {
       restoreEnv("GOOGLE_GENAI_USE_GCA", originalUseGca);
       restoreEnv("GOOGLE_CLOUD_ACCESS_TOKEN", originalCloudAccessToken);
+      restoreEnv("GOOGLE_APPLICATION_CREDENTIALS", originalGoogleApplicationCredentials);
       restoreEnv("GEMINI_FORCE_ENCRYPTED_FILE_STORAGE", originalForceEncryptedFileStorage);
       restoreEnv("GEMINI_API_KEY", originalGeminiApiKey);
       restoreEnv("GOOGLE_API_KEY", originalGoogleApiKey);
