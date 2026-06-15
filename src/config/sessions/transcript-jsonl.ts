@@ -26,8 +26,10 @@ export function serializeJsonlLines(lines: readonly string[]): string {
   return lines.length > 0 ? `${lines.join("\n")}\n` : "";
 }
 
-export function writeJsonlEntriesSync(filePath: string, entries: readonly unknown[]): void {
-  writeFileSync(filePath, serializeJsonlEntries(entries), "utf-8");
+export function writeJsonlEntriesSync(filePath: string, entries: readonly unknown[]): string {
+  const content = serializeJsonlEntries(entries);
+  writeFileSync(filePath, content, "utf-8");
+  return content;
 }
 
 export function appendJsonlEntrySync(
@@ -35,7 +37,14 @@ export function appendJsonlEntrySync(
   entry: unknown,
   options?: { prefixNewline?: boolean },
 ): string {
-  const serializedEntry = serializeJsonlEntry(entry);
+  return appendSerializedJsonlEntrySync(filePath, serializeJsonlEntry(entry), options);
+}
+
+export function appendSerializedJsonlEntrySync(
+  filePath: string,
+  serializedEntry: string,
+  options?: { prefixNewline?: boolean },
+): string {
   const content = options?.prefixNewline ? `\n${serializedEntry}` : serializedEntry;
   appendFileSync(filePath, content, "utf-8");
   return content;

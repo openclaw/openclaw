@@ -20,10 +20,11 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import {
   appendJsonlEntrySync,
-  serializeJsonlEntries,
+  appendSerializedJsonlEntrySync,
+  serializeJsonlEntry,
   writeJsonlEntriesSync,
 } from "../../config/sessions/transcript-jsonl.js";
-import { hasOwnedSessionTranscriptWriteContext } from "../../config/sessions/transcript-write-context.js";
+import { canAdvanceOwnedSessionEntryCache } from "../../config/sessions/transcript-write-context.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import type { ImageContent, Message, TextContent } from "../../llm/types.js";
 import { getAgentDir as getDefaultAgentDir, getSessionsDir } from "../config.js";
@@ -557,7 +558,7 @@ function hasCacheableSessionHeader(entries: FileEntry[]): boolean {
 
 function rememberWrittenSessionEntries(
   filePath: string,
-  entries: FileEntry[],
+  expectedContent?: string,
 ): SessionFileSnapshot | undefined {
   const resolvedPath = resolve(filePath);
   // Full rewrites break append continuity used by the pre-run repair cache,
@@ -575,7 +576,6 @@ function rememberWrittenSessionEntries(
     return beforeReadSnapshot;
   }
 
-  const expectedContent = serializeJsonlEntries(entries);
   let content: string;
   let afterReadSnapshot: SessionFileSnapshot;
   try {
@@ -586,7 +586,7 @@ function rememberWrittenSessionEntries(
     return undefined;
   }
   if (
-    content !== expectedContent ||
+    (expectedContent !== undefined && content !== expectedContent) ||
     !isSameSessionFileSnapshot(beforeReadSnapshot, afterReadSnapshot)
   ) {
     sessionEntriesCache.delete(resolvedPath);
@@ -611,6 +611,7 @@ function rememberAppendedSessionEntry(
   const resolvedPath = resolve(filePath);
   if (!cacheOwnedAppend) {
     sessionEntriesCache.delete(resolvedPath);
+    invalidateSessionFileRepairCache(resolvedPath);
     return readSessionFileSnapshotIfExists(resolvedPath);
   }
   if (
@@ -619,6 +620,7 @@ function rememberAppendedSessionEntry(
     !isSameSessionFileSnapshot(previousSnapshot, beforeAppendSnapshot)
   ) {
     sessionEntriesCache.delete(resolvedPath);
+    invalidateSessionFileRepairCache(resolvedPath);
     return readSessionFileSnapshotIfExists(resolvedPath);
   }
 
@@ -640,6 +642,7 @@ function rememberAppendedSessionEntry(
     !isSameSessionFileSnapshot(cached.snapshot, previousSnapshot)
   ) {
     sessionEntriesCache.delete(resolvedPath);
+    invalidateSessionFileRepairCache(resolvedPath);
     return snapshot;
   }
   if (snapshot.size > MAX_CACHED_SESSION_BYTES) {
@@ -1239,8 +1242,8 @@ export class SessionManager {
     if (!this.shouldPersist || !this.sessionFile) {
       return;
     }
-    writeJsonlEntriesSync(this.sessionFile, this.fileEntries);
-    this.sessionFileSnapshot = rememberWrittenSessionEntries(this.sessionFile, this.fileEntries);
+    const content = writeJsonlEntriesSync(this.sessionFile, this.fileEntries);
+    this.sessionFileSnapshot = rememberWrittenSessionEntries(this.sessionFile, content);
   }
 
   isPersisted(): boolean {
@@ -1282,12 +1285,23 @@ export class SessionManager {
     }
 
     if (!this.flushed) {
-      writeJsonlEntriesSync(this.sessionFile, this.fileEntries);
+      const content = writeJsonlEntriesSync(this.sessionFile, this.fileEntries);
       this.flushed = true;
-      this.sessionFileSnapshot = rememberWrittenSessionEntries(this.sessionFile, this.fileEntries);
+      this.sessionFileSnapshot = rememberWrittenSessionEntries(this.sessionFile, content);
     } else {
+      // Serialize before taking the prefix snapshot. Custom toJSON methods are
+      // user code and can mutate the transcript; the cache must validate the
+      // prefix state that immediately precedes the exact bytes being appended.
+      const serializedEntry = serializeJsonlEntry(entry);
       const beforeAppendSnapshot = readSessionFileSnapshotIfExists(this.sessionFile);
-      const serializedAppend = appendJsonlEntrySync(this.sessionFile, entry, {
+      const cacheOwnedAppend = Boolean(
+        beforeAppendSnapshot &&
+        canAdvanceOwnedSessionEntryCache({
+          sessionFile: this.sessionFile,
+          snapshot: beforeAppendSnapshot,
+        }),
+      );
+      const serializedAppend = appendSerializedJsonlEntrySync(this.sessionFile, serializedEntry, {
         prefixNewline: sessionFileNeedsAppendSeparator(this.sessionFile, beforeAppendSnapshot),
       });
       this.sessionFileSnapshot = rememberAppendedSessionEntry(
@@ -1295,7 +1309,7 @@ export class SessionManager {
         this.sessionFileSnapshot,
         beforeAppendSnapshot,
         serializedAppend,
-        hasOwnedSessionTranscriptWriteContext({ sessionFile: this.sessionFile }),
+        cacheOwnedAppend,
       );
     }
   }
@@ -1312,7 +1326,7 @@ export class SessionManager {
     if (!this.sessionFile) {
       return;
     }
-    this.sessionFileSnapshot = rememberWrittenSessionEntries(this.sessionFile, this.fileEntries);
+    this.sessionFileSnapshot = rememberWrittenSessionEntries(this.sessionFile);
   }
 
   private appendEntry(entry: SessionEntry): void {

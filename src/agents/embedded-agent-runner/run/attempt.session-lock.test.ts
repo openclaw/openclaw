@@ -1104,6 +1104,35 @@ describe("embedded attempt session lock lifecycle", () => {
     expect(release).toHaveBeenCalledTimes(3);
   });
 
+  it("authorizes entry-cache advancement only under the exact trusted file lock", async () => {
+    const sessionFile = await createTempSessionFile();
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLockLocal = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockLocal,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controller.releaseForPrompt();
+    const stat = await fs.stat(sessionFile, { bigint: true });
+    const snapshot = {
+      dev: stat.dev,
+      ino: stat.ino,
+      size: stat.size,
+      mtimeNs: stat.mtimeNs,
+      ctimeNs: stat.ctimeNs,
+    };
+
+    expect(controller.canAdvanceSessionEntryCache(snapshot)).toBe(false);
+    await expect(
+      controller.withSessionWriteLock(() => {
+        expect(controller.canAdvanceSessionEntryCache(snapshot)).toBe(true);
+        return "locked";
+      }),
+    ).resolves.toBe("locked");
+    expect(controller.canAdvanceSessionEntryCache(snapshot)).toBe(false);
+  });
+
   it("refreshes the prompt fence after an owned session manager append", async () => {
     const sessionFile = await createTempSessionFile();
     const release = vi.fn(async () => {});

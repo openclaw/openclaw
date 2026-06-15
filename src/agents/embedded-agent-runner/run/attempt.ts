@@ -19,6 +19,7 @@ import {
 } from "../../../config/sessions/store.js";
 import {
   bindOwnedSessionTranscriptWrites,
+  type OwnedSessionTranscriptCacheSnapshot,
   withOwnedSessionTranscriptWrites,
 } from "../../../config/sessions/transcript-write-context.js";
 import {
@@ -3305,6 +3306,8 @@ export async function runEmbeddedAttempt(
       const ownedTranscriptWriteContext = {
         sessionFile: params.sessionFile,
         sessionKey: params.sessionKey,
+        canAdvanceSessionEntryCache: (snapshot: OwnedSessionTranscriptCacheSnapshot) =>
+          sessionLockController.canAdvanceSessionEntryCache(snapshot),
         withSessionWriteLock: <T>(
           operation: () => Promise<T> | T,
           options?: { publishOwnedWrite?: boolean },
@@ -4270,6 +4273,8 @@ export async function runEmbeddedAttempt(
               sessionFile: params.sessionFile,
               withSessionWriteLock: (run, options) =>
                 sessionLockController.withSessionWriteLock(run, options),
+              canAdvanceSessionEntryCache: (snapshot: OwnedSessionTranscriptCacheSnapshot) =>
+                sessionLockController.canAdvanceSessionEntryCache(snapshot),
             });
           }
 

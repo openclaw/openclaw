@@ -196,15 +196,21 @@ describe("SessionManager.open", () => {
       expect(parseCount).toBe(0);
 
       const sessionManager = SessionManager.open(sessionFile, dir, dir);
+      let cacheAdvanceChecks = 0;
       await withOwnedSessionTranscriptWrites(
         {
           sessionFile,
+          canAdvanceSessionEntryCache: () => {
+            cacheAdvanceChecks += 1;
+            return true;
+          },
           withSessionWriteLock: async (run) => await run(),
         },
         async () => {
           sessionManager.appendMessage(secondMessage);
         },
       );
+      expect(cacheAdvanceChecks).toBe(1);
       const persistedEntries = (await fs.readFile(sessionFile, "utf8"))
         .trim()
         .split("\n")
@@ -279,6 +285,7 @@ describe("SessionManager.open", () => {
     await withOwnedSessionTranscriptWrites(
       {
         sessionFile,
+        canAdvanceSessionEntryCache: () => true,
         withSessionWriteLock: async (run) => await run(),
       },
       async () => {
@@ -325,6 +332,7 @@ describe("SessionManager.open", () => {
     await withOwnedSessionTranscriptWrites(
       {
         sessionFile,
+        canAdvanceSessionEntryCache: () => true,
         withSessionWriteLock: async (run) => await run(),
       },
       async () => {
@@ -348,6 +356,102 @@ describe("SessionManager.open", () => {
     expect(warmEntry).toMatchObject({ data: { value: "first" } });
   });
 
+  it("validates the transcript prefix after a custom entry is serialized", async () => {
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "session.jsonl");
+    const originalEntry = {
+      type: "message",
+      id: "assistant-1",
+      parentId: null,
+      timestamp: "2026-06-04T00:00:01.000Z",
+      message: buildAssistantMessage("message 1"),
+    };
+    const replacementEntry = {
+      ...originalEntry,
+      message: buildAssistantMessage("changed 1"),
+    };
+    const headerLine = JSON.stringify(buildSessionHeader(dir));
+    await fs.writeFile(sessionFile, `${headerLine}\n${JSON.stringify(originalEntry)}\n`, "utf8");
+
+    const sessionManager = SessionManager.open(sessionFile, dir, dir);
+    await withOwnedSessionTranscriptWrites(
+      {
+        sessionFile,
+        canAdvanceSessionEntryCache: () => true,
+        withSessionWriteLock: async (run) => await run(),
+      },
+      async () => {
+        sessionManager.appendCustomEntry("rewrite-during-serialization", {
+          value: {
+            toJSON() {
+              writeFileSync(
+                sessionFile,
+                `${headerLine}\n${JSON.stringify(replacementEntry)}\n`,
+                "utf8",
+              );
+              return "persisted";
+            },
+          },
+        });
+      },
+    );
+
+    expect(
+      SessionManager.open(sessionFile, dir, dir)
+        .getEntries()
+        .filter((entry) => entry.type === "message")
+        .map((entry) => readMessageContent(entry)),
+    ).toEqual(["changed 1"]);
+  });
+
+  it("invalidates incremental repair when append ownership cannot be proven", async () => {
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "session.jsonl");
+    const assistantEntry = {
+      type: "message",
+      id: "assistant-1",
+      parentId: null,
+      timestamp: "2026-06-04T00:00:01.000Z",
+      message: buildAssistantMessage("message 1"),
+    };
+    const headerLine = JSON.stringify(buildSessionHeader(dir));
+    const assistantLine = JSON.stringify(assistantEntry);
+    await fs.writeFile(sessionFile, `${headerLine}\n${assistantLine}\n`, "utf8");
+    await repairSessionFileIfNeeded({
+      sessionFile,
+      trustedSnapshot: await readTrustedRepairSnapshot(sessionFile),
+    });
+
+    const sessionManager = SessionManager.open(sessionFile, dir, dir);
+    await withOwnedSessionTranscriptWrites(
+      {
+        sessionFile,
+        canAdvanceSessionEntryCache: () => false,
+        withSessionWriteLock: async (run) => await run(),
+      },
+      async () => {
+        sessionManager.appendCustomEntry("corrupt-prefix-during-serialization", {
+          value: {
+            toJSON() {
+              writeFileSync(sessionFile, `${headerLine}\n!${assistantLine.slice(1)}\n`, "utf8");
+              return "persisted";
+            },
+          },
+        });
+      },
+    );
+
+    await repairSessionFileIfNeeded({
+      sessionFile,
+      trustedSnapshot: await readTrustedRepairSnapshot(sessionFile),
+    });
+    const repairedEntries = (await fs.readFile(sessionFile, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { type: string });
+    expect(repairedEntries.map((entry) => entry.type)).toEqual(["session", "custom"]);
+  });
+
   it("separates an owned append from an unterminated transcript entry", async () => {
     const dir = await makeTempDir();
     const sessionFile = path.join(dir, "session.jsonl");
@@ -362,6 +466,7 @@ describe("SessionManager.open", () => {
     await withOwnedSessionTranscriptWrites(
       {
         sessionFile,
+        canAdvanceSessionEntryCache: () => true,
         withSessionWriteLock: async (run) => await run(),
       },
       async () => {
@@ -382,10 +487,17 @@ describe("SessionManager.open", () => {
   it("caches the persisted JSON shape after a deferred full write", async () => {
     const dir = await makeTempDir();
     const sessionFile = path.join(dir, "session.jsonl");
+    let serializationCount = 0;
     const sessionManager = SessionManager.open(sessionFile, dir, dir);
     sessionManager.appendCustomEntry("json-shape", {
       kept: "value",
       dropped: () => "not persisted",
+      stateful: {
+        toJSON() {
+          serializationCount += 1;
+          return serializationCount === 1 ? "first" : "later";
+        },
+      },
     });
 
     expect(() => {
@@ -395,7 +507,8 @@ describe("SessionManager.open", () => {
     const warmEntry = SessionManager.open(sessionFile, dir, dir)
       .getEntries()
       .find((entry) => entry.type === "custom");
-    expect(warmEntry).toMatchObject({ data: { kept: "value" } });
+    expect(serializationCount).toBe(1);
+    expect(warmEntry).toMatchObject({ data: { kept: "value", stateful: "first" } });
     expect((warmEntry as { data?: Record<string, unknown> }).data).not.toHaveProperty("dropped");
   });
 
@@ -727,6 +840,7 @@ describe("SessionManager.open", () => {
     await withOwnedSessionTranscriptWrites(
       {
         sessionFile,
+        canAdvanceSessionEntryCache: () => true,
         withSessionWriteLock: async (run) => await run(),
       },
       async () => {

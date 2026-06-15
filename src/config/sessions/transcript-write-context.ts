@@ -5,10 +5,19 @@ import path from "node:path";
 type OwnedSessionTranscriptWriteContext = {
   sessionFile?: string;
   sessionKey?: string;
+  canAdvanceSessionEntryCache?: (snapshot: OwnedSessionTranscriptCacheSnapshot) => boolean;
   withSessionWriteLock: <T>(
     run: () => Promise<T> | T,
     options?: { publishOwnedWrite?: boolean },
   ) => Promise<T>;
+};
+
+export type OwnedSessionTranscriptCacheSnapshot = {
+  dev: bigint;
+  ino: bigint;
+  size: bigint;
+  mtimeNs: bigint;
+  ctimeNs: bigint;
 };
 
 const ownedTranscriptWriteContext = new AsyncLocalStorage<OwnedSessionTranscriptWriteContext>();
@@ -90,6 +99,19 @@ export function hasOwnedSessionTranscriptWriteContext(params: {
 }): boolean {
   const context = ownedTranscriptWriteContext.getStore();
   return Boolean(context && contextMatches({ context, ...params }));
+}
+
+export function canAdvanceOwnedSessionEntryCache(params: {
+  sessionFile?: string;
+  sessionKey?: string;
+  snapshot: OwnedSessionTranscriptCacheSnapshot;
+}): boolean {
+  const context = ownedTranscriptWriteContext.getStore();
+  return Boolean(
+    context &&
+    contextMatches({ context, ...params }) &&
+    context.canAdvanceSessionEntryCache?.(params.snapshot),
+  );
 }
 
 async function runWithOwnedSessionTranscriptWriteContext<T>(

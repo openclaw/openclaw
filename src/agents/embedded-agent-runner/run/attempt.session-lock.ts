@@ -7,7 +7,10 @@ import { createReadStream, readFileSync, statSync } from "node:fs";
 import fs from "node:fs/promises";
 import { isDeepStrictEqual } from "node:util";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { withOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
+import {
+  type OwnedSessionTranscriptCacheSnapshot,
+  withOwnedSessionTranscriptWrites,
+} from "../../../config/sessions/transcript-write-context.js";
 import { resolveGlobalSingleton } from "../../../shared/global-singleton.js";
 import { isSessionWriteLockAcquireError } from "../../session-write-lock-error.js";
 import type { acquireSessionWriteLock } from "../../session-write-lock.js";
@@ -657,6 +660,7 @@ export class EmbeddedAttemptSessionTakeoverError extends Error {
 }
 
 export type EmbeddedAttemptSessionLockController = {
+  canAdvanceSessionEntryCache(snapshot: OwnedSessionTranscriptCacheSnapshot): boolean;
   readTrustedCurrentSessionFileSnapshot(): Promise<TrustedSessionFileSnapshot | undefined>;
   releaseForPrompt(): Promise<void>;
   releaseHeldLockForAbort(): Promise<void>;
@@ -1040,6 +1044,16 @@ export async function createEmbeddedAttemptSessionLockController(params: {
   }
 
   return {
+    canAdvanceSessionEntryCache(snapshot: OwnedSessionTranscriptCacheSnapshot): boolean {
+      if (takeoverDetected || activeWriteLock.getStore()?.active !== true) {
+        return false;
+      }
+      const fingerprint: SessionFileFingerprint = { exists: true, ...snapshot };
+      return (
+        (fenceActive && sameSessionFileFingerprint(fenceFingerprint, fingerprint)) ||
+        isTrustedSessionFileState(sessionFileFenceKey, fingerprint)
+      );
+    },
     async readTrustedCurrentSessionFileSnapshot(): Promise<TrustedSessionFileSnapshot | undefined> {
       const fingerprint = await readSessionFileFingerprint(params.lockOptions.sessionFile);
       return fingerprint.exists && isTrustedSessionFileState(sessionFileFenceKey, fingerprint)
@@ -1200,6 +1214,7 @@ export function installPromptSubmissionLockRelease(params: {
     run: () => Promise<T> | T,
     options?: SessionWriteLockRunOptions,
   ) => Promise<T>;
+  canAdvanceSessionEntryCache?: (snapshot: OwnedSessionTranscriptCacheSnapshot) => boolean;
 }): void {
   const agent = (params.session as SessionWithAgentPrompt).agent;
   if (typeof agent?.streamFn !== "function") {
@@ -1220,6 +1235,7 @@ export function installPromptSubmissionLockRelease(params: {
             sessionFile: params.sessionFile,
             sessionKey: params.sessionKey,
             withSessionWriteLock: params.withSessionWriteLock,
+            canAdvanceSessionEntryCache: params.canAdvanceSessionEntryCache,
           },
           async () => await originalStreamFn(...args),
         );
