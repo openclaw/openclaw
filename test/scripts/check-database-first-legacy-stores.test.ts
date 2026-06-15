@@ -32,6 +32,36 @@ describe("check-database-first-legacy-stores", () => {
     }
   });
 
+  it("ignores deeply nested type-only syntax", () => {
+    const nestedType = Array.from({ length: 600 }).reduce((type) => `Readonly<${type}>`, "string");
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        type DeepRuntimeSchema = ${nestedType};
+        export const ok: DeepRuntimeSchema | null = null;
+      `,
+      "src/runtime/deep-type-only-schema.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("terminates analysis for self-recursive helper wrappers", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        function normalize(value: unknown): unknown {
+          if (Array.isArray(value)) {
+            return value.map((entry) => normalize(entry));
+          }
+          return value;
+        }
+        normalize([]);
+      `,
+      "src/runtime/self-recursive-helper.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
   it("flags runtime writes to legacy sessions.json stores", () => {
     const violations = collectDatabaseFirstLegacyStoreViolations(
       `
@@ -1836,6 +1866,22 @@ describe("check-database-first-legacy-stores", () => {
     expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 8 }]);
   });
 
+  it("flags legacy paths read through chained wrapper option properties", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { writeTextAtomic } from "../infra/json-files.js";
+        function persist(params: { filePath: string }) {
+          return writeTextAtomic(params.filePath.toString(), "{}\\n");
+        }
+        const options = { filePath: "sessions.json" };
+        await persist(options);
+      `,
+      "src/runtime/chained-wrapper-option-path.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 7 }]);
+  });
+
   it("flags legacy paths passed through destructured wrapper options", () => {
     const violations = collectDatabaseFirstLegacyStoreViolations(
       `
@@ -1851,6 +1897,149 @@ describe("check-database-first-legacy-stores", () => {
     expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 6 }]);
   });
 
+  it("flags legacy paths passed through nested destructured wrapper options", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { writeTextAtomic } from "../infra/json-files.js";
+        function persist({ paths: { filePath } }: { paths: { filePath: string } }) {
+          return writeTextAtomic(filePath, "{}\\n");
+        }
+        await persist({ paths: { filePath: "sessions.json" } });
+      `,
+      "src/runtime/nested-destructured-wrapper-options.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 6 }]);
+  });
+
+  it("flags legacy paths from nested destructured wrapper option defaults", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { writeTextAtomic } from "../infra/json-files.js";
+        function persist({ paths: { filePath = "sessions.json" } }: { paths: { filePath?: string } }) {
+          return writeTextAtomic(filePath, "{}\\n");
+        }
+        await persist({ paths: {} });
+      `,
+      "src/runtime/nested-destructured-wrapper-option-default.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 6 }]);
+  });
+
+  it("flags nested parameter defaults from identifier-valued intermediate objects", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { writeTextAtomic } from "../infra/json-files.js";
+        const paths = { filePath: "sessions.json" };
+        function persist({ paths: { filePath } }: { paths: { filePath: string } } = { paths }) {
+          return writeTextAtomic(filePath, "{}\\n");
+        }
+        await persist();
+      `,
+      "src/runtime/nested-parameter-default-identifier-intermediate.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 7 }]);
+  });
+
+  it("flags nested destructuring defaults from identifier-valued intermediate objects", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { writeTextAtomic } from "../infra/json-files.js";
+        const paths = {};
+        function persist({ paths: { filePath = "sessions.json" } }: { paths: { filePath?: string } } = { paths }) {
+          return writeTextAtomic(filePath, "{}\\n");
+        }
+        await persist();
+      `,
+      "src/runtime/nested-destructuring-default-identifier-intermediate.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 7 }]);
+  });
+
+  it("flags nested destructuring defaults from aliased known object literals", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { writeTextAtomic } from "../infra/json-files.js";
+        function persist({ paths: { filePath = "sessions.json" } }: { paths: { filePath?: string } }) {
+          return writeTextAtomic(filePath, "{}\\n");
+        }
+        const source = { paths: {} };
+        const options = source;
+        await persist(options);
+      `,
+      "src/runtime/nested-destructuring-default-aliased-known-object.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 8 }]);
+  });
+
+  it("flags nested destructuring defaults from parent binding defaults", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist({ paths: { filePath } = { filePath: "sessions.json" } }) {
+          return fs.writeFile(filePath, "{}\\n");
+        }
+        await persist({});
+      `,
+      "src/runtime/nested-destructuring-parent-binding-default.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 6 }]);
+  });
+
+  it("does not force nested destructured defaults for unknown intermediate properties", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        declare function loadPaths(): { filePath?: string };
+        function persist({ paths: { filePath = "sessions.json" } }: { paths: { filePath?: string } }) {
+          return fs.writeFile(filePath, "{}\\n");
+        }
+        const options = { paths: loadPaths() };
+        await persist(options);
+      `,
+      "src/runtime/nested-destructured-wrapper-option-unknown-intermediate.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("flags defaults referencing earlier nested destructured identifier parameters", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function writePath({ paths: { filePath } }: { paths: { filePath: string } }, path = filePath) {
+          return fs.writeFile(path, "{}\\n");
+        }
+        const options = { paths: { filePath: "sessions.json" } };
+        await writePath(options);
+      `,
+      "src/runtime/nested-destructured-wrapper-earlier-identifier-default.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 7 }]);
+  });
+
+  it("flags defaults referencing earlier nested object parameter properties", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function writePath(options: { paths: { filePath: string } }, path = options.paths.filePath) {
+          return fs.writeFile(path, "{}\\n");
+        }
+        const options = { paths: { filePath: "sessions.json" } };
+        await writePath(options);
+      `,
+      "src/runtime/nested-object-wrapper-earlier-property-default.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 7 }]);
+  });
+
   it("flags legacy paths passed through positional wrapper parameters", () => {
     const violations = collectDatabaseFirstLegacyStoreViolations(
       `
@@ -1864,6 +2053,3093 @@ describe("check-database-first-legacy-stores", () => {
     );
 
     expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 6 }]);
+  });
+
+  it("flags defaulted wrapper parameters after optional safe assignments", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        let filePath;
+        if (useDb) filePath = currentSqlitePath;
+        function persist(path = "sessions.json") {
+          return fs.writeFile(path, "{}\\n");
+        }
+        await persist(filePath);
+      `,
+      "src/runtime/conditional-undefined-defaulted-wrapper-parameter.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 8 }]);
+  });
+
+  it("flags legacy paths forwarded through nested wrapper helpers", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          function inner(nextPath: string) {
+            return fs.writeFile(nextPath, "{}\\n");
+          }
+          return inner(filePath);
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-wrapper-path.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 9 }]);
+  });
+
+  it("flags legacy paths captured by nested wrapper helpers", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          function inner() {
+            return fs.writeFile(filePath, "{}\\n");
+          }
+          return inner();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-wrapper-closed-over-path.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 9 }]);
+  });
+
+  it("flags legacy paths captured by nested helpers and forwarded to outer wrappers", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function writePath(path: string) {
+          return fs.writeFile(path, "{}\\n");
+        }
+        function persist(filePath: string) {
+          function inner() {
+            return writePath(filePath);
+          }
+          return inner();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-helper-forwarded-to-outer-wrapper.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 12 }]);
+  });
+
+  it("keeps closed-over write aliases after loop-scoped shadows", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          const write = fs.writeFile;
+          function inner() {
+            for (const write of [async () => {}]) {}
+            return write(filePath, "{}\\n");
+          }
+          return inner();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-wrapper-loop-shadowed-write-alias.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 11 }]);
+  });
+
+  it("flags legacy paths forwarded through nested helper parameter defaults", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          function inner(nextPath = filePath) {
+            return fs.writeFile(nextPath, "{}\\n");
+          }
+          return inner();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-helper-parameter-default.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 9 }]);
+  });
+
+  it("flags legacy paths written by callable nested helper parameter defaults", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          function inner(save = () => fs.writeFile(filePath, "{}\\n")) {
+            return save();
+          }
+          return inner();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-helper-callable-parameter-default.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 9 }]);
+  });
+
+  it("does not use callable nested helper parameter defaults when callbacks are provided", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          function inner(save = () => fs.writeFile(filePath, "{}\\n")) {
+            return save();
+          }
+          return inner(async () => {});
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-helper-callable-parameter-default-provided.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("flags legacy paths forwarded through undefined nested helper arguments", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          function inner(nextPath = filePath) {
+            return fs.writeFile(nextPath, "{}\\n");
+          }
+          return inner(undefined);
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-helper-undefined-parameter-default.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 9 }]);
+  });
+
+  it("flags legacy paths forwarded through void nested helper arguments", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          function inner(nextPath = filePath) {
+            return fs.writeFile(nextPath, "{}\\n");
+          }
+          return inner(void 0);
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-helper-void-parameter-default.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 9 }]);
+  });
+
+  it("resolves nested helper parameter defaults in the helper scope", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          function inner(filePath: string, nextPath = filePath) {
+            return fs.writeFile(nextPath, "{}\\n");
+          }
+          return inner(currentSqlitePath);
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-helper-default-parameter-shadow.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("does not resolve top-level helper parameter defaults in the caller scope", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        const defaultPath = "current-state.json";
+        function writePath(path = defaultPath) {
+          return fs.writeFile(path, "{}\\n");
+        }
+        function persist(defaultPath: string) {
+          return writePath();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/top-level-helper-default-caller-shadow.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("does not resolve top-level helper object binding defaults in the caller scope", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        const defaultPath = "current-state.json";
+        function writePath({ path = defaultPath } = {}) {
+          return fs.writeFile(path, "{}\\n");
+        }
+        function persist(defaultPath: string) {
+          return writePath({});
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/top-level-helper-object-binding-default-caller-shadow.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("flags forwarded top-level helper object binding literal defaults", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function writePath({ path = "sessions.json" } = {}) {
+          return fs.writeFile(path, "{}\\n");
+        }
+        function persist() {
+          return writePath({});
+        }
+        await persist();
+      `,
+      "src/runtime/top-level-helper-object-binding-literal-default.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 7 }]);
+  });
+
+  it("does not resolve top-level helper expression defaults in the caller scope", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        const fallback = "current-state.json";
+        function writePath(path = filePath ?? fallback) {
+          return fs.writeFile(path, "{}\\n");
+        }
+        function persist(filePath: string) {
+          return writePath();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/top-level-helper-expression-default-caller-shadow.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("flags top-level helper expression defaults derived from earlier parameters", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        const fallback = "current-state.json";
+        function writePath(filePath: string, path = filePath ?? fallback) {
+          return fs.writeFile(path, "{}\\n");
+        }
+        function persist(filePath: string) {
+          return writePath(filePath);
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/top-level-helper-earlier-parameter-expression-default.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 10 }]);
+  });
+
+  it("flags direct top-level helper calls with defaults derived from earlier arguments", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        const fallback = "current-state.json";
+        function writePath(filePath: string, path = filePath ?? fallback) {
+          return fs.writeFile(path, "{}\\n");
+        }
+        await writePath("sessions.json");
+      `,
+      "src/runtime/top-level-helper-direct-earlier-parameter-default.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 7 }]);
+  });
+
+  it("flags direct top-level helper calls with defaults from earlier destructured arguments", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function writePath({ filePath }: { filePath: string }, path = filePath) {
+          return fs.writeFile(path, "{}\\n");
+        }
+        await writePath({ filePath: "sessions.json" });
+      `,
+      "src/runtime/top-level-helper-direct-destructured-earlier-parameter-default.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 6 }]);
+  });
+
+  it("flags direct top-level helper calls with defaults from nested destructured arguments", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function writePath(
+          { paths: { filePath } }: { paths: { filePath: string } },
+          path = filePath,
+        ) {
+          return fs.writeFile(path, "{}\\n");
+        }
+        await writePath({ paths: { filePath: "sessions.json" } });
+      `,
+      "src/runtime/top-level-helper-direct-nested-destructured-earlier-parameter-default.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 9 }]);
+  });
+
+  it("does not flag safe defaults that only inspect earlier legacy arguments", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function writePath(
+          filePath: string,
+          path = filePath ? "current-state.json" : "current-state.json",
+        ) {
+          return fs.writeFile(path, "{}\\n");
+        }
+        await writePath("sessions.json");
+      `,
+      "src/runtime/top-level-helper-safe-conditional-default.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("flags direct top-level helper calls with method defaults from earlier arguments", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function writePath(filePath: string, path = filePath.replace(/\\.json$/, ".json")) {
+          return fs.writeFile(path, "{}\\n");
+        }
+        await writePath("sessions.json");
+      `,
+      "src/runtime/top-level-helper-direct-method-earlier-parameter-default.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 6 }]);
+  });
+
+  it("flags direct top-level helper calls with comma defaults from earlier arguments", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        const safePath = "current-state.json";
+        function writePath(filePath: string, path = (safePath, filePath)) {
+          return fs.writeFile(path, "{}\\n");
+        }
+        await writePath("sessions.json");
+      `,
+      "src/runtime/top-level-helper-direct-comma-earlier-parameter-default.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 7 }]);
+  });
+
+  it("flags direct top-level helper calls with assignment defaults from earlier arguments", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        let cached = "current-state.json";
+        function writePath(filePath: string, path = (cached = filePath)) {
+          return fs.writeFile(path, "{}\\n");
+        }
+        await writePath("sessions.json");
+      `,
+      "src/runtime/top-level-helper-direct-assignment-earlier-parameter-default.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 7 }]);
+  });
+
+  it("flags top-level helper object binding expression defaults derived from earlier parameters", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        const fallback = "current-state.json";
+        function writePath(filePath: string, { path = filePath ?? fallback } = {}) {
+          return fs.writeFile(path, "{}\\n");
+        }
+        function persist(filePath: string) {
+          return writePath(filePath, {});
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/top-level-helper-object-binding-earlier-parameter-expression-default.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 10 }]);
+  });
+
+  it("flags direct top-level helper calls with object binding defaults from earlier arguments", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        const fallback = "current-state.json";
+        function writePath(filePath: string, { path = filePath ?? fallback } = {}) {
+          return fs.writeFile(path, "{}\\n");
+        }
+        await writePath("sessions.json");
+      `,
+      "src/runtime/top-level-helper-direct-object-binding-earlier-parameter-default.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 7 }]);
+  });
+
+  it("flags object binding defaults from missing properties on identifier arguments", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        const options = {};
+        function writePath(filePath: string, { path = filePath } = {}) {
+          return fs.writeFile(path, "{}\\n");
+        }
+        await writePath("sessions.json", options);
+      `,
+      "src/runtime/top-level-helper-object-binding-missing-identifier-default.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 7 }]);
+  });
+
+  it("flags object binding defaults from undefined properties on identifier arguments", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        const options = { path: undefined };
+        function writePath(filePath: string, { path = filePath } = {}) {
+          return fs.writeFile(path, "{}\\n");
+        }
+        await writePath("sessions.json", options);
+      `,
+      "src/runtime/top-level-helper-object-binding-undefined-identifier-default.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 7 }]);
+  });
+
+  it("flags object binding defaults from undefined properties in parameter defaults", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function writePath({ path = "sessions.json" } = { path: undefined }) {
+          return fs.writeFile(path, "{}\\n");
+        }
+        await writePath();
+      `,
+      "src/runtime/top-level-helper-object-binding-undefined-parameter-default.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 6 }]);
+  });
+
+  it("uses explicit safe properties on identifier arguments before object binding defaults", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        const options = { path: "current-state.json" };
+        function writePath(filePath: string, { path = filePath } = {}) {
+          return fs.writeFile(path, "{}\\n");
+        }
+        await writePath("sessions.json", options);
+      `,
+      "src/runtime/top-level-helper-object-binding-safe-identifier-property.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("does not force object binding defaults for unknown identifier arguments", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        declare function loadOptions(): { path?: string };
+        const options = loadOptions();
+        function writePath(filePath: string, { path = filePath } = {}) {
+          return fs.writeFile(path, "{}\\n");
+        }
+        await writePath("sessions.json", options);
+      `,
+      "src/runtime/top-level-helper-object-binding-unknown-identifier-default.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("does not force object binding defaults for identifier arguments with unknown spreads", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        declare const defaults: { path?: string };
+        const options = { ...defaults };
+        function writePath(filePath: string, { path = filePath } = {}) {
+          return fs.writeFile(path, "{}\\n");
+        }
+        await writePath("sessions.json", options);
+      `,
+      "src/runtime/top-level-helper-object-binding-unknown-spread-default.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("keeps explicit undefined object properties after exhaustive branch merges", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function writePath(filePath: string, { path = filePath } = {}) {
+          return fs.writeFile(path, "{}\\n");
+        }
+        const options = { path: "current-state.json" };
+        if (Math.random() > 0.5) {
+          options.path = undefined;
+        } else {
+          options.path = undefined;
+        }
+        await writePath("sessions.json", options);
+      `,
+      "src/runtime/top-level-helper-object-binding-branch-undefined-default.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 12 }]);
+  });
+
+  it("keeps maybe undefined object properties after exhaustive branch merges", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function writePath(filePath: string, { path = filePath } = {}) {
+          return fs.writeFile(path, "{}\\n");
+        }
+        const options = { path: "current-state.json" };
+        if (Math.random() > 0.5) {
+          options.path = undefined;
+        } else {
+          options.path = "current-state.json";
+        }
+        await writePath("sessions.json", options);
+      `,
+      "src/runtime/top-level-helper-object-binding-branch-maybe-undefined-default.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 12 }]);
+  });
+
+  it("keeps known nested object literals after exhaustive branch merges", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function writePath({ paths: { filePath = "sessions.json" } = {} }) {
+          return fs.writeFile(filePath, "{}\\n");
+        }
+        let options = { paths: { filePath: "current-state.json" } };
+        if (Math.random() > 0.5) {
+          options = { paths: {} };
+        } else {
+          options = { paths: {} };
+        }
+        await writePath(options);
+      `,
+      "src/runtime/top-level-helper-object-binding-branch-known-nested-object.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 12 }]);
+  });
+
+  it("does not force object binding defaults after exhaustive unknown object branch merges", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        declare function loadOptions(): { path?: string };
+        function writePath(filePath: string, { path = filePath } = {}) {
+          return fs.writeFile(path, "{}\\n");
+        }
+        let options;
+        if (Math.random() > 0.5) {
+          options = { path: "current-state.json" };
+        } else {
+          options = loadOptions();
+        }
+        await writePath("sessions.json", options);
+      `,
+      "src/runtime/top-level-helper-object-binding-branch-unknown-default.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("does not force object binding defaults after optional unknown object rewrites", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        declare function loadOptions(): { path?: string };
+        function writePath(filePath: string, { path = filePath } = {}) {
+          return fs.writeFile(path, "{}\\n");
+        }
+        let options = loadOptions();
+        if (Math.random() > 0.5) {
+          options = {};
+        }
+        await writePath("sessions.json", options);
+      `,
+      "src/runtime/top-level-helper-object-binding-optional-unknown-rewrite-default.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("keeps known-missing object properties after exhaustive branch merges", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function writePath(filePath: string, { path = filePath } = {}) {
+          return fs.writeFile(path, "{}\\n");
+        }
+        let options;
+        if (Math.random() > 0.5) {
+          options = { path: "current-state.json" };
+        } else {
+          options = {};
+        }
+        await writePath("sessions.json", options);
+      `,
+      "src/runtime/top-level-helper-object-binding-branch-known-missing-default.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 12 }]);
+  });
+
+  it("flags object binding defaults from earlier destructured arguments", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function writePath({ filePath }: { filePath: string }, { path = filePath } = {}) {
+          return fs.writeFile(path, "{}\\n");
+        }
+        await writePath({ filePath: "sessions.json" }, {});
+      `,
+      "src/runtime/top-level-helper-object-binding-destructured-earlier-parameter-default.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 6 }]);
+  });
+
+  it("flags object binding defaults from nested destructured arguments", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function writePath(
+          { paths: { filePath } }: { paths: { filePath: string } },
+          { path = filePath } = {},
+        ) {
+          return fs.writeFile(path, "{}\\n");
+        }
+        await writePath({ paths: { filePath: "sessions.json" } }, {});
+      `,
+      "src/runtime/top-level-helper-object-binding-nested-destructured-earlier-parameter-default.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 9 }]);
+  });
+
+  it("does not scan unrelated object properties for earlier property defaults", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function writePath(
+          options: { currentPath: string; legacyPath: string },
+          path = options.currentPath,
+        ) {
+          return fs.writeFile(path, "{}\\n");
+        }
+        await writePath({
+          currentPath: "state/openclaw.sqlite",
+          legacyPath: "sessions.json",
+        });
+      `,
+      "src/runtime/top-level-helper-property-default-unrelated-legacy-property.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("does not scan unrelated object properties for bracket defaults", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function writePath(
+          options: { currentPath: string; legacyPath: string },
+          path = options["currentPath"],
+        ) {
+          return fs.writeFile(path, "{}\\n");
+        }
+        await writePath({
+          currentPath: "state/openclaw.sqlite",
+          legacyPath: "sessions.json",
+        });
+      `,
+      "src/runtime/top-level-helper-bracket-default-unrelated-legacy-property.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("flags direct top-level helper calls with nested property defaults", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function writePath(
+          options: { paths: { filePath: string } },
+          path = options.paths.filePath,
+        ) {
+          return fs.writeFile(path, "{}\\n");
+        }
+        await writePath({
+          paths: { filePath: "sessions.json" },
+        });
+      `,
+      "src/runtime/top-level-helper-nested-property-default.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 9 }]);
+  });
+
+  it("flags direct top-level helper calls with nested bracket property defaults", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function writePath(
+          options: { paths: { filePath: string } },
+          path = options.paths["filePath"],
+        ) {
+          return fs.writeFile(path, "{}\\n");
+        }
+        await writePath({
+          paths: { filePath: "sessions.json" },
+        });
+      `,
+      "src/runtime/top-level-helper-nested-bracket-property-default.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 9 }]);
+  });
+
+  it("does not crash on unknown spreads in nested property defaults", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        declare const defaults: { paths?: { filePath: string } };
+        function writePath(
+          options: { paths?: { filePath: string } },
+          path = options.paths.filePath,
+        ) {
+          return fs.writeFile(path, "{}\\n");
+        }
+        await writePath({ ...defaults });
+      `,
+      "src/runtime/top-level-helper-nested-property-default-unknown-spread.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("keeps nested legacy paths before unknown outer spreads", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        declare const options: { paths?: { filePath: string } };
+        function persist({ paths: { filePath } }: { paths: { filePath: string } }) {
+          return fs.writeFile(filePath, "{}\\n");
+        }
+        await persist({ paths: { filePath: "sessions.json" }, ...options });
+      `,
+      "src/runtime/nested-wrapper-path-before-unknown-spread.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 7 }]);
+  });
+
+  it("flags nested legacy paths passed through shorthand options", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        const paths = { filePath: "sessions.json" };
+        function writePath(options: { paths: { filePath: string } }, path = options.paths.filePath) {
+          return fs.writeFile(path, "{}\\n");
+        }
+        await writePath({ paths });
+      `,
+      "src/runtime/top-level-helper-nested-shorthand-options.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 7 }]);
+  });
+
+  it("flags nested legacy paths forwarded through identifier-valued object properties", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist({ paths: { filePath } }: { paths: { filePath: string } }) {
+          return fs.writeFile(filePath, "{}\\n");
+        }
+        const paths = { filePath: "sessions.json" };
+        const options = { paths };
+        await persist(options);
+      `,
+      "src/runtime/nested-wrapper-identifier-valued-object-property.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 8 }]);
+  });
+
+  it("flags nested legacy paths hidden in intermediate option expressions", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        declare function makePaths(filePath: string): { filePath: string };
+        function persist({ paths: { filePath } }: { paths: { filePath: string } }) {
+          return fs.writeFile(filePath, "{}\\n");
+        }
+        await persist({ paths: makePaths("sessions.json") });
+      `,
+      "src/runtime/nested-wrapper-path-intermediate-expression.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 7 }]);
+  });
+
+  it("flags direct top-level helper calls with chained literal parameter defaults", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function writePath(filePath = "sessions.json", path = filePath) {
+          return fs.writeFile(path, "{}\\n");
+        }
+        await writePath();
+      `,
+      "src/runtime/top-level-helper-chained-literal-parameter-default.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 6 }]);
+  });
+
+  it("flags direct top-level helper calls with nested object literal parameter defaults", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function writePath(
+          options = { paths: { filePath: "sessions.json" } },
+          path = options.paths.filePath,
+        ) {
+          return fs.writeFile(path, "{}\\n");
+        }
+        await writePath();
+      `,
+      "src/runtime/top-level-helper-nested-object-literal-parameter-default.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 9 }]);
+  });
+
+  it("flags direct top-level helper calls with nested spread parameter defaults", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        const defaults = { paths: { filePath: "sessions.json" } };
+        function writePath(
+          options = { ...defaults },
+          path = options.paths.filePath,
+        ) {
+          return fs.writeFile(path, "{}\\n");
+        }
+        await writePath();
+      `,
+      "src/runtime/top-level-helper-nested-spread-parameter-default.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 10 }]);
+  });
+
+  it("does not resolve top-level helper nested spread defaults in the caller scope", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        const defaults = { paths: { filePath: "current-state.json" } };
+        function writePath(
+          options = { ...defaults },
+          path = options.paths.filePath,
+        ) {
+          return fs.writeFile(path, "{}\\n");
+        }
+        function persist() {
+          const defaults = { paths: { filePath: "sessions.json" } };
+          return writePath();
+        }
+        await persist();
+      `,
+      "src/runtime/top-level-helper-nested-spread-default-caller-shadow.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("does not resolve omitted earlier helper parameters in the caller scope", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function writePath(filePath?: string, path = filePath) {
+          return fs.writeFile(path, "{}\\n");
+        }
+        function persist(filePath: string) {
+          return writePath();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/top-level-helper-omitted-earlier-default.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("does not resolve omitted earlier helper parameters in object binding defaults", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function writePath(filePath?: string, { path = filePath } = {}) {
+          return fs.writeFile(path, "{}\\n");
+        }
+        function persist(filePath: string) {
+          return writePath(undefined, {});
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/top-level-helper-object-binding-omitted-earlier-default.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("flags default expressions that combine multiple earlier parameters", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function writePath(prefix: string, filePath: string, path = prefix + filePath) {
+          return fs.writeFile(path, "{}\\n");
+        }
+        function persist(filePath: string) {
+          return writePath("state/", filePath);
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/top-level-helper-multiple-earlier-parameter-default.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 9 }]);
+  });
+
+  it("does not resolve top-level helper defaults in closed-over caller scope", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        const defaultPath = "current-state.json";
+        function writePath(path = defaultPath) {
+          return fs.writeFile(path, "{}\\n");
+        }
+        function persist(defaultPath: string) {
+          function inner() {
+            return writePath();
+          }
+          return inner();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/top-level-helper-default-closed-over-caller-shadow.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("does not treat top-level helper aliases as closed over nested helpers", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        const filePath = "current-state.json";
+        function writeCurrent() {
+          return fs.writeFile(filePath, "{}\\n");
+        }
+        function persist(filePath: string) {
+          function inner() {
+            const save = writeCurrent;
+            return save();
+          }
+          return inner();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/top-level-helper-alias-module-path-shadow.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("does not resolve aliased top-level helper defaults in the caller scope", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        const defaultPath = "current-state.json";
+        function writePath(path = defaultPath) {
+          return fs.writeFile(path, "{}\\n");
+        }
+        function persist(defaultPath: string) {
+          const save = writePath;
+          return save();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/top-level-helper-alias-default-caller-shadow.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("flags legacy paths forwarded through nested helper object binding defaults", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          function inner({ path = filePath } = {}) {
+            return fs.writeFile(path, "{}\\n");
+          }
+          return inner();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-helper-object-binding-default.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 9 }]);
+  });
+
+  it("does not use nested helper object binding defaults when a spread may provide the property", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          const options = getOptions();
+          function inner({ path = filePath } = {}) {
+            return fs.writeFile(path, "{}\\n");
+          }
+          return inner({ ...options });
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-helper-object-binding-default-unknown-spread.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("flags nested helper object binding defaults after known-empty object spreads", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          const defaults = {};
+          function inner({ path = filePath } = {}) {
+            return fs.writeFile(path, "{}\\n");
+          }
+          return inner({ ...defaults, ...{} });
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-helper-object-binding-default-known-empty-spread.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 10 }]);
+  });
+
+  it("resolves nested helper object binding defaults in the helper scope", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          function inner(filePath: string, { path = filePath } = {}) {
+            return fs.writeFile(path, "{}\\n");
+          }
+          return inner(currentSqlitePath, {});
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-helper-object-binding-default-shadow.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("flags legacy paths forwarded through undefined nested helper object arguments", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          function inner({ path = filePath } = {}) {
+            return fs.writeFile(path, "{}\\n");
+          }
+          return inner(undefined);
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-helper-undefined-object-binding-default.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 9 }]);
+  });
+
+  it("flags legacy paths forwarded through explicit undefined nested helper object properties", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          function inner({ path = filePath } = {}) {
+            return fs.writeFile(path, "{}\\n");
+          }
+          return inner({ path: undefined });
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-helper-undefined-object-property-default.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 9 }]);
+  });
+
+  it("flags legacy paths captured by nested helpers with local fs aliases", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        function persist(filePath: string) {
+          function inner() {
+            const fs = require("node:fs");
+            return fs.writeFileSync(filePath, "{}\\n");
+          }
+          return inner();
+        }
+        persist("sessions.json");
+      `,
+      "src/runtime/nested-wrapper-closed-over-local-fs.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 9 }]);
+  });
+
+  it("does not treat named function expression self-bindings as captured write aliases", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          const writeFile = fs.writeFile;
+          const inner = function writeFile() {
+            return writeFile(filePath);
+          };
+          return inner();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/named-function-expression-write-alias-shadow.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("flags legacy paths captured by defaulted destructured nested helpers", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          const writer = {};
+          function inner() {
+            const { save = () => fs.writeFile(filePath, "{}\\n") } = writer;
+            return save();
+          }
+          return inner();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/defaulted-destructured-nested-helper.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 11 }]);
+  });
+
+  it("does not use nested helper destructuring defaults when safe callbacks are present", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        const noopParam = async (_path: string) => {};
+        function persist(filePath: string) {
+          function inner() {
+            const writer = { save: noopParam };
+            const { save = () => fs.writeFile(filePath, "{}\\n") } = writer;
+            return save(filePath);
+          }
+          return inner();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/present-safe-callback-nested-default.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("uses nested helper destructuring defaults when properties are explicitly undefined", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          function inner() {
+            const writer = { save: undefined };
+            const { save = () => fs.writeFile(filePath, "{}\\n") } = writer;
+            return save();
+          }
+          return inner();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/undefined-callback-nested-default.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 11 }]);
+  });
+
+  it("does not resolve outer object methods through local object shadows", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          const writer = {
+            save() {
+              return fs.writeFile(filePath, "{}\\n");
+            },
+          };
+          function inner() {
+            const writer = getWriter();
+            const { save } = writer;
+            return save();
+          }
+          return inner();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/local-object-shadow-nested-method.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("keeps branch-only object methods inside closed-over nested helpers", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string, enabled: boolean) {
+          function inner() {
+            let writer = {};
+            if (enabled) {
+              writer = {
+                save() {
+                  return fs.writeFile(filePath, "{}\\n");
+                },
+              };
+            } else {
+              writer = {};
+            }
+            const { save } = writer;
+            return save();
+          }
+          return inner();
+        }
+        await persist("sessions.json", true);
+      `,
+      "src/runtime/branch-only-closed-over-object-method.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 20 }]);
+  });
+
+  it("keeps branch-only property assigned methods inside closed-over nested helpers", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string, enabled: boolean) {
+          function inner() {
+            let writer = {};
+            if (enabled) {
+              writer.save = () => fs.writeFile(filePath, "{}\\n");
+            } else {
+              writer = {};
+            }
+            return writer.save?.();
+          }
+          return inner();
+        }
+        await persist("sessions.json", true);
+      `,
+      "src/runtime/branch-only-property-closed-over-object-method.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 15 }]);
+  });
+
+  it("flags legacy paths captured by nested helpers with branch-assigned write aliases", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string, json: boolean) {
+          function inner() {
+            let write: typeof fs.writeFile;
+            if (json) {
+              write = fs.writeFile;
+            } else {
+              write = fs.writeFile;
+            }
+            return write(filePath, "{}\\n");
+          }
+          return inner();
+        }
+        await persist("sessions.json", true);
+      `,
+      "src/runtime/nested-wrapper-branch-assigned-write-alias.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 15 }]);
+  });
+
+  it("flags legacy paths captured by conditionally assigned nested helpers", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string, json: boolean) {
+          function inner() {
+            let save;
+            if (json) {
+              save = () => fs.writeFile(filePath, "{}\\n");
+            } else {
+              save = () => fs.writeFile(filePath, "{}\\n");
+            }
+            return save();
+          }
+          return inner();
+        }
+        await persist("sessions.json", true);
+      `,
+      "src/runtime/conditionally-assigned-nested-helper.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 15 }]);
+  });
+
+  it("keeps legacy nested helpers after braceless optional reassignment", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string, disabled: boolean) {
+          function inner() {
+            let save = () => fs.writeFile(filePath, "{}\\n");
+            if (disabled) save = async () => {};
+            return save();
+          }
+          return inner();
+        }
+        await persist("sessions.json", false);
+      `,
+      "src/runtime/nested-wrapper-braceless-optional-reassignment.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 11 }]);
+  });
+
+  it("flags legacy paths captured by nested helpers with destructured fs aliases", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          function inner() {
+            const { writeFile } = fs;
+            return writeFile(filePath, "{}\\n");
+          }
+          return inner();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-wrapper-closed-over-destructured-fs.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 10 }]);
+  });
+
+  it("ignores nested helpers with shadowed local require aliases", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        function persist(filePath: string, customRequire: NodeRequire) {
+          function inner() {
+            const require = customRequire;
+            const fs = require("node:fs");
+            return fs.writeFileSync(filePath, "{}\\n");
+          }
+          return inner();
+        }
+        persist("sessions.json", customRequire);
+      `,
+      "src/runtime/nested-wrapper-shadowed-require.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("uses nested helper createRequire shadows from the helper definition", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { createRequire } from "node:module";
+        function persist(filePath: string, customCreateRequire: typeof createRequire) {
+          function inner() {
+            const req = createRequire(import.meta.url);
+            const fs = req("node:fs");
+            return fs.writeFileSync(filePath, "{}\\n");
+          }
+          {
+            const createRequire = customCreateRequire;
+            return inner();
+          }
+        }
+        persist("sessions.json", customCreateRequire);
+      `,
+      "src/runtime/nested-wrapper-create-require-definition-scope.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 14 }]);
+  });
+
+  it("does not treat named nested function expressions as closed-over path parameters", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          const inner = function filePath() {
+            return fs.writeFile(filePath, "{}\\n");
+          };
+          return inner();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-wrapper-named-function-expression.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("does not resolve locally shadowed nested helper calls to outer wrappers", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function helper(filePath: string) {
+          return fs.writeFile(filePath, "{}\\n");
+        }
+        function persist(filePath: string) {
+          function inner(helper: (path: string) => Promise<void>) {
+            return helper(filePath);
+          }
+          return inner(async () => {});
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-wrapper-shadowed-helper-call.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("flags legacy paths captured by branch-assigned nested helpers", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string, useJson: boolean) {
+          let inner;
+          if (useJson) {
+            inner = () => fs.writeFile(filePath, "{}\\n");
+          }
+          return inner();
+        }
+        await persist("sessions.json", true);
+      `,
+      "src/runtime/nested-wrapper-branch-assigned-closed-over-path.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 10 }]);
+  });
+
+  it("flags legacy paths captured through nested helper chains", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          function inner() {
+            function deeper() {
+              return fs.writeFile(filePath, "{}\\n");
+            }
+            return deeper();
+          }
+          return inner();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-wrapper-helper-chain-closed-over-path.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 12 }]);
+  });
+
+  it("flags legacy paths captured through hoisted nested helper chains", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          function inner() {
+            return deeper();
+            function deeper() {
+              return fs.writeFile(filePath, "{}\\n");
+            }
+          }
+          return inner();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-wrapper-hoisted-helper-chain-closed-over-path.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 12 }]);
+  });
+
+  it("flags hoisted nested helpers that use write aliases declared later", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          function inner() {
+            function deeper() {
+              return write(filePath, "{}\\n");
+            }
+            const write = fs.writeFile;
+            return deeper();
+          }
+          return inner();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-wrapper-hoisted-helper-late-alias.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 13 }]);
+  });
+
+  it("flags escaped nested helpers that use write aliases declared later", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          let save;
+          function configure() {
+            save = () => write(filePath, "{}\\n");
+            const write = fs.writeFile;
+          }
+          configure();
+          return save?.();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-wrapper-escaped-late-write-alias.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 12 }]);
+  });
+
+  it("flags block-escaped nested helpers that use block write aliases declared later", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          function inner() {
+            let save;
+            {
+              save = () => write(filePath, "{}\\n");
+              const write = fs.writeFile;
+            }
+            return save?.();
+          }
+          return inner();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-wrapper-block-escaped-late-write-alias.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 14 }]);
+  });
+
+  it("flags var nested helpers declared in blocks", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          function inner() {
+            {
+              var save = () => fs.writeFile(filePath, "{}\\n");
+            }
+            return save();
+          }
+          return inner();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-wrapper-var-block-helper.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 12 }]);
+  });
+
+  it("flags var nested helper object methods declared in blocks", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          function inner() {
+            {
+              var writer = {
+                save() {
+                  return fs.writeFile(filePath, "{}\\n");
+                },
+              };
+            }
+            return writer.save();
+          }
+          return inner();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-wrapper-var-block-helper-object-method.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 16 }]);
+  });
+
+  it("flags nested helper defaults from object literal destructuring", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          const { save = () => fs.writeFile(filePath, "{}\\n") } = {};
+          return save();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-wrapper-object-literal-destructuring-default.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 7 }]);
+  });
+
+  it("uses the last object literal property before nested helper destructuring defaults", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          const safe = () => undefined;
+          const { save = () => fs.writeFile(filePath, "{}\\n") } = {
+            save: safe,
+            save: undefined,
+          };
+          return save?.();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-wrapper-object-literal-duplicate-default.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 11 }]);
+  });
+
+  it("does not use nested helper destructuring defaults when the last duplicate is safe", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          const safe = () => undefined;
+          const { save = () => fs.writeFile(filePath, "{}\\n") } = {
+            save: undefined,
+            save: safe,
+          };
+          return save?.();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-wrapper-object-literal-duplicate-safe.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("does not use nested helper destructuring defaults when a spread may provide the property", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          const safe = async () => {};
+          const { save = () => fs.writeFile(filePath, "{}\\n") } = {
+            ...{ save: safe },
+          };
+          return save();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-wrapper-object-literal-spread-safe.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("does not use nested helper destructuring defaults for untracked identifier spreads", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          const defaults = getWriter();
+          const { save = () => fs.writeFile(filePath, "{}\\n") } = {
+            ...defaults,
+          };
+          return save?.();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-wrapper-object-literal-unknown-spread-default.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("keeps earlier wrapper properties through known-missing object spreads", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          const save = () => fs.writeFile(filePath, "{}\\n");
+          const defaults = {};
+          const { save: inner = async () => {} } = {
+            save,
+            ...defaults,
+          };
+          return inner();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-wrapper-object-literal-known-missing-spread.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 12 }]);
+  });
+
+  it("uses nested helper destructuring defaults after known undefined object spreads", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          const defaults = { save: undefined };
+          const { save = () => fs.writeFile(filePath, "{}\\n") } = {
+            ...defaults,
+          };
+          return save();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-wrapper-object-literal-undefined-spread-default.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 10 }]);
+  });
+
+  it("flags var nested wrappers declared in blocks", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          {
+            var inner = (path: string) => fs.writeFile(path, "{}\\n");
+          }
+          return inner(filePath);
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-wrapper-var-block-declaration.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 9 }]);
+  });
+
+  it("merges var nested wrapper declarations inside exhaustive branches", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string, enabled: boolean) {
+          if (enabled) {
+            var inner = (path: string) => fs.writeFile(path, "{}\\n");
+          } else {
+            var inner = async (_path: string) => {};
+          }
+          return inner(filePath);
+        }
+        await persist("sessions.json", true);
+      `,
+      "src/runtime/nested-wrapper-var-branch-declaration.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 11 }]);
+  });
+
+  it("keeps prior var nested wrapper declarations after optional branch redeclarations", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string, disabled: boolean) {
+          var inner = (path: string) => fs.writeFile(path, "{}\\n");
+          if (disabled) {
+            var inner = async (_path: string) => {};
+          }
+          return inner(filePath);
+        }
+        await persist("sessions.json", false);
+      `,
+      "src/runtime/nested-wrapper-var-optional-branch-declaration.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 10 }]);
+  });
+
+  it("flags var nested wrapper destructuring defaults declared in blocks", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          {
+            var { save = (path: string) => fs.writeFile(path, "{}\\n") } = {};
+          }
+          return save(filePath);
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-wrapper-var-block-destructuring-default.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 9 }]);
+  });
+
+  it("flags legacy paths captured through sibling nested helper calls", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          function save() {
+            return fs.writeFile(filePath, "{}\\n");
+          }
+          function inner() {
+            return save();
+          }
+          return inner();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-wrapper-sibling-helper-call-closed-over-path.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 12 }]);
+  });
+
+  it("flags legacy paths forwarded through sibling nested helper parameters", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          function inner(nextPath: string) {
+            return deeper(nextPath);
+          }
+          function deeper(nextPath: string) {
+            return fs.writeFile(nextPath, "{}\\n");
+          }
+          return inner(filePath);
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-wrapper-sibling-helper-forwarded-path.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 12 }]);
+  });
+
+  it("flags legacy paths captured through nested arrow helper chains", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          const inner = () => {
+            const deeper = () => fs.writeFile(filePath, "{}\\n");
+            return deeper();
+          };
+          return inner();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-wrapper-arrow-helper-chain-closed-over-path.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 10 }]);
+  });
+
+  it("flags legacy paths captured through nested helper aliases", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          function inner() {
+            const deeper = () => fs.writeFile(filePath, "{}\\n");
+            const save = deeper;
+            return save();
+          }
+          return inner();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-wrapper-helper-alias-closed-over-path.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 11 }]);
+  });
+
+  it("flags legacy paths captured through nested object helper methods", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          function inner() {
+            const writer = {
+              save() {
+                return fs.writeFile(filePath, "{}\\n");
+              },
+            };
+            return writer.save();
+          }
+          return inner();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-wrapper-object-helper-closed-over-path.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 14 }]);
+  });
+
+  it("flags legacy paths captured through nested object helper aliases", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          function inner() {
+            const save = () => fs.writeFile(filePath, "{}\\n");
+            const writer = { save };
+            return writer.save();
+          }
+          return inner();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-wrapper-object-helper-alias-closed-over-path.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 11 }]);
+  });
+
+  it("does not treat nested function declaration shadows as captured write aliases", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          const write = fs.writeFile;
+          function inner() {
+            function write() {}
+            return write(filePath);
+          }
+          return inner();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-wrapper-function-declaration-write-shadow.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("does not treat nested helper parameters as captured write aliases", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string, customWrite: (value: string) => void) {
+          const writeFile = fs.writeFile;
+          function inner(writeFile: (value: string) => void) {
+            return writeFile(filePath);
+          }
+          return inner(customWrite);
+        }
+        await persist("sessions.json", customWrite);
+      `,
+      "src/runtime/nested-wrapper-parameter-write-alias-shadow.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("flags legacy paths forwarded through nested arrow helpers", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          const inner = (nextPath: string) => fs.writeFile(nextPath, "{}\\n");
+          return inner(filePath);
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-arrow-wrapper-path.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 7 }]);
+  });
+
+  it("flags legacy paths forwarded through nested object helper methods", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          const writer = {
+            inner(nextPath: string) {
+              return fs.writeFile(nextPath, "{}\\n");
+            },
+          };
+          return writer.inner(filePath);
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-object-wrapper-path.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 11 }]);
+  });
+
+  it("flags legacy paths forwarded through nested helper aliases", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          function inner(nextPath: string) {
+            return fs.writeFile(nextPath, "{}\\n");
+          }
+          const save = inner;
+          return save(filePath);
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-wrapper-alias-path.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 10 }]);
+  });
+
+  it("flags legacy paths forwarded through assignment-defined nested helper aliases", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          function inner() {
+            let save: () => Promise<void>;
+            save = () => fs.writeFile(filePath, "{}\\n");
+            return save();
+          }
+          return inner();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-wrapper-assigned-alias-closed-over-path.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 11 }]);
+  });
+
+  it("flags enclosing helper assignments made inside nested helpers", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          let save;
+          function configure() {
+            save = () => fs.writeFile(filePath, "{}\\n");
+          }
+          configure();
+          return save?.();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-wrapper-enclosing-assigned-helper.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 11 }]);
+  });
+
+  it("flags legacy paths forwarded through extracted nested object helper methods", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          const writer = {
+            inner(nextPath: string) {
+              return fs.writeFile(nextPath, "{}\\n");
+            },
+          };
+          const save = writer.inner;
+          return save(filePath);
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-object-wrapper-alias-path.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 12 }]);
+  });
+
+  it("flags legacy paths forwarded through assignment-defined nested object helpers", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          function inner() {
+            const writer: { save?: () => Promise<void> } = {};
+            writer.save = () => fs.writeFile(filePath, "{}\\n");
+            return writer.save?.();
+          }
+          return inner();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-object-wrapper-assigned-alias-closed-over-path.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 11 }]);
+  });
+
+  it("merges closed-over var nested wrapper declarations inside exhaustive branches", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string, enabled: boolean) {
+          function inner() {
+            if (enabled) {
+              var save = () => fs.writeFile(filePath, "{}\\n");
+            } else {
+              var save = async () => {};
+            }
+            return save();
+          }
+          return inner();
+        }
+        await persist("sessions.json", true);
+      `,
+      "src/runtime/nested-wrapper-var-branch-declaration-closed-over-path.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 14 }]);
+  });
+
+  it("merges closed-over var fs aliases declared inside optional branches", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string, enabled: boolean) {
+          function inner() {
+            if (enabled) {
+              var write = fs.writeFile;
+            }
+            return write(filePath, "{}\\n");
+          }
+          return inner();
+        }
+        await persist("sessions.json", true);
+      `,
+      "src/runtime/nested-wrapper-var-fs-alias-branch-closed-over-path.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 12 }]);
+  });
+
+  it("flags enclosing object helper assignments made inside nested helpers", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          const writer: { save?: () => Promise<void> } = {};
+          function configure() {
+            writer.save = () => fs.writeFile(filePath, "{}\\n");
+          }
+          function inner() {
+            configure();
+            return writer.save?.();
+          }
+          return inner();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-object-wrapper-enclosing-assigned-helper.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 14 }]);
+  });
+
+  it("flags legacy paths forwarded through local nested object helper aliases", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          function inner() {
+            const writer = {
+              save() {
+                return fs.writeFile(filePath, "{}\\n");
+              },
+            };
+            const save = writer.save;
+            return save();
+          }
+          return inner();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-object-wrapper-local-method-alias-closed-over-path.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 15 }]);
+  });
+
+  it("flags closed-over nested object helper methods copied through destructuring aliases", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          function inner() {
+            const writer = {
+              nested: {
+                save() {
+                  return fs.writeFile(filePath, "{}\\n");
+                },
+              },
+            };
+            const { nested } = writer;
+            return nested.save();
+          }
+          return inner();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-object-wrapper-destructured-alias-closed-over-path.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 17 }]);
+  });
+
+  it("clears closed-over nested object helpers after exhaustive reassignment", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string, enabled: boolean) {
+          function inner() {
+            let writer = {
+              save() {
+                return fs.writeFile(filePath, "{}\\n");
+              },
+            };
+            if (enabled) {
+              writer = {};
+            } else {
+              writer = {};
+            }
+            return writer.save?.();
+          }
+          return inner();
+        }
+        await persist("sessions.json", true);
+      `,
+      "src/runtime/nested-object-wrapper-exhaustive-reassigned-safe.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("keeps closed-over nested helpers after optional branch assignment", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string, enabled: boolean) {
+          function inner() {
+            let save;
+            if (enabled) {
+              save = () => fs.writeFile(filePath, "{}\\n");
+            }
+            return save?.();
+          }
+          return inner();
+        }
+        await persist("sessions.json", true);
+      `,
+      "src/runtime/nested-wrapper-optional-branch-assigned-helper.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 13 }]);
+  });
+
+  it("keeps closed-over nested helpers after loop assignment", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string, values: string[]) {
+          function inner() {
+            let save;
+            for (const value of values) {
+              save = () => fs.writeFile(filePath, value);
+            }
+            return save?.();
+          }
+          return inner();
+        }
+        await persist("sessions.json", ["{}\\n"]);
+      `,
+      "src/runtime/nested-wrapper-loop-assigned-helper.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 13 }]);
+  });
+
+  it("keeps closed-over nested helpers after optional while reassignment", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string, disabled: boolean) {
+          function inner() {
+            let save = () => fs.writeFile(filePath, "{}\\n");
+            while (disabled) {
+              save = async () => {};
+            }
+            return save();
+          }
+          return inner();
+        }
+        await persist("sessions.json", false);
+      `,
+      "src/runtime/nested-wrapper-while-reassigned-helper.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 13 }]);
+  });
+
+  it("keeps switch case closed-over nested helper shadows scoped", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string, mode: string) {
+          function inner() {
+            const save = () => fs.writeFile(filePath, "{}\\n");
+            switch (mode) {
+              case "off":
+                const save = async () => {};
+                break;
+            }
+            return save();
+          }
+          return inner();
+        }
+        await persist("sessions.json", "on");
+      `,
+      "src/runtime/nested-wrapper-switch-case-shadow.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 15 }]);
+  });
+
+  it("flags nested helper declarations inside switch cases", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string, mode: string) {
+          switch (mode) {
+            case "legacy":
+              function inner(nextPath: string) {
+                return fs.writeFile(nextPath, "{}\\n");
+              }
+              return inner(filePath);
+          }
+        }
+        await persist("sessions.json", "legacy");
+      `,
+      "src/runtime/nested-wrapper-switch-case-helper.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 12 }]);
+  });
+
+  it("keeps closed-over nested helpers after try assignment", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          function inner() {
+            let save;
+            try {
+              save = () => fs.writeFile(filePath, "{}\\n");
+            } catch {}
+            return save?.();
+          }
+          return inner();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-wrapper-try-assigned-helper.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 13 }]);
+  });
+
+  it("flags closed-over nested helper aliases to outer wrappers", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function writePath(path: string) {
+          return fs.writeFile(path, "{}\\n");
+        }
+        function persist(filePath: string) {
+          function inner() {
+            const save = writePath;
+            return save(filePath);
+          }
+          return inner();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-wrapper-outer-wrapper-alias.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 13 }]);
+  });
+
+  it("flags closed-over nested helper parameter default writes", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          function inner(_ = fs.writeFile(filePath, "{}\\n")) {
+            return _;
+          }
+          return inner();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-wrapper-parameter-default-write.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 9 }]);
+  });
+
+  it("does not use outer write aliases shadowed later in closed-over helpers", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          const write = fs.writeFile;
+          function inner() {
+            write(filePath, "{}\\n");
+            const write = async () => {};
+            return write;
+          }
+          return inner();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-wrapper-later-write-alias-shadow.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("flags closed-over aliases to top-level wrappers with local metadata", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function writePath(path: string) {
+          let writer = {};
+          writer.save = () => fs.writeFile(path, "{}\\n");
+          return writer.save();
+        }
+        function persist(filePath: string) {
+          function inner() {
+            const save = writePath;
+            return save(filePath);
+          }
+          return inner();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-wrapper-top-level-wrapper-alias.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 15 }]);
+  });
+
+  it("flags closed-over aliases to top-level wrappers with module object metadata", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        const writer = {};
+        function writePath(path: string) {
+          writer.save = () => fs.writeFile(path, "{}\\n");
+          return writer.save();
+        }
+        function persist(filePath: string) {
+          function inner() {
+            const save = writePath;
+            return save(filePath);
+          }
+          return inner();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-wrapper-top-level-object-wrapper-alias.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 15 }]);
+  });
+
+  it("flags legacy paths forwarded through destructured local nested object helpers", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          function inner() {
+            const writer = {
+              save() {
+                return fs.writeFile(filePath, "{}\\n");
+              },
+            };
+            const { save } = writer;
+            return save();
+          }
+          return inner();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-object-wrapper-local-method-destructure-closed-over-path.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 15 }]);
+  });
+
+  it("flags legacy paths forwarded through destructured nested object helper methods", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          const writer = {
+            inner(nextPath: string) {
+              return fs.writeFile(nextPath, "{}\\n");
+            },
+          };
+          const { inner } = writer;
+          return inner(filePath);
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-object-wrapper-destructure-path.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 12 }]);
+  });
+
+  it("flags legacy paths forwarded through renamed nested object helper methods", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          const writer = {
+            inner(nextPath: string) {
+              return fs.writeFile(nextPath, "{}\\n");
+            },
+          };
+          const { inner: save } = writer;
+          return save(filePath);
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-object-wrapper-renamed-destructure-path.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 12 }]);
+  });
+
+  it("keeps nested wrapper assignments inside optional branches", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string, useJson: boolean) {
+          let inner: (nextPath: string) => Promise<void>;
+          if (useJson) {
+            inner = (nextPath: string) => fs.writeFile(nextPath, "{}\\n");
+          }
+          return inner(filePath);
+        }
+        await persist("sessions.json", true);
+      `,
+      "src/runtime/nested-wrapper-optional-branch-assignment.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 10 }]);
+  });
+
+  it("keeps previous nested wrappers after optional safe reassignment", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string, disabled: boolean) {
+          let inner = (nextPath: string) => fs.writeFile(nextPath, "{}\\n");
+          if (disabled) {
+            inner = async () => {};
+          }
+          return inner(filePath);
+        }
+        await persist("sessions.json", false);
+      `,
+      "src/runtime/nested-wrapper-optional-safe-reassignment.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 10 }]);
+  });
+
+  it("keeps nested object wrapper assignments inside optional branches", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string, useJson: boolean) {
+          const writer: { inner?: (nextPath: string) => Promise<void> } = {};
+          if (useJson) {
+            writer.inner = (nextPath: string) => fs.writeFile(nextPath, "{}\\n");
+          }
+          return writer.inner?.(filePath);
+        }
+        await persist("sessions.json", true);
+      `,
+      "src/runtime/nested-object-wrapper-optional-branch-assignment.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 10 }]);
+  });
+
+  it("keeps nested object wrapper methods from optional whole-object assignments", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string, useJson: boolean) {
+          let writer: { inner?: (nextPath: string) => Promise<void> } = {};
+          if (useJson) {
+            writer = {
+              inner(nextPath: string) {
+                return fs.writeFile(nextPath, "{}\\n");
+              },
+            };
+          }
+          return writer.inner?.(filePath);
+        }
+        await persist("sessions.json", true);
+      `,
+      "src/runtime/nested-object-wrapper-optional-object-assignment.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 14 }]);
+  });
+
+  it("flags legacy paths after exhaustive nested wrapper assignments", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string, useJson: boolean) {
+          let inner: (nextPath: string) => Promise<void>;
+          if (useJson) {
+            inner = (nextPath: string) => fs.writeFile(nextPath, "{}\\n");
+          } else {
+            inner = (nextPath: string) => fs.writeFile(nextPath, "[]\\n");
+          }
+          return inner(filePath);
+        }
+        await persist("sessions.json", true);
+      `,
+      "src/runtime/nested-wrapper-branch-assignment.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 12 }]);
+  });
+
+  it("flags legacy paths after nested wrapper assignments inside plain blocks", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          let inner: (nextPath: string) => Promise<void>;
+          {
+            inner = (nextPath: string) => fs.writeFile(nextPath, "{}\\n");
+          }
+          return inner(filePath);
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-wrapper-block-assignment.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 10 }]);
+  });
+
+  it("keeps exhaustive nested wrapper assignments inside plain blocks", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string, useJson: boolean) {
+          let inner: (nextPath: string) => Promise<void>;
+          {
+            if (useJson) {
+              inner = (nextPath: string) => fs.writeFile(nextPath, "{}\\n");
+            } else {
+              inner = (nextPath: string) => fs.writeFile(nextPath, "[]\\n");
+            }
+          }
+          return inner(filePath);
+        }
+        await persist("sessions.json", true);
+      `,
+      "src/runtime/nested-wrapper-block-branch-assignment.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 14 }]);
+  });
+
+  it("does not leak branch-local nested wrapper shadows after exhaustive branches", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string, useJson: boolean) {
+          let inner = (_nextPath: string) => Promise.resolve();
+          if (useJson) {
+            {
+              let inner: (nextPath: string) => Promise<void>;
+              inner = (nextPath: string) => fs.writeFile(nextPath, "{}\\n");
+            }
+          } else {
+            {
+              let inner: (nextPath: string) => Promise<void>;
+              inner = (nextPath: string) => fs.writeFile(nextPath, "[]\\n");
+            }
+          }
+          return inner(filePath);
+        }
+        await persist("sessions.json", true);
+      `,
+      "src/runtime/nested-wrapper-branch-local-shadow.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("refreshes block-local aliases for nested wrappers assigned to outer bindings", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          let inner: (nextPath: string) => Promise<void>;
+          {
+            inner = (nextPath: string) => write(nextPath, "{}\\n");
+            const write = fs.writeFile;
+          }
+          return inner(filePath);
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-wrapper-block-local-late-alias.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 11 }]);
+  });
+
+  it("keeps escaped nested wrapper aliases isolated from sibling blocks", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          let inner: (nextPath: string) => Promise<void>;
+          {
+            const write = fs.writeFile;
+            inner = (nextPath: string) => write(nextPath, "{}\\n");
+          }
+          {
+            const write = async () => {};
+          }
+          return inner(filePath);
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-wrapper-sibling-block-alias-shadow.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 14 }]);
+  });
+
+  it("refreshes merged nested wrapper assignments after later aliases", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string, useJson: boolean) {
+          let inner: (nextPath: string) => Promise<void>;
+          if (useJson) {
+            inner = (nextPath: string) => write(nextPath, "{}\\n");
+          } else {
+            inner = (nextPath: string) => write(nextPath, "[]\\n");
+          }
+          const write = fs.writeFile;
+          return inner(filePath);
+        }
+        await persist("sessions.json", true);
+      `,
+      "src/runtime/nested-wrapper-branch-late-alias.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 13 }]);
+  });
+
+  it("refreshes branch-local aliases before merging nested wrapper assignments", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string, useJson: boolean) {
+          let inner: (nextPath: string) => Promise<void>;
+          if (useJson) {
+            inner = (nextPath: string) => write(nextPath, "{}\\n");
+            const write = fs.writeFile;
+          } else {
+            inner = (nextPath: string) => write(nextPath, "[]\\n");
+            const write = fs.writeFile;
+          }
+          return inner(filePath);
+        }
+        await persist("sessions.json", true);
+      `,
+      "src/runtime/nested-wrapper-branch-local-late-alias.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 14 }]);
+  });
+
+  it("flags legacy paths after exhaustive nested object wrapper assignments", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string, useJson: boolean) {
+          let writer: { inner(nextPath: string): Promise<void> };
+          if (useJson) {
+            writer = {
+              inner(nextPath: string) {
+                return fs.writeFile(nextPath, "{}\\n");
+              },
+            };
+          } else {
+            writer = {
+              inner(nextPath: string) {
+                return fs.writeFile(nextPath, "[]\\n");
+              },
+            };
+          }
+          return writer.inner(filePath);
+        }
+        await persist("sessions.json", true);
+      `,
+      "src/runtime/nested-object-wrapper-branch-assignment.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 20 }]);
+  });
+
+  it("clears stale nested object wrapper methods after exhaustive object reassignment", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string, useJson: boolean) {
+          let writer = {
+            inner(nextPath: string) {
+              return fs.writeFile(nextPath, "{}\\n");
+            },
+          };
+          if (useJson) {
+            writer = {};
+          } else {
+            writer = {};
+          }
+          return writer.inner?.(filePath);
+        }
+        await persist("sessions.json", true);
+      `,
+      "src/runtime/nested-object-wrapper-exhaustive-object-reassignment.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("flags legacy paths after exhaustive nested object wrapper parameter assignments", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(
+          filePath: string,
+          writer: { inner?: (nextPath: string) => Promise<void> },
+          useJson: boolean,
+        ) {
+          if (useJson) {
+            writer.inner = (nextPath: string) => fs.writeFile(nextPath, "{}\\n");
+          } else {
+            writer.inner = (nextPath: string) => fs.writeFile(nextPath, "[]\\n");
+          }
+          return writer.inner?.(filePath);
+        }
+        await persist("sessions.json", {}, true);
+      `,
+      "src/runtime/nested-object-wrapper-parameter-branch-assignment.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 15 }]);
+  });
+
+  it("keeps block-local nested wrapper shadows scoped to their block", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          function inner(nextPath: string) {
+            return fs.writeFile(nextPath, "{}\\n");
+          }
+          {
+            function inner(_: string) {}
+          }
+          return inner(filePath);
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-wrapper-block-shadow.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 12 }]);
+  });
+
+  it("does not use outer nested wrappers for destructured parameter shadows", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function helper(nextPath: string) {
+          return fs.writeFile(nextPath, "{}\\n");
+        }
+        function persist({ helper }: { helper: (nextPath: string) => Promise<void> }, filePath: string) {
+          return helper(filePath);
+        }
+        await persist({ helper: async () => {} }, "sessions.json");
+      `,
+      "src/runtime/nested-wrapper-destructured-parameter-shadow.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("uses enclosing aliases when nested wrapper helpers are called", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          const write = fs.writeFile;
+          function inner(nextPath: string) {
+            return write(nextPath, "{}\\n");
+          }
+          return inner(filePath);
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-wrapper-alias.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 10 }]);
+  });
+
+  it("does not use caller block shadows for nested wrapper helper aliases", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { createRequire } from "node:module";
+        const req = createRequire(import.meta.url);
+        function persist(filePath: string, customRequire: NodeRequire) {
+          function inner(nextPath: string) {
+            const fs = req("node:fs");
+            return fs.writeFileSync(nextPath, "{}\\n");
+          }
+          {
+            const req = customRequire;
+            return inner(filePath);
+          }
+        }
+        await persist("sessions.json", require);
+      `,
+      "src/runtime/nested-wrapper-call-shadow.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 14 }]);
+  });
+
+  it("flags wrapper object binding defaults for explicit undefined forwarded properties", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function inner({ path }: { path: string }) {
+          return fs.writeFile(path, "{}\\n");
+        }
+        function persist(filePath: string) {
+          function forward({ path = filePath } = {}) {
+            return inner({ path });
+          }
+          return forward({ path: undefined });
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/wrapper-forwarded-undefined-object-property-default.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 12 }]);
   });
 
   it("flags legacy paths from defaulted wrapper parameters", () => {
@@ -1896,6 +5172,22 @@ describe("check-database-first-legacy-stores", () => {
       { kind: "legacy store filesystem write", line: 15 },
       { kind: "legacy store filesystem write", line: 16 },
     ]);
+  });
+
+  it("does not treat ambient declarations as undefined wrapper arguments", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import fs from "node:fs/promises";
+        declare const provided: string;
+        function persist(filePath = "sessions.json") {
+          return fs.writeFile(filePath, "{}\\n");
+        }
+        await persist(provided);
+      `,
+      "src/runtime/ambient-defaulted-wrapper-path.ts",
+    );
+
+    expect(violations).toEqual([]);
   });
 
   it("clears wrapper object parameter paths after reassignment", () => {
@@ -1978,6 +5270,22 @@ describe("check-database-first-legacy-stores", () => {
         await persist({ filePath: "sessions.json" });
       `,
       "src/runtime/reassigned-wrapper-property-options.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("clears nested wrapper object property paths after reassignment", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(params: { paths: { filePath: string } }) {
+          params.paths.filePath = currentSqlitePath;
+          return fs.writeFile(params.paths.filePath, "{}\\n");
+        }
+        await persist({ paths: { filePath: "sessions.json" } });
+      `,
+      "src/runtime/reassigned-nested-wrapper-property-options.ts",
     );
 
     expect(violations).toEqual([]);
@@ -2318,6 +5626,51 @@ describe("check-database-first-legacy-stores", () => {
     expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 7 }]);
   });
 
+  it("flags wrapper option paths written through branch-assigned body-local fs aliases", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import fs from "node:fs/promises";
+        function persist(params: { filePath: string }, ready: boolean) {
+          let write;
+          if (ready) {
+            write = fs.writeFile;
+          } else {
+            write = fs.writeFile;
+          }
+          return write(params.filePath, "{}\\n");
+        }
+        await persist({ filePath: "sessions.json" }, true);
+      `,
+      "src/runtime/branch-assigned-body-local-fs-alias-wrapper.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 12 }]);
+  });
+
+  it("flags nested wrapper helpers capturing branch-assigned body-local fs aliases", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import fs from "node:fs/promises";
+        function persist(params: { filePath: string }, ready: boolean) {
+          let write;
+          if (ready) {
+            write = fs.writeFile;
+          } else {
+            write = fs.writeFile;
+          }
+          function inner() {
+            return write(params.filePath, "{}\\n");
+          }
+          return inner();
+        }
+        await persist({ filePath: "sessions.json" }, true);
+      `,
+      "src/runtime/nested-wrapper-branch-assigned-body-local-fs-alias.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 15 }]);
+  });
+
   it("flags wrapper option paths written through body-local fs object aliases", () => {
     const violations = collectDatabaseFirstLegacyStoreViolations(
       `
@@ -2636,6 +5989,26 @@ describe("check-database-first-legacy-stores", () => {
     expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 7 }]);
   });
 
+  it("does not treat aliased top-level helpers as closing over wrapper parameters", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { writeTextAtomic } from "../infra/json-files.js";
+        const filePath = "not-openclaw-state.txt";
+        function helper() {
+          return writeTextAtomic(filePath, "{}\\n");
+        }
+        function persist(filePath: string) {
+          const inner = helper;
+          return inner();
+        }
+        persist("sessions.json");
+      `,
+      "src/runtime/aliased-top-level-wrapper-closed-over-module-var.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
   it("flags object method wrappers", () => {
     const violations = collectDatabaseFirstLegacyStoreViolations(
       `
@@ -2698,6 +6071,434 @@ describe("check-database-first-legacy-stores", () => {
     );
 
     expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 7 }]);
+  });
+
+  it("flags object wrapper methods copied through property access aliases", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          const writer = {
+            save(nextPath: string) {
+              return fs.writeFile(nextPath, "{}\\n");
+            },
+          };
+          const proxy = { save: writer.save };
+          return proxy.save(filePath);
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/object-wrapper-property-access-alias.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 12 }]);
+  });
+
+  it("flags object wrapper methods copied through whole-object aliases", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          const writer = {
+            save(nextPath: string) {
+              return fs.writeFile(nextPath, "{}\\n");
+            },
+          };
+          const proxy = writer;
+          return proxy.save(filePath);
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/object-wrapper-whole-object-alias.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 12 }]);
+  });
+
+  it("flags nested object wrapper methods copied through property access aliases", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          const writer = {
+            nested: {
+              save(nextPath: string) {
+                return fs.writeFile(nextPath, "{}\\n");
+              },
+            },
+          };
+          const nested = writer.nested;
+          return nested.save(filePath);
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-object-wrapper-property-access-alias.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 14 }]);
+  });
+
+  it("flags destructured object wrapper methods from deep property paths", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          const holder = {
+            inner: {
+              writer: {
+                save() {
+                  return fs.writeFile(filePath, "{}\\n");
+                },
+              },
+            },
+          };
+          const { save } = holder.inner.writer;
+          return save();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/deep-object-wrapper-destructured-method.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 16 }]);
+  });
+
+  it("flags nested object wrapper methods copied through destructuring aliases", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          const writer = {
+            nested: {
+              save() {
+                return fs.writeFile(filePath, "{}\\n");
+              },
+            },
+          };
+          const { nested } = writer;
+          return nested.save();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-object-wrapper-destructured-alias.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 14 }]);
+  });
+
+  it("flags nested object wrapper methods copied through identifier-valued properties", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          const nested = {
+            save() {
+              return fs.writeFile(filePath, "{}\\n");
+            },
+          };
+          const writer = { nested };
+          return writer.nested.save();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-object-wrapper-identifier-property-alias.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 12 }]);
+  });
+
+  it("clears stale nested object wrapper methods after object literal overwrites", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          const writer = {
+            nested: {
+              save(nextPath: string) {
+                return fs.writeFile(nextPath, "{}\\n");
+              },
+            },
+            nested: {},
+          };
+          return writer.nested.save(filePath);
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-object-wrapper-literal-overwrite.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("flags object wrapper methods copied through object spreads", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          const writer = {
+            save(nextPath: string) {
+              return fs.writeFile(nextPath, "{}\\n");
+            },
+          };
+          const proxy = { ...writer };
+          return proxy.save(filePath);
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/object-wrapper-object-spread-alias.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 12 }]);
+  });
+
+  it("flags nested object wrapper methods", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          const writer = {
+            nested: {
+              save() {
+                return fs.writeFile(filePath, "{}\\n");
+              },
+            },
+          };
+          return writer.nested.save();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-object-wrapper-method.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 13 }]);
+  });
+
+  it("flags top-level nested object wrapper methods", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        const writer = {
+          nested: {
+            save(filePath: string) {
+              return fs.writeFile(filePath, "{}\\n");
+            },
+          },
+        };
+        await writer.nested.save("sessions.json");
+      `,
+      "src/runtime/top-level-nested-object-wrapper-method.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 10 }]);
+  });
+
+  it("flags top-level nested object wrapper methods copied through shorthand properties", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        const nested = {
+          save(filePath: string) {
+            return fs.writeFile(filePath, "{}\\n");
+          },
+        };
+        const writer = { nested };
+        await writer.nested.save("sessions.json");
+      `,
+      "src/runtime/top-level-nested-object-wrapper-shorthand.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 9 }]);
+  });
+
+  it("flags top-level nested object wrapper methods copied through identifier properties", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        const nested = {
+          save(filePath: string) {
+            return fs.writeFile(filePath, "{}\\n");
+          },
+        };
+        const writer = { child: nested };
+        await writer.child.save("sessions.json");
+      `,
+      "src/runtime/top-level-nested-object-wrapper-identifier-property.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 9 }]);
+  });
+
+  it("flags top-level nested object wrapper methods copied through property access aliases", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        const writer = {
+          nested: {
+            save(filePath: string) {
+              return fs.writeFile(filePath, "{}\\n");
+            },
+          },
+        };
+        const child = writer.nested;
+        await child.save("sessions.json");
+      `,
+      "src/runtime/top-level-nested-object-wrapper-property-access-alias.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 11 }]);
+  });
+
+  it("clears top-level object wrapper methods overwritten with undefined", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function save(filePath: string) {
+          return fs.writeFile(filePath, "{}\\n");
+        }
+        const writer = { save, save: undefined };
+        await writer.save?.("sessions.json");
+      `,
+      "src/runtime/top-level-object-wrapper-undefined-overwrite.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("clears top-level nested object wrapper methods overwritten with undefined", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        const writer = {
+          nested: {
+            save(filePath: string) {
+              return fs.writeFile(filePath, "{}\\n");
+            },
+          },
+          nested: undefined,
+        };
+        await writer.nested?.save?.("sessions.json");
+      `,
+      "src/runtime/top-level-nested-object-wrapper-undefined-overwrite.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("does not copy object wrapper methods from shadowed objects", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        const writer = {
+          save(filePath: string) {
+            return fs.writeFile(filePath, "{}\\n");
+          },
+        };
+        {
+          const writer = {};
+          const alias = writer;
+          await alias.save?.("sessions.json");
+        }
+      `,
+      "src/runtime/shadowed-object-wrapper-method-alias.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("flags nested object wrapper methods assigned through object properties", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          const writer: any = {};
+          writer.nested = {
+            save() {
+              return fs.writeFile(filePath, "{}\\n");
+            },
+          };
+          return writer.nested.save();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-object-wrapper-property-object-assignment.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 12 }]);
+  });
+
+  it("flags top-level nested object wrapper methods assigned through object properties", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        const writer: any = {};
+        writer.nested = {
+          save(filePath: string) {
+            return fs.writeFile(filePath, "{}\\n");
+          },
+        };
+        await writer.nested.save("sessions.json");
+      `,
+      "src/runtime/top-level-nested-object-wrapper-property-object-assignment.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 9 }]);
+  });
+
+  it("flags nested object wrapper methods assigned through deep object properties", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          const writer: any = { nested: {} };
+          writer.nested.save = () => fs.writeFile(filePath, "{}\\n");
+          return writer.nested.save();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-object-wrapper-deep-property-assignment.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 8 }]);
+  });
+
+  it("clears stale nested object wrapper methods after property reassignment", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          const writer: any = {
+            nested: {
+              save() {
+                return fs.writeFile(filePath, "{}\\n");
+              },
+            },
+          };
+          writer.nested = {};
+          return writer.nested.save?.();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-object-wrapper-property-object-reassignment.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("clears object wrapper property aliases overwritten with undefined", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          const save = () => fs.writeFile(filePath, "{}\\n");
+          const writer = { save, save: undefined };
+          return writer.save?.();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/object-wrapper-property-undefined-overwrite.ts",
+    );
+
+    expect(violations).toEqual([]);
   });
 
   it("flags object wrapper methods assigned after declaration", () => {
@@ -2768,6 +6569,26 @@ describe("check-database-first-legacy-stores", () => {
     );
 
     expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 5 }]);
+  });
+
+  it("flags nested object wrapper methods copied through property access spreads", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { writeTextAtomic } from "../infra/json-files.js";
+        const writer: any = {
+          nested: {
+            save(params: { filePath: string }) {
+              return writeTextAtomic(params.filePath, "{}\\n");
+            },
+          },
+        };
+        const copy = { ...writer.nested };
+        await copy.save({ filePath: "sessions.json" });
+      `,
+      "src/runtime/nested-object-wrapper-property-access-spread.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 11 }]);
   });
 
   it("flags extracted object wrapper methods", () => {
@@ -2859,6 +6680,197 @@ describe("check-database-first-legacy-stores", () => {
     );
 
     expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 9 }]);
+  });
+
+  it("flags defaulted destructured object wrapper methods", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          const writer = {};
+          const { save = () => fs.writeFile(filePath, "{}\\n") } = writer;
+          return save();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/defaulted-destructured-object-wrapper-method.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 8 }]);
+  });
+
+  it("does not use destructured wrapper defaults when safe callbacks are present", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        const noopParam = async (_path: string) => {};
+        function persist(filePath: string) {
+          const writer = { save: noopParam };
+          const { save = () => fs.writeFile(filePath, "{}\\n") } = writer;
+          return save(filePath);
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/present-safe-callback-destructured-default.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("uses destructured wrapper defaults when properties are explicitly undefined", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string) {
+          const writer = { save: undefined };
+          const { save = () => fs.writeFile(filePath, "{}\\n") } = writer;
+          return save();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/undefined-callback-destructured-default.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 8 }]);
+  });
+
+  it("uses destructured wrapper defaults when properties are aliased undefined", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        const absent = undefined;
+        function persist(filePath: string) {
+          const writer = { save: absent };
+          const { save = () => fs.writeFile(filePath, "{}\\n") } = writer;
+          return save();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/aliased-undefined-callback-destructured-default.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 9 }]);
+  });
+
+  it("does not use destructured wrapper defaults after unknown spreads", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string, options: { save?: () => Promise<void> }) {
+          const writer = { save: undefined, ...options };
+          const { save = () => fs.writeFile(filePath, "{}\\n") } = writer;
+          return save();
+        }
+        await persist("sessions.json", { save: async () => {} });
+      `,
+      "src/runtime/object-wrapper-destructuring-default-unknown-spread.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("does not force destructured wrapper defaults from unknown spread objects", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string, defaults: { save?: () => Promise<void> }) {
+          const writer = { ...defaults };
+          const { save = () => fs.writeFile(filePath, "{}\\n") } = writer;
+          return save();
+        }
+        await persist("sessions.json", { save: async () => {} });
+      `,
+      "src/runtime/object-wrapper-destructuring-default-unknown-spread-object.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("does not force closed-over destructured wrapper defaults from unknown spread objects", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string, defaults: { save?: () => Promise<void> }) {
+          function inner() {
+            const writer = { ...defaults };
+            const { save = () => fs.writeFile(filePath, "{}\\n") } = writer;
+            return save();
+          }
+          return inner();
+        }
+        await persist("sessions.json", { save: async () => {} });
+      `,
+      "src/runtime/object-wrapper-destructuring-default-unknown-spread-object-closed-over.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("keeps branch-only object wrapper methods after exhaustive merge", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string, enabled: boolean) {
+          let writer = {};
+          if (enabled) {
+            writer = {
+              save() {
+                return fs.writeFile(filePath, "{}\\n");
+              },
+            };
+          } else {
+            writer = {};
+          }
+          const { save } = writer;
+          return save();
+        }
+        await persist("sessions.json", true);
+      `,
+      "src/runtime/branch-only-object-wrapper-method.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 17 }]);
+  });
+
+  it("keeps branch-only property assigned object wrapper methods after exhaustive merge", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string, enabled: boolean) {
+          let writer = {};
+          if (enabled) {
+            writer.save = () => fs.writeFile(filePath, "{}\\n");
+          } else {
+            writer = {};
+          }
+          return writer.save?.();
+        }
+        await persist("sessions.json", true);
+      `,
+      "src/runtime/branch-only-property-object-wrapper-method.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 12 }]);
+  });
+
+  it("keeps prior nested wrapper values when only one branch assigns", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(filePath: string, disabled: boolean) {
+          let save = (nextPath: string) => fs.writeFile(nextPath, "{}\\n");
+          if (disabled) {
+            save = async () => {};
+          } else {
+          }
+          return save(filePath);
+        }
+        await persist("sessions.json", false);
+      `,
+      "src/runtime/prior-wrapper-value-branch-assignment.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 11 }]);
   });
 
   it("clears wrapper metadata after non-wrapper reassignment", () => {
@@ -3102,6 +7114,107 @@ describe("check-database-first-legacy-stores", () => {
     expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 7 }]);
   });
 
+  it("flags nested property assignments forwarded through option objects", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist({ paths: { filePath } }: { paths: { filePath: string } }) {
+          return fs.writeFile(filePath, "{}\\n");
+        }
+        const options = { paths: {} };
+        options.paths.filePath = "sessions.json";
+        await persist(options);
+      `,
+      "src/runtime/nested-wrapper-option-property-assignment.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 8 }]);
+  });
+
+  it("flags nested property assignments read directly by filesystem writes", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        const options = { paths: {} };
+        options.paths.filePath = "sessions.json";
+        await fs.writeFile(options.paths.filePath, "{}\\n");
+      `,
+      "src/runtime/nested-direct-property-assignment.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 5 }]);
+  });
+
+  it("flags nested parent object assignments forwarded through option objects", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist({ paths: { filePath } }: { paths: { filePath: string } }) {
+          return fs.writeFile(filePath, "{}\\n");
+        }
+        const options = { paths: {} };
+        options.paths = { filePath: "sessions.json" };
+        await persist(options);
+      `,
+      "src/runtime/nested-wrapper-option-parent-assignment.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 8 }]);
+  });
+
+  it("flags nested defaults after parent object property assignments", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist({ paths: { filePath = "sessions.json" } }: { paths: { filePath?: string } }) {
+          return fs.writeFile(filePath, "{}\\n");
+        }
+        const options = {};
+        options.paths = {};
+        await persist(options);
+      `,
+      "src/runtime/nested-wrapper-option-parent-known-empty-assignment.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 8 }]);
+  });
+
+  it("clears nested path metadata after parent object assignments", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist({ paths: { filePath } }: { paths: { filePath: string } }) {
+          return fs.writeFile(filePath, "{}\\n");
+        }
+        const options = { paths: { filePath: "sessions.json" } };
+        options.paths = { filePath: "current-state.json" };
+        await persist(options);
+      `,
+      "src/runtime/nested-wrapper-option-parent-current-assignment.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("keeps maybe missing nested properties after conditional parent object assignments", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist({ paths: { filePath = "sessions.json" } }: { paths: { filePath?: string } }) {
+          return fs.writeFile(filePath, "{}\\n");
+        }
+        const options = { paths: { filePath: "state/openclaw.sqlite" } };
+        if (Math.random() > 0.5) {
+          options.paths = {};
+        }
+        await persist(options);
+      `,
+      "src/runtime/conditional-nested-parent-missing-property.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 10 }]);
+  });
+
   it("clears object path metadata after current-path assignment", () => {
     const violations = collectDatabaseFirstLegacyStoreViolations(
       `
@@ -3128,6 +7241,23 @@ describe("check-database-first-legacy-stores", () => {
     );
 
     expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 5 }]);
+  });
+
+  it("keeps maybe missing properties after conditional safe property assignments", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        const options = {};
+        if (ready) options.path = currentSqlitePath;
+        function writePath(filePath: string, { path = filePath } = {}) {
+          return fs.writeFile(path, "{}\\n");
+        }
+        await writePath("sessions.json", options);
+      `,
+      "src/runtime/conditional-safe-property-missing-default.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 8 }]);
   });
 
   it("keeps legacy object metadata after loop current-path assignment", () => {
@@ -3405,6 +7535,45 @@ describe("check-database-first-legacy-stores", () => {
     expect(violations).toEqual([]);
   });
 
+  it("flags nested defaults after conditional whole-object rewrites omit safe properties", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { writeTextAtomic } from "../infra/json-files.js";
+        function persist({ paths: { filePath = "sessions.json" } }: { paths: { filePath?: string } }) {
+          return writeTextAtomic(filePath, "{}\\n");
+        }
+        let options = { paths: { filePath: currentSqlitePath } };
+        if (ready) {
+          options = { paths: {} };
+        }
+        await persist(options);
+      `,
+      "src/runtime/conditional-whole-object-rewrite-nested-default.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 10 }]);
+  });
+
+  it("flags nested defaults after conditional whole-object rewrites from known aliases", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { writeTextAtomic } from "../infra/json-files.js";
+        function persist({ paths: { filePath = "sessions.json" } }: { paths: { filePath?: string } }) {
+          return writeTextAtomic(filePath, "{}\\n");
+        }
+        const source = { paths: {} };
+        let options = { paths: { filePath: currentSqlitePath } };
+        if (ready) {
+          options = source;
+        }
+        await persist(options);
+      `,
+      "src/runtime/conditional-whole-object-rewrite-alias-nested-default.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 11 }]);
+  });
+
   it("flags legacy paths from destructured default values", () => {
     const violations = collectDatabaseFirstLegacyStoreViolations(
       `
@@ -3417,6 +7586,122 @@ describe("check-database-first-legacy-stores", () => {
     );
 
     expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 5 }]);
+  });
+
+  it("flags legacy paths from inline object destructured default values", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { writeTextAtomic } from "../infra/json-files.js";
+        const { filePath = "sessions.json" } = {};
+        writeTextAtomic(filePath, "{}\\n");
+      `,
+      "src/runtime/inline-destructured-default-object-path.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 4 }]);
+  });
+
+  it("flags legacy paths from inline destructured object descendants", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { writeTextAtomic } from "../infra/json-files.js";
+        const { paths } = { paths: { filePath: "sessions.json" } };
+        writeTextAtomic(paths.filePath, "{}\\n");
+      `,
+      "src/runtime/inline-destructured-object-descendant-path.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 4 }]);
+  });
+
+  it("flags legacy paths destructured from tracked nested properties", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { writeTextAtomic } from "../infra/json-files.js";
+        const options = { paths: { filePath: "sessions.json" } };
+        const { filePath } = options.paths;
+        writeTextAtomic(filePath, "{}\\n");
+      `,
+      "src/runtime/destructured-tracked-nested-property-path.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 5 }]);
+  });
+
+  it("does not force inline object destructured defaults after unknown spreads", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { writeTextAtomic } from "../infra/json-files.js";
+        declare const defaults: { filePath?: string };
+        const { filePath = "sessions.json" } = { ...defaults };
+        writeTextAtomic(filePath, "{}\\n");
+      `,
+      "src/runtime/inline-destructured-default-unknown-spread.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("flags destructured defaults from explicitly undefined tracked properties", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { writeTextAtomic } from "../infra/json-files.js";
+        const params = { filePath: undefined };
+        const { filePath = "sessions.json" } = params;
+        writeTextAtomic(filePath, "{}\\n");
+      `,
+      "src/runtime/destructured-default-explicit-undefined-object-path.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 5 }]);
+  });
+
+  it("flags wrapper defaults from destructured missing tracked properties", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        const params = {};
+        function persist({ path = "sessions.json" }: { path?: string }) {
+          return fs.writeFile(path, "{}\\n");
+        }
+        const { filePath } = params;
+        await persist({ path: filePath });
+      `,
+      "src/runtime/destructured-missing-property-wrapper-default.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 8 }]);
+  });
+
+  it("flags wrapper defaults from inline destructured missing properties", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist({ path = "sessions.json" }: { path?: string }) {
+          return fs.writeFile(path, "{}\\n");
+        }
+        const { filePath } = {};
+        await persist({ path: filePath });
+      `,
+      "src/runtime/inline-destructured-missing-property-wrapper-default.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 7 }]);
+  });
+
+  it("flags destructured defaults from aliased undefined tracked properties", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { writeTextAtomic } from "../infra/json-files.js";
+        const absent = undefined;
+        const params = { filePath: absent };
+        const { filePath = "sessions.json" } = params;
+        writeTextAtomic(filePath, "{}\\n");
+      `,
+      "src/runtime/destructured-default-aliased-undefined-object-path.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 6 }]);
   });
 
   it("uses tracked object properties before destructured defaults", () => {
@@ -3480,6 +7765,81 @@ describe("check-database-first-legacy-stores", () => {
     );
 
     expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 8 }]);
+  });
+
+  it("flags wrapper option paths forwarded through destructured object aliases", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { writeTextAtomic } from "../infra/json-files.js";
+        function persist(params: { paths: { filePath: string } }) {
+          return writeTextAtomic(params.paths.filePath, "{}\\n");
+        }
+        const options = { paths: { filePath: "sessions.json" } };
+        const { paths } = options;
+        await persist({ paths });
+      `,
+      "src/runtime/wrapper-option-path-destructured-object-alias.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 8 }]);
+  });
+
+  it("does not treat sibling nested properties as wrapper option paths", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist(params: { paths: { filePath: string; legacyPath: string } }) {
+          return fs.writeFile(params.paths.filePath, "{}\\n");
+        }
+        const options = {
+          paths: {
+            filePath: "state/openclaw.sqlite",
+            legacyPath: "sessions.json",
+          },
+        };
+        await persist(options);
+      `,
+      "src/runtime/wrapper-option-path-nested-sibling-property.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("clears nested wrapper option paths after object literal spread overwrites", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        function persist({ paths: { filePath = currentSqlitePath } = {} }) {
+          return fs.writeFile(filePath, "{}\\n");
+        }
+        const params = {
+          paths: { filePath: "sessions.json" },
+          ...{ paths: {} },
+        };
+        await persist(params);
+      `,
+      "src/runtime/wrapper-option-path-object-spread-overwrite.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("clears known nested wrapper option paths after parent rewrites", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        declare function loadNested(): { filePath?: string };
+        function persist({ paths: { nested: { filePath = "sessions.json" } = {} } }) {
+          return fs.writeFile(filePath, "{}\\n");
+        }
+        const options = { paths: { nested: {} } };
+        options.paths = { nested: loadNested() };
+        await persist(options);
+      `,
+      "src/runtime/wrapper-option-path-parent-rewrite-unknown-nested.ts",
+    );
+
+    expect(violations).toEqual([]);
   });
 
   it("flags wrapper option paths forwarded through object spreads", () => {
@@ -3582,6 +7942,24 @@ describe("check-database-first-legacy-stores", () => {
         await persist({ store: "sessions.json", ...currentOptions });
       `,
       "src/runtime/inline-current-spread-wrapper-options.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("allows nested inline object spreads when a later spread overrides the legacy path", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { writeJson } from "../infra/json-files.js";
+        function persist({ paths: { filePath } }: { paths: { filePath: string } }) {
+          return writeJson(filePath, {});
+        }
+        await persist({
+          paths: { filePath: "sessions.json" },
+          ...{ paths: { filePath: currentSqlitePath } },
+        });
+      `,
+      "src/runtime/nested-inline-current-spread-wrapper-options.ts",
     );
 
     expect(violations).toEqual([]);
@@ -3707,6 +8085,29 @@ describe("check-database-first-legacy-stores", () => {
     );
 
     expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 9 }]);
+  });
+
+  it("keeps closed-over catch binding shadows scoped to the catch block", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import fs from "node:fs/promises";
+        function persist(filePath: string) {
+          function inner() {
+            try {
+              await load();
+            } catch (filePath) {
+              await recover(filePath);
+            }
+            return fs.writeFile(filePath, "{}\\n");
+          }
+          return inner();
+        }
+        await persist("sessions.json");
+      `,
+      "src/runtime/nested-wrapper-catch-shadow.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 14 }]);
   });
 
   it("keeps wrapper catch binding shadows scoped to the catch block", () => {
