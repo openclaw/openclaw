@@ -73,12 +73,14 @@ export async function writeJsonlLines(
   filePath: string,
   lines: readonly string[],
   options?: WriteJsonlFileOptions,
-): Promise<void> {
-  await fs.writeFile(filePath, serializeJsonlLines(lines), {
+): Promise<string> {
+  const content = serializeJsonlLines(lines);
+  await fs.writeFile(filePath, content, {
     encoding: options?.encoding ?? "utf-8",
     ...(options?.flag ? { flag: options.flag } : {}),
     ...(options?.mode !== undefined ? { mode: options.mode } : {}),
   });
+  return content;
 }
 
 export async function appendJsonlEntry(filePath: string, entry: unknown): Promise<void> {

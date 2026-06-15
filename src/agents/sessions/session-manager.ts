@@ -24,7 +24,10 @@ import {
   serializeJsonlEntry,
   writeJsonlEntriesSync,
 } from "../../config/sessions/transcript-jsonl.js";
-import { canAdvanceOwnedSessionEntryCache } from "../../config/sessions/transcript-write-context.js";
+import {
+  canAdvanceOwnedSessionEntryCache,
+  publishOwnedSessionFileSnapshot,
+} from "../../config/sessions/transcript-write-context.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import type { ImageContent, Message, TextContent } from "../../llm/types.js";
 import { getAgentDir as getDefaultAgentDir, getSessionsDir } from "../config.js";
@@ -559,7 +562,7 @@ function hasCacheableSessionHeader(entries: FileEntry[]): boolean {
 function rememberWrittenSessionEntries(
   filePath: string,
   expectedContent?: string,
-): SessionFileSnapshot | undefined {
+): { snapshot: SessionFileSnapshot | undefined; verifiedWrite: boolean } {
   const resolvedPath = resolve(filePath);
   // Full rewrites break append continuity used by the pre-run repair cache,
   // even when the filesystem preserves the inode and the rewritten file grows.
@@ -569,11 +572,11 @@ function rememberWrittenSessionEntries(
     beforeReadSnapshot = readSessionFileSnapshot(resolvedPath);
   } catch {
     sessionEntriesCache.delete(resolvedPath);
-    return undefined;
+    return { snapshot: undefined, verifiedWrite: false };
   }
   if (beforeReadSnapshot.size > MAX_CACHED_SESSION_BYTES) {
     sessionEntriesCache.delete(resolvedPath);
-    return beforeReadSnapshot;
+    return { snapshot: beforeReadSnapshot, verifiedWrite: false };
   }
 
   let content: string;
@@ -583,14 +586,14 @@ function rememberWrittenSessionEntries(
     afterReadSnapshot = readSessionFileSnapshot(resolvedPath);
   } catch {
     sessionEntriesCache.delete(resolvedPath);
-    return undefined;
+    return { snapshot: undefined, verifiedWrite: false };
   }
   if (
     (expectedContent !== undefined && content !== expectedContent) ||
     !isSameSessionFileSnapshot(beforeReadSnapshot, afterReadSnapshot)
   ) {
     sessionEntriesCache.delete(resolvedPath);
-    return afterReadSnapshot;
+    return { snapshot: afterReadSnapshot, verifiedWrite: false };
   }
   rememberSessionEntries(
     resolvedPath,
@@ -598,7 +601,10 @@ function rememberWrittenSessionEntries(
     parseJsonlEntries(content),
     content.endsWith("\n"),
   );
-  return afterReadSnapshot;
+  return {
+    snapshot: afterReadSnapshot,
+    verifiedWrite: expectedContent !== undefined,
+  };
 }
 
 function rememberAppendedSessionEntry(
@@ -607,12 +613,15 @@ function rememberAppendedSessionEntry(
   beforeAppendSnapshot: SessionFileSnapshot | undefined,
   serializedAppend: string,
   cacheOwnedAppend: boolean,
-): SessionFileSnapshot | undefined {
+): { snapshot: SessionFileSnapshot | undefined; cacheAdvanced: boolean } {
   const resolvedPath = resolve(filePath);
   if (!cacheOwnedAppend) {
     sessionEntriesCache.delete(resolvedPath);
     invalidateSessionFileRepairCache(resolvedPath);
-    return readSessionFileSnapshotIfExists(resolvedPath);
+    return {
+      snapshot: readSessionFileSnapshotIfExists(resolvedPath),
+      cacheAdvanced: false,
+    };
   }
   if (
     !previousSnapshot ||
@@ -621,7 +630,10 @@ function rememberAppendedSessionEntry(
   ) {
     sessionEntriesCache.delete(resolvedPath);
     invalidateSessionFileRepairCache(resolvedPath);
-    return readSessionFileSnapshotIfExists(resolvedPath);
+    return {
+      snapshot: readSessionFileSnapshotIfExists(resolvedPath),
+      cacheAdvanced: false,
+    };
   }
 
   const cached = sessionEntriesCache.get(resolvedPath);
@@ -643,11 +655,11 @@ function rememberAppendedSessionEntry(
   ) {
     sessionEntriesCache.delete(resolvedPath);
     invalidateSessionFileRepairCache(resolvedPath);
-    return snapshot;
+    return { snapshot, cacheAdvanced: false };
   }
   if (snapshot.size > MAX_CACHED_SESSION_BYTES) {
     sessionEntriesCache.delete(resolvedPath);
-    return snapshot;
+    return { snapshot, cacheAdvanced: false };
   }
 
   const persistedEntry = JSON.parse(
@@ -659,7 +671,21 @@ function rememberAppendedSessionEntry(
   sessionEntriesCache.delete(resolvedPath);
   sessionEntriesCache.set(resolvedPath, cached);
   trimSessionEntriesCache();
-  return snapshot;
+  return { snapshot, cacheAdvanced: true };
+}
+
+function publishRememberedSessionFileSnapshot(
+  filePath: string,
+  snapshot: SessionFileSnapshot | undefined,
+): void {
+  if (!snapshot) {
+    return;
+  }
+  const published = publishOwnedSessionFileSnapshot({ sessionFile: filePath, snapshot });
+  if (published === false) {
+    sessionEntriesCache.delete(resolve(filePath));
+    invalidateSessionFileRepairCache(filePath);
+  }
 }
 
 function readSessionFileSnapshotIfExists(filePath: string): SessionFileSnapshot | undefined {
@@ -1243,7 +1269,11 @@ export class SessionManager {
       return;
     }
     const content = writeJsonlEntriesSync(this.sessionFile, this.fileEntries);
-    this.sessionFileSnapshot = rememberWrittenSessionEntries(this.sessionFile, content);
+    const rememberedWrite = rememberWrittenSessionEntries(this.sessionFile, content);
+    this.sessionFileSnapshot = rememberedWrite.snapshot;
+    if (rememberedWrite.verifiedWrite) {
+      publishRememberedSessionFileSnapshot(this.sessionFile, rememberedWrite.snapshot);
+    }
   }
 
   isPersisted(): boolean {
@@ -1287,7 +1317,11 @@ export class SessionManager {
     if (!this.flushed) {
       const content = writeJsonlEntriesSync(this.sessionFile, this.fileEntries);
       this.flushed = true;
-      this.sessionFileSnapshot = rememberWrittenSessionEntries(this.sessionFile, content);
+      const rememberedWrite = rememberWrittenSessionEntries(this.sessionFile, content);
+      this.sessionFileSnapshot = rememberedWrite.snapshot;
+      if (rememberedWrite.verifiedWrite) {
+        publishRememberedSessionFileSnapshot(this.sessionFile, rememberedWrite.snapshot);
+      }
     } else {
       // Serialize before taking the prefix snapshot. Custom toJSON methods are
       // user code and can mutate the transcript; the cache must validate the
@@ -1304,13 +1338,17 @@ export class SessionManager {
       const serializedAppend = appendSerializedJsonlEntrySync(this.sessionFile, serializedEntry, {
         prefixNewline: sessionFileNeedsAppendSeparator(this.sessionFile, beforeAppendSnapshot),
       });
-      this.sessionFileSnapshot = rememberAppendedSessionEntry(
+      const rememberedAppend = rememberAppendedSessionEntry(
         this.sessionFile,
         this.sessionFileSnapshot,
         beforeAppendSnapshot,
         serializedAppend,
         cacheOwnedAppend,
       );
+      this.sessionFileSnapshot = rememberedAppend.snapshot;
+      if (rememberedAppend.cacheAdvanced) {
+        publishRememberedSessionFileSnapshot(this.sessionFile, rememberedAppend.snapshot);
+      }
     }
   }
 
@@ -1322,11 +1360,15 @@ export class SessionManager {
    * snapshot-mismatch branch in rememberAppendedSessionEntry, drops the warm
    * cache, and the next open reparses the whole transcript.
    */
-  syncSnapshotAfterHeaderRewrite(): void {
+  syncSnapshotAfterHeaderRewrite(expectedContent?: string): void {
     if (!this.sessionFile) {
       return;
     }
-    this.sessionFileSnapshot = rememberWrittenSessionEntries(this.sessionFile);
+    const rememberedWrite = rememberWrittenSessionEntries(this.sessionFile, expectedContent);
+    this.sessionFileSnapshot = rememberedWrite.snapshot;
+    if (rememberedWrite.verifiedWrite) {
+      publishRememberedSessionFileSnapshot(this.sessionFile, rememberedWrite.snapshot);
+    }
   }
 
   private appendEntry(entry: SessionEntry): void {

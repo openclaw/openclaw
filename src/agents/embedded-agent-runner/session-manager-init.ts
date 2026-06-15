@@ -58,7 +58,7 @@ export async function prepareSessionManagerForRun(params: {
     labelsById?: Map<string, unknown>;
     leafId?: string | null;
     wasRecoveredFromCorruptHeader?: () => boolean;
-    syncSnapshotAfterHeaderRewrite?: () => void;
+    syncSnapshotAfterHeaderRewrite?: (expectedContent?: string) => void;
   };
 
   const header = sm.fileEntries.find((e): e is SessionHeaderEntry => e.type === "session");
@@ -80,11 +80,15 @@ export async function prepareSessionManagerForRun(params: {
       header.cwd = params.cwd;
       sm.sessionId = params.sessionId;
       sm.cwd = params.cwd;
-      await writeJsonlLines(params.sessionFile, sm.fileEntries.map(serializeJsonlLine), {
-        mode: 0o600,
-      });
+      const content = await writeJsonlLines(
+        params.sessionFile,
+        sm.fileEntries.map(serializeJsonlLine),
+        {
+          mode: 0o600,
+        },
+      );
       sm.flushed = true;
-      sm.syncSnapshotAfterHeaderRewrite?.();
+      sm.syncSnapshotAfterHeaderRewrite?.(content);
       return;
     }
 
@@ -114,10 +118,14 @@ export async function prepareSessionManagerForRun(params: {
       sm.flushed = true;
       return;
     }
-    await writeJsonlLines(params.sessionFile, sm.fileEntries.map(serializeJsonlLine), {
-      mode: 0o600,
-    });
+    const content = await writeJsonlLines(
+      params.sessionFile,
+      sm.fileEntries.map(serializeJsonlLine),
+      {
+        mode: 0o600,
+      },
+    );
     sm.flushed = true;
-    sm.syncSnapshotAfterHeaderRewrite?.();
+    sm.syncSnapshotAfterHeaderRewrite?.(content);
   }
 }

@@ -1133,6 +1133,37 @@ describe("embedded attempt session lock lifecycle", () => {
     expect(controller.canAdvanceSessionEntryCache(snapshot)).toBe(false);
   });
 
+  it("publishes an exact owned snapshot only while the write lock is active", async () => {
+    const sessionFile = await createTempSessionFile();
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: vi.fn(async () => ({
+        release: vi.fn(async () => {}),
+      })),
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+    const readSnapshot = async () => {
+      const stat = await fs.stat(sessionFile, { bigint: true });
+      return {
+        dev: stat.dev,
+        ino: stat.ino,
+        size: stat.size,
+        mtimeNs: stat.mtimeNs,
+        ctimeNs: stat.ctimeNs,
+      };
+    };
+    const initialSnapshot = await readSnapshot();
+
+    expect(controller.publishOwnedSessionFileSnapshot(initialSnapshot)).toBe(false);
+    await controller.withSessionWriteLock(async () => {
+      expect(controller.publishOwnedSessionFileSnapshot(initialSnapshot)).toBe(true);
+      await fs.appendFile(sessionFile, '{"type":"message","id":"owned"}\n', "utf8");
+      expect(controller.publishOwnedSessionFileSnapshot(initialSnapshot)).toBe(false);
+      expect(controller.publishOwnedSessionFileSnapshot(await readSnapshot())).toBe(true);
+    });
+    expect(controller.publishOwnedSessionFileSnapshot(await readSnapshot())).toBe(false);
+    await controller.dispose();
+  });
+
   it("publishes only an unchanged repair-validated snapshot while retaining the lock", async () => {
     const sessionFile = await createTempSessionFile();
     const acquireSessionWriteLockLocal = vi.fn(async () => ({

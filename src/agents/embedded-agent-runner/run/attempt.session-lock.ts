@@ -661,6 +661,7 @@ export class EmbeddedAttemptSessionTakeoverError extends Error {
 
 export type EmbeddedAttemptSessionLockController = {
   canAdvanceSessionEntryCache(snapshot: OwnedSessionTranscriptCacheSnapshot): boolean;
+  publishOwnedSessionFileSnapshot(snapshot: OwnedSessionTranscriptCacheSnapshot): boolean;
   publishValidatedSessionFileSnapshot(snapshot: OwnedSessionTranscriptCacheSnapshot): boolean;
   readTrustedCurrentSessionFileSnapshot(): Promise<TrustedSessionFileSnapshot | undefined>;
   releaseForPrompt(): Promise<void>;
@@ -1055,6 +1056,23 @@ export async function createEmbeddedAttemptSessionLockController(params: {
         isTrustedSessionFileState(sessionFileFenceKey, fingerprint)
       );
     },
+    publishOwnedSessionFileSnapshot(snapshot: OwnedSessionTranscriptCacheSnapshot): boolean {
+      if (takeoverDetected || activeWriteLock.getStore()?.active !== true) {
+        return false;
+      }
+      const fingerprint: SessionFileFingerprint = { exists: true, ...snapshot };
+      const current = readSessionFileFingerprintSync(params.lockOptions.sessionFile);
+      if (!sameSessionFileFingerprint(fingerprint, current)) {
+        return false;
+      }
+      const generation = recordOwnedSessionFileWrite(sessionFileFenceKey, current);
+      if (fenceActive) {
+        fenceFingerprint = current;
+        fenceSnapshot = { fingerprint: current };
+        fenceGeneration = generation;
+      }
+      return true;
+    },
     publishValidatedSessionFileSnapshot(snapshot: OwnedSessionTranscriptCacheSnapshot): boolean {
       if (takeoverDetected || !heldLock || heldLockDraining) {
         return false;
@@ -1232,6 +1250,7 @@ export function installPromptSubmissionLockRelease(params: {
     options?: SessionWriteLockRunOptions,
   ) => Promise<T>;
   canAdvanceSessionEntryCache?: (snapshot: OwnedSessionTranscriptCacheSnapshot) => boolean;
+  publishSessionFileSnapshot?: (snapshot: OwnedSessionTranscriptCacheSnapshot) => boolean;
 }): void {
   const agent = (params.session as SessionWithAgentPrompt).agent;
   if (typeof agent?.streamFn !== "function") {
@@ -1253,6 +1272,7 @@ export function installPromptSubmissionLockRelease(params: {
             sessionKey: params.sessionKey,
             withSessionWriteLock: params.withSessionWriteLock,
             canAdvanceSessionEntryCache: params.canAdvanceSessionEntryCache,
+            publishSessionFileSnapshot: params.publishSessionFileSnapshot,
           },
           async () => await originalStreamFn(...args),
         );

@@ -4,7 +4,7 @@ import { writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import { prepareSessionManagerForRun } from "../embedded-agent-runner/session-manager-init.js";
 import { repairSessionFileIfNeeded } from "../session-file-repair.js";
@@ -196,27 +196,38 @@ describe("SessionManager.open", () => {
       expect(parseCount).toBe(0);
 
       const sessionManager = SessionManager.open(sessionFile, dir, dir);
+      let trustedSnapshot = await readTrustedRepairSnapshot(sessionFile);
       let cacheAdvanceChecks = 0;
+      let snapshotPublications = 0;
       await withOwnedSessionTranscriptWrites(
         {
           sessionFile,
-          canAdvanceSessionEntryCache: () => {
+          canAdvanceSessionEntryCache: (snapshot) => {
             cacheAdvanceChecks += 1;
+            expect(snapshot).toEqual(trustedSnapshot);
+            return true;
+          },
+          publishSessionFileSnapshot: (snapshot) => {
+            snapshotPublications += 1;
+            trustedSnapshot = snapshot;
             return true;
           },
           withSessionWriteLock: async (run) => await run(),
         },
         async () => {
           sessionManager.appendMessage(secondMessage);
+          sessionManager.appendMessage(buildAssistantMessage("message 3"));
         },
       );
-      expect(cacheAdvanceChecks).toBe(1);
+      expect(cacheAdvanceChecks).toBe(2);
+      expect(snapshotPublications).toBe(2);
       const persistedEntries = (await fs.readFile(sessionFile, "utf8"))
         .trim()
         .split("\n")
         .map((line) => originalParse(line) as { type: string });
       expect(persistedEntries.map((entry) => entry.type)).toEqual([
         "session",
+        "message",
         "message",
         "message",
       ]);
@@ -226,6 +237,7 @@ describe("SessionManager.open", () => {
       expect(reopened.getEntries().map((entry) => readMessageContent(entry))).toEqual([
         "message 1",
         "message 2",
+        "message 3",
       ]);
       expect(parseCount).toBe(0);
     } finally {
@@ -286,6 +298,7 @@ describe("SessionManager.open", () => {
       {
         sessionFile,
         canAdvanceSessionEntryCache: () => true,
+        publishSessionFileSnapshot: () => true,
         withSessionWriteLock: async (run) => await run(),
       },
       async () => {
@@ -333,6 +346,7 @@ describe("SessionManager.open", () => {
       {
         sessionFile,
         canAdvanceSessionEntryCache: () => true,
+        publishSessionFileSnapshot: () => true,
         withSessionWriteLock: async (run) => await run(),
       },
       async () => {
@@ -378,6 +392,7 @@ describe("SessionManager.open", () => {
       {
         sessionFile,
         canAdvanceSessionEntryCache: () => true,
+        publishSessionFileSnapshot: () => true,
         withSessionWriteLock: async (run) => await run(),
       },
       async () => {
@@ -427,6 +442,7 @@ describe("SessionManager.open", () => {
       {
         sessionFile,
         canAdvanceSessionEntryCache: () => false,
+        publishSessionFileSnapshot: () => true,
         withSessionWriteLock: async (run) => await run(),
       },
       async () => {
@@ -467,6 +483,7 @@ describe("SessionManager.open", () => {
       {
         sessionFile,
         canAdvanceSessionEntryCache: () => true,
+        publishSessionFileSnapshot: () => true,
         withSessionWriteLock: async (run) => await run(),
       },
       async () => {
@@ -633,6 +650,38 @@ describe("SessionManager.open", () => {
     await fs.writeFile(sessionFile, replacementContent, "utf8");
     sessionManager.syncSnapshotAfterHeaderRewrite();
 
+    expect(
+      SessionManager.open(sessionFile, dir, dir)
+        .getEntries()
+        .map((entry) => readMessageContent(entry)),
+    ).toEqual(["message 2"]);
+  });
+
+  it("does not publish a header rewrite snapshot when the expected bytes do not match", async () => {
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "session.jsonl");
+    const header = buildSessionHeader(dir);
+    const originalContent = `${JSON.stringify(header)}\n${JSON.stringify(buildMessageEntry(1, null))}\n`;
+    const replacementContent = `${JSON.stringify(header)}\n${JSON.stringify(
+      buildMessageEntry(2, null),
+    )}\n`;
+    await fs.writeFile(sessionFile, originalContent, "utf8");
+
+    const sessionManager = SessionManager.open(sessionFile, dir, dir);
+    const publishSessionFileSnapshot = vi.fn(() => true);
+    await withOwnedSessionTranscriptWrites(
+      {
+        sessionFile,
+        publishSessionFileSnapshot,
+        withSessionWriteLock: async (run) => await run(),
+      },
+      async () => {
+        await fs.writeFile(sessionFile, replacementContent, "utf8");
+        sessionManager.syncSnapshotAfterHeaderRewrite(originalContent);
+      },
+    );
+
+    expect(publishSessionFileSnapshot).not.toHaveBeenCalled();
     expect(
       SessionManager.open(sessionFile, dir, dir)
         .getEntries()
@@ -827,26 +876,36 @@ describe("SessionManager.open", () => {
     expect(SessionManager.open(sessionFile, dir, dir).getSessionId()).toBe("original-session");
     const sessionManager = SessionManager.open(sessionFile, dir, dir);
 
-    await prepareSessionManagerForRun({
-      sessionManager,
-      sessionFile,
-      hadSessionFile: true,
-      sessionId: "run-session",
-      cwd: dir,
-    });
-
-    // First append after the embedded header rewrite. Before the fix the stale
-    // snapshot made this drop the warm cache.
+    let trustedSnapshot = await readTrustedRepairSnapshot(sessionFile);
+    let snapshotPublications = 0;
     await withOwnedSessionTranscriptWrites(
       {
         sessionFile,
-        canAdvanceSessionEntryCache: () => true,
+        canAdvanceSessionEntryCache: (snapshot) => {
+          expect(snapshot).toEqual(trustedSnapshot);
+          return true;
+        },
+        publishSessionFileSnapshot: (snapshot) => {
+          snapshotPublications += 1;
+          trustedSnapshot = snapshot;
+          return true;
+        },
         withSessionWriteLock: async (run) => await run(),
       },
       async () => {
+        await prepareSessionManagerForRun({
+          sessionManager,
+          sessionFile,
+          hadSessionFile: true,
+          sessionId: "run-session",
+          cwd: dir,
+        });
+        // First append after the embedded header rewrite. Before the fix the
+        // stale snapshot made this drop the warm cache.
         sessionManager.appendMessage(buildAssistantMessage("after rewrite"));
       },
     );
+    expect(snapshotPublications).toBe(2);
 
     const originalParse = JSON.parse;
     let parseCount = 0;
