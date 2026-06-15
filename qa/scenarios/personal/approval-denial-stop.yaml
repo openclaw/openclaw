@@ -7,6 +7,7 @@ scenario:
   coverage:
     primary:
       - personal.approval-denial
+      - dangerous-tool-safeguards
     secondary:
       - runtime.approvals
       - tools.safety
