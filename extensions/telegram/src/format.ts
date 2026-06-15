@@ -8,6 +8,7 @@ import {
   markdownToIRWithMeta,
   type MarkdownLinkSpan,
   type MarkdownIR,
+  type MarkdownTableCell,
   type MarkdownTableMeta,
   renderMarkdownIRChunksWithinLimit,
   renderMarkdownWithMarkers,
@@ -732,12 +733,14 @@ function renderTelegramRichHtmlTable(table: MarkdownTableMeta): string {
   if (columnCount > TELEGRAM_RICH_TEXT_TABLE_COLUMN_LIMIT) {
     return renderTelegramRichHtmlTableFallback(table);
   }
-  const renderCell = (tag: "td" | "th", value: string | undefined) =>
-    `<${tag}>${escapeHtml(value ?? "")}</${tag}>`;
+  const renderCellValue = (cell: MarkdownTableCell | undefined) =>
+    cell ? renderTelegramHtml(cell) : "";
+  const renderCell = (tag: "td" | "th", value: MarkdownTableCell | undefined) =>
+    `<${tag}>${renderCellValue(value)}</${tag}>`;
   const head = table.headers.length
-    ? `<thead><tr>${table.headers.map((cell) => renderCell("th", cell)).join("")}</tr></thead>`
+    ? `<thead><tr>${table.headerCells.map((cell) => renderCell("th", cell)).join("")}</tr></thead>`
     : "";
-  const bodyRows = table.rows
+  const bodyRows = table.rowCells
     .map(
       (row) =>
         `<tr>${Array.from({ length: columnCount }, (_value, index) => renderCell("td", row[index])).join("")}</tr>`,
@@ -800,7 +803,7 @@ type TelegramHtmlTag = {
   closeTag: string;
 };
 
-const TELEGRAM_SELF_CLOSING_HTML_TAGS = new Set(["br"]);
+const TELEGRAM_SELF_CLOSING_HTML_TAGS = TELEGRAM_VOID_HTML_TAGS;
 
 function buildTelegramHtmlOpenPrefix(tags: TelegramHtmlTag[]): string {
   return tags.map((tag) => tag.openTag).join("");

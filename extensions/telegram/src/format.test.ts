@@ -139,6 +139,15 @@ describe("markdownToTelegramHtml", () => {
     expect(markdownToTelegramRichHtml(table(21))).toContain("<pre><code>");
   });
 
+  it("preserves inline markdown inside rich table cells", () => {
+    const html = markdownToTelegramRichHtml(
+      "| Name | Link |\n| --- | --- |\n| **API** | [docs](https://example.com) |",
+    );
+
+    expect(html).toContain("<td><b>API</b></td>");
+    expect(html).toContain('<td><a href="https://example.com">docs</a></td>');
+  });
+
   it("normalizes raw code language HTML without leaking tags", () => {
     const commandBlock = '<code class="language-text">/queue followup debounce:0\n</code>';
 
@@ -296,6 +305,16 @@ describe("markdownToTelegramHtml", () => {
     expect(chunks.every((chunk) => chunk.length <= 4000)).toBe(true);
     expect(chunks[0]).toMatch(/^<b>[\s\S]*<\/b>$/);
     expect(chunks[1]).toMatch(/^<b>[\s\S]*<\/b>$/);
+  });
+
+  it("does not synthesize closing tags for rich void tags when chunking html", () => {
+    const chunks = splitTelegramHtmlChunks(
+      `<figure><img src="https://example.com/a.jpg"></figure><ul><li><input type="checkbox" checked>${"A".repeat(80)}</li></ul>`,
+      64,
+    );
+
+    expect(chunks.join("")).not.toContain("</img>");
+    expect(chunks.join("")).not.toContain("</input>");
   });
 
   it("fails loudly when a leading entity cannot fit inside a chunk", () => {

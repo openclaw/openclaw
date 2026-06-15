@@ -76,8 +76,16 @@ export type MarkdownTableData = {
   rows: string[][];
 };
 
+export type MarkdownTableCell = {
+  text: string;
+  styles: MarkdownStyleSpan[];
+  links: MarkdownLinkSpan[];
+};
+
 export type MarkdownTableMeta = MarkdownTableData & {
   placeholderOffset: number;
+  headerCells: MarkdownTableCell[];
+  rowCells: MarkdownTableCell[][];
 };
 
 type OpenStyle = {
@@ -93,11 +101,7 @@ type RenderTarget = {
   linkStack: LinkState[];
 };
 
-type TableCell = {
-  text: string;
-  styles: MarkdownStyleSpan[];
-  links: MarkdownLinkSpan[];
-};
+type TableCell = MarkdownTableCell;
 
 type TableState = {
   headers: TableCell[];
@@ -485,9 +489,13 @@ function collectTableBlock(state: RenderState) {
   if (!state.table) {
     return;
   }
+  const headerCells = state.table.headers.map(trimCell);
+  const rowCells = state.table.rows.map((row) => row.map(trimCell));
   state.collectedTables.push({
-    headers: state.table.headers.map((cell) => trimCell(cell).text),
-    rows: state.table.rows.map((row) => row.map((cell) => trimCell(cell).text)),
+    headers: headerCells.map((cell) => cell.text),
+    rows: rowCells.map((row) => row.map((cell) => cell.text)),
+    headerCells,
+    rowCells,
     placeholderOffset: state.text.length,
   });
 }
