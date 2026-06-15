@@ -885,7 +885,7 @@ export const dispatchTelegramMessage = async ({
   });
   const renderStreamText = (text: string) => ({
     text,
-    richMessage: buildTelegramRichMarkdown(text),
+    richMessage: buildTelegramRichMarkdown(text, { tableMode }),
   });
   const accountBlockStreamingEnabled =
     resolveChannelStreamingBlockEnabled(telegramCfg) ??

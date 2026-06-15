@@ -14,6 +14,8 @@ type LinkState = {
   labelStart: number;
 };
 
+const OPEN_MARKDOWN_HTML_TAG_PATTERN = /<\/?[a-zA-Z][a-zA-Z0-9-]*\b[^<>]*$/;
+
 type RenderEnv = {
   listStack: ListState[];
 };
@@ -385,6 +387,17 @@ function handleLinkClose(state: RenderState) {
   target.links.push({ start, end, href });
 }
 
+function isInsideMarkdownHtmlTag(text: string): boolean {
+  const openTagStart = text.lastIndexOf("<");
+  if (openTagStart === -1) {
+    return false;
+  }
+  return (
+    text.lastIndexOf(">") < openTagStart &&
+    OPEN_MARKDOWN_HTML_TAG_PATTERN.test(text.slice(openTagStart))
+  );
+}
+
 function initTableState(): TableState {
   return {
     headers: [],
@@ -678,8 +691,8 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
         }
         break;
       case "link_open": {
-        const href = getAttr(token, "href") ?? "";
         const target = resolveRenderTarget(state);
+        const href = isInsideMarkdownHtmlTag(target.text) ? "" : (getAttr(token, "href") ?? "");
         target.linkStack.push({ href, labelStart: target.text.length });
         break;
       }
