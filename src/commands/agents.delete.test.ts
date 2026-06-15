@@ -31,6 +31,11 @@ const gatewayMocks = vi.hoisted(() => ({
   isGatewayTransportError: vi.fn(),
 }));
 
+const sessionStateMigrationMocks = vi.hoisted(() => ({
+  ensureSessionStateMigratedForCommand: vi.fn(async () => {}),
+  resetSessionStateMigratedForCommandForTest: vi.fn(),
+}));
+
 vi.mock("../config/config.js", async () => ({
   ...(await vi.importActual<typeof import("../config/config.js")>("../config/config.js")),
   readConfigFileSnapshot: configMocks.readConfigFileSnapshot,
@@ -64,8 +69,21 @@ vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: processMocks.runCommandWithTimeout,
 }));
 
+vi.mock("./session-state-migration.js", async () => ({
+  ...(await vi.importActual<typeof import("./session-state-migration.js")>(
+    "./session-state-migration.js",
+  )),
+  ensureSessionStateMigratedForCommand:
+    sessionStateMigrationMocks.ensureSessionStateMigratedForCommand,
+  resetSessionStateMigratedForCommandForTest:
+    sessionStateMigrationMocks.resetSessionStateMigratedForCommandForTest,
+}));
+
 import { agentsDeleteCommand } from "./agents.commands.delete.js";
-import { resetSessionStateMigratedForCommandForTest } from "./session-state-migration.js";
+import {
+  ensureExplicitSessionStoreMigratedForCommand,
+  resetSessionStateMigratedForCommandForTest,
+} from "./session-state-migration.js";
 
 const runtime = createTestRuntime();
 
@@ -130,6 +148,8 @@ describe("agents delete command", () => {
     gatewayMocks.isGatewayTransportError.mockImplementation(
       (error: unknown) => error instanceof Error && error.name === "GatewayTransportError",
     );
+    sessionStateMigrationMocks.ensureSessionStateMigratedForCommand.mockClear();
+    sessionStateMigrationMocks.resetSessionStateMigratedForCommandForTest.mockClear();
     resetSessionStateMigratedForCommandForTest();
     runtime.log.mockClear();
     runtime.error.mockClear();
@@ -214,6 +234,9 @@ describe("agents delete command", () => {
 
       expect(runtime.exit).not.toHaveBeenCalled();
       expect(gatewayMocks.callGateway).toHaveBeenCalledOnce();
+      expect(sessionStateMigrationMocks.ensureSessionStateMigratedForCommand).toHaveBeenCalledWith(
+        cfg,
+      );
       expect(configMocks.replaceConfigFile).toHaveBeenCalledOnce();
       const output = readJsonLogs()[0];
       expect(output?.agentId).toBe("ops");
@@ -312,6 +335,7 @@ describe("agents delete command", () => {
         sourceConfig: cfg,
         resolved: cfg,
       });
+      await ensureExplicitSessionStoreMigratedForCommand(storePath);
 
       await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
 

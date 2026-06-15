@@ -21,6 +21,22 @@ import * as taskRegistryMaintenance from "../tasks/task-registry.maintenance.js"
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
+
+const sessionStateMigrationMocks = vi.hoisted(() => ({
+  ensureSessionStateMigratedForCommand: vi.fn(async () => {}),
+  resetSessionStateMigratedForCommandForTest: vi.fn(),
+}));
+
+vi.mock("./session-state-migration.js", async () => ({
+  ...(await vi.importActual<typeof import("./session-state-migration.js")>(
+    "./session-state-migration.js",
+  )),
+  ensureSessionStateMigratedForCommand:
+    sessionStateMigrationMocks.ensureSessionStateMigratedForCommand,
+  resetSessionStateMigratedForCommandForTest:
+    sessionStateMigrationMocks.resetSessionStateMigratedForCommandForTest,
+}));
+
 import { tasksAuditCommand, tasksMaintenanceCommand, tasksShowCommand } from "./tasks.js";
 
 function createRuntime(): RuntimeEnv {
@@ -103,6 +119,8 @@ async function withTaskCommandStateDir(
 
 describe("tasks commands", () => {
   beforeEach(() => {
+    sessionStateMigrationMocks.ensureSessionStateMigratedForCommand.mockClear();
+    sessionStateMigrationMocks.resetSessionStateMigratedForCommandForTest.mockClear();
     vi.useRealTimers();
   });
 
