@@ -340,21 +340,30 @@ function normalizeApprovalDecision(value: string): ExecApprovalReplyDecision | n
   return null;
 }
 
+const APPROVAL_ID_LINE_RE = /^\s*ID:\s*([A-Za-z0-9][A-Za-z0-9._:-]*)\s*$/i;
+const APPROVE_COMMAND_LINE_RE = /\/approve(?:@[^\s]+)?\s+([A-Za-z0-9][A-Za-z0-9._:-]*)\s+(.+)$/i;
+
 export function extractSignalApprovalPromptBinding(text: string): {
   approvalId: string;
   allowedDecisions: ExecApprovalReplyDecision[];
 } | null {
+  const lines = text.split(/\r?\n/);
+  // Only canonical approval prompts carry the SDK-emitted "ID: <approvalId>"
+  // header. Bare `/approve` snippets in ordinary model output must not become
+  // native reaction targets for a pending approval.
+  const idHeaderMatch = lines
+    .map((line) => line.match(APPROVAL_ID_LINE_RE))
+    .find((match): match is RegExpMatchArray => Boolean(match));
+  if (!idHeaderMatch) {
+    return null;
+  }
+  const approvalId = idHeaderMatch[1];
   const allowedDecisions: ExecApprovalReplyDecision[] = [];
-  let approvalId = "";
-  for (const line of text.split(/\r?\n/)) {
-    const match = line.match(/\/approve(?:@[^\s]+)?\s+([A-Za-z0-9][A-Za-z0-9._:-]*)\s+(.+)$/i);
-    if (!match) {
+  for (const line of lines) {
+    const match = line.match(APPROVE_COMMAND_LINE_RE);
+    if (!match || match[1] !== approvalId) {
       continue;
     }
-    if (approvalId && match[1] !== approvalId) {
-      continue;
-    }
-    approvalId ||= match[1];
     for (const decisionText of match[2].split(/[\s|,]+/)) {
       const decision = normalizeApprovalDecision(decisionText);
       if (decision && !allowedDecisions.includes(decision)) {
@@ -362,7 +371,7 @@ export function extractSignalApprovalPromptBinding(text: string): {
       }
     }
   }
-  return approvalId && allowedDecisions.length > 0 ? { approvalId, allowedDecisions } : null;
+  return allowedDecisions.length > 0 ? { approvalId, allowedDecisions } : null;
 }
 
 function buildTargetRoute(params: {

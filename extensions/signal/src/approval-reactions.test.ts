@@ -135,6 +135,83 @@ describe("Signal approval reactions", () => {
     });
   });
 
+  it("does not register target-mode outbound approval snippets without canonical id headers", () => {
+    const cfg = {
+      channels: {
+        signal: {
+          allowFrom: ["+15551230000"],
+        },
+      },
+      approvals: {
+        plugin: {
+          enabled: true,
+          mode: "targets" as const,
+          targets: [{ channel: "signal", to: "+15551230000" }],
+        },
+      },
+    };
+    const text = "Use this command later:\nReply with: /approve plugin:abc allow-once|deny";
+
+    expect(
+      appendSignalApprovalReactionHintForOutboundMessage({
+        cfg,
+        accountId: "default",
+        to: "+15551230000",
+        text,
+        targetAuthor: "+15550009999",
+      }),
+    ).toBe(text);
+    expect(
+      registerSignalApprovalReactionTargetForOutboundMessage({
+        cfg,
+        accountId: "default",
+        to: "+15551230000",
+        messageId: "1700000000010",
+        text,
+        targetAuthor: "+15550009999",
+      }),
+    ).toBe(false);
+  });
+
+  it("does not register target-mode outbound approval prompts with mismatched ids", () => {
+    const cfg = {
+      channels: {
+        signal: {
+          allowFrom: ["+15551230000"],
+        },
+      },
+      approvals: {
+        plugin: {
+          enabled: true,
+          mode: "targets" as const,
+          targets: [{ channel: "signal", to: "+15551230000" }],
+        },
+      },
+    };
+    const text =
+      "Plugin approval required\nID: plugin:abc\n\nReply with: /approve plugin:def allow-once|deny";
+
+    expect(
+      appendSignalApprovalReactionHintForOutboundMessage({
+        cfg,
+        accountId: "default",
+        to: "+15551230000",
+        text,
+        targetAuthor: "+15550009999",
+      }),
+    ).toBe(text);
+    expect(
+      registerSignalApprovalReactionTargetForOutboundMessage({
+        cfg,
+        accountId: "default",
+        to: "+15551230000",
+        messageId: "1700000000011",
+        text,
+        targetAuthor: "+15550009999",
+      }),
+    ).toBe(false);
+  });
+
   it("keeps target-mode outbound prompts manual when the target route is disabled", () => {
     const text =
       "Plugin approval required\nID: plugin:abc\n\nReply with: /approve plugin:abc allow-once|deny";
