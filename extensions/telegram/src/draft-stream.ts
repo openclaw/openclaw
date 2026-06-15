@@ -6,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
+import { renderTelegramHtmlText, telegramHtmlToPlainTextFallback } from "./format.js";
 import {
   isRecoverableTelegramNetworkError,
   isSafeToRetrySendError,
@@ -17,10 +18,13 @@ import {
 import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
 import { normalizeTelegramReplyToMessageId } from "./outbound-params.js";
 import {
-  renderTelegramHtmlText,
-  telegramHtmlToPlainTextFallback,
-} from "./format.js";
-import type { TelegramInputRichMessage } from "./rich-message.js";
+  buildTelegramRichMarkdown,
+  getTelegramRichRawApi,
+  isTelegramRichMessageWithinStructuralLimits,
+  TELEGRAM_RICH_TEXT_LIMIT,
+  type TelegramInputRichMessage,
+  type TelegramSendRichMessageParams,
+} from "./rich-message.js";
 
 const TELEGRAM_STREAM_MAX_CHARS = TELEGRAM_TEXT_CHUNK_LIMIT;
 const DEFAULT_THROTTLE_MS = 1000;
@@ -122,20 +126,32 @@ function telegramDraftPreviewKey(preview: TelegramDraftPreview): string {
   });
 }
 
+function telegramDraftRichPayloadLength(preview: TelegramDraftPreview): number {
+  const sourceMessage = preview.richMessage ?? { markdown: preview.text };
+  if (!isTelegramRichMessageWithinStructuralLimits(sourceMessage)) {
+    return TELEGRAM_RICH_TEXT_LIMIT + 1;
+  }
+  const richMessage = preview.richMessage ?? buildTelegramRichMarkdown(preview.text);
+  return richMessage.html?.length ?? richMessage.markdown?.length ?? 0;
+}
+
 function findTelegramDraftChunkLength(
   text: string,
   maxChars: number,
   renderText: ((text: string) => TelegramDraftPreview) | undefined,
+  richMessages: boolean,
 ): number {
   let best = 0;
   let low = 1;
   let high = text.length;
   while (low <= high) {
     const mid = Math.floor((low + high) / 2);
-    const renderedText = normalizeTelegramDraftTransportPreview(
-      renderTelegramDraftPreview(text.slice(0, mid), renderText),
-    ).text.trimEnd();
-    if (renderedText && renderedText.length <= maxChars) {
+    const preview = renderTelegramDraftPreview(text.slice(0, mid), renderText);
+    const renderedText = normalizeTelegramDraftTransportPreview(preview).text.trimEnd();
+    const payloadLength = richMessages
+      ? telegramDraftRichPayloadLength(preview)
+      : renderedText.length;
+    if (renderedText && payloadLength <= maxChars) {
       best = mid;
       low = mid + 1;
     } else {
@@ -151,6 +167,7 @@ export function createTelegramDraftStream(params: {
   maxChars?: number;
   thread?: TelegramThreadSpec | null;
   replyToMessageId?: number;
+  richMessages?: boolean;
   throttleMs?: number;
   /** Minimum chars before sending first message (debounce for push notifications) */
   minInitialChars?: number;
@@ -161,16 +178,25 @@ export function createTelegramDraftStream(params: {
   log?: (message: string) => void;
   warn?: (message: string) => void;
 }): TelegramDraftStream {
-  const maxChars = Math.min(
-    params.maxChars ?? TELEGRAM_STREAM_MAX_CHARS,
-    TELEGRAM_STREAM_MAX_CHARS,
-  );
+  const richMessages = params.richMessages === true;
+  const transportLimit = richMessages ? TELEGRAM_RICH_TEXT_LIMIT : TELEGRAM_STREAM_MAX_CHARS;
+  const maxChars = Math.min(params.maxChars ?? transportLimit, transportLimit);
   const throttleMs = Math.max(250, params.throttleMs ?? DEFAULT_THROTTLE_MS);
   const minInitialChars = params.minInitialChars;
   const chatId = params.chatId;
   const threadParams = buildTelegramThreadParams(params.thread);
   const replyToMessageId = normalizeTelegramReplyToMessageId(params.replyToMessageId);
   const sendMessageParams =
+    replyToMessageId != null
+      ? {
+          ...threadParams,
+          reply_parameters: {
+            message_id: replyToMessageId,
+            allow_sending_without_reply: true,
+          },
+        }
+      : (threadParams ?? {});
+  const richMessageParams: Omit<TelegramSendRichMessageParams, "chat_id" | "rich_message"> =
     replyToMessageId != null
       ? {
           ...threadParams,
@@ -199,6 +225,13 @@ export function createTelegramDraftStream(params: {
     sendGeneration: number;
   };
   const sendRenderedMessage = async (preview: TelegramDraftPreview) => {
+    if (richMessages) {
+      return await getTelegramRichRawApi(params.api).sendRichMessage({
+        chat_id: chatId,
+        rich_message: preview.richMessage ?? buildTelegramRichMarkdown(preview.text),
+        ...richMessageParams,
+      });
+    }
     const transportPreview = normalizeTelegramDraftTransportPreview(preview);
     const sendPlain = async () =>
       await params.api.sendMessage(chatId, transportPreview.plainText, sendMessageParams);
@@ -224,6 +257,14 @@ export function createTelegramDraftStream(params: {
     const transportPreview = normalizeTelegramDraftTransportPreview(preview);
     if (typeof streamMessageId === "number") {
       streamVisibleSinceMs ??= Date.now();
+      if (richMessages) {
+        await getTelegramRichRawApi(params.api).editMessageText({
+          chat_id: chatId,
+          message_id: streamMessageId,
+          rich_message: preview.richMessage ?? buildTelegramRichMarkdown(preview.text),
+        });
+        return true;
+      }
       if (transportPreview.parseMode === "HTML") {
         try {
           await params.api.editMessageText(chatId, streamMessageId, transportPreview.text, {
@@ -271,11 +312,9 @@ export function createTelegramDraftStream(params: {
     streamVisibleSinceMs = visibleSinceMs;
     return true;
   };
-  const stopOversizedPreview = (renderedText: string): false => {
+  const stopOversizedPreview = (payloadLength: number): false => {
     streamState.stopped = true;
-    params.warn?.(
-      `telegram stream preview stopped (text length ${renderedText.length} > ${maxChars})`,
-    );
+    params.warn?.(`telegram stream preview stopped (text length ${payloadLength} > ${maxChars})`);
     return false;
   };
 
@@ -303,20 +342,28 @@ export function createTelegramDraftStream(params: {
         : renderTelegramDraftPreview(currentText, params.renderText);
     const transportPreview = normalizeTelegramDraftTransportPreview(rendered);
     const renderedText = transportPreview.text.trimEnd();
+    const renderedPayloadLength = richMessages
+      ? telegramDraftRichPayloadLength(rendered)
+      : renderedText.length;
     const renderedPreview = { ...rendered, text: renderedText };
     const renderedPreviewKey = telegramDraftPreviewKey(renderedPreview);
     if (!renderedText) {
       return false;
     }
-    if (renderedText.length > maxChars) {
-      const chunkLength = findTelegramDraftChunkLength(currentText, maxChars, params.renderText);
+    if (renderedPayloadLength > maxChars) {
+      const chunkLength = findTelegramDraftChunkLength(
+        currentText,
+        maxChars,
+        params.renderText,
+        richMessages,
+      );
       if (!streamState.final) {
         if (chunkLength > 0) {
           return await sendOrEditStreamMessage(
             trimmed.slice(0, deliveredTextOffset) + currentText.slice(0, chunkLength),
           );
         }
-        return stopOversizedPreview(renderedText);
+        return stopOversizedPreview(renderedPayloadLength);
       }
       if (lastDeliveredText.length > deliveredTextOffset) {
         const supersededMessageId = streamMessageId;
@@ -343,7 +390,7 @@ export function createTelegramDraftStream(params: {
         }
         return await sendOrEditStreamMessage(trimmed);
       }
-      return stopOversizedPreview(renderedText);
+      return stopOversizedPreview(renderedPayloadLength);
     }
     if (renderedPreviewKey === lastSentPreviewKey) {
       return true;

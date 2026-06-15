@@ -598,6 +598,49 @@ describe("createTelegramDraftStream", () => {
     expect(api.raw.editMessageText).not.toHaveBeenCalled();
   });
 
+  it("uses rich send and edit for previews when explicitly enabled", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, { richMessages: true });
+
+    stream.updatePreview({
+      text: "Plan",
+      richMessage: { html: "<h2>Plan</h2><table><tr><td>A</td></tr></table>" },
+    });
+    await stream.flush();
+
+    expect(api.raw.sendRichMessage).toHaveBeenCalledWith({
+      chat_id: 123,
+      rich_message: { html: "<h2>Plan</h2><table><tr><td>A</td></tr></table>" },
+    });
+    expect(api.sendMessage).not.toHaveBeenCalled();
+
+    stream.updatePreview({
+      text: "Plan updated",
+      richMessage: { html: "<h2>Plan updated</h2><table><tr><td>B</td></tr></table>" },
+    });
+    await stream.flush();
+
+    expect(api.raw.editMessageText).toHaveBeenCalledWith({
+      chat_id: 123,
+      message_id: 17,
+      rich_message: { html: "<h2>Plan updated</h2><table><tr><td>B</td></tr></table>" },
+    });
+    expect(api.editMessageText).not.toHaveBeenCalled();
+  });
+
+  it("clamps rich previews to the block limit", async () => {
+    const api = createMockDraftApi();
+    const text = Array.from({ length: 501 }, (_, index) => `paragraph ${index}`).join("\n\n");
+    const stream = createDraftStream(api, { richMessages: true });
+
+    stream.update(text);
+    await stream.flush();
+
+    const richMessage = api.raw.sendRichMessage.mock.calls[0]?.[0]?.rich_message;
+    expect(richMessage?.html).toContain("paragraph 499");
+    expect(richMessage?.html).not.toContain("paragraph 500");
+  });
+
   it("clamps rendered previews to the text-message limit", async () => {
     const api = createMockDraftApi();
     const text = `# Long\n\n${"rich line\n".repeat(600)}`;

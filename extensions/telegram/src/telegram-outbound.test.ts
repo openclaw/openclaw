@@ -1,6 +1,7 @@
+import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-chunking";
 // Telegram tests cover telegram outbound plugin behavior.
 import { describe, expect, it } from "vitest";
-import { markdownToTelegramHtmlChunks, splitTelegramHtmlChunks } from "./format.js";
+import { splitTelegramHtmlChunks } from "./format.js";
 import { telegramOutbound } from "./outbound-adapter.js";
 import { clearTelegramRuntime } from "./runtime.js";
 
@@ -18,14 +19,16 @@ describe("telegramPlugin outbound", () => {
   it("uses static outbound contract when Telegram runtime is uninitialized", () => {
     clearTelegramRuntime();
     const text = `${"hello\n".repeat(1200)}tail`;
-    const expected = markdownToTelegramHtmlChunks(text, 4000);
+    const expected = chunkMarkdownTextWithMode(text, 4000, "length");
 
     expect(telegramOutbound.chunker?.(text, 4000)).toEqual(expected);
     expect(telegramOutbound.deliveryMode).toBe("direct");
     expect(telegramOutbound.chunkerMode).toBe("markdown");
-    expect(telegramOutbound.chunkedTextFormatting).toEqual({ parseMode: "HTML" });
+    expect(telegramOutbound.chunkedTextFormatting).toBeUndefined();
     expect(telegramOutbound.textChunkLimit).toBe(4000);
-    expect(telegramOutbound.presentationCapabilities?.limits?.text?.markdownDialect).toBe("html");
+    expect(telegramOutbound.presentationCapabilities?.limits?.text?.markdownDialect).toBe(
+      "markdown",
+    );
     expect(telegramOutbound.sanitizeText).toBeUndefined();
     expect(telegramOutbound.pollMaxOptions).toBe(10);
   });
@@ -40,7 +43,7 @@ describe("telegramPlugin outbound", () => {
     expect(telegramOutbound.chunker?.(text, 4000)).toEqual([text]);
   });
 
-  it("renders markdown tables according to the requested table mode", () => {
+  it("preserves markdown tables for the configured delivery renderer", () => {
     clearTelegramRuntime();
     const text = ["| Name | Value |", "|------|-------|", "| A | 1 |"].join("\n");
 
@@ -48,9 +51,7 @@ describe("telegramPlugin outbound", () => {
       formatting: { tableMode: "bullets" },
     });
 
-    expect(chunks).toEqual(markdownToTelegramHtmlChunks(text, 4000, { tableMode: "bullets" }));
-    expect(chunks?.[0]).toContain("<b>A</b>");
-    expect(chunks?.[0]).toContain("Value: 1");
+    expect(chunks).toEqual([text]);
   });
 
   it("keeps wide markdown tables as visible text in the HTML text path", () => {

@@ -165,6 +165,11 @@ export type TelegramAccountConfig = {
   dms?: Record<string, DmConfig>;
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
+  /**
+   * Use Telegram Bot API 10.1 rich messages for text sends and edits.
+   * Default: false until Telegram clients render rich messages consistently.
+   */
+  richMessages?: boolean;
   /** Streaming + chunking settings. Prefer this nested shape over legacy flat keys. */
   streaming?: TelegramPreviewStreamingConfig;
   mediaMaxMb?: number;

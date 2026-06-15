@@ -137,6 +137,22 @@ function markdownTable(columns: number): string {
     .join("\n");
 }
 
+function markdownTableWithRows(rows: number): string {
+  return [
+    "| Name | Value |",
+    "| --- | --- |",
+    ...Array.from({ length: rows }, (_, index) => `| row ${index} | ${index} |`),
+  ].join("\n");
+}
+
+function countTelegramRichHtmlBlocks(html: string): number {
+  return (
+    html.match(
+      /<(?:aside|audio|blockquote|details|figure|footer|h[1-6]|hr|img|li|ol|p|pre|table|tg-collage|tg-map|tg-math-block|tg-slideshow|tr|ul|video)\b/gi,
+    )?.length ?? 0
+  );
+}
+
 beforeEach(() => {
   resetPluginStateStoreForTests({ closeDatabase: false });
   installTelegramStateRuntimeForTest();
@@ -917,6 +933,115 @@ describe("sendMessageTelegram", () => {
       parse_mode: "HTML",
     });
     expect(botRawApi.sendRichMessage).not.toHaveBeenCalled();
+  });
+
+  it("sends native rich tables when explicitly enabled", async () => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 45, chat: { id: "123" } });
+    const markdown = markdownTable(3);
+
+    await sendMessageTelegram("123", markdown, {
+      cfg: {
+        channels: {
+          telegram: {
+            richMessages: true,
+            markdown: { tables: "block" },
+          },
+        },
+      },
+      token: "tok",
+    });
+
+    expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
+    const richMessage = botRawApi.sendRichMessage.mock.calls[0]?.[0]?.rich_message;
+    expect(richMessage?.html).toContain("<table>");
+  });
+
+  it.each([
+    {
+      name: "list",
+      text: `<ul>${Array.from({ length: 501 }, (_, index) => `<li>item ${index}</li>`).join("")}</ul>`,
+      textMode: "html" as const,
+      terminalText: "item 500",
+    },
+    {
+      name: "table",
+      text: markdownTableWithRows(501),
+      textMode: "markdown" as const,
+      terminalText: "row 500",
+    },
+  ])("chunks rich $name output at Telegram's block limit", async (testCase) => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 45, chat: { id: "123" } });
+
+    await sendMessageTelegram("123", testCase.text, {
+      cfg: {
+        channels: {
+          telegram: {
+            richMessages: true,
+            markdown: { tables: "block" },
+          },
+        },
+      },
+      token: "tok",
+      textMode: testCase.textMode,
+    });
+
+    expect(botRawApi.sendRichMessage.mock.calls.length).toBeGreaterThan(1);
+    const htmlChunks = botRawApi.sendRichMessage.mock.calls.map(
+      (call) => call[0]?.rich_message.html ?? "",
+    );
+    for (const html of htmlChunks) {
+      expect(countTelegramRichHtmlBlocks(html)).toBeLessThanOrEqual(500);
+    }
+    expect(htmlChunks.join("\n")).toContain(testCase.terminalText);
+  });
+
+  it("chunks rich media at Telegram's attachment limit", async () => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 45, chat: { id: "123" } });
+    const html = Array.from(
+      { length: 51 },
+      (_, index) => `<img src="https://example.com/${index}.png" alt="image ${index}"/>`,
+    ).join("");
+
+    await sendMessageTelegram("123", html, {
+      cfg: { channels: { telegram: { richMessages: true } } },
+      token: "tok",
+      textMode: "html",
+    });
+
+    expect(botRawApi.sendRichMessage.mock.calls.length).toBe(2);
+    for (const call of botRawApi.sendRichMessage.mock.calls) {
+      const richHtml = call[0]?.rich_message.html ?? "";
+      expect(richHtml.match(/<img\b/gi)?.length ?? 0).toBeLessThanOrEqual(50);
+    }
+  });
+
+  it("flattens rich HTML beyond Telegram's nesting limit", async () => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 45, chat: { id: "123" } });
+    const html = `${"<b>".repeat(20)}nested<br>line${"</b>".repeat(20)}`;
+
+    await sendMessageTelegram("123", html, {
+      cfg: { channels: { telegram: { richMessages: true } } },
+      token: "tok",
+      textMode: "html",
+    });
+
+    expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
+    const richHtml = botRawApi.sendRichMessage.mock.calls[0]?.[0]?.rich_message.html ?? "";
+    expect(richHtml.match(/<b>/g)?.length ?? 0).toBe(16);
+    expect(richHtml).toContain("nested<br>line");
+  });
+
+  it("preserves nonempty Markdown when rich rendering is empty", async () => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 45, chat: { id: "123" } });
+    const markdown = "[reference]: https://example.com";
+
+    await sendMessageTelegram("123", markdown, {
+      cfg: { channels: { telegram: { richMessages: true } } },
+      token: "tok",
+    });
+
+    expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
+    expect(botRawApi.sendRichMessage.mock.calls[0]?.[0]?.rich_message.html).toBe(markdown);
   });
 
   it("renders complex markdown into HTML text", async () => {

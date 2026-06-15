@@ -1100,6 +1100,48 @@ describe("deliverReplies", () => {
     }
   });
 
+  it("retries rich messages without converting reply parameters to legacy fields", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(createQuoteNotFoundError())
+      .mockResolvedValueOnce({
+        message_id: 11,
+        chat: { id: "123" },
+      });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [{ text: "Hello there", replyToId: "500" }],
+      runtime,
+      bot,
+      replyToMode: "all",
+      replyQuoteMessageId: 500,
+      replyQuoteText: " quoted text\n",
+      richMessages: true,
+    });
+
+    const raw = bot.api.raw as unknown as {
+      sendRichMessage: ReturnType<typeof vi.fn>;
+    };
+    const { sendRichMessage } = raw;
+    expect(sendRichMessage).toHaveBeenCalledTimes(2);
+    expectRecordFields(firstMockCallArg(sendRichMessage, 0), {
+      reply_parameters: {
+        message_id: 500,
+        quote: " quoted text\n",
+        allow_sending_without_reply: true,
+      },
+    });
+    expectRecordFields(mockCallArg(sendRichMessage, 1, 0), {
+      reply_parameters: {
+        message_id: 500,
+        allow_sending_without_reply: true,
+      },
+    });
+    expect(mockCallArg(sendRichMessage, 1, 0)).not.toHaveProperty("reply_to_message_id");
+  });
+
   it("uses legacy reply id when selected reply target differs from quote source", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn().mockResolvedValue({
