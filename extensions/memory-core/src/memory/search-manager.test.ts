@@ -368,6 +368,77 @@ describe("getMemorySearchManager caching", () => {
     expect(searchResults).toHaveLength(1);
   });
 
+  it("returns file keyword fallback when builtin sqlite is unavailable", async () => {
+    const fixtureRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-memory-keyword-fallback-"),
+    );
+    try {
+      const workspace = path.join(fixtureRoot, "workspace");
+      await fs.mkdir(path.join(workspace, "memory"), { recursive: true });
+      await fs.writeFile(
+        path.join(workspace, "MEMORY.md"),
+        "# Root Memory\nThe orbit launch window is morning.\n",
+        "utf8",
+      );
+      await fs.writeFile(
+        path.join(workspace, "memory", "preferences.md"),
+        "# Preferences\nFavorite ramen is shoyu.\nThe orbit codename is ORBIT-22.\n",
+        "utf8",
+      );
+      const cfg = {
+        agents: {
+          list: [{ id: "main", default: true, workspace }],
+        },
+      } as OpenClawConfig;
+      mockMemoryIndexGet.mockRejectedValueOnce(
+        new Error(
+          "SQLite support is unavailable in this Node runtime (missing node:sqlite). No such built-in module: node:sqlite",
+        ),
+      );
+      const debug: unknown[] = [];
+
+      const result = await getMemorySearchManager({ cfg, agentId: "main" });
+      const manager = requireManager(result);
+      const results = await manager.search("orbit ramen", {
+        maxResults: 1,
+        minScore: 0,
+        onDebug: (entry) => debug.push(entry),
+      });
+
+      expect(results).toEqual([
+        expect.objectContaining({
+          path: "memory/preferences.md",
+          startLine: 1,
+          endLine: 4,
+          snippet: expect.stringContaining("ORBIT-22"),
+          source: "memory",
+        }),
+      ]);
+      expect(debug).toEqual([
+        {
+          backend: "builtin",
+          effectiveMode: "keyword-fallback",
+          fallback: "node-sqlite-unavailable",
+        },
+      ]);
+      expect(manager.status()).toEqual(
+        expect.objectContaining({
+          backend: "builtin",
+          provider: "keyword-fallback",
+          requestedProvider: "keyword-fallback",
+          fallback: {
+            from: "builtin-sqlite",
+            reason:
+              "SQLite support is unavailable in this Node runtime (missing node:sqlite). No such built-in module: node:sqlite",
+          },
+        }),
+      );
+      expect(mockMemoryIndexGet).toHaveBeenCalledTimes(1);
+    } finally {
+      await fs.rm(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
   it("returns the qmd startup failure when builtin fallback is unavailable", async () => {
     const cfg = createQmdCfg("missing-qmd-no-builtin");
     checkQmdBinaryAvailability.mockResolvedValueOnce({
