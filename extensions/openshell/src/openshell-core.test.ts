@@ -1,4 +1,5 @@
 // Openshell tests cover openshell core plugin behavior.
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -529,11 +530,54 @@ function createMirrorBackendMock(): OpenShellSandboxBackend {
       stderr: Buffer.alloc(0),
       code: 0,
     }),
+    mkdirpRemotePath: vi.fn().mockResolvedValue(undefined),
+    renameRemotePath: vi.fn().mockResolvedValue(undefined),
     syncLocalPathToRemote: vi.fn().mockResolvedValue(undefined),
   } as unknown as OpenShellSandboxBackend;
 }
 
 describe("openshell fs bridges", () => {
+  it.runIf(process.platform !== "win32")(
+    "rejects remote-only symlink parents in pinned mirror mutations",
+    async () => {
+      const stateDir = await makeTempDir("openclaw-openshell-remote-pin-");
+      const remoteRoot = path.join(stateDir, "sandbox");
+      const outsideDir = path.join(stateDir, "outside");
+      await fs.mkdir(remoteRoot, { recursive: true });
+      await fs.mkdir(outsideDir, { recursive: true });
+      await fs.writeFile(path.join(remoteRoot, "source.txt"), "payload", "utf8");
+      await fs.symlink(outsideDir, path.join(remoteRoot, "alias"));
+
+      const { PINNED_REMOTE_PATH_MUTATION_SCRIPT } = await import("./backend.js");
+      const runPinnedMutation = (args: string[]) =>
+        spawnSync("sh", ["-c", PINNED_REMOTE_PATH_MUTATION_SCRIPT, "openshell-test", ...args], {
+          encoding: "utf8",
+        });
+
+      expect(runPinnedMutation(["mkdirp", remoteRoot, "safe/nested"]).status).toBe(0);
+      await expect(fs.stat(path.join(remoteRoot, "safe", "nested"))).resolves.toBeDefined();
+
+      expect(runPinnedMutation(["mkdirp", remoteRoot, "alias/escaped"]).status).not.toBe(0);
+      await expectPathMissing(path.join(outsideDir, "escaped"));
+
+      expect(
+        runPinnedMutation([
+          "rename",
+          remoteRoot,
+          "",
+          "source.txt",
+          remoteRoot,
+          "alias",
+          "escaped.txt",
+        ]).status,
+      ).not.toBe(0);
+      await expect(fs.readFile(path.join(remoteRoot, "source.txt"), "utf8")).resolves.toBe(
+        "payload",
+      );
+      await expectPathMissing(path.join(outsideDir, "escaped.txt"));
+    },
+  );
+
   it("writes locally and syncs the file to the remote workspace", async () => {
     const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
     const backend = createMirrorBackendMock();
@@ -559,6 +603,55 @@ describe("openshell fs bridges", () => {
       path.join(workspaceDir, "nested", "file.txt"),
       "/sandbox/nested/file.txt",
     );
+  });
+
+  it("creates remote mirror directories through the pinned backend operation", async () => {
+    const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
+    const backend = createMirrorBackendMock();
+    const sandbox = createSandboxTestContext({
+      overrides: {
+        backendId: "openshell",
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        containerWorkdir: "/sandbox",
+      },
+    });
+
+    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
+    const bridge = createOpenShellFsBridge({ sandbox, backend });
+    await bridge.mkdirp({ filePath: "nested/dir" });
+
+    await expect(fs.stat(path.join(workspaceDir, "nested", "dir"))).resolves.toBeDefined();
+    expect(backend["mkdirpRemotePath"]).toHaveBeenCalledWith("/sandbox/nested/dir", undefined);
+    expect(backend["runRemoteShellScript"]).not.toHaveBeenCalled();
+  });
+
+  it("renames remote mirror paths through the pinned backend operation", async () => {
+    const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
+    await fs.writeFile(path.join(workspaceDir, "source.txt"), "payload", "utf8");
+    const backend = createMirrorBackendMock();
+    const sandbox = createSandboxTestContext({
+      overrides: {
+        backendId: "openshell",
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        containerWorkdir: "/sandbox",
+      },
+    });
+
+    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
+    const bridge = createOpenShellFsBridge({ sandbox, backend });
+    await bridge.rename({ from: "source.txt", to: "nested/target.txt" });
+
+    await expect(
+      fs.readFile(path.join(workspaceDir, "nested", "target.txt"), "utf8"),
+    ).resolves.toBe("payload");
+    expect(backend["renameRemotePath"]).toHaveBeenCalledWith(
+      "/sandbox/source.txt",
+      "/sandbox/nested/target.txt",
+      undefined,
+    );
+    expect(backend["runRemoteShellScript"]).not.toHaveBeenCalled();
   });
 
   it("rejects symlink-parent writes instead of escaping the local mount root", async () => {

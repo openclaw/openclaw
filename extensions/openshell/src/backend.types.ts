@@ -8,5 +8,11 @@ export type OpenShellFsBridgeContext = Parameters<
 export type OpenShellSandboxBackend = SandboxBackendHandle &
   RemoteShellSandboxHandle & {
     mode: "mirror" | "remote";
+    mkdirpRemotePath(remotePath: string, signal?: AbortSignal): Promise<void>;
+    renameRemotePath(
+      fromRemotePath: string,
+      toRemotePath: string,
+      signal?: AbortSignal,
+    ): Promise<void>;
     syncLocalPathToRemote(localPath: string, remotePath: string): Promise<void>;
   };

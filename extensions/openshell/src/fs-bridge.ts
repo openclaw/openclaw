@@ -117,11 +117,7 @@ class OpenShellFsBridge implements SandboxFsBridge {
       allowFinalSymlinkForUnlink: false,
     });
     await fsPromises.mkdir(hostPath, { recursive: true });
-    await this.backend.runRemoteShellScript({
-      script: 'mkdir -p -- "$1"',
-      args: [target.containerPath],
-      signal: params.signal,
-    });
+    await this.backend.mkdirpRemotePath(target.containerPath, params.signal);
   }
 
   async remove(params: {
@@ -177,11 +173,7 @@ class OpenShellFsBridge implements SandboxFsBridge {
     });
     await fsPromises.mkdir(path.dirname(toHostPath), { recursive: true });
     await movePathWithCopyFallback({ from: fromHostPath, to: toHostPath });
-    await this.backend.runRemoteShellScript({
-      script: 'mkdir -p -- "$(dirname -- "$2")" && mv -- "$1" "$2"',
-      args: [from.containerPath, to.containerPath],
-      signal: params.signal,
-    });
+    await this.backend.renameRemotePath(from.containerPath, to.containerPath, params.signal);
   }
 
   async stat(params: {
