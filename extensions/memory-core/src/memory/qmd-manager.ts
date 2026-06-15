@@ -370,6 +370,13 @@ export class QmdMemoryManager implements MemorySearchManager {
   private readonly xdgCacheHome: string;
   private readonly indexPath: string;
   private readonly env: NodeJS.ProcessEnv;
+  /**
+   * Environment for mcporter spawns.  Strips XDG_CONFIG_HOME and
+   * XDG_CACHE_HOME so mcporter ≥ 0.10 resolves its own config dir
+   * instead of falling into the per-agent qmd XDG tree.
+   * See https://github.com/openclaw/openclaw/issues/79847.
+   */
+  private readonly mcporterEnv: NodeJS.ProcessEnv;
   private readonly syncSettings: ReturnType<typeof resolveMemorySearchSyncConfig>;
   private readonly managedCollectionNames: string[];
   private readonly collectionRoots = new Map<string, CollectionRoot>();
@@ -446,6 +453,10 @@ export class QmdMemoryManager implements MemorySearchManager {
       XDG_CACHE_HOME: this.xdgCacheHome,
       NO_COLOR: "1",
     };
+    // mcporter must NOT inherit the per-agent XDG overrides — it needs its
+    // own default config/cache dirs to find ~/.mcporter/mcporter.json.
+    const { XDG_CONFIG_HOME: _xdgCfg, XDG_CACHE_HOME: _xdgCache, ...mcporterBase } = this.env;
+    this.mcporterEnv = mcporterBase;
     this.closeSignal = new Promise<void>((resolve) => {
       this.resolveCloseSignal = resolve;
     });
@@ -2238,14 +2249,14 @@ export class QmdMemoryManager implements MemorySearchManager {
     const spawnInvocation = resolveCliSpawnInvocation({
       command: "mcporter",
       args,
-      env: this.env,
+      env: this.mcporterEnv,
       packageName: "mcporter",
     });
     return await runCliCommand({
       commandSummary: `${spawnInvocation.command} ${spawnInvocation.argv.join(" ")}`,
       spawnInvocation,
-      // Keep mcporter and direct qmd commands on the same agent-scoped XDG state.
-      env: this.env,
+      // mcporter uses its own env without per-agent XDG overrides (see mcporterEnv).
+      env: this.mcporterEnv,
       cwd: this.workspaceDir,
       timeoutMs: opts?.timeoutMs,
       maxOutputChars: this.maxQmdOutputChars,
