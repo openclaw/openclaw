@@ -404,11 +404,9 @@ export function createOpenClawTools(
   const effectiveCallGateway = embedded
     ? createEmbeddedCallGateway()
     : openClawToolsDeps.callGateway;
-  const sessionsYieldAllowed = isToolAllowedByPolicyName("sessions_yield", {
-    allow: explicitFactoryAllowlist,
+  const sessionsYieldDenied = !isToolAllowedByPolicyName("sessions_yield", {
     deny: explicitFactoryDenylist,
   });
-  const sessionsYieldDenied = !sessionsYieldAllowed;
   const includeUpdatePlanTool = shouldIncludeUpdatePlanToolForOpenClawTools({
     config: resolvedConfig,
     agentSessionKey: options?.agentSessionKey,

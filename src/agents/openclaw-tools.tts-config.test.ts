@@ -541,4 +541,45 @@ describe("createOpenClawTools sessions_yield denylist", () => {
       testing.setDepsForTest();
     }
   });
+
+  it("keeps sessions_yield when alsoAllow is set with unrelated tools", () => {
+    testing.setDepsForTest({
+      config: {
+        tools: { alsoAllow: ["skill_workshop"] },
+      } as OpenClawConfig,
+    });
+
+    try {
+      const toolNames = createOpenClawTools({
+        disableMessageTool: true,
+        disablePluginTools: true,
+      }).map((t) => t.name);
+
+      expect(toolNames).toContain("sessions_yield");
+    } finally {
+      testing.setDepsForTest();
+    }
+  });
+
+  it("still excludes sessions_yield when alsoAllow and deny both set", () => {
+    testing.setDepsForTest({
+      config: {
+        tools: {
+          alsoAllow: ["skill_workshop"],
+          deny: ["sessions_yield"],
+        },
+      } as OpenClawConfig,
+    });
+
+    try {
+      const toolNames = createOpenClawTools({
+        disableMessageTool: true,
+        disablePluginTools: true,
+      }).map((t) => t.name);
+
+      expect(toolNames).not.toContain("sessions_yield");
+    } finally {
+      testing.setDepsForTest();
+    }
+  });
 });
