@@ -114,6 +114,32 @@ describe("report-test-temp-creations", () => {
     ]);
   });
 
+  it("reports repository-observed mkdtemp call forms", () => {
+    const sources = [
+      'const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "case-"));',
+      'const root = await fs.mkdtemp(path.join(os.tmpdir(), "case-"));',
+      'const root = await fsPromises.mkdtemp("/tmp/openclaw-case-");',
+      'const root = await mkdtemp(path.join(tmpdir(), "case-"));',
+      'const root = mkdtempSync(join(tmpdir(), "case-"));',
+    ];
+    const diff = [
+      "diff --git a/test/scripts/temp-patterns.test.ts b/test/scripts/temp-patterns.test.ts",
+      "--- a/test/scripts/temp-patterns.test.ts",
+      "+++ b/test/scripts/temp-patterns.test.ts",
+      "@@ -1,0 +1,5 @@",
+      ...sources.map((source) => `+${source}`),
+    ].join("\n");
+
+    expect(collectTempCreationFindingsFromDiff(diff)).toEqual(
+      sources.map((source, index) => ({
+        file: "test/scripts/temp-patterns.test.ts",
+        line: index + 1,
+        reason: "new mkdtemp temp directory creation",
+        source,
+      })),
+    );
+  });
+
   it("honors explicit allow comments with reasons", () => {
     const mkdtempCall = ["fs.", "mkdtemp", 'Sync("case-")'].join("");
     const tmpDirCall = ["tmp.", "dir", 'Sync({ prefix: "case-" })'].join("");
