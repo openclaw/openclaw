@@ -938,6 +938,13 @@ export function buildAllowedModelSetWithFallbacks(
     cfg: params.cfg,
     manifestPlugins: params.manifestPlugins,
   });
+  const aliasIndex = buildModelAliasIndex({
+    cfg: params.cfg,
+    defaultProvider: params.defaultProvider,
+    allowManifestNormalization: params.allowManifestNormalization,
+    allowPluginNormalization: params.allowPluginNormalization,
+    manifestPlugins: params.manifestPlugins,
+  });
   const catalog = mergeModelCatalogEntries({
     primary: params.catalog,
     secondary: configuredCatalog,
@@ -1005,8 +1012,39 @@ export function buildAllowedModelSetWithFallbacks(
     allowedKeys.add(modelKey(entry.provider, entry.id));
     addAllowedCatalogRef({ provider: entry.provider, model: entry.id });
   }
-  const addAllowedModelRef = (raw: string) => {
+  const addAllowedRef = (parsed: ModelRef) => {
+    const key = modelKey(parsed.provider, parsed.model);
+    allowedKeys.add(key);
+    addAllowedCatalogRef(parsed);
+
+    if (
+      !findModelCatalogEntry(catalog, { provider: parsed.provider, modelId: parsed.model }) &&
+      !syntheticCatalogEntries.has(key)
+    ) {
+      // Config can allow a model before it appears in live provider catalogs.
+      // Synthetic entries keep UI/model switchers aligned with that allowlist.
+      syntheticCatalogEntries.set(key, buildSyntheticAllowedCatalogEntry({ parsed, metadata }));
+    }
+  };
+  const addAllowedModelRef = (raw: string, options?: { resolveAliasFirst?: boolean }) => {
     const trimmed = raw.trim();
+    if (!trimmed) {
+      return;
+    }
+    if (options?.resolveAliasFirst && !trimmed.includes("/")) {
+      const aliasMatch = aliasIndex.byAlias.get(normalizeLowercaseStringOrEmpty(trimmed));
+      if (aliasMatch) {
+        const inferredProvider = resolveBareModelDefaultProvider({
+          cfg: params.cfg,
+          catalog,
+          model: aliasMatch.ref.model,
+          defaultProvider: aliasMatch.ref.provider,
+          manifestPlugins: params.manifestPlugins,
+        });
+        addAllowedRef({ provider: inferredProvider, model: aliasMatch.ref.model });
+        return;
+      }
+    }
     const defaultProvider = !trimmed.includes("/")
       ? resolveBareModelDefaultProvider({
           cfg: params.cfg,
@@ -1027,18 +1065,7 @@ export function buildAllowedModelSetWithFallbacks(
     if (!parsed) {
       return;
     }
-    const key = modelKey(parsed.provider, parsed.model);
-    allowedKeys.add(key);
-    addAllowedCatalogRef(parsed);
-
-    if (
-      !findModelCatalogEntry(catalog, { provider: parsed.provider, modelId: parsed.model }) &&
-      !syntheticCatalogEntries.has(key)
-    ) {
-      // Config can allow a model before it appears in live provider catalogs.
-      // Synthetic entries keep UI/model switchers aligned with that allowlist.
-      syntheticCatalogEntries.set(key, buildSyntheticAllowedCatalogEntry({ parsed, metadata }));
-    }
+    addAllowedRef(parsed);
   };
 
   for (const raw of visibility.exactModelRefs) {
@@ -1047,7 +1074,7 @@ export function buildAllowedModelSetWithFallbacks(
 
   if (visibility.exactModelRefs.length > 0) {
     for (const fallback of params.fallbackModels) {
-      addAllowedModelRef(fallback);
+      addAllowedModelRef(fallback, { resolveAliasFirst: true });
     }
   }
 
