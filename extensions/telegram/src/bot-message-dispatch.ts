@@ -67,7 +67,6 @@ import {
   resolveDefaultModelForAgent,
 } from "./bot-message-dispatch.agent.runtime.js";
 import { deduplicateBlockSentMedia } from "./bot-message-dispatch.media-dedup.js";
-import { pruneStickerMediaFromContext } from "./bot-message-dispatch.media.js";
 import {
   generateTopicLabel,
   getAgentScopedMediaLocalRoots,
@@ -144,7 +143,6 @@ import {
   supersedeTelegramReplyFence,
 } from "./telegram-reply-fence.js";
 
-export { pruneStickerMediaFromContext } from "./bot-message-dispatch.media.js";
 export { getTelegramReplyFenceSizeForTests, resetTelegramReplyFenceForTests };
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
@@ -1526,9 +1524,6 @@ export const dispatchTelegramMessage = async ({
         if (!stickerSupportsVision) {
           ctxPayload.Body = formattedDesc;
           ctxPayload.BodyForAgent = formattedDesc;
-          pruneStickerMediaFromContext(ctxPayload, {
-            stickerMediaIncluded: ctxPayload.StickerMediaIncluded,
-          });
         }
         cacheSticker({
           fileId: sticker.fileId,
