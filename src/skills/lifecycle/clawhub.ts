@@ -103,6 +103,9 @@ export type ClawHubSkillStatusLink =
       installedAt: number;
       originPath: string;
       lockPath: string;
+      sourceUrl?: string;
+      artifact?: ClawHubSkillDownloadedArtifactLock;
+      skillFile?: ClawHubSkillFileLock;
     }
   | {
       status: "invalid";
@@ -420,6 +423,42 @@ function normalizeOptionalSelector(value: string | undefined): string | undefine
   return trimmed ? trimmed : undefined;
 }
 
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function normalizeDownloadedArtifactLock(
+  raw: unknown,
+): ClawHubSkillDownloadedArtifactLock | undefined {
+  if (!raw || typeof raw !== "object") {
+    return undefined;
+  }
+  const candidate = raw as Partial<ClawHubSkillDownloadedArtifactLock>;
+  if (
+    (candidate.kind === "archive" || candidate.kind === "clawpack") &&
+    isNonEmptyString(candidate.sha256) &&
+    isNonEmptyString(candidate.integrity)
+  ) {
+    return {
+      kind: candidate.kind,
+      sha256: candidate.sha256,
+      integrity: candidate.integrity,
+    };
+  }
+  return undefined;
+}
+
+function normalizeSkillFileLock(raw: unknown): ClawHubSkillFileLock | undefined {
+  if (!raw || typeof raw !== "object") {
+    return undefined;
+  }
+  const candidate = raw as Partial<ClawHubSkillFileLock>;
+  if (isNonEmptyString(candidate.path) && isNonEmptyString(candidate.sha256)) {
+    return { path: candidate.path, sha256: candidate.sha256 };
+  }
+  return undefined;
+}
+
 function normalizeClawHubSkillOrigin(
   raw: Partial<ClawHubSkillOrigin> | null,
 ): ClawHubSkillOrigin | null {
@@ -433,12 +472,18 @@ function normalizeClawHubSkillOrigin(
     raw.installedVersion.trim().length > 0 &&
     typeof raw.installedAt === "number"
   ) {
+    const sourceUrl = normalizeOptionalStringValue((raw as { sourceUrl?: unknown }).sourceUrl);
+    const artifact = normalizeDownloadedArtifactLock((raw as { artifact?: unknown }).artifact);
+    const skillFile = normalizeSkillFileLock((raw as { skillFile?: unknown }).skillFile);
     return {
       version: 1,
       registry: normalizeStoredRegistry(raw.registry),
       slug: raw.slug,
       installedVersion: raw.installedVersion,
       installedAt: raw.installedAt,
+      ...(sourceUrl ? { sourceUrl } : {}),
+      ...(artifact ? { artifact } : {}),
+      ...(skillFile ? { skillFile } : {}),
     };
   }
   return null;
@@ -676,6 +721,9 @@ export function resolveClawHubSkillStatusLinkSync(params: {
     installedAt: locked.installedAt,
     originPath: originRead.path,
     lockPath: lockRead.path,
+    ...(originRead.origin.sourceUrl ? { sourceUrl: originRead.origin.sourceUrl } : {}),
+    ...(originRead.origin.artifact ? { artifact: originRead.origin.artifact } : {}),
+    ...(originRead.origin.skillFile ? { skillFile: originRead.origin.skillFile } : {}),
   };
 }
 
