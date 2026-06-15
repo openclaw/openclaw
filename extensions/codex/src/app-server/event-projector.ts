@@ -1077,7 +1077,10 @@ export class CodexAppServerEventProjector {
       this.lastCommentaryProgress &&
       this.lastCommentaryProgress.source !== params.source &&
       this.lastCommentaryProgress.itemId !== params.itemId &&
-      this.lastCommentaryProgress.progressText === progressText
+      (this.lastCommentaryProgress.progressText === progressText ||
+        (this.lastCommentaryProgress.source === "raw"
+          ? this.lastCommentaryProgress.progressText.startsWith(progressText)
+          : progressText.startsWith(this.lastCommentaryProgress.progressText)))
     ) {
       this.lastCommentaryProgressTextByItem.set(params.itemId, progressText);
       return;
