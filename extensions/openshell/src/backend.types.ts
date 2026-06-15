@@ -14,7 +14,7 @@ export type OpenShellSandboxBackend = SandboxBackendHandle &
       params?: {
         recursive?: boolean;
         signal?: AbortSignal;
-        allowFailure?: boolean;
+        ignoreMissing?: boolean;
       },
     ): Promise<void>;
     renameRemotePath(

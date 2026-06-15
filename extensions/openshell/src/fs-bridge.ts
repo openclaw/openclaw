@@ -139,7 +139,7 @@ class OpenShellFsBridge implements SandboxFsBridge {
     await this.backend.removeRemotePath(target.containerPath, {
       recursive: params.recursive ?? false,
       signal: params.signal,
-      allowFailure: params.force !== false,
+      ignoreMissing: params.force !== false,
     });
     await fsPromises.rm(hostPath, {
       recursive: params.recursive ?? false,

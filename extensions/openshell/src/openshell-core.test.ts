@@ -584,6 +584,12 @@ describe("openshell fs bridges", () => {
       expect(runPinnedMutation(["removefile", remoteRoot, "alias", "victim.txt"]).status).not.toBe(
         0,
       );
+      expect(
+        runPinnedMutation(["removefile", remoteRoot, "missing-parent", "victim.txt", "1"]).status,
+      ).toBe(0);
+      expect(
+        runPinnedMutation(["removefile", remoteRoot, "alias", "victim.txt", "1"]).status,
+      ).not.toBe(0);
       await expect(fs.readFile(path.join(remoteRoot, "victim.txt"), "utf8")).resolves.toBe(
         "delete me",
       );
@@ -688,7 +694,7 @@ describe("openshell fs bridges", () => {
     expect(backend["removeRemotePath"]).toHaveBeenCalledWith("/sandbox/target.txt", {
       recursive: false,
       signal: undefined,
-      allowFailure: true,
+      ignoreMissing: true,
     });
     expect(backend["runRemoteShellScript"]).not.toHaveBeenCalled();
   });

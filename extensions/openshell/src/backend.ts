@@ -80,20 +80,55 @@ export const PINNED_REMOTE_PATH_MUTATION_SCRIPT = [
   "  done",
   '  printf "%s\\n" "$current"',
   "}",
+  "pin_dir_or_missing() {",
+  '  root="$1"',
+  '  relative="$2"',
+  '  missing_ok="$3"',
+  '  case "$root" in /*) ;; *) die "remote root must be absolute: $root" ;; esac',
+  '  root="${root%/}"',
+  '  [ -n "$root" ] || root="/"',
+  '  if [ -L "$root" ]; then die "unsafe remote root symlink: $root"; fi',
+  '  if [ ! -d "$root" ]; then',
+  '    if [ -e "$root" ]; then die "unsafe remote root component: $root"; fi',
+  '    if [ "$missing_ok" = "1" ]; then printf "\\n"; return 0; fi',
+  '    die "remote directory not found: $root"',
+  "  fi",
+  '  canonical_root="$(cd "$root" && pwd -P)"',
+  '  current="$canonical_root"',
+  '  relative="${relative#/}"',
+  '  while [ -n "$relative" ]; do',
+  '    part="${relative%%/*}"',
+  '    if [ "$part" = "$relative" ]; then relative=""; else relative="${relative#*/}"; fi',
+  '    [ -n "$part" ] || continue',
+  '    case "$part" in "."|"..") die "unsafe remote directory component: $part" ;; esac',
+  '    if [ "$current" = "/" ]; then next="/$part"; else next="$current/$part"; fi',
+  '    if [ -L "$next" ]; then die "unsafe remote directory symlink: $next"; fi',
+  '    if [ -e "$next" ]; then',
+  '      if [ ! -d "$next" ]; then die "unsafe remote directory component: $next"; fi',
+  "    else",
+  '      if [ "$missing_ok" = "1" ]; then printf "\\n"; return 0; fi',
+  '      die "remote directory not found: $next"',
+  "    fi",
+  '    current="$next"',
+  "  done",
+  '  printf "%s\\n" "$current"',
+  "}",
   'operation="$1"',
   'case "$operation" in',
   "  mkdirp)",
   '    pin_dir "$2" "$3" 1 >/dev/null',
   "    ;;",
   "  remove)",
-  '    parent="$(pin_dir "$2" "$3" 0)"',
   '    validate_basename "$4"',
+  '    parent="$(pin_dir_or_missing "$2" "$3" "${5:-0}")"',
+  '    [ -n "$parent" ] || exit 0',
   '    target="$parent/$4"',
   '    if [ -d "$target" ] && [ ! -L "$target" ]; then rm -rf -- "$target"; elif [ -e "$target" ] || [ -L "$target" ]; then rm -f -- "$target"; fi',
   "    ;;",
   "  removefile)",
-  '    parent="$(pin_dir "$2" "$3" 0)"',
   '    validate_basename "$4"',
+  '    parent="$(pin_dir_or_missing "$2" "$3" "${5:-0}")"',
+  '    [ -n "$parent" ] || exit 0',
   '    target="$parent/$4"',
   '    if [ -d "$target" ] && [ ! -L "$target" ]; then rmdir -- "$target"; elif [ -e "$target" ] || [ -L "$target" ]; then rm -f -- "$target"; fi',
   "    ;;",
@@ -400,7 +435,7 @@ class OpenShellSandboxBackendImpl {
     params?: {
       recursive?: boolean;
       signal?: AbortSignal;
-      allowFailure?: boolean;
+      ignoreMissing?: boolean;
     },
   ): Promise<void> {
     const target = this.resolveRemoteTarget(remotePath);
@@ -412,9 +447,9 @@ class OpenShellSandboxBackendImpl {
           ? ""
           : path.posix.dirname(target.relativePath),
         path.posix.basename(target.relativePath),
+        params?.ignoreMissing ? "1" : "0",
       ],
       signal: params?.signal,
-      allowFailure: params?.allowFailure,
     });
   }
 
@@ -478,8 +513,8 @@ class OpenShellSandboxBackendImpl {
             ? ""
             : path.posix.dirname(target.relativePath),
           path.posix.basename(target.relativePath),
+          "1",
         ],
-        allowFailure: true,
       });
       return;
     }
@@ -492,8 +527,8 @@ class OpenShellSandboxBackendImpl {
             ? ""
             : path.posix.dirname(target.relativePath),
           path.posix.basename(target.relativePath),
+          "1",
         ],
-        allowFailure: true,
       });
       return;
     }
@@ -530,13 +565,11 @@ class OpenShellSandboxBackendImpl {
   private async runPinnedRemotePathMutation(params: {
     args: string[];
     signal?: AbortSignal;
-    allowFailure?: boolean;
   }): Promise<SandboxBackendCommandResult> {
     return await this.runRemoteShellScript({
       script: PINNED_REMOTE_PATH_MUTATION_SCRIPT,
       args: params.args,
       signal: params.signal,
-      allowFailure: params.allowFailure,
     });
   }
 
