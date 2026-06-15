@@ -902,7 +902,57 @@ describe("wrapAnthropicStreamWithRecovery", () => {
     expect(callCount).toBe(1);
   });
 
-  it("does not retry terminal stream-error events after output was yielded", async () => {
+  it("retries when a thinking error arrives after a control-plane start event", async () => {
+    let callCount = 0;
+    const partialMessage = createTestAssistantMessage({
+      content: [{ type: "text", text: "" }],
+      stopReason: "stop",
+    });
+    const errorMessage = createTestStreamErrorMessage(terminalThinkingSignatureError);
+    const retryMessage = createTestAssistantMessage({
+      content: [{ type: "text", text: "recovered" }],
+      stopReason: "stop",
+    });
+    const wrapped = wrapAnthropicStreamWithRecovery(
+      (() => {
+        callCount += 1;
+        const stream = createAssistantMessageEventStream();
+        queueMicrotask(() => {
+          if (callCount > 1) {
+            // Retry – produce a successful result
+            stream.push({ type: "start", partial: retryMessage });
+            stream.push({ type: "done", reason: "stop", message: retryMessage });
+          } else {
+            // First call – start then fail with thinking error
+            stream.push({ type: "start", partial: partialMessage });
+            stream.push({ type: "error", reason: "error", error: errorMessage });
+          }
+          stream.end();
+        });
+        return stream;
+      }) as unknown as Parameters<typeof wrapAnthropicStreamWithRecovery>[0],
+      { id: "test-session" },
+    );
+
+    const response = wrapped({} as never, { messages: [] } as never, {} as never) as {
+      result: () => Promise<unknown>;
+    } & AsyncIterable<unknown>;
+    const events: unknown[] = [];
+    for await (const event of response) {
+      events.push(event);
+    }
+
+    // Should see only the retry stream's events (start + done) — the
+    // original "start" is buffered and discarded during recovery to avoid
+    // a duplicate start event and a spurious empty partial message round.
+    expect(events).toHaveLength(2);
+    expect(events[0]).toEqual({ type: "start", partial: retryMessage });
+    expect(events[1]).toEqual({ type: "done", reason: "stop", message: retryMessage });
+    await expect(response.result()).resolves.toEqual(retryMessage);
+    expect(callCount).toBe(2);
+  });
+
+  it("does not retry terminal stream-error events after content was yielded", async () => {
     let callCount = 0;
     const partialMessage = createTestAssistantMessage({
       content: [{ type: "text", text: "" }],
@@ -915,6 +965,7 @@ describe("wrapAnthropicStreamWithRecovery", () => {
         const stream = createAssistantMessageEventStream();
         queueMicrotask(() => {
           stream.push({ type: "start", partial: partialMessage });
+          stream.push({ type: "text_delta", contentIndex: 0, delta: "partial" });
           stream.push({ type: "error", reason: "error", error: errorMessage });
           stream.end();
         });
@@ -933,6 +984,7 @@ describe("wrapAnthropicStreamWithRecovery", () => {
 
     expect(events).toEqual([
       { type: "start", partial: partialMessage },
+      { type: "text_delta", contentIndex: 0, delta: "partial" },
       { type: "error", reason: "error", error: errorMessage },
     ]);
     await expect(response.result()).resolves.toEqual(errorMessage);

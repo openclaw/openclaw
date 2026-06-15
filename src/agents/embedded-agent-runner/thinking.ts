@@ -688,6 +688,18 @@ async function pumpStreamWithRecovery(
   notify: () => Promise<void>,
 ): Promise<AssistantMessage> {
   let yieldedOutput = false;
+  // The control-plane "start" event must not be forwarded to outer until
+  // we know the stream will not need a thinking-block recovery retry.
+  // Forwarding it eagerly would cause duplicate "start" events when the
+  // retry stream also emits one, leaving a spurious empty partial message
+  // in the agentLoop consumer.
+  let bufferedStart: unknown = null;
+  function flushBuffer(): void {
+    if (bufferedStart !== null) {
+      outer.push(bufferedStart as Parameters<typeof outer.push>[0]);
+      bufferedStart = null;
+    }
+  }
   try {
     const resolved = stream instanceof Promise ? await stream : stream;
     for await (const chunk of resolved as AsyncIterable<unknown>) {
@@ -697,35 +709,68 @@ async function pumpStreamWithRecovery(
             log.warn(
               `[session-recovery] Anthropic thinking error occurred after streaming began; skipping retry to avoid duplicate chunks: sessionId=${sessionMeta.id}`,
             );
+            // Flush buffered start so the consumer sees partial state
+            // before the terminal error event.
+            flushBuffer();
           } else {
             sessionMeta.recoveredAnthropicThinking = true;
             log.warn(
               `[session-recovery] Anthropic thinking stream error; retrying once without thinking blocks: sessionId=${sessionMeta.id}`,
             );
+            // Discard buffered start — the retry stream sends its own.
+            // Do NOT forward the error event — the retry stream replaces
+            // the failed attempt entirely.
+            bufferedStart = null;
             return retryStreamWithoutThinking(outer, retry, notify);
           }
         }
+        // Non-recoverable error: flush buffered start, then forward the
+        // error event so the consumer sees partial state before failure.
+        flushBuffer();
+        outer.push(chunk as Parameters<typeof outer.push>[0]);
       } else {
-        yieldedOutput = true;
+        const chunkType = (chunk as { type?: unknown }).type;
+        if (chunkType === "start") {
+          // Buffer the control-plane start event so it is not forwarded
+          // until we are past the recovery window (content arrives or
+          // stream ends).  If a recovery retry fires, this buffered
+          // start is silently discarded and the retry stream's own start
+          // takes its place.
+          bufferedStart = chunk;
+        } else {
+          // Real content or terminal event: flush the buffered start
+          // first, then forward this chunk.
+          flushBuffer();
+          outer.push(chunk as Parameters<typeof outer.push>[0]);
+          yieldedOutput = true;
+        }
       }
-      outer.push(chunk as Parameters<typeof outer.push>[0]);
     }
+    // Stream ended without error — flush any remaining buffered start.
+    flushBuffer();
     const result = await (resolved as { result?: () => Promise<AssistantMessage> }).result?.();
     return result as AssistantMessage;
   } catch (error: unknown) {
     if (!shouldRecoverAnthropicThinkingError(error, sessionMeta)) {
+      // Flush buffer before re-throwing so the consumer sees the start
+      // event even on unexpected stream exceptions.
+      flushBuffer();
       throw error;
     }
     if (yieldedOutput) {
       log.warn(
         `[session-recovery] Anthropic thinking error occurred after streaming began; skipping retry to avoid duplicate chunks: sessionId=${sessionMeta.id}`,
       );
+      // Flush buffer before re-throwing so the consumer sees partial state.
+      flushBuffer();
       throw error;
     }
     sessionMeta.recoveredAnthropicThinking = true;
     log.warn(
       `[session-recovery] Anthropic thinking error during stream; retrying once without thinking blocks: sessionId=${sessionMeta.id}`,
     );
+    // Discard buffered start — the retry stream will send its own.
+    bufferedStart = null;
     return retryStreamWithoutThinking(outer, retry, notify);
   }
 }
