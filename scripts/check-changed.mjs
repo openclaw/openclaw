@@ -257,6 +257,7 @@ export function createChangedCheckPlan(result, options = {}) {
   }
 
   if (runAll) {
+    add("database-first legacy-store guard", ["check:database-first-legacy-stores"]);
     add("media download helper guard", ["check:media-download-helpers"]);
     add("runtime sidecar loader guard", ["check:runtime-sidecar-loaders"]);
     addTypecheck("typecheck all", ["tsgo:all"]);
@@ -322,6 +323,7 @@ export function createChangedCheckPlan(result, options = {}) {
   }
 
   if (lanes.core || lanes.extensions) {
+    add("database-first legacy-store guard", ["check:database-first-legacy-stores"]);
     add("media download helper guard", ["check:media-download-helpers"]);
     add("runtime sidecar loader guard", ["check:runtime-sidecar-loaders"]);
     add("runtime import cycles", ["check:import-cycles"]);

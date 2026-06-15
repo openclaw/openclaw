@@ -466,6 +466,9 @@ describe("scripts/changed-lanes", () => {
       core: true,
       coreTests: true,
     });
+    expect(plan.commands.map((command) => command.args[0])).toContain(
+      "check:database-first-legacy-stores",
+    );
     expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:core");
     expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:core:test");
     expect(plan.commands.find((command) => command.args[0] === "tsgo:core")?.env).toEqual({
