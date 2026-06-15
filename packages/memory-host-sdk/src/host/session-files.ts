@@ -13,6 +13,7 @@ import {
   isCronRunSessionKey,
   isExecCompletionEvent,
   isHeartbeatUserMessage,
+  isPrimarySessionTranscriptFileName,
   isSessionArchiveArtifactName,
   isSilentReplyPayloadText,
   isUsageCountedSessionTranscriptFileName,
@@ -91,6 +92,10 @@ export type ResolvedSessionTranscriptIdentity = {
 type SessionTranscriptStoreEntry = {
   sessionFile?: unknown;
   sessionId?: unknown;
+  /** Parent session key that spawned this session, for cron-parentage chain walks. */
+  spawnedBy?: unknown;
+  /** Explicit marker set at spawn time when the parent session is cron-descended. */
+  parentTrigger?: unknown;
 };
 
 function shouldSkipTranscriptFileForDreaming(absPath: string): boolean {
@@ -279,6 +284,37 @@ export function loadSessionTranscriptClassificationForSessionsDir(
   const store = readSessionTranscriptClassificationStore(storePath);
   const dreamingTranscriptPaths = new Set<string>();
   const cronRunTranscriptPaths = new Set<string>();
+
+  // Walk the spawnedBy chain to determine if a session is cron-descended.
+  // Handles transitive parentage: a subagent spawned by another subagent
+  // that was spawned by a cron run inherits the cron classification.
+  const cronCache = new Map<string, boolean>();
+  function isCronSession(sessionKey: string, entry: SessionTranscriptStoreEntry): boolean {
+    if (isCronRunSessionKey(sessionKey)) {
+      cronCache.set(sessionKey, true);
+      return true;
+    }
+    if (entry.parentTrigger === "cron") {
+      cronCache.set(sessionKey, true);
+      return true;
+    }
+    const cached = cronCache.get(sessionKey);
+    if (cached !== undefined) {
+      return cached;
+    }
+    // Mark as not-yet-resolved to guard against cycles.
+    cronCache.set(sessionKey, false);
+    if (typeof entry.spawnedBy === "string" && entry.spawnedBy.trim().length > 0) {
+      const parentEntry = store[entry.spawnedBy];
+      if (parentEntry) {
+        const result = isCronSession(entry.spawnedBy, parentEntry);
+        cronCache.set(sessionKey, result);
+        return result;
+      }
+    }
+    return false;
+  }
+
   for (const [sessionKey, entry] of Object.entries(store)) {
     const transcriptPath = resolveSessionStoreTranscriptPath(sessionsDir, entry);
     if (!transcriptPath) {
@@ -287,7 +323,7 @@ export function loadSessionTranscriptClassificationForSessionsDir(
     if (isDreamingNarrativeSessionStoreKey(sessionKey)) {
       dreamingTranscriptPaths.add(transcriptPath);
     }
-    if (isCronRunSessionKey(sessionKey)) {
+    if (isCronSession(sessionKey, entry)) {
       cronRunTranscriptPaths.add(transcriptPath);
     }
   }

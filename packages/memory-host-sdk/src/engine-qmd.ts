@@ -20,9 +20,12 @@ export {
   type SessionTranscriptCorpusEntry,
 } from "./host/session-files.js";
 export {
+  isCronRunSessionKey,
+  isPrimarySessionTranscriptFileName,
   isSessionArchiveArtifactName,
   isUsageCountedSessionTranscriptFileName,
   parseUsageCountedSessionIdFromFileName,
+  resolveSessionTranscriptsDirForAgent,
 } from "./host/openclaw-runtime-session.js";
 export { parseQmdQueryJson, type QmdQueryResult } from "./host/qmd-query-parser.js";
 export {

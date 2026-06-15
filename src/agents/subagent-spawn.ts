@@ -35,6 +35,7 @@ import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../plugins/command-registry-state.js";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
 import { isValidAgentId, normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { resolveUserPath } from "../utils.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { listAgentIds, resolveAgentDir } from "./agent-scope-config.js";
@@ -318,6 +319,9 @@ function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<S
   }
   if (typeof patch.spawnedBy === "string" && patch.spawnedBy.trim()) {
     entry.spawnedBy = patch.spawnedBy.trim();
+  }
+  if (patch.parentTrigger === "cron") {
+    entry.parentTrigger = "cron";
   }
   if (typeof patch.spawnedWorkspaceDir === "string" && patch.spawnedWorkspaceDir.trim()) {
     entry.spawnedWorkspaceDir = patch.spawnedWorkspaceDir.trim();
@@ -1325,6 +1329,23 @@ export async function spawnSubagentDirect(
     }
   };
 
+  // Determine if the parent session is cron-descended for dreaming corpus
+  // classification. Subagents spawned by a cron run (or transitively from
+  // one via another subagent) inherit the cron marker so dreaming phases can
+  // skip their transcripts during session corpus ingestion.
+  const isCronDescended =
+    isCronRunSessionKey(spawnedByKey) ||
+    (() => {
+      try {
+        const parentTarget = resolveGatewaySessionStoreTarget({ cfg, key: spawnedByKey });
+        const parentStore = loadSessionStore(parentTarget.storePath, { clone: false });
+        const parentEntry = resolveStoreEntryByKeys(parentStore, parentTarget.storeKeys);
+        return parentEntry?.parentTrigger === "cron";
+      } catch {
+        return false;
+      }
+    })();
+
   const initialChildSessionPatch: Record<string, unknown> = {
     spawnDepth: childDepth,
     subagentRole: childCapabilities.role === "main" ? null : childCapabilities.role,
@@ -1332,6 +1353,7 @@ export async function spawnSubagentDirect(
     ...inheritedToolAllowPatch(ctx.inheritedToolAllowlist),
     ...inheritedToolDenyPatch(ctx.inheritedToolDenylist),
     ...plan.initialSessionPatch,
+    ...(isCronDescended ? { parentTrigger: "cron" } : {}),
   };
 
   const initialPatchError = await patchChildSession(initialChildSessionPatch);

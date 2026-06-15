@@ -13,6 +13,7 @@ export {
   isCronRunSessionKey,
   isExecCompletionEvent,
   isHeartbeatUserMessage,
+  isPrimarySessionTranscriptFileName,
   isSessionArchiveArtifactName,
   isSilentReplyPayloadText,
   isUsageCountedSessionTranscriptFileName,

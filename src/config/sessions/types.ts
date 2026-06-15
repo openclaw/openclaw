@@ -237,6 +237,8 @@ export type SessionEntry = {
   sessionFile?: string;
   /** Parent session key that spawned this session (used for sandbox session-tool scoping). */
   spawnedBy?: string;
+  /** Set when this session was spawned by a cron-run parent session, for dreaming corpus classification. */
+  parentTrigger?: "cron";
   /** Workspace inherited by spawned sessions and reused on later turns for the same child session. */
   spawnedWorkspaceDir?: string;
   /** Task working directory inherited by spawned sessions and reused on later turns. */
