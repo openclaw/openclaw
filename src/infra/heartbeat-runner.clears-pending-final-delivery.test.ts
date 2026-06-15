@@ -3,7 +3,11 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { runHeartbeatOnce, type HeartbeatDeps } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
-import { seedMainSessionStore, withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
+import {
+  type HeartbeatReplySpy,
+  seedMainSessionStore,
+  withTempHeartbeatSandbox,
+} from "./heartbeat-runner.test-utils.js";
 
 installHeartbeatRunnerTestRuntime();
 
@@ -32,7 +36,7 @@ describe("runHeartbeatOnce clears stuck pendingFinalDelivery state once delivery
 
   function heartbeatDeps(
     sendTelegram: ReturnType<typeof vi.fn>,
-    replySpy: ReturnType<typeof vi.fn>,
+    replySpy: HeartbeatReplySpy,
   ): HeartbeatDeps {
     return {
       telegram: sendTelegram as unknown,
