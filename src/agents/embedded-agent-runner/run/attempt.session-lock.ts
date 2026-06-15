@@ -28,6 +28,7 @@ type AcquireSessionWriteLock = typeof acquireSessionWriteLock;
 type ActiveWriteLockState = {
   active: boolean;
   publishingOwnedWrite: boolean;
+  publishedEntryIds?: string[];
 };
 
 type LockOptions = {
@@ -343,13 +344,14 @@ async function readAppendedSessionFileText(params: {
   sessionFile: string;
   previous: Extract<SessionFileFingerprint, { exists: true }>;
   current: Extract<SessionFileFingerprint, { exists: true }>;
+  maxBytes?: number;
 }): Promise<string | undefined> {
   if (params.current.size <= params.previous.size || params.previous.size > MAX_SAFE_FILE_OFFSET) {
     return undefined;
   }
   const appendedBytes = params.current.size - params.previous.size;
   if (
-    appendedBytes > BigInt(MAX_BENIGN_SESSION_FENCE_ADVANCE_BYTES) ||
+    (params.maxBytes !== undefined && appendedBytes > BigInt(params.maxBytes)) ||
     appendedBytes > MAX_SAFE_FILE_OFFSET
   ) {
     return undefined;
@@ -430,6 +432,9 @@ async function classifySessionFenceAdvance(params: {
     sessionFile: params.sessionFile,
     previous: params.previous.fingerprint,
     current: params.current,
+    // Exact IDs come from the lock owner. Replaying the persisted entry needs
+    // its full payload, so only unowned benign classification uses the size cap.
+    ...(params.allowAnyMessage ? {} : { maxBytes: MAX_BENIGN_SESSION_FENCE_ADVANCE_BYTES }),
   });
   if (!text?.endsWith("\n")) {
     return undefined;
@@ -476,7 +481,8 @@ async function classifySessionFenceRewrite(params: {
     !params.current.exists ||
     !params.previous.text ||
     !sameSessionFileIdentity(params.previous.fingerprint, params.current) ||
-    params.current.size > BigInt(MAX_BENIGN_SESSION_FENCE_REWRITE_RESULT_BYTES) ||
+    (!params.allowAnyMessage &&
+      params.current.size > BigInt(MAX_BENIGN_SESSION_FENCE_REWRITE_RESULT_BYTES)) ||
     params.current.size > MAX_SAFE_FILE_OFFSET
   ) {
     return undefined;
@@ -1364,7 +1370,13 @@ export async function createEmbeddedAttemptSessionLockController(params: {
   ): Promise<T> {
     const parentLockState = activeWriteLock.getStore();
     if (parentLockState?.publishingOwnedWrite) {
-      return await run();
+      const result = await run();
+      const nestedEntryIds = resolvePublishedEntryIds?.(result);
+      if (nestedEntryIds !== undefined) {
+        parentLockState.publishedEntryIds ??= [];
+        parentLockState.publishedEntryIds.push(...nestedEntryIds);
+      }
+      return result;
     }
     let releaseQueue!: () => void;
     const currentQueueEntry = new Promise<void>((resolve) => {
@@ -1381,13 +1393,21 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       const publicationLockState: ActiveWriteLockState = {
         active: parentLockState?.active ?? true,
         publishingOwnedWrite: true,
+        publishedEntryIds: undefined,
       };
       try {
         return await activeWriteLock.run(publicationLockState, async () => {
           let expectedEntryIds: readonly string[] | undefined;
           try {
             const result = await run();
-            expectedEntryIds = resolvePublishedEntryIds?.(result);
+            const ownEntryIds = resolvePublishedEntryIds?.(result);
+            const nestedEntryIds = publicationLockState.publishedEntryIds;
+            expectedEntryIds =
+              nestedEntryIds === undefined
+                ? ownEntryIds
+                : ownEntryIds === undefined
+                  ? nestedEntryIds
+                  : [...nestedEntryIds, ...ownEntryIds];
             return result;
           } finally {
             await publishOwnedSessionFileFence(beforeWrite, expectedEntryIds);

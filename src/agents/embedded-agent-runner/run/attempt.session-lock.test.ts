@@ -2205,6 +2205,132 @@ describe("embedded attempt session lock lifecycle", () => {
     expect(releases).toEqual(["release", "release", "release"]);
   });
 
+  it("validates nested owned publications with the persisted entry ids", async () => {
+    const sessionFile = await createTempSessionFile();
+    const mergePromptReleasedSessionEntries = vi.fn();
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+      mergePromptReleasedSessionEntries,
+    });
+    await controller.releaseForPrompt();
+
+    const sessionKey = "agent:main:nested-publication";
+    const appended = await withOwnedSessionTranscriptWrites(
+      {
+        sessionFile,
+        sessionKey,
+        withSessionWriteLock: (operation, options) =>
+          controller.withSessionWriteLock(operation, options),
+      },
+      async () =>
+        await runWithOwnedSessionTranscriptWritePublication(
+          { sessionFile, sessionKey },
+          async () =>
+            await appendSessionTranscriptMessage({
+              transcriptPath: sessionFile,
+              message: {
+                role: "assistant",
+                content: [{ type: "text", text: "nested owned publication" }],
+                provider: "anthropic",
+                model: "sonnet-4.6",
+              },
+            }),
+        ),
+    );
+
+    expect(mergePromptReleasedSessionEntries).toHaveBeenCalledWith([
+      expect.objectContaining({ type: "message", id: appended.messageId }),
+    ]);
+    expect(controller.hasSessionTakeover()).toBe(false);
+    await controller.dispose();
+  });
+
+  it("validates owned transcript entries larger than the benign external read limit", async () => {
+    const sessionFile = await createTempSessionFile();
+    const mergePromptReleasedSessionEntries = vi.fn();
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+      mergePromptReleasedSessionEntries,
+    });
+    await controller.releaseForPrompt();
+
+    const appended = await withOwnedSessionTranscriptWrites(
+      {
+        sessionFile,
+        withSessionWriteLock: (operation, options) =>
+          controller.withSessionWriteLock(operation, options),
+      },
+      async () =>
+        await appendSessionTranscriptMessage({
+          transcriptPath: sessionFile,
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "x".repeat(1024 * 1024 + 1) }],
+            provider: "anthropic",
+            model: "sonnet-4.6",
+          },
+        }),
+    );
+
+    expect(mergePromptReleasedSessionEntries).toHaveBeenCalledWith([
+      expect.objectContaining({ type: "message", id: appended.messageId }),
+    ]);
+    expect(controller.hasSessionTakeover()).toBe(false);
+    await controller.dispose();
+  });
+
+  it("validates large owned entries after migrating a large linear transcript", async () => {
+    const sessionFile = await createTempSessionFile();
+    await fs.appendFile(
+      sessionFile,
+      `${JSON.stringify({
+        type: "message",
+        id: "large-linear-user",
+        timestamp: new Date().toISOString(),
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "x".repeat(7 * 1024 * 1024) }],
+        },
+      })}\n`,
+      "utf8",
+    );
+    const mergePromptReleasedSessionEntries = vi.fn();
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+      mergePromptReleasedSessionEntries,
+    });
+    await controller.releaseForPrompt();
+
+    const appended = await withOwnedSessionTranscriptWrites(
+      {
+        sessionFile,
+        withSessionWriteLock: (operation, options) =>
+          controller.withSessionWriteLock(operation, options),
+      },
+      async () =>
+        await appendSessionTranscriptMessage({
+          transcriptPath: sessionFile,
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "y".repeat(3 * 1024 * 1024) }],
+            provider: "anthropic",
+            model: "sonnet-4.6",
+          },
+        }),
+    );
+
+    const persisted = await fs.readFile(sessionFile, "utf8");
+    expect(persisted).toContain('"parentId"');
+    expect(mergePromptReleasedSessionEntries).toHaveBeenCalledWith([
+      expect.objectContaining({ type: "message", id: appended.messageId }),
+    ]);
+    expect(controller.hasSessionTakeover()).toBe(false);
+    await controller.dispose();
+  });
+
   it("serializes concurrent nested owned transcript publications", async () => {
     const sessionFile = await createTempSessionFile();
     const mergedIds: string[] = [];
