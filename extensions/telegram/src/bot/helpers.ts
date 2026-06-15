@@ -483,6 +483,7 @@ export function buildTypingThreadParams(messageThreadId?: number) {
 export function resolveTelegramStreamMode(telegramCfg?: {
   streaming?: unknown;
   streamMode?: unknown;
+  sessionStreamingMode?: unknown;
 }): TelegramStreamMode {
   return resolveTelegramPreviewStreamMode(telegramCfg);
 }

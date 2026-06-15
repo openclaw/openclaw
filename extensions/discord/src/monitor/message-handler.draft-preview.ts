@@ -28,6 +28,7 @@ type DiscordConfig = NonNullable<OpenClawConfig["channels"]>["discord"];
 export function createDiscordDraftPreviewController(params: {
   cfg: OpenClawConfig;
   discordConfig: DiscordConfig;
+  sessionStreamingMode?: unknown;
   accountId: string;
   sourceRepliesAreToolOnly: boolean;
   textLimit: number;
@@ -39,7 +40,10 @@ export function createDiscordDraftPreviewController(params: {
   chunkMode: Parameters<typeof chunkDiscordTextWithMode>[1]["chunkMode"];
   log: (message: string) => void;
 }) {
-  const discordStreamMode = resolveDiscordPreviewStreamMode(params.discordConfig);
+  const discordStreamMode = resolveDiscordPreviewStreamMode({
+    ...params.discordConfig,
+    sessionStreamingMode: params.sessionStreamingMode,
+  });
   const draftMaxChars = Math.min(params.textLimit, 2000);
   const accountBlockStreamingEnabled =
     resolveChannelStreamingBlockEnabled(params.discordConfig) ??

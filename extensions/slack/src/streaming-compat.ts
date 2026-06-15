@@ -1,6 +1,7 @@
 // Slack plugin module implements streaming compat behavior.
 import {
   getChannelStreamingConfigObject,
+  resolveChannelPreviewStreamMode,
   resolveChannelStreamingNativeTransport,
 } from "openclaw/plugin-sdk/channel-outbound";
 import {
@@ -65,8 +66,15 @@ export function resolveSlackStreamingMode(
   params: {
     streamMode?: unknown;
     streaming?: unknown;
+    sessionStreamingMode?: unknown;
   } = {},
 ): StreamingMode {
+  if (params.sessionStreamingMode !== undefined) {
+    const sessionMode = resolveChannelPreviewStreamMode(params, "partial", {
+      sessionMode: params.sessionStreamingMode,
+    });
+    return sessionMode;
+  }
   const parsedStreaming = parseStreamingMode(
     getChannelStreamingConfigObject(params)?.mode ?? params.streaming,
   );

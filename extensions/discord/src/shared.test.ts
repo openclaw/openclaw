@@ -33,6 +33,13 @@ describe("createDiscordPluginBase", () => {
     expect(plugin.security?.collectAuditFindings).toBeTypeOf("function");
   });
 
+  it("advertises the preview-streaming session override so /stream is supported", () => {
+    const plugin = createDiscordPluginBase({ setup: {} as never });
+
+    // Gates handleStreamCommand: without this flag /stream silently replies "unsupported".
+    expect(plugin.capabilities?.previewStreamingSessionOverride).toBe(true);
+  });
+
   it("hydrates announce delivery targets from stored session routing", () => {
     const plugin = createDiscordPluginBase({ setup: {} as never });
 

@@ -1,7 +1,7 @@
-/** Shared command registry builders used by browser-safe and runtime command lists. */
-import { formatFastModeAutoLabel, resolveFastModeModelAutoOnSeconds } from "../shared/fast-mode.js";
 import { normalizeOptionalLowercaseString } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeStringEntries } from "../../packages/normalization-core/src/string-normalization.js";
+/** Shared command registry builders used by browser-safe and runtime command lists. */
+import { formatFastModeAutoLabel, resolveFastModeModelAutoOnSeconds } from "../shared/fast-mode.js";
 import { COMMAND_ARG_FORMATTERS } from "./commands-args.js";
 import type {
   ChatCommandDefinition,
@@ -850,6 +850,24 @@ export function buildBuiltinChatCommands(
             "default",
             "status",
           ],
+        },
+      ],
+      argsMenu: "auto",
+    }),
+    defineChatCommand({
+      key: "stream",
+      nativeName: "stream",
+      nativeAliases: ["streaming"],
+      description: "Set preview streaming mode for this chat.",
+      textAliases: ["/stream", "/streaming"],
+      category: "options",
+      tier: "standard",
+      args: [
+        {
+          name: "mode",
+          description: "status, off, partial, block, progress, or default",
+          type: "string",
+          choices: ["status", "off", "partial", "block", "progress", "default"],
         },
       ],
       argsMenu: "auto",

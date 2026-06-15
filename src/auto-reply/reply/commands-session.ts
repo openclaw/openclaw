@@ -12,10 +12,15 @@ import {
   setChannelConversationBindingMaxAgeBySessionKey,
 } from "../../channels/plugins/conversation-bindings.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import {
+  resolveChannelPreviewStreamMode,
+  type StreamingCompatEntry,
+} from "../../channels/streaming.js";
 import { formatThreadBindingDurationLabel } from "../../channels/thread-bindings-messages.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { isRestartEnabled } from "../../config/commands.flags.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
+import type { StreamingMode } from "../../config/types.base.js";
 import { logVerbose } from "../../globals.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
@@ -49,9 +54,87 @@ import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
 import { resolveConversationBindingContextFromAcpCommand } from "./conversation-binding-input.js";
 
 const SESSION_COMMAND_PREFIX = "/session";
+const STREAM_COMMAND_PREFIXES = ["/stream", "/streaming"] as const;
 const SESSION_DURATION_OFF_VALUES = new Set(["off", "disable", "disabled", "none", "0"]);
 const SESSION_ACTION_IDLE = "idle";
 const SESSION_ACTION_MAX_AGE = "max-age";
+
+function matchStreamCommand(normalized: string): (typeof STREAM_COMMAND_PREFIXES)[number] | null {
+  return (
+    STREAM_COMMAND_PREFIXES.find(
+      (prefix) => normalized === prefix || normalized.startsWith(`${prefix} `),
+    ) ?? null
+  );
+}
+
+function normalizeStreamCommandMode(raw: string): StreamingMode | undefined {
+  const normalized = normalizeLowercaseStringOrEmpty(raw);
+  if (normalized === "final") {
+    return "off";
+  }
+  return parseStreamCommandMode(normalized);
+}
+
+function parseStreamCommandMode(value: unknown): StreamingMode | undefined {
+  const normalized = typeof value === "string" ? normalizeLowercaseStringOrEmpty(value) : "";
+  if (
+    normalized === "off" ||
+    normalized === "partial" ||
+    normalized === "block" ||
+    normalized === "progress"
+  ) {
+    return normalized;
+  }
+  return undefined;
+}
+
+function formatStreamModeLabel(mode: StreamingMode): string {
+  return mode === "off" ? "off (final-only)" : mode;
+}
+
+function resolveStreamCommandSupported(params: HandleCommandsParams): boolean {
+  const channelId = normalizeChannelId(
+    params.command.channelId ?? resolveCommandSurfaceChannel(params),
+  );
+  if (!channelId) {
+    return false;
+  }
+  return getChannelPlugin(channelId)?.capabilities?.previewStreamingSessionOverride === true;
+}
+
+function resolveStreamCommandChannelId(params: HandleCommandsParams) {
+  return normalizeChannelId(params.command.channelId ?? resolveCommandSurfaceChannel(params));
+}
+
+function resolveStreamCommandDefaultMode(channelId: string | null): "off" | "partial" {
+  return channelId === "discord" ? "off" : "partial";
+}
+
+function resolveStreamCommandFallbackMode(channelId: string | null): StreamingMode {
+  return channelId === "discord" ? "progress" : "partial";
+}
+
+function resolveStreamCommandChannelConfig(params: HandleCommandsParams, channelId: string | null) {
+  if (!channelId) {
+    return undefined;
+  }
+  const channels = params.cfg.channels as Record<string, unknown> | undefined;
+  return (channels?.[channelId] ??
+    (params.cfg as Record<string, unknown> | undefined)?.[channelId]) as
+    | StreamingCompatEntry
+    | undefined;
+}
+
+function hasConfiguredPreviewStreaming(entry: StreamingCompatEntry | undefined): boolean {
+  if (!entry) {
+    return false;
+  }
+  return (
+    entry.streaming !== undefined ||
+    entry.streamMode !== undefined ||
+    entry.blockStreaming !== undefined
+  );
+}
 
 function buildRestartCommandSentinel(params: HandleCommandsParams): RestartSentinelPayload | null {
   const sessionKey = normalizeOptionalString(params.sessionKey);
@@ -473,6 +556,85 @@ export const handleFastCommand: CommandHandler = async (params, allowTextCommand
           ? "⚙️ Fast mode set to auto."
           : `⚙️ Fast mode ${nextMode ? "enabled" : "disabled"}.`,
     },
+  };
+};
+
+export const handleStreamCommand: CommandHandler = async (params, allowTextCommands) => {
+  if (!allowTextCommands) {
+    return null;
+  }
+  const normalized = params.command.commandBodyNormalized;
+  const prefix = matchStreamCommand(normalized);
+  if (!prefix) {
+    return null;
+  }
+  if (!params.command.isAuthorizedSender) {
+    logVerbose(
+      `Ignoring ${prefix} from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
+    );
+    return { shouldContinue: false };
+  }
+  if (!resolveStreamCommandSupported(params)) {
+    return {
+      shouldContinue: false,
+      reply: { text: "⚙️ /stream isn't supported on this channel yet." },
+    };
+  }
+
+  const rawArgs = normalized === prefix ? "" : normalized.slice(prefix.length).trim();
+  const rawMode = normalizeLowercaseStringOrEmpty(rawArgs);
+  const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+  if (!rawMode || rawMode === "status") {
+    const currentMode = parseStreamCommandMode(targetSessionEntry?.streamingMode);
+    if (currentMode) {
+      return {
+        shouldContinue: false,
+        reply: { text: `⚙️ Current stream mode: ${formatStreamModeLabel(currentMode)} (session).` },
+      };
+    }
+    const channelId = resolveStreamCommandChannelId(params);
+    const channelConfig = resolveStreamCommandChannelConfig(params, channelId);
+    const inheritedMode = hasConfiguredPreviewStreaming(channelConfig)
+      ? resolveChannelPreviewStreamMode(channelConfig, resolveStreamCommandDefaultMode(channelId))
+      : resolveStreamCommandFallbackMode(channelId);
+    const source = hasConfiguredPreviewStreaming(channelConfig)
+      ? "channel config"
+      : "channel default";
+    return {
+      shouldContinue: false,
+      reply: {
+        text: `⚙️ Current stream mode: ${formatStreamModeLabel(inheritedMode)} (${source}).`,
+      },
+    };
+  }
+
+  const resetsToDefault = isSessionDefaultDirectiveValue(rawMode);
+  const nextMode = resetsToDefault ? undefined : normalizeStreamCommandMode(rawMode);
+  if (nextMode === undefined) {
+    if (resetsToDefault) {
+      if (targetSessionEntry && params.sessionStore && params.sessionKey) {
+        delete targetSessionEntry.streamingMode;
+        await persistSessionEntry({ ...params, sessionEntry: targetSessionEntry });
+      }
+      return {
+        shouldContinue: false,
+        reply: { text: "⚙️ Stream mode reset to channel default." },
+      };
+    }
+    return {
+      shouldContinue: false,
+      reply: { text: "⚙️ Usage: /stream status|off|partial|block|progress|default" },
+    };
+  }
+
+  if (targetSessionEntry && params.sessionStore && params.sessionKey) {
+    targetSessionEntry.streamingMode = nextMode;
+    await persistSessionEntry({ ...params, sessionEntry: targetSessionEntry });
+  }
+
+  return {
+    shouldContinue: false,
+    reply: { text: `⚙️ Stream mode set to ${formatStreamModeLabel(nextMode)}.` },
   };
 };
 

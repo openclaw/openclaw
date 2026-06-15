@@ -872,7 +872,13 @@ export function resolveChannelStreamingNativeTransport(
 export function resolveChannelPreviewStreamMode(
   entry: StreamingCompatEntry | null | undefined,
   defaultMode: "off" | "partial",
+  options: { sessionMode?: unknown } = {},
 ): StreamingMode {
+  const sessionMode = parsePreviewStreamingMode(options.sessionMode);
+  if (sessionMode) {
+    return sessionMode;
+  }
+
   const parsedStreaming = parsePreviewStreamingMode(
     getChannelStreamingConfigObject(entry)?.mode ?? entry?.streaming,
   );

@@ -42,6 +42,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "chatType",
   "thinkingLevel",
   "fastMode",
+  "streamingMode",
   "verboseLevel",
   "traceLevel",
   "reasoningLevel",
