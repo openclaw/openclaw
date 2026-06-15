@@ -65,6 +65,12 @@ type AwsSdkAuthProfileMarkerStore = {
   profiles: AwsSdkProfileMarker[];
 };
 
+type RawAuthProfileImportStore = {
+  version: number;
+  profiles: Record<string, Record<string, unknown>>;
+  order?: Record<string, string[]>;
+};
+
 export type LegacyFlatAuthProfileRepairResult = {
   detected: string[];
   changes: string[];
@@ -294,11 +300,13 @@ function collectAuthProfileStateProfileIds(state: AuthProfileState): string[] {
 }
 
 function coerceLegacyConfigAuthProfileStore(cfg: OpenClawConfig): AuthProfileStore | null {
-  const profiles = isRecord(cfg.auth?.profiles) ? cfg.auth.profiles : null;
+  const cfgRecord: Record<string, unknown> = cfg;
+  const auth = isRecord(cfgRecord.auth) ? cfgRecord.auth : null;
+  const profiles = auth && isRecord(auth.profiles) ? auth.profiles : null;
   if (!profiles) {
     return null;
   }
-  const store: Record<string, unknown> = { version: AUTH_STORE_VERSION, profiles: {} };
+  const store: RawAuthProfileImportStore = { version: AUTH_STORE_VERSION, profiles: {} };
   for (const [profileId, raw] of Object.entries(profiles)) {
     if (!isRecord(raw)) {
       continue;
@@ -350,8 +358,8 @@ function coerceLegacyConfigAuthProfileStore(cfg: OpenClawConfig): AuthProfileSto
     }
     store.profiles[profileId] = next;
   }
-  if (isRecord(cfg.auth?.order)) {
-    const state = coerceAuthProfileState({ order: cfg.auth.order });
+  if (auth && isRecord(auth.order)) {
+    const state = coerceAuthProfileState({ order: auth.order });
     if (state.order) {
       store.order = state.order;
     }
