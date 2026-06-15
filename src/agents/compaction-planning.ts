@@ -359,7 +359,10 @@ export function pruneHistoryForContextShare(params: {
   const defaultShare = isHandoff ? 0.2 : 0.5; // Stricter budget for handoff snapshots
   const maxHistoryShare = params.maxHistoryShare ?? defaultShare;
   const budgetTokens = Math.max(1, Math.floor(params.maxContextTokens * maxHistoryShare));
-  let keptMessages = params.messages;
+  // Validate the retained history before any budget-driven chunk drop. Some
+  // timeout paths leave an assistant tool_use in history without its matching
+  // result even when the history already fits the target budget.
+  let keptMessages = repairToolUseResultPairing(params.messages).messages;
   const allDroppedMessages: AgentMessage[] = [];
   let droppedChunks = 0;
   let droppedMessages = 0;
