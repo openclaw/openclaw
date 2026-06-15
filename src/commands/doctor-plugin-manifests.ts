@@ -1,12 +1,13 @@
+/** Doctor migration for legacy plugin manifest capability keys into contracts.* fields. */
 import fs from "node:fs";
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { z } from "zod";
+import { note } from "../../packages/terminal-core/src/note.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
-import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
 import { safeParseJsonWithSchema, safeParseWithSchema } from "../utils/zod-parse.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
@@ -15,6 +16,7 @@ const LEGACY_MANIFEST_CONTRACT_KEYS = [
   "speechProviders",
   "mediaUnderstandingProviders",
   "imageGenerationProviders",
+  "tools",
 ] as const;
 
 type LegacyManifestContractMigration = {
@@ -89,6 +91,7 @@ function buildLegacyManifestContractMigration(params: {
   };
 }
 
+/** Collects manifest rewrites needed to move legacy top-level capability keys under contracts. */
 export function collectLegacyPluginManifestContractMigrations(params?: {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -149,6 +152,7 @@ export function collectLegacyPluginManifestContractMigrations(params?: {
   return migrations.toSorted((left, right) => left.manifestPath.localeCompare(right.manifestPath));
 }
 
+/** Prompts and rewrites legacy plugin manifest contract fields when doctor repair is enabled. */
 export async function maybeRepairLegacyPluginManifestContracts(params: {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;

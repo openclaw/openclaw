@@ -1,10 +1,11 @@
+// Qa Channel plugin module implements setup entry behavior.
 import { defineBundledChannelSetupEntry } from "openclaw/plugin-sdk/channel-entry-contract";
 
 export default defineBundledChannelSetupEntry({
   importMetaUrl: import.meta.url,
   plugin: {
-    specifier: "./channel-plugin-api.js",
-    exportName: "qaChannelPlugin",
+    specifier: "./setup-plugin-api.js",
+    exportName: "qaChannelSetupPlugin",
   },
   runtime: {
     specifier: "./api.js",

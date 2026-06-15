@@ -1,11 +1,13 @@
+// Discord plugin module implements gateway metadata behavior.
 import type { APIGatewayBotInfo } from "discord-api-types/v10";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { captureHttpExchange } from "openclaw/plugin-sdk/proxy-capture";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { Type } from "typebox";
 import { Check, Errors } from "typebox/value";
+import { isDiscordRateLimitResponseBody, summarizeDiscordResponseBody } from "../error-body.js";
 import { withAbortTimeout } from "./timeouts.js";
 
 const DISCORD_GATEWAY_BOT_URL = "https://discord.com/api/v10/gateway/bot";
@@ -16,7 +18,7 @@ const MAX_DISCORD_GATEWAY_INFO_TIMEOUT_MS = 120_000;
 const DISCORD_GATEWAY_INFO_TIMEOUT_ENV = "OPENCLAW_DISCORD_GATEWAY_INFO_TIMEOUT_MS";
 const DISCORD_GATEWAY_METADATA_FALLBACK_LOG_INTERVAL_MS = 60_000;
 
-export type DiscordGatewayMetadataResponse = Pick<Response, "ok" | "status" | "text">;
+type DiscordGatewayMetadataResponse = Pick<Response, "ok" | "status" | "text">;
 export type DiscordGatewayFetchInit = Record<string, unknown> & {
   headers?: Record<string, string>;
 };
@@ -24,6 +26,10 @@ export type DiscordGatewayFetch = (
   input: string,
   init?: DiscordGatewayFetchInit,
 ) => Promise<DiscordGatewayMetadataResponse>;
+export type DiscordGatewayMetadataFetchOptions = {
+  capture?: false | { flowId: string; meta: Record<string, unknown> };
+  proxyUrl?: string;
+};
 
 type DiscordGatewayMetadataError = Error & { transient?: boolean };
 
@@ -60,12 +66,11 @@ async function materializeGuardedResponse(response: Response): Promise<Response>
 }
 
 function normalizeGatewayInfoTimeoutMs(value: unknown): number | undefined {
-  const numeric =
-    typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
-  if (!Number.isFinite(numeric) || numeric <= 0) {
+  const numeric = parseStrictPositiveInteger(value);
+  if (numeric === undefined) {
     return undefined;
   }
-  return Math.min(Math.floor(numeric), MAX_DISCORD_GATEWAY_INFO_TIMEOUT_MS);
+  return Math.min(numeric, MAX_DISCORD_GATEWAY_INFO_TIMEOUT_MS);
 }
 
 export function resolveDiscordGatewayInfoTimeoutMs(params?: {
@@ -80,18 +85,21 @@ export function resolveDiscordGatewayInfoTimeoutMs(params?: {
 }
 
 function summarizeGatewayResponseBody(body: string): string {
-  const normalized = body.trim().replace(/\s+/g, " ");
-  if (!normalized) {
-    return "<empty>";
-  }
-  return normalized.slice(0, 240);
+  return summarizeDiscordResponseBody(body, { emptyText: "<empty>" }) ?? "<empty>";
+}
+
+function isDiscordGatewayRateLimitResponse(status: number, body: string): boolean {
+  return status === 429 && isDiscordRateLimitResponseBody(body);
 }
 
 function isTransientDiscordGatewayResponse(status: number, body: string): boolean {
   if (status >= 500) {
     return true;
   }
-  const normalized = normalizeLowercaseStringOrEmpty(body);
+  if (isDiscordGatewayRateLimitResponse(status, body)) {
+    return true;
+  }
+  const normalized = body.toLowerCase();
   return (
     normalized.includes("upstream connect error") ||
     normalized.includes("disconnect/reset before headers") ||
@@ -262,10 +270,10 @@ export function resolveGatewayInfoWithFallback(params: { runtime?: RuntimeEnv; e
   };
 }
 
-export async function fetchDiscordGatewayMetadataDirect(
+export async function fetchDiscordGatewayMetadataGuarded(
   input: string,
   init?: DiscordGatewayFetchInit,
-  capture?: false | { flowId: string; meta: Record<string, unknown> },
+  options?: DiscordGatewayMetadataFetchOptions,
 ): Promise<Response> {
   const guarded = await fetchWithSsrFGuard({
     url: resolveFetchInputUrl(input),
@@ -273,6 +281,16 @@ export async function fetchDiscordGatewayMetadataDirect(
     policy: { allowedHostnames: [DISCORD_API_HOST] },
     capture: false,
     auditContext: "discord.gateway.metadata",
+    ...(options?.proxyUrl
+      ? {
+          mode: "trusted_explicit_proxy" as const,
+          dispatcherPolicy: {
+            mode: "explicit-proxy" as const,
+            proxyUrl: options.proxyUrl,
+            allowPrivateProxy: true,
+          },
+        }
+      : {}),
   });
   let response: Response;
   try {
@@ -280,15 +298,15 @@ export async function fetchDiscordGatewayMetadataDirect(
   } finally {
     await guarded.release();
   }
-  if (capture) {
+  if (options?.capture) {
     captureHttpExchange({
       url: input,
       method: (init?.method as string | undefined) ?? "GET",
       requestHeaders: init?.headers as Headers | Record<string, string> | undefined,
       requestBody: (init as RequestInit & { body?: BodyInit | null })?.body ?? null,
       response,
-      flowId: capture.flowId,
-      meta: capture.meta,
+      flowId: options.capture.flowId,
+      meta: options.capture.meta,
     });
   }
   return response;

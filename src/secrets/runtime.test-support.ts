@@ -1,3 +1,4 @@
+/** Shared fixtures for secrets runtime unit tests. */
 import { afterEach, beforeAll, beforeEach, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -14,6 +15,10 @@ const { resolvePluginWebSearchProvidersMock } = vi.hoisted(() => ({
 
 vi.mock("../plugins/web-search-providers.runtime.js", () => ({
   resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
+}));
+
+vi.mock("../plugins/installed-plugin-index-records.js", () => ({
+  loadInstalledPluginIndexInstallRecordsSync: () => ({}),
 }));
 
 export function asConfig(value: unknown): OpenClawConfig {
@@ -64,6 +69,15 @@ function createTestProvider(params: {
     getConfiguredCredentialValue: (config) =>
       (config?.plugins?.entries?.[params.pluginId]?.config as { webSearch?: { apiKey?: unknown } })
         ?.webSearch?.apiKey,
+    getConfiguredCredentialFallback:
+      params.id === "gemini"
+        ? (config) => {
+            const provider = (config?.models?.providers?.google ?? {}) as { apiKey?: unknown };
+            return provider.apiKey !== undefined
+              ? { path: "models.providers.google.apiKey", value: provider.apiKey }
+              : undefined;
+          }
+        : undefined,
     setConfiguredCredentialValue: (configTarget, value) => {
       const plugins = (configTarget.plugins ??= {}) as { entries?: Record<string, unknown> };
       const entries = (plugins.entries ??= {});

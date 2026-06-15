@@ -1,3 +1,4 @@
+// Control UI module implements usage types behavior.
 import type {
   SessionUsageTimePoint as SharedSessionUsageTimePoint,
   SessionUsageTimeSeries as SharedSessionUsageTimeSeries,
@@ -15,6 +16,7 @@ export type CostUsageSummary = {
   days: number;
   daily: CostUsageDailyEntry[];
   totals: SessionsUsageTotals;
+  cacheStatus?: SharedSessionsUsageResult["cacheStatus"];
 };
 
 export type SessionUsageTimePoint = SharedSessionUsageTimePoint;

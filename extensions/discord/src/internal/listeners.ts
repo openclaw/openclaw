@@ -1,7 +1,9 @@
+// Discord plugin module implements listeners behavior.
 import {
   GatewayDispatchEvents,
   type APIMessage,
   type APIReaction,
+  type APIVoiceState,
   type GatewayPresenceUpdateDispatchData,
   type GatewayThreadUpdateDispatchData,
 } from "discord-api-types/v10";
@@ -45,6 +47,10 @@ export abstract class ReadyListener extends BaseListener {
   readonly type = GatewayDispatchEvents.Ready;
 }
 
+export abstract class ResumedListener extends BaseListener {
+  readonly type = GatewayDispatchEvents.Resumed;
+}
+
 export abstract class MessageCreateListener extends BaseListener {
   readonly type = GatewayDispatchEvents.MessageCreate;
   abstract override handle(data: DiscordMessageDispatchData, client: Client): Promise<void> | void;
@@ -70,6 +76,11 @@ export abstract class PresenceUpdateListener extends BaseListener {
     data: GatewayPresenceUpdateDispatchData,
     client: Client,
   ): Promise<void> | void;
+}
+
+export abstract class VoiceStateUpdateListener extends BaseListener {
+  readonly type = GatewayDispatchEvents.VoiceStateUpdate;
+  abstract override handle(data: APIVoiceState, client: Client): Promise<void> | void;
 }
 
 export abstract class ThreadUpdateListener extends BaseListener {

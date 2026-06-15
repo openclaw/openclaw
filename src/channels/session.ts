@@ -1,6 +1,8 @@
+// Inbound channel session recorder and last-route updater.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { GroupKeyResolution } from "../config/sessions/types.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
 import type { InboundLastRouteUpdate } from "./session.types.js";
 export type { InboundLastRouteUpdate, RecordInboundSession } from "./session.types.js";
 
@@ -9,6 +11,7 @@ let inboundSessionRuntimePromise: Promise<
 > | null = null;
 
 function loadInboundSessionRuntime() {
+  // Keep session persistence lazy so channel SDK type paths do not load disk writers.
   inboundSessionRuntimePromise ??= import("../config/sessions/inbound.runtime.js");
   return inboundSessionRuntimePromise;
 }
@@ -38,8 +41,9 @@ export async function recordInboundSession(params: {
   onRecordError: (err: unknown) => void;
   trackSessionMetaTask?: (task: Promise<unknown>) => void;
 }): Promise<void> {
+  // Session keys may contain opaque peer ids; preserve case-sensitive payloads while normalizing shape.
   const { storePath, sessionKey, ctx, groupResolution, createIfMissing } = params;
-  const canonicalSessionKey = normalizeLowercaseStringOrEmpty(sessionKey);
+  const canonicalSessionKey = normalizeSessionKeyPreservingOpaquePeerIds(sessionKey);
   const runtime = await loadInboundSessionRuntime();
   const metaTask = runtime
     .recordSessionMetaFromInbound({
@@ -60,10 +64,11 @@ export async function recordInboundSession(params: {
   if (shouldSkipPinnedMainDmRouteUpdate(update.mainDmOwnerPin)) {
     return;
   }
-  const targetSessionKey = normalizeLowercaseStringOrEmpty(update.sessionKey);
+  const targetSessionKey = normalizeSessionKeyPreservingOpaquePeerIds(update.sessionKey);
   await runtime.updateLastRoute({
     storePath,
     sessionKey: targetSessionKey,
+    route: update.route,
     deliveryContext: {
       channel: update.channel,
       to: update.to,

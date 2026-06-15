@@ -37,10 +37,12 @@ Capabilities are the public **native plugin** model inside OpenClaw. Every nativ
 | ---------------------- | ------------------------------------------------ | ------------------------------------ |
 | Text inference         | `api.registerProvider(...)`                      | `openai`, `anthropic`                |
 | CLI inference backend  | `api.registerCliBackend(...)`                    | `openai`, `anthropic`                |
+| Embeddings             | `api.registerEmbeddingProvider(...)`             | Provider-owned vector plugins        |
 | Speech                 | `api.registerSpeechProvider(...)`                | `elevenlabs`, `microsoft`            |
 | Realtime transcription | `api.registerRealtimeTranscriptionProvider(...)` | `openai`                             |
 | Realtime voice         | `api.registerRealtimeVoiceProvider(...)`         | `openai`                             |
 | Media understanding    | `api.registerMediaUnderstandingProvider(...)`    | `openai`, `google`                   |
+| Transcripts source     | `api.registerTranscriptSourceProvider(...)`      | `discord`                            |
 | Image generation       | `api.registerImageGenerationProvider(...)`       | `openai`, `google`, `fal`, `minimax` |
 | Music generation       | `api.registerMusicGenerationProvider(...)`       | `google`, `minimax`                  |
 | Video generation       | `api.registerVideoGenerationProvider(...)`       | `qwen`                               |
@@ -123,7 +125,7 @@ OpenClaw's plugin system has four layers:
     Core decides whether a discovered plugin is enabled, disabled, blocked, or selected for an exclusive slot such as memory.
   </Step>
   <Step title="Runtime loading">
-    Native OpenClaw plugins are loaded in-process via jiti and register capabilities into a central registry. Compatible bundles are normalized into registry records without importing runtime code.
+    Native OpenClaw plugins are loaded in-process and register capabilities into a central registry. Packaged JavaScript loads through native `require`; third-party local source TypeScript is the emergency Jiti fallback. Compatible bundles are normalized into registry records without importing runtime code.
   </Step>
   <Step title="Surface consumption">
     The rest of OpenClaw reads the registry to expose tools, channels, provider setup, hooks, HTTP routes, CLI commands, and services.

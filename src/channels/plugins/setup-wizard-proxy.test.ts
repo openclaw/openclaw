@@ -1,3 +1,4 @@
+// Setup wizard proxy tests cover proxying setup wizard calls through channel plugin facades.
 import {
   promptSetupWizardAllowFrom,
   resolveSetupWizardAllowFromEntries,
@@ -153,7 +154,7 @@ describe("createAllowlistSetupWizardProxy", () => {
 
     expect(
       await promptSetupWizardAllowFrom({ promptAllowFrom: wizard.dmPolicy?.promptAllowFrom }),
-    ).toEqual({});
+    ).toStrictEqual({});
     expect(
       await resolveSetupWizardAllowFromEntries({
         resolveEntries: wizard.allowFrom?.resolveEntries,

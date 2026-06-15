@@ -1,3 +1,4 @@
+// Check No Raw Window Open tests cover check no raw window open script behavior.
 import { describe, expect, it } from "vitest";
 import { findRawWindowOpenLines } from "../../scripts/check-no-raw-window-open.mjs";
 
@@ -25,7 +26,7 @@ describe("check-no-raw-window-open", () => {
       // window.open("https://example.com")
       const text = "window.open('https://example.com')";
     `;
-    expect(findRawWindowOpenLines(source)).toEqual([]);
+    expect(findRawWindowOpenLines(source)).toStrictEqual([]);
   });
 
   it("handles parenthesized and asserted window references", () => {

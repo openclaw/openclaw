@@ -1,3 +1,4 @@
+// Msteams tests cover graph messages.actions plugin behavior.
 import { beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import {
@@ -20,6 +21,38 @@ let unreactMessageMSTeams: GraphMessagesTestModule["unreactMessageMSTeams"];
 beforeAll(async () => {
   ({ pinMessageMSTeams, reactMessageMSTeams, unpinMessageMSTeams, unreactMessageMSTeams } =
     await loadGraphMessagesTestModule());
+});
+
+const emptyReactionCases: Array<{
+  name: string;
+  invoke: () => Promise<unknown>;
+}> = [
+  {
+    name: "reactMessageMSTeams",
+    invoke: () =>
+      reactMessageMSTeams({
+        cfg: {} as OpenClawConfig,
+        to: CHAT_ID,
+        messageId: "msg-1",
+        reactionType: "   ",
+      }),
+  },
+  {
+    name: "unreactMessageMSTeams",
+    invoke: () =>
+      unreactMessageMSTeams({
+        cfg: {} as OpenClawConfig,
+        to: CHAT_ID,
+        messageId: "msg-1",
+        reactionType: "",
+      }),
+  },
+];
+
+describe("MSTeams reaction validation", () => {
+  it.each(emptyReactionCases)("$name rejects empty reaction type", async ({ invoke }) => {
+    await expect(invoke()).rejects.toThrow(/Reaction type is required/);
+  });
 });
 
 describe("pinMessageMSTeams", () => {
@@ -159,17 +192,6 @@ describe("reactMessageMSTeams", () => {
     });
   });
 
-  it("rejects empty reaction type", async () => {
-    await expect(
-      reactMessageMSTeams({
-        cfg: {} as OpenClawConfig,
-        to: CHAT_ID,
-        messageId: "msg-1",
-        reactionType: "   ",
-      }),
-    ).rejects.toThrow(/Reaction type is required/);
-  });
-
   it("resolves user: target through conversation store", async () => {
     mockState.findPreferredDmByUserId.mockResolvedValue({
       conversationId: "a:bot-id",
@@ -228,16 +250,5 @@ describe("unreactMessageMSTeams", () => {
       path: "/teams/team-id-1/channels/channel-id-1/messages/msg-2/unsetReaction",
       body: { reactionType: "angry" },
     });
-  });
-
-  it("rejects empty reaction type", async () => {
-    await expect(
-      unreactMessageMSTeams({
-        cfg: {} as OpenClawConfig,
-        to: CHAT_ID,
-        messageId: "msg-1",
-        reactionType: "",
-      }),
-    ).rejects.toThrow(/Reaction type is required/);
   });
 });

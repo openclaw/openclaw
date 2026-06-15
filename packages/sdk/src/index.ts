@@ -1,3 +1,5 @@
+// Public OpenClaw SDK entrypoint. Re-export client namespaces, event helpers,
+// transport, and stable SDK types from focused modules.
 export {
   Agent,
   AgentsNamespace,
@@ -20,9 +22,15 @@ export { GatewayClientTransport, isConnectableTransport } from "./transport.js";
 export type {
   AgentRunParams,
   ApprovalMode,
+  ArtifactQuery,
   ArtifactSummary,
+  ArtifactsDownloadResult,
+  ArtifactsGetResult,
+  ArtifactsListResult,
   ConnectableOpenClawTransport,
   EnvironmentSelection,
+  EnvironmentSummary,
+  EnvironmentsListResult,
   GatewayEvent,
   GatewayRequestOptions,
   JsonObject,
@@ -38,5 +46,13 @@ export type {
   SessionCreateParams,
   SessionSendParams,
   SessionTarget,
+  TaskStatus,
+  TaskSummary,
+  TasksCancelResult,
+  TasksGetResult,
+  TasksListParams,
+  TasksListResult,
+  ToolInvokeParams,
+  ToolInvokeResult,
   WorkspaceSelection,
 } from "./types.js";

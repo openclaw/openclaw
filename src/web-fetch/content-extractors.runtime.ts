@@ -1,42 +1,28 @@
+/** Runtime bridge for plugin-provided readable-content extractors used by web fetch. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createConfigScopedPromiseLoader } from "../plugins/plugin-cache-primitives.js";
 import type {
   WebContentExtractionResult,
   WebContentExtractMode,
 } from "../plugins/web-content-extractor-types.js";
 import { resolvePluginWebContentExtractors } from "../plugins/web-content-extractors.runtime.js";
 
-let extractorPromise: Promise<ReturnType<typeof resolvePluginWebContentExtractors>> | undefined;
-const extractorPromisesByConfig = new WeakMap<
-  OpenClawConfig,
-  Promise<ReturnType<typeof resolvePluginWebContentExtractors>>
->();
+// Runtime loader for plugin-provided readable-content extractors. The loader is
+// config-scoped so plugin registry results can be reused within a config view.
+const webContentExtractorLoader = createConfigScopedPromiseLoader((config?: OpenClawConfig) =>
+  resolvePluginWebContentExtractors(config ? { config } : undefined),
+);
 
-async function loadWebContentExtractors(config?: OpenClawConfig) {
-  if (config) {
-    const cached = extractorPromisesByConfig.get(config);
-    if (cached) {
-      return await cached;
-    }
-    const promise = Promise.resolve().then(() => resolvePluginWebContentExtractors({ config }));
-    extractorPromisesByConfig.set(config, promise);
-    void promise.catch(() => {
-      extractorPromisesByConfig.delete(config);
-    });
-    return await promise;
-  }
-  extractorPromise ??= Promise.resolve(resolvePluginWebContentExtractors());
-  return await extractorPromise;
-}
-
+/** Runs configured content extractors until one returns readable text. */
 export async function extractReadableContent(params: {
   html: string;
   url: string;
   extractMode: WebContentExtractMode;
   config?: OpenClawConfig;
 }): Promise<(WebContentExtractionResult & { extractor: string }) | null> {
-  let extractors: Awaited<ReturnType<typeof loadWebContentExtractors>>;
+  let extractors: Awaited<ReturnType<typeof webContentExtractorLoader.load>>;
   try {
-    extractors = await loadWebContentExtractors(params.config);
+    extractors = await webContentExtractorLoader.load(params.config);
   } catch {
     return null;
   }
@@ -50,6 +36,8 @@ export async function extractReadableContent(params: {
         extractMode: params.extractMode,
       });
     } catch {
+      // Extraction is best-effort across plugins; one broken extractor should
+      // not prevent later extractors from handling the page.
       continue;
     }
     if (result?.text) {

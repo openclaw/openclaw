@@ -3,6 +3,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pathExists } from "../infra/fs-safe.js";
 import type {
   MigrationApplyResult,
   MigrationItem,
@@ -18,6 +19,7 @@ import {
 
 export type { MigrationApplyResult, MigrationItem } from "../plugins/types.js";
 
+/** Wrap migration runtime config access with a cached mutable snapshot during apply. */
 export function withCachedMigrationConfigRuntime(
   runtime: MigrationProviderContext["runtime"] | undefined,
   fallbackConfig: MigrationProviderContext["config"],
@@ -67,12 +69,7 @@ export function withCachedMigrationConfigRuntime(
 }
 
 async function exists(filePath: string): Promise<boolean> {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
+  return await pathExists(filePath);
 }
 
 async function backupExistingMigrationTarget(
@@ -134,6 +131,7 @@ async function resolveUniqueArchivePath(
   return candidate;
 }
 
+/** Archive a migration item source into the report directory and mark the item migrated. */
 export async function archiveMigrationItem(
   item: MigrationItem,
   reportDir: string,
@@ -170,6 +168,7 @@ export async function archiveMigrationItem(
   }
 }
 
+/** Copy a migration item source to its target, optionally backing up an overwritten target. */
 export async function copyMigrationFileItem(
   item: MigrationItem,
   reportDir: string,
@@ -205,6 +204,7 @@ export async function copyMigrationFileItem(
   }
 }
 
+/** Write redacted JSON and Markdown migration reports into the apply report directory. */
 export async function writeMigrationReport(
   result: MigrationApplyResult,
   opts: { title?: string } = {},

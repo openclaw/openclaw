@@ -1,9 +1,9 @@
+// Synology Chat plugin module implements channel mocks behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Mock } from "vitest";
 import { vi } from "vitest";
-import type { ResolvedSynologyChatAccount } from "./types.js";
 
-export type RegisteredRoute = {
+type RegisteredRoute = {
   path: string;
   accountId: string;
   handler: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
@@ -19,7 +19,7 @@ export const dispatchReplyWithBufferedBlockDispatcher: Mock<
 export const finalizeInboundContextMock: Mock<
   (ctx: Record<string, unknown>) => Record<string, unknown>
 > = vi.fn((ctx) => ctx);
-export const buildChannelTurnContextMock: Mock<
+export const buildChannelInboundEventContextMock: Mock<
   (params: {
     channel: string;
     accountId?: string;
@@ -142,7 +142,7 @@ vi.mock("./runtime.js", () => ({
         resolveStorePath: vi.fn(() => "/tmp/openclaw/synology-chat-sessions.json"),
         recordInboundSession: vi.fn(async () => undefined),
       },
-      turn: {
+      inbound: {
         run: vi.fn(async (params) => {
           const input = await params.adapter.ingest(params.raw);
           if (!input) {
@@ -169,31 +169,9 @@ vi.mock("./runtime.js", () => ({
             routeSessionKey: resolved.routeSessionKey,
           };
         }),
-        buildContext: buildChannelTurnContextMock,
+        buildContext: buildChannelInboundEventContextMock,
       },
     },
   })),
   setSynologyRuntime: vi.fn(),
 }));
-
-export function makeSecurityAccount(
-  overrides: Partial<ResolvedSynologyChatAccount> = {},
-): ResolvedSynologyChatAccount {
-  return {
-    accountId: "default",
-    enabled: true,
-    token: "t",
-    incomingUrl: "https://nas/incoming",
-    nasHost: "h",
-    webhookPath: "/w",
-    webhookPathSource: "default",
-    dangerouslyAllowNameMatching: false,
-    dangerouslyAllowInheritedWebhookPath: false,
-    dmPolicy: "allowlist" as const,
-    allowedUserIds: [],
-    rateLimitPerMinute: 30,
-    botName: "Bot",
-    allowInsecureSsl: false,
-    ...overrides,
-  };
-}

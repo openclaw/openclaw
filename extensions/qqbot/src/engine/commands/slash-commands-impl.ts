@@ -31,17 +31,9 @@ export function initCommands(port: CommandsPort): void {
   initSlashCommandDeps(port);
 }
 
-export type {
-  SlashCommandContext,
-  SlashCommandResult,
-  SlashCommandFileResult,
-  QQBotFrameworkCommand,
-  QueueSnapshot,
-} from "./slash-commands.js";
-
 /**
- * Return all commands that require authorization, for registration with the
- * framework via api.registerCommand() in registerFull().
+ * Return commands that may be registered with the framework via
+ * api.registerCommand() in registerFull().
  */
 export function getFrameworkCommands(): QQBotFrameworkCommand[] {
   return registry.getFrameworkCommands();

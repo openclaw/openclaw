@@ -1,5 +1,11 @@
+/**
+ * Runtime SDK subpath for building approval replies and exec approval presentations.
+ */
 export {
   buildApprovalInteractiveReplyFromActionDescriptors,
+  buildApprovalPresentation,
+  buildApprovalPresentationFromActionDescriptors,
+  buildExecApprovalPresentation,
   buildExecApprovalActionDescriptors,
   buildExecApprovalPendingReplyPayload,
   getExecApprovalApproverDmNoticeText,

@@ -1,15 +1,16 @@
+// Whatsapp plugin module implements outbound base behavior.
 import {
   DEFAULT_ACCOUNT_ID,
   listCombinedAccountIds,
   normalizeOptionalAccountId,
   resolveListedDefaultAccountId,
 } from "openclaw/plugin-sdk/account-core";
+import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createAttachedChannelResultAdapter,
   type ChannelOutboundAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-send-deps";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { sendTextMediaPayload } from "openclaw/plugin-sdk/reply-payload";
 import {
   normalizeWhatsAppOutboundPayload,
@@ -32,6 +33,7 @@ type WhatsAppSendTextOptions = {
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
   gifPlayback?: boolean;
   audioAsVoice?: boolean;
+  forceDocument?: boolean;
   accountId?: string;
   quotedMessageKey?: {
     id: string;
@@ -89,6 +91,7 @@ type WhatsAppOutboundBaseCore = Pick<
   | "chunkerMode"
   | "textChunkLimit"
   | "sanitizeText"
+  | "deliveryCapabilities"
   | "pollMaxOptions"
   | "resolveTarget"
   | "sendText"
@@ -111,6 +114,7 @@ export function createWhatsAppOutboundBase({
   | "chunkerMode"
   | "textChunkLimit"
   | "sanitizeText"
+  | "deliveryCapabilities"
   | "pollMaxOptions"
   | "resolveTarget"
   | "sendPayload"
@@ -144,6 +148,13 @@ export function createWhatsAppOutboundBase({
     chunkerMode: "text",
     textChunkLimit: 4000,
     sanitizeText: ({ text }) => normalizeText(text),
+    deliveryCapabilities: {
+      durableFinal: {
+        text: true,
+        replyTo: true,
+        messageSendingHooks: true,
+      },
+    },
     pollMaxOptions: 12,
     resolveTarget,
     ...createAttachedChannelResultAdapter({
@@ -183,6 +194,7 @@ export function createWhatsAppOutboundBase({
         accountId,
         deps,
         gifPlayback,
+        forceDocument,
         replyToId,
       }) => {
         const send =
@@ -205,6 +217,7 @@ export function createWhatsAppOutboundBase({
           ...(audioAsVoice === undefined ? {} : { audioAsVoice }),
           accountId: accountId ?? undefined,
           gifPlayback,
+          forceDocument,
           quotedMessageKey,
         });
       },

@@ -1,3 +1,4 @@
+// Zalo tests cover channelirectory plugin behavior.
 import {
   createDirectoryTestRuntime,
   expectDirectorySurface,
@@ -19,21 +20,18 @@ describe("zalo directory", () => {
       },
     } as unknown as OpenClawConfig;
 
-    await expect(
-      directory.listPeers({
-        cfg,
-        accountId: undefined,
-        query: undefined,
-        limit: undefined,
-        runtime: runtimeEnv,
-      }),
-    ).resolves.toEqual(
-      expect.arrayContaining([
-        { kind: "user", id: "123" },
-        { kind: "user", id: "234" },
-        { kind: "user", id: "345" },
-      ]),
-    );
+    const peers = await directory.listPeers({
+      cfg,
+      accountId: undefined,
+      query: undefined,
+      limit: undefined,
+      runtime: runtimeEnv,
+    });
+    expect(peers).toStrictEqual([
+      { kind: "user", id: "123" },
+      { kind: "user", id: "234" },
+      { kind: "user", id: "345" },
+    ]);
 
     await expect(
       directory.listGroups({
@@ -43,7 +41,7 @@ describe("zalo directory", () => {
         limit: undefined,
         runtime: runtimeEnv,
       }),
-    ).resolves.toEqual([]);
+    ).resolves.toStrictEqual([]);
   }
 
   it("lists peers from allowFrom", async () => {

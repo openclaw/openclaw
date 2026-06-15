@@ -6,8 +6,6 @@ read_when:
 title: "Zalo personal plugin"
 ---
 
-# Zalo Personal (plugin)
-
 Zalo Personal support for OpenClaw via a plugin, using native `zca-js` to automate a normal Zalo user account.
 
 <Warning>
@@ -34,9 +32,8 @@ No external `zca`/`openzca` CLI binary is required.
 openclaw plugins install @openclaw/zalouser
 ```
 
-If npm reports the OpenClaw-owned package as deprecated, that package version is
-from an older external package train; use a current packaged OpenClaw build or
-the local folder path until a newer npm package is published.
+Use the bare package to follow the current official release tag. Pin an exact
+version only when you need a reproducible install.
 
 Restart the Gateway afterwards.
 
@@ -86,4 +83,4 @@ Channel message actions also support `react` for message reactions.
 ## Related
 
 - [Building plugins](/plugins/building-plugins)
-- [Community plugins](/plugins/community)
+- [ClawHub](/clawhub)

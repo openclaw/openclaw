@@ -1,3 +1,4 @@
+// Check Plugin Sdk Wildcard Reexports tests cover check plugin sdk wildcard reexports script behavior.
 import { describe, expect, it } from "vitest";
 import { findPluginSdkWildcardReexports } from "../../scripts/check-plugin-sdk-wildcard-reexports.mjs";
 
@@ -26,6 +27,6 @@ describe("check-plugin-sdk-wildcard-reexports", () => {
           'export * from "./src/runtime-api.js";',
         ].join("\n"),
       ),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 });

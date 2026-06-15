@@ -1,3 +1,4 @@
+// Browser tests cover server context.remote profile tab ops.fallback plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { withBrowserFetchPreconnect } from "../../test-fetch.js";
 import {
@@ -67,7 +68,7 @@ describe("browser remote profile fallback and attachOnly behavior", () => {
             id: "T1",
             title: "Tab 1",
             url: "https://example.com",
-            webSocketDebuggerUrl: "wss://browserless.example/devtools/page/T1",
+            webSocketDebuggerUrl: "wss://1.1.1.1:9222/devtools/page/T1",
             type: "page",
           },
         ]),
@@ -76,6 +77,89 @@ describe("browser remote profile fallback and attachOnly behavior", () => {
 
     const tabs = await remote.listTabs();
     expect(tabs.map((t) => t.targetId)).toEqual(["T1"]);
+  });
+
+  it("filters browser-internal targets from raw CDP tab listing", async () => {
+    vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue(null);
+    const { remote } = deps.createRemoteRouteHarness(
+      vi.fn(
+        deps.createJsonListFetchMock([
+          {
+            id: "OMNI",
+            title: "Omnibox Popup",
+            url: "chrome://omnibox-popup.top-chrome/",
+            webSocketDebuggerUrl: "wss://1.1.1.1:9222/devtools/page/OMNI",
+            type: "page",
+          },
+          {
+            id: "UNTRUSTED",
+            title: "Untrusted",
+            url: "chrome-untrusted://foo/",
+            webSocketDebuggerUrl: "wss://1.1.1.1:9222/devtools/page/UNTRUSTED",
+            type: "page",
+          },
+          {
+            id: "T1",
+            title: "Tab 1",
+            url: "https://example.com",
+            webSocketDebuggerUrl: "wss://1.1.1.1:9222/devtools/page/T1",
+            type: "page",
+          },
+        ]),
+      ),
+    );
+
+    const tabs = await remote.listTabs();
+    expect(tabs.map((t) => t.targetId)).toEqual(["T1"]);
+  });
+
+  it("rejects policy-blocked discovered CDP websocket URLs from raw tab listings", async () => {
+    vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue(null);
+    const { state, remote } = deps.createRemoteRouteHarness(
+      vi.fn(
+        deps.createJsonListFetchMock([
+          {
+            id: "T_BLOCKED",
+            title: "Blocked",
+            url: "https://example.com",
+            webSocketDebuggerUrl: "ws://169.254.169.254/devtools/page/T_BLOCKED",
+            type: "page",
+          },
+        ]),
+      ),
+    );
+    state.resolved.ssrfPolicy = { dangerouslyAllowPrivateNetwork: false };
+
+    await expect(remote.listTabs()).rejects.toBeInstanceOf(deps.BrowserCdpEndpointBlockedError);
+  });
+
+  it("rejects policy-blocked discovered CDP websocket URLs from raw tab creation", async () => {
+    vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue(null);
+    vi.spyOn(deps.cdpModule, "createTargetViaCdp").mockRejectedValue(
+      new Error("Target.createTarget unavailable"),
+    );
+    const fetchMock = vi.fn(async (url: unknown) => {
+      const u = String(url);
+      if (!u.includes("/json/new")) {
+        throw new Error(`unexpected fetch: ${u}`);
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          id: "T_BLOCKED",
+          title: "Blocked",
+          url: "about:blank",
+          webSocketDebuggerUrl: "ws://169.254.169.254/devtools/page/T_BLOCKED",
+          type: "page",
+        }),
+      } as unknown as Response;
+    });
+    const { state, remote } = deps.createRemoteRouteHarness(fetchMock);
+    state.resolved.ssrfPolicy = { dangerouslyAllowPrivateNetwork: false };
+
+    await expect(remote.openTab("about:blank")).rejects.toBeInstanceOf(
+      deps.BrowserCdpEndpointBlockedError,
+    );
   });
 
   it("fails closed for remote tab opens in strict mode without Playwright", async () => {
@@ -141,7 +225,7 @@ describe("browser remote profile fallback and attachOnly behavior", () => {
             id: "T_REMOTE",
             title: "Remote Tab",
             url: "https://example.com",
-            webSocketDebuggerUrl: "wss://browserless.example/devtools/page/T_REMOTE",
+            webSocketDebuggerUrl: "wss://1.1.1.1:9222/devtools/page/T_REMOTE",
             type: "page",
           },
         ]),
@@ -153,16 +237,15 @@ describe("browser remote profile fallback and attachOnly behavior", () => {
     const opened = await remote.openTab("https://example.com");
 
     expect(opened.targetId).toBe("T_REMOTE");
-    expect(createTargetViaCdp).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cdpUrl: "https://1.1.1.1:9222/chrome?token=abc",
-        url: "https://example.com",
-        timeouts: {
-          httpTimeoutMs: 4321,
-          handshakeTimeoutMs: 8765,
-        },
-      }),
-    );
+    expect(createTargetViaCdp).toHaveBeenCalledWith({
+      cdpUrl: "https://1.1.1.1:9222/chrome?token=abc",
+      url: "https://example.com",
+      ssrfPolicy: { allowPrivateNetwork: true },
+      timeouts: {
+        httpTimeoutMs: 4321,
+        handshakeTimeoutMs: 8765,
+      },
+    });
   });
 
   it("uses remote-class tab-open timeouts for attachOnly loopback CDP profiles", async () => {
@@ -195,15 +278,15 @@ describe("browser remote profile fallback and attachOnly behavior", () => {
     const opened = await ctx.forProfile("openclaw").openTab("https://example.com");
 
     expect(opened.targetId).toBe("T_ATTACH");
-    expect(createTargetViaCdp).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cdpUrl: "http://127.0.0.1:18800",
-        timeouts: {
-          httpTimeoutMs: 2345,
-          handshakeTimeoutMs: 6789,
-        },
-      }),
-    );
+    expect(createTargetViaCdp).toHaveBeenCalledWith({
+      cdpUrl: "http://127.0.0.1:18800",
+      url: "https://example.com",
+      ssrfPolicy: undefined,
+      timeouts: {
+        httpTimeoutMs: 2345,
+        handshakeTimeoutMs: 6789,
+      },
+    });
   });
 
   it("keeps managed loopback tab opens on local CDP defaults", async () => {
@@ -265,12 +348,17 @@ describe("browser remote profile fallback and attachOnly behavior", () => {
     );
 
     expect(Date.now() - startedAt).toBeLessThan(700);
-    expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringContaining("/json/new"),
-      expect.objectContaining({
-        method: "PUT",
-        signal: expect.any(AbortSignal),
-      }),
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [fetchUrl, fetchInit] =
+      (fetchMock.mock.calls as Array<[string | URL, RequestInit & { dispatcher?: unknown }]>)[0] ??
+      [];
+    expect(String(fetchUrl)).toBe(
+      "https://1.1.1.1:9222/chrome/json/new?token=abc&url=https%3A%2F%2Fexample.com",
     );
+    expect(fetchInit.method).toBe("PUT");
+    expect(fetchInit.headers).toEqual({});
+    expect(fetchInit.redirect).toBe("manual");
+    expect(fetchInit.signal).toBeInstanceOf(AbortSignal);
+    expect(fetchInit.dispatcher).toBeUndefined();
   });
 });

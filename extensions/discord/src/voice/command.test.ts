@@ -1,3 +1,4 @@
+// Discord tests cover command plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { CommandInteraction, CommandWithSubcommands } from "../internal/discord.js";
 import { createPartialDiscordChannelWithThrowingGetters } from "../test-support/partial-channel.js";
@@ -58,14 +59,20 @@ describe("createDiscordVoiceCommand", () => {
     const serialized = command.serialize();
     const firstOption = serialized.options?.[0] as Record<string, unknown> | undefined;
 
-    expect(firstOption).toMatchObject({
+    expect(firstOption).toEqual({
       name: "join",
       type: 1,
-      description: expect.any(String),
+      description: "Join a voice channel",
+      options: [
+        {
+          name: "channel",
+          description: "Voice channel to join",
+          type: 7,
+          required: true,
+          channel_types: [2, 13],
+        },
+      ],
     });
-    expect(firstOption).not.toHaveProperty("contexts");
-    expect(firstOption).not.toHaveProperty("integration_types");
-    expect(firstOption).not.toHaveProperty("default_member_permissions");
   });
 
   it("dispatches slash-command subcommand interactions", async () => {

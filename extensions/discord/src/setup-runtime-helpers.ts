@@ -1,7 +1,7 @@
+// Discord helper module supports setup runtime helpers behavior.
 export {
   createAccountScopedAllowFromSection,
   createAccountScopedGroupAccessSection,
-  createAllowlistSetupWizardProxy,
   createLegacyCompatChannelDmPolicy,
   parseMentionOrPrefixedId,
   patchChannelConfigForAccount,

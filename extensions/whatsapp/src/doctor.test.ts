@@ -1,3 +1,4 @@
+// Whatsapp tests cover doctor plugin behavior.
 import { describe, expect, it } from "vitest";
 import { normalizeCompatibilityConfig } from "./doctor.js";
 
@@ -13,7 +14,7 @@ describe("whatsapp doctor compatibility", () => {
     });
 
     expect(result.config.channels?.whatsapp).toBeUndefined();
-    expect(result.changes).toEqual([]);
+    expect(result.changes).toStrictEqual([]);
   });
 
   it("copies legacy ack reaction into configured whatsapp channel", () => {
@@ -69,6 +70,6 @@ describe("whatsapp doctor compatibility", () => {
       direct: true,
       group: "always",
     });
-    expect(result.changes).toEqual([]);
+    expect(result.changes).toStrictEqual([]);
   });
 });

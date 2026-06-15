@@ -1,6 +1,2 @@
-export {
-  parseStandalonePlainTextToolCallBlocks,
-  stripPlainTextToolCallBlocks,
-  type PlainTextToolCallBlock,
-  type PlainTextToolCallParseOptions,
-} from "../../plugin-sdk/tool-payload.js";
+/** Facade for shared plain-text tool-call block stripping used by visible-text cleanup. */
+export { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";

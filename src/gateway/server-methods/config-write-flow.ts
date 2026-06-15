@@ -1,3 +1,5 @@
+// Config write flow helpers commit control-plane config edits, detect auth
+// changes, write restart sentinels, and schedule gateway restarts when required.
 import { isDeepStrictEqual } from "node:util";
 import {
   createConfigIO,
@@ -12,8 +14,10 @@ import {
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
-import { resolveEffectiveSharedGatewayAuth } from "../auth.js";
-import { buildGatewayReloadPlan, resolveGatewayReloadSettings } from "../config-reload.js";
+import { getActiveSecretsRuntimeSnapshot } from "../../secrets/runtime-state.js";
+import { resolveEffectiveSharedGatewayAuth, resolveGatewayAuth } from "../auth.js";
+import { buildGatewayReloadPlan } from "../config-reload-plan.js";
+import { resolveGatewayReloadSettings } from "../config-reload-settings.js";
 import { formatControlPlaneActor, type ControlPlaneActor } from "../control-plane-audit.js";
 import { parseRestartRequestParams } from "./restart-request.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -25,11 +29,57 @@ export type ConfigWriteOptions = Awaited<
   ReturnType<typeof readConfigFileSnapshotForWrite>
 >["writeOptions"];
 
+/** Resolves the on-disk config path used in config method responses. */
 export function resolveGatewayConfigPath(snapshot?: Pick<ConfigWriteSnapshot, "path">): string {
   return snapshot?.path ?? createConfigIO().configPath;
 }
 
+function normalizeStringListForAuthCompare(items: readonly string[] | undefined): string[] {
+  return [...(items ?? [])].toSorted();
+}
+
+function normalizeTrustedProxyAuthForCompare(auth: ReturnType<typeof resolveGatewayAuth>): {
+  userHeader: string | undefined;
+  requiredHeaders: string[];
+  allowUsers: string[];
+  allowLoopback: boolean | undefined;
+} {
+  return {
+    userHeader: auth.trustedProxy?.userHeader,
+    requiredHeaders: normalizeStringListForAuthCompare(auth.trustedProxy?.requiredHeaders),
+    allowUsers: normalizeStringListForAuthCompare(auth.trustedProxy?.allowUsers),
+    allowLoopback: auth.trustedProxy?.allowLoopback,
+  };
+}
+
+/** Compares the effective shared Gateway auth surface that active clients use. */
 export function didSharedGatewayAuthChange(prev: OpenClawConfig, next: OpenClawConfig): boolean {
+  const prevResolvedAuth = resolveGatewayAuth({
+    authConfig: prev.gateway?.auth,
+    env: process.env,
+    tailscaleMode: prev.gateway?.tailscale?.mode,
+  });
+  const nextResolvedAuth = resolveGatewayAuth({
+    authConfig: next.gateway?.auth,
+    env: process.env,
+    tailscaleMode: next.gateway?.tailscale?.mode,
+  });
+  if (prevResolvedAuth.mode === "trusted-proxy" || nextResolvedAuth.mode === "trusted-proxy") {
+    if (prevResolvedAuth.mode !== nextResolvedAuth.mode) {
+      return true;
+    }
+    return (
+      !isDeepStrictEqual(
+        normalizeTrustedProxyAuthForCompare(prevResolvedAuth),
+        normalizeTrustedProxyAuthForCompare(nextResolvedAuth),
+      ) ||
+      !isDeepStrictEqual(
+        normalizeStringListForAuthCompare(prev.gateway?.trustedProxies),
+        normalizeStringListForAuthCompare(next.gateway?.trustedProxies),
+      )
+    );
+  }
+
   const prevAuth = resolveEffectiveSharedGatewayAuth({
     authConfig: prev.gateway?.auth,
     env: process.env,
@@ -44,6 +94,17 @@ export function didSharedGatewayAuthChange(prev: OpenClawConfig, next: OpenClawC
     return prevAuth !== nextAuth;
   }
   return prevAuth.mode !== nextAuth.mode || !isDeepStrictEqual(prevAuth.secret, nextAuth.secret);
+}
+
+/** Compares against the active secrets-expanded config when one is available. */
+export function didActiveSharedGatewayAuthChange(params: {
+  fallbackPrev: OpenClawConfig;
+  next: OpenClawConfig;
+}): boolean {
+  return didSharedGatewayAuthChange(
+    getActiveSecretsRuntimeSnapshot()?.config ?? params.fallbackPrev,
+    params.next,
+  );
 }
 
 function queueSharedGatewayAuthDisconnect(
@@ -79,6 +140,8 @@ function shouldScheduleDirectConfigRestart(params: {
   if (reloadSettings.mode === "off") {
     return true;
   }
+  // Hybrid mode lets hot-reload own non-gateway restarts; only paths the reload
+  // plan marks as gateway-owned get a direct process restart here.
   const plan = buildGatewayReloadPlan(params.changedPaths);
   if (reloadSettings.mode === "hot" && plan.restartGateway) {
     return true;
@@ -150,27 +213,38 @@ async function tryWriteRestartSentinelPayload(
   }
 }
 
+/** Persists a gateway config write and returns follow-up work that must run after response. */
 export async function commitGatewayConfigWrite(params: {
   snapshot: ConfigWriteSnapshot;
   writeOptions: ConfigWriteOptions;
   nextConfig: OpenClawConfig;
   context?: GatewayRequestContext;
   disconnectSharedAuthClients?: boolean;
-}): Promise<{ path: string; queueFollowUp: () => void }> {
-  await replaceConfigFile({
+}): Promise<{ path: string; config: OpenClawConfig; queueFollowUp: () => void }> {
+  const result = await replaceConfigFile({
     nextConfig: params.nextConfig,
-    writeOptions: params.writeOptions,
+    writeOptions: {
+      ...params.writeOptions,
+      runtimeRefresh: {
+        ...params.writeOptions.runtimeRefresh,
+        includeAuthStoreRefs: false,
+      },
+    },
     afterWrite: { mode: "auto" },
   });
   return {
     path: resolveGatewayConfigPath(params.snapshot),
+    config: result.nextConfig,
     queueFollowUp: () => {
-      queueSharedGatewayAuthGenerationRefresh(true, params.nextConfig, params.context);
+      // Defer generation refresh/disconnect until after the RPC response so
+      // the writer receives the success payload before its connection is closed.
+      queueSharedGatewayAuthGenerationRefresh(true, result.nextConfig, params.context);
       queueSharedGatewayAuthDisconnect(Boolean(params.disconnectSharedAuthClients), params.context);
     },
   };
 }
 
+/** Builds restart sentinel/queue state for config.patch and config.apply writes. */
 export async function resolveGatewayConfigRestartWriteResult(params: {
   requestParams: unknown;
   kind: RestartSentinelPayload["kind"];

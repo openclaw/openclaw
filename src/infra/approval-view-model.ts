@@ -1,3 +1,4 @@
+// Builds approval prompt view models from request and resolution events.
 import type {
   ApprovalMetadataView,
   ApprovalRequest,
@@ -14,7 +15,10 @@ import {
   resolveExecApprovalRequestAllowedDecisions,
   type ExecApprovalRequest,
 } from "./exec-approvals.js";
-import type { PluginApprovalRequest } from "./plugin-approvals.js";
+import {
+  resolvePluginApprovalRequestAllowedDecisions,
+  type PluginApprovalRequest,
+} from "./plugin-approvals.js";
 
 type ApprovalPhase = "pending" | "resolved" | "expired";
 
@@ -69,6 +73,7 @@ function buildExecViewBase<TPhase extends ApprovalPhase>(
     ask: request.request.ask ?? null,
     agentId: request.request.agentId ?? null,
     warningText: request.request.warningText ?? null,
+    commandAnalysis: request.request.commandAnalysis ?? null,
     commandText,
     commandPreview,
     cwd: request.request.cwd ?? null,
@@ -97,6 +102,7 @@ function buildPluginViewBase<TPhase extends ApprovalPhase>(
   };
 }
 
+/** Builds the presentation model for an unresolved exec or plugin approval. */
 export function buildPendingApprovalView(request: ApprovalRequest): PendingApprovalView {
   if (request.id.startsWith("plugin:")) {
     const pluginRequest = request as PluginApprovalRequest;
@@ -104,6 +110,7 @@ export function buildPendingApprovalView(request: ApprovalRequest): PendingAppro
       ...buildPluginViewBase(pluginRequest, "pending"),
       actions: buildExecApprovalActionDescriptors({
         approvalCommandId: pluginRequest.id,
+        allowedDecisions: resolvePluginApprovalRequestAllowedDecisions(pluginRequest.request),
       }),
       expiresAtMs: pluginRequest.expiresAtMs,
     };
@@ -120,6 +127,7 @@ export function buildPendingApprovalView(request: ApprovalRequest): PendingAppro
   };
 }
 
+/** Builds the presentation model for an approval after a decision was recorded. */
 export function buildResolvedApprovalView(
   request: ApprovalRequest,
   resolved: ApprovalResolved,
@@ -140,6 +148,7 @@ export function buildResolvedApprovalView(
   };
 }
 
+/** Builds the presentation model shown when an approval can no longer be acted on. */
 export function buildExpiredApprovalView(request: ApprovalRequest): ExpiredApprovalView {
   if (request.id.startsWith("plugin:")) {
     return buildPluginViewBase(request as PluginApprovalRequest, "expired");

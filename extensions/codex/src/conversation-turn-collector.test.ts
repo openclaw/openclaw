@@ -1,7 +1,14 @@
-import { describe, expect, it, vi } from "vitest";
+// Codex tests cover conversation turn collector plugin behavior.
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCodexConversationTurnCollector } from "./conversation-turn-collector.js";
 
 describe("codex conversation turn collector", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
   it("collects streamed assistant deltas for the active turn", async () => {
     const collector = createCodexConversationTurnCollector("thread-1");
     collector.setTurnId("turn-1");
@@ -21,6 +28,43 @@ describe("codex conversation turn collector", () => {
     });
 
     await expect(completion).resolves.toEqual({ replyText: "hello world" });
+  });
+
+  it("buffers pre-start notifications and replays only the selected turn", async () => {
+    const collector = createCodexConversationTurnCollector("thread-1");
+
+    collector.handleNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-stale",
+          status: "completed",
+          items: [{ type: "agentMessage", id: "wrong", text: "stale answer" }],
+        },
+      },
+    });
+    collector.handleNotification({
+      method: "item/agentMessage/delta",
+      params: { threadId: "thread-1", turnId: "turn-1", itemId: "right", delta: "fresh " },
+    });
+    collector.handleNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          status: "completed",
+          items: [{ type: "agentMessage", id: "right", text: "fresh answer" }],
+        },
+      },
+    });
+
+    collector.setTurnId("turn-1");
+
+    await expect(collector.wait({ timeoutMs: 1_000 })).resolves.toEqual({
+      replyText: "fresh answer",
+    });
   });
 
   it("uses completed agent message items when deltas are absent", async () => {
@@ -148,6 +192,28 @@ describe("codex conversation turn collector", () => {
       await vi.advanceTimersByTimeAsync(100);
       await assertion;
     } finally {
+      vi.restoreAllMocks();
+      vi.useRealTimers();
+    }
+  });
+
+  it("clamps oversized turn wait timers", async () => {
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      const collector = createCodexConversationTurnCollector("thread-1");
+      collector.setTurnId("turn-1");
+      const completion = collector.wait({ timeoutMs: MAX_TIMER_TIMEOUT_MS + 1 });
+
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+      collector.handleNotification({
+        method: "turn/completed",
+        params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed", items: [] } },
+      });
+
+      await expect(completion).resolves.toEqual({ replyText: "" });
+    } finally {
+      vi.restoreAllMocks();
+      vi.clearAllTimers();
       vi.useRealTimers();
     }
   });

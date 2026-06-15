@@ -1,18 +1,20 @@
+/**
+ * Resolves model provider API keys from explicit environment variables.
+ */
 import fs from "node:fs";
 import os from "node:os";
+import { normalizeProviderIdForAuth } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeOptionalString as normalizeOptionalPathInput } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
 import { resolvePluginSetupProvider } from "../plugins/setup-registry.js";
 import type { ProviderAuthEvidence } from "../secrets/provider-env-vars.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
-import {
-  resolveProviderEnvApiKeyCandidates,
-  resolveProviderEnvAuthEvidence,
-} from "./model-auth-env-vars.js";
+import { resolveProviderEnvAuthLookupMaps } from "./model-auth-env-vars.js";
 import { GCP_VERTEX_CREDENTIALS_MARKER } from "./model-auth-markers.js";
-import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
-import { normalizeProviderIdForAuth } from "./provider-id.js";
 
+// Resolves API keys and local auth evidence from environment state. This keeps
+// env-var lookup, shell-env provenance, and plugin setup fallbacks in one path.
 export type EnvApiKeyResult = {
   apiKey: string;
   source: string;
@@ -24,6 +26,7 @@ export type EnvApiKeyLookupOptions = {
   aliasMap?: Readonly<Record<string, string>>;
   candidateMap?: Readonly<Record<string, readonly string[]>>;
   authEvidenceMap?: Readonly<Record<string, readonly ProviderAuthEvidence[]>>;
+  skipSetupProviderFallback?: boolean;
 };
 
 function expandAuthEvidencePath(rawPath: string, env: NodeJS.ProcessEnv): string | undefined {
@@ -31,8 +34,12 @@ function expandAuthEvidencePath(rawPath: string, env: NodeJS.ProcessEnv): string
   if (!trimmed) {
     return undefined;
   }
-  const homeDir = normalizeOptionalSecretInput(env.HOME) ?? os.homedir();
-  return trimmed.replaceAll("${HOME}", homeDir);
+  const homeDir = normalizeOptionalPathInput(env.HOME) ?? os.homedir();
+  const appDataDir = normalizeOptionalPathInput(env.APPDATA);
+  if (trimmed.includes("${APPDATA}") && !appDataDir) {
+    return undefined;
+  }
+  return trimmed.replaceAll("${HOME}", homeDir).replaceAll("${APPDATA}", appDataDir ?? "");
 }
 
 function hasRequiredAuthEvidenceEnv(
@@ -51,7 +58,7 @@ function hasRequiredAuthEvidenceEnv(
 
 function hasLocalFileAuthEvidence(evidence: ProviderAuthEvidence, env: NodeJS.ProcessEnv): boolean {
   if (evidence.fileEnvVar) {
-    const explicitPath = normalizeOptionalSecretInput(env[evidence.fileEnvVar]);
+    const explicitPath = normalizeOptionalPathInput(env[evidence.fileEnvVar]);
     if (explicitPath) {
       return fs.existsSync(explicitPath);
     }
@@ -84,22 +91,26 @@ function resolveAuthEvidence(
   return null;
 }
 
+/** Resolve an API key or auth-evidence marker for a provider from environment state. */
 export function resolveEnvApiKey(
   provider: string,
   env: NodeJS.ProcessEnv = process.env,
   options: EnvApiKeyLookupOptions = {},
 ): EnvApiKeyResult | null {
   const normalizedProvider = normalizeProviderIdForAuth(provider);
-  const normalized = options.aliasMap
-    ? (options.aliasMap[normalizedProvider] ?? normalizedProvider)
-    : resolveProviderIdForAuth(provider, { env });
   const lookupParams = {
     config: options.config,
     workspaceDir: options.workspaceDir,
     env,
   };
-  const candidateMap = options.candidateMap ?? resolveProviderEnvApiKeyCandidates(lookupParams);
-  const authEvidenceMap = options.authEvidenceMap ?? resolveProviderEnvAuthEvidence(lookupParams);
+  const lookupMaps =
+    !options.aliasMap || !options.candidateMap || !options.authEvidenceMap
+      ? resolveProviderEnvAuthLookupMaps(lookupParams)
+      : undefined;
+  const aliasMap = options.aliasMap ?? lookupMaps?.aliasMap ?? {};
+  const normalized = aliasMap[normalizedProvider] ?? normalizedProvider;
+  const candidateMap = options.candidateMap ?? lookupMaps?.envCandidateMap ?? {};
+  const authEvidenceMap = options.authEvidenceMap ?? lookupMaps?.authEvidenceMap ?? {};
   const applied = new Set(getShellEnvAppliedKeys());
   const pick = (envVar: string): EnvApiKeyResult | null => {
     const value = normalizeOptionalSecretInput(env[envVar]);
@@ -120,7 +131,10 @@ export function resolveEnvApiKey(
     }
   }
 
-  const authEvidence = resolveAuthEvidence(authEvidenceMap[normalized], env);
+  const evidence = Object.hasOwn(authEvidenceMap, normalized)
+    ? authEvidenceMap[normalized]
+    : undefined;
+  const authEvidence = resolveAuthEvidence(evidence, env);
   if (authEvidence) {
     return authEvidence;
   }
@@ -128,9 +142,14 @@ export function resolveEnvApiKey(
   if (Array.isArray(candidates)) {
     return null;
   }
+  if (options.skipSetupProviderFallback === true) {
+    return null;
+  }
 
   const setupProvider = resolvePluginSetupProvider({
     provider: normalized,
+    config: options.config,
+    workspaceDir: options.workspaceDir,
     env,
   });
   if (setupProvider?.resolveConfigApiKey) {

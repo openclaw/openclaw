@@ -1,3 +1,4 @@
+// Telegram tests cover approval handler plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { telegramApprovalNativeRuntime } from "./approval-handler.runtime.js";
 
@@ -100,24 +101,19 @@ describe("telegramApprovalNativeRuntime", () => {
       },
     });
 
-    expect(sendTyping).toHaveBeenCalledWith(
-      "-1003841603622",
-      expect.objectContaining({
-        token: "tg-token",
-        accountId: "default",
-        messageThreadId: 928,
-      }),
-    );
-    expect(sendMessage).toHaveBeenCalledWith(
-      "-1003841603622",
-      "pending",
-      expect.objectContaining({
-        token: "tg-token",
-        accountId: "default",
-        messageThreadId: 928,
-        buttons: [],
-      }),
-    );
+    expect(sendTyping).toHaveBeenCalledWith("-1003841603622", {
+      cfg: {},
+      token: "tg-token",
+      accountId: "default",
+      messageThreadId: 928,
+    });
+    expect(sendMessage).toHaveBeenCalledWith("-1003841603622", "pending", {
+      cfg: {},
+      token: "tg-token",
+      accountId: "default",
+      buttons: [],
+      messageThreadId: 928,
+    });
     expect(entry).toEqual({
       chatId: "-1003841603622",
       messageId: "m1",

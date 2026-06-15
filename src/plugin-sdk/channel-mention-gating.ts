@@ -1,3 +1,4 @@
+// Plugin SDK barrel for mention-gating policy helpers used by channel plugins.
 export type {
   InboundImplicitMentionKind,
   InboundMentionDecision,
@@ -23,4 +24,10 @@ export {
   CURRENT_MESSAGE_MARKER,
   buildMentionRegexes,
   normalizeMentionText,
+  type BuildMentionRegexesOptions,
 } from "../auto-reply/reply/mentions.js";
+export {
+  resolveMentionPatternPolicy,
+  type ResolveMentionPatternPolicyParams,
+  type ResolvedMentionPatternPolicy,
+} from "../channels/mention-pattern-policy.js";

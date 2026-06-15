@@ -1,12 +1,13 @@
+// Discord plugin module implements approval native behavior.
 import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { ChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { resolveApprovalRequestSessionConversation } from "openclaw/plugin-sdk/approval-native-runtime";
 import type { ChannelApprovalCapability } from "openclaw/plugin-sdk/channel-contract";
-import type { DiscordExecApprovalConfig } from "openclaw/plugin-sdk/config-types";
+import type { DiscordExecApprovalConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 export { shouldHandleDiscordApprovalRequest } from "./approval-shared.js";
 import { listDiscordAccountIds, resolveDiscordAccount } from "./accounts.js";
 import {
@@ -32,23 +33,22 @@ export function extractDiscordChannelId(sessionKey?: string | null): string | nu
   return match ? match[1] : null;
 }
 
-export function extractDiscordThreadId(sessionKey?: string | null): string | null {
-  if (!sessionKey) {
-    return null;
-  }
-  const match = sessionKey.match(/discord:(?:channel|group):\d+:thread:(\d+)/);
-  return match ? match[1] : null;
-}
-
 function extractDiscordSessionKind(sessionKey?: string | null): "channel" | "group" | "dm" | null {
   if (!sessionKey) {
     return null;
   }
-  const match = sessionKey.match(/discord:(channel|group|dm):/);
+  // DM session keys use the `direct` peer kind in the normalized form
+  // (`agent:<id>:discord[:account]:direct:<userId>`); legacy keys may still use
+  // `dm`. Treat both as the same logical kind for downstream comparisons.
+  const match = sessionKey.match(/discord:(?:[^:]+:)?(channel|group|dm|direct):/);
   if (!match) {
     return null;
   }
-  return match[1] as "channel" | "group" | "dm";
+  const raw = match[1];
+  if (raw === "direct") {
+    return "dm";
+  }
+  return raw as "channel" | "group" | "dm";
 }
 
 function normalizeDiscordOriginChannelId(value?: string | null): string | null {
@@ -168,7 +168,7 @@ function createDiscordApproverDmTargetResolver(configOverride?: DiscordExecAppro
   });
 }
 
-export function createDiscordApprovalCapability(configOverride?: DiscordExecApprovalConfig | null) {
+function createDiscordApprovalCapability(configOverride?: DiscordExecApprovalConfig | null) {
   return createApproverRestrictedNativeApprovalCapability({
     channel: "discord",
     channelLabel: "Discord",
@@ -220,16 +220,8 @@ export function createDiscordNativeApprovalAdapter(
 }
 
 let cachedDiscordApprovalCapability: ReturnType<typeof createDiscordApprovalCapability> | undefined;
-let cachedDiscordNativeApprovalAdapter:
-  | ReturnType<typeof createDiscordNativeApprovalAdapter>
-  | undefined;
 
 export function getDiscordApprovalCapability() {
   cachedDiscordApprovalCapability ??= createDiscordApprovalCapability();
   return cachedDiscordApprovalCapability;
-}
-
-export function getDiscordNativeApprovalAdapter() {
-  cachedDiscordNativeApprovalAdapter ??= createDiscordNativeApprovalAdapter();
-  return cachedDiscordNativeApprovalAdapter;
 }

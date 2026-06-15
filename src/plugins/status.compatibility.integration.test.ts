@@ -1,3 +1,4 @@
+/** Integration coverage for plugin status compatibility output and installed-index state. */
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
@@ -47,24 +48,22 @@ describe("plugin compatibility snapshot notices", () => {
     cleanupPluginLoaderFixturesForTest();
   });
 
-  it("reports implicit startup sidecar compatibility from a real legacy manifest", () => {
+  it("does not report startup compatibility warnings for legacy manifests", () => {
     const plugin = writePlugin({
       id: "legacy-sidecar",
       body: `module.exports = { id: "legacy-sidecar", register() {} };\n`,
     });
 
-    expect(buildSnapshotCompatibilityNoticeCodes(plugin)).toEqual([
-      "legacy-implicit-startup-sidecar",
-    ]);
+    expect(buildSnapshotCompatibilityNoticeCodes(plugin)).toStrictEqual([]);
   });
 
-  it("does not report implicit startup compatibility for explicit startup-lazy manifests", () => {
+  it("does not report startup compatibility warnings for explicit startup-lazy manifests", () => {
     const plugin = writePlugin({
       id: "modern-startup-lazy",
       body: `module.exports = { id: "modern-startup-lazy", register() {} };\n`,
     });
     addStartupActivation(plugin.dir, false);
 
-    expect(buildSnapshotCompatibilityNoticeCodes(plugin)).toEqual([]);
+    expect(buildSnapshotCompatibilityNoticeCodes(plugin)).toStrictEqual([]);
   });
 });

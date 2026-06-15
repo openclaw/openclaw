@@ -1,8 +1,11 @@
+// Channel doctor tests cover shared channel health checks and repair hints.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { normalizeResolvedSecretInputString } from "../../../config/types.secrets.js";
 import {
   collectChannelDoctorCompatibilityMutations,
   collectChannelDoctorEmptyAllowlistExtraWarnings,
   collectChannelDoctorMutableAllowlistWarnings,
+  collectChannelDoctorPreviewWarnings,
   collectChannelDoctorStaleConfigMutations,
   createChannelDoctorEmptyAllowlistPolicyHooks,
 } from "./channel-doctor.js";
@@ -16,7 +19,7 @@ const mocks = vi.hoisted(() => ({
 
 const READ_ONLY_CHANNEL_DOCTOR_OPTIONS = {
   includePersistedAuthState: false,
-  includeSetupRuntimeFallback: true,
+  includeSetupFallbackPlugins: true,
 } as const;
 
 vi.mock("../../../channels/plugins/registry.js", () => ({
@@ -127,7 +130,7 @@ describe("channel doctor compatibility mutations", () => {
   it("skips plugin discovery when no channels are configured", () => {
     const result = collectChannelDoctorCompatibilityMutations({} as never);
 
-    expect(result).toEqual([]);
+    expect(result).toStrictEqual([]);
     expect(mocks.resolveReadOnlyChannelPluginsForConfig).not.toHaveBeenCalled();
   });
 
@@ -140,7 +143,7 @@ describe("channel doctor compatibility mutations", () => {
       },
     } as never);
 
-    expect(result).toEqual([]);
+    expect(result).toStrictEqual([]);
     expect(mocks.resolveReadOnlyChannelPluginsForConfig).not.toHaveBeenCalled();
     expect(mocks.getLoadedChannelPlugin).not.toHaveBeenCalled();
     expect(mocks.getBundledChannelSetupPlugin).not.toHaveBeenCalled();
@@ -156,7 +159,7 @@ describe("channel doctor compatibility mutations", () => {
       },
     } as never);
 
-    expect(result).toEqual([]);
+    expect(result).toStrictEqual([]);
     expect(mocks.resolveReadOnlyChannelPluginsForConfig).not.toHaveBeenCalled();
     expect(mocks.getLoadedChannelPlugin).not.toHaveBeenCalled();
     expect(mocks.getBundledChannelSetupPlugin).not.toHaveBeenCalled();
@@ -174,6 +177,28 @@ describe("channel doctor compatibility mutations", () => {
     expect(normalizeCompatibilityConfig).toHaveBeenCalledTimes(1);
     expectMatrixDoctorLookupCalls(cfg);
     expect(mocks.getBundledChannelSetupPlugin).not.toHaveBeenCalledWith("discord");
+  });
+
+  it("keeps unresolved SecretRef preview reads non-fatal", async () => {
+    const collectPreviewWarnings = vi.fn(() => {
+      normalizeResolvedSecretInputString({
+        value: { source: "exec", provider: "default", id: "matrix/access-token" },
+        path: "channels.matrix.accessToken",
+      });
+      return ["unreachable"];
+    });
+    mockReadOnlyMatrixPlugin({ collectPreviewWarnings });
+    const cfg = createMatrixEnabledConfig();
+
+    const result = await collectChannelDoctorPreviewWarnings({
+      cfg: cfg as never,
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(result).toEqual([
+      "- channels.matrix: configured SecretRef at channels.matrix.accessToken is unavailable in doctor preview; skipping secret-backed channel preview checks.",
+    ]);
+    expect(collectPreviewWarnings).toHaveBeenCalledTimes(1);
   });
 
   it("merges partial doctor adapters instead of masking runtime-only hooks", async () => {
@@ -267,7 +292,7 @@ describe("channel doctor compatibility mutations", () => {
       },
     } as never);
 
-    expect(result).toEqual([]);
+    expect(result).toStrictEqual([]);
     expect(mocks.getLoadedChannelPlugin).toHaveBeenCalledWith("discord");
     expect(mocks.getBundledChannelSetupPlugin).toHaveBeenCalledWith("discord");
     expect(mocks.getBundledChannelPlugin).toHaveBeenCalledWith("discord");

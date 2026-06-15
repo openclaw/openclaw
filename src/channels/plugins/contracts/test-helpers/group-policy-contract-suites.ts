@@ -1,12 +1,16 @@
+/**
+ * Runtime group-policy contract suite installer.
+ *
+ * Verifies open-provider channels fail closed when provider config is missing.
+ */
 import { expect, it } from "vitest";
 import { resolveOpenProviderRuntimeGroupPolicy } from "../../../../config/runtime-group-policy.js";
-
-type ResolvedGroupPolicy = ReturnType<typeof resolveOpenProviderRuntimeGroupPolicy>;
 
 export type RuntimeGroupPolicyResolver = (
   params: Parameters<typeof resolveOpenProviderRuntimeGroupPolicy>[0],
 ) => ReturnType<typeof resolveOpenProviderRuntimeGroupPolicy>;
 
+/** Installs fallback-policy tests for a channel-specific resolver wrapper. */
 export function installChannelRuntimeGroupPolicyFallbackSuite(params: {
   configuredLabel: string;
   defaultGroupPolicyUnderTest: "allowlist" | "disabled" | "open";
@@ -38,12 +42,4 @@ export function installChannelRuntimeGroupPolicyFallbackSuite(params: {
     expect(resolved.groupPolicy).toBe("allowlist");
     expect(resolved.providerMissingFallbackApplied).toBe(true);
   });
-}
-
-export function expectResolvedGroupPolicyCase(
-  resolved: Pick<ResolvedGroupPolicy, "groupPolicy" | "providerMissingFallbackApplied">,
-  expected: Pick<ResolvedGroupPolicy, "groupPolicy" | "providerMissingFallbackApplied">,
-) {
-  expect(resolved.groupPolicy).toBe(expected.groupPolicy);
-  expect(resolved.providerMissingFallbackApplied).toBe(expected.providerMissingFallbackApplied);
 }

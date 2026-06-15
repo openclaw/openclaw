@@ -1,13 +1,7 @@
+// Shares plugin activation state helpers across config and registry code.
 type EnableStateLike = {
   enabled: boolean;
   reason?: string;
-};
-
-type EnableStateParamsLike = {
-  id: string;
-  origin: string;
-  config: unknown;
-  enabledByDefault?: boolean;
 };
 
 type PluginKindLike = string | readonly string[] | undefined;
@@ -313,13 +307,6 @@ export function resolveEnableStateResult<TParams>(
   resolveState: (params: TParams) => EnableStateLike,
 ): { enabled: boolean; reason?: string } {
   return toEnableStateResult(resolveState(params));
-}
-
-export function resolveEnableStateShared<TParams extends EnableStateParamsLike>(
-  params: TParams,
-  resolveState: (params: TParams) => EnableStateLike,
-): { enabled: boolean; reason?: string } {
-  return resolveEnableStateResult(params, resolveState);
 }
 
 export function createPluginEnableStateResolver<TConfig, TOrigin extends string>(

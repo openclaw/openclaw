@@ -1,3 +1,9 @@
+// Recovers queued session deliveries after process crashes.
+import {
+  resolveDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+  resolveNonNegativeIntegerOption,
+} from "@openclaw/normalization-core/number-coercion";
 import { formatErrorMessage } from "./errors.js";
 import {
   ackSessionDelivery,
@@ -8,14 +14,16 @@ import {
   type QueuedSessionDelivery,
 } from "./session-delivery-queue-storage.js";
 
-export type SessionDeliveryRecoverySummary = {
+// Session delivery recovery replays persisted messages after crashes while
+// bounding retry count, backoff, and concurrent drain work.
+type SessionDeliveryRecoverySummary = {
   recovered: number;
   failed: number;
   skippedMaxRetries: number;
   deferredBackoff: number;
 };
 
-export type DeliverSessionDeliveryFn = (entry: QueuedSessionDelivery) => Promise<void>;
+type DeliverSessionDeliveryFn = (entry: QueuedSessionDelivery) => Promise<void>;
 
 export interface SessionDeliveryRecoveryLogger {
   info(msg: string): void;
@@ -23,12 +31,12 @@ export interface SessionDeliveryRecoveryLogger {
   error(msg: string): void;
 }
 
-export interface PendingSessionDeliveryDrainDecision {
+interface PendingSessionDeliveryDrainDecision {
   match: boolean;
   bypassBackoff?: boolean;
 }
 
-export const MAX_SESSION_DELIVERY_RETRIES = 5;
+const MAX_SESSION_DELIVERY_RETRIES = 5;
 
 const BACKOFF_MS: readonly number[] = [5_000, 25_000, 120_000, 600_000];
 const drainInProgress = new Map<string, boolean>();
@@ -61,11 +69,23 @@ function releaseRecoveryEntry(entryId: string): void {
   entriesInProgress.delete(entryId);
 }
 
-export function computeSessionDeliveryBackoffMs(retryCount: number): number {
+function computeSessionDeliveryBackoffMs(retryCount: number): number {
   if (retryCount <= 0) {
     return 0;
   }
   return BACKOFF_MS[Math.min(retryCount - 1, BACKOFF_MS.length - 1)] ?? BACKOFF_MS.at(-1) ?? 0;
+}
+
+function resolveSessionDeliveryMaxRetries(entry: QueuedSessionDelivery): number {
+  return entry.maxRetries ?? MAX_SESSION_DELIVERY_RETRIES;
+}
+
+function resolveSessionDeliveryRecoveryDeadlineMs(maxRecoveryMs: number | undefined): number {
+  const durationMs = resolveNonNegativeIntegerOption(maxRecoveryMs, 60_000);
+  if (durationMs <= 0) {
+    return resolveDateTimestampMs(Date.now());
+  }
+  return resolveExpiresAtMsFromDurationMs(durationMs) ?? resolveDateTimestampMs(Date.now());
 }
 
 export function isSessionDeliveryEligibleForRetry(
@@ -119,6 +139,7 @@ async function drainQueuedEntry(opts: {
   }
 }
 
+/** Drain matching queued session deliveries with retry/backoff protection. */
 export async function drainPendingSessionDeliveries(opts: {
   drainKey: string;
   logLabel: string;
@@ -153,7 +174,7 @@ export async function drainPendingSessionDeliveries(opts: {
         if (!currentDecision.match) {
           continue;
         }
-        if (currentEntry.retryCount >= MAX_SESSION_DELIVERY_RETRIES) {
+        if (currentEntry.retryCount >= resolveSessionDeliveryMaxRetries(currentEntry)) {
           try {
             await moveSessionDeliveryToFailed(currentEntry.id, opts.stateDir);
           } catch (err) {
@@ -194,6 +215,7 @@ export async function drainPendingSessionDeliveries(opts: {
   }
 }
 
+/** Replay pending session deliveries until the recovery budget is exhausted. */
 export async function recoverPendingSessionDeliveries(opts: {
   deliver: DeliverSessionDeliveryFn;
   log: SessionDeliveryRecoveryLogger;
@@ -210,7 +232,7 @@ export async function recoverPendingSessionDeliveries(opts: {
 
   pending.sort((a, b) => a.enqueuedAt - b.enqueuedAt);
   const summary = createEmptyRecoverySummary();
-  const deadline = Date.now() + (opts.maxRecoveryMs ?? 60_000);
+  const deadline = resolveSessionDeliveryRecoveryDeadlineMs(opts.maxRecoveryMs);
 
   for (const entry of pending) {
     if (Date.now() >= deadline) {
@@ -229,7 +251,7 @@ export async function recoverPendingSessionDeliveries(opts: {
       if (opts.maxEnqueuedAt != null && currentEntry.enqueuedAt > opts.maxEnqueuedAt) {
         continue;
       }
-      if (currentEntry.retryCount >= MAX_SESSION_DELIVERY_RETRIES) {
+      if (currentEntry.retryCount >= resolveSessionDeliveryMaxRetries(currentEntry)) {
         summary.skippedMaxRetries += 1;
         try {
           await moveSessionDeliveryToFailed(currentEntry.id, opts.stateDir);

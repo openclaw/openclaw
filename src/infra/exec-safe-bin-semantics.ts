@@ -1,6 +1,7 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+// Applies semantic validators for safe-bin command arguments.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
-export type SafeBinSemanticValidationParams = {
+type SafeBinSemanticValidationParams = {
   binName?: string;
   positional: readonly string[];
 };
@@ -54,6 +55,7 @@ const SAFE_BIN_SEMANTIC_RULES: Readonly<Record<string, SafeBinSemanticRule>> = {
   },
 };
 
+/** Normalizes a configured safe-bin entry to its executable basename without Windows suffixes. */
 export function normalizeSafeBinName(raw: string): string {
   const trimmed = normalizeLowercaseStringOrEmpty(raw);
   if (!trimmed) {
@@ -64,15 +66,17 @@ export function normalizeSafeBinName(raw: string): string {
   return normalized.replace(/\.(?:exe|cmd|bat|com)$/i, "");
 }
 
-export function getSafeBinSemanticRule(binName?: string): SafeBinSemanticRule | undefined {
+function getSafeBinSemanticRule(binName?: string): SafeBinSemanticRule | undefined {
   const normalized = typeof binName === "string" ? normalizeSafeBinName(binName) : "";
   return normalized ? SAFE_BIN_SEMANTIC_RULES[normalized] : undefined;
 }
 
+/** Applies command-specific semantic gates for executables that are risky as broad safeBins. */
 export function validateSafeBinSemantics(params: SafeBinSemanticValidationParams): boolean {
   return getSafeBinSemanticRule(params.binName)?.validate?.(params) ?? true;
 }
 
+/** Lists configured safeBins that need operator warnings because their semantics are broad. */
 export function listRiskyConfiguredSafeBins(entries: Iterable<string>): Array<{
   bin: string;
   warning: string;

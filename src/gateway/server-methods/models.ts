@@ -1,21 +1,19 @@
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
-import { resolveVisibleModelCatalog } from "../../agents/model-catalog-visibility.js";
-import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
+// Models gateway methods expose model catalog browse results without triggering
+// auth probes or fresh provider discovery on each request.
 import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
   validateModelsListParams,
-} from "../protocol/index.js";
+} from "../../../packages/gateway-protocol/src/index.js";
+import { buildModelsListResult } from "./models-list-result.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
-type ModelsListView = "default" | "configured" | "all";
+export { buildModelsListResult };
 
-function resolveModelsListView(params: Record<string, unknown>): ModelsListView {
-  return typeof params.view === "string" ? (params.view as ModelsListView) : "default";
-}
-
+// The gateway model list is a browse API, not an auth probe. It reuses the
+// current runtime catalog snapshot and applies visibility rules without doing
+// extra runtime discovery on each request.
 export const modelsHandlers: GatewayRequestHandlers = {
   "models.list": async ({ params, respond, context }) => {
     if (!validateModelsListParams(params)) {
@@ -30,24 +28,7 @@ export const modelsHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      const catalog = await context.loadGatewayModelCatalog();
-      const cfg = context.getRuntimeConfig();
-      const workspaceDir =
-        resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)) ??
-        resolveDefaultAgentWorkspaceDir();
-      const view = resolveModelsListView(params);
-      if (view === "all") {
-        respond(true, { models: catalog }, undefined);
-        return;
-      }
-      const models = resolveVisibleModelCatalog({
-        cfg,
-        catalog,
-        defaultProvider: DEFAULT_PROVIDER,
-        workspaceDir,
-        view,
-      });
-      respond(true, { models }, undefined);
+      respond(true, await buildModelsListResult({ context, params }), undefined);
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
     }

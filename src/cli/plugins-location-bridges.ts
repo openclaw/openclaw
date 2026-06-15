@@ -1,8 +1,14 @@
+// Bridge builder for users upgrading from bundled plugins to external plugin packages.
 import type { ExternalizedBundledPluginBridge } from "../plugins/externalized-bundled-plugins.js";
 import { readPersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
 import type { InstalledPluginIndexRecord } from "../plugins/installed-plugin-index.js";
 import { loadPluginManifestRegistryForInstalledIndex } from "../plugins/manifest-registry-installed.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import {
+  getOfficialExternalPluginCatalogEntry,
+  getOfficialExternalPluginCatalogManifest,
+  resolveOfficialExternalPluginInstall,
+} from "../plugins/official-external-plugin-catalog.js";
 
 function buildBridgeFromPersistedBundledRecord(
   record: InstalledPluginIndexRecord,
@@ -14,19 +20,36 @@ function buildBridgeFromPersistedBundledRecord(
   if (record.origin !== "bundled" || !record.enabled) {
     return null;
   }
-  const npmSpec = record.packageInstall?.npm?.spec;
-  if (!npmSpec) {
+  const officialEntry = getOfficialExternalPluginCatalogEntry(record.pluginId);
+  const officialInstall = officialEntry
+    ? resolveOfficialExternalPluginInstall(officialEntry)
+    : null;
+  const npmSpec = officialInstall?.npmSpec?.trim() ?? record.packageInstall?.npm?.spec;
+  const clawhubSpec = officialInstall?.clawhubSpec?.trim();
+  if (!npmSpec && !clawhubSpec) {
     return null;
   }
+  const officialChannelId = officialEntry
+    ? getOfficialExternalPluginCatalogManifest(officialEntry)?.channel?.id?.trim()
+    : undefined;
+  const channelIds = manifest?.channels.length
+    ? manifest.channels
+    : officialChannelId
+      ? [officialChannelId]
+      : [];
   return {
     bundledPluginId: record.pluginId,
     pluginId: record.pluginId,
-    npmSpec,
+    preferredSource:
+      officialInstall?.defaultChoice === "clawhub" && clawhubSpec ? "clawhub" : "npm",
+    ...(npmSpec ? { npmSpec } : {}),
+    ...(clawhubSpec ? { clawhubSpec } : {}),
     ...(record.enabledByDefault ? { enabledByDefault: true } : {}),
-    ...(manifest?.channels.length ? { channelIds: manifest.channels } : {}),
+    ...(channelIds.length ? { channelIds } : {}),
   };
 }
 
+/** List install bridges inferred from the persisted plugin index before current discovery runs. */
 export async function listPersistedBundledPluginLocationBridges(options: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;

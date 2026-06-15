@@ -1,3 +1,4 @@
+// Non-interactive gateway health auth tests cover SecretRef and password resolution for setup probes.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -95,7 +96,9 @@ describe("resolveGatewayHealthProbeToken", () => {
       } as OpenClawConfig);
 
       expect(resolved.token).toBeUndefined();
-      expect(resolved.unresolvedRefReason).toContain("gateway.auth.token SecretRef is unresolved");
+      expect(resolved.unresolvedRefReason).toBe(
+        "gateway.auth.token SecretRef is unresolved (file:gateway-token-file:value).",
+      );
     });
   });
 

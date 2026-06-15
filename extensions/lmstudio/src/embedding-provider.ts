@@ -1,3 +1,4 @@
+// Lmstudio provider module implements model/runtime integration.
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import {
   buildRemoteBaseUrlPolicy,
@@ -19,7 +20,7 @@ import {
 
 const log = createSubsystemLogger("memory/embeddings");
 
-export type LmstudioEmbeddingClient = {
+type LmstudioEmbeddingClient = {
   baseUrl: string;
   headers: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;

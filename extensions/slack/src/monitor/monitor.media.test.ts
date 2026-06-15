@@ -1,3 +1,4 @@
+// Slack tests cover monitor.media plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetSlackThreadStarterCacheForTest, resolveSlackThreadStarter } from "./thread.js";
 
@@ -58,6 +59,45 @@ describe("resolveSlackThreadStarter cache", () => {
       client,
     });
 
+    expect(replies).toHaveBeenCalledTimes(2);
+  });
+
+  it("drops cached thread starters when the current clock is not a valid date timestamp", async () => {
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+    const { replies, client } = createThreadStarterRepliesClient();
+
+    const first = await resolveSlackThreadStarter({
+      channelId: "C1",
+      threadTs: "1000.1",
+      client,
+    });
+    nowSpy.mockReturnValue(Number.NaN);
+    const second = await resolveSlackThreadStarter({
+      channelId: "C1",
+      threadTs: "1000.1",
+      client,
+    });
+
+    expect(first).toEqual(second);
+    expect(replies).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cache thread starters when the expiry timestamp would exceed the valid date range", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
+    const { replies, client } = createThreadStarterRepliesClient();
+
+    const first = await resolveSlackThreadStarter({
+      channelId: "C1",
+      threadTs: "1000.1",
+      client,
+    });
+    const second = await resolveSlackThreadStarter({
+      channelId: "C1",
+      threadTs: "1000.1",
+      client,
+    });
+
+    expect(first).toEqual(second);
     expect(replies).toHaveBeenCalledTimes(2);
   });
 

@@ -1,12 +1,8 @@
+// Line plugin module implements monitor behavior.
 import type { webhook } from "@line/bot-sdk";
-import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
-import { runPreparedInboundReplyTurn } from "openclaw/plugin-sdk/inbound-reply-dispatch";
-import {
-  dispatchReplyWithBufferedBlockDispatcher,
-  chunkMarkdownText,
-} from "openclaw/plugin-sdk/reply-runtime";
+import { hasFinalInboundReplyDispatch } from "openclaw/plugin-sdk/channel-inbound";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { chunkMarkdownText } from "openclaw/plugin-sdk/reply-runtime";
 import {
   danger,
   logVerbose,
@@ -16,6 +12,7 @@ import {
 import {
   isRequestBodyLimitError,
   normalizePluginHttpPath,
+  normalizeWebhookPath,
   registerWebhookTargetWithPluginRoute,
   requestBodyErrorToText,
   resolveSingleWebhookTarget,
@@ -28,7 +25,9 @@ import { resolveDefaultLineAccountId } from "./accounts.js";
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";
 import { createLineBot } from "./bot.js";
 import { processLineMessage } from "./markdown-to-line.js";
+import { resolveLineDurableReplyOptions } from "./monitor-durable.js";
 import { sendLineReplyChunks } from "./reply-chunks.js";
+import { getLineRuntime } from "./runtime.js";
 import {
   createFlexMessage,
   createImageMessage,
@@ -226,28 +225,39 @@ export async function monitorLineProvider(
       try {
         const textLimit = 5000;
         let replyTokenUsed = false;
-        const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
-          cfg: config,
-          agentId: route.agentId,
+        const core = getLineRuntime();
+        const turnResult = await core.channel.inbound.run({
           channel: "line",
           accountId: route.accountId,
-        });
-
-        const { dispatchResult } = await runPreparedInboundReplyTurn({
-          channel: "line",
-          accountId: route.accountId,
-          routeSessionKey: route.sessionKey,
-          storePath: ctx.turn.storePath,
-          ctxPayload,
-          recordInboundSession,
-          record: ctx.turn.record,
-          runDispatch: () =>
-            dispatchReplyWithBufferedBlockDispatcher({
-              ctx: ctxPayload,
+          raw: ctx,
+          adapter: {
+            ingest: () => ({
+              id: ctxPayload.MessageSid ?? `${ctxPayload.From}:${Date.now()}`,
+              rawText: ctxPayload.RawBody ?? ctxPayload.BodyForAgent ?? "",
+            }),
+            resolveTurn: () => ({
               cfg: config,
-              dispatcherOptions: {
-                ...replyPipeline,
-                deliver: async (payload, _info) => {
+              channel: "line",
+              accountId: route.accountId,
+              agentId: route.agentId,
+              routeSessionKey: route.sessionKey,
+              storePath: ctx.turn.storePath,
+              ctxPayload,
+              recordInboundSession: core.channel.session.recordInboundSession,
+              dispatchReplyWithBufferedBlockDispatcher:
+                core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
+              record: ctx.turn.record,
+              replyPipeline: {},
+              delivery: {
+                durable: (payload, info) =>
+                  resolveLineDurableReplyOptions({
+                    payload,
+                    infoKind: info.kind,
+                    to: ctxPayload.From,
+                    replyToken,
+                    replyTokenUsed,
+                  }),
+                deliver: async (payload) => {
                   const lineData = (payload.channelData?.line as LineChannelData | undefined) ?? {};
 
                   if (ctx.userId && !ctx.isGroup) {
@@ -301,14 +311,11 @@ export async function monitorLineProvider(
                   runtime.error?.(danger(`line ${info.kind} reply failed: ${String(err)}`));
                 },
               },
-              replyOptions: {
-                onModelSelected,
-              },
             }),
+          },
         });
-        const queuedFinal = dispatchResult.queuedFinal;
-
-        if (!queuedFinal) {
+        const dispatchResult = turnResult.dispatched ? turnResult.dispatchResult : undefined;
+        if (!hasFinalInboundReplyDispatch(dispatchResult)) {
           logVerbose(`line: no response generated for message from ${ctxPayload.From}`);
         }
       } catch (err) {
@@ -331,7 +338,9 @@ export async function monitorLineProvider(
     },
   });
 
-  const normalizedPath = normalizePluginHttpPath(webhookPath, "/line/webhook") ?? "/line/webhook";
+  const normalizedPath = normalizeWebhookPath(
+    normalizePluginHttpPath(webhookPath, "/line/webhook") ?? "/line/webhook",
+  );
   const createScopedLineWebhookHandler = (target: LineWebhookTarget) =>
     createLineNodeWebhookHandler({
       channelSecret: target.channelSecret,
@@ -424,15 +433,20 @@ export async function monitorLineProvider(
           }
 
           requestLifecycle.release();
-
-          if (body.events && body.events.length > 0) {
-            logVerbose(`line: received ${body.events.length} webhook events`);
-            await match.target.bot.handleWebhook(body);
-          }
-
           res.statusCode = 200;
           res.setHeader("Content-Type", "application/json");
           res.end(JSON.stringify({ status: "ok" }));
+
+          if (body.events && body.events.length > 0) {
+            logVerbose(`line: received ${body.events.length} webhook events`);
+            void Promise.resolve()
+              .then(() => match.target.bot.handleWebhook(body))
+              .catch((err: unknown) => {
+                match.target.runtime.error?.(
+                  danger(`line webhook dispatch failed: ${String(err)}`),
+                );
+              });
+          }
         } catch (err) {
           if (isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE")) {
             res.statusCode = 413;

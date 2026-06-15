@@ -1,3 +1,4 @@
+// Covers JSON merge-patch behavior for config mutations.
 import { describe, expect, it } from "vitest";
 import { applyMergePatch } from "./merge-patch.js";
 
@@ -50,6 +51,51 @@ describe("applyMergePatch", () => {
     expect(primary?.workspace).toBe("/tmp/one");
     expect(primary?.memorySearch?.extraPaths).toEqual(["/tmp/memory.md"]);
     expect(secondary?.workspace).toBe("/tmp/two");
+  });
+
+  it("replaces object arrays by id when the array path is explicit", () => {
+    const { base, patch } = makeAgentListBaseAndPatch();
+
+    const merged = applyMergePatch(base, patch, {
+      mergeObjectArraysById: true,
+      replaceArrayPaths: new Set(["agents.list"]),
+    }) as {
+      agents?: {
+        list?: Array<{ id?: string; memorySearch?: { extraPaths?: string[] } }>;
+      };
+    };
+
+    expect(merged.agents?.list).toEqual([
+      { id: "primary", memorySearch: { extraPaths: ["/tmp/memory.md"] } },
+    ]);
+  });
+
+  it("replaces nested arrays in id-keyed entries when the nested path is explicit", () => {
+    const base = {
+      agents: {
+        list: [
+          { id: "primary", skills: ["a", "b"] },
+          { id: "secondary", skills: ["c"] },
+        ],
+      },
+    };
+    const patch = {
+      agents: {
+        list: [{ id: "primary", skills: ["a"] }],
+      },
+    };
+
+    const merged = applyMergePatch(base, patch, {
+      mergeObjectArraysById: true,
+      replaceArrayPaths: new Set(["agents.list[].skills"]),
+    }) as {
+      agents?: { list?: Array<{ id?: string; skills?: string[] }> };
+    };
+
+    expect(merged.agents?.list).toEqual([
+      { id: "primary", skills: ["a"] },
+      { id: "secondary", skills: ["c"] },
+    ]);
   });
 
   it("merges by id even when patch entries lack id (appends them)", () => {

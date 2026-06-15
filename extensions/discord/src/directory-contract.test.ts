@@ -1,6 +1,7 @@
+// Discord tests cover directory contract plugin behavior.
 import type { BaseProbeResult, BaseTokenResolution } from "openclaw/plugin-sdk/channel-contract";
 import { expectDirectoryIds } from "openclaw/plugin-sdk/channel-test-helpers";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   listDiscordDirectoryGroupsFromConfig,

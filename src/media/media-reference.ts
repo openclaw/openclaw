@@ -1,10 +1,13 @@
+// Media reference helpers resolve media refs to file, URL, or inline payloads.
+import fs from "node:fs/promises";
 import path from "node:path";
 import { safeFileURLToPath } from "../infra/local-file-access.js";
 import { resolveUserPath } from "../utils.js";
 import { getMediaDir, resolveMediaBufferPath } from "./store.js";
 
-export type MediaReferenceErrorCode = "invalid-path" | "path-not-allowed";
+type MediaReferenceErrorCode = "invalid-path" | "path-not-allowed";
 
+/** Error raised when a media reference cannot be mapped to an allowed local media file. */
 export class MediaReferenceError extends Error {
   code: MediaReferenceErrorCode;
 
@@ -15,13 +18,19 @@ export class MediaReferenceError extends Error {
   }
 }
 
-export type InboundMediaReference = {
+type InboundMediaReference = {
   id: string;
   normalizedSource: string;
   physicalPath: string;
   sourceType: "uri" | "path";
 };
 
+type InboundMediaUri = {
+  id: string;
+  normalizedSource: string;
+};
+
+/** Strips legacy MEDIA: prefixes while preserving canonical media:// references. */
 export function normalizeMediaReferenceSource(source: string): string {
   const trimmed = source.trim();
   if (/^media:\/\//i.test(trimmed)) {
@@ -30,7 +39,7 @@ export function normalizeMediaReferenceSource(source: string): string {
   return trimmed.replace(/^\s*MEDIA\s*:\s*/i, "").trim();
 }
 
-export type MediaReferenceSourceInfo = {
+type MediaReferenceSourceInfo = {
   hasScheme: boolean;
   hasUnsupportedScheme: boolean;
   isDataUrl: boolean;
@@ -40,6 +49,7 @@ export type MediaReferenceSourceInfo = {
   looksLikeWindowsDrivePath: boolean;
 };
 
+/** Classifies media reference schemes before local resolution or sandbox rewriting. */
 export function classifyMediaReferenceSource(
   source: string,
   options?: { allowDataUrl?: boolean },
@@ -86,9 +96,26 @@ function maybeLocalPathFromSource(source: string): string | null {
   return null;
 }
 
-async function resolveInboundMediaUri(
-  normalizedSource: string,
-): Promise<InboundMediaReference | null> {
+function relativePathEscapesBase(relativePath: string): boolean {
+  return (
+    relativePath === ".." ||
+    relativePath.startsWith("../") ||
+    relativePath.startsWith("..\\") ||
+    path.isAbsolute(relativePath)
+  );
+}
+
+async function resolvePathForContainment(candidate: string): Promise<string> {
+  try {
+    return await fs.realpath(candidate);
+  } catch {
+    return path.resolve(candidate);
+  }
+}
+
+/** Parses canonical inbound media-store URIs and rejects nested or cross-bucket references. */
+export function parseInboundMediaUri(source: string): InboundMediaUri | null {
+  const normalizedSource = normalizeMediaReferenceSource(source);
   if (!/^media:\/\//i.test(normalizedSource)) {
     return null;
   }
@@ -118,18 +145,47 @@ async function resolveInboundMediaUri(
     });
   }
 
-  if (!id || id.includes("/") || id.includes("\\")) {
+  if (!id || id.includes("/") || id.includes("\\") || id.includes("\0")) {
     throw new MediaReferenceError("invalid-path", `Invalid media URI: ${normalizedSource}`);
   }
 
   return {
     id,
     normalizedSource,
-    physicalPath: await resolveInboundMediaPath(id, normalizedSource),
+  };
+}
+
+async function resolveInboundMediaUri(
+  normalizedSource: string,
+): Promise<InboundMediaReference | null> {
+  const uri = parseInboundMediaUri(normalizedSource);
+  if (!uri) {
+    return null;
+  }
+  return {
+    ...uri,
+    physicalPath: await resolveInboundMediaPath(uri.id, uri.normalizedSource),
     sourceType: "uri",
   };
 }
 
+/** Rewrites inbound media-store URIs to sandbox-relative paths for staged agent inputs. */
+export function resolveMediaReferenceSandboxPath(
+  source: string,
+  inboundDir = "media/inbound",
+): { resolved: string; rewrittenFrom?: string } {
+  const normalizedSource = normalizeMediaReferenceSource(source);
+  const uri = parseInboundMediaUri(normalizedSource);
+  if (!uri) {
+    return { resolved: normalizedSource };
+  }
+  return {
+    resolved: path.posix.join(inboundDir.replace(/\\/g, "/"), uri.id),
+    rewrittenFrom: uri.normalizedSource,
+  };
+}
+
+/** Resolves inbound media:// URIs or first-level inbound file paths to concrete store files. */
 export async function resolveInboundMediaReference(
   source: string,
 ): Promise<InboundMediaReference | null> {
@@ -148,10 +204,18 @@ export async function resolveInboundMediaReference(
     return null;
   }
 
-  const inboundDir = path.resolve(getMediaDir(), "inbound");
-  const resolvedPath = path.resolve(localPath);
-  const rel = path.relative(inboundDir, resolvedPath);
-  if (!rel || rel.startsWith("..") || path.isAbsolute(rel) || rel.includes(path.sep)) {
+  const rawInboundDir = path.resolve(getMediaDir(), "inbound");
+  const rawResolvedPath = path.resolve(localPath);
+  const rawRel = path.relative(rawInboundDir, rawResolvedPath);
+  // Realpath fallback catches symlinks and moved state dirs before accepting direct paths.
+  const rel =
+    rawRel && !relativePathEscapesBase(rawRel)
+      ? rawRel
+      : path.relative(
+          await resolvePathForContainment(rawInboundDir),
+          await resolvePathForContainment(localPath),
+        );
+  if (!rel || relativePathEscapesBase(rel) || rel.includes(path.sep)) {
     return null;
   }
 
@@ -163,6 +227,7 @@ export async function resolveInboundMediaReference(
   };
 }
 
+/** Converts inbound media references for callers that need a direct local file path. */
 export async function resolveMediaReferenceLocalPath(source: string): Promise<string> {
   const normalizedSource = normalizeMediaReferenceSource(source);
   return (await resolveInboundMediaReference(normalizedSource))?.physicalPath ?? normalizedSource;

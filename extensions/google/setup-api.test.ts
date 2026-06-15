@@ -1,3 +1,4 @@
+// Google tests cover setup api plugin behavior.
 import type { CliBackendPlugin } from "openclaw/plugin-sdk/cli-backend";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { describe, expect, it } from "vitest";
@@ -17,7 +18,7 @@ describe("google setup entry", () => {
       },
     } as never);
 
-    expect(providerIds).toContain("google-vertex");
-    expect(cliBackendIds).toContain("google-gemini-cli");
+    expect(providerIds).toEqual(["google-vertex"]);
+    expect(cliBackendIds).toEqual(["google-gemini-cli"]);
   });
 });

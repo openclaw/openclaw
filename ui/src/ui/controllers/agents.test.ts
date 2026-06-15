@@ -1,9 +1,12 @@
+// Control UI tests cover agents behavior.
 import { describe, expect, it, vi } from "vitest";
 import { loadAgents, loadToolsCatalog, loadToolsEffective, saveAgentsConfig } from "./agents.ts";
 import type { AgentsConfigSaveState, AgentsState } from "./agents.ts";
 
-function createState(): { state: AgentsState; request: ReturnType<typeof vi.fn> } {
-  const request = vi.fn();
+type TestRequest = (method: string, payload?: unknown) => Promise<unknown>;
+
+function createState(): { state: AgentsState; request: ReturnType<typeof vi.fn<TestRequest>> } {
+  const request = vi.fn<TestRequest>();
   const state: AgentsState = {
     client: {
       request,
@@ -46,7 +49,7 @@ function createState(): { state: AgentsState; request: ReturnType<typeof vi.fn> 
 
 function createSaveState(): {
   state: AgentsConfigSaveState;
-  request: ReturnType<typeof vi.fn>;
+  request: ReturnType<typeof vi.fn<TestRequest>>;
 } {
   const { state, request } = createState();
   return {
@@ -74,11 +77,27 @@ function createSaveState(): {
       configActiveSection: null,
       configActiveSubsection: null,
       pendingUpdateExpectedVersion: null,
+      pendingUpdateHandoff: false,
       updateStatusBanner: null,
       lastError: null,
     },
     request,
   };
+}
+
+function requireRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Expected a non-array record");
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireFirstRequestCall(request: ReturnType<typeof vi.fn>): unknown[] {
+  const [call] = request.mock.calls;
+  if (!call) {
+    throw new Error("Expected client request call");
+  }
+  return call;
 }
 
 describe("loadAgents", () => {
@@ -172,7 +191,7 @@ describe("loadToolsCatalog", () => {
     await loadToolsCatalog(state, "main");
 
     expect(state.toolsCatalogResult).toBeNull();
-    expect(state.toolsCatalogError).toContain("gateway unavailable");
+    expect(state.toolsCatalogError).toBe("Error: gateway unavailable");
     expect(state.toolsCatalogLoading).toBe(false);
   });
 
@@ -246,7 +265,7 @@ describe("loadToolsEffective", () => {
 
     expect(state.toolsEffectiveResult).toBeNull();
     expect(state.toolsEffectiveResultKey).toBeNull();
-    expect(state.toolsEffectiveError).toContain("gateway unavailable");
+    expect(state.toolsEffectiveError).toBe("Error: gateway unavailable");
     expect(state.toolsEffectiveLoading).toBe(false);
   });
 
@@ -371,12 +390,11 @@ describe("saveAgentsConfig", () => {
 
     await saveAgentsConfig(state);
 
-    expect(request).toHaveBeenNthCalledWith(
-      1,
-      "config.set",
-      expect.objectContaining({ baseHash: "hash-1" }),
-    );
-    expect(JSON.parse(request.mock.calls[0]?.[1]?.raw as string)).toEqual({
+    const [method, params] = requireFirstRequestCall(request);
+    const requestParams = requireRecord(params);
+    expect(method).toBe("config.set");
+    expect(requestParams.baseHash).toBe("hash-1");
+    expect(JSON.parse(String(requestParams.raw))).toEqual({
       agents: { list: [{ id: "main" }] },
     });
     expect(request).toHaveBeenNthCalledWith(2, "config.get", {});

@@ -1,3 +1,4 @@
+// Discord plugin module implements outbound adapter harness behavior.
 import { expect, vi, type Mock } from "vitest";
 
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
@@ -41,13 +42,13 @@ export function createDiscordOutboundHoisted(): DiscordOutboundHoisted {
   };
 }
 
-export const DEFAULT_DISCORD_SEND_RESULT = {
+const DEFAULT_DISCORD_SEND_RESULT = {
   channel: "discord",
   messageId: "msg-1",
   channelId: "ch-1",
 } as const;
 
-export async function createDiscordSendModuleMock(
+async function createDiscordSendModuleMock(
   hoisted: DiscordOutboundHoisted,
   loadActual: () => Promise<DiscordSendModule>,
 ): Promise<DiscordSendModule> {
@@ -79,7 +80,7 @@ export async function createDiscordSendModuleMock(
   };
 }
 
-export async function createDiscordSendComponentsModuleMock(
+async function createDiscordSendComponentsModuleMock(
   hoisted: DiscordOutboundHoisted,
   loadActual: () => Promise<DiscordSendComponentsModule>,
 ): Promise<DiscordSendComponentsModule> {
@@ -96,7 +97,7 @@ export async function createDiscordSendComponentsModuleMock(
   };
 }
 
-export async function createDiscordThreadBindingsModuleMock(
+async function createDiscordThreadBindingsModuleMock(
   hoisted: DiscordOutboundHoisted,
   loadActual: () => Promise<DiscordThreadBindingsModule>,
 ): Promise<DiscordThreadBindingsModule> {

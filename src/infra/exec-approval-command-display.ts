@@ -1,4 +1,9 @@
-import { redactSensitiveText, resolveRedactOptions } from "../logging/redact.js";
+// Sanitizes command text before it is displayed in approval prompts.
+import {
+  computeSensitiveRedactionBitmap,
+  redactSensitiveText,
+  resolveRedactOptions,
+} from "../logging/redact.js";
 import type { ExecApprovalRequestPayload } from "./exec-approvals.js";
 
 // Escape control characters, Unicode format/line/paragraph separators, and non-ASCII space
@@ -38,36 +43,25 @@ function escapeInvisibles(text: string, options?: { preserveLineBreaks?: boolean
   );
 }
 
-function truncateForDisplay(text: string): string {
-  if (text.length <= EXEC_APPROVAL_MAX_OUTPUT) {
-    return text;
-  }
-  return text.slice(0, EXEC_APPROVAL_MAX_OUTPUT) + EXEC_APPROVAL_TRUNCATION_MARKER;
-}
+/** Sanitized approval text plus size-cap status for callers that need UI affordances. */
+export type SanitizedExecApprovalDisplayText = {
+  /** Redacted, spoof-resistant command or warning text safe for an approval prompt. */
+  text: string;
+  /** True when sanitized output exceeded the display cap and was shortened. */
+  truncated: boolean;
+  /** True when raw input exceeded the hard cap and was replaced with a fixed marker. */
+  oversized: boolean;
+};
 
-// Build a boolean bitmap of positions in `text` that ANY redaction pattern would match.
-// Patterns are applied independently to the raw text (not sequentially against a
-// progressively-redacted view) so later patterns can still find matches that the in-place
-// redaction would have replaced first. That is conservative — it may over-count overlapping
-// matches — but that is acceptable for a coverage check. Indices are UTF-16 code-unit
-// offsets, matching what `matchAll` returns and aligning with `String#length`.
-function computeRedactionBitmap(text: string, patterns: RegExp[]): boolean[] {
-  const bitmap: boolean[] = Array.from({ length: text.length }, () => false);
-  for (const pattern of patterns) {
-    const iter = pattern.flags.includes("g")
-      ? new RegExp(pattern.source, pattern.flags)
-      : new RegExp(pattern.source, `${pattern.flags}g`);
-    for (const match of text.matchAll(iter)) {
-      if (match.index === undefined) {
-        continue;
-      }
-      const end = match.index + match[0].length;
-      for (let i = match.index; i < end; i++) {
-        bitmap[i] = true;
-      }
-    }
+function truncateForDisplay(text: string): SanitizedExecApprovalDisplayText {
+  if (text.length <= EXEC_APPROVAL_MAX_OUTPUT) {
+    return { text, truncated: false, oversized: false };
   }
-  return bitmap;
+  return {
+    text: text.slice(0, EXEC_APPROVAL_MAX_OUTPUT) + EXEC_APPROVAL_TRUNCATION_MARKER,
+    truncated: true,
+    oversized: false,
+  };
 }
 
 // Iterate by full Unicode code point so astral-plane invisibles (e.g. U+E0061 TAG LATIN
@@ -92,11 +86,15 @@ function buildStrippedView(original: string): { stripped: string; strippedToOrig
 function sanitizeExecApprovalDisplayTextInternal(
   commandText: string,
   options?: { preserveLineBreaks?: boolean; oversizedMarker?: string },
-): string {
+): SanitizedExecApprovalDisplayText {
   if (commandText.length > EXEC_APPROVAL_MAX_INPUT) {
     // Refuse to display inputs above the hard cap; anything larger must be approved through
     // another channel. Running redaction on a multi-megabyte payload would be a DoS vector.
-    return options?.oversizedMarker ?? EXEC_APPROVAL_OVERSIZED_MARKER;
+    return {
+      text: options?.oversizedMarker ?? EXEC_APPROVAL_OVERSIZED_MARKER,
+      truncated: false,
+      oversized: true,
+    };
   }
   const rawRedacted = redactSensitiveText(commandText, { mode: "tools" });
   const { stripped, strippedToOrig } = buildStrippedView(commandText);
@@ -107,17 +105,16 @@ function sanitizeExecApprovalDisplayTextInternal(
   if (strippedRedacted === stripped) {
     return truncateForDisplay(escapeInvisibles(rawRedacted, options));
   }
-  // Detect bypass by position-bitmap coverage. Run each redaction pattern independently on
-  // both views and map stripped-view match positions back to original coordinates. If every
-  // position the stripped view would mask is also masked by the raw view, the raw view
-  // already covered everything — for example, an ordinary multi-line PEM private key where
-  // raw produces `BEGIN/…redacted…/END` while stripped collapses to `***`. A real bypass
-  // exists only when the stripped view masks at least one original position raw missed (e.g.
-  // the tail of an `sk-` token whose prefix-boundary was broken by a spliced zero-width or
-  // NBSP character).
-  const { patterns } = resolveRedactOptions({ mode: "tools" });
-  const rawMask = computeRedactionBitmap(commandText, patterns);
-  const strippedMask = computeRedactionBitmap(stripped, patterns);
+  // Detect bypass by position-bitmap coverage. Run the redaction matchers on both views and
+  // map stripped-view match positions back to original coordinates. If every position the
+  // stripped view would mask is also masked by the raw view, the raw view already covered
+  // everything — for example, an ordinary multi-line PEM private key where raw produces
+  // `BEGIN/…redacted…/END` while stripped collapses to `***`. A real bypass exists only when
+  // the stripped view masks at least one original position raw missed (e.g. the tail of an
+  // `sk-` token whose prefix-boundary was broken by a spliced zero-width or NBSP character).
+  const redaction = resolveRedactOptions({ mode: "tools" });
+  const rawMask = computeSensitiveRedactionBitmap(commandText, redaction);
+  const strippedMask = computeSensitiveRedactionBitmap(stripped, redaction);
   let bypassDetected = false;
   for (let i = 0; i < strippedMask.length; i++) {
     if (strippedMask[i] && !rawMask[strippedToOrig[i]]) {
@@ -166,15 +163,28 @@ function sanitizeExecApprovalDisplayTextInternal(
   return truncateForDisplay(out);
 }
 
+/** Sanitizes exec command text for approval UI without exposing status metadata. */
 export function sanitizeExecApprovalDisplayText(commandText: string): string {
+  return sanitizeExecApprovalDisplayTextInternal(commandText).text;
+}
+
+/**
+ * Sanitizes exec command text for approval UI and reports whether size caps changed it.
+ */
+export function sanitizeExecApprovalDisplayTextWithStatus(
+  commandText: string,
+): SanitizedExecApprovalDisplayText {
   return sanitizeExecApprovalDisplayTextInternal(commandText);
 }
 
+/**
+ * Sanitizes warning prose for approval UI while preserving real line boundaries.
+ */
 export function sanitizeExecApprovalWarningText(warningText: string): string {
   return sanitizeExecApprovalDisplayTextInternal(normalizeDisplayLineBreaks(warningText), {
     preserveLineBreaks: true,
     oversizedMarker: EXEC_APPROVAL_WARNING_OVERSIZED_MARKER,
-  });
+  }).text;
 }
 
 function normalizePreview(commandText: string, commandPreview?: string | null): string | null {
@@ -189,8 +199,11 @@ function normalizePreview(commandText: string, commandPreview?: string | null): 
   return preview;
 }
 
+/** Resolves sanitized command and preview text for exec approval prompts. */
 export function resolveExecApprovalCommandDisplay(request: ExecApprovalRequestPayload): {
+  /** Primary command text rendered in the approval prompt. */
   commandText: string;
+  /** Optional shorter preview, omitted when it would duplicate the primary command text. */
   commandPreview: string | null;
 } {
   const commandTextSource =

@@ -55,6 +55,34 @@ import Testing
         #expect(problem?.actionCommand == "openclaw devices approve req-123")
     }
 
+    @Test func scopeMismatchMapsToPairingOrRepairProblem() {
+        let error = GatewayConnectAuthError(
+            message: "device token scope mismatch",
+            detailCode: GatewayConnectAuthDetailCode.authScopeMismatch.rawValue,
+            canRetryWithDeviceToken: false)
+
+        let problem = GatewayConnectionProblemMapper.map(error: error)
+
+        #expect(error.detail == .authScopeMismatch)
+        #expect(error.isNonRecoverable)
+        #expect(problem?.kind == .deviceTokenScopeMismatch)
+        #expect(problem?.needsPairingApproval == true)
+        #expect(problem?.needsCredentialUpdate == false)
+    }
+
+    @Test func tokenMismatchSuggestsOnboardingReset() {
+        let error = GatewayConnectAuthError(
+            message: "token mismatch",
+            detailCode: GatewayConnectAuthDetailCode.authTokenMismatch.rawValue,
+            canRetryWithDeviceToken: false)
+
+        let problem = GatewayConnectionProblemMapper.map(error: error)
+
+        #expect(problem?.kind == .gatewayAuthTokenMismatch)
+        #expect(problem?.suggestsOnboardingReset == true)
+        #expect(problem?.needsCredentialUpdate == true)
+    }
+
     @Test func cancelledTransportDoesNotReplaceStructuredPairingProblem() {
         let pairing = GatewayConnectAuthError(
             message: "pairing required",
@@ -88,5 +116,63 @@ import Testing
         let mapped = GatewayConnectionProblemMapper.map(error: unknownTransport, preserving: previousProblem)
 
         #expect(mapped == nil)
+    }
+
+    @Test func tlsPinMismatchMapsToActionableProblem() {
+        let error = GatewayTLSValidationError(
+            failure: GatewayTLSValidationFailure(
+                kind: .pinMismatch,
+                host: "gateway.example.ts.net",
+                storeKey: "gateway.example.ts.net:443",
+                expectedFingerprint: "old",
+                observedFingerprint: "new",
+                systemTrustOk: true),
+            context: "connect to gateway")
+
+        let problem = GatewayConnectionProblemMapper.map(error: error)
+
+        #expect(problem?.kind == .tlsPinMismatch)
+        #expect(problem?.retryable == false)
+        #expect(problem?.pauseReconnect == true)
+        #expect(problem?.actionLabel == "Review certificate")
+        #expect(problem?.canTrustRotatedCertificate == true)
+        #expect(problem?.tlsStoreKey == "gateway.example.ts.net:443")
+        #expect(problem?.tlsExpectedFingerprint == "old")
+        #expect(problem?.tlsObservedFingerprint == "new")
+    }
+
+    @Test func untrustedTLSCertificatePausesReconnect() {
+        let error = GatewayTLSValidationError(
+            failure: GatewayTLSValidationFailure(
+                kind: .untrustedCertificate,
+                host: "gateway.example.com",
+                storeKey: "gateway.example.com:443",
+                expectedFingerprint: nil,
+                observedFingerprint: nil,
+                systemTrustOk: false),
+            context: "connect to gateway")
+
+        let problem = GatewayConnectionProblemMapper.map(error: error)
+
+        #expect(problem?.kind == .tlsCertificateUntrusted)
+        #expect(problem?.retryable == false)
+        #expect(problem?.pauseReconnect == true)
+    }
+
+    @Test func untrustedTLSMismatchCannotBeRecoveredInApp() {
+        let error = GatewayTLSValidationError(
+            failure: GatewayTLSValidationFailure(
+                kind: .pinMismatch,
+                host: "gateway.example.ts.net",
+                storeKey: "gateway.example.ts.net:443",
+                expectedFingerprint: "old",
+                observedFingerprint: "new",
+                systemTrustOk: false),
+            context: "connect to gateway")
+
+        let problem = GatewayConnectionProblemMapper.map(error: error)
+
+        #expect(problem?.kind == .tlsPinMismatch)
+        #expect(problem?.canTrustRotatedCertificate == false)
     }
 }

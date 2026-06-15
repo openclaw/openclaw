@@ -10,10 +10,8 @@ query-filters:
       precision:
         - high
         - very-high
-  - exclude:
-      problem.severity:
-        - recommendation
-        - warning
+      tags contain: security
+      security-severity: /([7-9]|10)\.(\d)+/
 
 paths:
   - src/channels
@@ -21,7 +19,7 @@ paths:
   - src/config/types.channel*.ts
   - src/gateway/server-channel*.ts
   - src/gateway/server-methods/channels.ts
-  - src/gateway/protocol/schema/channels.ts
+  - packages/gateway-protocol/src/schema/channels.ts
   - src/infra/channel-*.ts
   - src/infra/exec-approval-channel-runtime.ts
   - src/infra/outbound/channel-*.ts

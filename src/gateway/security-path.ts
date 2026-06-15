@@ -1,6 +1,8 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+// Gateway path security canonicalizes repeatedly encoded paths and protects
+// plugin HTTP routes even under malformed encoding.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
-export type SecurityPathCanonicalization = {
+type SecurityPathCanonicalization = {
   canonicalPath: string;
   candidates: string[];
   decodePasses: number;
@@ -63,7 +65,7 @@ export function buildCanonicalPathCandidates(
   let malformedEncoding = false;
   let decodePasses = 0;
   for (let pass = 0; pass < maxDecodePasses; pass++) {
-    let nextDecoded = decoded;
+    let nextDecoded;
     try {
       nextDecoded = decodeURIComponent(decoded);
     } catch {
@@ -119,11 +121,6 @@ export function canonicalizePathForSecurity(pathname: string): SecurityPathCanon
     malformedEncoding,
     rawNormalizedPath: normalizePathSeparators(normalizeLowercaseStringOrEmpty(pathname)) || "/",
   };
-}
-
-export function hasSecurityPathCanonicalizationAnomaly(pathname: string): boolean {
-  const canonical = canonicalizePathForSecurity(pathname);
-  return canonical.malformedEncoding || canonical.decodePassLimitReached;
 }
 
 const normalizedPrefixesCache = new WeakMap<readonly string[], readonly string[]>();

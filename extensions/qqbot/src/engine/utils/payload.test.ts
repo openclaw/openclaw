@@ -1,3 +1,4 @@
+// Qqbot tests cover payload plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   decodeCronPayload,
@@ -59,6 +60,9 @@ describe("engine/utils/payload", () => {
   it("reports cron decode errors without throwing", () => {
     expect(decodeCronPayload("plain")).toEqual({ isCronPayload: false });
     expect(decodeCronPayload("QQBOT_CRON:").error).toBe("Cron payload body is empty");
+    expect(decodeCronPayload("QQBOT_CRON:AAA@@@").error).toBe(
+      "Failed to decode cron payload: Cron payload body is not valid base64",
+    );
 
     const wrongType = Buffer.from('{"type":"media"}', "utf-8").toString("base64");
     expect(decodeCronPayload(`QQBOT_CRON:${wrongType}`).error).toBe(

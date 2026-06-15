@@ -1,3 +1,4 @@
+// Video generation normalization helpers map user inputs to provider requests.
 import {
   hasMediaNormalizationEntry,
   resolveClosestAspectRatio,
@@ -15,6 +16,15 @@ import type {
   VideoGenerationProvider,
   VideoGenerationResolution,
 } from "./types.js";
+
+const VIDEO_RESOLUTION_ORDER: readonly VideoGenerationResolution[] = [
+  "360P",
+  "480P",
+  "540P",
+  "720P",
+  "768P",
+  "1080P",
+];
 
 export type ResolvedVideoGenerationOverrides = {
   size?: string;
@@ -138,12 +148,15 @@ export function resolveVideoGenerationOverrides(params: {
       const normalizedResolution = resolveClosestResolution({
         requestedResolution: resolution,
         supportedResolutions: caps.resolutions,
+        order: VIDEO_RESOLUTION_ORDER,
       });
       if (normalizedResolution && normalizedResolution !== resolution) {
         normalization.resolution = {
           requested: resolution,
           applied: normalizedResolution,
         };
+      } else if (!normalizedResolution) {
+        ignoredOverrides.push({ key: "resolution", value: resolution });
       }
       resolution = normalizedResolution;
     } else if (resolution && !caps.supportsResolution) {

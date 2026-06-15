@@ -1,16 +1,18 @@
+// Slack plugin module implements channel.setup behavior.
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import {
   adaptScopedAccountAccessor,
   createScopedChannelConfigAdapter,
 } from "openclaw/plugin-sdk/channel-config-helpers";
-import { type ResolvedSlackAccount } from "./accounts.js";
+import type { ResolvedSlackAccount } from "./accounts.js";
 import {
   listSlackAccountIds,
+  resolveSlackConfigAccessorAccount,
   resolveDefaultSlackAccountId,
   resolveSlackAccount,
-  resolveSlackAccountAllowFrom,
+  type SlackConfigAccessorAccount,
 } from "./accounts.js";
-import { type ChannelPlugin } from "./channel-api.js";
+import type { ChannelPlugin } from "./channel-api.js";
 import { SlackChannelConfigSchema } from "./config-schema.js";
 import { slackSetupAdapter, createSlackSetupWizardProxy } from "./setup-core.js";
 import {
@@ -23,25 +25,14 @@ const slackSetupWizard = createSlackSetupWizardProxy(async () => ({
   slackSetupWizard: (await import("./setup-surface.js")).slackSetupWizard,
 }));
 
-type SlackSetupConfigAccessorAccount = {
-  allowFrom: string[] | undefined;
-  defaultTo: string | undefined;
-};
-
 const slackSetupConfigAdapter = createScopedChannelConfigAdapter<
   ResolvedSlackAccount,
-  SlackSetupConfigAccessorAccount
+  SlackConfigAccessorAccount
 >({
   sectionKey: SLACK_CHANNEL,
   listAccountIds: listSlackAccountIds,
   resolveAccount: adaptScopedAccountAccessor(resolveSlackAccount),
-  resolveAccessorAccount: (params) => {
-    const account = resolveSlackAccount(params);
-    return {
-      allowFrom: resolveSlackAccountAllowFrom({ cfg: params.cfg, accountId: account.accountId }),
-      defaultTo: account.config.defaultTo,
-    };
-  },
+  resolveAccessorAccount: resolveSlackConfigAccessorAccount,
   defaultAccountId: resolveDefaultSlackAccountId,
   clearBaseFields: ["botToken", "appToken", "name"],
   resolveAllowFrom: (account) => account.allowFrom,

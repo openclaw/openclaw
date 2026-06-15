@@ -1,4 +1,9 @@
-import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
+/**
+ * Native approval prompt capability helpers.
+ *
+ * Detects loaded or known channels that can render approval prompts natively.
+ */
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { resolveChannelApprovalCapability } from "./approvals.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 
@@ -6,15 +11,14 @@ export const NATIVE_APPROVAL_PROMPT_RUNTIME_CAPABILITY = "nativeApprovals";
 
 const NATIVE_APPROVAL_PROMPT_RUNTIME_CAPABILITY_NORMALIZED = "nativeapprovals";
 
-// Keep prompt construction lightweight. Full plugin loading is too expensive on
-// prompt-only import paths; plugin-backed checks still cover loaded native
-// channels at runtime.
 const KNOWN_NATIVE_APPROVAL_PROMPT_CHANNELS = new Set([
   "discord",
+  "googlechat",
   "matrix",
   "qqbot",
   "slack",
   "telegram",
+  "signal",
 ]);
 
 export function channelPluginHasNativeApprovalPromptUi(

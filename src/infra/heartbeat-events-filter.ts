@@ -1,5 +1,7 @@
+// Filters heartbeat event text before it is added to prompts.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS } from "../auto-reply/heartbeat.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 const MAX_EXEC_EVENT_PROMPT_CHARS = 8_000;
 const STRUCTURED_EXEC_COMPLETION_EVENT_RE =
@@ -75,11 +77,19 @@ export function buildCronEventPrompt(
   pendingEvents: string[],
   opts?: {
     deliverToUser?: boolean;
+    useHeartbeatResponseTool?: boolean;
   },
 ): string {
   const deliverToUser = opts?.deliverToUser ?? true;
+  const useHeartbeatResponseTool = opts?.useHeartbeatResponseTool ?? false;
   const eventText = pendingEvents.join("\n").trim();
   if (!eventText) {
+    if (useHeartbeatResponseTool) {
+      return (
+        "A scheduled cron event was triggered, but no event content was found. " +
+        HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS
+      );
+    }
     if (!deliverToUser) {
       return (
         "A scheduled cron event was triggered, but no event content was found. " +
@@ -107,21 +117,35 @@ export function buildCronEventPrompt(
 
 export function buildExecEventPrompt(
   pendingEvents: string[],
-  opts?: { deliverToUser?: boolean },
+  opts?: { deliverToUser?: boolean; useHeartbeatResponseTool?: boolean },
 ): string {
   const deliverToUser = opts?.deliverToUser ?? true;
+  const useHeartbeatResponseTool = opts?.useHeartbeatResponseTool ?? false;
   const { text: rawEventText, hasMissingOutputFailure } = formatExecEventPromptText(pendingEvents);
   const eventText =
     rawEventText.length > MAX_EXEC_EVENT_PROMPT_CHARS
       ? `${rawEventText.slice(0, MAX_EXEC_EVENT_PROMPT_CHARS)}\n\n[truncated]`
       : rawEventText;
   if (!eventText) {
+    if (useHeartbeatResponseTool) {
+      return (
+        "An async command completion event was triggered, but no command output was found. " +
+        `${HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS} Do not mention, summarize, or reuse output from any earlier run.`
+      );
+    }
     return (
       "An async command completion event was triggered, but no command output was found. " +
       "Reply HEARTBEAT_OK only. Do not mention, summarize, or reuse output from any earlier run."
     );
   }
   if (!deliverToUser) {
+    if (useHeartbeatResponseTool) {
+      return (
+        "An async command completion event was triggered, but user delivery is disabled for this run. " +
+        `Handle the result internally. ${HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS} ` +
+        "Do not mention, summarize, or reuse command output."
+      );
+    }
     return (
       "An async command completion event was triggered, but user delivery is disabled for this run. " +
       "Handle the result internally and reply HEARTBEAT_OK only. Do not mention, summarize, or reuse command output."

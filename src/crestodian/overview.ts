@@ -1,3 +1,4 @@
+// Crestodian overview gathers config, agent, tool, docs, source, and gateway status.
 import {
   listAgentEntries,
   resolveAgentEffectiveModelPrimary,
@@ -19,7 +20,7 @@ import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { probeGatewayUrl, probeLocalCommand, type LocalCommandProbe } from "./probes.js";
 
-export type CrestodianAgentSummary = {
+type CrestodianAgentSummary = {
   id: string;
   name?: string;
   isDefault: boolean;
@@ -102,6 +103,7 @@ function buildAgentSummaries(cfg: OpenClawConfig): CrestodianAgentSummary[] {
   }
   const seen = new Set<string>();
   const summaries: CrestodianAgentSummary[] = [];
+  // Agent ids are normalized and deduped so config aliases do not produce duplicate setup choices.
   for (const entry of entries) {
     const id = normalizeAgentId(entry.id);
     if (seen.has(id)) {
@@ -168,6 +170,7 @@ export async function loadCrestodianOverview(
   const resolveReferences = deps.resolveOpenClawReferencePaths ?? resolveOpenClawReferencePaths;
   const commandProbe = deps.probeLocalCommand ?? probeLocalCommand;
   const [codex, claude, gateway, references] = await Promise.all([
+    // Probes run in parallel; each individual probe is timeout-bounded in probes.ts.
     commandProbe("codex"),
     commandProbe("claude"),
     (deps.probeGatewayUrl ?? probeGatewayUrl)(gatewayUrl),
@@ -274,7 +277,7 @@ export function formatCrestodianOverview(overview: CrestodianOverview): string {
     .join("\n");
 }
 
-export function recommendCrestodianNextStep(overview: CrestodianOverview): string {
+function recommendCrestodianNextStep(overview: CrestodianOverview): string {
   if (!overview.config.exists) {
     return 'run "setup" to create a starter config';
   }

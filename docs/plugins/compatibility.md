@@ -69,16 +69,14 @@ not publish the inspector binary from the main `openclaw` package.
 
 ### Maintainer acceptance lane
 
-Use Blacksmith Testbox for the installable-package acceptance lane when validating
-the external inspector against OpenClaw plugin packages. Run it from a clean
-OpenClaw checkout after the package is built:
+Use Crabbox-backed Blacksmith Testbox for the installable-package acceptance
+lane when validating the external inspector against OpenClaw plugin packages.
+Run it from a clean OpenClaw checkout after the package is built:
 
 ```sh
-blacksmith testbox warmup ci-check-testbox.yml --ref main --idle-timeout 90
-blacksmith testbox run --id <tbx_id> "pnpm install && pnpm build && npm exec --yes @openclaw/plugin-inspector@0.1.0 -- ./extensions/telegram --json"
-blacksmith testbox run --id <tbx_id> "npm exec --yes @openclaw/plugin-inspector@0.1.0 -- ./extensions/discord --json"
-blacksmith testbox run --id <tbx_id> "npm exec --yes @openclaw/plugin-inspector@0.1.0 -- <clawhub-plugin-dir> --json"
-blacksmith testbox stop <tbx_id>
+pnpm crabbox:run -- --provider blacksmith-testbox --timing-json --shell -- "pnpm install && pnpm build && npm exec --yes @openclaw/plugin-inspector@0.1.0 -- ./extensions/telegram --json"
+pnpm crabbox:run -- --provider blacksmith-testbox --timing-json --shell -- "npm exec --yes @openclaw/plugin-inspector@0.1.0 -- ./extensions/discord --json"
+pnpm crabbox:run -- --provider blacksmith-testbox --timing-json --shell -- "npm exec --yes @openclaw/plugin-inspector@0.1.0 -- <clawhub-plugin-dir> --json"
 ```
 
 Keep this lane opt-in for maintainers because it installs an external npm
@@ -114,6 +112,8 @@ Current compatibility records include:
 
 - legacy broad SDK imports such as `openclaw/plugin-sdk/compat`
 - legacy hook-only plugin shapes and `before_agent_start`
+- legacy `api.on("deactivate", ...)` cleanup hook names while plugins migrate to
+  `gateway_stop`
 - legacy `activate(api)` plugin entrypoints while plugins migrate to
   `register(api)`
 - legacy SDK aliases such as `openclaw/extension-api`,
@@ -128,16 +128,20 @@ Current compatibility records include:
 - legacy runtime aliases such as `api.runtime.taskFlow`,
   `api.runtime.subagent.getSession`, `api.runtime.stt`, and deprecated
   `api.runtime.config.loadConfig()` / `api.runtime.config.writeConfigFile(...)`
+- WhatsApp `WebInboundMessage` flat callback fields such as `body`, `chatId`,
+  `reply(...)`, and `mediaPath` while callback consumers migrate to the nested
+  `WebInboundCallbackMessage` `event`, `payload`, `quote`, `group`, and
+  `platform` contexts
 - legacy memory-plugin split registration while memory plugins move to
   `registerMemoryCapability`
+- legacy memory-specific embedding provider registration while embedding
+  providers move to `api.registerEmbeddingProvider(...)` and
+  `contracts.embeddingProviders`
 - legacy channel SDK helpers for native message schemas, mention gating,
   inbound envelope formatting, and approval capability nesting
 - legacy channel route key and comparable-target helper aliases while plugins
   move to `openclaw/plugin-sdk/channel-route`
 - activation hints that are being replaced by manifest contribution ownership
-- deprecated implicit startup sidecar loading for plugins that have not declared
-  `activation.onStartup`; maintainers can test the future stricter behavior with
-  `OPENCLAW_DISABLE_LEGACY_IMPLICIT_STARTUP_SIDECARS=1`
 - `setup-api` runtime fallback while setup descriptors move to cold
   `setup.requiresRuntime: false` metadata
 - provider `discovery` hooks while provider catalog hooks move to
@@ -159,6 +163,33 @@ Current compatibility records include:
 New plugin code should prefer the replacement listed in the registry and in the
 specific migration guide. Existing plugins can keep using a compatibility path
 until the docs, diagnostics, and release notes announce a removal window.
+
+### WhatsApp Inbound Callback Flat Aliases
+
+WhatsApp runtime callbacks deliver `WebInboundMessage`: the canonical nested
+`event`, `payload`, `quote`, `group`, and `platform` contexts plus deprecated
+flat aliases for the shipped callback fields. New callback code should read the
+nested contexts. Code that constructs clean nested callback messages can use
+`WebInboundCallbackMessage`; compatibility listeners that still inject old flat
+test or plugin messages should use `LegacyFlatWebInboundMessage` or
+`WebInboundMessageInput`.
+
+The flat aliases remain available until **2026-08-30**. That removal window
+applies only to flat alias access; the nested callback shape is the canonical
+runtime contract. The TypeScript `@deprecated` annotations on each flat alias
+name its exact nested replacement. Common examples:
+
+- `id`, `timestamp`, and `isBatched` move under `event`.
+- `body`, `mediaPath`, `mediaType`, `mediaFileName`, `mediaUrl`, `location`, and
+  `untrustedStructuredContext` move under `payload`.
+- `to`, `chatId`, sender/self fields, `sendComposing`, `reply(...)`, and
+  `sendMedia(...)` move under `platform`.
+- `replyTo*` fields move under `quote`, and group subject/participant/mention
+  fields move under `group`.
+
+`payload.untrustedStructuredContext` is extracted from inbound provider payloads.
+Plugins should inspect the `label`, `source`, and `type` before treating its
+`payload` as authoritative.
 
 ## Release notes
 

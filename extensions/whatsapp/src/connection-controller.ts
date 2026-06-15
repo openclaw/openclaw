@@ -1,10 +1,12 @@
-import { DisconnectReason, type WASocket } from "@whiskeysockets/baileys";
+// Whatsapp plugin module implements connection controller behavior.
+import type { WASocket } from "baileys";
 import { info } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
   registerWhatsAppConnectionController,
   unregisterWhatsAppConnectionController,
 } from "./connection-controller-registry.js";
+import { resolveComparableIdentity, type WhatsAppSelfIdentity } from "./identity.js";
 import type { ActiveWebListener, WebListenerCloseReason } from "./inbound/types.js";
 import { computeBackoff, sleepWithAbort, type ReconnectPolicy } from "./reconnect.js";
 import {
@@ -12,17 +14,31 @@ import {
   formatError,
   getStatusCode,
   logoutWeb,
+  readWebAuthExistsForDecision,
   waitForWaConnection,
+  WhatsAppAuthUnstableError,
 } from "./session.js";
-import type { WhatsAppSocketTimingOptions } from "./socket-timing.js";
+import {
+  DEFAULT_WHATSAPP_SOCKET_TIMING,
+  type WhatsAppSocketTimingOptions,
+} from "./socket-timing.js";
 
-const LOGGED_OUT_STATUS = DisconnectReason?.loggedOut ?? 401;
+const LOGGED_OUT_STATUS = 401;
+const POST_PAIRING_RESTART_STATUS = 515;
+const TIMED_OUT_STATUS = 408;
 const WHATSAPP_LOGIN_RESTART_MESSAGE =
   "WhatsApp asked for a restart after pairing (code 515); waiting for creds to save…";
-export const WHATSAPP_LOGGED_OUT_RELINK_MESSAGE =
+const WHATSAPP_LOGIN_TIMEOUT_RESTART_MESSAGE =
+  "WhatsApp connection timed out before login; retrying with a fresh socket…";
+const WHATSAPP_LOGGED_OUT_RELINK_MESSAGE =
   "WhatsApp reported the session is logged out. Cleared cached web session; please rerun openclaw channels login and scan the QR again.";
+const WHATSAPP_LOGIN_AUTH_UNSTABLE_MESSAGE =
+  "WhatsApp connected, but saving the linked credentials has not settled on disk yet. Retry login in a moment.";
+const WHATSAPP_LOGIN_AUTH_NOT_PERSISTED_MESSAGE =
+  "WhatsApp connected, but the linked credentials were not found on disk. Retry login in a moment.";
 export const WHATSAPP_LOGGED_OUT_QR_MESSAGE =
   "WhatsApp reported the session is logged out. Cleared cached web session; please scan a new QR.";
+export const WHATSAPP_WATCHDOG_TIMEOUT_ERROR = "watchdog-timeout";
 
 type TimerHandle = ReturnType<typeof setInterval>;
 type WaSocket = Awaited<ReturnType<typeof createWaSocket>>;
@@ -33,7 +49,7 @@ export type ManagedWhatsAppListener = ActiveWebListener & {
   signalClose?: (reason?: WebListenerCloseReason) => void;
 };
 
-export type WhatsAppLiveConnection = {
+type WhatsAppLiveConnection = {
   connectionId: string;
   startedAt: number;
   sock: WASocket;
@@ -51,7 +67,7 @@ export type WhatsAppLiveConnection = {
   resolveClose: (reason: WebListenerCloseReason) => void;
 };
 
-export type WhatsAppConnectionSnapshot = {
+type WhatsAppConnectionSnapshot = {
   connectionId: string;
   startedAt: number;
   lastInboundAt: number | null;
@@ -61,7 +77,7 @@ export type WhatsAppConnectionSnapshot = {
   uptimeMs: number;
 };
 
-export type NormalizedConnectionCloseReason = {
+type NormalizedConnectionCloseReason = {
   statusCode?: number;
   statusLabel: number | "unknown";
   isLoggedOut: boolean;
@@ -69,7 +85,7 @@ export type NormalizedConnectionCloseReason = {
   errorText: string;
 };
 
-export type WhatsAppConnectionCloseDecision = {
+type WhatsAppConnectionCloseDecision = {
   action: "stop" | "retry";
   delayMs?: number;
   reconnectAttempts: number;
@@ -77,15 +93,33 @@ export type WhatsAppConnectionCloseDecision = {
   normalized: NormalizedConnectionCloseReason;
 };
 
-export type WhatsAppReconnectAttemptDecision = {
+type WhatsAppReconnectAttemptDecision = {
   action: "stop" | "retry";
   delayMs?: number;
   reconnectAttempts: number;
   healthState: "stopped" | "reconnecting";
 };
 
+type LoginSocketRestartKind = "post-pairing" | "timeout";
+
 function createNeverResolvePromise<T>(): Promise<T> {
   return new Promise<T>(() => {});
+}
+
+function getLoginSocketRestartKind(statusCode: number | undefined): LoginSocketRestartKind | null {
+  if (statusCode === POST_PAIRING_RESTART_STATUS) {
+    return "post-pairing";
+  }
+  if (statusCode === TIMED_OUT_STATUS) {
+    return "timeout";
+  }
+  return null;
+}
+
+function getLoginSocketRestartMessage(kind: LoginSocketRestartKind): string {
+  return kind === "timeout"
+    ? WHATSAPP_LOGIN_TIMEOUT_RESTART_MESSAGE
+    : WHATSAPP_LOGIN_RESTART_MESSAGE;
 }
 
 type SocketActivityEmitter = {
@@ -131,8 +165,20 @@ function createLiveConnection(params: {
   };
 }
 
-export function closeWaSocket(sock: { ws?: { close?: () => void } } | null | undefined): void {
+export function closeWaSocket(
+  sock:
+    | {
+        end?: (error: Error | undefined) => void;
+        ws?: { close?: () => void };
+      }
+    | null
+    | undefined,
+): void {
   try {
+    if (typeof sock?.end === "function") {
+      sock.end(new Error("OpenClaw WhatsApp socket close"));
+      return;
+    }
     sock?.ws?.close?.();
   } catch {
     // ignore best-effort shutdown failures
@@ -140,7 +186,13 @@ export function closeWaSocket(sock: { ws?: { close?: () => void } } | null | und
 }
 
 export function closeWaSocketSoon(
-  sock: { ws?: { close?: () => void } } | null | undefined,
+  sock:
+    | {
+        end?: (error: Error | undefined) => void;
+        ws?: { close?: () => void };
+      }
+    | null
+    | undefined,
   delayMs = 500,
 ): void {
   setTimeout(() => {
@@ -148,7 +200,7 @@ export function closeWaSocketSoon(
   }, delayMs);
 }
 
-export type WhatsAppLoginWaitResult =
+type WhatsAppLoginWaitResult =
   | {
       outcome: "connected";
       restarted: boolean;
@@ -182,21 +234,46 @@ export async function waitForWhatsAppLoginResult(params: {
   const wait = params.waitForConnection ?? waitForWaConnection;
   const createSocket = params.createSocket ?? createWaSocket;
   let currentSock = params.sock;
-  let restarted = false;
+  let postPairingRestarted = false;
+  let timeoutRestarted = false;
 
   while (true) {
     try {
-      await wait(currentSock);
+      await wait(currentSock, { timeout: "none" });
+      // Socket open only proves in-memory auth; require persisted creds before success.
+      const persistedAuth = await readWebAuthExistsForDecision(params.authDir);
+      if (persistedAuth.outcome === "unstable") {
+        return {
+          outcome: "failed",
+          message: WHATSAPP_LOGIN_AUTH_UNSTABLE_MESSAGE,
+          error: new WhatsAppAuthUnstableError(WHATSAPP_LOGIN_AUTH_UNSTABLE_MESSAGE),
+        };
+      }
+      if (!persistedAuth.exists) {
+        return {
+          outcome: "failed",
+          message: WHATSAPP_LOGIN_AUTH_NOT_PERSISTED_MESSAGE,
+          error: new WhatsAppAuthUnstableError(WHATSAPP_LOGIN_AUTH_NOT_PERSISTED_MESSAGE),
+        };
+      }
       return {
         outcome: "connected",
-        restarted,
+        restarted: postPairingRestarted || timeoutRestarted,
         sock: currentSock,
       };
     } catch (err) {
       const statusCode = getStatusCode(err);
-      if (statusCode === 515 && !restarted) {
-        restarted = true;
-        params.runtime.log(info(WHATSAPP_LOGIN_RESTART_MESSAGE));
+      const restartKind = getLoginSocketRestartKind(statusCode);
+      const canRestart =
+        (restartKind === "post-pairing" && !postPairingRestarted) ||
+        (restartKind === "timeout" && !timeoutRestarted);
+      if (restartKind && canRestart) {
+        if (restartKind === "post-pairing") {
+          postPairingRestarted = true;
+        } else {
+          timeoutRestarted = true;
+        }
+        params.runtime.log(info(getLoginSocketRestartMessage(restartKind)));
         closeWaSocket(currentSock);
         try {
           currentSock = await createSocket(false, params.verbose, {
@@ -256,7 +333,7 @@ export class WhatsAppConnectionController {
   private readonly abortSignal?: AbortSignal;
   private readonly sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
   private readonly isNonRetryableStatus: (statusCode: unknown) => boolean;
-  private readonly socketTiming: WhatsAppSocketTimingOptions;
+  private readonly socketTiming: Required<WhatsAppSocketTimingOptions>;
   private readonly abortPromise?: Promise<"aborted">;
   private readonly disconnectRetryController = new AbortController();
 
@@ -292,7 +369,10 @@ export class WhatsAppConnectionController {
     this.abortSignal = params.abortSignal;
     this.sleep = params.sleep ?? ((ms: number, signal?: AbortSignal) => sleepWithAbort(ms, signal));
     this.isNonRetryableStatus = params.isNonRetryableStatus ?? (() => false);
-    this.socketTiming = params.socketTiming ?? {};
+    this.socketTiming = {
+      ...DEFAULT_WHATSAPP_SOCKET_TIMING,
+      ...params.socketTiming,
+    };
     this.socketRef = { current: null };
     this.abortPromise =
       params.abortSignal &&
@@ -311,6 +391,30 @@ export class WhatsAppConnectionController {
 
   getActiveListener(): ActiveWebListener | null {
     return this.current?.listener ?? null;
+  }
+
+  getCurrentSock(): WASocket | null {
+    return this.socketRef.current;
+  }
+
+  getSelfIdentity(): WhatsAppSelfIdentity | null {
+    const user = this.socketRef.current?.user as
+      | { id?: string | null; lid?: string | null }
+      | undefined;
+    if (!user) {
+      return null;
+    }
+    const jid = user.id ?? null;
+    const lid = user.lid ?? null;
+    if (!jid && !lid) {
+      return null;
+    }
+    // Pre-resolve via the controller's authDir so e164 is populated from the
+    // auth-state PN<->LID mapping. That lets `identitiesOverlap()` recognize a
+    // successor logged into the same account even when the original socket
+    // exposes only the PN form and the successor exposes only the LID form.
+    const resolved = resolveComparableIdentity({ jid, lid }, this.authDir);
+    return { jid: resolved.jid, lid: resolved.lid, e164: resolved.e164 };
   }
 
   getReconnectAttempts(): number {
@@ -395,7 +499,7 @@ export class WhatsAppConnectionController {
         authDir: this.authDir,
         ...this.socketTiming,
       });
-      await waitForWaConnection(sock);
+      await waitForWaConnection(sock, { timeoutMs: this.socketTiming.connectTimeoutMs });
 
       this.socketRef.current = sock;
       const placeholderListener = {} as ManagedWhatsAppListener;
@@ -434,7 +538,7 @@ export class WhatsAppConnectionController {
       return "aborted";
     }
     const listenerClose =
-      connection.listener.onClose?.catch((err) => ({
+      connection.listener.onClose?.catch((err: unknown) => ({
         status: 500,
         isLoggedOut: false,
         error: err,
@@ -513,6 +617,19 @@ export class WhatsAppConnectionController {
       healthState: retryDecision.healthState,
       normalized,
     };
+  }
+
+  resolveSetupErrorDecision(error: unknown): WhatsAppConnectionCloseDecision | "aborted" | null {
+    const statusCode = getStatusCode(error);
+    if (typeof statusCode !== "number") {
+      return null;
+    }
+
+    return this.resolveCloseDecision({
+      status: statusCode,
+      isLoggedOut: statusCode === LOGGED_OUT_STATUS,
+      error,
+    });
   }
 
   consumeReconnectAttempt(): WhatsAppReconnectAttemptDecision {
@@ -623,7 +740,7 @@ export class WhatsAppConnectionController {
       this.forceClose({
         status: 499,
         isLoggedOut: false,
-        error: "watchdog-timeout",
+        error: WHATSAPP_WATCHDOG_TIMEOUT_ERROR,
       });
     }, this.watchdogCheckMs);
   }
