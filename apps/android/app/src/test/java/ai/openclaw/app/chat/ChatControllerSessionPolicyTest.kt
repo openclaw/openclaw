@@ -91,6 +91,41 @@ class ChatControllerSessionPolicyTest {
   }
 
   @Test
+  fun sessionMergePreservesUsageWhenHistorySnapshotOmitsTotalTokens() {
+    val existing =
+      ChatSessionEntry(
+        key = "agent:main:phone",
+        updatedAtMs = 1L,
+        displayName = "Phone",
+        totalTokens = 41_000L,
+        totalTokensFresh = true,
+        contextTokens = 100_000L,
+      )
+    val next =
+      ChatSessionEntry(
+        key = "agent:main:phone",
+        updatedAtMs = 2L,
+        displayName = "Phone renamed",
+        totalTokensFresh = false,
+        contextTokens = 120_000L,
+      )
+
+    val merged =
+      mergeChatSessionEntry(
+        existing = existing,
+        next = next,
+        preserveExistingContextUsageWithoutTotal = true,
+      )
+
+    assertEquals(2L, merged.updatedAtMs)
+    assertEquals("Phone renamed", merged.displayName)
+    assertEquals(41_000L, merged.totalTokens)
+    assertEquals(true, merged.totalTokensFresh)
+    assertEquals(120_000L, merged.contextTokens)
+    assertTrue(merged.hasContextUsageMetadata)
+  }
+
+  @Test
   fun sessionMergeAppliesExplicitStaleUsageMetadata() {
     val existing =
       ChatSessionEntry(

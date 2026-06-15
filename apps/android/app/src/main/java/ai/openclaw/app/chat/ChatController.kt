@@ -699,15 +699,25 @@ class ChatController(
 
   private fun updateSessionFromHistory(history: ChatHistory) {
     val info = history.sessionInfo ?: return
-    upsertSessionEntry(info)
+    upsertSessionEntry(info, preserveExistingContextUsageWithoutTotal = true)
   }
 
-  private fun upsertSessionEntry(entry: ChatSessionEntry) {
+  private fun upsertSessionEntry(
+    entry: ChatSessionEntry,
+    preserveExistingContextUsageWithoutTotal: Boolean = false,
+  ) {
     val current = _sessions.value
     val index = current.indexOfFirst { it.key == entry.key }
     _sessions.value =
       if (index >= 0) {
-        current.toMutableList().also { it[index] = mergeChatSessionEntry(it[index], entry) }
+        current.toMutableList().also {
+          it[index] =
+            mergeChatSessionEntry(
+              existing = it[index],
+              next = entry,
+              preserveExistingContextUsageWithoutTotal = preserveExistingContextUsageWithoutTotal,
+            )
+        }
       } else {
         listOf(entry) + current
       }
@@ -947,12 +957,34 @@ private fun JsonElement?.asBooleanOrNull(): Boolean? =
 internal fun mergeChatSessionEntry(
   existing: ChatSessionEntry,
   next: ChatSessionEntry,
-): ChatSessionEntry =
-  existing.copy(
+  preserveExistingContextUsageWithoutTotal: Boolean = false,
+): ChatSessionEntry {
+  val preserveExistingContextUsage = preserveExistingContextUsageWithoutTotal && next.totalTokens == null
+  return existing.copy(
     updatedAtMs = next.updatedAtMs ?: existing.updatedAtMs,
     displayName = next.displayName ?: existing.displayName,
-    totalTokens = if (next.hasContextUsageMetadata) next.totalTokens else null,
-    totalTokensFresh = if (next.hasContextUsageMetadata) next.totalTokensFresh else null,
-    contextTokens = if (next.hasContextUsageMetadata) next.contextTokens else null,
-    hasContextUsageMetadata = next.hasContextUsageMetadata,
+    totalTokens =
+      when {
+        preserveExistingContextUsage -> existing.totalTokens
+        next.hasContextUsageMetadata -> next.totalTokens
+        else -> null
+      },
+    totalTokensFresh =
+      when {
+        preserveExistingContextUsage -> existing.totalTokensFresh
+        next.hasContextUsageMetadata -> next.totalTokensFresh
+        else -> null
+      },
+    contextTokens =
+      when {
+        preserveExistingContextUsage -> next.contextTokens ?: existing.contextTokens
+        next.hasContextUsageMetadata -> next.contextTokens
+        else -> null
+      },
+    hasContextUsageMetadata =
+      when {
+        preserveExistingContextUsage -> existing.hasContextUsageMetadata || next.contextTokens != null
+        else -> next.hasContextUsageMetadata
+      },
   )
+}
