@@ -44,14 +44,14 @@ describe("media-generation runtime shared candidates", () => {
     const candidates = resolveCapabilityModelCandidates({
       cfg,
       modelConfig: {
-        primary: "google/gemini-3.1-flash-image-preview",
+        primary: "google/gemini-3.1-flash-image",
         fallbacks: ["fal/fal-ai/flux/dev"],
       },
       parseModelRef,
       listProviders: () => [
         {
           id: "google",
-          defaultModel: "gemini-3.1-flash-image-preview",
+          defaultModel: "gemini-3.1-flash-image",
           isConfigured: () => true,
         },
         {
@@ -68,7 +68,7 @@ describe("media-generation runtime shared candidates", () => {
     });
 
     expect(candidates).toEqual([
-      { provider: "google", model: "gemini-3.1-flash-image-preview" },
+      { provider: "google", model: "gemini-3.1-flash-image" },
       { provider: "fal", model: "fal-ai/flux/dev" },
       { provider: "openai", model: "gpt-image-1" },
       { provider: "minimax", model: "image-01" },
@@ -145,7 +145,7 @@ describe("media-generation runtime shared candidates", () => {
         },
       } as OpenClawConfig,
       modelConfig: {
-        primary: "google/gemini-3.1-flash-image-preview",
+        primary: "google/gemini-3.1-flash-image",
       },
       parseModelRef,
       listProviders: () => {
@@ -160,7 +160,7 @@ describe("media-generation runtime shared candidates", () => {
       },
     });
 
-    expect(candidates).toEqual([{ provider: "google", model: "gemini-3.1-flash-image-preview" }]);
+    expect(candidates).toEqual([{ provider: "google", model: "gemini-3.1-flash-image" }]);
     expect(listProviderCalls).toBe(0);
   });
 
@@ -174,7 +174,7 @@ describe("media-generation runtime shared candidates", () => {
         },
       } as OpenClawConfig,
       modelConfig: {
-        primary: "google/gemini-3.1-flash-image-preview",
+        primary: "google/gemini-3.1-flash-image",
         fallbacks: ["fal/fal-ai/flux/dev"],
       },
       modelOverride: "openai/gpt-image-2",
@@ -182,7 +182,7 @@ describe("media-generation runtime shared candidates", () => {
       listProviders: () => [
         {
           id: "google",
-          defaultModel: "gemini-3.1-flash-image-preview",
+          defaultModel: "gemini-3.1-flash-image",
           isConfigured: () => true,
         },
       ],

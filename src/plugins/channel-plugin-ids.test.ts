@@ -919,7 +919,7 @@ describe("resolveGatewayStartupPluginIds", () => {
           defaults: {
             imageGenerationModel: {
               primary: "openai/gpt-image-2",
-              fallbacks: ["google/gemini-3-pro-image-preview"],
+              fallbacks: ["google/gemini-3.1-flash-image"],
             },
             videoGenerationModel: {
               primary: "google/veo-3.1-fast-generate-preview",
@@ -938,7 +938,7 @@ describe("resolveGatewayStartupPluginIds", () => {
         channels: {},
         agents: {
           defaults: {
-            imageGenerationModel: { primary: "google/gemini-3-pro-image-preview" },
+            imageGenerationModel: { primary: "google/gemini-3.1-flash-image" },
           },
         },
         plugins: { entries: { google: { enabled: false } } },
@@ -1303,7 +1303,7 @@ describe("resolveGatewayStartupPluginIds", () => {
         channels: {},
         agents: {
           defaults: {
-            imageGenerationModel: { primary: "google/gemini-3-pro-image-preview" },
+            imageGenerationModel: { primary: "google/gemini-3.1-flash-image" },
           },
         },
         plugins: { allow: ["browser"] },

@@ -33,7 +33,7 @@ describeLive("image generation infer CLI live", () => {
         "image",
         "generate",
         "--model",
-        "google/gemini-3.1-flash-image-preview",
+        "google/gemini-3.1-flash-image",
         "--prompt",
         "Minimal flat test image: one blue square on a white background, no text.",
         "--output",
@@ -53,7 +53,7 @@ describeLive("image generation infer CLI live", () => {
     expect(payload.ok).toBe(true);
     expect(payload.capability).toBe("image.generate");
     expect(payload.provider).toBe("google");
-    expect(payload.model).toBe("gemini-3.1-flash-image-preview");
+    expect(payload.model).toBe("gemini-3.1-flash-image");
     const outputs = payload.outputs as Array<{ path?: string; mimeType?: string; size?: number }>;
     expect(outputs).toHaveLength(1);
     const outputPath = outputs[0]?.path;

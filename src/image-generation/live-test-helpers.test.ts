@@ -27,11 +27,11 @@ describe("image-generation live-test helpers", () => {
 
   it("parses provider model overrides by provider id", () => {
     expect(
-      parseProviderModelMap("openai/gpt-image-2, google/gemini-3.1-flash-image-preview, invalid"),
+      parseProviderModelMap("openai/gpt-image-2, google/gemini-3.1-flash-image, invalid"),
     ).toEqual(
       new Map([
         ["openai", "openai/gpt-image-2"],
-        ["google", "google/gemini-3.1-flash-image-preview"],
+        ["google", "google/gemini-3.1-flash-image"],
       ]),
     );
   });
@@ -42,7 +42,7 @@ describe("image-generation live-test helpers", () => {
         defaults: {
           imageGenerationModel: {
             primary: "openai/gpt-image-2",
-            fallbacks: ["google/gemini-3.1-flash-image-preview", "invalid"],
+            fallbacks: ["google/gemini-3.1-flash-image", "invalid"],
           },
         },
       },
@@ -51,7 +51,7 @@ describe("image-generation live-test helpers", () => {
     expect(resolveConfiguredLiveImageModels(cfg)).toEqual(
       new Map([
         ["openai", "openai/gpt-image-2"],
-        ["google", "google/gemini-3.1-flash-image-preview"],
+        ["google", "google/gemini-3.1-flash-image"],
       ]),
     );
   });

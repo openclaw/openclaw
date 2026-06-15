@@ -472,7 +472,7 @@ describe("handleToolExecutionEnd media emission", () => {
         content: [
           {
             type: "text",
-            text: "Generated 1 image with google/gemini-3.1-flash-image-preview.",
+            text: "Generated 1 image with google/gemini-3.1-flash-image.",
           },
         ],
         details: {

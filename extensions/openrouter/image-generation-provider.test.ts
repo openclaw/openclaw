@@ -97,8 +97,8 @@ describe("openrouter image generation provider", () => {
     const provider = buildOpenRouterImageGenerationProvider();
     expect(provider.id).toBe("openrouter");
     expect(provider.label).toBe("OpenRouter");
-    expect(provider.defaultModel).toBe("google/gemini-3.1-flash-image-preview");
-    expect(provider.models).toContain("google/gemini-3-pro-image-preview");
+    expect(provider.defaultModel).toBe("google/gemini-3.1-flash-image");
+    expect(provider.models).toContain("google/gemini-3.1-flash-image");
     expect(provider.capabilities.generate.maxCount).toBe(4);
     expect(provider.capabilities.generate.supportsAspectRatio).toBe(true);
     expect(provider.capabilities.edit.enabled).toBe(true);
@@ -131,7 +131,7 @@ describe("openrouter image generation provider", () => {
     const provider = buildOpenRouterImageGenerationProvider();
     const result = await provider.generateImage({
       provider: "openrouter",
-      model: "google/gemini-3.1-flash-image-preview",
+      model: "google/gemini-3.1-flash-image",
       prompt: "draw a sticker",
       aspectRatio: "16:9",
       resolution: "2K",
@@ -192,7 +192,7 @@ describe("openrouter image generation provider", () => {
       url: "https://custom.openrouter.test/api/v1/chat/completions",
       headers,
       body: {
-        model: "google/gemini-3.1-flash-image-preview",
+        model: "google/gemini-3.1-flash-image",
         messages: [
           {
             role: "user",
@@ -244,7 +244,7 @@ describe("openrouter image generation provider", () => {
     const provider = buildOpenRouterImageGenerationProvider();
     await provider.generateImage({
       provider: "openrouter",
-      model: "google/gemini-3.1-flash-image-preview",
+      model: "google/gemini-3.1-flash-image",
       prompt: "draw a sticker",
       cfg: {},
     });
@@ -282,7 +282,7 @@ describe("openrouter image generation provider", () => {
     const provider = buildOpenRouterImageGenerationProvider();
     const result = await provider.generateImage({
       provider: "openrouter",
-      model: "google/gemini-3.1-flash-image-preview",
+      model: "google/gemini-3.1-flash-image",
       prompt: "turn this into watercolor",
       inputImages: [{ buffer: Buffer.from("source-image"), mimeType: "image/png" }],
       cfg: {},
@@ -315,7 +315,7 @@ describe("openrouter image generation provider", () => {
     await expect(
       provider.generateImage({
         provider: "openrouter",
-        model: "google/gemini-3.1-flash-image-preview",
+        model: "google/gemini-3.1-flash-image",
         prompt: "bad shape",
         cfg: {},
       }),

@@ -601,6 +601,20 @@ function upgradeRetiredOpenAiModelId(model: string, provider?: string): string |
   return null;
 }
 
+function upgradeRetiredGoogleImageModelId(model: string): string | null {
+  const normalized = normalizeString(model);
+  switch (normalized) {
+    case "gemini-3.1-flash-image-preview":
+    case "gemini-3-pro-image-preview":
+    case "imagen-4.0-generate-001":
+    case "imagen-4.0-ultra-generate-001":
+    case "imagen-4.0-fast-generate-001":
+      return "gemini-3.1-flash-image";
+    default:
+      return null;
+  }
+}
+
 function hasRetiredVersionPrefix(normalized: string, prefix: string): boolean {
   if (normalized === prefix) {
     return true;
@@ -757,13 +771,20 @@ function upgradeRetiredModelRef(value: string): string | null {
       ? upgradeRetiredGroqModelId(model)
       : normalizedProvider === "xai"
         ? upgradeRetiredXaiModelId(model)
-        : normalizedProvider === "openai" ||
-            normalizedProvider === "openai-codex" ||
-            normalizedProvider === "github-copilot"
-          ? upgradeRetiredOpenAiModelId(model, normalizedProvider)
-          : undefined;
+        : !normalizedProvider || normalizedProvider === "google"
+          ? upgradeRetiredGoogleImageModelId(model)
+          : normalizedProvider === "openrouter" &&
+              (normalizedModel === "google/gemini-3.1-flash-image-preview" ||
+                normalizedModel === "google/gemini-3-pro-image-preview")
+            ? "google/gemini-3.1-flash-image"
+            : normalizedProvider === "openai" ||
+                normalizedProvider === "openai-codex" ||
+                normalizedProvider === "github-copilot"
+              ? upgradeRetiredOpenAiModelId(model, normalizedProvider)
+              : undefined;
   if (retiredOwnerModel) {
-    return `${provider}/${retiredOwnerModel}${split.profile ? `@${split.profile}` : ""}`;
+    const upgraded = provider ? `${provider}/${retiredOwnerModel}` : retiredOwnerModel;
+    return `${upgraded}${split.profile ? `@${split.profile}` : ""}`;
   }
 
   if (

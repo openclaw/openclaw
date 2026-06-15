@@ -19,7 +19,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeGoogleModelId, resolveGoogleGenerativeAiHttpRequestConfig } from "./api.js";
 
-const DEFAULT_GOOGLE_IMAGE_MODEL = "gemini-3.1-flash-image-preview";
+const DEFAULT_GOOGLE_IMAGE_MODEL = "gemini-3.1-flash-image";
 const DEFAULT_IMAGE_TIMEOUT_MS = 180_000;
 const DEFAULT_OUTPUT_MIME = "image/png";
 const GOOGLE_SUPPORTED_SIZES = [
@@ -141,7 +141,7 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
     id: "google",
     label: "Google",
     defaultModel: DEFAULT_GOOGLE_IMAGE_MODEL,
-    models: [DEFAULT_GOOGLE_IMAGE_MODEL, "gemini-3-pro-image-preview"],
+    models: [DEFAULT_GOOGLE_IMAGE_MODEL],
     isConfigured: ({ agentDir }) =>
       isProviderApiKeyConfigured({
         provider: "google",
