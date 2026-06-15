@@ -992,6 +992,37 @@ describe("gateway run option collisions", () => {
     expect(runtimeErrors.join("\n")).toContain("run automatic gateway startup migrations");
   });
 
+  it("blocks a future-version service-mode late recovery candidate before restore", async () => {
+    let recoveryAllowed: boolean | undefined;
+    await withEnvAsync(
+      {
+        OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS: "1",
+        OPENCLAW_SERVICE_MARKER: undefined,
+      },
+      async () => {
+        readConfigFileSnapshotWithPluginMetadata.mockImplementationOnce(async (options) => {
+          recoveryAllowed = await options?.allowSuspiciousRecovery?.(
+            {
+              env: { vars: { OPENCLAW_SERVICE_MARKER: "gateway" } },
+              gateway: { mode: "local" },
+              meta: { lastTouchedVersion: "9999.1.1" },
+            },
+            { gateway: { mode: "local" } },
+          );
+          return { snapshot: configState.snapshot };
+        });
+
+        await expect(runGatewayCli(["gateway", "run", "--allow-unconfigured"])).rejects.toThrow(
+          "__exit__:78",
+        );
+      },
+    );
+
+    expect(recoveryAllowed).toBe(false);
+    expect(startGatewayServer).not.toHaveBeenCalled();
+    expect(runtimeErrors.join("\n")).toContain("start the gateway service");
+  });
+
   it("blocks a future-version current config before suspicious recovery", async () => {
     let recoveryAllowed: boolean | undefined;
     readConfigFileSnapshotWithPluginMetadata.mockImplementationOnce(async (options) => {

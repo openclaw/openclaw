@@ -663,7 +663,7 @@ describe("runCli exit behavior", () => {
     }
   });
 
-  it("revokes the destructive override when selected config enters service mode", async () => {
+  it("blocks and revokes the destructive override when selected config declares service mode", async () => {
     readConfigFileSnapshotMock.mockResolvedValue({
       exists: true,
       valid: true,
@@ -683,14 +683,9 @@ describe("runCli exit behavior", () => {
           OPENCLAW_SERVICE_MARKER: undefined,
         },
         async () => {
-          await runCli(["node", "openclaw", "gateway"]);
-          expect(process.env.OPENCLAW_SERVICE_MARKER).toBe("gateway");
+          await expect(runCli(["node", "openclaw", "gateway"])).rejects.toThrow("exit:78");
+          expect(process.env.OPENCLAW_SERVICE_MARKER).toBeUndefined();
           expect(process.env.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS).toBeUndefined();
-
-          const hooks = addGatewayRunCommandMock.mock.calls[0]?.[1] as
-            | { beforeRun?: (opts: { force?: boolean }) => Promise<void> }
-            | undefined;
-          await expect(hooks?.beforeRun?.({})).rejects.toThrow("exit:1");
           expect(ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
         },
       );
@@ -698,6 +693,30 @@ describe("runCli exit behavior", () => {
       exitSpy.mockRestore();
       errorSpy.mockRestore();
     }
+  });
+
+  it("ignores service mode declared by an invalid selected config", async () => {
+    readConfigFileSnapshotMock.mockResolvedValue({
+      exists: true,
+      valid: false,
+      sourceConfig: {
+        env: { vars: { OPENCLAW_SERVICE_MARKER: "gateway" } },
+        meta: { lastTouchedVersion: "9999.1.1" },
+      },
+    });
+
+    await withEnvAsync(
+      {
+        OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS: "1",
+        OPENCLAW_SERVICE_MARKER: undefined,
+      },
+      async () => {
+        await runCli(["node", "openclaw", "gateway"]);
+
+        expect(process.env.OPENCLAW_SERVICE_MARKER).toBeUndefined();
+        expect(process.env.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS).toBe("1");
+      },
+    );
   });
 
   it("guards the config selected by trusted global dotenv before the default config", async () => {
@@ -894,6 +913,52 @@ describe("runCli exit behavior", () => {
       expect(errorSpy).toHaveBeenCalledWith(
         expect.stringContaining("run automatic gateway startup migrations"),
       );
+      expect(ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
+    } finally {
+      exitSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("blocks a future service-mode candidate before pre-bootstrap suspicious recovery", async () => {
+    let recoveryAllowed: boolean | undefined;
+    const currentSnapshot = {
+      exists: true,
+      valid: true,
+      sourceConfig: { gateway: { mode: "local" } },
+    };
+    readConfigFileSnapshotMock.mockImplementation(async (options) => {
+      if (options?.recoverSuspicious) {
+        recoveryAllowed = await options.allowSuspiciousRecovery?.(
+          {
+            env: { vars: { OPENCLAW_SERVICE_MARKER: "gateway" } },
+            gateway: { mode: "local" },
+            meta: { lastTouchedVersion: "9999.1.1" },
+          },
+          { gateway: { mode: "local" } },
+        );
+      }
+      return currentSnapshot;
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+      throw new Error(`exit:${String(code)}`);
+    }) as typeof process.exit);
+    try {
+      await withEnvAsync(
+        {
+          OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS: "1",
+          OPENCLAW_SERVICE_MARKER: undefined,
+        },
+        async () => {
+          await runCli(["node", "openclaw", "gateway"]);
+          const hooks = addGatewayRunCommandMock.mock.calls[0]?.[1] as
+            | { beforeRun?: (opts: { force?: boolean }) => Promise<void> }
+            | undefined;
+          await expect(hooks?.beforeRun?.({})).rejects.toThrow("exit:78");
+        },
+      );
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("start the gateway service"));
       expect(ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
     } finally {
       exitSpy.mockRestore();
