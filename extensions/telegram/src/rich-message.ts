@@ -297,7 +297,6 @@ function markdownTableColumnCount(row: string): number {
 }
 
 function findRichMarkdownTableLineIndexes(
-  markdown: string,
   lines: readonly string[],
   fenceSpans: readonly RichMarkdownFenceSpan[],
 ): Set<number> {
@@ -336,7 +335,7 @@ function preserveTelegramRichMarkdownLineBreaks(markdown: string): string {
 
   const fenceSpans = parseRichMarkdownFenceSpans(markdown);
   const lines = markdown.split("\n");
-  const tableLineIndexes = findRichMarkdownTableLineIndexes(markdown, lines, fenceSpans);
+  const tableLineIndexes = findRichMarkdownTableLineIndexes(lines, fenceSpans);
   const out: string[] = [];
   let offset = 0;
   for (let index = 0; index < lines.length; index += 1) {
