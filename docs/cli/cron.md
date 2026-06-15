@@ -138,8 +138,8 @@ One-shot jobs delete after success by default. Use `--keep-after-run` to preserv
 Preview a create request without saving it by passing `--dry-run`:
 
 ```bash
-openclaw cron add --at 2026-07-01T09:00:00Z --message "Run quarterly check" --dry-run
-openclaw cron add --at 2026-07-01T09:00:00Z --message "Run quarterly check" --dry-run --json
+openclaw cron add --name quarterly-check --at 2026-07-01T09:00:00Z --message "Run quarterly check" --dry-run
+openclaw cron add --name quarterly-check --at 2026-07-01T09:00:00Z --message "Run quarterly check" --dry-run --json
 ```
 
 The preview prints the `cron.add` params that would be sent to the gateway and returns before creating a job or checking scheduler status.
