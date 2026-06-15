@@ -9,6 +9,7 @@ import {
   listSessionFilesForAgent,
   listSessionTranscriptCorpusEntriesForAgent,
   loadSessionTranscriptClassificationForAgent,
+  loadSessionTranscriptClassificationForSessionsDir,
   parseCanonicalSessionSyncTargetFromPath,
   resolveSessionIdentityForTranscriptFile,
   resolveSessionFileForSyncTarget,
@@ -828,5 +829,170 @@ describe("buildSessionEntry", () => {
 
     const entry = requireSessionEntry(await buildSessionEntry(filePath));
     expect(entry.messageTimestampsMs).toStrictEqual([0]);
+  });
+});
+
+describe("loadSessionTranscriptClassificationForSessionsDir", () => {
+  it("classifies a session with direct cron key as cron-run", () => {
+    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
+    fsSync.mkdirSync(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "cron-run.jsonl");
+    fsSync.writeFileSync(sessionFile, JSON.stringify({ type: "message", message: {} }));
+
+    fsSync.writeFileSync(
+      path.join(sessionsDir, "sessions.json"),
+      JSON.stringify({
+        "agent:main:cron:job-1:run:run-1": {
+          sessionFile: sessionFile,
+        },
+      }),
+    );
+
+    const result = loadSessionTranscriptClassificationForSessionsDir(sessionsDir);
+    expect([...result.cronRunTranscriptPaths]).toEqual([sessionFile]);
+    expect(result.dreamingNarrativeTranscriptPaths.size).toBe(0);
+  });
+
+  it("classifies a subagent with parentTrigger=cron as cron-run", () => {
+    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
+    fsSync.mkdirSync(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "subagent.jsonl");
+    fsSync.writeFileSync(sessionFile, JSON.stringify({ type: "message", message: {} }));
+
+    fsSync.writeFileSync(
+      path.join(sessionsDir, "sessions.json"),
+      JSON.stringify({
+        "agent:main:subagent:uuid-1": {
+          sessionFile: sessionFile,
+          parentTrigger: "cron",
+        },
+      }),
+    );
+
+    const result = loadSessionTranscriptClassificationForSessionsDir(sessionsDir);
+    expect([...result.cronRunTranscriptPaths]).toEqual([sessionFile]);
+  });
+
+  it("classifies a subagent via spawnedBy chain to a cron parent", () => {
+    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
+    fsSync.mkdirSync(sessionsDir, { recursive: true });
+    const cronSession = path.join(sessionsDir, "cron-run.jsonl");
+    const subSession = path.join(sessionsDir, "sub-agent.jsonl");
+    fsSync.writeFileSync(cronSession, "");
+    fsSync.writeFileSync(subSession, "");
+
+    fsSync.writeFileSync(
+      path.join(sessionsDir, "sessions.json"),
+      JSON.stringify({
+        "agent:main:cron:job-1:run:run-1": {
+          sessionFile: cronSession,
+        },
+        "agent:main:subagent:uuid-1": {
+          sessionFile: subSession,
+          spawnedBy: "agent:main:cron:job-1:run:run-1",
+        },
+      }),
+    );
+
+    const result = loadSessionTranscriptClassificationForSessionsDir(sessionsDir);
+    expect(result.cronRunTranscriptPaths.size).toBe(2);
+  });
+
+  it("classifies a deeply nested subagent chain (subagent→subagent→cron) as cron-run", () => {
+    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
+    fsSync.mkdirSync(sessionsDir, { recursive: true });
+    const cronSession = path.join(sessionsDir, "cron-run.jsonl");
+    const sub1Session = path.join(sessionsDir, "sub-1.jsonl");
+    const sub2Session = path.join(sessionsDir, "sub-2.jsonl");
+    for (const f of [cronSession, sub1Session, sub2Session]) fsSync.writeFileSync(f, "");
+
+    fsSync.writeFileSync(
+      path.join(sessionsDir, "sessions.json"),
+      JSON.stringify({
+        "agent:main:cron:job-1:run:run-1": { sessionFile: cronSession },
+        "agent:main:subagent:uuid-1": {
+          sessionFile: sub1Session,
+          spawnedBy: "agent:main:cron:job-1:run:run-1",
+        },
+        "agent:main:subagent:uuid-2": {
+          sessionFile: sub2Session,
+          spawnedBy: "agent:main:subagent:uuid-1",
+        },
+      }),
+    );
+
+    const result = loadSessionTranscriptClassificationForSessionsDir(sessionsDir);
+    expect(result.cronRunTranscriptPaths.size).toBe(3);
+  });
+
+  it("does not classify a normal subagent with no cron ancestry", () => {
+    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
+    fsSync.mkdirSync(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "normal.jsonl");
+    fsSync.writeFileSync(sessionFile, "");
+
+    fsSync.writeFileSync(
+      path.join(sessionsDir, "sessions.json"),
+      JSON.stringify({
+        "agent:main:subagent:uuid-1": { sessionFile },
+      }),
+    );
+
+    const result = loadSessionTranscriptClassificationForSessionsDir(sessionsDir);
+    expect(result.cronRunTranscriptPaths.size).toBe(0);
+  });
+
+  it("handles cycles in spawnedBy chain without infinite loop", () => {
+    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
+    fsSync.mkdirSync(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "cyclic.jsonl");
+    fsSync.writeFileSync(sessionFile, "");
+
+    // A → B → A creates a cycle; must not hang.
+    fsSync.writeFileSync(
+      path.join(sessionsDir, "sessions.json"),
+      JSON.stringify({
+        "agent:main:subagent:uuid-a": {
+          sessionFile: sessionFile,
+          spawnedBy: "agent:main:subagent:uuid-b",
+        },
+        "agent:main:subagent:uuid-b": {
+          spawnedBy: "agent:main:subagent:uuid-a",
+        },
+      }),
+    );
+
+    const result = loadSessionTranscriptClassificationForSessionsDir(sessionsDir);
+    // Neither side is cron-descended; uuid-b's resolution is false (no path).
+    expect(result.cronRunTranscriptPaths.size).toBe(0);
+  });
+
+  it("returns empty classification when no sessions.json exists", () => {
+    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
+    fsSync.mkdirSync(sessionsDir, { recursive: true });
+
+    const result = loadSessionTranscriptClassificationForSessionsDir(sessionsDir);
+    expect(result.cronRunTranscriptPaths.size).toBe(0);
+    expect(result.dreamingNarrativeTranscriptPaths.size).toBe(0);
+  });
+
+  it("classifies a dreaming narrative session key", () => {
+    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
+    fsSync.mkdirSync(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "dreaming.jsonl");
+    fsSync.writeFileSync(sessionFile, "");
+
+    fsSync.writeFileSync(
+      path.join(sessionsDir, "sessions.json"),
+      JSON.stringify({
+        "agent:main:dreaming-narrative-run-42": {
+          sessionFile: sessionFile,
+        },
+      }),
+    );
+
+    const result = loadSessionTranscriptClassificationForSessionsDir(sessionsDir);
+    expect([...result.dreamingNarrativeTranscriptPaths]).toEqual([sessionFile]);
+    expect(result.cronRunTranscriptPaths.size).toBe(0);
   });
 });

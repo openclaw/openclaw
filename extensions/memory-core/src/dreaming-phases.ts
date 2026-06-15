@@ -914,7 +914,7 @@ async function collectSessionIngestionBatches(params: {
         const sessionId = parseUsageCountedSessionIdFromFileName(fileName);
         if (!sessionId) continue;
         for (const [key, entry] of Object.entries(store)) {
-          if (entry.sessionFile === fileName || entry.sessionId === sessionId) {
+          if (entry.sessionId === sessionId) {
             if (isCronDescendant(key, store)) {
               sessionFile.generatedByCronRun = true;
             }
