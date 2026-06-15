@@ -153,6 +153,43 @@ function parseGatewayRpcTimeoutOption(raw: unknown, fallback = 10_000): number {
   return fallback;
 }
 
+/**
+ * Calls a Gateway RPC method, but when credential resolution fails before the
+ * method is dispatched (gateway auth SecretRefs are unresolved in this command
+ * path), emit the same reachable-but-unauthenticated diagnostic the `health`
+ * subcommand uses instead of leaking a raw error. Returns `{ handled: true }`
+ * when the diagnostic was emitted (and the process is exiting); callers should
+ * stop processing. Otherwise the raw error is rethrown for the default handler.
+ */
+async function callGatewayCliWithAuthDiagnostic<T = unknown>(
+  method: string,
+  rpcOpts: GatewayRpcOpts,
+  params?: unknown,
+): Promise<{ handled: true } | { handled: false; result: T }> {
+  try {
+    const result = (await callGatewayCli(method, rpcOpts, params)) as T;
+    return { handled: false, result };
+  } catch (error) {
+    const [{ emitReachableGatewayAuthDiagnostic }, { readBestEffortConfig }] = await Promise.all([
+      loadGatewayHealthModule(),
+      loadConfigModule(),
+    ]);
+    const handled = await emitReachableGatewayAuthDiagnostic({
+      error,
+      config: await readBestEffortConfig(),
+      runtime: defaultRuntime,
+      timeoutMs: parseGatewayRpcTimeoutOption(rpcOpts.timeout),
+      token: rpcOpts.token,
+      password: rpcOpts.password,
+      json: Boolean(rpcOpts.json),
+    });
+    if (handled) {
+      return { handled: true };
+    }
+    throw error;
+  }
+}
+
 function resolveGatewayRpcOptions<T extends { token?: string; password?: string }>(
   opts: T,
   command?: Command,
@@ -499,20 +536,27 @@ export function registerGatewayCli(program: Command) {
       .argument("<method>", "Method name (health/status/system-presence/cron.*)")
       .option("--params <json>", "JSON object string for params", "{}")
       .action(async (method, opts, command) => {
-        await runGatewayCommand(async () => {
-          const rpcOpts = resolveGatewayRpcOptions(opts, command);
-          const params = JSON.parse(String(opts.params ?? "{}"));
-          const result = await callGatewayCli(method, rpcOpts, params);
-          if (rpcOpts.json) {
+        await runGatewayCommand(
+          async () => {
+            const rpcOpts = resolveGatewayRpcOptions(opts, command);
+            const params = JSON.parse(String(opts.params ?? "{}"));
+            const outcome = await callGatewayCliWithAuthDiagnostic(method, rpcOpts, params);
+            if (outcome.handled) {
+              return;
+            }
+            const result = outcome.result;
+            if (rpcOpts.json) {
+              defaultRuntime.writeJson(result);
+              return;
+            }
+            const rich = isRich();
+            defaultRuntime.log(
+              `${colorize(rich, theme.heading, "Gateway call")}: ${colorize(rich, theme.muted, String(method))}`,
+            );
             defaultRuntime.writeJson(result);
-            return;
-          }
-          const rich = isRich();
-          defaultRuntime.log(
-            `${colorize(rich, theme.heading, "Gateway call")}: ${colorize(rich, theme.muted, String(method))}`,
-          );
-          defaultRuntime.writeJson(result);
-        }, "Gateway call failed");
+          },
+          "Gateway call failed",
+        );
       }),
   );
 
@@ -522,20 +566,26 @@ export function registerGatewayCli(program: Command) {
       .description("Fetch usage cost summary from session logs")
       .option("--days <days>", "Number of days to include", "30")
       .action(async (opts, command) => {
-        await runGatewayCommand(async () => {
-          const rpcOpts = resolveGatewayRpcOptions(opts, command);
-          const days = parseDaysOption(opts.days);
-          const result = await callGatewayCli("usage.cost", rpcOpts, { days });
-          if (rpcOpts.json) {
-            defaultRuntime.writeJson(result);
-            return;
-          }
-          const rich = isRich();
-          const summary = result as CostUsageSummary;
-          for (const line of await renderCostUsageSummaryAsync(summary, days, rich)) {
-            defaultRuntime.log(line);
-          }
-        }, "Gateway usage cost failed");
+        await runGatewayCommand(
+          async () => {
+            const rpcOpts = resolveGatewayRpcOptions(opts, command);
+            const days = parseDaysOption(opts.days);
+            const outcome = await callGatewayCliWithAuthDiagnostic("usage.cost", rpcOpts, { days });
+            if (outcome.handled) {
+              return;
+            }
+            if (rpcOpts.json) {
+              defaultRuntime.writeJson(outcome.result);
+              return;
+            }
+            const rich = isRich();
+            const summary = outcome.result as CostUsageSummary;
+            for (const line of await renderCostUsageSummaryAsync(summary, days, rich)) {
+              defaultRuntime.log(line);
+            }
+          },
+          "Gateway usage cost failed",
+        );
       }),
   );
 

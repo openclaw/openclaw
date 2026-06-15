@@ -5,6 +5,7 @@ import path from "node:path";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnvOverride } from "../config/test-helpers.js";
+import { GatewaySecretRefUnavailableError } from "../gateway/credentials.js";
 import { GatewayLockError } from "../infra/gateway-lock.js";
 import { registerGatewayCli } from "./gateway-cli.js";
 
@@ -34,6 +35,9 @@ const discoverGatewayBeacons = vi.fn<(opts: unknown) => Promise<DiscoveredBeacon
 const gatewayStatusCommand = vi.fn<(opts: unknown) => Promise<void>>(async () => {});
 const inspectPortUsage = vi.fn(async (_port: number) => ({ status: "free" as const }));
 const formatPortDiagnostics = vi.fn((_diagnostics: unknown) => [] as string[]);
+const emitReachableGatewayAuthDiagnostic =
+  vi.fn<(params: Record<string, unknown>) => Promise<boolean>>(async () => false);
+const readBestEffortConfig = vi.fn<() => Promise<Record<string, unknown>>>(async () => ({}));
 
 const mocks = await vi.hoisted(async () => {
   const { createCliRuntimeMock } = await import("./test-runtime-mock.js");
@@ -118,6 +122,19 @@ vi.mock("../infra/ports.js", () => ({
   formatPortDiagnostics: (diagnostics: unknown) => formatPortDiagnostics(diagnostics),
 }));
 
+vi.mock("../commands/health.js", async () => ({
+  ...(await vi.importActual<typeof import("../commands/health.js")>("../commands/health.js")),
+  emitReachableGatewayAuthDiagnostic: (params: Record<string, unknown>) =>
+    emitReachableGatewayAuthDiagnostic(params),
+}));
+
+vi.mock("../config/read-best-effort-config.runtime.js", async () => ({
+  ...(await vi.importActual<typeof import("../config/read-best-effort-config.runtime.js")>(
+    "../config/read-best-effort-config.runtime.js",
+  )),
+  readBestEffortConfig: () => readBestEffortConfig(),
+}));
+
 let gatewayProgram: Command;
 
 function createGatewayProgram() {
@@ -158,6 +175,10 @@ describe("gateway-cli coverage", () => {
     formatPortDiagnostics.mockClear();
     formatGatewayTransportErrorJson.mockReset();
     formatGatewayTransportErrorJson.mockReturnValue(null);
+    emitReachableGatewayAuthDiagnostic.mockReset();
+    emitReachableGatewayAuthDiagnostic.mockResolvedValue(false);
+    readBestEffortConfig.mockReset();
+    readBestEffortConfig.mockResolvedValue({});
   });
 
   it("registers call/health commands and routes to callGateway", async () => {
@@ -547,5 +568,85 @@ describe("gateway-cli coverage", () => {
       expect(startCall?.[0]).toBe(19001);
       expect(typeof startCall?.[1]).toBe("object");
     });
+  });
+
+  it("emits the reachable-gateway auth diagnostic for usage-cost when SecretRefs are unavailable", async () => {
+    callGateway.mockClear();
+    callGateway.mockRejectedValueOnce(
+      new GatewaySecretRefUnavailableError("gateway.auth.password"),
+    );
+    emitReachableGatewayAuthDiagnostic.mockResolvedValueOnce(true);
+
+    await runGatewayCommand([
+      "gateway",
+      "usage-cost",
+      "--days",
+      "7",
+      "--token",
+      "diag-token",
+      "--password",
+      "diag-pass",
+    ]);
+
+    expect(emitReachableGatewayAuthDiagnostic).toHaveBeenCalledTimes(1);
+    const diagArg = firstMockArg(emitReachableGatewayAuthDiagnostic) as {
+      token?: string;
+      password?: string;
+      timeoutMs?: number;
+      error?: unknown;
+    };
+    expect(diagArg.token).toBe("diag-token");
+    expect(diagArg.password).toBe("diag-pass");
+    expect(diagArg.error).toBeInstanceOf(GatewaySecretRefUnavailableError);
+    // Diagnostic handled the failure: no raw error leaked to stderr.
+    expect(runtimeErrors.join("\n")).not.toContain("Gateway usage cost failed");
+    expect(runtimeErrors.join("\n")).not.toContain("SecretRefUnavailable");
+  });
+
+  it("rethrows raw usage-cost errors when the gateway is not reachable", async () => {
+    callGateway.mockClear();
+    callGateway.mockRejectedValueOnce(
+      new GatewaySecretRefUnavailableError("gateway.auth.password"),
+    );
+    emitReachableGatewayAuthDiagnostic.mockResolvedValueOnce(false);
+
+    await expectGatewayExit(["gateway", "usage-cost"]);
+
+    expect(emitReachableGatewayAuthDiagnostic).toHaveBeenCalledTimes(1);
+    expect(runtimeErrors.join("\n")).toContain("Gateway usage cost failed");
+  });
+
+  it("emits the reachable-gateway auth diagnostic for gateway call when SecretRefs are unavailable", async () => {
+    callGateway.mockClear();
+    callGateway.mockRejectedValueOnce(
+      new GatewaySecretRefUnavailableError("gateway.auth.token"),
+    );
+    emitReachableGatewayAuthDiagnostic.mockResolvedValueOnce(true);
+
+    await runGatewayCommand([
+      "gateway",
+      "call",
+      "system-presence",
+      "--token",
+      "diag-token",
+    ]);
+
+    expect(emitReachableGatewayAuthDiagnostic).toHaveBeenCalledTimes(1);
+    const diagArg = firstMockArg(emitReachableGatewayAuthDiagnostic) as { token?: string };
+    expect(diagArg.token).toBe("diag-token");
+    expect(runtimeErrors.join("\n")).not.toContain("Gateway call failed");
+  });
+
+  it("rethrows raw gateway call errors when the gateway is not reachable", async () => {
+    callGateway.mockClear();
+    callGateway.mockRejectedValueOnce(
+      new GatewaySecretRefUnavailableError("gateway.auth.token"),
+    );
+    emitReachableGatewayAuthDiagnostic.mockResolvedValueOnce(false);
+
+    await expectGatewayExit(["gateway", "call", "system-presence"]);
+
+    expect(emitReachableGatewayAuthDiagnostic).toHaveBeenCalledTimes(1);
+    expect(runtimeErrors.join("\n")).toContain("Gateway call failed");
   });
 });
