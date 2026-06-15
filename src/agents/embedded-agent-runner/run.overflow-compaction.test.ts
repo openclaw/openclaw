@@ -2471,6 +2471,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
         onSessionIdChanged,
       });
 
+      const compactParams = expectMockCallFields(mockedCompactDirect, {});
       expectMockCallFields(
         mockedRunEmbeddedAttempt,
         {
@@ -2479,9 +2480,17 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
         },
         1,
       );
-      expectMockCallFields(mockedRunContextEngineMaintenance, {
+      const maintenanceParams = expectMockCallFields(mockedRunContextEngineMaintenance, {
         sessionId: "rotated-session",
         sessionFile: "/tmp/rotated-session.json",
+      });
+      expect(maintenanceParams.runtimeSettings).toBe(compactParams.runtimeSettings);
+      const runtimeSettings = expectRecordFields(maintenanceParams.runtimeSettings, {});
+      expectRecordFields(runtimeSettings.runtime, {
+        mode: "degraded",
+      });
+      expectRecordFields(runtimeSettings.diagnostics, {
+        degradedReason: "context_overflow",
       });
       expect(replyOperation.sessionId).toBe("rotated-session");
       expect(onSessionIdChanged).toHaveBeenCalledWith("rotated-session");

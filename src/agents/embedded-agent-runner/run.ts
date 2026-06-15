@@ -2464,6 +2464,12 @@ async function runEmbeddedAgentInternal(
                 // run-level abort signal through, so a hung plugin compact()
                 // cannot stall overflow recovery indefinitely. A timeout/abort
                 // surfaces as a thrown error handled by the catch below.
+                const overflowCompactionRuntimeSettings = buildEmbeddedContextEngineRuntimeSettings(
+                  {
+                    tokenBudget: ctxInfo.tokens,
+                    degradedReason: "context_overflow",
+                  },
+                );
                 compactResult = await compactContextEngineWithSafetyTimeout(
                   contextEngine,
                   {
@@ -2477,10 +2483,7 @@ async function runEmbeddedAgentInternal(
                     force: true,
                     compactionTarget: "budget",
                     runtimeContext: overflowCompactionRuntimeContext,
-                    runtimeSettings: buildEmbeddedContextEngineRuntimeSettings({
-                      tokenBudget: ctxInfo.tokens,
-                      degradedReason: "context_overflow",
-                    }),
+                    runtimeSettings: overflowCompactionRuntimeSettings,
                   },
                   resolveCompactionTimeoutMs(params.config),
                   params.abortSignal,
@@ -2494,6 +2497,7 @@ async function runEmbeddedAgentInternal(
                     sessionFile: activeSessionFile,
                     reason: "compaction",
                     runtimeContext: overflowCompactionRuntimeContext,
+                    runtimeSettings: overflowCompactionRuntimeSettings,
                     config: params.config,
                     agentId: sessionAgentId,
                   });
