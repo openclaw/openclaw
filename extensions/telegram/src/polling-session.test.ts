@@ -1669,7 +1669,7 @@ describe("TelegramPollingSession", () => {
             const err = new Error(
               "Cannot find module 'missing-harness-85470' imported from /app/extensions/telegram/src/bot.js",
             );
-            (err as Record<string, unknown>).code = "ERR_MODULE_NOT_FOUND";
+            (err as unknown as Record<string, unknown>).code = "ERR_MODULE_NOT_FOUND";
             throw err;
           }
           if (update.update_id === 43) {
@@ -1711,7 +1711,7 @@ describe("TelegramPollingSession", () => {
           const cause = new Error(
             "Cannot find module 'missing-harness-85470' imported from /app/extensions/telegram/src/bot.js",
           );
-          (cause as Record<string, unknown>).code = "ERR_MODULE_NOT_FOUND";
+          (cause as unknown as Record<string, unknown>).code = "ERR_MODULE_NOT_FOUND";
           const err = new Error("Agent turn failed", { cause });
           throw err;
         },
@@ -1744,7 +1744,7 @@ describe("TelegramPollingSession", () => {
           const cause = new Error(
             "Cannot find module 'missing-harness-85470' imported from /app/extensions/telegram/src/bot.js",
           );
-          (cause as Record<string, unknown>).code = "ERR_MODULE_NOT_FOUND";
+          (cause as unknown as Record<string, unknown>).code = "ERR_MODULE_NOT_FOUND";
           const middlewareError = new Error("Agent turn failed", { cause });
           const botError = Object.assign(new Error("Error in middleware: Agent turn failed"), {
             name: "BotError",
