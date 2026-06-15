@@ -500,6 +500,7 @@ describe("resolveDeliveryTarget", () => {
               id: "alpha",
               outbound: createStubOutbound("Alpha"),
               messaging: { targetPrefixes: ["alpha"] },
+              capabilities: { chatTypes: ["group"] },
             }),
             directory: {
               listGroups: async () => {
