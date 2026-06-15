@@ -1,4 +1,4 @@
-title: Plugin lifecycle probe script coverage
+title: Plugin lifecycle probe evidence
 
 scenario:
   id: plugin-lifecycle-probe
@@ -9,7 +9,7 @@ scenario:
     secondary:
       - plugin-validation-and-repair
       - plugin-setup
-  objective: Link the plugin lifecycle probe script test to QA Lab evidence for strict plugin load/uninstall proof parsing.
+  objective: Exercise strict plugin load/uninstall proof parsing through QA Lab evidence.
   successCriteria:
     - Enabled loaded plugin inspect JSON is accepted as proof.
     - Pending or missing inspect JSON is rejected instead of treated as loaded.
@@ -20,8 +20,8 @@ scenario:
     - docs/concepts/qa-e2e-automation.md
   codeRefs:
     - scripts/e2e/lib/plugin-lifecycle-matrix/probe.mjs
-    - test/scripts/plugin-lifecycle-probe.test.ts
+    - test/e2e/qa-lab/plugins/plugin-lifecycle-probe.e2e.test.ts
   execution:
     kind: vitest
-    path: test/scripts/plugin-lifecycle-probe.test.ts
-    summary: Vitest coverage for plugin lifecycle probe proof parsing.
+    path: test/e2e/qa-lab/plugins/plugin-lifecycle-probe.e2e.test.ts
+    summary: Vitest coverage for plugin lifecycle proof parsing.

@@ -1,12 +1,12 @@
-// Channel Message Flows tests cover channel message flows script behavior.
+// Channel Message Flows tests cover QA Lab channel preview evidence.
 import { describe, expect, it, vi } from "vitest";
 import {
   parseChannelMessageFlowArgs,
   resolveTelegramFlowThreadSpec,
   runTelegramThinkingFinalFlow,
   runTelegramWorkingFinalFlow,
-} from "../../scripts/dev/channel-message-flows.ts";
-import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
+} from "../../../../scripts/dev/channel-message-flows.ts";
+import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 
 describe("channel message flows dev runner", () => {
   function createTestDraftStream(params?: {

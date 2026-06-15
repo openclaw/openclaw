@@ -1,4 +1,4 @@
-title: Docker package artifact script coverage
+title: Docker package artifact QA evidence
 
 scenario:
   id: package-openclaw-for-docker
@@ -9,7 +9,7 @@ scenario:
     secondary:
       - package-manager-installs
       - runtime.package-update
-  objective: Link the Docker package artifact script test to QA Lab evidence for bounded OpenClaw package artifact generation.
+  objective: Exercise bounded OpenClaw package artifact generation through QA Lab evidence.
   successCriteria:
     - Package artifact output flags are parsed strictly.
     - The Docker package path uses the single bounded build-all step before npm pack.
@@ -22,8 +22,8 @@ scenario:
     - docs/concepts/qa-e2e-automation.md
   codeRefs:
     - scripts/package-openclaw-for-docker.mjs
-    - test/scripts/package-openclaw-for-docker.test.ts
+    - test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts
   execution:
     kind: vitest
-    path: test/scripts/package-openclaw-for-docker.test.ts
+    path: test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts
     summary: Vitest coverage for Docker package artifact creation and cleanup behavior.

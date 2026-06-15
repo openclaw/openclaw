@@ -1,4 +1,4 @@
-// Package Openclaw For Docker tests cover package openclaw for docker script behavior.
+// Package OpenClaw For Docker tests cover QA Lab package artifact evidence.
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -10,7 +10,7 @@ import {
   packOpenClawPackageForDocker,
   parseArgs,
   runCommandForTest,
-} from "../../scripts/package-openclaw-for-docker.mjs";
+} from "../../../../scripts/package-openclaw-for-docker.mjs";
 
 function isProcessAlive(pid: number): boolean {
   if (!Number.isSafeInteger(pid) || pid <= 0) {

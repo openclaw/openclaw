@@ -1,4 +1,4 @@
-title: Channel message flows script coverage
+title: Channel message flows QA evidence
 
 scenario:
   id: channel-message-flows
@@ -9,7 +9,7 @@ scenario:
     secondary:
       - channels.streaming
       - channels.direct-visible-replies
-  objective: Link the channel message flow dev runner test to QA Lab evidence for Telegram-shaped streamed previews and durable final text delivery.
+  objective: Exercise Telegram-shaped streamed previews and durable final text delivery through QA Lab evidence.
   successCriteria:
     - Telegram flow flags parse channel, target, account, thread, timing, and flow mode.
     - Thinking preview updates flush, clear, and then send a durable final answer.
@@ -21,8 +21,8 @@ scenario:
     - docs/concepts/qa-e2e-automation.md
   codeRefs:
     - scripts/dev/channel-message-flows.ts
-    - test/scripts/channel-message-flows.test.ts
+    - test/e2e/qa-lab/channels/channel-message-flows.e2e.test.ts
   execution:
     kind: vitest
-    path: test/scripts/channel-message-flows.test.ts
+    path: test/e2e/qa-lab/channels/channel-message-flows.e2e.test.ts
     summary: Vitest coverage for channel preview clearing and durable final text sends.

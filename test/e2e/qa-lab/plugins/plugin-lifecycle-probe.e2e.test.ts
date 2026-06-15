@@ -1,4 +1,4 @@
-// Plugin Lifecycle Probe tests cover plugin lifecycle probe script behavior.
+// Plugin Lifecycle Probe tests cover QA Lab plugin lifecycle evidence.
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

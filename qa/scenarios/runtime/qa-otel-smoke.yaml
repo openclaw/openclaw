@@ -1,4 +1,4 @@
-title: QA OTEL smoke script coverage
+title: QA OTEL smoke evidence
 
 scenario:
   id: qa-otel-smoke
@@ -9,7 +9,7 @@ scenario:
     secondary:
       - harness.qa-lab
       - plugin-sdk-diagnostic-runtime-exports
-  objective: Link the QA OTEL smoke script test to QA Lab evidence for bounded local OTLP capture and OpenTelemetry smoke assertions.
+  objective: Exercise bounded local OTLP capture and OpenTelemetry smoke assertions through QA Lab evidence.
   successCriteria:
     - Package-manager forwarded QA OTEL smoke arguments parse correctly.
     - Body-size limits are strict positive integers.
@@ -22,8 +22,8 @@ scenario:
     - docs/concepts/qa-e2e-automation.md
   codeRefs:
     - scripts/qa-otel-smoke.ts
-    - test/scripts/qa-otel-smoke.test.ts
+    - test/e2e/qa-lab/runtime/qa-otel-smoke.e2e.test.ts
   execution:
     kind: vitest
-    path: test/scripts/qa-otel-smoke.test.ts
+    path: test/e2e/qa-lab/runtime/qa-otel-smoke.e2e.test.ts
     summary: Vitest coverage for QA OTEL smoke receiver bounds and signal assertions.
