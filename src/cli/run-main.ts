@@ -742,7 +742,9 @@ export async function runCli(argv: string[] = process.argv) {
     }
 
     if (shouldRunBareRoot) {
-      const hasInteractiveTty = process.stdin.isTTY && process.stdout.isTTY;
+      const hasInteractiveTty =
+        (process.stdin as { isTTY?: boolean }).isTTY === true &&
+        (process.stdout as { isTTY?: boolean }).isTTY === true;
       const destination = await resolveBareRootDestination(normalizedArgv, {
         probeLocalAgent: hasInteractiveTty,
       });

@@ -1113,14 +1113,14 @@ describe("runCli exit behavior", () => {
     });
   });
 
-  it("rejects noninteractive local bare root invocations before probing agent readiness", async () => {
+  it("rejects bare root invocations with missing TTY flags before probing agent readiness", async () => {
     const previousExitCode = process.exitCode;
     const stdinDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
     const stdoutDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     process.exitCode = undefined;
-    Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: false });
-    Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: false });
+    Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: undefined });
+    Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: undefined });
 
     try {
       await runCli(["node", "openclaw"]);

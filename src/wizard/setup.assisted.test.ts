@@ -817,11 +817,18 @@ describe("agent-assisted setup handoff", () => {
     );
   });
 
-  it("preserves legacy readiness for plugin harnesses without the optional probe", async () => {
+  it("uses provider auth for plugin harnesses without the optional readiness probe", async () => {
+    selectAgentHarness.mockReturnValueOnce({ id: "custom-harness" });
+
+    await expect(hasRunnableLocalAgent({})).resolves.toBe(true);
+    expect(hasAuthForModelProvider).toHaveBeenCalledOnce();
+  });
+
+  it("rejects unauthenticated plugin harnesses without the optional readiness probe", async () => {
     selectAgentHarness.mockReturnValueOnce({ id: "custom-harness" });
     hasAuthForModelProvider.mockResolvedValueOnce(false);
 
-    await expect(hasRunnableLocalAgent({})).resolves.toBe(true);
+    await expect(hasRunnableLocalAgent({})).resolves.toBe(false);
     expect(hasAuthForModelProvider).toHaveBeenCalledOnce();
   });
 });

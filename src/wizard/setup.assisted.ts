@@ -163,9 +163,9 @@ async function hasRunnableModelCandidate(params: {
     return hasProviderAuth;
   }
   if (!agentHarness.checkReadiness) {
-    // Readiness is an additive plugin SDK capability. Existing external
-    // harnesses may own authentication entirely inside their runtime.
-    return true;
+    // Without a plugin-owned probe, core provider auth is the only readiness
+    // evidence available for existing external harnesses.
+    return hasProviderAuth;
   }
   const readinessAbort = new AbortController();
   const timeoutError = new Error("agent harness readiness check timed out");
