@@ -8,6 +8,7 @@ import {
   type McpLoopbackTool,
   type McpToolSchemaEntry,
 } from "./mcp-http.schema.js";
+import { getSessionOperatorClientId } from "./session-client-id-registry.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
 
 // MCP loopback runtime scopes gateway tools to the current session/channel
@@ -45,10 +46,27 @@ export function resolveMcpLoopbackScopedTools(params: McpLoopbackScopeParams): {
   agentId: string | undefined;
   tools: McpLoopbackTool[];
 } {
+  // Per-client-id tool restriction (gateway.tools.byClientId). The operator turn
+  // records the connecting client's id against the session key; we read it back
+  // so a deployment can scope a specific connecting surface (identified by its
+  // client.id) to a reduced toolset. Restriction-only: allow intersects the final
+  // set and deny extends the exclude set, so it can never grant a tool the base
+  // policy already removed.
+  const clientId = getSessionOperatorClientId(params.sessionKey);
+  const byClientId = clientId ? params.cfg.gateway?.tools?.byClientId?.[clientId] : undefined;
+  // Pass the allow list through as-is: a present-but-empty allow is fail-closed
+  // (no tools); only an absent allow means "no restriction".
+  const clientAllow = byClientId?.allow;
+  const clientDeny = byClientId?.deny && byClientId.deny.length > 0 ? byClientId.deny : undefined;
+  const excludeToolNames = clientDeny
+    ? new Set<string>([...NATIVE_TOOL_EXCLUDE, ...clientDeny])
+    : NATIVE_TOOL_EXCLUDE;
   const scoped = resolveGatewayScopedTools({
     ...params,
     surface: "loopback",
-    excludeToolNames: NATIVE_TOOL_EXCLUDE,
+    excludeToolNames,
+    allowToolNames: clientAllow,
+    inheritedDenyToolNames: clientDeny,
   });
   return {
     agentId: scoped.agentId,
@@ -72,6 +90,7 @@ export class McpLoopbackToolCache {
       params.inboundEventKind ?? "",
       params.sourceReplyDeliveryMode ?? "",
       params.requireExplicitMessageTarget === true ? "explicit-message-target" : "",
+      getSessionOperatorClientId(params.sessionKey) ?? "",
       params.senderIsOwner === true
         ? "owner"
         : params.senderIsOwner === false

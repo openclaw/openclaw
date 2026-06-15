@@ -56,6 +56,20 @@ export function resolveGatewayScopedTools(params: {
   allowMediaInvokeCommands?: boolean;
   surface?: GatewayScopedToolSurface;
   excludeToolNames?: Iterable<string>;
+  /**
+   * When non-empty, restricts the FINAL returned tools to only these names
+   * (applied after the full policy pipeline + gatewayDenySet). This is a
+   * RESTRICTION-only intersection: it can never add a tool that the existing
+   * policy already removed, so it is safe even if the value originates from an
+   * untrusted client (e.g. a connecting client's self-reported client.id).
+   */
+  allowToolNames?: Iterable<string>;
+  /**
+   * Deny names (e.g. from a byClientId restriction) that must ALSO propagate to
+   * spawned subagents — added to the inherited denylist, not only the parent
+   * gatewayDenySet — so the restriction cannot be escaped via sessions_spawn.
+   */
+  inheritedDenyToolNames?: Iterable<string>;
   disablePluginTools?: boolean;
   gatewayRequestedTools?: string[];
 }) {
@@ -111,6 +125,10 @@ export function resolveGatewayScopedTools(params: {
     store: subagentStore,
   });
   const excludedToolNames = params.excludeToolNames ? Array.from(params.excludeToolNames) : [];
+  const byClientIdAllow = params.allowToolNames ? Array.from(params.allowToolNames) : undefined;
+  const inheritedDenyToolNames = params.inheritedDenyToolNames
+    ? Array.from(params.inheritedDenyToolNames)
+    : [];
   const surface = params.surface ?? "http";
   const gatewayToolsCfg = params.cfg.gateway?.tools;
   const defaultGatewayDeny =
@@ -140,22 +158,26 @@ export function resolveGatewayScopedTools(params: {
     ownerOnlyGatewayDeny.length > 0 ? { deny: ownerOnlyGatewayDeny } : undefined,
     Array.isArray(gatewayToolsCfg?.deny) ? { deny: gatewayToolsCfg.deny } : undefined,
   ]);
-  const inheritedToolDenylist = [...explicitDenylist];
+  const inheritedToolDenylist = [...explicitDenylist, ...inheritedDenyToolNames];
   // Passed by reference to sessions_spawn and populated after the final policy
   // pass so child sessions inherit the actual parent tool surface.
   const inheritedToolAllowlist: string[] = [];
-  const shouldInheritEffectiveToolAllowlist = [
-    profilePolicy,
-    providerProfilePolicy,
-    globalPolicy,
-    globalProviderPolicy,
-    agentPolicy,
-    agentProviderPolicy,
-    groupPolicy,
-    subagentPolicy,
-    inheritedToolPolicy,
-    gatewayRequestedTools.length > 0 ? { allow: gatewayRequestedTools } : undefined,
-  ].some(hasRestrictiveAllowPolicy);
+  const shouldInheritEffectiveToolAllowlist =
+    [
+      profilePolicy,
+      providerProfilePolicy,
+      globalPolicy,
+      globalProviderPolicy,
+      agentPolicy,
+      agentProviderPolicy,
+      groupPolicy,
+      subagentPolicy,
+      inheritedToolPolicy,
+      gatewayRequestedTools.length > 0 ? { allow: gatewayRequestedTools } : undefined,
+    ].some(hasRestrictiveAllowPolicy) ||
+    // A byClientId allow list narrows the surface too, so spawned subagents must
+    // inherit the narrowed allowlist (not just the direct loopback turn).
+    (byClientIdAllow !== undefined && byClientIdAllow.length > 0);
 
   const allTools = createOpenClawTools({
     agentSessionKey: params.sessionKey,
@@ -224,7 +246,16 @@ export function resolveGatewayScopedTools(params: {
     ...(Array.isArray(gatewayToolsCfg?.deny) ? gatewayToolsCfg.deny : []),
     ...excludedToolNames,
   ]);
-  const tools = policyFiltered.filter((tool) => !gatewayDenySet.has(tool.name));
+  const denyFiltered = policyFiltered.filter((tool) => !gatewayDenySet.has(tool.name));
+
+  // byClientId restriction applies after the full policy pipeline + gatewayDenySet.
+  // An explicitly-present allow list (even empty) is fail-CLOSED: empty => no tools.
+  // Only an ABSENT allow list means "no restriction".
+  const allowSet = byClientIdAllow ? new Set(byClientIdAllow) : undefined;
+  const tools = allowSet ? denyFiltered.filter((tool) => allowSet.has(tool.name)) : denyFiltered;
+
+  // Capture the inherited allowlist from the FINAL (byClientId-restricted) set so
+  // spawned subagents inherit the narrowed surface, not the unrestricted parent.
   if (shouldInheritEffectiveToolAllowlist) {
     replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, tools);
   }

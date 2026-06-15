@@ -459,6 +459,17 @@ export type GatewayToolsConfig = {
   deny?: string[];
   /** Tools to explicitly allow (removes from default deny list). */
   allow?: string[];
+  /**
+   * Per-client-id tool restrictions, keyed by the connecting gateway client's
+   * `client.id`. When an operator/webchat agent turn runs for a session whose
+   * operator connected with a matching `client.id`, the entry's `allow`/`deny`
+   * are applied as a RESTRICTION on top of the existing policy — they can only
+   * reduce the available tools, never escalate. This lets a deployment scope a
+   * specific connecting surface (identified by its `client.id`) to a reduced
+   * toolset even when it shares an operator path that would otherwise expose the
+   * full toolset.
+   */
+  byClientId?: Record<string, { allow?: string[]; deny?: string[] }>;
 };
 
 export type GatewayConfig = {
