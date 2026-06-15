@@ -131,7 +131,7 @@ function bindCronJobRow(storeKey: string, job: CronJob, sortOrder: number): Cron
     delete_after_run: booleanToInteger(job.deleteAfterRun),
     created_at_ms: job.createdAtMs,
     updated_at: job.updatedAtMs,
-    agent_id: job.agentId ?? null,
+    agent_id: job.agentId ?? "main",
     session_key: job.sessionKey ?? null,
     session_target: job.sessionTarget,
     wake_mode: job.wakeMode,
