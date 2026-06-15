@@ -7,7 +7,12 @@ import { isDiagnosticFlagEnabled } from "openclaw/plugin-sdk/diagnostic-runtime"
 import { formatUncaughtError } from "openclaw/plugin-sdk/error-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
-import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
+import {
+  chunkMarkdownTextWithMode,
+  resolveChunkMode,
+  resolveTextChunkLimit,
+  type ChunkMode,
+} from "openclaw/plugin-sdk/reply-chunking";
 import { createTelegramRetryRunner, type RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
 import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -615,6 +620,7 @@ export async function sendMessageTelegram(
     }),
     TELEGRAM_TEXT_CHUNK_LIMIT,
   );
+  const chunkMode = resolveChunkMode(cfg, "telegram", account.accountId);
 
   type TelegramLegacyTextChunk = { html: string; plainText: string };
 
@@ -711,6 +717,34 @@ export async function sendMessageTelegram(
     return { messageId: lastMessageId, chatId: lastChatId };
   };
 
+  const splitMarkdownTextChunksWithMode = (
+    rawText: string,
+    limit: number,
+    mode: ChunkMode,
+  ): string[] => {
+    if (rawText.length <= limit) {
+      return [rawText];
+    }
+    const chunks: string[] = [];
+    const queue = chunkMarkdownTextWithMode(rawText, limit, mode);
+    for (let index = 0; index < queue.length; index += 1) {
+      const chunk = queue[index] ?? "";
+      if (chunk.length <= limit) {
+        chunks.push(chunk);
+        continue;
+      }
+      const reducedLimit = Math.max(1, Math.min(chunk.length - 1, limit - 16));
+      const nextChunks = chunkMarkdownTextWithMode(chunk, reducedLimit, mode);
+      if (nextChunks.length <= 1) {
+        chunks.push(chunk);
+        continue;
+      }
+      queue.splice(index, 1, ...nextChunks);
+      index -= 1;
+    }
+    return chunks;
+  };
+
   const buildChunkedTextPlan = (rawText: string): TelegramLegacyTextChunk[] => {
     if (textMode === "html") {
       const htmlText = renderTelegramHtmlText(rawText, { textMode, tableMode });
@@ -719,10 +753,12 @@ export async function sendMessageTelegram(
         plainText: telegramHtmlToPlainTextFallback(html),
       }));
     }
-    const chunks = markdownToTelegramChunks(rawText, textLimit, { tableMode }).map((chunk) => ({
-      html: chunk.html,
-      plainText: chunk.text,
-    }));
+    const chunks = splitMarkdownTextChunksWithMode(rawText, textLimit, chunkMode).flatMap((chunk) =>
+      markdownToTelegramChunks(chunk, textLimit, { tableMode }).map((formattedChunk) => ({
+        html: formattedChunk.html,
+        plainText: formattedChunk.text,
+      })),
+    );
     if (chunks.length > 0) {
       return chunks;
     }

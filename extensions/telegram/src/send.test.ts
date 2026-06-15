@@ -1208,6 +1208,29 @@ describe("sendMessageTelegram", () => {
     expect(chunks.join("").match(/Paragraph \d+/g)).toHaveLength(900);
   });
 
+  it("honors Telegram newline chunk mode for legacy sendMessage text", async () => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 53, chat: { id: "123" } });
+    const markdown = ["Alpha", "Beta", "Gamma", "Delta", "Epsilon"].join("\n\n");
+    const cfg = {
+      channels: {
+        telegram: {
+          ...TELEGRAM_TEST_CFG.channels.telegram,
+          chunkMode: "newline" as const,
+          textChunkLimit: 25,
+        },
+      },
+    };
+
+    await sendMessageTelegram("123", markdown, {
+      cfg,
+      token: "tok",
+    });
+
+    expect(textSendHtmlChunks()).toEqual(["Alpha\n\nBeta\n\nGamma\n\nDelta", "Epsilon"]);
+    expect(textSendCallParams().every((call) => call.params.parse_mode === "HTML")).toBe(true);
+    expect(botRawApi.sendRichMessage).not.toHaveBeenCalled();
+  });
+
   it("chunks markdown headings above Telegram's text message limit", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 54, chat: { id: "123" } });
     const markdown = Array.from({ length: 600 }, (_, index) => `# Heading ${index + 1}`).join("\n");
