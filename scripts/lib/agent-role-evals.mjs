@@ -552,7 +552,7 @@ export const DEFAULT_SELF_CONTAINED_LIVE_MODEL = "ollama/qwen3.5:4b";
 export const DEFAULT_SELF_CONTAINED_OLLAMA_MIN_MEM_MB = 8192;
 export const DEFAULT_SELF_CONTAINED_LIVE_PARAMS = Object.freeze({
   temperature: 0,
-  maxTokens: 64,
+  maxTokens: 128,
 });
 
 function normalizeText(value) {
@@ -620,11 +620,19 @@ function providerConfigForModelRef(modelRef) {
   return baseConfig;
 }
 
-function roleDocForContract(contractEntry) {
+function runtimeAgentIdForContract(contractEntry) {
+  return contractEntry.agentId ?? contractEntry.id;
+}
+
+function roleDocForContract(
+  contractEntry,
+  runtimeAgentId = runtimeAgentIdForContract(contractEntry),
+) {
   return [
     `# ${contractEntry.name}`,
     "",
-    `Agent id: ${contractEntry.id}`,
+    `Agent id: ${runtimeAgentId}`,
+    ...(runtimeAgentId !== contractEntry.id ? [`Contract id: ${contractEntry.id}`] : []),
     `Domain: ${contractEntry.domain}`,
     "",
     "Responsibilities:",
@@ -647,24 +655,30 @@ export function createSelfContainedLiveEvalEnvironment(contracts, options = {}) 
   fs.mkdirSync(stateDir, { recursive: true });
   fs.mkdirSync(workspacesRoot, { recursive: true });
 
-  const agents = selectedContracts.map((contractEntry) => {
-    const workspace = path.join(workspacesRoot, contractEntry.id);
-    const agentDir = path.join(stateDir, "agents", contractEntry.id, "agent");
+  const agentsById = new Map();
+  for (const contractEntry of selectedContracts) {
+    const runtimeAgentId = runtimeAgentIdForContract(contractEntry);
+    if (agentsById.has(runtimeAgentId)) {
+      continue;
+    }
+    const workspace = path.join(workspacesRoot, runtimeAgentId);
+    const agentDir = path.join(stateDir, "agents", runtimeAgentId, "agent");
     fs.mkdirSync(workspace, { recursive: true });
     fs.mkdirSync(agentDir, { recursive: true });
-    const doc = roleDocForContract(contractEntry);
+    const doc = roleDocForContract(contractEntry, runtimeAgentId);
     writeTextFile(path.join(workspace, "AGENTS.md"), doc);
     writeTextFile(path.join(workspace, "IDENTITY.md"), doc);
-    return {
-      id: contractEntry.id,
+    agentsById.set(runtimeAgentId, {
+      id: runtimeAgentId,
       name: contractEntry.name,
       workspace,
       agentDir,
       model: { primary: modelRef, fallbacks: [] },
       params: { ...DEFAULT_SELF_CONTAINED_LIVE_PARAMS },
       tools: { profile: "minimal" },
-    };
-  });
+    });
+  }
+  const agents = Array.from(agentsById.values());
 
   const config = {
     models: {
@@ -1138,7 +1152,7 @@ function extractAgentJson(stdout) {
 export function runLiveAgentEval(contractEntry, options = {}) {
   const timeoutSeconds = Number(options.timeoutSeconds ?? 180);
   const sessionId = options.sessionId ?? `agent-eval-${Date.now()}-${contractEntry.id}`;
-  const runAgentId = contractEntry.agentId ?? contractEntry.id;
+  const runAgentId = runtimeAgentIdForContract(contractEntry);
   const args = [
     "scripts/run-node.mjs",
     "agent",

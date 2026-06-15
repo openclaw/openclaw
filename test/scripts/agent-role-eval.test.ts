@@ -178,6 +178,28 @@ describe("agent role eval harness", () => {
     expect(result).toMatchObject({ ok: true, agentCount: 1, issues: [] });
   });
 
+  it("creates self-contained live eval agents using aliased runtime ids", () => {
+    const contract = AGENT_ROLE_CONTRACT_BY_ID.get(
+      "browser-session-credential-steward-safety-boundary",
+    )!;
+    const fixture = createSelfContainedLiveEvalEnvironment([contract], {
+      modelRef: DEFAULT_SELF_CONTAINED_LIVE_MODEL,
+      keep: true,
+    });
+    harness.trackTempDir(fixture.root);
+
+    expect(fixture.config.agents.list).toHaveLength(1);
+    expect(fixture.config.agents.list[0]?.id).toBe("browser-session-credential-steward");
+    expect(fixture.config.agents.list[0]?.workspace).toContain(
+      "browser-session-credential-steward",
+    );
+
+    const result = evaluateAgentStaticContracts(fixture.config, {
+      stateDir: fixture.stateDir,
+    });
+    expect(result).toMatchObject({ ok: true, agentCount: 1, issues: [] });
+  });
+
   it("keeps the CI workflow deterministic and secret-free", () => {
     const source = readFileSync(".github/workflows/agent-role-evals.yml", "utf8");
     const workflow = readAgentRoleEvalWorkflow();
