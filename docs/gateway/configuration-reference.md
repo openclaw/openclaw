@@ -1439,6 +1439,36 @@ Split config into multiple files:
 - Root includes, include arrays, and includes with sibling overrides are read-only for OpenClaw-owned writes; those writes fail closed instead of flattening the config.
 - Errors: clear messages for missing files, parse errors, circular includes, invalid path format, and excessive length.
 
+## Raw-text includes (`$includeText`)
+
+Where `$include` merges a parsed JSON5 file into the surrounding object, `$includeText` injects a file's **raw text** as a plain string value. This lets any string field be maintained as a separate file — for example a per-channel system prompt kept as Markdown:
+
+```json5
+// ~/.openclaw/openclaw.json
+{
+  channels: {
+    slack: {
+      channels: {
+        C0AHNL55CQK: {
+          systemPrompt: { $includeText: "./prompts/slack-support.md" },
+        },
+      },
+    },
+  },
+}
+```
+
+**Behavior:**
+
+- The file's contents are inserted verbatim as a string — **not** JSON-parsed. A file containing `{"a":1}` resolves to that literal string, not an object.
+- Takes a **single string path only**. Arrays are not supported (no unambiguous concatenation semantics), and the value must be a string.
+- **No sibling keys**, and it cannot be combined with `$include` in the same object — a raw string cannot deep-merge into surrounding keys.
+- Trailing whitespace and newlines are **preserved** exactly.
+- Same path and security rules as `$include`: resolved relative to the including file, must stay inside the config directory, no null bytes, length-bounded, 2 MB size cap, and symlink/hardlink-guarded.
+- Resolves **before** schema validation and `${ENV}` expansion, so the injected string flows through the normal config pipeline.
+- Treated as include-owned for write-back: OpenClaw-owned (and channel-initiated) config writes that would touch a `$includeText` node fail closed rather than flattening it into a resolved string. Editing the prompt file triggers a config hot-reload.
+- Writes to **other** fields are unaffected: the directive is preserved verbatim, and write-back validation runs against the include-resolved shape, so an unrelated change (e.g. `openclaw config set models.providers.<id>.timeoutSeconds 90`) succeeds even while a `$includeText` system prompt is present elsewhere.
+
 ---
 
 _Related: [Configuration](/gateway/configuration) · [Configuration Examples](/gateway/configuration-examples) · [Doctor](/gateway/doctor)_
