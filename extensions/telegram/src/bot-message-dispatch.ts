@@ -30,7 +30,6 @@ import {
   type ChannelProgressDraftLine,
   type ChannelProgressDraftCompositorLine,
   createChannelProgressDraftCompositor,
-  formatChannelProgressDraftLine,
   resolveChannelStreamingBlockEnabled,
   resolveTranscriptBackedChannelFinalText,
 } from "openclaw/plugin-sdk/channel-outbound";

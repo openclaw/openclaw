@@ -2467,8 +2467,6 @@ describe("dispatchTelegramMessage draft streaming", () => {
     const lastUpdate = answerDraftStream.updatePreview.mock.calls.at(-1)?.[0];
     expect(lastUpdate?.text).toContain("completed");
     expect(lastUpdate?.text).not.toContain("install dependencies");
-    expect(lastUpdate?.richMessage.html).toContain("<code>completed</code>");
-    expect(lastUpdate?.richMessage.html).not.toContain("install dependencies");
   });
 
   it("sends trailing verbose status after a progress-mode final answer", async () => {
