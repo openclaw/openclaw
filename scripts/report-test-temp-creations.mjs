@@ -7,6 +7,7 @@ import { runAsScript } from "./lib/ts-guard-utils.mjs";
 
 const DEFAULT_BASE_REF = "origin/main";
 const DEFAULT_HEAD_REF = "HEAD";
+const TEMP_DIR_HELPER_PATH = "test/helpers/temp-dir.ts";
 const FINDING_PATTERNS = [
   {
     pattern: /\bmkdtemp(?:Sync)?\s*\(/u,
@@ -58,8 +59,9 @@ function normalizePath(filePath) {
     .replace(/^\.\/+/u, "");
 }
 
-function isTestFile(filePath) {
-  return isChangedLaneTestPath(filePath);
+function shouldInspectFile(filePath) {
+  const normalizedPath = normalizePath(filePath);
+  return normalizedPath !== TEMP_DIR_HELPER_PATH && isChangedLaneTestPath(normalizedPath);
 }
 
 function isTruthyEnvFlag(value) {
@@ -158,7 +160,7 @@ export function collectTempCreationFindingsFromDiff(diffText) {
     }
 
     if (line.startsWith("+") && !line.startsWith("+++")) {
-      if (currentFile && isTestFile(currentFile)) {
+      if (currentFile && shouldInspectFile(currentFile)) {
         const source = line.slice(1);
         const allowed =
           hasTempDirAllowMarker(source) ||
