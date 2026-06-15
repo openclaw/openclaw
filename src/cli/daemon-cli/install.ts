@@ -39,8 +39,21 @@ export function mergeInstallInvocationEnv(params: {
   env: NodeJS.ProcessEnv;
   existingServiceEnv?: Record<string, string>;
 }): NodeJS.ProcessEnv {
+  const invocationEnv: NodeJS.ProcessEnv = {};
+  for (const [rawKey, rawValue] of Object.entries(params.env)) {
+    const key = normalizeEnvVarKey(rawKey, { portable: true });
+    if (
+      !key ||
+      rawValue === undefined ||
+      isDangerousHostEnvVarName(key) ||
+      isDangerousHostEnvOverrideVarName(key)
+    ) {
+      continue;
+    }
+    invocationEnv[key] = rawValue;
+  }
   if (!params.existingServiceEnv || Object.keys(params.existingServiceEnv).length === 0) {
-    return params.env;
+    return invocationEnv;
   }
   const preservedServiceEnv: NodeJS.ProcessEnv = {};
   for (const [rawKey, rawValue] of Object.entries(params.existingServiceEnv)) {
@@ -77,7 +90,7 @@ export function mergeInstallInvocationEnv(params: {
   }
   return {
     ...preservedServiceEnv,
-    ...params.env,
+    ...invocationEnv,
   };
 }
 
