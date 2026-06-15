@@ -45,7 +45,15 @@ const SESSION_STATE_MAX_ENTRIES = 2000;
 
 let lastSessionPruneAt = 0;
 
-/** Prunes stale idle session states and caps the process-local state map. */
+/**
+ * Fallback TTL for non-idle entries that linger after failed recovery.
+ * Longer than SESSION_STATE_TTL_MS to avoid deleting genuinely active
+ * long-running sessions. Only entries with no activity for this duration
+ * are eligible for non-idle pruning.
+ */
+const SESSION_STATE_NON_IDLE_TTL_MS = 3 * SESSION_STATE_TTL_MS;
+
+/** Prunes stale idle session states, non-idle ghost entries, and caps the process-local state map. */
 export function pruneDiagnosticSessionStates(now = Date.now(), force = false): void {
   const shouldPruneForSize = diagnosticSessionStates.size > SESSION_STATE_MAX_ENTRIES;
   if (!force && !shouldPruneForSize && now - lastSessionPruneAt < SESSION_STATE_PRUNE_INTERVAL_MS) {
@@ -57,6 +65,15 @@ export function pruneDiagnosticSessionStates(now = Date.now(), force = false): v
     const ageMs = now - state.lastActivity;
     const isIdle = state.state === "idle";
     if (isIdle && state.queueDepth <= 0 && ageMs > SESSION_STATE_TTL_MS) {
+      diagnosticSessionStates.delete(key);
+      continue;
+    }
+    // Clean up non-idle ghost entries that linger after failed recovery.
+    // recoveryOutcomeMutatesSessionState returns false for status:"failed",
+    // leaving entries permanently in "processing"/"waiting" state. These can
+    // accumulate past the FIFO cap. We use a longer TTL to avoid deleting
+    // genuinely active long-running sessions that regularly update lastActivity.
+    if (!isIdle && ageMs > SESSION_STATE_NON_IDLE_TTL_MS) {
       diagnosticSessionStates.delete(key);
     }
   }

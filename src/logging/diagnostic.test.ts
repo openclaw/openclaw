@@ -168,6 +168,33 @@ describe("diagnostic session state pruning", () => {
     expect(getDiagnosticSessionStateCountForTest()).toBe(1);
   });
 
+  it("prunes non-idle ghost entries that have been inactive past the extended TTL", () => {
+    getDiagnosticSessionState({ sessionId: "s1" });
+    // Set state to "processing" mimicking a stuck entry after failed recovery
+    const state = diagnosticSessionStates.get("s1");
+    if (state) {
+      state.state = "processing";
+      state.lastActivity = 1;
+    }
+
+    pruneDiagnosticSessionStates(1 + 3 * 30 * 60 * 1000 + 1, true);
+
+    expect(getDiagnosticSessionStateCountForTest()).toBe(0);
+  });
+
+  it("preserves active non-idle entries whose lastActivity is within the extended TTL", () => {
+    getDiagnosticSessionState({ sessionId: "active" });
+    const state = diagnosticSessionStates.get("active");
+    if (state) {
+      state.state = "processing";
+      state.lastActivity = Date.now();
+    }
+
+    pruneDiagnosticSessionStates(Date.now() + 1000, true);
+
+    expect(getDiagnosticSessionStateCountForTest()).toBe(1);
+  });
+
   it("caps tracked session states to a bounded max", () => {
     const now = Date.now();
     for (let i = 0; i < 2001; i += 1) {
