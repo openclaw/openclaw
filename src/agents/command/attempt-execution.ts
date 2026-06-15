@@ -225,15 +225,19 @@ function cliBackendAcceptsAuthProfileForwarding(params: {
 
 function resolveCliExecutionAuthProfileId(params: {
   cliExecutionProvider: string;
+  authProfileProvider: string;
   config: OpenClawConfig;
   agentDir: string;
   selected: HarnessAuthProfileSelection;
 }): string | undefined {
   if (params.selected.authProfileId) {
-    return params.selected.authProfileProvider === params.cliExecutionProvider ||
-      params.cliExecutionProvider === GOOGLE_GEMINI_CLI_PROVIDER_ID
-      ? params.selected.authProfileId
-      : undefined;
+    if (
+      params.selected.authProfileProvider === params.cliExecutionProvider ||
+      (params.cliExecutionProvider === GOOGLE_GEMINI_CLI_PROVIDER_ID &&
+        params.selected.authProfileIdSource !== "auto")
+    ) {
+      return params.selected.authProfileId;
+    }
   }
 
   const store = ensureAuthProfileStore(params.agentDir, {
@@ -251,7 +255,7 @@ function resolveCliExecutionAuthProfileId(params: {
 
   if (
     params.cliExecutionProvider !== GOOGLE_GEMINI_CLI_PROVIDER_ID ||
-    params.selected.authProfileProvider !== GOOGLE_PROVIDER_ID
+    params.authProfileProvider !== GOOGLE_PROVIDER_ID
   ) {
     return undefined;
   }
@@ -571,6 +575,7 @@ export function runAgentAttempt(params: {
   const cliAuthProfileId = allowCliAuthProfileForwarding
     ? resolveCliExecutionAuthProfileId({
         cliExecutionProvider,
+        authProfileProvider: params.authProfileProvider,
         config: params.cfg,
         agentDir: params.agentDir,
         selected: harnessAuthSelection,
