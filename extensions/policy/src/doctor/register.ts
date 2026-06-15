@@ -7030,14 +7030,13 @@ async function readPolicyFile(
 async function readExecApprovalsFile(
   ctx: HealthCheckContext,
 ): Promise<{ raw: string; path: string; displayName: string; ocDocName: string } | null> {
-  const displayName = execApprovalsDisplayName();
-  const path = resolvePolicyArtifactPath(ctx, canonicalExecApprovalsPath());
+  const artifact = execApprovalsArtifactLocation(ctx);
   try {
     const fs = await loadFsPromisesModule();
     return {
-      raw: await fs.readFile(path, "utf-8"),
-      path,
-      displayName,
+      raw: await fs.readFile(artifact.path, "utf-8"),
+      path: artifact.path,
+      displayName: artifact.displayName,
       ocDocName: "exec-approvals.json",
     };
   } catch (err) {
@@ -7078,14 +7077,18 @@ function resolvePolicyArtifactHomeDir(): string | undefined {
   const explicitHome = normalizedEnvValue(process.env.OPENCLAW_HOME);
   if (explicitHome !== undefined) {
     if (explicitHome === "~" || explicitHome.startsWith("~/") || explicitHome.startsWith("~\\")) {
-      const fallbackHome = resolveOsPolicyHomeDir();
-      return fallbackHome === undefined
-        ? undefined
-        : resolve(explicitHome.replace(/^~(?=$|[\\/])/, fallbackHome));
+      return resolvePolicyHomeRelativePath(explicitHome);
     }
     return resolve(explicitHome);
   }
   return resolveOsPolicyHomeDir();
+}
+
+function resolvePolicyHomeRelativePath(value: string): string {
+  const fallbackHome = resolveOsPolicyHomeDir();
+  return fallbackHome === undefined
+    ? resolve(value)
+    : resolve(value.replace(/^~(?=$|[\\/])/, fallbackHome));
 }
 
 function resolveOsPolicyHomeDir(): string | undefined {
@@ -7434,8 +7437,31 @@ function canonicalExecApprovalsPath(): string {
   return "~/.openclaw/exec-approvals.json";
 }
 
+function execApprovalsArtifactLocation(ctx: HealthCheckContext): {
+  readonly path: string;
+  readonly displayName: string;
+} {
+  const stateDir = normalizedEnvValue(process.env.OPENCLAW_STATE_DIR);
+  if (stateDir !== undefined) {
+    const path = resolve(resolvePolicyStateDir(stateDir), "exec-approvals.json");
+    return { path, displayName: path };
+  }
+  return {
+    path: resolvePolicyArtifactPath(ctx, canonicalExecApprovalsPath()),
+    displayName: canonicalExecApprovalsPath(),
+  };
+}
+
 function execApprovalsDisplayName(): string {
-  return canonicalExecApprovalsPath();
+  const stateDir = normalizedEnvValue(process.env.OPENCLAW_STATE_DIR);
+  if (stateDir === undefined) {
+    return canonicalExecApprovalsPath();
+  }
+  return resolve(resolvePolicyStateDir(stateDir), "exec-approvals.json");
+}
+
+function resolvePolicyStateDir(stateDir: string): string {
+  return stateDir.startsWith("~") ? resolvePolicyHomeRelativePath(stateDir) : resolve(stateDir);
 }
 
 function policyPathSetting(ctx: HealthCheckContext): string {

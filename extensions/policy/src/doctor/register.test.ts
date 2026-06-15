@@ -29,6 +29,7 @@ import {
 
 let workspaceDir: string;
 let originalOpenClawHome: string | undefined;
+let originalOpenClawStateDir: string | undefined;
 
 function cfgWithPolicy(settings: Record<string, unknown> = {}): OpenClawConfig {
   return {
@@ -106,13 +107,23 @@ describe("registerPolicyDoctorChecks", () => {
     clearHealthChecksForTest();
     resetPolicyDoctorChecksForTest();
     originalOpenClawHome = process.env.OPENCLAW_HOME;
+    originalOpenClawStateDir = process.env.OPENCLAW_STATE_DIR;
     workspaceDir = await fs.mkdtemp(join(tmpdir(), "policy-doctor-"));
     process.env.OPENCLAW_HOME = workspaceDir;
+    delete process.env.OPENCLAW_STATE_DIR;
     await fs.mkdir(join(workspaceDir, ".openclaw"), { recursive: true });
-    await fs.symlink(
-      "../exec-approvals.json",
-      join(workspaceDir, ".openclaw", "exec-approvals.json"),
-    );
+    try {
+      await fs.symlink(
+        "../exec-approvals.json",
+        join(workspaceDir, ".openclaw", "exec-approvals.json"),
+      );
+    } catch (err) {
+      if (typeof err !== "object" || err === null || !("code" in err) || err.code !== "EPERM") {
+        throw err;
+      }
+      await fs.rm(join(workspaceDir, ".openclaw"), { recursive: true, force: true });
+      await fs.symlink(workspaceDir, join(workspaceDir, ".openclaw"), "junction");
+    }
   });
 
   afterEach(async () => {
@@ -120,6 +131,11 @@ describe("registerPolicyDoctorChecks", () => {
       delete process.env.OPENCLAW_HOME;
     } else {
       process.env.OPENCLAW_HOME = originalOpenClawHome;
+    }
+    if (originalOpenClawStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = originalOpenClawStateDir;
     }
     await fs.rm(workspaceDir, { recursive: true, force: true });
     clearHealthChecksForTest();
@@ -8490,6 +8506,40 @@ describe("registerPolicyDoctorChecks", () => {
         process.env.OPENCLAW_HOME = previousOpenClawHome;
       }
     }
+  });
+
+  it("uses OPENCLAW_STATE_DIR for the exec approvals artifact path", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const stateDir = join(workspaceDir, "state");
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({ execApprovals: { defaults: { allowSecurity: ["deny"] } } }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      join(workspaceDir, "exec-approvals.json"),
+      JSON.stringify({ version: 1, defaults: { security: "deny" } }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      join(stateDir, "exec-approvals.json"),
+      JSON.stringify({ version: 1, defaults: { security: "full" } }),
+      "utf-8",
+    );
+
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/exec-approvals-default-security-unapproved",
+        ocPath: "oc://exec-approvals.json/defaults",
+      }),
+    ]);
   });
 
   it("rejects unsupported exec approval allowlist requirement keys", async () => {

@@ -415,12 +415,14 @@ allowlist such as `["all"]`.
 
 #### Exec approvals
 
-Exec approvals policy observes the runtime `~/.openclaw/exec-approvals.json`
-file artifact. Actual posture rules such as `execApprovals.defaults.*` or
-`execApprovals.agents.*` require readable artifact evidence; a missing or
-invalid artifact is reported as unobservable evidence instead of becoming a
-best-effort pass against synthetic runtime defaults. Once the artifact is
-readable, omitted approval fields inherit runtime defaults: missing
+Exec approvals policy observes the active runtime `exec-approvals.json`
+artifact. By default this is `~/.openclaw/exec-approvals.json`; when
+`OPENCLAW_STATE_DIR` is set, Policy reads
+`$OPENCLAW_STATE_DIR/exec-approvals.json`. Actual posture rules such as
+`execApprovals.defaults.*` or `execApprovals.agents.*` require readable artifact
+evidence; a missing or invalid artifact is reported as unobservable evidence
+instead of becoming a best-effort pass against synthetic runtime defaults. Once
+the artifact is readable, omitted approval fields inherit runtime defaults: missing
 `defaults.security` is `full`, and missing agent security inherits that
 default. Evidence includes `defaults`, `agents.*`, and
 `agents.*.allowlist[].pattern` plus optional `argPattern`, effective
@@ -429,7 +431,7 @@ path/token, `commandText`, `lastUsedCommand`, resolved paths, or timestamps.
 
 | Policy field                                | Observed state                                                                         | Use when                                                                                |
 | ------------------------------------------- | -------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| `execApprovals.requireFile`                 | Runtime `~/.openclaw/exec-approvals.json` path                                         | Set to `true` to require the approvals artifact to exist and parse.                     |
+| `execApprovals.requireFile`                 | Active runtime `exec-approvals.json` path                                              | Set to `true` to require the approvals artifact to exist and parse.                     |
 | `execApprovals.defaults.allowSecurity`      | `defaults.security`, defaulting to `full`                                              | Allow only approved default approval security modes.                                    |
 | `execApprovals.agents.allowSecurity`        | `agents.*.security`, inheriting defaults                                               | Allow only approved per-agent effective approval security modes.                        |
 | `execApprovals.agents.allowAutoAllowSkills` | `defaults.autoAllowSkills` and `agents.*.autoAllowSkills`, inheriting runtime defaults | Set to `false` to require strict manual allowlists without implicit skill CLI approval. |
