@@ -194,6 +194,7 @@ export const uk: TranslationMap = {
     verbose: "Докладно",
     reasoning: "Міркування",
     actions: "Дії",
+    rename: "Rename session",
     addToWorkboard: "Додати до Workboard",
     openWorkboardCard: "Відкрити картку Workboard",
     noSessions: "Сеансів не знайдено.",

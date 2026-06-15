@@ -195,6 +195,7 @@ export const tr: TranslationMap = {
     verbose: "Ayrıntılı",
     reasoning: "Akıl yürütme",
     actions: "Eylemler",
+    rename: "Rename session",
     addToWorkboard: "Workboard'a ekle",
     openWorkboardCard: "Workboard kartını aç",
     noSessions: "Oturum bulunamadı.",

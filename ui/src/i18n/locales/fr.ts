@@ -195,6 +195,7 @@ export const fr: TranslationMap = {
     verbose: "Détaillé",
     reasoning: "Raisonnement",
     actions: "Actions",
+    rename: "Rename session",
     addToWorkboard: "Ajouter au Workboard",
     openWorkboardCard: "Ouvrir la carte Workboard",
     noSessions: "Aucune session trouvée.",

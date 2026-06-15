@@ -192,6 +192,7 @@ export const ko: TranslationMap = {
     verbose: "상세",
     reasoning: "추론",
     actions: "작업",
+    rename: "Rename session",
     addToWorkboard: "Workboard에 추가",
     openWorkboardCard: "Workboard 카드 열기",
     noSessions: "세션을 찾을 수 없습니다.",

@@ -192,6 +192,7 @@ export const ar: TranslationMap = {
     verbose: "مطوّل",
     reasoning: "الاستدلال",
     actions: "الإجراءات",
+    rename: "Rename session",
     addToWorkboard: "إضافة إلى Workboard",
     openWorkboardCard: "فتح بطاقة Workboard",
     noSessions: "لم يتم العثور على جلسات.",

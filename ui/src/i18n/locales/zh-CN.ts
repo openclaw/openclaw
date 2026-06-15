@@ -191,6 +191,7 @@ export const zh_CN: TranslationMap = {
     verbose: "详细",
     reasoning: "推理",
     actions: "操作",
+    rename: "Rename session",
     addToWorkboard: "添加到 Workboard",
     openWorkboardCard: "打开 Workboard 卡片",
     noSessions: "未找到会话。",
