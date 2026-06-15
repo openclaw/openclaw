@@ -972,13 +972,23 @@ export function extractMessagingToolSendResult(
   if (!extracted?.to) {
     return pending;
   }
+  const extractedThreadId = normalizeOptionalString(extracted.threadId);
+  const providerReportedThread = extractedThreadId != null;
   return {
     ...pending,
     ...extracted,
     accountId: normalizeOptionalString(extracted.accountId) ?? pending.accountId,
     to: normalizeTargetForProvider(providerId ?? pending.provider, extracted.to),
-    threadId: normalizeOptionalString(extracted.threadId),
-    threadImplicit: extracted.threadImplicit === true ? true : undefined,
-    threadSuppressed: extracted.threadSuppressed === true ? true : undefined,
+    threadId: extractedThreadId ?? pending.threadId,
+    threadImplicit:
+      extracted.threadImplicit === true ||
+      (!providerReportedThread && pending.threadImplicit === true)
+        ? true
+        : undefined,
+    threadSuppressed:
+      extracted.threadSuppressed === true ||
+      (!providerReportedThread && pending.threadSuppressed === true)
+        ? true
+        : undefined,
   };
 }
