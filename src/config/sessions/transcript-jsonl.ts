@@ -84,5 +84,18 @@ export async function writeJsonlLines(
 }
 
 export async function appendJsonlEntry(filePath: string, entry: unknown): Promise<void> {
-  await fs.appendFile(filePath, serializeJsonlEntry(entry), "utf-8");
+  const serializedEntry = serializeJsonlEntry(entry);
+  const handle = await fs.open(filePath, "a+", 0o600);
+  try {
+    const stat = await handle.stat();
+    let prefixNewline = false;
+    if (stat.size > 0) {
+      const lastByte = Buffer.allocUnsafe(1);
+      const { bytesRead } = await handle.read(lastByte, 0, 1, stat.size - 1);
+      prefixNewline = bytesRead === 1 && lastByte[0] !== 0x0a;
+    }
+    await handle.appendFile(`${prefixNewline ? "\n" : ""}${serializedEntry}`, "utf-8");
+  } finally {
+    await handle.close();
+  }
 }
