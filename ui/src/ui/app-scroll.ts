@@ -6,6 +6,7 @@ const NEAR_BOTTOM_THRESHOLD = 450;
 const FOLLOW_REACQUIRE_THRESHOLD = 8;
 const HEADER_HIDE_SCROLL_DELTA = 12;
 const HEADER_SHOW_TOP_THRESHOLD = 24;
+const MANUAL_SCROLL_RELEASE_THRESHOLD = 24;
 
 type ScrollHost = {
   updateComplete: Promise<unknown>;
@@ -17,6 +18,7 @@ type ScrollHost = {
   chatHasAutoScrolled: boolean;
   chatUserNearBottom: boolean;
   chatFollowLocked: boolean;
+  chatSmoothAutoScrolling: boolean;
   chatHeaderControlsHidden: boolean;
   chatNewMessagesBelow: boolean;
   chatIsProgrammaticScroll: boolean;
@@ -40,19 +42,54 @@ type ChatScrollOptions = {
   source?: "auto" | "manual";
 };
 
+function cancelPendingChatScroll(host: ScrollHost) {
+  if (host.chatScrollFrame) {
+    cancelAnimationFrame(host.chatScrollFrame);
+    host.chatScrollFrame = null;
+  }
+  if (host.chatScrollTimeout != null) {
+    clearTimeout(host.chatScrollTimeout);
+    host.chatScrollTimeout = null;
+  }
+}
+
+function canConsumeVerticalWheelDelta(node: HTMLElement, deltaY: number) {
+  const overflowY = getComputedStyle(node).overflowY;
+  const hasVerticalScrollRange = node.scrollHeight - node.clientHeight > 1;
+  const canScrollVertically =
+    (overflowY === "auto" || overflowY === "scroll" || overflowY === "overlay") &&
+    hasVerticalScrollRange;
+  if (!canScrollVertically) {
+    return false;
+  }
+  if (deltaY < 0) {
+    return node.scrollTop > 1;
+  }
+  return node.scrollTop + node.clientHeight < node.scrollHeight - 1;
+}
+
+function hasNestedScrollableAncestor(
+  target: EventTarget | null,
+  container: HTMLElement,
+  deltaY: number,
+) {
+  let node = target instanceof HTMLElement ? target : null;
+  while (node && node !== container) {
+    if (canConsumeVerticalWheelDelta(node, deltaY)) {
+      return true;
+    }
+    node = node.parentElement;
+  }
+  return false;
+}
+
 export function scheduleChatScroll(
   host: ScrollHost,
   force = false,
   smooth = false,
   options: ChatScrollOptions = {},
 ) {
-  if (host.chatScrollFrame) {
-    cancelAnimationFrame(host.chatScrollFrame);
-  }
-  if (host.chatScrollTimeout != null) {
-    clearTimeout(host.chatScrollTimeout);
-    host.chatScrollTimeout = null;
-  }
+  cancelPendingChatScroll(host);
   const pickScrollTarget = () => {
     const container = queryHost(host, ".chat-thread") as HTMLElement | null;
     if (container) {
@@ -117,6 +154,7 @@ export function scheduleChatScroll(
         host.chatIsProgrammaticScroll = false;
       });
       host.chatUserNearBottom = true;
+      host.chatSmoothAutoScrolling = smoothEnabled;
       host.chatNewMessagesBelow = false;
       const retryDelay = effectiveForce ? 150 : 120;
       host.chatScrollTimeout = window.setTimeout(() => {
@@ -144,6 +182,7 @@ export function scheduleChatScroll(
           host.chatIsProgrammaticScroll = false;
         });
         host.chatUserNearBottom = true;
+        host.chatSmoothAutoScrolling = false;
       }, retryDelay);
     });
   });
@@ -204,7 +243,6 @@ export function handleChatScroll(host: ScrollHost, event: Event) {
   }
   const scrollTop = Math.max(0, container.scrollTop);
   const delta = scrollTop - host.chatLastScrollTop;
-  host.chatLastScrollTop = scrollTop;
   // Ignore scroll events that we ourselves triggered — they must not flip
   // chatUserNearBottom to false while streaming content grows the page.
   // Only suppress if scrollTop is still at or above the position we scrolled to;
@@ -217,10 +255,18 @@ export function handleChatScroll(host: ScrollHost, event: Event) {
     !isUserScrollUp &&
     container.scrollTop >= host.chatProgrammaticScrollTarget - container.clientHeight
   ) {
+    host.chatLastScrollTop = scrollTop;
     return;
   }
   const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
-  if (isUserScrollUp && distanceFromBottom > FOLLOW_REACQUIRE_THRESHOLD) {
+  if (host.chatSmoothAutoScrolling) {
+    if (isUserScrollUp && distanceFromBottom > MANUAL_SCROLL_RELEASE_THRESHOLD) {
+      host.chatSmoothAutoScrolling = false;
+      host.chatFollowLocked = true;
+    } else if (!isUserScrollUp || distanceFromBottom <= FOLLOW_REACQUIRE_THRESHOLD) {
+      host.chatSmoothAutoScrolling = false;
+    }
+  } else if (isUserScrollUp && distanceFromBottom > FOLLOW_REACQUIRE_THRESHOLD) {
     host.chatFollowLocked = true;
   } else if (distanceFromBottom <= FOLLOW_REACQUIRE_THRESHOLD) {
     host.chatFollowLocked = false;
@@ -240,6 +286,30 @@ export function handleChatScroll(host: ScrollHost, event: Event) {
   if (host.chatUserNearBottom) {
     host.chatNewMessagesBelow = false;
   }
+  host.chatLastScrollTop = scrollTop;
+}
+
+export function handleChatWheelIntent(host: ScrollHost, event: WheelEvent) {
+  if (event.deltaY >= 0) {
+    return;
+  }
+  const container = event.currentTarget as HTMLElement | null;
+  if (!container || container.scrollHeight - container.clientHeight <= 1) {
+    return;
+  }
+  if (container.scrollTop <= 1) {
+    return;
+  }
+  if (hasNestedScrollableAncestor(event.target, container, event.deltaY)) {
+    return;
+  }
+  if (!host.chatUserNearBottom && host.chatFollowLocked) {
+    return;
+  }
+  cancelPendingChatScroll(host);
+  host.chatSmoothAutoScrolling = false;
+  host.chatUserNearBottom = false;
+  host.chatFollowLocked = true;
 }
 
 export function handleLogsScroll(host: ScrollHost, event: Event) {
@@ -264,6 +334,7 @@ export function resetChatScroll(host: ScrollHost) {
   host.chatHasAutoScrolled = false;
   host.chatUserNearBottom = true;
   host.chatFollowLocked = false;
+  host.chatSmoothAutoScrolling = false;
   host.chatLastScrollTop = 0;
   host.chatHeaderControlsHidden = false;
   host.chatNewMessagesBelow = false;

@@ -1,6 +1,11 @@
 // Control UI tests cover app scroll behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { handleChatScroll, scheduleChatScroll, resetChatScroll } from "./app-scroll.ts";
+import {
+  handleChatScroll,
+  handleChatWheelIntent,
+  scheduleChatScroll,
+  resetChatScroll,
+} from "./app-scroll.ts";
 import type { ChatAutoScrollMode } from "./storage.ts";
 
 /* ------------------------------------------------------------------ */
@@ -52,6 +57,7 @@ function createScrollHost(
     chatHasAutoScrolled: false,
     chatUserNearBottom: true,
     chatFollowLocked: false,
+    chatSmoothAutoScrolling: false,
     chatHeaderControlsHidden: false,
     chatNewMessagesBelow: false,
     chatIsProgrammaticScroll: false,
@@ -69,6 +75,19 @@ function createScrollEvent(scrollHeight: number, scrollTop: number, clientHeight
   return {
     currentTarget: { scrollHeight, scrollTop, clientHeight },
   } as unknown as Event;
+}
+
+function createWheelEvent(
+  deltaY: number,
+  scrollHeight: number,
+  clientHeight: number,
+  target: EventTarget | null = null,
+) {
+  return {
+    deltaY,
+    target,
+    currentTarget: { scrollHeight, clientHeight },
+  } as unknown as WheelEvent;
 }
 
 /* ------------------------------------------------------------------ */
@@ -146,6 +165,125 @@ describe("handleChatScroll", () => {
     handleChatScroll(host, event);
 
     expect(host.chatHeaderControlsHidden).toBe(false);
+  });
+
+  it("does not treat smooth auto-scroll progress as upward manual scroll intent", () => {
+    const { host } = createScrollHost({});
+    host.chatUserNearBottom = true;
+    host.chatSmoothAutoScrolling = true;
+    host.chatLastScrollTop = 1200;
+
+    handleChatScroll(host, createScrollEvent(2000, 1300, 400));
+
+    expect(host.chatUserNearBottom).toBe(true);
+    expect(host.chatFollowLocked).toBe(false);
+    expect(host.chatSmoothAutoScrolling).toBe(false);
+  });
+
+  it("releases follow when the user scrolls upward during smooth auto-scroll", () => {
+    const { host } = createScrollHost({});
+    host.chatUserNearBottom = true;
+    host.chatSmoothAutoScrolling = true;
+    host.chatLastScrollTop = 1600;
+
+    handleChatScroll(host, createScrollEvent(2000, 1100, 400));
+
+    expect(host.chatSmoothAutoScrolling).toBe(false);
+    expect(host.chatUserNearBottom).toBe(false);
+    expect(host.chatFollowLocked).toBe(true);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/*  handleChatWheelIntent                                              */
+/* ------------------------------------------------------------------ */
+
+describe("handleChatWheelIntent", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("locks follow and cancels pending auto-scroll when the user wheels upward", () => {
+    const { host } = createScrollHost({});
+    const cancelFrame = vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
+    host.chatUserNearBottom = true;
+    host.chatSmoothAutoScrolling = true;
+    host.chatScrollFrame = 12;
+    host.chatScrollTimeout = window.setTimeout(() => {}, 100);
+
+    handleChatWheelIntent(host, createWheelEvent(-120, 2000, 400));
+
+    expect(cancelFrame).toHaveBeenCalledWith(12);
+    expect(host.chatScrollFrame).toBeNull();
+    expect(host.chatScrollTimeout).toBeNull();
+    expect(host.chatUserNearBottom).toBe(false);
+    expect(host.chatFollowLocked).toBe(true);
+    expect(host.chatSmoothAutoScrolling).toBe(false);
+  });
+
+  it("does not lock follow for downward wheel intent", () => {
+    const { host } = createScrollHost({});
+    host.chatUserNearBottom = true;
+
+    handleChatWheelIntent(host, createWheelEvent(120, 2000, 400));
+
+    expect(host.chatUserNearBottom).toBe(true);
+    expect(host.chatFollowLocked).toBe(false);
+  });
+
+  it("does not lock follow when upward wheel cannot move the chat upward", () => {
+    const { host } = createScrollHost({});
+    const container = {
+      clientHeight: 400,
+      scrollHeight: 500,
+      scrollTop: 0,
+    };
+    host.chatUserNearBottom = true;
+
+    handleChatWheelIntent(host, {
+      deltaY: -120,
+      target: container,
+      currentTarget: container,
+    } as unknown as WheelEvent);
+
+    expect(host.chatUserNearBottom).toBe(true);
+    expect(host.chatFollowLocked).toBe(false);
+  });
+
+  it("ignores upward wheel intent inside a nested scrollable element", () => {
+    const { host } = createScrollHost({});
+    const container = document.createElement("div");
+    const nested = document.createElement("div");
+    container.append(nested);
+    Object.defineProperties(container, {
+      clientHeight: { value: 400 },
+      scrollHeight: { value: 2000 },
+    });
+    Object.defineProperties(nested, {
+      clientHeight: { value: 100 },
+      scrollHeight: { value: 300 },
+      scrollTop: { value: 40 },
+    });
+    vi.spyOn(window, "getComputedStyle").mockImplementation((node) => {
+      return {
+        overflowY: node === nested ? "auto" : "visible",
+      } as unknown as CSSStyleDeclaration;
+    });
+    host.chatUserNearBottom = true;
+
+    handleChatWheelIntent(host, {
+      deltaY: -120,
+      target: nested,
+      currentTarget: container,
+    } as unknown as WheelEvent);
+
+    expect(host.chatUserNearBottom).toBe(true);
+    expect(host.chatFollowLocked).toBe(false);
   });
 });
 
@@ -435,6 +573,7 @@ describe("resetChatScroll", () => {
     host.chatHasAutoScrolled = true;
     host.chatUserNearBottom = false;
     host.chatFollowLocked = true;
+    host.chatSmoothAutoScrolling = true;
     host.chatLastScrollTop = 300;
     host.chatHeaderControlsHidden = true;
 
@@ -443,6 +582,7 @@ describe("resetChatScroll", () => {
     expect(host.chatHasAutoScrolled).toBe(false);
     expect(host.chatUserNearBottom).toBe(true);
     expect(host.chatFollowLocked).toBe(false);
+    expect(host.chatSmoothAutoScrolling).toBe(false);
     expect(host.chatLastScrollTop).toBe(0);
     expect(host.chatHeaderControlsHidden).toBe(false);
     expect(host.chatIsProgrammaticScroll).toBe(false);

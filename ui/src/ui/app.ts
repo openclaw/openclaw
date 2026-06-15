@@ -52,6 +52,7 @@ import {
   exportLogs as exportLogsInternal,
   handleActivityScroll as handleActivityScrollInternal,
   handleChatScroll as handleChatScrollInternal,
+  handleChatWheelIntent as handleChatWheelIntentInternal,
   handleLogsScroll as handleLogsScrollInternal,
   resetChatScroll as resetChatScrollInternal,
   scheduleActivityScroll as scheduleActivityScrollInternal,
@@ -698,6 +699,7 @@ export class OpenClawApp extends LitElement {
   chatHasAutoScrolled = false;
   chatUserNearBottom = true;
   chatFollowLocked = false;
+  chatSmoothAutoScrolling = false;
   chatIsProgrammaticScroll = false;
   chatProgrammaticScrollTarget = 0;
   @state() chatNewMessagesBelow = false;
@@ -879,6 +881,13 @@ export class OpenClawApp extends LitElement {
   handleChatScroll(event: Event) {
     handleChatScrollInternal(
       this as unknown as Parameters<typeof handleChatScrollInternal>[0],
+      event,
+    );
+  }
+
+  handleChatWheelIntent(event: WheelEvent) {
+    handleChatWheelIntentInternal(
+      this as unknown as Parameters<typeof handleChatWheelIntentInternal>[0],
       event,
     );
   }
