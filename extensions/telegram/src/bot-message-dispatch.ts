@@ -1186,17 +1186,20 @@ export const dispatchTelegramMessage = async ({
   // A streamed answer preamble stays mutable until finalized. When a tool starts
   // mid-stream and tool progress is suppressed (so prepareAnswerLaneForToolProgress
   // never rotated), the post-tool answer text would keep editing the preamble
-  // bubble. Rotate the in-flight preamble at the tool boundary so the resumed
-  // text lands in a new message. Skip empty/never-sent drafts, and defer to the
-  // tool-progress path when it already owns the rotation.
+  // bubble. Rotate on INTENT — a preamble partial was emitted (hasStreamedMessage)
+  // — not on send-ack. Under fast live timing the preamble's Bot API send is still
+  // in flight when the tool boundary fires, so its message id is not back yet;
+  // gating on stream.messageId() being a number (as a prior fix did) let the post-tool
+  // text edit the preamble bubble. rotateAnswerLaneForNewMessage -> rotateLaneForNewMessage
+  // awaits the in-flight send (loop.flush awaits the in-flight promise) before
+  // forceNewMessage(), so the preamble is always committed to its own message and the
+  // resumed text starts a fresh one. Defer to the tool-progress path when it already
+  // owns the rotation; skip when no preamble was emitted.
   const rotateInFlightAnswerPreambleForToolBoundary = async () => {
     if (activeAnswerDraftIsToolProgressOnly) {
       return;
     }
     if (!answerLane.hasStreamedMessage || answerLane.finalized) {
-      return;
-    }
-    if (typeof answerLane.stream?.messageId() !== "number") {
       return;
     }
     await rotateAnswerLaneForNewMessage();
