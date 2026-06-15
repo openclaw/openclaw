@@ -30,6 +30,7 @@ import { resolveSelectedAndActiveModel } from "../auto-reply/model-runtime.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import { toAgentModelListLike } from "../config/model-input.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import {
@@ -513,11 +514,39 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
   const explicitThinkingDefault =
     (agentConfig?.thinkingDefault as ThinkLevel | undefined) ??
     (agentDefaults.thinkingDefault as ThinkLevel | undefined);
+  const configuredContextTokens =
+    typeof agentConfig?.contextTokens === "number" && agentConfig.contextTokens > 0
+      ? agentConfig.contextTokens
+      : typeof agentDefaults.contextTokens === "number" && agentDefaults.contextTokens > 0
+        ? agentDefaults.contextTokens
+        : undefined;
   const runtimeContextTokens = resolveStatusRuntimeContextTokens({
     cfg,
     provider: activeStatusProvider,
     model: modelRefs.active.model || model,
   });
+  const selectedContextTokens = resolveStatusRuntimeContextTokens({
+    cfg,
+    provider: selectedStatusProvider,
+    model,
+  });
+  const runtimeSnapshotHasFallbackProvenance =
+    !modelRefs.activeDiffers ||
+    hasSessionAutoModelFallbackProvenance(sessionEntry) ||
+    areRuntimeModelRefsEquivalent(modelRefs.active.label, modelRefs.selected.label, {
+      config: cfg,
+    });
+  const statusAgentContextTokens =
+    typeof contextTokens === "number" &&
+    contextTokens > 0 &&
+    (runtimeSnapshotHasFallbackProvenance ||
+      contextTokens === configuredContextTokens ||
+      contextTokens === selectedContextTokens)
+      ? contextTokens
+      : undefined;
+  const statusRuntimeContextTokens = runtimeSnapshotHasFallbackProvenance
+    ? runtimeContextTokens
+    : undefined;
   return buildStatusMessage({
     config: cfg,
     agent: {
@@ -527,7 +556,9 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
         primary: params.primaryModelLabelOverride ?? `${provider}/${model}`,
         ...(agentFallbacksOverride === undefined ? {} : { fallbacks: agentFallbacksOverride }),
       },
-      ...(typeof contextTokens === "number" && contextTokens > 0 ? { contextTokens } : {}),
+      ...(statusAgentContextTokens !== undefined
+        ? { contextTokens: statusAgentContextTokens }
+        : {}),
       thinkingDefault: explicitThinkingDefault,
       verboseDefault: agentDefaults.verboseDefault,
       reasoningDefault: agentConfig?.reasoningDefault ?? agentDefaults.reasoningDefault,
@@ -535,11 +566,8 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     },
     agentId: statusAgentId,
     configuredDefaultModelLabel,
-    explicitConfiguredContextTokens:
-      typeof agentDefaults.contextTokens === "number" && agentDefaults.contextTokens > 0
-        ? agentDefaults.contextTokens
-        : undefined,
-    runtimeContextTokens,
+    explicitConfiguredContextTokens: configuredContextTokens,
+    runtimeContextTokens: statusRuntimeContextTokens,
     sessionEntry,
     sessionKey,
     parentSessionKey,

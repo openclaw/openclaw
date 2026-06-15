@@ -711,18 +711,19 @@ async function saveSessionStoreUnlocked(
         const { cleanupArchivedSessionTranscripts } = await loadSessionArchiveRuntime();
         const targetDirs =
           archivedDirs.size > 0 ? [...archivedDirs] : [path.dirname(path.resolve(storePath))];
+        // Both retention reasons ride one cleanup call so each save enumerates
+        // the sessions dir at most once; reset retention defaults on, so a
+        // listing per reason would scan twice per save (costly on NFS).
         await cleanupArchivedSessionTranscripts({
           directories: targetDirs,
-          olderThanMs: maintenance.pruneAfterMs,
-          reason: "deleted",
+          rules:
+            maintenance.resetArchiveRetentionMs != null
+              ? [
+                  { reason: "deleted", olderThanMs: maintenance.pruneAfterMs },
+                  { reason: "reset", olderThanMs: maintenance.resetArchiveRetentionMs },
+                ]
+              : [{ reason: "deleted", olderThanMs: maintenance.pruneAfterMs }],
         });
-        if (maintenance.resetArchiveRetentionMs != null) {
-          await cleanupArchivedSessionTranscripts({
-            directories: targetDirs,
-            olderThanMs: maintenance.resetArchiveRetentionMs,
-            reason: "reset",
-          });
-        }
       }
 
       const diskBudget = await enforceSessionDiskBudget({
