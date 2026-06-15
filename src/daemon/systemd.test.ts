@@ -295,7 +295,7 @@ describe("systemd availability", () => {
     mockEffectiveUid(0);
     const accessSpy = vi.spyOn(fs, "access").mockImplementation(async (pathname) => {
       const p = typeof pathname === "string" ? pathname : pathname.toString();
-      if (p.includes("/home/ai/.config/systemd/user/")) return;
+      if (p.includes("/home/ai/.config/systemd/user/")) { return; }
       throw new Error("ENOENT");
     });
     try {
@@ -322,7 +322,7 @@ describe("systemd availability", () => {
     mockEffectiveUid(0);
     const accessSpy = vi.spyOn(fs, "access").mockImplementation(async (pathname) => {
       const p = typeof pathname === "string" ? pathname : pathname.toString();
-      if (p.includes("/home/debian/.config/systemd/user/")) return;
+      if (p.includes("/home/debian/.config/systemd/user/")) { return; }
       throw new Error("ENOENT");
     });
     try {
@@ -2060,7 +2060,7 @@ describe("systemd service control", () => {
     // so findInstalledSystemdGatewayScope returns user scope, not system.
     const accessSpy = vi.spyOn(fs, "access").mockImplementation(async (pathname) => {
       const p = typeof pathname === "string" ? pathname : pathname.toString();
-      if (p.includes("/.config/systemd/user/")) return;
+      if (p.includes("/.config/systemd/user/")) { return; }
       throw new Error("ENOENT");
     });
     try {
