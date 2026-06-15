@@ -168,6 +168,36 @@ describe("normalizeMessagesForLlmBoundary", () => {
     expect((firstInput.content as Array<{ text?: string }>)[0]?.text).toBe(historicalContent);
   });
 
+  it("preserves stored sidecar metadata while preparing disabled timestamp model bytes", () => {
+    const input = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "Stored ask with index metadata" }],
+        timestamp: 1717570800000,
+        __openclaw: {
+          seq: 12,
+          embeddingInput: "Stored ask with index metadata",
+        },
+      },
+    ];
+
+    const output = normalizeMessagesForLlmBoundary(
+      input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+      { timezone: "UTC", includeTimestamp: false },
+    ) as unknown as Array<Record<string, unknown>>;
+
+    expect(output[0]?.content).toBe("Stored ask with index metadata");
+    expect(output[0]?.["__openclaw"]).toEqual({
+      seq: 12,
+      embeddingInput: "Stored ask with index metadata",
+    });
+    expect(input[0]?.content).toEqual([{ type: "text", text: "Stored ask with index metadata" }]);
+    expect(input[0]?.["__openclaw"]).toEqual({
+      seq: 12,
+      embeddingInput: "Stored ask with index metadata",
+    });
+  });
+
   it("stamps the current turn from the prepared persisted timestamp when supplied", () => {
     const preparedTimestamp = 1717570800000;
     const runtimeTimestamp = 1717574460000;

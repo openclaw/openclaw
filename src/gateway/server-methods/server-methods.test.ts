@@ -1913,6 +1913,15 @@ describe("timestampOptsFromConfig", () => {
   ])("$name", ({ cfg, expected }) => {
     expect(timestampOptsFromConfig(cfg).timezone).toBe(expected);
   });
+
+  it("keeps timestamp injection enabled for existing configs unless explicitly disabled", () => {
+    expect(timestampOptsFromConfig({} as OpenClawConfig).includeTimestamp).toBe(true);
+    expect(
+      timestampOptsFromConfig({
+        agents: { defaults: { envelopeTimestamp: "off" } },
+      } as OpenClawConfig).includeTimestamp,
+    ).toBe(false);
+  });
 });
 
 describe("normalizeRpcAttachmentsToChatAttachments", () => {
