@@ -2554,6 +2554,42 @@ describe("embedded attempt session lock lifecycle", () => {
     await controller.dispose();
   });
 
+  it("keeps non-message events with message payloads opaque", async () => {
+    const sessionFile = await createTempSessionFile();
+    const mergePromptReleasedSessionEntries = vi.fn();
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+      mergePromptReleasedSessionEntries,
+    });
+    await controller.releaseForPrompt();
+
+    const event = {
+      type: "metadata",
+      id: "message-shaped-metadata",
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      message: { role: "assistant", provider: "openclaw", model: "delivery-mirror" },
+      payload: { source: "plugin" },
+    };
+    await withOwnedSessionTranscriptWrites(
+      {
+        sessionFile,
+        withSessionWriteLock: (operation, options) =>
+          controller.withSessionWriteLock(operation, options),
+      },
+      async () => {
+        await appendSessionTranscriptEvent({ transcriptPath: sessionFile, event });
+      },
+    );
+
+    expect(mergePromptReleasedSessionEntries).toHaveBeenCalledWith([
+      { type: "prompt_released_opaque", record: event },
+    ]);
+    expect(controller.hasSessionTakeover()).toBe(false);
+    await controller.dispose();
+  });
+
   it("validates opaque events migrated by a nested message publication", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attempt-session-migrated-"));
     tempDirs.push(dir);

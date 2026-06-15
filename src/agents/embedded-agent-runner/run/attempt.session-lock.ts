@@ -135,6 +135,7 @@ function parsePromptReleasedMessageLine(
     const parsed = JSON.parse(line) as unknown;
     if (
       !isJsonRecord(parsed) ||
+      parsed.type !== "message" ||
       typeof parsed.id !== "string" ||
       parsed.id.trim().length === 0 ||
       typeof parsed.timestamp !== "string" ||

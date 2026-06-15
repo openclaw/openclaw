@@ -1412,6 +1412,12 @@ describe("SessionManager.open", () => {
     sessionManager.branch(assistantId);
     const branchedFile = sessionManager.createBranchedSession(assistantId);
     expect(branchedFile).toBeDefined();
+    const branchedRecords = (await fs.readFile(branchedFile!, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { id?: string; parentId?: string | null });
+    expect(branchedRecords).toContainEqual(metadata);
+    expect(branchedRecords.find((record) => record.id === assistantId)?.parentId).toBe(metadata.id);
     expect(
       SessionManager.open(branchedFile!, dir, dir).buildSessionContext().messages,
     ).toMatchObject([
@@ -1654,6 +1660,87 @@ describe("SessionManager.open", () => {
     expect(SessionManager.open(sessionFile!, dir, dir).buildSessionContext().messages).toHaveLength(
       3,
     );
+  });
+
+  it("removes leaf controls that target regenerated labels when branching", async () => {
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "session.jsonl");
+    const rootEntry = {
+      type: "message",
+      id: "root-user",
+      parentId: null,
+      timestamp: "2026-06-04T00:00:01.000Z",
+      message: { role: "user", content: "root question" },
+    };
+    const labelEntry = {
+      type: "label",
+      id: "label-1",
+      parentId: rootEntry.id,
+      timestamp: "2026-06-04T00:00:02.000Z",
+      targetId: rootEntry.id,
+      label: "selected",
+    };
+    const abandonedEntry = {
+      type: "message",
+      id: "abandoned-assistant",
+      parentId: labelEntry.id,
+      timestamp: "2026-06-04T00:00:03.000Z",
+      message: buildAssistantMessage("abandoned answer"),
+    };
+    const leafEntry = {
+      type: "leaf",
+      id: "leaf-1",
+      parentId: abandonedEntry.id,
+      timestamp: "2026-06-04T00:00:04.000Z",
+      targetId: labelEntry.id,
+    };
+    const replacementEntry = {
+      type: "message",
+      id: "replacement-assistant",
+      parentId: leafEntry.id,
+      timestamp: "2026-06-04T00:00:05.000Z",
+      message: buildAssistantMessage("replacement answer"),
+    };
+    await fs.writeFile(
+      sessionFile,
+      [
+        buildSessionHeader(dir, "session-1"),
+        rootEntry,
+        labelEntry,
+        abandonedEntry,
+        leafEntry,
+        replacementEntry,
+      ]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n") + "\n",
+      "utf8",
+    );
+
+    const sessionManager = SessionManager.open(sessionFile, dir, dir);
+    const branchedFile = sessionManager.createBranchedSession(replacementEntry.id);
+    expect(branchedFile).toBeDefined();
+    const branchedRecords = (await fs.readFile(branchedFile!, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+
+    expect(branchedRecords.some((record) => record.type === "leaf")).toBe(false);
+    expect(branchedRecords.find((record) => record.id === replacementEntry.id)?.parentId).toBe(
+      rootEntry.id,
+    );
+    expect(branchedRecords).toContainEqual(
+      expect.objectContaining({
+        type: "label",
+        targetId: rootEntry.id,
+        label: labelEntry.label,
+      }),
+    );
+    expect(
+      SessionManager.open(branchedFile!, dir, dir).buildSessionContext().messages,
+    ).toMatchObject([
+      { role: "user", content: "root question" },
+      { role: "assistant", content: [{ type: "text", text: "replacement answer" }] },
+    ]);
   });
 
   it("keeps the warm cache after prepareSessionManagerForRun rewrites then appends", async () => {

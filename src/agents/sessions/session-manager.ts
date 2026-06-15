@@ -2253,6 +2253,77 @@ export class SessionManager {
     return entry.id;
   }
 
+  private collectBranchedSessionPath(leafId: string): {
+    entries: SessionEntry[];
+    opaqueEntries: PreservedOpaqueFileEntry[];
+    tailId: string | null;
+    usedIds: Set<string>;
+  } {
+    type BranchNode =
+      | { type: "entry"; entry: SessionEntry }
+      | { type: "opaque"; id: string; record: Record<string, unknown> };
+
+    const opaqueById = new Map<string, Record<string, unknown>>();
+    for (const opaqueEntry of this.opaqueFileEntries) {
+      const leafEntry = parseOpaqueLeafEntry(opaqueEntry.record);
+      const link = leafEntry ?? parseParentLinkedOpaqueEntry(opaqueEntry.record);
+      if (link && isJsonRecord(opaqueEntry.record)) {
+        opaqueById.set(link.id, opaqueEntry.record);
+      }
+    }
+
+    const reversedNodes: BranchNode[] = [];
+    const seen = new Set<string>();
+    let currentId: string | null = leafId;
+    while (currentId && !seen.has(currentId)) {
+      seen.add(currentId);
+      const entry = this.byId.get(currentId);
+      if (entry) {
+        reversedNodes.push({ type: "entry", entry });
+        currentId = entry.parentId;
+        continue;
+      }
+      const record = opaqueById.get(currentId);
+      if (!record || !this.opaqueParentsById.has(currentId)) {
+        break;
+      }
+      reversedNodes.push({ type: "opaque", id: currentId, record });
+      currentId = this.opaqueParentsById.get(currentId) ?? null;
+    }
+
+    const entries: SessionEntry[] = [];
+    const opaqueEntries: PreservedOpaqueFileEntry[] = [];
+    const usedIds = new Set<string>();
+    let tailId: string | null = null;
+    for (const node of reversedNodes.toReversed()) {
+      if (node.type === "entry") {
+        if (node.entry.type === "label") {
+          continue;
+        }
+        const branchEntry: SessionEntry =
+          node.entry.parentId === tailId
+            ? node.entry
+            : ({ ...node.entry, parentId: tailId } as SessionEntry);
+        entries.push(branchEntry);
+        usedIds.add(branchEntry.id);
+        tailId = branchEntry.id;
+        continue;
+      }
+      if (parseOpaqueLeafEntry(node.record)) {
+        // A fork already materializes one selected path. Drop navigation-only
+        // leaf markers so regenerated labels cannot leave dangling targetIds.
+        continue;
+      }
+      opaqueEntries.push({
+        index: entries.length + 1,
+        record: { ...node.record, parentId: tailId },
+      });
+      usedIds.add(node.id);
+      tailId = node.id;
+    }
+    return { entries, opaqueEntries, tailId, usedIds };
+  }
+
   /**
    * Create a new session file containing only the path from root to the specified leaf.
    * Useful for extracting a single conversation path from a branched session.
@@ -2260,13 +2331,10 @@ export class SessionManager {
    */
   createBranchedSession(leafId: string): string | undefined {
     const previousSessionFile = this.sessionFile;
-    const path = this.getBranch(leafId);
-    if (path.length === 0) {
+    const branchPath = this.collectBranchedSessionPath(leafId);
+    if (branchPath.entries.length === 0) {
       throw new Error(`Entry ${leafId} not found`);
     }
-
-    // Filter out LabelEntry from path - we'll recreate them from the resolved map
-    const pathWithoutLabels = path.filter((e) => e.type !== "label");
 
     const newSessionId = createSessionId();
     const timestamp = new Date().toISOString();
@@ -2283,7 +2351,7 @@ export class SessionManager {
     };
 
     // Collect labels for entries in the path
-    const pathEntryIds = new Set(pathWithoutLabels.map((e) => e.id));
+    const pathEntryIds = new Set(branchPath.entries.map((entry) => entry.id));
     const labelsToWrite: Array<{ targetId: string; label: string; timestamp: string }> = [];
     for (const [targetId, label] of this.labelsById) {
       if (pathEntryIds.has(targetId)) {
@@ -2293,25 +2361,24 @@ export class SessionManager {
 
     if (this.shouldPersist) {
       // Build label entries
-      const lastEntryId = pathWithoutLabels[pathWithoutLabels.length - 1]?.id || null;
-      let parentId = lastEntryId;
+      let parentId = branchPath.tailId;
       const labelEntries: LabelEntry[] = [];
       for (const { targetId, label, timestamp: labelTimestamp } of labelsToWrite) {
         const labelEntry: LabelEntry = {
           type: "label",
-          id: generateId(new Set(pathEntryIds)),
+          id: generateId(branchPath.usedIds),
           parentId,
           timestamp: labelTimestamp,
           targetId,
           label,
         };
-        pathEntryIds.add(labelEntry.id);
+        branchPath.usedIds.add(labelEntry.id);
         labelEntries.push(labelEntry);
         parentId = labelEntry.id;
       }
 
-      this.fileEntries = [header, ...pathWithoutLabels, ...labelEntries];
-      this.opaqueFileEntries = [];
+      this.fileEntries = [header, ...branchPath.entries, ...labelEntries];
+      this.opaqueFileEntries = branchPath.opaqueEntries;
       this.sessionId = newSessionId;
       this.sessionFile = newSessionFile;
       this.sessionFileSnapshot = undefined;
@@ -2337,21 +2404,22 @@ export class SessionManager {
 
     // In-memory mode: replace current session with the path + labels
     const labelEntries: LabelEntry[] = [];
-    let parentId = pathWithoutLabels[pathWithoutLabels.length - 1]?.id || null;
+    let parentId = branchPath.tailId;
     for (const { targetId, label, timestamp: labelTimestamp } of labelsToWrite) {
       const labelEntry: LabelEntry = {
         type: "label",
-        id: generateId(new Set([...pathEntryIds, ...labelEntries.map((e) => e.id)])),
+        id: generateId(branchPath.usedIds),
         parentId,
         timestamp: labelTimestamp,
         targetId,
         label,
       };
+      branchPath.usedIds.add(labelEntry.id);
       labelEntries.push(labelEntry);
       parentId = labelEntry.id;
     }
-    this.fileEntries = [header, ...pathWithoutLabels, ...labelEntries];
-    this.opaqueFileEntries = [];
+    this.fileEntries = [header, ...branchPath.entries, ...labelEntries];
+    this.opaqueFileEntries = branchPath.opaqueEntries;
     this.sessionId = newSessionId;
     this.buildIndex();
     return undefined;
