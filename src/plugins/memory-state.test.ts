@@ -18,6 +18,7 @@ import {
   registerMemoryRuntime,
   resolveMemoryFlushPlan,
   restoreMemoryPluginState,
+  type MemoryPluginPublicArtifact,
 } from "./memory-state.js";
 
 function createMemoryRuntime() {
@@ -200,6 +201,35 @@ describe("memory plugin state", () => {
         relativePath: "memory/2026-04-06.md",
         absolutePath: "/tmp/workspace-b/memory/2026-04-06.md",
         agentIds: ["beta"],
+        contentType: "markdown",
+      },
+    ]);
+  });
+
+  it("normalizes public memory artifacts without agent ids", async () => {
+    const legacyArtifact = {
+      kind: "memory-root",
+      workspaceDir: "/tmp/workspace",
+      relativePath: "MEMORY.md",
+      absolutePath: "/tmp/workspace/MEMORY.md",
+      contentType: "markdown" as const,
+    } as Omit<MemoryPluginPublicArtifact, "agentIds"> as MemoryPluginPublicArtifact;
+
+    registerMemoryCapability("memory-core", {
+      publicArtifacts: {
+        async listArtifacts() {
+          return [legacyArtifact];
+        },
+      },
+    });
+
+    await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toEqual([
+      {
+        kind: "memory-root",
+        workspaceDir: "/tmp/workspace",
+        relativePath: "MEMORY.md",
+        absolutePath: "/tmp/workspace/MEMORY.md",
+        agentIds: [],
         contentType: "markdown",
       },
     ]);

@@ -8,6 +8,7 @@ import {
 } from "../commands/doctor/shared/update-phase.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { buildGatewayConnectionDetails } from "../gateway/call.js";
+import type { UpdatePostInstallDoctorResult } from "../infra/update-doctor-result.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { HealthFinding } from "./health-checks.js";
 import type { FlowContribution } from "./types.js";
@@ -29,7 +30,7 @@ type DoctorConfigResult = {
   preservedLegacyRootKeys?: readonly string[];
 };
 
-type DoctorHealthFlowContext = {
+export type DoctorHealthFlowContext = {
   runtime: RuntimeEnv;
   options: DoctorOptions;
   prompter: DoctorPrompter;
@@ -45,6 +46,7 @@ type DoctorHealthFlowContext = {
   gatewayHealthSkipped?: boolean;
   gatewayStatus?: import("../commands/status.types.js").StatusSummary;
   gatewayMemoryProbe?: Awaited<ReturnType<typeof probeGatewayMemoryStatus>>;
+  postInstallDoctorResult?: UpdatePostInstallDoctorResult;
 };
 
 type DoctorHealthContribution = FlowContribution & {
@@ -424,6 +426,9 @@ async function runReleaseConfiguredPluginInstallsHealth(
     env: ctx.env ?? process.env,
     touchedVersion: ctx.configResult.sourceLastTouchedVersion ?? ctx.cfg.meta?.lastTouchedVersion,
   });
+  if (result.postInstallDoctorResult) {
+    ctx.postInstallDoctorResult = result.postInstallDoctorResult;
+  }
   if (result.changes.length > 0) {
     note(result.changes.join("\n"), "Doctor changes");
   }

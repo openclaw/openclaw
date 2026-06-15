@@ -1,6 +1,7 @@
 // Tests agent runner execution setup, command args, and model fallback routing.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OAuthRefreshFailureError } from "../../agents/auth-profiles/oauth-refresh-failure.js";
+import { testing as cliBackendsTesting } from "../../agents/cli-backends.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { MissingProviderAuthError } from "../../agents/model-auth.js";
@@ -42,17 +43,64 @@ const state = vi.hoisted(() => ({
   isContextOverflowErrorMock: vi.fn((_: string | undefined) => false),
   isLikelyContextOverflowErrorMock: vi.fn((_: string | undefined) => false),
   updateSessionStoreMock: vi.fn(),
+  resolveCurrentTurnImagesMock: vi.fn(),
 }));
 
 const GENERIC_RUN_FAILURE_TEXT =
   "⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.";
 
 describe("resolveSessionRuntimeOverrideForProvider", () => {
+  afterEach(() => {
+    cliBackendsTesting.resetDepsForTest();
+  });
+
   it("ignores unsupported session runtime pins", () => {
     expect(
       resolveSessionRuntimeOverrideForProvider({
         provider: "openai",
         entry: { agentRuntimeOverride: "unsupported-runtime" },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("keeps CLI runtime pins only when the runtime serves the selected provider", () => {
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [],
+      resolvePluginSetupCliBackend: ({ backend, config }) =>
+        backend === "claude-cli" && config
+          ? {
+              pluginId: "anthropic",
+              backend: {
+                id: "claude-cli",
+                modelProvider: "anthropic",
+                config: { command: "claude" },
+                bundleMcp: false,
+              },
+            }
+          : undefined,
+    });
+    const cfg = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": { command: "claude" },
+          },
+        },
+      },
+    };
+
+    expect(
+      resolveSessionRuntimeOverrideForProvider({
+        provider: "anthropic",
+        entry: { agentRuntimeOverride: "claude-cli" },
+        cfg,
+      }),
+    ).toBe("claude-cli");
+    expect(
+      resolveSessionRuntimeOverrideForProvider({
+        provider: "openai",
+        entry: { agentRuntimeOverride: "claude-cli" },
+        cfg,
       }),
     ).toBeUndefined();
   });
@@ -148,6 +196,7 @@ vi.mock("../../infra/agent-events.js", async () => {
   );
   return {
     ...actual,
+    clearAgentRunContext: vi.fn(),
     emitAgentEvent: vi.fn(),
     registerAgentRunContext: vi.fn(),
   };
@@ -173,13 +222,39 @@ vi.mock("../heartbeat.js", () => ({
   }),
 }));
 
+vi.mock("./current-turn-images.js", () => ({
+  resolveCurrentTurnImages: (params: unknown) => state.resolveCurrentTurnImagesMock(params),
+}));
+
 vi.mock("./agent-runner-utils.js", () => ({
   buildEmbeddedRunExecutionParams: (params: {
     provider: string;
     model: string;
-    run: { provider?: string; authProfileId?: string; authProfileIdSource?: "auto" | "user" };
+    run: {
+      provider?: string;
+      authProfileId?: string;
+      authProfileIdSource?: "auto" | "user";
+      agentAccountId?: string;
+      chatType?: string;
+    };
+    replyRoute?: {
+      originatingChannel?: string;
+      originatingTo?: string;
+      originatingAccountId?: string;
+      originatingChatType?: string;
+    };
+    sessionCtx: { AccountId?: string; ChatType?: string };
   }) => ({
-    embeddedContext: {},
+    embeddedContext: {
+      messageProvider: params.replyRoute?.originatingChannel,
+      messageTo: params.replyRoute?.originatingTo,
+      agentAccountId:
+        params.replyRoute?.originatingAccountId ??
+        params.sessionCtx.AccountId ??
+        params.run.agentAccountId,
+      chatType:
+        params.replyRoute?.originatingChatType ?? params.sessionCtx.ChatType ?? params.run.chatType,
+    },
     senderContext: {},
     runBaseParams: {
       provider: params.provider,
@@ -236,6 +311,8 @@ type FallbackRunnerParams = {
 };
 
 type EmbeddedAgentParams = {
+  lifecycleGeneration?: string;
+  onExecutionStarted?: (info?: { lifecycleGeneration?: string }) => void;
   onBlockReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
   onToolResult?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
   onItemEvent?: (payload: {
@@ -332,8 +409,10 @@ function createMockReplyOperation(): {
       updateSessionId: updateSessionIdMock,
       attachBackend: vi.fn(),
       detachBackend: vi.fn(),
+      retainFailureUntilComplete: vi.fn(),
       complete: vi.fn(),
       completeThen: vi.fn((afterClear: () => void) => afterClear()),
+      completeWithAfterClearBarrier: vi.fn(),
       fail: failMock,
       abortByUser: vi.fn(),
       abortForRestart: vi.fn(),
@@ -1153,6 +1232,13 @@ describe("runAgentTurnWithFallback", () => {
     state.isLikelyContextOverflowErrorMock.mockReset();
     state.isLikelyContextOverflowErrorMock.mockReturnValue(false);
     state.updateSessionStoreMock.mockReset();
+    state.resolveCurrentTurnImagesMock.mockReset();
+    state.resolveCurrentTurnImagesMock.mockImplementation(
+      async (params: { images?: unknown[]; imageOrder?: unknown[] }) => ({
+        images: params.images,
+        imageOrder: params.imageOrder,
+      }),
+    );
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => ({
       result: await params.run("anthropic", "claude"),
       provider: "anthropic",
@@ -1189,6 +1275,85 @@ describe("runAgentTurnWithFallback", () => {
     expect(fallbackCall.abortSignal).toBe(replyOperation.abortSignal);
     expect(fallbackCall.sessionId).toBe("session");
     expect(embeddedCall.abortSignal).toBe(replyOperation.abortSignal);
+  });
+
+  it("passes the hydrated run account to embedded execution", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {},
+    });
+    const followupRun = createFollowupRun();
+    followupRun.run.agentAccountId = "work";
+    followupRun.originatingChannel = "slack";
+    followupRun.originatingTo = "user:U1";
+    followupRun.originatingAccountId = "work";
+    followupRun.originatingChatType = "direct";
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    await runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({
+        followupRun,
+        sessionCtx: {
+          Provider: "cron-event",
+        },
+      }),
+    );
+
+    expectMockCallArgFields(state.runEmbeddedAgentMock, 0, "embedded run params", {
+      messageProvider: "slack",
+      messageTo: "user:U1",
+      agentAccountId: "work",
+      chatType: "direct",
+    });
+  });
+
+  it("registers run ownership before asynchronous image preflight", async () => {
+    const agentEvents = await import("../../infra/agent-events.js");
+    const registerAgentRunContext = vi.mocked(agentEvents.registerAgentRunContext);
+    let resolveImages: (() => void) | undefined;
+    state.resolveCurrentTurnImagesMock.mockImplementationOnce(
+      () =>
+        new Promise<Record<string, never>>((resolve) => {
+          resolveImages = () => resolve({});
+        }),
+    );
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {},
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const runPromise = runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+    expect(registerAgentRunContext).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        sessionKey: "main",
+        sessionId: "session",
+      }),
+    );
+    expect(state.runWithModelFallbackMock).not.toHaveBeenCalled();
+
+    resolveImages?.();
+    await runPromise;
+  });
+
+  it("clears run ownership when image preflight fails", async () => {
+    const agentEvents = await import("../../infra/agent-events.js");
+    const clearAgentRunContext = vi.mocked(agentEvents.clearAgentRunContext);
+    state.resolveCurrentTurnImagesMock.mockRejectedValueOnce(new Error("invalid image metadata"));
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    await expect(
+      runAgentTurnWithFallback(
+        createMinimalRunAgentTurnParams({
+          opts: { runId: "preflight-failure" },
+        }),
+      ),
+    ).rejects.toThrow("invalid image metadata");
+
+    expect(clearAgentRunContext).toHaveBeenCalledWith("preflight-failure", expect.any(String));
+    expect(state.runWithModelFallbackMock).not.toHaveBeenCalled();
   });
 
   it("passes runtime toolsAllow to embedded agent runs", async () => {
@@ -1967,6 +2132,8 @@ describe("runAgentTurnWithFallback", () => {
       agentId: "agent",
       sessionId: "session",
       suppressNextUserMessagePersistence: false,
+      persistAssistantTranscript: true,
+      storePath: "/tmp/sessions.json",
     });
     const call = requireMockCall(state.runCliAgentMock, 0, "CLI runtime");
     const callParams = requireRecord(call[0], "CLI runtime");
@@ -2019,6 +2186,7 @@ describe("runAgentTurnWithFallback", () => {
     expect(result.kind).toBe("success");
     expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
       currentInboundEventKind: "room_event",
+      persistAssistantTranscript: false,
       cliSessionId: "existing-cli-session",
       cliSessionBinding: {
         sessionId: "existing-cli-session",
@@ -3947,6 +4115,64 @@ describe("runAgentTurnWithFallback", () => {
     expect(typeof lifecycleData.endedAt).toBe("number");
   });
 
+  it("uses a rebound lifecycle generation for embedded terminal events", async () => {
+    const agentEvents = await import("../../infra/agent-events.js");
+    const emitAgentEvent = vi.mocked(agentEvents.emitAgentEvent);
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      params.onExecutionStarted?.({ lifecycleGeneration: "post-restart" });
+      await params.onAgentEvent?.({
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 1_000 },
+      });
+      throw new Error("rebound failure");
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: { runId: "run-rebound" } as GetReplyOptions,
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result.kind).toBe("final");
+    const lifecycleEvents = emitAgentEvent.mock.calls
+      .map((call) => call[0])
+      .filter(
+        (event) =>
+          event.runId === "run-rebound" &&
+          event.stream === "lifecycle" &&
+          (event.data.phase === "error" || event.data.fallbackExhaustedFailure === true),
+      );
+    expect(lifecycleEvents.length).toBeGreaterThan(0);
+    expect(lifecycleEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          lifecycleGeneration: "post-restart",
+        }),
+      ]),
+    );
+    expect(lifecycleEvents.every((event) => event.lifecycleGeneration === "post-restart")).toBe(
+      true,
+    );
+  });
+
   it("does not duplicate embedded lifecycle terminal events already reported by the runner", async () => {
     const agentEvents = await import("../../infra/agent-events.js");
     const emitAgentEvent = vi.mocked(agentEvents.emitAgentEvent);
@@ -5181,12 +5407,14 @@ describe("runAgentTurnWithFallback", () => {
   });
 
   it("surfaces gateway restart text when the reply operation was aborted for restart", async () => {
+    const agentEvents = await import("../../infra/agent-events.js");
+    const emitAgentEvent = vi.mocked(agentEvents.emitAgentEvent);
     const { replyOperation, failMock } = createMockReplyOperation();
     Object.defineProperty(replyOperation, "result", {
       value: { kind: "aborted", code: "aborted_for_restart" } as const,
       configurable: true,
     });
-    state.runWithModelFallbackMock.mockRejectedValueOnce(
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(
       Object.assign(new Error("aborted"), { name: "AbortError" }),
     );
 
@@ -5222,6 +5450,70 @@ describe("runAgentTurnWithFallback", () => {
       );
     }
     expect(failMock).not.toHaveBeenCalled();
+    expect(
+      emitAgentEvent.mock.calls.some(
+        ([event]) =>
+          event.stream === "lifecycle" &&
+          event.data.phase === "end" &&
+          event.data.aborted === true &&
+          event.data.stopReason === "restart",
+      ),
+    ).toBe(true);
+  });
+
+  it("preserves restart ownership when an aborted embedded runner resolves normally", async () => {
+    const agentEvents = await import("../../infra/agent-events.js");
+    const emitAgentEvent = vi.mocked(agentEvents.emitAgentEvent);
+    const { replyOperation } = createMockReplyOperation();
+    Object.defineProperty(replyOperation, "result", {
+      value: { kind: "aborted", code: "aborted_for_restart" } as const,
+      configurable: true,
+    });
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {},
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      replyOperation,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result).toEqual({
+      kind: "final",
+      payload: expect.objectContaining({
+        text: "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
+      }),
+    });
+    expect(
+      emitAgentEvent.mock.calls.some(
+        ([event]) =>
+          event.stream === "lifecycle" &&
+          event.data.phase === "end" &&
+          event.data.aborted === true &&
+          event.data.stopReason === "restart",
+      ),
+    ).toBe(true);
   });
 
   it("uses compact generic copy for raw external chat errors when verbose is off", async () => {

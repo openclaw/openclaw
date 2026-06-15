@@ -10,6 +10,7 @@ import {
 } from "../infra/node-pairing.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { callGateway } from "./call.js";
 import {
   loadDeviceIdentity,
   openTrackedWs,
@@ -111,10 +112,18 @@ async function expectRePairingRequest(params: {
     });
     const connectedControlWs = controlWs;
 
-    let lastNodes: Array<{ nodeId: string; connected?: boolean; commands?: string[] }> = [];
+    type NodeDiagnostics = {
+      nodeId: string;
+      connected?: boolean;
+      commands?: string[];
+      approvalState?: string;
+      pendingRequestId?: string;
+      pendingDeclaredCommands?: string[];
+    };
+    let lastNodes: NodeDiagnostics[] = [];
     await vi.waitFor(async () => {
       const list = await rpcReq<{
-        nodes?: Array<{ nodeId: string; connected?: boolean; commands?: string[] }>;
+        nodes?: NodeDiagnostics[];
       }>(connectedControlWs, "node.list", {});
       lastNodes = list.payload?.nodes ?? [];
       const node = lastNodes.find(
@@ -140,6 +149,23 @@ async function expectRePairingRequest(params: {
     const pending = pairing.pending?.find((entry) => entry.nodeId === pairedNode.identity.deviceId);
     expect(pending?.nodeId).toBe(pairedNode.identity.deviceId);
     expect(pending?.commands).toEqual(params.reconnectCommands);
+    const listedNode = lastNodes.find((entry) => entry.nodeId === pairedNode.identity.deviceId);
+    expect(listedNode).toMatchObject({
+      approvalState: "pending-reapproval",
+      pendingRequestId: pending?.requestId,
+      pendingDeclaredCommands: params.reconnectCommands,
+      commands: params.expectedVisibleCommands,
+    });
+
+    const described = await rpcReq<NodeDiagnostics>(connectedControlWs, "node.describe", {
+      nodeId: pairedNode.identity.deviceId,
+    });
+    expect(described.payload).toMatchObject({
+      approvalState: "pending-reapproval",
+      pendingRequestId: pending?.requestId,
+      pendingDeclaredCommands: params.reconnectCommands,
+      commands: params.expectedVisibleCommands,
+    });
   } finally {
     controlWs?.close();
     await firstClient?.stopAndWait();
@@ -314,7 +340,166 @@ describe("gateway node pairing authorization", () => {
     });
   });
 
+  describeWithGatewayServer("pending diagnostics scopes", (getStarted) => {
+    test("shows pending pairing records to direct-local backend shared-auth callers", async () => {
+      const pendingOnlyNodeId = "node-local-backend-pending";
+      const pending = await requestNodePairing({
+        nodeId: pendingOnlyNodeId,
+        platform: "macos",
+        commands: ["system.run"],
+      });
+
+      const listed = await callGateway<{
+        nodes?: Array<{
+          nodeId: string;
+          approvalState?: string;
+          pendingRequestId?: string;
+        }>;
+      }>({
+        config: {
+          gateway: {
+            mode: "local",
+            bind: "loopback",
+            port: getStarted().port,
+            auth: { mode: "token", token: "secret" },
+          },
+        },
+        method: "node.list",
+        scopes: ["operator.read", "operator.pairing"],
+        requireLocalBackendSharedAuth: true,
+        timeoutMs: 2_000,
+      });
+
+      expect(listed.nodes).toContainEqual(
+        expect.objectContaining({
+          nodeId: pendingOnlyNodeId,
+          approvalState: "pending-approval",
+          pendingRequestId: pending.request.requestId,
+        }),
+      );
+    });
+
+    test("hides pending pairing records from read-only callers", async () => {
+      const pairedNodeId = "node-read-only-paired";
+      const pendingOnlyNodeId = "node-read-only-pending";
+      const initial = await requestNodePairing({
+        nodeId: pairedNodeId,
+        platform: "macos",
+        commands: ["screen.snapshot"],
+      });
+      await approveNodePairing(initial.request.requestId, {
+        callerScopes: ["operator.pairing", "operator.write"],
+      });
+      await requestNodePairing({
+        nodeId: pairedNodeId,
+        platform: "macos",
+        commands: ["screen.snapshot", "system.run"],
+      });
+      await requestNodePairing({
+        nodeId: pendingOnlyNodeId,
+        platform: "macos",
+        commands: ["system.run"],
+      });
+
+      const ws = await openTrackedWs(getStarted().port);
+      try {
+        await connectOk(ws, {
+          token: "secret",
+          scopes: ["operator.read"],
+          deviceIdentityPath: `${await makeNodePairingStateDir()}/read-only.json`,
+        });
+
+        type NodeDiagnostics = {
+          nodeId: string;
+          approvalState?: string;
+          pendingRequestId?: string;
+          pendingDeclaredCommands?: string[];
+        };
+        const listed = await rpcReq<{ nodes?: NodeDiagnostics[] }>(ws, "node.list", {});
+        expect(listed.ok).toBe(true);
+        const nodes = listed.payload?.nodes ?? [];
+        expect(nodes.some((node) => node.nodeId === pendingOnlyNodeId)).toBe(false);
+        expect(nodes.find((node) => node.nodeId === pairedNodeId)).toEqual(
+          expect.objectContaining({
+            nodeId: pairedNodeId,
+            approvalState: "approved",
+          }),
+        );
+        expect(nodes.find((node) => node.nodeId === pairedNodeId)).not.toHaveProperty(
+          "pendingRequestId",
+        );
+        expect(nodes.find((node) => node.nodeId === pairedNodeId)).not.toHaveProperty(
+          "pendingDeclaredCommands",
+        );
+
+        const described = await rpcReq<NodeDiagnostics>(ws, "node.describe", {
+          nodeId: pairedNodeId,
+        });
+        expect(described.payload).toEqual(
+          expect.objectContaining({
+            nodeId: pairedNodeId,
+            approvalState: "approved",
+          }),
+        );
+        expect(described.payload).not.toHaveProperty("pendingRequestId");
+        expect(described.payload).not.toHaveProperty("pendingDeclaredCommands");
+
+        const pendingOnly = await rpcReq(ws, "node.describe", { nodeId: pendingOnlyNodeId });
+        expect(pendingOnly.ok).toBe(false);
+        expect(pendingOnly.error?.message).toContain("unknown nodeId");
+      } finally {
+        ws.close();
+      }
+    });
+  });
+
   describeWithGatewayServer("paired node reconnects", (getStarted) => {
+    test("clears stale reapproval when a node returns to its approved surface", async () => {
+      const pairedNode = await pairDeviceIdentity({
+        name: "node-reverted-reapproval",
+        role: "node",
+        scopes: [],
+        clientId: GATEWAY_CLIENT_NAMES.NODE_HOST,
+        clientMode: GATEWAY_CLIENT_MODES.NODE,
+      });
+      const initial = await requestNodePairing({
+        nodeId: pairedNode.identity.deviceId,
+        platform: "macos",
+        deviceFamily: "Mac",
+        commands: ["screen.snapshot"],
+      });
+      await approveNodePairing(initial.request.requestId, {
+        callerScopes: ["operator.pairing", "operator.write"],
+      });
+
+      const upgraded = await connectNodeClient({
+        port: getStarted().port,
+        deviceIdentity: pairedNode.identity,
+        commands: ["screen.snapshot", "system.run"],
+      });
+      await upgraded.stopAndWait();
+      expect(
+        (await listNodePairing()).pending.some(
+          (entry) => entry.nodeId === pairedNode.identity.deviceId,
+        ),
+      ).toBe(true);
+
+      const reverted = await connectNodeClient({
+        port: getStarted().port,
+        deviceIdentity: pairedNode.identity,
+        commands: ["screen.snapshot"],
+      });
+      await reverted.stopAndWait();
+
+      await vi.waitFor(async () => {
+        expect(
+          (await listNodePairing()).pending.some(
+            (entry) => entry.nodeId === pairedNode.identity.deviceId,
+          ),
+        ).toBe(false);
+      });
+    });
+
     test("requests re-pairing when a paired node reconnects with upgraded commands", async () => {
       await expectRePairingRequest({
         started: getStarted(),

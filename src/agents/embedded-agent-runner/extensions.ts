@@ -25,6 +25,7 @@ import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "./cache-t
 import { resolveEmbeddedCompactionTarget } from "./compaction-runtime-context.js";
 import { log } from "./logger.js";
 import { resolveModelWithRegistry } from "./model.js";
+import { recordEmbeddedToolSendReceipt } from "./tool-send-receipts.js";
 
 type AgentToolResultEvent = {
   threadId?: string;
@@ -53,7 +54,14 @@ function hasErrorToolResultStatus(result: AgentToolResult<unknown>): boolean {
   return status === "error" || status === "timeout";
 }
 
-function buildAgentToolResultMiddlewareFactory(): ExtensionFactory {
+function snapshotToolSendReceipt(details: unknown): unknown {
+  const toolSend = recordFromUnknown(details).toolSend;
+  return toolSend && typeof toolSend === "object" && !Array.isArray(toolSend)
+    ? { ...(toolSend as Record<string, unknown>) }
+    : toolSend;
+}
+
+function buildAgentToolResultMiddlewareFactory(sessionManager: SessionManager): ExtensionFactory {
   const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" });
   return (agent) => {
     agent.on("tool_result", async (rawEvent: unknown, ctx: { cwd?: string }) => {
@@ -61,15 +69,21 @@ function buildAgentToolResultMiddlewareFactory(): ExtensionFactory {
       if (!event.toolName) {
         return undefined;
       }
-      const toolCallId =
+      const eventToolCallId =
         typeof event.toolCallId === "string" && event.toolCallId.trim()
           ? event.toolCallId
-          : `openclaw-${randomUUID()}`;
+          : undefined;
+      const toolCallId = eventToolCallId ?? `openclaw-${randomUUID()}`;
       const content = Array.isArray(event.content) ? event.content : [];
       const current = {
         content,
         details: event.details,
       } satisfies AgentToolResult<unknown>;
+      const rawToolSend = snapshotToolSendReceipt(current.details);
+      if (eventToolCallId && rawToolSend !== undefined) {
+        // Routing evidence stays private so middleware may fully replace result details.
+        recordEmbeddedToolSendReceipt(sessionManager, eventToolCallId, rawToolSend);
+      }
       const inputHadErrorStatus = hasErrorToolResultStatus(current);
       const result = await runner.applyToolResultMiddleware({
         threadId: event.threadId,
@@ -234,7 +248,7 @@ export function buildEmbeddedExtensionFactories(params: {
   if (pruningFactory) {
     factories.push(pruningFactory);
   }
-  factories.push(buildAgentToolResultMiddlewareFactory());
+  factories.push(buildAgentToolResultMiddlewareFactory(params.sessionManager));
   return factories;
 }
 
