@@ -169,6 +169,9 @@ describe("normalizeMessagesForLlmBoundary", () => {
   });
 
   it("preserves stored sidecar metadata while preparing disabled timestamp model bytes", () => {
+    // This boundary normalization prepares provider input only: stored
+    // transcript/embedding sidecar state is preserved by identity, so no
+    // migration or persistent schema change is required for disabled stamps.
     const input = [
       {
         role: "user",
