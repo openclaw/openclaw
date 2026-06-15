@@ -18,9 +18,11 @@ export type ReleaseVerifyBetaArgs = {
   repo: string;
   registry: string;
   workflowRef?: string;
+  clawHubWorkflowRef?: string;
   pluginSelection: string[];
   evidenceOut?: string;
   skipPostpublish: boolean;
+  skipGitHubRelease: boolean;
   skipClawHub: boolean;
   rerunFailedClawHub: boolean;
   workflowRuns: {
@@ -28,6 +30,7 @@ export type ReleaseVerifyBetaArgs = {
     openclawNpm?: string;
     pluginNpm?: string;
     pluginClawHub?: string;
+    pluginClawHubBootstrap?: string;
     npmTelegram?: string;
   };
 };
@@ -118,7 +121,7 @@ export function parseReleaseVerifyBetaArgs(argv: string[]): ReleaseVerifyBetaArg
   const version = values.shift();
   if (!version || version.startsWith("-")) {
     throw new Error(
-      "Usage: pnpm release:verify-beta -- <version> [--workflow-ref REF] [--full-release-validation-run ID] [--openclaw-npm-run ID] [--plugin-npm-run ID] [--plugin-clawhub-run ID] [--npm-telegram-run ID] [--skip-clawhub]",
+      "Usage: pnpm release:verify-beta -- <version> [--workflow-ref REF] [--clawhub-workflow-ref REF] [--full-release-validation-run ID] [--openclaw-npm-run ID] [--plugin-npm-run ID] [--plugin-clawhub-run ID] [--plugin-clawhub-bootstrap-run ID] [--npm-telegram-run ID] [--skip-github-release] [--skip-clawhub]",
     );
   }
 
@@ -129,9 +132,11 @@ export function parseReleaseVerifyBetaArgs(argv: string[]): ReleaseVerifyBetaArg
     repo: DEFAULT_REPO,
     registry: DEFAULT_CLAWHUB_REGISTRY,
     workflowRef: undefined,
+    clawHubWorkflowRef: undefined,
     pluginSelection: [],
     evidenceOut: undefined,
     skipPostpublish: false,
+    skipGitHubRelease: false,
     skipClawHub: false,
     rerunFailedClawHub: false,
     workflowRuns: {},
@@ -164,6 +169,9 @@ export function parseReleaseVerifyBetaArgs(argv: string[]): ReleaseVerifyBetaArg
       case "--workflow-ref":
         parsed.workflowRef = next();
         break;
+      case "--clawhub-workflow-ref":
+        parsed.clawHubWorkflowRef = next();
+        break;
       case "--plugins":
         parsed.pluginSelection = parsePluginReleaseSelection(next());
         if (parsed.pluginSelection.length === 0) {
@@ -185,11 +193,17 @@ export function parseReleaseVerifyBetaArgs(argv: string[]): ReleaseVerifyBetaArg
       case "--plugin-clawhub-run":
         parsed.workflowRuns.pluginClawHub = next();
         break;
+      case "--plugin-clawhub-bootstrap-run":
+        parsed.workflowRuns.pluginClawHubBootstrap = next();
+        break;
       case "--npm-telegram-run":
         parsed.workflowRuns.npmTelegram = next();
         break;
       case "--skip-postpublish":
         parsed.skipPostpublish = true;
+        break;
+      case "--skip-github-release":
+        parsed.skipGitHubRelease = true;
         break;
       case "--skip-clawhub":
         parsed.skipClawHub = true;
@@ -479,8 +493,12 @@ export async function verifyBetaRelease(
   }
 
   const lines: string[] = [];
-  const releaseUrl = verifyGitHubRelease(args);
-  lines.push(`GitHub release OK: ${releaseUrl}`);
+  const releaseUrl = args.skipGitHubRelease ? undefined : verifyGitHubRelease(args);
+  if (releaseUrl === undefined) {
+    lines.push("GitHub release skipped: final release page is created after verification");
+  } else {
+    lines.push(`GitHub release OK: ${releaseUrl}`);
+  }
 
   const openclawNpm = verifyNpmPackage("openclaw", args.version, args.distTag);
   lines.push(`openclaw npm OK: ${args.version} (${args.distTag})`);
@@ -558,14 +576,28 @@ export async function verifyBetaRelease(
     );
   }
   if (args.workflowRuns.pluginClawHub !== undefined) {
+    const clawHubWorkflowRef = args.clawHubWorkflowRef ?? args.workflowRef;
     workflowRuns.push(
       verifyWorkflowRun({
         id: args.workflowRuns.pluginClawHub,
         label: "Plugin ClawHub Release",
         repo: args.repo,
         expectedWorkflowName: "Plugin ClawHub Release",
-        expectedHeadBranch: args.workflowRef,
+        expectedHeadBranch: clawHubWorkflowRef,
         rerunFailed: args.rerunFailedClawHub,
+      }),
+    );
+  }
+  if (args.workflowRuns.pluginClawHubBootstrap !== undefined) {
+    const clawHubWorkflowRef = args.clawHubWorkflowRef ?? args.workflowRef;
+    workflowRuns.push(
+      verifyWorkflowRun({
+        id: args.workflowRuns.pluginClawHubBootstrap,
+        label: "Plugin ClawHub New",
+        repo: args.repo,
+        expectedWorkflowName: "Plugin ClawHub New",
+        expectedHeadBranch: clawHubWorkflowRef,
+        rerunFailed: false,
       }),
     );
   }
@@ -612,7 +644,7 @@ export async function verifyBetaRelease(
           npmDistTag: args.distTag,
           pluginSelection: args.pluginSelection,
           openclawNpmIntegrity: openclawNpm.integrity,
-          githubReleaseUrl: releaseUrl,
+          githubReleaseUrl: releaseUrl ?? null,
           pluginNpmPackageCount: npmPlugins.length,
           clawHubPackageCount: clawHubPlugins.length,
           workflowRuns,

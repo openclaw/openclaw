@@ -1,7 +1,11 @@
 // Discord tests cover native command.options plugin behavior.
 import { ApplicationCommandType, ChannelType, InteractionContextType } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { logVerboseMock } = vi.hoisted(() => ({
   logVerboseMock: vi.fn(),
@@ -222,8 +226,13 @@ describe("createDiscordNativeCommand option wiring", () => {
   });
 
   beforeEach(() => {
+    clearRuntimeConfigSnapshot();
     logVerboseMock.mockReset();
     loggerWarnMock.mockReset();
+  });
+
+  afterEach(() => {
+    clearRuntimeConfigSnapshot();
   });
 
   it("uses autocomplete for /acp action so inline action values are accepted", async () => {
@@ -393,6 +402,78 @@ describe("createDiscordNativeCommand option wiring", () => {
       expect(respond).toHaveBeenCalledWith([
         { name: "fast", value: "fast" },
         { name: "secure", value: "secure" },
+      ]);
+    } finally {
+      nativeCommandTesting.setMatchPluginCommand(restoreMatchPluginCommand);
+    }
+  });
+
+  it("refreshes autocomplete authorization and dynamic choices between invocations", async () => {
+    const restoreMatchPluginCommand = nativeCommandTesting.setMatchPluginCommand((prompt) =>
+      prompt === "/scope" ? ({ command: { name: "scope" }, args: "" } as never) : null,
+    );
+    const sourceCfg = {
+      session: { dmScope: "main" },
+      channels: {
+        discord: {
+          dm: { enabled: true, policy: "disabled" },
+        },
+      },
+    } as OpenClawConfig;
+    const runtimeCfg = {
+      session: { dmScope: "per-channel-peer" },
+      channels: {
+        discord: {
+          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+        },
+      },
+    } as OpenClawConfig;
+    try {
+      const command = createDiscordNativeCommand({
+        command: {
+          name: "scope",
+          description: "Scope",
+          acceptsArgs: true,
+          args: [
+            {
+              name: "value",
+              description: "Scope value",
+              type: "string",
+              preferAutocomplete: true,
+              choices: ({ cfg }) => {
+                const dmScope = cfg?.session?.dmScope ?? "missing";
+                return [{ label: dmScope, value: dmScope }];
+              },
+            },
+          ],
+        },
+        cfg: sourceCfg,
+        discordConfig: sourceCfg.channels?.discord ?? {},
+        accountId: "default",
+        sessionPrefix: "discord:slash",
+        ephemeralDefault: true,
+        threadBindings: createNoopThreadBindingManager("default"),
+      });
+      const value = requireOption(command, "value");
+      const autocomplete = requireAutocomplete(
+        value,
+        "scope value option did not wire autocomplete",
+      );
+      const autocompleteParams = {
+        userId: "owner",
+        channelType: ChannelType.DM,
+        channelId: "dm-1",
+        channelName: "dm-1",
+        focusedValue: "",
+      } as const;
+
+      const blockedRespond = await runAutocomplete(autocomplete, autocompleteParams);
+      expect(blockedRespond).toHaveBeenCalledWith([]);
+
+      setRuntimeConfigSnapshot(runtimeCfg, runtimeCfg);
+      const refreshedRespond = await runAutocomplete(autocomplete, autocompleteParams);
+      expect(refreshedRespond).toHaveBeenCalledWith([
+        { name: "per-channel-peer", value: "per-channel-peer" },
       ]);
     } finally {
       nativeCommandTesting.setMatchPluginCommand(restoreMatchPluginCommand);

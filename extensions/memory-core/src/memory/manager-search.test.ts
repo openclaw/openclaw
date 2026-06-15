@@ -790,6 +790,56 @@ describe("searchVector sqlite-vec KNN", () => {
     }
   });
 
+  it("searches provider-declared model aliases while excluding arbitrary paths", async () => {
+    const db = createFallbackDb();
+    try {
+      insertFallbackChunk(db, { id: "canonical", model: "canonical-model", vector: [1, 0] });
+      insertFallbackChunk(db, { id: "alias", model: "/cache/default.gguf", vector: [0.9, 0.1] });
+      insertFallbackChunk(db, { id: "arbitrary", model: "/other/default.gguf", vector: [1, 0] });
+
+      const results = await searchVector({
+        db,
+        vectorTable: "chunks_vec",
+        providerModel: "canonical-model",
+        providerModelAliases: ["/cache/default.gguf"],
+        queryVec: [1, 0],
+        limit: 5,
+        snippetMaxChars: 200,
+        ensureVectorReady: async () => false,
+        sourceFilterVec: { sql: "", params: [] },
+        sourceFilterChunks: { sql: "", params: [] },
+      });
+
+      expect(results.map((row) => row.id)).toEqual(["canonical", "alias"]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("searches an empty primary model without requiring aliases", async () => {
+    const db = createFallbackDb();
+    try {
+      insertFallbackChunk(db, { id: "empty-primary", model: "", vector: [1, 0] });
+      insertFallbackChunk(db, { id: "other", model: "other-model", vector: [1, 0] });
+
+      const results = await searchVector({
+        db,
+        vectorTable: "chunks_vec",
+        providerModel: "",
+        queryVec: [1, 0],
+        limit: 5,
+        snippetMaxChars: 200,
+        ensureVectorReady: async () => false,
+        sourceFilterVec: { sql: "", params: [] },
+        sourceFilterChunks: { sql: "", params: [] },
+      });
+
+      expect(results.map((row) => row.id)).toEqual(["empty-primary"]);
+    } finally {
+      db.close();
+    }
+  });
+
   it("handles a single matching row (below the yield batch size)", async () => {
     const db = createFallbackDb();
     try {
@@ -1013,11 +1063,13 @@ describe("searchVector sqlite-vec KNN", () => {
       }
       addChunk({ id: "target-1", model: "target-model", vector: [0.5, 0.5] });
       addChunk({ id: "target-2", model: "target-model", vector: [0.4, 0.6] });
+      addChunk({ id: "alias-1", model: "alias-model", vector: [0.45, 0.55] });
 
       const results = await searchVector({
         db,
         vectorTable: "chunks_vec",
         providerModel: "target-model",
+        providerModelAliases: ["alias-model"],
         queryVec: [1, 0],
         limit: 2,
         snippetMaxChars: 200,
@@ -1026,7 +1078,7 @@ describe("searchVector sqlite-vec KNN", () => {
         sourceFilterChunks: { sql: "", params: [] },
       });
 
-      expect(results.map((row) => row.id)).toEqual(["target-1", "target-2"]);
+      expect(results.map((row) => row.id)).toEqual(["target-1", "alias-1"]);
     } finally {
       db.close();
     }

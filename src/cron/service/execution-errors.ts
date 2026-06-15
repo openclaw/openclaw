@@ -24,6 +24,11 @@ export function setupTimeoutErrorMessage(execution?: CronAgentExecutionStarted):
   return `cron: isolated agent setup timed out before runner start (last phase: ${phase})`;
 }
 
+/** Returns true for the setup-timeout class that fires before the isolated runner starts. */
+export function isSetupTimeoutErrorText(error: string): boolean {
+  return error.startsWith("cron: isolated agent setup timed out before runner start");
+}
+
 /** Formats timeout text for runs that stalled after setup but before execution start. */
 export function preExecutionTimeoutErrorMessage(execution?: CronAgentExecutionStarted): string {
   const phase = formatCronAgentExecutionPhase(execution);

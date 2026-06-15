@@ -149,6 +149,7 @@ import {
   includeForcedCodexDynamicToolAllow,
   isCodexNativeExecutionBlockedByNodeExecHost,
   resolveCodexAppServerHookChannelId,
+  resolveCodexMessageToolProvider,
   resolveOpenClawCodingToolsSessionKeys,
   resetOpenClawCodingToolsFactoryForTests,
   setOpenClawCodingToolsFactoryForTests,
@@ -223,6 +224,7 @@ import {
   writeCodexAppServerBinding,
   type CodexAppServerThreadBinding,
 } from "./session-binding.js";
+import { retireSharedCodexAppServerClientIfCurrent } from "./shared-client.js";
 import { rotateOversizedCodexAppServerStartupBinding } from "./startup-binding.js";
 import {
   buildDeveloperInstructions,
@@ -724,6 +726,12 @@ export async function runCodexAppServerAttempt(
       sessionKey: sandboxSessionKey,
       runId: params.runId,
       channelId: hookChannelId,
+      currentChannelProvider: resolveCodexMessageToolProvider(params),
+      currentChannelId: params.currentChannelId,
+      currentMessagingTarget: params.currentMessagingTarget,
+      currentThreadId: params.currentThreadTs,
+      replyToMode: params.replyToMode,
+      hasRepliedRef: params.hasRepliedRef,
     },
   });
   const hadSessionFile = await pathExists(activeSessionFile);
@@ -1112,6 +1120,7 @@ export async function runCodexAppServerAttempt(
   };
   let nativeHookRelay: NativeHookRelayRegistrationHandle | undefined;
   let releaseSharedClientLease: (() => void) | undefined;
+  let sharedCodexClientRetiredForOneShotCleanup = false;
   const releaseSharedClientLeaseOnce = () => {
     const release = releaseSharedClientLease;
     if (!release) {
@@ -1119,6 +1128,31 @@ export async function runCodexAppServerAttempt(
     }
     releaseSharedClientLease = undefined;
     release();
+  };
+  const retireSharedCodexClientForOneShotCleanup = async () => {
+    if (params.cleanupBundleMcpOnRunEnd !== true) {
+      return;
+    }
+    if (sharedCodexClientRetiredForOneShotCleanup) {
+      return;
+    }
+    sharedCodexClientRetiredForOneShotCleanup = true;
+    const retired = retireSharedCodexAppServerClientIfCurrent(client);
+    embeddedAgentLog.info("codex app-server one-shot cleanup retired shared client", {
+      runId: params.runId,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      activeLeases: retired?.activeLeases ?? null,
+      closed: retired?.closed ?? false,
+      matchedSharedClient: Boolean(retired),
+    });
+    if (retired?.closed) {
+      await client.closeAndWait({ exitTimeoutMs: 2_000, forceKillDelayMs: 250 });
+    }
+  };
+  const releaseSharedClientLeaseAndRetireOneShotClient = async () => {
+    releaseSharedClientLeaseOnce();
+    await retireSharedCodexClientForOneShotCleanup();
   };
   let sandboxExecEnvironmentAcquired = false;
   const releaseSandboxExecEnvironment = async () => {
@@ -1688,13 +1722,17 @@ export async function runCodexAppServerAttempt(
     return notificationQueue;
   };
 
+  const nativeSubagentCodexHome =
+    appServer.start.transport === "stdio"
+      ? (appServer.start.env?.CODEX_HOME ?? resolveCodexAppServerHomeDir(agentDir))
+      : undefined;
   registerCodexNativeSubagentMonitor({
     client,
     parentThreadId: thread.threadId,
     requesterSessionKey: params.sessionKey,
     taskRuntimeScope: params.agentHarnessTaskRuntimeScope,
     agentId: params.agentId,
-    codexHome: appServer.start.env?.CODEX_HOME ?? resolveCodexAppServerHomeDir(agentDir),
+    codexHome: nativeSubagentCodexHome,
   });
   const notificationCleanup = client.addNotificationHandler(enqueueNotification);
   const requestCleanup = client.addRequestHandler(async (request) => {
@@ -1846,6 +1884,7 @@ export async function runCodexAppServerAttempt(
           toolBridge,
           signal: runAbortController.signal,
           timeoutMs: dynamicToolTimeoutMs,
+          onAgentToolResult: params.onAgentToolResult,
           onTimeout: () => {
             trajectoryRecorder?.recordEvent("tool.timeout", {
               threadId: call.threadId,
@@ -2290,7 +2329,7 @@ export async function runCodexAppServerAttempt(
         },
       });
       params.abortSignal?.removeEventListener("abort", abortFromUpstream);
-      releaseSharedClientLeaseOnce();
+      await releaseSharedClientLeaseAndRetireOneShotClient();
       if (usageLimitError) {
         await markCodexAuthProfileBlockedFromRateLimits({
           params,
@@ -2310,7 +2349,7 @@ export async function runCodexAppServerAttempt(
     }
   }
   if (!turn) {
-    releaseSharedClientLeaseOnce();
+    await releaseSharedClientLeaseAndRetireOneShotClient();
     throw new Error("codex app-server turn/start failed without an error");
   }
   turnIdRef.current = turn.turn.id;
@@ -2760,7 +2799,7 @@ export async function runCodexAppServerAttempt(
     notificationCleanup();
     requestCleanup();
     closeCleanup?.();
-    releaseSharedClientLeaseOnce();
+    await releaseSharedClientLeaseAndRetireOneShotClient();
     if (nativeHookRelay) {
       if (shouldDelayNativeHookRelayUnregister) {
         // Codex hook subprocesses can outlive a completed app-server turn by a

@@ -25,6 +25,7 @@ import {
   resolveQaRuntimeHostVersion,
 } from "./bundled-plugin-staging.js";
 import { assertRepoBoundPath, ensureRepoBoundDirectory } from "./cli-paths.js";
+import { QaSuiteInfraError } from "./errors.js";
 import { formatQaGatewayLogsForError, redactQaGatewayDebugText } from "./gateway-log-redaction.js";
 import { startQaGatewayRpcClient } from "./gateway-rpc-client.js";
 import { splitQaModelRef, type QaProviderMode } from "./model-selection.js";
@@ -470,7 +471,8 @@ async function waitForGatewayReady(params: {
   const startedAt = Date.now();
   while (Date.now() - startedAt < (params.timeoutMs ?? 60_000)) {
     if (params.child.exitCode !== null || params.child.signalCode !== null) {
-      throw new Error(
+      throw new QaSuiteInfraError(
+        "gateway_startup_unhealthy",
         `gateway exited before becoming healthy (exitCode=${String(params.child.exitCode)}, signal=${String(params.child.signalCode)}):\n${params.logs()}`,
       );
     }
@@ -485,7 +487,10 @@ async function waitForGatewayReady(params: {
     }
     await sleep(250);
   }
-  throw new Error(`gateway failed to become healthy:\n${params.logs()}`);
+  throw new QaSuiteInfraError(
+    "gateway_startup_unhealthy",
+    `gateway failed to become healthy:\n${params.logs()}`,
+  );
 }
 
 function isRetryableRpcStartupError(error: unknown) {
@@ -1031,14 +1036,13 @@ export async function startQaGatewayChild(params: {
         stagedBundledPluginsRoot,
       });
     }
-    throw new Error(
-      keepTemp
-        ? appendQaGatewayTempRoot(formatErrorMessage(error), tempRoot)
-        : formatErrorMessage(error),
-      {
-        cause: error,
-      },
-    );
+    const message = keepTemp
+      ? appendQaGatewayTempRoot(formatErrorMessage(error), tempRoot)
+      : formatErrorMessage(error);
+    if (error instanceof QaSuiteInfraError) {
+      throw new QaSuiteInfraError(error.code, message, { cause: error });
+    }
+    throw new Error(message, { cause: error });
   }
 }
 export { testing as __testing };

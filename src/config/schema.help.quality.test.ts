@@ -579,6 +579,7 @@ const FINAL_BACKLOG_TARGET_KEYS = [
   "skills.load.extraDirs",
   "skills.load.watch",
   "skills.load.watchDebounceMs",
+  "skills.workshop.allowSymlinkTargetWrites",
   "ui.assistant.avatar",
   "ui.assistant.name",
   "ui.seamColor",
