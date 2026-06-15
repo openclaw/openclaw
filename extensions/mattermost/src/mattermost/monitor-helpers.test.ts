@@ -75,9 +75,21 @@ describe("normalizeMention", () => {
     expect(result).toContain("    code line 2");
   });
 
-  it("preserves first-line indentation for indented code blocks", () => {
-    const input = "@echobot\n    code line 1\n    code line 2";
+  it("returns empty string for bare mention with surrounding whitespace", () => {
+    expect(normalizeMention("  @echobot  ", "echobot")).toBe("");
+  });
+
+  it("returns empty string for multi-line bare mention", () => {
+    expect(normalizeMention("@echobot\n", "echobot")).toBe("");
+  });
+
+  it("returns empty string for standalone mention", () => {
+    expect(normalizeMention("@echobot", "echobot")).toBe("");
+  });
+
+  it("returns empty string for bare mention with other mentions stripped", () => {
+    const input = "@alice @echobot @bob";
     const result = normalizeMention(input, "echobot");
-    expect(result).toBe("    code line 1\n    code line 2");
+    expect(result).toBe("@alice @bob");
   });
 });

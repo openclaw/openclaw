@@ -1526,7 +1526,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         const bodySource = oncharTriggered ? oncharResult.stripped : rawText;
         const baseText = [bodySource, mediaPlaceholder].filter(Boolean).join("\n").trim();
         const bodyText = normalizeMention(baseText, botUsername);
-        if (!bodyText) {
+        if (
+          !bodyText &&
+          !wasMentioned &&
+          !(botUsername && rawText.toLowerCase().includes("@" + botUsername.toLowerCase()))
+        ) {
           logVerboseMessage(
             `mattermost: drop group message (empty body after normalization channel=${channelId} sender=${senderId})`,
           );
