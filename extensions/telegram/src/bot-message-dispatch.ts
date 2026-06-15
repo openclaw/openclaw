@@ -967,6 +967,10 @@ export const dispatchTelegramMessage = async ({
     active: Boolean(answerLane.stream),
     seed: progressSeed,
     formatLine: formatTelegramProgressLine,
+    // Telegram's rich-markdown renderer collapses a lone "\n" to a space, so
+    // tool-progress lines need a blank line between them to stay on their own
+    // line (it renders "\n\n" as a single break, not a double).
+    lineSeparator: "\n\n",
     update: async (streamText, options) => {
       await prepareAnswerLaneForToolProgress();
       answerLane.lastPartialText = streamText;

@@ -1047,6 +1047,11 @@ export function formatChannelProgressDraftText(params: {
   formatLine?: (line: string) => string;
   /** Prefix used for plain progress lines that lack their own icon. */
   bullet?: string;
+  /** Separator between rendered progress lines. Defaults to a single newline.
+   *  Telegram's rich-markdown parser treats a lone "\n" as a soft break (space),
+   *  so its draft passes "\n\n"; channels where a single newline already breaks
+   *  the line (Discord) keep the default. */
+  lineSeparator?: string;
 }): string {
   const rawLabel = resolveChannelProgressDraftLabel({
     entry: params.entry,
@@ -1058,6 +1063,7 @@ export function formatChannelProgressDraftText(params: {
   const maxLineChars = resolveChannelProgressDraftMaxLineChars(params.entry);
   const formatLine = params.formatLine ?? ((line: string) => line);
   const bullet = params.bullet ?? "•";
+  const lineSeparator = params.lineSeparator ?? "\n";
   const rawLines: Array<string | ChannelProgressDraftLine | { draftLabel: string }> = resolvedLabel
     ? [{ draftLabel: resolvedLabel }, ...params.lines]
     : params.lines;
@@ -1090,7 +1096,7 @@ export function formatChannelProgressDraftText(params: {
     });
   const renderedLines = lines.map((line) => line.text).filter((line) => Boolean(line));
   if (renderedLines.length > 1 && lines[0]?.isLabelLine) {
-    return `${renderedLines[0]}\n\n${renderedLines.slice(1).join("\n")}`;
+    return `${renderedLines[0]}\n\n${renderedLines.slice(1).join(lineSeparator)}`;
   }
-  return renderedLines.join("\n");
+  return renderedLines.join(lineSeparator);
 }
