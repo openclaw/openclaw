@@ -228,6 +228,29 @@ describe("config mcp config", () => {
     });
   });
 
+  it("sanitizes server names in blocked-env warnings", async () => {
+    mockedLogWarn.mockClear();
+    await withMcpConfigHome({}, async () => {
+      const setResult = await setConfiguredMcpServer({
+        // Server name with newline and ANSI escape that must be stripped.
+        name: "bad\nWARN forged[31m",
+        server: {
+          command: "node",
+          args: ["server.js"],
+          env: { LD_PRELOAD: "/tmp/pwn.so" },
+        },
+      });
+
+      expect(setResult.ok).toBe(true);
+      expect(mockedLogWarn).toHaveBeenCalledTimes(1);
+      const warnMsg = mockedLogWarn.mock.calls[0][0] as string;
+      expect(warnMsg).toContain('server "badWARN forged"');
+      expect(warnMsg).toContain("LD_PRELOAD");
+      expect(warnMsg).not.toContain("\n");
+      expect(warnMsg).not.toContain("");
+    });
+  });
+
   it("canonicalizes CLI-native HTTP type aliases when saving MCP config", async () => {
     await withMcpConfigHome({}, async () => {
       const setResult = await setConfiguredMcpServer({

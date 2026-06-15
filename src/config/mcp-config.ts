@@ -1,3 +1,4 @@
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 // Normalizes MCP server config for runtime launch and validation.
 import { isDangerousMcpStdioEnvVarName, isMcpConfigRecord } from "../agents/mcp-config-shared.js";
 import { logWarn } from "../logger.js";
@@ -201,7 +202,7 @@ function warnBlockedMcpStdioEnvKeys(serverName: string, server: Record<string, u
   for (const key of Object.keys(server.env)) {
     if (isDangerousMcpStdioEnvVarName(key)) {
       logWarn(
-        `bundle-mcp: server "${serverName}": env "${key}" is blocked for stdio startup safety and will be ignored at runtime. Remove it from the config or handle it inside the server script.`,
+        `bundle-mcp: server "${sanitizeForLog(serverName)}": env "${sanitizeForLog(key)}" is blocked for stdio startup safety and will be ignored at runtime. Remove it from the config or handle it inside the server script.`,
       );
     }
   }
