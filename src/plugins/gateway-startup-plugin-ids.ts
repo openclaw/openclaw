@@ -206,6 +206,22 @@ function hasConfiguredStartupChannel(params: {
   );
 }
 
+function hasExplicitlyEnabledChannelEntry(params: {
+  plugin: InstalledPluginIndexRecord;
+  manifestLookup: ManifestRegistryLookup;
+  activationSourcePlugins: NormalizedPluginsConfig;
+}): boolean {
+  if (params.plugin.origin === "bundled") {
+    return false;
+  }
+  const channelIds = listManifestChannelIds(params.manifestLookup, params.plugin.pluginId);
+  if (channelIds.length === 0) {
+    return false;
+  }
+  const entry = params.activationSourcePlugins.entries[params.plugin.pluginId];
+  return entry?.enabled === true;
+}
+
 type ManifestRegistryLookup = ReadonlyMap<string, PluginManifestRecord>;
 
 function createManifestRegistryLookup(
@@ -1947,6 +1963,16 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
           configuredDeferredChannelPluginIds.push(plugin.pluginId);
         }
       }
+      continue;
+    }
+    if (
+      hasExplicitlyEnabledChannelEntry({
+        plugin,
+        manifestLookup,
+        activationSourcePlugins,
+      })
+    ) {
+      pluginIds.push(plugin.pluginId);
       continue;
     }
     if (
