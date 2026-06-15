@@ -11,6 +11,7 @@ const PRODUCER_WORKFLOW_PATH = ".github/workflows/ios-periphery.yml";
 const ARTIFACT_NAME = "ios-periphery-dead-code-12345-2";
 
 type WorkflowStep = {
+  id?: string;
   name?: string;
   with?: {
     name?: string;
@@ -27,7 +28,16 @@ type Workflow = {
 };
 
 type ProducerWorkflow = {
+  on?: {
+    pull_request?: {
+      paths?: string[];
+      types?: string[];
+    };
+  };
   jobs?: {
+    scope?: {
+      steps?: WorkflowStep[];
+    };
     scan?: {
       steps?: WorkflowStep[];
     };
@@ -71,6 +81,62 @@ function commenterScript(): string {
   return script;
 }
 
+function scopeScript(): string {
+  const workflow = parse(readFileSync(PRODUCER_WORKFLOW_PATH, "utf8")) as ProducerWorkflow;
+  const step = workflow.jobs?.scope?.steps?.find((candidate) => candidate.id === "scope");
+  const script = step?.with?.script;
+  if (!script) {
+    throw new Error("missing iOS Periphery scope script");
+  }
+  return script;
+}
+
+async function runScope(options: {
+  draft?: boolean;
+  eventName?: string;
+  files?: Array<string | { filename: string; previous_filename?: string }>;
+}): Promise<string | undefined> {
+  const outputs = new Map<string, string>();
+  const core = {
+    setOutput(name: string, value: string) {
+      outputs.set(name, value);
+    },
+  };
+  const context = {
+    eventName: options.eventName ?? "pull_request",
+    payload: {
+      pull_request: {
+        draft: options.draft ?? false,
+        number: 123,
+      },
+    },
+    repo: {
+      owner: "openclaw",
+      repo: "openclaw",
+    },
+  };
+  const github = {
+    rest: {
+      pulls: {
+        listFiles() {},
+      },
+    },
+    async paginate() {
+      return (options.files ?? []).map((file) =>
+        typeof file === "string" ? { filename: file } : file,
+      );
+    },
+  };
+  const execute = compileFunction(`return (async () => {\n${scopeScript()}\n})();`, [
+    "context",
+    "core",
+    "github",
+  ]) as (context: typeof context, core: typeof core, github: typeof github) => Promise<void>;
+
+  await execute(context, core, github);
+  return outputs.get("should-scan");
+}
+
 async function runCommenter(
   artifact: Artifact,
   archiveData: Buffer,
@@ -81,6 +147,7 @@ async function runCommenter(
     runHeadSha?: string;
     runAttempt?: number;
     scanJobConclusion?: string;
+    scopeJobConclusion?: string;
     workflowRuns?: WorkflowRun[];
   } = {},
 ) {
@@ -144,6 +211,10 @@ async function runCommenter(
       if (params.run_id === 12345 && params.filter === "latest") {
         jobListCount += 1;
         return [
+          {
+            conclusion: options.scopeJobConclusion ?? "success",
+            name: "Detect iOS scan scope",
+          },
           {
             conclusion: options.scanJobConclusion ?? "success",
             name: "Scan iOS dead code",
@@ -344,6 +415,60 @@ describe("iOS Periphery comment workflow", () => {
     );
   });
 
+  it("runs scope detection for PR transitions that can clear stale findings", () => {
+    const workflow = parse(readFileSync(PRODUCER_WORKFLOW_PATH, "utf8")) as ProducerWorkflow;
+
+    expect(workflow.on?.pull_request?.types).toContain("converted_to_draft");
+    expect(workflow.on?.pull_request?.paths).toBeUndefined();
+    expect(() =>
+      compileFunction(`return (async () => {\n${scopeScript()}\n})();`, [
+        "context",
+        "core",
+        "github",
+      ]),
+    ).not.toThrow();
+  });
+
+  it.each([
+    {
+      expected: "false",
+      files: ["apps/ios/Sources/Test.swift"],
+      name: "draft pull request",
+      options: { draft: true },
+    },
+    {
+      expected: "true",
+      files: ["apps/ios/Sources/Test.swift"],
+      name: "iOS change",
+      options: {},
+    },
+    {
+      expected: "false",
+      files: ["docs/index.md"],
+      name: "out-of-scope change",
+      options: {},
+    },
+    {
+      expected: "true",
+      files: [
+        {
+          filename: "docs/Moved.swift",
+          previous_filename: "apps/ios/Sources/Moved.swift",
+        },
+      ],
+      name: "iOS file renamed out of scope",
+      options: {},
+    },
+    {
+      expected: "true",
+      files: [],
+      name: "manual dispatch",
+      options: { eventName: "workflow_dispatch" },
+    },
+  ])("sets scope output for $name", async ({ expected, files, options }) => {
+    await expect(runScope({ ...options, files })).resolves.toBe(expected);
+  });
+
   it("accepts a valid small Periphery artifact", async () => {
     const archive = makeZip({
       "periphery.json": "[]\n",
@@ -444,7 +569,7 @@ describe("iOS Periphery comment workflow", () => {
     expect(result.downloadCount).toBe(0);
   });
 
-  it("does not comment when the producer intentionally skips a draft scan", async () => {
+  it("replaces stale findings when the producer intentionally skips a scan", async () => {
     const result = await runCommenter(
       {
         expired: false,
@@ -470,7 +595,7 @@ describe("iOS Periphery comment workflow", () => {
     expect(result.createdBodies).toEqual([]);
     expect(result.updatedBodies).toHaveLength(1);
     expect(result.updatedBodies[0]).toContain(
-      "Periphery scan skipped while the pull request is a draft.",
+      "Periphery scan skipped because the pull request is a draft or no longer touches iOS scan scope.",
     );
   });
 
@@ -674,6 +799,24 @@ describe("iOS Periphery comment workflow", () => {
     expect(parsed.text).toContain("<script>*bold*</script>");
     expect(parsed.text).toContain("![click](https://example.invalid) @octocat|next");
     expect(parsed.links).toEqual([]);
+  });
+
+  it("treats non-object finding entries as an unreadable report", async () => {
+    const archive = makeZip({
+      "periphery.json": "[null]\n",
+      "periphery.status": "1\n",
+    });
+    const result = await runCommenter(
+      {
+        expired: false,
+        id: 77,
+        name: ARTIFACT_NAME,
+        size_in_bytes: archive.length,
+      },
+      archive,
+    );
+
+    expectUnavailableComment(result.createdBodies);
   });
 
   it("bounds the rendered comment after escaping", async () => {

@@ -2,13 +2,7 @@ name: iOS Periphery Dead Code
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
-    paths:
-      - ".github/workflows/ios-periphery.yml"
-      - ".github/workflows/ios-periphery-comment.yml"
-      - "apps/ios/**"
-      - "config/swiftformat"
-      - "config/swiftlint.yml"
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
   workflow_dispatch:
 
 concurrency:
@@ -20,11 +14,53 @@ env:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
+  scope:
+    name: Detect iOS scan scope
+    runs-on: ubuntu-24.04
+    outputs:
+      should-scan: ${{ steps.scope.outputs.should-scan }}
+    steps:
+      - name: Detect changed paths
+        id: scope
+        uses: actions/github-script@v9
+        with:
+          script: |
+            if (context.eventName === "workflow_dispatch") {
+              core.setOutput("should-scan", "true");
+              return;
+            }
+            if (context.payload.pull_request?.draft) {
+              core.setOutput("should-scan", "false");
+              return;
+            }
+
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+              per_page: 100,
+            });
+            const isScanPath = (filename) =>
+              typeof filename === "string" && (
+                filename.startsWith("apps/ios/") ||
+                filename === ".github/workflows/ios-periphery.yml" ||
+                filename === ".github/workflows/ios-periphery-comment.yml" ||
+                filename === "config/swiftformat" ||
+                filename === "config/swiftlint.yml"
+              );
+            const shouldScan = files.some(
+              ({ filename, previous_filename: previousFilename }) =>
+                isScanPath(filename) || isScanPath(previousFilename)
+            );
+            core.setOutput("should-scan", String(shouldScan));
+
   scan:
     name: Scan iOS dead code
-    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
+    needs: scope
+    if: ${{ needs.scope.outputs.should-scan == 'true' }}
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'macos-26' || (github.repository == 'openclaw/openclaw' && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
     timeout-minutes: 45
     steps:

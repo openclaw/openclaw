@@ -80,8 +80,10 @@ jobs:
               filter: "latest",
               per_page: 100,
             });
+            const scopeJob = jobs.find((job) => job.name === "Detect iOS scan scope");
             const scanJob = jobs.find((job) => job.name === "Scan iOS dead code");
-            const scanSkipped = scanJob?.conclusion === "skipped";
+            const scanSkipped =
+              scopeJob?.conclusion === "success" && scanJob?.conclusion === "skipped";
             if (scanSkipped) {
               core.info(`Skipping intentionally omitted Periphery scan for PR #${pr.number}.`);
             }
@@ -265,7 +267,15 @@ jobs:
               for (const name of ["periphery.json", "periphery.stdout.json"]) {
                 try {
                   const parsed = JSON.parse(read(name));
-                  if (Array.isArray(parsed)) {
+                  const validFindings =
+                    Array.isArray(parsed) &&
+                    parsed.every(
+                      (finding) =>
+                        finding !== null &&
+                        typeof finding === "object" &&
+                        !Array.isArray(finding),
+                    );
+                  if (validFindings) {
                     findings = parsed;
                     break;
                   }
@@ -318,7 +328,7 @@ jobs:
               body += [
                 "### iOS Periphery",
                 "",
-                "Periphery scan skipped while the pull request is a draft.",
+                "Periphery scan skipped because the pull request is a draft or no longer touches iOS scan scope.",
               ].join("\n");
             } else if (findings === null) {
               body += [
