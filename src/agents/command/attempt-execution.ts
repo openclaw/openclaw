@@ -230,7 +230,8 @@ function resolveCliExecutionAuthProfileId(params: {
   selected: HarnessAuthProfileSelection;
 }): string | undefined {
   if (params.selected.authProfileId) {
-    return params.selected.authProfileProvider === params.cliExecutionProvider
+    return params.selected.authProfileProvider === params.cliExecutionProvider ||
+      params.cliExecutionProvider === GOOGLE_GEMINI_CLI_PROVIDER_ID
       ? params.selected.authProfileId
       : undefined;
   }
