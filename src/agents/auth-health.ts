@@ -422,11 +422,7 @@ export function buildAuthHealthSummary(params: {
     // aggregated provider status drives the Control UI badge; marking the
     // provider as expired when a usable credential exists is misleading.
     if (hasHealthyOAuth) {
-      if (hasExpiring) {
-        provider.status = "expiring";
-      } else {
-        provider.status = "ok";
-      }
+      provider.status = "ok";
     } else if (hasExpired) {
       provider.status = "expired";
     } else if (hasMissing) {
