@@ -322,10 +322,12 @@ function makeSyntheticToolResultEntry(params: {
   toolCallId: string;
   toolName?: string;
 }): SessionMessageEntry {
+  const parentMessageTimestamp = readSessionEntrySourceTimestamp(params.parent);
   const message = makeMissingToolResult({
     toolCallId: params.toolCallId,
     toolName: params.toolName,
     text: "aborted",
+    sourceTimestamp: parentMessageTimestamp,
   });
   return {
     type: "message",
@@ -334,6 +336,17 @@ function makeSyntheticToolResultEntry(params: {
     timestamp: new Date().toISOString(),
     message: message as unknown as SessionMessageEntry["message"],
   };
+}
+
+function readSessionEntrySourceTimestamp(entry: SessionMessageEntry): number | undefined {
+  if (typeof entry.message.timestamp === "number" && Number.isFinite(entry.message.timestamp)) {
+    return entry.message.timestamp;
+  }
+  if (typeof entry.timestamp === "string") {
+    const timestamp = Date.parse(entry.timestamp);
+    return Number.isFinite(timestamp) ? timestamp : undefined;
+  }
+  return undefined;
 }
 
 function insertMissingCodeModeToolResults(entries: unknown[]): {

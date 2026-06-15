@@ -151,6 +151,10 @@ const DEFAULT_MISSING_TOOL_RESULT_TEXT =
   "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.";
 const SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY = "openclawSyntheticMissingToolResult";
 
+function readFiniteTimestamp(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
 function makeMissingToolResult(params: {
   toolCallId: string;
   toolName?: string;
@@ -160,6 +164,7 @@ function makeMissingToolResult(params: {
   // sends this repaired history to real models. Other providers keep the older,
   // explicit OpenClaw diagnostic text unless the caller opts in.
   text?: string;
+  sourceTimestamp?: unknown;
 }): Extract<AgentMessage, { role: "toolResult" }> {
   return {
     role: "toolResult",
@@ -173,7 +178,7 @@ function makeMissingToolResult(params: {
     ],
     details: { [SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY]: true },
     isError: true,
-    timestamp: Date.now(),
+    timestamp: readFiniteTimestamp(params.sourceTimestamp) ?? 0,
   } as Extract<AgentMessage, { role: "toolResult" }>;
 }
 
@@ -715,6 +720,7 @@ export function repairToolUseResultPairing(
             toolCallId: call.id,
             toolName: call.name,
             text: options?.missingToolResultText,
+            sourceTimestamp: readFiniteTimestamp((msg as { timestamp?: unknown }).timestamp),
           });
           added.push(missing);
           changed = true;

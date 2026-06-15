@@ -653,11 +653,12 @@ describe("repairSessionFileIfNeeded", () => {
   it("inserts missing code-mode tool results before replay repair has to synthesize them", async () => {
     const { file } = await createTempSessionPath();
     const { header, message } = buildSessionHeaderAndMessage();
+    const sourceEntryTimestamp = "2026-06-15T14:16:00.000Z";
     const toolCallAssistant = {
       type: "message",
       id: "msg-asst-process",
       parentId: "msg-1",
-      timestamp: new Date().toISOString(),
+      timestamp: sourceEntryTimestamp,
       message: {
         role: "assistant",
         provider: "openai",
@@ -707,6 +708,7 @@ describe("repairSessionFileIfNeeded", () => {
     expect(inserted.message.toolCallId).toBe("call_process|fc_1");
     expect(inserted.message.toolName).toBe("process");
     expect(inserted.message.isError).toBe(true);
+    expect(inserted.message.timestamp).toBe(Date.parse(sourceEntryTimestamp));
     expect(inserted.message.content[0].text).toBe("aborted");
     expect(JSON.parse(lines[4])).toEqual(deliveryMirror);
   });

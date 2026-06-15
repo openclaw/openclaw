@@ -91,6 +91,7 @@ describe("sanitizeToolUseResultPairing", () => {
       {
         role: "assistant",
         content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+        timestamp: 12345,
       },
       { role: "user", content: "user message that should come after tool use" },
     ]);
@@ -102,6 +103,11 @@ describe("sanitizeToolUseResultPairing", () => {
     expect(result.added).toHaveLength(1);
     expect(result.messages.map((m) => m.role)).toEqual(["assistant", "toolResult", "user"]);
     expect(result.added[0]?.content).toEqual([{ type: "text", text: "aborted" }]);
+    const repeated = repairToolUseResultPairing(input, {
+      missingToolResultText: "aborted",
+    });
+    expect(result.added[0]?.timestamp).toBe(12345);
+    expect(repeated.added[0]?.timestamp).toBe(result.added[0]?.timestamp);
   });
 
   it("keeps matched parallel tool results and synthesizes only missing siblings", () => {

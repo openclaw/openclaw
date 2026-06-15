@@ -37,6 +37,10 @@ import { makeMissingToolResult, sanitizeToolCallInputs } from "./session-transcr
 import type { SessionManager } from "./sessions/index.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
 
+function readFiniteTimestamp(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
 /**
  * Truncate oversized text content blocks in a tool result message.
  * Returns the original message if under the limit, or a new message with
@@ -705,16 +709,17 @@ export function installSessionToolResultGuard(
       return;
     }
     if (allowSyntheticToolResults) {
-      for (const [id, name] of pendingState.entries()) {
+      for (const [id, entry] of pendingState.entries()) {
         const synthetic = makeMissingToolResult({
           toolCallId: id,
-          toolName: name,
+          toolName: entry.name,
           text: missingToolResultText,
+          sourceTimestamp: entry.timestamp,
         });
         const flushed = applyBeforeWriteHook(
           persistToolResult(persistMessage(synthetic), {
             toolCallId: id,
-            toolName: name,
+            toolName: entry.name,
             isSynthetic: true,
           }),
         );
@@ -858,7 +863,17 @@ export function installSessionToolResultGuard(
     }
 
     if (toolCalls.length > 0) {
-      pendingState.trackToolCalls(toolCalls);
+      const assistantTimestamp = readFiniteTimestamp(
+        (finalMessage as { timestamp?: unknown }).timestamp,
+      );
+      pendingState.trackToolCalls(
+        toolCalls.map((call) => {
+          if (assistantTimestamp === undefined) {
+            return call;
+          }
+          return { id: call.id, name: call.name, timestamp: assistantTimestamp };
+        }),
+      );
     }
     if (isUserAgentMessage(finalMessage)) {
       void opts?.onUserMessagePersisted?.(finalMessage);
