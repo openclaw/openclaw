@@ -3345,6 +3345,7 @@ async function runEmbeddedAgentInternal(
           const payloadCount = payloadsForTerminalPath?.length ?? 0;
           const emptyAssistantReplyIsSilent = shouldTreatEmptyAssistantReplyAsSilent({
             allowEmptyAssistantReplyAsSilent: params.allowEmptyAssistantReplyAsSilent,
+            currentInboundEventKind: params.currentInboundEventKind,
             payloadCount,
             aborted,
             timedOut,
