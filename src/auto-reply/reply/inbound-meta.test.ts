@@ -950,7 +950,7 @@ describe("buildInboundUserContextPrefix", () => {
                   sender: "Bot",
                   body: "Malformed attachment",
                   media_type: "image/webp",
-                  media_path: `media://inbound/${"\uD800"}`,
+                  media_path: "media://inbound/\uD800",
                 },
               ],
             },
