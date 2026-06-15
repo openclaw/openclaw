@@ -1539,6 +1539,58 @@ function visibleCatalogEntries(
     : catalog.entries;
 }
 
+function tokenizeLookupValue(input: string): Set<string> {
+  return new Set(normalizeStringEntries(input.toLowerCase().split(/[^a-z0-9]+/u)));
+}
+
+function scoreUnknownToolSuggestion(needle: string, entry: ToolSearchCatalogEntry): number {
+  const normalizedNeedle = needle.toLowerCase();
+  const name = entry.name.toLowerCase();
+  const id = entry.id.toLowerCase();
+  const label = (entry.label ?? "").toLowerCase();
+  const description = entry.description.toLowerCase();
+  const needleTokens = tokenizeLookupValue(needle);
+  const entryTokens = tokenizeLookupValue(
+    `${entry.name} ${entry.id} ${entry.label ?? ""} ${entry.description}`,
+  );
+  let score = 0;
+  if ((name && normalizedNeedle.includes(name)) || id.includes(normalizedNeedle)) {
+    score += 40;
+  }
+  if (name && needleTokens.has(name)) {
+    score += 40;
+  }
+  for (const token of needleTokens) {
+    if (entryTokens.has(token)) {
+      score += 12;
+    }
+  }
+  if (label.includes(normalizedNeedle) || description.includes(normalizedNeedle)) {
+    score += 8;
+  }
+  return score;
+}
+
+function formatUnknownToolIdError(
+  needle: string,
+  entries: readonly ToolSearchCatalogEntry[],
+  options: { exactIdOnly?: boolean } = {},
+): string {
+  const suggestions = uniqueStrings(
+    entries
+      .map((entry) => ({
+        value: options.exactIdOnly ? entry.id : entry.name,
+        score: scoreUnknownToolSuggestion(needle, entry),
+      }))
+      .filter((candidate) => candidate.score > 0)
+      .toSorted((a, b) => b.score - a.score || a.value.localeCompare(b.value))
+      .map((candidate) => candidate.value),
+  ).slice(0, 3);
+  const suggestionText =
+    suggestions.length > 0 ? `. Did you mean: ${suggestions.join(", ")}?` : ".";
+  return `Unknown tool id: ${needle}${suggestionText} Use tool_search to find a tool, tool_describe to inspect it, then tool_call with the exact id or name.`;
+}
+
 function findEntry(
   catalog: ToolSearchCatalogSession,
   id: string,
@@ -1556,7 +1608,7 @@ function findEntry(
   }
   const namedEntry = namedEntries[0];
   if (!namedEntry) {
-    throw new ToolInputError(`Unknown tool id: ${needle}`);
+    throw new ToolInputError(formatUnknownToolIdError(needle, entries));
   }
   return namedEntry;
 }
@@ -1565,7 +1617,9 @@ function findEntryByExactId(catalog: ToolSearchCatalogSession, id: string): Tool
   const needle = id.trim();
   const entry = catalog.entries.find((candidate) => candidate.id === needle);
   if (!entry) {
-    throw new ToolInputError(`Unknown tool id: ${needle}`);
+    throw new ToolInputError(
+      formatUnknownToolIdError(needle, catalog.entries, { exactIdOnly: true }),
+    );
   }
   return entry;
 }

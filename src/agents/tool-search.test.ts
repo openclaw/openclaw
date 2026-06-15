@@ -1288,6 +1288,36 @@ describe("Tool Search", () => {
     ).rejects.toThrow();
   });
 
+  it("suggests recoverable Tool Search steps for guessed tool ids", async () => {
+    const callTool = fakeTool(TOOL_CALL_RAW_TOOL_NAME, "call");
+    const searchTool = fakeTool(TOOL_SEARCH_RAW_TOOL_NAME, "search");
+    const describeTool = fakeTool(TOOL_DESCRIBE_RAW_TOOL_NAME, "describe");
+    const writeTool = fakeTool("write", "Write a file to the workspace");
+    applyToolSearchCatalog({
+      tools: [callTool, searchTool, describeTool, writeTool],
+      config: { tools: { toolSearch: { mode: "tools" } } } as never,
+      sessionId: "session-guessed-file-write",
+      sessionKey: "agent:main:main",
+    });
+
+    const runtimeTools = createToolSearchTools({
+      sessionId: "session-guessed-file-write",
+      sessionKey: "agent:main:main",
+      config: { tools: { toolSearch: { mode: "tools" } } } as never,
+    });
+    const runtimeCallTool = runtimeTools[3];
+
+    await expect(
+      runtimeCallTool.execute("call-guessed-file-write", {
+        id: "file_write",
+        args: { path: "memory/2026-05-22.md", content: "remember this" },
+      }),
+    ).rejects.toThrow(
+      "Unknown tool id: file_write. Did you mean: write? Use tool_search to find a tool, tool_describe to inspect it, then tool_call with the exact id or name.",
+    );
+    expect(writeTool.execute).not.toHaveBeenCalled();
+  });
+
   it("preserves code-mode bridge errors from the child process", async () => {
     const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
     applyToolSearchCatalog({
