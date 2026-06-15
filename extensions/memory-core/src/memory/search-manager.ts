@@ -1,6 +1,5 @@
 // Memory Core plugin module implements search manager behavior.
 import fs from "node:fs/promises";
-import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createSubsystemLogger,
@@ -516,7 +515,17 @@ class KeywordFallbackMemoryManager implements MemorySearchManager {
         return left.startLine - right.startLine;
       })
       .slice(0, maxResults)
-      .map(({ matchCount, ...result }) => result);
+      .map(
+        (candidate): MemorySearchResult => ({
+          path: candidate.path,
+          startLine: candidate.startLine,
+          endLine: candidate.endLine,
+          score: candidate.score,
+          textScore: candidate.textScore,
+          snippet: candidate.snippet,
+          source: candidate.source,
+        }),
+      );
   }
 
   async readFile(params: {
