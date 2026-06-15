@@ -31,6 +31,7 @@ Docs: https://docs.openclaw.ai
 - UI/mobile/TUI: preserve dashboard session parent lineage, WebChat backscroll, reset soft command args, sidebar session picker interactivity, collapsed workspace files, resolved `/model` confirmation refs, and stale foreground iOS Gateway reconnects. (#90658, #92622, #91353, #92705, #92779, #92773, #92552) Thanks @luoyanglang, @TurboTheTurtle, @zhouhe-xydt, @NianJiuZst, @shakkernerd, @NarahariRaghava, and @Solvely-Colin.
 - Release and test reliability: extend slow Gateway/full-suite watchdogs, split local full-suite shards when throttled, stabilize plugin auth marker fixtures, avoid brittle provider-ref error text, and keep QA Lab bootstrap selection assertions aligned with flow-only scenarios. (#92652)
 - Agent routing: route subagent RPC callbacks addressed to an agent-shaped `--to` target to the correct session key instead of falling back to the main session, so WeChat (and other channel) session-key callbacks reach the intended subagent session. (#90231) Thanks @zhangguiping-xydt.
+- QQBot delivery: keep markdown table chunks self-contained across message boundaries by preserving table state across block deliveries, flushing unfinished table-row fragments as plain text, and detecting short pipe-terminated rows by column count so split rows are not sent as malformed markdown. (#92428) Thanks @sliverp.
 
 ## 2026.6.6
 
