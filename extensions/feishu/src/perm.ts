@@ -2,13 +2,15 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { listEnabledFeishuAccounts } from "./accounts.js";
+import { createFeishuClient } from "./client.js";
 import { FeishuPermSchema, type FeishuPermParams } from "./perm-schema.js";
-import { createFeishuToolClient, resolveAnyEnabledFeishuToolsConfig } from "./tool-account.js";
+import { resolveAnyEnabledFeishuToolsConfig, resolveFeishuToolAccount } from "./tool-account.js";
 import {
   jsonToolResult,
   toolExecutionErrorResult,
   unknownToolActionResult,
 } from "./tool-result.js";
+import { resolveToolsConfig } from "./tools-config.js";
 
 type ListTokenType =
   | "doc"
@@ -130,6 +132,17 @@ export function registerFeishuPermTools(api: OpenClawPluginApi) {
 
   type FeishuPermExecuteParams = FeishuPermParams & { accountId?: string };
 
+  const createPermClient = (
+    params: FeishuPermExecuteParams | undefined,
+    defaultAccountId?: string,
+  ) => {
+    const account = resolveFeishuToolAccount({ api, executeParams: params, defaultAccountId });
+    if (!resolveToolsConfig(account.config.tools).perm) {
+      throw new Error(`Feishu Perm tools are disabled for account "${account.accountId}"`);
+    }
+    return createFeishuClient(account);
+  };
+
   api.registerTool(
     (ctx) => {
       const defaultAccountId = ctx.agentAccountId;
@@ -141,11 +154,7 @@ export function registerFeishuPermTools(api: OpenClawPluginApi) {
         async execute(_toolCallId, params) {
           const p = params as FeishuPermExecuteParams;
           try {
-            const client = createFeishuToolClient({
-              api,
-              executeParams: p,
-              defaultAccountId,
-            });
+            const client = createPermClient(p, defaultAccountId);
             switch (p.action) {
               case "list":
                 return jsonToolResult(await listMembers(client, p.token, p.type));

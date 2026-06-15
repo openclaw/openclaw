@@ -205,6 +205,38 @@ describe("feishu tool account routing", () => {
     expect(lastClientAppId()).toBe("app-b");
   });
 
+  test("perm tool rejects a disabled contextual account when another account enables it", async () => {
+    const { api, resolveTool } = createToolFactoryHarness(
+      createConfig({
+        toolsA: { perm: false },
+        toolsB: { perm: true },
+      }),
+    );
+    registerFeishuPermTools(api);
+
+    const tool = resolveTool("feishu_perm", { agentAccountId: "a" });
+    const result = await tool.execute("call", { action: "unknown_action" });
+
+    expect(createFeishuClientMock).not.toHaveBeenCalled();
+    expect(result.details.error).toBe('Feishu Perm tools are disabled for account "a"');
+  });
+
+  test("perm tool rejects an explicit disabled account override", async () => {
+    const { api, resolveTool } = createToolFactoryHarness(
+      createConfig({
+        toolsA: { perm: false },
+        toolsB: { perm: true },
+      }),
+    );
+    registerFeishuPermTools(api);
+
+    const tool = resolveTool("feishu_perm", { agentAccountId: "b" });
+    const result = await tool.execute("call", { action: "unknown_action", accountId: "a" });
+
+    expect(createFeishuClientMock).not.toHaveBeenCalled();
+    expect(result.details.error).toBe('Feishu Perm tools are disabled for account "a"');
+  });
+
   test("bitable tool registers when only second account enables it and routes to agentAccountId", async () => {
     const { api, resolveTool } = createToolFactoryHarness(
       createConfig({
