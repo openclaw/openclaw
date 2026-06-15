@@ -360,11 +360,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         return;
       }
 
-      streaming = new FeishuStreamingSession(
-        createFeishuClient(account),
-        creds,
-        (message) => params.runtime.log?.(`feishu[${account.accountId}] ${message}`),
-        { contentUpdateMode: account.config?.streamingContentMode },
+      streaming = new FeishuStreamingSession(createFeishuClient(account), creds, (message) =>
+        params.runtime.log?.(`feishu[${account.accountId}] ${message}`),
       );
       try {
         const cardHeader = resolveCardHeader(agentId, identity);

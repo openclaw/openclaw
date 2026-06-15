@@ -69,7 +69,6 @@ const RenderModeSchema = z.enum(["auto", "raw", "card"]).optional();
 // Streaming card mode: when enabled, card replies use Feishu's Card Kit streaming API
 // for incremental text display with a "Thinking..." placeholder
 const StreamingModeSchema = z.boolean().optional();
-const StreamingContentModeSchema = z.enum(["full", "append"]).optional();
 const BlockStreamingSchema = z.boolean().optional();
 
 const BlockStreamingCoalesceSchema = z
@@ -200,7 +199,6 @@ const FeishuSharedConfigShape = {
   heartbeat: ChannelHeartbeatVisibilitySchema,
   renderMode: RenderModeSchema,
   streaming: StreamingModeSchema,
-  streamingContentMode: StreamingContentModeSchema,
   tools: FeishuToolsConfigSchema,
   actions: ChannelActionsSchema,
   replyInThread: ReplyInThreadSchema,

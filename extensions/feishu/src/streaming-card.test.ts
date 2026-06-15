@@ -177,7 +177,7 @@ describe("FeishuStreamingSession", () => {
     await session.update("hello small");
     expect(updateBodies).toHaveLength(0);
 
-    await vi.advanceTimersByTimeAsync(160);
+    await vi.advanceTimersByTimeAsync(750);
 
     expect(updateBodies).toHaveLength(1);
     expect(JSON.parse(updateBodies[0] ?? "{}")).toEqual({
@@ -187,7 +187,7 @@ describe("FeishuStreamingSession", () => {
     });
   });
 
-  it("pushes natural-boundary updates immediately inside the throttle window", async () => {
+  it("coalesces natural-boundary updates inside the throttle window", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(2_000);
     const updateBodies: string[] = [];
@@ -210,6 +210,10 @@ describe("FeishuStreamingSession", () => {
     });
 
     await session.update("hello!");
+
+    expect(updateBodies).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(750);
 
     expect(updateBodies).toHaveLength(1);
     expect(JSON.parse(updateBodies[0] ?? "{}")).toEqual({
@@ -243,6 +247,7 @@ describe("FeishuStreamingSession", () => {
 
     await session.update("hello world");
     await session.update("hello world!");
+    await vi.advanceTimersByTimeAsync(750);
 
     expect(updateBodies).toHaveLength(2);
     expect(JSON.parse(updateBodies[0] ?? "{}")).toEqual({
@@ -281,6 +286,7 @@ describe("FeishuStreamingSession", () => {
 
     await session.update("hello world");
     await session.update("hello world!");
+    await vi.advanceTimersByTimeAsync(750);
 
     expect(updateBodies).toHaveLength(2);
     expect(JSON.parse(updateBodies[0] ?? "{}")).toEqual({
@@ -295,63 +301,53 @@ describe("FeishuStreamingSession", () => {
     });
   });
 
-  it("sends only appended content for streaming updates in append mode", async () => {
+  it("sends complete content for prefix streaming updates", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(3_700);
     const updateBodies: string[] = [];
     mockFetches(updateBodies);
 
-    const session = new FeishuStreamingSession(
-      {} as never,
-      {
-        appId: "app_append_mode_update",
-        appSecret: "secret",
-      },
-      undefined,
-      { contentUpdateMode: "append" },
-    );
+    const session = new FeishuStreamingSession({} as never, {
+      appId: "app_full_mode_update",
+      appSecret: "secret",
+    });
     setStreamingSessionInternals(session, {
       state: {
-        cardId: "card_append_update",
-        messageId: "om_append_update",
+        cardId: "card_full_update",
+        messageId: "om_full_update",
         sequence: 1,
         currentText: "hello",
         sentText: "hello",
         hasNote: false,
       },
-      lastUpdateTime: 3_000,
+      lastUpdateTime: 2_900,
     });
 
     await session.update("hello world");
 
     expect(updateBodies).toHaveLength(1);
     expect(JSON.parse(updateBodies[0] ?? "{}")).toEqual({
-      content: " world",
+      content: "hello world",
       sequence: 2,
-      uuid: "s_card_append_update_2",
+      uuid: "s_card_full_update_2",
     });
   });
 
-  it("sends only final appended content when closing a partially streamed card", async () => {
+  it("sends complete final content when closing a partially streamed card", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(3_800);
     const updateBodies: string[] = [];
     const replaceBodies: string[] = [];
     mockFetches(updateBodies, new Set<number>(), replaceBodies);
 
-    const session = new FeishuStreamingSession(
-      {} as never,
-      {
-        appId: "app_final_append_only",
-        appSecret: "secret",
-      },
-      undefined,
-      { contentUpdateMode: "append" },
-    );
+    const session = new FeishuStreamingSession({} as never, {
+      appId: "app_final_full_content",
+      appSecret: "secret",
+    });
     setStreamingSessionInternals(session, {
       state: {
-        cardId: "card_final_append",
-        messageId: "om_final_append",
+        cardId: "card_final_full",
+        messageId: "om_final_full",
         sequence: 1,
         currentText: "hello",
         sentText: "hello",
@@ -365,9 +361,9 @@ describe("FeishuStreamingSession", () => {
     expect(updateBodies).toHaveLength(1);
     expect(replaceBodies).toHaveLength(0);
     expect(JSON.parse(updateBodies[0] ?? "{}")).toEqual({
-      content: " world",
+      content: "hello world",
       sequence: 2,
-      uuid: "s_card_final_append_2",
+      uuid: "s_card_final_full_2",
     });
   });
 
