@@ -246,9 +246,10 @@ describe("buildSlackThreadingToolContext", () => {
       context: { ChatType: "channel", To: "channel:C1234ABC" },
     });
     expect(result.currentChannelId).toBe("C1234ABC");
+    expect(result.currentMessagingTarget).toBe("channel:C1234ABC");
   });
 
-  it("uses NativeChannelId for DM when To is user-prefixed", () => {
+  it("preserves native and routable DM targets", () => {
     const result = buildSlackThreadingToolContext({
       cfg: emptyCfg,
       accountId: null,
@@ -259,14 +260,16 @@ describe("buildSlackThreadingToolContext", () => {
       },
     });
     expect(result.currentChannelId).toBe("D8SRXRDNF");
+    expect(result.currentMessagingTarget).toBe("user:U8SUVSVGS");
   });
 
-  it("returns undefined currentChannelId when neither channel: To nor NativeChannelId is set", () => {
+  it("uses the user target for implicit DM sends when NativeChannelId is missing", () => {
     const result = buildSlackThreadingToolContext({
       cfg: emptyCfg,
       accountId: null,
       context: { ChatType: "direct", To: "user:U8SUVSVGS" },
     });
-    expect(result.currentChannelId).toBeUndefined();
+    expect(result.currentChannelId).toBe("user:U8SUVSVGS");
+    expect(result.currentMessagingTarget).toBe("user:U8SUVSVGS");
   });
 });

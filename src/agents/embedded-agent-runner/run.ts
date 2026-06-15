@@ -32,7 +32,7 @@ import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveProviderAuthProfileId } from "../../plugins/provider-runtime.js";
-import { enqueueCommandInLane } from "../../process/command-queue.js";
+import { enqueueCommandInLane, getCommandLaneSnapshot } from "../../process/command-queue.js";
 import type { CommandQueueEnqueueOptions } from "../../process/command-queue.types.js";
 import { createAgentHarnessTaskRuntimeScope } from "../../tasks/agent-harness-task-runtime-scope.js";
 import { resolveUserPath } from "../../utils.js";
@@ -74,6 +74,7 @@ import {
   isCompactionFailureError,
   isFailoverAssistantError,
   isFailoverErrorMessage,
+  isGenericUnknownStreamErrorMessage,
   isLikelyContextOverflowError,
   isRateLimitAssistantError,
   parseImageDimensionError,
@@ -109,6 +110,7 @@ import {
   resolveSelectedOpenAIRuntimeProvider,
 } from "../openai-routing.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
+import { hasOnlyAssistantReasoningContent } from "../replay-turn-classification.js";
 import { runAgentCleanupStep } from "../run-cleanup-timeout.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
@@ -139,7 +141,10 @@ import {
   type PostCompactionGuardObservation,
 } from "./post-compaction-loop-guard.js";
 import { createEmbeddedRunReplayState, observeReplayMetadata } from "./replay-state.js";
-import { handleAssistantFailover, isShortWindowRateLimitMessage } from "./run/assistant-failover.js";
+import {
+  handleAssistantFailover,
+  isShortWindowRateLimitMessage,
+} from "./run/assistant-failover.js";
 import {
   createEmbeddedRunStageTracker,
   EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE,
@@ -194,6 +199,7 @@ import {
   resolveReplayInvalidFlag,
   resolveRunLivenessState,
   shouldRetryMissingAssistantTurn,
+  shouldRetrySilentErrorAssistantTurn,
   shouldTreatEmptyAssistantReplyAsSilent,
 } from "./run/incomplete-turn.js";
 import type { RunEmbeddedAgentParams } from "./run/params.js";
@@ -420,10 +426,26 @@ function createScopedAuthProfileStore(
       return credential ? [[profileId, credential] as const] : [];
     }),
   );
+  const scopedRuntimeExternalProfileIds = (store.runtimeExternalProfileIds ?? []).filter(
+    (profileId) => scopedProfiles[profileId],
+  );
+  const scopedRuntimePersistedProfileIds = (store.runtimePersistedProfileIds ?? []).filter(
+    (profileId) => scopedProfiles[profileId],
+  );
   return Object.keys(scopedProfiles).length > 0
     ? {
         version: store.version,
         profiles: scopedProfiles,
+        ...(scopedRuntimePersistedProfileIds.length > 0
+          ? { runtimePersistedProfileIds: scopedRuntimePersistedProfileIds }
+          : {}),
+        ...(scopedRuntimeExternalProfileIds.length > 0 ||
+        store.runtimeExternalProfileIdsAuthoritative === true
+          ? { runtimeExternalProfileIds: scopedRuntimeExternalProfileIds }
+          : {}),
+        ...(store.runtimeExternalProfileIdsAuthoritative === true
+          ? { runtimeExternalProfileIdsAuthoritative: true }
+          : {}),
       }
     : createEmptyAuthProfileStore();
 }
@@ -569,12 +591,38 @@ async function runEmbeddedAgentInternal(
       },
       laneTaskTimeoutMs,
     );
+  const withRunLaneWait = (opts?: CommandQueueEnqueueOptions) => {
+    if (!opts?.onWait && !params.onLaneWait) {
+      return opts;
+    }
+    return {
+      ...opts,
+      onWait: (waitMs, queuedAhead) => {
+        opts?.onWait?.(waitMs, queuedAhead);
+        params.onLaneWait?.({ waitMs, queuedAhead, waiting: true });
+      },
+    } satisfies CommandQueueEnqueueOptions;
+  };
+  const noteLaneWaitIfBusy = (lane: string) => {
+    if (!params.onLaneWait) {
+      return;
+    }
+    const snapshot = getCommandLaneSnapshot(lane);
+    if (snapshot.queuedCount > 0 || snapshot.activeCount >= snapshot.maxConcurrent) {
+      params.onLaneWait({
+        waitMs: 0,
+        queuedAhead: snapshot.queuedCount + snapshot.activeCount,
+        waiting: true,
+      });
+    }
+  };
   const enqueueGlobal = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) => {
     const globalOpts: CommandQueueEnqueueOptions = {
       ...opts,
       priority: sessionQueuePriority,
     };
     const taskWithCurrentLifecycle = () => {
+      params.onLaneWait?.({ waitMs: 0, queuedAhead: 0, waiting: false });
       throwIfAborted();
       const currentLifecycleGeneration = getAgentEventLifecycleGeneration();
       const existingContext = getAgentRunContext(params.runId);
@@ -601,15 +649,27 @@ async function runEmbeddedAgentInternal(
       });
       return withAgentRunLifecycleGeneration(lifecycleGeneration, task);
     };
-    return params.enqueue
-      ? params.enqueue(taskWithCurrentLifecycle, withLaneTimeout(globalOpts))
-      : enqueueCommandInLane(globalLane, taskWithCurrentLifecycle, withLaneTimeout(globalOpts));
+    if (params.enqueue) {
+      return params.enqueue(taskWithCurrentLifecycle, withLaneTimeout(withRunLaneWait(globalOpts)));
+    }
+    noteLaneWaitIfBusy(globalLane);
+    return enqueueCommandInLane(
+      globalLane,
+      taskWithCurrentLifecycle,
+      withLaneTimeout(withRunLaneWait(globalOpts)),
+    );
   };
   const enqueueSession = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) => {
     const sessionOpts: CommandQueueEnqueueOptions = { ...opts, priority: sessionQueuePriority };
-    return params.enqueue
-      ? params.enqueue(task, sessionOpts)
-      : enqueueCommandInLane(sessionLane, task, sessionOpts);
+    const taskWithLaneAdmission = () => {
+      params.onLaneWait?.({ waitMs: 0, queuedAhead: 0, waiting: false });
+      return task();
+    };
+    if (params.enqueue) {
+      return params.enqueue(taskWithLaneAdmission, withRunLaneWait(sessionOpts));
+    }
+    noteLaneWaitIfBusy(sessionLane);
+    return enqueueCommandInLane(sessionLane, taskWithLaneAdmission, withRunLaneWait(sessionOpts));
   };
   const channelHint = params.messageChannel ?? params.messageProvider;
   const resolvedToolResultFormat =
@@ -1721,6 +1781,7 @@ async function runEmbeddedAgentInternal(
             senderUsername: params.senderUsername,
             senderE164: params.senderE164,
             currentChannelId: params.currentChannelId,
+            currentMessagingTarget: params.currentMessagingTarget,
             currentThreadTs: params.currentThreadTs,
             currentMessageId: params.currentMessageId,
             currentInboundAudio: params.currentInboundAudio,
@@ -1807,6 +1868,7 @@ async function runEmbeddedAgentInternal(
             onReasoningStream: params.onReasoningStream,
             onReasoningEnd: params.onReasoningEnd,
             onToolResult: params.onToolResult,
+            onAgentToolResult: params.onAgentToolResult,
             onAgentEvent: params.onAgentEvent,
             onExecutionPhase: params.onExecutionPhase,
             extraSystemPrompt: params.extraSystemPrompt,
@@ -1822,6 +1884,7 @@ async function runEmbeddedAgentInternal(
             bootstrapContextRunKind: params.bootstrapContextRunKind,
             jobId: params.jobId,
             toolsAllow: params.toolsAllow,
+            cleanupBundleMcpOnRunEnd: params.cleanupBundleMcpOnRunEnd,
             disableMessageTool: params.disableMessageTool,
             forceMessageTool: params.forceMessageTool,
             enableHeartbeatTool: params.enableHeartbeatTool,
@@ -2750,8 +2813,7 @@ async function runEmbeddedAgentInternal(
               {
                 providerStarted: promptErrorSource === "prompt",
                 transientRateLimit:
-                  promptFailoverReason === "rate_limit" &&
-                  isShortWindowRateLimitMessage(errorText),
+                  promptFailoverReason === "rate_limit" && isShortWindowRateLimitMessage(errorText),
               },
             );
             const promptFailoverFailure =
@@ -2931,6 +2993,43 @@ async function runEmbeddedAgentInternal(
           const imageDimensionError = parseImageDimensionError(
             assistantForFailover?.errorMessage ?? "",
           );
+          // The shared runtime wraps interrupted streams as a timeout. Retry that
+          // wrapper only for reasoning-only output so ordinary timeouts keep failover.
+          const genericUnknownReasoningError =
+            assistantFailoverReason === "timeout" &&
+            isGenericUnknownStreamErrorMessage(assistantForFailover?.errorMessage ?? "") &&
+            Boolean(assistantForFailover && hasOnlyAssistantReasoningContent(assistantForFailover));
+          const silentErrorRetryReason =
+            assistantFailoverReason === null ||
+            genericUnknownReasoningError ||
+            assistantFailoverReason === "no_error_details" ||
+            assistantFailoverReason === "unclassified" ||
+            assistantFailoverReason === "unknown";
+          // Retry replay-safe non-visible provider errors before assistant
+          // failover surfaces them as terminal provider failures.
+          if (
+            !authFailure &&
+            !rateLimitFailure &&
+            !billingFailure &&
+            !cloudCodeAssistFormatError &&
+            !imageDimensionError &&
+            !aborted &&
+            !promptError &&
+            !timedOut &&
+            silentErrorRetryReason &&
+            shouldRetrySilentErrorAssistantTurn({ attempt, assistant: assistantForFailover }) &&
+            emptyErrorRetries < MAX_EMPTY_ERROR_RETRIES
+          ) {
+            emptyErrorRetries += 1;
+            log.warn(
+              `[empty-error-retry] stopReason=error non-visible-output; resubmitting ` +
+                `attempt=${emptyErrorRetries}/${MAX_EMPTY_ERROR_RETRIES} ` +
+                `provider=${assistantForFailover?.provider ?? provider} ` +
+                `model=${assistantForFailover?.model ?? model.id} ` +
+                `sessionKey=${params.sessionKey ?? params.sessionId}`,
+            );
+            continue;
+          }
           // Capture the failing profile before auth-profile rotation mutates `lastProfileId`.
           const failedAssistantProfileId = lastProfileId;
           const logAssistantFailoverDecision = createFailoverDecisionLogger({
@@ -3596,47 +3695,6 @@ async function runEmbeddedAgentInternal(
               `empty response retries exhausted: runId=${params.runId} sessionId=${params.sessionId} ` +
                 `provider=${activeErrorContext.provider}/${activeErrorContext.model} attempts=${emptyResponseRetryAttempts}/${maxEmptyResponseRetryAttempts} — surfacing incomplete-turn error`,
             );
-          }
-          // ── silent-error retry ────────────────────────────────────────────
-          // Observed with ollama/glm-5.1: a turn can end with stopReason="error"
-          // and zero output tokens AND empty content after a successful
-          // tool-call sequence, producing no user-visible text at all. This
-          // path is narrower than the empty-response continuation retry:
-          // same prompt, same session transcript (tool results already
-          // captured), no instruction injection. Placed before the
-          // incompleteTurnText return so it actually gets a chance to fire.
-          //
-          // Content-empty guard: a reasoning-only error (content has thinking
-          // blocks) is a distinct failure mode handled elsewhere; only retry
-          // when the assistant truly produced nothing.
-          //
-          // Side-effect guard: if the failed attempt already recorded potential
-          // side effects (messaging tool sent, cron add, mutating tool
-          // call that wasn't round-tripped as replay-safe), resubmission can
-          // duplicate those actions. Mirror the gate the other retry resolvers
-          // use (resolveEmptyResponseRetryInstruction, reasoning-only, planning-
-          // only), which short-circuit on attempt.replayMetadata.hadPotentialSideEffects.
-          const silentErrorContent = sessionLastAssistant?.content as Array<unknown> | undefined;
-          if (
-            incompleteTurnText &&
-            !aborted &&
-            !promptError &&
-            !timedOut &&
-            sessionLastAssistant?.stopReason === "error" &&
-            ((sessionLastAssistant?.usage as { output?: number } | undefined)?.output ?? 0) === 0 &&
-            (silentErrorContent?.length ?? 0) === 0 &&
-            (attempt.replayMetadata ? !attempt.replayMetadata.hadPotentialSideEffects : false) &&
-            emptyErrorRetries < MAX_EMPTY_ERROR_RETRIES
-          ) {
-            emptyErrorRetries += 1;
-            log.warn(
-              `[empty-error-retry] stopReason=error output=0; resubmitting ` +
-                `attempt=${emptyErrorRetries}/${MAX_EMPTY_ERROR_RETRIES} ` +
-                `provider=${sessionLastAssistant?.provider ?? provider} ` +
-                `model=${sessionLastAssistant?.model ?? model.id} ` +
-                `sessionKey=${params.sessionKey ?? params.sessionId}`,
-            );
-            continue;
           }
           if (incompleteTurnText) {
             const replayInvalid = resolveReplayInvalidForAttempt(incompleteTurnText);

@@ -565,7 +565,7 @@ export function createFollowupRunner(params: {
         }
       };
       const admission = await admitReplyTurn({
-        sessionId: run.sessionId,
+        sessionId: effectiveQueued.admissionSessionId ?? run.sessionId,
         sessionKey: replySessionKey ?? "",
         kind: "queued_followup",
         resetTriggered: false,
@@ -628,6 +628,7 @@ export function createFollowupRunner(params: {
           originatingAccountId: queued.originatingAccountId ?? run.agentAccountId,
           originatingChannel: queued.originatingChannel,
           originatingChatType: queued.originatingChatType,
+          originatingReplyToMode: queued.originatingReplyToMode,
           originatingTo: queued.originatingTo,
         });
         if (noticePayloads.length === 0) {
@@ -1518,7 +1519,9 @@ export function createFollowupRunner(params: {
         originatingAccountId: queued.originatingAccountId ?? run.agentAccountId,
         originatingChannel: queued.originatingChannel,
         originatingChatType: queued.originatingChatType,
+        originatingReplyToMode: queued.originatingReplyToMode,
         originatingTo: queued.originatingTo,
+        originatingThreadId: queued.originatingThreadId,
         sentMediaUrls: runResult.messagingToolSentMediaUrls,
         sentTargets: runResult.messagingToolSentTargets,
         sentTexts: runResult.messagingToolSentTexts,

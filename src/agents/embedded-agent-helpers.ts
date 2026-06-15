@@ -38,6 +38,7 @@ export {
   isLikelyContextOverflowError,
   isFailoverAssistantError,
   isFailoverErrorMessage,
+  isGenericUnknownStreamErrorMessage,
   isImageDimensionErrorMessage,
   isImageSizeError,
   isOverloadedErrorMessage,

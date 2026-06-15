@@ -8,7 +8,12 @@ import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 // WAL maintenance configures SQLite write-ahead logging and schedules bounded
 // checkpoints so state databases do not accumulate unbounded WAL files.
 export const DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES = 1000;
-export const DEFAULT_SQLITE_WAL_TRUNCATE_INTERVAL_MS = 30 * 60 * 1000;
+export const DEFAULT_SQLITE_WAL_CHECKPOINT_INTERVAL_MS = 30 * 60 * 1000;
+/**
+ * @deprecated Use DEFAULT_SQLITE_WAL_CHECKPOINT_INTERVAL_MS.
+ * Periodic checkpoints default to PASSIVE.
+ */
+export const DEFAULT_SQLITE_WAL_TRUNCATE_INTERVAL_MS = DEFAULT_SQLITE_WAL_CHECKPOINT_INTERVAL_MS;
 const LINUX_NFS_SUPER_MAGIC = 0x6969;
 const PROC_MOUNTINFO_PATH = "/proc/self/mountinfo";
 
@@ -31,6 +36,12 @@ export type SqliteWalMaintenanceOptions = {
   databaseLabel?: string;
   databasePath?: string;
   onCheckpointError?: (error: unknown) => void;
+};
+
+export type SqliteConnectionPragmaOptions = SqliteWalMaintenanceOptions & {
+  busyTimeoutMs?: number;
+  foreignKeys?: boolean;
+  synchronous?: "NORMAL";
 };
 
 function normalizeNonNegativeInteger(value: number, label: string): number {
@@ -183,11 +194,12 @@ export function configureSqliteWalMaintenance(
     "autoCheckpointPages",
   );
   const checkpointIntervalMs = normalizeNonNegativeInteger(
-    options.checkpointIntervalMs ?? DEFAULT_SQLITE_WAL_TRUNCATE_INTERVAL_MS,
+    options.checkpointIntervalMs ?? DEFAULT_SQLITE_WAL_CHECKPOINT_INTERVAL_MS,
     "checkpointIntervalMs",
   );
   const timerIntervalMs = Math.min(checkpointIntervalMs, MAX_TIMER_TIMEOUT_MS);
   const checkpointMode = options.checkpointMode ?? "TRUNCATE";
+  const periodicCheckpointMode = options.checkpointMode ?? "PASSIVE";
   if (options.databasePath && isNfsBackedPath(options.databasePath)) {
     requireRollbackJournalMode(db, options);
     return {
@@ -198,9 +210,9 @@ export function configureSqliteWalMaintenance(
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec(`PRAGMA wal_autocheckpoint = ${autoCheckpointPages};`);
 
-  const checkpoint = (): boolean => {
+  const runCheckpoint = (mode: SqliteWalCheckpointMode): boolean => {
     try {
-      db.exec(`PRAGMA wal_checkpoint(${checkpointMode});`);
+      db.exec(`PRAGMA wal_checkpoint(${mode});`);
       return true;
     } catch (error) {
       options.onCheckpointError?.(error);
@@ -208,9 +220,14 @@ export function configureSqliteWalMaintenance(
     }
   };
 
+  const checkpoint = (): boolean => runCheckpoint(checkpointMode);
+
   let timer: IntervalHandle | null = null;
   if (timerIntervalMs > 0) {
-    timer = setInterval(checkpoint, timerIntervalMs) as IntervalHandle;
+    timer = setInterval(
+      () => runCheckpoint(periodicCheckpointMode),
+      timerIntervalMs,
+    ) as IntervalHandle;
     timer.unref?.();
   }
 
@@ -224,4 +241,25 @@ export function configureSqliteWalMaintenance(
       return checkpoint();
     },
   };
+}
+
+/** Configure per-connection SQLite pragmas in the safe lock-retry/WAL order. */
+export function configureSqliteConnectionPragmas(
+  db: DatabaseSync,
+  options: SqliteConnectionPragmaOptions = {},
+): SqliteWalMaintenance {
+  const { busyTimeoutMs, foreignKeys, synchronous, ...walOptions } = options;
+  if (busyTimeoutMs !== undefined) {
+    db.exec(
+      `PRAGMA busy_timeout = ${normalizeNonNegativeInteger(busyTimeoutMs, "busyTimeoutMs")};`,
+    );
+  }
+  const maintenance = configureSqliteWalMaintenance(db, walOptions);
+  if (synchronous) {
+    db.exec(`PRAGMA synchronous = ${synchronous};`);
+  }
+  if (foreignKeys) {
+    db.exec("PRAGMA foreign_keys = ON;");
+  }
+  return maintenance;
 }

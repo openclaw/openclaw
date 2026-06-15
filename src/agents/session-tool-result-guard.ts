@@ -306,6 +306,24 @@ function sanitizePersistedSessionDetail(
   return out;
 }
 
+function copyPersistedResultStateFields(
+  out: Record<string, unknown>,
+  src: Record<string, unknown>,
+  maxStringChars: number,
+  redactionConfig?: ToolResultDetailRedactionConfig,
+): void {
+  for (const key of ["disabled", "unavailable", "success"] as const) {
+    if (typeof src[key] === "boolean") {
+      out[key] = src[key];
+    }
+  }
+  if (typeof src.error === "string" && src.error) {
+    out.error = redactPersistedDetailString(src.error, maxStringChars, redactionConfig);
+  } else if (src.error) {
+    out.error = true;
+  }
+}
+
 function buildPersistedDetailsFallback(
   src: Record<string, unknown> | undefined,
   originalSize: BoundedJsonUtf8Bytes,
@@ -336,6 +354,12 @@ function buildPersistedDetailsFallback(
         );
       }
     }
+    copyPersistedResultStateFields(
+      fallback,
+      src,
+      MAX_PERSISTED_DETAIL_FALLBACK_STRING_CHARS,
+      redactionConfig,
+    );
   }
   return fallback;
 }
@@ -457,6 +481,7 @@ function sanitizeToolResultDetailsForPersistence(
       );
     }
   }
+  copyPersistedResultStateFields(out, src, MAX_PERSISTED_DETAIL_STRING_CHARS, redactionConfig);
   if (typeof src.tail === "string") {
     out.tail = redactPersistedDetailString(
       src.tail,

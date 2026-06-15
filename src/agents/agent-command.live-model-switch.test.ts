@@ -328,7 +328,6 @@ vi.mock("../routing/session-key.js", async () => {
   );
   return {
     ...actual,
-    isSubagentSessionKey: () => false,
     normalizeAgentId: (id: string) => id,
     normalizeMainKey: (key?: string | null) => key?.trim() || "main",
   };
@@ -1338,6 +1337,75 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       timeoutMs: 600_000,
       runTimeoutOverrideMs: 600_000,
     });
+  });
+
+  it("clamps unsupported explicit thinking for subagent spawns instead of throwing", async () => {
+    setupSingleAttemptFallback();
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("anthropic", "claude-fable-5"));
+    state.resolvedSessionKeyMock = "agent:planner:subagent:00000000-0000-4000-8000-000000000000";
+    state.isThinkingLevelSupportedMock.mockReturnValue(false);
+    state.resolveSupportedThinkingLevelMock.mockReturnValue("high");
+
+    await agentCommand({
+      message: "hello",
+      sessionKey: state.resolvedSessionKeyMock,
+      thinking: "xhigh",
+      lane: "subagent",
+    });
+
+    expect(state.resolveSupportedThinkingLevelMock).toHaveBeenCalled();
+    expectRecordFields(mockCallArg(state.runAgentAttemptMock), {
+      resolvedThinkLevel: "high",
+    });
+  });
+
+  it("rejects unsupported explicit thinking for interactive subagent-key runs", async () => {
+    setupSingleAttemptFallback();
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("anthropic", "claude-fable-5"));
+    state.resolvedSessionKeyMock = "agent:planner:subagent:00000000-0000-4000-8000-000000000000";
+    state.isThinkingLevelSupportedMock.mockReturnValue(false);
+
+    await expect(
+      agentCommand({
+        message: "hello",
+        sessionKey: state.resolvedSessionKeyMock,
+        thinking: "xhigh",
+      }),
+    ).rejects.toThrow(/is not supported/u);
+    expect(state.runAgentAttemptMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects unsupported explicit thinking for non-subagent sessions on the subagent lane", async () => {
+    setupSingleAttemptFallback();
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("anthropic", "claude-fable-5"));
+    state.resolvedSessionKeyMock = "agent:main:main";
+    state.isThinkingLevelSupportedMock.mockReturnValue(false);
+
+    await expect(
+      agentCommand({
+        message: "hello",
+        sessionKey: state.resolvedSessionKeyMock,
+        thinking: "xhigh",
+        lane: "subagent",
+      }),
+    ).rejects.toThrow(/is not supported/u);
+    expect(state.runAgentAttemptMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects unsupported explicit thinking for direct interactive runs", async () => {
+    setupSingleAttemptFallback();
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("anthropic", "claude-fable-5"));
+    state.resolvedSessionKeyMock = "agent:main:main";
+    state.isThinkingLevelSupportedMock.mockReturnValue(false);
+
+    await expect(
+      agentCommand({
+        message: "hello",
+        to: "+1234567890",
+        thinking: "xhigh",
+      }),
+    ).rejects.toThrow(/is not supported/u);
+    expect(state.runAgentAttemptMock).not.toHaveBeenCalled();
   });
 
   it("skips the initial session touch after gateway ingress already persisted activity", async () => {

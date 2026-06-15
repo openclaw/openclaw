@@ -73,6 +73,24 @@ describe("createChannelProgressDraftCompositor", () => {
     expect(update).toHaveBeenLastCalledWith("Shelling\n\n🛠️ Exec\n• _Reading files_", undefined);
   });
 
+  it("resets reasoning deltas without clearing tool progress", async () => {
+    const update = vi.fn();
+    const progress = createChannelProgressDraftCompositor({
+      entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+      mode: "progress",
+      active: true,
+      seed: "test",
+      update,
+    });
+
+    await progress.pushToolProgress("🛠️ Exec", { startImmediately: true });
+    await progress.pushReasoningProgress("Checking files");
+    progress.resetReasoningProgress();
+    await progress.pushReasoningProgress("Now testing");
+
+    expect(update).toHaveBeenLastCalledWith("Shelling\n\n🛠️ Exec\n• _Now testing_", undefined);
+  });
+
   it("preserves tagged reasoning content without leaking tags", async () => {
     const update = vi.fn();
     const progress = createChannelProgressDraftCompositor({
