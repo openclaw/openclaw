@@ -358,6 +358,7 @@ use the Control UI Tools panel or config surfaces.
 /model 3           # select by number from picker
 /model openai/gpt-5.4
 /model opus@anthropic:default
+/model default     # clear the session model selection
 /model status      # detailed view with endpoint and API mode
 ```
 
