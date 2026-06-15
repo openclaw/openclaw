@@ -333,6 +333,8 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     }));
     const resolveApiKeyForProfile = vi.fn(async () => ({
       apiKey: JSON.stringify({ token: "provider-formatted-access", projectId: "project-1" }),
+      profileId: authProfileId,
+      profileType: "oauth" as const,
       provider: "google-gemini-cli",
       email: "user@example.test",
     }));
