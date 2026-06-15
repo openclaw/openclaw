@@ -208,6 +208,7 @@ function getAuthProfileCredential(
 /** Resolves the stable auth epoch hash for a CLI runtime/provider session. */
 export async function resolveCliAuthEpoch(params: {
   provider: string;
+  agentDir?: string;
   authProfileId?: string;
   skipLocalCredential?: boolean;
 }): Promise<string | undefined> {
@@ -223,7 +224,7 @@ export async function resolveCliAuthEpoch(params: {
   }
 
   if (authProfileId) {
-    const store = cliAuthEpochDeps.loadAuthProfileStoreForRuntime(undefined, {
+    const store = cliAuthEpochDeps.loadAuthProfileStoreForRuntime(params.agentDir, {
       readOnly: true,
       allowKeychainPrompt: false,
     });

@@ -485,6 +485,7 @@ export async function prepareCliRunContext(
   });
   const authEpoch = await resolveCliAuthEpoch({
     provider: params.provider,
+    agentDir,
     authProfileId: effectiveAuthProfileId,
     skipLocalCredential: skipLocalCredentialEpoch,
   });
