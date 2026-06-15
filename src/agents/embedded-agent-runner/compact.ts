@@ -510,9 +510,12 @@ export async function compactEmbeddedAgentSessionDirect(
       classifyResult: ({ result, provider, model }) =>
         classifyCompactionFallbackResult(result, provider, model),
       run: async (provider, model) => {
-        const preservesPrimaryAuth =
-          provider === primaryProvider || provider === requestedPrimaryProvider;
-        const authProfileId = preservesPrimaryAuth ? params.authProfileId : undefined;
+        const authProfileId =
+          provider === primaryProvider
+            ? resolvedCompactionTarget.authProfileId
+            : provider === requestedPrimaryProvider
+              ? params.authProfileId
+              : undefined;
         return await compactEmbeddedAgentSessionDirectOnce(
           {
             ...params,

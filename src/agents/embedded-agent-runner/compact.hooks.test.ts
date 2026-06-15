@@ -962,6 +962,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       workspaceDir: "/tmp/workspace",
       provider: "openai",
       model: "gpt-primary",
+      authProfileId: "openai:work",
       config: {
         agents: {
           defaults: {
@@ -1002,6 +1003,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
         tokensBefore: 120,
         details: { ok: true },
       });
+    resolveEmbeddedAgentStreamFnMock.mockClear();
 
     const result = await compactEmbeddedAgentSessionDirect({
       sessionId: "session-1",
@@ -1033,6 +1035,11 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     expect(mockCallArg(resolveModelMock, 0, 1)).toBe("compact-primary");
     expect(mockCallArg(resolveModelMock, 1)).toBe("openai");
     expect(mockCallArg(resolveModelMock, 1, 1)).toBe("compact-fallback");
+    const primaryStreamCall = findMockCall(resolveEmbeddedAgentStreamFnMock, ([arg]) => {
+      const model = (arg as { model?: { provider?: string; id?: string } }).model;
+      return model?.provider === "azure" && model.id === "compact-primary";
+    });
+    expectRecordFields(primaryStreamCall[0], { authProfileId: undefined });
     expect(
       resolveModelMock.mock.calls.some(
         ([provider, modelId]) => provider === "anthropic" && modelId === "chat-fallback",
