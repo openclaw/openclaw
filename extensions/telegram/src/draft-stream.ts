@@ -80,7 +80,8 @@ function telegramDraftPreviewKey(preview: TelegramDraftPreview): string {
 }
 
 function telegramDraftPreviewPayloadLength(preview: TelegramDraftPreview): number {
-  return preview.richMessage.html?.length ?? preview.richMessage.markdown.length;
+  const richMessage = preview.richMessage;
+  return richMessage.html !== undefined ? richMessage.html.length : richMessage.markdown.length;
 }
 
 function findTelegramDraftChunkLength(
