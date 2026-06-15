@@ -928,7 +928,9 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
             ? replyToIsExplicit
               ? (replyToId ?? ambientThreadId)
               : (ambientThreadId ?? replyToId ?? undefined)
-            : (replyToId ?? ambientThreadId);
+            : replyToIsExplicit === false
+              ? (ambientThreadId ?? replyToId)
+              : (replyToId ?? ambientThreadId);
       return {
         replyToId: replyDelivery?.chatType === "direct" ? null : resolvedThreadId,
         threadId: resolvedThreadId ?? null,

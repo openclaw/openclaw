@@ -284,6 +284,17 @@ describe("mattermostPlugin", () => {
       expect(
         resolveReplyTransport({
           cfg: {},
+          replyToId: "child-post",
+          replyToIsExplicit: false,
+          threadId: "root-post",
+        }),
+      ).toEqual({
+        replyToId: "root-post",
+        threadId: "root-post",
+      });
+      expect(
+        resolveReplyTransport({
+          cfg: {},
           threadId: 42,
         }),
       ).toEqual({
