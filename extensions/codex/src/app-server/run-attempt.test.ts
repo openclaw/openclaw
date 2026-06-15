@@ -2201,7 +2201,7 @@ describe("runCodexAppServerAttempt", () => {
 
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => { setImmediate(resolve); });
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
 
