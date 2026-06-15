@@ -2523,7 +2523,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
 
     expect(answerDraftStream.updatePreview).not.toHaveBeenCalledWith(
-      expect.stringContaining("stdout line one"),
+      expect.objectContaining({ text: expect.stringContaining("stdout line one") }),
     );
     expect(answerDraftStream.updatePreview).toHaveBeenLastCalledWith(
       expect.objectContaining({
@@ -2758,6 +2758,92 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.flush).toHaveBeenCalled();
   });
 
+  it("renders command status without command output in Telegram progress draft previews", async () => {
+    const draftStream = createSequencedDraftStream(2001);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onReplyStart?.();
+      await replyOptions?.onAssistantMessageStart?.();
+      await replyOptions?.onToolStart?.({
+        name: "exec",
+        phase: "start",
+        toolCallId: "exec-1",
+        args: { command: "false" },
+      });
+      await replyOptions?.onCommandOutput?.({
+        phase: "end",
+        title: "command false",
+        name: "exec",
+        toolCallId: "exec-1",
+        output: "No such file or directory",
+        exitCode: 2,
+      });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: {
+        streaming: {
+          mode: "progress",
+          progress: { label: "Shelling", commandText: "raw" },
+        },
+      },
+    });
+
+    expect(draftStream.updatePreview).toHaveBeenLastCalledWith({
+      text: "Shelling\n\n`🛠️ exit 2; command false`",
+      richMessage: {
+        html: "<b>Shelling</b><br><b>🛠️ Exec</b> <code>command false</code> <i>exit 2</i>",
+        skip_entity_detection: true,
+      },
+    });
+  });
+
+  it("hides command titles in Telegram status-only progress draft previews", async () => {
+    const draftStream = createSequencedDraftStream(2001);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onReplyStart?.();
+      await replyOptions?.onAssistantMessageStart?.();
+      await replyOptions?.onToolStart?.({
+        name: "exec",
+        phase: "start",
+        toolCallId: "exec-1",
+        args: { command: "curl -H 'Authorization: token' https://example.test" },
+      });
+      await replyOptions?.onCommandOutput?.({
+        phase: "end",
+        title: "curl -H 'Authorization: token' https://example.test",
+        name: "exec",
+        toolCallId: "exec-1",
+        output: "secret response",
+        exitCode: 2,
+      });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: {
+        streaming: {
+          mode: "progress",
+          progress: { label: "Shelling", commandText: "status" },
+        },
+      },
+    });
+
+    expect(draftStream.updatePreview).toHaveBeenLastCalledWith({
+      text: "Shelling\n\n`🛠️ exit 2`",
+      richMessage: {
+        html: "<b>Shelling</b><br><b>🛠️ Exec</b> <code>exit 2</code>",
+        skip_entity_detection: true,
+      },
+    });
+  });
+
   it("composes streamed reasoning with tool progress in Telegram progress drafts", async () => {
     const draftStream = createSequencedDraftStream(2001);
     createTelegramDraftStream.mockReturnValue(draftStream);
@@ -2842,9 +2928,11 @@ describe("dispatchTelegramMessage draft streaming", () => {
       },
     });
 
-    expect(draftStream.updatePreview).not.toHaveBeenCalledWith(
-      expect.objectContaining({ text: expect.stringContaining("Checking recent") }),
-    );
+    expect(
+      draftStream.updatePreview.mock.calls.every(
+        ([preview]) => !preview.text.includes("Checking recent"),
+      ),
+    ).toBe(true);
   });
 
   it("keeps the progress draft label when tool progress lines are hidden", async () => {
