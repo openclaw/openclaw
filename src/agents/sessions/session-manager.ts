@@ -22,6 +22,7 @@ import {
   appendJsonlEntrySync,
   appendSerializedJsonlEntrySync,
   serializeJsonlEntry,
+  serializeJsonlLine,
   writeJsonlEntriesSync,
 } from "../../config/sessions/transcript-jsonl.js";
 import {
@@ -607,12 +608,45 @@ function rememberWrittenSessionEntries(
   };
 }
 
+function serializeCachedEntriesPrefix(cached: CachedSessionEntries): string {
+  const lines = cached.entries.map((entry) => serializeJsonlLine(entry));
+  if (lines.length === 0) {
+    return "";
+  }
+  return `${lines.join("\n")}${cached.endsWithNewline ? "\n" : ""}`;
+}
+
+function cachedPrefixStillMatchesFile(params: {
+  filePath: string;
+  cached: CachedSessionEntries;
+  appendedBytes: number;
+  snapshot: SessionFileSnapshot;
+}): boolean {
+  const prefixByteLength = params.snapshot.size - BigInt(params.appendedBytes);
+  if (prefixByteLength < 0n || prefixByteLength > BigInt(Number.MAX_SAFE_INTEGER)) {
+    return false;
+  }
+  const expectedPrefix = serializeCachedEntriesPrefix(params.cached);
+  if (BigInt(Buffer.byteLength(expectedPrefix, "utf8")) !== prefixByteLength) {
+    return false;
+  }
+  try {
+    const currentPrefix = readFileSync(params.filePath)
+      .subarray(0, Number(prefixByteLength))
+      .toString("utf8");
+    return currentPrefix === expectedPrefix;
+  } catch {
+    return false;
+  }
+}
+
 function rememberAppendedSessionEntry(
   filePath: string,
   previousSnapshot: SessionFileSnapshot | undefined,
   beforeAppendSnapshot: SessionFileSnapshot | undefined,
   serializedAppend: string,
   cacheOwnedAppend: boolean,
+  validateCachedPrefix: boolean,
 ): { snapshot: SessionFileSnapshot | undefined; cacheAdvanced: boolean } {
   const resolvedPath = resolve(filePath);
   if (!cacheOwnedAppend) {
@@ -638,9 +672,9 @@ function rememberAppendedSessionEntry(
 
   const cached = sessionEntriesCache.get(resolvedPath);
   const snapshot = readSessionFileSnapshotIfExists(resolvedPath);
-  // Owned transcript writes serialize appenders under the session lock. Full
-  // rewrites refresh the cache explicitly, so identity and size are sufficient
-  // to advance this append-only snapshot without reading the whole file.
+  // Owned transcript writes serialize appenders under the session lock. Custom
+  // entry serialization can still run user toJSON code, so those appends also
+  // validate the cached prefix before advancing the append-only snapshot.
   const expectedSize =
     beforeAppendSnapshot.size + BigInt(Buffer.byteLength(serializedAppend, "utf8"));
   if (
@@ -659,6 +693,19 @@ function rememberAppendedSessionEntry(
   }
   if (snapshot.size > MAX_CACHED_SESSION_BYTES) {
     sessionEntriesCache.delete(resolvedPath);
+    return { snapshot, cacheAdvanced: false };
+  }
+  if (
+    validateCachedPrefix &&
+    !cachedPrefixStillMatchesFile({
+      filePath: resolvedPath,
+      cached,
+      appendedBytes: Buffer.byteLength(serializedAppend, "utf8"),
+      snapshot,
+    })
+  ) {
+    sessionEntriesCache.delete(resolvedPath);
+    invalidateSessionFileRepairCache(resolvedPath);
     return { snapshot, cacheAdvanced: false };
   }
 
@@ -1344,6 +1391,7 @@ export class SessionManager {
         beforeAppendSnapshot,
         serializedAppend,
         cacheOwnedAppend,
+        entry.type === "custom",
       );
       this.sessionFileSnapshot = rememberedAppend.snapshot;
       if (rememberedAppend.cacheAdvanced) {
