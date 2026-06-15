@@ -154,11 +154,7 @@ export function collectClawHubPublishablePluginPackages(
       continue;
     }
 
-    const errors = collectPublishablePluginPackageErrors({
-      extensionId,
-      packageDir,
-      packageJson,
-    });
+    const errors = collectPublishablePluginPackageErrors(candidate);
     if (errors.length > 0) {
       validationErrors.push(...errors.map((error) => `${extensionId}: ${error}`));
       continue;

@@ -1150,6 +1150,7 @@ function createTempPluginRepo(
       join(repoDir, "extensions", currentExtensionId, "index.ts"),
       `export const ${currentExtensionId.replaceAll(/[-.]/g, "_")} = 1;\n`,
     );
+    writeFileSync(join(repoDir, "extensions", currentExtensionId, "README.md"), "# Demo plugin\n");
   }
 
   git(repoDir, ["init", "-b", "main"]);
