@@ -962,7 +962,7 @@ export async function handleOpenAiHttpRequest(
         }
       : undefined;
 
-  const { agentId, sessionKey, messageChannel } = resolveGatewayRequestContext({
+  const resolvedContext = resolveGatewayRequestContext({
     req,
     model,
     user,
@@ -970,6 +970,13 @@ export async function handleOpenAiHttpRequest(
     defaultMessageChannel: "webchat",
     useMessageChannelHeader: true,
   });
+  if ("error" in resolvedContext) {
+    sendJson(res, resolvedContext.error.status, {
+      error: { message: resolvedContext.error.message, type: "invalid_request_error" },
+    });
+    return true;
+  }
+  const { agentId, sessionKey, messageChannel } = resolvedContext;
   const { modelOverride, errorMessage: modelError } = await resolveOpenAiCompatModelOverride({
     req,
     agentId,

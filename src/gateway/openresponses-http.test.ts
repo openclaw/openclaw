@@ -1,8 +1,6 @@
 // OpenAI Responses HTTP tests cover response creation, streaming, tool calls,
 // response-session lookup, limits, auth scopes, and provider error mapping.
-import fs from "node:fs/promises";
 import http from "node:http";
-import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import { FailoverError } from "../agents/failover-error.js";
@@ -15,6 +13,7 @@ import {
   getFreePort,
   installGatewayTestHooks,
   startGatewayServerWithRetries,
+  writeGatewayConfig,
 } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
@@ -89,15 +88,6 @@ async function startTokenServer(port: number, opts?: { openResponsesEnabled?: bo
       ? { ...serverOpts, openResponsesEnabled: true }
       : { ...serverOpts, openResponsesEnabled: opts.openResponsesEnabled },
   );
-}
-
-async function writeGatewayConfig(config: Record<string, unknown>) {
-  const configPath = process.env.OPENCLAW_CONFIG_PATH;
-  if (!configPath) {
-    throw new Error("OPENCLAW_CONFIG_PATH is required for gateway config tests");
-  }
-  await fs.mkdir(path.dirname(configPath), { recursive: true });
-  await fs.writeFile(configPath, JSON.stringify(config, null, 2), "utf-8");
 }
 
 async function postResponses(port: number, body: unknown, headers?: Record<string, string>) {
@@ -298,6 +288,16 @@ describe("OpenResponses HTTP API (e2e)", () => {
       );
       expect(agentCommand).toHaveBeenCalledTimes(0);
       await ensureResponseConsumed(resInvalidModel);
+
+      await writeGatewayConfig({
+        agents: {
+          list: [{ id: "main", default: true }, { id: "beta" }],
+          defaults: {
+            model: { primary: "openai/gpt-5.4" },
+            models: { "openai/gpt-5.4": {} },
+          },
+        },
+      });
 
       mockAgentOnce([{ text: "hello" }]);
       const resHeader = await postResponses(

@@ -1,8 +1,6 @@
 // OpenAI-compatible HTTP tests cover chat completions, streaming, tool calls,
 // session context, auth scopes, and provider error mapping.
-import fs from "node:fs/promises";
 import http from "node:http";
-import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import {
@@ -22,6 +20,7 @@ import {
   startGatewayServerWithRetries,
   testState,
   withGatewayServer,
+  writeGatewayConfig,
 } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
@@ -65,15 +64,6 @@ async function startTokenServer(port: number, opts?: { openAiChatCompletionsEnab
     controlUiEnabled: false,
     openAiChatCompletionsEnabled: opts?.openAiChatCompletionsEnabled ?? true,
   });
-}
-
-async function writeGatewayConfig(config: Record<string, unknown>) {
-  const configPath = process.env.OPENCLAW_CONFIG_PATH;
-  if (!configPath) {
-    throw new Error("OPENCLAW_CONFIG_PATH is required for gateway config tests");
-  }
-  await fs.mkdir(path.dirname(configPath), { recursive: true });
-  await fs.writeFile(configPath, JSON.stringify(config, null, 2), "utf-8");
 }
 
 async function postChatCompletions(port: number, body: unknown, headers?: Record<string, string>) {
@@ -210,6 +200,18 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         expect(getFirstAgentCall()?.messageChannel).toBe("webchat");
         await res.text();
       }
+
+      await writeGatewayConfig({
+        agents: {
+          list: [{ id: "main", default: true }, { id: "beta" }],
+          defaults: {
+            model: { primary: "openai/gpt-5.4" },
+            models: {
+              "openai/gpt-5.4": {},
+            },
+          },
+        },
+      });
 
       await expectAgentSessionKeyMatch({
         body: { model: "openclaw", messages: [{ role: "user", content: "hi" }] },

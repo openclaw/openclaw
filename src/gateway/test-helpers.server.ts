@@ -195,6 +195,18 @@ async function persistTestSessionConfig(): Promise<void> {
   lastSyncedSessionConfigJson = serializeGatewayTestSessionConfig();
 }
 
+export async function writeGatewayConfig(config: Record<string, unknown>): Promise<void> {
+  const configPath = process.env.OPENCLAW_CONFIG_PATH;
+  if (!configPath) {
+    throw new Error("OPENCLAW_CONFIG_PATH is required for gateway config tests");
+  }
+  await fs.mkdir(path.dirname(configPath), { recursive: true });
+  await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf-8");
+  // Tests mutate config on disk while the gateway server runs in the same process.
+  // Clear the pinned runtime snapshot so the next handler load sees the new file.
+  resetConfigRuntimeState();
+}
+
 export async function writeSessionStore(params: {
   entries: Record<string, Partial<SessionEntry>>;
   storePath?: string;

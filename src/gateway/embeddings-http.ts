@@ -291,7 +291,14 @@ export async function handleOpenAiEmbeddingsHttpRequest(
     return true;
   }
 
-  const agentId = resolveAgentIdForRequest({ req, model: requestModel });
+  const agentResult = resolveAgentIdForRequest({ req, model: requestModel });
+  if ("error" in agentResult) {
+    sendJson(res, agentResult.error.status, {
+      error: { message: agentResult.error.message, type: "invalid_request_error" },
+    });
+    return true;
+  }
+  const agentId = agentResult.agentId;
   const agentDir = resolveAgentDir(cfg, agentId);
   const memorySearch = resolveMemorySearchConfig(cfg, agentId);
   const configuredProvider = memorySearch?.provider ?? "openai";

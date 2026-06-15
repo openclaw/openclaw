@@ -477,7 +477,14 @@ export async function handleOpenResponsesHttpRequest(
   const stream = Boolean(payload.stream);
   const model = payload.model;
   const user = payload.user;
-  const agentId = resolveAgentIdForRequest({ req, model });
+  const agentResult = resolveAgentIdForRequest({ req, model });
+  if ("error" in agentResult) {
+    sendJson(res, agentResult.error.status, {
+      error: { message: agentResult.error.message, type: "invalid_request_error" },
+    });
+    return true;
+  }
+  const agentId = agentResult.agentId;
   const { modelOverride, errorMessage: modelError } = await resolveOpenAiCompatModelOverride({
     req,
     agentId,
@@ -632,6 +639,12 @@ export async function handleOpenResponsesHttpRequest(
     defaultMessageChannel: "webchat",
     useMessageChannelHeader: true,
   });
+  if ("error" in resolved) {
+    sendJson(res, resolved.error.status, {
+      error: { message: resolved.error.message, type: "invalid_request_error" },
+    });
+    return true;
+  }
   const responseSessionScope = createResponseSessionScope({
     req,
     auth: opts.auth,

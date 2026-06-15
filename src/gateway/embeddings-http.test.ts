@@ -9,7 +9,7 @@ import { resolveAgentDir } from "../agents/agent-scope.js";
 import { createConfigIO, resetConfigRuntimeState } from "../config/config.js";
 import type { MemoryEmbeddingProviderAdapter } from "../plugins/memory-embedding-providers.js";
 import { startOpenAiCompatGatewayServer } from "./openai-compatible-http.test-helpers.js";
-import { getFreePort, installGatewayTestHooks, testState } from "./test-helpers.js";
+import { getFreePort, installGatewayTestHooks, testState, writeGatewayConfig } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -278,6 +278,16 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
   });
 
   it("supports base64 encoding and agent-scoped auth/config resolution", async () => {
+    await writeGatewayConfig({
+      agents: {
+        list: [{ id: "main", default: true }, { id: "beta" }],
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+          models: { "openai/gpt-5.4": {} },
+        },
+      },
+    });
+
     const res = await postEmbeddings(
       {
         model: "openclaw/beta",

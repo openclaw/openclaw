@@ -18,39 +18,56 @@ function createReq(headers: Record<string, string> = {}): IncomingMessage {
 const tokenAuth = { mode: "token" as const };
 const noneAuth = { mode: "none" as const };
 
+function requireContext(
+  result:
+    | { agentId: string; sessionKey: string; messageChannel: string }
+    | { error: { status: number; message: string } },
+): { agentId: string; sessionKey: string; messageChannel: string } {
+  if ("error" in result) {
+    throw new Error(`unexpected error: ${result.error.message}`);
+  }
+  return result;
+}
+
 describe("resolveGatewayRequestContext", () => {
   it("uses normalized x-openclaw-message-channel when enabled", () => {
-    const result = resolveGatewayRequestContext({
-      req: createReq({ "x-openclaw-message-channel": " Custom-Channel " }),
-      model: "openclaw",
-      sessionPrefix: "openai",
-      defaultMessageChannel: "webchat",
-      useMessageChannelHeader: true,
-    });
+    const result = requireContext(
+      resolveGatewayRequestContext({
+        req: createReq({ "x-openclaw-message-channel": " Custom-Channel " }),
+        model: "openclaw",
+        sessionPrefix: "openai",
+        defaultMessageChannel: "webchat",
+        useMessageChannelHeader: true,
+      }),
+    );
 
     expect(result.messageChannel).toBe("custom-channel");
   });
 
   it("uses default messageChannel when header support is disabled", () => {
-    const result = resolveGatewayRequestContext({
-      req: createReq({ "x-openclaw-message-channel": "custom-channel" }),
-      model: "openclaw",
-      sessionPrefix: "openresponses",
-      defaultMessageChannel: "webchat",
-      useMessageChannelHeader: false,
-    });
+    const result = requireContext(
+      resolveGatewayRequestContext({
+        req: createReq({ "x-openclaw-message-channel": "custom-channel" }),
+        model: "openclaw",
+        sessionPrefix: "openresponses",
+        defaultMessageChannel: "webchat",
+        useMessageChannelHeader: false,
+      }),
+    );
 
     expect(result.messageChannel).toBe("webchat");
   });
 
   it("includes session prefix and user in generated session key", () => {
-    const result = resolveGatewayRequestContext({
-      req: createReq(),
-      model: "openclaw",
-      user: "alice",
-      sessionPrefix: "openresponses",
-      defaultMessageChannel: "webchat",
-    });
+    const result = requireContext(
+      resolveGatewayRequestContext({
+        req: createReq(),
+        model: "openclaw",
+        user: "alice",
+        sessionPrefix: "openresponses",
+        defaultMessageChannel: "webchat",
+      }),
+    );
 
     expect(result.sessionKey).toContain("openresponses-user:alice");
   });
