@@ -4903,9 +4903,11 @@ describe("dispatchTelegramMessage draft streaming", () => {
       const realDraft =
         await vi.importActual<typeof import("./draft-stream.js")>("./draft-stream.js");
       let nextMessageId = 500;
-      const sendRichMessage = vi.fn(async (_params: { rich_message?: { markdown?: string } }) => ({
-        message_id: nextMessageId++,
-      }));
+      const sendRichMessage = vi.fn(
+        async (_params: { rich_message?: { markdown?: string; html?: string } }) => ({
+          message_id: nextMessageId++,
+        }),
+      );
       const editRichMessageText = vi.fn(async () => true);
       const bot = {
         api: {
@@ -4997,6 +4999,45 @@ describe("dispatchTelegramMessage draft streaming", () => {
         edits: editRichMessageText.mock.calls.length,
         spuriousPreamble: sentTexts.includes(SHORT),
       }).toEqual({ sends: 1, edits: 0, spuriousPreamble: false });
+    });
+
+    // Regression for the eager-rotation staircase: a multi-tool turn streams
+    // cumulative full-snapshot partials with a tool boundary between each segment.
+    // No distinct sent message may be a superset re-render (prefix) of another —
+    // each tool boundary must NOT open a fresh bubble that re-prints prior content.
+    it("does not staircase: no sent message re-renders a previous one (multi-tool turn)", async () => {
+      const { bot, sendRichMessage } = await setupRealDraftStream();
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+        async ({ dispatcherOptions, replyOptions }) => {
+          await replyOptions?.onAssistantMessageStart?.();
+          let cumulative = "";
+          for (let i = 0; i < 3; i += 1) {
+            const seg = `Segment ${i + 1}: distinct answer content number ${i + 1} here.`;
+            cumulative = cumulative ? `${cumulative} ${seg}` : seg;
+            await replyOptions?.onPartialReply?.({ text: cumulative });
+            if (i < 2) {
+              await replyOptions?.onToolStart?.({ name: "read_file", phase: "start" });
+            }
+          }
+          await dispatcherOptions.deliver({ text: cumulative }, { kind: "final" });
+          return { queuedFinal: true };
+        },
+      );
+
+      await dispatchWithContext({ context: createContext(), bot });
+
+      const sent = sendRichMessage.mock.calls.map(
+        (c) => c[0]?.rich_message?.html ?? c[0]?.rich_message?.markdown ?? "",
+      );
+      const supersetPairs: Array<[string, string]> = [];
+      for (let i = 0; i < sent.length; i += 1) {
+        for (let j = 0; j < sent.length; j += 1) {
+          if (i !== j && sent[j].length > sent[i].length && sent[j].startsWith(sent[i])) {
+            supersetPairs.push([sent[i], sent[j]]);
+          }
+        }
+      }
+      expect(supersetPairs).toEqual([]);
     });
   });
 });

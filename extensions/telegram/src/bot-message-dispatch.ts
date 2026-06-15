@@ -1183,25 +1183,27 @@ export const dispatchTelegramMessage = async ({
     }
     await rotateLaneForNewMessage(answerLane);
   };
-  // A streamed answer preamble stays mutable until finalized. When a tool starts
-  // mid-stream and tool progress is suppressed (so prepareAnswerLaneForToolProgress
-  // never rotated), the post-tool answer text would keep editing the preamble
-  // bubble. Rotate on INTENT — a preamble partial was emitted (hasStreamedMessage)
-  // — not on send-ack. Under fast live timing the preamble's Bot API send is still
-  // in flight when the tool boundary fires, so its message id is not back yet;
-  // gating on stream.messageId() being a number (as a prior fix did) let the post-tool
-  // text edit the preamble bubble. rotateAnswerLaneForNewMessage -> rotateLaneForNewMessage
-  // awaits the in-flight send (loop.flush awaits the in-flight promise) before
-  // forceNewMessage(), so the preamble is always committed to its own message and the
-  // resumed text starts a fresh one. Defer to the tool-progress path when it already
-  // owns the rotation; skip when no preamble was emitted.
-  //
-  // Gate on send-dispatched, not just hasStreamedMessage: a preamble shorter than the
-  // preview debounce (minInitialChars) is suppressed and never sent. Rotating it here
-  // would stop()->flush it into a spurious standalone message. Rotate only when the
-  // send has landed (messageId is a number) or is in flight (sendMayHaveLanded); a
-  // never-attempted preamble stays pending so the resumed text remains one message.
-  const rotateInFlightAnswerPreambleForToolBoundary = async () => {
+  // A streamed answer preamble stays mutable until finalized. When a tool runs
+  // mid-stream and the answer resumes, decide rotation by comparing the resumed
+  // snapshot to what is already on screen:
+  //  - FRESH resume (snapshot does NOT continue the shown text): a genuine
+  //    preamble->answer transition. Rotate ONCE so the preamble is preserved (the
+  //    original bug). The fresh snapshot is itself the un-shown delta — never a
+  //    superset of the previous bubble.
+  //  - CONTINUATION (snapshot starts with the shown text): ordinary streaming
+  //    growth, including MULTIPLE tool boundaries in one turn. Do NOT rotate — keep
+  //    editing the one bubble (no staircase, no cumulative re-render).
+  // The decision is deferred to the next answer event (flag set at onToolStart)
+  // because the resumed text is unknown at the boundary. Gate on send-dispatched so
+  // a below-debounce never-sent preamble (minInitialChars-suppressed) is not flushed
+  // into a spurious standalone message: rotate only when the send has landed
+  // (messageId) or is in flight (sendMayHaveLanded).
+  let toolBoundaryRotationPending = false;
+  const rotateAnswerLaneForFreshResume = async (resumedText: string): Promise<void> => {
+    if (!toolBoundaryRotationPending) {
+      return;
+    }
+    toolBoundaryRotationPending = false;
     if (activeAnswerDraftIsToolProgressOnly) {
       return;
     }
@@ -1212,6 +1214,14 @@ export const dispatchTelegramMessage = async ({
     const sendDispatched =
       typeof stream?.messageId() === "number" || stream?.sendMayHaveLanded?.() === true;
     if (!sendDispatched) {
+      return;
+    }
+    // Compare against lastAnswerPartialText (the cumulative we last streamed), not
+    // stream.lastDeliveredText(): under fast timing the send is still in flight and
+    // lastDeliveredText() lags (empty), which would misclassify a continuation as
+    // fresh and re-staircase.
+    const shownText = lastAnswerPartialText.trimEnd();
+    if (shownText && resumedText.trimEnd().startsWith(shownText)) {
       return;
     }
     await rotateAnswerLaneForNewMessage();
@@ -1395,6 +1405,10 @@ export const dispatchTelegramMessage = async ({
     const split = splitTextIntoLaneSegments(update, isReasoning);
     for (const segment of split.segments) {
       if (segment.lane === "answer") {
+        const resumed = resolveDraftPartialText(lastAnswerPartialText, segment.update);
+        if (resumed) {
+          await rotateAnswerLaneForFreshResume(resumed);
+        }
         await prepareAnswerLaneForText();
       }
       if (segment.lane === "reasoning") {
@@ -2355,6 +2369,10 @@ export const dispatchTelegramMessage = async ({
                         enqueueDraftLaneEvent(async () => {
                           reasoningStepState.resetForNextStep();
                           finalAnswerDelivered = false;
+                          // A genuine new assistant message owns its own rotation here;
+                          // drop any deferred tool-boundary rotation so it does not
+                          // double-fire on the next partial.
+                          toolBoundaryRotationPending = false;
                           if (streamMode !== "progress") {
                             resetProgressDraftState();
                           }
@@ -2406,10 +2424,13 @@ export const dispatchTelegramMessage = async ({
                       await statusReactionController.setTool(toolName);
                     }
                     await progressPromise;
-                    // Ordered after pending preamble partials so the rotation
-                    // sees the streamed message; no-op when progress already
-                    // rotated or nothing was sent.
-                    await enqueueDraftLaneEvent(rotateInFlightAnswerPreambleForToolBoundary);
+                    // Defer the preamble->answer rotation to the next answer event so
+                    // we can tell a fresh resume (rotate, preserve preamble) from an
+                    // ordinary cumulative continuation across multiple tool boundaries
+                    // (do not rotate -> no staircase). Ordered after pending partials.
+                    await enqueueDraftLaneEvent(async () => {
+                      toolBoundaryRotationPending = true;
+                    });
                   },
                   onItemEvent: async (payload) => {
                     if (payload.kind === "preamble") {
