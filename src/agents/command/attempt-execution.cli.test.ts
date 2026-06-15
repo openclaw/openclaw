@@ -36,7 +36,9 @@ vi.mock("../cli-runner.js", () => ({
 
 vi.mock("../model-selection.js", () => ({
   isCliProvider: (provider: string) =>
-    provider.trim().toLowerCase() === "claude-cli" || provider.trim().toLowerCase() === "codex-cli",
+    provider.trim().toLowerCase() === "claude-cli" ||
+    provider.trim().toLowerCase() === "codex-cli" ||
+    provider.trim().toLowerCase() === "google-gemini-cli",
   normalizeProviderId: (provider: string) => provider.trim().toLowerCase(),
 }));
 
@@ -704,6 +706,87 @@ describe("CLI attempt execution", () => {
 
     expect(runCliAgentMock).toHaveBeenCalledTimes(1);
     expect(firstRunCliAgentArg().authProfileId).toBe("openai:work");
+  });
+
+  it("selects a google-gemini-cli auth profile for canonical Google models routed through Gemini CLI", async () => {
+    const sessionKey = "agent:main:direct:gemini-cli-auth-bridge";
+    const sessionEntry: SessionEntry = {
+      sessionId: "openclaw-session-gemini",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    await fs.writeFile(
+      path.join(tmpDir, "auth-profiles.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          profiles: {
+            "google-gemini-cli:user@example.test": {
+              type: "oauth",
+              provider: "google-gemini-cli",
+              access: "access-token",
+              refresh: "refresh-token",
+              expires: Date.now() + 3_600_000,
+              email: "user@example.test",
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    runCliAgentMock.mockResolvedValueOnce(makeCliResult("gemini cli response"));
+
+    await runAgentAttempt({
+      providerOverride: "google",
+      originalProvider: "google",
+      modelOverride: "gemini-3.1-pro-preview",
+      cfg: {
+        auth: {
+          order: {
+            "google-gemini-cli": ["google-gemini-cli:user@example.test"],
+          },
+        },
+        agents: {
+          defaults: {
+            models: {
+              "google/gemini-3.1-pro-preview": {
+                agentRuntime: { id: "google-gemini-cli" },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      sessionEntry,
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionAgentId: "main",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      workspaceDir: tmpDir,
+      body: "continue",
+      isFallbackRetry: false,
+      resolvedThinkLevel: "medium",
+      timeoutMs: 1_000,
+      runId: "run-gemini-cli-auth-bridge",
+      opts: {} as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      spawnedBy: undefined,
+      messageChannel: undefined,
+      skillsSnapshot: undefined,
+      resolvedVerboseLevel: undefined,
+      agentDir: tmpDir,
+      onAgentEvent: vi.fn(),
+      authProfileProvider: "google",
+      sessionStore,
+      storePath,
+      sessionHasHistory: false,
+    });
+
+    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
+    expect(firstRunCliAgentArg().provider).toBe("google-gemini-cli");
+    expect(firstRunCliAgentArg().authProfileId).toBe("google-gemini-cli:user@example.test");
   });
 
   it("persists CLI replies into the session transcript", async () => {

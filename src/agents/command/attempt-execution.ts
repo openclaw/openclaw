@@ -31,6 +31,7 @@ import { resolveMessageChannel } from "../../utils/message-channel.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import { ensureAuthProfileStore } from "../auth-profiles/store.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../bootstrap-budget.js";
+import { resolveCliBackendConfig } from "../cli-backends.js";
 import { runCliAgent } from "../cli-runner.js";
 import { getCliSessionBinding } from "../cli-session.js";
 import { runEmbeddedAgent, type EmbeddedAgentRunResult } from "../embedded-agent.js";
@@ -207,6 +208,40 @@ function resolveHarnessAuthProfileSelection(params: {
         authProfileProvider: harnessAuthProvider,
       }
     : { authProfileProvider: params.authProfileProvider };
+}
+
+function cliBackendAcceptsAuthProfileForwarding(params: {
+  provider: string;
+  config: OpenClawConfig;
+  agentId?: string;
+}): boolean {
+  const backend = resolveCliBackendConfig(params.provider, params.config, {
+    agentId: params.agentId,
+  });
+  return backend?.id === "google-gemini-cli";
+}
+
+function resolveCliExecutionAuthProfileId(params: {
+  cliExecutionProvider: string;
+  config: OpenClawConfig;
+  agentDir: string;
+  selected: HarnessAuthProfileSelection;
+}): string | undefined {
+  if (params.selected.authProfileId) {
+    return params.selected.authProfileProvider === params.cliExecutionProvider
+      ? params.selected.authProfileId
+      : undefined;
+  }
+
+  const store = ensureAuthProfileStore(params.agentDir, {
+    allowKeychainPrompt: false,
+    externalCliProviderIds: [params.cliExecutionProvider],
+  });
+  return resolveAuthProfileOrder({
+    cfg: params.config,
+    store,
+    provider: params.cliExecutionProvider,
+  })[0];
 }
 
 function resolveTranscriptUsage(usage: PersistTextTurnTranscriptParams["assistant"]["usage"]) {
@@ -467,6 +502,14 @@ export function runAgentAttempt(params: {
         modelId: params.modelOverride,
         authProfileId: params.sessionEntry?.authProfileOverride,
       }) ?? params.providerOverride);
+  const isCliExecutionProvider = isCliProvider(cliExecutionProvider, params.cfg);
+  const allowCliAuthProfileForwarding =
+    isCliExecutionProvider &&
+    cliBackendAcceptsAuthProfileForwarding({
+      provider: cliExecutionProvider,
+      config: params.cfg,
+      agentId: params.sessionAgentId,
+    });
   const agentHarnessPolicy = isRawModelRun
     ? ({ runtime: "openclaw", runtimeSource: "model" } as const)
     : resolveAvailableAgentHarnessPolicy({
@@ -488,7 +531,7 @@ export function runAgentAttempt(params: {
     harnessRuntime: agentHarnessPolicy.runtime,
     ...(params.metadataSnapshot ? { metadataSnapshot: params.metadataSnapshot } : {}),
     providerAuthAliasesEnabled: params.pluginsEnabled,
-    allowHarnessAuthProfileForwarding: !isCliProvider(cliExecutionProvider, params.cfg),
+    allowHarnessAuthProfileForwarding: !isCliExecutionProvider,
   });
   const runtimeAuthPlan = buildAgentRuntimeAuthPlan({
     provider: params.providerOverride,
@@ -497,13 +540,19 @@ export function runAgentAttempt(params: {
     sessionAuthProfileId: harnessAuthSelection.authProfileId,
     config: params.cfg,
     workspaceDir: params.workspaceDir,
-    ...(params.metadataSnapshot ? { metadataSnapshot: params.metadataSnapshot } : {}),
-    providerAuthAliasesEnabled: params.pluginsEnabled,
     harnessId: requestedAgentHarnessId,
     harnessRuntime: agentHarnessPolicy.runtime,
-    allowHarnessAuthProfileForwarding: !isCliProvider(cliExecutionProvider, params.cfg),
+    allowHarnessAuthProfileForwarding: !isCliExecutionProvider,
   });
-  const authProfileId = runtimeAuthPlan.forwardedAuthProfileId;
+  const cliAuthProfileId = allowCliAuthProfileForwarding
+    ? resolveCliExecutionAuthProfileId({
+        cliExecutionProvider,
+        config: params.cfg,
+        agentDir: params.agentDir,
+        selected: harnessAuthSelection,
+      })
+    : undefined;
+  const authProfileId = cliAuthProfileId ?? runtimeAuthPlan.forwardedAuthProfileId;
   const embeddedAgentProvider = resolveOpenAIRuntimeProvider({
     provider: params.providerOverride,
     harnessRuntime: agentHarnessPolicy.runtime,
@@ -518,7 +567,7 @@ export function runAgentAttempt(params: {
     (agentHarnessPolicy.runtime === "openclaw" && agentHarnessPolicy.runtimeSource !== "implicit"
       ? "openclaw"
       : undefined);
-  if (!isRawModelRun && isCliProvider(cliExecutionProvider, params.cfg)) {
+  if (!isRawModelRun && isCliExecutionProvider) {
     const cliSessionBinding = getCliSessionBinding(params.sessionEntry, cliExecutionProvider);
     const cliProcessCwd = params.cwd ? resolveUserPath(params.cwd) : params.workspaceDir;
     const cliPrompt =
@@ -591,7 +640,7 @@ export function runAgentAttempt(params: {
           nextCliSessionId === activeCliSessionBinding?.sessionId
             ? activeCliSessionBinding
             : undefined,
-        authProfileId,
+        authProfileId: authProfileId ?? params.cfg.auth?.order?.[cliExecutionProvider]?.[0],
         bootstrapPromptWarningSignaturesSeen,
         bootstrapPromptWarningSignature,
         images: params.isFallbackRetry ? undefined : params.opts.images,
