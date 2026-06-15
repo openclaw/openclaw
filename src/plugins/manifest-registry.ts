@@ -851,7 +851,9 @@ function isTrustedOfficialPluginInstall(params: {
   if (
     installRecord.source === "clawhub" &&
     officialInstall?.clawhubSpec &&
-    installRecord.clawhubChannel === "official" &&
+    (installRecord.clawhubChannel === "official" ||
+      installRecord.clawhubChannel === "community" ||
+      installRecord.clawhubChannel === "private") &&
     (installRecord.clawhubPackage === packageName ||
       installRecord.spec === officialInstall.clawhubSpec ||
       installRecord.resolvedSpec === officialInstall.clawhubSpec)

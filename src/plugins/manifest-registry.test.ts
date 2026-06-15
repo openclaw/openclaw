@@ -786,6 +786,95 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins[0]?.trustedOfficialInstall).toBeUndefined();
   });
 
+  it("trusts ClawHub installs from all channel types (official/community/private) when package matches official catalog", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "copilot", configSchema: { type: "object" } });
+
+    // Test official channel
+    const registryOfficial = loadPluginManifestRegistry({
+      installRecords: {
+        copilot: {
+          source: "clawhub",
+          clawhubUrl: "https://clawhub.ai",
+          clawhubPackage: "@openclaw/copilot",
+          clawhubChannel: "official",
+          clawhubFamily: "code-plugin",
+          artifactKind: "npm-pack",
+          artifactFormat: "tgz",
+          npmIntegrity: "sha512-official",
+          installPath: dir,
+          version: "1.0.0",
+        },
+      },
+      candidates: [
+        createPluginCandidate({
+          idHint: "copilot",
+          rootDir: dir,
+          packageName: "@openclaw/copilot",
+          origin: "global",
+        }),
+      ],
+    });
+
+    expect(registryOfficial.plugins[0]?.trustedOfficialInstall).toBe(true);
+
+    // Test community channel
+    const registryCommunity = loadPluginManifestRegistry({
+      installRecords: {
+        copilot: {
+          source: "clawhub",
+          clawhubUrl: "https://clawhub.ai",
+          clawhubPackage: "@openclaw/copilot",
+          clawhubChannel: "community",
+          clawhubFamily: "code-plugin",
+          artifactKind: "npm-pack",
+          artifactFormat: "tgz",
+          npmIntegrity: "sha512-community",
+          installPath: dir,
+          version: "1.0.0",
+        },
+      },
+      candidates: [
+        createPluginCandidate({
+          idHint: "copilot",
+          rootDir: dir,
+          packageName: "@openclaw/copilot",
+          origin: "global",
+        }),
+      ],
+    });
+
+    expect(registryCommunity.plugins[0]?.trustedOfficialInstall).toBe(true);
+
+    // Test private channel
+    const registryPrivate = loadPluginManifestRegistry({
+      installRecords: {
+        copilot: {
+          source: "clawhub",
+          clawhubUrl: "https://clawhub.ai",
+          clawhubPackage: "@openclaw/copilot",
+          clawhubChannel: "private",
+          clawhubFamily: "code-plugin",
+          artifactKind: "npm-pack",
+          artifactFormat: "tgz",
+          npmIntegrity: "sha512-private",
+          installPath: dir,
+          version: "1.0.0",
+        },
+      },
+      candidates: [
+        createPluginCandidate({
+          idHint: "copilot",
+          rootDir: dir,
+          packageName: "@openclaw/copilot",
+          origin: "global",
+        }),
+      ],
+    });
+
+    expect(registryPrivate.plugins[0]?.trustedOfficialInstall).toBe(true);
+  });
+
   it("preserves provider auth env metadata from plugin manifests", () => {
     const dir = makeTempDir();
     writeManifest(dir, {
