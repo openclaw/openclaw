@@ -221,9 +221,11 @@ export type RunEmbeddedAgentParams = {
     sessionKey?: string;
   }) => void | Promise<void>;
   /**
-   * Emit lifecycle "finishing" when the model turn ends; the caller owns the
-   * final lifecycle "end" after durable post-turn maintenance completes.
+   * Emit lifecycle "finishing" when the attempt ends; the caller owns the
+   * final lifecycle "end" or "error" after fallback and post-turn work settle.
    */
+  deferTerminalLifecycle?: boolean;
+  /** @deprecated Use deferTerminalLifecycle. */
   deferTerminalLifecycleEnd?: boolean;
   lane?: string;
   enqueue?: CommandQueueEnqueueFn;

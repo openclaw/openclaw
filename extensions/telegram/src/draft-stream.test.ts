@@ -2,6 +2,7 @@
 import type { Bot } from "grammy";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTelegramDraftStream } from "./draft-stream.js";
+import { markdownToTelegramRichHtml } from "./format.js";
 
 type TelegramDraftStreamParams = Parameters<typeof createTelegramDraftStream>[0];
 
@@ -48,7 +49,7 @@ async function expectInitialForumSend(
   await vi.waitFor(() =>
     expect(api.raw.sendRichMessage).toHaveBeenCalledWith({
       chat_id: 123,
-      rich_message: { markdown: text },
+      rich_message: { html: markdownToTelegramRichHtml(text) },
       message_thread_id: 99,
     }),
   );
@@ -61,7 +62,7 @@ function expectRichSend(
 ) {
   expect(api.raw.sendRichMessage).toHaveBeenCalledWith({
     chat_id: 123,
-    rich_message: { markdown: text },
+    rich_message: { html: markdownToTelegramRichHtml(text) },
     ...params,
   });
 }
@@ -74,7 +75,7 @@ function expectNthRichSend(
 ) {
   expect(api.raw.sendRichMessage).toHaveBeenNthCalledWith(call, {
     chat_id: 123,
-    rich_message: { markdown: text },
+    rich_message: { html: markdownToTelegramRichHtml(text) },
     ...params,
   });
 }
@@ -83,7 +84,7 @@ function expectRichEdit(api: ReturnType<typeof createMockDraftApi>, text: string
   expect(api.raw.editMessageText).toHaveBeenCalledWith({
     chat_id: 123,
     message_id: 17,
-    rich_message: { markdown: text },
+    rich_message: { html: markdownToTelegramRichHtml(text) },
   });
 }
 
@@ -396,7 +397,7 @@ describe("createTelegramDraftStream", () => {
     expect(api.raw.editMessageText).not.toHaveBeenCalledWith({
       chat_id: 123,
       message_id: 17,
-      rich_message: { markdown: "Message B partial" },
+      rich_message: { html: markdownToTelegramRichHtml("Message B partial") },
     });
   });
 
@@ -471,7 +472,7 @@ describe("createTelegramDraftStream", () => {
     expect(api.raw.editMessageText).toHaveBeenLastCalledWith({
       chat_id: 123,
       message_id: 17,
-      rich_message: { markdown: "Hello more" },
+      rich_message: { html: markdownToTelegramRichHtml("Hello more") },
     });
     expect(warn).not.toHaveBeenCalled();
   });
@@ -498,7 +499,7 @@ describe("createTelegramDraftStream", () => {
     expect(api.raw.editMessageText).toHaveBeenLastCalledWith({
       chat_id: 123,
       message_id: 17,
-      rich_message: { markdown: "Hello again" },
+      rich_message: { html: markdownToTelegramRichHtml("Hello again") },
     });
     expect(stream.lastDeliveredText?.()).toBe("Hello again");
   });
@@ -530,7 +531,7 @@ describe("createTelegramDraftStream", () => {
       expect(api.raw.editMessageText).toHaveBeenLastCalledWith({
         chat_id: 123,
         message_id: 17,
-        rich_message: { markdown: "Hello more" },
+        rich_message: { html: markdownToTelegramRichHtml("Hello more") },
       });
     } finally {
       vi.useRealTimers();
@@ -637,7 +638,7 @@ describe("createTelegramDraftStream", () => {
       chatId: 123,
       renderText: (value) => ({
         text: value,
-        richMessage: { markdown: value },
+        richMessage: { html: markdownToTelegramRichHtml(value) },
       }),
     });
 
@@ -646,7 +647,7 @@ describe("createTelegramDraftStream", () => {
 
     expect(richApi.sendRichMessage).toHaveBeenCalledWith({
       chat_id: 123,
-      rich_message: { markdown: text.trimEnd() },
+      rich_message: { html: markdownToTelegramRichHtml(text.trimEnd()) },
     });
     expect(api.sendMessage).not.toHaveBeenCalled();
   });
@@ -797,7 +798,7 @@ describe("createTelegramDraftStream", () => {
       chatId: 123,
       maxChars: 100,
       renderText: () => ({
-        text: `<b>${"<".repeat(120)}</b>`,
+        text: "short raw text",
         richMessage: { html: `<b>${"<".repeat(120)}</b>` },
       }),
       warn,

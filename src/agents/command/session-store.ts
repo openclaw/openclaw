@@ -185,12 +185,14 @@ export async function updateSessionStoreAfterAgentRun(params: {
     });
   }
   if (!preserveUserFacingRunState) {
-    if (agentHarnessId) {
-      next.agentHarnessId = agentHarnessId;
-    } else if (result.meta.executionTrace?.runner === "cli") {
-      next.agentHarnessId = undefined;
+    if (!preserveRuntimeModel) {
+      if (agentHarnessId) {
+        next.agentHarnessId = agentHarnessId;
+      } else if (result.meta.executionTrace?.runner === "cli") {
+        next.agentHarnessId = undefined;
+      }
     }
-    if (isCliProvider(providerUsed, cfg)) {
+    if (!preserveRuntimeModel && isCliProvider(providerUsed, cfg)) {
       const cliSessionBinding = result.meta.agentMeta?.cliSessionBinding;
       if (result.meta.agentMeta?.clearCliSessionBinding === true) {
         clearCliSession(next, providerUsed);

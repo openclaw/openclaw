@@ -33,7 +33,11 @@ import { resolveTelegramInlineButtons, type TelegramInlineButtons } from "../but
 import { splitTelegramCaption } from "../caption.js";
 import { renderTelegramHtmlText } from "../format.js";
 import { resolveTelegramInteractiveTextFallback } from "../interactive-fallback.js";
-import { splitTelegramRichMarkdownChunks, TELEGRAM_RICH_TEXT_LIMIT } from "../rich-message.js";
+import {
+  splitTelegramRichMessageTextChunks,
+  TELEGRAM_RICH_TEXT_LIMIT,
+  type TelegramRichTextChunk,
+} from "../rich-message.js";
 import { buildInlineKeyboard } from "../send.js";
 import { resolveTelegramVoiceSend } from "../voice.js";
 import {
@@ -71,23 +75,23 @@ type TelegramReplyQuoteForSend = {
   entities?: unknown[];
 };
 
-type TelegramTextChunk = {
-  text: string;
-};
-
-type ChunkTextFn = (markdown: string) => TelegramTextChunk[];
+type ChunkTextFn = (markdown: string) => TelegramRichTextChunk[];
 
 function buildChunkTextResolver(params: {
   textLimit: number;
   chunkMode: ChunkMode;
   tableMode?: MarkdownTableMode;
+  skipEntityDetection?: boolean;
 }): ChunkTextFn {
   return (markdown: string) => {
-    return splitTelegramRichMarkdownChunks(markdown, params.textLimit, params.chunkMode).map(
-      (text) => ({
-        text,
-      }),
-    );
+    return splitTelegramRichMessageTextChunks({
+      text: markdown,
+      textLimit: params.textLimit,
+      textMode: "markdown",
+      chunkMode: params.chunkMode,
+      tableMode: params.tableMode,
+      skipEntityDetection: params.skipEntityDetection,
+    });
   };
 }
 
@@ -156,6 +160,7 @@ async function deliverTextReply(params: {
   replyQuoteEntities?: unknown[];
   linkPreview?: boolean;
   silent?: boolean;
+  tableMode?: MarkdownTableMode;
   replyToId?: number;
   replyToMode: ReplyToMode;
   progress: DeliveryProgress;
@@ -183,8 +188,9 @@ async function deliverTextReply(params: {
           replyQuotePosition: params.replyQuotePosition,
           replyQuoteEntities: params.replyQuoteEntities,
           thread: params.thread,
-          textMode: "markdown",
+          textMode: chunk.textMode,
           linkPreview: params.linkPreview,
+          tableMode: params.tableMode,
           silent: params.silent,
           replyMarkup,
         },
@@ -207,6 +213,7 @@ async function sendPendingFollowUpText(params: {
   replyMarkup?: ReturnType<typeof buildInlineKeyboard>;
   linkPreview?: boolean;
   silent?: boolean;
+  tableMode?: MarkdownTableMode;
   replyToId?: number;
   replyToMode: ReplyToMode;
   progress: DeliveryProgress;
@@ -223,8 +230,9 @@ async function sendPendingFollowUpText(params: {
       await sendTelegramText(params.bot, params.chatId, chunk.text, params.runtime, {
         replyToMessageId,
         thread: params.thread,
-        textMode: "markdown",
+        textMode: chunk.textMode,
         linkPreview: params.linkPreview,
+        tableMode: params.tableMode,
         silent: params.silent,
         replyMarkup,
       });
@@ -261,7 +269,7 @@ async function sendTelegramVoiceFallbackText(opts: {
   chatId: string;
   runtime: RuntimeEnv;
   text: string;
-  chunkText: (markdown: string) => TelegramTextChunk[];
+  chunkText: ChunkTextFn;
   replyToId?: number;
   replyQuoteMessageId?: number;
   replyQuotePosition?: number;
@@ -269,6 +277,7 @@ async function sendTelegramVoiceFallbackText(opts: {
   thread?: TelegramThreadSpec | null;
   linkPreview?: boolean;
   silent?: boolean;
+  tableMode?: MarkdownTableMode;
   replyMarkup?: ReturnType<typeof buildInlineKeyboard>;
   replyQuoteText?: string;
 }): Promise<number | undefined> {
@@ -286,8 +295,9 @@ async function sendTelegramVoiceFallbackText(opts: {
       replyQuotePosition: applyQuoteForChunk ? opts.replyQuotePosition : undefined,
       replyQuoteEntities: applyQuoteForChunk ? opts.replyQuoteEntities : undefined,
       thread: opts.thread,
-      textMode: "markdown",
+      textMode: chunk.textMode,
       linkPreview: opts.linkPreview,
+      tableMode: opts.tableMode,
       silent: opts.silent,
       replyMarkup: !appliedReplyTo ? opts.replyMarkup : undefined,
     });
@@ -552,6 +562,7 @@ async function deliverMediaReply(params: {
         replyMarkup: params.replyMarkup,
         linkPreview: params.linkPreview,
         silent: params.silent,
+        tableMode: params.tableMode,
         replyToId: params.replyToId,
         replyToMode: params.replyToMode,
         progress: params.progress,
@@ -717,6 +728,7 @@ export async function deliverReplies(params: {
     textLimit: Math.min(params.textLimit, TELEGRAM_RICH_TEXT_LIMIT),
     chunkMode: params.chunkMode ?? "length",
     tableMode: params.tableMode,
+    skipEntityDetection: params.linkPreview === false,
   });
   const candidateReplies: ReplyPayload[] = [];
   for (const reply of params.replies) {
@@ -837,6 +849,7 @@ export async function deliverReplies(params: {
           replyQuoteEntities: replyQuote.entities,
           linkPreview: params.linkPreview,
           silent: params.silent,
+          tableMode: params.tableMode,
           replyToId,
           replyToMode: params.replyToMode,
           progress,

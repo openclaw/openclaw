@@ -1695,6 +1695,11 @@ describe("package artifact reuse", () => {
     const clawHubNewWorkflow = readFileSync(".github/workflows/plugin-clawhub-new.yml", "utf8");
     const pluginNpmWorkflow = readFileSync(".github/workflows/plugin-npm-release.yml", "utf8");
     const openclawNpmWorkflow = readFileSync(".github/workflows/openclaw-npm-release.yml", "utf8");
+    const fastPretagScript = readFileSync("scripts/release-fast-pretag-check.sh", "utf8");
+    const pluginPretagPackScript = readFileSync(
+      "scripts/plugin-release-pretag-pack-check.ts",
+      "utf8",
+    );
     const approvalScript = readFileSync("scripts/validate-release-publish-approval.mjs", "utf8");
     const clawHubReleasePlanScript = readFileSync(
       "scripts/lib/openclaw-release-clawhub-plan.ts",
@@ -1721,6 +1726,15 @@ describe("package artifact reuse", () => {
     expect(packageJson.scripts?.["release:fast-pretag-check"]).toBe(
       "bash scripts/release-fast-pretag-check.sh",
     );
+    expect(fastPretagScript).toContain(
+      "node --import tsx scripts/plugin-release-pretag-pack-check.ts",
+    );
+    expect(fastPretagScript).not.toContain(
+      "check-plugin-npm-runtime-builds.mjs --package extensions/diffs-language-pack",
+    );
+    expect(pluginPretagPackScript).toContain("scripts/check-plugin-npm-runtime-builds.mjs");
+    expect(pluginPretagPackScript).toContain("scripts/plugin-npm-publish.sh");
+    expect(pluginPretagPackScript).toContain("scripts/plugin-clawhub-publish.sh");
     expect(clawHubWorkflow).toContain('CLAWHUB_CLI_PACKAGE: "clawhub@0.21.0"');
     expect(clawHubWorkflow).not.toContain("CLAWHUB_REPOSITORY:");
     expect(clawHubWorkflow).not.toContain("CLAWHUB_REF:");

@@ -11,6 +11,7 @@ import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-bu
 import { getCliSessionBinding } from "../../agents/cli-session.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
+import { mergeEmbeddedAgentRunResultForModelFallbackExhaustion } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
@@ -45,12 +46,18 @@ import {
 } from "../reply-payload.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
+  createAgentLifecycleTerminalBackstop,
+  resolveAgentLifecycleTerminalMetadata,
+  type AgentLifecycleTerminalBackstop,
+} from "./agent-lifecycle-terminal.js";
+import {
   clearDroppedCliSessionBinding,
   createCliToolSummaryTracker,
   keepCliSessionBindingOnlyWhenReused,
   runCliAgentWithLifecycle,
 } from "./agent-runner-cli-dispatch.js";
 import {
+  buildCommandOutputFromToolResultEvent,
   buildPreflightCompactionFailureText,
   resolveRunAfterAutoFallbackPrimaryProbeRecheck,
   resolveSessionRuntimeOverrideForProvider,
@@ -101,6 +108,14 @@ function filterStringArray(value: unknown): string[] | undefined {
 }
 
 function hasFailedFollowupProgressEvent(evt: FollowupAgentEvent): boolean {
+  const commandOutput = buildCommandOutputFromToolResultEvent(evt);
+  if (commandOutput) {
+    return (
+      commandOutput.status === "failed" ||
+      commandOutput.status === "error" ||
+      (typeof commandOutput.exitCode === "number" && commandOutput.exitCode !== 0)
+    );
+  }
   if (evt.stream !== "item" && evt.stream !== "command_output") {
     return false;
   }
@@ -118,7 +133,7 @@ function canForwardFailedFollowupProgressEvent(
   evt: FollowupAgentEvent,
   opts?: GetReplyOptions,
 ): boolean {
-  if (evt.stream === "command_output") {
+  if (evt.stream === "command_output" || buildCommandOutputFromToolResultEvent(evt)) {
     return typeof opts?.onCommandOutput === "function";
   }
   if (evt.stream !== "item") {
@@ -151,6 +166,8 @@ async function forwardFollowupProgressEvent(params: {
     const name = readStringValue(evt.data.name);
     if (phase === "start" || phase === "update") {
       await opts?.onToolStart?.({
+        itemId: readStringValue(evt.data.itemId),
+        toolCallId: readStringValue(evt.data.toolCallId),
         name,
         phase,
         args:
@@ -159,6 +176,10 @@ async function forwardFollowupProgressEvent(params: {
             : undefined,
         detailMode: params.detailMode,
       });
+    }
+    const commandOutput = buildCommandOutputFromToolResultEvent(evt);
+    if (commandOutput) {
+      await opts?.onCommandOutput?.(commandOutput);
     }
   }
 
@@ -169,6 +190,7 @@ async function forwardFollowupProgressEvent(params: {
   if (evt.stream === "item" && !suppressItemChannelProgress) {
     await opts?.onItemEvent?.({
       itemId: readStringValue(evt.data.itemId),
+      toolCallId: readStringValue(evt.data.toolCallId),
       kind: readStringValue(evt.data.kind),
       title: readStringValue(evt.data.title),
       name: readStringValue(evt.data.name),
@@ -605,6 +627,7 @@ export function createFollowupRunner(params: {
       let runResult: Awaited<ReturnType<typeof runEmbeddedAgent>>;
       let fallbackProvider = run.provider;
       let fallbackModel = run.model;
+      let fallbackExhausted = false;
       const resolveFollowupCurrentMessageId = () =>
         run.inputProvenance?.kind === "internal_system" &&
         run.inputProvenance.sourceTool === "restart-sentinel"
@@ -783,11 +806,11 @@ export function createFollowupRunner(params: {
       fallbackModel = run.model;
       replyOperation.setPhase("running");
       const runAbortSignal = replyOperation.abortSignal;
-      let pendingDeferredCliTerminal:
+      let pendingLifecycleTerminal:
         | {
             provider: string;
             model: string;
-            startedAt: number;
+            backstop: AgentLifecycleTerminalBackstop;
           }
         | undefined;
       let queuedUserMessagePersistedAcrossFallback = false;
@@ -819,6 +842,7 @@ export function createFollowupRunner(params: {
           },
           classifyResult: ({ result, provider, model }) =>
             outcomePlan.classifyRunResult({ result, provider, model }),
+          mergeExhaustedResult: mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
           run: async (provider, model, runOptions) => {
             const suppressQueuedUserPersistenceForCandidate =
               (run.suppressNextUserMessagePersistence ?? false) ||
@@ -889,12 +913,16 @@ export function createFollowupRunner(params: {
                   cliExecutionProvider,
                 );
                 const cliLifecycleStartedAt = Date.now();
-                let droppedCliSessionReplacement = false;
-                pendingDeferredCliTerminal = {
-                  provider,
-                  model,
+                const lifecycleBackstop = createAgentLifecycleTerminalBackstop({
+                  runId,
+                  sessionKey: replySessionKey,
                   startedAt: cliLifecycleStartedAt,
-                };
+                  getLifecycleGeneration: () => lifecycleGeneration,
+                  resolveAbortLifecycleFields: () =>
+                    resolveAgentRunAbortLifecycleFields(runAbortSignal),
+                });
+                let droppedCliSessionReplacement = false;
+                pendingLifecycleTerminal = { provider, model, backstop: lifecycleBackstop };
                 const followupCurrentMessageId = resolveFollowupCurrentMessageId();
                 const cliToolSummaryTracker = createCliToolSummaryTracker({
                   detailMode: toolProgressDetail,
@@ -1029,7 +1057,14 @@ export function createFollowupRunner(params: {
                 );
                 return result;
               }
-              pendingDeferredCliTerminal = undefined;
+              const lifecycleBackstop = createAgentLifecycleTerminalBackstop({
+                runId,
+                sessionKey: replySessionKey,
+                getLifecycleGeneration: () => lifecycleGeneration,
+                resolveAbortLifecycleFields: () =>
+                  resolveAgentRunAbortLifecycleFields(runAbortSignal),
+              });
+              pendingLifecycleTerminal = { provider, model, backstop: lifecycleBackstop };
               const followupCurrentMessageId = resolveFollowupCurrentMessageId();
               const result = await runEmbeddedAgent({
                 allowGatewaySubagentBinding: true,
@@ -1098,6 +1133,7 @@ export function createFollowupRunner(params: {
                 runTimeoutOverrideMs: run.runTimeoutOverrideMs,
                 runId,
                 abortSignal: runAbortSignal,
+                deferTerminalLifecycle: true,
                 onExecutionStarted: (info) => {
                   if (info?.lifecycleGeneration) {
                     lifecycleGeneration = info.lifecycleGeneration;
@@ -1116,8 +1152,9 @@ export function createFollowupRunner(params: {
                 shouldEmitToolResult: shouldEmitToolResultProgress,
                 shouldEmitToolOutput: shouldEmitToolOutputProgress,
                 onToolResult: deliverFollowupToolSummary,
-                onAgentEvent: (evt) =>
-                  enqueueProgressDelivery(async () => {
+                onAgentEvent: (evt) => {
+                  lifecycleBackstop.note(evt);
+                  return enqueueProgressDelivery(async () => {
                     await forwardFollowupProgressEvent({
                       evt,
                       opts,
@@ -1137,7 +1174,8 @@ export function createFollowupRunner(params: {
                     ) {
                       markVisibleToolErrorProgress();
                     }
-                  }),
+                  });
+                },
               });
               bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
                 result.meta?.systemPromptReport,
@@ -1156,49 +1194,73 @@ export function createFollowupRunner(params: {
         runResult = fallbackResult.result;
         fallbackProvider = fallbackResult.provider;
         fallbackModel = fallbackResult.model;
+        fallbackExhausted = fallbackResult.outcome === "exhausted";
+        const settledLifecycleTerminal =
+          pendingLifecycleTerminal?.provider === fallbackProvider &&
+          pendingLifecycleTerminal.model === fallbackModel
+            ? pendingLifecycleTerminal.backstop
+            : undefined;
+        pendingLifecycleTerminal = undefined;
         if (isAgentRunRestartAbortReason(runAbortSignal.reason)) {
+          settledLifecycleTerminal?.emit("end", runResult);
           throw runAbortSignal.reason;
         }
-        if (
-          pendingDeferredCliTerminal &&
-          pendingDeferredCliTerminal.provider === fallbackProvider &&
-          pendingDeferredCliTerminal.model === fallbackModel
-        ) {
+        const emitSettledLifecycleError = (error: Error, extraData?: Record<string, unknown>) => {
+          if (settledLifecycleTerminal) {
+            settledLifecycleTerminal.emit("error", error, extraData);
+            return;
+          }
           emitAgentEvent({
             runId,
             lifecycleGeneration,
-            stream: "lifecycle",
-            data: {
-              phase: "end",
-              startedAt: pendingDeferredCliTerminal.startedAt,
-              endedAt: Date.now(),
-              ...resolveAgentRunAbortLifecycleFields(runAbortSignal),
-            },
-          });
-        }
-        pendingDeferredCliTerminal = undefined;
-        await clearRecoveredAutoFallbackPrimaryProbe({
-          provider: fallbackProvider,
-          model: fallbackModel,
-        });
-      } catch (err) {
-        const message = formatErrorMessage(err);
-        replyOperation.fail("run_failed", err);
-        if (pendingDeferredCliTerminal) {
-          emitAgentEvent({
-            runId,
-            lifecycleGeneration,
+            ...(replySessionKey ? { sessionKey: replySessionKey } : {}),
             stream: "lifecycle",
             data: {
               phase: "error",
-              startedAt: pendingDeferredCliTerminal.startedAt,
+              error: error.message,
               endedAt: Date.now(),
-              error: message,
-              ...resolveAgentRunAbortLifecycleFields(runAbortSignal),
+              ...extraData,
             },
           });
-          pendingDeferredCliTerminal = undefined;
+        };
+        const deferredLifecycleError = settledLifecycleTerminal?.getDeferredError();
+        const userFacingErrorPayload = runResult.payloads?.find(
+          (payload) => payload.isError === true && typeof payload.text === "string",
+        )?.text;
+        const terminalErrorMessage =
+          deferredLifecycleError ??
+          userFacingErrorPayload ??
+          (runResult.meta?.error ? "Agent run failed" : undefined);
+        const terminalMetadata = resolveAgentLifecycleTerminalMetadata(runResult.meta);
+        if (fallbackExhausted) {
+          const exhaustionError = new Error(
+            terminalErrorMessage ?? "All model fallback candidates failed",
+          );
+          emitSettledLifecycleError(exhaustionError, {
+            ...terminalMetadata,
+            fallbackExhaustedFailure: true,
+          });
+          replyOperation.retainFailureUntilComplete();
+          replyOperation.fail("run_failed", exhaustionError);
+        } else if (deferredLifecycleError || runResult.meta?.error) {
+          const terminalError = new Error(terminalErrorMessage ?? "Agent run failed");
+          emitSettledLifecycleError(terminalError, terminalMetadata);
+          replyOperation.retainFailureUntilComplete();
+          replyOperation.fail("run_failed", terminalError);
+        } else {
+          settledLifecycleTerminal?.emit("end", runResult);
         }
+        if (!fallbackExhausted) {
+          await clearRecoveredAutoFallbackPrimaryProbe({
+            provider: fallbackProvider,
+            model: fallbackModel,
+          });
+        }
+      } catch (err) {
+        const message = formatErrorMessage(err);
+        replyOperation.fail("run_failed", err);
+        pendingLifecycleTerminal?.backstop.emit("error", err);
+        pendingLifecycleTerminal = undefined;
         if (lifecycleGeneration !== getAgentEventLifecycleGeneration()) {
           clearAgentRunContext(runId, lifecycleGeneration);
         }
@@ -1235,6 +1297,7 @@ export function createFollowupRunner(params: {
           compactionTokensAfter: runResult.meta?.agentMeta?.compactionTokensAfter,
           promptTokens,
           isHeartbeat: opts?.isHeartbeat === true,
+          preserveRuntimeModel: fallbackExhausted,
           preserveUserFacingSessionModelState: preserveUserFacingSessionState,
           modelUsed,
           providerUsed,

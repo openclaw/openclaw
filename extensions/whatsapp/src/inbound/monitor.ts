@@ -38,7 +38,11 @@ import {
   type WhatsAppSocketTimingOptions,
 } from "../socket-timing.js";
 import { resolveJidToE164 } from "../text-runtime.js";
-import { checkInboundAccessControl, emitWhatsAppMessagePreAuthHooks } from "./access-control.js";
+import {
+  checkInboundAccessControl,
+  emitWhatsAppMessagePreAuthHooks,
+  type AcceptedInboundAccessControlResult,
+} from "./access-control.js";
 import {
   claimRecentInboundMessageDelivery,
   commitRecentInboundMessage,
@@ -319,6 +323,7 @@ export async function attachWebInboxToSocket(
     return successor.getCurrentSock();
   };
   type QueuedInboundMessageMetadata = {
+    admission: NonNullable<WebInboundMessage["admission"]>;
     dedupeKey?: string;
     debounceKey?: string;
     durableId?: string;
@@ -683,7 +688,7 @@ export async function attachWebInboxToSocket(
     groupSubject?: string;
     groupParticipants?: string[];
     messageTimestampMs?: number;
-    access: Awaited<ReturnType<typeof checkInboundAccessControl>>;
+    access: AcceptedInboundAccessControlResult;
   };
 
   const normalizeInboundMessage = async (
@@ -776,6 +781,7 @@ export async function attachWebInboxToSocket(
       selfE164: self.e164 ?? null,
       senderE164,
       content: preAuthContent,
+      senderJid: participantJid,
       group,
       pushName: msg.pushName ?? undefined,
       isFromMe: Boolean(msg.key?.fromMe),
@@ -1150,6 +1156,7 @@ export async function attachWebInboxToSocket(
           }
         : undefined;
     const inboundMessage: QueuedInboundMessage = withDeprecatedWebInboundMessageFlatAliases({
+      admission: inbound.access.admission,
       event: {
         id: inbound.id,
         timestamp,

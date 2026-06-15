@@ -248,6 +248,32 @@ describe("extractMessagingToolSend", () => {
     expect(result?.to).toBe("telegram:123");
   });
 
+  it("accepts channelId alias when earlier target aliases are blank", () => {
+    const result = extractMessagingToolSend("message", {
+      action: "send",
+      channel: "telegram",
+      target: " ",
+      to: "",
+      channelId: "123",
+    });
+
+    expect(result?.tool).toBe("message");
+    expect(result?.provider).toBe("telegram");
+    expect(result?.to).toBe("telegram:123");
+  });
+
+  it("prefers canonical target over legacy target aliases", () => {
+    const result = extractMessagingToolSend("message", {
+      action: "send",
+      channel: "telegram",
+      target: "123",
+      to: "456",
+      channelId: "789",
+    });
+
+    expect(result?.to).toBe("telegram:123");
+  });
+
   it("recognizes attachment-style message tool sends", () => {
     const upload = extractMessagingToolSend("message", {
       action: "upload-file",

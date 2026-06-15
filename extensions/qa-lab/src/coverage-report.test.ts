@@ -121,7 +121,7 @@ describe("qa coverage report", () => {
     expect(inventory.scorecardTaxonomy.taxonomyFulfillmentPercent).toBeGreaterThan(0);
     expect(inventory.scorecardTaxonomy.evidenceRefCount).toBeGreaterThan(0);
     expect(inventory.scorecardTaxonomy.scenarioCoverageIdCount).toBeGreaterThan(0);
-    expect(inventory.scorecardTaxonomy.unmappedCoverageIdCount).toBe(0);
+    expect(inventory.scorecardTaxonomy.unknownCoverageIdCount).toBe(0);
     expect(inventory.scorecardTaxonomy.validationIssues.length).toBeGreaterThan(0);
     expect(
       inventory.scorecardTaxonomy.validationIssues.every(
@@ -210,7 +210,7 @@ describe("qa coverage report", () => {
       "- browser-automation-and-exec-sandbox-tools.tool-invocation-and-execution (browser-automation-and-exec-sandbox-tools / Tool Invocation and Execution; partial): profiles: release, smoke-ci; coverage IDs:",
     );
     expect(report).toContain("primary:playwright:ui/src/ui/e2e/chat-flow.e2e.test.ts (ui.control)");
-    expect(report).not.toContain("### Unmapped Scenario Coverage IDs");
+    expect(report).not.toContain("### Unknown Scenario Coverage IDs");
   });
 
   it("renders Playwright matches as qa suite targets", () => {
@@ -292,7 +292,7 @@ describe("qa coverage report", () => {
     });
 
     expect(report.fulfilledFeatureCount).toBe(0);
-    expect(report.categories[0]?.mappingStatus).toBe("missing");
+    expect(report.categories[0]?.coverageStatus).toBe("missing");
     expect(report.validationIssues.map((issue) => issue.code)).toEqual([
       "coverage-id-not-found",
       "coverage-id-missing-primary-evidence",
@@ -320,7 +320,7 @@ describe("qa coverage report", () => {
     expect(report.validationIssues).toStrictEqual([]);
     expect(report.fulfilledCategoryCount).toBe(1);
     expect(report.fulfilledFeatureCount).toBe(1);
-    expect(report.categories[0]?.mappingStatus).toBe("mapped");
+    expect(report.categories[0]?.coverageStatus).toBe("covered");
     expect(report.categories[0]?.scenarioRefs).toStrictEqual([
       "qa/scenarios/ui/control-ui-chat-flow-playwright.yaml",
     ]);
@@ -422,7 +422,7 @@ describe("qa coverage report", () => {
     });
 
     expect(report.fulfilledFeatureCount).toBe(0);
-    expect(report.categories[0]?.mappingStatus).toBe("partial");
+    expect(report.categories[0]?.coverageStatus).toBe("partial");
     expect(report.validationIssues.map((issue) => issue.code)).toEqual([
       "coverage-id-not-found",
       "coverage-id-missing-primary-evidence",

@@ -1,5 +1,6 @@
 // Telegram plugin module implements bot handlers behavior.
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 import type { Message, ReactionTypeEmoji } from "grammy/types";
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-helpers";
@@ -123,6 +124,7 @@ import {
   evaluateTelegramGroupBaseAccess,
   evaluateTelegramGroupPolicyAccess,
 } from "./group-access.js";
+import { resolveTelegramGroupHistoryContextMode } from "./group-history-context.js";
 import { migrateTelegramGroupConfig } from "./group-migration.js";
 import {
   resolveTelegramCommandIngressAuthorization,
@@ -160,6 +162,39 @@ import {
   isTelegramMessageHasNoTextError,
 } from "./network-errors.js";
 import { buildInlineKeyboard } from "./send.js";
+
+function resolveTelegramPromptMediaPath(mediaPath: string): string | undefined {
+  const toInboundMediaPath = (id: string): string | undefined => {
+    if (
+      !id ||
+      id === "." ||
+      id === ".." ||
+      id.includes("/") ||
+      id.includes("\\") ||
+      id.includes("\0")
+    ) {
+      return undefined;
+    }
+    return `media://inbound/${encodeURIComponent(id)}`;
+  };
+  const decodeInboundMediaId = (id: string): string | undefined => {
+    try {
+      return decodeURIComponent(id);
+    } catch {
+      return undefined;
+    }
+  };
+  const canonicalMatch = /^media:\/\/inbound\/([^/\\]+)$/i.exec(mediaPath);
+  if (canonicalMatch?.[1]) {
+    const id = decodeInboundMediaId(canonicalMatch[1]);
+    return id ? toInboundMediaPath(id) : undefined;
+  }
+  const normalized = mediaPath.replace(/\\/g, "/");
+  if (!normalized.includes("/media/inbound/")) {
+    return undefined;
+  }
+  return toInboundMediaPath(path.posix.basename(normalized));
+}
 
 export const registerTelegramHandlers = ({
   cfg,
@@ -1110,9 +1145,13 @@ export const registerTelegramHandlers = ({
     media?: TelegramMediaRef,
   ): TelegramReplyChainEntry => {
     const { sourceMessage: _sourceMessage, ...entry } = node;
+    if (!media?.path) {
+      return entry;
+    }
+    const { mediaRef: _mediaRef, ...entryWithoutProviderMediaRef } = entry;
     return {
-      ...entry,
-      ...(media?.path ? { mediaPath: media.path } : {}),
+      ...entryWithoutProviderMediaRef,
+      mediaPath: media.path,
       ...(media?.contentType ? { mediaType: media.contentType } : {}),
     };
   };
@@ -1120,6 +1159,7 @@ export const registerTelegramHandlers = ({
   const toPromptContextMessage = (
     node: TelegramCachedMessageNode,
     flags?: { replyTarget?: boolean },
+    media?: TelegramMediaRef,
   ) => ({
     message_id: node.messageId,
     thread_id: node.threadId,
@@ -1128,17 +1168,83 @@ export const registerTelegramHandlers = ({
     sender_username: node.senderUsername,
     timestamp_ms: node.timestamp,
     body: node.body,
-    media_type: node.mediaType,
-    media_ref: node.mediaRef,
+    media_type: media?.contentType ?? node.mediaType,
+    media_path: media?.path,
+    media_ref: media?.path ? undefined : node.mediaRef,
     reply_to_id: node.replyToId,
     is_reply_target: flags?.replyTarget === true ? true : undefined,
   });
 
+  const buildMentionOnlyGroupHistoryPredicate = (params: {
+    ctx: TelegramContext;
+    msg: Message;
+    threadId?: number;
+  }): ((node: TelegramCachedMessageNode) => boolean) => {
+    const runtimeCfg = telegramDeps.getRuntimeConfig();
+    const isForum =
+      params.msg.chat.type === "supergroup" &&
+      Boolean(params.msg.chat.is_forum || params.msg.is_topic_message);
+    const senderId = params.msg.from?.id != null ? String(params.msg.from.id) : undefined;
+    const sessionState = resolveTelegramSessionState({
+      chatId: params.msg.chat.id,
+      isGroup: true,
+      isForum,
+      messageThreadId: params.msg.message_thread_id,
+      resolvedThreadId: params.threadId,
+      senderId,
+      runtimeCfg,
+    });
+    const conversationId = buildTelegramGroupPeerId(params.msg.chat.id, params.threadId);
+    const mentionRegexes = buildMentionRegexes(runtimeCfg, sessionState.agentId, {
+      provider: "telegram",
+      conversationId,
+      providerPolicy: telegramCfg.mentionPatterns,
+    });
+    const botUsername = params.ctx.me?.username?.trim().toLowerCase();
+    const botId = params.ctx.me?.id;
+    return (node) => {
+      if (botId != null && node.sourceMessage.from?.id === botId) {
+        return true;
+      }
+      const replyFromId = node.sourceMessage.reply_to_message?.from?.id;
+      if (
+        botId != null &&
+        replyFromId === botId &&
+        !isTelegramForumServiceMessage(node.sourceMessage.reply_to_message)
+      ) {
+        return true;
+      }
+      const messageTextParts = getTelegramTextParts(node.sourceMessage);
+      const hasAnyMention = messageTextParts.entities.some((ent) => ent.type === "mention");
+      const explicitlyMentioned = botUsername
+        ? hasBotMention(node.sourceMessage, botUsername)
+        : false;
+      return matchesMentionWithExplicit({
+        text: messageTextParts.text,
+        mentionRegexes,
+        explicit: {
+          hasAnyMention,
+          isExplicitlyMentioned: explicitlyMentioned,
+          canResolveExplicit: Boolean(botUsername),
+        },
+      });
+    };
+  };
+
   const buildPromptContextForMessage = async (
+    ctx: TelegramContext,
     msg: Message,
     replyChainNodes: TelegramCachedMessageNode[],
     options?: TelegramMessageContextOptions,
+    mediaByMessageId?: ReadonlyMap<string, TelegramMediaRef>,
   ): Promise<TelegramPromptContextEntry[]> => {
+    const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
+    const groupHistoryContextMode = isGroup
+      ? resolveTelegramGroupHistoryContextMode(telegramCfg)
+      : "recent";
+    if (isGroup && groupHistoryContextMode === "none") {
+      return [];
+    }
     const messageId = typeof msg.message_id === "number" ? String(msg.message_id) : undefined;
     const currentNode = await messageCache.get({
       accountId,
@@ -1158,6 +1264,9 @@ export const registerTelegramHandlers = ({
       ...(options?.promptContextMinTimestampMs !== undefined
         ? { minTimestampMs: options.promptContextMinTimestampMs }
         : {}),
+      ...(isGroup && groupHistoryContextMode === "mention-only"
+        ? { includeNode: buildMentionOnlyGroupHistoryPredicate({ ctx, msg, threadId }) }
+        : {}),
     });
     return conversationContext.length > 0
       ? [
@@ -1169,7 +1278,11 @@ export const registerTelegramHandlers = ({
               order: "chronological",
               relation: "selected_for_current_message",
               messages: conversationContext.map((entry) =>
-                toPromptContextMessage(entry.node, { replyTarget: entry.isReplyTarget }),
+                toPromptContextMessage(
+                  entry.node,
+                  { replyTarget: entry.isReplyTarget },
+                  entry.node.messageId ? mediaByMessageId?.get(entry.node.messageId) : undefined,
+                ),
               ),
             },
           },
@@ -1241,10 +1354,40 @@ export const registerTelegramHandlers = ({
         params.ctx,
         replyChainNodes,
       );
+      const promptContextMediaByMessageId = new Map<string, TelegramMediaRef>();
+      const currentMessageId =
+        typeof params.msg.message_id === "number" ? String(params.msg.message_id) : undefined;
+      const currentMedia = params.allMedia[0];
+      const currentPromptMediaPath = currentMedia?.path
+        ? resolveTelegramPromptMediaPath(currentMedia.path)
+        : undefined;
+      if (currentMessageId && currentMedia && currentPromptMediaPath) {
+        promptContextMediaByMessageId.set(currentMessageId, {
+          ...currentMedia,
+          path: currentPromptMediaPath,
+        });
+      }
+      const isGroupConversation =
+        params.msg.chat.type === "group" || params.msg.chat.type === "supergroup";
+      if (!isGroupConversation) {
+        for (const entry of replyChain) {
+          const promptMediaPath = entry.mediaPath
+            ? resolveTelegramPromptMediaPath(entry.mediaPath)
+            : undefined;
+          if (entry.messageId && entry.mediaPath && promptMediaPath) {
+            promptContextMediaByMessageId.set(entry.messageId, {
+              path: promptMediaPath,
+              ...(entry.mediaType ? { contentType: entry.mediaType } : {}),
+            });
+          }
+        }
+      }
       const promptContext = await buildPromptContextForMessage(
+        params.ctx,
         params.msg,
         replyChainNodes,
         params.options,
+        promptContextMediaByMessageId,
       );
       const result = await processMessage(
         params.ctx,

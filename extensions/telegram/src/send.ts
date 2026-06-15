@@ -40,11 +40,12 @@ import {
 import {
   buildTelegramRichMessage,
   getTelegramRichRawApi,
-  splitTelegramRichTextChunks,
+  splitTelegramRichMessageTextChunks,
   TELEGRAM_RICH_TEXT_LIMIT,
   toTelegramRichMessageContextParams,
   type TelegramEditRichMessageTextParams,
   type TelegramRichMessageContextParams,
+  type TelegramRichTextChunk,
 } from "./rich-message.js";
 import {
   buildOutboundMediaLoadOptions,
@@ -600,16 +601,16 @@ export async function sendMessageTelegram(
   });
 
   const textMode = opts.textMode ?? "markdown";
-  const richMessageOptions = {
-    skipEntityDetection: account.config.linkPreview === false,
-  };
-  const buildRichMessage = (value: string) =>
-    buildTelegramRichMessage(value, textMode, richMessageOptions);
   const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "telegram",
     accountId: account.accountId,
+    supportsBlockTables: true,
   });
+  const richMessageOptions = {
+    skipEntityDetection: account.config.linkPreview === false,
+    tableMode,
+  };
   const renderHtmlText = (value: string) => renderTelegramHtmlText(value, { textMode, tableMode });
   const textLimit = Math.min(
     resolveTextChunkLimit(cfg, "telegram", account.accountId, {
@@ -619,12 +620,8 @@ export async function sendMessageTelegram(
   );
   const chunkMode = resolveChunkMode(cfg, "telegram", account.accountId);
 
-  type TelegramTextChunk = {
-    text: string;
-  };
-
   const sendTelegramTextChunk = async (
-    chunk: TelegramTextChunk,
+    chunk: TelegramRichTextChunk,
     params?: TelegramRichMessageContextParams,
   ) => {
     const richRawApi = getTelegramRichRawApi(api);
@@ -636,7 +633,7 @@ export async function sendMessageTelegram(
       () =>
         richRawApi.sendRichMessage({
           chat_id: chatId,
-          rich_message: buildRichMessage(chunk.text),
+          rich_message: buildTelegramRichMessage(chunk.text, chunk.textMode, richMessageOptions),
           ...richParams,
         }),
       "richMessage",
@@ -653,7 +650,7 @@ export async function sendMessageTelegram(
       : undefined;
 
   const sendTelegramTextChunks = async (
-    chunks: TelegramTextChunk[],
+    chunks: TelegramRichTextChunk[],
     context: string,
   ): Promise<{ messageId: string; chatId: string }> => {
     let lastMessageId = "";
@@ -677,7 +674,7 @@ export async function sendMessageTelegram(
         chatId,
         message: res,
         messageId,
-        text: chunk.text,
+        text: chunk.plainText,
         ...(acceptedParams?.message_thread_id !== undefined
           ? { messageThreadId: acceptedParams.message_thread_id }
           : {}),
@@ -703,13 +700,15 @@ export async function sendMessageTelegram(
     return { messageId: lastMessageId, chatId: lastChatId };
   };
 
-  const buildChunkedTextPlan = (rawText: string): TelegramTextChunk[] => {
-    return splitTelegramRichTextChunks({
+  const buildChunkedTextPlan = (rawText: string): TelegramRichTextChunk[] => {
+    return splitTelegramRichMessageTextChunks({
       text: rawText,
       textLimit,
       textMode,
       chunkMode,
-    }).map((chunk) => ({ text: chunk }));
+      tableMode,
+      skipEntityDetection: richMessageOptions.skipEntityDetection,
+    });
   };
 
   const sendChunkedText = async (rawText: string, context: string) =>
@@ -1355,12 +1354,14 @@ export async function editMessageTelegram(
     cfg,
     channel: "telegram",
     accountId: account.accountId,
+    supportsBlockTables: true,
   });
   const htmlText = renderTelegramHtmlText(text, { textMode, tableMode });
   const plainText = textMode === "html" ? telegramHtmlToPlainTextFallback(htmlText) : text;
   const richRawApi = getTelegramRichRawApi(api);
   const richMessage = buildTelegramRichMessage(text, textMode, {
     skipEntityDetection: opts.linkPreview === false,
+    tableMode,
   });
 
   // Reply markup semantics:

@@ -225,6 +225,56 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryContext).toBeUndefined();
   });
 
+  it("clears pending final delivery when abort fires after a successful final send (#89115)", async () => {
+    // Regression for #89115: an abort that lands after the final reply has
+    // shipped (here, during sendFinalReply) must still clear the pending-final
+    // bookkeeping — otherwise pendingFinalDelivery stays true and the get-reply
+    // redelivery short-circuit silently blocks every later inbound.
+    hookMocks.runner.hasHooks.mockReturnValue(false);
+    sessionStoreMocks.currentEntry = {
+      sessionKey: "agent:test:session",
+      pendingFinalDelivery: true,
+      pendingFinalDeliveryText: "durable reply",
+      pendingFinalDeliveryCreatedAt: 1,
+      pendingFinalDeliveryLastAttemptAt: 2,
+      pendingFinalDeliveryAttemptCount: 3,
+      pendingFinalDeliveryLastError: "previous failure",
+      pendingFinalDeliveryContext: { source: "heartbeat" },
+      pendingFinalDeliveryIntentId: "intent-89115",
+    };
+    sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({
+      existing: sessionStoreMocks.currentEntry,
+    });
+    const abortController = new AbortController();
+    const dispatcher = createDispatcher();
+    vi.mocked(dispatcher.sendFinalReply).mockImplementation(() => {
+      abortController.abort();
+      return true;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: createHookCtx(),
+      cfg: emptyConfig,
+      dispatcher,
+      replyOptions: { abortSignal: abortController.signal },
+      replyResolver: async () => ({ text: "durable reply" }),
+    });
+
+    // Abort landed after delivery: the run is still surfaced as aborted
+    // (queuedFinal:false), but the pending-final state is fully cleared.
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledOnce();
+    expect(result.queuedFinal).toBe(false);
+    expect(sessionStoreMocks.updateSessionStoreEntry).toHaveBeenCalledOnce();
+    expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBeUndefined();
+    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryText).toBeUndefined();
+    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryCreatedAt).toBeUndefined();
+    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryLastAttemptAt).toBeUndefined();
+    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryAttemptCount).toBeUndefined();
+    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryLastError).toBeUndefined();
+    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryContext).toBeUndefined();
+    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryIntentId).toBeUndefined();
+  });
+
   it("preserves pending final delivery when final dispatch fails", async () => {
     hookMocks.runner.hasHooks.mockReturnValue(false);
     sessionStoreMocks.currentEntry = {

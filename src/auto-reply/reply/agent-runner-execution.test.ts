@@ -317,6 +317,7 @@ type EmbeddedAgentParams = {
   onToolResult?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
   onItemEvent?: (payload: {
     itemId?: string;
+    toolCallId?: string;
     kind?: string;
     title?: string;
     name?: string;
@@ -391,12 +392,15 @@ function createTestUserTurnRecorder(message: PersistedUserTurnMessage) {
 function createMockReplyOperation(): {
   replyOperation: ReplyOperation;
   failMock: ReturnType<typeof vi.fn>;
+  retainFailureUntilCompleteMock: ReturnType<typeof vi.fn>;
   updateSessionIdMock: ReturnType<typeof vi.fn>;
 } {
   const failMock = vi.fn();
+  const retainFailureUntilCompleteMock = vi.fn();
   const updateSessionIdMock = vi.fn();
   return {
     failMock,
+    retainFailureUntilCompleteMock,
     updateSessionIdMock,
     replyOperation: {
       key: "main",
@@ -409,7 +413,7 @@ function createMockReplyOperation(): {
       updateSessionId: updateSessionIdMock,
       attachBackend: vi.fn(),
       detachBackend: vi.fn(),
-      retainFailureUntilComplete: vi.fn(),
+      retainFailureUntilComplete: retainFailureUntilCompleteMock,
       complete: vi.fn(),
       completeThen: vi.fn((afterClear: () => void) => afterClear()),
       completeWithAfterClearBarrier: vi.fn(),
@@ -495,6 +499,7 @@ function expectBlockReplyCall(
 function createMinimalRunAgentTurnParams(overrides?: {
   followupRun?: FollowupRun;
   opts?: GetReplyOptions;
+  replyOperation?: ReplyOperation;
   sessionCtx?: TemplateContext;
 }) {
   return {
@@ -507,6 +512,7 @@ function createMinimalRunAgentTurnParams(overrides?: {
         MessageSid: "msg",
       } as unknown as TemplateContext),
     opts: overrides?.opts ?? ({} satisfies GetReplyOptions),
+    replyOperation: overrides?.replyOperation,
     typingSignals: createMockTypingSignaler(),
     blockReplyPipeline: null,
     blockStreamingEnabled: false,
@@ -1608,6 +1614,238 @@ describe("runAgentTurnWithFallback", () => {
       authProfileId: "google:fallback",
       authProfileIdSource: "auto",
     });
+  });
+
+  it("does not clear an auto-fallback pin for an exhausted preserved result", async () => {
+    const probe = {
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      fallbackProvider: "google",
+      fallbackModel: "gemini-3-pro",
+      fallbackAuthProfileId: "google:fallback",
+      fallbackAuthProfileIdSource: "auto" as const,
+    };
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = probe.provider;
+    followupRun.run.model = probe.model;
+    followupRun.run.autoFallbackPrimaryProbe = probe;
+    const sessionKey = "exhausted-primary-probe";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: 1,
+      providerOverride: probe.fallbackProvider,
+      modelOverride: probe.fallbackModel,
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: probe.provider,
+      modelOverrideFallbackOriginModel: probe.model,
+      authProfileOverride: probe.fallbackAuthProfileId,
+      authProfileOverrideSource: "auto",
+    };
+    const activeSessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    const exhaustedResult = {
+      payloads: [{ text: "Terminal tool summary", isError: true }],
+      meta: {
+        error: {
+          kind: "incomplete_turn",
+          message: "All fallback candidates ended incomplete",
+          fallbackSafe: true,
+          terminalPresentation: true,
+        },
+      },
+    };
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onAgentEvent?.({
+        stream: "lifecycle",
+        data: {
+          phase: "finishing",
+          error: "All fallback candidates ended incomplete",
+          livenessState: "blocked",
+          providerStarted: true,
+          replayInvalid: true,
+          timeoutPhase: "provider",
+        },
+      });
+      return exhaustedResult;
+    });
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      outcome: "exhausted",
+      result: await params.run(probe.provider, probe.model),
+      provider: probe.provider,
+      model: probe.model,
+      attempts: [
+        { provider: probe.provider, model: probe.model, error: "incomplete" },
+        {
+          provider: probe.fallbackProvider,
+          model: probe.fallbackModel,
+          error: "incomplete",
+        },
+      ],
+    }));
+    const { replyOperation, failMock, retainFailureUntilCompleteMock } = createMockReplyOperation();
+    const emitAgentEvent = vi.mocked((await import("../../infra/agent-events.js")).emitAgentEvent);
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({ followupRun, replyOperation }),
+      sessionKey,
+      activeSessionStore,
+      getActiveSessionEntry: () => activeSessionStore[sessionKey],
+    });
+
+    expect(result).toMatchObject({
+      kind: "success",
+      fallbackExhausted: true,
+      fallbackProvider: probe.provider,
+      fallbackModel: probe.model,
+    });
+    expect(activeSessionStore[sessionKey]).toMatchObject({
+      providerOverride: probe.fallbackProvider,
+      modelOverride: probe.fallbackModel,
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: probe.provider,
+      modelOverrideFallbackOriginModel: probe.model,
+    });
+    expect(retainFailureUntilCompleteMock).toHaveBeenCalledTimes(1);
+    expect(failMock).toHaveBeenCalledWith("run_failed", expect.any(Error));
+    expect(
+      emitAgentEvent.mock.calls
+        .map((call) => call[0])
+        .find(
+          (event) =>
+            event.stream === "lifecycle" &&
+            event.data.phase === "error" &&
+            event.data.fallbackExhaustedFailure === true &&
+            event.data.livenessState === "blocked" &&
+            event.data.providerStarted === true &&
+            event.data.replayInvalid === true &&
+            event.data.timeoutPhase === "provider",
+        ),
+    ).toBeDefined();
+  });
+
+  it("reports a completed non-fallbackable error result as a failure terminal", async () => {
+    const terminalErrorResult = {
+      payloads: [{ text: "Command may have changed state", isError: true }],
+      meta: {
+        replayInvalid: true,
+        error: {
+          kind: "incomplete_turn",
+          message: "raw provider detail should stay private",
+          fallbackSafe: false,
+        },
+      },
+    };
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onAgentEvent?.({
+        stream: "lifecycle",
+        data: {
+          phase: "finishing",
+          error: "Command may have changed state",
+          replayInvalid: true,
+        },
+      });
+      return terminalErrorResult;
+    });
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      outcome: "completed",
+      result: await params.run("anthropic", "claude"),
+      provider: "anthropic",
+      model: "claude",
+      attempts: [],
+    }));
+    const { replyOperation, failMock, retainFailureUntilCompleteMock } = createMockReplyOperation();
+    const emitAgentEvent = vi.mocked((await import("../../infra/agent-events.js")).emitAgentEvent);
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({
+        replyOperation,
+        opts: { runId: "run-non-fallbackable-error" },
+      }),
+    );
+
+    expect(result.kind).toBe("success");
+    expect(retainFailureUntilCompleteMock).toHaveBeenCalledTimes(1);
+    expect(failMock).toHaveBeenCalledWith("run_failed", expect.any(Error));
+    const lifecycleEvents = emitAgentEvent.mock.calls
+      .map((call) => call[0])
+      .filter(
+        (event) => event.runId === "run-non-fallbackable-error" && event.stream === "lifecycle",
+      );
+    expect(lifecycleEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          data: expect.objectContaining({
+            phase: "error",
+            error: "Command may have changed state",
+            replayInvalid: true,
+          }),
+        }),
+      ]),
+    );
+    expect(
+      lifecycleEvents.some(
+        (event) => event.data.phase === "end" || event.data.fallbackExhaustedFailure === true,
+      ),
+    ).toBe(false);
+    expect(JSON.stringify(lifecycleEvents)).not.toContain("raw provider detail");
+  });
+
+  it("reports exhausted CLI results without a success lifecycle terminal", async () => {
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      outcome: "exhausted",
+      result: await params.run("codex-cli", "gpt-5.4"),
+      provider: "codex-cli",
+      model: "gpt-5.4",
+      attempts: [{ provider: "codex-cli", model: "gpt-5.4", error: "incomplete" }],
+    }));
+    state.runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "Terminal tool summary", isError: true }],
+      meta: {
+        error: {
+          kind: "incomplete_turn",
+          message: "CLI turn ended incomplete",
+        },
+      },
+    });
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "codex-cli";
+    followupRun.run.model = "gpt-5.4";
+    const { replyOperation, failMock, retainFailureUntilCompleteMock } = createMockReplyOperation();
+    const emitAgentEvent = vi.mocked((await import("../../infra/agent-events.js")).emitAgentEvent);
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({
+        followupRun,
+        replyOperation,
+        opts: { runId: "run-cli-exhausted" },
+      }),
+    );
+
+    expect(result).toMatchObject({
+      kind: "success",
+      fallbackExhausted: true,
+      fallbackProvider: "codex-cli",
+      fallbackModel: "gpt-5.4",
+    });
+    expect(retainFailureUntilCompleteMock).toHaveBeenCalledTimes(1);
+    expect(failMock).toHaveBeenCalledWith("run_failed", expect.any(Error));
+    const lifecycleEvents = emitAgentEvent.mock.calls
+      .map((call) => call[0])
+      .filter((event) => event.runId === "run-cli-exhausted" && event.stream === "lifecycle");
+    expect(lifecycleEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          data: expect.objectContaining({
+            phase: "error",
+            fallbackExhaustedFailure: true,
+          }),
+        }),
+      ]),
+    );
+    expect(lifecycleEvents.some((event) => event.data.phase === "end")).toBe(false);
   });
 
   it("keeps fallback auth available for later same-provider fallback models", async () => {
@@ -3384,18 +3622,15 @@ describe("runAgentTurnWithFallback", () => {
     });
   });
 
-  it("classifies GPT-5 plan-only terminal results as fallback-eligible", async () => {
+  it("classifies structured harness plan-only terminal results as fallback-eligible", async () => {
     const followupRun = createFollowupRun();
     followupRun.run.provider = "openai";
     followupRun.run.model = "gpt-5.4";
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [
-        {
-          text: "agent stopped after repeated plan-only turns without taking a concrete action.",
-          isError: true,
-        },
-      ],
-      meta: {},
+      payloads: [],
+      meta: {
+        agentHarnessResultClassification: "planning-only",
+      },
     });
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
       const first = (await params.run("openai", "gpt-5.4")) as {
@@ -3771,6 +4006,7 @@ describe("runAgentTurnWithFallback", () => {
         stream: "item",
         data: {
           itemId: "tool:read-1",
+          toolCallId: "read-1",
           kind: "tool",
           title: "read",
           name: "read",
@@ -3814,6 +4050,7 @@ describe("runAgentTurnWithFallback", () => {
     expect(result.kind).toBe("success");
     expect(onItemEvent).toHaveBeenCalledWith({
       itemId: "tool:read-1",
+      toolCallId: "read-1",
       kind: "tool",
       title: "read",
       name: "read",
@@ -3830,6 +4067,7 @@ describe("runAgentTurnWithFallback", () => {
         stream: "item",
         data: {
           itemId: "cmd-1",
+          toolCallId: "cmd-1",
           kind: "command",
           title: "Command",
           name: "bash",
@@ -3880,6 +4118,7 @@ describe("runAgentTurnWithFallback", () => {
         stream: "item",
         data: {
           itemId: "cmd-1",
+          toolCallId: "cmd-1",
           kind: "command",
           title: "Command",
           name: "bash",
@@ -3913,6 +4152,7 @@ describe("runAgentTurnWithFallback", () => {
     expect(result.kind).toBe("success");
     expect(onItemEvent).toHaveBeenCalledWith({
       itemId: "cmd-1",
+      toolCallId: "cmd-1",
       kind: "command",
       title: "Command",
       name: "bash",
@@ -4460,6 +4700,179 @@ describe("runAgentTurnWithFallback", () => {
       deleted: [],
       summary: "1 added, 1 modified",
     });
+  });
+
+  it("forwards Codex command tool results as command output completion", async () => {
+    const onCommandOutput = vi.fn();
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onAgentEvent?.({
+        stream: "tool",
+        data: {
+          phase: "result",
+          itemId: "command:exec-1",
+          toolCallId: "exec-1",
+          name: "exec",
+          status: "completed",
+          result: {
+            exitCode: 0,
+            durationMs: 42,
+          },
+        },
+      });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: { onCommandOutput } satisfies GetReplyOptions,
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(onCommandOutput).toHaveBeenCalledWith({
+      itemId: "command:exec-1",
+      phase: "end",
+      title: undefined,
+      toolCallId: "exec-1",
+      name: "exec",
+      output: undefined,
+      status: "completed",
+      exitCode: 0,
+      durationMs: 42,
+      cwd: undefined,
+    });
+  });
+
+  it("marks Codex command tool result errors as failed command output", async () => {
+    const onCommandOutput = vi.fn();
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onAgentEvent?.({
+        stream: "tool",
+        data: {
+          phase: "result",
+          itemId: "command:exec-1",
+          toolCallId: "exec-1",
+          name: "exec",
+          isError: true,
+          result: {
+            content: [{ type: "text", text: "command failed" }],
+          },
+        },
+      });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: { onCommandOutput } satisfies GetReplyOptions,
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(onCommandOutput).toHaveBeenCalledWith(
+      expect.objectContaining({
+        itemId: "command:exec-1",
+        phase: "end",
+        toolCallId: "exec-1",
+        name: "exec",
+        status: "failed",
+      }),
+    );
+  });
+
+  it("does not synthesize command output from bare exec tool results", async () => {
+    const onCommandOutput = vi.fn();
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onAgentEvent?.({
+        stream: "tool",
+        data: {
+          phase: "result",
+          name: "exec",
+          toolCallId: "exec-1",
+          isError: false,
+        },
+      });
+      await params.onAgentEvent?.({
+        stream: "command_output",
+        data: {
+          itemId: "command:exec-1",
+          phase: "end",
+          title: "command ls",
+          toolCallId: "exec-1",
+          name: "exec",
+          status: "completed",
+          exitCode: 0,
+        },
+      });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: { onCommandOutput } satisfies GetReplyOptions,
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(onCommandOutput).toHaveBeenCalledTimes(1);
+    expect(onCommandOutput).toHaveBeenCalledWith(
+      expect.objectContaining({
+        itemId: "command:exec-1",
+        phase: "end",
+        status: "completed",
+      }),
+    );
   });
 
   it("suppresses progress callbacks after message-tool-only delivery completes", async () => {

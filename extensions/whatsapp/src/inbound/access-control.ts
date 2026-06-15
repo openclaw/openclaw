@@ -15,17 +15,31 @@ import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { warnMissingProviderGroupPolicyFallbackOnce } from "openclaw/plugin-sdk/runtime-group-policy";
 import { resolveWhatsAppInboundPolicy, resolveWhatsAppIngressAccess } from "../inbound-policy.js";
+import { buildWhatsAppInboundAdmission, type WhatsAppInboundAdmission } from "./admission.js";
 
-export type InboundAccessControlResult = {
-  allowed: boolean;
-  shouldMarkRead: boolean;
+export type BlockedInboundAccessControlResult = {
+  allowed: false;
+  shouldMarkRead: false;
   isSelfChat: boolean;
   resolvedAccountId: string;
+  admission?: never;
 };
 type MessagePreAuthHookRunner = Pick<
   NonNullable<ReturnType<typeof getGlobalHookRunner>>,
   "hasHooks" | "runMessagePreAuth"
 >;
+
+export type AcceptedInboundAccessControlResult = {
+  allowed: true;
+  shouldMarkRead: true;
+  isSelfChat: boolean;
+  resolvedAccountId: string;
+  admission: WhatsAppInboundAdmission;
+};
+
+export type InboundAccessControlResult =
+  | BlockedInboundAccessControlResult
+  | AcceptedInboundAccessControlResult;
 
 const PAIRING_REPLY_HISTORY_GRACE_MS = 30_000;
 const WHATSAPP_MESSAGE_PRE_AUTH_HOOK_LIMITS = {
@@ -99,6 +113,17 @@ export function emitWhatsAppMessagePreAuthHooks(params: {
   );
 }
 
+function blockedInboundAccess(
+  policy: ReturnType<typeof resolveWhatsAppInboundPolicy>,
+): BlockedInboundAccessControlResult {
+  return {
+    allowed: false,
+    shouldMarkRead: false,
+    isSelfChat: policy.isSelfChat,
+    resolvedAccountId: policy.account.accountId,
+  };
+}
+
 export async function checkInboundAccessControl(params: {
   cfg: OpenClawConfig;
   accountId: string;
@@ -106,6 +131,7 @@ export async function checkInboundAccessControl(params: {
   selfE164: string | null;
   senderE164: string | null;
   content?: string;
+  senderJid?: string | null;
   group: boolean;
   pushName?: string;
   isFromMe: boolean;
@@ -144,12 +170,17 @@ export async function checkInboundAccessControl(params: {
     accountId: policy.account.accountId,
     log: (message) => logWhatsAppVerbose(params.verbose, message),
   });
+  const conversationId = params.group ? params.remoteJid : params.from;
+  const accessSenderId = params.group ? params.senderE164 : params.from;
+  const admissionSenderId = params.group
+    ? (params.senderE164 ?? params.senderJid ?? params.from)
+    : params.from;
   const access = await resolveWhatsAppIngressAccess({
     cfg: params.cfg,
     policy,
     isGroup: params.group,
-    conversationId: params.remoteJid,
-    senderId: params.group ? params.senderE164 : params.from,
+    conversationId,
+    senderId: accessSenderId,
     dmSenderId: params.from,
   });
   const { senderAccess } = access;
@@ -185,33 +216,18 @@ export async function checkInboundAccessControl(params: {
         `Blocked group message from ${params.senderE164 ?? "unknown sender"} (groupPolicy: allowlist)`,
       );
     }
-    return {
-      allowed: false,
-      shouldMarkRead: false,
-      isSelfChat: policy.isSelfChat,
-      resolvedAccountId: policy.account.accountId,
-    };
+    return blockedInboundAccess(policy);
   }
 
   // DM access control (secure defaults): "pairing" (default) / "allowlist" / "open" / "disabled".
   if (!params.group) {
     if (params.isFromMe && !policy.isSamePhone(params.from)) {
       logWhatsAppVerbose(params.verbose, "Skipping outbound DM (fromMe); no pairing reply needed.");
-      return {
-        allowed: false,
-        shouldMarkRead: false,
-        isSelfChat: policy.isSelfChat,
-        resolvedAccountId: policy.account.accountId,
-      };
+      return blockedInboundAccess(policy);
     }
     if (senderAccess.decision === "block" && senderAccess.reasonCode === "dm_policy_disabled") {
       logWhatsAppVerbose(params.verbose, "Blocked dm (dmPolicy: disabled)");
-      return {
-        allowed: false,
-        shouldMarkRead: false,
-        isSelfChat: policy.isSelfChat,
-        resolvedAccountId: policy.account.accountId,
-      };
+      return blockedInboundAccess(policy);
     }
     if (senderAccess.decision === "pairing" && !policy.isSamePhone(params.from)) {
       const candidate = params.from;
@@ -251,24 +267,14 @@ export async function checkInboundAccessControl(params: {
           },
         });
       }
-      return {
-        allowed: false,
-        shouldMarkRead: false,
-        isSelfChat: policy.isSelfChat,
-        resolvedAccountId: policy.account.accountId,
-      };
+      return blockedInboundAccess(policy);
     }
     if (senderAccess.decision !== "allow") {
       logWhatsAppVerbose(
         params.verbose,
         `Blocked unauthorized sender ${params.from} (dmPolicy=${policy.dmPolicy})`,
       );
-      return {
-        allowed: false,
-        shouldMarkRead: false,
-        isSelfChat: policy.isSelfChat,
-        resolvedAccountId: policy.account.accountId,
-      };
+      return blockedInboundAccess(policy);
     }
   }
 
@@ -277,6 +283,13 @@ export async function checkInboundAccessControl(params: {
     shouldMarkRead: true,
     isSelfChat: policy.isSelfChat,
     resolvedAccountId: policy.account.accountId,
+    admission: buildWhatsAppInboundAdmission({
+      policy,
+      access,
+      isGroup: params.group,
+      conversationId,
+      senderId: admissionSenderId,
+    }),
   };
 }
 

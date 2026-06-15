@@ -46,6 +46,17 @@ public enum NodePresenceAliveReason: String, Codable, Sendable {
     case connect = "connect"
 }
 
+public enum SessionFileKind: String, Codable, Sendable {
+    case modified = "modified"
+    case read = "read"
+}
+
+public enum SessionFileRelevance: String, Codable, Sendable {
+    case modified = "modified"
+    case read = "read"
+    case mixed = "mixed"
+}
+
 public struct ConnectParams: Codable, Sendable {
     public let minprotocol: Int
     public let maxprotocol: Int
@@ -1756,6 +1767,7 @@ public struct SessionsResolveParams: Codable, Sendable {
     public let spawnedby: String?
     public let includeglobal: Bool?
     public let includeunknown: Bool?
+    public let allowmissing: Bool?
 
     public init(
         key: String?,
@@ -1764,7 +1776,8 @@ public struct SessionsResolveParams: Codable, Sendable {
         agentid: String? = nil,
         spawnedby: String?,
         includeglobal: Bool?,
-        includeunknown: Bool?)
+        includeunknown: Bool?,
+        allowmissing: Bool? = nil)
     {
         self.key = key
         self.sessionid = sessionid
@@ -1773,6 +1786,7 @@ public struct SessionsResolveParams: Codable, Sendable {
         self.spawnedby = spawnedby
         self.includeglobal = includeglobal
         self.includeunknown = includeunknown
+        self.allowmissing = allowmissing
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -1783,6 +1797,7 @@ public struct SessionsResolveParams: Codable, Sendable {
         case spawnedby = "spawnedBy"
         case includeglobal = "includeGlobal"
         case includeunknown = "includeUnknown"
+        case allowmissing = "allowMissing"
     }
 }
 

@@ -345,6 +345,28 @@ describe("getStatusSummary", () => {
     });
   });
 
+  it("does not pass stale session contextTokens as status row overrides", async () => {
+    statusSummaryMocks.listSessionEntries.mockReturnValue(
+      toSessionEntrySummaries({
+        "agent:main:main": {
+          sessionId: "stale-context",
+          updatedAt: Date.now(),
+          modelProvider: "openai",
+          model: "gpt-5.4",
+          contextTokens: 1_000_000,
+        },
+      }),
+    );
+
+    await getStatusSummary();
+
+    expect(
+      vi
+        .mocked(statusSummaryRuntime.resolveContextTokensForModel)
+        .mock.calls.some((call) => call[0]?.contextTokensOverride === 1_000_000),
+    ).toBe(false);
+  });
+
   it("uses bundled provider static catalogs for cold status context", async () => {
     vi.mocked(statusSummaryRuntime.resolveConfiguredStatusModelRef).mockReturnValue({
       provider: "google",

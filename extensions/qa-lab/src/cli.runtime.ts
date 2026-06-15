@@ -71,7 +71,7 @@ import { resolveQaScenarioPackScenarioIds } from "./scenario-packs.js";
 import { attachQaProfileScorecardEvidenceToFile } from "./scorecard-evidence.js";
 import {
   readQaScorecardTaxonomyReport,
-  type QaScorecardCategoryMappingReport,
+  type QaScorecardCategoryCoverageReport,
 } from "./scorecard-taxonomy.js";
 import { runQaFlowSuiteFromRuntime, runQaSuite } from "./suite-launch.runtime.js";
 import { scenarioMatchesQaProviderLane } from "./suite-planning.js";
@@ -686,7 +686,6 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
   }
   await attachQaProfileScorecardEvidenceToFile({
     evidencePath,
-    taxonomyReport: scorecardReport,
     profile,
     filters: {
       surface: opts.surface,
@@ -713,7 +712,7 @@ function defaultQaRunProfileProviderMode(profile: string): QaProviderModeInput {
 }
 
 function qaScorecardCategoryMatchesRunProfile(
-  category: QaScorecardCategoryMappingReport,
+  category: QaScorecardCategoryCoverageReport,
   opts: { profile: string; surface?: string; category?: string },
 ): boolean {
   if (!category.profiles.includes(opts.profile)) {

@@ -91,16 +91,14 @@ export function resolveMarkdownTableMode(
 ): MarkdownTableMode {
   const channel = normalizeChannelId(params.channel);
   const defaultMode = channel ? (getDefaultTableModes().get(channel) ?? "code") : "code";
-  if (!channel || !params.cfg) {
-    return defaultMode;
+  let resolved = defaultMode;
+  if (channel && params.cfg) {
+    const channelsConfig = params.cfg.channels as Record<string, unknown> | undefined;
+    const rootConfig = params.cfg as Record<string, unknown>;
+    const section = (channelsConfig?.[channel] ?? rootConfig[channel]) as
+      | MarkdownConfigSection
+      | undefined;
+    resolved = resolveMarkdownModeFromSection(section, params.accountId) ?? defaultMode;
   }
-  const channelsConfig = params.cfg.channels as Record<string, unknown> | undefined;
-  const section = (channelsConfig?.[channel] ??
-    (params.cfg as Record<string, unknown> | undefined)?.[channel]) as
-    | MarkdownConfigSection
-    | undefined;
-  const resolved = resolveMarkdownModeFromSection(section, params.accountId) ?? defaultMode;
-  // "block" stays schema-valid for the shared markdown seam, but this PR
-  // keeps runtime delivery on safe text rendering until Slack send support lands.
-  return resolved === "block" ? "code" : resolved;
+  return resolved === "block" && !params.supportsBlockTables ? "code" : resolved;
 }

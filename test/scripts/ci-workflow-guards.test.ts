@@ -32,6 +32,22 @@ describe("ci workflow guards", () => {
     );
   });
 
+  it("runs the transcript reader ratchet as a visible additional check", () => {
+    const workflow = readCiWorkflow();
+    const additionalJob = workflow.jobs["check-additional-shard"];
+    const matrixRows = additionalJob.strategy.matrix.include;
+    expect(matrixRows).toContainEqual({
+      check_name: "check-session-transcript-reader-boundary",
+      group: "session-transcript-reader-boundary",
+    });
+
+    const runStep = additionalJob.steps.find((step) => step.name === "Run additional check shard");
+    expect(runStep.run).toContain("session-transcript-reader-boundary)");
+    expect(runStep.run).toContain(
+      'run_check "lint:tmp:session-transcript-reader-boundary" pnpm run lint:tmp:session-transcript-reader-boundary',
+    );
+  });
+
   it("kills timed manual checkout fetches after the grace period", () => {
     const workflowPaths = [
       ".github/workflows/ci.yml",

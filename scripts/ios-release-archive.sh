@@ -4,14 +4,15 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/ios-beta-archive.sh [--build-number 7]
+  scripts/ios-release-archive.sh [--build-number 7]
 
-Archives and exports a beta-release IPA locally without uploading.
+Archives and exports an App Store distribution IPA locally without uploading.
 EOF
 }
 
-BUILD_NUMBER="${IOS_BETA_BUILD_NUMBER:-}"
+BUILD_NUMBER="${IOS_RELEASE_BUILD_NUMBER:-}"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "${ROOT_DIR}/scripts/lib/ios-fastlane.sh"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -36,5 +37,5 @@ done
 
 (
   cd "${ROOT_DIR}/apps/ios"
-  IOS_BETA_BUILD_NUMBER="${BUILD_NUMBER}" fastlane ios beta_archive
+  IOS_RELEASE_BUILD_NUMBER="${BUILD_NUMBER}" run_ios_fastlane ios app_store_archive
 )

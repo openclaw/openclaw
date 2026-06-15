@@ -25,6 +25,10 @@ const legacyWholeStoreAccessNames = new Set([
 ]);
 
 export const migratedSessionAccessorFiles = new Set([
+  "src/agents/embedded-agent-runner/compaction-successor-transcript.ts",
+  "src/agents/embedded-agent-runner/tool-result-truncation.ts",
+  "src/agents/embedded-agent-runner/transcript-rewrite.ts",
+  "src/agents/embedded-agent-runner/transcript-runtime-state.ts",
   "src/commands/export-trajectory.ts",
   "src/commands/health.ts",
   "src/commands/sandbox-explain.ts",
@@ -35,6 +39,7 @@ export const migratedSessionAccessorFiles = new Set([
   "src/config/sessions/combined-store-gateway.ts",
   "src/cron/isolated-agent/delivery-target.ts",
   "src/cron/service/timer.ts",
+  "src/gateway/session-compaction-checkpoints.ts",
   "src/gateway/session-utils.ts",
   "src/gateway/sessions-resolve.ts",
   "src/gateway/server-methods/sessions.ts",
@@ -161,6 +166,7 @@ export async function main() {
   const sourceRoots = resolveSourceRoots(repoRoot, [
     "extensions/discord/src/monitor",
     "extensions/telegram/src",
+    "src/agents/embedded-agent-runner",
     "src/commands",
     "src/config/sessions",
     "src/cron",

@@ -70,11 +70,6 @@ final class TalkModeManager: NSObject {
         self.gatewayConnected
     }
 
-    var hasActiveAudioCapture: Bool {
-        self.isEnabled || self.isListening || self.isPushToTalkActive || self.realtimeRelaySession != nil
-            || self.realtimeRelayStartInFlight
-    }
-
     private enum CaptureMode {
         case idle
         case continuous
@@ -175,7 +170,7 @@ final class TalkModeManager: NSObject {
     private var incrementalSpeechPrefetch: IncrementalSpeechPrefetchState?
     private var incrementalSpeechPrefetchMonitorTask: Task<Void, Never>?
 
-    private let logger = Logger(subsystem: "ai.openclaw", category: "TalkMode")
+    private let logger = Logger(subsystem: "ai.openclawfoundation.app", category: "TalkMode")
 
     private static func nowSeconds() -> TimeInterval {
         ProcessInfo.processInfo.systemUptime
@@ -223,6 +218,34 @@ final class TalkModeManager: NSObject {
         if self.gatewayConnected, self.isEnabled {
             Task { await self.subscribeChatIfNeeded(sessionKey: trimmed) }
         }
+    }
+
+    func enterScreenshotFixtureMode() {
+        self.updateGatewayConnected(true)
+        self.isEnabled = false
+        self.isListening = false
+        self.isSpeaking = false
+        self.isUserSpeechDetected = false
+        self.statusText = "Ready"
+        self.gatewayTalkConfigLoaded = true
+        self.gatewayTalkApiKeyConfigured = true
+        self.gatewayTalkDefaultModelId = "gpt-realtime-2"
+        self.gatewayTalkDefaultVoiceId = "marin"
+        self.gatewayTalkProviderLabel = "OpenAI"
+        self.gatewayTalkTransportLabel = "Gateway Relay"
+        self.gatewayTalkUsesRealtime = true
+        self.gatewayTalkUsesRealtimeRelay = true
+        self.gatewayTalkRealtimeProviderLabel = "OpenAI"
+        self.gatewayTalkRealtimeModelId = "gpt-realtime-2"
+        self.gatewayTalkRealtimeVoiceId = "marin"
+        self.gatewayTalkVoiceModeTitle = "Realtime Voice"
+        self.gatewayTalkVoiceModeSubtitle = "Gateway relay ready"
+        self.gatewayTalkVoiceModeAccessibilityValue = "Realtime Voice, Gateway relay ready"
+        self.gatewayTalkActiveModeTitle = "Ready"
+        self.gatewayTalkActiveModeSubtitle = "Listening starts from this phone"
+        self.gatewayTalkLastIssueText = nil
+        self.gatewayTalkCurrentFallbackIssue = nil
+        self.gatewayTalkPermissionState = .ready
     }
 
     func setEnabled(_ enabled: Bool) {
@@ -475,26 +498,11 @@ final class TalkModeManager: NSObject {
         return wasActive
     }
 
-    func setForegroundAudioCaptureAllowed(_ allowed: Bool) {
-        self.foregroundAudioCaptureAllowed = allowed
-        if !allowed {
-            self.cancelPendingStart()
-        }
-    }
-
     func resumeAfterBackground(wasSuspended: Bool, wasKeptActive: Bool = false) async {
         if wasKeptActive { return }
         guard wasSuspended else { return }
         guard self.isEnabled else { return }
         await self.start()
-    }
-
-    func userTappedOrb() {
-        if let realtimeSession {
-            realtimeSession.cancelResponse()
-        }
-        self.realtimeRelaySession?.cancelOutput()
-        self.stopSpeaking()
     }
 
     func beginPushToTalk() async throws -> OpenClawTalkPTTStartPayload {
@@ -3102,23 +3110,6 @@ extension TalkModeManager {
 
     func _test_gatewayTalkCurrentFallbackIssue() -> TalkRuntimeIssue? {
         self.gatewayTalkCurrentFallbackIssue
-    }
-
-    func _test_seedTranscript(_ transcript: String) {
-        self.lastTranscript = transcript
-        self.lastHeard = Date()
-    }
-
-    func _test_handleTranscript(_ transcript: String, isFinal: Bool) async {
-        await self.handleTranscript(transcript: transcript, isFinal: isFinal)
-    }
-
-    func _test_backdateLastHeard(seconds: TimeInterval) {
-        self.lastHeard = Date().addingTimeInterval(-seconds)
-    }
-
-    func _test_runSilenceCheck() async {
-        await self.checkSilence()
     }
 
     func _test_incrementalReset() {

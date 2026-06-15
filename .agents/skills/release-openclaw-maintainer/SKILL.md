@@ -321,6 +321,7 @@ Upgrade with the beta channel.
 Before tagging or publishing, run:
 
 ```bash
+pnpm release:fast-pretag-check
 pnpm check:architecture
 pnpm build
 pnpm ui:build
@@ -329,6 +330,21 @@ pnpm release:check
 pnpm test:install:smoke
 ```
 
+- Treat `pnpm release:fast-pretag-check` as a hard packaging gate. Every
+  publishable plugin must have a non-empty package-root `README.md`, build its
+  package-local runtime, and pass the npm and ClawHub release metadata checks
+  before a tag or publish workflow can start. Do not defer README, entrypoint,
+  or packed-artifact failures to postpublish verification.
+- Before tagging, require green CI for the exact release-candidate SHA, not an
+  earlier branch SHA. Heal every related red CI, release-check, packaging, or
+  root-Dockerfile lane on the release branch, forward-port the fix to `main`,
+  and rerun the affected exact-SHA gates. Never waive a red Docker lane because
+  npm preflight passed.
+- Root Dockerfile proof is mandatory before every beta and stable tag. Run the
+  release `install-smoke` group or equivalent root Dockerfile build for the
+  exact candidate SHA and require it to pass. The tag-triggered Docker Release
+  workflow is post-tag publishing, not the first valid proof that the root
+  Dockerfile can build.
 - Before tagging, diff publishable plugin package manifests against the last
   reachable stable/beta release tag. For every newly publishable package
   (`openclaw.release.publishToNpm: true` or `publishToClawHub: true`) whose
@@ -644,9 +660,10 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
    off, live OpenAI off, and regression failure off. Let it run in parallel
    with preflight and validation work.
 10. Run the fast local beta preflight from the release branch before any npm
-    preflight or publish. Keep expensive Docker, Parallels, and published-package
-    install/update lanes for after the beta is live unless the operator asks to
-    run them before beta publication.
+    preflight or publish. Require exact-SHA CI and root Dockerfile install-smoke
+    to be green before tagging. Keep the remaining expensive Docker, Parallels,
+    and published-package install/update lanes for after the beta is live unless
+    the operator asks to run them before beta publication.
 11. For beta releases, skip mac app build/sign/notarize unless beta scope or a
     release blocker specifically requires it. For stable releases, include the
     mac app, signing, notarization, and appcast path.

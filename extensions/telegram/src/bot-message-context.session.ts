@@ -1,4 +1,5 @@
 // Telegram plugin module implements bot message context.session behavior.
+import path from "node:path";
 import {
   type BuildChannelInboundEventContextAsyncParams,
   type BuiltChannelInboundEventContext,
@@ -50,6 +51,11 @@ import {
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
+import {
+  type TelegramGroupHistoryContextMode,
+  includesRecentTelegramGroupHistoryContext,
+  resolveTelegramGroupHistoryContextModeForAccount,
+} from "./group-history-context.js";
 import type { TelegramReplyChainEntry } from "./message-cache.js";
 
 export type TelegramInboundContextPayload = BuiltChannelInboundEventContext & {
@@ -139,8 +145,42 @@ function stripReplyChainForwarded(entry: TelegramReplyChainEntry): TelegramReply
   return withoutForwarded;
 }
 
+function resolveTelegramPromptMediaPath(mediaPath: string): string | undefined {
+  const toInboundMediaPath = (id: string): string | undefined => {
+    if (
+      !id ||
+      id === "." ||
+      id === ".." ||
+      id.includes("/") ||
+      id.includes("\\") ||
+      id.includes("\0")
+    ) {
+      return undefined;
+    }
+    return `media://inbound/${encodeURIComponent(id)}`;
+  };
+  const decodeInboundMediaId = (id: string): string | undefined => {
+    try {
+      return decodeURIComponent(id);
+    } catch {
+      return undefined;
+    }
+  };
+  const canonicalMatch = /^media:\/\/inbound\/([^/\\]+)$/i.exec(mediaPath);
+  if (canonicalMatch?.[1]) {
+    const id = decodeInboundMediaId(canonicalMatch[1]);
+    return id ? toInboundMediaPath(id) : undefined;
+  }
+  const normalized = mediaPath.replace(/\\/g, "/");
+  if (!normalized.includes("/media/inbound/")) {
+    return undefined;
+  }
+  return toInboundMediaPath(path.posix.basename(normalized));
+}
+
 function formatReplyChainEntry(entry: TelegramReplyChainEntry, index: number): string {
   const forwardedAt = timestampMsToIsoString(entry.forwardedDate);
+  const mediaPath = entry.mediaPath ? resolveTelegramPromptMediaPath(entry.mediaPath) : undefined;
   const labels = [
     `${index + 1}. ${entry.sender ?? "unknown sender"}`,
     entry.messageId ? `id:${entry.messageId}` : undefined,
@@ -153,7 +193,7 @@ function formatReplyChainEntry(entry: TelegramReplyChainEntry, index: number): s
       : undefined,
     entry.isQuote && entry.body ? `"${entry.body}"` : entry.body,
     entry.mediaType ? `<media:${entry.mediaType}>` : undefined,
-    entry.mediaPath ? `[media_path:${entry.mediaPath}]` : undefined,
+    mediaPath ? `[media_path:${mediaPath}]` : undefined,
     entry.mediaRef ? `[media_ref:${entry.mediaRef}]` : undefined,
   ].filter(Boolean);
   return `[${labels.join(" ")}]\n${bodyLines.join("\n")}`;
@@ -181,11 +221,12 @@ export async function buildTelegramInboundContextPayload(params: {
   historyKey?: string;
   historyLimit: number;
   groupHistories: Map<string, HistoryEntry[]>;
+  groupHistoryContextMode?: TelegramGroupHistoryContextMode;
   groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
   topicConfig?: TelegramTopicConfig;
-  stickerCacheHit: boolean;
   effectiveWasMentioned: boolean;
   hasControlCommand: boolean;
+  stickerCacheHit?: boolean;
   audioTranscribedMediaIndex?: number;
   commandAuthorized: boolean;
   locationData?: NormalizedLocation;
@@ -231,11 +272,12 @@ export async function buildTelegramInboundContextPayload(params: {
     historyKey,
     historyLimit,
     groupHistories,
+    groupHistoryContextMode,
     groupConfig,
     topicConfig,
-    stickerCacheHit,
     effectiveWasMentioned,
     hasControlCommand,
+    stickerCacheHit,
     audioTranscribedMediaIndex,
     commandAuthorized,
     locationData,
@@ -384,8 +426,17 @@ export async function buildTelegramInboundContextPayload(params: {
     envelope: envelopeOptions,
   });
   const channelHistory = createChannelHistoryWindow({ historyMap: groupHistories });
+  const includeRecentGroupHistoryContext =
+    isGroup &&
+    includesRecentTelegramGroupHistoryContext(
+      groupHistoryContextMode ??
+        resolveTelegramGroupHistoryContextModeForAccount({
+          cfg,
+          accountId: route.accountId,
+        }),
+    );
   let combinedBody = body;
-  if (isGroup && historyKey && historyLimit > 0) {
+  if (includeRecentGroupHistoryContext && historyKey && historyLimit > 0) {
     combinedBody = channelHistory.buildPendingContext({
       historyKey,
       limit: historyLimit,
@@ -411,13 +462,12 @@ export async function buildTelegramInboundContextPayload(params: {
     botUsername: normalizeOptionalLowercaseString(primaryCtx.me?.username),
   });
   const inboundHistory =
-    isGroup && historyKey && historyLimit > 0
+    includeRecentGroupHistoryContext && historyKey && historyLimit > 0
       ? channelHistory.buildInboundHistory({
           historyKey,
           limit: historyLimit,
         })
       : undefined;
-  const currentMediaForContext = stickerCacheHit ? [] : allMedia;
   const replyHead = visibleReplyChain[0];
   const toInboundMedia = (media: TelegramMediaRef, index?: number) => ({
     path: media.path,
@@ -425,7 +475,7 @@ export async function buildTelegramInboundContextPayload(params: {
     contentType: media.contentType,
     transcribed: index !== undefined && audioTranscribedMediaIndex === index,
   });
-  const currentMediaFacts = currentMediaForContext.map(toInboundMedia);
+  const currentMediaFacts = allMedia.map(toInboundMedia);
   const replyMediaFacts =
     visibleReplyChain.length > 0
       ? visibleReplyChain.flatMap((entry) =>
@@ -569,7 +619,8 @@ export async function buildTelegramInboundContextPayload(params: {
       WasMentioned: isGroup ? effectiveWasMentioned : undefined,
       SenderGroup: senderGroup,
       Sticker: allMedia[0]?.stickerMetadata,
-      StickerMediaIncluded: allMedia[0]?.stickerMetadata ? !stickerCacheHit : undefined,
+      StickerMediaIncluded: allMedia[0]?.stickerMetadata ? currentMediaFacts.length > 0 : undefined,
+      SkipStickerMediaUnderstanding: stickerCacheHit ? true : undefined,
       ...locationContext,
       IsForum: isForum,
       TopicName: isForum && topicName ? topicName : undefined,

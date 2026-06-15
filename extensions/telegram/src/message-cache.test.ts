@@ -670,6 +670,49 @@ describe("telegram message cache", () => {
     expect(context.find((entry) => entry.node.messageId === "34477")).toBeUndefined();
   });
 
+  it("filters conversation context nodes when an include predicate is supplied", async () => {
+    const cache = createTelegramMessageCache();
+    const chat = { id: 7, type: "group", title: "Ops" } as const;
+    for (const msg of [
+      {
+        chat,
+        message_id: 600,
+        date: 1736380600,
+        text: "ambient setup chatter",
+        from: { id: 111, is_bot: false, first_name: "Requester" },
+      },
+      {
+        chat,
+        message_id: 601,
+        date: 1736380660,
+        text: "@openclaw_bot please check this",
+        from: { id: 222, is_bot: false, first_name: "Operator" },
+      },
+      {
+        chat,
+        message_id: 602,
+        date: 1736380720,
+        text: "@openclaw_bot Hello",
+        from: { id: 222, is_bot: false, first_name: "Operator" },
+      },
+    ] satisfies Message[]) {
+      await cache.record({ accountId: "default", chatId: 7, msg });
+    }
+
+    const context = await buildTelegramConversationContext({
+      cache,
+      accountId: "default",
+      chatId: 7,
+      messageId: "602",
+      replyChainNodes: [],
+      recentLimit: 10,
+      replyTargetWindowSize: 1,
+      includeNode: (node) => node.body?.includes("@openclaw_bot") === true,
+    });
+
+    expect(context.map((entry) => entry.node.messageId)).toEqual(["601"]);
+  });
+
   it("does not select messages before the latest session reset command", async () => {
     const cache = createTelegramMessageCache();
     const beforeSession = Date.parse("2026-05-10T12:40:00.000Z");
