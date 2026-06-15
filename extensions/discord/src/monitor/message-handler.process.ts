@@ -980,7 +980,8 @@ async function processDiscordMessageInner(
         sourceReplyDeliveryMode,
         queuedDeliveryCorrelations: isRoomEvent ? [{ begin: beginDeliveryCorrelation }] : undefined,
         suppressTyping: isRoomEvent ? true : undefined,
-        allowProgressCallbacksWhenSourceDeliverySuppressed: undefined,
+        allowProgressCallbacksWhenSourceDeliverySuppressed:
+          sourceRepliesAreToolOnly && statusReactionsExplicitlyEnabled ? true : undefined,
         disableBlockStreaming: sourceRepliesAreToolOnly
           ? true
           : (draftPreview.disableBlockStreamingForDraft ??

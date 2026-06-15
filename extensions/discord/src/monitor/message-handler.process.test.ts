@@ -2155,8 +2155,6 @@ describe("processDiscordMessage draft streaming", () => {
   });
 
   it("keeps Discord tool progress private for coding-profile message-tool-only guild replies", async () => {
-    const draftStream = createMockDraftStreamForTest();
-
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       expect(params?.replyOptions?.sourceReplyDeliveryMode).toBe("message_tool_only");
       expect(
@@ -2181,7 +2179,35 @@ describe("processDiscordMessage draft streaming", () => {
     await runProcessDiscordMessage(ctx);
 
     expect(getLastDispatchReplyOptions()?.sourceReplyDeliveryMode).toBe("message_tool_only");
-    expect(draftStream.update).not.toHaveBeenCalled();
+    expect(createDiscordDraftStream).not.toHaveBeenCalled();
+    expect(deliverDiscordReply).not.toHaveBeenCalled();
+  });
+
+  it("preserves explicitly enabled status reactions without exposing tool progress drafts", async () => {
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      expect(params?.replyOptions?.sourceReplyDeliveryMode).toBe("message_tool_only");
+      expect(params?.replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed).toBe(true);
+      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createBaseContext({
+      cfg: {
+        tools: { profile: "coding" },
+        messages: {
+          ackReaction: "👀",
+          groupChat: { visibleReplies: "message_tool" },
+          statusReactions: { enabled: true, timing: { debounceMs: 0 } },
+        },
+        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
+      },
+      route: BASE_CHANNEL_ROUTE,
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(getReactionEmojis()).toContain(DEFAULT_EMOJIS.done);
+    expect(createDiscordDraftStream).not.toHaveBeenCalled();
     expect(deliverDiscordReply).not.toHaveBeenCalled();
   });
 
