@@ -9,6 +9,7 @@ import {
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { handleDiscordAction } from "../../action-runtime-api.js";
+import { isTrustedRequesterGuildAdminAction } from "../trusted-requester-actions.js";
 import {
   isDiscordModerationAction,
   readDiscordModerationCommand,
@@ -32,9 +33,14 @@ type Ctx = Pick<
 >;
 
 function readDiscordRequesterSenderId(ctx: Ctx): string | undefined {
-  return ctx.toolContext?.currentChannelProvider?.trim().toLowerCase() === "discord"
-    ? normalizeOptionalString(ctx.requesterSenderId)
-    : undefined;
+  const currentProvider = normalizeOptionalString(ctx.toolContext?.currentChannelProvider);
+  if (currentProvider?.toLowerCase() === "discord") {
+    return normalizeOptionalString(ctx.requesterSenderId);
+  }
+  if (isTrustedRequesterGuildAdminAction(ctx.action)) {
+    throw new Error("Discord guild admin actions require a trusted Discord sender identity.");
+  }
+  return undefined;
 }
 
 function senderParam(senderUserId: string | undefined) {

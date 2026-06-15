@@ -122,10 +122,27 @@ describe("handleDiscordMessageAction", () => {
     });
   });
 
-  it("does not treat non-Discord requester ids as Discord guild admin sender ids", async () => {
+  it("rejects non-Discord requester ids for Discord guild admin actions", async () => {
     const cfg = discordConfig({ channels: true });
+    await expect(
+      handleDiscordMessageAction({
+        action: "channel-delete",
+        params: {
+          channelId: "channel-1",
+        },
+        cfg,
+        requesterSenderId: "telegram-user-id",
+        toolContext: { currentChannelProvider: "telegram" },
+      }),
+    ).rejects.toThrow("trusted Discord sender identity");
+
+    expect(handleDiscordActionMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps read-only guild lookups available from non-Discord requesters", async () => {
+    const cfg = discordConfig({ channelInfo: true });
     await handleDiscordMessageAction({
-      action: "channel-delete",
+      action: "channel-info",
       params: {
         channelId: "channel-1",
       },
@@ -135,11 +152,7 @@ describe("handleDiscordMessageAction", () => {
     });
 
     expectDiscordActionCall({
-      payload: {
-        action: "channelDelete",
-        accountId: undefined,
-        channelId: "channel-1",
-      },
+      payload: { action: "channelInfo", accountId: undefined, channelId: "channel-1" },
       cfg,
     });
   });

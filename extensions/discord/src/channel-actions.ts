@@ -12,24 +12,7 @@ import { inspectDiscordAccount } from "./account-inspect.js";
 import { createDiscordActionGate, listDiscordAccountIds } from "./accounts.js";
 import { readDiscordComponentSpec } from "./components.js";
 import { withDiscordInboundEventDeliveryMetadata } from "./inbound-event-delivery.js";
-
-const trustedRequesterGuildAdminActions = new Set<ChannelMessageActionName>([
-  "emoji-upload",
-  "sticker-upload",
-  "role-add",
-  "role-remove",
-  "channel-create",
-  "channel-edit",
-  "channel-delete",
-  "channel-move",
-  "category-create",
-  "category-edit",
-  "category-delete",
-  "event-create",
-  "timeout",
-  "kick",
-  "ban",
-]);
+import { isTrustedRequesterGuildAdminAction } from "./trusted-requester-actions.js";
 
 const localExecutionActions = new Set<ChannelMessageActionName>([
   "send",
@@ -201,9 +184,7 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
   // component, and client-local payload semantics.
   resolveExecutionMode: resolveDiscordActionExecutionMode,
   describeMessageTool: describeDiscordMessageTool,
-  requiresTrustedRequesterSender: ({ action, toolContext }) =>
-    normalizeOptionalString(toolContext?.currentChannelProvider)?.toLowerCase() === "discord" &&
-    trustedRequesterGuildAdminActions.has(action),
+  requiresTrustedRequesterSender: ({ action }) => isTrustedRequesterGuildAdminAction(action),
   extractToolSend: ({ args }) => {
     const action = normalizeOptionalString(args.action) ?? "";
     if (action === "sendMessage") {
