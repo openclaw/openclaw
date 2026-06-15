@@ -488,7 +488,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
   }
 
   const onAbort = () => {
-    void daemonLifecycle.stop().catch((err) => {
+    void daemonLifecycle.stop().catch((err: unknown) => {
       runtime.error?.(`daemon stop error on abort: ${String(err)}`);
     });
   };
