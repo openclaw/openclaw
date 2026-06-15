@@ -4,8 +4,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../runtime-api.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import * as clientModule from "./client.js";
-import type { MattermostClient } from "./client.js";
+import type { MattermostClient, MattermostUser } from "./client.js";
 import {
+  backfillMattermostThreadHistory,
   buildMattermostModelPickerSelectMessageSid,
   canFinalizeMattermostPreviewInPlace,
   deliverMattermostReplyWithDraftPreview,
@@ -1065,5 +1066,115 @@ describe("resolveMattermostReactionChannelId", () => {
 
   it("returns undefined when neither payload location includes channel_id", () => {
     expect(resolveMattermostReactionChannelId({})).toBeUndefined();
+  });
+});
+
+describe("backfillMattermostThreadHistory", () => {
+  function threadClientMock(response: unknown): MattermostClient {
+    const client = createMattermostClientMock();
+    client.request = vi.fn(async () => response) as MattermostClient["request"];
+    return client;
+  }
+
+  const resolveUserInfo = vi.fn(
+    async (userId: string): Promise<MattermostUser | null> => ({
+      id: userId,
+      username: `user-${userId}`,
+    }),
+  );
+
+  it("seeds an empty history window from the server thread", async () => {
+    const channelHistories = new Map();
+    const client = threadClientMock({
+      order: ["p1", "p2"],
+      posts: {
+        p1: { id: "p1", user_id: "u1", message: "first", create_at: 100 },
+        p2: { id: "p2", user_id: "u2", message: "second", create_at: 200 },
+      },
+    });
+
+    await backfillMattermostThreadHistory({
+      client,
+      threadRootId: "root-1",
+      historyKey: "channel:chan-1",
+      channelHistories,
+      historyLimit: 10,
+      currentPostId: "p3",
+      resolveUserInfo,
+    });
+
+    expect(client.request).toHaveBeenCalledWith("/posts/root-1/thread");
+    expect(channelHistories.get("channel:chan-1")).toStrictEqual([
+      { sender: "@user-u1", body: "first", timestamp: 100, messageId: "p1" },
+      { sender: "@user-u2", body: "second", timestamp: 200, messageId: "p2" },
+    ]);
+  });
+
+  it("excludes the current post and trims to historyLimit", async () => {
+    const channelHistories = new Map();
+    const client = threadClientMock({
+      order: ["p1", "p2", "p3"],
+      posts: {
+        p1: { id: "p1", user_id: "u1", message: "first" },
+        p2: { id: "p2", user_id: "u2", message: "second" },
+        p3: { id: "p3", user_id: "u3", message: "current" },
+      },
+    });
+
+    await backfillMattermostThreadHistory({
+      client,
+      threadRootId: "root-1",
+      historyKey: "channel:chan-1",
+      channelHistories,
+      historyLimit: 1,
+      currentPostId: "p3",
+      resolveUserInfo,
+    });
+
+    const seeded = channelHistories.get("channel:chan-1");
+    expect(seeded).toHaveLength(1);
+    expect(seeded?.[0]?.messageId).toBe("p2");
+  });
+
+  it("does not overwrite a non-empty history window", async () => {
+    const channelHistories = new Map([["channel:chan-1", [{ sender: "@existing", body: "kept" }]]]);
+    const client = threadClientMock({ order: ["p1"], posts: { p1: { id: "p1", message: "x" } } });
+
+    await backfillMattermostThreadHistory({
+      client,
+      threadRootId: "root-1",
+      historyKey: "channel:chan-1",
+      channelHistories,
+      historyLimit: 10,
+      resolveUserInfo,
+    });
+
+    expect(client.request).not.toHaveBeenCalled();
+    expect(channelHistories.get("channel:chan-1")).toStrictEqual([
+      { sender: "@existing", body: "kept" },
+    ]);
+  });
+
+  it("swallows fetch errors and logs", async () => {
+    const channelHistories = new Map();
+    const client = createMattermostClientMock();
+    client.request = vi.fn(async () => {
+      throw new Error("boom");
+    }) as MattermostClient["request"];
+    const log = vi.fn();
+
+    await backfillMattermostThreadHistory({
+      client,
+      threadRootId: "root-1",
+      historyKey: "channel:chan-1",
+      channelHistories,
+      historyLimit: 10,
+      resolveUserInfo,
+      log,
+    });
+
+    expect(channelHistories.has("channel:chan-1")).toBe(false);
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(String(log.mock.calls[0]?.[0])).toContain("boom");
   });
 });

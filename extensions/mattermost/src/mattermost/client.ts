@@ -200,6 +200,21 @@ export async function fetchMattermostChannelByName(
   );
 }
 
+/** Response shape of `GET /posts/{id}/thread`: ordered ids plus a post map. */
+export type MattermostThread = {
+  order: string[];
+  posts: Record<string, MattermostPost>;
+};
+
+export async function fetchMattermostThread(
+  client: MattermostClient,
+  threadRootId: string,
+): Promise<MattermostThread> {
+  return await client.request<MattermostThread>(
+    `/posts/${encodeURIComponent(threadRootId)}/thread`,
+  );
+}
+
 export async function sendMattermostTyping(
   client: MattermostClient,
   params: { channelId: string; parentId?: string },
