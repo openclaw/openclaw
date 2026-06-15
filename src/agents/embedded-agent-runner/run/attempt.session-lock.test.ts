@@ -66,6 +66,65 @@ function cloneBigIntStatWith(
 }
 
 describe("embedded attempt session lock lifecycle", () => {
+  it("recognizes an unchanged session file trusted by the previous prompt release", async () => {
+    const sessionFile = await createTempSessionFile();
+    const options = { ...lockOptions, sessionFile };
+    const first = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: options,
+    });
+
+    expect(await first.readTrustedCurrentSessionFileSnapshot()).toBeUndefined();
+    await first.releaseForPrompt();
+    await first.dispose();
+
+    const second = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: options,
+    });
+    expect(await second.readTrustedCurrentSessionFileSnapshot()).toBeDefined();
+    await second.dispose();
+  });
+
+  it("does not trust a session file changed after the previous prompt release", async () => {
+    const sessionFile = await createTempSessionFile();
+    const options = { ...lockOptions, sessionFile };
+    const first = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: options,
+    });
+    await first.releaseForPrompt();
+    await first.dispose();
+    await fs.appendFile(sessionFile, '{"type":"message","id":"external"}\n', "utf8");
+
+    const second = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: options,
+    });
+    expect(await second.readTrustedCurrentSessionFileSnapshot()).toBeUndefined();
+    await second.dispose();
+  });
+
+  it("publishes a known owned append for the next attempt", async () => {
+    const sessionFile = await createTempSessionFile();
+    const options = { ...lockOptions, sessionFile };
+    const first = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: options,
+    });
+    await fs.appendFile(sessionFile, '{"type":"message","id":"owned"}\n', "utf8");
+    first.refreshAfterOwnedSessionWrite();
+    await first.releaseForPrompt();
+    await first.dispose();
+
+    const second = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: options,
+    });
+    expect(await second.readTrustedCurrentSessionFileSnapshot()).toBeDefined();
+    await second.dispose();
+  });
+
   it("serializes embedded attempts that share a session file owner", async () => {
     const sessionFile = await createTempSessionFile();
     const firstOwner = await acquireEmbeddedAttemptSessionFileOwner({ sessionFile });

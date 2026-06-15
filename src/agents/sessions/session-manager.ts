@@ -20,8 +20,11 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import {
   appendJsonlEntrySync,
+  serializeJsonlEntries,
+  serializeJsonlEntry,
   writeJsonlEntriesSync,
 } from "../../config/sessions/transcript-jsonl.js";
+import { hasOwnedSessionTranscriptWriteContext } from "../../config/sessions/transcript-write-context.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import type { ImageContent, Message, TextContent } from "../../llm/types.js";
 import { getAgentDir as getDefaultAgentDir, getSessionsDir } from "../config.js";
@@ -31,6 +34,7 @@ import {
   type SessionTreeEntry as CoreSessionTreeEntry,
   uuidv7,
 } from "../runtime/index.js";
+import { invalidateSessionFileRepairCache } from "../session-file-repair.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 
 export { CURRENT_SESSION_VERSION };
@@ -389,7 +393,12 @@ export function getDefaultSessionDir(cwd: string, agentDir: string = getDefaultA
 
 /** Exported for testing */
 export function loadEntriesFromFile(filePath: string): FileEntry[] {
-  return loadEntriesFromFileWithSnapshot(filePath).entries;
+  if (!existsSync(filePath)) {
+    return [];
+  }
+
+  const entries = parseJsonlEntries(readFileSync(filePath, "utf8"));
+  return hasReadableSessionHeader(entries) ? entries : [];
 }
 
 function loadEntriesFromFileWithSnapshot(filePath: string): {
@@ -397,22 +406,37 @@ function loadEntriesFromFileWithSnapshot(filePath: string): {
   snapshot: SessionFileSnapshot | undefined;
 } {
   const resolvedPath = resolve(filePath);
-  let snapshot: SessionFileSnapshot;
-  try {
-    snapshot = readSessionFileSnapshot(resolvedPath);
-  } catch {
-    sessionEntriesCache.delete(resolvedPath);
-    return { entries: [], snapshot: undefined };
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    let beforeReadSnapshot: SessionFileSnapshot;
+    try {
+      beforeReadSnapshot = readSessionFileSnapshot(resolvedPath);
+    } catch {
+      sessionEntriesCache.delete(resolvedPath);
+      return { entries: [], snapshot: undefined };
+    }
+
+    const cached = sessionEntriesCache.get(resolvedPath);
+    if (cached && isSameSessionFileSnapshot(cached.snapshot, beforeReadSnapshot)) {
+      const afterCacheSnapshot = readSessionFileSnapshotIfExists(resolvedPath);
+      if (afterCacheSnapshot && isSameSessionFileSnapshot(beforeReadSnapshot, afterCacheSnapshot)) {
+        return { entries: copyFileEntries(cached.entries), snapshot: afterCacheSnapshot };
+      }
+      continue;
+    }
+
+    const content = readFileSync(resolvedPath, "utf8");
+    const entries = parseJsonlEntries(content);
+    const afterParseSnapshot = readSessionFileSnapshotIfExists(resolvedPath);
+    if (afterParseSnapshot && isSameSessionFileSnapshot(beforeReadSnapshot, afterParseSnapshot)) {
+      return {
+        entries: rememberSessionEntries(resolvedPath, afterParseSnapshot, entries),
+        snapshot: afterParseSnapshot,
+      };
+    }
   }
 
-  const cached = sessionEntriesCache.get(resolvedPath);
-  if (cached && isSameSessionFileSnapshot(cached.snapshot, snapshot)) {
-    return { entries: copyFileEntries(cached.entries), snapshot };
-  }
-
-  const content = readFileSync(resolvedPath, "utf8");
-  const entries = parseJsonlEntries(content);
-  return { entries: rememberSessionEntries(resolvedPath, snapshot, entries), snapshot };
+  sessionEntriesCache.delete(resolvedPath);
+  throw new Error(`session file changed repeatedly while loading: ${resolvedPath}`);
 }
 
 interface SessionFileSnapshot {
@@ -429,6 +453,9 @@ interface CachedSessionEntries {
 }
 
 const MAX_CACHED_SESSION_FILES = 8;
+// Bound approximate retained payload bytes as well as file count; parsed JSON
+// has higher overhead than the transcript bytes used for this conservative cap.
+const MAX_CACHED_SESSION_BYTES = 32n * 1024n * 1024n;
 const sessionEntriesCache = new Map<string, CachedSessionEntries>();
 
 function readSessionFileSnapshot(filePath: string): SessionFileSnapshot {
@@ -456,7 +483,7 @@ function rememberSessionEntries(
   filePath: string,
   snapshot: SessionFileSnapshot,
   entries: FileEntry[],
-  cloneForCache = false,
+  copyMutableEntries = false,
 ): FileEntry[] {
   if (!hasReadableSessionHeader(entries)) {
     sessionEntriesCache.delete(filePath);
@@ -468,25 +495,46 @@ function rememberSessionEntries(
     sessionEntriesCache.delete(filePath);
     return entries;
   }
+  if (snapshot.size > MAX_CACHED_SESSION_BYTES) {
+    sessionEntriesCache.delete(filePath);
+    return copyFileEntries(entries.map(freezeFileEntry));
+  }
 
   // Current-version session entries are append-only after load. Freeze the
   // cached snapshot so warm hits cannot drift away from the file metadata that
   // validated the cache key.
-  const cachedEntries = freezeFileEntries(cloneForCache ? entries.map(cloneFileEntry) : entries);
+  const cachedEntries = entries.map((entry) => {
+    if (Object.isFrozen(entry)) {
+      return entry;
+    }
+    return freezeFileEntry(copyMutableEntries ? cloneFileEntry(entry) : entry);
+  });
   const cached: CachedSessionEntries = {
     snapshot,
     entries: cachedEntries,
   };
   sessionEntriesCache.delete(filePath);
   sessionEntriesCache.set(filePath, cached);
-  while (sessionEntriesCache.size > MAX_CACHED_SESSION_FILES) {
+  trimSessionEntriesCache();
+  return copyFileEntries(cachedEntries);
+}
+
+function trimSessionEntriesCache(): void {
+  let cachedBytes = 0n;
+  for (const cached of sessionEntriesCache.values()) {
+    cachedBytes += cached.snapshot.size;
+  }
+  while (
+    sessionEntriesCache.size > MAX_CACHED_SESSION_FILES ||
+    cachedBytes > MAX_CACHED_SESSION_BYTES
+  ) {
     const oldestKey = sessionEntriesCache.keys().next().value;
     if (!oldestKey) {
       break;
     }
+    cachedBytes -= sessionEntriesCache.get(oldestKey)?.snapshot.size ?? 0n;
     sessionEntriesCache.delete(oldestKey);
   }
-  return copyFileEntries(cachedEntries);
 }
 
 function hasCacheableSessionHeader(entries: FileEntry[]): boolean {
@@ -501,16 +549,45 @@ function hasCacheableSessionHeader(entries: FileEntry[]): boolean {
   return header.version === CURRENT_SESSION_VERSION;
 }
 
-function rememberWrittenSessionEntries(filePath: string, entries: FileEntry[]): void {
+function rememberWrittenSessionEntries(
+  filePath: string,
+  entries: FileEntry[],
+): SessionFileSnapshot | undefined {
   const resolvedPath = resolve(filePath);
-  let snapshot: SessionFileSnapshot;
+  // Full rewrites break append continuity used by the pre-run repair cache,
+  // even when the filesystem preserves the inode and the rewritten file grows.
+  invalidateSessionFileRepairCache(resolvedPath);
+  let beforeReadSnapshot: SessionFileSnapshot;
   try {
-    snapshot = readSessionFileSnapshot(resolvedPath);
+    beforeReadSnapshot = readSessionFileSnapshot(resolvedPath);
   } catch {
     sessionEntriesCache.delete(resolvedPath);
-    return;
+    return undefined;
   }
-  rememberSessionEntries(resolvedPath, snapshot, entries, true);
+  if (beforeReadSnapshot.size > MAX_CACHED_SESSION_BYTES) {
+    sessionEntriesCache.delete(resolvedPath);
+    return beforeReadSnapshot;
+  }
+
+  const expectedContent = serializeJsonlEntries(entries);
+  let content: string;
+  let afterReadSnapshot: SessionFileSnapshot;
+  try {
+    content = readFileSync(resolvedPath, "utf8");
+    afterReadSnapshot = readSessionFileSnapshot(resolvedPath);
+  } catch {
+    sessionEntriesCache.delete(resolvedPath);
+    return undefined;
+  }
+  if (
+    content !== expectedContent ||
+    !isSameSessionFileSnapshot(beforeReadSnapshot, afterReadSnapshot)
+  ) {
+    sessionEntriesCache.delete(resolvedPath);
+    return afterReadSnapshot;
+  }
+  rememberSessionEntries(resolvedPath, afterReadSnapshot, entries, true);
+  return afterReadSnapshot;
 }
 
 function rememberAppendedSessionEntry(
@@ -518,8 +595,13 @@ function rememberAppendedSessionEntry(
   previousSnapshot: SessionFileSnapshot | undefined,
   beforeAppendSnapshot: SessionFileSnapshot | undefined,
   entry: FileEntry,
+  cacheOwnedAppend: boolean,
 ): SessionFileSnapshot | undefined {
   const resolvedPath = resolve(filePath);
+  if (!cacheOwnedAppend) {
+    sessionEntriesCache.delete(resolvedPath);
+    return readSessionFileSnapshotIfExists(resolvedPath);
+  }
   if (
     !previousSnapshot ||
     !beforeAppendSnapshot ||
@@ -531,7 +613,21 @@ function rememberAppendedSessionEntry(
 
   const cached = sessionEntriesCache.get(resolvedPath);
   const snapshot = readSessionFileSnapshotIfExists(resolvedPath);
-  if (!snapshot || !cached || !isSameSessionFileSnapshot(cached.snapshot, previousSnapshot)) {
+  // Owned transcript writes serialize appenders under the session lock. Full
+  // rewrites refresh the cache explicitly, so identity and size are sufficient
+  // to advance this append-only snapshot without reading the whole file.
+  const expectedSize =
+    beforeAppendSnapshot.size + BigInt(Buffer.byteLength(serializeJsonlEntry(entry), "utf8"));
+  if (
+    !snapshot ||
+    !cached ||
+    cached.snapshot.dev !== previousSnapshot.dev ||
+    cached.snapshot.ino !== previousSnapshot.ino ||
+    snapshot.dev !== beforeAppendSnapshot.dev ||
+    snapshot.ino !== beforeAppendSnapshot.ino ||
+    snapshot.size !== expectedSize ||
+    !isSameSessionFileSnapshot(cached.snapshot, previousSnapshot)
+  ) {
     sessionEntriesCache.delete(resolvedPath);
     return snapshot;
   }
@@ -540,6 +636,7 @@ function rememberAppendedSessionEntry(
   cached.snapshot = snapshot;
   sessionEntriesCache.delete(resolvedPath);
   sessionEntriesCache.set(resolvedPath, cached);
+  trimSessionEntriesCache();
   return snapshot;
 }
 
@@ -549,6 +646,30 @@ function readSessionFileSnapshotIfExists(filePath: string): SessionFileSnapshot 
   } catch {
     return undefined;
   }
+}
+
+function revalidateLoadedSessionFile(
+  filePath: string,
+  loaded: {
+    entries: FileEntry[];
+    snapshot: SessionFileSnapshot | undefined;
+  },
+): {
+  entries: FileEntry[];
+  snapshot: SessionFileSnapshot | undefined;
+} {
+  const currentSnapshot = readSessionFileSnapshotIfExists(resolve(filePath));
+  if (
+    loaded.snapshot &&
+    currentSnapshot &&
+    isSameSessionFileSnapshot(loaded.snapshot, currentSnapshot)
+  ) {
+    return loaded;
+  }
+  if (!loaded.snapshot && !currentSnapshot) {
+    return loaded;
+  }
+  return loadEntriesFromFileWithSnapshot(filePath);
 }
 
 // Cached entries are deep-frozen so warm hits cannot drift from the file bytes
@@ -568,13 +689,6 @@ function copyFileEntries(entries: readonly FileEntry[]): FileEntry[] {
 
 function cloneFileEntry(entry: FileEntry): FileEntry {
   return structuredClone(entry);
-}
-
-function freezeFileEntries(entries: FileEntry[]): FileEntry[] {
-  for (const entry of entries) {
-    freezeJsonLikeValue(entry);
-  }
-  return entries;
 }
 
 function freezeFileEntry(entry: FileEntry): FileEntry {
@@ -949,6 +1063,10 @@ export class SessionManager {
     sessionDir: string,
     sessionFile: string | undefined,
     persist: boolean,
+    loadedSessionFile?: {
+      entries: FileEntry[];
+      snapshot: SessionFileSnapshot | undefined;
+    },
   ) {
     this.cwd = cwd;
     this.sessionDir = sessionDir;
@@ -958,7 +1076,10 @@ export class SessionManager {
     }
 
     if (sessionFile) {
-      this.setSessionFile(sessionFile);
+      this.setLoadedSessionFile(
+        sessionFile,
+        loadedSessionFile ?? loadEntriesFromFileWithSnapshot(sessionFile),
+      );
     } else {
       this.newSession();
     }
@@ -966,11 +1087,20 @@ export class SessionManager {
 
   /** Switch to a different session file (used for resume and branching) */
   setSessionFile(sessionFile: string): void {
+    this.setLoadedSessionFile(sessionFile, loadEntriesFromFileWithSnapshot(sessionFile));
+  }
+
+  private setLoadedSessionFile(
+    sessionFile: string,
+    loaded: {
+      entries: FileEntry[];
+      snapshot: SessionFileSnapshot | undefined;
+    },
+  ): void {
     this.sessionFile = resolve(sessionFile);
     this.sessionFileSnapshot = undefined;
     this.recoveredCorruptHeader = false;
     if (existsSync(this.sessionFile)) {
-      const loaded = loadEntriesFromFileWithSnapshot(this.sessionFile);
       this.fileEntries = loaded.entries;
       this.sessionFileSnapshot = loaded.snapshot;
 
@@ -1067,8 +1197,7 @@ export class SessionManager {
       return;
     }
     writeJsonlEntriesSync(this.sessionFile, this.fileEntries);
-    rememberWrittenSessionEntries(this.sessionFile, this.fileEntries);
-    this.sessionFileSnapshot = readSessionFileSnapshotIfExists(this.sessionFile);
+    this.sessionFileSnapshot = rememberWrittenSessionEntries(this.sessionFile, this.fileEntries);
   }
 
   isPersisted(): boolean {
@@ -1112,8 +1241,7 @@ export class SessionManager {
     if (!this.flushed) {
       writeJsonlEntriesSync(this.sessionFile, this.fileEntries);
       this.flushed = true;
-      rememberWrittenSessionEntries(this.sessionFile, this.fileEntries);
-      this.sessionFileSnapshot = readSessionFileSnapshotIfExists(this.sessionFile);
+      this.sessionFileSnapshot = rememberWrittenSessionEntries(this.sessionFile, this.fileEntries);
     } else {
       const beforeAppendSnapshot = readSessionFileSnapshotIfExists(this.sessionFile);
       appendJsonlEntrySync(this.sessionFile, entry);
@@ -1122,6 +1250,7 @@ export class SessionManager {
         this.sessionFileSnapshot,
         beforeAppendSnapshot,
         entry,
+        hasOwnedSessionTranscriptWriteContext({ sessionFile: this.sessionFile }),
       );
     }
   }
@@ -1138,8 +1267,7 @@ export class SessionManager {
     if (!this.sessionFile) {
       return;
     }
-    rememberWrittenSessionEntries(this.sessionFile, this.fileEntries);
-    this.sessionFileSnapshot = readSessionFileSnapshotIfExists(this.sessionFile);
+    this.sessionFileSnapshot = rememberWrittenSessionEntries(this.sessionFile, this.fileEntries);
   }
 
   private appendEntry(entry: SessionEntry): void {
@@ -1612,13 +1740,15 @@ export class SessionManager {
    * @param cwdOverride Optional cwd override instead of the session header cwd.
    */
   static open(path: string, sessionDir?: string, cwdOverride?: string): SessionManager {
-    // Extract cwd from session header if possible, otherwise use process.cwd()
-    const entries = loadEntriesFromFile(path);
-    const header = entries.find((e) => e.type === "session");
+    // Re-stat before construction so the single parsed load cannot become
+    // stale while deriving cwd/session metadata. Stable warm opens pay only
+    // the extra stat; changed files retry through the normal loader.
+    const loaded = revalidateLoadedSessionFile(path, loadEntriesFromFileWithSnapshot(path));
+    const header = loaded.entries.find((e) => e.type === "session");
     const cwd = cwdOverride ?? header?.cwd ?? process.cwd();
     // If no sessionDir provided, derive from file's parent directory
     const dir = sessionDir ?? resolve(path, "..");
-    return new SessionManager(cwd, dir, path, true);
+    return new SessionManager(cwd, dir, path, true, loaded);
   }
 
   /**

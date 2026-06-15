@@ -53,6 +53,8 @@ type SessionFileFingerprint =
       ctimeNs: bigint;
     };
 
+export type TrustedSessionFileSnapshot = Extract<SessionFileFingerprint, { exists: true }>;
+
 const TRANSCRIPT_ONLY_OPENCLAW_ASSISTANT_MODELS = new Set(["delivery-mirror", "gateway-injected"]);
 const MAX_BENIGN_SESSION_FENCE_ADVANCE_BYTES = 1024 * 1024;
 const MAX_BENIGN_SESSION_FENCE_REWRITE_BYTES = 8 * 1024 * 1024;
@@ -655,6 +657,7 @@ export class EmbeddedAttemptSessionTakeoverError extends Error {
 }
 
 export type EmbeddedAttemptSessionLockController = {
+  readTrustedCurrentSessionFileSnapshot(): Promise<TrustedSessionFileSnapshot | undefined>;
   releaseForPrompt(): Promise<void>;
   releaseHeldLockForAbort(): Promise<void>;
   refreshAfterOwnedSessionWrite(): void;
@@ -1037,6 +1040,12 @@ export async function createEmbeddedAttemptSessionLockController(params: {
   }
 
   return {
+    async readTrustedCurrentSessionFileSnapshot(): Promise<TrustedSessionFileSnapshot | undefined> {
+      const fingerprint = await readSessionFileFingerprint(params.lockOptions.sessionFile);
+      return fingerprint.exists && isTrustedSessionFileState(sessionFileFenceKey, fingerprint)
+        ? fingerprint
+        : undefined;
+    },
     async releaseForPrompt(): Promise<void> {
       await releaseHeldLockWithFence();
     },
@@ -1044,10 +1053,26 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       await releaseHeldLockWithFence();
     },
     refreshAfterOwnedSessionWrite(): void {
-      if (fenceActive && !takeoverDetected) {
-        fenceFingerprint = readSessionFileFingerprintSync(params.lockOptions.sessionFile);
-        fenceSnapshot = { fingerprint: fenceFingerprint };
+      if (takeoverDetected) {
+        return;
       }
+      const beforeWrite = fenceFingerprint;
+      const fingerprint = readSessionFileFingerprintSync(params.lockOptions.sessionFile);
+      if (!fenceActive) {
+        // User-message persistence occurs before the prompt fence activates.
+        // The retained session lock owns that write, so publish its exact state
+        // for the next attempt before release establishes the active fence.
+        fenceGeneration = recordTrustedSessionFileState(sessionFileFenceKey, fingerprint);
+        return;
+      }
+      if (
+        !sameSessionFileFingerprint(beforeWrite, fingerprint) &&
+        isTrustedSessionFileState(sessionFileFenceKey, beforeWrite ?? { exists: false })
+      ) {
+        fenceGeneration = recordOwnedSessionFileWrite(sessionFileFenceKey, fingerprint);
+      }
+      fenceFingerprint = fingerprint;
+      fenceSnapshot = { fingerprint };
     },
     withOwnedSessionFileWrite<T>(
       run: () => T,

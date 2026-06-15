@@ -1,10 +1,13 @@
 // Session manager tests cover JSONL recovery behavior for interrupted or
 // corrupted transcript writes.
+import { writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import { prepareSessionManagerForRun } from "../embedded-agent-runner/session-manager-init.js";
+import { repairSessionFileIfNeeded } from "../session-file-repair.js";
 import {
   CURRENT_SESSION_VERSION,
   loadEntriesFromFile,
@@ -185,10 +188,7 @@ describe("SessionManager.open", () => {
     } as typeof JSON.parse;
 
     try {
-      expect(loadEntriesFromFile(sessionFile).map((entry) => entry.type)).toEqual([
-        "session",
-        "message",
-      ]);
+      expect(SessionManager.open(sessionFile, dir, dir).getEntries()).toEqual([firstEntry]);
       expect(parseCount).toBe(2);
 
       parseCount = 0;
@@ -196,7 +196,15 @@ describe("SessionManager.open", () => {
       expect(parseCount).toBe(0);
 
       const sessionManager = SessionManager.open(sessionFile, dir, dir);
-      sessionManager.appendMessage(secondMessage);
+      await withOwnedSessionTranscriptWrites(
+        {
+          sessionFile,
+          withSessionWriteLock: async (run) => await run(),
+        },
+        async () => {
+          sessionManager.appendMessage(secondMessage);
+        },
+      );
       const persistedEntries = (await fs.readFile(sessionFile, "utf8"))
         .trim()
         .split("\n")
@@ -217,6 +225,63 @@ describe("SessionManager.open", () => {
     } finally {
       JSON.parse = originalParse;
     }
+  });
+
+  it("invalidates warm entries after an append outside the owned write context", async () => {
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "session.jsonl");
+    const firstEntry = buildMessageEntry(1, null);
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify(buildSessionHeader(dir))}\n${JSON.stringify(firstEntry)}\n`,
+      "utf8",
+    );
+
+    const sessionManager = SessionManager.open(sessionFile, dir, dir);
+    sessionManager.appendMessage(buildAssistantMessage("message 2"));
+
+    const originalParse = JSON.parse;
+    let parseCount = 0;
+    JSON.parse = function countedParse(...args: Parameters<typeof JSON.parse>) {
+      parseCount += 1;
+      return originalParse.apply(originalParse, args);
+    } as typeof JSON.parse;
+
+    try {
+      expect(
+        SessionManager.open(sessionFile, dir, dir)
+          .getEntries()
+          .map((entry) => readMessageContent(entry)),
+      ).toEqual(["message 1", "message 2"]);
+      expect(parseCount).toBeGreaterThanOrEqual(3);
+    } finally {
+      JSON.parse = originalParse;
+    }
+  });
+
+  it("keeps the exported file loader mutable and separate from warm SessionManager entries", async () => {
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "session.jsonl");
+    const firstEntry = buildMessageEntry(1, null);
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify(buildSessionHeader(dir))}\n${JSON.stringify(firstEntry)}\n`,
+      "utf8",
+    );
+
+    const loaded = loadEntriesFromFile(sessionFile);
+    const messageEntry = loaded[1];
+    if (!messageEntry || messageEntry.type !== "message") {
+      throw new Error("expected message entry");
+    }
+    (messageEntry.message as { content: unknown }).content = "caller-owned mutation";
+
+    expect(readMessageContent(messageEntry)).toBe("caller-owned mutation");
+    expect(
+      SessionManager.open(sessionFile, dir, dir)
+        .getEntries()
+        .map((entry) => readMessageContent(entry)),
+    ).toEqual(["message 1"]);
   });
 
   it("invalidates the transcript entry cache when the file is externally replaced", async () => {
@@ -256,6 +321,72 @@ describe("SessionManager.open", () => {
     }
   });
 
+  it("revalidates a transcript changed while the initial load is parsing", async () => {
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "session.jsonl");
+    const firstEntry = buildMessageEntry(1, null);
+    const replacementEntry = buildMessageEntry(2, null);
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify(buildSessionHeader(dir))}\n${JSON.stringify(firstEntry)}\n`,
+      "utf8",
+    );
+    const replacementContent =
+      `${JSON.stringify(buildSessionHeader(dir, "intermediate-session"))}\n` +
+      `${JSON.stringify(replacementEntry)}\n`;
+    const finalEntry = buildMessageEntry(3, null);
+    const finalContent =
+      `${JSON.stringify(buildSessionHeader(dir, "replacement-session"))}\n` +
+      `${JSON.stringify(finalEntry)}\n`;
+
+    const originalParse = JSON.parse;
+    let replacementCount = 0;
+    JSON.parse = function replaceDuringParse(...args: Parameters<typeof JSON.parse>) {
+      const parsed = originalParse.apply(originalParse, args);
+      if (replacementCount === 0) {
+        replacementCount += 1;
+        writeFileSync(sessionFile, replacementContent, "utf8");
+      } else if (replacementCount === 1 && args[0].includes("intermediate-session")) {
+        replacementCount += 1;
+        writeFileSync(sessionFile, finalContent, "utf8");
+      }
+      return parsed;
+    } as typeof JSON.parse;
+
+    try {
+      const reopened = SessionManager.open(sessionFile, dir, dir);
+      expect(reopened.getSessionId()).toBe("replacement-session");
+      expect(reopened.getEntries()).toEqual([finalEntry]);
+    } finally {
+      JSON.parse = originalParse;
+    }
+  });
+
+  it("does not cache manager entries over a same-length external replacement", async () => {
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "session.jsonl");
+    const firstEntry = buildMessageEntry(1, null);
+    const replacementEntry = {
+      ...buildMessageEntry(2, null),
+      id: firstEntry.id,
+    };
+    const header = buildSessionHeader(dir);
+    const originalContent = `${JSON.stringify(header)}\n${JSON.stringify(firstEntry)}\n`;
+    const replacementContent = `${JSON.stringify(header)}\n${JSON.stringify(replacementEntry)}\n`;
+    expect(Buffer.byteLength(replacementContent)).toBe(Buffer.byteLength(originalContent));
+    await fs.writeFile(sessionFile, originalContent, "utf8");
+
+    const sessionManager = SessionManager.open(sessionFile, dir, dir);
+    await fs.writeFile(sessionFile, replacementContent, "utf8");
+    sessionManager.syncSnapshotAfterHeaderRewrite();
+
+    expect(
+      SessionManager.open(sessionFile, dir, dir)
+        .getEntries()
+        .map((entry) => readMessageContent(entry)),
+    ).toEqual(["message 2"]);
+  });
+
   it("does not persist caller-side entry mutations into warm cache hits", async () => {
     const dir = await makeTempDir();
     const sessionFile = path.join(dir, "session.jsonl");
@@ -291,6 +422,31 @@ describe("SessionManager.open", () => {
     } finally {
       JSON.parse = originalParse;
     }
+  });
+
+  it("keeps current-version entries immutable when the transcript exceeds the cache limit", async () => {
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "session.jsonl");
+    const hugeEntry = buildMessageEntry(1, null);
+    if (hugeEntry.type !== "message") {
+      throw new Error("expected message entry fixture");
+    }
+    hugeEntry.message.content = "x".repeat(33 * 1024 * 1024);
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify(buildSessionHeader(dir))}\n${JSON.stringify(hugeEntry)}\n`,
+      "utf8",
+    );
+
+    const opened = SessionManager.open(sessionFile, dir, dir);
+    const returnedEntry = opened.getEntries()[0];
+    if (!returnedEntry || returnedEntry.type !== "message") {
+      throw new Error("expected message entry");
+    }
+
+    expect(() => {
+      (returnedEntry.message as { content: unknown }).content = "mutated";
+    }).toThrow(TypeError);
   });
 
   it("invalidates the warm cache when another writer appends before this manager persists", async () => {
@@ -427,7 +583,15 @@ describe("SessionManager.open", () => {
 
     // First append after the embedded header rewrite. Before the fix the stale
     // snapshot made this drop the warm cache.
-    sessionManager.appendMessage(buildAssistantMessage("after rewrite"));
+    await withOwnedSessionTranscriptWrites(
+      {
+        sessionFile,
+        withSessionWriteLock: async (run) => await run(),
+      },
+      async () => {
+        sessionManager.appendMessage(buildAssistantMessage("after rewrite"));
+      },
+    );
 
     const originalParse = JSON.parse;
     let parseCount = 0;
@@ -449,6 +613,80 @@ describe("SessionManager.open", () => {
       JSON.parse = originalParse;
     }
   });
+
+  it("invalidates incremental repair state after a full header rewrite", async () => {
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "session.jsonl");
+    const firstEntry = {
+      type: "message",
+      id: "assistant-1",
+      parentId: null,
+      timestamp: "2026-06-04T00:00:01.000Z",
+      message: buildAssistantMessage("message 1"),
+    };
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify(buildSessionHeader(dir))}\n${JSON.stringify(firstEntry)}\n`,
+      "utf8",
+    );
+    await repairSessionFileIfNeeded({ sessionFile });
+
+    const sessionManager = SessionManager.open(sessionFile, dir, dir);
+    await prepareSessionManagerForRun({
+      sessionManager,
+      sessionFile,
+      hadSessionFile: true,
+      sessionId: "longer-rewritten-session-id",
+      cwd: dir,
+    });
+
+    const originalParse = JSON.parse;
+    let parseCount = 0;
+    JSON.parse = function countedParse(...args: Parameters<typeof JSON.parse>) {
+      parseCount += 1;
+      return originalParse.apply(originalParse, args);
+    } as typeof JSON.parse;
+    try {
+      await repairSessionFileIfNeeded({
+        sessionFile,
+        trustedSnapshot: await readTrustedRepairSnapshot(sessionFile),
+      });
+      expect(parseCount).toBeGreaterThanOrEqual(2);
+    } finally {
+      JSON.parse = originalParse;
+    }
+  });
+
+  it("does not rewrite a warm transcript when its header already matches the run", async () => {
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "session.jsonl");
+    const assistantEntry = {
+      type: "message",
+      id: "assistant-1",
+      parentId: null,
+      timestamp: "2026-06-04T00:00:01.000Z",
+      message: { role: "assistant", content: "carried context" },
+    };
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify(buildSessionHeader(dir))}\n${JSON.stringify(assistantEntry)}\n`,
+      "utf8",
+    );
+    await fs.utimes(sessionFile, new Date(1_000), new Date(1_000));
+    const before = await fs.stat(sessionFile);
+    const sessionManager = SessionManager.open(sessionFile, dir, dir);
+
+    await prepareSessionManagerForRun({
+      sessionManager,
+      sessionFile,
+      hadSessionFile: true,
+      sessionId: "test-session",
+      cwd: dir,
+    });
+
+    const after = await fs.stat(sessionFile);
+    expect(after.mtimeMs).toBe(before.mtimeMs);
+  });
 });
 
 function readMessageContent(entry: SessionEntry): unknown {
@@ -457,6 +695,17 @@ function readMessageContent(entry: SessionEntry): unknown {
     return content.map((part) => (part as { text?: string }).text ?? "").join("");
   }
   return content;
+}
+
+async function readTrustedRepairSnapshot(sessionFile: string) {
+  const stat = await fs.stat(sessionFile, { bigint: true });
+  return {
+    dev: stat.dev,
+    ino: stat.ino,
+    size: stat.size,
+    mtimeNs: stat.mtimeNs,
+    ctimeNs: stat.ctimeNs,
+  };
 }
 
 function buildAssistantMessage(text: string) {

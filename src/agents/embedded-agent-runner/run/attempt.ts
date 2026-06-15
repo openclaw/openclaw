@@ -2078,8 +2078,11 @@ export async function runEmbeddedAttempt(
     let cleanupYieldAborted = false;
     let repairedRejectedThinkingReplay = false;
     try {
+      const trustedSessionFileSnapshot =
+        await sessionLockController.readTrustedCurrentSessionFileSnapshot();
       await repairSessionFileIfNeeded({
         sessionFile: params.sessionFile,
+        trustedSnapshot: trustedSessionFileSnapshot,
         debug: (message) => log.debug(message),
         warn: (message) => log.warn(message),
       });

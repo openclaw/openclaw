@@ -84,6 +84,14 @@ export function resolveOwnedSessionTranscriptWriteLockRunner(params: {
   return context.withSessionWriteLock;
 }
 
+export function hasOwnedSessionTranscriptWriteContext(params: {
+  sessionFile?: string;
+  sessionKey?: string;
+}): boolean {
+  const context = ownedTranscriptWriteContext.getStore();
+  return Boolean(context && contextMatches({ context, ...params }));
+}
+
 async function runWithOwnedSessionTranscriptWriteContext<T>(
   params: {
     sessionFile?: string;

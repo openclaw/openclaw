@@ -3,6 +3,7 @@
  */
 import fs from "node:fs/promises";
 import { serializeJsonlLine, writeJsonlLines } from "../../config/sessions/transcript-jsonl.js";
+import { invalidateSessionFileRepairCache } from "../session-file-repair.js";
 
 type SessionHeaderEntry = { type: "session"; id?: string; cwd?: string };
 type SessionMessageEntry = { type: "message"; message?: { role?: string } };
@@ -90,6 +91,7 @@ export async function prepareSessionManagerForRun(params: {
     // Reset file so the first assistant flush includes header+user+assistant in order.
     await assertExistingHeaderIsReadable(params.sessionFile);
     await fs.writeFile(params.sessionFile, "", "utf-8");
+    invalidateSessionFileRepairCache(params.sessionFile);
     header.id = params.sessionId;
     header.cwd = params.cwd;
     sm.sessionId = params.sessionId;
@@ -103,10 +105,15 @@ export async function prepareSessionManagerForRun(params: {
   }
 
   if (params.hadSessionFile && header) {
+    const headerChanged = header.id !== params.sessionId || header.cwd !== params.cwd;
     header.id = params.sessionId;
     header.cwd = params.cwd;
     sm.sessionId = params.sessionId;
     sm.cwd = params.cwd;
+    if (!headerChanged) {
+      sm.flushed = true;
+      return;
+    }
     await writeJsonlLines(params.sessionFile, sm.fileEntries.map(serializeJsonlLine), {
       mode: 0o600,
     });
