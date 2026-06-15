@@ -132,17 +132,6 @@ function createForcedResetHarness(bootstrapCrossSigning: BootstrapCrossSigningMo
   });
 }
 
-function expectForcedResetCrossSigningCalls(
-  bootstrapCrossSigning: BootstrapCrossSigningMock,
-  params: { setupNewCall: number; totalCalls: number },
-) {
-  expect(bootstrapCrossSigning).toHaveBeenCalledTimes(params.totalCalls);
-  expectBootstrapCrossSigningCall(bootstrapCrossSigning, params.setupNewCall, {
-    setupNewCrossSigning: true,
-  });
-  expectBootstrapCrossSigningCall(bootstrapCrossSigning, params.totalCalls);
-}
-
 async function bootstrapWithVerificationRequestListener(overrides?: {
   deps?: Partial<ReturnType<typeof createBootstrapperDeps>>;
   crypto?: Partial<MatrixCryptoBootstrapApi>;
@@ -405,14 +394,19 @@ describe("MatrixCryptoBootstrapper", () => {
       "Matrix cross-signing key upload requires UIA; provide matrix.password for m.login.password fallback",
     );
 
-    expect(deps.recoveryKeyStore.bootstrapSecretStorageWithRecoveryKey).not.toHaveBeenCalled();
+    // SSSS is bootstrapped upfront before cross-signing, even for forced reset. This is safe
+    // because SSSS recreation only happens when the existing SSSS is broken; if SSSS is healthy
+    // the upfront bootstrap is a no-op. When UIA then fails, the operator fixes the password
+    // config and retries with a working SSSS, which is strictly better than the previous behavior
+    // of a double cross-signing reset that could destroy E2EE state (gh-78396).
+    expect(deps.recoveryKeyStore.bootstrapSecretStorageWithRecoveryKey).toHaveBeenCalled();
+    // Only one cross-signing attempt — the upfront SSSS fix prevents the repair block from
+    // triggering a second resetCrossSigning.
+    expect(bootstrapCrossSigning).toHaveBeenCalledTimes(1);
   });
 
-  it("recreates secret storage and retries a forced reset when stale server SSSS blocks it", async () => {
-    const bootstrapCrossSigning = vi
-      .fn<() => Promise<void>>()
-      .mockRejectedValueOnce(new Error("getSecretStorageKey callback returned falsey"))
-      .mockResolvedValueOnce(undefined);
+  it("recreates secret storage upfront and does a single forced cross-signing reset", async () => {
+    const bootstrapCrossSigning = vi.fn<() => Promise<void>>(async () => {});
     const { deps, crypto, bootstrapper } = createForcedResetHarness(bootstrapCrossSigning);
 
     await bootstrapper.bootstrap(crypto, {
@@ -421,17 +415,20 @@ describe("MatrixCryptoBootstrapper", () => {
       allowSecretStorageRecreateWithoutRecoveryKey: true,
     });
 
+    // SSSS is bootstrapped upfront before cross-signing, with recreation allowed so broken
+    // SSSS is repaired before the destructive reset. No repair-block retry needed.
     expect(deps.recoveryKeyStore.bootstrapSecretStorageWithRecoveryKey).toHaveBeenCalledWith(
       crypto,
-      {
+      expect.objectContaining({
         allowSecretStorageRecreateWithoutRecoveryKey: true,
-        forceNewSecretStorage: true,
-      },
+      }),
     );
-    expectForcedResetCrossSigningCalls(bootstrapCrossSigning, {
-      setupNewCall: 2,
-      totalCalls: 3,
-    });
+    // SSSS is bootstrapped again after cross-signing to pick up the newly published keys.
+    expect(deps.recoveryKeyStore.bootstrapSecretStorageWithRecoveryKey).toHaveBeenCalledTimes(2);
+    // Only one forced cross-signing reset — the upfront SSSS fix prevents the repair block
+    // from triggering a second resetCrossSigning (gh-78396).
+    expect(bootstrapCrossSigning).toHaveBeenCalledTimes(1);
+    expectBootstrapCrossSigningCall(bootstrapCrossSigning, 1, { setupNewCrossSigning: true });
   });
 
   it("re-exports cross-signing keys after forced reset creates secret storage", async () => {
@@ -444,16 +441,25 @@ describe("MatrixCryptoBootstrapper", () => {
       allowSecretStorageRecreateWithoutRecoveryKey: true,
     });
 
-    expect(deps.recoveryKeyStore.bootstrapSecretStorageWithRecoveryKey).toHaveBeenCalledWith(
+    // SSSS bootstrapped upfront (before cross-signing) and after (to pick up keys).
+    expect(deps.recoveryKeyStore.bootstrapSecretStorageWithRecoveryKey).toHaveBeenCalledTimes(2);
+    expect(deps.recoveryKeyStore.bootstrapSecretStorageWithRecoveryKey).toHaveBeenNthCalledWith(
+      1,
       crypto,
-      {
+      expect.objectContaining({
         allowSecretStorageRecreateWithoutRecoveryKey: true,
-      },
+      }),
     );
-    expectForcedResetCrossSigningCalls(bootstrapCrossSigning, {
-      setupNewCall: 1,
-      totalCalls: 2,
-    });
+    expect(deps.recoveryKeyStore.bootstrapSecretStorageWithRecoveryKey).toHaveBeenNthCalledWith(
+      2,
+      crypto,
+      expect.objectContaining({
+        allowSecretStorageRecreateWithoutRecoveryKey: true,
+      }),
+    );
+    // No redundant second bootstrapCrossSigning call — no double reset (gh-78396).
+    expect(bootstrapCrossSigning).toHaveBeenCalledTimes(1);
+    expectBootstrapCrossSigningCall(bootstrapCrossSigning, 1, { setupNewCrossSigning: true });
   });
 
   it("trusts the fresh own identity after a forced cross-signing reset", async () => {

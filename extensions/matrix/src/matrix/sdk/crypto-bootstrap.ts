@@ -51,42 +51,36 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
     options: MatrixCryptoBootstrapOptions = {},
   ): Promise<MatrixCryptoBootstrapResult> {
     const strict = options.strict === true;
-    const deferSecretStorageBootstrapUntilAfterCrossSigning =
-      options.forceResetCrossSigning === true;
+    const forceReset = options.forceResetCrossSigning === true;
     // Register verification listeners before expensive bootstrap work so incoming requests
     // are not missed during startup.
     this.registerVerificationRequestHandler(crypto);
-    if (!deferSecretStorageBootstrapUntilAfterCrossSigning) {
-      await this.bootstrapSecretStorage(crypto, {
-        strict,
-        allowSecretStorageRecreateWithoutRecoveryKey:
-          options.allowSecretStorageRecreateWithoutRecoveryKey === true,
-      });
-    }
-    let crossSigning = await this.bootstrapCrossSigning(crypto, {
-      forceResetCrossSigning: options.forceResetCrossSigning === true,
-      allowAutomaticCrossSigningReset: options.allowAutomaticCrossSigningReset !== false,
+
+    // Always bootstrap SSSS before cross-signing. For forced reset, run non-strict with
+    // recreation allowed so broken SSSS is repaired before the destructive reset.
+    await this.bootstrapSecretStorage(crypto, {
+      strict: forceReset ? false : strict,
       allowSecretStorageRecreateWithoutRecoveryKey:
-        options.allowSecretStorageRecreateWithoutRecoveryKey === true,
+        forceReset ? true : options.allowSecretStorageRecreateWithoutRecoveryKey === true,
+    });
+
+    const crossSigning = await this.bootstrapCrossSigning(crypto, {
+      forceResetCrossSigning: forceReset,
+      allowAutomaticCrossSigningReset: options.allowAutomaticCrossSigningReset !== false,
+      // SSSS was already fixed above, so prevent the repair block from doing a second cross-signing
+      // reset after recreating secret storage (https://github.com/openclaw/openclaw/issues/78396).
+      allowSecretStorageRecreateWithoutRecoveryKey:
+        forceReset ? false : options.allowSecretStorageRecreateWithoutRecoveryKey === true,
       strict,
     });
-    // Forced repair may need password UIA to upload new cross-signing keys. Delay any
-    // secret-storage repair/recreation until after that step succeeds so passwordless bots do
-    // not partially mutate SSSS on homeservers that require password-based UIA.
+
+    // Second SSSS pass to pick up cross-signing keys published during bootstrap.
     await this.bootstrapSecretStorage(crypto, {
       strict,
       allowSecretStorageRecreateWithoutRecoveryKey:
         options.allowSecretStorageRecreateWithoutRecoveryKey === true,
     });
-    if (deferSecretStorageBootstrapUntilAfterCrossSigning) {
-      crossSigning = await this.bootstrapCrossSigning(crypto, {
-        forceResetCrossSigning: false,
-        allowAutomaticCrossSigningReset: false,
-        allowSecretStorageRecreateWithoutRecoveryKey:
-          options.allowSecretStorageRecreateWithoutRecoveryKey === true,
-        strict,
-      });
-    }
+
     const ownDeviceVerified = await this.ensureOwnDeviceTrust(crypto, {
       strict,
     });
