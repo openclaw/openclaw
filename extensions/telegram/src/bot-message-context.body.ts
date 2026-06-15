@@ -149,7 +149,7 @@ function resolveTelegramMentionFacts(params: {
 
   return {
     canDetectMention: params.canDetectMention,
-    wasMentioned: params.wasMentioned,
+    wasMentioned: params.effectiveWasMentioned,
     explicitlyMentionedBot: params.explicitlyMentionedBot,
     mentionSource,
     implicitMentionKinds: params.implicitMentionKinds,
