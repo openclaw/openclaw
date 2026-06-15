@@ -206,6 +206,10 @@ function senderKindForLoadedMedia(
   return "file";
 }
 
+function resolveHostReadQuotaFilePath(ctx: MediaTargetContext, mediaPath: string): string {
+  return resolveWorkspacePathCandidate(normalizePath(mediaPath), ctx.mediaAccess?.workspaceDir);
+}
+
 async function trySendViaHostRead(
   ctx: MediaTargetContext,
   mediaPath: string,
@@ -251,7 +255,11 @@ async function trySendViaHostRead(
     if (err instanceof UploadDailyLimitExceededError) {
       return buildDailyLimitExceededResult(
         err.filePath === "<buffer>"
-          ? new UploadDailyLimitExceededError(mediaPath, err.fileSize, err.message)
+          ? new UploadDailyLimitExceededError(
+              resolveHostReadQuotaFilePath(ctx, mediaPath),
+              err.fileSize,
+              err.message,
+            )
           : err,
       );
     }

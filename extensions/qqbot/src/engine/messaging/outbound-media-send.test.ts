@@ -100,17 +100,14 @@ describe("trySendViaHostRead error handling", () => {
       new MockUploadDailyLimitExceededError("<buffer>", 2048, "daily quota"),
     );
 
-    const result = (await sendPhoto(
-      makeCtx(),
-      "/tmp/openclaw-sandbox/report.docx",
-    )) as OutboundResult;
+    const result = (await sendPhoto(makeCtx(), "report.docx")) as OutboundResult;
 
     expect(result).toMatchObject({
       channel: "qqbot",
       errorCode: OUTBOUND_ERROR_CODES.UPLOAD_DAILY_LIMIT_EXCEEDED,
       qqBizCode: 40093002,
     });
-    expect(result.error).toContain("/tmp/openclaw-sandbox/report.docx");
+    expect(result.error).toContain("/tmp/workspace/report.docx");
     expect(result.error).not.toContain("<buffer>");
   });
 });
