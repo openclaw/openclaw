@@ -215,35 +215,44 @@ async function trySendViaHostRead(
   if (!mediaReadFile || isHttpOrDataSource(mediaPath)) {
     return null;
   }
-  const loaded = await loadOutboundMediaFromUrl(mediaPath, {
-    maxBytes: getMaxUploadSize(mediaFileTypeForKind(mediaKind)),
-    mediaAccess: ctx.mediaAccess,
-    mediaLocalRoots: ctx.mediaLocalRoots,
-    mediaReadFile,
-    workspaceDir: ctx.mediaAccess?.workspaceDir,
-  });
-  const kind = senderKindForLoadedMedia(mediaKind, loaded.kind);
-  const creds = accountToCreds(ctx.account);
-  const target: DeliveryTarget = { type: ctx.targetType, id: ctx.targetId };
-  if (target.type !== "c2c" && target.type !== "group") {
+  try {
+    const loaded = await loadOutboundMediaFromUrl(mediaPath, {
+      maxBytes: getMaxUploadSize(mediaFileTypeForKind(mediaKind)),
+      mediaAccess: ctx.mediaAccess,
+      mediaLocalRoots: ctx.mediaLocalRoots,
+      mediaReadFile,
+      workspaceDir: ctx.mediaAccess?.workspaceDir,
+    });
+    const kind = senderKindForLoadedMedia(mediaKind, loaded.kind);
+    const creds = accountToCreds(ctx.account);
+    const target: DeliveryTarget = { type: ctx.targetType, id: ctx.targetId };
+    if (target.type !== "c2c" && target.type !== "group") {
+      return {
+        channel: "qqbot",
+        error: `${qqBotMediaKindLabel[mediaKind]} not supported in channel`,
+      };
+    }
+    const r = await senderSendMedia({
+      target,
+      creds,
+      kind,
+      source: {
+        buffer: loaded.buffer,
+        ...(loaded.fileName ? { fileName: sanitizeFileName(loaded.fileName) } : {}),
+        ...(loaded.contentType ? { mime: loaded.contentType } : {}),
+      },
+      msgId: ctx.replyToId,
+      ...(kind === "file" && loaded.fileName
+        ? { fileName: sanitizeFileName(loaded.fileName) }
+        : {}),
+    });
+    return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
+  } catch (err) {
     return {
       channel: "qqbot",
-      error: `${qqBotMediaKindLabel[mediaKind]} not supported in channel`,
+      error: formatErrorMessage(err),
     };
   }
-  const r = await senderSendMedia({
-    target,
-    creds,
-    kind,
-    source: {
-      buffer: loaded.buffer,
-      ...(loaded.fileName ? { fileName: sanitizeFileName(loaded.fileName) } : {}),
-      ...(loaded.contentType ? { mime: loaded.contentType } : {}),
-    },
-    msgId: ctx.replyToId,
-    ...(kind === "file" && loaded.fileName ? { fileName: sanitizeFileName(loaded.fileName) } : {}),
-  });
-  return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
 }
 
 export function resolveOutboundMediaPath(
