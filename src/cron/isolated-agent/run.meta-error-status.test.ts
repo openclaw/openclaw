@@ -54,6 +54,26 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
     expect(result.outputText).toBe("cron isolated run failed: retry limit exceeded");
   });
 
+  it("marks an aborted embedded agent run without a run-level error as a cron error", async () => {
+    runWithModelFallbackMock.mockResolvedValueOnce({
+      result: {
+        payloads: [],
+        meta: {
+          aborted: true,
+          agentMeta: { usage: { input: 0, output: 0 } },
+        },
+      },
+      provider: "openai",
+      model: "gpt-5.4",
+      attempts: [],
+    });
+
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentTurnParams());
+
+    expect(result.status).toBe("error");
+    expect(result.error).toBe("cron isolated agent run aborted");
+  });
+
   it("surfaces cron timeout result when the cron-nested lane watchdog fires", async () => {
     runWithModelFallbackMock.mockRejectedValueOnce(
       new CommandLaneTaskTimeoutError("cron-nested", 330_000),

@@ -1067,6 +1067,19 @@ async function finalizeCronRun(params: {
       ...telemetry,
     });
   }
+  if (finalRunResult.meta?.aborted === true) {
+    const metaErrorMessage = normalizeOptionalString(finalRunResult.meta.error?.message);
+    const error = metaErrorMessage ?? "cron isolated agent run aborted";
+    return prepared.withRunSession({
+      status: "error",
+      error,
+      diagnostics: mergeCronRunDiagnostics(
+        createCronRunDiagnosticsFromAgentResult(finalRunResult, { finalStatus: "error" }),
+        createCronRunDiagnosticsFromError("agent-run", error),
+      ),
+      ...telemetry,
+    });
+  }
   const cronPayloadOutcome = resolveCronPayloadOutcome({
     payloads,
     runLevelError: finalRunResult.meta?.error,
