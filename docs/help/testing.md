@@ -145,6 +145,9 @@ inside every shard.
 
 - `pnpm openclaw qa suite`
   - Runs repo-backed QA scenarios directly on the host.
+  - Writes top-level `qa-evidence.json`, `qa-suite-summary.json`, and
+    `qa-suite-report.md` artifacts for the selected scenario set, including
+    mixed flow, Vitest, and Playwright scenario selections.
   - Runs multiple selected scenarios in parallel by default with isolated
     gateway workers. `qa-channel` defaults to concurrency 4 (bounded by the
     selected scenario count). Use `--concurrency <count>` to tune the worker

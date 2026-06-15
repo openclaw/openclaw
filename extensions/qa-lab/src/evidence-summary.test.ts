@@ -22,7 +22,7 @@ describe("evidence summary", () => {
         {
           id: "dm-chat-baseline",
           title: "DM baseline conversation",
-          sourcePath: "qa/scenarios/channels/dm-chat-baseline.md",
+          sourcePath: "qa/scenarios/channels/dm-chat-baseline.yaml",
           surface: "dm",
           coverage: {
             primary: ["channels.dm"],
@@ -54,7 +54,7 @@ describe("evidence summary", () => {
         id: "dm-chat-baseline",
         title: "DM baseline conversation",
         source: {
-          path: "qa/scenarios/channels/dm-chat-baseline.md",
+          path: "qa/scenarios/channels/dm-chat-baseline.yaml",
         },
       },
       mapping: {

@@ -83,6 +83,7 @@ import {
   runQaJsonlReplayCommand,
   runQaManualLaneCommand,
   runQaParityReportCommand,
+  runQaProfileCommand,
   runQaSuiteCommand,
 } from "./cli.runtime.js";
 import { QaSuiteInfraError } from "./errors.js";
@@ -139,21 +140,22 @@ function flowSuiteRuntimeResult(params: {
   };
 }
 
-function testFileSuiteRuntimeResult(params: {
+function unifiedSuiteRuntimeResult(params: {
   evidencePath: string;
-  executionKind?: "vitest" | "playwright";
   outputDir: string;
   reportPath: string;
-  results?: unknown[];
+  summaryPath: string;
+  scenarios?: unknown[];
 }) {
   return {
-    executionKind: params.executionKind ?? "playwright",
+    executionKind: "suite",
     result: {
       outputDir: params.outputDir,
-      executionKind: params.executionKind ?? "playwright",
       reportPath: params.reportPath,
       evidencePath: params.evidencePath,
-      results: params.results ?? [{ status: "pass" }],
+      summaryPath: params.summaryPath,
+      report: "# QA Suite Report\n",
+      scenarios: params.scenarios ?? [],
     },
   };
 }
@@ -301,9 +303,10 @@ describe("qa cli runtime", () => {
     const evidencePath = path.join(suiteArtifactsDir, "qa-evidence.json");
     await fs.writeFile(evidencePath, JSON.stringify({ entries: [] }), "utf8");
     runQaSuite.mockResolvedValueOnce(
-      testFileSuiteRuntimeResult({
+      unifiedSuiteRuntimeResult({
         outputDir: suiteArtifactsDir,
         reportPath: suiteReportPath,
+        summaryPath: suiteSummaryPath,
         evidencePath,
       }),
     );
@@ -325,6 +328,7 @@ describe("qa cli runtime", () => {
       scenarioIds: ["control-ui-chat-flow-playwright"],
     });
     expectWriteContains(stdoutWrite, `QA suite evidence: ${evidencePath}`);
+    expectWriteContains(stdoutWrite, `QA suite summary: ${suiteSummaryPath}`);
   });
 
   it("rejects host-only resource options for Playwright scenarios", async () => {
@@ -336,6 +340,75 @@ describe("qa cli runtime", () => {
       }),
     ).rejects.toThrow("--image, --cpus, --memory, and --disk require --runner multipass");
 
+    expect(runQaSuite).not.toHaveBeenCalled();
+  });
+
+  it("dispatches a taxonomy-backed profile category through the suite runner", async () => {
+    const previousProfile = process.env.OPENCLAW_QA_PROFILE;
+    process.env.OPENCLAW_QA_PROFILE = "release";
+    try {
+      runQaSuite.mockImplementationOnce(async () => {
+        expect(process.env.OPENCLAW_QA_PROFILE).toBe("smoke-ci");
+        return flowSuiteRuntimeResult({
+          reportPath: suiteReportPath,
+          summaryPath: suiteSummaryPath,
+        });
+      });
+
+      await runQaProfileCommand({
+        repoRoot: "/tmp/openclaw-repo",
+        outputDir: ".artifacts/qa-e2e/smoke-ci",
+        profile: "smoke-ci",
+        surface: "agent-runtime-and-provider-execution",
+        category: "agent-runtime-and-provider-execution.agent-turn-execution",
+        transportId: "qa-channel",
+        fastMode: true,
+        concurrency: 2,
+        allowFailures: true,
+      });
+
+      const suiteArgs = mockFirstObjectArg(runQaSuite);
+      expectFields(suiteArgs, {
+        repoRoot: path.resolve("/tmp/openclaw-repo"),
+        outputDir: path.resolve("/tmp/openclaw-repo", ".artifacts/qa-e2e/smoke-ci"),
+        transportId: "qa-channel",
+        providerMode: "mock-openai",
+        fastMode: true,
+        concurrency: 2,
+      });
+      expect(suiteArgs.scenarioIds).toEqual(expect.arrayContaining(["dm-chat-baseline"]));
+      expect(suiteArgs.scenarioIds).not.toContain("thinking-slash-model-remap");
+      expect(process.env.OPENCLAW_QA_PROFILE).toBe("release");
+      expectWriteContains(stdoutWrite, "QA run profile: smoke-ci; categories: 1; scenarios:");
+    } finally {
+      if (previousProfile === undefined) {
+        delete process.env.OPENCLAW_QA_PROFILE;
+      } else {
+        process.env.OPENCLAW_QA_PROFILE = previousProfile;
+      }
+    }
+  });
+
+  it("rejects qa profile runs that do not match taxonomy categories", async () => {
+    await expect(
+      runQaProfileCommand({
+        repoRoot: "/tmp/openclaw-repo",
+        profile: "smoke-ci",
+        surface: "unknown-surface",
+      }),
+    ).rejects.toThrow(
+      "qa run did not find taxonomy categories for --qa-profile smoke-ci --surface unknown-surface.",
+    );
+    expect(runQaSuite).not.toHaveBeenCalled();
+  });
+
+  it("rejects qa profile runs whose profile is not declared in taxonomy.yaml", async () => {
+    await expect(
+      runQaProfileCommand({
+        repoRoot: "/tmp/openclaw-repo",
+        profile: "nightly",
+      }),
+    ).rejects.toThrow('--qa-profile must be one of smoke-ci, release, got "nightly".');
     expect(runQaSuite).not.toHaveBeenCalled();
   });
 

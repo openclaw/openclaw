@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   findSessionAccessorBoundaryViolations,
+  migratedBundledPluginSessionAccessorFiles,
   migratedSessionAccessorFiles,
 } from "../../scripts/check-session-accessor-boundary.mjs";
 
@@ -26,6 +27,16 @@ describe("session accessor boundary guard", () => {
     );
   });
 
+  it("ratchets only the bundled plugin files migrated by this slice", () => {
+    expect(migratedBundledPluginSessionAccessorFiles).toEqual(
+      new Set([
+        "extensions/discord/src/monitor/native-command-model-picker-apply.ts",
+        "extensions/discord/src/monitor/thread-session-close.ts",
+        "extensions/telegram/src/bot-handlers.runtime.ts",
+      ]),
+    );
+  });
+
   it("flags legacy reader imports", () => {
     expect(
       findSessionAccessorBoundaryViolations(`
@@ -33,14 +44,14 @@ describe("session accessor boundary guard", () => {
         import { readSessionEntry, readSessionStoreReadOnly } from "../config/sessions/store-load.js";
       `),
     ).toEqual([
-      { line: 2, reason: 'imports legacy session store reader "loadSessionStore"' },
-      { line: 2, reason: 'imports legacy session store reader "readSessionEntries"' },
-      { line: 3, reason: 'imports legacy session store reader "readSessionEntry"' },
-      { line: 3, reason: 'imports legacy session store reader "readSessionStoreReadOnly"' },
+      { line: 2, reason: 'imports legacy session store access "loadSessionStore"' },
+      { line: 2, reason: 'imports legacy session store access "readSessionEntries"' },
+      { line: 3, reason: 'imports legacy session store access "readSessionEntry"' },
+      { line: 3, reason: 'imports legacy session store access "readSessionStoreReadOnly"' },
     ]);
   });
 
-  it("flags direct and namespace legacy reader calls", () => {
+  it("flags direct and namespace legacy access calls", () => {
     expect(
       findSessionAccessorBoundaryViolations(`
         loadSessionStore(storePath);
@@ -50,11 +61,11 @@ describe("session accessor boundary guard", () => {
         resolveSessionStoreEntry({ store, sessionKey });
       `),
     ).toEqual([
-      { line: 2, reason: 'calls legacy session store reader "loadSessionStore"' },
-      { line: 3, reason: 'references legacy session store reader "readSessionEntries"' },
-      { line: 4, reason: 'references legacy session store reader "loadSessionStore"' },
-      { line: 5, reason: 'calls legacy session store reader "readSessionStoreReadOnly"' },
-      { line: 6, reason: 'calls legacy session store reader "resolveSessionStoreEntry"' },
+      { line: 2, reason: 'calls legacy session store access "loadSessionStore"' },
+      { line: 3, reason: 'references legacy session store access "readSessionEntries"' },
+      { line: 4, reason: 'references legacy session store access "loadSessionStore"' },
+      { line: 5, reason: 'calls legacy session store access "readSessionStoreReadOnly"' },
+      { line: 6, reason: 'calls legacy session store access "resolveSessionStoreEntry"' },
     ]);
   });
 
@@ -66,9 +77,24 @@ describe("session accessor boundary guard", () => {
         const { loadSessionStore } = sessions;
       `),
     ).toEqual([
-      { line: 2, reason: 'references legacy session store reader "loadSessionStore"' },
-      { line: 3, reason: 'aliases legacy session store reader "readSessionEntries"' },
-      { line: 4, reason: 'aliases legacy session store reader "loadSessionStore"' },
+      { line: 2, reason: 'references legacy session store access "loadSessionStore"' },
+      { line: 3, reason: 'aliases legacy session store access "readSessionEntries"' },
+      { line: 4, reason: 'aliases legacy session store access "loadSessionStore"' },
+    ]);
+  });
+
+  it("flags legacy whole-store writes", () => {
+    expect(
+      findSessionAccessorBoundaryViolations(`
+        import { saveSessionStore, updateSessionStore } from "../config/sessions.js";
+        saveSessionStore(storePath, store);
+        updateSessionStore(storePath, update);
+      `),
+    ).toEqual([
+      { line: 2, reason: 'imports legacy session store access "saveSessionStore"' },
+      { line: 2, reason: 'imports legacy session store access "updateSessionStore"' },
+      { line: 3, reason: 'calls legacy session store access "saveSessionStore"' },
+      { line: 4, reason: 'calls legacy session store access "updateSessionStore"' },
     ]);
   });
 

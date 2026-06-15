@@ -84,6 +84,7 @@ import {
 } from "./no-visible-reply-diagnostic.js";
 import { runWithReconnect } from "./reconnect.js";
 import {
+  createMattermostReplyDeliveryBarrier,
   deliverMattermostReplyPayload,
   type MattermostReplyDeliveryOutcome,
 } from "./reply-delivery.js";
@@ -794,9 +795,15 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
               },
             },
           });
+        const deliveryBarrier = createMattermostReplyDeliveryBarrier({
+          isDirect: kind === "direct",
+          dmRetryOptions: account.config.dmChannelRetry,
+        });
         const { dispatcher, replyOptions, markDispatchIdle } =
           core.channel.reply.createReplyDispatcherWithTyping({
             ...replyPipeline,
+            resolveFollowupAdmissionBarrierTimeoutPolicy: deliveryBarrier.resolveTimeoutPolicy,
+            onDeliverySettled: deliveryBarrier.markDeliverySettled,
             humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId),
             deliver: async (payload: ReplyPayload) => {
               await deliverMattermostReplyPayload({
@@ -814,6 +821,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 textLimit,
                 tableMode,
                 sendMessage: sendMessageMattermost,
+                onDmChannelResolution: deliveryBarrier.trackDmChannelResolution,
               });
               runtime.log?.(`delivered button-click reply to ${to}`);
             },
@@ -991,9 +999,15 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           : undefined,
       });
     const capturedTexts: string[] = [];
+    const deliveryBarrier = createMattermostReplyDeliveryBarrier({
+      isDirect: params.kind === "direct",
+      dmRetryOptions: account.config.dmChannelRetry,
+    });
     const { dispatcher, replyOptions, markDispatchIdle } =
       core.channel.reply.createReplyDispatcherWithTyping({
         ...replyPipeline,
+        resolveFollowupAdmissionBarrierTimeoutPolicy: deliveryBarrier.resolveTimeoutPolicy,
+        onDeliverySettled: deliveryBarrier.markDeliverySettled,
         // Picker-triggered confirmations should stay immediate.
         deliver: async (payload: ReplyPayload) => {
           const trimmedPayload = {
@@ -1024,6 +1038,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             // The picker path already converts and trims text before capture/delivery.
             tableMode: "off",
             sendMessage: sendMessageMattermost,
+            onDmChannelResolution: deliveryBarrier.trackDmChannelResolution,
           });
         },
         onError: (err, info) => {
@@ -1753,9 +1768,15 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           draftStream.update(cleaned);
         };
 
+        const deliveryBarrier = createMattermostReplyDeliveryBarrier({
+          isDirect: kind === "direct",
+          dmRetryOptions: account.config.dmChannelRetry,
+        });
         const { dispatcher, replyOptions, markDispatchIdle, markRunComplete } =
           core.channel.reply.createReplyDispatcherWithTyping({
             ...replyPipeline,
+            resolveFollowupAdmissionBarrierTimeoutPolicy: deliveryBarrier.resolveTimeoutPolicy,
+            onDeliverySettled: deliveryBarrier.markDeliverySettled,
             humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId),
             typingCallbacks,
             deliver: async (payloadEntry: ReplyPayload, info) => {
@@ -1788,6 +1809,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                     textLimit,
                     tableMode,
                     sendMessage: sendMessageMattermost,
+                    onDmChannelResolution: deliveryBarrier.trackDmChannelResolution,
                   });
                   const deliveryLog = formatMattermostFinalDeliveryOutcomeLog({
                     outcome,

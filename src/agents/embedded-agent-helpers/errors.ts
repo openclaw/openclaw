@@ -960,7 +960,7 @@ function isBilling429MessageForProvider(raw: string, provider: string | undefine
 // stream ends with stopReason === "aborted" | "error" without specific info. Treat
 // it as a transient transport failure so the configured fallback chain rotates
 // instead of returning the bare string to the user (#71620).
-function isGenericUnknownStreamError(raw: string): boolean {
+export function isGenericUnknownStreamErrorMessage(raw: string): boolean {
   return /^\s*an unknown error occurred\.?\s*$/i.test(raw);
 }
 
@@ -1064,7 +1064,7 @@ function classifyFailoverClassificationFromMessage(
   if (isAuthErrorMessage(raw)) {
     return toReasonClassification("auth");
   }
-  if (isGenericUnknownStreamError(raw)) {
+  if (isGenericUnknownStreamErrorMessage(raw)) {
     return toReasonClassification("timeout");
   }
   if (isOpenRouterProviderReturnedError(raw, provider)) {
