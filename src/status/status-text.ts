@@ -373,11 +373,22 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     // labels differ; prefer the active auth label so status matches execution.
     selectedModelAuth = activeModelAuth;
   }
-  const usageAuthLabel = modelRefs.activeDiffers ? activeModelAuth : selectedModelAuth;
+  const hasSessionModelOverride = Boolean(
+    sessionEntry?.providerOverride?.trim() || sessionEntry?.modelOverride?.trim(),
+  );
+  const useSelectedModelUsage =
+    hasSessionModelOverride &&
+    (sessionEntry?.modelOverrideSource === "user" ||
+      (sessionEntry?.modelOverrideSource !== "auto" &&
+        !hasSessionAutoModelFallbackProvenance(sessionEntry)));
+  const usageStatusProvider = useSelectedModelUsage ? selectedStatusProvider : activeStatusProvider;
+  const usageProvider = useSelectedModelUsage ? provider : activeProvider;
+  const usageAuthLabel =
+    modelRefs.activeDiffers && !useSelectedModelUsage ? activeModelAuth : selectedModelAuth;
   const selectedUsageCredentialType = resolveUsageCredentialType(usageAuthLabel);
   const useCodexSyntheticUsage =
     shouldUseCodexSyntheticUsage({
-      provider: activeStatusProvider,
+      provider: usageStatusProvider,
       effectiveHarness,
     }) &&
     (selectedUsageCredentialType === "oauth" || selectedUsageCredentialType === "token");
@@ -390,8 +401,8 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     : undefined;
   const usageCredentialType = useCodexSyntheticUsage ? "token" : selectedUsageCredentialType;
   const currentUsageProvider =
-    resolveUsageProviderId(activeStatusProvider, { credentialType: usageCredentialType }) ??
-    resolveUsageProviderId(activeProvider, { credentialType: usageCredentialType });
+    resolveUsageProviderId(usageStatusProvider, { credentialType: usageCredentialType }) ??
+    resolveUsageProviderId(usageProvider, { credentialType: usageCredentialType });
   let usageLine: string | null = null;
   if (
     currentUsageProvider &&

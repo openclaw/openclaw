@@ -1192,6 +1192,81 @@ describe("buildStatusReply subagent summary", () => {
     expect(providerUsageCall[0]?.providers).toEqual(["deepseek"]);
   });
 
+  it("uses session-selected usage when a stale runtime snapshot differs", async () => {
+    registerStatusCodexHarness();
+    const usageResetBase = Math.floor(Date.now() / 1000);
+    providerUsageMock.loadProviderUsageSummary.mockImplementation(async (params) => ({
+      updatedAt: Date.now(),
+      providers: params.providers?.includes("deepseek")
+        ? [
+            {
+              provider: "deepseek",
+              displayName: "DeepSeek",
+              windows: [],
+              summary: "Balance ¥22.75",
+            },
+          ]
+        : [
+            {
+              provider: "openai",
+              displayName: "OpenAI",
+              windows: [
+                {
+                  label: "5h",
+                  usedPercent: 9,
+                  resetAt: (usageResetBase + 60 * 60) * 1000,
+                },
+              ],
+            },
+          ],
+    }));
+
+    const text = await buildStatusText({
+      cfg: {
+        ...baseCfg,
+        agents: {
+          defaults: {
+            agentRuntime: { id: "codex" },
+          },
+        },
+      },
+      sessionEntry: {
+        sessionId: "sess-status-selected-openai-stale-deepseek",
+        updatedAt: 0,
+        providerOverride: "openai",
+        modelOverride: "gpt-5.5",
+        modelOverrideSource: "user",
+        modelProvider: "deepseek",
+        model: "deepseek-v4-flash",
+      },
+      sessionKey: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      statusChannel: "mobilechat",
+      provider: "openai",
+      model: "gpt-5.5",
+      contextTokens: 1_000_000,
+      resolvedFastMode: false,
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+      modelAuthOverride: "oauth",
+      activeModelAuthOverride: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Model: openai/gpt-5.5");
+    expect(normalized).toContain("Usage: 5h 91% left");
+    expect(normalized).not.toContain("Balance ¥22.75");
+    const providerUsageCalls = providerUsageMock.loadProviderUsageSummary.mock.calls.map(
+      ([params]) => params?.providers,
+    );
+    expect(providerUsageCalls).toContainEqual(["openai"]);
+    expect(providerUsageCalls).not.toContainEqual(["deepseek"]);
+  });
+
   it("uses Codex OAuth auth labels for explicit OpenAI OpenClaw auth order", async () => {
     await withTempHome(
       async (dir) => {
