@@ -1637,25 +1637,24 @@ function hasRuntimeShellPayload(argv: readonly string[]): boolean {
 
 function resolvePlanPersistenceState(plan: ExecAuthorizationPlan | undefined): {
   reusablePatternsAllowed: boolean;
-  exactCommandAllowed: boolean;
   reasons: AllowAlwaysPersistenceReason[];
 } {
   if (!plan) {
-    return { reusablePatternsAllowed: true, exactCommandAllowed: false, reasons: [] };
+    return { reusablePatternsAllowed: true, reasons: [] };
   }
   if (!plan.ok) {
-    return { reusablePatternsAllowed: false, exactCommandAllowed: false, reasons: ["unplanned"] };
+    return { reusablePatternsAllowed: false, reasons: ["unplanned"] };
   }
   const reasons = new Set<AllowAlwaysPersistenceReason>();
   let reusablePatternsAllowed = true;
   const candidates = plan.groups.flatMap((group) => group.candidates);
-  const exactCommandAllowed =
-    candidates.length === 1 && candidates[0]?.trustMode === "exact-command";
   for (const candidate of candidates) {
     if (candidate.trustMode === "prompt-only") {
       reasons.add("prompt-only");
     }
     if (candidate.trustMode === "exact-command") {
+      // Durable `=command:` entries are command-text-only and cannot bind
+      // cwd, env, or PATH, so planner exact-command candidates stay one-shot.
       reasons.add("no-reusable-pattern");
     }
     if (candidate.trustMode === "executable" && !candidate.allowAlways) {
@@ -1674,7 +1673,6 @@ function resolvePlanPersistenceState(plan: ExecAuthorizationPlan | undefined): {
   }
   return {
     reusablePatternsAllowed,
-    exactCommandAllowed,
     reasons: [...reasons],
   };
 }
@@ -1726,11 +1724,7 @@ export function resolveAllowAlwaysPersistenceDecision(params: {
     }
   }
 
-  if (commandText && planPersistence.exactCommandAllowed) {
-    return { kind: "exact-command", commandText };
-  }
-
-  return { kind: "one-shot", reasons: [...reasons, "no-reusable-pattern"] };
+  return { kind: "one-shot", reasons: [...new Set([...reasons, "no-reusable-pattern"])] };
 }
 
 export function persistAllowAlwaysDecision(params: {

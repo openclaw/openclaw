@@ -37,7 +37,7 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
     });
   });
 
-  it("uses exact-command fallback for shell wrappers without reusable patterns", async () => {
+  it("keeps shell wrappers without reusable patterns one-shot", async () => {
     const cwd = makeTempDir();
     const command = "sh -c './scripts/run.sh'";
     const plan = await planShellAuthorization({ command, cwd });
@@ -51,17 +51,16 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
     });
 
     expect(decision).toEqual({
-      kind: "exact-command",
-      commandText: command,
+      kind: "one-shot",
+      reasons: expect.arrayContaining(["no-reusable-pattern"]),
     });
     expect(resolveExecApprovalAllowedDecisions({ allowAlwaysPersistence: decision })).toEqual([
       "allow-once",
-      "allow-always",
       "deny",
     ]);
   });
 
-  it("offers exact-command fallback without an approved cwd", async () => {
+  it("keeps shell wrappers without approved cwd one-shot", async () => {
     const command = "sh -c './scripts/run.sh'";
     const plan = await planShellAuthorization({ command });
 
@@ -73,12 +72,11 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
     });
 
     expect(decision).toEqual({
-      kind: "exact-command",
-      commandText: command,
+      kind: "one-shot",
+      reasons: expect.arrayContaining(["no-reusable-pattern"]),
     });
     expect(resolveExecApprovalAllowedDecisions({ allowAlwaysPersistence: decision })).toEqual([
       "allow-once",
-      "allow-always",
       "deny",
     ]);
   });

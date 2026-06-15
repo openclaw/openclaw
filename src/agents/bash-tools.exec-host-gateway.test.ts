@@ -751,7 +751,7 @@ describe("processGatewayAllowlist", () => {
     });
   });
 
-  it("offers exact-command allow-always when allowlist execution needs exact approval", async () => {
+  it("omits allow-always when allowlist execution cannot persist reusable patterns", async () => {
     const command = "ls *.ts";
     const authorizationPlan = await planShellAuthorization({
       command,
@@ -791,13 +791,13 @@ describe("processGatewayAllowlist", () => {
     expect(resolveExecApprovalAllowedDecisionsMock).toHaveBeenCalledWith({
       ask: "on-miss",
       allowAlwaysPersistence: {
-        kind: "exact-command",
-        commandText: command,
+        kind: "one-shot",
+        reasons: ["no-reusable-pattern"],
       },
     });
     expect(buildExecApprovalPendingToolResultMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        allowedDecisions: ["allow-once", "allow-always", "deny"],
+        allowedDecisions: ["allow-once", "deny"],
       }),
     );
   });

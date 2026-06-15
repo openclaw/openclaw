@@ -177,8 +177,9 @@ function resolveGatewayEffectiveAllowAlwaysPersistence(params: {
   if (params.allowAlwaysPersistence.kind !== "patterns") {
     return params.allowAlwaysPersistence;
   }
-  const commandText = params.command.trim();
-  return commandText ? { kind: "exact-command", commandText } : createOneShotAllowAlwaysDecision();
+  // If the gateway cannot rebuild an enforceable command, a reusable grant
+  // would only be keyed by command text and could run under a different cwd/env.
+  return createOneShotAllowAlwaysDecision();
 }
 
 function resolveGatewayEnforcedCommand(params: {
