@@ -24,6 +24,7 @@ import {
   consumeGatewayFastPathRootOptionToken,
   consumeGatewayRunOptionToken,
   resolveGatewayCatalogCommandPath,
+  resolveGatewayRunPreBootstrapOptions,
 } from "./gateway-run-argv.js";
 import { hasJsonOutputFlag, withConsoleLogsRoutedToStderrForJson } from "./json-output-mode.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
@@ -160,6 +161,14 @@ export function isGatewayRunFastPathArgv(argv: string[]): boolean {
   return sawGateway;
 }
 
+function isGatewayRunInvocationArgv(argv: string[]): boolean {
+  const commandPath = resolveGatewayCatalogCommandPath(argv);
+  return (
+    commandPath?.length === 1 ||
+    (commandPath?.length === 2 && commandPath[0] === "gateway" && commandPath[1] === "run")
+  );
+}
+
 async function tryRunGatewayRunFastPath(
   argv: string[],
   startupTrace: ReturnType<typeof createGatewayCliMainStartupTrace>,
@@ -176,7 +185,6 @@ async function tryRunGatewayRunFastPath(
     { enableConsoleCapture },
     { ensureCliExecutionBootstrap },
     { defaultRuntime },
-    { readConfigFileSnapshot },
   ] = await startupTrace.measure("gateway-run-imports", () =>
     Promise.all([
       import("commander"),
@@ -187,7 +195,6 @@ async function tryRunGatewayRunFastPath(
       loadLoggingModule(),
       import("./command-execution-startup.js"),
       import("../runtime.js"),
-      import("../config/config.js"),
     ]),
   );
   const commandPath = resolveGatewayCatalogCommandPath(argv) ?? ["gateway"];
@@ -208,23 +215,36 @@ async function tryRunGatewayRunFastPath(
     process.exitCode = typeof err.exitCode === "number" ? err.exitCode : 1;
     throw err;
   });
-  const beforeRun = async (opts: { reset?: boolean }) => {
-    // Dev reset deletes the state directory before recreating config. Migrating first would
-    // archive legacy state and then delete its imported SQLite rows.
-    if (opts.reset) {
+  const beforeRun = async (opts: { force?: boolean; reset?: boolean }) => {
+    let beforeStateMigrations: ((snapshot?: ConfigFileSnapshot) => Promise<boolean>) | undefined;
+    const shouldBootstrap = await startupTrace.measure("gateway-run-pre-bootstrap", async () => {
+      const { prepareGatewayRunBootstrap, recheckGatewayRunBootstrap } =
+        await import("./gateway-cli/pre-bootstrap.js");
+      const prepared = await prepareGatewayRunBootstrap({ opts, runtime: defaultRuntime });
+      if (prepared) {
+        beforeStateMigrations = (snapshot) =>
+          recheckGatewayRunBootstrap({
+            opts,
+            runtime: defaultRuntime,
+            ...(snapshot ? { snapshot } : {}),
+          });
+      }
+      return prepared;
+    });
+    if (!shouldBootstrap) {
       return;
     }
-    await startupTrace.measure("gateway-run-config-recovery", () =>
-      readConfigFileSnapshot({ recoverSuspicious: true }),
-    );
-    await startupTrace.measure("gateway-run-bootstrap", () =>
-      ensureCliExecutionBootstrap({
+    await startupTrace.measure("gateway-run-bootstrap", async () => {
+      await ensureCliExecutionBootstrap({
         runtime: defaultRuntime,
         commandPath,
         startupPolicy,
         loadPlugins: false,
-      }),
-    );
+        ...(beforeStateMigrations ? { beforeStateMigrations } : {}),
+      });
+      const { reloadTrustedGatewayRunEnvironment } = await import("./gateway-cli/pre-bootstrap.js");
+      await reloadTrustedGatewayRunEnvironment({ runtime: defaultRuntime });
+    });
   };
   const gateway = addGatewayRunCommand(
     program.command("gateway").description("Run, inspect, and query the WebSocket Gateway"),
@@ -530,17 +550,31 @@ export async function runCli(argv: string[] = process.argv) {
   const normalizedArgv = normalizeRootHelpTargetArgv(parsedProfile.argv);
   const normalizedInvocation = resolveCliArgvInvocation(normalizedArgv);
   const isHelpOrVersionInvocation = normalizedInvocation.hasHelpOrVersion;
+  const isGatewayRunInvocation = isGatewayRunInvocationArgv(normalizedArgv);
   startupTrace.mark("argv");
 
-  if (!isHelpOrVersionInvocation && shouldLoadCliDotEnv()) {
+  // Enforce the minimum supported runtime before gateway selection can read or recover config.
+  assertSupportedRuntime();
+
+  if (!isHelpOrVersionInvocation && (isGatewayRunInvocation || shouldLoadCliDotEnv())) {
     await startupTrace.measure("dotenv", async () => {
       if (isRemoteAgentDispatchInvocation(normalizedArgv, normalizedInvocation.primary)) {
         const { loadGatewayDispatchCliDotEnv } = await import("./gateway-dispatch-dotenv.js");
         await loadGatewayDispatchCliDotEnv({ quiet: true });
       } else {
         const { loadCliDotEnv } = await import("./dotenv.js");
-        loadCliDotEnv({ quiet: true });
+        loadCliDotEnv({ loadGlobalEnv: !isGatewayRunInvocation, quiet: true });
       }
+    });
+  }
+  if (!isHelpOrVersionInvocation && isGatewayRunInvocation) {
+    await startupTrace.measure("gateway-run-select-environment", async () => {
+      const [{ selectGatewayRunEnvironment }, { defaultRuntime }] = await Promise.all([
+        import("./gateway-cli/pre-bootstrap.js"),
+        import("../runtime.js"),
+      ]);
+      const opts = resolveGatewayRunPreBootstrapOptions(normalizedArgv) ?? {};
+      await selectGatewayRunEnvironment({ opts, runtime: defaultRuntime });
     });
   }
   normalizeEnv();
@@ -548,18 +582,21 @@ export async function runCli(argv: string[] = process.argv) {
     ensureOpenClawCliOnPath();
   }
 
-  // Enforce the minimum supported runtime before doing any work.
-  assertSupportedRuntime();
-
   // Activate operator-managed proxy routing for network-capable commands.
   // Local Gateway/control-plane commands keep direct loopback access while
   // runtime, provider, plugin, update, and manifest/metadata-owned plugin commands route egress.
   let proxyHandle: ProxyHandle | null = null;
+  let onSigterm: (() => void) | null = null;
+  let onSigint: (() => void) | null = null;
+  let onExit: (() => void) | null = null;
   let bestEffortConfigPromise: Promise<OpenClawConfig> | null = null;
+  const isolateProxyConfigEnv = isGatewayRunInvocation;
   const readBestEffortCliConfig = async (): Promise<OpenClawConfig> => {
     if (!bestEffortConfigPromise) {
       bestEffortConfigPromise = import("../config/io.js").then(({ readBestEffortConfig }) =>
-        readBestEffortConfig(),
+        readBestEffortConfig(
+          isolateProxyConfigEnv ? { isolateEnv: true, observe: false } : undefined,
+        ),
       );
     }
     return await bestEffortConfigPromise;
@@ -577,20 +614,10 @@ export async function runCli(argv: string[] = process.argv) {
     proxyHandle = null;
     handle?.kill("SIGTERM");
   };
-  if (!isHelpOrVersionInvocation && shouldStartProxyForCli(normalizedArgv)) {
-    const config = await readBestEffortCliConfig();
-    const unownedPrimary = await resolveUnownedCliPrimary({ argv: normalizedArgv, config });
-    if (unownedPrimary) {
-      throw new Error(await resolveUnownedCliPrimaryMessage({ primary: unownedPrimary, config }));
+  const installProxySignalHandlers = () => {
+    if (!proxyHandle || onSigterm || onSigint || onExit) {
+      return;
     }
-    const { startProxy } = await loadProxyLifecycleModule();
-    proxyHandle = await startProxy(config?.proxy ?? undefined);
-  }
-
-  let onSigterm: (() => void) | null = null;
-  let onSigint: (() => void) | null = null;
-  let onExit: (() => void) | null = null;
-  if (proxyHandle) {
     const shutdown = (exitCode: number) => {
       if (onSigterm) {
         process.off("SIGTERM", onSigterm);
@@ -608,6 +635,29 @@ export async function runCli(argv: string[] = process.argv) {
     process.once("SIGTERM", onSigterm);
     process.once("SIGINT", onSigint);
     process.once("exit", onExit);
+  };
+  const replaceStartedProxy = async (config: OpenClawConfig["proxy"]) => {
+    await stopStartedProxy();
+    const { startProxy } = await loadProxyLifecycleModule();
+    proxyHandle = await startProxy(config);
+    installProxySignalHandlers();
+  };
+  if (!isHelpOrVersionInvocation && shouldStartProxyForCli(normalizedArgv)) {
+    const config = await readBestEffortCliConfig();
+    const unownedPrimary = await resolveUnownedCliPrimary({ argv: normalizedArgv, config });
+    if (unownedPrimary) {
+      throw new Error(await resolveUnownedCliPrimaryMessage({ primary: unownedPrimary, config }));
+    }
+    await replaceStartedProxy(config?.proxy ?? undefined);
+  }
+
+  let uninstallGatewayRunRuntimeHooks: (() => void) | null = null;
+  if (!isHelpOrVersionInvocation && isGatewayRunInvocation) {
+    const { installGatewayRunRuntimeHooks } = await import("./gateway-cli/runtime-hooks.js");
+    uninstallGatewayRunRuntimeHooks = installGatewayRunRuntimeHooks({
+      releaseManagedProxy: stopStartedProxy,
+      refreshManagedProxy: replaceStartedProxy,
+    });
   }
 
   try {
@@ -937,6 +987,7 @@ export async function runCli(argv: string[] = process.argv) {
       stopStartupProgress();
     }
   } finally {
+    uninstallGatewayRunRuntimeHooks?.();
     if (onSigterm) {
       process.off("SIGTERM", onSigterm);
     }

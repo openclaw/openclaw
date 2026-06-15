@@ -5,6 +5,7 @@ import path from "node:path";
 import { withSuppressedNotes } from "../../../packages/terminal-core/src/note.js";
 import { readConfigFileSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { resolveLegacyStateDirs, resolveOAuthDir, resolveStateDir } from "../../config/paths.js";
+import type { ConfigFileSnapshot } from "../../config/types.js";
 import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { shouldMigrateStateFromPath } from "../argv.js";
@@ -179,6 +180,7 @@ export async function ensureConfigReady(params: {
   commandPath?: string[];
   suppressDoctorStdout?: boolean;
   allowInvalid?: boolean;
+  beforeStateMigrations?: (snapshot?: ConfigFileSnapshot) => Promise<boolean>;
 }): Promise<void> {
   const commandPath = params.commandPath ?? [];
   let preflightSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>> | null = null;
@@ -191,6 +193,9 @@ export async function ensureConfigReady(params: {
         migrateState: true,
         migrateLegacyConfig: false,
         invalidConfigNote: false,
+        ...(params.beforeStateMigrations
+          ? { beforeStateMigrations: params.beforeStateMigrations }
+          : {}),
       });
     return !params.suppressDoctorStdout
       ? (await runDoctorConfigPreflight()).snapshot

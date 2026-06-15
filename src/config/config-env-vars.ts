@@ -5,10 +5,21 @@ import {
   normalizeEnvVarKey,
 } from "../infra/host-env-security.js";
 import { containsEnvVarReference } from "./env-substitution.js";
+import { ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV } from "./future-version-guard.js";
 import type { OpenClawConfig } from "./types.js";
 
 function isBlockedConfigEnvVar(key: string): boolean {
-  return isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key);
+  return (
+    key.toUpperCase() === ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV ||
+    key.toUpperCase() === "OPENCLAW_INCLUDE_ROOTS" ||
+    isDangerousHostEnvVarName(key) ||
+    isDangerousHostEnvOverrideVarName(key)
+  );
+}
+
+/** Returns whether a config-controlled environment entry is safe to apply at runtime. */
+export function isConfigRuntimeEnvVarAllowed(key: string, value: string): boolean {
+  return Boolean(value.trim()) && !isBlockedConfigEnvVar(key) && !containsEnvVarReference(value);
 }
 
 function collectConfigEnvVarsByTarget(cfg?: OpenClawConfig): Record<string, string> {
@@ -28,10 +39,7 @@ function collectConfigEnvVarsByTarget(cfg?: OpenClawConfig): Record<string, stri
       if (!key) {
         continue;
       }
-      if (isBlockedConfigEnvVar(key)) {
-        continue;
-      }
-      if (containsEnvVarReference(value)) {
+      if (!isConfigRuntimeEnvVarAllowed(key, value)) {
         continue;
       }
       entries[key] = value;
@@ -49,10 +57,7 @@ function collectConfigEnvVarsByTarget(cfg?: OpenClawConfig): Record<string, stri
     if (!key) {
       continue;
     }
-    if (isBlockedConfigEnvVar(key)) {
-      continue;
-    }
-    if (containsEnvVarReference(value)) {
+    if (!isConfigRuntimeEnvVarAllowed(key, value)) {
       continue;
     }
     entries[key] = value;
@@ -86,10 +91,18 @@ export function createConfigRuntimeEnv(
 export function applyConfigEnvVars(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
+  options: { lowerPrecedenceEnv?: Readonly<Record<string, string>> } = {},
 ): void {
   const entries = collectConfigRuntimeEnvVars(cfg);
+  const lowerPrecedenceEnv = new Map(
+    Object.entries(options.lowerPrecedenceEnv ?? {}).map(([key, value]) => [
+      key.toUpperCase(),
+      value,
+    ]),
+  );
   for (const [key, value] of Object.entries(entries)) {
-    if (env[key]?.trim()) {
+    const currentValue = env[key];
+    if (currentValue?.trim() && lowerPrecedenceEnv.get(key.toUpperCase()) !== currentValue) {
       continue;
     }
     // Skip values containing unresolved ${VAR} references — applyConfigEnvVars runs

@@ -29,6 +29,21 @@ describe("config env vars", () => {
     });
   });
 
+  it("overrides only exact lower-precedence env values", () => {
+    const config = {
+      env: { vars: { OPENROUTER_API_KEY: "config-key" } },
+    } as OpenClawConfig;
+    const lowerPrecedenceEnv = { OPENROUTER_API_KEY: "shell-key" };
+    const shellEnv = { OPENROUTER_API_KEY: "shell-key" };
+    const changedEnv = { OPENROUTER_API_KEY: "changed-key" };
+
+    applyConfigEnvVars(config, shellEnv, { lowerPrecedenceEnv });
+    applyConfigEnvVars(config, changedEnv, { lowerPrecedenceEnv });
+
+    expect(shellEnv.OPENROUTER_API_KEY).toBe("config-key");
+    expect(changedEnv.OPENROUTER_API_KEY).toBe("changed-key");
+  });
+
   it("applies env vars from env.vars when missing", async () => {
     await withEnvOverride({ GROQ_API_KEY: undefined }, async () => {
       applyConfigEnvVars({ env: { vars: { GROQ_API_KEY: "gsk-config" } } } as OpenClawConfig);
@@ -72,6 +87,9 @@ describe("config env vars", () => {
         SHELL: undefined,
         HOME: undefined,
         ZDOTDIR: undefined,
+        OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS: undefined,
+        OPENCLAW_INCLUDE_ROOTS: undefined,
+        openclaw_allow_older_binary_destructive_actions: undefined,
         OPENROUTER_API_KEY: undefined,
       },
       async () => {
@@ -82,6 +100,9 @@ describe("config env vars", () => {
               SHELL: "/tmp/evil-shell",
               HOME: "/tmp/evil-home",
               ZDOTDIR: "/tmp/evil-zdotdir",
+              OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS: "1",
+              OPENCLAW_INCLUDE_ROOTS: "/tmp/evil-include-root",
+              openclaw_allow_older_binary_destructive_actions: "1",
               OPENROUTER_API_KEY: "config-key",
             },
           },
@@ -91,6 +112,9 @@ describe("config env vars", () => {
         expect(entries.SHELL).toBeUndefined();
         expect(entries.HOME).toBeUndefined();
         expect(entries.ZDOTDIR).toBeUndefined();
+        expect(entries.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS).toBeUndefined();
+        expect(entries.OPENCLAW_INCLUDE_ROOTS).toBeUndefined();
+        expect(entries.openclaw_allow_older_binary_destructive_actions).toBeUndefined();
         expect(entries.OPENROUTER_API_KEY).toBe("config-key");
 
         applyConfigEnvVars(config as OpenClawConfig);
@@ -98,6 +122,9 @@ describe("config env vars", () => {
         expect(process.env.SHELL).toBeUndefined();
         expect(process.env.HOME).toBeUndefined();
         expect(process.env.ZDOTDIR).toBeUndefined();
+        expect(process.env.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS).toBeUndefined();
+        expect(process.env.OPENCLAW_INCLUDE_ROOTS).toBeUndefined();
+        expect(process.env.openclaw_allow_older_binary_destructive_actions).toBeUndefined();
         expect(process.env.OPENROUTER_API_KEY).toBe("config-key");
       },
     );
@@ -217,11 +244,13 @@ describe("config env vars", () => {
 
   it("drops dangerous and empty values from the state-dir .env file", async () => {
     await withTempHome(async (_home) => {
-      await writeStateDirDotEnv("NODE_OPTIONS=--require /tmp/evil.js\nEMPTY=\nVALID=ok\n", {
-        env: process.env,
-      });
+      await writeStateDirDotEnv(
+        "NODE_OPTIONS=--require /tmp/evil.js\nOPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1\nEMPTY=\nVALID=ok\n",
+        { env: process.env },
+      );
       const vars = readStateDirDotEnvVars(process.env);
       expect(vars.NODE_OPTIONS).toBeUndefined();
+      expect(vars.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS).toBeUndefined();
       expect(vars.EMPTY).toBeUndefined();
       expect(vars.VALID).toBe("ok");
     });
