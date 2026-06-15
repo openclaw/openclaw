@@ -193,6 +193,7 @@ async function deliverTextReply(params: {
           tableMode: params.tableMode,
           silent: params.silent,
           replyMarkup,
+          replyToMode: params.replyToMode,
         },
       );
       if (firstDeliveredMessageId == null) {
@@ -235,6 +236,7 @@ async function sendPendingFollowUpText(params: {
         tableMode: params.tableMode,
         silent: params.silent,
         replyMarkup,
+        replyToMode: params.replyToMode,
       });
     },
   });
