@@ -661,6 +661,7 @@ export class EmbeddedAttemptSessionTakeoverError extends Error {
 
 export type EmbeddedAttemptSessionLockController = {
   canAdvanceSessionEntryCache(snapshot: OwnedSessionTranscriptCacheSnapshot): boolean;
+  publishValidatedSessionFileSnapshot(snapshot: OwnedSessionTranscriptCacheSnapshot): boolean;
   readTrustedCurrentSessionFileSnapshot(): Promise<TrustedSessionFileSnapshot | undefined>;
   releaseForPrompt(): Promise<void>;
   releaseHeldLockForAbort(): Promise<void>;
@@ -1053,6 +1054,22 @@ export async function createEmbeddedAttemptSessionLockController(params: {
         (fenceActive && sameSessionFileFingerprint(fenceFingerprint, fingerprint)) ||
         isTrustedSessionFileState(sessionFileFenceKey, fingerprint)
       );
+    },
+    publishValidatedSessionFileSnapshot(snapshot: OwnedSessionTranscriptCacheSnapshot): boolean {
+      if (takeoverDetected || !heldLock || heldLockDraining) {
+        return false;
+      }
+      const fingerprint: SessionFileFingerprint = { exists: true, ...snapshot };
+      const current = readSessionFileFingerprintSync(params.lockOptions.sessionFile);
+      if (!sameSessionFileFingerprint(fingerprint, current)) {
+        return false;
+      }
+      fenceGeneration = recordTrustedSessionFileState(sessionFileFenceKey, current);
+      if (fenceActive) {
+        fenceFingerprint = current;
+        fenceSnapshot = { fingerprint: current };
+      }
+      return true;
     },
     async readTrustedCurrentSessionFileSnapshot(): Promise<TrustedSessionFileSnapshot | undefined> {
       const fingerprint = await readSessionFileFingerprint(params.lockOptions.sessionFile);

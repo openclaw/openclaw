@@ -186,7 +186,10 @@ import {
 import type { AgentMessage } from "../../runtime/index.js";
 import { resolveSandboxContext } from "../../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
-import { repairSessionFileIfNeeded } from "../../session-file-repair.js";
+import {
+  invalidateSessionFileRepairCache,
+  repairSessionFileIfNeeded,
+} from "../../session-file-repair.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import { sanitizeToolUseResultPairing } from "../../session-transcript-repair.js";
 import { acquireSessionWriteLock } from "../../session-write-lock.js";
@@ -2081,12 +2084,18 @@ export async function runEmbeddedAttempt(
     try {
       const trustedSessionFileSnapshot =
         await sessionLockController.readTrustedCurrentSessionFileSnapshot();
-      await repairSessionFileIfNeeded({
+      const repairReport = await repairSessionFileIfNeeded({
         sessionFile: params.sessionFile,
         trustedSnapshot: trustedSessionFileSnapshot,
         debug: (message) => log.debug(message),
         warn: (message) => log.warn(message),
       });
+      if (
+        repairReport.validatedSnapshot &&
+        !sessionLockController.publishValidatedSessionFileSnapshot(repairReport.validatedSnapshot)
+      ) {
+        invalidateSessionFileRepairCache(params.sessionFile);
+      }
       const hadSessionFile = await fs
         .stat(params.sessionFile)
         .then(() => true)

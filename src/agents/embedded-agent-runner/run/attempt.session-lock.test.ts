@@ -1133,6 +1133,30 @@ describe("embedded attempt session lock lifecycle", () => {
     expect(controller.canAdvanceSessionEntryCache(snapshot)).toBe(false);
   });
 
+  it("publishes only an unchanged repair-validated snapshot while retaining the lock", async () => {
+    const sessionFile = await createTempSessionFile();
+    const acquireSessionWriteLockLocal = vi.fn(async () => ({
+      release: vi.fn(async () => {}),
+    }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockLocal,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+    const stat = await fs.stat(sessionFile, { bigint: true });
+    const snapshot = {
+      dev: stat.dev,
+      ino: stat.ino,
+      size: stat.size,
+      mtimeNs: stat.mtimeNs,
+      ctimeNs: stat.ctimeNs,
+    };
+
+    expect(controller.publishValidatedSessionFileSnapshot(snapshot)).toBe(true);
+    await fs.appendFile(sessionFile, '{"type":"message","id":"external"}\n', "utf8");
+    expect(controller.publishValidatedSessionFileSnapshot(snapshot)).toBe(false);
+    await controller.dispose();
+  });
+
   it("refreshes the prompt fence after an owned session manager append", async () => {
     const sessionFile = await createTempSessionFile();
     const release = vi.fn(async () => {});

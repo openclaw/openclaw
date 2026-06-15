@@ -24,6 +24,7 @@ export const CORRUPTED_IMAGE_FALLBACK_TEXT = "[image omitted: corrupted base64 p
 type RepairReport = {
   repaired: boolean;
   droppedLines: number;
+  validatedSnapshot?: SessionRepairFileSnapshot;
   rewrittenAssistantMessages?: number;
   droppedBlankUserMessages?: number;
   rewrittenUserMessages?: number;
@@ -597,7 +598,11 @@ async function tryIncrementalSessionRepair(params: {
   trustedSnapshot: TrustedSessionRepairSnapshot | undefined;
 }): Promise<RepairReport | undefined> {
   if (isSameSessionRepairSnapshot(params.cached.snapshot, params.currentSnapshot)) {
-    return { repaired: false, droppedLines: 0 };
+    return {
+      repaired: false,
+      droppedLines: 0,
+      validatedSnapshot: params.currentSnapshot,
+    };
   }
   if (
     !params.trustedSnapshot ||
@@ -642,7 +647,11 @@ async function tryIncrementalSessionRepair(params: {
     toolResultIds: repairedToolResults.resultIds,
     endsWithNewline: true,
   });
-  return { repaired: false, droppedLines: 0 };
+  return {
+    repaired: false,
+    droppedLines: 0,
+    validatedSnapshot: afterReadSnapshot,
+  };
 }
 
 /** Repair a persisted session JSONL file in place when replay-breaking corruption is found. */
@@ -715,18 +724,26 @@ export async function repairSessionFileIfNeeded(params: {
   const insertedToolResults = repairedToolResults.insertedToolResults;
   if (!hasEntryRepairs(repairedEntries) && insertedToolResults === 0) {
     const afterReadSnapshot = await readSessionRepairSnapshot(sessionFile);
-    if (
+    const validatedSnapshot =
       beforeReadSnapshot &&
       afterReadSnapshot &&
       isSameSessionRepairSnapshot(beforeReadSnapshot, afterReadSnapshot)
-    ) {
+        ? afterReadSnapshot
+        : undefined;
+    if (validatedSnapshot) {
       rememberSessionRepair(sessionFile, {
-        snapshot: afterReadSnapshot,
+        snapshot: validatedSnapshot,
         toolResultIds: repairedToolResults.resultIds,
         endsWithNewline: content.endsWith("\n"),
       });
+    } else {
+      sessionRepairCache.delete(sessionFile);
     }
-    return { repaired: false, droppedLines: 0 };
+    return {
+      repaired: false,
+      droppedLines: 0,
+      ...(validatedSnapshot ? { validatedSnapshot } : {}),
+    };
   }
   if (insertedToolResults > 0) {
     entries.splice(0, entries.length, ...repairedToolResults.entries);
@@ -768,13 +785,30 @@ export async function repairSessionFileIfNeeded(params: {
     };
   }
 
-  const repairedSnapshot = await readSessionRepairSnapshot(sessionFile);
+  let repairedSnapshot: SessionRepairFileSnapshot | undefined;
+  try {
+    const beforeVerifySnapshot = await readSessionRepairSnapshot(sessionFile);
+    const persistedContent = await fs.readFile(sessionFile, "utf8");
+    const afterVerifySnapshot = await readSessionRepairSnapshot(sessionFile);
+    if (
+      beforeVerifySnapshot &&
+      afterVerifySnapshot &&
+      persistedContent === cleaned &&
+      isSameSessionRepairSnapshot(beforeVerifySnapshot, afterVerifySnapshot)
+    ) {
+      repairedSnapshot = afterVerifySnapshot;
+    }
+  } catch {
+    repairedSnapshot = undefined;
+  }
   if (repairedSnapshot) {
     rememberSessionRepair(sessionFile, {
       snapshot: repairedSnapshot,
       toolResultIds: repairedToolResults.resultIds,
       endsWithNewline: true,
     });
+  } else {
+    sessionRepairCache.delete(sessionFile);
   }
   params.debug?.(
     `session file repaired: ${buildRepairSummaryParts({
@@ -789,6 +823,7 @@ export async function repairSessionFileIfNeeded(params: {
   return {
     repaired: true,
     droppedLines,
+    ...(repairedSnapshot ? { validatedSnapshot: repairedSnapshot } : {}),
     rewrittenAssistantMessages,
     droppedBlankUserMessages,
     rewrittenUserMessages,

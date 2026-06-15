@@ -87,6 +87,7 @@ describe("repairSessionFileIfNeeded", () => {
     const result = await repairSessionFileIfNeeded({ sessionFile: file });
     expect(result.repaired).toBe(true);
     expect(result.droppedLines).toBe(1);
+    expect(result.validatedSnapshot).toEqual(await readTrustedSnapshot(file));
 
     const repaired = await fs.readFile(file, "utf-8");
     const repairedLines = repaired
@@ -159,8 +160,9 @@ describe("repairSessionFileIfNeeded", () => {
       return originalParse.apply(originalParse, args);
     } as typeof JSON.parse;
     try {
-      await repairSessionFileIfNeeded({ sessionFile: file });
+      const initial = await repairSessionFileIfNeeded({ sessionFile: file });
       expect(parseCount).toBe(2);
+      expect(initial.validatedSnapshot).toEqual(await readTrustedSnapshot(file));
 
       parseCount = 0;
       await fs.appendFile(
@@ -181,6 +183,7 @@ describe("repairSessionFileIfNeeded", () => {
       });
 
       expect(result).toMatchObject({ repaired: false, droppedLines: 0 });
+      expect(result.validatedSnapshot).toEqual(trustedSnapshot);
       expect(parseCount).toBe(1);
     } finally {
       JSON.parse = originalParse;
