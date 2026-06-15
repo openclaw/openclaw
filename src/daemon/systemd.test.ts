@@ -293,37 +293,55 @@ describe("systemd availability", () => {
 
   it("does not fall back to direct --user when machine scope fails under sudo", async () => {
     mockEffectiveUid(0);
-    execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
-      assertMachineUserSystemctlArgs(args, "ai", "status");
-      cb(
-        createExecFileError("Failed to connect to bus: No such file or directory", {
-          stderr: "Failed to connect to bus: No such file or directory",
-          code: 1,
-        }),
-        "",
-        "",
-      );
+    const accessSpy = vi.spyOn(fs, "access").mockImplementation(async (pathname) => {
+      const p = typeof pathname === "string" ? pathname : pathname.toString();
+      if (p.includes("/home/ai/.config/systemd/user/")) return;
+      throw new Error("ENOENT");
     });
+    try {
+      execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertMachineUserSystemctlArgs(args, "ai", "status");
+        cb(
+          createExecFileError("Failed to connect to bus: No such file or directory", {
+            stderr: "Failed to connect to bus: No such file or directory",
+            code: 1,
+          }),
+          "",
+          "",
+        );
+      });
 
-    await expect(isSystemdUserServiceAvailable({ SUDO_USER: "ai" })).resolves.toBe(false);
-    expect(execFileMock).toHaveBeenCalledTimes(1);
+      await expect(isSystemdUserServiceAvailable({ SUDO_USER: "ai" })).resolves.toBe(false);
+      expect(execFileMock).toHaveBeenCalledTimes(1);
+    } finally {
+      accessSpy.mockRestore();
+    }
   });
 
   it("does not let preserved USER suppress sudo-to-root machine scope", async () => {
     mockEffectiveUid(0);
-    execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
-      assertMachineUserSystemctlArgs(args, "debian", "status");
-      cb(null, "", "");
+    const accessSpy = vi.spyOn(fs, "access").mockImplementation(async (pathname) => {
+      const p = typeof pathname === "string" ? pathname : pathname.toString();
+      if (p.includes("/home/debian/.config/systemd/user/")) return;
+      throw new Error("ENOENT");
     });
+    try {
+      execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertMachineUserSystemctlArgs(args, "debian", "status");
+        cb(null, "", "");
+      });
 
-    await expect(
-      isSystemdUserServiceAvailable({
-        SUDO_USER: "debian",
-        USER: "root-env-stale",
-        LOGNAME: "root-env-stale",
-      }),
-    ).resolves.toBe(true);
-    expect(execFileMock).toHaveBeenCalledTimes(1);
+      await expect(
+        isSystemdUserServiceAvailable({
+          SUDO_USER: "debian",
+          USER: "root-env-stale",
+          LOGNAME: "root-env-stale",
+        }),
+      ).resolves.toBe(true);
+      expect(execFileMock).toHaveBeenCalledTimes(1);
+    } finally {
+      accessSpy.mockRestore();
+    }
   });
 
   it("does not let stale SUDO_USER override a sudo-u target user scope", async () => {
@@ -2037,29 +2055,76 @@ describe("systemd service control", () => {
 
   it("targets the sudo caller's user scope when SUDO_USER is set", async () => {
     mockEffectiveUid(0);
-    execFileMock
-      .mockImplementationOnce((_cmd, args, _opts, cb) => {
-        assertMachineUserSystemctlArgs(args, "debian", "status");
-        cb(null, "", "");
-      })
-      .mockImplementationOnce((_cmd, args, _opts, cb) => {
-        assertMachineRestartArgs(args);
-        cb(null, "", "");
-      });
-    await assertRestartSuccess({ SUDO_USER: "debian" });
+    // SUDO_USER "debian" has a unit file — real sudo-to-root scenario.
+    // Use selective mock: only user-scope paths succeed; system paths fail
+    // so findInstalledSystemdGatewayScope returns user scope, not system.
+    const accessSpy = vi.spyOn(fs, "access").mockImplementation(async (pathname) => {
+      const p = typeof pathname === "string" ? pathname : pathname.toString();
+      if (p.includes("/.config/systemd/user/")) return;
+      throw new Error("ENOENT");
+    });
+    try {
+      execFileMock
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertMachineUserSystemctlArgs(args, "debian", "status");
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertMachineRestartArgs(args);
+          cb(null, "", "");
+        });
+      await assertRestartSuccess({ SUDO_USER: "debian" });
+    } finally {
+      accessSpy.mockRestore();
+    }
   });
 
   it("keeps direct --user scope when SUDO_USER is root", async () => {
-    execFileMock
-      .mockImplementationOnce((_cmd, args, _opts, cb) => {
-        assertUserSystemctlArgs(args, "status");
-        cb(null, "", "");
-      })
-      .mockImplementationOnce((_cmd, args, _opts, cb) => {
-        assertUserSystemctlArgs(args, "restart", GATEWAY_SERVICE);
-        cb(null, "", "");
-      });
-    await assertRestartSuccess({ SUDO_USER: "root", USER: "root" });
+    // SUDO_USER "root" is not a non-root user, so isSudoToRoot is false
+    // and the fs.access unit-file check is skipped entirely.
+    // Mock fs.access to reject system paths so findInstalledSystemdGatewayScope
+    // returns null (no installed unit), matching the pre-change behavior.
+    const accessSpy = vi.spyOn(fs, "access").mockRejectedValue(new Error("ENOENT"));
+    try {
+      execFileMock
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "status");
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "restart", GATEWAY_SERVICE);
+          cb(null, "", "");
+        });
+      await assertRestartSuccess({ SUDO_USER: "root", USER: "root" });
+    } finally {
+      accessSpy.mockRestore();
+    }
+  });
+
+  it("falls back to direct --user scope when stale SUDO_USER has no unit file (fixes #81410)", async () => {
+    mockEffectiveUid(0);
+    // SUDO_USER "alice" has no unit file — stale env var from prior sudo.
+    // Root's own unit file exists so findInstalledSystemdGatewayScope works.
+    const accessSpy = vi.spyOn(fs, "access").mockImplementation(async (pathname) => {
+      const p = typeof pathname === "string" ? pathname : pathname.toString();
+      if (p.includes("/home/alice/")) {
+        throw new Error("ENOENT");
+      }
+    });
+    try {
+      execFileMock
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "status");
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "restart", GATEWAY_SERVICE);
+          cb(null, "", "");
+        });
+      await assertRestartSuccess({ SUDO_USER: "alice", USER: "root", HOME: "/root" });
+    } finally {
+      accessSpy.mockRestore();
+    }
   });
 
   it("falls back to machine user scope for restart when user bus env is missing", async () => {

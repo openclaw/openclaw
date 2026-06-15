@@ -677,16 +677,34 @@ function isNonRootUser(user: string | null): user is string {
   return Boolean(user && user !== "root");
 }
 
-function resolveSystemctlUserScope(env: GatewayServiceEnv): {
+async function resolveSystemctlUserScope(env: GatewayServiceEnv): Promise<{
   machineUser: string | null;
   preferMachineScope: boolean;
-} {
+}> {
   const sudoUser = env.SUDO_USER?.trim() || null;
   const envUser = readSystemctlEnvUser(env);
   const effectiveUid = readSystemctlEffectiveUid();
   const effectiveUser = readSystemctlEffectiveUser();
   const isEffectiveRoot = effectiveUid === null ? effectiveUser === "root" : effectiveUid === 0;
-  const isSudoToRoot = isEffectiveRoot && isNonRootUser(sudoUser);
+  let isSudoToRoot = isEffectiveRoot && isNonRootUser(sudoUser);
+
+  // When running as root with a non-root SUDO_USER, verify the SUDO_USER's
+  // service unit file actually exists.  A stale SUDO_USER from a previous
+  // sudo invocation can linger in a root shell; blindly targeting that user's
+  // systemd scope causes stop/start/status to hit the wrong manager.
+  // See: https://github.com/openclaw/openclaw/issues/81410
+  if (isSudoToRoot && sudoUser) {
+    try {
+      const sudoHome = sudoUser === "root" ? "/root" : `/home/${sudoUser}`;
+      const serviceName = resolveSystemdServiceName(env);
+      const sudoUnitPath = path.posix.join(sudoHome, ".config", "systemd", "user", `${serviceName}.service`);
+      await fs.access(sudoUnitPath);
+    } catch {
+      // SUDO_USER's unit file does not exist — treat SUDO_USER as stale.
+      isSudoToRoot = false;
+    }
+  }
+
   const machineUser = isSudoToRoot
     ? sudoUser
     : isNonRootUser(envUser)
@@ -722,7 +740,7 @@ async function execSystemctlUser(
   env: GatewayServiceEnv,
   args: string[],
 ): Promise<{ stdout: string; stderr: string; code: number }> {
-  const { machineUser, preferMachineScope } = resolveSystemctlUserScope(env);
+  const { machineUser, preferMachineScope } = await resolveSystemctlUserScope(env);
 
   // Under sudo-to-root, prefer the invoking non-root user's scope directly via machine scope.
   if (preferMachineScope && machineUser) {
