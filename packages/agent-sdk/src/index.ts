@@ -187,13 +187,6 @@ export const DEFAULT_DENY_PRIVATE_RANGES = [
   "::1/128",
 ] as const;
 
-// ── TODO: Implement ─────────────────────────────────────────────────
-// PR 1: pack CLI, validate CLI, schema, integrity hash generation.
-// PR 2: Secret resolution, DNS rebinding check.
-// PR 3: Config compiler dry-run.
-// PR 4: enable / disable.
-// PR 5: Test harness (src/test.ts).
-// PR 6: Mutation detection + quarantine.
-// PR 7: Config compiler live integration.
-// PR 8: Declarative upgrade.
-// PR 9: Documentation + examples.
+// ── Hash utilities ──────────────────────────────────────────────────
+
+export { hashFile, hashString } from "./hash.js";

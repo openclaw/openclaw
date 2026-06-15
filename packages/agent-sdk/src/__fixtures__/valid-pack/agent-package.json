@@ -1,0 +1,49 @@
+{
+  "name": "test-agent",
+  "version": "1.0.0",
+  "description": "A test agent package for unit tests.",
+  "files": {
+    "copy": [
+      { "src": "files/AGENTS.md", "dest": "AGENTS.md" },
+      { "src": "files/SOUL.md", "dest": "SOUL.md" },
+      { "src": "files/USER.md", "dest": "USER.md" },
+      { "src": "files/HEARTBEAT.md", "dest": "HEARTBEAT.md" }
+    ],
+    "mutable": [
+      { "dest": "memory/", "description": "Agent working memory." }
+    ]
+  },
+  "skills": [
+    { "path": "skills/my-skill", "required": true }
+  ],
+  "secrets": {
+    "consumer": [
+      { "name": "API_KEY", "required": true, "description": "Test API key." }
+    ],
+    "mapping": {
+      "API_KEY": { "source": "env", "key": "TEST_API_KEY" }
+    },
+    "audit": {
+      "logAccess": true,
+      "redactInTranscripts": true
+    }
+  },
+  "tools": {
+    "allow": ["exec", "read", "write"],
+    "deny": ["browser"],
+    "sandbox": {
+      "mode": "inherit",
+      "network": {
+        "egress": "restricted",
+        "allowedDomains": ["api.example.com"],
+        "dnsRebindingCheck": true,
+        "denyPrivateRanges": true
+      }
+    }
+  },
+  "policy": {
+    "denyMutableInstructionFiles": true,
+    "allowMutableUserInstructionFiles": false,
+    "onUpgrade": "preserve-custom"
+  }
+}
