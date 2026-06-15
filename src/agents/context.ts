@@ -25,25 +25,9 @@ import {
   beginContextWindowCacheRefresh,
   CONTEXT_WINDOW_RUNTIME_STATE,
 } from "./context-runtime-state.js";
+import { loadBundledProviderStaticCatalogContextModels } from "./embedded-agent-runner/model.static-catalog.js";
+import { loadModelCatalog } from "./model-catalog.runtime.js";
 import { normalizeProviderId } from "./model-selection.js";
-
-// Lazy loaders for catalog modules — preserved as dynamic imports to respect
-// the lazy loading boundary. Errors are caught to prevent process crashes.
-function lazyLoadModelCatalog(): Promise<typeof import("./model-catalog.runtime.js")> {
-  return import("./model-catalog.runtime.js").catch(() => {
-    return { loadModelCatalog: async () => [] } as typeof import("./model-catalog.runtime.js");
-  });
-}
-
-function lazyLoadStaticCatalog(): Promise<
-  typeof import("./embedded-agent-runner/model.static-catalog.js")
-> {
-  return import("./embedded-agent-runner/model.static-catalog.js").catch(() => {
-    return {
-      loadBundledProviderStaticCatalogContextModels: async () => [],
-    } as typeof import("./embedded-agent-runner/model.static-catalog.js");
-  });
-}
 
 export {
   ANTHROPIC_CONTEXT_1M_TOKENS,
@@ -227,10 +211,8 @@ export function ensureContextWindowCacheLoaded(cfgOverride?: OpenClawConfig): Pr
     try {
       // Lazy-load catalog modules at runtime to preserve lazy import boundaries.
       const [modelsResult, providerStaticModelsResult] = await Promise.allSettled([
-        lazyLoadModelCatalog().then((m) => m.loadModelCatalog({ config: cfg, readOnly: true })),
-        lazyLoadStaticCatalog().then((m) =>
-          m.loadBundledProviderStaticCatalogContextModels({ cfg }),
-        ),
+        loadModelCatalog({ config: cfg, readOnly: true }),
+        loadBundledProviderStaticCatalogContextModels({ cfg }),
       ]);
       if (CONTEXT_WINDOW_RUNTIME_STATE.generation !== generation) {
         return;

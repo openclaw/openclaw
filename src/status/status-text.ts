@@ -99,10 +99,16 @@ function loadStatusQueueRuntime(): Promise<typeof import("./status-queue.runtime
   return runtimePromise;
 }
 
-// Context lookup stays synchronous for status rendering — the cache is read
-// directly, not awaited. Async cache warming fires in the background if the
-// discovery cache has not been loaded yet, so catalog IO does not block the
-// command response.
+function loadStatusPluginHealthRuntime(): Promise<
+  typeof import("./status-plugin-health.runtime.js")
+> {
+  const runtimePromise = (statusPluginHealthRuntimePromise ??=
+    import("./status-plugin-health.runtime.js"));
+  return runtimePromise;
+}
+
+// Context lookup stays synchronous/non-refreshing so status output does not
+// trigger provider/catalog IO while rendering a command response.
 function resolveStatusRuntimeContextTokens(params: {
   cfg: OpenClawConfig;
   provider: string;
@@ -112,6 +118,7 @@ function resolveStatusRuntimeContextTokens(params: {
     cfg: params.cfg,
     provider: params.provider,
     model: params.model,
+    allowAsyncLoad: false,
   });
 }
 
