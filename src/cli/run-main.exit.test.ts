@@ -1113,6 +1113,43 @@ describe("runCli exit behavior", () => {
     });
   });
 
+  it("rejects noninteractive local bare root invocations before probing agent readiness", async () => {
+    const previousExitCode = process.exitCode;
+    const stdinDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+    const stdoutDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    process.exitCode = undefined;
+    Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: false });
+    Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: false });
+
+    try {
+      await runCli(["node", "openclaw"]);
+
+      expect(process.exitCode).toBe(1);
+      expect(errorSpy).toHaveBeenCalledWith(
+        "OpenClaw chat needs an interactive TTY. Use `openclaw agent --local --message <text>` for one command.",
+      );
+      expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(1);
+      expect(hasRunnableLocalAgentMock).not.toHaveBeenCalled();
+      expect(setupWizardCommandMock).not.toHaveBeenCalled();
+      expect(runCrestodianMock).not.toHaveBeenCalled();
+      expect(launchTuiCliMock).not.toHaveBeenCalled();
+    } finally {
+      errorSpy.mockRestore();
+      process.exitCode = previousExitCode;
+      if (stdinDescriptor) {
+        Object.defineProperty(process.stdin, "isTTY", stdinDescriptor);
+      } else {
+        Reflect.deleteProperty(process.stdin, "isTTY");
+      }
+      if (stdoutDescriptor) {
+        Object.defineProperty(process.stdout, "isTTY", stdoutDescriptor);
+      } else {
+        Reflect.deleteProperty(process.stdout, "isTTY");
+      }
+    }
+  });
+
   it("checks the cwd-selected agent before opening the bare local TUI", async () => {
     readConfigFileSnapshotMock.mockResolvedValueOnce({
       exists: true,

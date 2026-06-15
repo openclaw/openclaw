@@ -269,7 +269,10 @@ type BareRootDestination =
   | { kind: "crestodian" }
   | { kind: "onboard"; agentId?: string };
 
-async function resolveBareRootDestination(argv: string[]): Promise<BareRootDestination | null> {
+async function resolveBareRootDestination(
+  argv: string[],
+  options: { probeLocalAgent?: boolean } = {},
+): Promise<BareRootDestination | null> {
   if (!shouldHandleBareRoot(argv)) {
     return null;
   }
@@ -291,6 +294,9 @@ async function resolveBareRootDestination(argv: string[]): Promise<BareRootDesti
     // Remote profiles use the configured Gateway and do not require local model
     // readiness before opening the normal TUI connection path.
     return { kind: "remote-agent" };
+  }
+  if (options.probeLocalAgent === false) {
+    return { kind: "local-agent" };
   }
   try {
     const { resolveAgentIdFromSessionOrWorkspace, resolveDefaultAgentId } =
@@ -736,9 +742,12 @@ export async function runCli(argv: string[] = process.argv) {
     }
 
     if (shouldRunBareRoot) {
-      const destination = await resolveBareRootDestination(normalizedArgv);
+      const hasInteractiveTty = process.stdin.isTTY && process.stdout.isTTY;
+      const destination = await resolveBareRootDestination(normalizedArgv, {
+        probeLocalAgent: hasInteractiveTty,
+      });
       if (destination?.kind === "onboard") {
-        if (!process.stdin.isTTY || !process.stdout.isTTY) {
+        if (!hasInteractiveTty) {
           console.error(
             "Onboarding needs an interactive TTY. Use `openclaw onboard --non-interactive --accept-risk ...` for automation.",
           );
@@ -750,7 +759,7 @@ export async function runCli(argv: string[] = process.argv) {
         return;
       }
       if (destination?.kind === "crestodian") {
-        if (!process.stdin.isTTY || !process.stdout.isTTY) {
+        if (!hasInteractiveTty) {
           console.error(
             'Crestodian needs an interactive TTY. Use `openclaw crestodian --message "status"` for one command.',
           );
@@ -760,7 +769,7 @@ export async function runCli(argv: string[] = process.argv) {
         await runBareRootCrestodian();
         return;
       }
-      if (!process.stdin.isTTY || !process.stdout.isTTY) {
+      if (!hasInteractiveTty) {
         const agentCommand =
           destination?.kind === "remote-agent"
             ? "openclaw agent --message <text>"
