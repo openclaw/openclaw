@@ -99,6 +99,7 @@ import {
   resolveAuthProfileOrder,
   shouldPreferExplicitConfigApiKeyAuth,
 } from "../model-auth.js";
+import { resolveDefaultModelForAgent } from "../model-selection.js";
 import { resolveThinkingDefault } from "../model-thinking-default.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import {
@@ -749,8 +750,17 @@ async function runEmbeddedAgentInternal(
       startupStages.mark("runtime-plugins");
       notifyExecutionPhase("runtime_plugins");
 
-      let provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
-      let modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
+      const configuredDefault =
+        !params.provider && !params.model
+          ? resolveDefaultModelForAgent({
+              cfg: params.config ?? {},
+              agentId: workspaceResolution.agentId,
+            })
+          : undefined;
+      let provider = (params.provider ?? configuredDefault?.provider ?? DEFAULT_PROVIDER).trim();
+      let modelId = (params.model ?? configuredDefault?.model ?? DEFAULT_MODEL).trim();
+      provider ||= DEFAULT_PROVIDER;
+      modelId ||= DEFAULT_MODEL;
       const agentDir =
         params.agentDir ?? resolveAgentDir(params.config ?? {}, workspaceResolution.agentId);
       const normalizedSessionKey = params.sessionKey?.trim();
