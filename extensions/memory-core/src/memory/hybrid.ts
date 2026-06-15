@@ -86,6 +86,7 @@ export async function mergeHybridResults(params: {
       vectorScore: number;
       textScore: number;
       hasVector: boolean;
+      hasKeyword: boolean;
     }
   >();
 
@@ -100,6 +101,7 @@ export async function mergeHybridResults(params: {
       vectorScore: r.vectorScore,
       textScore: 0,
       hasVector: true,
+      hasKeyword: false,
     });
   }
 
@@ -107,6 +109,7 @@ export async function mergeHybridResults(params: {
     const existing = byId.get(r.id);
     if (existing) {
       existing.textScore = r.textScore;
+      existing.hasKeyword = true;
       if (r.snippet && r.snippet.length > 0) {
         existing.snippet = r.snippet;
       }
@@ -121,6 +124,7 @@ export async function mergeHybridResults(params: {
         vectorScore: 0,
         textScore: r.textScore,
         hasVector: false,
+        hasKeyword: true,
       });
     }
   }
@@ -128,6 +132,7 @@ export async function mergeHybridResults(params: {
   const merged = Array.from(byId.values()).map((entry) => {
     const dropMediaTextSignal =
       entry.hasVector &&
+      !entry.hasKeyword &&
       params.vectorWeight > 0 &&
       params.isNonTextMediaPath?.(entry.path) === true;
     const effectiveTextWeight = dropMediaTextSignal ? 0 : params.textWeight;

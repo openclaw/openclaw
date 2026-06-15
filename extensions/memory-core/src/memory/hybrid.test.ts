@@ -243,4 +243,40 @@ describe("memory hybrid helpers", () => {
     expect(image?.score).toBeCloseTo(0.8);
     expect(image?.score ?? 0).toBeGreaterThan(0);
   });
+
+  it("preserves keyword scoring for classified media with both vector and keyword results under positive vector weight", async () => {
+    const imagePath = "memory/generated/images/photo.png";
+    const merged = await mergeHybridResults({
+      vectorWeight: 0.7,
+      textWeight: 0.3,
+      isNonTextMediaPath: (path) => path === imagePath,
+      vector: [
+        {
+          id: "image",
+          path: imagePath,
+          startLine: 1,
+          endLine: 1,
+          source: "memory",
+          snippet: "Image file: generated/images/photo.png",
+          vectorScore: 0.95,
+        },
+      ],
+      keyword: [
+        {
+          id: "image",
+          path: imagePath,
+          startLine: 1,
+          endLine: 1,
+          source: "memory",
+          snippet: "Image file: generated/images/photo.png",
+          textScore: 0.8,
+        },
+      ],
+    });
+
+    const image = merged.find((r) => r.path === imagePath);
+    expect(image?.score).toBeCloseTo(0.7 * 0.95 + 0.3 * 0.8);
+    expect(image?.textScore).toBeCloseTo(0.8);
+    expect(image?.score ?? 0).toBeGreaterThan(0.7 * 0.95);
+  });
 });
