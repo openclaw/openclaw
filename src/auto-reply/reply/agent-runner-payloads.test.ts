@@ -107,6 +107,16 @@ describe("buildReplyPayloads media filter integration", () => {
           },
           source: "test",
         },
+        {
+          pluginId: "telegram",
+          plugin: createChannelTestPluginBase({ id: "telegram" }),
+          source: "test",
+        },
+        {
+          pluginId: "discord",
+          plugin: createChannelTestPluginBase({ id: "discord" }),
+          source: "test",
+        },
       ]),
     );
   });
