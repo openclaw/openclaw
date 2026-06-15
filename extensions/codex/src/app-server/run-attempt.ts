@@ -854,6 +854,9 @@ export async function runCodexAppServerAttempt(
       sessionKey: contextSessionKey,
       sessionFile: activeSessionFile,
       runtimeContext: buildActiveContextEngineRuntimeContext(),
+      contextEngineHostSupport: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
+      providerId: params.provider,
+      modelId: params.modelId,
       runMaintenance: runHarnessContextEngineMaintenance,
       config: params.config,
       warn: (message) => embeddedAgentLog.warn(message),
@@ -918,6 +921,8 @@ export async function runCodexAppServerAttempt(
       ),
       citationsMode: params.config?.memory?.citations,
       modelId: params.modelId,
+      contextEngineHostSupport: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
+      providerId: params.provider,
       prompt: params.prompt,
     });
     if (!assembled) {
@@ -2793,6 +2798,9 @@ export async function runCodexAppServerAttempt(
           lastCallUsage: result.attemptUsage,
           promptCache: result.promptCache,
         }),
+        contextEngineHostSupport: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
+        providerId: params.provider,
+        modelId: params.modelId,
         runMaintenance: runHarnessContextEngineMaintenance,
         config: params.config,
         warn: (message) => embeddedAgentLog.warn(message),
