@@ -249,6 +249,10 @@ function unwrapTimeInvocation(argv: string[]): string[] | null {
   });
 }
 
+function isFlockShortFlagCluster(token: string): boolean {
+  return /^-[eFnsxo]+$/.test(token);
+}
+
 function unwrapFlockInvocation(argv: string[]): string[] | null {
   return scanWrapperInvocation(argv, {
     separators: new Set(["--"]),
@@ -263,6 +267,9 @@ function unwrapFlockInvocation(argv: string[]): string[] | null {
       }
       if (FLOCK_LONG_OPTIONS_WITH_VALUE.has(lowerFlag)) {
         return parsedToken.hasInlineValue ? "continue" : "consume-next";
+      }
+      if (isFlockShortFlagCluster(token)) {
+        return "continue";
       }
       if (FLOCK_SHORT_FLAG_OPTIONS.has(parsedToken.name)) {
         return "continue";

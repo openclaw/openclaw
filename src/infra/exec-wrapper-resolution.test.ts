@@ -192,6 +192,10 @@ describe("unwrapKnownDispatchWrapperInvocation", () => {
       expected: { kind: "unwrapped", wrapper: "flock", argv: ["bash", "-lc", "echo hi"] },
     },
     {
+      argv: ["flock", "-en", "/tmp/openclaw.lock", "bash", "-lc", "echo hi"],
+      expected: { kind: "unwrapped", wrapper: "flock", argv: ["bash", "-lc", "echo hi"] },
+    },
+    {
       argv: ["flock", "-E", "1", "/tmp/openclaw.lock", "bash", "-lc", "echo hi"],
       expected: { kind: "unwrapped", wrapper: "flock", argv: ["bash", "-lc", "echo hi"] },
     },
@@ -252,6 +256,10 @@ describe("unwrapKnownDispatchWrapperInvocation", () => {
     },
     {
       argv: ["flock", "/tmp/openclaw.lock", "-c", "echo hi"],
+      expected: { kind: "blocked", wrapper: "flock" },
+    },
+    {
+      argv: ["flock", "-un", "/tmp/openclaw.lock", "bash", "-lc", "echo hi"],
       expected: { kind: "blocked", wrapper: "flock" },
     },
     {
