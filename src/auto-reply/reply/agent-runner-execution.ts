@@ -2750,10 +2750,7 @@ export async function runAgentTurnWithFallback(params: {
                           if (completed) {
                             attemptCompactionCount += 1;
                             if (backend === CODEX_APP_SERVER_COMPACTION_BACKEND) {
-                              const modelRef = formatCompactionModelRef(
-                                effectiveRun.provider,
-                                effectiveRun.model,
-                              );
+                              const modelRef = formatCompactionModelRef(provider, model);
                               const consoleMessage =
                                 `codex app-server auto-compaction succeeded for ${modelRef}; ` +
                                 "refreshed session context";
@@ -2762,8 +2759,8 @@ export async function runAgentTurnWithFallback(params: {
                                 {
                                   event: "codex_app_server_compaction_succeeded",
                                   backend,
-                                  provider: effectiveRun.provider,
-                                  model: effectiveRun.model,
+                                  provider,
+                                  model,
                                   sessionKey: params.sessionKey,
                                   sessionId: effectiveRun.sessionId,
                                   threadId: readStringValue(evt.data.threadId),

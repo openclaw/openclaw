@@ -5155,6 +5155,14 @@ describe("runAgentTurnWithFallback", () => {
       error: vi.fn(),
     };
     try {
+      state.runWithModelFallbackMock.mockImplementationOnce(
+        async (params: FallbackRunnerParams) => ({
+          result: await params.run("openai", "gpt-5.5"),
+          provider: "openai",
+          model: "gpt-5.5",
+          attempts: [{ provider: "anthropic", model: "claude", error: "rate limit" }],
+        }),
+      );
       state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
         await params.onAgentEvent?.({
           stream: "compaction",
@@ -5190,7 +5198,7 @@ describe("runAgentTurnWithFallback", () => {
       expect(result.kind).toBe("success");
       expect(onBlockReply).not.toHaveBeenCalled();
       expect(consoleLog.mock.calls.map(([line]) => String(line)).join("\n")).toContain(
-        "codex app-server auto-compaction succeeded for anthropic/claude; refreshed session context",
+        "codex app-server auto-compaction succeeded for openai/gpt-5.5; refreshed session context",
       );
     } finally {
       loggingState.rawConsole = null;
