@@ -37,6 +37,7 @@ Docs: https://docs.openclaw.ai
 - Release and test reliability: extend slow Gateway/full-suite watchdogs, split local full-suite shards when throttled, stabilize plugin auth marker fixtures, avoid brittle provider-ref error text, and keep QA Lab bootstrap selection assertions aligned with flow-only scenarios. (#92652)
 - macOS Peekaboo bridge: update the embedded Peekaboo package to 3.5.2 and route bundled-skill CLI commands through the OpenClaw app bridge so they inherit its Screen Recording and Accessibility grants.
 - Agent routing: route subagent RPC callbacks addressed to an agent-shaped `--to` target to the correct session key instead of falling back to the main session, so WeChat (and other channel) session-key callbacks reach the intended subagent session. (#90231) Thanks @zhangguiping-xydt.
+- Cron: preserve model, fallback, thinking, timeout, light-context, unsafe-content, and tool allow-list overrides on implicit text payloads by promoting them to agent turns, while explicit system events still prune those fields. Fixes #28905; carries forward #64060 and #73946. Thanks @liaoandi.
 - QQBot delivery: keep markdown table chunks self-contained across message boundaries by preserving table state across block deliveries, flushing unfinished table-row fragments as plain text, and detecting short pipe-terminated rows by column count so split rows are not sent as malformed markdown. (#92428) Thanks @sliverp.
 
 ## 2026.6.6
