@@ -31,30 +31,34 @@ vi.mock("./client.js", () => ({
   createFeishuClient: createFeishuClientMock,
 }));
 
-vi.mock("./channel.runtime.js", () => ({
-  feishuChannelRuntime: {
-    addReactionFeishu: addReactionFeishuMock,
-    createPinFeishu: createPinFeishuMock,
-    editMessageFeishu: editMessageFeishuMock,
-    getChatInfo: getChatInfoMock,
-    getChatMembers: getChatMembersMock,
-    getFeishuMemberInfo: getFeishuMemberInfoMock,
-    getMessageFeishu: getMessageFeishuMock,
-    listFeishuDirectoryGroupsLive: listFeishuDirectoryGroupsLiveMock,
-    listFeishuDirectoryPeersLive: listFeishuDirectoryPeersLiveMock,
-    listPinsFeishu: listPinsFeishuMock,
-    listReactionsFeishu: listReactionsFeishuMock,
-    probeFeishu: probeFeishuMock,
-    removePinFeishu: removePinFeishuMock,
-    removeReactionFeishu: removeReactionFeishuMock,
-    sendCardFeishu: sendCardFeishuMock,
-    sendMessageFeishu: sendMessageFeishuMock,
-    feishuOutbound: {
-      sendText: vi.fn(),
-      sendMedia: feishuOutboundSendMediaMock,
+vi.mock("./channel.runtime.js", async () => {
+  const outbound = await vi.importActual<typeof import("./outbound.js")>("./outbound.js");
+  return {
+    feishuChannelRuntime: {
+      addReactionFeishu: addReactionFeishuMock,
+      createPinFeishu: createPinFeishuMock,
+      editMessageFeishu: editMessageFeishuMock,
+      getChatInfo: getChatInfoMock,
+      getChatMembers: getChatMembersMock,
+      getFeishuMemberInfo: getFeishuMemberInfoMock,
+      getMessageFeishu: getMessageFeishuMock,
+      listFeishuDirectoryGroupsLive: listFeishuDirectoryGroupsLiveMock,
+      listFeishuDirectoryPeersLive: listFeishuDirectoryPeersLiveMock,
+      listPinsFeishu: listPinsFeishuMock,
+      listReactionsFeishu: listReactionsFeishuMock,
+      probeFeishu: probeFeishuMock,
+      removePinFeishu: removePinFeishuMock,
+      removeReactionFeishu: removeReactionFeishuMock,
+      sendCardFeishu: sendCardFeishuMock,
+      sendMessageFeishu: sendMessageFeishuMock,
+      tryParseFeishuCardFromText: outbound.tryParseFeishuCardFromText,
+      feishuOutbound: {
+        sendText: vi.fn(),
+        sendMedia: feishuOutboundSendMediaMock,
+      },
     },
-  },
-}));
+  };
+});
 
 function getDescribedActions(cfg: OpenClawConfig, accountId?: string): string[] {
   return [...(feishuPlugin.actions?.describeMessageTool?.({ cfg, accountId })?.actions ?? [])];
