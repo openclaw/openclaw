@@ -5,6 +5,7 @@ import path from "node:path";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "../../prompt-overlay.js";
+import { fingerprintCodexAppServerNetworkProxyConfigPatch } from "./config.js";
 import { createCodexTestModel } from "./test-support.js";
 import {
   buildDeveloperInstructions,
@@ -83,36 +84,38 @@ function createAppServerOptions() {
     approvalPolicy: "on-request",
     approvalsReviewer: "user",
     sandbox: "workspace-write",
-  } as const;
+  };
 }
 
 function createNetworkProxyAppServerOptions() {
+  const configPatch = {
+    "features.network_proxy.enabled": true,
+    default_permissions: "mock-proxy",
+    permissions: {
+      "mock-proxy": {
+        filesystem: {
+          ":minimal": "read",
+          ":workspace_roots": {
+            ".": "write",
+          },
+        },
+        network: {
+          enabled: true,
+          domains: {
+            "api.openai.com": "allow",
+          },
+          allow_upstream_proxy: true,
+          proxy_url: "http://127.0.0.1:3128",
+        },
+      },
+    },
+  } as const;
   return {
     ...createAppServerOptions(),
     networkProxy: {
       profileName: "mock-proxy",
-      configPatch: {
-        "features.network_proxy.enabled": true,
-        default_permissions: "mock-proxy",
-        permissions: {
-          "mock-proxy": {
-            filesystem: {
-              ":minimal": "read",
-              ":workspace_roots": {
-                ".": "write",
-              },
-            },
-            network: {
-              enabled: true,
-              domains: {
-                "api.openai.com": "allow",
-              },
-              allow_upstream_proxy: true,
-              proxy_url: "http://127.0.0.1:3128",
-            },
-          },
-        },
-      },
+      configFingerprint: fingerprintCodexAppServerNetworkProxyConfigPatch(configPatch),
+      configPatch,
     },
   } as const;
 }

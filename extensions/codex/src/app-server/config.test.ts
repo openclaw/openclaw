@@ -10,6 +10,7 @@ import {
   CODEX_PLUGINS_CONFIG_KEYS,
   canUseCodexModelBackedApprovalsReviewerForModel,
   codexAppServerStartOptionsKey,
+  fingerprintCodexAppServerNetworkProxyConfigPatch,
   readCodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
   resolveCodexComputerUseConfig,
@@ -83,6 +84,21 @@ describe("Codex app-server config", () => {
         sandbox: "danger-full-access",
       }),
     ).toBe(false);
+    expect(
+      shouldAutoApproveCodexAppServerApprovals({
+        approvalPolicy: "never",
+        sandbox: "danger-full-access",
+        networkProxy: {
+          profileName: "openclaw-network",
+          configFingerprint: "network-proxy-v1",
+          configPatch: {
+            "features.network_proxy.enabled": true,
+            default_permissions: "openclaw-network",
+            permissions: {},
+          },
+        },
+      }),
+    ).toBe(false);
   });
 
   it("parses typed plugin config before falling back to environment knobs", () => {
@@ -140,6 +156,7 @@ describe("Codex app-server config", () => {
             },
             unixSockets: {
               " /tmp/mock-proxy.sock ": "allow",
+              "/tmp/blocked.sock": "none",
             },
             proxyUrl: "http://127.0.0.1:3128",
             socksUrl: "socks5h://127.0.0.1:8081",
@@ -152,8 +169,13 @@ describe("Codex app-server config", () => {
       },
     });
 
-    expect(runtime.networkProxy).toEqual({
+    const networkProxy = runtime.networkProxy;
+    if (!networkProxy) {
+      throw new Error("Expected network proxy runtime config");
+    }
+    expect(networkProxy).toEqual({
       profileName: "mock-proxy",
+      configFingerprint: expect.any(String),
       configPatch: {
         "features.network_proxy.enabled": true,
         default_permissions: "mock-proxy",
@@ -161,7 +183,7 @@ describe("Codex app-server config", () => {
           "mock-proxy": {
             filesystem: {
               ":minimal": "read",
-              ":workspace_roots": {
+              ":project_roots": {
                 ".": "write",
               },
             },
@@ -174,6 +196,7 @@ describe("Codex app-server config", () => {
               },
               unix_sockets: {
                 "/tmp/mock-proxy.sock": "allow",
+                "/tmp/blocked.sock": "none",
               },
               proxy_url: "http://127.0.0.1:3128",
               socks_url: "socks5h://127.0.0.1:8081",
@@ -186,6 +209,9 @@ describe("Codex app-server config", () => {
         },
       },
     });
+    expect(networkProxy.configFingerprint).toBe(
+      fingerprintCodexAppServerNetworkProxyConfigPatch(networkProxy.configPatch),
+    );
   });
 
   it("uses read-only filesystem rules for read-only network proxy profiles", () => {
@@ -202,11 +228,11 @@ describe("Codex app-server config", () => {
     });
     const permissions = runtime.networkProxy?.configPatch.permissions as Record<
       string,
-      { filesystem: { ":workspace_roots": { ".": string } } }
+      { filesystem: { ":project_roots": { ".": string } } }
     >;
 
     expect(runtime.networkProxy?.profileName).toBe("openclaw-network");
-    expect(permissions["openclaw-network"]?.filesystem[":workspace_roots"]["."]).toBe("read");
+    expect(permissions["openclaw-network"]?.filesystem[":project_roots"]["."]).toBe("read");
   });
 
   it("clamps oversized app-server timer config", () => {

@@ -74,8 +74,66 @@ import {
   handleCodexConversationInboundClaim,
   startCodexConversationThread,
 } from "./conversation-binding.js";
+import { fingerprintCodexAppServerNetworkProxyConfigPatch } from "./app-server/config.js";
 
 let tempDir: string;
+
+const NETWORK_PROXY_CONFIG_PATCH = {
+  "features.network_proxy.enabled": true,
+  default_permissions: "openclaw-network",
+  permissions: {
+    "openclaw-network": {
+      filesystem: {
+        ":minimal": "read",
+        ":project_roots": {
+          ".": "write",
+        },
+      },
+      network: {
+        enabled: true,
+        domains: { "api.openai.com": "allow" },
+        allow_upstream_proxy: true,
+        proxy_url: "http://127.0.0.1:3128",
+      },
+    },
+  },
+};
+
+const NETWORK_PROXY_CONFIG_FINGERPRINT = fingerprintCodexAppServerNetworkProxyConfigPatch(
+  NETWORK_PROXY_CONFIG_PATCH,
+);
+
+function conversationThreadStartResult(threadId: string) {
+  return {
+    approvalPolicy: "never",
+    approvalsReviewer: "user",
+    cwd: tempDir,
+    model: "gpt-5.4-mini",
+    modelProvider: "openai",
+    sandbox: { type: "workspaceWrite", networkAccess: false },
+    serviceTier: null,
+    activePermissionProfile: null,
+    thread: {
+      id: threadId,
+      sessionId: "session-1",
+      preview: "",
+      ephemeral: false,
+      modelProvider: "openai",
+      createdAt: 1,
+      updatedAt: 1,
+      status: { type: "idle" },
+      path: null,
+      cwd: tempDir,
+      cliVersion: "0.125.0",
+      source: "unknown",
+      agentNickname: null,
+      agentRole: null,
+      gitInfo: null,
+      name: null,
+      turns: [],
+    },
+  };
+}
 
 function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0): unknown {
   const call = mock.mock.calls[callIndex];
@@ -1175,7 +1233,6 @@ describe("codex conversation binding", () => {
         schemaVersion: 1,
         threadId: "thread-1",
         cwd: tempDir,
-        networkProxyProfileName: "openclaw-network",
       }),
     );
     let notificationHandler: ((notification: unknown) => void) | undefined;
@@ -1262,6 +1319,7 @@ describe("codex conversation binding", () => {
         threadId: "thread-1",
         cwd: tempDir,
         networkProxyProfileName: "openclaw-network",
+        networkProxyConfigFingerprint: NETWORK_PROXY_CONFIG_FINGERPRINT,
       }),
     );
     let notificationHandler: ((notification: unknown) => void) | undefined;
@@ -1337,6 +1395,108 @@ describe("codex conversation binding", () => {
     expect(result).toEqual({ handled: true, reply: { text: "done" } });
     expect(turnStartParams[0]).not.toHaveProperty("permissions");
     expect(turnStartParams[0]).not.toHaveProperty("sandboxPolicy");
+  });
+
+  it("refreshes stale network-proxy bound app-server threads before the turn", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({
+        schemaVersion: 2,
+        threadId: "thread-old",
+        cwd: tempDir,
+        networkProxyProfileName: "openclaw-network",
+        networkProxyConfigFingerprint: "stale-proxy-config",
+      }),
+    );
+    let notificationHandler: ((notification: unknown) => void) | undefined;
+    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
+      request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
+        requests.push({ method, params: requestParams });
+        if (method === "thread/start") {
+          return conversationThreadStartResult("thread-new");
+        }
+        if (method === "turn/start") {
+          setImmediate(() =>
+            notificationHandler?.({
+              method: "turn/completed",
+              params: {
+                threadId: "thread-new",
+                turn: {
+                  id: "turn-1",
+                  status: "completed",
+                  items: [{ type: "agentMessage", id: "item-1", text: "done" }],
+                },
+              },
+            }),
+          );
+          return { turn: { id: "turn-1" } };
+        }
+        throw new Error(`unexpected method: ${method}`);
+      }),
+      addNotificationHandler: vi.fn((handler: (notification: unknown) => void) => {
+        notificationHandler = handler;
+        return () => undefined;
+      }),
+      addRequestHandler: vi.fn(() => () => undefined),
+    });
+
+    const result = await handleCodexConversationInboundClaim(
+      {
+        content: "hello",
+        channel: "telegram",
+        isGroup: false,
+        commandAuthorized: true,
+      },
+      {
+        channelId: "telegram",
+        pluginBinding: {
+          bindingId: "binding-1",
+          pluginId: "codex",
+          pluginRoot: tempDir,
+          channel: "telegram",
+          accountId: "default",
+          conversationId: "5185575566",
+          boundAt: Date.now(),
+          data: {
+            kind: "codex-app-server-session",
+            version: 1,
+            sessionFile,
+            workspaceDir: tempDir,
+          },
+        },
+      },
+      {
+        pluginConfig: {
+          appServer: {
+            serviceTier: "priority",
+            networkProxy: {
+              enabled: true,
+              domains: { "api.openai.com": "allow" },
+              allowUpstreamProxy: true,
+              proxyUrl: "http://127.0.0.1:3128",
+            },
+          },
+        },
+        timeoutMs: 50,
+      },
+    );
+
+    expect(result).toEqual({ handled: true, reply: { text: "done" } });
+    expect(requests.map((request) => request.method)).toEqual(["thread/start", "turn/start"]);
+    expect(requests[0]?.params.config).toMatchObject(NETWORK_PROXY_CONFIG_PATCH);
+    expect(requests[0]?.params).not.toHaveProperty("sandbox");
+    expect(requests[0]?.params.serviceTier).toBe("priority");
+    expect(requests[1]?.params.threadId).toBe("thread-new");
+    expect(requests[1]?.params).not.toHaveProperty("sandboxPolicy");
+    const bindingAfterRefresh = JSON.parse(
+      await fs.readFile(`${sessionFile}.codex-app-server.json`, "utf8"),
+    ) as Record<string, unknown>;
+    expect(bindingAfterRefresh.threadId).toBe("thread-new");
+    expect(bindingAfterRefresh.networkProxyConfigFingerprint).toBe(
+      NETWORK_PROXY_CONFIG_FINGERPRINT,
+    );
   });
 
   it("blocks Guardian-mode bound turns with stale no-approval policy on custom model providers", async () => {

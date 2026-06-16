@@ -52,6 +52,7 @@ import {
   getLeasedSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
 } from "./app-server/shared-client.js";
+import { assertCodexThreadStartResponse } from "./app-server/protocol-validators.js";
 import {
   CODEX_NATIVE_PERSONALITY_NONE,
   resolveCodexAppServerRequestModelSelection,
@@ -479,6 +480,7 @@ async function writeThreadBindingFromResponse(
         : (params.sandbox ?? resolved.runtime.sandbox),
       serviceTier: params.serviceTier ?? resolved.runtime.serviceTier,
       networkProxyProfileName: resolved.runtime.networkProxy?.profileName,
+      networkProxyConfigFingerprint: resolved.runtime.networkProxy?.configFingerprint,
     },
     {
       ...resolved.agentLookup,
@@ -546,10 +548,10 @@ async function runBoundTurn(params: {
 }): Promise<BoundTurnResult> {
   const agentLookup = buildAgentLookup({ agentDir: params.data.agentDir, config: params.config });
   const binding = await readCodexAppServerBinding(params.data.sessionFile, agentLookup);
-  const threadId = binding?.threadId;
-  if (!threadId) {
+  if (!binding?.threadId) {
     throw new Error("bound Codex conversation has no thread binding");
   }
+  let threadId = binding.threadId;
   const workspaceDir = binding.cwd || params.data.workspaceDir;
   const reviewerModelProvider = resolveModelBackedReviewerPolicyProvider({
     authProfileId: binding.authProfileId,
@@ -589,8 +591,15 @@ async function runBoundTurn(params: {
     ? modelScopedRuntime.sandbox
     : (binding.sandbox ?? modelScopedRuntime.sandbox);
   const permissionProfile = modelScopedRuntime.networkProxy?.profileName;
-  const useStickyNetworkProfile =
-    permissionProfile !== undefined && binding.networkProxyProfileName === permissionProfile;
+  const networkProxyConfigFingerprint = modelScopedRuntime.networkProxy?.configFingerprint;
+  const networkProxyBindingChanged =
+    binding.networkProxyProfileName !== permissionProfile ||
+    binding.networkProxyConfigFingerprint !== networkProxyConfigFingerprint;
+  const serviceTier = binding.serviceTier ?? runtime.serviceTier;
+  let useStickyNetworkProfile =
+    permissionProfile !== undefined &&
+    binding.networkProxyProfileName === permissionProfile &&
+    binding.networkProxyConfigFingerprint === networkProxyConfigFingerprint;
   assertNativeConversationApprovalPolicySupported({
     execPolicy,
     approvalPolicy,
@@ -612,12 +621,60 @@ async function runBoundTurn(params: {
     authProfileId: binding.authProfileId,
     ...agentLookup,
   });
-  const collector = createCodexConversationTurnCollector(threadId);
-  const notificationCleanup = client.addNotificationHandler((notification) =>
-    collector.handleNotification(notification),
-  );
-  const requestCleanup = client.addRequestHandler(
-    async (request): Promise<JsonValue | undefined> => {
+  let notificationCleanup: () => void = () => undefined;
+  let requestCleanup: () => void = () => undefined;
+  try {
+    if (networkProxyBindingChanged) {
+      const response = assertCodexThreadStartResponse(
+        await client.request(
+          "thread/start",
+          {
+            cwd: workspaceDir,
+            ...(modelSelection?.model ? { model: modelSelection.model } : {}),
+            ...(modelSelection?.modelProvider ? { modelProvider: modelSelection.modelProvider } : {}),
+            personality: CODEX_NATIVE_PERSONALITY_NONE,
+            approvalPolicy,
+            approvalsReviewer: modelScopedRuntime.approvalsReviewer,
+            ...(modelScopedRuntime.networkProxy
+              ? { config: modelScopedRuntime.networkProxy.configPatch }
+              : { sandbox }),
+            ...(serviceTier ? { serviceTier } : {}),
+            developerInstructions:
+              "This Codex thread is bound to an OpenClaw conversation. Answer normally; OpenClaw will deliver your final response back to the conversation.",
+            experimentalRawEvents: true,
+            persistExtendedHistory: true,
+          },
+          { timeoutMs: runtime.requestTimeoutMs },
+        ),
+      );
+      threadId = response.thread.id;
+      await writeCodexAppServerBinding(
+        params.data.sessionFile,
+        {
+          threadId,
+          cwd: response.thread.cwd ?? workspaceDir,
+          authProfileId: binding.authProfileId,
+          model: response.model ?? modelSelection?.model ?? binding.model,
+          modelProvider: normalizeCodexAppServerBindingModelProvider({
+            authProfileId: binding.authProfileId,
+            modelProvider: response.modelProvider ?? modelSelection?.modelProvider ?? binding.modelProvider,
+            ...agentLookup,
+          }),
+          approvalPolicy: typeof approvalPolicy === "string" ? approvalPolicy : undefined,
+          sandbox,
+          serviceTier,
+          networkProxyProfileName: modelScopedRuntime.networkProxy?.profileName,
+          networkProxyConfigFingerprint: modelScopedRuntime.networkProxy?.configFingerprint,
+        },
+        agentLookup,
+      );
+      useStickyNetworkProfile = modelScopedRuntime.networkProxy !== undefined;
+    }
+    const collector = createCodexConversationTurnCollector(threadId);
+    notificationCleanup = client.addNotificationHandler((notification) =>
+      collector.handleNotification(notification),
+    );
+    requestCleanup = client.addRequestHandler(async (request): Promise<JsonValue | undefined> => {
       if (request.method === "item/tool/call") {
         return {
           contentItems: [
@@ -650,9 +707,7 @@ async function runBoundTurn(params: {
         };
       }
       return undefined;
-    },
-  );
-  try {
+    });
     const response: CodexTurnStartResponse = await client.request(
       "turn/start",
       {
@@ -669,9 +724,7 @@ async function runBoundTurn(params: {
           : { sandboxPolicy: codexSandboxPolicyForTurn(sandbox, workspaceDir) }),
         ...(modelSelection?.model ? { model: modelSelection.model } : {}),
         personality: CODEX_NATIVE_PERSONALITY_NONE,
-        ...((binding.serviceTier ?? runtime.serviceTier)
-          ? { serviceTier: binding.serviceTier ?? runtime.serviceTier }
-          : {}),
+        ...(serviceTier ? { serviceTier } : {}),
       },
       { timeoutMs: runtime.requestTimeoutMs },
     );

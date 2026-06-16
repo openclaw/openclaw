@@ -12,6 +12,7 @@ import {
   readCodexAppServerBinding,
   writeCodexAppServerBinding as writeRawCodexAppServerBinding,
 } from "./session-binding.js";
+import { fingerprintCodexAppServerNetworkProxyConfigPatch } from "./config.js";
 import { startOrResumeThread } from "./thread-lifecycle.js";
 
 function createThreadLifecycleAppServerOptions(): Parameters<
@@ -30,6 +31,38 @@ function createThreadLifecycleAppServerOptions(): Parameters<
     approvalsReviewer: "user",
     sandbox: "workspace-write",
     codeModeOnly: false,
+  };
+}
+
+function createNetworkProxyThreadLifecycleAppServerOptions() {
+  const configPatch = {
+    "features.network_proxy.enabled": true,
+    default_permissions: "openclaw-network",
+    permissions: {
+      "openclaw-network": {
+        filesystem: {
+          ":minimal": "read",
+          ":workspace_roots": {
+            ".": "write",
+          },
+        },
+        network: {
+          enabled: true,
+          domains: {
+            "api.openai.com": "allow",
+          },
+          proxy_url: "http://127.0.0.1:3128",
+        },
+      },
+    },
+  };
+  return {
+    ...createThreadLifecycleAppServerOptions(),
+    networkProxy: {
+      profileName: "openclaw-network",
+      configFingerprint: fingerprintCodexAppServerNetworkProxyConfigPatch(configPatch),
+      configPatch,
+    },
   };
 }
 
@@ -1445,6 +1478,42 @@ describe("Codex app-server thread lifecycle bindings", () => {
     expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/resume"]);
     const binding = await readCodexAppServerBinding(sessionFile);
     expect(binding?.threadId).toBe("thread-existing");
+  });
+
+  it("starts a new thread when the network proxy config is not active on the binding", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-existing",
+      cwd: workspaceDir,
+      model: "gpt-5.4-codex",
+      modelProvider: "openai",
+      dynamicToolsFingerprint: "[]",
+    });
+    const appServer = createNetworkProxyThreadLifecycleAppServerOptions();
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-network-proxy");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params: createParams(sessionFile, workspaceDir),
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer,
+    });
+
+    const requestCalls = request.mock.calls as unknown as Array<[string, { config?: unknown }]>;
+    expect(requestCalls.map(([method]) => method)).toEqual(["thread/start"]);
+    expect(requestCalls[0]?.[1]).not.toHaveProperty("sandbox");
+    expect(requestCalls[0]?.[1].config).toMatchObject(appServer.networkProxy.configPatch);
+    const binding = await readCodexAppServerBinding(sessionFile);
+    expect(binding?.threadId).toBe("thread-network-proxy");
+    expect(binding?.networkProxyProfileName).toBe("openclaw-network");
+    expect(binding?.networkProxyConfigFingerprint).toBe(appServer.networkProxy.configFingerprint);
   });
 
   it("passes native hook relay config on thread start and resume", async () => {

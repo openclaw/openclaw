@@ -1,5 +1,5 @@
 // Codex helper module supports config behavior.
-import { createHmac, randomBytes } from "node:crypto";
+import { createHash, createHmac, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { hostname as readHostName } from "node:os";
 import path from "node:path";
@@ -111,7 +111,8 @@ export type CodexAppServerExperimentalConfig = {
   sandboxExecServer?: boolean;
 };
 
-export type CodexAppServerNetworkProxyPermission = "allow" | "deny";
+export type CodexAppServerNetworkProxyDomainPermission = "allow" | "deny";
+export type CodexAppServerNetworkProxyUnixSocketPermission = "allow" | "none";
 export type CodexAppServerNetworkProxyBaseProfile = "read-only" | "workspace";
 export type CodexAppServerNetworkProxyMode = "limited" | "full";
 
@@ -120,8 +121,8 @@ export type CodexAppServerNetworkProxyConfig = {
   profileName?: string;
   baseProfile?: CodexAppServerNetworkProxyBaseProfile;
   mode?: CodexAppServerNetworkProxyMode;
-  domains?: Record<string, CodexAppServerNetworkProxyPermission>;
-  unixSockets?: Record<string, CodexAppServerNetworkProxyPermission>;
+  domains?: Record<string, CodexAppServerNetworkProxyDomainPermission>;
+  unixSockets?: Record<string, CodexAppServerNetworkProxyUnixSocketPermission>;
   proxyUrl?: string;
   socksUrl?: string;
   enableSocks5?: boolean;
@@ -134,6 +135,7 @@ export type CodexAppServerNetworkProxyConfig = {
 
 export type ResolvedCodexAppServerNetworkProxyConfig = {
   profileName: string;
+  configFingerprint: string;
   configPatch: JsonObject;
 };
 
@@ -222,9 +224,13 @@ export type CodexPluginConfig = {
 };
 
 export function shouldAutoApproveCodexAppServerApprovals(
-  appServer: Pick<CodexAppServerRuntimeOptions, "approvalPolicy" | "sandbox">,
+  appServer: Pick<CodexAppServerRuntimeOptions, "approvalPolicy" | "networkProxy" | "sandbox">,
 ): boolean {
-  return appServer.approvalPolicy === "never" && appServer.sandbox === "danger-full-access";
+  return (
+    appServer.networkProxy === undefined &&
+    appServer.approvalPolicy === "never" &&
+    appServer.sandbox === "danger-full-access"
+  );
 }
 
 export const CODEX_APP_SERVER_CONFIG_KEYS = [
@@ -303,15 +309,16 @@ const codexAppServerExperimentalSchema = z
     sandboxExecServer: z.boolean().optional(),
   })
   .strict();
-const codexAppServerNetworkProxyPermissionSchema = z.enum(["allow", "deny"]);
+const codexAppServerNetworkProxyDomainPermissionSchema = z.enum(["allow", "deny"]);
+const codexAppServerNetworkProxyUnixSocketPermissionSchema = z.enum(["allow", "none"]);
 const codexAppServerNetworkProxySchema = z
   .object({
     enabled: z.boolean().optional(),
     profileName: z.string().trim().min(1).optional(),
     baseProfile: z.enum(["read-only", "workspace"]).optional(),
     mode: z.enum(["limited", "full"]).optional(),
-    domains: z.record(z.string(), codexAppServerNetworkProxyPermissionSchema).optional(),
-    unixSockets: z.record(z.string(), codexAppServerNetworkProxyPermissionSchema).optional(),
+    domains: z.record(z.string(), codexAppServerNetworkProxyDomainPermissionSchema).optional(),
+    unixSockets: z.record(z.string(), codexAppServerNetworkProxyUnixSocketPermissionSchema).optional(),
     proxyUrl: z.string().trim().min(1).optional(),
     socksUrl: z.string().trim().min(1).optional(),
     enableSocks5: z.boolean().optional(),
@@ -900,31 +907,37 @@ function resolveCodexAppServerNetworkProxy(
     dangerously_allow_non_loopback_proxy: config.dangerouslyAllowNonLoopbackProxy,
     dangerously_allow_all_unix_sockets: config.dangerouslyAllowAllUnixSockets,
   });
+  const configPatch: JsonObject = {
+    "features.network_proxy.enabled": true,
+    default_permissions: profileName,
+    permissions: {
+      [profileName]: {
+        filesystem: {
+          ":minimal": "read",
+          ":project_roots": {
+            ".": fileSystemMode,
+          },
+        },
+        network: networkConfig,
+      },
+    },
+  };
   return {
     networkProxy: {
       profileName,
-      configPatch: {
-        "features.network_proxy.enabled": true,
-        default_permissions: profileName,
-        permissions: {
-          [profileName]: {
-            filesystem: {
-              ":minimal": "read",
-              ":workspace_roots": {
-                ".": fileSystemMode,
-              },
-            },
-            network: networkConfig,
-          },
-        },
-      },
+      configFingerprint: fingerprintCodexAppServerNetworkProxyConfigPatch(configPatch),
+      configPatch,
     },
   };
 }
 
-function normalizeNetworkProxyPermissionMap(
-  value: Record<string, CodexAppServerNetworkProxyPermission> | undefined,
-): Record<string, CodexAppServerNetworkProxyPermission> | undefined {
+export function fingerprintCodexAppServerNetworkProxyConfigPatch(configPatch: JsonObject): string {
+  return createHash("sha256").update(stableStringifyJson(configPatch)).digest("hex");
+}
+
+function normalizeNetworkProxyPermissionMap<TPermission extends string>(
+  value: Record<string, TPermission> | undefined,
+): Record<string, TPermission> | undefined {
   const entries = Object.entries(value ?? {})
     .map(([key, permission]) => [key.trim(), permission] as const)
     .filter(([key]) => key.length > 0);
@@ -935,6 +948,19 @@ function removeUndefinedJsonFields(value: Record<string, JsonValue | undefined>)
   return Object.fromEntries(
     Object.entries(value).filter((entry): entry is [string, JsonValue] => entry[1] !== undefined),
   );
+}
+
+function stableStringifyJson(value: JsonValue): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableStringifyJson(item)).join(",")}]`;
+  }
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value)
+      .toSorted(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => `${JSON.stringify(key)}:${stableStringifyJson(item)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
 }
 
 export function withMcpElicitationsApprovalPolicy(
