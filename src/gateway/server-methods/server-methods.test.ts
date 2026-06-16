@@ -901,6 +901,29 @@ describe("sanitizeChatHistoryMessages", () => {
 });
 
 describe("projectRecentChatDisplayMessages", () => {
+  it("projects empty assistant error turns as a generic safe failure", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        content: [],
+        stopReason: "error",
+        errorMessage: "private upstream at secret.internal.example failed",
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "The agent run failed before producing a reply." }],
+        stopReason: "error",
+        errorMessage: "private upstream at secret.internal.example failed",
+        timestamp: 1,
+      },
+    ]);
+    expect(JSON.stringify(result[0]?.content)).not.toContain("secret.internal.example");
+  });
+
   it("projects sessions_send inter-session turns as forwarded assistant-side display messages", () => {
     const result = projectRecentChatDisplayMessages([
       {

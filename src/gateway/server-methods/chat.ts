@@ -136,6 +136,7 @@ import {
 import {
   augmentChatHistoryWithCanvasBlocks,
   dropPreSessionStartAnnouncePairs,
+  GATEWAY_ASSISTANT_ERROR_FALLBACK_TEXT,
   projectChatDisplayMessage,
   projectRecentChatDisplayMessages,
   resolveEffectiveChatHistoryMaxChars,
@@ -816,8 +817,6 @@ function hasSensitiveMediaPayload(payloads: ReplyPayload[]): boolean {
 }
 
 type AssistantDisplayContentBlock = Record<string, unknown>;
-
-const GATEWAY_ASSISTANT_ERROR_FALLBACK_TEXT = "The agent run failed before producing a reply.";
 
 function sanitizeAssistantDisplayText(value?: string | null): string | undefined {
   if (!value) {
@@ -3689,6 +3688,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       const deliveredReplies: Array<{ payload: ReplyPayload; kind: "block" | "final" }> = [];
       let appendedWebchatAgentMedia = false;
       let agentRunStarted = false;
+      let dispatchCompleted = false;
       let runtimeAssistantErrorPersisted = false;
       const userTurnRecorder: UserTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
         input: baseUserTurnInput,
@@ -4029,6 +4029,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         },
       )
         .then(async () => {
+          dispatchCompleted = true;
           emitServerTiming("dispatch-completed", undefined, dispatchStartedAtMs);
           const postDispatchStartedAtMs = performance.now();
           await measureDiagnosticsTimelineSpan(
@@ -4937,7 +4938,7 @@ export const chatHandlers: GatewayRequestHandlers = {
               `webchat user transcript update failed after error: ${formatForLog(transcriptErr)}`,
             );
           });
-          if (agentRunStarted) {
+          if (agentRunStarted && !dispatchCompleted) {
             await persistGatewayAssistantErrorTranscript();
           }
           const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));

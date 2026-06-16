@@ -1595,6 +1595,30 @@ function projectSessionsSendInterSessionMessages(
   return changed ? projected : messages;
 }
 
+export const GATEWAY_ASSISTANT_ERROR_FALLBACK_TEXT =
+  "The agent run failed before producing a reply.";
+
+function projectEmptyAssistantErrorMessages(
+  messages: Array<Record<string, unknown>>,
+): Array<Record<string, unknown>> {
+  let changed = false;
+  const projected = messages.map((message) => {
+    if (
+      message.role !== "assistant" ||
+      message.stopReason !== "error" ||
+      extractProjectedText(message.content ?? message.text).trim()
+    ) {
+      return message;
+    }
+    changed = true;
+    return {
+      ...message,
+      content: [{ type: "text", text: GATEWAY_ASSISTANT_ERROR_FALLBACK_TEXT }],
+    };
+  });
+  return changed ? projected : messages;
+}
+
 export function projectChatDisplayMessages(
   messages: unknown[],
   options?: { maxChars?: number; stripEnvelope?: boolean },
@@ -1603,8 +1627,10 @@ export function projectChatDisplayMessages(
   const mirrored = mirrorMessageToolVisibleReplies(source);
   const projectedForwarded = mergeTtsSupplementMessages(
     filterVisibleProjectedHistoryMessages(
-      projectSessionsSendInterSessionMessages(
-        toProjectedMessages(sanitizeChatHistoryMessages(mirrored, Number.MAX_SAFE_INTEGER)),
+      projectEmptyAssistantErrorMessages(
+        projectSessionsSendInterSessionMessages(
+          toProjectedMessages(sanitizeChatHistoryMessages(mirrored, Number.MAX_SAFE_INTEGER)),
+        ),
       ),
     ),
   );
