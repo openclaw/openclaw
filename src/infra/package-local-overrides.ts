@@ -306,7 +306,19 @@ async function writeFileWithMode(
 }
 
 type LocalOverridePackageRoot = Awaited<ReturnType<typeof openFsRoot>>;
-const withRequiredFsSafePython = createAsyncLock();
+const withRequiredFsSafePythonLock = createAsyncLock();
+
+async function runWithRequiredFsSafePython<T>(operation: () => Promise<T>): Promise<T> {
+  return await withRequiredFsSafePythonLock(async () => {
+    const previousPythonConfig = getFsSafePythonConfig();
+    configureFsSafePython({ mode: "require" });
+    try {
+      return await operation();
+    } finally {
+      configureFsSafePython(previousPythonConfig);
+    }
+  });
+}
 
 class LocalOverrideRollbackError extends Error {
   constructor(
@@ -340,15 +352,9 @@ async function moveLocalOverrideTargetNoReplace(params: {
   }
   // Executable override replay fails closed instead of using fs-safe's path-based
   // Node fallback for the final no-clobber publish.
-  await withRequiredFsSafePython(async () => {
-    const previousPythonConfig = getFsSafePythonConfig();
-    configureFsSafePython({ mode: "require" });
-    try {
-      await params.packageFs.move(params.sourcePath, params.relativePath, { overwrite: false });
-    } finally {
-      configureFsSafePython(previousPythonConfig);
-    }
-  });
+  await runWithRequiredFsSafePython(() =>
+    params.packageFs.move(params.sourcePath, params.relativePath, { overwrite: false }),
+  );
 }
 
 async function writeRollbackBackup(params: {
@@ -447,6 +453,10 @@ async function moveExpectedLocalOverrideTarget(params: {
   const movedPath = createLocalOverrideMutationPath(params.relativePath, "previous");
   let targetMoved = false;
   try {
+    if (process.platform !== "win32") {
+      // Verify the required publish/restore backend before moving the target aside.
+      await runWithRequiredFsSafePython(() => params.packageFs.stat("."));
+    }
     await params.packageFs.move(params.relativePath, movedPath);
     targetMoved = true;
     const moved = await params.packageFs.read(movedPath, {

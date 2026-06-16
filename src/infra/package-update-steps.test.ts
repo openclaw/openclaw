@@ -297,6 +297,47 @@ describe("runGlobalPackageUpdateSteps", () => {
   );
 
   it.runIf(process.platform !== "win32")(
+    "does not move updated targets when required fs-safe Python is unavailable",
+    async () => {
+      await withTempDir({ prefix: "openclaw-package-update-local-no-python-" }, async (base) => {
+        const packageRoot = path.join(base, "package");
+        const indexPath = path.join(packageRoot, "dist", "index.js");
+        await writePackageRoot(packageRoot, "1.0.0");
+        await fs.writeFile(indexPath, "export const local = true;\n", "utf8");
+
+        const plan = await captureLocalPackageOverrides({ packageRoot });
+        expect(plan).not.toBeNull();
+        await writePackageRoot(packageRoot, "2.0.0");
+
+        const previousPythonConfig = getFsSafePythonConfig();
+        configureFsSafePython({
+          mode: "off",
+          pythonPath: path.join(base, "missing-python"),
+        });
+        try {
+          const result = await applyLocalPackageOverrides({
+            packageRoot,
+            plan,
+            reapply: true,
+          });
+
+          expect(result.status).toBe("error");
+          expect(result.applied).toBe(0);
+          expect(result.conflicts).toEqual([{ path: "dist/index.js", reason: "apply-failed" }]);
+          await expect(fs.readFile(indexPath, "utf8")).resolves.toBe("export {};\n");
+          expect(
+            (await fs.readdir(path.dirname(indexPath))).filter((entry) =>
+              entry.startsWith(".openclaw-override-"),
+            ),
+          ).toEqual([]);
+        } finally {
+          configureFsSafePython(previousPythonConfig);
+        }
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "does not reapply added overrides through symlinked target ancestors",
     async () => {
       await withTempDir(
