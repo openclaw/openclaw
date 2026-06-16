@@ -32,8 +32,12 @@ vi.mock("./provider-model-normalization.runtime.js", () => ({
 const sessionSuspensionMocks = vi.hoisted(() => ({
   suspendSession: vi.fn().mockResolvedValue(undefined),
   resolveSessionSuspensionReason: vi.fn((reason: string) => {
-    if (reason === "billing") return "manual";
-    if (reason === "rate_limit") return "quota_exhausted";
+    if (reason === "billing") {
+      return "manual";
+    }
+    if (reason === "rate_limit") {
+      return "quota_exhausted";
+    }
     return "circuit_open";
   }),
 }));
