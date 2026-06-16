@@ -13,6 +13,14 @@ function runSurfaceReport(env: Record<string, string>) {
   });
 }
 
+const relaxedSdkBudgetEnv = {
+  OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS: "999999",
+  OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS: "999999",
+  OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS: "999999",
+  OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS: "999999",
+  OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_WILDCARD_REEXPORTS: "999999",
+} as const;
+
 describe("plugin SDK surface report", () => {
   it("rejects loose numeric budget env vars before collecting SDK stats", () => {
     const result = runSurfaceReport({
@@ -42,6 +50,7 @@ describe("plugin SDK surface report", () => {
 
   it("accepts exact deprecated export budget overrides by public entrypoint", () => {
     const result = runSurfaceReport({
+      ...relaxedSdkBudgetEnv,
       OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS_BY_ENTRYPOINT: JSON.stringify({ core: 2 }),
     });
 
@@ -51,6 +60,7 @@ describe("plugin SDK surface report", () => {
 
   it("rejects deprecated export growth by public entrypoint", () => {
     const result = runSurfaceReport({
+      ...relaxedSdkBudgetEnv,
       OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS_BY_ENTRYPOINT: JSON.stringify({ core: 1 }),
     });
 
