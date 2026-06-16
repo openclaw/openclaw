@@ -3366,37 +3366,70 @@ describe("embedded attempt session lock lifecycle", () => {
       return id;
     };
 
-    await controller.withSessionWriteLock(async () => {
-      const firstWrite = controller.withSessionWriteLock(
-        async () => {
-          markFirstWriteStarted();
-          await firstWriteCanFinish;
-          await appendAssistant("interleaved-external");
-          return await appendAssistant("owned-entry");
-        },
-        {
-          publishOwnedWrite: true,
-          resolvePublishedEntries: (id) => [{ kind: "id", id }],
-        },
-      );
-      await firstWriteStarted;
-      const secondWrite = controller.withSessionWriteLock(
-        async () => {
-          secondWriteRan = true;
-          return await appendAssistant("queued-entry");
-        },
-        {
-          publishOwnedWrite: true,
-          resolvePublishedEntries: (id) => [{ kind: "id", id }],
-        },
-      );
-      releaseFirstWrite();
-      const results = await Promise.allSettled([firstWrite, secondWrite]);
-      expect(results.map((result) => result.status)).toEqual(["rejected", "rejected"]);
-    });
+    await expect(
+      controller.withSessionWriteLock(async () => {
+        const firstWrite = controller.withSessionWriteLock(
+          async () => {
+            markFirstWriteStarted();
+            await firstWriteCanFinish;
+            await appendAssistant("interleaved-external");
+            return await appendAssistant("owned-entry");
+          },
+          {
+            publishOwnedWrite: true,
+            resolvePublishedEntries: (id) => [{ kind: "id", id }],
+          },
+        );
+        await firstWriteStarted;
+        const secondWrite = controller.withSessionWriteLock(
+          async () => {
+            secondWriteRan = true;
+            return await appendAssistant("queued-entry");
+          },
+          {
+            publishOwnedWrite: true,
+            resolvePublishedEntries: (id) => [{ kind: "id", id }],
+          },
+        );
+        releaseFirstWrite();
+        const results = await Promise.allSettled([firstWrite, secondWrite]);
+        expect(results.map((result) => result.status)).toEqual(["rejected", "rejected"]);
+      }),
+    ).rejects.toBeInstanceOf(EmbeddedAttemptSessionTakeoverError);
 
     expect(secondWriteRan).toBe(false);
     expect(mergePromptReleasedSessionEntries).not.toHaveBeenCalled();
+    expect(controller.hasSessionTakeover()).toBe(true);
+    await controller.dispose();
+  });
+
+  it("preserves an outer failure when a nested publication detects takeover", async () => {
+    const sessionFile = await createTempSessionFile();
+    const outerFailure = new Error("outer operation failed");
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+      mergePromptReleasedSessionEntries: vi.fn(),
+    });
+    await controller.releaseForPrompt();
+
+    await expect(
+      controller.withSessionWriteLock(async () => {
+        const nestedPublication = controller.withSessionWriteLock(
+          async () => {
+            await fs.appendFile(sessionFile, '{"type":"message","id":"external"}\n', "utf8");
+            return "owned";
+          },
+          {
+            publishOwnedWrite: true,
+            resolvePublishedEntries: (id) => [{ kind: "id", id }],
+          },
+        );
+        const [nestedResult] = await Promise.allSettled([nestedPublication]);
+        expect(nestedResult.status).toBe("rejected");
+        throw outerFailure;
+      }),
+    ).rejects.toBe(outerFailure);
     expect(controller.hasSessionTakeover()).toBe(true);
     await controller.dispose();
   });

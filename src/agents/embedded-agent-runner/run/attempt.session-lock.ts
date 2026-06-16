@@ -1691,16 +1691,25 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     releaseRetainedUse: () => void,
   ): Promise<T> {
     const scope = createActiveWriteLockScope();
+    let operationSucceeded = false;
     try {
-      return await activeWriteLock.run(scope.state, run);
+      const result = await activeWriteLock.run(scope.state, run);
+      operationSucceeded = true;
+      return result;
     } finally {
-      await drainWriteLockScope(scope.state.scope);
-      scope.state.active = false;
-      scope.state.scope.active = false;
       try {
-        releaseRetainedUse();
+        await drainWriteLockScope(scope.state.scope);
+        if (operationSucceeded && takeoverDetected) {
+          throw new EmbeddedAttemptSessionTakeoverError(params.lockOptions.sessionFile);
+        }
       } finally {
-        scope.complete();
+        scope.state.active = false;
+        scope.state.scope.active = false;
+        try {
+          releaseRetainedUse();
+        } finally {
+          scope.complete();
+        }
       }
     }
   }
@@ -1848,16 +1857,25 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     }
 
     const scope = createActiveWriteLockScope();
+    let operationSucceeded = false;
     try {
-      return await activeWriteLock.run(scope.state, runLockedOperation);
+      const result = await activeWriteLock.run(scope.state, runLockedOperation);
+      operationSucceeded = true;
+      return result;
     } finally {
-      await drainWriteLockScope(scope.state.scope);
-      scope.state.active = false;
-      scope.state.scope.active = false;
       try {
-        await lock.release();
+        await drainWriteLockScope(scope.state.scope);
+        if (operationSucceeded && takeoverDetected) {
+          throw new EmbeddedAttemptSessionTakeoverError(params.lockOptions.sessionFile);
+        }
       } finally {
-        scope.complete();
+        scope.state.active = false;
+        scope.state.scope.active = false;
+        try {
+          await lock.release();
+        } finally {
+          scope.complete();
+        }
       }
     }
   }
