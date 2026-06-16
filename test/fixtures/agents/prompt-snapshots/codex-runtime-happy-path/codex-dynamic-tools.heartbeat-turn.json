@@ -1100,12 +1100,18 @@
         "description": "Fetch sanitized history for visible session. Use before replying, debugging, resuming; supports limits/tool messages.",
         "inputSchema": {
           "properties": {
+            "includeFamily": {
+              "type": "boolean"
+            },
             "includeTools": {
               "type": "boolean"
             },
             "limit": {
               "minimum": 1,
               "type": "integer"
+            },
+            "resetAncestors": {
+              "type": "boolean"
             },
             "sessionKey": {
               "type": "string"

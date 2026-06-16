@@ -28,6 +28,7 @@ export type ArchivedSessionTranscript = {
 const MAX_RESET_ARCHIVE_DISCOVERY_CACHE_ENTRIES = 2048;
 const MAX_RESET_ARCHIVE_HEADER_MATCH_CACHE_ENTRIES = 4096;
 const MAX_RESET_ARCHIVE_CANDIDATES_PER_TRANSCRIPT = 128;
+const MAX_RESET_TOPIC_ARCHIVE_CANDIDATES_PER_SESSION = 128;
 
 const resetArchiveDiscoveryCache = new Map<
   string,
@@ -275,6 +276,54 @@ async function listResetArchiveCandidatesForTranscriptAsync(
   return boundedArchives;
 }
 
+async function listResetTopicArchiveCandidatesForSessionAsync(
+  sessionId: string,
+  storePath: string | undefined,
+): Promise<ResetArchiveCandidate[]> {
+  if (!storePath) {
+    return [];
+  }
+  const dir = path.dirname(storePath);
+  const dirStat = await fs.promises.stat(dir).catch(() => null);
+  if (!dirStat?.isDirectory()) {
+    return [];
+  }
+  const cacheKey = `${dir}\0${sessionId}-topic-*.jsonl`;
+  const cached = resetArchiveDiscoveryCache.get(cacheKey);
+  if (cached && cached.dirMtimeMs === dirStat.mtimeMs && cached.dirSize === dirStat.size) {
+    resetArchiveDiscoveryCache.delete(cacheKey);
+    resetArchiveDiscoveryCache.set(cacheKey, cached);
+    return cached.archives;
+  }
+
+  const prefix = `${sessionId}-topic-`;
+  const archives: ResetArchiveCandidate[] = [];
+  try {
+    for (const entry of await fs.promises.readdir(dir, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.startsWith(prefix)) {
+        continue;
+      }
+      const timestamp = parseSessionArchiveTimestamp(entry.name, "reset");
+      if (timestamp == null) {
+        continue;
+      }
+      archives.push({ archivePath: path.join(dir, entry.name), name: entry.name, timestamp });
+    }
+  } catch {
+    return [];
+  }
+  archives.sort(
+    (left, right) => right.timestamp - left.timestamp || right.name.localeCompare(left.name),
+  );
+  const boundedArchives = archives.slice(0, MAX_RESET_TOPIC_ARCHIVE_CANDIDATES_PER_SESSION);
+  setResetArchiveDiscoveryCacheEntry(cacheKey, {
+    dirMtimeMs: dirStat.mtimeMs,
+    dirSize: dirStat.size,
+    archives: boundedArchives,
+  });
+  return boundedArchives;
+}
+
 async function resolveLatestResetArchiveForTranscriptAsync(
   sessionId: string,
   transcriptPath: string,
@@ -351,7 +400,22 @@ export async function resolveSessionTranscriptResetArchiveCandidatesAsync(
       )
       .slice(0, 1),
   );
-  return uniqueStrings(archives.map((archive) => archive.archivePath));
+  const topicArchives: ResetArchiveCandidate[] = [];
+  for (const archive of await listResetTopicArchiveCandidatesForSessionAsync(
+    sessionId,
+    storePath,
+  )) {
+    if (await resetArchiveHeaderMatchesSessionId(sessionId, archive.archivePath)) {
+      topicArchives.push(archive);
+    }
+  }
+  topicArchives.sort(
+    (left, right) => right.timestamp - left.timestamp || right.name.localeCompare(left.name),
+  );
+  return uniqueStrings([
+    ...archives.map((archive) => archive.archivePath),
+    ...topicArchives.map((archive) => archive.archivePath),
+  ]);
 }
 
 export function archiveFileOnDisk(filePath: string, reason: ArchiveFileReason): string {

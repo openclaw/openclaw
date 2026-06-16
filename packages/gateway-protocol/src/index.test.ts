@@ -91,6 +91,7 @@ describe("lazy protocol validators", () => {
         sessionKey: "global",
         agentId: "work",
         limit: 50,
+        includeFamily: true,
       }),
     ).toBe(true);
     expect(
