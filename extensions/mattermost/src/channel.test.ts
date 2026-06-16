@@ -278,8 +278,19 @@ describe("mattermostPlugin", () => {
           threadId: "other-thread",
         }),
       ).toEqual({
-        replyToId: "post-parent",
-        threadId: "post-parent",
+        replyToId: "other-thread",
+        threadId: "other-thread",
+      });
+      expect(
+        resolveReplyTransport({
+          cfg: {},
+          replyToId: "child-post",
+          replyToIsExplicit: true,
+          threadId: "root-post",
+        }),
+      ).toEqual({
+        replyToId: "root-post",
+        threadId: "root-post",
       });
       expect(
         resolveReplyTransport({
