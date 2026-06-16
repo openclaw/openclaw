@@ -64,10 +64,10 @@ import {
   resolveStableSessionEndTranscript,
   type ArchivedSessionTranscript,
 } from "./session-transcript-files.fs.js";
+import { readSessionMessagesAsync } from "./session-transcript-readers.js";
 import {
   loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,
-  readSessionMessagesAsync,
   resolveGatewaySessionStoreTarget,
   resolveSessionStoreKey,
   resolveSessionModelRef,
@@ -806,10 +806,18 @@ export async function emitGatewayBeforeResetPluginHook(params: {
   let messages: unknown[] = [];
   try {
     if (typeof sessionId === "string" && sessionId.trim().length > 0) {
-      messages = await readSessionMessagesAsync(sessionId, params.storePath, sessionFile, {
-        mode: "full",
-        reason: "before_reset hook payload",
-      });
+      messages = await readSessionMessagesAsync(
+        {
+          agentId,
+          sessionFile,
+          sessionId,
+          storePath: params.storePath,
+        },
+        {
+          mode: "full",
+          reason: "before_reset hook payload",
+        },
+      );
     }
   } catch (err) {
     logVerbose(

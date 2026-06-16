@@ -115,6 +115,11 @@ export function registerCronEditCommand(cron: Command) {
         "Thinking level for agent jobs (off|minimal|low|medium|high|xhigh)",
       )
       .option("--model <model>", "Model override for agent jobs")
+      .option(
+        "--clear-model",
+        "Remove the per-job model override (restore normal cron model precedence)",
+        false,
+      )
       .option("--timeout-seconds <n>", "Timeout seconds for agent or command jobs")
       .option("--no-output-timeout-seconds <n>", "No-output timeout seconds for command jobs")
       .option("--output-max-bytes <n>", "Maximum captured stdout/stderr bytes for command jobs")
@@ -279,6 +284,9 @@ export function registerCronEditCommand(cron: Command) {
             );
           }
           const model = normalizeOptionalString(opts.model);
+          if (model && opts.clearModel) {
+            throw new Error("Use --model or --clear-model, not both");
+          }
           const thinking = normalizeOptionalString(opts.thinking);
           const toolsAllow = parseCronToolsAllow(opts.tools);
           const rawTimeoutSeconds =
@@ -346,6 +354,7 @@ export function registerCronEditCommand(cron: Command) {
           const hasAgentTurnPayloadField =
             typeof opts.message === "string" ||
             Boolean(model) ||
+            Boolean(opts.clearModel) ||
             Boolean(thinking) ||
             (hasTimeoutSeconds &&
               !hasCommandSpecificPayloadField &&
@@ -373,7 +382,11 @@ export function registerCronEditCommand(cron: Command) {
           } else if (hasAgentTurnPatch) {
             const payload: Record<string, unknown> = { kind: "agentTurn" };
             assignIf(payload, "message", String(opts.message), typeof opts.message === "string");
-            assignIf(payload, "model", model, Boolean(model));
+            if (opts.clearModel) {
+              payload.model = null;
+            } else {
+              assignIf(payload, "model", model, Boolean(model));
+            }
             assignIf(payload, "thinking", thinking, Boolean(thinking));
             assignIf(payload, "timeoutSeconds", timeoutSeconds, hasTimeoutSeconds);
             assignIf(

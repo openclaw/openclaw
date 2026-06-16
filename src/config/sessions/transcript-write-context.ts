@@ -5,10 +5,20 @@ import path from "node:path";
 type OwnedSessionTranscriptWriteContext = {
   sessionFile?: string;
   sessionKey?: string;
+  canAdvanceSessionEntryCache?: (snapshot: OwnedSessionTranscriptCacheSnapshot) => boolean;
+  publishSessionFileSnapshot?: (snapshot: OwnedSessionTranscriptCacheSnapshot) => boolean;
   withSessionWriteLock: <T>(
     run: () => Promise<T> | T,
     options?: { publishOwnedWrite?: boolean },
   ) => Promise<T>;
+};
+
+export type OwnedSessionTranscriptCacheSnapshot = {
+  dev: bigint;
+  ino: bigint;
+  size: bigint;
+  mtimeNs: bigint;
+  ctimeNs: bigint;
 };
 
 const ownedTranscriptWriteContext = new AsyncLocalStorage<OwnedSessionTranscriptWriteContext>();
@@ -82,6 +92,40 @@ export function resolveOwnedSessionTranscriptWriteLockRunner(params: {
     return undefined;
   }
   return context.withSessionWriteLock;
+}
+
+export function hasOwnedSessionTranscriptWriteContext(params: {
+  sessionFile?: string;
+  sessionKey?: string;
+}): boolean {
+  const context = ownedTranscriptWriteContext.getStore();
+  return Boolean(context && contextMatches({ context, ...params }));
+}
+
+export function canAdvanceOwnedSessionEntryCache(params: {
+  sessionFile?: string;
+  sessionKey?: string;
+  snapshot: OwnedSessionTranscriptCacheSnapshot;
+}): boolean {
+  const context = ownedTranscriptWriteContext.getStore();
+  return Boolean(
+    context &&
+    contextMatches({ context, ...params }) &&
+    context.publishSessionFileSnapshot &&
+    context.canAdvanceSessionEntryCache?.(params.snapshot),
+  );
+}
+
+export function publishOwnedSessionFileSnapshot(params: {
+  sessionFile?: string;
+  sessionKey?: string;
+  snapshot: OwnedSessionTranscriptCacheSnapshot;
+}): boolean | undefined {
+  const context = ownedTranscriptWriteContext.getStore();
+  if (!context || !contextMatches({ context, ...params }) || !context.publishSessionFileSnapshot) {
+    return undefined;
+  }
+  return context.publishSessionFileSnapshot(params.snapshot);
 }
 
 async function runWithOwnedSessionTranscriptWriteContext<T>(

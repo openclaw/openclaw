@@ -40,7 +40,10 @@ export async function readLastGatewayErrorLine(
       : resolveGatewayLogPaths(env);
   const stderrRaw = readStderr ? await fs.readFile(stderrPath, "utf8").catch(() => "") : "";
   const stdoutRaw = await fs.readFile(stdoutPath, "utf8").catch(() => "");
-  const lines = [...stderrRaw.split(/\r?\n/), ...stdoutRaw.split(/\r?\n/)].map((line) =>
+  // stderr is the strongest failure signal on non-darwin platforms, so place it
+  // last and scan from the end: the most recent stderr error line then wins over
+  // any (possibly stale) stdout match, matching the stderr-first fallback below.
+  const lines = [...stdoutRaw.split(/\r?\n/), ...stderrRaw.split(/\r?\n/)].map((line) =>
     line.trim(),
   );
   for (let i = lines.length - 1; i >= 0; i -= 1) {

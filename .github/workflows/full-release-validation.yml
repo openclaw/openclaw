@@ -275,7 +275,7 @@ jobs:
             local workflow="$1"
             shift
 
-            local before_json dispatch_output run_id status conclusion url poll_count
+            local dispatch_output run_id status conclusion url poll_count
             gh_with_retry() {
               local output status attempt
               for attempt in 1 2 3 4 5 6; do
@@ -298,8 +298,6 @@ jobs:
               printf '%s\n' "$output" >&2
               return "$status"
             }
-            before_json="$(gh_with_retry run list --workflow "$workflow" --event workflow_dispatch --limit 100 --json databaseId --jq '[.[].databaseId]')"
-
             dispatch_output="$(gh_with_retry workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@")"
             printf '%s\n' "$dispatch_output"
             run_id="$(
@@ -309,20 +307,7 @@ jobs:
             )"
 
             if [[ -z "$run_id" ]]; then
-              for _ in $(seq 1 60); do
-                run_id="$(
-                  BEFORE_IDS="$before_json" gh_with_retry run list --workflow "$workflow" --event workflow_dispatch --limit 50 --json databaseId,createdAt \
-                    --jq 'map(select(.databaseId as $id | (env.BEFORE_IDS | fromjson | index($id) | not))) | sort_by(.createdAt) | reverse | .[0].databaseId // empty'
-                )"
-                if [[ -n "$run_id" ]]; then
-                  break
-                fi
-                sleep 5
-              done
-            fi
-
-            if [[ -z "${run_id:-}" ]]; then
-              echo "Could not find dispatched run for ${workflow}." >&2
+              echo "::error::gh workflow run ${workflow} did not return an Actions run URL; refusing to guess from recent workflow_dispatch runs." >&2
               exit 1
             fi
 
@@ -423,7 +408,7 @@ jobs:
             local workflow="$1"
             shift
 
-            local before_json dispatch_output run_id status conclusion url poll_count
+            local dispatch_output run_id status conclusion url poll_count
             gh_with_retry() {
               local output status attempt
               for attempt in 1 2 3 4 5 6; do
@@ -446,8 +431,6 @@ jobs:
               printf '%s\n' "$output" >&2
               return "$status"
             }
-            before_json="$(gh_with_retry run list --workflow "$workflow" --event workflow_dispatch --limit 100 --json databaseId --jq '[.[].databaseId]')"
-
             dispatch_output="$(gh_with_retry workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@")"
             printf '%s\n' "$dispatch_output"
             run_id="$(
@@ -457,20 +440,7 @@ jobs:
             )"
 
             if [[ -z "$run_id" ]]; then
-              for _ in $(seq 1 60); do
-                run_id="$(
-                  BEFORE_IDS="$before_json" gh_with_retry run list --workflow "$workflow" --event workflow_dispatch --limit 50 --json databaseId,createdAt \
-                    --jq 'map(select(.databaseId as $id | (env.BEFORE_IDS | fromjson | index($id) | not))) | sort_by(.createdAt) | reverse | .[0].databaseId // empty'
-                )"
-                if [[ -n "$run_id" ]]; then
-                  break
-                fi
-                sleep 5
-              done
-            fi
-
-            if [[ -z "${run_id:-}" ]]; then
-              echo "Could not find dispatched run for ${workflow}." >&2
+              echo "::error::gh workflow run ${workflow} did not return an Actions run URL; refusing to guess from recent workflow_dispatch runs." >&2
               exit 1
             fi
 
@@ -581,7 +551,7 @@ jobs:
             local workflow="$1"
             shift
 
-            local before_json dispatch_output run_id status conclusion url poll_count run_json
+            local dispatch_output run_id status conclusion url poll_count run_json
             gh_with_retry() {
               local output status attempt
               for attempt in 1 2 3 4 5 6; do
@@ -604,8 +574,6 @@ jobs:
               printf '%s\n' "$output" >&2
               return "$status"
             }
-            before_json="$(gh_with_retry run list --workflow "$workflow" --event workflow_dispatch --limit 100 --json databaseId --jq '[.[].databaseId]')"
-
             dispatch_output="$(gh_with_retry workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@")"
             printf '%s\n' "$dispatch_output"
             run_id="$(
@@ -615,20 +583,7 @@ jobs:
             )"
 
             if [[ -z "$run_id" ]]; then
-              for _ in $(seq 1 60); do
-                run_id="$(
-                  BEFORE_IDS="$before_json" gh_with_retry run list --workflow "$workflow" --event workflow_dispatch --limit 50 --json databaseId,createdAt \
-                    --jq 'map(select(.databaseId as $id | (env.BEFORE_IDS | fromjson | index($id) | not))) | sort_by(.createdAt) | reverse | .[0].databaseId // empty'
-                )"
-                if [[ -n "$run_id" ]]; then
-                  break
-                fi
-                sleep 5
-              done
-            fi
-
-            if [[ -z "${run_id:-}" ]]; then
-              echo "Could not find dispatched run for ${workflow}." >&2
+              echo "::error::gh workflow run ${workflow} did not return an Actions run URL; refusing to guess from recent workflow_dispatch runs." >&2
               exit 1
             fi
 
@@ -928,8 +883,6 @@ jobs:
             return "$status"
           }
 
-          before_json="$(gh_with_retry run list --workflow npm-telegram-beta-e2e.yml --event workflow_dispatch --limit 100 --json databaseId --jq '[.[].databaseId]')"
-
           args=(-f package_spec="${PACKAGE_SPEC:-openclaw@beta}" -f harness_ref="$TARGET_SHA" -f provider_mode="$PROVIDER_MODE")
           if [[ -z "${PACKAGE_SPEC// }" ]]; then
             if [[ "$PREPARE_PACKAGE_RESULT" != "success" || -z "${PACKAGE_ARTIFACT_NAME// }" ]]; then
@@ -946,22 +899,16 @@ jobs:
             args+=(-f scenario="$SCENARIO")
           fi
 
-          gh_with_retry workflow run npm-telegram-beta-e2e.yml --ref "$CHILD_WORKFLOW_REF" "${args[@]}"
-
-          run_id=""
-          for _ in $(seq 1 60); do
-            run_id="$(
-              BEFORE_IDS="$before_json" gh_with_retry run list --workflow npm-telegram-beta-e2e.yml --event workflow_dispatch --limit 50 --json databaseId,createdAt \
-                --jq 'map(select(.databaseId as $id | (env.BEFORE_IDS | fromjson | index($id) | not))) | sort_by(.createdAt) | reverse | .[0].databaseId // empty'
-            )"
-            if [[ -n "$run_id" ]]; then
-              break
-            fi
-            sleep 5
-          done
+          dispatch_output="$(gh_with_retry workflow run npm-telegram-beta-e2e.yml --ref "$CHILD_WORKFLOW_REF" "${args[@]}")"
+          printf '%s\n' "$dispatch_output"
+          run_id="$(
+            printf '%s\n' "$dispatch_output" |
+              sed -nE 's#.*actions/runs/([0-9]+).*#\1#p' |
+              tail -n 1
+          )"
 
           if [[ -z "$run_id" ]]; then
-            echo "Could not find dispatched run for npm-telegram-beta-e2e.yml." >&2
+            echo "::error::gh workflow run npm-telegram-beta-e2e.yml did not return an Actions run URL; refusing to guess from recent workflow_dispatch runs." >&2
             exit 1
           fi
 
@@ -1073,31 +1020,23 @@ jobs:
             echo "- Release impact: advisory"
           } >> "$GITHUB_STEP_SUMMARY"
 
-          before_json="$(gh_with_retry run list --workflow openclaw-performance.yml --event workflow_dispatch --limit 100 --json databaseId --jq '[.[].databaseId]')"
-
-          gh_with_retry workflow run openclaw-performance.yml \
+          dispatch_output="$(gh_with_retry workflow run openclaw-performance.yml \
             --ref "$CHILD_WORKFLOW_REF" \
             -f target_ref="$TARGET_SHA" \
             -f profile=release \
             -f repeat=3 \
             -f deep_profile=false \
             -f live_openai_candidate=false \
-            -f fail_on_regression=false
-
-          run_id=""
-          for _ in $(seq 1 60); do
-            run_id="$(
-              BEFORE_IDS="$before_json" gh_with_retry run list --workflow openclaw-performance.yml --event workflow_dispatch --limit 50 --json databaseId,createdAt \
-                --jq 'map(select(.databaseId as $id | (env.BEFORE_IDS | fromjson | index($id) | not))) | sort_by(.createdAt) | reverse | .[0].databaseId // empty'
-            )"
-            if [[ -n "$run_id" ]]; then
-              break
-            fi
-            sleep 5
-          done
+            -f fail_on_regression=false)"
+          printf '%s\n' "$dispatch_output"
+          run_id="$(
+            printf '%s\n' "$dispatch_output" |
+              sed -nE 's#.*actions/runs/([0-9]+).*#\1#p' |
+              tail -n 1
+          )"
 
           if [[ -z "$run_id" ]]; then
-            echo "::warning::Could not find dispatched run for openclaw-performance.yml."
+            echo "::warning::gh workflow run openclaw-performance.yml did not return an Actions run URL; refusing to guess from recent workflow_dispatch runs."
             exit 0
           fi
 

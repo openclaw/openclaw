@@ -253,6 +253,76 @@ export function normalizeRootHelpTargetArgv(argv: string[]): string[] {
   return [argv[0], argv[1], ...rootOptions, ...targetPath, "--help"];
 }
 
+export type NormalizeRootNoColorArgvOptions = {
+  shouldPreserveNoColor?: (params: {
+    remainingArgs: readonly string[];
+    noColorIndex: number;
+  }) => boolean;
+};
+
+function isPossibleCommandOptionValue(
+  remainingArgs: readonly string[],
+  noColorIndex: number,
+): boolean {
+  const previous = remainingArgs[noColorIndex - 1];
+  if (!previous?.startsWith("-") || previous === FLAG_TERMINATOR) {
+    return false;
+  }
+  return !previous.includes("=");
+}
+
+export function normalizeRootNoColorArgv(
+  argv: string[],
+  options: NormalizeRootNoColorArgvOptions = {},
+): string[] {
+  const prefix = argv.slice(0, 2);
+  const args = argv.slice(2);
+  let rootPrefixEnd = 0;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (!arg || arg === FLAG_TERMINATOR) {
+      break;
+    }
+    const consumed = consumeRootOptionToken(args, index);
+    if (consumed <= 0) {
+      break;
+    }
+    rootPrefixEnd = index + consumed;
+    index += consumed - 1;
+  }
+
+  const rootPrefix = args.slice(0, rootPrefixEnd);
+  const remainingArgs = args.slice(rootPrefixEnd);
+  const movedNoColorArgs: string[] = [];
+  const nextArgs: string[] = [];
+  for (let index = 0; index < remainingArgs.length; index += 1) {
+    const arg = remainingArgs[index];
+    if (arg === FLAG_TERMINATOR) {
+      nextArgs.push(...remainingArgs.slice(index));
+      break;
+    }
+    if (arg === "--no-color") {
+      // Commander can treat dash-prefixed tokens as command option values.
+      // Early callers stay conservative; final Commander parse can pass metadata.
+      const shouldPreserve =
+        options.shouldPreserveNoColor?.({ remainingArgs, noColorIndex: index }) ??
+        isPossibleCommandOptionValue(remainingArgs, index);
+      if (shouldPreserve) {
+        nextArgs.push(arg);
+        continue;
+      }
+      movedNoColorArgs.push(arg);
+      continue;
+    }
+    nextArgs.push(arg);
+  }
+
+  if (movedNoColorArgs.length === 0) {
+    return argv;
+  }
+  return [...prefix, ...rootPrefix, ...movedNoColorArgs, ...nextArgs];
+}
+
 export function getFlagValue(argv: string[], name: string): string | null | undefined {
   const args = argv.slice(2);
   for (let i = 0; i < args.length; i += 1) {

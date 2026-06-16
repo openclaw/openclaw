@@ -28,11 +28,8 @@ import {
   resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
-import {
-  loadSessionEntry,
-  readSessionMessagesWithSourceAsync,
-  resolveSessionHistoryTranscriptPathAsync,
-} from "./session-utils.js";
+import { readSessionMessagesWithSourceAsync } from "./session-transcript-readers.js";
+import { loadSessionEntry, resolveSessionHistoryTranscriptPathAsync } from "./session-utils.js";
 
 const OUTGOING_IMAGE_ROUTE_PREFIX = "/api/chat/media/outgoing";
 const DEFAULT_TRANSIENT_OUTGOING_IMAGE_TTL_MS = 15 * 60 * 1000;
@@ -732,9 +729,12 @@ async function getSessionManagedOutgoingAttachmentIndex(
   }
 
   const readResult = await readSessionMessagesWithSourceAsync(
-    sessionId,
-    storePath,
-    entry.sessionFile,
+    {
+      agentId,
+      sessionFile: entry.sessionFile,
+      sessionId,
+      storePath,
+    },
     {
       mode: "full",
       reason: "managed outgoing attachment index",

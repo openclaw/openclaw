@@ -15,6 +15,8 @@ import {
   publishTranscriptUpdate,
   readSessionUpdatedAt,
   replaceSessionEntry,
+  resolveSessionTranscriptRuntimeReadTarget,
+  resolveSessionTranscriptRuntimeTarget,
   updateSessionEntry,
   upsertSessionEntry,
 } from "./session-accessor.js";
@@ -556,6 +558,61 @@ describe("session accessor file-backed seam", () => {
       fs.realpathSync(expectedTranscriptPath),
     );
     await expect(loadTranscriptEvents(scope)).resolves.toEqual([event]);
+  });
+
+  it("resolves runtime transcript targets from scope without caller-owned paths", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "session-1",
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+
+    await upsertSessionEntry(scope, {
+      sessionId: scope.sessionId,
+      updatedAt: 10,
+    });
+
+    const target = await resolveSessionTranscriptRuntimeTarget(scope);
+
+    expect(target).toMatchObject({
+      agentId: "main",
+      sessionId: "session-1",
+      sessionKey: "agent:main:main",
+    });
+    expect(fs.realpathSync(path.dirname(target.sessionFile))).toBe(fs.realpathSync(tempDir));
+    expect(path.basename(target.sessionFile)).toBe("session-1.jsonl");
+    expect(loadSessionEntry(scope)?.sessionFile).toBe(target.sessionFile);
+  });
+
+  it("keeps read and write runtime targets aligned for new topic sessions", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "session-2",
+      sessionKey: "agent:main:main:topic:456",
+      storePath,
+      threadId: "456",
+    };
+    fs.writeFileSync(
+      path.join(tempDir, "session-1-topic-456.jsonl"),
+      '{"type":"session","id":"session-1"}\n',
+      "utf8",
+    );
+    await upsertSessionEntry(
+      { sessionKey: scope.sessionKey, storePath },
+      {
+        sessionFile: "session-1-topic-456.jsonl",
+        sessionId: "session-1",
+        updatedAt: 10,
+      },
+    );
+
+    const readTarget = await resolveSessionTranscriptRuntimeReadTarget(scope);
+    const writeTarget = await resolveSessionTranscriptRuntimeTarget(scope);
+
+    expect(path.basename(readTarget.sessionFile)).toBe("session-2-topic-456.jsonl");
+    expect(writeTarget.sessionFile).toBe(readTarget.sessionFile);
+    expect(loadSessionEntry(scope)?.sessionFile).toBe(readTarget.sessionFile);
   });
 
   it("persists transcript metadata under the normalized session key", async () => {

@@ -56,8 +56,9 @@ the resolved scenarios through `qa suite`. `--surface` and
 `--category` filter the selected profile instead of defining separate lanes.
 The resulting `qa-evidence.json` includes a profile scorecard summary with
 selected-category counts and missing coverage IDs; the individual evidence
-entries remain the source of truth for the tests, coverage roles, artifacts,
-and results:
+entries remain the source of truth for the tests, coverage roles, and results.
+Slim evidence omits per-entry `execution` and sets `evidenceMode: "slim"`;
+`smoke-ci` defaults to slim, and `--evidence-mode full` restores full entries:
 
 ```bash
 pnpm openclaw qa run \

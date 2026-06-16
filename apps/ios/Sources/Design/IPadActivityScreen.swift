@@ -180,12 +180,11 @@ struct IPadActivityScreen: View {
     }
 
     private var sessionsAvailable: Bool {
-        self.appModel.isAppleReviewDemoModeEnabled || self.appModel.isOperatorGatewayConnected
+        self.appModel.isLocalChatFixtureEnabled || self.appModel.isOperatorGatewayConnected
     }
 
     private var sessionsMode: String {
-        if self.appModel.isAppleReviewDemoModeEnabled { return "demo" }
-        return self.appModel.isOperatorGatewayConnected ? "operator" : "offline"
+        self.appModel.chatTransportModeID
     }
 
     private var sessionRows: [CommandCenterTab.WorkItem] {
@@ -215,9 +214,7 @@ struct IPadActivityScreen: View {
         defer { self.isLoading = false }
 
         do {
-            let transport: any OpenClawChatTransport = self.appModel.isAppleReviewDemoModeEnabled
-                ? AppleReviewDemoChatTransport()
-                : IOSGatewayChatTransport(gateway: self.appModel.operatorSession)
+            let transport = self.appModel.makeChatTransport()
             let response = try await transport.listSessions(limit: CommandCenterTab.recentSessionsFetchLimit)
             self.sessions = response.sessions
         } catch {

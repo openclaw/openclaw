@@ -710,6 +710,134 @@ describe("runMessageAction plugin dispatch", () => {
       );
     });
 
+    it("preserves gateway send receipts in broadcast results", async () => {
+      const gatewayPlugin = createGatewayActionPlugin({
+        pluginId: "gatewaychat",
+        label: "Gateway Chat",
+        blurb: "Gateway Chat broadcast test plugin.",
+        actions: ["send"],
+        messaging: {
+          targetResolver: {
+            looksLikeId: () => true,
+          },
+        },
+        handleAction: vi.fn(async () => jsonResult({ ok: true })),
+      });
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "gatewaychat",
+            source: "test",
+            plugin: gatewayPlugin,
+          },
+        ]),
+      );
+      mocks.callGatewayLeastPrivilege.mockResolvedValue({
+        ok: true,
+        messageId: "gw-broadcast-1",
+      });
+
+      const result = await runMessageAction({
+        cfg: {
+          channels: {
+            gatewaychat: {
+              enabled: true,
+            },
+          },
+        } as OpenClawConfig,
+        action: "broadcast",
+        params: {
+          channel: "gatewaychat",
+          targets: ["user-123"],
+          message: "hello from broadcast",
+        },
+        gateway: {
+          clientName: "cli",
+          mode: "cli",
+        },
+      });
+
+      expect(result).toMatchObject({
+        kind: "broadcast",
+        payload: {
+          results: [
+            {
+              channel: "gatewaychat",
+              to: "user-123",
+              ok: true,
+              payload: {
+                ok: true,
+                messageId: "gw-broadcast-1",
+              },
+            },
+          ],
+        },
+      });
+      expect(mocks.executeSendAction).not.toHaveBeenCalled();
+    });
+
+    it("preserves partial-delivery evidence from failed broadcast sends", async () => {
+      const gatewayPlugin = createGatewayActionPlugin({
+        pluginId: "gatewaychat",
+        label: "Gateway Chat",
+        blurb: "Gateway Chat partial broadcast test plugin.",
+        actions: ["send"],
+        messaging: {
+          targetResolver: {
+            looksLikeId: () => true,
+          },
+        },
+        handleAction: vi.fn(async () => jsonResult({ ok: true })),
+      });
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "gatewaychat",
+            source: "test",
+            plugin: gatewayPlugin,
+          },
+        ]),
+      );
+      mocks.callGatewayLeastPrivilege.mockRejectedValue(
+        Object.assign(new Error("second payload failed"), { sentBeforeError: true }),
+      );
+
+      const result = await runMessageAction({
+        cfg: {
+          channels: {
+            gatewaychat: {
+              enabled: true,
+            },
+          },
+        } as OpenClawConfig,
+        action: "broadcast",
+        params: {
+          channel: "gatewaychat",
+          targets: ["user-123"],
+          message: "hello from broadcast",
+        },
+        gateway: {
+          clientName: "cli",
+          mode: "cli",
+        },
+      });
+
+      expect(result).toMatchObject({
+        kind: "broadcast",
+        payload: {
+          results: [
+            {
+              channel: "gatewaychat",
+              to: "user-123",
+              ok: false,
+              sentBeforeError: true,
+              error: "second payload failed",
+            },
+          ],
+        },
+      });
+    });
+
     it("preserves buffer-only send bytes for gateway-side materialization", async () => {
       const gatewayPlugin = createGatewayActionPlugin({
         pluginId: "gatewaychat",
