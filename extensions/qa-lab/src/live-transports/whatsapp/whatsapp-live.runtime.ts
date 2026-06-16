@@ -1895,6 +1895,7 @@ async function waitForScenarioObservedMessage(
       label: string;
       match: (message: WhatsAppQaDriverObservedMessage) => boolean;
     }>;
+    expectedSender?: (message: WhatsAppQaDriverObservedMessage) => boolean;
     match: (message: WhatsAppQaDriverObservedMessage) => boolean;
     observedAfter?: Date;
     timeoutMs?: number;
@@ -1906,7 +1907,8 @@ async function waitForScenarioObservedMessage(
       observedAfter: params.observedAfter,
       timeoutMs: params.timeoutMs ?? 45_000,
       match: (candidate) =>
-        candidate.fromPhoneE164 === context.sutPhoneE164 && params.match(candidate),
+        (params.expectedSender?.(candidate) ?? candidate.fromPhoneE164 === context.sutPhoneE164) &&
+        params.match(candidate),
     });
   } catch (error) {
     if (/\btimed out waiting for WhatsApp QA driver message\b/iu.test(formatErrorMessage(error))) {
@@ -2522,6 +2524,8 @@ async function runWhatsAppScenario(params: {
   sutAuthDir: string;
   sutPhoneE164: string;
   groupJid?: string;
+  onGatewayDebugPreserveFailure?: (error: unknown) => void;
+  onGatewayDebugPreserved?: () => void;
 }): Promise<WhatsAppQaScenarioResult> {
   const scenarioRun = params.scenario.buildRun();
   if (scenarioRun.kind !== "approval" && scenarioRun.target === "group" && !params.groupJid) {
@@ -2709,26 +2713,19 @@ async function runWhatsAppScenario(params: {
         details: "no reply",
       };
     }
-    const reply = await params.driver.waitForMessage({
+    const reply = await waitForScenarioObservedMessage(scenarioContext, {
       observedAfter: requestStartedAt,
       timeoutMs: params.scenario.timeoutMs,
-      match: (message) =>
-        (scenarioRun.target === "group"
+      expectedSender: (message) =>
+        scenarioRun.target === "group"
           ? message.fromJid === params.groupJid
-          : message.fromPhoneE164 === params.sutPhoneE164) &&
-        messageMatches(message as WhatsAppObservedMessage, scenarioRun.matchText),
+          : message.fromPhoneE164 === params.sutPhoneE164,
+      match: (message) => messageMatches(message as WhatsAppObservedMessage, scenarioRun.matchText),
     });
-    const observed: WhatsAppObservedMessage = {
-      ...reply,
-      matchedScenario: true,
-      scenarioId: params.scenario.id,
-      scenarioTitle: params.scenario.title,
-    };
     scenarioRun.verify?.(reply, scenarioContext);
-    params.observedMessages.push(observed);
     const afterReplyDetails = await scenarioRun.afterReply?.(reply, scenarioContext);
     const batchDetails = await assertWhatsAppScenarioMessageBatch({
-      alreadyRecordedMessageIds: new Set(observed.messageId ? [observed.messageId] : []),
+      alreadyRecordedMessageIds: new Set(reply.messageId ? [reply.messageId] : []),
       context: scenarioContext,
       observedAfter: requestStartedAt,
       run: scenarioRun,
@@ -2754,8 +2751,13 @@ async function runWhatsAppScenario(params: {
       },
     };
   } catch (error) {
-    preservedGatewayDebug = true;
-    await gatewayHarness.stop({ preserveToDir: params.gatewayDebugDirPath }).catch(() => {});
+    try {
+      await gatewayHarness.stop({ preserveToDir: params.gatewayDebugDirPath });
+      preservedGatewayDebug = true;
+      params.onGatewayDebugPreserved?.();
+    } catch (preserveError) {
+      params.onGatewayDebugPreserveFailure?.(preserveError);
+    }
     throw error;
   } finally {
     if (!preservedGatewayDebug) {
@@ -3074,6 +3076,8 @@ export async function runWhatsAppQaLive(params: {
       }
       let driverAttempt = 1;
       while (true) {
+        let scenarioGatewayDebugPreserved = false;
+        const scenarioGatewayDebugPreserveFailures: unknown[] = [];
         try {
           const result = await runWhatsAppScenario({
             driver: activeDriver,
@@ -3090,6 +3094,12 @@ export async function runWhatsAppQaLive(params: {
             sutAccountId,
             sutAuthDir,
             sutPhoneE164: runtimeEnv.sutPhoneE164,
+            onGatewayDebugPreserved: () => {
+              scenarioGatewayDebugPreserved = true;
+            },
+            onGatewayDebugPreserveFailure: (error) => {
+              scenarioGatewayDebugPreserveFailures.push(error);
+            },
           });
           const recordedResult =
             driverAttempt > 1
@@ -3126,7 +3136,12 @@ export async function runWhatsAppQaLive(params: {
             closeDriverSession = () => activeDriver.close();
             continue;
           }
-          preservedGatewayDebugArtifacts = true;
+          if (scenarioGatewayDebugPreserved) {
+            preservedGatewayDebugArtifacts = true;
+          }
+          for (const preserveError of scenarioGatewayDebugPreserveFailures) {
+            appendLiveLaneIssue(cleanupIssues, "gateway debug preserve failed", preserveError);
+          }
           const result: WhatsAppQaScenarioResult = {
             id: scenario.id,
             title: scenario.title,
@@ -3286,6 +3301,7 @@ export const testing = {
   parseWhatsAppQaCredentialPayload,
   renderWhatsAppQaMarkdown,
   runWhatsAppStructuredInboundChecks,
+  waitForScenarioObservedMessage,
   redactWhatsAppQaScenarioResults,
   resolveWhatsAppQaMessageTargets,
   resolveWhatsAppQaRuntimeEnv,

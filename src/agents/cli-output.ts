@@ -8,6 +8,10 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import type { CliBackendConfig } from "../config/types.js";
 import { extractBalancedJsonFragments } from "../shared/balanced-json.js";
 import { isRecord } from "../utils.js";
+import type {
+  MessagingToolSend,
+  MessagingToolSourceReplyPayload,
+} from "./embedded-agent-messaging.types.js";
 
 type CliUsage = {
   input?: number;
@@ -24,6 +28,12 @@ export type CliOutput = {
   sessionId?: string;
   usage?: CliUsage;
   finalPromptText?: string;
+  didSendViaMessagingTool?: boolean;
+  didDeliverSourceReplyViaMessageTool?: boolean;
+  messagingToolSentTexts?: string[];
+  messagingToolSentMediaUrls?: string[];
+  messagingToolSentTargets?: MessagingToolSend[];
+  messagingToolSourceReplyPayloads?: MessagingToolSourceReplyPayload[];
 };
 
 /** Incremental assistant text emitted while parsing a streaming CLI response. */
@@ -53,7 +63,8 @@ function isClaudeCliProvider(providerId: string): boolean {
   return normalizeLowercaseStringOrEmpty(providerId) === "claude-cli";
 }
 
-function usesClaudeStreamJsonDialect(params: {
+/** Returns whether JSONL output carries correlated Claude-style tool events. */
+export function supportsCliJsonlToolEvents(params: {
   backend: CliBackendConfig;
   providerId: string;
 }): boolean {
@@ -67,7 +78,7 @@ function isClaudeStreamJsonResult(params: {
   providerId: string;
   parsed: Record<string, unknown>;
 }): boolean {
-  return usesClaudeStreamJsonDialect(params) && params.parsed.type === "result";
+  return supportsCliJsonlToolEvents(params) && params.parsed.type === "result";
 }
 
 function extractJsonObjectCandidates(raw: string): string[] {
@@ -368,7 +379,7 @@ function parseClaudeCliJsonlResult(params: {
   sessionId?: string;
   usage?: CliUsage;
 }): CliOutput | null {
-  if (!usesClaudeStreamJsonDialect(params)) {
+  if (!supportsCliJsonlToolEvents(params)) {
     return null;
   }
   if (
@@ -395,7 +406,7 @@ function parseClaudeCliStreamingDelta(params: {
   sessionId?: string;
   usage?: CliUsage;
 }): CliStreamingDelta | null {
-  if (!usesClaudeStreamJsonDialect(params)) {
+  if (!supportsCliJsonlToolEvents(params)) {
     return null;
   }
   if (params.parsed.type !== "stream_event" || !isRecord(params.parsed.event)) {
@@ -510,7 +521,7 @@ function dispatchClaudeCliStreamingToolEvent(params: {
   onToolUseStart?: (delta: CliToolUseStartDelta) => void;
   onToolResult?: (delta: CliToolResultDelta) => void;
 }): void {
-  if (!usesClaudeStreamJsonDialect(params)) {
+  if (!supportsCliJsonlToolEvents(params)) {
     return;
   }
   const tracker = params.tracker;
@@ -644,7 +655,7 @@ export function createCliJsonlStreamingParser(params: {
   // Classification is keyed on consumer presence so reclassified pre-tool text
   // always has a destination; a separate enable flag let it be dropped (#92092).
   const classifyClaudeCommentary =
-    Boolean(params.onCommentaryText) && usesClaudeStreamJsonDialect(params);
+    Boolean(params.onCommentaryText) && supportsCliJsonlToolEvents(params);
 
   const flushPendingClaudeAssistantText = () => {
     if (!pendingClaudeText) {

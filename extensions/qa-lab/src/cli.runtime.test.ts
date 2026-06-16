@@ -124,6 +124,7 @@ function makeQaEvidence(entries: unknown[] = []) {
     kind: "openclaw.qa.evidence-summary",
     schemaVersion: 2,
     generatedAt: "2026-06-14T00:00:00.000Z",
+    evidenceMode: "full",
     entries,
   };
 }
@@ -283,6 +284,13 @@ describe("qa cli runtime", () => {
       baseUrl: "http://127.0.0.1:58000",
       runSelfCheck: vi.fn().mockResolvedValue({
         outputPath: "/tmp/report.md",
+        report: "",
+        checks: [{ name: "QA self-check scenario", status: "pass" }],
+        scenarioResult: {
+          name: "QA self-check scenario",
+          status: "pass",
+          steps: [],
+        },
       }),
       stop: vi.fn(),
     });
@@ -441,6 +449,8 @@ describe("qa cli runtime", () => {
       expect(suiteArgs.scenarioIds).not.toContain("thinking-slash-model-remap");
       expect(process.env.OPENCLAW_QA_PROFILE).toBe("release");
       const evidence = JSON.parse(await fs.readFile(suiteEvidencePath, "utf8")) as {
+        evidenceMode?: unknown;
+        entries?: unknown[];
         profile?: unknown;
         scorecard?: {
           run?: { evidenceEntryCount?: unknown };
@@ -453,6 +463,7 @@ describe("qa cli runtime", () => {
         };
       };
       expect(evidence.profile).toBe("smoke-ci");
+      expect(evidence.evidenceMode).toBe("slim");
       expect(evidence.scorecard).toMatchObject({
         run: {
           evidenceEntryCount: 1,
@@ -468,6 +479,7 @@ describe("qa cli runtime", () => {
           fulfilled: 1,
         },
       });
+      expect(evidence.entries?.[0]).not.toHaveProperty("execution");
       expect(JSON.stringify(evidence.scorecard)).not.toContain("dm-chat-baseline");
       expectWriteContains(stdoutWrite, "QA run profile: smoke-ci; categories: 1; scenarios:");
       expectWriteContains(stdoutWrite, `QA profile scorecard: ${suiteEvidencePath}`);
@@ -2147,6 +2159,33 @@ describe("qa cli runtime", () => {
       repoRoot: path.resolve("/tmp/openclaw-repo"),
       outputPath: path.resolve("/tmp/openclaw-repo", ".artifacts/qa/self-check.md"),
     });
+  });
+
+  it("fails unsuccessful self-checks after stopping the lab server", async () => {
+    const stop = vi.fn();
+    startQaLabServer.mockResolvedValueOnce({
+      baseUrl: "http://127.0.0.1:58000",
+      runSelfCheck: vi.fn().mockResolvedValue({
+        outputPath: "/tmp/failed-report.md",
+        report: "",
+        checks: [{ name: "QA self-check scenario", status: "fail" }],
+        scenarioResult: {
+          name: "QA self-check scenario",
+          status: "fail",
+          steps: [],
+        },
+      }),
+      stop,
+    });
+
+    await expect(
+      runQaLabSelfCheckCommand({
+        repoRoot: "/tmp/openclaw-repo",
+      }),
+    ).rejects.toThrow("QA self-check failed. See /tmp/failed-report.md.");
+
+    expect(stop).toHaveBeenCalledOnce();
+    expectWriteContains(stdoutWrite, "QA self-check report: /tmp/failed-report.md");
   });
 
   it("resolves docker scaffold paths relative to the explicit repo root", async () => {

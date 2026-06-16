@@ -52,6 +52,8 @@ import {
   closeMemoryDatabase,
   openMemoryDatabaseAtPath,
   openMemoryReindexTempDatabaseAtPath,
+  releaseMemoryDatabaseSwapLock,
+  restoreMemoryDatabaseSwapLock,
 } from "./manager-db.js";
 import { isMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
 import {
@@ -2431,6 +2433,7 @@ export abstract class MemoryManagerSyncOps {
     let tempDb: DatabaseSync | undefined;
     let tempDbClosed = false;
     let originalDbClosed = false;
+    let originalDbSwapLockReleased = false;
     const originalRetryState = this.snapshotReindexRetryState();
     const shouldRetryMemoryOnFailure = this.sources.has("memory");
     const shouldRetrySessionsOnFailure = this.shouldSyncSessions(
@@ -2451,6 +2454,10 @@ export abstract class MemoryManagerSyncOps {
       if (originalDbClosed) {
         this.db = openMemoryDatabaseAtPath(dbPath, this.settings.store.vector.enabled, false);
       } else {
+        if (originalDbSwapLockReleased) {
+          restoreMemoryDatabaseSwapLock(originalDb, dbPath);
+          originalDbSwapLockReleased = false;
+        }
         this.db = originalDb;
       }
       this.fts.available = originalState.ftsAvailable;
@@ -2477,6 +2484,8 @@ export abstract class MemoryManagerSyncOps {
       this.fts.loadError = undefined;
       this.ensureSchema();
 
+      originalDbSwapLockReleased = true;
+      releaseMemoryDatabaseSwapLock(originalDb);
       const nextMeta = await runMemoryAtomicReindex({
         targetPath: dbPath,
         tempPath: tempDbPath,

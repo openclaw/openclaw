@@ -41,6 +41,7 @@ import {
 } from "../../plugins/status.js";
 import { resolveUserPath } from "../../utils.js";
 import {
+  rejectNonOwnerCommand,
   rejectUnauthorizedCommand,
   requireCommandFlagEnabled,
   requireGatewayClientScope,
@@ -142,6 +143,10 @@ function isPluginsWriteAction(action: string): boolean {
   return action === "install" || action === "enable" || action === "disable";
 }
 
+function hasGatewayAdminScope(params: Parameters<CommandHandler>[0]): boolean {
+  return params.ctx.GatewayClientScopes?.includes("operator.admin") === true;
+}
+
 function rejectNixModePluginWrite(): {
   shouldContinue: false;
   reply: { text: string };
@@ -210,6 +215,7 @@ function findTrustedCatalogPackageInstall(packageName: string):
 
 async function installPluginFromPluginsCommand(params: {
   raw: string;
+  config: OpenClawConfig;
   snapshot: ConfigSnapshotForInstallPersist;
 }): Promise<{ ok: true; pluginId: string } | { ok: false; error: string }> {
   const fileSpec = resolveFileNpmSpecToLocalPath(params.raw);
@@ -222,6 +228,7 @@ async function installPluginFromPluginsCommand(params: {
   if (fs.existsSync(resolved)) {
     const result = await installPluginFromPath({
       path: resolved,
+      config: params.config,
       logger: createPluginInstallLogger(),
     });
     if (!result.ok) {
@@ -253,6 +260,7 @@ async function installPluginFromPluginsCommand(params: {
   if (gitSpec) {
     const result = await installPluginFromGitSpec({
       spec: params.raw,
+      config: params.config,
       logger: createPluginInstallLogger(),
     });
     if (!result.ok) {
@@ -279,6 +287,7 @@ async function installPluginFromPluginsCommand(params: {
   if (clawhubSpec) {
     const result = await installPluginFromClawHub({
       spec: params.raw,
+      config: params.config,
       logger: createPluginInstallLogger(),
     });
     if (!result.ok) {
@@ -309,6 +318,7 @@ async function installPluginFromPluginsCommand(params: {
   });
   const result = await installPluginFromNpmSpec({
     spec: params.raw,
+    config: params.config,
     ...(officialNpmTrust
       ? {
           expectedPluginId: officialNpmTrust.pluginId,
@@ -442,6 +452,12 @@ export const handlePluginsCommand: CommandHandler = async (params, allowTextComm
     if (missingAdminScope) {
       return missingAdminScope;
     }
+    if (!params.command.senderIsOwner && !hasGatewayAdminScope(params)) {
+      const nonOwner = rejectNonOwnerCommand(params, "/plugins write");
+      if (nonOwner) {
+        return nonOwner;
+      }
+    }
     const nixModeWrite = rejectNixModePluginWrite();
     if (nixModeWrite) {
       return nixModeWrite;
@@ -458,6 +474,7 @@ export const handlePluginsCommand: CommandHandler = async (params, allowTextComm
     }
     const installed = await installPluginFromPluginsCommand({
       raw: pluginsCommand.spec,
+      config: loadedConfig.snapshot.config,
       snapshot: loadedConfig.snapshot,
     });
     if (!installed.ok) {

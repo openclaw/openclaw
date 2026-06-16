@@ -176,8 +176,6 @@ vi.mock("../gateway/session-utils.js", () => ({
   loadSessionEntry: (sessionKey: string, opts?: { agentId?: string }) =>
     loadSessionEntryMock(sessionKey, opts),
   migrateAndPruneGatewaySessionStoreKey: ({ key }: { key: string }) => ({ primaryKey: key }),
-  readSessionMessagesAsync: (...args: Parameters<typeof readSessionMessagesAsyncMock>) =>
-    readSessionMessagesAsyncMock(...args),
   resolveGatewaySessionStoreTarget: ({ key }: { key: string }) => ({
     canonicalKey: key,
     storePath: "/tmp/openclaw-sessions.json",
@@ -193,8 +191,10 @@ vi.mock("../gateway/session-reset-service.js", () => ({
   performGatewaySessionReset: () => ({ ok: true, key: "agent:main:main", entry: {} }),
 }));
 
-vi.mock("../gateway/session-utils.fs.js", () => ({
+vi.mock("../gateway/session-transcript-readers.js", () => ({
   capArrayByJsonBytes: (items: unknown[]) => ({ items }),
+  readSessionMessagesAsync: (...args: Parameters<typeof readSessionMessagesAsyncMock>) =>
+    readSessionMessagesAsyncMock(...args),
 }));
 
 vi.mock("../gateway/sessions-patch.js", () => ({
@@ -650,9 +650,12 @@ describe("EmbeddedTuiBackend", () => {
     await backend.loadHistory({ sessionKey: "agent:main:main" });
 
     expect(readSessionMessagesAsyncMock).toHaveBeenCalledWith(
-      "sess-main",
-      "/tmp/openclaw-sessions.json",
-      undefined,
+      {
+        agentId: "main",
+        sessionFile: undefined,
+        sessionId: "sess-main",
+        storePath: "/tmp/openclaw-sessions.json",
+      },
       {
         mode: "recent",
         maxMessages: 200,

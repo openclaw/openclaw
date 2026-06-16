@@ -417,6 +417,10 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain(
       'gh_with_retry workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@"',
     );
+    expect(workflow).toContain(
+      "did not return an Actions run URL; refusing to guess from recent workflow_dispatch runs",
+    );
+    expect(workflow).not.toContain("BEFORE_IDS=");
     expect(workflow).toContain("child run used ${head_sha}, expected ${TARGET_SHA}");
     expect(workflow).toContain(
       "Dispatch Full Release Validation from a ref pinned to the target SHA",
@@ -1268,8 +1272,9 @@ describe("package artifact reuse", () => {
       TARGET_SHA: "${{ needs.resolve_target.outputs.sha }}",
     });
     expectTextToIncludeAll(dispatchStep.run, [
-      'gh_with_retry workflow run npm-telegram-beta-e2e.yml --ref "$CHILD_WORKFLOW_REF" "${args[@]}"',
-      'before_json="$(gh_with_retry run list --workflow npm-telegram-beta-e2e.yml',
+      'dispatch_output="$(gh_with_retry workflow run npm-telegram-beta-e2e.yml --ref "$CHILD_WORKFLOW_REF" "${args[@]}")"',
+      "sed -nE 's#.*actions/runs/([0-9]+).*#\\1#p'",
+      "did not return an Actions run URL; refusing to guess from recent workflow_dispatch runs",
       '-f harness_ref="$TARGET_SHA"',
       'args=(-f package_spec="${PACKAGE_SPEC:-openclaw@beta}"',
       'if [[ -z "${PACKAGE_SPEC// }" ]]; then',
@@ -1848,6 +1853,8 @@ describe("package artifact reuse", () => {
       "already has a public GitHub release page without complete postpublish evidence",
     );
     expect(releaseWorkflow).toContain("registry tarball");
+    expect(releaseWorkflow).toContain("openclawNpmTarball");
+    expect(releaseWorkflow).not.toContain('npm view "openclaw@${release_version}" dist.tarball');
     expect(releaseWorkflow).toContain("release SHA");
     expect(clawHubReleasePlanScript).toContain("not awaited by this proof");
     expect(releaseWorkflow).toContain("wait_for_job_success");

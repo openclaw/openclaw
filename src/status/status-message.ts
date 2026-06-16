@@ -43,7 +43,7 @@ import {
 } from "../config/sessions.js";
 import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readRecentSessionUsageFromTranscript } from "../gateway/session-utils.fs.js";
+import { readRecentSessionUsageFromTranscript } from "../gateway/session-transcript-readers.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { resolveCommitHash } from "../infra/git-commit.js";
 import {
@@ -108,6 +108,7 @@ export type StatusArgs = {
   mediaDecisions?: ReadonlyArray<MediaUnderstandingDecision>;
   subagentsLine?: string;
   taskLine?: string;
+  pluginHealthLine?: string;
   includeTranscriptUsage?: boolean;
   now?: number;
 };
@@ -319,10 +320,12 @@ const readUsageFromSessionLog = (
 
   try {
     const snapshot = readRecentSessionUsageFromTranscript(
-      sessionId,
-      storePath,
-      sessionEntry?.sessionFile,
-      agentId ?? (sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined),
+      {
+        agentId: agentId ?? (sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined),
+        sessionFile: sessionEntry?.sessionFile,
+        sessionId,
+        storePath,
+      },
       256 * 1024,
     );
     if (!snapshot) {
@@ -1086,6 +1089,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     args.subagentsLine,
     args.taskLine,
     `⚙️ ${optionsLine}`,
+    args.pluginHealthLine,
     pluginStatusLine ? `🧩 ${pluginStatusLine}` : null,
     voiceLine,
     activationLine,

@@ -11,6 +11,8 @@ import type {
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import {
+  escapeTelegramHtml,
+  limitTelegramRichHtmlNesting,
   markdownToTelegramRichHtml,
   sanitizeTelegramRichHtml,
   splitTelegramHtmlChunks,
@@ -25,6 +27,8 @@ type TelegramRichMessageReplyMarkup =
 
 export const TELEGRAM_RICH_TEXT_LIMIT = 32_768;
 export const TELEGRAM_RICH_BLOCK_LIMIT = 500;
+export const TELEGRAM_RICH_MEDIA_LIMIT = 50;
+export const TELEGRAM_RICH_NESTING_LIMIT = 16;
 
 export type TelegramInputRichMessage =
   | {
@@ -49,7 +53,7 @@ export type TelegramRichTextMode = "markdown" | "html";
 
 export type TelegramRichTextChunk = {
   text: string;
-  textMode: TelegramRichTextMode;
+  textMode: "html";
   plainText: string;
 };
 
@@ -166,7 +170,7 @@ export function buildTelegramRichHtml(
   html: string,
   options?: TelegramRichMessageOptions,
 ): TelegramInputRichMessage {
-  const safeHtml = sanitizeTelegramRichHtml(html);
+  const safeHtml = prepareTelegramRichHtml(html);
   return options?.skipEntityDetection === true
     ? { html: safeHtml, skip_entity_detection: true }
     : { html: safeHtml };
@@ -180,6 +184,59 @@ export function buildTelegramRichMessage(
   return textMode === "html"
     ? buildTelegramRichHtml(text, options)
     : buildTelegramRichMarkdown(text, options);
+}
+
+function prepareTelegramRichHtml(html: string): string {
+  return limitTelegramRichHtmlNesting(sanitizeTelegramRichHtml(html), TELEGRAM_RICH_NESTING_LIMIT);
+}
+
+const TELEGRAM_RICH_HTML_CHUNK_LIMITS = {
+  blockLimit: TELEGRAM_RICH_BLOCK_LIMIT,
+  mediaLimit: TELEGRAM_RICH_MEDIA_LIMIT,
+} as const;
+
+function splitPreparedTelegramRichHtml(params: {
+  html: string;
+  sourceFallback: string;
+  textLimit: number;
+}): string[] {
+  try {
+    const chunks = splitTelegramHtmlChunks(
+      params.html,
+      params.textLimit,
+      TELEGRAM_RICH_HTML_CHUNK_LIMITS,
+    );
+    if (chunks.length > 0) {
+      return chunks;
+    }
+  } catch {
+    // Fall through to readable source text when rich planning cannot preserve the payload.
+  }
+  return splitTelegramHtmlChunks(escapeTelegramHtml(params.sourceFallback), params.textLimit);
+}
+
+export function isTelegramRichMessageWithinStructuralLimits(
+  message: TelegramInputRichMessage,
+): boolean {
+  if (message.markdown !== undefined) {
+    if (splitTelegramRichMarkdownBlocks(message.markdown, TELEGRAM_RICH_BLOCK_LIMIT).length > 1) {
+      return false;
+    }
+    return (
+      splitTelegramHtmlChunks(
+        prepareTelegramRichHtml(markdownToTelegramRichHtml(message.markdown)),
+        TELEGRAM_RICH_TEXT_LIMIT,
+        TELEGRAM_RICH_HTML_CHUNK_LIMITS,
+      ).length <= 1
+    );
+  }
+  return (
+    splitTelegramHtmlChunks(
+      prepareTelegramRichHtml(message.html),
+      TELEGRAM_RICH_TEXT_LIMIT,
+      TELEGRAM_RICH_HTML_CHUNK_LIMITS,
+    ).length <= 1
+  );
 }
 
 type RichMarkdownFenceSpan = {
@@ -352,7 +409,11 @@ export function splitTelegramRichTextChunks(params: {
   chunkMode: ChunkMode;
 }): string[] {
   return params.textMode === "html"
-    ? splitTelegramHtmlChunks(sanitizeTelegramRichHtml(params.text), params.textLimit)
+    ? splitTelegramHtmlChunks(
+        prepareTelegramRichHtml(params.text),
+        params.textLimit,
+        TELEGRAM_RICH_HTML_CHUNK_LIMITS,
+      )
     : splitTelegramRichMarkdownChunks(params.text, params.textLimit, params.chunkMode);
 }
 
@@ -365,15 +426,26 @@ export function splitTelegramRichMessageTextChunks(params: {
   skipEntityDetection?: boolean;
 }): TelegramRichTextChunk[] {
   const renderMarkdownChunk = (chunk: string) =>
-    markdownToTelegramRichHtml(chunk, {
-      tableMode: params.tableMode,
-      skipEntityDetection: params.skipEntityDetection,
-    });
+    prepareTelegramRichHtml(
+      markdownToTelegramRichHtml(chunk, {
+        tableMode: params.tableMode,
+        skipEntityDetection: params.skipEntityDetection,
+      }),
+    );
   const htmlChunks =
     params.textMode === "html"
-      ? splitTelegramHtmlChunks(sanitizeTelegramRichHtml(params.text), params.textLimit)
+      ? splitPreparedTelegramRichHtml({
+          html: prepareTelegramRichHtml(params.text),
+          sourceFallback: params.text,
+          textLimit: params.textLimit,
+        })
       : splitTelegramRichMarkdownChunks(params.text, params.textLimit, params.chunkMode).flatMap(
-          (chunk) => splitTelegramHtmlChunks(renderMarkdownChunk(chunk), params.textLimit),
+          (chunk) =>
+            splitPreparedTelegramRichHtml({
+              html: renderMarkdownChunk(chunk),
+              sourceFallback: chunk,
+              textLimit: params.textLimit,
+            }),
         );
   return htmlChunks.map((chunk) => ({
     text: chunk,

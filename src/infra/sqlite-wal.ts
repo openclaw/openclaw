@@ -15,7 +15,11 @@ export const DEFAULT_SQLITE_WAL_CHECKPOINT_INTERVAL_MS = 30 * 60 * 1000;
  */
 export const DEFAULT_SQLITE_WAL_TRUNCATE_INTERVAL_MS = DEFAULT_SQLITE_WAL_CHECKPOINT_INTERVAL_MS;
 const LINUX_NFS_SUPER_MAGIC = 0x6969;
+const LINUX_SMB_SUPER_MAGIC = 0x517b;
+const LINUX_CIFS_SUPER_MAGIC = 0xff534d42;
+const LINUX_SMB2_SUPER_MAGIC = 0xfe534d42;
 const PROC_MOUNTINFO_PATH = "/proc/self/mountinfo";
+const NETWORK_FILESYSTEM_TYPES = new Set(["cifs", "smbfs", "smb2", "smb3"]);
 
 type IntervalHandle = ReturnType<typeof setInterval> & {
   unref?: () => void;
@@ -133,33 +137,66 @@ function isPathWithinMount(targetPath: string, mountPoint: string): boolean {
   );
 }
 
-function isNfsMountType(fsType: string): boolean {
-  return fsType.toLowerCase().startsWith("nfs");
+function isNetworkMountType(fsType: string): boolean {
+  const normalized = fsType.toLowerCase();
+  return normalized.startsWith("nfs") || NETWORK_FILESYSTEM_TYPES.has(normalized);
 }
 
-function isNfsMountEntryPath(targetPath: string): boolean {
+function isNetworkMountEntryPath(targetPath: string): boolean {
   const mountEntry = readMountEntries()
     .filter((entry) => isPathWithinMount(targetPath, entry.mountPoint))
     .toSorted((a, b) => b.mountPoint.length - a.mountPoint.length)[0];
-  return mountEntry ? isNfsMountType(mountEntry.fsType) : false;
+  return mountEntry ? isNetworkMountType(mountEntry.fsType) : false;
 }
 
-function isNfsBackedPath(targetPath: string): boolean {
+function isWindowsUncPath(targetPath: string): boolean {
+  return (
+    /^\\\\\?\\UNC\\[^\\]+\\[^\\]+/i.test(targetPath) ||
+    /^\\\\(?![?.]\\)[^\\]+\\[^\\]+/.test(targetPath)
+  );
+}
+
+function isWindowsDrivePath(targetPath: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(targetPath) || /^\\\\\?\\[A-Za-z]:[\\/]/i.test(targetPath);
+}
+
+function isNetworkBackedPath(targetPath: string): boolean {
+  if (process.platform === "win32") {
+    const normalizedTargetPath = path.win32.normalize(targetPath);
+    if (isWindowsUncPath(normalizedTargetPath)) {
+      return true;
+    }
+    if (isWindowsDrivePath(normalizedTargetPath)) {
+      try {
+        return isWindowsUncPath(path.win32.normalize(fs.realpathSync.native(targetPath)));
+      } catch {
+        // Windows can deny SMB path normalization when parent components are
+        // unreadable. Treat an unclassifiable opened database as network-backed.
+        return true;
+      }
+    }
+  }
   if (typeof fs.statfsSync !== "function") {
-    return isNfsMountEntryPath(targetPath);
+    return isNetworkMountEntryPath(targetPath);
   }
   const checkedPath = findExistingVolumePath(targetPath);
   if (!checkedPath) {
     return false;
   }
   try {
-    if (fs.statfsSync(checkedPath).type === LINUX_NFS_SUPER_MAGIC) {
+    const filesystemType = fs.statfsSync(checkedPath).type;
+    if (
+      filesystemType === LINUX_NFS_SUPER_MAGIC ||
+      filesystemType === LINUX_SMB_SUPER_MAGIC ||
+      filesystemType === LINUX_CIFS_SUPER_MAGIC ||
+      filesystemType === LINUX_SMB2_SUPER_MAGIC
+    ) {
       return true;
     }
   } catch {
-    return isNfsMountEntryPath(checkedPath);
+    return isNetworkMountEntryPath(checkedPath);
   }
-  return isNfsMountEntryPath(checkedPath);
+  return isNetworkMountEntryPath(checkedPath);
 }
 
 function readJournalModeResult(row: unknown): string | null {
@@ -179,7 +216,7 @@ function requireRollbackJournalMode(db: DatabaseSync, options: SqliteWalMaintena
     const location = options.databasePath ? ` at ${options.databasePath}` : "";
     const actual = journalMode ?? "unknown";
     throw new Error(
-      `${label}${location} is on an NFS-backed volume but SQLite kept journal_mode=${actual}; refusing to continue with WAL on NFS.`,
+      `${label}${location} is on a network-backed volume but SQLite kept journal_mode=${actual}; refusing to continue with WAL on network storage.`,
     );
   }
 }
@@ -200,7 +237,7 @@ export function configureSqliteWalMaintenance(
   const timerIntervalMs = Math.min(checkpointIntervalMs, MAX_TIMER_TIMEOUT_MS);
   const checkpointMode = options.checkpointMode ?? "TRUNCATE";
   const periodicCheckpointMode = options.checkpointMode ?? "PASSIVE";
-  if (options.databasePath && isNfsBackedPath(options.databasePath)) {
+  if (options.databasePath && isNetworkBackedPath(options.databasePath)) {
     requireRollbackJournalMode(db, options);
     return {
       checkpoint: () => true,

@@ -24,6 +24,7 @@ import type {
 } from "../../plugins/cli-backend.types.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { resolveSkillsPromptForRun } from "../../skills/loading/workspace.js";
 import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
@@ -289,6 +290,19 @@ export async function prepareCliRunContext(
     params.extraSystemPromptStatic !== undefined
       ? hashCliSessionText(params.extraSystemPromptStatic.trim() || undefined)
       : hashCliSessionText(extraSystemPrompt);
+  const requireExplicitMessageTarget =
+    params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey);
+  const messageToolPolicyHash =
+    params.sourceReplyDeliveryMode !== undefined ||
+    params.requireExplicitMessageTarget !== undefined ||
+    requireExplicitMessageTarget
+      ? hashCliSessionText(
+          JSON.stringify({
+            sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+            requireExplicitMessageTarget,
+          }),
+        )
+      : undefined;
 
   const modelId = (params.model ?? "default").trim() || "default";
   const normalizedModel = normalizeCliModel(modelId, backendResolved.config);
@@ -359,6 +373,7 @@ export async function prepareCliRunContext(
     }
     mcpLoopbackRuntime = prepareDeps.getActiveMcpLoopbackRuntime();
   }
+  const mcpDeliveryCaptureEnabled = bundleMcpEnabled && Boolean(mcpLoopbackRuntime);
   const preparedBackend = await prepareCliBundleMcpConfig({
     enabled: bundleMcpEnabled,
     mode: backendResolved.bundleMcpMode,
@@ -385,8 +400,8 @@ export async function prepareCliRunContext(
           OPENCLAW_MCP_CURRENT_INBOUND_AUDIO: params.currentInboundAudio === true ? "true" : "",
           OPENCLAW_MCP_INBOUND_EVENT_KIND: params.currentInboundEventKind ?? "",
           OPENCLAW_MCP_SOURCE_REPLY_DELIVERY_MODE: params.sourceReplyDeliveryMode ?? "",
-          OPENCLAW_MCP_REQUIRE_EXPLICIT_MESSAGE_TARGET:
-            params.requireExplicitMessageTarget === true ? "true" : "",
+          OPENCLAW_MCP_REQUIRE_EXPLICIT_MESSAGE_TARGET: requireExplicitMessageTarget ? "true" : "",
+          OPENCLAW_MCP_CLI_CAPTURE_KEY: "",
         }
       : undefined,
     warn: (message) => cliBackendLog.warn(message),
@@ -476,6 +491,7 @@ export async function prepareCliRunContext(
           accountId: params.agentAccountId,
           inboundEventKind: params.currentInboundEventKind,
           sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+          requireExplicitMessageTarget,
           senderIsOwner: params.senderIsOwner,
         }).tools
       : [];
@@ -492,6 +508,7 @@ export async function prepareCliRunContext(
           authEpoch,
           authEpochVersion: CLI_AUTH_EPOCH_VERSION,
           extraSystemPromptHash,
+          messageToolPolicyHash,
           promptToolNamesHash,
           cwdHash,
           mcpConfigHash: preparedBackendFinal.mcpConfigHash,
@@ -585,6 +602,7 @@ export async function prepareCliRunContext(
         defaultThinkLevel: params.thinkLevel,
         extraSystemPrompt,
         sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+        requireExplicitMessageTarget,
         silentReplyPromptMode: params.silentReplyPromptMode,
         runtimeChannel,
         runtimeChatType: params.sessionEntry?.chatType,
@@ -758,6 +776,7 @@ export async function prepareCliRunContext(
       ...params,
       config: contextEngineConfig,
       prompt: preparedPrompt,
+      ...(requireExplicitMessageTarget ? { requireExplicitMessageTarget: true } : {}),
     };
 
     return {
@@ -781,8 +800,10 @@ export async function prepareCliRunContext(
       authEpoch,
       authEpochVersion: CLI_AUTH_EPOCH_VERSION,
       extraSystemPromptHash,
+      messageToolPolicyHash,
       promptToolNamesHash,
       cwdHash,
+      ...(mcpDeliveryCaptureEnabled ? { mcpDeliveryCapture: true } : {}),
     };
   }
   try {
@@ -821,6 +842,7 @@ export async function prepareCliRunContext(
       ...params,
       config: contextEngineConfig,
       prompt: preparedPrompt,
+      ...(requireExplicitMessageTarget ? { requireExplicitMessageTarget: true } : {}),
     };
 
     return {
@@ -848,8 +870,10 @@ export async function prepareCliRunContext(
       authEpoch,
       authEpochVersion: CLI_AUTH_EPOCH_VERSION,
       extraSystemPromptHash,
+      messageToolPolicyHash,
       promptToolNamesHash,
       cwdHash,
+      ...(mcpDeliveryCaptureEnabled ? { mcpDeliveryCapture: true } : {}),
     };
   } catch (err) {
     try {

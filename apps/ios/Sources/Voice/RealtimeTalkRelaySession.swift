@@ -121,7 +121,7 @@ final class RealtimeTalkRelaySession {
     private let gateway: GatewayNodeSession
     private let options: Options
     private let pcmPlayer: PCMStreamingAudioPlaying
-    private let logger = Logger(subsystem: "ai.openclaw", category: "RealtimeTalkRelay")
+    private let logger = Logger(subsystem: "ai.openclawfoundation.app", category: "RealtimeTalkRelay")
     private let onStatus: (String) -> Void
     private let onIssue: (TalkRuntimeIssue) -> Void
     private let onSpeakingChanged: (Bool) -> Void

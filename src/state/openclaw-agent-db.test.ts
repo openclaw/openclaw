@@ -6,6 +6,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { listOpenFileDescriptorsForPath } from "../infra/open-file-descriptors.test-support.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "./openclaw-agent-db.generated.js";
 import {
@@ -93,6 +94,21 @@ describe("openclaw agent database", () => {
       schemaVersion: 1,
     });
     expect(registered?.sizeBytes).toBeGreaterThan(0);
+  });
+
+  it.runIf(process.platform === "linux")("closes the database when initialization fails", () => {
+    const stateDir = createTempStateDir();
+    const databasePath = path.join(stateDir, "agent.sqlite");
+    fs.writeFileSync(databasePath, "not a sqlite database");
+
+    expect(() =>
+      openOpenClawAgentDatabase({
+        agentId: "worker-1",
+        env: { OPENCLAW_STATE_DIR: stateDir },
+        path: databasePath,
+      }),
+    ).toThrow("file is not a database");
+    expect(listOpenFileDescriptorsForPath(databasePath)).toEqual([]);
   });
 
   it("keeps multiple registered paths for the same agent", () => {

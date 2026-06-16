@@ -8,7 +8,9 @@ import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
-import { resolveStorePath, updateSessionStoreEntry } from "../../config/sessions.js";
+import { getRuntimeConfigSnapshot } from "../../config/config.js";
+import { resolveStorePath } from "../../config/sessions.js";
+import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import {
   resolveContextEngine,
@@ -98,6 +100,7 @@ import {
   resolveAuthProfileOrder,
   shouldPreferExplicitConfigApiKeyAuth,
 } from "../model-auth.js";
+import { resolveDefaultModelForAgent } from "../model-selection.js";
 import { resolveThinkingDefault } from "../model-thinking-default.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import {
@@ -277,12 +280,12 @@ async function resetNoRealConversationTokenSnapshot(params: {
   }
   const storePath = resolveStorePath(params.config?.session?.store, { agentId: params.agentId });
   try {
-    await updateSessionStoreEntry({
-      storePath,
-      sessionKey: params.sessionKey,
-      skipMaintenance: true,
-      takeCacheOwnership: true,
-      update: async () => ({
+    await updateSessionEntry(
+      {
+        storePath,
+        sessionKey: params.sessionKey,
+      },
+      async () => ({
         totalTokens: 0,
         totalTokensFresh: true,
         inputTokens: undefined,
@@ -292,7 +295,11 @@ async function resetNoRealConversationTokenSnapshot(params: {
         contextBudgetStatus: undefined,
         updatedAt: Date.now(),
       }),
-    });
+      {
+        skipMaintenance: true,
+        takeCacheOwnership: true,
+      },
+    );
   } catch (err) {
     log.warn(
       `[context-overflow-precheck] failed to reset stale context snapshot for ` +
@@ -524,11 +531,18 @@ function buildHandledReplyPayloads(reply?: ReplyPayload) {
 export function runEmbeddedAgent(
   paramsInput: RunEmbeddedAgentParams,
 ): Promise<EmbeddedAgentRunResult> {
+  const requestedProvider = normalizeOptionalString(paramsInput.provider);
+  const requestedModel = normalizeOptionalString(paramsInput.model);
+  const needsConfiguredDefault = !paramsInput.config && !requestedProvider && !requestedModel;
+  const config =
+    paramsInput.config ??
+    (needsConfiguredDefault ? (getRuntimeConfigSnapshot() ?? undefined) : undefined);
   const lifecycleGeneration =
     paramsInput.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(paramsInput.runId);
   return withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
     runEmbeddedAgentInternal({
       ...paramsInput,
+      config,
       lifecycleGeneration,
     }),
   );
@@ -744,8 +758,17 @@ async function runEmbeddedAgentInternal(
       startupStages.mark("runtime-plugins");
       notifyExecutionPhase("runtime_plugins");
 
-      let provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
-      let modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
+      const requestedProvider = normalizeOptionalString(params.provider);
+      const requestedModel = normalizeOptionalString(params.model);
+      const configuredDefault =
+        !requestedProvider && !requestedModel
+          ? resolveDefaultModelForAgent({
+              cfg: params.config ?? {},
+              agentId: workspaceResolution.agentId,
+            })
+          : undefined;
+      let provider = requestedProvider ?? configuredDefault?.provider ?? DEFAULT_PROVIDER;
+      let modelId = requestedModel ?? configuredDefault?.model ?? DEFAULT_MODEL;
       const agentDir =
         params.agentDir ?? resolveAgentDir(params.config ?? {}, workspaceResolution.agentId);
       const normalizedSessionKey = params.sessionKey?.trim();
@@ -2003,11 +2026,13 @@ async function runEmbeddedAgentInternal(
           if (attempt.contextBudgetStatus) {
             lastContextBudgetStatus = attempt.contextBudgetStatus;
           }
+          // Transcript fallback can outlive a provider or alias transition.
+          // Reuse it only when it reports the effective model for this attempt.
           const sessionAssistantForCandidate =
             !currentAttemptAssistant &&
             !isAssistantForModelRef(sessionLastAssistant, {
-              provider,
-              model: modelId,
+              provider: effectiveModel.provider,
+              model: effectiveModel.id,
             })
               ? undefined
               : sessionLastAssistant;

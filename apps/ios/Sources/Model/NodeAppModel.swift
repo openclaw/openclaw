@@ -88,14 +88,14 @@ final class NodeAppModel {
         var pendingApprovalIDs: [String]?
     }
 
-    private let deepLinkLogger = Logger(subsystem: "ai.openclaw.ios", category: "DeepLink")
-    private let pushWakeLogger = Logger(subsystem: "ai.openclaw.ios", category: "PushWake")
-    private let pendingActionLogger = Logger(subsystem: "ai.openclaw.ios", category: "PendingAction")
-    private let locationWakeLogger = Logger(subsystem: "ai.openclaw.ios", category: "LocationWake")
-    private let watchReplyLogger = Logger(subsystem: "ai.openclaw.ios", category: "WatchReply")
-    private let watchExecApprovalLogger = Logger(subsystem: "ai.openclaw.ios", category: "WatchExecApproval")
+    private let deepLinkLogger = Logger(subsystem: "ai.openclawfoundation.app", category: "DeepLink")
+    private let pushWakeLogger = Logger(subsystem: "ai.openclawfoundation.app", category: "PushWake")
+    private let pendingActionLogger = Logger(subsystem: "ai.openclawfoundation.app", category: "PendingAction")
+    private let locationWakeLogger = Logger(subsystem: "ai.openclawfoundation.app", category: "LocationWake")
+    private let watchReplyLogger = Logger(subsystem: "ai.openclawfoundation.app", category: "WatchReply")
+    private let watchExecApprovalLogger = Logger(subsystem: "ai.openclawfoundation.app", category: "WatchExecApproval")
     private let execApprovalNotificationLogger = Logger(
-        subsystem: "ai.openclaw.ios",
+        subsystem: "ai.openclawfoundation.app",
         category: "ExecApprovalNotification")
     enum CameraHUDKind {
         case photo
@@ -112,6 +112,7 @@ final class NodeAppModel {
     var nodeStatusText: String = "Offline"
     var operatorStatusText: String = "Offline"
     private(set) var isAppleReviewDemoModeEnabled: Bool = false
+    private(set) var isScreenshotFixtureModeEnabled: Bool = false
     var isOperatorGatewayConnected: Bool {
         self.operatorConnected
     }
@@ -204,6 +205,36 @@ final class NodeAppModel {
 
     var operatorSession: GatewayNodeSession {
         self.operatorGateway
+    }
+
+    var localChatFixture: LocalChatFixture? {
+        if self.isScreenshotFixtureModeEnabled { return .appScreenshots }
+        if self.isAppleReviewDemoModeEnabled { return .appleReviewDemo }
+        return nil
+    }
+
+    var isLocalChatFixtureEnabled: Bool {
+        self.localChatFixture != nil
+    }
+
+    var isLocalGatewayFixtureEnabled: Bool {
+        self.isAppleReviewDemoModeEnabled || self.isScreenshotFixtureModeEnabled
+    }
+
+    var chatTransportModeID: String {
+        if self.isScreenshotFixtureModeEnabled { return "screenshots" }
+        if self.isAppleReviewDemoModeEnabled { return "apple-review-demo" }
+        return self.isOperatorGatewayConnected ? "operator" : "offline"
+    }
+
+    func makeChatTransport() -> any OpenClawChatTransport {
+        if self.isScreenshotFixtureModeEnabled {
+            return LocalFixtureChatTransport(fixture: .appScreenshots)
+        }
+        if self.isAppleReviewDemoModeEnabled {
+            return AppleReviewDemoChatTransport()
+        }
+        return IOSGatewayChatTransport(gateway: self.operatorSession)
     }
 
     private(set) var activeGatewayConnectConfig: GatewayConnectConfig?
@@ -547,7 +578,7 @@ final class NodeAppModel {
             await self.operatorGateway.disconnect()
             await self.nodeGateway.disconnect()
             await MainActor.run {
-                guard !self.isAppleReviewDemoModeEnabled else { return }
+                guard !self.isLocalGatewayFixtureEnabled else { return }
                 self.setOperatorConnected(false)
                 self.gatewayConnected = false
                 self.talkMode.updateGatewayConnected(false)
@@ -914,7 +945,7 @@ final class NodeAppModel {
                 await self.operatorGateway.disconnect()
                 await self.nodeGateway.disconnect()
                 await MainActor.run {
-                    guard !self.isAppleReviewDemoModeEnabled else { return }
+                    guard !self.isLocalGatewayFixtureEnabled else { return }
                     self.setOperatorConnected(false)
                     self.gatewayConnected = false
                     self.gatewayStatusText = "Reconnecting…"
@@ -1963,6 +1994,7 @@ extension NodeAppModel {
     /// Preferred entry-point: apply a single config object and start both sessions.
     func applyGatewayConnectConfig(_ cfg: GatewayConnectConfig, forceReconnect: Bool = false) {
         self.isAppleReviewDemoModeEnabled = false
+        self.isScreenshotFixtureModeEnabled = false
         self.connectToGateway(
             url: cfg.url,
             // Preserve the caller-provided stableID (may be empty) and let connectToGateway
@@ -1997,7 +2029,7 @@ extension NodeAppModel {
 
     private func restartGatewaySessionsAfterForegroundStaleConnection() async {
         await self.resetGatewaySessionsForForcedReconnect()
-        guard !self.isAppleReviewDemoModeEnabled else { return }
+        guard !self.isLocalGatewayFixtureEnabled else { return }
         self.setOperatorConnected(false)
         self.gatewayConnected = false
         self.gatewayStatusText = "Reconnecting…"
@@ -2008,6 +2040,7 @@ extension NodeAppModel {
 
     func disconnectGateway() {
         self.isAppleReviewDemoModeEnabled = false
+        self.isScreenshotFixtureModeEnabled = false
         self.gatewayAutoReconnectEnabled = false
         self.gatewayPairingPaused = false
         self.gatewayPairingRequestId = nil
@@ -2043,6 +2076,7 @@ extension NodeAppModel {
 extension NodeAppModel {
     private func prepareForGatewayConnect(stableID: String) {
         self.isAppleReviewDemoModeEnabled = false
+        self.isScreenshotFixtureModeEnabled = false
         self.gatewayAutoReconnectEnabled = true
         self.gatewayPairingPaused = false
         self.gatewayPairingRequestId = nil
@@ -2085,7 +2119,7 @@ extension NodeAppModel {
     }
 
     private func applyGatewayConnectionProblem(_ problem: GatewayConnectionProblem) {
-        guard !self.isAppleReviewDemoModeEnabled else { return }
+        guard !self.isLocalGatewayFixtureEnabled else { return }
         self.lastGatewayProblem = problem
         self.gatewayStatusText = problem.statusText
         self.gatewayServerName = nil
@@ -2111,7 +2145,7 @@ extension NodeAppModel {
     }
 
     private func applyOperatorGatewayConnectionProblem(_ problem: GatewayConnectionProblem) {
-        guard !self.isAppleReviewDemoModeEnabled else { return }
+        guard !self.isLocalGatewayFixtureEnabled else { return }
         self.operatorGatewayProblem = problem
         self.lastGatewayProblem = problem
         self.gatewayStatusText = problem.statusText
@@ -2344,7 +2378,7 @@ extension NodeAppModel {
                         onConnected: { [weak self] in
                             guard let self else { return }
                             let shouldUseConnection = await MainActor.run {
-                                guard !self.isAppleReviewDemoModeEnabled else { return false }
+                                guard !self.isLocalGatewayFixtureEnabled else { return false }
                                 self.setOperatorConnected(true)
                                 self.clearOperatorGatewayConnectionProblemIfCurrent()
                                 self.forceOperatorTalkPermissionUpgradeRequest = false
@@ -2366,7 +2400,7 @@ extension NodeAppModel {
                         onDisconnected: { [weak self] reason in
                             guard let self else { return }
                             await MainActor.run {
-                                guard !self.isAppleReviewDemoModeEnabled else { return }
+                                guard !self.isLocalGatewayFixtureEnabled else { return }
                                 self.setOperatorConnected(false)
                                 self.talkMode.updateGatewayConnected(false)
                                 LiveActivityManager.shared.endActivity(reason: "operator_disconnected")
@@ -2391,7 +2425,7 @@ extension NodeAppModel {
                     GatewayDiagnostics.log("operator gateway connect error: \(error.localizedDescription)")
                     let problem: GatewayConnectionProblem? = await MainActor.run {
                         let nextProblem = GatewayConnectionProblemMapper.map(error: error)
-                        guard !self.isAppleReviewDemoModeEnabled else { return nil }
+                        guard !self.isLocalGatewayFixtureEnabled else { return nil }
                         if let nextProblem {
                             if nextProblem.needsPairingApproval || nextProblem.pauseReconnect {
                                 self.applyOperatorGatewayConnectionProblem(nextProblem)
@@ -2457,7 +2491,7 @@ extension NodeAppModel {
                     continue
                 }
                 await MainActor.run {
-                    guard !self.isAppleReviewDemoModeEnabled else { return }
+                    guard !self.isLocalGatewayFixtureEnabled else { return }
                     self.gatewayStatusText = (attempt == 0) ? "Connecting…" : "Reconnecting…"
                     self.gatewayServerName = nil
                     self.gatewayRemoteAddress = nil
@@ -2485,7 +2519,7 @@ extension NodeAppModel {
                         onConnected: { [weak self] in
                             guard let self else { return }
                             let shouldUseConnection = await MainActor.run {
-                                guard !self.isAppleReviewDemoModeEnabled else { return false }
+                                guard !self.isLocalGatewayFixtureEnabled else { return false }
                                 self.clearGatewayConnectionProblem()
                                 self.gatewayStatusText = "Connected"
                                 self.gatewayServerName = url.host ?? "gateway"
@@ -2544,7 +2578,7 @@ extension NodeAppModel {
                         onDisconnected: { [weak self] reason in
                             guard let self else { return }
                             await MainActor.run {
-                                guard !self.isAppleReviewDemoModeEnabled else { return }
+                                guard !self.isLocalGatewayFixtureEnabled else { return }
                                 if self.shouldKeepGatewayProblemStatus(forDisconnectReason: reason),
                                    let lastGatewayProblem = self.lastGatewayProblem
                                 {
@@ -2594,7 +2628,7 @@ extension NodeAppModel {
                         let nextProblem = GatewayConnectionProblemMapper.map(
                             error: error,
                             preserving: self.lastGatewayProblem)
-                        guard !self.isAppleReviewDemoModeEnabled else { return nil }
+                        guard !self.isLocalGatewayFixtureEnabled else { return nil }
                         if let nextProblem {
                             self.applyGatewayConnectionProblem(nextProblem)
                         } else {
@@ -2635,7 +2669,7 @@ extension NodeAppModel {
             }
 
             await MainActor.run {
-                guard !self.isAppleReviewDemoModeEnabled else { return }
+                guard !self.isLocalGatewayFixtureEnabled else { return }
                 self.lastGatewayProblem = nil
                 self.gatewayStatusText = "Offline"
                 LiveActivityManager.shared.endActivity(reason: "gateway_loop_stopped")
@@ -2785,6 +2819,7 @@ extension NodeAppModel {
 extension NodeAppModel {
     func enterAppleReviewDemoMode() {
         self.isAppleReviewDemoModeEnabled = true
+        self.isScreenshotFixtureModeEnabled = false
         self.gatewayAutoReconnectEnabled = false
         self.gatewayPairingPaused = false
         self.gatewayPairingRequestId = nil
@@ -2823,6 +2858,47 @@ extension NodeAppModel {
         self.gatewayAgents = AppleReviewDemoMode.agents
         self.focusedChatSessionKey = nil
         self.talkMode.updateMainSessionKey(self.mainSessionKey)
+        self.homeCanvasRevision &+= 1
+    }
+
+    func enterScreenshotFixtureMode() {
+        self.isAppleReviewDemoModeEnabled = false
+        self.isScreenshotFixtureModeEnabled = true
+        self.gatewayAutoReconnectEnabled = false
+        self.gatewayPairingPaused = false
+        self.gatewayPairingRequestId = nil
+        self.lastGatewayProblem = nil
+        self.operatorGatewayProblem = nil
+        self.nodeGatewayTask?.cancel()
+        self.nodeGatewayTask = nil
+        self.operatorGatewayTask?.cancel()
+        self.operatorGatewayTask = nil
+        self.voiceWakeSyncTask?.cancel()
+        self.voiceWakeSyncTask = nil
+        self.gatewayHealthMonitor.stop()
+        LiveActivityManager.shared.endActivity(reason: "screenshot_fixture")
+
+        Task {
+            await self.operatorGateway.disconnect()
+            await self.nodeGateway.disconnect()
+        }
+
+        self.gatewayStatusText = "Connected"
+        self.nodeStatusText = "Connected"
+        self.gatewayServerName = ScreenshotFixtureMode.gatewayName
+        self.gatewayRemoteAddress = ScreenshotFixtureMode.gatewayAddress
+        self.connectedGatewayID = ScreenshotFixtureMode.gatewayID
+        self.activeGatewayConnectConfig = nil
+        self.gatewayConnected = true
+        self.setOperatorConnected(true)
+        self.hasOperatorAdminScope = true
+        self.mainSessionBaseKey = "main"
+        self.selectedAgentId = nil
+        self.gatewayDefaultAgentId = "main"
+        self.gatewayAgents = ScreenshotFixtureMode.agents
+        self.focusedChatSessionKey = nil
+        self.talkMode.updateMainSessionKey(self.mainSessionKey)
+        self.talkMode.enterScreenshotFixtureMode()
         self.homeCanvasRevision &+= 1
     }
 }

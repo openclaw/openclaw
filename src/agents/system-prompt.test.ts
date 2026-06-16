@@ -1081,6 +1081,22 @@ describe("buildAgentSystemPrompt", () => {
     },
   );
 
+  it("requires an explicit target for message-tool-only turns when requested", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["message"],
+      sourceReplyDeliveryMode: "message_tool_only",
+      requireExplicitMessageTarget: true,
+      runtimeInfo: {
+        channel: "telegram",
+        chatType: "group",
+      },
+    });
+
+    expect(prompt).toContain("include `target` and `message`; `target` is required for this turn");
+    expect(prompt).not.toContain("The target defaults to the current source channel");
+  });
+
   it("tells automatic source delivery to expose generated media as MEDIA directives", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

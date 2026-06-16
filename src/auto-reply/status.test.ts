@@ -124,6 +124,7 @@ describe("buildStatusMessage", () => {
       resolvedVerbose: "off",
       resolvedHarness: "openclaw",
       queue: { mode: "collect", depth: 0 },
+      pluginHealthLine: "🔌 Plugins: OK",
       modelAuth: "api-key",
       subagentsLine: "🤖 Subagents: 1\n- active run",
       now: 10 * 60_000, // 10 minutes later
@@ -133,6 +134,7 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("OpenClaw");
     expect(normalized).toContain("Model: anthropic/test:opus");
     expect(normalized).toContain("api-key");
+    expect(normalized).toContain("Plugins: OK");
     expect(normalized).toContain("Tokens: 1.2k in / 800 out");
     expect(normalized).toContain("Cost: $0.0020");
     expect(normalized).toContain("Context: 16k/32k (50%)");

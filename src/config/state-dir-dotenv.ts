@@ -8,11 +8,16 @@ import {
   normalizeEnvVarKey,
 } from "../infra/host-env-security.js";
 import { collectConfigServiceEnvVars } from "./config-env-vars.js";
+import { ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV } from "./future-version-guard.js";
 import { resolveStateDir } from "./paths.js";
 import type { OpenClawConfig } from "./types.js";
 
 function isBlockedServiceEnvVar(key: string): boolean {
-  return isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key);
+  return (
+    key.toUpperCase() === ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV ||
+    isDangerousHostEnvVarName(key) ||
+    isDangerousHostEnvOverrideVarName(key)
+  );
 }
 
 function unwrapMatchingLiteralQuotes(value: string): string {

@@ -18,10 +18,8 @@ import {
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
-import {
-  deriveSessionTitle,
-  readSessionTitleFieldsFromTranscriptAsync,
-} from "../../gateway/session-utils.js";
+import { readSessionTitleFieldsFromTranscriptAsync } from "../../gateway/session-transcript-readers.js";
+import { deriveSessionTitle } from "../../gateway/session-utils.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
 import {
@@ -385,12 +383,12 @@ export function createSessionsListTool(opts?: {
               return;
             }
             const target = titleTargets[next];
-            const fields = await readSessionTitleFieldsFromTranscriptAsync(
-              target.sessionId,
+            const fields = await readSessionTitleFieldsFromTranscriptAsync({
+              agentId: target.agentId,
+              sessionFile: target.sessionFile,
+              sessionId: target.sessionId,
               storePath,
-              target.sessionFile,
-              target.agentId,
-            );
+            });
             if (includeDerivedTitles && !target.row.derivedTitle) {
               target.row.derivedTitle = deriveSessionTitle(
                 target.titleEntry,
