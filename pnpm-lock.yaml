@@ -1335,9 +1335,6 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: 1.29.0
         version: 1.29.0(zod@4.4.3)
-      crabline:
-        specifier: github:openclaw/crabline#cf60f28094b977593766daf93cbdae365338e62e
-        version: https://codeload.github.com/openclaw/crabline/tar.gz/cf60f28094b977593766daf93cbdae365338e62e
       playwright-core:
         specifier: 1.60.0
         version: 1.60.0
@@ -1360,6 +1357,9 @@ importers:
       '@openclaw/whatsapp':
         specifier: workspace:*
         version: link:../whatsapp
+      crabline:
+        specifier: github:openclaw/crabline#cf60f28094b977593766daf93cbdae365338e62e
+        version: https://codeload.github.com/openclaw/crabline/tar.gz/cf60f28094b977593766daf93cbdae365338e62e
       openclaw:
         specifier: 2026.5.28
         version: 2026.5.28

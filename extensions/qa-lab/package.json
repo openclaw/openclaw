@@ -7,7 +7,6 @@
   "dependencies": {
     "@copilotkit/aimock": "1.27.3",
     "@modelcontextprotocol/sdk": "1.29.0",
-    "crabline": "github:openclaw/crabline#cf60f28094b977593766daf93cbdae365338e62e",
     "playwright-core": "1.60.0",
     "yaml": "2.9.0",
     "zod": "4.4.3"
@@ -17,6 +16,7 @@
     "@openclaw/plugin-sdk": "workspace:*",
     "@openclaw/slack": "workspace:*",
     "@openclaw/whatsapp": "workspace:*",
+    "crabline": "github:openclaw/crabline#cf60f28094b977593766daf93cbdae365338e62e",
     "openclaw": "2026.5.28"
   },
   "peerDependencies": {
