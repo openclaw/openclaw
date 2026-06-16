@@ -3,6 +3,7 @@
 import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
 import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.core.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
@@ -104,12 +105,27 @@ export function resolveHeartbeatDeliveryTarget(params: {
   const heartbeat = params.heartbeat ?? cfg.agents?.defaults?.heartbeat;
   const rawTarget = heartbeat?.target;
   let target: HeartbeatTarget = "none";
+  let preparedExplicitPlugin: ChannelPlugin | undefined;
+  let preparedExplicitTo: string | undefined;
   if (rawTarget === "none" || rawTarget === "last") {
     target = rawTarget;
   } else if (typeof rawTarget === "string") {
     const normalized = normalizeDeliverableOutboundChannel(rawTarget);
     if (normalized) {
       target = normalized;
+    } else {
+      const explicitTo = heartbeat?.to?.trim();
+      if (explicitTo) {
+        preparedExplicitPlugin = resolveOutboundChannelPlugin({
+          channel: rawTarget,
+          cfg,
+          allowBootstrap: true,
+        });
+        if (preparedExplicitPlugin) {
+          target = preparedExplicitPlugin.id as HeartbeatTarget;
+          preparedExplicitTo = explicitTo;
+        }
+      }
     }
   } else if (
     rawTarget === undefined &&
@@ -139,24 +155,31 @@ export function resolveHeartbeatDeliveryTarget(params: {
       ? mergeDeliveryContext(params.turnSource, deliveryContextFromSession(entry))
       : undefined;
 
-  const resolvedTarget = resolveSessionDeliveryTarget({
-    entry,
-    requestedChannel: target === "last" ? "last" : target,
-    explicitTo: heartbeat?.to,
-    mode: "heartbeat",
-    turnSourceChannel:
-      resolvedTurnSource?.channel && isDeliverableMessageChannel(resolvedTurnSource.channel)
-        ? resolvedTurnSource.channel
-        : undefined,
-    turnSourceTo: resolvedTurnSource?.to,
-    turnSourceAccountId: resolvedTurnSource?.accountId,
-    // Only pass threadId from an explicit turn source (e.g., restart sentinel's
-    // delivery context). Do NOT fall back to session-stored threadId here —
-    // heartbeat mode intentionally drops inherited thread IDs to avoid replying
-    // in stale threads (e.g., Slack thread_ts). The sentinel's delivery context
-    // carries the correct topic/thread ID when present.
-    turnSourceThreadId: params.turnSource?.threadId,
-  });
+  const resolvedTarget =
+    preparedExplicitPlugin && preparedExplicitTo
+      ? {
+          channel: target,
+          to: preparedExplicitTo,
+          mode: "heartbeat" as const,
+        }
+      : resolveSessionDeliveryTarget({
+          entry,
+          requestedChannel: target === "last" ? "last" : target,
+          explicitTo: heartbeat?.to,
+          mode: "heartbeat",
+          turnSourceChannel:
+            resolvedTurnSource?.channel && isDeliverableMessageChannel(resolvedTurnSource.channel)
+              ? resolvedTurnSource.channel
+              : undefined,
+          turnSourceTo: resolvedTurnSource?.to,
+          turnSourceAccountId: resolvedTurnSource?.accountId,
+          // Only pass threadId from an explicit turn source (e.g., restart sentinel's
+          // delivery context). Do NOT fall back to session-stored threadId here —
+          // heartbeat mode intentionally drops inherited thread IDs to avoid replying
+          // in stale threads (e.g., Slack thread_ts). The sentinel's delivery context
+          // carries the correct topic/thread ID when present.
+          turnSourceThreadId: params.turnSource?.threadId,
+        });
 
   const heartbeatAccountId = heartbeat?.accountId?.trim();
   // Use explicit accountId from heartbeat config if provided, otherwise fall back to session
@@ -173,11 +196,13 @@ export function resolveHeartbeatDeliveryTarget(params: {
 
   // Bootstrap once after a concrete route exists, then carry the prepared plugin
   // through account validation, target policy, and allow-from comparison.
-  const plugin = resolveOutboundChannelPlugin({
-    channel: resolvedTarget.channel,
-    cfg,
-    allowBootstrap: true,
-  });
+  const plugin =
+    preparedExplicitPlugin ??
+    resolveOutboundChannelPlugin({
+      channel: resolvedTarget.channel,
+      cfg,
+      allowBootstrap: true,
+    });
 
   if (heartbeatAccountId) {
     const listAccountIds = plugin?.config.listAccountIds;
@@ -336,6 +361,7 @@ export async function resolveHeartbeatDeliveryTargetWithSessionRoute(params: {
       return await resolveOutboundSessionRoute({
         cfg: params.cfg,
         channel: delivery.channel as ChannelId,
+        plugin,
         agentId: params.agentId,
         accountId: delivery.accountId,
         target: routeResolvedTarget?.to ?? deliveryTo,

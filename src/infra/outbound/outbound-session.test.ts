@@ -1,6 +1,7 @@
 // Covers outbound session-route resolution through plugin hooks and fallback
 // target parsing, plus best-effort session metadata persistence.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbound-session.js";
 import { setMinimalOutboundSessionPluginRegistryForTests } from "./outbound-session.test-helpers.js";
@@ -63,6 +64,32 @@ describe("resolveOutboundSessionRoute", () => {
       },
     },
   } as OpenClawConfig;
+
+  it("uses a prepared runtime plugin for session-route resolution", async () => {
+    const plugin = {
+      messaging: {
+        resolveOutboundSessionRoute: ({ target }: { target: string }) => ({
+          sessionKey: `agent:main:external-channel:direct:${target}`,
+          baseSessionKey: `agent:main:external-channel:direct:${target}`,
+          peer: { kind: "direct" as const, id: target },
+          chatType: "direct" as const,
+          from: `external-channel:${target}`,
+          to: `user:${target}`,
+        }),
+      },
+    } as ChannelPlugin;
+
+    const route = await resolveOutboundSessionRoute({
+      cfg: baseConfig,
+      channel: "external-channel",
+      plugin,
+      agentId: "main",
+      target: "u123",
+    });
+
+    expect(route?.to).toBe("user:u123");
+    expect(route?.chatType).toBe("direct");
+  });
 
   async function expectResolvedRoute(params: {
     cfg: OpenClawConfig;

@@ -906,6 +906,33 @@ describe("resolveSessionDeliveryTarget", () => {
     expect(resolved.threadId).toBe(1008013);
   });
 
+  it("bootstraps explicit external heartbeat targets before strict validation", () => {
+    const external = {
+      ...createForumTargetTestPlugin(),
+      id: "external-channel",
+    };
+    mocks.resolveOutboundChannelPlugin.mockImplementation(
+      ({ channel, allowBootstrap }: { channel: string; allowBootstrap?: boolean }) =>
+        channel === "external-channel" && allowBootstrap === true ? external : undefined,
+    );
+
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg: {},
+      heartbeat: {
+        target: "external-channel",
+        to: "room:ops",
+      },
+    });
+
+    expect(resolved.channel).toBe("external-channel");
+    expect(resolved.to).toBe("room:ops");
+    expect(mocks.resolveOutboundChannelPlugin).toHaveBeenCalledWith({
+      channel: "external-channel",
+      cfg: {},
+      allowBootstrap: true,
+    });
+  });
+
   it("blocks heartbeat targets that route to direct chats after canonicalization", async () => {
     const alpha = createGenericTargetTestPlugin("alpha", "Alpha");
     const routedAlpha = {
