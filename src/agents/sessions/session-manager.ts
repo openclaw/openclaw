@@ -18,6 +18,7 @@ import {
 } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { isProxy } from "node:util/types";
 import {
   appendJsonlEntrySync,
   appendSerializedJsonlEntrySync,
@@ -716,13 +717,62 @@ function publishRememberedSessionFileSnapshot(
   }
 }
 
-function canIncrementallyCacheAppendedEntry(entry: SessionEntry): boolean {
-  return !(
-    entry.type === "custom" ||
-    entry.type === "custom_message" ||
-    entry.type === "compaction" ||
-    entry.type === "branch_summary"
-  );
+function jsonSerializationCanRunUserCode(value: unknown, ancestors = new Set<object>()): boolean {
+  if (typeof value === "bigint") {
+    return Object.getOwnPropertyDescriptor(BigInt.prototype, "toJSON") !== undefined;
+  }
+  if ((typeof value !== "object" && typeof value !== "function") || value === null) {
+    return false;
+  }
+
+  try {
+    if (isProxy(value) || ancestors.has(value)) {
+      return true;
+    }
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== Array.prototype && prototype !== null) {
+      return true;
+    }
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    if (
+      descriptors.toJSON ||
+      (prototype !== null && Object.getOwnPropertyDescriptor(prototype, "toJSON")) ||
+      Object.values(descriptors).some(
+        (descriptor) => descriptor.get !== undefined || descriptor.set !== undefined,
+      )
+    ) {
+      return true;
+    }
+
+    ancestors.add(value);
+    try {
+      if (Array.isArray(value)) {
+        for (let index = 0; index < value.length; index += 1) {
+          const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+          if (
+            !descriptor ||
+            descriptor.get !== undefined ||
+            descriptor.set !== undefined ||
+            ("value" in descriptor && jsonSerializationCanRunUserCode(descriptor.value, ancestors))
+          ) {
+            return true;
+          }
+        }
+        return false;
+      }
+
+      return Object.values(descriptors).some(
+        (descriptor) =>
+          descriptor.enumerable &&
+          "value" in descriptor &&
+          jsonSerializationCanRunUserCode(descriptor.value, ancestors),
+      );
+    } finally {
+      ancestors.delete(value);
+    }
+  } catch {
+    return true;
+  }
 }
 
 function readSessionFileSnapshotIfExists(filePath: string): SessionFileSnapshot | undefined {
@@ -1360,21 +1410,24 @@ export class SessionManager {
         publishRememberedSessionFileSnapshot(this.sessionFile, rememberedWrite.snapshot);
       }
     } else {
-      // Serialize before taking the prefix snapshot. Custom toJSON methods are
-      // user code and can mutate the transcript; extension-owned writes opt out
-      // of warm-cache advancement so same-size prefix rewrites cannot publish.
+      // Serialization can execute extension/provider code through toJSON or
+      // getters. A same-size rewrite from that code can preserve the stat key,
+      // so only inert plain JSON entries may advance the metadata-keyed cache.
+      const serializationCanRunUserCode = jsonSerializationCanRunUserCode(entry);
       const serializedEntry = serializeJsonlEntry(entry);
       const beforeAppendSnapshot = readSessionFileSnapshotIfExists(this.sessionFile);
-      const canPublishOwnedAppend = Boolean(
-        beforeAppendSnapshot &&
-        canAdvanceOwnedSessionEntryCache({
-          sessionFile: this.sessionFile,
-          snapshot: beforeAppendSnapshot,
-        }),
-      );
-      // Extension/detail-bearing entries can run arbitrary toJSON code while
-      // serializing, so stat-only append validation is too weak for them.
-      const cacheOwnedAppend = canPublishOwnedAppend && canIncrementallyCacheAppendedEntry(entry);
+      const invalidateSerializedPrefixCache =
+        options?.invalidateSerializedPrefixCache === true || serializationCanRunUserCode;
+      const canPublishOwnedAppend =
+        !serializationCanRunUserCode &&
+        Boolean(
+          beforeAppendSnapshot &&
+          canAdvanceOwnedSessionEntryCache({
+            sessionFile: this.sessionFile,
+            snapshot: beforeAppendSnapshot,
+          }),
+        );
+      const cacheOwnedAppend = canPublishOwnedAppend && !invalidateSerializedPrefixCache;
       const serializedAppend = appendSerializedJsonlEntrySync(this.sessionFile, serializedEntry, {
         prefixNewline: sessionFileNeedsAppendSeparator(this.sessionFile, beforeAppendSnapshot),
       });
@@ -1385,7 +1438,7 @@ export class SessionManager {
         serializedAppend,
         cacheOwnedAppend,
         canPublishOwnedAppend,
-        options?.invalidateSerializedPrefixCache === true,
+        invalidateSerializedPrefixCache,
       );
       this.sessionFileSnapshot = rememberedAppend.snapshot;
       if (rememberedAppend.ownedAppendVerified) {

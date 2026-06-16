@@ -557,6 +557,49 @@ describe("telegram message cache", () => {
     expect(recent.map((entry) => entry.messageId)).toEqual(["42", "43"]);
   });
 
+  it("preserves rich-message placeholders in subsequent conversation context", async () => {
+    const cache = createTelegramMessageCache();
+    const chat = { id: 7, type: "private", first_name: "Nora" } as const;
+    await cache.record({
+      accountId: "default",
+      chatId: 7,
+      msg: {
+        chat,
+        message_id: 45,
+        date: 1736380745,
+        rich_message: { blocks: [{ type: "paragraph" }] },
+        from: { id: 1, is_bot: false, first_name: "Nora" },
+      } as Message,
+    });
+    await cache.record({
+      accountId: "default",
+      chatId: 7,
+      msg: {
+        chat,
+        message_id: 46,
+        date: 1736380746,
+        text: "What did I just send?",
+        from: { id: 1, is_bot: false, first_name: "Nora" },
+      } as Message,
+    });
+
+    const context = await buildTelegramConversationContext({
+      cache,
+      accountId: "default",
+      chatId: 7,
+      messageId: "46",
+      replyChainNodes: [],
+      recentLimit: 10,
+      replyTargetWindowSize: 2,
+    });
+
+    expect(context).toHaveLength(1);
+    expect(context[0]?.node).toMatchObject({
+      messageId: "45",
+      body: "[unsupported Telegram rich_message received]",
+    });
+  });
+
   it("returns nearby messages around a stale reply target", async () => {
     const cache = createTelegramMessageCache();
     for (const id of [100, 101, 102, 200, 201]) {

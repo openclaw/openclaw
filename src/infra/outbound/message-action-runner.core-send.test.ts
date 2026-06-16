@@ -237,7 +237,7 @@ describe("runMessageAction core send routing", () => {
     expect(payload.dryRun).toBe(true);
   });
 
-  it("sends with the provider-canonical reply root", async () => {
+  it("preserves an explicit provider reply target with its canonical thread root", async () => {
     const sendText = vi.fn().mockResolvedValue({
       channel: "testchat",
       messageId: "m1",
@@ -312,7 +312,7 @@ describe("runMessageAction core send routing", () => {
     });
 
     expect(firstMockArg(sendText, "send text")).toMatchObject({
-      replyToId: "root-1",
+      replyToId: "child-1",
       threadId: "root-1",
     });
   });
