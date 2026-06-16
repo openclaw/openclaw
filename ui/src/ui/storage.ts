@@ -391,7 +391,7 @@ function parseLocalAssistantAvatarMap(raw: string): {
   if (legacyAvatar && legacyAgentId && !Object.hasOwn(avatars, legacyAgentId)) {
     avatars[legacyAgentId] = legacyAvatar;
   }
-  return { avatars, legacyAvatar: legacyAgentId ? null : legacyAvatar };
+  return { avatars, legacyAvatar: legacyAgentId ? null : (legacyAvatar ?? null) };
 }
 
 function persistLocalAssistantAvatarMap(storage: Storage | null, avatars: Record<string, string>) {

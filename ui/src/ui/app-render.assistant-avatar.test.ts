@@ -295,7 +295,7 @@ describe("renderApp assistant avatar routing", () => {
     );
   });
 
-  it("reloads the default agent identity after clearing its override from a bare main session", () => {
+  it("reloads the default agent identity after clearing its override from a bare main session", async () => {
     const loadAssistantIdentity = vi.fn(async () => undefined);
     saveLocalAssistantIdentity({
       avatar: "data:image/png;base64,YWxwaGE=",
@@ -317,7 +317,7 @@ describe("renderApp assistant avatar routing", () => {
       }),
     );
 
-    quickSettingsProps.current?.onAssistantAvatarClearOverride?.();
+    await quickSettingsProps.current?.onAssistantAvatarClearOverride?.();
 
     expect(loadAssistantIdentity).toHaveBeenCalledWith({
       sessionKey: "agent:alpha:main",
