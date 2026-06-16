@@ -112,6 +112,13 @@ describe("ensureConfigReady", () => {
     fs.writeFileSync(markerPath, "");
   }
 
+  function writePendingTaskSidecarArchiveMarker(root: string): void {
+    const markerPath = path.join(root, ".openclaw", "tasks", "runs.sqlite");
+    fs.mkdirSync(path.dirname(markerPath), { recursive: true });
+    fs.writeFileSync(`${markerPath}.migrated`, "");
+    fs.writeFileSync(`${markerPath}-wal`, "");
+  }
+
   function writeStateMarker(root: string, relativePath: string): void {
     const markerPath = path.join(root, ".openclaw", relativePath);
     fs.mkdirSync(path.dirname(markerPath), { recursive: true });
@@ -194,6 +201,19 @@ describe("ensureConfigReady", () => {
   it("runs doctor flow when lightweight startup detection finds legacy state", async () => {
     const root = useTempOpenClawHome();
     writeLegacyTaskSidecarMarker(root);
+
+    await runEnsureConfigReady(["status"]);
+
+    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledWith({
+      migrateState: true,
+      migrateLegacyConfig: false,
+      invalidConfigNote: false,
+    });
+  });
+
+  it("runs doctor flow when lightweight startup detection finds a pending SQLite archive", async () => {
+    const root = useTempOpenClawHome();
+    writePendingTaskSidecarArchiveMarker(root);
 
     await runEnsureConfigReady(["status"]);
 

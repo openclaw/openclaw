@@ -62,6 +62,10 @@ export const telegramChannelConfigUiHints = {
     label: "Telegram Chunk Mode",
     help: 'Chunking mode for outbound Telegram text delivery: "length" (default) or "newline".',
   },
+  richMessages: {
+    label: "Telegram Rich Messages",
+    help: "Opt into Bot API 10.1 rich text sends and edits, including native tables and rich media. Default: false because some current Telegram clients render these messages as unsupported.",
+  },
   "streaming.block.enabled": {
     label: "Telegram Block Streaming Enabled",
     help: 'Enable chunked block-style Telegram preview delivery when channels.telegram.streaming.mode="block".',

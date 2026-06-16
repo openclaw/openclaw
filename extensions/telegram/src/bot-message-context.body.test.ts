@@ -73,6 +73,50 @@ function transcribeCallContext(index = 0): Record<string, unknown> {
 }
 
 describe("resolveTelegramInboundBody", () => {
+  it("delivers rich-message-only updates as a sanitized placeholder", async () => {
+    const result = await resolveTelegramBody({
+      msg: {
+        message_id: 0,
+        date: 1_700_000_000,
+        chat: { id: 42, type: "private", first_name: "Pat" },
+        from: { id: 42, first_name: "Pat" },
+        rich_message: { blocks: [{ type: "paragraph" }] },
+      } as never,
+    });
+
+    expect(result?.rawBody).toBe("[unsupported Telegram rich_message received]");
+    expect(result?.bodyText).toBe("[unsupported Telegram rich_message received]");
+  });
+
+  it("keeps rich-message placeholders quiet in requireMention groups", async () => {
+    const logger = { info: vi.fn() };
+    const result = await resolveTelegramBody({
+      cfg: {
+        channels: { telegram: {} },
+        messages: { groupChat: { mentionPatterns: ["\\btelegram\\b"] } },
+      } as never,
+      msg: {
+        message_id: 1,
+        date: 1_700_000_001,
+        chat: { id: -1001234567890, type: "supergroup", title: "Test Group" },
+        from: { id: 42, first_name: "Pat" },
+        rich_message: { blocks: [{ type: "paragraph" }] },
+      } as never,
+      isGroup: true,
+      chatId: -1001234567890,
+      senderId: "42",
+      groupConfig: { requireMention: true } as never,
+      requireMention: true,
+      logger,
+    });
+
+    expect(logger.info).toHaveBeenCalledWith(
+      { chatId: -1001234567890, reason: "no-mention" },
+      "skipping group message",
+    );
+    expect(result).toBeNull();
+  });
+
   it("renders Telegram text entities before building the agent body", async () => {
     const result = await resolveTelegramBody({
       msg: {
