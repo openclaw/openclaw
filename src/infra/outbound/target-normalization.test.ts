@@ -330,20 +330,26 @@ describe("buildTargetResolverSignature", () => {
     expect(first).not.toBe(second);
   });
 
-  it("partitions prepared runtime plugins from pinned plugin cache entries", () => {
-    const plugin = {
+  it("partitions prepared runtime plugins from pinned and replacement plugin cache entries", () => {
+    const firstPlugin = {
       messaging: {
         targetResolver: {},
       },
     } as ChannelPlugin;
-    getLoadedChannelPluginMock.mockReturnValue(plugin);
+    const replacementPlugin = {
+      messaging: {
+        targetResolver: {},
+      },
+    } as ChannelPlugin;
+    getLoadedChannelPluginMock.mockReturnValue(firstPlugin);
 
     const pinned = buildTargetResolverSignature("workspace");
-    const prepared = buildTargetResolverSignature("workspace", plugin);
-    getActivePluginChannelRegistryVersionMock.mockReturnValue(2);
-    const nextPrepared = buildTargetResolverSignature("workspace", plugin);
+    const prepared = buildTargetResolverSignature("workspace", firstPlugin);
+    const samePrepared = buildTargetResolverSignature("workspace", firstPlugin);
+    const replacementPrepared = buildTargetResolverSignature("workspace", replacementPlugin);
 
     expect(prepared).not.toBe(pinned);
-    expect(nextPrepared).not.toBe(prepared);
+    expect(samePrepared).toBe(prepared);
+    expect(replacementPrepared).not.toBe(prepared);
   });
 });

@@ -25,6 +25,8 @@ type TargetNormalizerCacheEntry = {
 };
 
 const targetNormalizerCacheByChannelId = new Map<string, TargetNormalizerCacheEntry>();
+const preparedPluginSignatureIds = new WeakMap<ChannelPlugin, number>();
+let nextPreparedPluginSignatureId = 1;
 
 function resolveChannelPluginForTargetRead(channelId: ChannelId): ChannelPlugin | undefined {
   return getLoadedChannelPluginForRead(channelId) ?? getChannelPlugin(channelId);
@@ -58,6 +60,17 @@ function resolveTargetNormalizer(
     normalizer,
   });
   return normalizer;
+}
+
+function resolvePreparedPluginSignatureId(plugin: ChannelPlugin): number {
+  const existing = preparedPluginSignatureIds.get(plugin);
+  if (existing) {
+    return existing;
+  }
+  const id = nextPreparedPluginSignatureId;
+  nextPreparedPluginSignatureId += 1;
+  preparedPluginSignatureIds.set(plugin, id);
+  return id;
 }
 
 /**
@@ -207,7 +220,7 @@ export function buildTargetResolverSignature(
 ): string {
   const plugin = preparedPlugin ?? resolveChannelPluginForTargetRead(channel);
   const registryScope = preparedPlugin
-    ? `prepared:${getActivePluginChannelRegistryVersion()}`
+    ? `prepared:${resolvePreparedPluginSignatureId(preparedPlugin)}`
     : "pinned";
   const resolver = plugin?.messaging?.targetResolver;
   const hint = resolver?.hint ?? "";
