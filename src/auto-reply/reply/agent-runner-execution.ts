@@ -2483,7 +2483,7 @@ export async function runAgentTurnWithFallback(params: {
                       suppressAssistantErrorPersistenceForCandidate,
                     onAssistantErrorMessagePersisted: () => {
                       assistantErrorPersistedAcrossFallback = true;
-                      void params.opts?.onAssistantErrorMessagePersisted?.();
+                      params.opts?.onAssistantErrorMessagePersisted?.();
                     },
                     toolResultFormat: (() => {
                       const channel = resolveMessageChannel(

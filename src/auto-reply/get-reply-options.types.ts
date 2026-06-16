@@ -69,7 +69,7 @@ export type GetReplyOptions = {
   /** Shared lifecycle owner for the current user-turn transcript append. */
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
   /** Notifies callers when the runtime persisted an assistant error turn. */
-  onAssistantErrorMessagePersisted?: () => Promise<void> | void;
+  onAssistantErrorMessagePersisted?: () => void;
   onReplyStart?: () => Promise<void> | void;
   /** Called when the typing controller cleans up (e.g., run ended with NO_REPLY). */
   onTypingCleanup?: () => void;
