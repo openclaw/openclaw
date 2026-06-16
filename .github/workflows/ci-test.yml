@@ -28,6 +28,7 @@ jobs:
         uses: actions/setup-node@v5
         with:
           node-version: "24.16.0"
+          package-manager-cache: false
 
       - name: Install pnpm
         run: npm install -g pnpm@11.2.2
