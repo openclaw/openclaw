@@ -45,6 +45,11 @@ schemes:
     test:
       targets:
         - OpenClawUITests
+  OpenClawWatchApp:
+    shared: true
+    build:
+      targets:
+        OpenClawWatchApp: all
 
 targets:
   OpenClaw:

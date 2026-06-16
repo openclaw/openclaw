@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   findSessionAccessorBoundaryViolations,
   migratedBundledPluginSessionAccessorFiles,
+  findSessionAccessorWriteBoundaryViolations,
   migratedSessionAccessorFiles,
+  migratedSessionAccessorWriteFiles,
 } from "../../scripts/check-session-accessor-boundary.mjs";
 
 describe("session accessor boundary guard", () => {
@@ -10,9 +12,15 @@ describe("session accessor boundary guard", () => {
     expect(migratedSessionAccessorFiles).toEqual(
       new Set([
         "src/agents/embedded-agent-runner/compaction-successor-transcript.ts",
+        "src/agents/embedded-agent-runner/run/attempt.ts",
         "src/agents/embedded-agent-runner/tool-result-truncation.ts",
         "src/agents/embedded-agent-runner/transcript-rewrite.ts",
         "src/agents/embedded-agent-runner/transcript-runtime-state.ts",
+        "src/auto-reply/reply/agent-runner-helpers.ts",
+        "src/auto-reply/reply/agent-runner.ts",
+        "src/auto-reply/reply/commands-subagents/action-info.ts",
+        "src/auto-reply/reply/followup-runner.ts",
+        "src/auto-reply/reply/queue/drain.ts",
         "src/commands/export-trajectory.ts",
         "src/commands/health.ts",
         "src/commands/sandbox-explain.ts",
@@ -38,6 +46,34 @@ describe("session accessor boundary guard", () => {
         "extensions/discord/src/monitor/native-command-model-picker-apply.ts",
         "extensions/discord/src/monitor/thread-session-close.ts",
         "extensions/telegram/src/bot-handlers.runtime.ts",
+      ]),
+    );
+  });
+
+  it("ratchets only the auto-reply files migrated to session accessor writes", () => {
+    expect(migratedSessionAccessorWriteFiles).toEqual(
+      new Set([
+        "src/agents/command/attempt-execution.shared.ts",
+        "src/agents/command/session-store.ts",
+        "src/agents/embedded-agent-runner/run.ts",
+        "src/agents/embedded-agent-runner/run/attempt.ts",
+        "src/auto-reply/reply/abort-cutoff.runtime.ts",
+        "src/auto-reply/reply/agent-runner-cli-dispatch.ts",
+        "src/auto-reply/reply/agent-runner-execution.ts",
+        "src/auto-reply/reply/agent-runner-memory.ts",
+        "src/auto-reply/reply/agent-runner.ts",
+        "src/auto-reply/reply/body.ts",
+        "src/auto-reply/reply/commands-acp/lifecycle.ts",
+        "src/auto-reply/reply/commands-reset.ts",
+        "src/auto-reply/reply/directive-handling.impl.ts",
+        "src/auto-reply/reply/directive-handling.persist.ts",
+        "src/auto-reply/reply/dispatch-from-config.runtime.ts",
+        "src/auto-reply/reply/followup-runner.ts",
+        "src/auto-reply/reply/get-reply.ts",
+        "src/auto-reply/reply/model-selection.ts",
+        "src/auto-reply/reply/session-reset-model.ts",
+        "src/auto-reply/reply/session-updates.ts",
+        "src/auto-reply/reply/session-usage.ts",
       ]),
     );
   });
@@ -108,6 +144,36 @@ describe("session accessor boundary guard", () => {
       findSessionAccessorBoundaryViolations(`
         import { listSessionEntries } from "../config/sessions/session-accessor.js";
         listSessionEntries({ storePath });
+      `),
+    ).toEqual([]);
+  });
+
+  it("flags legacy writer imports and calls", () => {
+    expect(
+      findSessionAccessorWriteBoundaryViolations(`
+        import { applySessionStoreEntryPatch, saveSessionStore, updateSessionStore, updateSessionStoreEntry as updateEntry } from "../config/sessions.js";
+        saveSessionStore(storePath, store);
+        updateSessionStore(storePath, () => undefined);
+        sessions.updateSessionStoreEntry({ storePath, sessionKey, update });
+        applySessionStoreEntryPatch({ storePath, sessionKey, patch });
+      `),
+    ).toEqual([
+      { line: 2, reason: 'imports legacy session store writer "applySessionStoreEntryPatch"' },
+      { line: 2, reason: 'imports legacy session store writer "saveSessionStore"' },
+      { line: 2, reason: 'imports legacy session store writer "updateSessionStore"' },
+      { line: 2, reason: 'imports legacy session store writer "updateSessionStoreEntry"' },
+      { line: 3, reason: 'calls legacy session store writer "saveSessionStore"' },
+      { line: 4, reason: 'calls legacy session store writer "updateSessionStore"' },
+      { line: 5, reason: 'references legacy session store writer "updateSessionStoreEntry"' },
+      { line: 6, reason: 'calls legacy session store writer "applySessionStoreEntryPatch"' },
+    ]);
+  });
+
+  it("allows migrated accessor writes", () => {
+    expect(
+      findSessionAccessorWriteBoundaryViolations(`
+        import { updateSessionEntry } from "../config/sessions/session-accessor.js";
+        updateSessionEntry({ storePath, sessionKey }, () => undefined);
       `),
     ).toEqual([]);
   });

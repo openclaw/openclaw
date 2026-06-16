@@ -52,6 +52,27 @@ describe("DebugProxyCaptureStore", () => {
     expect(reopened.isClosed).toBe(false);
   });
 
+  it("tracks and closes cached stores independently across paths", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-proxy-capture-paths-"));
+    cleanupDirs.push(root);
+    const first = acquireDebugProxyCaptureStore(
+      path.join(root, "first.sqlite"),
+      path.join(root, "first-blobs"),
+    );
+    const second = acquireDebugProxyCaptureStore(
+      path.join(root, "second.sqlite"),
+      path.join(root, "second-blobs"),
+    );
+
+    first.release();
+    expect(first.store.isClosed).toBe(true);
+    expect(second.store.isClosed).toBe(false);
+
+    closeDebugProxyCaptureStore();
+    expect(second.store.isClosed).toBe(true);
+    second.release();
+  });
+
   it("uses rollback journaling for captures on NFS-backed volumes", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-proxy-capture-nfs-"));
     cleanupDirs.push(root);

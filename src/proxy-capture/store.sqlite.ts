@@ -479,28 +479,29 @@ export class DebugProxyCaptureStore {
   }
 }
 
-let cachedStore: DebugProxyCaptureStore | null = null;
-let cachedKey = "";
-let cachedStoreLeases = 0;
+type CachedStoreEntry = {
+  store: DebugProxyCaptureStore;
+  leases: number;
+};
+
+const cachedStores = new Map<string, CachedStoreEntry>();
 
 export function getDebugProxyCaptureStore(dbPath: string, blobDir: string): DebugProxyCaptureStore {
   const key = `${dbPath}:${blobDir}`;
-  if (!cachedStore || cachedStore.isClosed || cachedKey !== key) {
-    cachedStore = new DebugProxyCaptureStore(dbPath, blobDir);
-    cachedKey = key;
-    cachedStoreLeases = 0;
+  const cached = cachedStores.get(key);
+  if (cached && !cached.store.isClosed) {
+    return cached.store;
   }
-  return cachedStore;
+  const store = new DebugProxyCaptureStore(dbPath, blobDir);
+  cachedStores.set(key, { store, leases: 0 });
+  return store;
 }
 
 export function closeDebugProxyCaptureStore(): void {
-  if (!cachedStore) {
-    return;
+  for (const cached of cachedStores.values()) {
+    cached.store.close();
   }
-  cachedStore.close();
-  cachedStore = null;
-  cachedKey = "";
-  cachedStoreLeases = 0;
+  cachedStores.clear();
 }
 
 // Lease API keeps one cached synchronous SQLite connection alive across related
@@ -509,9 +510,13 @@ export function acquireDebugProxyCaptureStore(
   dbPath: string,
   blobDir: string,
 ): { store: DebugProxyCaptureStore; release: () => void } {
+  const key = `${dbPath}:${blobDir}`;
   const store = getDebugProxyCaptureStore(dbPath, blobDir);
-  const key = cachedKey;
-  cachedStoreLeases += 1;
+  const cached = cachedStores.get(key);
+  if (!cached || cached.store !== store) {
+    throw new Error("debug proxy capture store cache changed while acquiring a lease");
+  }
+  cached.leases += 1;
   let released = false;
   return {
     store,
@@ -520,9 +525,14 @@ export function acquireDebugProxyCaptureStore(
         return;
       }
       released = true;
-      cachedStoreLeases = Math.max(0, cachedStoreLeases - 1);
-      if (cachedStoreLeases === 0 && cachedStore === store && cachedKey === key) {
-        closeDebugProxyCaptureStore();
+      const current = cachedStores.get(key);
+      if (!current || current.store !== store) {
+        return;
+      }
+      current.leases = Math.max(0, current.leases - 1);
+      if (current.leases === 0) {
+        current.store.close();
+        cachedStores.delete(key);
       }
     },
   };

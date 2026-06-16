@@ -26,6 +26,13 @@ const defaultFileOps: MemoryIndexFileOps = {
 };
 
 const transientFileErrorCodes = new Set(["EBUSY", "EPERM", "EACCES"]);
+// SQLite keeps WAL/SHM sidecars under journal_mode=WAL, but NFS-backed stores
+// fall back to journal_mode=DELETE and leave a rollback-journal (-journal)
+// sidecar instead. Index file operations must cover all three so a swap never
+// strands a stale -journal next to the freshly published database, which would
+// trigger an erroneous rollback the next time SQLite opens the index.
+const memoryIndexFileSuffixes = ["", "-wal", "-shm", "-journal"] as const;
+const memoryIndexSidecarSuffixes = ["-wal", "-shm", "-journal"] as const;
 const defaultMaxRenameAttempts = 6;
 const defaultRenameRetryDelayMs = 25;
 const defaultMaxRemoveAttempts = 10;
@@ -76,8 +83,7 @@ export async function moveMemoryIndexFiles(
   options: MemoryIndexFileOptions = {},
 ): Promise<void> {
   const resolvedOptions = resolveMemoryIndexFileOptions(options);
-  const suffixes = ["", "-wal", "-shm"];
-  for (const suffix of suffixes) {
+  for (const suffix of memoryIndexFileSuffixes) {
     const source = `${sourceBase}${suffix}`;
     const target = `${targetBase}${suffix}`;
     await renameWithRetry(source, target, resolvedOptions, suffix !== "");
@@ -107,8 +113,7 @@ export async function removeMemoryIndexFiles(
   options: MemoryIndexFileOptions = {},
 ): Promise<void> {
   const resolvedOptions = resolveMemoryIndexFileOptions(options);
-  const suffixes = ["", "-wal", "-shm"];
-  for (const suffix of suffixes) {
+  for (const suffix of memoryIndexFileSuffixes) {
     await rmWithRetry(`${basePath}${suffix}`, resolvedOptions);
   }
 }
@@ -117,8 +122,9 @@ async function removeMemoryIndexSidecars(
   basePath: string,
   options: ResolvedMemoryIndexFileOptions,
 ): Promise<void> {
-  await rmWithRetry(`${basePath}-wal`, options);
-  await rmWithRetry(`${basePath}-shm`, options);
+  for (const suffix of memoryIndexSidecarSuffixes) {
+    await rmWithRetry(`${basePath}${suffix}`, options);
+  }
 }
 
 async function moveMemoryIndexSidecars(
@@ -126,8 +132,7 @@ async function moveMemoryIndexSidecars(
   targetBase: string,
   options: ResolvedMemoryIndexFileOptions,
 ): Promise<void> {
-  const suffixes = ["-wal", "-shm"];
-  for (const suffix of suffixes) {
+  for (const suffix of memoryIndexSidecarSuffixes) {
     await renameWithRetry(`${sourceBase}${suffix}`, `${targetBase}${suffix}`, options, true);
   }
 }

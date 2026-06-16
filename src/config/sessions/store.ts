@@ -196,6 +196,7 @@ type SessionEntryWorkflowOptions = {
   agentId?: string;
   env?: NodeJS.ProcessEnv;
   hydrateSkillPromptRefs?: boolean;
+  maintenanceConfig?: ResolvedSessionMaintenanceConfig;
   storePath?: string;
 };
 
@@ -1184,6 +1185,7 @@ async function persistResolvedSessionEntry(params: {
   resolved: ReturnType<typeof resolveSessionStoreEntry>;
   next: SessionEntry;
   skipMaintenance?: boolean;
+  maintenanceConfig?: ResolvedSessionMaintenanceConfig;
   takeCacheOwnership?: boolean;
   returnDetached?: boolean;
   requireWriteSuccess?: boolean;
@@ -1199,6 +1201,7 @@ async function persistResolvedSessionEntry(params: {
   await saveSessionStoreUnlocked(params.storePath, params.store, {
     activeSessionKey: params.resolved.normalizedKey,
     skipMaintenance: params.skipMaintenance,
+    maintenanceConfig: params.maintenanceConfig,
     skipSerializeForUnchangedStore: entryUnchanged,
     singleEntryPersistence:
       params.resolved.legacyKeys.length === 0 && params.resolved.existing
@@ -1310,6 +1313,7 @@ export async function patchSessionEntry(
       store,
       resolved,
       next,
+      maintenanceConfig: params.maintenanceConfig,
       takeCacheOwnership: true,
       returnDetached: true,
     });

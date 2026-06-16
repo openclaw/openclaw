@@ -1523,7 +1523,13 @@ jobs:
               fi
               ;;
             session-transcript-reader-boundary)
-              run_check "lint:tmp:session-transcript-reader-boundary" pnpm run lint:tmp:session-transcript-reader-boundary
+              if [ ! -f scripts/check-session-transcript-reader-boundary.mjs ]; then
+                echo "[skip] session transcript reader boundary check is not present in this checkout"
+              elif ! node -e 'const pkg = require("./package.json"); process.exit(pkg.scripts?.["lint:tmp:session-transcript-reader-boundary"] ? 0 : 1);'; then
+                echo "[skip] session transcript reader boundary script is not present in package.json"
+              else
+                run_check "lint:tmp:session-transcript-reader-boundary" pnpm run lint:tmp:session-transcript-reader-boundary
+              fi
               ;;
             extension-channels)
               run_check "lint:extensions:channels" pnpm run lint:extensions:channels

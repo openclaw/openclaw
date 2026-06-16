@@ -22,7 +22,6 @@ import {
   appendJsonlEntrySync,
   appendSerializedJsonlEntrySync,
   serializeJsonlEntry,
-  serializeJsonlLine,
   writeJsonlEntriesSync,
 } from "../../config/sessions/transcript-jsonl.js";
 import {
@@ -164,6 +163,10 @@ export type SessionEntry =
 
 /** Raw file entry (includes header) */
 export type FileEntry = SessionHeader | SessionEntry;
+
+type AppendPersistenceOptions = {
+  invalidateSerializedPrefixCache?: boolean;
+};
 
 /** Tree node for getTree() - defensive copy of session structure */
 export interface SessionTreeNode {
@@ -563,7 +566,7 @@ function hasCacheableSessionHeader(entries: FileEntry[]): boolean {
 function rememberWrittenSessionEntries(
   filePath: string,
   expectedContent?: string,
-): { snapshot: SessionFileSnapshot | undefined; verifiedWrite: boolean } {
+): { snapshot: SessionFileSnapshot | undefined; verifiedWrite: boolean; stableRead: boolean } {
   const resolvedPath = resolve(filePath);
   // Full rewrites break append continuity used by the pre-run repair cache,
   // even when the filesystem preserves the inode and the rewritten file grows.
@@ -573,11 +576,11 @@ function rememberWrittenSessionEntries(
     beforeReadSnapshot = readSessionFileSnapshot(resolvedPath);
   } catch {
     sessionEntriesCache.delete(resolvedPath);
-    return { snapshot: undefined, verifiedWrite: false };
+    return { snapshot: undefined, verifiedWrite: false, stableRead: false };
   }
   if (beforeReadSnapshot.size > MAX_CACHED_SESSION_BYTES) {
     sessionEntriesCache.delete(resolvedPath);
-    return { snapshot: beforeReadSnapshot, verifiedWrite: false };
+    return { snapshot: beforeReadSnapshot, verifiedWrite: false, stableRead: false };
   }
 
   let content: string;
@@ -587,14 +590,14 @@ function rememberWrittenSessionEntries(
     afterReadSnapshot = readSessionFileSnapshot(resolvedPath);
   } catch {
     sessionEntriesCache.delete(resolvedPath);
-    return { snapshot: undefined, verifiedWrite: false };
+    return { snapshot: undefined, verifiedWrite: false, stableRead: false };
   }
   if (
     (expectedContent !== undefined && content !== expectedContent) ||
     !isSameSessionFileSnapshot(beforeReadSnapshot, afterReadSnapshot)
   ) {
     sessionEntriesCache.delete(resolvedPath);
-    return { snapshot: afterReadSnapshot, verifiedWrite: false };
+    return { snapshot: afterReadSnapshot, verifiedWrite: false, stableRead: false };
   }
   rememberSessionEntries(
     resolvedPath,
@@ -605,39 +608,8 @@ function rememberWrittenSessionEntries(
   return {
     snapshot: afterReadSnapshot,
     verifiedWrite: expectedContent !== undefined,
+    stableRead: true,
   };
-}
-
-function serializeCachedEntriesPrefix(cached: CachedSessionEntries): string {
-  const lines = cached.entries.map((entry) => serializeJsonlLine(entry));
-  if (lines.length === 0) {
-    return "";
-  }
-  return `${lines.join("\n")}${cached.endsWithNewline ? "\n" : ""}`;
-}
-
-function cachedPrefixStillMatchesFile(params: {
-  filePath: string;
-  cached: CachedSessionEntries;
-  appendedBytes: number;
-  snapshot: SessionFileSnapshot;
-}): boolean {
-  const prefixByteLength = params.snapshot.size - BigInt(params.appendedBytes);
-  if (prefixByteLength < 0n || prefixByteLength > BigInt(Number.MAX_SAFE_INTEGER)) {
-    return false;
-  }
-  const expectedPrefix = serializeCachedEntriesPrefix(params.cached);
-  if (BigInt(Buffer.byteLength(expectedPrefix, "utf8")) !== prefixByteLength) {
-    return false;
-  }
-  try {
-    const currentPrefix = readFileSync(params.filePath)
-      .subarray(0, Number(prefixByteLength))
-      .toString("utf8");
-    return currentPrefix === expectedPrefix;
-  } catch {
-    return false;
-  }
 }
 
 function rememberAppendedSessionEntry(
@@ -646,15 +618,32 @@ function rememberAppendedSessionEntry(
   beforeAppendSnapshot: SessionFileSnapshot | undefined,
   serializedAppend: string,
   cacheOwnedAppend: boolean,
-  validateCachedPrefix: boolean,
-): { snapshot: SessionFileSnapshot | undefined; cacheAdvanced: boolean } {
+  publishOwnedAppend: boolean,
+  invalidateSerializedPrefixCache: boolean,
+): {
+  snapshot: SessionFileSnapshot | undefined;
+  cacheAdvanced: boolean;
+  ownedAppendVerified: boolean;
+} {
   const resolvedPath = resolve(filePath);
+  const appendedByteLength = BigInt(Buffer.byteLength(serializedAppend, "utf8"));
+  const isVerifiedOwnedAppend = (snapshot: SessionFileSnapshot | undefined) =>
+    Boolean(
+      publishOwnedAppend &&
+        beforeAppendSnapshot &&
+        snapshot &&
+        snapshot.dev === beforeAppendSnapshot.dev &&
+        snapshot.ino === beforeAppendSnapshot.ino &&
+        snapshot.size === beforeAppendSnapshot.size + appendedByteLength,
+    );
   if (!cacheOwnedAppend) {
     sessionEntriesCache.delete(resolvedPath);
     invalidateSessionFileRepairCache(resolvedPath);
+    const snapshot = readSessionFileSnapshotIfExists(resolvedPath);
     return {
-      snapshot: readSessionFileSnapshotIfExists(resolvedPath),
+      snapshot,
       cacheAdvanced: false,
+      ownedAppendVerified: isVerifiedOwnedAppend(snapshot),
     };
   }
   if (
@@ -667,16 +656,16 @@ function rememberAppendedSessionEntry(
     return {
       snapshot: readSessionFileSnapshotIfExists(resolvedPath),
       cacheAdvanced: false,
+      ownedAppendVerified: false,
     };
   }
 
   const cached = sessionEntriesCache.get(resolvedPath);
   const snapshot = readSessionFileSnapshotIfExists(resolvedPath);
-  // Owned transcript writes serialize appenders under the session lock. Custom
-  // entry serialization can still run user toJSON code, so those appends also
-  // validate the cached prefix before advancing the append-only snapshot.
-  const expectedSize =
-    beforeAppendSnapshot.size + BigInt(Buffer.byteLength(serializedAppend, "utf8"));
+  // Owned transcript writes serialize appenders under the session lock. Plain
+  // appends can advance by stat identity/size; extension-owned message payloads
+  // may run JSON hooks that rewrite same-size prefix bytes, so they drop cache.
+  const expectedSize = beforeAppendSnapshot.size + appendedByteLength;
   if (
     !snapshot ||
     !cached ||
@@ -689,24 +678,16 @@ function rememberAppendedSessionEntry(
   ) {
     sessionEntriesCache.delete(resolvedPath);
     invalidateSessionFileRepairCache(resolvedPath);
-    return { snapshot, cacheAdvanced: false };
+    return { snapshot, cacheAdvanced: false, ownedAppendVerified: false };
+  }
+  if (invalidateSerializedPrefixCache) {
+    sessionEntriesCache.delete(resolvedPath);
+    invalidateSessionFileRepairCache(resolvedPath);
+    return { snapshot, cacheAdvanced: false, ownedAppendVerified: true };
   }
   if (snapshot.size > MAX_CACHED_SESSION_BYTES) {
     sessionEntriesCache.delete(resolvedPath);
-    return { snapshot, cacheAdvanced: false };
-  }
-  if (
-    validateCachedPrefix &&
-    !cachedPrefixStillMatchesFile({
-      filePath: resolvedPath,
-      cached,
-      appendedBytes: Buffer.byteLength(serializedAppend, "utf8"),
-      snapshot,
-    })
-  ) {
-    sessionEntriesCache.delete(resolvedPath);
-    invalidateSessionFileRepairCache(resolvedPath);
-    return { snapshot, cacheAdvanced: false };
+    return { snapshot, cacheAdvanced: false, ownedAppendVerified: true };
   }
 
   const persistedEntry = JSON.parse(
@@ -718,9 +699,8 @@ function rememberAppendedSessionEntry(
   sessionEntriesCache.delete(resolvedPath);
   sessionEntriesCache.set(resolvedPath, cached);
   trimSessionEntriesCache();
-  return { snapshot, cacheAdvanced: true };
+  return { snapshot, cacheAdvanced: true, ownedAppendVerified: true };
 }
-
 function publishRememberedSessionFileSnapshot(
   filePath: string,
   snapshot: SessionFileSnapshot | undefined,
@@ -733,6 +713,15 @@ function publishRememberedSessionFileSnapshot(
     sessionEntriesCache.delete(resolve(filePath));
     invalidateSessionFileRepairCache(filePath);
   }
+}
+
+function canIncrementallyCacheAppendedEntry(entry: SessionEntry): boolean {
+  return !(
+    entry.type === "custom" ||
+    entry.type === "custom_message" ||
+    entry.type === "compaction" ||
+    entry.type === "branch_summary"
+  );
 }
 
 function readSessionFileSnapshotIfExists(filePath: string): SessionFileSnapshot | undefined {
@@ -1347,7 +1336,7 @@ export class SessionManager {
     return this.sessionFile;
   }
 
-  persist(entry: SessionEntry): void {
+  persist(entry: SessionEntry, options?: AppendPersistenceOptions): void {
     if (!this.shouldPersist || !this.sessionFile) {
       return;
     }
@@ -1371,17 +1360,20 @@ export class SessionManager {
       }
     } else {
       // Serialize before taking the prefix snapshot. Custom toJSON methods are
-      // user code and can mutate the transcript; the cache must validate the
-      // prefix state that immediately precedes the exact bytes being appended.
+      // user code and can mutate the transcript; extension-owned writes opt out
+      // of warm-cache advancement so same-size prefix rewrites cannot publish.
       const serializedEntry = serializeJsonlEntry(entry);
       const beforeAppendSnapshot = readSessionFileSnapshotIfExists(this.sessionFile);
-      const cacheOwnedAppend = Boolean(
+      const canPublishOwnedAppend = Boolean(
         beforeAppendSnapshot &&
         canAdvanceOwnedSessionEntryCache({
           sessionFile: this.sessionFile,
           snapshot: beforeAppendSnapshot,
         }),
       );
+      // Extension/detail-bearing entries can run arbitrary toJSON code while
+      // serializing, so stat-only append validation is too weak for them.
+      const cacheOwnedAppend = canPublishOwnedAppend && canIncrementallyCacheAppendedEntry(entry);
       const serializedAppend = appendSerializedJsonlEntrySync(this.sessionFile, serializedEntry, {
         prefixNewline: sessionFileNeedsAppendSeparator(this.sessionFile, beforeAppendSnapshot),
       });
@@ -1391,10 +1383,11 @@ export class SessionManager {
         beforeAppendSnapshot,
         serializedAppend,
         cacheOwnedAppend,
-        entry.type === "custom",
+        canPublishOwnedAppend,
+        options?.invalidateSerializedPrefixCache === true,
       );
       this.sessionFileSnapshot = rememberedAppend.snapshot;
-      if (rememberedAppend.cacheAdvanced) {
+      if (rememberedAppend.ownedAppendVerified) {
         publishRememberedSessionFileSnapshot(this.sessionFile, rememberedAppend.snapshot);
       }
     }
@@ -1419,11 +1412,11 @@ export class SessionManager {
     }
   }
 
-  private appendEntry(entry: SessionEntry): void {
+  private appendEntry(entry: SessionEntry, options?: AppendPersistenceOptions): void {
     this.fileEntries.push(entry);
     this.byId.set(entry.id, entry);
     this.leafId = entry.id;
-    this.persist(entry);
+    this.persist(entry, options);
   }
 
   /** Append a message as child of current leaf, then advance leaf. Returns entry id.
@@ -1432,7 +1425,10 @@ export class SessionManager {
    * so it is easier to find them.
    * These need to be appended via appendCompaction() and appendBranchSummary() methods.
    */
-  appendMessage(message: Message | CustomMessage | BashExecutionMessage): string {
+  appendMessage(
+    message: Message | CustomMessage | BashExecutionMessage,
+    options?: AppendPersistenceOptions,
+  ): string {
     const entry: SessionMessageEntry = {
       type: "message",
       id: generateId(this.byId),
@@ -1440,7 +1436,7 @@ export class SessionManager {
       timestamp: new Date().toISOString(),
       message,
     };
-    this.appendEntry(entry);
+    this.appendEntry(entry, options);
     return entry.id;
   }
 
@@ -1490,7 +1486,9 @@ export class SessionManager {
       details,
       fromHook,
     };
-    this.appendEntry(entry);
+    this.appendEntry(entry, {
+      invalidateSerializedPrefixCache: fromHook === true || details !== undefined,
+    });
     return entry.id;
   }
 
@@ -1504,7 +1502,7 @@ export class SessionManager {
       parentId: this.leafId,
       timestamp: new Date().toISOString(),
     };
-    this.appendEntry(entry);
+    this.appendEntry(entry, { invalidateSerializedPrefixCache: true });
     return entry.id;
   }
 
@@ -1559,7 +1557,7 @@ export class SessionManager {
       parentId: this.leafId,
       timestamp: new Date().toISOString(),
     };
-    this.appendEntry(entry);
+    this.appendEntry(entry, { invalidateSerializedPrefixCache: true });
     return entry.id;
   }
 
@@ -1766,7 +1764,9 @@ export class SessionManager {
       details,
       fromHook,
     };
-    this.appendEntry(entry);
+    this.appendEntry(entry, {
+      invalidateSerializedPrefixCache: fromHook === true || details !== undefined,
+    });
     return entry.id;
   }
 

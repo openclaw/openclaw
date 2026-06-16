@@ -912,6 +912,155 @@ describe("executePreparedCliRun supervisor output capture", () => {
     const result = await executePreparedCliRun(context);
 
     expect(result.didSendViaMessagingTool).toBe(true);
+    expect(result.messagingToolSentTargets).toEqual([
+      expect.objectContaining({
+        tool: "message",
+        provider: "telegram",
+        to: "chat123",
+      }),
+    ]);
+  });
+
+  it.each([
+    {
+      action: "reply",
+      args: {
+        action: "reply",
+        channel: "telegram",
+        target: "chat123",
+        message: "done",
+      },
+    },
+    {
+      action: "sticker",
+      args: {
+        action: "sticker",
+        channel: "telegram",
+        target: "chat123",
+        stickerId: "sticker-1",
+      },
+    },
+  ] as const)("records target evidence for confirmed $action delivery", async ({ args }) => {
+    const context = buildPreparedCliRunContext({ output: "text", provider: "google-gemini-cli" });
+    context.mcpDeliveryCapture = true;
+    supervisorSpawnMock.mockImplementationOnce(async (...spawnArgs: unknown[]) => {
+      const input = spawnArgs[0] as SupervisorSpawnInput;
+      recordMcpLoopbackToolCallResult({
+        captureKey: input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY ?? "",
+        toolName: "message",
+        args,
+        result: { ok: true },
+        isError: false,
+      });
+      input.onStdout?.("done");
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+
+    const result = await executePreparedCliRun(context);
+
+    expect(result.didSendViaMessagingTool).toBe(true);
+    expect(result.messagingToolSentTexts).toBeUndefined();
+    expect(result.messagingToolSentMediaUrls).toBeUndefined();
+    expect(result.messagingToolSentTargets).toEqual([
+      expect.objectContaining({
+        tool: "message",
+        provider: "telegram",
+        to: "chat123",
+      }),
+    ]);
+  });
+
+  it("records target evidence for confirmed conversation creation", async () => {
+    const context = buildPreparedCliRunContext({ output: "text", provider: "google-gemini-cli" });
+    context.mcpDeliveryCapture = true;
+    supervisorSpawnMock.mockImplementationOnce(async (...spawnArgs: unknown[]) => {
+      const input = spawnArgs[0] as SupervisorSpawnInput;
+      recordMcpLoopbackToolCallResult({
+        captureKey: input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY ?? "",
+        toolName: "message",
+        args: {
+          action: "thread-create",
+          channel: "telegram",
+          target: "chat123",
+          message: "new thread",
+        },
+        result: { ok: true, thread: { id: "thread-1" } },
+        isError: false,
+      });
+      input.onStdout?.("done");
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+
+    const result = await executePreparedCliRun(context);
+
+    expect(result.didSendViaMessagingTool).toBe(true);
+    expect(result.messagingToolSentTargets).toEqual([
+      expect.objectContaining({
+        tool: "message",
+        provider: "telegram",
+        to: "chat123",
+      }),
+    ]);
+  });
+
+  it("records current-target evidence for confirmed implicit reply delivery", async () => {
+    const context = buildPreparedCliRunContext({ output: "text", provider: "google-gemini-cli" });
+    context.mcpDeliveryCapture = true;
+    context.params.messageChannel = "telegram";
+    context.params.currentChannelId = "chat123";
+    supervisorSpawnMock.mockImplementationOnce(async (...spawnArgs: unknown[]) => {
+      const input = spawnArgs[0] as SupervisorSpawnInput;
+      recordMcpLoopbackToolCallResult({
+        captureKey: input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY ?? "",
+        toolName: "message",
+        args: {
+          action: "reply",
+          message: "done",
+        },
+        result: { ok: true },
+        isError: false,
+      });
+      input.onStdout?.("done");
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+
+    const result = await executePreparedCliRun(context);
+
+    expect(result.didSendViaMessagingTool).toBe(true);
+    expect(result.messagingToolSentTargets).toEqual([
+      expect.objectContaining({
+        tool: "message",
+        provider: "telegram",
+        to: "chat123",
+      }),
+    ]);
   });
 
   it("preserves text and media evidence for confirmed implicit message sends", async () => {

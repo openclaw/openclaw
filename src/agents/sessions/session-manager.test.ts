@@ -370,10 +370,134 @@ describe("SessionManager.open", () => {
     expect(warmEntry).toMatchObject({ data: { value: "first" } });
   });
 
-  it("validates the transcript prefix after a custom entry is serialized", async () => {
+  it("validates the transcript prefix after extension-owned entries are serialized", async () => {
+    const appenders: Array<{
+      name: string;
+      append: (manager: SessionManager, value: unknown) => void;
+    }> = [
+      {
+        name: "custom",
+        append: (manager, value) =>
+          manager.appendCustomEntry("rewrite-during-serialization", {
+            value,
+          }),
+      },
+      {
+        name: "custom_message",
+        append: (manager, value) =>
+          manager.appendCustomMessageEntry(
+            "rewrite-during-serialization",
+            "extension message",
+            false,
+            { value },
+          ),
+      },
+      {
+        name: "compaction",
+        append: (manager, value) =>
+          manager.appendCompaction("summary", "assistant-1", 1, { value }, true),
+      },
+      {
+        name: "branch_summary",
+        append: (manager, value) =>
+          manager.branchWithSummary("assistant-1", "summary", { value }, true),
+      },
+    ];
+
+    for (const { name, append } of appenders) {
+      const dir = await makeTempDir();
+      const sessionFile = path.join(dir, `${name}.jsonl`);
+      const originalEntry = {
+        type: "message",
+        id: "assistant-1",
+        parentId: null,
+        timestamp: "2026-06-04T00:00:01.000Z",
+        message: buildAssistantMessage("message 1"),
+      };
+      const replacementEntry = {
+        ...originalEntry,
+        message: buildAssistantMessage("changed 1"),
+      };
+      const headerLine = JSON.stringify(buildSessionHeader(dir));
+      await fs.writeFile(sessionFile, `${headerLine}\n${JSON.stringify(originalEntry)}\n`, "utf8");
+
+      const sessionManager = SessionManager.open(sessionFile, dir, dir);
+      const publishSessionFileSnapshot = vi.fn(() => true);
+      await withOwnedSessionTranscriptWrites(
+        {
+          sessionFile,
+          canAdvanceSessionEntryCache: () => true,
+          publishSessionFileSnapshot,
+          withSessionWriteLock: async (run) => await run(),
+        },
+        async () => {
+          append(sessionManager, {
+            toJSON() {
+              writeFileSync(
+                sessionFile,
+                `${headerLine}\n${JSON.stringify(replacementEntry)}\n`,
+                "utf8",
+              );
+              return "persisted";
+            },
+          });
+        },
+      );
+
+      expect(
+        SessionManager.open(sessionFile, dir, dir)
+          .getEntries()
+          .filter((entry) => entry.type === "message")
+          .map((entry) => readMessageContent(entry)),
+      ).toEqual(["changed 1"]);
+      expect(publishSessionFileSnapshot).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("does not probe custom entry getters before serialization", async () => {
     const dir = await makeTempDir();
     const sessionFile = path.join(dir, "session.jsonl");
-    const originalEntry = {
+    const assistantEntry = {
+      type: "message",
+      id: "assistant-1",
+      parentId: null,
+      timestamp: "2026-06-04T00:00:01.000Z",
+      message: buildAssistantMessage("message 1"),
+    };
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify(buildSessionHeader(dir))}\n${JSON.stringify(assistantEntry)}\n`,
+      "utf8",
+    );
+
+    let accessCount = 0;
+    const sessionManager = SessionManager.open(sessionFile, dir, dir);
+    await withOwnedSessionTranscriptWrites(
+      {
+        sessionFile,
+        canAdvanceSessionEntryCache: () => true,
+        publishSessionFileSnapshot: () => true,
+        withSessionWriteLock: async (run) => await run(),
+      },
+      async () => {
+        sessionManager.appendCustomEntry("getter-data", {
+          get cursor() {
+            accessCount += 1;
+            return `value ${accessCount}`;
+          },
+        });
+      },
+    );
+
+    const freshEntry = loadEntriesFromFile(sessionFile).find((entry) => entry.type === "custom");
+    expect(accessCount).toBe(1);
+    expect(freshEntry).toMatchObject({ data: { cursor: "value 1" } });
+  });
+
+  it("invalidates custom function serializers before advancing the cache", async () => {
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "session.jsonl");
+    const assistantEntry = {
       type: "message",
       id: "assistant-1",
       parentId: null,
@@ -381,11 +505,18 @@ describe("SessionManager.open", () => {
       message: buildAssistantMessage("message 1"),
     };
     const replacementEntry = {
-      ...originalEntry,
+      ...assistantEntry,
       message: buildAssistantMessage("changed 1"),
     };
     const headerLine = JSON.stringify(buildSessionHeader(dir));
-    await fs.writeFile(sessionFile, `${headerLine}\n${JSON.stringify(originalEntry)}\n`, "utf8");
+    await fs.writeFile(sessionFile, `${headerLine}\n${JSON.stringify(assistantEntry)}\n`, "utf8");
+
+    const serializer = Object.assign(function serialize() {}, {
+      toJSON() {
+        writeFileSync(sessionFile, `${headerLine}\n${JSON.stringify(replacementEntry)}\n`, "utf8");
+        return "persisted";
+      },
+    });
 
     const sessionManager = SessionManager.open(sessionFile, dir, dir);
     await withOwnedSessionTranscriptWrites(
@@ -396,7 +527,43 @@ describe("SessionManager.open", () => {
         withSessionWriteLock: async (run) => await run(),
       },
       async () => {
-        sessionManager.appendCustomEntry("rewrite-during-serialization", {
+        sessionManager.appendCustomEntry("function-serializer", { value: serializer });
+      },
+    );
+
+    const reopenedPrefix = SessionManager.open(sessionFile, dir, dir)
+      .getEntries()
+      .find((entry) => entry.id === "assistant-1");
+    expect(reopenedPrefix ? readMessageContent(reopenedPrefix) : undefined).toBe("changed 1");
+  });
+
+  it("validates custom message detail hooks before advancing the cache", async () => {
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "session.jsonl");
+    const assistantEntry = {
+      type: "message",
+      id: "assistant-1",
+      parentId: null,
+      timestamp: "2026-06-04T00:00:01.000Z",
+      message: buildAssistantMessage("message 1"),
+    };
+    const replacementEntry = {
+      ...assistantEntry,
+      message: buildAssistantMessage("changed 1"),
+    };
+    const headerLine = JSON.stringify(buildSessionHeader(dir));
+    await fs.writeFile(sessionFile, `${headerLine}\n${JSON.stringify(assistantEntry)}\n`, "utf8");
+
+    const sessionManager = SessionManager.open(sessionFile, dir, dir);
+    await withOwnedSessionTranscriptWrites(
+      {
+        sessionFile,
+        canAdvanceSessionEntryCache: () => true,
+        publishSessionFileSnapshot: () => true,
+        withSessionWriteLock: async (run) => await run(),
+      },
+      async () => {
+        sessionManager.appendCustomMessageEntry("details-hook", "visible", false, {
           value: {
             toJSON() {
               writeFileSync(
@@ -417,6 +584,67 @@ describe("SessionManager.open", () => {
         .filter((entry) => entry.type === "message")
         .map((entry) => readMessageContent(entry)),
     ).toEqual(["changed 1"]);
+  });
+
+  it("invalidates assistant tool-call hook writes before advancing the cache", async () => {
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "session.jsonl");
+    const assistantEntry = {
+      type: "message",
+      id: "assistant-1",
+      parentId: null,
+      timestamp: "2026-06-04T00:00:01.000Z",
+      message: buildAssistantMessage("message 1"),
+    };
+    const replacementEntry = {
+      ...assistantEntry,
+      message: buildAssistantMessage("changed 1"),
+    };
+    const headerLine = JSON.stringify(buildSessionHeader(dir));
+    await fs.writeFile(sessionFile, `${headerLine}\n${JSON.stringify(assistantEntry)}\n`, "utf8");
+
+    const sessionManager = SessionManager.open(sessionFile, dir, dir);
+    await withOwnedSessionTranscriptWrites(
+      {
+        sessionFile,
+        canAdvanceSessionEntryCache: () => true,
+        publishSessionFileSnapshot: () => true,
+        withSessionWriteLock: async (run) => await run(),
+      },
+      async () => {
+        sessionManager.appendMessage(
+          {
+            ...buildAssistantMessage("unused"),
+            content: [
+              {
+                type: "toolCall",
+                id: "call-1",
+                name: "custom",
+                arguments: {
+                  value: {
+                    toJSON() {
+                      writeFileSync(
+                        sessionFile,
+                        `${headerLine}\n${JSON.stringify(replacementEntry)}\n`,
+                        "utf8",
+                      );
+                      return "persisted";
+                    },
+                  },
+                },
+              },
+            ],
+            stopReason: "toolUse",
+          },
+          { invalidateSerializedPrefixCache: true },
+        );
+      },
+    );
+
+    const reopenedPrefix = SessionManager.open(sessionFile, dir, dir)
+      .getEntries()
+      .find((entry) => entry.id === "assistant-1");
+    expect(reopenedPrefix ? readMessageContent(reopenedPrefix) : undefined).toBe("changed 1");
   });
 
   it("invalidates incremental repair when append ownership cannot be proven", async () => {

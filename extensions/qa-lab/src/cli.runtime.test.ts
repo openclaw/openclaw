@@ -284,6 +284,13 @@ describe("qa cli runtime", () => {
       baseUrl: "http://127.0.0.1:58000",
       runSelfCheck: vi.fn().mockResolvedValue({
         outputPath: "/tmp/report.md",
+        report: "",
+        checks: [{ name: "QA self-check scenario", status: "pass" }],
+        scenarioResult: {
+          name: "QA self-check scenario",
+          status: "pass",
+          steps: [],
+        },
       }),
       stop: vi.fn(),
     });
@@ -2152,6 +2159,33 @@ describe("qa cli runtime", () => {
       repoRoot: path.resolve("/tmp/openclaw-repo"),
       outputPath: path.resolve("/tmp/openclaw-repo", ".artifacts/qa/self-check.md"),
     });
+  });
+
+  it("fails unsuccessful self-checks after stopping the lab server", async () => {
+    const stop = vi.fn();
+    startQaLabServer.mockResolvedValueOnce({
+      baseUrl: "http://127.0.0.1:58000",
+      runSelfCheck: vi.fn().mockResolvedValue({
+        outputPath: "/tmp/failed-report.md",
+        report: "",
+        checks: [{ name: "QA self-check scenario", status: "fail" }],
+        scenarioResult: {
+          name: "QA self-check scenario",
+          status: "fail",
+          steps: [],
+        },
+      }),
+      stop,
+    });
+
+    await expect(
+      runQaLabSelfCheckCommand({
+        repoRoot: "/tmp/openclaw-repo",
+      }),
+    ).rejects.toThrow("QA self-check failed. See /tmp/failed-report.md.");
+
+    expect(stop).toHaveBeenCalledOnce();
+    expectWriteContains(stdoutWrite, "QA self-check report: /tmp/failed-report.md");
   });
 
   it("resolves docker scaffold paths relative to the explicit repo root", async () => {

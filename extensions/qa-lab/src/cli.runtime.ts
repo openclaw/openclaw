@@ -74,6 +74,7 @@ import {
   type QaScorecardCategoryCoverageReport,
   type QaScorecardEvidenceMode,
 } from "./scorecard-taxonomy.js";
+import { isQaSelfCheckSuccessful } from "./self-check.js";
 import { runQaFlowSuiteFromRuntime, runQaSuite } from "./suite-launch.runtime.js";
 import { scenarioMatchesQaProviderLane } from "./suite-planning.js";
 import { readQaSuiteFailedOrSkippedScenarioCountFromFile } from "./suite-summary.js";
@@ -617,6 +618,9 @@ export async function runQaLabSelfCheckCommand(opts: QaLabSelfCheckCommandOption
   try {
     const result = await server.runSelfCheck();
     process.stdout.write(`QA self-check report: ${result.outputPath}\n`);
+    if (!isQaSelfCheckSuccessful(result)) {
+      throw new Error(`QA self-check failed. See ${result.outputPath}.`);
+    }
   } finally {
     await server.stop();
   }

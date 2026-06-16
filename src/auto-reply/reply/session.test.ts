@@ -974,6 +974,79 @@ describe("initSessionState RawBody", () => {
     expect(store[sessionKey]?.modelOverrideSource).toBe("user");
   });
 
+  it("preserves user-set behavior overrides across an implicit daily stale rollover (#92562)", async () => {
+    // Regression: session-level behavior overrides (/think, /verbose, /reasoning,
+    // /trace, ttsAuto) survive an explicit /new but were dropped after the
+    // automatic daily/idle reset, because the carryover was gated on
+    // resetTriggered while the implicit stale rollover runs with
+    // resetTriggered === false. The model override on this same path was already
+    // fixed (#90119); the behavior overrides must follow suit.
+    const root = await makeCaseDir("openclaw-daily-rollover-behavior-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:discord:channel:daily-rollover-behavior";
+    const existingSessionId = "session-before-daily-reset-behavior";
+    // Stale under the default daily reset (atHour 4): started ~48h ago.
+    const staleStartedAt = Date.now() - 48 * 60 * 60 * 1000;
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: staleStartedAt,
+        sessionStartedAt: staleStartedAt,
+        lastInteractionAt: staleStartedAt,
+        systemSent: true,
+        // User-set behavior overrides (what /think, /verbose, etc. write).
+        thinkingLevel: "medium",
+        verboseLevel: "on",
+        traceLevel: "high",
+        reasoningLevel: "low",
+        ttsAuto: "always",
+      },
+    });
+
+    const cfg = {
+      session: { store: storePath },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        // Ordinary message — NOT a reset trigger.
+        RawBody: "hello again",
+        ChatType: "channel",
+        SessionKey: sessionKey,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    // The session rolled over implicitly (stale), not via /new.
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(false);
+    expect(result.sessionId).not.toBe(existingSessionId);
+    // The user-set behavior overrides must survive the implicit rollover.
+    expect(result.sessionEntry.thinkingLevel).toBe("medium");
+    expect(result.sessionEntry.verboseLevel).toBe("on");
+    expect(result.sessionEntry.traceLevel).toBe("high");
+    expect(result.sessionEntry.reasoningLevel).toBe("low");
+    expect(result.sessionEntry.ttsAuto).toBe("always");
+
+    const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      {
+        thinkingLevel?: string;
+        verboseLevel?: string;
+        traceLevel?: string;
+        reasoningLevel?: string;
+        ttsAuto?: string;
+      }
+    >;
+    expect(store[sessionKey]?.thinkingLevel).toBe("medium");
+    expect(store[sessionKey]?.verboseLevel).toBe("on");
+    expect(store[sessionKey]?.traceLevel).toBe("high");
+    expect(store[sessionKey]?.reasoningLevel).toBe("low");
+    expect(store[sessionKey]?.ttsAuto).toBe("always");
+  });
+
   it("clears an auto-fallback model override on an implicit daily stale rollover (#90119)", async () => {
     // Counterpart: auto-created fallback overrides must still be cleared on a
     // daily rollover so stale sessions return to the configured default.
@@ -1017,6 +1090,58 @@ describe("initSessionState RawBody", () => {
     expect(result.sessionEntry.modelOverride).toBeUndefined();
     expect(result.sessionEntry.providerOverride).toBeUndefined();
     expect(result.sessionEntry.modelOverrideSource).toBeUndefined();
+  });
+
+  it("preserves behavior overrides while clearing an auto-fallback model override on one implicit daily rollover (#92562)", async () => {
+    // Documents the clear/preserve split on a single implicit rollover: a
+    // user-set /think survives (no fallback provenance to filter) while an
+    // auto-fallback model override is dropped back to the configured default.
+    // The two travel separate paths (direct carry vs resolveResetPreservedSelection),
+    // so they must not interfere.
+    const root = await makeCaseDir("openclaw-daily-rollover-mixed-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:discord:channel:daily-rollover-mixed";
+    const existingSessionId = "session-before-daily-reset-mixed";
+    const staleStartedAt = Date.now() - 48 * 60 * 60 * 1000;
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: staleStartedAt,
+        sessionStartedAt: staleStartedAt,
+        lastInteractionAt: staleStartedAt,
+        systemSent: true,
+        // User-set behavior override (must survive).
+        thinkingLevel: "medium",
+        // Auto-fallback model override (must be cleared).
+        providerOverride: "minimax",
+        modelOverride: "m2.7",
+        modelOverrideFallbackOriginProvider: "openai",
+        modelOverrideFallbackOriginModel: "gpt-4o-mini",
+      },
+    });
+
+    const cfg = {
+      session: { store: storePath },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        RawBody: "hello again",
+        ChatType: "channel",
+        SessionKey: sessionKey,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(false);
+    // Behavior override preserved...
+    expect(result.sessionEntry.thinkingLevel).toBe("medium");
+    // ...while the auto-fallback model override is cleared.
+    expect(result.sessionEntry.modelOverride).toBeUndefined();
+    expect(result.sessionEntry.providerOverride).toBeUndefined();
   });
 
   it("rotates local session state for /new on bound ACP sessions", async () => {

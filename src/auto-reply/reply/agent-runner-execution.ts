@@ -65,11 +65,8 @@ import {
   resolveAgentRunAbortLifecycleFields,
 } from "../../agents/run-termination.js";
 import { buildAgentRuntimeOutcomePlan } from "../../agents/runtime-plan/build.js";
-import {
-  resolveGroupSessionKey,
-  type SessionEntry,
-  updateSessionStore,
-} from "../../config/sessions.js";
+import { resolveGroupSessionKey, type SessionEntry } from "../../config/sessions.js";
+import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolveSilentReplyPolicy } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
@@ -502,6 +499,13 @@ function snapshotFallbackSelectionState(entry: SessionEntry): FallbackSelectionS
     authProfileOverride: entry.authProfileOverride,
     authProfileOverrideSource: entry.authProfileOverrideSource,
     authProfileOverrideCompactionCount: entry.authProfileOverrideCompactionCount,
+  };
+}
+
+function buildFallbackSelectionStatePatch(entry: SessionEntry): Partial<SessionEntry> {
+  return {
+    ...snapshotFallbackSelectionState(entry),
+    updatedAt: entry.updatedAt,
   };
 }
 
@@ -1846,14 +1850,13 @@ export async function runAgentTurnWithFallback(params: {
 
     try {
       if (params.storePath) {
-        await updateSessionStore(params.storePath, (store) => {
-          const persistedEntry = store[params.sessionKey!];
-          if (!persistedEntry) {
-            return;
-          }
-          applyFallbackSelectionState(persistedEntry, nextState);
-          store[params.sessionKey!] = persistedEntry;
-        });
+        await updateSessionEntry(
+          { storePath: params.storePath, sessionKey: params.sessionKey },
+          (persistedEntry) => {
+            applyFallbackSelectionState(persistedEntry, nextState);
+            return buildFallbackSelectionStatePatch(persistedEntry);
+          },
+        );
       }
     } catch (error) {
       rollbackFallbackSelectionStateIfUnchanged(activeSessionEntry, nextState, previousState);
@@ -1870,18 +1873,18 @@ export async function runAgentTurnWithFallback(params: {
       if (rolledBackInMemory) {
         params.activeSessionStore![params.sessionKey!] = activeSessionEntry;
       }
-      if (!params.storePath) {
+      if (!params.storePath || !params.sessionKey) {
         return;
       }
-      await updateSessionStore(params.storePath, (store) => {
-        const persistedEntry = store[params.sessionKey!];
-        if (!persistedEntry) {
-          return;
-        }
-        if (rollbackFallbackSelectionStateIfUnchanged(persistedEntry, nextState, previousState)) {
-          store[params.sessionKey!] = persistedEntry;
-        }
-      });
+      await updateSessionEntry(
+        { storePath: params.storePath, sessionKey: params.sessionKey },
+        (persistedEntry) => {
+          if (rollbackFallbackSelectionStateIfUnchanged(persistedEntry, nextState, previousState)) {
+            return buildFallbackSelectionStatePatch(persistedEntry);
+          }
+          return null;
+        },
+      );
     };
   };
   const clearRecoveredAutoFallbackPrimaryProbe = async (paramsForClear: {
@@ -1914,17 +1917,37 @@ export async function runAgentTurnWithFallback(params: {
     if (!params.storePath) {
       return;
     }
-    await updateSessionStore(params.storePath, (store) => {
-      const persistedEntry = store[params.sessionKey!];
-      if (!persistedEntry) {
-        return;
-      }
-      if (!entryMatchesAutoFallbackPrimaryProbe(persistedEntry, probe)) {
-        return;
-      }
-      clearAutoFallbackPrimaryProbeSelection(persistedEntry);
-      store[params.sessionKey!] = persistedEntry;
-    });
+    await updateSessionEntry(
+      { storePath: params.storePath, sessionKey: params.sessionKey },
+      (persistedEntry) => {
+        if (!entryMatchesAutoFallbackPrimaryProbe(persistedEntry, probe)) {
+          return null;
+        }
+        const shouldClearAuthProfile =
+          persistedEntry.authProfileOverrideSource === "auto" ||
+          (persistedEntry.authProfileOverrideSource === undefined &&
+            persistedEntry.authProfileOverrideCompactionCount !== undefined);
+        clearAutoFallbackPrimaryProbeSelection(persistedEntry);
+        return {
+          providerOverride: undefined,
+          modelOverride: undefined,
+          modelOverrideSource: undefined,
+          modelOverrideFallbackOriginProvider: undefined,
+          modelOverrideFallbackOriginModel: undefined,
+          ...(shouldClearAuthProfile
+            ? {
+                authProfileOverride: undefined,
+                authProfileOverrideSource: undefined,
+                authProfileOverrideCompactionCount: undefined,
+              }
+            : {}),
+          fallbackNoticeSelectedModel: undefined,
+          fallbackNoticeActiveModel: undefined,
+          fallbackNoticeReason: undefined,
+          updatedAt: persistedEntry.updatedAt,
+        };
+      },
+    );
   };
 
   while (true) {

@@ -99,7 +99,8 @@ describe("memory manager atomic reindex", () => {
       renameRetryDelayMs: 10,
     });
 
-    expect(rename).toHaveBeenCalledTimes(4);
+    // main (1 retry) + -wal + -shm + -journal.
+    expect(rename).toHaveBeenCalledTimes(5);
     expect(wait).toHaveBeenCalledTimes(1);
     expect(wait).toHaveBeenCalledWith(10);
   });
@@ -128,7 +129,8 @@ describe("memory manager atomic reindex", () => {
       .fn()
       .mockResolvedValueOnce(undefined)
       .mockRejectedValueOnce(Object.assign(new Error("missing wal"), { code: "ENOENT" }))
-      .mockRejectedValueOnce(Object.assign(new Error("missing shm"), { code: "ENOENT" }));
+      .mockRejectedValueOnce(Object.assign(new Error("missing shm"), { code: "ENOENT" }))
+      .mockRejectedValueOnce(Object.assign(new Error("missing journal"), { code: "ENOENT" }));
     const wait = vi.fn().mockResolvedValue(undefined);
 
     await moveMemoryIndexFiles("index.sqlite.tmp", "index.sqlite", {
@@ -137,7 +139,8 @@ describe("memory manager atomic reindex", () => {
       renameRetryDelayMs: 10,
     });
 
-    expect(rename).toHaveBeenCalledTimes(3);
+    // main + the three optional sidecars (-wal, -shm, -journal), none retried.
+    expect(rename).toHaveBeenCalledTimes(4);
     expect(wait).not.toHaveBeenCalled();
   });
 
@@ -202,6 +205,7 @@ describe("memory manager atomic reindex", () => {
         "index.sqlite.tmp",
         "index.sqlite.tmp-wal",
         "index.sqlite.tmp-shm",
+        "index.sqlite.tmp-journal",
       ]);
       expect(wait).toHaveBeenCalledTimes(1);
       expect(wait).toHaveBeenCalledWith(10);
@@ -273,6 +277,7 @@ describe("memory manager atomic reindex", () => {
       "rm:index.sqlite.tmp:closed",
       "rm:index.sqlite.tmp-wal:closed",
       "rm:index.sqlite.tmp-shm:closed",
+      "rm:index.sqlite.tmp-journal:closed",
     ]);
   });
 
@@ -313,8 +318,10 @@ describe("memory manager atomic reindex", () => {
     writeChunkMarker(tempIndexPath, "after");
     await fs.writeFile(`${indexPath}-wal`, "stale wal");
     await fs.writeFile(`${indexPath}-shm`, "stale shm");
+    await fs.writeFile(`${indexPath}-journal`, "stale journal");
     await fs.writeFile(`${tempIndexPath}-wal`, "closed temp wal");
     await fs.writeFile(`${tempIndexPath}-shm`, "closed temp shm");
+    await fs.writeFile(`${tempIndexPath}-journal`, "closed temp journal");
 
     const events: string[] = [];
     const realRename = fs.rename;
@@ -340,21 +347,90 @@ describe("memory manager atomic reindex", () => {
     });
 
     expect(readChunkMarker(indexPath)).toBe("after");
-    expect(rename).toHaveBeenCalledTimes(3);
+    expect(rename).toHaveBeenCalledTimes(4);
     expect(events).toEqual([
       "rename:index.sqlite-wal->index.sqlite.backup-<uuid>-wal",
       "rename:index.sqlite-shm->index.sqlite.backup-<uuid>-shm",
+      "rename:index.sqlite-journal->index.sqlite.backup-<uuid>-journal",
       "rename:index.sqlite.tmp->index.sqlite",
       "rm:index.sqlite.backup-<uuid>:after",
       "rm:index.sqlite.backup-<uuid>-wal:after",
       "rm:index.sqlite.backup-<uuid>-shm:after",
+      "rm:index.sqlite.backup-<uuid>-journal:after",
       "rm:index.sqlite.tmp-wal:after",
       "rm:index.sqlite.tmp-shm:after",
+      "rm:index.sqlite.tmp-journal:after",
     ]);
     await expectPathMissing(`${indexPath}-wal`);
     await expectPathMissing(`${indexPath}-shm`);
+    await expectPathMissing(`${indexPath}-journal`);
     await expectPathMissing(`${tempIndexPath}-wal`);
     await expectPathMissing(`${tempIndexPath}-shm`);
+    await expectPathMissing(`${tempIndexPath}-journal`);
+  });
+
+  it("does not strand a stale rollback-journal next to the published index", async () => {
+    // journal_mode=DELETE stores (e.g. NFS-backed) leave a -journal sidecar
+    // instead of -wal/-shm. A swap that ignores it would publish the new main
+    // file beside a stale rollback journal, so the next open would roll the
+    // fresh index back to a torn state. The journal must be cleared on publish.
+    writeChunkMarker(indexPath, "before");
+    writeChunkMarker(tempIndexPath, "after");
+    await fs.writeFile(`${indexPath}-journal`, "stale rollback journal");
+
+    await runMemoryAtomicReindex({
+      targetPath: indexPath,
+      tempPath: tempIndexPath,
+      build: async () => undefined,
+    });
+
+    // Real disk readback across the swap boundary.
+    expect(readChunkMarker(indexPath)).toBe("after");
+    await expectPathMissing(`${indexPath}-journal`);
+  });
+
+  it("removes the temp rollback-journal sidecar when a reindex build fails", async () => {
+    // A crashed/failed reindex on a DELETE-mode store can leave a temp
+    // -journal sidecar. Cleanup must remove it alongside the temp main file so
+    // the startup orphan sweep is never required to reclaim it.
+    writeChunkMarker(indexPath, "before");
+    writeChunkMarker(tempIndexPath, "after");
+    await fs.writeFile(`${tempIndexPath}-journal`, "temp rollback journal");
+
+    await expect(
+      runMemoryAtomicReindex({
+        targetPath: indexPath,
+        tempPath: tempIndexPath,
+        build: async () => {
+          throw new Error("embedding failure");
+        },
+      }),
+    ).rejects.toThrow("embedding failure");
+
+    // The prior index survives and the temp triplet (incl. -journal) is gone.
+    expect(readChunkMarker(indexPath)).toBe("before");
+    await expectPathMissing(tempIndexPath);
+    await expectPathMissing(`${tempIndexPath}-journal`);
+  });
+
+  it("moves the rollback-journal sidecar with the main index across the real filesystem", async () => {
+    // moveMemoryIndexFiles is the Windows backup-protocol restore primitive.
+    // It must carry the -journal sidecar so a DELETE-mode index is recovered
+    // intact when a publish is rolled back.
+    const sourceBase = `${indexPath}.tmp`;
+    writeChunkMarker(sourceBase, "recovered");
+    await fs.writeFile(`${sourceBase}-journal`, "recovered journal");
+
+    await moveMemoryIndexFiles(sourceBase, indexPath);
+
+    // Real disk readback at the destination. Inspect the relocated journal
+    // before opening the DB, since opening index.sqlite would treat a sibling
+    // -journal as a hot journal and consume it.
+    await expect(fs.readFile(`${indexPath}-journal`, "utf8")).resolves.toBe("recovered journal");
+    await expectPathMissing(sourceBase);
+    await expectPathMissing(`${sourceBase}-journal`);
+    await fs.rm(`${indexPath}-journal`, { force: true });
+    expect(readChunkMarker(indexPath)).toBe("recovered");
   });
 
   it("reports publish before post-swap cleanup failures", async () => {

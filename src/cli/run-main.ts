@@ -4,8 +4,10 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { Command as CommanderCommand, Option as CommanderOption } from "commander";
 import { resolveStateDir } from "../config/paths.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
+import { FLAG_TERMINATOR, isValueToken } from "../infra/cli-root-options.js";
 import { isTruthyEnvValue, normalizeEnv } from "../infra/env.js";
 import { isMainModule } from "../infra/is-main.js";
 import type { ProxyHandle } from "../infra/net/proxy/proxy-lifecycle.js";
@@ -13,7 +15,11 @@ import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import type { PluginManifestCommandAliasRegistry } from "../plugins/manifest-command-aliases.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
-import { normalizeGeneratedHelpCommandArgv, normalizeRootHelpTargetArgv } from "./argv.js";
+import {
+  normalizeGeneratedHelpCommandArgv,
+  normalizeRootHelpTargetArgv,
+  normalizeRootNoColorArgv,
+} from "./argv.js";
 import {
   isReservedNonPluginCommandRoot,
   shouldRegisterPrimaryCommandOnly,
@@ -363,6 +369,69 @@ function isCommanderParseExit(error: unknown): error is { exitCode: number } {
   );
 }
 
+function findCommandOption(command: CommanderCommand, token: string): CommanderOption | undefined {
+  const equalsIndex = token.indexOf("=");
+  const flag = equalsIndex === -1 ? token : token.slice(0, equalsIndex);
+  return command.options.find((option) => option.long === flag || option.short === flag);
+}
+
+function findSubcommand(command: CommanderCommand, name: string): CommanderCommand | undefined {
+  return command.commands.find(
+    (subcommand) => subcommand.name() === name || subcommand.aliases().includes(name),
+  );
+}
+
+function shouldOptionConsumeFollowingToken(
+  option: CommanderOption | undefined,
+  token: string,
+  next: string | undefined,
+): boolean {
+  if (!option || token.includes("=")) {
+    return false;
+  }
+  if (option.required) {
+    return true;
+  }
+  return option.optional && isValueToken(next);
+}
+
+function isNoColorConsumedAsCommandOptionValue(
+  program: CommanderCommand,
+  remainingArgs: readonly string[],
+  noColorIndex: number,
+): boolean {
+  let command = program;
+  let pendingValue = false;
+  for (let index = 0; index < noColorIndex; index += 1) {
+    const arg = remainingArgs[index];
+    if (!arg || arg === FLAG_TERMINATOR) {
+      return false;
+    }
+    if (pendingValue) {
+      pendingValue = false;
+      continue;
+    }
+    if (arg.startsWith("-")) {
+      const option = findCommandOption(command, arg);
+      if (!option && index === noColorIndex - 1 && !arg.includes("=")) {
+        // Unknown option surfaces may allow arbitrary flags; keep the value-safe behavior there.
+        return true;
+      }
+      pendingValue = shouldOptionConsumeFollowingToken(option, arg, remainingArgs[index + 1]);
+      continue;
+    }
+    command = findSubcommand(command, arg) ?? command;
+  }
+  return pendingValue;
+}
+
+function normalizeRootNoColorArgvForProgram(argv: string[], program: CommanderCommand): string[] {
+  return normalizeRootNoColorArgv(argv, {
+    shouldPreserveNoColor: ({ remainingArgs, noColorIndex }) =>
+      isNoColorConsumedAsCommandOptionValue(program, remainingArgs, noColorIndex),
+  });
+}
+
 async function ensureCliEnvProxyDispatcher(): Promise<void> {
   try {
     const { hasEnvHttpProxyAgentConfigured } = await import("../infra/net/proxy-env.js");
@@ -547,7 +616,7 @@ export async function runCli(argv: string[] = process.argv) {
     }
     return;
   }
-  const normalizedArgv = normalizeRootHelpTargetArgv(parsedProfile.argv);
+  const normalizedArgv = normalizeRootHelpTargetArgv(normalizeRootNoColorArgv(parsedProfile.argv));
   const normalizedInvocation = resolveCliArgvInvocation(normalizedArgv);
   const isHelpOrVersionInvocation = normalizedInvocation.hasHelpOrVersion;
   const isGatewayRunInvocation = isGatewayRunInvocationArgv(normalizedArgv);
@@ -840,7 +909,7 @@ export async function runCli(argv: string[] = process.argv) {
       return;
     }
 
-    const parseArgv = normalizeGeneratedHelpCommandArgv(rewriteUpdateFlagArgv(normalizedArgv));
+    let parseArgv = normalizeGeneratedHelpCommandArgv(rewriteUpdateFlagArgv(normalizedArgv));
     const suppressStartupProgress = hasJsonOutputFlag(parseArgv);
     const { createCliProgress } = await loadProgressModule();
     const startupProgress = createCliProgress({
@@ -982,6 +1051,7 @@ export async function runCli(argv: string[] = process.argv) {
         }
       }
 
+      parseArgv = normalizeRootNoColorArgvForProgram(parseArgv, program);
       stopStartupProgress();
 
       try {

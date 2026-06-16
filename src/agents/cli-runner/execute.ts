@@ -43,6 +43,7 @@ import {
   isMessagingTool,
   isMessagingToolDeliveryAction,
   isMessagingToolSendAction,
+  isMessagingToolTargetEvidenceAction,
 } from "../embedded-agent-messaging.js";
 import type {
   MessagingToolSend,
@@ -123,7 +124,7 @@ function extractCliMessagingTarget(
     normalizedToolName === "message" && currentProvider && !hasExplicitProvider
       ? { ...args, provider: currentProvider }
       : args;
-  if (!isMessagingToolSendAction(normalizedToolName, targetArgs)) {
+  if (!isMessagingToolTargetEvidenceAction(normalizedToolName, targetArgs)) {
     return undefined;
   }
   return extractMessagingToolSend(normalizedToolName, targetArgs, {
@@ -733,38 +734,40 @@ export async function executePreparedCliRun(
           }
           didSendViaMessagingTool = true;
           const toolArgs = paramsLocal.args ?? {};
-          if (!isMessagingToolSendAction(paramsLocal.toolName, toolArgs)) {
-            return;
-          }
-          const content = extractCliMessagingContent(toolArgs, paramsLocal.result);
-          appendUniqueCliMessagingEvidence(
-            messagingToolSentTexts,
-            messagingToolSentTextKeys,
-            content.text ? [content.text] : [],
-          );
-          appendUniqueCliMessagingEvidence(
-            messagingToolSentMediaUrls,
-            messagingToolSentMediaUrlKeys,
-            content.mediaUrls ?? [],
-          );
-          if (
-            isDeliveredMessageToolOnlySourceReplyResult({
-              sourceReplyDeliveryMode: context.params.sourceReplyDeliveryMode,
-              toolName: paramsLocal.toolName,
-              args: paramsLocal.args,
-              result: paramsLocal.result,
-              isError: paramsLocal.isError,
-            })
-          ) {
-            didDeliverSourceReplyViaMessageTool = true;
-            const sourceReplyPayload = extractMessagingToolSourceReplyPayload(paramsLocal.result);
-            if (sourceReplyPayload) {
-              if (messagingToolSourceReplyPayloads.length >= CLI_MESSAGING_EVIDENCE_MAX_CALLS) {
-                messagingToolSourceReplyPayloads.shift();
+          const isMessagingSend = isMessagingToolSendAction(paramsLocal.toolName, toolArgs);
+          const content = isMessagingSend
+            ? extractCliMessagingContent(toolArgs, paramsLocal.result)
+            : {};
+          if (isMessagingSend) {
+            appendUniqueCliMessagingEvidence(
+              messagingToolSentTexts,
+              messagingToolSentTextKeys,
+              content.text ? [content.text] : [],
+            );
+            appendUniqueCliMessagingEvidence(
+              messagingToolSentMediaUrls,
+              messagingToolSentMediaUrlKeys,
+              content.mediaUrls ?? [],
+            );
+            if (
+              isDeliveredMessageToolOnlySourceReplyResult({
+                sourceReplyDeliveryMode: context.params.sourceReplyDeliveryMode,
+                toolName: paramsLocal.toolName,
+                args: paramsLocal.args,
+                result: paramsLocal.result,
+                isError: paramsLocal.isError,
+              })
+            ) {
+              didDeliverSourceReplyViaMessageTool = true;
+              const sourceReplyPayload = extractMessagingToolSourceReplyPayload(paramsLocal.result);
+              if (sourceReplyPayload) {
+                if (messagingToolSourceReplyPayloads.length >= CLI_MESSAGING_EVIDENCE_MAX_CALLS) {
+                  messagingToolSourceReplyPayloads.shift();
+                }
+                // Each internal source-reply send is a distinct delivery, even when
+                // two intentional sends have identical text or media.
+                messagingToolSourceReplyPayloads.push(sourceReplyPayload);
               }
-              // Each internal source-reply send is a distinct delivery, even when
-              // two intentional sends have identical text or media.
-              messagingToolSourceReplyPayloads.push(sourceReplyPayload);
             }
           }
           if (paramsLocal.target) {

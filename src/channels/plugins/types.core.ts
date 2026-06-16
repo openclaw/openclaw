@@ -758,6 +758,8 @@ export type ChannelMessageActionAdapter = {
       ChannelMessageActionName,
       {
         aliases: string[];
+        /** Alias fields that identify the destination conversation, not an existing message. */
+        deliveryTargetAliases?: string[];
       }
     >
   >;

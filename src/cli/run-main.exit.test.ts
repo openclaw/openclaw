@@ -1445,6 +1445,7 @@ describe("runCli exit behavior", () => {
           OPENCLAW_GATEWAY_TOKEN: undefined,
           OPENCLAW_HOME: homeDir,
           OPENCLAW_STATE_DIR: undefined,
+          NODE_OPTIONS: undefined,
         },
         async () => {
           await runCli(["node", "openclaw", "gateway"]);

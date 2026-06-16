@@ -26,12 +26,12 @@ import {
   setRuntimeConfigSourceSnapshotMock,
   startWebAutoReplyMonitor,
 } from "./auto-reply.test-harness.js";
-import { waitForWaConnection } from "./session.js";
 import {
   createTestLegacyFlatWebInboundMessage,
   createTestWebInboundMessage,
 } from "./inbound/test-message.test-helper.js";
 import type { WebInboundMessageInput } from "./inbound/types.js";
+import { waitForWaConnection } from "./session.js";
 
 type DrainSelectionEntry = {
   channel: string;
@@ -125,16 +125,6 @@ function mockCallArg(mocked: unknown, callIndex: number, argIndex: number): unkn
     throw new Error(`Expected mock call at index ${callIndex}`);
   }
   return call[argIndex];
-}
-
-async function expectPathMissing(targetPath: string): Promise<void> {
-  try {
-    await fs.stat(targetPath);
-  } catch (error) {
-    expect((error as { code?: unknown }).code).toBe("ENOENT");
-    return;
-  }
-  throw new Error(`Expected path to be missing: ${targetPath}`);
 }
 
 describe("web auto-reply connection", () => {
@@ -417,6 +407,7 @@ describe("web auto-reply connection", () => {
     expect(sleep).not.toHaveBeenCalled();
     expectErrorContaining(runtime.error, "status 440");
     expectErrorContaining(runtime.error, "session conflict");
+    expectErrorContaining(runtime.error, "openclaw channels logout --channel whatsapp");
     expectErrorContaining(runtime.error, "Stopping web monitoring");
   });
 
@@ -434,15 +425,14 @@ describe("web auto-reply connection", () => {
       error: "Stream Errored (logged out)",
     },
   ] as const)(
-    "clears stale auth and active listener after terminal status $status",
+    "stops active listener and preserves auth after terminal status $status",
     async ({ status, isLoggedOut, healthState, error }) => {
       const accountId = `terminal-${status}`;
       const authDir = path.join(resolveOAuthDir(), "whatsapp", accountId);
+      const credsPath = resolveWebCredsPath(authDir);
+      const credsJson = JSON.stringify({ me: { id: "123@s.whatsapp.net" } });
       await fs.mkdir(authDir, { recursive: true });
-      await fs.writeFile(
-        resolveWebCredsPath(authDir),
-        JSON.stringify({ me: { id: "123@s.whatsapp.net" } }),
-      );
+      await fs.writeFile(credsPath, credsJson);
       setLoadConfigMock({
         channels: {
           whatsapp: {
@@ -489,7 +479,7 @@ describe("web auto-reply connection", () => {
       expect(scripted.getListenerCount()).toBe(1);
       expect(sleep).not.toHaveBeenCalled();
       expect(getActiveWebListener(accountId)).toBeNull();
-      await expectPathMissing(authDir);
+      await expect(fs.readFile(credsPath, "utf8")).resolves.toBe(credsJson);
       expect(
         statuses.filter((entry) => entry.connected === false && entry.healthState === healthState),
       ).not.toEqual([]);

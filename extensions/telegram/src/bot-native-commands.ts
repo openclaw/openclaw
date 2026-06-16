@@ -974,6 +974,7 @@ export const registerTelegramNativeCommands = ({
     tableMode: ReturnType<typeof resolveMarkdownTableMode>;
     chunkMode: TelegramChunkMode;
     linkPreview?: boolean;
+    richMessages?: boolean;
   }) => ({
     cfg: params.cfg,
     chatId: String(params.chatId),
@@ -993,6 +994,7 @@ export const registerTelegramNativeCommands = ({
     tableMode: params.tableMode,
     chunkMode: params.chunkMode,
     linkPreview: params.linkPreview,
+    richMessages: params.richMessages,
   });
   const resolveCommandTargetSessionKey = (params: {
     runtimeCfg: OpenClawConfig;
@@ -1210,6 +1212,7 @@ export const registerTelegramNativeCommands = ({
           tableMode,
           chunkMode,
           linkPreview: runtimeTelegramCfg.linkPreview,
+          richMessages: runtimeTelegramCfg.richMessages,
         });
         let topicName: string | undefined;
         if (isForum && resolvedThreadId != null) {
@@ -1432,6 +1435,7 @@ export const registerTelegramNativeCommands = ({
           tableMode,
           chunkMode,
           linkPreview: runtimeTelegramCfg.linkPreview,
+          richMessages: runtimeTelegramCfg.richMessages,
         });
         const from = isGroup ? buildTelegramGroupFrom(chatId, threadSpec.id) : `telegram:${chatId}`;
         const to = `telegram:${chatId}`;
