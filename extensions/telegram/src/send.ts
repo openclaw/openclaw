@@ -841,10 +841,21 @@ export async function sendMessageTelegram(
     }));
   };
 
-  const sendChunkedText = async (rawText: string, context: string) =>
-    useRichMessages
-      ? await sendTelegramRichTextChunks(buildRichTextPlan(rawText), context)
-      : await sendTelegramTextChunks(buildChunkedTextPlan(rawText, context), context);
+  const sendChunkedText = async (rawText: string, context: string) => {
+    if (!useRichMessages) {
+      return await sendTelegramTextChunks(buildChunkedTextPlan(rawText, context), context);
+    }
+    // Try rich messages first; fall back to legacy sendMessage if the API doesn't support it.
+    try {
+      return await sendTelegramRichTextChunks(buildRichTextPlan(rawText), context);
+    } catch (richErr) {
+      // Fall back gracefully — the Bot API server may not support sendRichMessage yet.
+      sendLogger.warn(
+        `sendRichMessage failed (${richErr instanceof Error ? richErr.message : richErr}), falling back to legacy sendMessage`,
+      );
+      return await sendTelegramTextChunks(buildChunkedTextPlan(rawText, context), context);
+    }
+  };
 
   const buildRichTextPlan = (rawText: string): TelegramRichTextChunk[] => {
     const textLimit = Math.min(
@@ -1620,6 +1631,7 @@ export async function editMessageTelegram(
     if (richRawApi && richMessage) {
       const richEditParams: Pick<TelegramEditRichMessageTextParams, "reply_markup"> =
         replyMarkup === undefined ? {} : { reply_markup: replyMarkup };
+      // Try rich edit first; fall back to legacy editMessageText if the API doesn't support it.
       return requestWithEditShouldLog(
         () =>
           richRawApi.editMessageText({
@@ -1630,7 +1642,30 @@ export async function editMessageTelegram(
           }),
         "editMessage",
         (err) => !isTelegramMessageNotModifiedError(err),
-      );
+      ).catch((richEditErr: unknown) => {
+        sendLogger.warn(
+          `editMessageText (rich) failed (${richEditErr instanceof Error ? richEditErr.message : richEditErr}), falling back to legacy edit`,
+        );
+        return withTelegramHtmlParseFallback({
+          label: "editMessage",
+          verbose: opts.verbose,
+          requestHtml: (retryLabel) =>
+            requestWithEditShouldLog(
+              () => api.editMessageText(chatId, messageId, htmlText, textEditParams),
+              retryLabel,
+              (err) => !isTelegramMessageNotModifiedError(err),
+            ),
+          requestPlain: (retryLabel) =>
+            requestWithEditShouldLog(
+              () =>
+                Object.keys(plainTextParams).length > 0
+                  ? api.editMessageText(chatId, messageId, plainText, plainTextParams)
+                  : api.editMessageText(chatId, messageId, plainText),
+              retryLabel,
+              (plainErr) => !isTelegramMessageNotModifiedError(plainErr),
+            ),
+        });
+      });
     }
     return withTelegramHtmlParseFallback({
       label: "editMessage",
