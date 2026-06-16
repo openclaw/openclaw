@@ -159,7 +159,13 @@ const TIMEOUT_BOILERPLATE_PATTERNS = [
 const CHITCHAT_BOILERPLATE_PATTERNS = [
   // Greeting openers.
   /^(?:您好|你好|哈喽|哈囉)[\s!！,，。.…]/,
-  /^(?:hello|hi|hey|greetings)\b[\s!.,]/i,
+  // English greeting immediately closed by punctuation ("Hello!", "Hi."), but
+  // never a factual summary that merely starts with a greeting word such as
+  // "Hello Kitty is ..." or "HelloFresh ...". #84034
+  /^(?:hello|hi|hey|greetings)\b\s*[!.,?…]/i,
+  // English greeting followed by a help/greeting follow-up rather than a noun,
+  // e.g. "Hi there", "Hello, how can I help", "Hey how are you".
+  /^(?:hello|hi|hey|greetings)\b[\s,!]+(?:there|everyone|folks|all|again|how\s+(?:can|may|are|is|'s|do)|what\s+can\s+i|nice\s+to\s+(?:meet|see)|welcome\b|i(?:'m|\s+am)\s+(?:here|happy|glad)|good\s+(?:morning|afternoon|evening|day))\b/i,
   // "It seems/looks like ..." clarification openers.
   /^it\s+(?:seems|looks|appears)\s+(?:like|that)\b/i,
   // "your message got cut off / didn't come through" clarifications.

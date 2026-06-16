@@ -2926,6 +2926,16 @@ describe("active-memory plugin", () => {
     expect(
       testing.normalizeActiveSummary("用户在开发 active-memory 插件，关注 recall 质量。"),
     ).toBe("用户在开发 active-memory 插件，关注 recall 质量。");
+    // Factual summaries that merely begin with a greeting word (names/brands)
+    // must NOT be misread as chitchat and dropped. #84034 follow-up.
+    for (const factual of [
+      "Hello Kitty is the user's favorite character.",
+      "HelloFresh is the user's preferred meal-kit service.",
+      "Hi-Chew is the user's favorite candy.",
+      "Hey Arnold is the user's favorite cartoon.",
+    ]) {
+      expect(testing.normalizeActiveSummary(factual)).toBe(factual);
+    }
   });
 
   it("does not inject embedded timeout boilerplate from partial transcripts", async () => {
