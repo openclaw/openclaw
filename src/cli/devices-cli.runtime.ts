@@ -716,6 +716,9 @@ function formatProvisionLocalFailure(
     case "approval-missing":
       return "Refusing to provision local device: generated pairing request was not found.";
   }
+  const exhaustiveReason: never = result.reason;
+  void exhaustiveReason;
+  throw new Error("unsupported local device provisioning failure");
 }
 
 export async function runDevicesListCommand(opts: DevicesRpcOpts): Promise<void> {
