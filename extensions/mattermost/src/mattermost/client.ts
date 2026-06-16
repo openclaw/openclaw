@@ -200,6 +200,18 @@ export async function fetchMattermostChannelByName(
   );
 }
 
+export type MattermostThreadResponse = {
+  order?: string[] | null;
+  posts?: Record<string, MattermostPost> | null;
+};
+
+export async function fetchMattermostThread(
+  client: MattermostClient,
+  threadRootId: string,
+): Promise<MattermostThreadResponse> {
+  return await client.request<MattermostThreadResponse>(`/posts/${threadRootId}/thread`);
+}
+
 export async function sendMattermostTyping(
   client: MattermostClient,
   params: { channelId: string; parentId?: string },

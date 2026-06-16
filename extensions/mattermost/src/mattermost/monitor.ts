@@ -33,10 +33,12 @@ import {
 import {
   createMattermostClient,
   fetchMattermostMe,
+  fetchMattermostThread,
   normalizeMattermostBaseUrl,
   updateMattermostPost,
   type MattermostClient,
   type MattermostPost,
+  type MattermostThreadResponse,
   type MattermostUser,
 } from "./client.js";
 import { createMattermostDraftStream } from "./draft-stream.js";
@@ -1571,6 +1573,34 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         });
         let combinedBody = body;
         if (historyKey) {
+          // Backfill thread history from server when in-memory window is empty
+          // (e.g. after gateway restart or session clear), so the agent has
+          // prior thread context instead of replying blind.
+          if (threadRootId && (channelHistories.get(historyKey) || []).length === 0) {
+            try {
+              const thread = await fetchMattermostThread(client, threadRootId);
+              if (thread?.order && thread?.posts) {
+                const entries: HistoryEntry[] = [];
+                for (const pid of thread.order) {
+                  const p = thread.posts[pid];
+                  if (!p || p.id === post.id) continue;
+                  const user = await resolveUserInfo(p.user_id ?? "").catch(() => null);
+                  entries.push({
+                    sender: user?.username ? `@${user.username}` : (p.user_id ?? "unknown"),
+                    body: p.message || "[attachment]",
+                    timestamp: p.create_at ?? undefined,
+                    messageId: p.id,
+                  });
+                }
+                if (entries.length > 0) {
+                  channelHistories.set(historyKey, entries.slice(-historyLimit));
+                }
+              }
+            } catch {
+              // Backfill failure is non-fatal; the turn proceeds with
+              // whatever in-memory history (if any) is available.
+            }
+          }
           const channelHistory = createChannelHistoryWindow({ historyMap: channelHistories });
           combinedBody = channelHistory.buildPendingContext({
             historyKey,
