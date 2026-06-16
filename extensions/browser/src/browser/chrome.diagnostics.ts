@@ -267,10 +267,24 @@ export function formatChromeCdpDiagnostic(diagnostic: ChromeCdpDiagnostic): stri
   const websocket = redactedWsUrl ? `; websocket=${redactedWsUrl}` : "";
   const wslPortproxyHint =
     diagnostic.code === "http_unreachable" && isLikelyEmptyHttpReply(diagnostic.message)
-      ? " In WSL2-to-Windows Chrome setups, this can be a stale netsh portproxy self-loop where svchost/iphlpsvc owns the CDP port instead of chrome.exe; verify with tasklist /svc and curl /json/version, then remove any 127.0.0.1:9222 -> 127.0.0.1:9222 portproxy rule."
+      ? WSL_EMPTY_REPLY_PORTPROXY_HINT
       : "";
   return `CDP diagnostic: ${diagnostic.code} after ${diagnostic.elapsedMs}ms; cdp=${redactedCdpUrl}${websocket}; ${diagnostic.message}.${wslPortproxyHint}`;
 }
+
+// An empty CDP reply on WSL2-to-Windows setups means a netsh portproxy forwarded
+// to an address Chrome is not listening on; the transport itself is fine, so the
+// raw error gives no clue which side is misconfigured. Name both known causes so
+// the silent failure points at the right fix: a stale self-loop (#39369) and, on
+// Chrome 136+, remote debugging binding to [::1] (IPv6) only while a v4tov4 rule
+// targets 127.0.0.1 (#54669).
+const WSL_EMPTY_REPLY_PORTPROXY_HINT =
+  " In WSL2-to-Windows Chrome setups an empty CDP reply means a netsh portproxy forwarded to an" +
+  " address Chrome is not listening on. Run `netstat -ano | findstr :9222`: if svchost/iphlpsvc" +
+  " owns the CDP port instead of chrome.exe it is a stale self-loop, so remove any" +
+  " 127.0.0.1:9222 -> 127.0.0.1:9222 portproxy rule; if Chrome listens on [::1] only (Chrome 136+" +
+  " binds remote debugging to IPv6 loopback and ignores --remote-debugging-address), replace the" +
+  " v4tov4 rule with v4tov6 (connectaddress=::1).";
 
 function isLikelyEmptyHttpReply(message: string): boolean {
   return /empty reply|other side closed|socket closed|terminated before response/i.test(message);

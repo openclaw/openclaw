@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import { createServer } from "node:http";
+import { createServer as createTcpServer } from "node:net";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -649,8 +650,37 @@ describe("browser chrome helpers", () => {
       elapsedMs: 12,
     });
 
+    // Both empty-reply causes must be named: stale self-loop and Chrome 136+
+    // IPv6-only binding (#54669). A v4tov4 rule to 127.0.0.1 reaches nothing
+    // when Chrome listens on [::1] only.
     expect(formatted).toContain("svchost/iphlpsvc owns the CDP port");
     expect(formatted).toContain("127.0.0.1:9222 -> 127.0.0.1:9222");
+    expect(formatted).toContain("[::1] only");
+    expect(formatted).toContain("v4tov6");
+  });
+
+  it("surfaces the IPv6-binding portproxy hint from a real empty-reply CDP probe", async () => {
+    // Reproduce the field report: a v4tov4 portproxy listens on IPv4 but forwards
+    // to an address Chrome no longer serves (Chrome 136+ bound [::1] only), so the
+    // socket is accepted then closed with no body. The diagnostic must classify
+    // this as http_unreachable and point at the IPv6 binding fix, not fail silently.
+    const portproxy = createTcpServer((socket) => socket.destroy());
+    await new Promise<void>((resolve, reject) => {
+      portproxy.listen(0, "127.0.0.1", () => resolve());
+      portproxy.once("error", reject);
+    });
+    try {
+      const addr = portproxy.address() as AddressInfo;
+      const diagnostic = expectFailedChromeCdpDiagnostic(
+        await diagnoseChromeCdp(`http://127.0.0.1:${addr.port}`, 500, 50),
+      );
+      expect(diagnostic.code).toBe("http_unreachable");
+      const formatted = formatChromeCdpDiagnostic(diagnostic);
+      expect(formatted).toContain("v4tov6");
+      expect(formatted).toContain("[::1] only");
+    } finally {
+      await new Promise<void>((resolve) => portproxy.close(() => resolve()));
+    }
   });
 
   it("probes direct ws:// CDP URLs (with /devtools/ path) via handshake instead of HTTP", async () => {

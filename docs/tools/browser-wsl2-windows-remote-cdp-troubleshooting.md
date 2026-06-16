@@ -90,6 +90,28 @@ curl http://127.0.0.1:9222/json/list
 
 If this fails on Windows, OpenClaw is not the problem yet.
 
+#### Chrome 136+ binds CDP to IPv6 loopback
+
+Chrome 136 and later ignore `--remote-debugging-address` and bind the CDP listener to `[::1]:9222` (IPv6 loopback) instead of `127.0.0.1:9222`. A `v4tov4` portproxy that forwards to `127.0.0.1:9222` then reaches nothing, and the WSL2 side gets an empty reply with no error.
+
+Check which family Chrome is listening on:
+
+```powershell
+netstat -ano | findstr :9222
+curl.exe http://127.0.0.1:9222/json/version
+curl.exe http://[::1]:9222/json/version
+```
+
+If `[::1]:9222` answers but `127.0.0.1:9222` returns an empty reply, Chrome bound IPv6 only. Point the portproxy at `::1` with a `v4tov6` rule (PowerShell as Administrator):
+
+```powershell
+netsh interface portproxy reset
+netsh interface portproxy add v4tov6 listenaddress=127.0.0.1 listenport=9222 connectaddress=::1 connectport=9222
+netsh interface portproxy add v4tov6 listenaddress=WINDOWS_HOST_OR_IP listenport=9222 connectaddress=::1 connectport=9222
+```
+
+After this, both `curl.exe http://127.0.0.1:9222/json/version` and the WSL2-reachable address return Chrome JSON.
+
 ### Layer 2: Verify WSL2 can reach that Windows endpoint
 
 From WSL2, test the exact address you plan to use in `cdpUrl`:
@@ -184,6 +206,8 @@ Treat each message as a layer-specific clue:
   - device approval problem
 - `Remote CDP for profile "remote" is not reachable`
   - WSL2 cannot reach the configured `cdpUrl`
+- empty CDP reply / `other side closed` on a `v4tov4` portproxy
+  - the portproxy forwards to an address Chrome is not listening on; either a stale self-loop or Chrome 136+ bound CDP to `[::1]` only (see [Chrome 136+ binds CDP to IPv6 loopback](#chrome-136-binds-cdp-to-ipv6-loopback))
 - `Browser attachOnly is enabled and CDP websocket for profile "remote" is not reachable`
   - the HTTP endpoint answered, but the DevTools WebSocket still could not be opened
 - stale viewport / dark-mode / locale / offline overrides after a remote session
