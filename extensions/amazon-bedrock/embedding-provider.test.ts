@@ -120,20 +120,26 @@ describe("stripInferenceProfilePrefix", () => {
     expect(testing.stripInferenceProfilePrefix("us.cohere.embed-v4:0")).toBe("cohere.embed-v4:0");
   });
 
+  it("strips eu prefix", () => {
+    expect(testing.stripInferenceProfilePrefix("eu.cohere.embed-v4:0")).toBe("cohere.embed-v4:0");
+  });
+
+  it("strips ap prefix", () => {
+    expect(testing.stripInferenceProfilePrefix("ap.cohere.embed-v4:0")).toBe("cohere.embed-v4:0");
+  });
+
   it("strips apac prefix", () => {
     expect(testing.stripInferenceProfilePrefix("apac.cohere.embed-v4:0")).toBe(
       "cohere.embed-v4:0",
     );
   });
 
-  it("strips eu prefix", () => {
-    expect(testing.stripInferenceProfilePrefix("eu.cohere.embed-v4:0")).toBe("cohere.embed-v4:0");
+  it("strips au prefix", () => {
+    expect(testing.stripInferenceProfilePrefix("au.cohere.embed-v4:0")).toBe("cohere.embed-v4:0");
   });
 
-  it("strips us-gov prefix", () => {
-    expect(testing.stripInferenceProfilePrefix("us-gov.cohere.embed-v4:0")).toBe(
-      "cohere.embed-v4:0",
-    );
+  it("strips jp prefix", () => {
+    expect(testing.stripInferenceProfilePrefix("jp.cohere.embed-v4:0")).toBe("cohere.embed-v4:0");
   });
 
   it("returns unchanged model ID without prefix", () => {

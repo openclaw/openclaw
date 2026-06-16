@@ -69,9 +69,9 @@ const MODELS: Record<string, ModelSpec> = {
   "twelvelabs.marengo-embed-3-0-v1:0": { maxTokens: 512, dims: 512, family: "twelvelabs" },
 };
 
-/** Strip AWS inference profile prefix (global., us., apac., eu., us-gov.) from model ID. */
+/** Strip AWS inference profile prefix (us., eu., ap., apac., au., jp., global.) from model ID. */
 function stripInferenceProfilePrefix(modelId: string): string {
-  return modelId.replace(/^(us-gov|us|global|apac|eu)\./, "");
+  return modelId.replace(/^(?:us|eu|ap|apac|au|jp|global)\./, "");
 }
 
 /** Resolve spec, stripping throughput suffixes like `:2:8k` or `:0:512`. */
