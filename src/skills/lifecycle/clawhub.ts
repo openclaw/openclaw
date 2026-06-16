@@ -19,6 +19,7 @@ import {
   type ClawHubSkillDetail,
   type ClawHubSkillInstallResolutionResponse,
   type ClawHubSkillSearchResult,
+  type ClawHubSkillSourceProvenance,
   type ClawHubSkillVerificationResponse,
 } from "../../infra/clawhub.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -55,9 +56,10 @@ type ClawHubSkillVerificationLock = {
   ok: boolean;
   decision: ClawHubSkillVerificationResponse["decision"];
   reasons: string[];
+  sourceUrl?: string;
   card?: unknown;
   artifact?: unknown;
-  provenance?: unknown;
+  provenance?: ClawHubSkillSourceProvenance | null;
   security?: unknown;
   signature?: unknown;
 };
@@ -273,12 +275,55 @@ function normalizeOptionalStringValue(raw: unknown): string | undefined {
   return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
 }
 
-function readSkillDetailSourceUrl(detail: ClawHubSkillDetail | undefined): string | undefined {
-  const skill = detail?.skill;
-  if (!skill || typeof skill !== "object") {
+function asRecord(raw: unknown): Record<string, unknown> | undefined {
+  return raw && typeof raw === "object" && !Array.isArray(raw)
+    ? (raw as Record<string, unknown>)
+    : undefined;
+}
+
+function readSourceUrlFromSourceMetadata(raw: unknown): string | undefined {
+  const record = asRecord(raw);
+  if (!record) {
     return undefined;
   }
-  return normalizeOptionalStringValue((skill as { sourceUrl?: unknown }).sourceUrl);
+  return (
+    normalizeOptionalStringValue(record.sourceUrl) ??
+    normalizeOptionalStringValue(record.url) ??
+    readSourceUrlFromSourceMetadata(record.provenance)
+  );
+}
+
+function readSkillDetailSourceUrl(
+  detail: ClawHubSkillDetail | undefined,
+  installedVersion: string,
+): string | undefined {
+  if (detail?.latestVersion?.version !== installedVersion) {
+    return undefined;
+  }
+  return (
+    readSourceUrlFromSourceMetadata(detail.latestVersion) ??
+    readSourceUrlFromSourceMetadata(detail.skill)
+  );
+}
+
+function readInstallResolutionSourceUrl(
+  resolution: Extract<ClawHubSkillInstallResolutionResponse, { ok: true }> | undefined,
+): string | undefined {
+  if (!resolution) {
+    return undefined;
+  }
+  return (
+    readSourceUrlFromSourceMetadata(resolution) ??
+    (resolution.installKind === "github"
+      ? readSourceUrlFromSourceMetadata(resolution.github)
+      : readSourceUrlFromSourceMetadata(resolution.archive))
+  );
+}
+
+function readVerificationSourceUrl(
+  verification: ClawHubSkillVerificationLock | undefined,
+): string | undefined {
+  return readSourceUrlFromSourceMetadata(verification);
 }
 
 function buildDownloadedArtifactLock(
@@ -309,11 +354,13 @@ function buildInstallTelemetrySkills(
 function snapshotClawHubSkillVerification(
   verification: ClawHubSkillVerificationResponse,
 ): ClawHubSkillVerificationLock {
+  const sourceUrl = readSourceUrlFromSourceMetadata(verification);
   return {
     schema: verification.schema,
     ok: verification.ok,
     decision: verification.decision,
     reasons: [...verification.reasons],
+    ...(sourceUrl ? { sourceUrl } : {}),
     ...(verification.card !== undefined ? { card: verification.card } : {}),
     ...(verification.artifact !== undefined ? { artifact: verification.artifact } : {}),
     ...(verification.provenance !== undefined ? { provenance: verification.provenance } : {}),
@@ -1106,10 +1153,6 @@ async function performClawHubSkillInstall(
 
       const installedAt = Date.now();
       const artifact = buildDownloadedArtifactLock(archive);
-      const sourceUrl =
-        latestResolution?.installKind === "github"
-          ? normalizeOptionalStringValue(latestResolution.github.sourceUrl)
-          : readSkillDetailSourceUrl(detail);
       const verificationVersion =
         latestResolution?.installKind === "github" && !params.version ? undefined : version;
       const [skillFile, verification] = await Promise.all([
@@ -1120,6 +1163,10 @@ async function performClawHubSkillInstall(
           baseUrl: params.baseUrl,
         }),
       ]);
+      const sourceUrl =
+        readInstallResolutionSourceUrl(latestResolution) ??
+        readVerificationSourceUrl(verification) ??
+        readSkillDetailSourceUrl(detail, version);
       await writeClawHubSkillOrigin(install.targetDir, {
         version: 1,
         registry: resolveClawHubBaseUrl(params.baseUrl),

@@ -382,6 +382,181 @@ describe("skills-clawhub", () => {
     }
   });
 
+  it("persists the source URL from ClawHub archive install resolution", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skills-source-");
+    const sourceUrl = "https://github.com/openclaw/skills/tree/abc123/agentreceipt";
+    fetchClawHubSkillInstallResolutionMock.mockResolvedValueOnce({
+      ok: true,
+      slug: "agentreceipt",
+      installKind: "archive",
+      archive: {
+        version: "1.0.0",
+        downloadUrl: "https://clawhub.ai/api/v1/download?slug=agentreceipt&version=1.0.0",
+        sourceUrl,
+      },
+    });
+    installPackageDirMock.mockImplementationOnce(async (params: { targetDir: string }) => {
+      await fs.mkdir(params.targetDir, { recursive: true });
+      await fs.writeFile(path.join(params.targetDir, "SKILL.md"), "# AgentReceipt\n", "utf8");
+      return { ok: true, targetDir: params.targetDir };
+    });
+
+    try {
+      const result = await installSkillFromClawHub({
+        workspaceDir,
+        slug: "agentreceipt",
+      });
+
+      expectInstalledSkill(result, {
+        slug: "agentreceipt",
+        version: "1.0.0",
+        targetDir: path.join(workspaceDir, "skills", "agentreceipt"),
+      });
+      const lock = JSON.parse(
+        await fs.readFile(path.join(workspaceDir, ".clawhub", "lock.json"), "utf8"),
+      ) as { skills: Record<string, Record<string, unknown>> };
+      expect(lock.skills.agentreceipt?.sourceUrl).toBe(sourceUrl);
+      const origin = JSON.parse(
+        await fs.readFile(
+          path.join(workspaceDir, "skills", "agentreceipt", ".clawhub", "origin.json"),
+          "utf8",
+        ),
+      ) as Record<string, unknown>;
+      expect(origin.sourceUrl).toBe(sourceUrl);
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("persists the source URL from version verification provenance", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skills-source-");
+    const sourceUrl = "https://github.com/openclaw/skills/tree/def456/agentreceipt";
+    fetchClawHubSkillDetailMock.mockResolvedValueOnce({
+      skill: {
+        slug: "agentreceipt",
+        displayName: "AgentReceipt",
+        createdAt: 1,
+        updatedAt: 2,
+      },
+      latestVersion: {
+        version: "1.0.0",
+        createdAt: 3,
+      },
+    });
+    fetchClawHubSkillVerificationMock.mockResolvedValueOnce({
+      schema: "clawhub.skill.verify.v1",
+      ok: true,
+      decision: "pass",
+      reasons: [],
+      card: { available: true },
+      artifact: { sourceFingerprint: "source-fp" },
+      provenance: {
+        source: "github",
+        url: sourceUrl,
+        repo: "openclaw/skills",
+        commit: "def456",
+        path: "agentreceipt",
+      },
+      security: { status: "clean" },
+      signature: { status: "unsigned" },
+    });
+    installPackageDirMock.mockImplementationOnce(async (params: { targetDir: string }) => {
+      await fs.mkdir(params.targetDir, { recursive: true });
+      await fs.writeFile(path.join(params.targetDir, "SKILL.md"), "# AgentReceipt\n", "utf8");
+      return { ok: true, targetDir: params.targetDir };
+    });
+
+    try {
+      const result = await installSkillFromClawHub({
+        workspaceDir,
+        slug: "agentreceipt",
+        version: "1.0.0",
+      });
+
+      expectInstalledSkill(result, {
+        slug: "agentreceipt",
+        version: "1.0.0",
+        targetDir: path.join(workspaceDir, "skills", "agentreceipt"),
+      });
+      const lock = JSON.parse(
+        await fs.readFile(path.join(workspaceDir, ".clawhub", "lock.json"), "utf8"),
+      ) as { skills: Record<string, Record<string, unknown>> };
+      expect(lock.skills.agentreceipt).toMatchObject({
+        sourceUrl,
+        verification: {
+          sourceUrl,
+          provenance: {
+            source: "github",
+            url: sourceUrl,
+            repo: "openclaw/skills",
+            commit: "def456",
+            path: "agentreceipt",
+          },
+        },
+      });
+      const origin = JSON.parse(
+        await fs.readFile(
+          path.join(workspaceDir, "skills", "agentreceipt", ".clawhub", "origin.json"),
+          "utf8",
+        ),
+      ) as Record<string, unknown>;
+      expect(origin.sourceUrl).toBe(sourceUrl);
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not use latest-version detail source for older explicit version installs", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skills-source-");
+    fetchClawHubSkillDetailMock.mockResolvedValueOnce({
+      skill: {
+        slug: "agentreceipt",
+        displayName: "AgentReceipt",
+        createdAt: 1,
+        updatedAt: 2,
+        sourceUrl: "https://github.com/openclaw/skills/tree/latest/agentreceipt",
+      },
+      latestVersion: {
+        version: "2.0.0",
+        createdAt: 3,
+        sourceUrl: "https://github.com/openclaw/skills/tree/latest/agentreceipt",
+      },
+    });
+    fetchClawHubSkillVerificationMock.mockRejectedValueOnce(new Error("verification down"));
+    installPackageDirMock.mockImplementationOnce(async (params: { targetDir: string }) => {
+      await fs.mkdir(params.targetDir, { recursive: true });
+      await fs.writeFile(path.join(params.targetDir, "SKILL.md"), "# AgentReceipt\n", "utf8");
+      return { ok: true, targetDir: params.targetDir };
+    });
+
+    try {
+      const result = await installSkillFromClawHub({
+        workspaceDir,
+        slug: "agentreceipt",
+        version: "1.0.0",
+      });
+
+      expectInstalledSkill(result, {
+        slug: "agentreceipt",
+        version: "1.0.0",
+        targetDir: path.join(workspaceDir, "skills", "agentreceipt"),
+      });
+      const lock = JSON.parse(
+        await fs.readFile(path.join(workspaceDir, ".clawhub", "lock.json"), "utf8"),
+      ) as { skills: Record<string, Record<string, unknown>> };
+      expect(lock.skills.agentreceipt?.sourceUrl).toBeUndefined();
+      const origin = JSON.parse(
+        await fs.readFile(
+          path.join(workspaceDir, "skills", "agentreceipt", ".clawhub", "origin.json"),
+          "utf8",
+        ),
+      ) as Record<string, unknown>;
+      expect(origin.sourceUrl).toBeUndefined();
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps installing when the ClawHub verification snapshot is unavailable", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skills-lock-");
     fetchClawHubSkillVerificationMock.mockRejectedValueOnce(new Error("verification down"));
