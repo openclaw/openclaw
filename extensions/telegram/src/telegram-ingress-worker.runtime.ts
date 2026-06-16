@@ -30,6 +30,34 @@ const pendingSpoolRequests = new Map<
   }
 >();
 
+// Startup logging for crash diagnosis
+console.log(`[telegram-ingress] Starting polling worker for account ${options.accountId}`);
+console.log(
+  `[telegram-ingress] Configuration: apiRoot=${options.apiRoot ?? "default"}, timeout=${options.timeoutSeconds ?? "default"}s`,
+);
+
+// Unhandled exception handler to capture silent crashes
+process.on("uncaughtException", (err) => {
+  console.error(`[telegram-ingress] FATAL: Uncaught exception: ${err.message}`);
+  console.error(`[telegram-ingress] Stack: ${err.stack}`);
+  console.error(
+    `[telegram-ingress] Worker state: stopped=${stopped}, accountId=${options.accountId}`,
+  );
+});
+
+// Unhandled rejection handler for async errors
+process.on("unhandledRejection", (reason, promise) => {
+  console.error(`[telegram-ingress] FATAL: Unhandled rejection at: ${promise}`);
+  console.error(
+    `[telegram-ingress] Reason: ${reason instanceof Error ? reason.message : String(reason)}`,
+  );
+});
+
+// Exit handler to log worker termination
+process.on("exit", (code) => {
+  console.log(`[telegram-ingress] Worker exiting with code ${code}, stopped=${stopped}`);
+});
+
 function post(message: TelegramIngressWorkerMessage): void {
   if (parentPort) {
     Reflect.apply(Reflect.get(parentPort, "postMessage") as (value: unknown) => void, parentPort, [
@@ -49,6 +77,26 @@ function formatErrorMessage(err: unknown): string {
     return err.message || err.name;
   }
   return String(err);
+}
+
+function readTelegramErrorCode(err: unknown): number | undefined {
+  if (err && typeof err === "object" && "error_code" in err) {
+    const code = (err as { error_code: unknown }).error_code;
+    if (typeof code === "number") {
+      return code;
+    }
+  }
+  return undefined;
+}
+
+function postPollError(err: unknown): void {
+  const errorCode = readTelegramErrorCode(err);
+  post({
+    type: "poll-error",
+    message: formatErrorMessage(err),
+    ...(errorCode === undefined ? {} : { errorCode }),
+    finishedAt: Date.now(),
+  });
 }
 
 function resolveBackoff(attempt: number): number {
@@ -122,15 +170,21 @@ async function fetchJson(params: {
     });
     const json = (await response.json()) as {
       ok?: unknown;
+      error_code?: unknown;
       result?: unknown;
       description?: unknown;
     };
     if (!response.ok || json.ok !== true) {
-      throw new Error(
+      const message =
         typeof json.description === "string"
           ? json.description
-          : `Telegram getUpdates failed with HTTP ${response.status}`,
-      );
+          : `Telegram getUpdates failed with HTTP ${response.status}`;
+      // Preserve the Bot API error_code across the worker boundary so the
+      // parent session can distinguish getUpdates conflicts (409) from fatal
+      // errors (401) without parsing description strings.
+      throw typeof json.error_code === "number"
+        ? Object.assign(new Error(message), { error_code: json.error_code })
+        : new Error(message);
     }
     return json.result;
   } finally {
@@ -195,11 +249,7 @@ async function main(): Promise<void> {
           break;
         }
         failures += 1;
-        post({
-          type: "poll-error",
-          message: formatErrorMessage(err),
-          finishedAt: Date.now(),
-        });
+        postPollError(err);
         if (!isRecoverableTelegramNetworkError(err, { context: "polling" })) {
           throw err;
         }
@@ -216,7 +266,7 @@ main()
     parentPort?.close();
   })
   .catch((err: unknown) => {
-    post({ type: "poll-error", message: formatErrorMessage(err), finishedAt: Date.now() });
+    postPollError(err);
     parentPort?.close();
     process.exitCode = stopped ? 0 : 1;
   });

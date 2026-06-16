@@ -46,6 +46,15 @@ function pollingLeaseRegistry(): TelegramPollingLeaseRegistry {
   return proc[TELEGRAM_POLLING_LEASES_KEY];
 }
 
+function isLeaseStale(entry: TelegramPollingLeaseEntry): boolean {
+  // Dynamic staleness threshold: consider a lease stale if it's been
+  // aborting for more than 2x the typical wait time (10s default).
+  // This accounts for network timeouts and graceful shutdown delays.
+  const STALE_LEASE_THRESHOLD_MS = 2 * DEFAULT_TELEGRAM_POLLING_LEASE_WAIT_MS;
+  const ageMs = Date.now() - entry.startedAt;
+  return entry.abortSignal?.aborted && ageMs > STALE_LEASE_THRESHOLD_MS;
+}
+
 function createDuplicatePollingError(params: {
   accountId: string;
   existing: TelegramPollingLeaseEntry;
@@ -53,8 +62,9 @@ function createDuplicatePollingError(params: {
 }): Error {
   const ageMs = Math.max(0, Date.now() - params.existing.startedAt);
   const ageSeconds = Math.round(ageMs / 1000);
+  const staleInfo = params.existing.abortSignal?.aborted ? ` (aborting for ${ageSeconds}s)` : "";
   return new Error(
-    `Telegram polling already active for bot token ${params.tokenFingerprint} on account "${params.existing.accountId}" (${ageSeconds}s old); refusing duplicate poller for account "${params.accountId}". Stop the existing OpenClaw gateway/poller or use a different bot token.`,
+    `Telegram polling already active for bot token ${params.tokenFingerprint} on account "${params.existing.accountId}" (${ageSeconds}s${staleInfo}); refusing duplicate poller for account "${params.accountId}". Stop the existing OpenClaw gateway/poller or use a different bot token.`,
   );
 }
 
@@ -143,6 +153,7 @@ export async function acquireTelegramPollingLease(
   const fingerprint = fingerprintTelegramBotToken(opts.token);
   const waitMs = opts.waitMs ?? DEFAULT_TELEGRAM_POLLING_LEASE_WAIT_MS;
   let waitedForPrevious = false;
+  let replacedStoppingPrevious = false;
 
   for (;;) {
     const existing = registry.get(fingerprint);
@@ -153,8 +164,19 @@ export async function acquireTelegramPollingLease(
         registry,
         tokenFingerprint: fingerprint,
         waitedForPrevious,
-        replacedStoppingPrevious: false,
+        replacedStoppingPrevious,
       });
+    }
+
+    // Check if the existing lease is stale (aborting for too long)
+    if (isLeaseStale(existing)) {
+      console.log(
+        `[telegram-lease] Replacing stale lease for ${fingerprint} (aborting for ${Math.round((Date.now() - existing.startedAt) / 1000)}s)`,
+      );
+      registry.delete(fingerprint);
+      existing.resolveDone();
+      replacedStoppingPrevious = true;
+      continue;
     }
 
     if (!existing.abortSignal?.aborted) {
