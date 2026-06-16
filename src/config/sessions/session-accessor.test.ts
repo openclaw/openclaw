@@ -6,6 +6,7 @@ import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import {
   appendTranscriptMessage,
   appendTranscriptEvent,
+  applySessionEntryLifecycleMutation,
   applySessionPatchProjection,
   cleanupSessionLifecycleArtifacts,
   createSessionEntryWithTranscript,
@@ -524,6 +525,152 @@ describe("session accessor file-backed seam", () => {
       event,
     ]);
     expect(fs.statSync(transcriptPath).mode & 0o777).toBe(0o600);
+  });
+
+  it("applies keyed lifecycle removals and artifact cleanup from the final store", async () => {
+    const removedTranscriptPath = path.join(tempDir, "removed-session.jsonl");
+    const sharedTranscriptPath = path.join(tempDir, "shared-session.jsonl");
+    const orphanTranscriptPath = path.join(tempDir, "orphan-session.jsonl");
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:main:removed": {
+            sessionId: "removed-session",
+          },
+          "agent:main:shared-remove": {
+            sessionId: "shared-session",
+          },
+          "agent:main:shared-keep": {
+            sessionId: "shared-session",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(removedTranscriptPath, '{"type":"session"}\n', "utf-8");
+    fs.writeFileSync(sharedTranscriptPath, '{"type":"session"}\n', "utf-8");
+    fs.writeFileSync(orphanTranscriptPath, "orphan", "utf-8");
+    const oldDate = new Date(Date.now() - 60_000);
+    fs.utimesSync(orphanTranscriptPath, oldDate, oldDate);
+
+    const result = await applySessionEntryLifecycleMutation({
+      storePath,
+      removals: [
+        { sessionKey: "agent:main:removed", archiveRemovedTranscript: true },
+        { sessionKey: "agent:main:shared-remove", archiveRemovedTranscript: true },
+      ],
+      upserts: [
+        {
+          sessionKey: "agent:main:new",
+          entry: { sessionId: "new-session", updatedAt: 123 },
+        },
+      ],
+      skipMaintenance: true,
+      restrictArchivedTranscriptsToStoreDir: true,
+      pruneUnreferencedArtifacts: { olderThanMs: 1 },
+    });
+
+    expect(result.removedEntries).toBe(2);
+    expect(result.unreferencedArtifacts?.removedFiles).toBe(1);
+    expect(loadSessionStore(storePath, { skipCache: true })).toEqual({
+      "agent:main:shared-keep": {
+        sessionId: "shared-session",
+      },
+      "agent:main:new": {
+        sessionId: "new-session",
+        updatedAt: 123,
+      },
+    });
+    expect(fs.existsSync(removedTranscriptPath)).toBe(false);
+    expect(fs.existsSync(sharedTranscriptPath)).toBe(true);
+    expect(fs.existsSync(orphanTranscriptPath)).toBe(false);
+    expect(
+      fs.readdirSync(tempDir).filter((file) => file.startsWith("removed-session.jsonl.deleted.")),
+    ).toHaveLength(1);
+  });
+
+  it("does not apply stale lifecycle removal plans to changed entries", async () => {
+    const stalePlanEntry: SessionEntry = {
+      sessionId: "planned-session",
+      updatedAt: 1,
+    };
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:main:planned": {
+            sessionId: "planned-session",
+            updatedAt: 2,
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const result = await applySessionEntryLifecycleMutation({
+      storePath,
+      removals: [
+        {
+          sessionKey: "agent:main:planned",
+          expectedEntry: stalePlanEntry,
+          archiveRemovedTranscript: true,
+        },
+      ],
+      skipMaintenance: true,
+    });
+
+    expect(result.removedEntries).toBe(0);
+    expect(loadSessionStore(storePath, { skipCache: true })).toEqual({
+      "agent:main:planned": {
+        sessionId: "planned-session",
+        updatedAt: 2,
+      },
+    });
+  });
+
+  it("builds lifecycle upsert entries from the locked store snapshot", async () => {
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:main:existing": {
+            sessionId: "current-session",
+            updatedAt: 10,
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const result = await applySessionEntryLifecycleMutation({
+      storePath,
+      upserts: [
+        {
+          sessionKey: "agent:main:existing",
+          buildEntry: ({ currentEntry }) => ({
+            ...currentEntry,
+            sessionId: currentEntry?.sessionId ?? "missing",
+            updatedAt: 20,
+          }),
+        },
+      ],
+      skipMaintenance: true,
+    });
+
+    expect(result.afterCount).toBe(1);
+    expect(loadSessionStore(storePath, { skipCache: true })).toEqual({
+      "agent:main:existing": {
+        sessionId: "current-session",
+        updatedAt: 20,
+      },
+    });
   });
 
   it("appends to an explicit transcript artifact without a session key", async () => {

@@ -21,7 +21,12 @@ import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { getFileStatSnapshot } from "../cache-utils.js";
 import { getRuntimeConfig } from "../io.js";
 import { formatSessionArchiveTimestamp } from "./artifacts.js";
-import { enforceSessionDiskBudget, type SessionDiskBudgetSweepResult } from "./disk-budget.js";
+import {
+  enforceSessionDiskBudget,
+  pruneUnreferencedSessionArtifacts,
+  type SessionDiskBudgetSweepResult,
+  type SessionUnreferencedArtifactSweepResult,
+} from "./disk-budget.js";
 import { deriveSessionMetaPatch } from "./metadata.js";
 import { resolveSessionFilePath, resolveStorePath } from "./paths.js";
 import {
@@ -273,6 +278,54 @@ export type DeleteSessionEntryLifecycleResult = {
   deletedEntry?: SessionEntry;
   deletedSessionFile?: string;
   deletedSessionId?: string;
+};
+
+export type SessionEntryLifecycleRemoval = {
+  /** Exact persisted key to remove from the store. */
+  sessionKey: string;
+  /** Optional full-entry guard for plans built before the writer lock. */
+  expectedEntry?: SessionEntry;
+  /** Archive the removed entry's transcript only when no final store entry still references it. */
+  archiveRemovedTranscript?: boolean;
+  /** Optional guard for stale plans built from a prior store read. */
+  expectedSessionId?: string;
+  /** Optional guard for stale plans built from a prior store read. */
+  expectedUpdatedAt?: number;
+};
+
+export type SessionEntryLifecycleUpsert = {
+  /** Exact persisted key to create or replace. */
+  sessionKey: string;
+} & (
+  | {
+      /** Entry to persist at the exact key. */
+      entry: SessionEntry;
+      buildEntry?: never;
+    }
+  | {
+      /** Builds the persisted entry after the storage writer lock is held. */
+      buildEntry: (context: {
+        currentEntry?: SessionEntry;
+        sessionKey: string;
+        store: Record<string, SessionEntry>;
+      }) => Promise<SessionEntry | null | undefined> | SessionEntry | null | undefined;
+      entry?: never;
+    }
+);
+
+export type SessionArchivedTranscriptCleanupRule = {
+  reason: "deleted" | "reset";
+  olderThanMs: number;
+};
+
+export type SessionEntryLifecycleMutationResult = {
+  removedEntries: number;
+  removedSessionKeys: string[];
+  archivedTranscriptDirectories: string[];
+  unreferencedArtifacts: SessionUnreferencedArtifactSweepResult | null;
+  maintenanceReport: SessionMaintenanceApplyReport | null;
+  afterCount: number;
+  artifactCleanupError?: unknown;
 };
 
 function cloneSessionEntry(entry: SessionEntry): SessionEntry {
@@ -1306,6 +1359,163 @@ export async function deleteSessionEntryLifecycle(params: {
     }
     return result;
   });
+}
+
+function shouldRemoveSessionEntry(
+  entry: SessionEntry | undefined,
+  removal: SessionEntryLifecycleRemoval,
+): entry is SessionEntry {
+  if (!entry) {
+    return false;
+  }
+  if (
+    removal.expectedEntry !== undefined &&
+    JSON.stringify(entry) !== JSON.stringify(removal.expectedEntry)
+  ) {
+    return false;
+  }
+  if (removal.expectedSessionId !== undefined && entry.sessionId !== removal.expectedSessionId) {
+    return false;
+  }
+  if (removal.expectedUpdatedAt !== undefined && entry.updatedAt !== removal.expectedUpdatedAt) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Applies exact entry removals/upserts and lifecycle artifact cleanup as one
+ * backend-owned operation. Callers choose domain keys; storage owns the final
+ * referenced-session set used for transcript/artifact cleanup.
+ */
+export async function applySessionEntryLifecycleMutation(params: {
+  storePath: string;
+  removals?: Iterable<SessionEntryLifecycleRemoval>;
+  upserts?: Iterable<SessionEntryLifecycleUpsert>;
+  activeSessionKey?: string;
+  maintenanceOverride?: Partial<ResolvedSessionMaintenanceConfig>;
+  skipMaintenance?: boolean;
+  archiveReason?: "deleted" | "reset";
+  restrictArchivedTranscriptsToStoreDir?: boolean;
+  cleanupArchivedTranscripts?: {
+    rules: SessionArchivedTranscriptCleanupRule[];
+    nowMs?: number;
+  };
+  pruneUnreferencedArtifacts?: {
+    olderThanMs: number;
+    dryRun?: boolean;
+  };
+  captureArtifactCleanupError?: boolean;
+}): Promise<SessionEntryLifecycleMutationResult> {
+  const storePath = path.resolve(params.storePath);
+  const removedSessionFiles = new Map<string, string | undefined>();
+  const removedSessionKeys: string[] = [];
+  const archivedTranscriptDirectories: string[] = [];
+  let unreferencedArtifacts: SessionUnreferencedArtifactSweepResult | null = null;
+  let maintenanceReport: SessionMaintenanceApplyReport | null = null;
+  let afterCount = 0;
+  let artifactCleanupError: unknown;
+
+  await runExclusiveSessionStoreWrite(storePath, async () => {
+    const store = loadMutableSessionStoreForWriter(storePath);
+    for (const removal of params.removals ?? []) {
+      const sessionKey = removal.sessionKey.trim();
+      if (!sessionKey) {
+        continue;
+      }
+      const entry = store[sessionKey];
+      if (!shouldRemoveSessionEntry(entry, removal)) {
+        continue;
+      }
+      if (removal.archiveRemovedTranscript === true && entry.sessionId) {
+        rememberRemovedSessionFile(removedSessionFiles, entry);
+      }
+      delete store[sessionKey];
+      removedSessionKeys.push(sessionKey);
+    }
+    for (const upsert of params.upserts ?? []) {
+      const sessionKey = upsert.sessionKey.trim();
+      if (!sessionKey) {
+        continue;
+      }
+      const entry =
+        upsert.buildEntry === undefined
+          ? upsert.entry
+          : await upsert.buildEntry({
+              currentEntry: store[sessionKey] ? cloneSessionEntry(store[sessionKey]) : undefined,
+              sessionKey,
+              store,
+            });
+      if (!entry) {
+        continue;
+      }
+      store[sessionKey] = cloneSessionEntry(entry);
+    }
+
+    await saveSessionStoreUnlocked(storePath, store, {
+      activeSessionKey: params.activeSessionKey,
+      maintenanceOverride: params.maintenanceOverride,
+      skipMaintenance: params.skipMaintenance,
+      onMaintenanceApplied: (report) => {
+        maintenanceReport = report;
+      },
+    });
+    afterCount = Object.keys(store).length;
+
+    const cleanupArtifacts = async () => {
+      const referencedSessionIds = new Set(
+        Object.values(store)
+          .map((entry) => entry?.sessionId)
+          .filter((sessionId): sessionId is string => Boolean(sessionId)),
+      );
+      if (removedSessionFiles.size > 0) {
+        const archivedDirs = await archiveRemovedSessionTranscripts({
+          removedSessionFiles,
+          referencedSessionIds,
+          storePath,
+          reason: params.archiveReason ?? "deleted",
+          restrictToStoreDir: params.restrictArchivedTranscriptsToStoreDir,
+        });
+        archivedTranscriptDirectories.push(...[...archivedDirs].toSorted());
+        if (archivedDirs.size > 0 && params.cleanupArchivedTranscripts) {
+          const { cleanupArchivedSessionTranscripts } = await loadSessionArchiveRuntime();
+          await cleanupArchivedSessionTranscripts({
+            directories: [...archivedDirs],
+            rules: params.cleanupArchivedTranscripts.rules,
+            nowMs: params.cleanupArchivedTranscripts.nowMs,
+          });
+        }
+      }
+      if (params.pruneUnreferencedArtifacts) {
+        unreferencedArtifacts = await pruneUnreferencedSessionArtifacts({
+          store,
+          storePath,
+          olderThanMs: params.pruneUnreferencedArtifacts.olderThanMs,
+          dryRun: params.pruneUnreferencedArtifacts.dryRun,
+        });
+      }
+    };
+
+    try {
+      await cleanupArtifacts();
+    } catch (err) {
+      if (params.captureArtifactCleanupError === true) {
+        artifactCleanupError = err;
+      } else {
+        throw err;
+      }
+    }
+  });
+
+  return {
+    removedEntries: removedSessionKeys.length,
+    removedSessionKeys,
+    archivedTranscriptDirectories,
+    unreferencedArtifacts,
+    maintenanceReport,
+    afterCount,
+    artifactCleanupError,
+  };
 }
 
 async function archiveUnreferencedLifecycleTranscriptArtifacts(params: {

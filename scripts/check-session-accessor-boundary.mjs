@@ -45,6 +45,10 @@ const legacyManualCompactTrimNames = new Set([
   "archiveFileOnDisk",
   "readRecentSessionTranscriptLines",
 ]);
+const legacyLifecycleCleanupNames = new Set([
+  "archiveRemovedSessionTranscripts",
+  "cleanupArchivedSessionTranscripts",
+]);
 
 export const migratedSessionAccessorFiles = new Set([
   "src/agents/embedded-agent-runner/compaction-successor-transcript.ts",
@@ -117,6 +121,12 @@ export const migratedTranscriptWriterFiles = new Set([
 
 export const migratedSessionCompactManualTrimFiles = new Set([
   "src/gateway/server-methods/sessions.ts",
+]);
+
+export const migratedSessionLifecycleCleanupFiles = new Set([
+  "src/config/sessions/cleanup-service.ts",
+  "src/cron/session-reaper.ts",
+  "src/infra/heartbeat-runner.ts",
 ]);
 
 function normalizeRelativePath(filePath) {
@@ -297,6 +307,15 @@ export function findSessionCompactManualTrimBoundaryViolations(content, fileName
   );
 }
 
+export function findSessionLifecycleCleanupBoundaryViolations(content, fileName = "source.ts") {
+  return findNamedSessionStoreViolations(
+    content,
+    fileName,
+    legacyLifecycleCleanupNames,
+    "lifecycle cleanup",
+  );
+}
+
 export async function main() {
   const repoRoot = resolveRepoRoot(import.meta.url);
   const readSourceRoots = resolveSourceRoots(repoRoot, [
@@ -368,12 +387,22 @@ export async function main() {
       ),
     findViolations: findSessionCompactManualTrimBoundaryViolations,
   });
+  const lifecycleCleanupViolations = await collectFileViolations({
+    repoRoot,
+    sourceRoots: readSourceRoots,
+    skipFile: (filePath) =>
+      !migratedSessionLifecycleCleanupFiles.has(
+        normalizeRelativePath(path.relative(repoRoot, filePath)),
+      ),
+    findViolations: findSessionLifecycleCleanupBoundaryViolations,
+  });
   const violations = [
     ...readViolations,
     ...writeViolations,
     ...transcriptWriterViolations,
     ...sessionCreateLifecycleViolations,
     ...manualCompactTrimViolations,
+    ...lifecycleCleanupViolations,
   ];
 
   if (violations.length === 0) {

@@ -4,8 +4,10 @@ import {
   findSessionAccessorBoundaryViolations,
   findSessionCompactManualTrimBoundaryViolations,
   findSessionAccessorWriteBoundaryViolations,
+  findSessionLifecycleCleanupBoundaryViolations,
   findTranscriptWriterBoundaryViolations,
   migratedBundledPluginSessionAccessorFiles,
+  migratedSessionLifecycleCleanupFiles,
   migratedSessionCompactManualTrimFiles,
   migratedSessionAccessorFiles,
   migratedSessionAccessorWriteFiles,
@@ -101,6 +103,16 @@ describe("session accessor boundary guard", () => {
   it("ratchets only compact manual trim gateway files", () => {
     expect(migratedSessionCompactManualTrimFiles).toEqual(
       new Set(["src/gateway/server-methods/sessions.ts"]),
+    );
+  });
+
+  it("ratchets only the lifecycle cleanup files migrated to backend cleanup", () => {
+    expect(migratedSessionLifecycleCleanupFiles).toEqual(
+      new Set([
+        "src/config/sessions/cleanup-service.ts",
+        "src/cron/session-reaper.ts",
+        "src/infra/heartbeat-runner.ts",
+      ]),
     );
   });
 
@@ -304,6 +316,35 @@ describe("session accessor boundary guard", () => {
         reason: 'calls legacy session store manual compact trim "readRecentSessionTranscriptLines"',
       },
       { line: 5, reason: 'calls legacy session store manual compact trim "archiveFileOnDisk"' },
+    ]);
+  });
+
+  it("flags direct lifecycle cleanup helper usage", () => {
+    expect(
+      findSessionLifecycleCleanupBoundaryViolations(`
+        import { archiveRemovedSessionTranscripts } from "../config/sessions/store.js";
+        import { cleanupArchivedSessionTranscripts } from "../gateway/session-utils.fs.js";
+        archiveRemovedSessionTranscripts({ removedSessionFiles, referencedSessionIds, storePath, reason: "deleted" });
+        cleanupArchivedSessionTranscripts({ directories, rules });
+      `),
+    ).toEqual([
+      {
+        line: 2,
+        reason: 'imports legacy session store lifecycle cleanup "archiveRemovedSessionTranscripts"',
+      },
+      {
+        line: 3,
+        reason:
+          'imports legacy session store lifecycle cleanup "cleanupArchivedSessionTranscripts"',
+      },
+      {
+        line: 4,
+        reason: 'calls legacy session store lifecycle cleanup "archiveRemovedSessionTranscripts"',
+      },
+      {
+        line: 5,
+        reason: 'calls legacy session store lifecycle cleanup "cleanupArchivedSessionTranscripts"',
+      },
     ]);
   });
 
