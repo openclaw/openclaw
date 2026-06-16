@@ -10,6 +10,8 @@ import { channelToNpmTag, type UpdateChannel } from "./update-channels.js";
 
 export type PackageManager = "pnpm" | "bun" | "npm" | "unknown";
 
+const DEFAULT_NPM_REGISTRY_URL = "https://registry.npmjs.org/";
+
 export type GitUpdateStatus = {
   root: string;
   sha: string | null;
@@ -329,11 +331,16 @@ export async function fetchNpmPackageTargetStatus(params: {
   const timeoutMs = params.timeoutMs ?? 3500;
   const target = params.target;
   try {
-    const res = await fetchWithTimeout(
-      `https://registry.npmjs.org/openclaw/${encodeURIComponent(target)}`,
-      {},
-      Math.max(250, timeoutMs),
-    );
+    const registryUrl =
+      process.env.npm_config_registry?.trim() ||
+      process.env.NPM_CONFIG_REGISTRY?.trim() ||
+      DEFAULT_NPM_REGISTRY_URL;
+    const registryBaseUrl = registryUrl.endsWith("/") ? registryUrl : `${registryUrl}/`;
+    const packageTargetUrl = new URL(
+      `openclaw/${encodeURIComponent(target)}`,
+      registryBaseUrl,
+    ).toString();
+    const res = await fetchWithTimeout(packageTargetUrl, {}, Math.max(250, timeoutMs));
     if (!res.ok) {
       return { target, version: null, nodeEngine: null, error: `HTTP ${res.status}` };
     }

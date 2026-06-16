@@ -44,14 +44,17 @@ describe("compareSemverStrings", () => {
 
 describe("resolveNpmChannelTag", () => {
   let versionByTag: Record<string, string | null>;
+  let fetchedUrls: string[];
 
   beforeEach(() => {
     versionByTag = {};
+    fetchedUrls = [];
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
         const url =
           typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+        fetchedUrls.push(url);
         const tag = decodeURIComponent(url.split("/").pop() ?? "");
         const version = versionByTag[tag] ?? null;
         return {
@@ -68,6 +71,7 @@ describe("resolveNpmChannelTag", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
   });
 
   it("falls back to latest when beta is older", async () => {
@@ -104,6 +108,21 @@ describe("resolveNpmChannelTag", () => {
       tag: "latest",
       version: "1.0.3",
     });
+  });
+
+  it("uses the configured npm registry for package target fetches", async () => {
+    vi.stubEnv("npm_config_registry", "https://registry.npmmirror.com");
+    versionByTag.latest = "1.0.4";
+
+    await expect(
+      fetchNpmPackageTargetStatus({ target: "latest", timeoutMs: 1000 }),
+    ).resolves.toEqual({
+      target: "latest",
+      version: "1.0.4",
+      nodeEngine: ">=22.19.0",
+    });
+
+    expect(fetchedUrls).toEqual(["https://registry.npmmirror.com/openclaw/latest"]);
   });
 
   it("exposes tag fetch helpers for success and http failures", async () => {
