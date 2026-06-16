@@ -127,7 +127,6 @@ function formatSavedMediaPlaceholder(allMedia: TelegramMediaRef[]): string | und
 
 function resolveTelegramMentionFacts(params: {
   canDetectMention: boolean;
-  wasMentioned: boolean;
   effectiveWasMentioned: boolean;
   explicitlyMentionedBot: boolean;
   computedWasMentioned: boolean;
@@ -483,7 +482,6 @@ export async function resolveTelegramInboundBody(params: {
     effectiveWasMentioned,
     mentionFacts: resolveTelegramMentionFacts({
       canDetectMention,
-      wasMentioned,
       effectiveWasMentioned,
       explicitlyMentionedBot: explicitlyMentioned,
       computedWasMentioned,

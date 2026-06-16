@@ -235,9 +235,9 @@ export function buildGroupChatContext(params: {
 
   const lines: string[] = [];
   lines.push(`You are in a ${providerLabel} group chat.`);
-  if (provider === "telegram" && botUsername) {
+  if (params.sessionCtx.ExplicitlyMentionedBot === true && botUsername) {
     lines.push(
-      `Telegram: @${botUsername} is your bot handle in this chat. Treat messages addressed to @${botUsername} as addressed to you, even if your persona name differs.`,
+      `The incoming message explicitly mentions your channel identity @${botUsername}. Treat that mention as addressed to you, even if your persona name differs.`,
     );
   }
   if (messageToolOnly) {
