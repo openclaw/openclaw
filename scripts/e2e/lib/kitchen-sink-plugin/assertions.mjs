@@ -150,26 +150,44 @@ function scanLogFiles(roots, onFile) {
   let scannedFiles = 0;
   let visitedEntries = 0;
   for (const root of roots) {
-    const pending = [root];
+    const pending = [{ entry: root, counted: false }];
     while (pending.length > 0) {
-      const entry = pending.pop();
+      const pendingEntry = pending.pop();
+      const entry = pendingEntry?.entry;
       if (!entry || !fs.existsSync(entry)) {
         continue;
       }
-      visitedEntries += 1;
-      if (visitedEntries > LOG_SCAN_MAX_ENTRIES) {
-        throw new Error(
-          `kitchen-sink log scan exceeded ${LOG_SCAN_MAX_ENTRIES} filesystem entries`,
-        );
+      if (!pendingEntry.counted) {
+        visitedEntries += 1;
+        if (visitedEntries > LOG_SCAN_MAX_ENTRIES) {
+          throw new Error(
+            `kitchen-sink log scan exceeded ${LOG_SCAN_MAX_ENTRIES} filesystem entries`,
+          );
+        }
       }
-      const stat = fs.lstatSync(entry);
-      if (stat.isSymbolicLink()) {
+      const entryType = pendingEntry.dirent ?? fs.lstatSync(entry);
+      if (entryType.isSymbolicLink()) {
         continue;
       }
-      if (stat.isDirectory()) {
-        const children = fs.readdirSync(entry).toSorted((left, right) => right.localeCompare(left));
-        for (const child of children) {
-          pending.push(path.join(entry, child));
+      if (entryType.isDirectory()) {
+        const dir = fs.opendirSync(entry);
+        try {
+          let child;
+          while ((child = dir.readSync()) !== null) {
+            visitedEntries += 1;
+            if (visitedEntries > LOG_SCAN_MAX_ENTRIES) {
+              throw new Error(
+                `kitchen-sink log scan exceeded ${LOG_SCAN_MAX_ENTRIES} filesystem entries`,
+              );
+            }
+            pending.push({
+              counted: true,
+              dirent: child,
+              entry: path.join(entry, child.name),
+            });
+          }
+        } finally {
+          dir.closeSync();
         }
         continue;
       }
@@ -301,7 +319,8 @@ const expectMissing = (listValue, expected, field) => {
 
 const INVALID_PROBE_DIAGNOSTIC_SURFACE_MODES = new Set(["full", "conformance", "adversarial"]);
 const requiredFullDiagnosticCanaries = new Set([
-  "only bundled plugins can register trusted tool policies",
+  "agent tool result middleware must be a function",
+  "trusted tool policy registration requires id, description, and evaluate()",
   "plugin must declare contracts.tools for: kitchen-sink-tool",
   'channel "kitchen-sink-channel-probe" registration missing required config helpers',
   'agent harness "kitchen-sink-agent-harness" registration missing required runtime methods',
@@ -312,14 +331,14 @@ function assertExpectedDiagnostics(surfaceMode, errorMessages) {
   const expectedErrorMessages = new Set([
     "cli registration missing explicit commands metadata",
     "only bundled plugins can register Codex app-server extension factories",
-    "only bundled plugins can register agent tool result middleware",
+    "agent tool result middleware must be a function",
     'compaction provider "kitchen-sink-compaction-provider" registration missing summarize',
     "context engine registration missing id",
     "control UI descriptor registration requires id, surface, label, and valid optional fields",
     "hosted media resolver registration missing resolver",
     "http route registration missing or invalid auth: /kitchen-sink/http-route",
     "node invoke policy registration missing commands",
-    "only bundled plugins can register trusted tool policies",
+    "trusted tool policy registration requires id, description, and evaluate()",
     "plugin must declare contracts.embeddingProviders for adapter: kitchen-sink-embedding-provider",
     "plugin must own memory slot or declare contracts.memoryEmbeddingProviders for adapter: kitchen-sink-memory-embedding-provider",
     "plugin must declare contracts.tools for: kitchen-sink-tool",

@@ -18,6 +18,7 @@ export type BlockReplyPipeline = {
   didStream: () => boolean;
   isAborted: () => boolean;
   hasSentPayload: (payload: ReplyPayload) => boolean;
+  hasSentExactPayload?: (payload: ReplyPayload) => boolean;
   getSentMediaUrls: () => readonly string[];
 };
 
@@ -315,6 +316,7 @@ export function createBlockReplyPipeline(params: {
     hasBuffered: () => coalescer?.hasBuffered() || bufferedPayloads.length > 0,
     didStream: () => didStream,
     isAborted: () => aborted,
+    hasSentExactPayload: (payload) => sentContentKeys.has(createBlockReplyContentKey(payload)),
     hasSentPayload: (payload) => {
       const payloadKey = createBlockReplyContentKey(payload);
       if (sentContentKeys.has(payloadKey)) {

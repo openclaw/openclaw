@@ -5,8 +5,10 @@ import path from "node:path";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import {
   clearMemoryCoreWorkspaceNamespace,
+  DREAMING_DAILY_INGESTION_NAMESPACE,
   DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
   DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
+  readMemoryCoreWorkspaceEntries,
 } from "./dreaming-state.js";
 
 type DreamingArtifactsAuditIssue = {
@@ -205,6 +207,29 @@ export async function auditDreamingArtifacts(params: {
         message: `Dreaming session-ingestion state could not be inspected: ${(err as NodeJS.ErrnoException).code ?? "error"}.`,
         fixable: false,
       });
+    }
+  }
+
+  // Fall back to SQLite plugin state when the legacy JSON file was archived by migration.
+  if (!sessionIngestionExists) {
+    try {
+      const ingestionNamespaces = [
+        DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
+        DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
+        DREAMING_DAILY_INGESTION_NAMESPACE,
+      ] as const;
+      for (const namespace of ingestionNamespaces) {
+        const entries = await readMemoryCoreWorkspaceEntries({
+          namespace,
+          workspaceDir,
+        });
+        if (entries.length > 0) {
+          sessionIngestionExists = true;
+          break;
+        }
+      }
+    } catch {
+      // SQLite plugin state unavailable — keep filesystem-only result.
     }
   }
 

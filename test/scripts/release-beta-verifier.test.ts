@@ -4,6 +4,7 @@ import {
   parseNpmViewFields,
   parseReleaseVerifyBetaArgs,
   readBoundedJsonResponse,
+  runNpmViewWithRetry,
 } from "../../scripts/lib/release-beta-verifier.ts";
 
 describe("parseReleaseVerifyBetaArgs", () => {
@@ -15,9 +16,11 @@ describe("parseReleaseVerifyBetaArgs", () => {
       repo: "openclaw/openclaw",
       registry: "https://clawhub.ai",
       workflowRef: undefined,
+      clawHubWorkflowRef: undefined,
       pluginSelection: [],
       evidenceOut: undefined,
       skipPostpublish: false,
+      skipGitHubRelease: false,
       skipClawHub: false,
       rerunFailedClawHub: false,
       workflowRuns: {},
@@ -31,6 +34,8 @@ describe("parseReleaseVerifyBetaArgs", () => {
         "2026.5.10-beta.3",
         "--workflow-ref",
         "release/2026.5.10",
+        "--clawhub-workflow-ref",
+        "v2026.5.10-beta.3",
         "--plugins",
         "@openclaw/plugin-a,@openclaw/plugin-b",
         "--full-release-validation-run",
@@ -41,11 +46,14 @@ describe("parseReleaseVerifyBetaArgs", () => {
         "22",
         "--plugin-clawhub-run",
         "33",
+        "--plugin-clawhub-bootstrap-run",
+        "34",
         "--npm-telegram-run",
         "44",
         "--evidence-out",
         ".artifacts/release-evidence.json",
         "--skip-postpublish",
+        "--skip-github-release",
         "--skip-clawhub",
         "--rerun-failed-clawhub",
       ]),
@@ -56,9 +64,11 @@ describe("parseReleaseVerifyBetaArgs", () => {
       repo: "openclaw/openclaw",
       registry: "https://clawhub.ai",
       workflowRef: "release/2026.5.10",
+      clawHubWorkflowRef: "v2026.5.10-beta.3",
       pluginSelection: ["@openclaw/plugin-a", "@openclaw/plugin-b"],
       evidenceOut: ".artifacts/release-evidence.json",
       skipPostpublish: true,
+      skipGitHubRelease: true,
       skipClawHub: true,
       rerunFailedClawHub: true,
       workflowRuns: {
@@ -66,6 +76,7 @@ describe("parseReleaseVerifyBetaArgs", () => {
         openclawNpm: "11",
         pluginNpm: "22",
         pluginClawHub: "33",
+        pluginClawHubBootstrap: "34",
         npmTelegram: "44",
       },
     });
@@ -80,6 +91,7 @@ describe("parseNpmViewFields", () => {
           version: "2026.5.10-beta.3",
           "dist-tags.beta": "2026.5.10-beta.3",
           "dist.integrity": "sha512-test",
+          "dist.tarball": "https://registry.example/openclaw.tgz",
         }),
         "beta",
       ),
@@ -87,6 +99,7 @@ describe("parseNpmViewFields", () => {
       version: "2026.5.10-beta.3",
       distTagVersion: "2026.5.10-beta.3",
       integrity: "sha512-test",
+      tarball: "https://registry.example/openclaw.tgz",
     });
   });
 
@@ -96,7 +109,10 @@ describe("parseNpmViewFields", () => {
         JSON.stringify({
           version: "2026.5.10-beta.3",
           "dist-tags": { beta: "2026.5.10-beta.3" },
-          dist: { integrity: "sha512-test" },
+          dist: {
+            integrity: "sha512-test",
+            tarball: "https://registry.example/openclaw.tgz",
+          },
         }),
         "beta",
       ),
@@ -104,7 +120,35 @@ describe("parseNpmViewFields", () => {
       version: "2026.5.10-beta.3",
       distTagVersion: "2026.5.10-beta.3",
       integrity: "sha512-test",
+      tarball: "https://registry.example/openclaw.tgz",
     });
+  });
+});
+
+describe("runNpmViewWithRetry", () => {
+  it("retries transient registry failures with online metadata reads", async () => {
+    const calls: string[][] = [];
+    const delays: number[] = [];
+
+    await expect(
+      runNpmViewWithRetry(["view", "openclaw@2026.5.10-beta.3", "version", "--json"], {
+        attempts: 3,
+        delay: async (delayMs) => {
+          delays.push(delayMs);
+        },
+        run: (args) => {
+          calls.push(args);
+          if (calls.length < 3) {
+            throw new Error("npm registry has not propagated the release yet");
+          }
+          return '"2026.5.10-beta.3"';
+        },
+      }),
+    ).resolves.toBe('"2026.5.10-beta.3"');
+
+    expect(calls).toHaveLength(3);
+    expect(calls.every((args) => args.at(-1) === "--prefer-online")).toBe(true);
+    expect(delays).toEqual([1000, 2000]);
   });
 });
 

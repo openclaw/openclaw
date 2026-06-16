@@ -51,6 +51,7 @@ function logMcpLoopbackHttp(step: string, details: Record<string, unknown>): voi
 
 type McpRequestContext = {
   sessionKey: string;
+  sessionId: string | undefined;
   messageProvider: string | undefined;
   currentChannelId: string | undefined;
   currentThreadTs: string | undefined;
@@ -59,6 +60,7 @@ type McpRequestContext = {
   accountId: string | undefined;
   inboundEventKind: InboundEventKind | undefined;
   sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined;
+  requireExplicitMessageTarget: boolean | undefined;
   senderIsOwner: boolean | undefined;
 };
 
@@ -108,6 +110,7 @@ export function validateMcpLoopbackRequest(params: {
   ownerToken: string;
   nonOwnerToken: string;
   resolveScopedTokenContext?: (authHeader: string) => McpLoopbackTokenScope | undefined;
+  onSseResponse?: (res: ServerResponse) => void;
 }): McpLoopbackTokenScope | null {
   let url: URL;
   try {
@@ -136,13 +139,71 @@ export function validateMcpLoopbackRequest(params: {
     return null;
   }
 
+  if (params.req.method === "GET") {
+    // Origin validation first (matches the POST path): a browser loopback request is
+    // rejected before bearer auth, so the local-loopback Origin boundary holds even for
+    // unauthenticated browser requests.
+    if (rejectsBrowserLoopbackRequest(params.req)) {
+      params.res.writeHead(403, { "Content-Type": "application/json" });
+      params.res.end(JSON.stringify({ error: "forbidden" }));
+      return null;
+    }
+    const authHeader = getHeader(params.req, "authorization") ?? "";
+    const ownerTokenMatched = safeEqualSecret(authHeader, `Bearer ${params.ownerToken}`);
+    const nonOwnerTokenMatched = safeEqualSecret(authHeader, `Bearer ${params.nonOwnerToken}`);
+    if (!ownerTokenMatched && !nonOwnerTokenMatched) {
+      params.res.writeHead(401, { "Content-Type": "application/json" });
+      params.res.end(JSON.stringify({ error: "unauthorized" }));
+      return null;
+    }
+    logMcpLoopbackHttp("sse-open", { method: "GET", path: url.pathname });
+    params.res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+    });
+    params.res.flushHeaders();
+    params.res.write(":\n\n");
+    params.onSseResponse?.(params.res);
+    params.req.on("close", () => {
+      if (!params.res.writableEnded) {
+        params.res.end();
+      }
+    });
+    return null;
+  }
+
+  if (params.req.method === "DELETE") {
+    // Streamable HTTP session teardown. The loopback server is stateless — it owns no
+    // session lifecycle — so this is an auth-gated no-op acknowledgement: clients that
+    // send DELETE when closing the transport get a clean 200 rather than a 405.
+    // Origin validation first (matches the POST/GET paths), before bearer auth.
+    if (rejectsBrowserLoopbackRequest(params.req)) {
+      params.res.writeHead(403, { "Content-Type": "application/json" });
+      params.res.end(JSON.stringify({ error: "forbidden" }));
+      return null;
+    }
+    const authHeader = getHeader(params.req, "authorization") ?? "";
+    const ownerTokenMatched = safeEqualSecret(authHeader, `Bearer ${params.ownerToken}`);
+    const nonOwnerTokenMatched = safeEqualSecret(authHeader, `Bearer ${params.nonOwnerToken}`);
+    if (!ownerTokenMatched && !nonOwnerTokenMatched) {
+      params.res.writeHead(401, { "Content-Type": "application/json" });
+      params.res.end(JSON.stringify({ error: "unauthorized" }));
+      return null;
+    }
+    logMcpLoopbackHttp("session-delete", { method: "DELETE", path: url.pathname });
+    params.res.writeHead(200, { "Content-Type": "application/json" });
+    params.res.end(JSON.stringify({ ok: true }));
+    return null;
+  }
+
   if (params.req.method !== "POST") {
     logMcpLoopbackHttp("reject", {
       reason: "method_not_allowed",
       method: params.req.method ?? "",
       path: url.pathname,
     });
-    params.res.writeHead(405, { Allow: "POST" });
+    params.res.writeHead(405, { Allow: "GET, POST, DELETE" });
     params.res.end();
     return null;
   }
@@ -300,12 +361,17 @@ export function resolveMcpHttpBodyTimeoutMs(): number {
   return readPositiveIntEnv("OPENCLAW_MCP_LOOPBACK_BODY_TIMEOUT_MS", DEFAULT_MCP_BODY_TIMEOUT_MS);
 }
 
+export function resolveMcpCliCaptureKey(req: IncomingMessage): string | undefined {
+  return normalizeOptionalString(getHeader(req, "x-openclaw-cli-capture-key"));
+}
+
 export function resolveMcpRequestContext(
   cfg: OpenClawConfig,
   auth: McpLoopbackTokenScope,
 ): McpRequestContext {
   return {
     sessionKey: resolveScopedSessionKey(cfg, auth.sessionKey),
+    sessionId: auth.sessionId,
     messageProvider: normalizeMessageChannel(auth.messageProvider) ?? undefined,
     currentChannelId: normalizeOptionalString(auth.currentChannelId),
     currentThreadTs: normalizeOptionalString(auth.currentThreadTs),
@@ -314,6 +380,7 @@ export function resolveMcpRequestContext(
     accountId: normalizeOptionalString(auth.accountId),
     inboundEventKind: normalizeMcpInboundEventKind(auth.inboundEventKind),
     sourceReplyDeliveryMode: normalizeMcpSourceReplyDeliveryMode(auth.sourceReplyDeliveryMode),
+    requireExplicitMessageTarget: auth.requireExplicitMessageTarget,
     senderIsOwner: auth.senderIsOwner,
   };
 }

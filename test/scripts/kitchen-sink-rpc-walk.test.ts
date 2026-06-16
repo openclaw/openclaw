@@ -26,6 +26,7 @@ import {
   assertKitchenSinkUiDescriptors,
   assertKitchenSinkSearchInvokeResult,
   assertKitchenSinkTextInvokeResult,
+  assertOperatorRpcDenied,
   assertResourceCeiling,
   assertTtsProviderCoverage,
   cleanupKitchenSinkEnv,
@@ -38,7 +39,10 @@ import {
   findDistCallGatewayModuleFiles,
   hasChildExited,
   listKitchenSinkToolInvokeNames,
+  listKitchenSinkAuthorizationRpcProbeNames,
+  listKitchenSinkReadOnlyRpcProbeNames,
   makeEnv,
+  parseGatewayCliRequestFailure,
   readPositiveInt,
   readBoundedResponseText,
   runCommand,
@@ -635,6 +639,20 @@ setInterval(() => {}, 1000);
       code: "ENOENT",
     });
   });
+
+  it("preserves failed command output for structured consumers", async () => {
+    await expect(
+      runCommand(process.execPath, [
+        "-e",
+        'process.stdout.write("request failure"); process.stderr.write("diagnostic"); process.exit(7)',
+      ]),
+    ).rejects.toMatchObject({
+      status: 7,
+      signal: null,
+      stdout: "request failure",
+      stderr: "diagnostic",
+    });
+  });
 });
 
 describe("kitchen-sink RPC caller loading", () => {
@@ -801,6 +819,92 @@ describe("kitchen-sink RPC command catalog assertions", () => {
       "kitchen_sink_search",
       "kitchen_sink_text",
     ]);
+  });
+
+  it("walks broad read-only gateway RPC surfaces", () => {
+    expect(listKitchenSinkReadOnlyRpcProbeNames()).toEqual(
+      expect.arrayContaining([
+        "gateway.identity.get",
+        "config.schema.lookup",
+        "models.list",
+        "skills.status",
+        "agents.list",
+        "sessions.list",
+        "cron.list",
+        "tasks.list",
+        "usage.status",
+        "voicewake.routing.get",
+        "talk.catalog",
+        "update.status",
+        "node.list",
+        "device.pair.list",
+        "exec.approvals.get",
+        "environments.status",
+      ]),
+    );
+  });
+
+  it("proves node-only RPC authorization boundaries", async () => {
+    expect(listKitchenSinkAuthorizationRpcProbeNames()).toEqual(["skills.bins"]);
+    await expect(
+      assertOperatorRpcDenied({ method: "skills.bins", params: {} }, async () => {
+        throw Object.assign(new Error("unauthorized role: operator"), {
+          gatewayCode: "INVALID_REQUEST",
+        });
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      assertOperatorRpcDenied({ method: "skills.bins", params: {} }, async () => {
+        throw new Error(
+          "openclaw gateway call skills.bins failed with 1\nGateway call failed: unauthorized role: operator",
+        );
+      }),
+    ).rejects.toThrow("Gateway call failed: unauthorized role: operator");
+    await expect(
+      assertOperatorRpcDenied({ method: "skills.bins", params: {} }, async () => ({})),
+    ).rejects.toThrow("skills.bins unexpectedly allowed operator access");
+  });
+
+  it("reconstructs typed request failures from gateway CLI JSON", async () => {
+    const { formatGatewayClientRequestErrorJson } = await import("../../src/gateway/call.js");
+    const payload = formatGatewayClientRequestErrorJson(
+      Object.assign(new Error("unauthorized role: operator"), {
+        name: "GatewayClientRequestError",
+        gatewayCode: "INVALID_REQUEST",
+        details: { method: "skills.bins" },
+        retryable: false,
+        retryAfterMs: 250,
+      }),
+    );
+
+    expect(
+      parseGatewayCliRequestFailure({
+        stdout: JSON.stringify(payload),
+      }),
+    ).toMatchObject({
+      name: "GatewayClientRequestError",
+      message: "unauthorized role: operator",
+      gatewayCode: "INVALID_REQUEST",
+      details: { method: "skills.bins" },
+      retryable: false,
+      retryAfterMs: 250,
+    });
+    expect(parseGatewayCliRequestFailure(new Error("plain failure"))).toBeNull();
+    for (const invalidFields of [{ retryable: "no" }, { retryable: false, retryAfterMs: -1 }]) {
+      expect(
+        parseGatewayCliRequestFailure({
+          stdout: JSON.stringify({
+            ok: false,
+            error: {
+              type: "gateway_request_error",
+              code: "INVALID_REQUEST",
+              message: "unauthorized role: operator",
+              ...invalidFields,
+            },
+          }),
+        }),
+      ).toBeNull();
+    }
   });
 
   it("requires provenance for effective Kitchen Sink plugin tools too", () => {
@@ -1031,6 +1135,22 @@ describe("kitchen-sink RPC command catalog assertions", () => {
     );
     expect(() => assertKitchenSinkUiDescriptors({ ok: true, descriptors: [] })).toThrow(
       "plugins.uiDescriptors did not report Kitchen Sink descriptor",
+    );
+  });
+
+  it("allows conformance mode to skip generated Kitchen Sink UI descriptors", () => {
+    expect(() =>
+      assertKitchenSinkUiDescriptors(
+        {
+          ok: true,
+          descriptors: [],
+        },
+        { expectDescriptor: false },
+      ),
+    ).not.toThrow();
+
+    expect(() => assertKitchenSinkUiDescriptors({}, { expectDescriptor: false })).toThrow(
+      "plugins.uiDescriptors returned invalid payload",
     );
   });
 });

@@ -404,6 +404,7 @@ export class OpenClawApp extends LitElement {
   @state() configActiveSection: string | null = null;
   @state() configActiveSubsection: string | null = null;
   @state() pendingUpdateExpectedVersion: string | null = null;
+  @state() pendingUpdateHandoff = false;
   @state() updateStatusBanner: { tone: "danger" | "warn" | "info"; text: string } | null = null;
   @state() communicationsFormMode: "form" | "raw" = "form";
   @state() communicationsSearchQuery = "";
@@ -606,6 +607,8 @@ export class OpenClawApp extends LitElement {
   @state() overviewLogCursor = 0;
 
   @state() skillsLoading = false;
+  @state() skillsAgentId: string | null = null;
+  skillsAgentRevision = 0;
   @state() skillsReport: SkillStatusReport | null = null;
   @state() skillsError: string | null = null;
   @state() skillsFilter = "";
@@ -696,6 +699,7 @@ export class OpenClawApp extends LitElement {
   chatLastScrollTop = 0;
   chatHasAutoScrolled = false;
   chatUserNearBottom = true;
+  chatFollowLocked = false;
   chatIsProgrammaticScroll = false;
   chatProgrammaticScrollTarget = 0;
   @state() chatNewMessagesBelow = false;
@@ -804,7 +808,7 @@ export class OpenClawApp extends LitElement {
     this.onSlashAction = async (action: string) => {
       switch (action) {
         case "new-session":
-          await createChatSessionInternal(this as unknown as AppViewState);
+          await createChatSessionInternal(this as unknown as AppViewState, { source: "user" });
           break;
         case "export":
           exportChatMarkdown(this.chatMessages, this.assistantName);
@@ -1235,10 +1239,6 @@ export class OpenClawApp extends LitElement {
           if (status === "idle" || status === "error") {
             this.realtimeTalkActive = status !== "idle";
           }
-          if (status === "error" && this.realtimeTalkDetail) {
-            this.lastError = this.realtimeTalkDetail;
-            this.chatError = this.realtimeTalkDetail;
-          }
         },
         onTranscript: (entry) => {
           this.realtimeTalkTranscript = `${entry.role === "user" ? "You" : "OpenClaw"}: ${entry.text}`;
@@ -1262,8 +1262,6 @@ export class OpenClawApp extends LitElement {
       this.realtimeTalkActive = false;
       this.realtimeTalkStatus = "error";
       this.realtimeTalkDetail = error instanceof Error ? error.message : String(error);
-      this.lastError = this.realtimeTalkDetail;
-      this.chatError = this.realtimeTalkDetail;
     }
   }
 

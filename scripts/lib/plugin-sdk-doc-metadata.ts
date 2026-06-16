@@ -102,7 +102,13 @@ export const pluginSdkDocMetadata = {
   "provider-oauth-runtime": {
     category: "provider",
   },
+  "message-tool-delivery-hints": {
+    category: "runtime",
+  },
   "provider-selection-runtime": {
+    category: "provider",
+  },
+  "provider-catalog-live-runtime": {
     category: "provider",
   },
   "runtime-store": {

@@ -6,7 +6,10 @@ import { classifyFailoverReason } from "../embedded-agent-helpers/errors.js";
 import type { FailoverReason } from "../embedded-agent-helpers/types.js";
 import { isGpt5ModelId } from "../gpt5-prompt-overlay.js";
 import type { ModelFallbackResultClassification } from "../model-fallback.js";
-import { hasOutboundDeliveryEvidence, hasVisibleAgentPayload } from "./delivery-evidence.js";
+import {
+  hasCommittedOutboundDeliveryEvidence,
+  hasVisibleAgentPayload,
+} from "./delivery-evidence.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
 
 /**
@@ -15,9 +18,6 @@ import type { EmbeddedAgentRunResult } from "./types.js";
  * The classifier only flags failed invisible outcomes; delivered messages, deliberate silent
  * replies, hook blocks, and aborts must not trigger another model attempt.
  */
-const EMPTY_TERMINAL_REPLY_RE = /Agent couldn't generate a response/i;
-const PLAN_ONLY_TERMINAL_REPLY_RE = /Agent stopped after repeated plan-only turns/i;
-
 function isEmbeddedAgentRunResult(value: unknown): value is EmbeddedAgentRunResult {
   return Boolean(
     value &&
@@ -26,6 +26,43 @@ function isEmbeddedAgentRunResult(value: unknown): value is EmbeddedAgentRunResu
     (value as { meta?: unknown }).meta &&
     typeof (value as { meta?: unknown }).meta === "object",
   );
+}
+
+/** Keeps final-candidate bookkeeping while surfacing the best trusted terminal payload. */
+export function mergeEmbeddedAgentRunResultForModelFallbackExhaustion(params: {
+  latestResult: EmbeddedAgentRunResult;
+  preferredResult: EmbeddedAgentRunResult;
+}): EmbeddedAgentRunResult {
+  const executionTrace = params.latestResult.meta.executionTrace;
+  const filteredAttempts = executionTrace?.attempts?.filter(
+    (attempt) => attempt.result !== "success",
+  );
+  const traceNeedsNormalization =
+    executionTrace !== undefined &&
+    (executionTrace.winnerProvider !== undefined ||
+      executionTrace.winnerModel !== undefined ||
+      filteredAttempts?.length !== executionTrace.attempts?.length);
+  if (params.latestResult === params.preferredResult && !traceNeedsNormalization) {
+    return params.latestResult;
+  }
+  return {
+    ...params.latestResult,
+    payloads: params.preferredResult.payloads,
+    meta: {
+      ...params.latestResult.meta,
+      error: params.preferredResult.meta.error,
+      ...(traceNeedsNormalization
+        ? {
+            executionTrace: {
+              ...executionTrace,
+              winnerProvider: undefined,
+              winnerModel: undefined,
+              attempts: filteredAttempts?.length ? filteredAttempts : undefined,
+            },
+          }
+        : {}),
+    },
+  };
 }
 
 function hasDeliberateSilentTerminalReply(result: EmbeddedAgentRunResult): boolean {
@@ -57,7 +94,7 @@ function classifyHarnessResult(params: {
       };
     case "planning-only":
       return {
-        message: `${params.provider}/${params.model} exhausted plan-only retries without taking action`,
+        message: `${params.provider}/${params.model} ended with a structured plan but no final answer`,
         reason: "format",
         code: "planning_only_result",
       };
@@ -107,7 +144,15 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
   ) {
     return null;
   }
-  if (hasOutboundDeliveryEvidence(params.result)) {
+  const incompleteTurn = params.result.meta.error?.kind === "incomplete_turn";
+  if (incompleteTurn && params.result.meta.error?.fallbackSafe !== true) {
+    return null;
+  }
+  const fallbackSafeIncompleteTurn = incompleteTurn;
+  if (params.result.meta.replayInvalid === true && !fallbackSafeIncompleteTurn) {
+    return null;
+  }
+  if (hasCommittedOutboundDeliveryEvidence(params.result)) {
     return null;
   }
   if (params.result.meta.error?.kind === "hook_block") {
@@ -115,7 +160,22 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
     // bypass a policy decision rather than recover a malformed model result.
     return null;
   }
+  const payloads = params.result.payloads ?? [];
 
+  if (fallbackSafeIncompleteTurn) {
+    const terminalErrorText = payloads.find(
+      (payload) => payload.isError === true && typeof payload.text === "string",
+    )?.text;
+    return {
+      message:
+        terminalErrorText ??
+        `${params.provider}/${params.model} ended with an incomplete terminal response`,
+      reason: "format",
+      code: "incomplete_result",
+      preserveResultOnExhaustion: true,
+      preserveResultPriority: params.result.meta.error?.terminalPresentation === true ? 1 : 0,
+    };
+  }
   const harnessClassification = classifyHarnessResult({
     provider: params.provider,
     model: params.model,
@@ -125,18 +185,10 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
     return harnessClassification;
   }
 
-  const payloads = params.result.payloads ?? [];
   const errorText = payloads
     .filter((payload) => payload?.isError === true)
     .map((payload) => (typeof payload.text === "string" ? payload.text : ""))
     .join("\n");
-  if (EMPTY_TERMINAL_REPLY_RE.test(errorText)) {
-    return {
-      message: `${params.provider}/${params.model} ended with an incomplete terminal response`,
-      reason: "format",
-      code: "incomplete_result",
-    };
-  }
   const failoverReason = classifyBusinessDenialErrorPayloadReason(errorText, params.provider);
   if (failoverReason) {
     return {
@@ -169,20 +221,5 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
     };
   }
 
-  if (PLAN_ONLY_TERMINAL_REPLY_RE.test(errorText)) {
-    return {
-      message: `${params.provider}/${params.model} exhausted plan-only retries without taking action`,
-      reason: "format",
-      code: "planning_only_result",
-    };
-  }
-  if (!EMPTY_TERMINAL_REPLY_RE.test(errorText)) {
-    return null;
-  }
-
-  return {
-    message: `${params.provider}/${params.model} ended with an incomplete terminal response`,
-    reason: "format",
-    code: "incomplete_result",
-  };
+  return null;
 }

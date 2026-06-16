@@ -139,15 +139,6 @@ extension SettingsProTab {
         await self.gatewayController.connectLastKnown()
     }
 
-    func refreshGateway() async {
-        guard !self.isRefreshingGateway else { return }
-        self.isRefreshingGateway = true
-        defer { self.isRefreshingGateway = false }
-        self.gatewayController.refreshActiveGatewayRegistrationFromSettings()
-        self.gatewayController.restartDiscovery()
-        await self.appModel.refreshGatewayOverviewIfConnected()
-    }
-
     @MainActor
     func runDiagnostics() async {
         guard !self.isRefreshingGateway else { return }
@@ -200,7 +191,7 @@ extension SettingsProTab {
             self.setupStatusText = "Failed: invalid port"
             return
         }
-        guard await self.preflightGateway(host: host, port: port, useTLS: self.manualGatewayTLS) else { return }
+        guard await self.preflightGateway(host: host, port: port) else { return }
         self.setupStatusText = "Setup code applied. Connecting..."
         await self.connectManual()
     }
@@ -298,7 +289,7 @@ extension SettingsProTab {
             self.setupStatusText = "Failed: invalid port"
             return
         }
-        guard await self.preflightGateway(host: host, port: port, useTLS: self.manualGatewayTLS) else { return }
+        guard await self.preflightGateway(host: host, port: port) else { return }
         await self.connectManual()
     }
 
@@ -327,7 +318,7 @@ extension SettingsProTab {
             authOverride: authOverride)
     }
 
-    func preflightGateway(host: String, port: Int, useTLS: Bool) async -> Bool {
+    func preflightGateway(host: String, port: Int) async -> Bool {
         let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
         if Self.isTailnetHostOrIP(trimmed), !Self.hasTailnetIPv4() {
@@ -495,11 +486,26 @@ extension SettingsProTab {
         case .gateway: "Gateway"
         case .approvals: "Approvals"
         case .permissions: "Permissions"
+        case .channels: "Channels"
         case .voice: "Voice & Talk"
         case .diagnostics: "Diagnostics"
         case .privacy: "Privacy"
         case .notifications: "Notifications"
         case .about: "About"
+        }
+    }
+
+    func subtitle(for route: SettingsRoute) -> String {
+        switch route {
+        case .gateway: "Pairing, diagnostics, and Tailscale checks."
+        case .approvals: "Review pending agent actions."
+        case .permissions: "Control device capabilities."
+        case .channels: "Message routing and external clients."
+        case .voice: "Talk mode and wake phrase settings."
+        case .diagnostics: "Run local health checks."
+        case .privacy: "Data and device privacy controls."
+        case .notifications: "Alert permissions and delivery."
+        case .about: "Version and support details."
         }
     }
 
@@ -608,6 +614,21 @@ extension SettingsProTab {
     var talkApiKeyStatus: String {
         guard self.appModel.talkMode.gatewayTalkConfigLoaded else { return "Not loaded" }
         return self.appModel.talkMode.gatewayTalkApiKeyConfigured ? "Configured" : "Not configured"
+    }
+
+    var gatewayTalkActiveVoiceDetail: String {
+        let title = self.appModel.talkMode.gatewayTalkActiveModeTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let subtitle = (self.appModel.talkMode.gatewayTalkActiveModeSubtitle ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if title.isEmpty { return "Not active" }
+        if subtitle.isEmpty { return title }
+        return "\(title) • \(subtitle)"
+    }
+
+    var gatewayTalkLastIssueDetail: String? {
+        let detail = (self.appModel.talkMode.gatewayTalkLastIssueText ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return detail.isEmpty ? nil : detail
     }
 
     func gatewayDetailLines(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) -> [String] {

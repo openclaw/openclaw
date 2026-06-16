@@ -160,11 +160,12 @@ Codex `0.124.0`, while pinning OpenClaw to the newer tested stable line.
 
 ### Tool-result middleware
 
-Bundled plugins can attach runtime-neutral tool-result middleware through
+Bundled plugins and explicitly enabled installed plugins with matching manifest
+contracts can attach runtime-neutral tool-result middleware through
 `api.registerAgentToolResultMiddleware(...)` when their manifest declares the
 targeted runtime ids in `contracts.agentToolResultMiddleware`. This trusted
-seam is for async tool-result transforms that must run before OpenClaw or Codex feeds
-tool output back into the model.
+seam is for async tool-result transforms that must run before OpenClaw or Codex
+feeds tool output back into the model.
 
 Legacy bundled plugins can still use
 `api.registerCodexAppServerExtensionFactory(...)` for Codex app-server-only
@@ -179,8 +180,10 @@ Native harnesses that own their own protocol projection can use
 `openclaw/plugin-sdk/agent-harness-runtime` when a completed turn produced no
 visible assistant text. The helper returns `empty`, `reasoning-only`, or
 `planning-only` so OpenClaw's fallback policy can decide whether to retry on a
-different model. It intentionally leaves prompt errors, in-flight turns, and
-intentional silent replies such as `NO_REPLY` unclassified.
+different model. `planning-only` requires the harness's explicit `planText`
+field; OpenClaw does not infer it from assistant prose. The helper intentionally
+leaves prompt errors, in-flight turns, and intentional silent replies such as
+`NO_REPLY` unclassified.
 
 ### Native Codex harness mode
 

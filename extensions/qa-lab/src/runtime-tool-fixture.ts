@@ -27,6 +27,7 @@ type QaRuntimeToolFixtureRequest = {
   plannedToolArgs?: unknown;
   toolOutputCallId?: string;
   toolOutput?: string;
+  toolOutputStructuredError?: unknown;
 };
 
 type QaRuntimeToolFixtureTranscriptToolCall = {
@@ -40,6 +41,7 @@ type QaRuntimeToolFixtureTranscriptToolResult = {
   tool?: string;
   text: string;
   failure: boolean;
+  structuredFailure: boolean;
 };
 
 type QaRuntimeToolFixtureDeps = {
@@ -99,6 +101,31 @@ function requestMatchesPrompt(request: QaRuntimeToolFixtureRequest, promptSnippe
 
 function requestHasToolOutput(request: QaRuntimeToolFixtureRequest) {
   return typeof request.toolOutput === "string" && request.toolOutput.trim().length > 0;
+}
+
+function isHardFailureToolOutputText(text: string) {
+  return (
+    /\b(?:ENOENT|EACCES|EPERM)\b/u.test(text) ||
+    /(?:^|\n)\s*(?:Error|Exception|Failed):/u.test(text) ||
+    /\b(?:disabled|forbidden|no provider|no such file|permission denied|unavailable)\b/iu.test(text)
+  );
+}
+
+function requestHasHappyPathFailureToolOutput(request: QaRuntimeToolFixtureRequest) {
+  return (
+    request.toolOutputStructuredError === true ||
+    (typeof request.toolOutput === "string" && isHardFailureToolOutputText(request.toolOutput))
+  );
+}
+
+function requestHasFailureLikeToolOutput(request: QaRuntimeToolFixtureRequest) {
+  return (
+    typeof request.toolOutput === "string" &&
+    isFailureLikeToolResult({
+      text: request.toolOutput,
+      isError: request.toolOutputStructuredError,
+    })
+  );
 }
 
 function readNonEmptyString(value: unknown) {
@@ -212,6 +239,12 @@ function readBooleanTrue(value: unknown) {
   return value === true;
 }
 
+const FAILURE_LIKE_TOOL_RESULT_RE =
+  /\b(?:denied|enoent|error|exception|fail(?:ed|ure)?|forbidden|invalid|missing|not found|permission)\b/iu;
+
+const REQUIRED_FIELD_TOOL_RESULT_RE =
+  /(?:^|[\n:,({[]\s*)["']?[A-Z_][A-Z0-9_.[\]-]*["']?\s+(?:is\s+)?required\b/iu;
+
 function isFailureLikeToolResult(params: {
   type?: string;
   text: string;
@@ -219,12 +252,22 @@ function isFailureLikeToolResult(params: {
   is_error?: unknown;
 }) {
   return (
+    isStructuredFailureToolResult(params) ||
+    isHardFailureToolOutputText(params.text) ||
+    FAILURE_LIKE_TOOL_RESULT_RE.test(params.text) ||
+    REQUIRED_FIELD_TOOL_RESULT_RE.test(params.text)
+  );
+}
+
+function isStructuredFailureToolResult(params: {
+  type?: string;
+  isError?: unknown;
+  is_error?: unknown;
+}) {
+  return (
     params.type === "tool_result_error" ||
     readBooleanTrue(params.isError) ||
-    readBooleanTrue(params.is_error) ||
-    /\b(?:denied|enoent|error|exception|fail(?:ed|ure)?|forbidden|invalid|missing|not found|permission)\b/iu.test(
-      params.text,
-    )
+    readBooleanTrue(params.is_error)
   );
 }
 
@@ -239,6 +282,10 @@ function extractTranscriptToolResults(
     readNonEmptyString(message.tool);
   if ((message.role === "tool" || message.role === "toolResult") && message.content !== undefined) {
     const text = extractTranscriptText(message.content);
+    const structuredFailure = isStructuredFailureToolResult({
+      isError: message.isError,
+      is_error: message.is_error,
+    });
     results.push({
       id:
         normalizeToolCallId(message.tool_call_id) ??
@@ -247,6 +294,7 @@ function extractTranscriptToolResults(
         normalizeToolCallId(message.id),
       ...(tool ? { tool } : {}),
       text,
+      structuredFailure,
       failure: isFailureLikeToolResult({
         text,
         isError: message.isError,
@@ -270,6 +318,11 @@ function extractTranscriptToolResults(
     const text = stringifyTranscriptToolResult(
       block.content ?? block.text ?? block.result ?? block.error ?? block.message,
     );
+    const structuredFailure = isStructuredFailureToolResult({
+      type,
+      isError: block.isError,
+      is_error: block.is_error,
+    });
     const blockTool =
       readNonEmptyString(block.toolName) ??
       readNonEmptyString(block.tool_name) ??
@@ -284,6 +337,7 @@ function extractTranscriptToolResults(
         normalizeToolCallId(block.id),
       ...(blockTool ? { tool: blockTool } : {}),
       text,
+      structuredFailure,
       failure: isFailureLikeToolResult({
         type,
         text,
@@ -605,6 +659,12 @@ export async function runRuntimeToolFixture(
           : `expected live happy-path tool call for ${toolName}`,
       );
     }
+    if (happyRequest.outputRequest.structuredFailure) {
+      if (isKnownHarnessGap(config.knownHarnessGap)) {
+        return formatKnownHarnessGapDetails(toolName, config);
+      }
+      throw new Error(`expected live happy-path successful tool output for ${toolName}`);
+    }
     const failureRequest = await readLiveToolEvidence({
       env,
       sessionKey: failureSessionKey,
@@ -667,6 +727,12 @@ export async function runRuntimeToolFixture(
         : `expected mock happy-path request for ${toolName}`,
     );
   }
+  if (requestHasHappyPathFailureToolOutput(happyRequest.outputRequest)) {
+    if (isKnownHarnessGap(config.knownHarnessGap)) {
+      return formatKnownHarnessGapDetails(toolName, config);
+    }
+    throw new Error(`expected mock happy-path successful tool output for ${toolName}`);
+  }
   const failurePlannedRequest = findPlannedRequest({
     requests,
     requestCountBefore,
@@ -697,6 +763,12 @@ export async function runRuntimeToolFixture(
         ? `expected mock failure-path tool output for ${toolName}`
         : `expected mock failure-path request for ${toolName}`,
     );
+  }
+  if (!requestHasFailureLikeToolOutput(failureRequest.outputRequest)) {
+    if (isKnownHarnessGap(config.knownHarnessGap)) {
+      return formatKnownHarnessGapDetails(toolName, config);
+    }
+    throw new Error(`expected mock failure-path tool failure output for ${toolName}`);
   }
 
   if (dynamicExposureIntentionallyExcluded) {

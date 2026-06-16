@@ -22,6 +22,7 @@ import { readErrorName } from "../../infra/errors.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import {
@@ -43,6 +44,7 @@ import { resolveAvailableAgentHarnessPolicy } from "../harness/selection.js";
 import { resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js";
 import { isCliProvider } from "../model-selection.js";
 import { resolveOpenAIRuntimeProvider } from "../openai-routing.js";
+import { resolveAgentRunAbortLifecycleFields } from "../run-termination.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { acquireSessionWriteLock, resolveSessionWriteLockOptions } from "../session-write-lock.js";
@@ -444,7 +446,9 @@ export function runAgentAttempt(params: {
   resolvedThinkLevel: ThinkLevel;
   fastMode?: boolean;
   timeoutMs: number;
+  runTimeoutOverrideMs?: number;
   runId: string;
+  lifecycleGeneration: string;
   opts: AgentCommandOpts;
   runContext: ReturnType<typeof resolveAgentRunContext>;
   spawnedBy: string | undefined;
@@ -457,6 +461,8 @@ export function runAgentAttempt(params: {
     data?: Record<string, unknown>;
     sessionKey?: string;
   }) => void;
+  deferTerminalLifecycle?: boolean;
+  /** @deprecated Use deferTerminalLifecycle. */
   deferTerminalLifecycleEnd?: boolean;
   authProfileProvider: string;
   sessionStore?: Record<string, SessionEntry>;
@@ -468,6 +474,7 @@ export function runAgentAttempt(params: {
   sessionHasHistory?: boolean;
   suppressPromptPersistenceOnRetry?: boolean;
   onUserMessagePersisted?: (message: Extract<AgentMessage, { role: "user" }>) => void;
+  onLifecycleGenerationChanged?: (lifecycleGeneration: string) => void;
 }) {
   const isRawModelRun = params.opts.modelRun === true || params.opts.promptMode === "none";
   const claudeCliFallbackPrelude =
@@ -614,9 +621,14 @@ export function runAgentAttempt(params: {
         model: params.modelOverride,
         thinkLevel: params.resolvedThinkLevel,
         timeoutMs: params.timeoutMs,
+        runTimeoutOverrideMs: params.runTimeoutOverrideMs,
         runId: params.runId,
+        lifecycleGeneration: params.lifecycleGeneration,
+        lane: params.opts.lane,
         extraSystemPrompt: params.opts.extraSystemPrompt,
         inputProvenance: params.opts.inputProvenance,
+        sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode,
+        requireExplicitMessageTarget: isSubagentSessionKey(params.sessionKey),
         cliSessionId: nextCliSessionId,
         cliSessionBinding:
           nextCliSessionId === activeCliSessionBinding?.sessionId
@@ -635,10 +647,12 @@ export function runAgentAttempt(params: {
         currentThreadTs: params.runContext.currentThreadTs,
         currentInboundAudio: params.runContext.currentInboundAudio,
         agentAccountId: params.runContext.accountId,
+        senderId: params.runContext.senderId,
         senderIsOwner: params.opts.senderIsOwner,
         toolsAllow: params.opts.toolsAllow,
         cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
         cleanupCliLiveSessionOnRunEnd: params.opts.cleanupCliLiveSessionOnRunEnd,
+        oneShotCliRun: params.opts.oneShotCliRun,
         ...(mutableCliSessionStore
           ? {
               onBeforeFreshCliSessionRetry: async (retry) => {
@@ -704,6 +718,7 @@ export function runAgentAttempt(params: {
     currentInboundAudio: params.runContext.currentInboundAudio,
     replyToMode: params.runContext.replyToMode,
     hasRepliedRef: params.runContext.hasRepliedRef,
+    senderId: params.runContext.senderId,
     senderIsOwner: params.opts.senderIsOwner,
     sessionFile: params.sessionFile,
     workspaceDir: params.workspaceDir,
@@ -727,6 +742,7 @@ export function runAgentAttempt(params: {
     bashElevated: params.opts.bashElevated,
     timeoutMs: params.timeoutMs,
     runId: params.runId,
+    lifecycleGeneration: params.lifecycleGeneration,
     lane: params.opts.lane,
     abortSignal: params.opts.abortSignal,
     extraSystemPrompt: params.opts.extraSystemPrompt,
@@ -741,13 +757,21 @@ export function runAgentAttempt(params: {
     agentDir: params.agentDir,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
     cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
+    oneShotCliRun: params.opts.oneShotCliRun,
     modelRun: params.opts.modelRun,
     promptMode: params.opts.promptMode,
     disableTools: params.opts.modelRun === true,
     onAgentEvent: params.onAgentEvent,
+    deferTerminalLifecycle: params.deferTerminalLifecycle,
     deferTerminalLifecycleEnd: params.deferTerminalLifecycleEnd,
     suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
     onUserMessagePersisted: params.onUserMessagePersisted,
+    onExecutionStarted: (info) => {
+      if (info?.lifecycleGeneration) {
+        params.onLifecycleGenerationChanged?.(info.lifecycleGeneration);
+      }
+    },
+    onSessionIdChanged: params.opts.onSessionIdChanged,
     bootstrapPromptWarningSignaturesSeen,
     bootstrapPromptWarningSignature,
   });
@@ -763,19 +787,25 @@ export function buildAcpResult(params: {
     text: params.payloadText,
   });
   const payloads = normalizedFinalPayload ? [normalizedFinalPayload] : [];
+  const abortFields = resolveAgentRunAbortLifecycleFields(params.abortSignal);
   return {
     payloads,
     meta: {
       durationMs: Date.now() - params.startedAt,
-      aborted: params.abortSignal?.aborted === true,
-      stopReason: params.stopReason,
+      aborted: abortFields.aborted ?? false,
+      stopReason: abortFields.stopReason ?? params.stopReason,
     },
   };
 }
 
-export function emitAcpLifecycleStart(params: { runId: string; startedAt: number }) {
+export function emitAcpLifecycleStart(params: {
+  runId: string;
+  startedAt: number;
+  lifecycleGeneration?: string;
+}) {
   emitAgentEvent({
     runId: params.runId,
+    ...(params.lifecycleGeneration ? { lifecycleGeneration: params.lifecycleGeneration } : {}),
     stream: "lifecycle",
     data: {
       phase: "start",
@@ -871,13 +901,19 @@ export function emitAcpRuntimeEvent(params: {
   });
 }
 
-export function emitAcpLifecycleEnd(params: { runId: string }) {
+export function emitAcpLifecycleEnd(params: {
+  runId: string;
+  lifecycleGeneration?: string;
+  abortSignal?: AbortSignal;
+}) {
   emitAgentEvent({
     runId: params.runId,
+    ...(params.lifecycleGeneration ? { lifecycleGeneration: params.lifecycleGeneration } : {}),
     stream: "lifecycle",
     data: {
       phase: "end",
       endedAt: Date.now(),
+      ...resolveAgentRunAbortLifecycleFields(params.abortSignal),
     },
   });
 }
@@ -886,15 +922,19 @@ export function emitAcpLifecycleError(params: {
   runId: string;
   error: unknown;
   sessionKey?: string;
+  lifecycleGeneration?: string;
+  abortSignal?: AbortSignal;
 }) {
   emitAgentEvent({
     runId: params.runId,
+    ...(params.lifecycleGeneration ? { lifecycleGeneration: params.lifecycleGeneration } : {}),
     stream: "lifecycle",
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     data: {
       phase: "error",
       error: formatAcpErrorChain(params.error),
       endedAt: Date.now(),
+      ...resolveAgentRunAbortLifecycleFields(params.abortSignal),
     },
   });
 }

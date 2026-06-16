@@ -625,7 +625,8 @@ export function assertToolSearchLaneResults(params: {
   assert(
     normal.providerPlannedTools.includes(targetTool) &&
       normal.gatewayOutputText.includes("FAKE_PLUGIN_OK") &&
-      normal.gatewayOutputText.includes(targetTool),
+      normal.gatewayOutputText.includes(targetTool) &&
+      normal.sessionLogToolMentions[targetTool] > 0,
     `normal lane did not call ${targetTool}`,
   );
   assert(

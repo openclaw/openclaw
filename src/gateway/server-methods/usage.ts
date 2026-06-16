@@ -28,6 +28,7 @@ import {
   loadCostUsageSummaryFromCache,
   loadSessionLogs,
   loadSessionCostSummaryFromCache,
+  loadSessionCostSummariesFromCache,
   loadSessionUsageTimeSeries,
   discoverAllSessions,
   resolveExistingUsageSessionFile,
@@ -1145,7 +1146,6 @@ export const usageHandlers: GatewayRequestHandlers = {
     // Sort by most recent first
     mergedEntries.sort((a, b) => b.updatedAt - a.updatedAt);
 
-    // Apply limit
     const limitedEntries = mergedEntries.slice(0, limit);
 
     // Load usage for each session
@@ -1232,7 +1232,7 @@ export const usageHandlers: GatewayRequestHandlers = {
     };
 
     const usageByEntryIndex: Array<SessionCostSummary | null> = Array.from(
-      { length: limitedEntries.length },
+      { length: mergedEntries.length },
       () => null,
     );
     const usageLoadTasks: Array<
@@ -1289,7 +1289,7 @@ export const usageHandlers: GatewayRequestHandlers = {
       if (!loaded.summary) {
         continue;
       }
-      const merged = limitedEntries[loaded.entryIndex];
+      const merged = mergedEntries[loaded.entryIndex];
       const usage = usageByEntryIndex[loaded.entryIndex] ?? createEmptySessionCostSummary();
       usage.sessionId = merged.sessionId;
       usage.sessionFile = merged.sessionFile;
@@ -1297,7 +1297,53 @@ export const usageHandlers: GatewayRequestHandlers = {
       usageByEntryIndex[loaded.entryIndex] = usage;
     }
 
-    for (const [entryIndex, merged] of limitedEntries.entries()) {
+    const hiddenSessionsByAgent = new Map<
+      string | undefined,
+      Array<{ entryIndex: number; sessionId: string; sessionFile: string }>
+    >();
+    for (const [entryIndex, merged] of mergedEntries.entries()) {
+      if (entryIndex < limitedEntries.length) {
+        continue;
+      }
+      const hiddenSessions = hiddenSessionsByAgent.get(merged.agentId) ?? [];
+      for (const includedSessionId of merged.includedSessionIds ?? [merged.sessionId]) {
+        const sessionFile =
+          includedSessionId === merged.sessionId
+            ? merged.sessionFile
+            : resolveExistingUsageSessionFile({
+                sessionId: includedSessionId,
+                agentId: merged.agentId,
+              });
+        if (sessionFile) {
+          hiddenSessions.push({ entryIndex, sessionId: includedSessionId, sessionFile });
+        }
+      }
+      hiddenSessionsByAgent.set(merged.agentId, hiddenSessions);
+    }
+    for (const [agentId, hiddenSessions] of hiddenSessionsByAgent) {
+      const hiddenUsage = await loadSessionCostSummariesFromCache({
+        sessions: hiddenSessions,
+        config,
+        agentId,
+        startMs,
+        endMs,
+      });
+      cacheStatus = mergeUsageCacheStatus(cacheStatus, hiddenUsage.cacheStatus);
+      for (const [hiddenIndex, summary] of hiddenUsage.summaries.entries()) {
+        if (!summary) {
+          continue;
+        }
+        const hiddenSession = hiddenSessions[hiddenIndex];
+        const merged = mergedEntries[hiddenSession.entryIndex];
+        const usage = usageByEntryIndex[hiddenSession.entryIndex] ?? createEmptySessionCostSummary();
+        usage.sessionId = merged.sessionId;
+        usage.sessionFile = merged.sessionFile;
+        mergeSessionUsageInto(usage, summary);
+        usageByEntryIndex[hiddenSession.entryIndex] = usage;
+      }
+    }
+
+    for (const [entryIndex, merged] of mergedEntries.entries()) {
       const agentId = merged.agentId;
       const usage = usageByEntryIndex[entryIndex];
 
@@ -1433,29 +1479,31 @@ export const usageHandlers: GatewayRequestHandlers = {
         }
       }
 
-      sessions.push({
-        key: merged.key,
-        label: merged.label,
-        sessionId: merged.sessionId,
-        scope: merged.scope ?? "instance",
-        sessionFamilyKey: merged.sessionFamilyKey,
-        currentSessionId: merged.currentSessionId,
-        includedSessionIds: merged.includedSessionIds,
-        historicalInstanceCount: merged.includedSessionIds?.length,
-        updatedAt: merged.updatedAt,
-        agentId,
-        channel,
-        chatType,
-        origin: merged.storeEntry?.origin,
-        modelOverride: merged.storeEntry?.modelOverride,
-        providerOverride: merged.storeEntry?.providerOverride,
-        modelProvider: merged.storeEntry?.modelProvider,
-        model: merged.storeEntry?.model,
-        usage,
-        contextWeight: includeContextWeight
-          ? (merged.storeEntry?.systemPromptReport ?? null)
-          : undefined,
-      });
+      if (entryIndex < limit) {
+        sessions.push({
+          key: merged.key,
+          label: merged.label,
+          sessionId: merged.sessionId,
+          scope: merged.scope ?? "instance",
+          sessionFamilyKey: merged.sessionFamilyKey,
+          currentSessionId: merged.currentSessionId,
+          includedSessionIds: merged.includedSessionIds,
+          historicalInstanceCount: merged.includedSessionIds?.length,
+          updatedAt: merged.updatedAt,
+          agentId,
+          channel,
+          chatType,
+          origin: merged.storeEntry?.origin,
+          modelOverride: merged.storeEntry?.modelOverride,
+          providerOverride: merged.storeEntry?.providerOverride,
+          modelProvider: merged.storeEntry?.modelProvider,
+          model: merged.storeEntry?.model,
+          usage,
+          contextWeight: includeContextWeight
+            ? (merged.storeEntry?.systemPromptReport ?? null)
+            : undefined,
+        });
+      }
     }
 
     // Format dates back to YYYY-MM-DD strings

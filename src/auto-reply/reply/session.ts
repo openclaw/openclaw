@@ -524,20 +524,17 @@ export async function initSessionState(params: {
     isNewSession = true;
     systemSent = false;
     abortedLastRun = false;
-    // When a reset trigger (/new, /reset) starts a new session, carry over
-    // user-set behavior overrides (verbose, thinking, reasoning, ttsAuto)
-    // so the user doesn't have to re-enable them every time.
-    if (resetTriggered && entry) {
-      persistedThinking = entry.thinkingLevel;
-      persistedVerbose = entry.verboseLevel;
-      persistedTrace = entry.traceLevel;
-      persistedReasoning = entry.reasoningLevel;
-      persistedTtsAuto = entry.ttsAuto;
-      // Only carry over user-driven overrides on reset. Auto-created
-      // fallback overrides (e.g. rate-limit auth rotation, model auto-pin)
-      // must be cleared so /new and /reset actually return the session to
-      // the configured default instead of staying pinned to the auto pick
-      // (#69301).
+    // Preserve user-driven model/auth overrides across ANY rollover that mints
+    // a new session from an existing entry — explicit /new and /reset AND
+    // implicit stale rollovers (daily/idle reset boundary). Auto-created
+    // fallback overrides (rate-limit auth rotation, model auto-pin) are still
+    // cleared by resolveResetPreservedSelection so resets return to the
+    // configured default. Previously this was gated on `resetTriggered`, so a
+    // user `/model` override set after the daily reset hour was silently
+    // dropped on the next turn (the rollover took this branch with
+    // resetTriggered === false), reverting the session to the default model
+    // despite the `Model set to ... for this session` ack (#90119, #69301).
+    if (entry) {
       const preservedSelection = resolveResetPreservedSelection({ entry });
       persistedModelOverride = preservedSelection.modelOverride;
       persistedProviderOverride = preservedSelection.providerOverride;
@@ -546,6 +543,20 @@ export async function initSessionState(params: {
       persistedAuthProfileOverrideSource = preservedSelection.authProfileOverrideSource;
       persistedAuthProfileOverrideCompactionCount =
         preservedSelection.authProfileOverrideCompactionCount;
+      // Behavior overrides carry across ANY new-session mint (explicit /new AND
+      // implicit daily/idle rollover), mirroring the model/auth carry above
+      // (#90119). Any persisted level is safe to forward — user `/think` or a
+      // spawn-applied default (subagent-spawn-thinking.ts) — so unlike model
+      // overrides these need no fallback-provenance filtering (#92562).
+      persistedThinking = entry.thinkingLevel;
+      persistedVerbose = entry.verboseLevel;
+      persistedTrace = entry.traceLevel;
+      persistedReasoning = entry.reasoningLevel;
+      persistedTtsAuto = entry.ttsAuto;
+    }
+    // When a reset trigger (/new, /reset) starts a new session, also rotate the
+    // underlying CLI conversation and carry forward spawn lineage/label.
+    if (resetTriggered && entry) {
       // Explicit /new and /reset should rotate the underlying CLI conversation too.
       // Keep the model/auth choice, but force the next turn to mint a fresh CLI binding.
       persistedLabel = entry.label;

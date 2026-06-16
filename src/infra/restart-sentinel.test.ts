@@ -191,7 +191,8 @@ describe("restart sentinel", () => {
     const textA = formatRestartSentinelMessage(payloadA);
     const textB = formatRestartSentinelMessage(payloadB);
     expect(textA).toBe(textB);
-    expect(textA).toContain("Gateway restart restart ok");
+    expect(textA).toContain("Gateway restart ok");
+    expect(textA).not.toContain("Gateway restart restart");
     expect(textA).not.toContain('"ts"');
   });
 
@@ -221,6 +222,37 @@ describe("restart sentinel", () => {
 
       await finalizeUpdateRestartSentinelRunningVersion("actual-version");
 
+      await expect(readRestartSentinel()).resolves.toEqual({
+        version: 1,
+        payload: {
+          kind: "update",
+          status: "ok",
+          ts,
+          stats: {
+            after: {
+              version: "actual-version",
+            },
+          },
+        },
+      });
+    });
+  });
+
+  it("does not rewrite update sentinels when the running version is already current", async () => {
+    await withRestartSentinelStateDir(async () => {
+      const ts = Date.now();
+      await writeRestartSentinel({
+        kind: "update",
+        status: "ok",
+        ts,
+        stats: {
+          after: { version: "actual-version" },
+        },
+      });
+
+      await expect(
+        finalizeUpdateRestartSentinelRunningVersion("actual-version"),
+      ).resolves.toBeNull();
       await expect(readRestartSentinel()).resolves.toEqual({
         version: 1,
         payload: {

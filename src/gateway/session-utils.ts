@@ -9,7 +9,11 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
-import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
+import {
+  readAcpSessionMeta,
+  readAcpSessionMetaForEntry,
+  repairAcpSessionMetaKeyForMigration,
+} from "../acp/runtime/session-meta.js";
 import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import {
   listAgentIds,
@@ -57,7 +61,6 @@ import { resolveStateDir } from "../config/paths.js";
 import {
   buildGroupDisplayName,
   getSessionStoreCacheVersion,
-  loadSessionStore,
   resolveAllAgentSessionStoreTargetsSync,
   resolveAgentMainSessionKey,
   resolveFreshSessionTotalTokens,
@@ -67,6 +70,7 @@ import {
   type SessionStoreTarget,
   type SessionScope,
 } from "../config/sessions.js";
+import { listSessionEntries as listAccessorSessionEntries } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
@@ -76,7 +80,7 @@ import {
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
-import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
+import { isAcpSessionKey, isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import {
   AVATAR_MAX_BYTES,
   isAvatarDataUrl,
@@ -94,10 +98,10 @@ import {
   resolveStoredSessionKeyForAgentStore,
 } from "./session-store-key.js";
 import {
-  readRecentSessionUsageFromTranscript,
-  readSessionTitleFieldsFromTranscriptAsync,
-  readSessionTitleFieldsFromTranscript,
-} from "./session-utils.fs.js";
+  readRecentSessionUsageFromTranscript as readScopedRecentSessionUsageFromTranscript,
+  readSessionTitleFieldsFromTranscriptAsync as readScopedSessionTitleFieldsFromTranscriptAsync,
+  readSessionTitleFieldsFromTranscript as readScopedSessionTitleFieldsFromTranscript,
+} from "./session-transcript-readers.js";
 import type {
   GatewayAgentRow,
   GatewaySessionRow,
@@ -109,6 +113,10 @@ import type {
 export {
   archiveFileOnDisk,
   archiveSessionTranscripts,
+  resolveSessionHistoryTranscriptPathAsync,
+  resolveSessionTranscriptCandidates,
+} from "./session-utils.fs.js";
+export {
   attachOpenClawTranscriptMeta,
   capArrayByJsonBytes,
   readFirstUserMessageFromTranscript,
@@ -125,10 +133,13 @@ export {
   readSessionTitleFieldsFromTranscriptAsync,
   readSessionPreviewItemsFromTranscript,
   readSessionMessagesAsync,
+  readSessionMessagesWithSourceAsync,
   visitSessionMessagesAsync,
-  resolveSessionTranscriptCandidates,
-} from "./session-utils.fs.js";
-export type { ReadSessionMessagesAsyncOptions } from "./session-utils.fs.js";
+} from "./session-transcript-readers.js";
+export type {
+  ReadSessionMessagesAsyncOptions,
+  SessionTranscriptReadScope,
+} from "./session-transcript-readers.js";
 export { canonicalizeSpawnedByForAgent, resolveSessionStoreKey } from "./session-store-key.js";
 export type {
   GatewayAgentRow,
@@ -871,11 +882,13 @@ function resolveTranscriptUsageFallback(params: {
   const agentId = parsed?.agentId
     ? normalizeAgentId(parsed.agentId)
     : normalizeAgentId(params.agentId ?? resolveDefaultAgentId(params.cfg));
-  const snapshot = readRecentSessionUsageFromTranscript(
-    entry.sessionId,
-    params.storePath,
-    entry.sessionFile,
-    agentId,
+  const snapshot = readScopedRecentSessionUsageFromTranscript(
+    {
+      agentId,
+      sessionFile: entry.sessionFile,
+      sessionId: entry.sessionId,
+      storePath: params.storePath,
+    },
     typeof params.maxTranscriptBytes === "number" ? params.maxTranscriptBytes : 256 * 1024,
   );
   if (!snapshot) {
@@ -913,14 +926,60 @@ function resolveTranscriptUsageFallback(params: {
   };
 }
 
+function readAcpMetaForDeletedAgentCheck(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  entry?: Pick<SessionEntry, "acp" | "sessionId"> | null;
+  acpMetadataSessionKey?: string | null;
+}) {
+  if (params.entry?.acp) {
+    return params.entry.acp;
+  }
+
+  const acpMetadataSessionKey = normalizeOptionalString(params.acpMetadataSessionKey);
+  const directKeys = new Set<string>();
+  if (acpMetadataSessionKey) {
+    directKeys.add(acpMetadataSessionKey);
+  } else {
+    const acpMeta = readAcpSessionMeta({ sessionKey: params.sessionKey, cfg: params.cfg });
+    if (acpMeta) {
+      return acpMeta;
+    }
+  }
+  directKeys.add(params.sessionKey);
+
+  for (const directKey of directKeys) {
+    const acpMeta = readAcpSessionMetaForEntry({
+      sessionKey: directKey,
+      entry: params.entry ?? undefined,
+    });
+    if (acpMeta) {
+      return acpMeta;
+    }
+  }
+
+  repairAcpSessionMetaKeyForMigration({
+    sessionKey: params.sessionKey,
+    candidateSessionKeys: directKeys,
+    entry: params.entry ?? undefined,
+  });
+  return readAcpSessionMetaForEntry({
+    sessionKey: params.sessionKey,
+    entry: params.entry ?? undefined,
+  });
+}
+
 /**
  * Returns the owning agent id if the session key belongs to an agent that is no
  * longer present in config (deleted). Returns null for non-agent legacy/global
- * keys, or when the owning agent still exists (#65524).
+ * keys, confirmed ACP runtime session keys, or when the owning agent still
+ * exists (#65524).
  */
 export function resolveDeletedAgentIdFromSessionKey(
   cfg: OpenClawConfig,
   sessionKey: string,
+  entry?: SessionEntry | null,
+  options?: { acpMetadataSessionKey?: string | null },
 ): string | null {
   const parsed = parseAgentSessionKey(sessionKey);
   if (!parsed) {
@@ -929,6 +988,20 @@ export function resolveDeletedAgentIdFromSessionKey(
   const agentId = normalizeAgentId(parsed.agentId);
   if (listAgentIds(cfg).includes(agentId)) {
     return null;
+  }
+  if (isAcpSessionKey(sessionKey) && !parsed.rest.startsWith("acp:binding:")) {
+    // Free ACP runtime keys use agent:<harnessId>:acp:<uuid>, but key shape is
+    // not proof: ACP bridge sessions can use ACP-shaped keys without SessionAcpMeta.
+    // Configured acp:binding keys stay owner-scoped even when ACP metadata exists.
+    const acpMeta = readAcpMetaForDeletedAgentCheck({
+      cfg,
+      sessionKey,
+      entry,
+      acpMetadataSessionKey: options?.acpMetadataSessionKey,
+    });
+    if (acpMeta) {
+      return null;
+    }
   }
   return agentId;
 }
@@ -1346,6 +1419,18 @@ function resolveGatewaySessionStoreCandidates(
   return [...targets.values()];
 }
 
+function loadGatewaySessionLookupStore(
+  storePath: string,
+  clone: boolean | undefined,
+): Record<string, SessionEntry> {
+  return Object.fromEntries(
+    listAccessorSessionEntries({
+      ...(clone === false ? { clone: false } : {}),
+      storePath,
+    }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+  );
+}
+
 function resolveGatewaySessionStoreLookup(params: {
   cfg: OpenClawConfig;
   key: string;
@@ -1364,9 +1449,9 @@ function resolveGatewaySessionStoreLookup(params: {
     agentId: params.agentId,
     storePath: resolveStorePath(params.cfg.session?.store, { agentId: params.agentId }),
   };
-  const loadOptions = params.clone === false ? { clone: false } : undefined;
+  const loadStore = (storePath: string) => loadGatewaySessionLookupStore(storePath, params.clone);
   let selectedStorePath = fallback.storePath;
-  let selectedStore = params.initialStore ?? loadSessionStore(fallback.storePath, loadOptions);
+  let selectedStore = params.initialStore ?? loadStore(fallback.storePath);
   let selectedMatch = findFreshestStoreMatch(selectedStore, ...scanTargets);
   let selectedUpdatedAt = selectedMatch?.entry.updatedAt ?? Number.NEGATIVE_INFINITY;
 
@@ -1375,7 +1460,7 @@ function resolveGatewaySessionStoreLookup(params: {
     if (!candidate) {
       continue;
     }
-    const store = loadSessionStore(candidate.storePath, loadOptions);
+    const store = loadStore(candidate.storePath);
     const match = findFreshestStoreMatch(store, ...scanTargets);
     if (!match) {
       continue;
@@ -1433,12 +1518,11 @@ function resolveExplicitDeletedLegacyMainStoreTarget(params: {
         match: { entry: SessionEntry; key: string };
       }
     | undefined;
-  const loadOptions = params.clone === false ? { clone: false } : undefined;
   for (const target of resolveAllAgentSessionStoreTargetsSync(params.cfg)) {
     if (target.agentId !== legacyAgentId) {
       continue;
     }
-    const store = loadSessionStore(target.storePath, loadOptions);
+    const store = loadGatewaySessionLookupStore(target.storePath, params.clone);
     const match = findFreshestStoreMatch(store, ...lookupSeeds);
     if (!match) {
       continue;
@@ -1973,8 +2057,8 @@ export function buildGatewaySessionRow(params: {
   );
   const runtimeModelPresent =
     Boolean(entry?.model?.trim()) || Boolean(entry?.modelProvider?.trim());
-  const needsTranscriptTotalTokens =
-    resolvePositiveNumber(resolveFreshSessionTotalTokens(entry)) === undefined;
+  const freshSessionTotalTokens = resolveNonNegativeNumber(resolveFreshSessionTotalTokens(entry));
+  const needsTranscriptTotalTokens = freshSessionTotalTokens === undefined;
   const needsTranscriptContextTokens = resolvePositiveNumber(entry?.contextTokens) === undefined;
   const needsTranscriptEstimatedCostUsd =
     !skipTranscriptUsage &&
@@ -2018,10 +2102,10 @@ export function buildGatewaySessionRow(params: {
     : resolvedModelIdentity;
   const { provider: modelProvider, model } = modelIdentity;
   const totalTokens =
-    resolvePositiveNumber(resolveFreshSessionTotalTokens(entry)) ??
-    resolvePositiveNumber(transcriptUsage?.totalTokens);
+    freshSessionTotalTokens ?? resolveNonNegativeNumber(transcriptUsage?.totalTokens);
   const totalTokensFresh =
-    typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0
+    freshSessionTotalTokens !== undefined ||
+    (typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0)
       ? true
       : transcriptUsage?.totalTokensFresh === true;
   const goal = entry?.goal
@@ -2111,12 +2195,12 @@ export function buildGatewaySessionRow(params: {
   let derivedTitle: string | undefined;
   let lastMessagePreview: string | undefined;
   if (entry?.sessionId && (params.includeDerivedTitles || params.includeLastMessage)) {
-    const fields = readSessionTitleFieldsFromTranscript(
-      entry.sessionId,
+    const fields = readScopedSessionTitleFieldsFromTranscript({
+      agentId: sessionAgentId,
+      sessionFile: entry.sessionFile,
+      sessionId: entry.sessionId,
       storePath,
-      entry.sessionFile,
-      sessionAgentId,
-    );
+    });
     if (params.includeDerivedTitles) {
       derivedTitle = deriveSessionTitle(entry, fields.firstUserMessage);
     }
@@ -2681,7 +2765,7 @@ export function listSessionsFromStore(params: {
       : undefined;
   const sharedRowContext =
     fullRowContext ??
-    (entries.length > 1 ? buildSessionListRowMetadataContext({ now }) : undefined);
+    (entries.length > 0 ? buildSessionListRowMetadataContext({ now }) : undefined);
 
   const sessions = entries.map(([key, entry], index) => {
     const includeTranscriptFields = index < sessionListTranscriptFieldRows;
@@ -2771,7 +2855,7 @@ export async function listSessionsFromStoreAsync(params: {
       : undefined;
   const sharedRowContext =
     fullRowContext ??
-    (entries.length > 1 ? buildSessionListRowMetadataContext({ now }) : undefined);
+    (entries.length > 0 ? buildSessionListRowMetadataContext({ now }) : undefined);
 
   const sessions: GatewaySessionRow[] = [];
   for (let i = 0; i < entries.length; i++) {
@@ -2810,12 +2894,12 @@ export async function listSessionsFromStoreAsync(params: {
       const sessionAgentId =
         rowAgentId ??
         (parsed?.agentId ? normalizeAgentId(parsed.agentId) : resolveDefaultAgentId(cfg));
-      const fields = await readSessionTitleFieldsFromTranscriptAsync(
-        entry.sessionId,
+      const fields = await readScopedSessionTitleFieldsFromTranscriptAsync({
+        agentId: sessionAgentId,
+        sessionFile: entry.sessionFile,
+        sessionId: entry.sessionId,
         storePath,
-        entry.sessionFile,
-        sessionAgentId,
-      );
+      });
       if (includeDerivedTitles) {
         row.derivedTitle = deriveSessionTitle(entry, fields.firstUserMessage);
       }

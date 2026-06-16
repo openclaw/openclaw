@@ -58,3 +58,9 @@ export function releaseFeishuMessageProcessing(
     processingClaims.delete(key);
   }
 }
+
+export const testingHooks = {
+  resetFeishuMessageProcessingClaimsForTests() {
+    processingClaims.clear();
+  },
+};

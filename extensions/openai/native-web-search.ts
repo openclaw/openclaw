@@ -87,11 +87,18 @@ export function patchOpenAINativeWebSearchPayload(
 
 export function createOpenAINativeWebSearchWrapper(
   baseStreamFn: StreamFn | undefined,
-  params: { config?: OpenClawConfig },
+  params: {
+    config?: OpenClawConfig;
+    agentId?: string;
+    nativeWebSearchAllowedByToolPolicy?: boolean;
+  },
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
     if (!shouldEnableOpenAINativeWebSearch({ config: params.config, model })) {
+      return underlying(model, context, options);
+    }
+    if (params.nativeWebSearchAllowedByToolPolicy === false) {
       return underlying(model, context, options);
     }
     return streamWithPayloadPatch(underlying, model, context, options, (payload) => {

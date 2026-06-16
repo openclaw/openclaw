@@ -249,6 +249,19 @@ describe("qa-otel-smoke receiver bounds", () => {
     expect(captured.traces?.join("\n")).toContain("[captured body text truncated");
   });
 
+  it("keeps collector output tails bounded without retaining earlier chunks", () => {
+    const output = testing.createBoundedTextAccumulator(64);
+
+    output.append("DO_NOT_RETAIN_COLLECTOR_PREFIX\n");
+    output.append(Buffer.alloc(2048, "x"));
+    output.append("\nCOLLECTOR_TAIL_MARKER\n");
+
+    expect(output.byteLength()).toBeLessThanOrEqual(64);
+    expect(output.text()).toContain("COLLECTOR_TAIL_MARKER");
+    expect(output.text()).toContain("...");
+    expect(output.text()).not.toContain("DO_NOT_RETAIN_COLLECTOR_PREFIX");
+  });
+
   it("times out and kills a wedged QA suite child with a detached gateway", async () => {
     if (process.platform === "win32") {
       return;
@@ -345,6 +358,51 @@ describe("qa-otel-smoke receiver bounds", () => {
         "openclaw-otel-smoke-00000000-0000-4000-8000-000000000000",
       );
       expect(existsSync(collectorDir)).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("reports bounded Docker collector output when readiness exits", async () => {
+    const tempRoot = mkdtempSync(path.join(os.tmpdir(), "openclaw-qa-otel-collector-output-"));
+    const collectorDir = path.join(tempRoot, "collector");
+    const child = new EventEmitter() as EventEmitter & {
+      stderr: EventEmitter;
+      stdout: EventEmitter;
+    };
+    child.stderr = new EventEmitter();
+    child.stdout = new EventEmitter();
+
+    try {
+      let thrown: unknown;
+      await testing
+        .startDockerOtelCollector(4317, {
+          mkdtemp: async () => {
+            mkdirSync(collectorDir);
+            return collectorDir;
+          },
+          randomUUID: () => "00000000-0000-4000-8000-000000000000",
+          reserveLocalPort: async () => 4318,
+          spawn: vi.fn(() => child) as never,
+          stopDockerContainer: vi.fn(async () => {}),
+          waitForLocalPort: async (_port, _timeout, readFailure) => {
+            child.stdout.emit("data", "DO_NOT_DUMP_COLLECTOR_PREFIX\n");
+            child.stderr.emit("data", Buffer.alloc(64 * 1024, "x"));
+            child.stderr.emit("data", "\nCOLLECTOR_TAIL_MARKER\n");
+            child.emit("close", 1);
+            await delay(0);
+            throw new Error(readFailure());
+          },
+        })
+        .catch((error: unknown) => {
+          thrown = error;
+        });
+
+      expect(thrown).toBeInstanceOf(Error);
+      const message = thrown instanceof Error ? thrown.message : String(thrown);
+      expect(message).toContain("COLLECTOR_TAIL_MARKER");
+      expect(message).not.toContain("DO_NOT_DUMP_COLLECTOR_PREFIX");
+      expect(message.length).toBeLessThan(24 * 1024);
     } finally {
       rmSync(tempRoot, { force: true, recursive: true });
     }

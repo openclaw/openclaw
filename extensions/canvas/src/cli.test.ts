@@ -1,7 +1,11 @@
 // Canvas tests cover cli plugin behavior.
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
-import { registerNodesCanvasCommands, type CanvasCliDependencies } from "./cli.js";
+import {
+  createDefaultCanvasCliDependencies,
+  registerNodesCanvasCommands,
+  type CanvasCliDependencies,
+} from "./cli.js";
 
 function createCanvasCliDeps() {
   const writtenFiles: Array<{ filePath: string; base64: string }> = [];
@@ -45,6 +49,26 @@ function createCanvasCliDeps() {
     shortenHomePath: (filePath) => filePath,
   };
   return { deps, runtime, writtenFiles };
+}
+
+function createCanvasCliDepsWithDefaultParsers() {
+  const baseDeps = createDefaultCanvasCliDependencies();
+  const harness = createCanvasCliDeps();
+  return {
+    ...harness,
+    deps: {
+      ...baseDeps,
+      defaultRuntime: harness.runtime,
+      nodesCallOpts: harness.deps.nodesCallOpts,
+      runNodesCommand: harness.deps.runNodesCommand,
+      getNodesTheme: harness.deps.getNodesTheme,
+      resolveNodeId: harness.deps.resolveNodeId,
+      buildNodeInvokeParams: harness.deps.buildNodeInvokeParams,
+      callGatewayCli: harness.deps.callGatewayCli,
+      writeBase64ToFile: harness.deps.writeBase64ToFile,
+      shortenHomePath: harness.deps.shortenHomePath,
+    },
+  };
 }
 
 describe("canvas CLI", () => {
@@ -135,6 +159,8 @@ describe("canvas CLI", () => {
   it.each([
     ["--max-width", "640px", "--max-width must be a positive integer."],
     ["--quality", "0.8x", "--quality must be a number."],
+    ["--quality", "-0.1", "--quality must be between 0 and 1."],
+    ["--quality", "5", "--quality must be between 0 and 1."],
   ])("rejects partial numeric snapshot %s values", async (flag, value, message) => {
     const program = new Command();
     program.exitOverride();
@@ -148,6 +174,62 @@ describe("canvas CLI", () => {
         from: "user",
       }),
     ).rejects.toThrow(message);
+    expect(deps.callGatewayCli).not.toHaveBeenCalled();
+  });
+
+  it.each(["0", "1"])("accepts snapshot --quality boundary value %s", async (quality) => {
+    const program = new Command();
+    program.exitOverride();
+    const nodes = program.command("nodes");
+    const { deps } = createCanvasCliDeps();
+
+    registerNodesCanvasCommands(nodes, deps);
+
+    await program.parseAsync(
+      ["nodes", "canvas", "snapshot", "--node", "ios-node", "--quality", quality],
+      {
+        from: "user",
+      },
+    );
+    expect(deps.callGatewayCli).toHaveBeenCalledWith(
+      "node.invoke",
+      expect.any(Object),
+      expect.objectContaining({
+        params: expect.objectContaining({
+          quality: Number(quality),
+        }),
+      }),
+    );
+  });
+
+  it.each([
+    ["snapshot"],
+    ["present"],
+    ["hide"],
+    ["navigate", "https://example.com"],
+    ["eval", "1 + 1"],
+    ["a2ui", "push", "--text", "hello"],
+    ["a2ui", "reset"],
+  ])("rejects invalid %s invoke timeouts before invoking the node", async (...args) => {
+    const program = new Command();
+    program.exitOverride();
+    const nodes = program.command("nodes");
+    const { deps } = createCanvasCliDepsWithDefaultParsers();
+    deps.resolveNodeId = vi.fn(async () => {
+      throw new Error("resolveNodeId should not be called");
+    });
+
+    registerNodesCanvasCommands(nodes, deps);
+
+    await expect(
+      program.parseAsync(
+        ["nodes", "canvas", ...args, "--node", "ios-node", "--invoke-timeout", "20ms"],
+        {
+          from: "user",
+        },
+      ),
+    ).rejects.toThrow("--invoke-timeout must be a positive integer.");
+    expect(deps.resolveNodeId).not.toHaveBeenCalled();
     expect(deps.callGatewayCli).not.toHaveBeenCalled();
   });
 

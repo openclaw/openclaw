@@ -233,8 +233,29 @@ function mockResolvedGatewayTokenSecretRef() {
   );
 }
 
-const { runDaemonInstall } = await import("./install.js");
+const { mergeInstallInvocationEnv, runDaemonInstall } = await import("./install.js");
 const envSnapshot = captureFullEnv();
+
+describe("mergeInstallInvocationEnv", () => {
+  it("canonicalizes Windows install env keys while filtering dangerous loader env", () => {
+    const env = mergeInstallInvocationEnv({
+      env: {
+        Path: "C:\\Windows\\System32",
+        openai_api_key: "service-openai-key",
+        NODE_OPTIONS: "--require C:\\temp\\untrusted.js",
+      },
+      platform: "win32",
+    });
+
+    expectFields(env, {
+      PATH: "C:\\Windows\\System32",
+      OPENAI_API_KEY: "service-openai-key",
+    });
+    expect(env.Path).toBeUndefined();
+    expect(env.openai_api_key).toBeUndefined();
+    expect(env.NODE_OPTIONS).toBeUndefined();
+  });
+});
 
 describe("runDaemonInstall", () => {
   beforeEach(() => {
@@ -689,7 +710,9 @@ describe("runDaemonInstall", () => {
       },
     } as never);
     const previous = process.env.OPENAI_API_KEY;
+    const previousNodeOptions = process.env.NODE_OPTIONS;
     delete process.env.OPENAI_API_KEY;
+    process.env.NODE_OPTIONS = "--require /tmp/untrusted.js";
     try {
       await runDaemonInstall({ json: true, force: true });
 
@@ -702,6 +725,11 @@ describe("runDaemonInstall", () => {
         delete process.env.OPENAI_API_KEY;
       } else {
         process.env.OPENAI_API_KEY = previous;
+      }
+      if (previousNodeOptions === undefined) {
+        delete process.env.NODE_OPTIONS;
+      } else {
+        process.env.NODE_OPTIONS = previousNodeOptions;
       }
     }
   });

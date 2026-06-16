@@ -1,7 +1,7 @@
 /** Tests Gemini CLI bundle-MCP system settings generation. */
 import fs from "node:fs/promises";
 import { describe, expect, it } from "vitest";
-import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
+import { prepareCliBundleMcpCaptureAttempt, prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 
 describe("prepareCliBundleMcpConfig gemini", () => {
   it("writes Gemini system settings for bundle MCP servers", async () => {
@@ -94,5 +94,52 @@ describe("prepareCliBundleMcpConfig gemini", () => {
     expect(raw.mcpServers?.context7?.headers?.Authorization).toBe("Bearer ctx7-test");
 
     await prepared.cleanup?.();
+  });
+
+  it("writes a unique capture token into per-attempt Gemini settings", async () => {
+    const prepared = await prepareCliBundleMcpConfig({
+      enabled: true,
+      mode: "gemini-system-settings",
+      backend: {
+        command: "gemini",
+        args: ["--prompt", "{prompt}"],
+      },
+      workspaceDir: "/tmp/openclaw-bundle-mcp-gemini",
+      config: { plugins: { enabled: false } },
+      additionalConfig: {
+        mcpServers: {
+          openclaw: {
+            type: "http",
+            url: "http://127.0.0.1:23119/mcp",
+            headers: {
+              "x-openclaw-cli-capture-key": "${OPENCLAW_MCP_CLI_CAPTURE_KEY}",
+            },
+          },
+        },
+      },
+      env: {
+        OPENCLAW_MCP_CLI_CAPTURE_KEY: "",
+      },
+    });
+    const attempt = await prepareCliBundleMcpCaptureAttempt({
+      mode: "gemini-system-settings",
+      env: prepared.env,
+      captureKey: "attempt-123",
+    });
+
+    try {
+      const raw = JSON.parse(
+        await fs.readFile(attempt.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH as string, "utf-8"),
+      ) as {
+        mcpServers?: Record<string, { headers?: Record<string, string> }>;
+      };
+      expect(raw.mcpServers?.openclaw?.headers?.["x-openclaw-cli-capture-key"]).toBe("attempt-123");
+      expect(attempt.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH).not.toBe(
+        prepared.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH,
+      );
+    } finally {
+      await attempt.cleanup?.();
+      await prepared.cleanup?.();
+    }
   });
 });

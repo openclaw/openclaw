@@ -161,6 +161,13 @@ When any subkey is enabled, model and tool spans get bounded, redacted
 `captureContent: true` only for broad diagnostics captures where OTLP log
 message bodies are also approved for export.
 
+`toolInputs`/`toolOutputs` content is captured for the built-in agent runtime's
+tool executions (`openclaw.content.tool_input` on completed/error spans,
+`openclaw.content.tool_output` on completed spans). External harness tool calls
+(Codex, Claude CLI) emit `tool.execution.*` spans without content payloads.
+Captured content travels on a trusted, listener-only channel and is never placed
+on the public diagnostic event bus.
+
 ## Sampling and flushing
 
 - **Traces:** `diagnostics.otel.sampleRate` (root-span only, `0.0` drops all,
@@ -242,12 +249,18 @@ still be detected.
 OpenClaw classifies sessions by the work it can still observe:
 
 - `session.long_running`: active embedded work, model calls, or tool calls are
-  still making progress.
+  still making progress. Owned model calls that stay silent past
+  `diagnostics.stuckSessionWarnMs` also report as long-running before
+  `diagnostics.stuckSessionAbortMs` so slow or non-streaming model providers do
+  not look like stalled gateway sessions while they remain abort-observable.
 - `session.stalled`: active work exists, but the active run has not reported
-  recent progress. Stalled embedded runs stay observe-only at first, then
-  abort-drain after `diagnostics.stuckSessionAbortMs` with no progress so queued
-  turns behind the lane can resume. When unset, the abort threshold defaults to
-  the safer extended window of at least 5 minutes and 3x
+  recent progress. Owned model calls switch from `session.long_running` to
+  `session.stalled` at or after `diagnostics.stuckSessionAbortMs`; ownerless
+  stale model/tool activity is not treated as harmless long-running work.
+  Stalled embedded runs stay observe-only at first, then abort-drain after
+  `diagnostics.stuckSessionAbortMs` with no progress so queued turns behind the
+  lane can resume. When unset, the abort threshold defaults to the safer
+  extended window of at least 5 minutes and 3x
   `diagnostics.stuckSessionWarnMs`.
 - `session.stuck`: stale session bookkeeping with no active work, or an idle
   queued session with stale ownerless model/tool activity. This releases the

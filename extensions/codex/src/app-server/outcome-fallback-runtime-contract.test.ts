@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
@@ -9,7 +10,8 @@ import {
   OUTCOME_FALLBACK_RUNTIME_CONTRACT,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import {
   CodexAppServerEventProjector,
   type CodexAppServerToolTelemetry,
@@ -95,6 +97,7 @@ function readMirrorIdentity(message: unknown): string | undefined {
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   for (const tempDir of tempDirs) {
     await fs.rm(tempDir, { recursive: true, force: true });
   }
@@ -402,4 +405,60 @@ describe("Outcome/fallback runtime contract - Codex app-server adapter", () => {
     expect(result.agentHarnessResultClassification).toBeUndefined();
     expect(classifyProjectedAttemptResult(result)).toBeNull();
   });
+
+  it.each([
+    { action: "status", replaySafe: true },
+    { action: "add", replaySafe: false },
+  ])(
+    "classifies an empty Codex turn after cron.$action from structured replay safety",
+    async ({ action, replaySafe }) => {
+      const toolResult: AgentToolResult<unknown> = {
+        content: [{ type: "text", text: "cron complete" }],
+        details: { ok: true },
+      };
+      const bridge = createCodexDynamicToolBridge({
+        tools: [
+          {
+            name: "cron",
+            description: "Cron",
+            parameters: { type: "object", properties: {} },
+            execute: vi.fn(async () => toolResult),
+          } as never,
+        ],
+        signal: new AbortController().signal,
+      });
+      const projector = await createProjector();
+      const call = {
+        threadId: THREAD_ID,
+        turnId: TURN_ID,
+        callId: `call-cron-${action}`,
+        namespace: null,
+        tool: "cron",
+        arguments: { action },
+      };
+      projector.recordDynamicToolCall(call);
+      const response = await bridge.handleToolCall(call);
+      projector.recordDynamicToolResult({
+        callId: call.callId,
+        tool: call.tool,
+        success: response.success,
+        terminalType: response.diagnosticTerminalType,
+        sideEffectEvidence: response.sideEffectEvidence === true,
+        contentItems: response.contentItems,
+      });
+      await projector.handleNotification(
+        forCurrentTurn("turn/completed", {
+          turn: { id: TURN_ID, status: "completed", items: [] },
+        }),
+      );
+
+      const result = projector.buildResult(bridge.telemetry);
+
+      expect(result.replayMetadata).toEqual({
+        hadPotentialSideEffects: !replaySafe,
+        replaySafe,
+      });
+      expect(classifyProjectedAttemptResult(result) !== null).toBe(replaySafe);
+    },
+  );
 });
