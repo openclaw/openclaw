@@ -1,5 +1,10 @@
 // Control UI controller manages skill workshop gateway state.
 import type { GatewayBrowserClient } from "../gateway.ts";
+import {
+  normalizeAgentId,
+  parseAgentSessionKey,
+  resolveUiSelectedGlobalAgentId,
+} from "../session-key.ts";
 import type {
   SkillWorkshopAction,
   SkillWorkshopActionNotice,
@@ -76,6 +81,10 @@ type SkillProposalInspectResult = {
 export type SkillWorkshopState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
+  assistantAgentId?: string | null;
+  agentsList?: { defaultId?: string | null; mainKey?: string | null } | null;
+  hello?: { snapshot?: unknown } | null;
+  sessionKey?: string | null;
   skillWorkshopLoading: boolean;
   skillWorkshopLoaded: boolean;
   skillWorkshopError: string | null;
@@ -98,6 +107,15 @@ export type SkillWorkshopState = {
 
 function getErrorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+function skillWorkshopAgentParams(state: SkillWorkshopState): { agentId: string } {
+  const sessionAgentId = parseAgentSessionKey(state.sessionKey)?.agentId;
+  return {
+    agentId: sessionAgentId
+      ? normalizeAgentId(sessionAgentId)
+      : resolveUiSelectedGlobalAgentId(state),
+  };
 }
 
 function parseDateMs(value: string | undefined): number {
@@ -297,7 +315,10 @@ export async function loadSkillWorkshopProposals(
   state.skillWorkshopLoading = true;
   state.skillWorkshopError = null;
   try {
-    const result = await state.client.request<SkillProposalManifest>("skills.proposals.list", {});
+    const result = await state.client.request<SkillProposalManifest>(
+      "skills.proposals.list",
+      skillWorkshopAgentParams(state),
+    );
     const previousByKey = new Map(
       state.skillWorkshopProposals.map((proposal) => [proposal.key, proposal]),
     );
@@ -334,11 +355,10 @@ export async function loadSkillWorkshopProposalDetail(
   state.skillWorkshopInspectingKey = proposalId;
   state.skillWorkshopError = null;
   try {
+    const requestParams = { ...skillWorkshopAgentParams(state), proposalId };
     const result = await state.client.request<SkillProposalInspectResult>(
       "skills.proposals.inspect",
-      {
-        proposalId,
-      },
+      requestParams,
     );
     mergeProposal(state, proposalFromInspect(result, existing));
   } catch (err) {
@@ -375,7 +395,8 @@ export async function runSkillWorkshopLifecycleAction(
   state.skillWorkshopError = null;
   try {
     const method = action === "apply" ? "skills.proposals.apply" : "skills.proposals.reject";
-    await state.client.request(method, { proposalId });
+    const requestParams = { ...skillWorkshopAgentParams(state), proposalId };
+    await state.client.request(method, requestParams);
     await refreshAfterMutation(state, proposalId);
     const updated = state.skillWorkshopProposals.find((proposal) => proposal.key === proposalId);
     showActionNotice(state, updated ?? previous, action === "apply" ? "Applied" : "Rejected");
