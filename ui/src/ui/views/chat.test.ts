@@ -1555,6 +1555,34 @@ describe("chat voice controls", () => {
     ]);
   });
 
+  it("renders catalog providers and limits transports to the selected provider", () => {
+    const container = renderChatView({
+      realtimeTalkOptionsOpen: true,
+      realtimeTalkCatalogProviders: [
+        { id: "openai", label: "OpenAI", transports: ["webrtc", "provider-websocket"] },
+        { id: "plugin-realtime", label: "Plugin realtime", transports: ["gateway-relay"] },
+      ],
+      realtimeTalkOptions: {
+        provider: "plugin-realtime",
+        model: "",
+        voice: "",
+        transport: "gateway-relay",
+        vadThreshold: "",
+        silenceDurationMs: "",
+        prefixPaddingMs: "",
+        reasoningEffort: "",
+      },
+      onRealtimeTalkOptionsChange: () => undefined,
+    });
+
+    expect(getTalkSelectOptionValues(container, "provider")).toEqual([
+      "",
+      "openai",
+      "plugin-realtime",
+    ]);
+    expect(getTalkSelectOptionValues(container, "transport")).toEqual(["", "gateway-relay"]);
+  });
+
   it("renders composer and Talk labels from the active locale", async () => {
     await i18n.setLocale("zh-CN");
     const container = renderChatView();
