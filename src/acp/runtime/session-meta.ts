@@ -111,6 +111,7 @@ function rowToAcpSessionMeta(row: AcpSessionRow): SessionAcpMeta {
   return {
     backend: row.backend,
     agent: row.agent,
+    ...(row.config_agent_id != null ? { configAgentId: row.config_agent_id } : {}),
     runtimeSessionName: row.runtime_session_name,
     ...(identity ? { identity } : {}),
     mode: row.mode === "oneshot" ? "oneshot" : "persistent",
@@ -133,6 +134,7 @@ function bindAcpSessionMeta(params: {
     session_id: params.sessionId ?? null,
     backend: params.meta.backend,
     agent: params.meta.agent,
+    config_agent_id: params.meta.configAgentId ?? null,
     runtime_session_name: params.meta.runtimeSessionName,
     identity_json: params.meta.identity ? JSON.stringify(params.meta.identity) : null,
     mode: params.meta.mode,
@@ -339,6 +341,7 @@ function upsertAcpSessionMetaRow(db: DatabaseSync, row: Insertable<AcpSessionsTa
           session_id: (eb) => eb.ref("excluded.session_id"),
           backend: (eb) => eb.ref("excluded.backend"),
           agent: (eb) => eb.ref("excluded.agent"),
+          config_agent_id: (eb) => eb.ref("excluded.config_agent_id"),
           runtime_session_name: (eb) => eb.ref("excluded.runtime_session_name"),
           identity_json: (eb) => eb.ref("excluded.identity_json"),
           mode: (eb) => eb.ref("excluded.mode"),

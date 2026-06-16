@@ -46,6 +46,7 @@ describe("ACP session metadata SQLite store", () => {
         mutate: () => ({
           backend: "acpx",
           agent: "codex",
+          configAgentId: "blueprint-platform",
           runtimeSessionName: "codex-discord",
           mode: "persistent",
           state: "idle",
@@ -65,6 +66,7 @@ describe("ACP session metadata SQLite store", () => {
       ).toMatchObject({
         backend: "acpx",
         agent: "codex",
+        configAgentId: "blueprint-platform",
         runtimeSessionName: "codex-discord",
         mode: "persistent",
         state: "idle",

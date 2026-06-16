@@ -534,6 +534,7 @@ CREATE TABLE IF NOT EXISTS acp_sessions (
   session_id TEXT,
   backend TEXT NOT NULL,
   agent TEXT NOT NULL,
+  config_agent_id TEXT,
   runtime_session_name TEXT NOT NULL,
   identity_json TEXT,
   mode TEXT NOT NULL,

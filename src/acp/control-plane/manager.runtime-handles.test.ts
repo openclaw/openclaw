@@ -337,6 +337,55 @@ describe("AcpSessionManager runtime handles", () => {
     });
   });
 
+  it("uses persisted config agent env when reopening an aliased ACP runtime", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    const sessionKey = "agent:codex:acp:session-alias-env";
+    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+      const key = (paramsUnknown as { sessionKey?: string }).sessionKey ?? sessionKey;
+      return {
+        sessionKey: key,
+        storeSessionKey: key,
+        acp: readySessionMeta({
+          agent: "codex",
+          configAgentId: "blueprint-platform",
+          runtimeSessionName: key,
+        }),
+      };
+    });
+
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      cfg: {
+        ...baseCfg,
+        agents: {
+          list: [
+            {
+              id: "blueprint-platform",
+              env: {
+                GIT_AUTHOR_EMAIL: "blueprint-platform-pm@blueprint.local",
+                GIT_COMMITTER_EMAIL: "blueprint-platform-pm@blueprint.local",
+              },
+            },
+          ],
+        },
+      } as OpenClawConfig,
+      sessionKey,
+      text: "after restart",
+      mode: "prompt",
+      requestId: "r-alias-env-restart",
+    });
+
+    const ensureInput = mockCallArg(runtimeState.ensureSession);
+    expect(ensureInput.env).toMatchObject({
+      GIT_AUTHOR_EMAIL: "blueprint-platform-pm@blueprint.local",
+      GIT_COMMITTER_EMAIL: "blueprint-platform-pm@blueprint.local",
+    });
+  });
+
   it("passes persisted cwd runtime options into ensureSession after restart", async () => {
     const runtimeState = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({

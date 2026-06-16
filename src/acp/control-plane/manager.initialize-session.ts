@@ -49,7 +49,8 @@ export async function runManagerInitializeSession(params: {
   const requestedCwd = initialRuntimeOptions.cwd;
   const requestedModel = initialRuntimeOptions.model;
   const requestedThinking = initialRuntimeOptions.thinking;
-  const agentEnv = resolveAgentConfig(input.cfg, input.configAgentId ?? agent)?.env;
+  const configAgentId = input.configAgentId ?? agent;
+  const agentEnv = resolveAgentConfig(input.cfg, configAgentId)?.env;
   const runtimeEnv = agentEnv
     ? sanitizeHostExecEnv({
         baseEnv: {},
@@ -100,6 +101,7 @@ export async function runManagerInitializeSession(params: {
   const meta: SessionAcpMeta = {
     backend: handle.backend || backend.id,
     agent,
+    ...(configAgentId !== agent ? { configAgentId } : {}),
     runtimeSessionName: handle.runtimeSessionName,
     identity: initializedIdentity,
     mode: input.mode,

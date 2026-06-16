@@ -32,6 +32,7 @@ export interface AcpReplaySessions {
 export interface AcpSessions {
   agent: string;
   backend: string;
+  config_agent_id: string | null;
   cwd: string | null;
   identity_json: string | null;
   last_activity_at: number;

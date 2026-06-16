@@ -84,6 +84,7 @@ export type AcpSessionRuntimeOptions = {
 export type SessionAcpMeta = {
   backend: string;
   agent: string;
+  configAgentId?: string;
   runtimeSessionName: string;
   /** Canonical backend/agent ids used for resume hints and thread/status details. */
   identity?: SessionAcpIdentity;

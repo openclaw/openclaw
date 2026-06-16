@@ -46,7 +46,9 @@ export async function ensureManagerRuntimeHandle(params: {
   const cwd = runtimeOptions.cwd ?? normalizeText(params.meta.cwd);
   const model = normalizeText(runtimeOptions.model);
   const thinking = normalizeText(runtimeOptions.thinking);
-  const configAgentId = resolveAcpAgentFromSessionKey(params.sessionKey, agent);
+  const configAgentId =
+    normalizeText(params.meta.configAgentId) ??
+    resolveAcpAgentFromSessionKey(params.sessionKey, agent);
   const agentEnv = resolveAgentConfig(params.cfg, configAgentId)?.env;
   const runtimeEnv = agentEnv
     ? sanitizeHostExecEnv({
@@ -193,6 +195,7 @@ export async function ensureManagerRuntimeHandle(params: {
   const nextMeta: SessionAcpMeta = {
     backend: ensured.backend || backend.id,
     agent,
+    ...(configAgentId !== agent ? { configAgentId } : {}),
     runtimeSessionName: ensured.runtimeSessionName,
     ...(nextIdentity ? { identity: nextIdentity } : {}),
     mode: params.meta.mode,
@@ -204,6 +207,7 @@ export async function ensureManagerRuntimeHandle(params: {
   };
   const shouldPersistMeta =
     previousMeta.backend !== nextMeta.backend ||
+    previousMeta.configAgentId !== nextMeta.configAgentId ||
     previousMeta.runtimeSessionName !== nextMeta.runtimeSessionName ||
     !identityEquals(previousIdentity, nextIdentity) ||
     previousMeta.agent !== nextMeta.agent ||

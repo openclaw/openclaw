@@ -710,6 +710,7 @@ function backfillDeliveryQueueEntriesFromEntryJson(db: DatabaseSync): void {
 }
 
 function ensureAdditiveStateColumns(db: DatabaseSync): void {
+  ensureColumn(db, "acp_sessions", "config_agent_id TEXT");
   ensureColumn(db, "node_pairing_pending", "client_id TEXT");
   ensureColumn(db, "node_pairing_pending", "client_mode TEXT");
   ensureColumn(db, "node_pairing_paired", "client_id TEXT");
