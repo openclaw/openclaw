@@ -476,6 +476,9 @@ export default definePluginEntry({
         }),
       },
       createStreamFn: ({ config, model, provider }) => {
+        if (model.api !== "ollama") {
+          return undefined;
+        }
         return createConfiguredOllamaStreamFn({
           model,
           providerBaseUrl:
@@ -598,6 +601,9 @@ export default definePluginEntry({
         await ensureOllamaModelPulled({ config, model, prompter });
       },
       createStreamFn: ({ config, model, provider }) => {
+        if (model.api !== "ollama") {
+          return undefined;
+        }
         return createConfiguredOllamaStreamFn({
           model,
           providerBaseUrl: readProviderBaseUrl(

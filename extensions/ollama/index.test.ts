@@ -1397,7 +1397,7 @@ describe("ollama plugin", () => {
 
     provider.createStreamFn?.({
       config: {},
-      model: { id: "kimi-k2.5:cloud" },
+      model: { api: "ollama", id: "kimi-k2.5:cloud" },
       provider: "ollama-cloud",
     } as never);
     expect(requireConfiguredStreamParams().providerBaseUrl).toBe("https://ollama.com");
@@ -1496,6 +1496,55 @@ describe("ollama plugin", () => {
     expect(nativePolicy?.validateAnthropicTurns).toBe(true);
   });
 
+  it.each([
+    {
+      providerId: "ollama",
+      register: registerProvider,
+      nativeBaseUrl: "http://127.0.0.1:11434",
+    },
+    {
+      providerId: "ollama-cloud",
+      register: registerOllamaCloudProvider,
+      nativeBaseUrl: "https://ollama.com",
+    },
+  ])(
+    "$providerId selects native /api/chat transport only for api=ollama",
+    ({ providerId, register, nativeBaseUrl }) => {
+      const provider = register();
+      const createStream = (api: "ollama" | "openai-completions", baseUrl: string) =>
+        provider.createStreamFn?.({
+          config: {
+            models: {
+              providers: {
+                [providerId]: {
+                  api,
+                  baseUrl,
+                  models: [],
+                },
+              },
+            },
+          },
+          model: {
+            api,
+            id: "qwen3:32b",
+            provider: providerId,
+          },
+          provider: providerId,
+        } as never);
+
+      const compatibleStream = createStream("openai-completions", `${nativeBaseUrl}/v1`);
+
+      expect(compatibleStream).toBeUndefined();
+      expect(createConfiguredOllamaStreamFnMock).not.toHaveBeenCalled();
+
+      const nativeStream = createStream("ollama", nativeBaseUrl);
+
+      expect(nativeStream).toBeDefined();
+      expect(createConfiguredOllamaStreamFnMock).toHaveBeenCalledOnce();
+      expect(requireConfiguredStreamParams().providerBaseUrl).toBe(nativeBaseUrl);
+    },
+  );
+
   it("routes createStreamFn to the correct provider baseUrl for ollama2", () => {
     const provider = registerProvider();
     const config = {
@@ -1514,7 +1563,7 @@ describe("ollama plugin", () => {
         },
       },
     };
-    const model = { id: "llama3.2", provider: "ollama2", baseUrl: undefined };
+    const model = { id: "llama3.2", provider: "ollama2", api: "ollama", baseUrl: undefined };
 
     provider.createStreamFn?.({ config, model, provider: "ollama2" } as never);
 
@@ -1534,7 +1583,7 @@ describe("ollama plugin", () => {
         },
       },
     };
-    const model = { id: "llama3.2", provider: "ollama2", baseUrl: undefined };
+    const model = { id: "llama3.2", provider: "ollama2", api: "ollama", baseUrl: undefined };
 
     provider.createStreamFn?.({ config, model, provider: "ollama2" } as never);
 
@@ -1559,7 +1608,7 @@ describe("ollama plugin", () => {
         },
       },
     };
-    const model = { id: "llama3.2", provider: "ollama", baseUrl: undefined };
+    const model = { id: "llama3.2", provider: "ollama", api: "ollama", baseUrl: undefined };
 
     provider.createStreamFn?.({ config, model, provider: "ollama" } as never);
 
