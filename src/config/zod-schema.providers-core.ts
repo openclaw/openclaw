@@ -282,6 +282,7 @@ export const TelegramAccountSchemaBase = z
     direct: z.record(z.string(), TelegramDirectSchema.optional()).optional(),
     textChunkLimit: z.number().int().positive().optional(),
     richMessages: z.boolean().optional(),
+    richMessagesAutoDetect: z.boolean().optional(),
     streaming: TelegramPreviewStreamingConfigSchema.optional(),
     mediaMaxMb: z.number().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
