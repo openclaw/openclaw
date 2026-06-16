@@ -733,9 +733,8 @@ export async function handleFeishuMessage(params: {
   }
 
   try {
-    const core = {
-      channel: channelRuntime ?? getFeishuRuntime().channel,
-    } as ReturnType<typeof getFeishuRuntime>;
+    const pluginRuntime = getFeishuRuntime();
+    const core = channelRuntime ? { ...pluginRuntime, channel: channelRuntime } : pluginRuntime;
     const pairing = createChannelPairingController({
       core,
       channel: "feishu",
