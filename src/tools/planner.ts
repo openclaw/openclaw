@@ -1,4 +1,5 @@
 // Plans usable tools from descriptors, availability, and request constraints.
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { evaluateToolAvailability } from "./availability.js";
 import { ToolPlanContractError } from "./diagnostics.js";
 import type {
@@ -8,6 +9,8 @@ import type {
   ToolPlan,
   ToolPlanEntry,
 } from "./types.js";
+
+const log = createSubsystemLogger("tools/planner");
 
 /**
  * Deterministic planner for descriptor-backed tools.
@@ -48,6 +51,14 @@ export function buildToolPlan(options: BuildToolPlanOptions): ToolPlan {
     const diagnostics = [
       ...evaluateToolAvailability({ descriptor, context: options.availability }),
     ];
+    const malformedDiagnostics = diagnostics.filter(
+      (entry) => entry.reason === "unsupported-signal",
+    );
+    for (const diagnostic of malformedDiagnostics) {
+      log.warn(
+        `Tool descriptor "${descriptor.name}" has malformed availability: ${diagnostic.message}`,
+      );
+    }
     if (diagnostics.length > 0) {
       hidden.push({ descriptor, diagnostics });
       continue;

@@ -1,5 +1,21 @@
 // Verifies tool planner filtering, ordering, and unsupported-tool reporting.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+const warnMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => ({
+    info: vi.fn(),
+    warn: warnMock,
+    error: vi.fn(),
+    debug: vi.fn(),
+    trace: vi.fn(),
+    raw: vi.fn(),
+    child: vi.fn().mockReturnThis(),
+    isEnabled: vi.fn(() => false),
+  }),
+}));
+
 import { ToolPlanContractError } from "./diagnostics.js";
 import { formatToolExecutorRef } from "./execution.js";
 import { buildToolPlan } from "./planner.js";
@@ -111,6 +127,34 @@ describe("buildToolPlan", () => {
         message: "Empty availability allOf group",
       },
     ]);
+  });
+
+  it("logs a warning when a descriptor has malformed availability", () => {
+    warnMock.mockClear();
+
+    buildToolPlan({
+      descriptors: [descriptor("malformed", { availability: { anyOf: [] } })],
+    });
+
+    expect(warnMock).toHaveBeenCalledTimes(1);
+    expect(warnMock).toHaveBeenCalledWith(
+      'Tool descriptor "malformed" has malformed availability: Empty availability anyOf group',
+    );
+  });
+
+  it("does not log warnings for ordinary runtime unavailability", () => {
+    warnMock.mockClear();
+
+    buildToolPlan({
+      descriptors: [
+        descriptor("missing-env", {
+          availability: { kind: "env", name: "MISSING_ENV" },
+        }),
+      ],
+      availability: { env: {} },
+    });
+
+    expect(warnMock).not.toHaveBeenCalled();
   });
 
   it("keeps protocol conversion separate from executor refs and model normalization", () => {
