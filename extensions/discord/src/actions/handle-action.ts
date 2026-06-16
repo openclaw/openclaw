@@ -43,6 +43,7 @@ export async function handleDiscordMessageAction(
     | "cfg"
     | "accountId"
     | "requesterSenderId"
+    | "senderIsOwner"
     | "toolContext"
     | "mediaAccess"
     | "mediaLocalRoots"
