@@ -432,7 +432,7 @@ export async function runSearchSetupFlow(
 
   const existingProvider = config.tools?.web?.search?.provider;
 
-  const defaultChoice: SearchProvider | "__skip__" = (() => {
+  const defaultChoice: SearchProvider = (() => {
     if (existingProvider && providerOptions.some((entry) => entry.id === existingProvider)) {
       return existingProvider;
     }
