@@ -62,14 +62,11 @@ describe("resolveCodexProviderWebSearchSupport", () => {
     expect(request).toHaveBeenCalledOnce();
   });
 
-  it("reads capabilities for the built-in OpenAI provider override", async () => {
-    const supported = createClientFactory(true);
-    const unsupported = createClientFactory(false);
+  it("uses hosted search for the built-in OpenAI provider override", async () => {
+    const { clientFactory, request } = createClientFactory(false);
 
-    await expect(resolveSupport(supported.clientFactory, "openai")).resolves.toBe(true);
-    await expect(resolveSupport(unsupported.clientFactory, "openai")).resolves.toBe(false);
-    expect(supported.request).toHaveBeenCalledOnce();
-    expect(unsupported.request).toHaveBeenCalledOnce();
+    await expect(resolveSupport(clientFactory, " OpenAI ")).resolves.toBe(true);
+    expect(request).not.toHaveBeenCalled();
   });
 
   it("keeps managed search for provider overrides the capability RPC cannot target", async () => {

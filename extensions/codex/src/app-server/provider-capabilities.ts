@@ -27,10 +27,13 @@ export async function resolveCodexProviderWebSearchSupportForClient(params: {
   signal: AbortSignal;
 }): Promise<boolean> {
   const modelProviderOverride = params.modelProviderOverride?.trim().toLowerCase();
-  if (modelProviderOverride && modelProviderOverride !== "openai") {
+  if (modelProviderOverride === "openai") {
+    return true;
+  }
+  if (modelProviderOverride) {
     // Codex's capability RPC only reports the configured provider, not a
-    // thread-scoped override. Keep managed search unless the override is the
-    // built-in OpenAI provider whose hosted-search capability is being queried.
+    // thread-scoped override. Keep managed search for overrides whose hosted
+    // capability cannot be proven from the configured-provider response.
     return false;
   }
   try {

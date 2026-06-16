@@ -663,6 +663,43 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(toolExecuteMock).not.toHaveBeenCalled();
   });
 
+  it("preserves managed web_search while planning hosted search for Responses side questions", async () => {
+    createOpenClawCodingToolsMock.mockImplementation(
+      (options: { suppressManagedWebSearch?: boolean }) =>
+        options.suppressManagedWebSearch === false
+          ? [
+              {
+                name: "web_search",
+                description: "Search the web",
+                parameters: { type: "object", properties: {} },
+                execute: toolExecuteMock,
+              },
+            ]
+          : [],
+    );
+
+    const { forkConfig, toolResponse } = await runSideQuestionWithManagedWebSearchCall(
+      sideParams({
+        runtimeModel: {
+          id: "gpt-5.5",
+          provider: "openai",
+          api: "openai-chatgpt-responses",
+        } as never,
+      }),
+      { preserveToolFactory: true },
+    );
+
+    expect(forkConfig).toMatchObject({
+      "features.standalone_web_search": false,
+      web_search: "cached",
+    });
+    expect(toolResponse).toEqual({
+      success: false,
+      contentItems: [{ type: "inputText", text: "Unknown OpenClaw tool: web_search" }],
+    });
+    expect(toolExecuteMock).not.toHaveBeenCalled();
+  });
+
   it("keeps managed search for side forks when the configured provider lacks hosted search", async () => {
     resolveCodexProviderWebSearchSupportForClientMock.mockResolvedValue(false);
 
