@@ -11,42 +11,56 @@ import {
 
 const PORT = 39517;
 
-function openSocket(): Promise<WebSocket> {
+interface Client {
+  ws: WebSocket;
+  waitFor: (match: (m: any) => boolean, timeoutMs?: number) => Promise<any>;
+}
+
+// Buffer messages from socket creation so the bridge's immediate connect.challenge
+// (sent on connect, before the client's "open" fires) is never raced/dropped.
+function connect(): Promise<Client> {
   const ws = new WebSocket(`ws://127.0.0.1:${PORT}/extension`);
+  const buffer: any[] = [];
+  const waiters: Array<{ match: (m: any) => boolean; resolve: (m: any) => void }> = [];
+  ws.on("message", (data: WebSocket.RawData) => {
+    let m: any;
+    try {
+      m = JSON.parse(String(data));
+    } catch {
+      return;
+    }
+    buffer.push(m);
+    for (let i = waiters.length - 1; i >= 0; i--) {
+      if (waiters[i].match(m)) {
+        waiters[i].resolve(m);
+        waiters.splice(i, 1);
+      }
+    }
+  });
+  const waitFor = (match: (m: any) => boolean, timeoutMs = 3000): Promise<any> => {
+    const existing = buffer.find(match);
+    if (existing) return Promise.resolve(existing);
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("timeout waiting for message")), timeoutMs);
+      waiters.push({
+        match,
+        resolve: (m) => {
+          clearTimeout(timer);
+          resolve(m);
+        },
+      });
+    });
+  };
   return new Promise((resolve, reject) => {
-    ws.once("open", () => resolve(ws));
+    ws.once("open", () => resolve({ ws, waitFor }));
     ws.once("error", reject);
   });
 }
 
-/** Resolve with the first message whose JSON matches the predicate. */
-function waitFor(ws: WebSocket, match: (m: any) => boolean, timeoutMs = 3000): Promise<any> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      ws.off("message", onMsg);
-      reject(new Error("timeout waiting for message"));
-    }, timeoutMs);
-    const onMsg = (data: WebSocket.RawData) => {
-      let m: any;
-      try {
-        m = JSON.parse(String(data));
-      } catch {
-        return;
-      }
-      if (match(m)) {
-        clearTimeout(timer);
-        ws.off("message", onMsg);
-        resolve(m);
-      }
-    };
-    ws.on("message", onMsg);
-  });
-}
-
-async function handshake(ws: WebSocket): Promise<void> {
-  await waitFor(ws, (m) => m.event === "connect.challenge");
-  ws.send(JSON.stringify({ type: "req", id: 1, method: "connect" }));
-  await waitFor(ws, (m) => m.type === "res" && m.id === 1 && m.ok === true);
+async function handshake(c: Client): Promise<void> {
+  await c.waitFor((m) => m.event === "connect.challenge");
+  c.ws.send(JSON.stringify({ type: "req", id: 1, method: "connect" }));
+  await c.waitFor((m) => m.type === "res" && m.id === 1 && m.ok === true);
 }
 
 describe("extension bridge agent.request routing", () => {
@@ -60,10 +74,10 @@ describe("extension bridge agent.request routing", () => {
   it("forwards a side-panel agent.request to onAgentRequest and acks ok", async () => {
     const onAgentRequest = vi.fn().mockResolvedValue(undefined);
     handle = await startExtensionBridgeServer({ port: PORT, onAgentRequest });
-    const ws = await openSocket();
-    await handshake(ws);
+    const c = await connect();
+    await handshake(c);
 
-    ws.send(
+    c.ws.send(
       JSON.stringify({
         type: "req",
         id: 2,
@@ -71,53 +85,53 @@ describe("extension bridge agent.request routing", () => {
         params: { message: "hi from the side panel", sessionKey: "agent:main:main" },
       }),
     );
-    const res = await waitFor(ws, (m) => m.type === "res" && m.id === 2);
+    const res = await c.waitFor((m) => m.type === "res" && m.id === 2);
 
     expect(onAgentRequest).toHaveBeenCalledWith({
       message: "hi from the side panel",
       sessionKey: "agent:main:main",
     });
     expect(res.result?.ok).toBe(true);
-    ws.close();
+    c.ws.close();
   });
 
   it("acks an error when no node routing is wired (gateway-only deployment)", async () => {
     handle = await startExtensionBridgeServer({ port: PORT }); // no onAgentRequest
-    const ws = await openSocket();
-    await handshake(ws);
+    const c = await connect();
+    await handshake(c);
 
-    ws.send(
+    c.ws.send(
       JSON.stringify({ type: "req", id: 2, method: "agent.request", params: { message: "x" } }),
     );
-    const res = await waitFor(ws, (m) => m.type === "res" && m.id === 2);
+    const res = await c.waitFor((m) => m.type === "res" && m.id === 2);
 
     expect(String(res.error)).toMatch(/node agent routing unavailable/);
-    ws.close();
+    c.ws.close();
   });
 
   it("rejects an empty message", async () => {
     const onAgentRequest = vi.fn().mockResolvedValue(undefined);
     handle = await startExtensionBridgeServer({ port: PORT, onAgentRequest });
-    const ws = await openSocket();
-    await handshake(ws);
+    const c = await connect();
+    await handshake(c);
 
-    ws.send(
+    c.ws.send(
       JSON.stringify({ type: "req", id: 2, method: "agent.request", params: { message: "   " } }),
     );
-    const res = await waitFor(ws, (m) => m.type === "res" && m.id === 2);
+    const res = await c.waitFor((m) => m.type === "res" && m.id === 2);
 
     expect(onAgentRequest).not.toHaveBeenCalled();
     expect(String(res.error)).toMatch(/message required/);
-    ws.close();
+    c.ws.close();
   });
 
   it("surfaces an onAgentRequest failure as an error ack", async () => {
     const onAgentRequest = vi.fn().mockRejectedValue(new Error("node not connected"));
     handle = await startExtensionBridgeServer({ port: PORT, onAgentRequest });
-    const ws = await openSocket();
-    await handshake(ws);
+    const c = await connect();
+    await handshake(c);
 
-    ws.send(
+    c.ws.send(
       JSON.stringify({
         type: "req",
         id: 2,
@@ -125,9 +139,9 @@ describe("extension bridge agent.request routing", () => {
         params: { message: "hi", sessionKey: "agent:main:main" },
       }),
     );
-    const res = await waitFor(ws, (m) => m.type === "res" && m.id === 2);
+    const res = await c.waitFor((m) => m.type === "res" && m.id === 2);
 
     expect(String(res.error)).toMatch(/node not connected/);
-    ws.close();
+    c.ws.close();
   });
 });
