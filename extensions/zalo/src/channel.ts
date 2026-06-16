@@ -30,10 +30,7 @@ import { createStaticReplyToModeResolver } from "openclaw/plugin-sdk/conversatio
 import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
 import { listResolvedDirectoryUserEntriesFromAllowFrom } from "openclaw/plugin-sdk/directory-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import {
-  isNumericTargetId,
-  sendPayloadWithChunkedTextAndMedia,
-} from "openclaw/plugin-sdk/reply-payload";
+import { sendPayloadWithChunkedTextAndMedia } from "openclaw/plugin-sdk/reply-payload";
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
@@ -72,6 +69,13 @@ function normalizeZaloMessagingTarget(raw: string): string | undefined {
     return undefined;
   }
   return trimmed.replace(/^(zalo|zl):/i, "").trim();
+}
+
+const zaloChatIdPattern = /^(?:\d{3,}|(?=[a-f0-9]{12,}$)(?=.*[a-f])[a-f0-9]+)$/i;
+
+function looksLikeZaloChatId(raw: string, normalized?: string): boolean {
+  const target = normalizeZaloMessagingTarget(normalized ?? raw);
+  return target ? zaloChatIdPattern.test(target) : false;
 }
 
 const loadZaloChannelRuntime = createLazyRuntimeModule(() => import("./channel.runtime.js"));
@@ -234,7 +238,7 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
         normalizeTarget: normalizeZaloMessagingTarget,
         resolveOutboundSessionRoute: (params) => resolveZaloOutboundSessionRoute(params),
         targetResolver: {
-          looksLikeId: isNumericTargetId,
+          looksLikeId: looksLikeZaloChatId,
           hint: "<chatId>",
         },
       },
