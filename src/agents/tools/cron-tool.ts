@@ -300,6 +300,7 @@ export function createCronToolSchema(): TSchema {
       action: stringEnum(CRON_ACTIONS),
       ...gatewayCallOptionSchemaProperties(),
       includeDisabled: Type.Optional(Type.Boolean()),
+      compact: Type.Optional(Type.Boolean()),
       job: createCronJobObjectSchema(),
       jobId: Type.Optional(Type.String()),
       id: Type.Optional(Type.String()),
@@ -571,7 +572,7 @@ Main cron => system events for heartbeat. Isolated cron => background task in \`
 
 ACTIONS:
 - status: scheduler status
-- list: jobs; includeDisabled true includes disabled; agentId filter auto-filled from session
+- list: jobs; includeDisabled true includes disabled; compact true returns minimal summaries (id/name/enabled/nextRunAtMs/scheduleKind/lastRunStatus); agentId filter auto-filled from session
 - get: one job; needs jobId
 - add: create job; needs job object
 - update: patch job; needs jobId + patch
@@ -681,6 +682,7 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
               includeDisabled,
               agentId: listAgentId,
               ...(selfRemoveOnlyJobId ? { limit: 200, offset } : {}),
+              ...(params.compact !== undefined ? { compact: Boolean(params.compact) } : {}),
             });
             if (!selfRemoveOnlyJobId || cronListResultHasJob(result, selfRemoveOnlyJobId)) {
               shouldContinue = false;

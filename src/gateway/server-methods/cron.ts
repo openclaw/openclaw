@@ -329,6 +329,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       sortBy?: "nextRunAtMs" | "updatedAtMs" | "name";
       sortDir?: "asc" | "desc";
       agentId?: string;
+      compact?: boolean;
     };
     const page = await context.cron.listPage({
       includeDisabled: p.includeDisabled,
@@ -341,6 +342,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       sortBy: p.sortBy,
       sortDir: p.sortDir,
       agentId: p.agentId,
+      compact: p.compact,
     });
     const deliveryPreviews = await resolveCronDeliveryPreviews({
       cfg: context.getRuntimeConfig(),

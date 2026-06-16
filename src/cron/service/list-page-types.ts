@@ -16,6 +16,16 @@ export type CronJobsSortBy = "nextRunAtMs" | "updatedAtMs" | "name";
 /** Sort direction for paginated cron listing. */
 export type CronSortDir = "asc" | "desc";
 
+/** Compact job summary returned when listPage is called with compact: true. */
+export type CronJobCompact = {
+  id: string;
+  name: string;
+  enabled: boolean;
+  nextRunAtMs: number | null;
+  scheduleKind: string;
+  lastRunStatus: string | null;
+};
+
 /** Input contract for filtered, sorted, offset-based cron job pages. */
 export type CronListPageOptions = {
   includeDisabled?: boolean;
@@ -28,6 +38,8 @@ export type CronListPageOptions = {
   sortBy?: CronJobsSortBy;
   sortDir?: CronSortDir;
   agentId?: string;
+  /** When true, return minimal job summaries (id/name/enabled/nextRunAtMs/scheduleKind/lastRunStatus) instead of full CronJob objects. */
+  compact?: boolean;
 };
 
 /** Offset-page result returned by cron listPage callers. */

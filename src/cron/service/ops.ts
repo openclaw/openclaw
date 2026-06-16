@@ -459,8 +459,18 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
     const offset = Math.max(0, Math.min(total, Math.floor(opts?.offset ?? 0)));
     const defaultLimit = total === 0 ? 50 : total;
     const limit = Math.max(1, Math.min(200, Math.floor(opts?.limit ?? defaultLimit)));
-    const jobs = sorted.slice(offset, offset + limit);
-    const nextOffset = offset + jobs.length;
+    const pageJobs = sorted.slice(offset, offset + limit);
+    const nextOffset = offset + pageJobs.length;
+    const jobs = opts?.compact
+      ? pageJobs.map((job) => ({
+          id: job.id,
+          name: job.name,
+          enabled: job.enabled,
+          nextRunAtMs: job.state.nextRunAtMs ?? null,
+          scheduleKind: job.schedule.kind,
+          lastRunStatus: job.state.lastRunStatus ?? job.state.lastStatus ?? null,
+        }))
+      : pageJobs;
     return {
       jobs,
       total,
