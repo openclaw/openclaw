@@ -122,6 +122,7 @@ export type ChatProps = {
   realtimeTalkTranscript?: string | null;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
   realtimeTalkOptionsOpen?: boolean;
+  realtimeTalkCatalogProviders?: { id: string; label: string; transports?: string[] }[] | null;
   realtimeTalkOptions?: {
     provider: string;
     model: string;
@@ -237,11 +238,7 @@ const TALK_SENSITIVITY_OPTIONS: TalkSelectOption[] = [
   { label: "Medium", value: "0.5" },
   { label: "High", value: "0.35" },
 ];
-const TALK_PROVIDER_OPTIONS: TalkSelectOption[] = [
-  { label: "Auto", value: "" },
-  { label: "OpenAI", value: "openai" },
-  { label: "Google", value: "google" },
-];
+const TALK_PROVIDER_AUTO_OPTION: TalkSelectOption = { label: "Auto", value: "" };
 const TALK_TRANSPORT_OPTIONS: TalkSelectOption[] = [
   { label: "Auto", value: "" },
   { label: "WebRTC", value: "webrtc" },
@@ -320,6 +317,22 @@ function renderRealtimeTalkOptions(props: ChatProps) {
   if (!props.realtimeTalkOptionsOpen || !options || !onChange) {
     return nothing;
   }
+  const providerOptions: TalkSelectOption[] = [
+    TALK_PROVIDER_AUTO_OPTION,
+    ...(props.realtimeTalkCatalogProviders ?? []).map((p) => ({ label: p.label, value: p.id })),
+  ];
+  const selectedCatalogProvider = options.provider
+    ? (props.realtimeTalkCatalogProviders ?? []).find((p) => p.id === options.provider)
+    : null;
+  const providerTransports = selectedCatalogProvider?.transports;
+  const transportOptions: TalkSelectOption[] = providerTransports
+    ? [
+        { label: "Auto", value: "" },
+        ...TALK_TRANSPORT_OPTIONS.filter(
+          (opt) => opt.value !== "" && providerTransports.includes(opt.value),
+        ),
+      ]
+    : TALK_TRANSPORT_OPTIONS;
   const update = (key: keyof NonNullable<ChatProps["realtimeTalkOptions"]>) => (event: Event) => {
     const value = (event.currentTarget as HTMLInputElement | HTMLSelectElement).value;
     onChange({ [key]: value });
@@ -374,13 +387,13 @@ function renderRealtimeTalkOptions(props: ChatProps) {
           ${renderNativeTalkSelect({
             label: "Provider",
             value: options.provider,
-            options: TALK_PROVIDER_OPTIONS,
+            options: providerOptions,
             onSelect: (provider) => onChange({ provider }),
           })}
           ${renderNativeTalkSelect({
             label: "Transport",
             value: options.transport,
-            options: TALK_TRANSPORT_OPTIONS,
+            options: transportOptions,
             onSelect: (transport) => onChange({ transport }),
           })}
           ${renderNativeTalkSelect({

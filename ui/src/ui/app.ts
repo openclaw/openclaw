@@ -308,6 +308,9 @@ export class OpenClawApp extends LitElement {
   @state() realtimeTalkTranscript: string | null = null;
   @state() realtimeTalkConversation: RealtimeTalkConversationEntry[] = [];
   @state() realtimeTalkOptionsOpen = false;
+  @state() realtimeTalkCatalogProviders:
+    | { id: string; label: string; transports?: string[] }[]
+    | null = null;
   @state() realtimeTalkOptions = {
     provider: "",
     model: "",
@@ -1168,6 +1171,20 @@ export class OpenClawApp extends LitElement {
 
   updateRealtimeTalkOptions(next: Partial<typeof this.realtimeTalkOptions>) {
     this.realtimeTalkOptions = { ...this.realtimeTalkOptions, ...next };
+  }
+
+  async fetchRealtimeTalkCatalog() {
+    if (!this.client || !this.connected) {
+      return;
+    }
+    try {
+      const result = await this.client.request<{
+        realtime?: { providers?: { id: string; label: string; transports?: string[] }[] };
+      }>("talk.catalog", {});
+      this.realtimeTalkCatalogProviders = result?.realtime?.providers ?? null;
+    } catch {
+      // leave existing catalog in place on error
+    }
   }
 
   private buildRealtimeTalkLaunchOptions(): RealtimeTalkLaunchOptions {

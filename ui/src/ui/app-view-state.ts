@@ -152,6 +152,7 @@ export type AppViewState = {
   realtimeTalkTranscript: string | null;
   realtimeTalkConversation: RealtimeTalkConversationEntry[];
   realtimeTalkOptionsOpen: boolean;
+  realtimeTalkCatalogProviders: { id: string; label: string; transports?: string[] }[] | null;
   realtimeTalkOptions: {
     provider: string;
     model: string;
@@ -164,6 +165,7 @@ export type AppViewState = {
   };
   resetRealtimeTalkConversation?: () => void;
   updateRealtimeTalkOptions: (next: Partial<AppViewState["realtimeTalkOptions"]>) => void;
+  fetchRealtimeTalkCatalog: () => Promise<void>;
   chatManualRefreshInFlight: boolean;
   chatHeaderControlsHidden: boolean;
   chatMobileControlsOpen: boolean;
