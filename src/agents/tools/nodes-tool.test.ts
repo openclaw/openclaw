@@ -38,6 +38,15 @@ const screenMocks = vi.hoisted(() => ({
   })),
   screenRecordTempPath: vi.fn(() => "/tmp/screen-record.mp4"),
   writeScreenRecordToFile: vi.fn(async () => ({ path: "/tmp/screen-record.mp4" })),
+  parseScreenSnapshotPayload: vi.fn(() => ({
+    base64: "ZmFrZQ==",
+    format: "png",
+    screenIndex: 0,
+    width: 1920,
+    height: 1080,
+  })),
+  screenSnapshotTempPath: vi.fn(() => "/tmp/screen-snapshot.png"),
+  writeScreenSnapshotToFile: vi.fn(async () => ({ path: "/tmp/screen-snapshot.png" })),
 }));
 
 vi.mock("./gateway.js", () => ({
@@ -62,6 +71,9 @@ vi.mock("../../cli/nodes-screen.js", () => ({
   parseScreenRecordPayload: screenMocks.parseScreenRecordPayload,
   screenRecordTempPath: screenMocks.screenRecordTempPath,
   writeScreenRecordToFile: screenMocks.writeScreenRecordToFile,
+  parseScreenSnapshotPayload: screenMocks.parseScreenSnapshotPayload,
+  screenSnapshotTempPath: screenMocks.screenSnapshotTempPath,
+  writeScreenSnapshotToFile: screenMocks.writeScreenSnapshotToFile,
 }));
 
 let createNodesTool: typeof import("./nodes-tool.js").createNodesTool;
@@ -256,6 +268,25 @@ describe("createNodesTool screen_record duration guardrails", () => {
       }),
     ).rejects.toThrow("durationMs must be a positive integer");
     expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("invokes screen.snapshot with screenIndex and returns file path", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
+    const tool = createNodesTool();
+
+    await tool.execute("call-snapshot", {
+      action: "screen_snapshot",
+      node: "macbook",
+      screenIndex: 1,
+    });
+
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledTimes(1);
+    const call = gatewayMocks.callGatewayTool.mock.calls[0] as
+      | [string, unknown, { command?: string; params?: { screenIndex?: unknown } }]
+      | undefined;
+    expect(call?.[0]).toBe("node.invoke");
+    expect(call?.[2].command).toBe("screen.snapshot");
+    expect(call?.[2].params?.screenIndex).toBe(1);
   });
 
   it("rejects the removed run action", async () => {

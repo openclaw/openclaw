@@ -16,8 +16,11 @@ import {
 } from "../../cli/nodes-camera.js";
 import {
   parseScreenRecordPayload,
+  parseScreenSnapshotPayload,
   screenRecordTempPath,
+  screenSnapshotTempPath,
   writeScreenRecordToFile,
+  writeScreenSnapshotToFile,
 } from "../../cli/nodes-screen.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import type { ImageSanitizationLimits } from "../image-sanitization.js";
@@ -37,6 +40,7 @@ export const MEDIA_INVOKE_ACTIONS = {
   "camera.clip": "camera_clip",
   "photos.latest": "photos_latest",
   "screen.record": "screen_record",
+  "screen.snapshot": "screen_snapshot",
   // file-transfer commands: redirect to dedicated tools for better result
   // formatting and media-store handling. The gateway still enforces the
   // underlying node-invoke path policy for raw callers.
@@ -55,7 +59,12 @@ export const POLICY_REDIRECT_INVOKE_COMMANDS: ReadonlySet<string> = new Set([
   "file.write",
 ]);
 
-export type NodeMediaAction = "camera_snap" | "photos_latest" | "camera_clip" | "screen_record";
+export type NodeMediaAction =
+  | "camera_snap"
+  | "photos_latest"
+  | "camera_clip"
+  | "screen_record"
+  | "screen_snapshot";
 const MAX_RECORDING_DURATION_MS = 300_000;
 
 type ExecuteNodeMediaActionParams = {
@@ -78,6 +87,8 @@ export async function executeNodeMediaAction(
       return await executeCameraClip(input);
     case "screen_record":
       return await executeScreenRecord(input);
+    case "screen_snapshot":
+      return await executeScreenSnapshot(input);
   }
   throw new Error("Unsupported node media action");
 }
@@ -385,6 +396,38 @@ async function executeScreenRecord({
       fps: payload.fps,
       screenIndex: payload.screenIndex,
       hasAudio: payload.hasAudio,
+    },
+  };
+}
+
+async function executeScreenSnapshot({
+  params,
+  gatewayOpts,
+}: ExecuteNodeMediaActionParams): Promise<AgentToolResult<unknown>> {
+  const node = requireString(params, "node");
+  const nodeId = await resolveNodeId(gatewayOpts, node);
+  const screenIndex = readNonNegativeIntegerParam(params, "screenIndex") ?? 0;
+  const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", gatewayOpts, {
+    nodeId,
+    command: "screen.snapshot",
+    params: { screenIndex },
+    idempotencyKey: crypto.randomUUID(),
+  });
+  const payload = parseScreenSnapshotPayload(raw?.payload);
+  const ext = `.${payload.format || "png"}`;
+  const filePath =
+    typeof params.outPath === "string" && params.outPath.trim()
+      ? params.outPath.trim()
+      : screenSnapshotTempPath({ ext });
+  const written = await writeScreenSnapshotToFile(filePath, payload.base64);
+  return {
+    content: [{ type: "text", text: `FILE:${written.path}` }],
+    details: {
+      path: written.path,
+      format: payload.format,
+      screenIndex: payload.screenIndex,
+      width: payload.width,
+      height: payload.height,
     },
   };
 }

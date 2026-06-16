@@ -39,6 +39,7 @@ const NODES_TOOL_ACTIONS = [
   "camera_clip",
   "photos_latest",
   "screen_record",
+  "screen_snapshot",
   "location_get",
   "notifications_list",
   "notifications_action",
@@ -263,6 +264,15 @@ export function createNodesTool(options?: {
             });
           }
           case "screen_record": {
+            return await executeNodeMediaAction({
+              action,
+              params,
+              gatewayOpts,
+              modelHasVision: options?.modelHasVision,
+              imageSanitization,
+            });
+          }
+          case "screen_snapshot": {
             return await executeNodeMediaAction({
               action,
               params,
