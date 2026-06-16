@@ -729,6 +729,51 @@ describe("web search runtime", () => {
     ).rejects.toThrow("web_search is disabled or no provider is available.");
   });
 
+  it("ignores auto-detected runtime metadata after config names an unknown provider", async () => {
+    const createTool = vi.fn(() => createCustomSearchTool());
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
+      createGoogleSearchProvider({
+        createTool,
+      }),
+    ]);
+    const config = {
+      tools: {
+        web: {
+          search: {
+            provider: "missing-id",
+          },
+        },
+      },
+    };
+
+    activateSecretsRuntimeSnapshot({
+      sourceConfig: config,
+      config: structuredClone(config),
+      authStores: [],
+      warnings: [],
+      webTools: {
+        search: {
+          providerSource: "auto-detect",
+          selectedProvider: "google",
+          diagnostics: [],
+        },
+        fetch: {
+          providerSource: "none",
+          diagnostics: [],
+        },
+        diagnostics: [],
+      },
+    });
+
+    await expect(
+      runWebSearch({
+        config: structuredClone(config),
+        args: { query: "runtime-config-typo" },
+      }),
+    ).rejects.toThrow("web_search is disabled or no provider is available.");
+    expect(createTool).not.toHaveBeenCalled();
+  });
+
   it("ignores auto-detected keyless runtime metadata when resolving a provider definition", () => {
     resolvePluginWebSearchProvidersMock.mockReturnValue([
       createWebSearchTestProvider({

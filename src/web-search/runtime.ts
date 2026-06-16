@@ -233,6 +233,14 @@ function resolveRuntimePreferredWebSearchProviderId(params: {
   if (!runtimeProviderId) {
     return undefined;
   }
+  const configuredProviderId =
+    params.search && "provider" in params.search
+      ? normalizeOptionalLowercaseString(params.search.provider)
+      : undefined;
+  if (configuredProviderId) {
+    const configuredProvider = params.providers?.find((entry) => entry.id === configuredProviderId);
+    return configuredProvider?.id === runtimeProviderId ? runtimeProviderId : undefined;
+  }
   if (params.runtimeWebSearch?.providerSource === "configured") {
     return runtimeProviderId;
   }
