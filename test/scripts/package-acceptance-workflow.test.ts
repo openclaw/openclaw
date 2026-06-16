@@ -21,6 +21,8 @@ const CRABBOX_CONFIG = ".crabbox.yaml";
 const SCHEDULED_LIVE_CHECKS_WORKFLOW = ".github/workflows/openclaw-scheduled-live-checks.yml";
 const TUI_PTY_WORKFLOW = ".github/workflows/tui-pty.yml";
 const CI_HYDRATE_LIVE_AUTH_SCRIPT = "scripts/ci-hydrate-live-auth.sh";
+const VERIFY_PROVIDER_SECRETS_SCRIPT =
+  ".agents/skills/release-openclaw-ci/scripts/verify-provider-secrets.mjs";
 const UPGRADE_SURVIVOR_RUN_SCRIPT = "scripts/e2e/lib/upgrade-survivor/run.sh";
 
 type WorkflowStep = {
@@ -986,9 +988,17 @@ describe("package artifact reuse", () => {
     const testboxWorkflow = readFileSync(CI_CHECK_TESTBOX_WORKFLOW, "utf8");
     const dockerPlanAction = readFileSync(DOCKER_E2E_PLAN_ACTION, "utf8");
     const hydrateScript = readFileSync(CI_HYDRATE_LIVE_AUTH_SCRIPT, "utf8");
+    const providerVerifier = readFileSync(VERIFY_PROVIDER_SECRETS_SCRIPT, "utf8");
 
     expect(hydrateScript).toContain("  FACTORY_API_KEY \\");
+    expect(hydrateScript).toContain("  ANTHROPIC_OAUTH_TOKEN \\");
+    expect(providerVerifier).toContain(
+      'env: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_API_TOKEN"]',
+    );
+    expect(providerVerifier).toContain('"anthropic-beta": "oauth-2025-04-20"');
+    expect(providerVerifier).toContain("authorization: `Bearer ${value}`");
     expect(dockerPlanAction).toContain('if [[ "$credentials" == *",factory,"* ]]; then');
+    expect(dockerPlanAction).not.toContain("require_any Anthropic ANTHROPIC_OAUTH_TOKEN");
     expectTextToIncludeAll(dockerPlanAction, [
       'if [[ "$credentials" == *",openai,"* ]]; then',
       "require_any OpenAI OPENAI_API_KEY",
@@ -1011,9 +1021,12 @@ describe("package artifact reuse", () => {
       testboxWorkflow,
     ]) {
       expect(workflow).toContain("FACTORY_API_KEY: ${{ secrets.FACTORY_API_KEY }}");
+      expect(workflow).toContain("ANTHROPIC_OAUTH_TOKEN: ${{ secrets.ANTHROPIC_OAUTH_TOKEN }}");
     }
     expect(reusableWorkflow).toContain("FACTORY_API_KEY:\n        required: false");
+    expect(reusableWorkflow).toContain("ANTHROPIC_OAUTH_TOKEN:\n        required: false");
     expect(packageAcceptanceWorkflow).toContain("FACTORY_API_KEY:\n        required: false");
+    expect(packageAcceptanceWorkflow).toContain("ANTHROPIC_OAUTH_TOKEN:\n        required: false");
     expectTextToIncludeAll(reusableWorkflow, [
       'if [[ "$credentials" == *",openai,"* ]]; then',
       "require_any OpenAI OPENAI_API_KEY",
@@ -1024,6 +1037,16 @@ describe("package artifact reuse", () => {
       'if [[ "$credentials" == *",opencode,"* ]]; then',
       "require_any OpenCode OPENCODE_API_KEY OPENCODE_ZEN_API_KEY",
     ]);
+    expect(reusableWorkflow).toContain(
+      "anthropic) require_any Anthropic ANTHROPIC_OAUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_API_KEY_OLD ANTHROPIC_API_TOKEN ;;",
+    );
+    expect(reusableWorkflow).toContain('echo "ANTHROPIC_API_KEY=" >> "$GITHUB_ENV"');
+    expect(reusableWorkflow.match(/OPENCLAW_LIVE_CLI_BACKEND_AUTH=subscription/g)).toHaveLength(2);
+    expect(
+      reusableWorkflow.match(
+        /if \[\[ -n "\$\{OPENCLAW_CLAUDE_CREDENTIALS_JSON:-\}" \|\| -n "\$\{CLAUDE_CODE_OAUTH_TOKEN:-\}" \]\]; then/g,
+      ),
+    ).toHaveLength(2);
   });
 
   it("fails Testbox changed-check delegation when the remote command fails", () => {
@@ -1095,6 +1118,7 @@ describe("package artifact reuse", () => {
     );
     expect(workflow).toContain("ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}");
     expect(workflow).toContain("ANTHROPIC_API_TOKEN: ${{ secrets.ANTHROPIC_API_TOKEN }}");
+    expect(workflow).toContain("ANTHROPIC_OAUTH_TOKEN: ${{ secrets.ANTHROPIC_OAUTH_TOKEN }}");
     expect(workflow).toContain(
       "OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}",
     );

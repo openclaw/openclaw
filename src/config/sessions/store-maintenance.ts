@@ -308,10 +308,12 @@ function getEntryUpdatedAt(entry?: SessionEntry): number {
 function isSyntheticSessionMaintenanceKey(sessionKey: string): boolean {
   const parsed = parseAgentSessionKey(sessionKey);
   const rest = normalizeLowercaseStringOrEmpty(parsed?.rest ?? sessionKey);
+  // ACP bridge sessions use normal model dispatch, but remain synthetic and disposable.
   return (
     isSubagentSessionKey(sessionKey) ||
     isAcpSessionKey(sessionKey) ||
     isCronSessionKey(sessionKey) ||
+    rest.startsWith("acp-bridge:") ||
     rest.startsWith("hook:") ||
     rest.startsWith("node:") ||
     rest === "heartbeat" ||

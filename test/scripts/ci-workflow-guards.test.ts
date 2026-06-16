@@ -50,24 +50,27 @@ describe("ci workflow guards", () => {
 
   it("kills timed manual checkout fetches after the grace period", () => {
     const workflowPaths = [
-      ".github/workflows/ci.yml",
-      ".github/workflows/workflow-sanity.yml",
-      ".github/workflows/ci-check-testbox.yml",
-      ".github/workflows/ci-check-arm-testbox.yml",
-      ".github/workflows/ci-build-artifacts-testbox.yml",
-      ".github/workflows/crabbox-hydrate.yml",
+      [".github/workflows/ci.yml", "120s"],
+      [".github/workflows/workflow-sanity.yml", "30s"],
+      [".github/workflows/ci-check-testbox.yml", "120s"],
+      [".github/workflows/ci-check-arm-testbox.yml", "120s"],
+      [".github/workflows/ci-build-artifacts-testbox.yml", "120s"],
+      [".github/workflows/crabbox-hydrate.yml", "30s"],
     ];
 
-    for (const workflowPath of workflowPaths) {
+    for (const [workflowPath, timeoutSeconds] of workflowPaths) {
       const workflow = readFileSync(workflowPath, "utf8");
       const fetchTimeouts = workflow.match(
-        /timeout --signal=TERM[^\n]* 30s git(?: -C "(?:\$workdir|\$GITHUB_WORKSPACE|clawhub-source)")?/g,
+        new RegExp(
+          `timeout --signal=TERM[^\\n]* ${timeoutSeconds} git(?: -C "(?:\\$workdir|\\$GITHUB_WORKSPACE|clawhub-source)")?`,
+          "g",
+        ),
       );
 
       expect(fetchTimeouts?.length, workflowPath).toBeGreaterThan(0);
       expect(
         fetchTimeouts?.every((line) =>
-          line.startsWith("timeout --signal=TERM --kill-after=10s 30s git"),
+          line.startsWith(`timeout --signal=TERM --kill-after=10s ${timeoutSeconds} git`),
         ),
         workflowPath,
       ).toBe(true);
@@ -90,7 +93,7 @@ describe("ci workflow guards", () => {
       const checkoutStep = workflow.jobs[jobName].steps.find((step) => step.name === "Checkout");
 
       expect(checkoutStep.run, jobName).toContain(
-        'timeout --signal=TERM --kill-after=10s 30s git -C "$GITHUB_WORKSPACE"',
+        'timeout --signal=TERM --kill-after=10s 120s git -C "$GITHUB_WORKSPACE"',
       );
       expect(checkoutStep.run, jobName).toContain("for attempt in 1 2 3");
       expect(checkoutStep.run, jobName).toContain("timed out on attempt $attempt; retrying");
