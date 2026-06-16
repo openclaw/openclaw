@@ -371,6 +371,33 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
+  it("suppresses non-mutating Codex exec_command warnings when verbose mode is off", () => {
+    expectNoPayloads({
+      lastToolError: {
+        toolName: "exec_command",
+        error: "grep exited 1 because the verification label was absent",
+        mutatingAction: false,
+      },
+      verboseLevel: "off",
+    });
+  });
+
+  it("keeps mutating Codex exec_command failures visible", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "exec_command",
+        error: "command failed",
+        mutatingAction: true,
+      },
+      verboseLevel: "off",
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Exec Command",
+      absentDetail: "command failed",
+    });
+  });
+
   it("marks middleware tool-error warnings after assistant output as non-terminal", () => {
     // Middleware failures after useful assistant output warn the user without
     // replacing the successful answer as the terminal payload.

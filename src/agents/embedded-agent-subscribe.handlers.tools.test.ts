@@ -337,6 +337,39 @@ describe("handleToolExecutionStart read path checks", () => {
 });
 
 describe("handleToolExecutionEnd cron mutation tracking", () => {
+  it("classifies Codex exec_command read-only failures as non-mutating", async () => {
+    const { ctx } = createTestContext();
+    const toolCallId = "tool-codex-exec-command-readonly";
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "exec_command",
+        toolCallId,
+        args: { cmd: "rg -n missing-label src/agents" },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec_command",
+        toolCallId,
+        isError: true,
+        result: {
+          content: [{ type: "text", text: "rg exited with status 1" }],
+        },
+      } as never,
+    );
+
+    expect(ctx.state.lastToolError).toMatchObject({
+      toolName: "exec_command",
+      error: "rg exited with status 1",
+      mutatingAction: false,
+    });
+  });
+
   it("increments successfulCronAdds when cron add succeeds", async () => {
     const { ctx } = createTestContext();
     await handleToolExecutionStart(

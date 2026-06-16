@@ -77,6 +77,7 @@ import {
 } from "./embedded-agent-subscribe.tools.js";
 import { inferToolMetaFromArgs } from "./embedded-agent-utils.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
+import { isExecLikeToolName } from "./exec-tool-names.js";
 import type { AgentEvent } from "./runtime/index.js";
 import { buildToolMutationState, isSameToolMutationAction } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
@@ -263,7 +264,7 @@ function buildToolItemTitle(toolName: string, meta?: string): string {
 }
 
 function isExecToolName(toolName: string): boolean {
-  return toolName === "exec" || toolName === "bash";
+  return isExecLikeToolName(toolName);
 }
 
 function isPatchToolName(toolName: string): boolean {
@@ -494,8 +495,7 @@ function buildPatchSummaryText(summary: ApplyPatchSummary): string {
 }
 
 function extendExecMeta(toolName: string, args: unknown, meta?: string): string | undefined {
-  const normalized = normalizeOptionalLowercaseString(toolName);
-  if (normalized !== "exec" && normalized !== "bash") {
+  if (!isExecLikeToolName(toolName)) {
     return meta;
   }
   if (!args || typeof args !== "object") {

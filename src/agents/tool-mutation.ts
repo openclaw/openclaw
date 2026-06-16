@@ -7,6 +7,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
+import { normalizeExecLikeToolName } from "./exec-tool-names.js";
 import { asRecord } from "./tool-display-record.js";
 
 const MUTATING_TOOL_NAMES = new Set([
@@ -346,7 +347,7 @@ function appendFingerprintAlias(
 }
 
 export function isLikelyMutatingToolName(toolName: string): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(toolName);
+  const normalized = normalizeExecLikeToolName(toolName);
   if (!normalized) {
     return false;
   }
@@ -359,7 +360,7 @@ export function isLikelyMutatingToolName(toolName: string): boolean {
 }
 
 export function isMutatingToolCall(toolName: string, args: unknown): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(toolName);
+  const normalized = normalizeExecLikeToolName(toolName);
   const record = asRecord(args);
   const action = normalizeActionName(record?.action);
 
@@ -406,7 +407,7 @@ export function isMutatingToolCall(toolName: string, args: unknown): boolean {
 
 /** Return true only for tool calls whose structured contract proves replay safety. */
 export function isReplaySafeToolCall(toolName: string, args: unknown): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(toolName);
+  const normalized = normalizeExecLikeToolName(toolName);
   const record = asRecord(args);
   const action = normalizeActionName(record?.action);
   if (REPLAY_SAFE_TOOL_NAMES.has(normalized)) {
