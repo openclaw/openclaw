@@ -321,6 +321,14 @@ export function createFeishuMessageReceiveHandler({
       return;
     }
     const messageId = event.message?.message_id?.trim();
+    const botOpenId = getBotOpenId(accountId)?.trim();
+    const senderOpenId = event.sender.sender_id.open_id?.trim();
+    if (botOpenId && senderOpenId === botOpenId) {
+      // Feishu bot receive events identify their sender by open_id. Drop this
+      // account's bot before it can consume a claim or debounce slot.
+      log(`feishu[${accountId}]: dropping self-authored message ${messageId ?? "unknown"}`);
+      return;
+    }
     const messageDedupeKey = resolveFeishuMessageDedupeKey(event);
     if (!tryBeginFeishuMessageProcessing(messageDedupeKey, accountId)) {
       log(`feishu[${accountId}]: dropping duplicate event for message ${messageId}`);
