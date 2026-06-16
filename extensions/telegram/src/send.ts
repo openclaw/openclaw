@@ -848,10 +848,11 @@ export async function sendMessageTelegram(
     // Try rich messages first; fall back to legacy sendMessage if the API doesn't support it.
     try {
       return await sendTelegramRichTextChunks(buildRichTextPlan(rawText), context);
-    } catch (richErr) {
+    } catch (richErrUnknown) {
       // Fall back gracefully — the Bot API server may not support sendRichMessage yet.
+      const richErrMessage = richErrUnknown instanceof Error ? richErrUnknown.message : String(richErrUnknown);
       sendLogger.warn(
-        `sendRichMessage failed (${richErr instanceof Error ? richErr.message : richErr}), falling back to legacy sendMessage`,
+        `sendRichMessage failed (${richErrMessage}), falling back to legacy sendMessage`,
       );
       return await sendTelegramTextChunks(buildChunkedTextPlan(rawText, context), context);
     }
@@ -1642,9 +1643,10 @@ export async function editMessageTelegram(
           }),
         "editMessage",
         (err) => !isTelegramMessageNotModifiedError(err),
-      ).catch((richEditErr: unknown) => {
+      ).catch((richEditErrUnknown: unknown) => {
+        const richEditErrMessage = richEditErrUnknown instanceof Error ? richEditErrUnknown.message : String(richEditErrUnknown);
         sendLogger.warn(
-          `editMessageText (rich) failed (${richEditErr instanceof Error ? richEditErr.message : richEditErr}), falling back to legacy edit`,
+          `editMessageText (rich) failed (${richEditErrMessage}), falling back to legacy edit`,
         );
         return withTelegramHtmlParseFallback({
           label: "editMessage",
