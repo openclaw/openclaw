@@ -1,3 +1,5 @@
+// Implements guided and non-interactive disable/delete for channel accounts.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
@@ -14,7 +16,6 @@ import { callGateway } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { channelLabel } from "./runtime-label.js";
@@ -29,8 +30,9 @@ export type ChannelsRemoveOptions = {
 function listAccountIds(
   cfg: OpenClawConfig,
   channel: ChatChannel,
-  plugin?: ChannelPlugin,
+  pluginInput?: ChannelPlugin,
 ): string[] {
+  let plugin = pluginInput;
   plugin ??= getChannelPlugin(channel);
   if (!plugin) {
     return [];
@@ -67,6 +69,7 @@ async function stopGatewayRuntimeBeforeRemove(params: {
   }
 }
 
+/** Disable or delete a channel account, stopping gateway runtime state before mutation. */
 export async function channelsRemoveCommand(
   opts: ChannelsRemoveOptions,
   runtime: RuntimeEnv = defaultRuntime,

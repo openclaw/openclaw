@@ -1,11 +1,16 @@
+// Covers dynamic registration of custom model API providers.
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   clearApiProviders,
-  createAssistantMessageEventStream,
   getApiProvider,
-  registerBuiltInApiProviders,
+  registerApiProvider,
   unregisterApiProviders,
-} from "@earendil-works/pi-ai";
-import { afterEach, describe, expect, it, vi } from "vitest";
+} from "../llm/api-registry.js";
+import {
+  registerBuiltInApiProviders,
+  resetApiProviders,
+} from "../llm/providers/register-builtins.js";
+import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { ensureCustomApiRegistered, getCustomApiRegistrySourceId } from "./custom-api-registry.js";
 
 function getRegisteredTestProvider() {
@@ -24,6 +29,8 @@ describe("ensureCustomApiRegistered", () => {
   });
 
   it("registers a custom api provider once", () => {
+    // Custom API registration is idempotent so repeated plugin setup does not
+    // replace provider entries or create duplicate sources.
     const streamFn = vi.fn(() => createAssistantMessageEventStream());
 
     expect(ensureCustomApiRegistered("test-custom-api", streamFn)).toBe(true);
@@ -48,5 +55,29 @@ describe("ensureCustomApiRegistered", () => {
     expect(provider.stream(model as never, context as never, options as never)).toBe(stream);
     expect(provider.streamSimple(model as never, context as never, options as never)).toBe(stream);
     expect(streamFn).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps plugin api providers when refreshing built-ins", () => {
+    // Built-in refresh should preserve plugin-owned API providers while
+    // repopulating core providers.
+    const sourceId = "plugin:test-reset-api";
+    const api = "test-reset-plugin-api";
+    const streamFn = vi.fn(() => createAssistantMessageEventStream());
+    const streamSimpleFn = vi.fn(() => createAssistantMessageEventStream());
+    registerApiProvider(
+      {
+        api,
+        stream: streamFn,
+        streamSimple: streamSimpleFn,
+      },
+      sourceId,
+    );
+
+    resetApiProviders();
+
+    expect(getApiProvider(api)).toBeDefined();
+    expect(getApiProvider("openai-responses")).toBeDefined();
+
+    unregisterApiProviders(sourceId);
   });
 });

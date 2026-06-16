@@ -1,17 +1,26 @@
+// Defines Slack channel configuration types.
 import type {
+  ChannelStreamingBlockConfig,
+  ChannelStreamingProgressConfig,
+  ChannelStreamingPreviewConfig,
   ContextVisibilityMode,
   DmPolicy,
   GroupPolicy,
   MarkdownConfig,
   ReplyToMode,
-  SlackChannelStreamingConfig,
+  StreamingMode,
+  TextChunkMode,
 } from "./types.base.js";
 import type { ChannelBotLoopProtectionConfig } from "./types.bot-loop-protection.js";
 import type {
   ChannelHealthMonitorConfig,
   ChannelHeartbeatVisibilityConfig,
 } from "./types.channel-health.js";
-import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
+import type {
+  DmConfig,
+  MentionPatternsPolicyConfig,
+  ProviderCommandsConfig,
+} from "./types.messages.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type SlackDmConfig = {
@@ -51,6 +60,18 @@ export type SlackChannelConfig = {
 
 export type SlackReactionNotificationMode = "off" | "own" | "all" | "allowlist";
 export type SlackStreamingMode = "off" | "partial" | "block" | "progress";
+export type SlackStreamingProgressConfig = ChannelStreamingProgressConfig & {
+  /** Opt in to Slack-native task cards for progress mode. Default: false. */
+  nativeTaskCards?: boolean;
+};
+export type SlackChannelStreamingConfig = {
+  mode?: StreamingMode;
+  chunkMode?: TextChunkMode;
+  nativeTransport?: boolean;
+  preview?: ChannelStreamingPreviewConfig;
+  progress?: SlackStreamingProgressConfig;
+  block?: ChannelStreamingBlockConfig;
+};
 export type SlackExecApprovalTarget = "dm" | "channel" | "both";
 export type SlackExecApprovalConfig = {
   /** Enable mode for Slack exec approvals on this account. Default: auto when approvers can be resolved; false disables. */
@@ -164,6 +185,8 @@ export type SlackAccountConfig = {
    * - "allowlist": only allow channels present in channels.slack.channels
    */
   groupPolicy?: GroupPolicy;
+  /** Scope configured groupChat mentionPatterns to selected Slack channel IDs. */
+  mentionPatterns?: MentionPatternsPolicyConfig;
   /** Supplemental context visibility policy (all|allowlist|allowlist_quote). */
   contextVisibility?: ContextVisibilityMode;
   /** Max channel messages to keep as history context (0 disables). */

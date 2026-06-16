@@ -1,6 +1,7 @@
+// Google Meet tests cover node host plugin behavior.
 import { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 type MockChild = EventEmitter & {
   exitCode: number | null;
@@ -12,6 +13,7 @@ type MockChild = EventEmitter & {
 };
 
 const children: MockChild[] = [];
+let handleGoogleMeetNodeHostCommand: typeof import("./src/node-host.js").handleGoogleMeetNodeHostCommand;
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -41,6 +43,10 @@ vi.mock("node:child_process", async (importOriginal) => {
 });
 
 describe("google-meet node host bridge sessions", () => {
+  beforeAll(async () => {
+    ({ handleGoogleMeetNodeHostCommand } = await import("./src/node-host.js"));
+  });
+
   afterEach(() => {
     vi.useRealTimers();
     children.length = 0;
@@ -52,15 +58,12 @@ describe("google-meet node host bridge sessions", () => {
   });
 
   it("reports malformed params JSON with an owned error", async () => {
-    const { handleGoogleMeetNodeHostCommand } = await import("./src/node-host.js");
-
     await expect(handleGoogleMeetNodeHostCommand("{not json")).rejects.toThrow(
       "Google Meet node host received malformed params JSON.",
     );
   });
 
   it("starts observe-only Chrome without BlackHole or bridge processes", async () => {
-    const { handleGoogleMeetNodeHostCommand } = await import("./src/node-host.js");
     const originalPlatform = process.platform;
     children.length = 0;
     vi.mocked(spawnSync).mockClear();
@@ -89,7 +92,6 @@ describe("google-meet node host bridge sessions", () => {
   });
 
   it("clears output playback without closing the active bridge when the old output exits", async () => {
-    const { handleGoogleMeetNodeHostCommand } = await import("./src/node-host.js");
     const originalPlatform = process.platform;
     children.length = 0;
 
@@ -165,7 +167,6 @@ describe("google-meet node host bridge sessions", () => {
   });
 
   it("lists active bridge sessions and hides closed sessions", async () => {
-    const { handleGoogleMeetNodeHostCommand } = await import("./src/node-host.js");
     const originalPlatform = process.platform;
     children.length = 0;
 

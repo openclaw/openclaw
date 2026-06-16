@@ -1,5 +1,16 @@
+/**
+ * Playwright browser session manager.
+ *
+ * Manages CDP-backed Playwright connections, page lookup, observed dialogs,
+ * console/network/page state, role refs, and safe navigation handling.
+ */
 import crypto from "node:crypto";
 import path from "node:path";
+import {
+  isFutureDateTimestampMs,
+  parseFiniteNumber,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   Browser,
@@ -43,6 +54,7 @@ import { sanitizeUntrustedFileName } from "./safe-filename.js";
 
 const { chromium } = playwrightCore;
 
+/** Console message captured from a Playwright page. */
 export type BrowserConsoleMessage = {
   type: string;
   text: string;
@@ -50,6 +62,7 @@ export type BrowserConsoleMessage = {
   location?: { url?: string; lineNumber?: number; columnNumber?: number };
 };
 
+/** Page error captured from a Playwright page. */
 export type BrowserPageError = {
   message: string;
   name?: string;
@@ -57,6 +70,7 @@ export type BrowserPageError = {
   timestamp: string;
 };
 
+/** Network request record captured from a Playwright page. */
 export type BrowserNetworkRequest = {
   id: string;
   timestamp: string;
@@ -68,6 +82,7 @@ export type BrowserNetworkRequest = {
   failureText?: string;
 };
 
+/** Observed browser dialog record tracked for agent-visible state. */
 export type BrowserObservedDialogRecord = {
   id: string;
   type: string;
@@ -78,15 +93,18 @@ export type BrowserObservedDialogRecord = {
   closedBy?: "agent" | "armed" | "auto" | "timeout" | "remote";
 };
 
+/** Pending and recent dialog state for a page. */
 export type BrowserObservedDialogState = {
   pending: BrowserObservedDialogRecord[];
   recent: BrowserObservedDialogRecord[];
 };
 
+/** Browser state currently observable by agent responses. */
 export type BrowserObservedState = {
   dialogs: BrowserObservedDialogState;
 };
 
+/** Raised when an action is blocked by an observed modal dialog. */
 export class BrowserObservedDialogBlockedError extends Error {
   readonly browserState: BrowserObservedState;
 
@@ -97,6 +115,7 @@ export class BrowserObservedDialogBlockedError extends Error {
   }
 }
 
+/** Type guard for observed-dialog blocked errors. */
 export function isBrowserObservedDialogBlockedError(
   err: unknown,
 ): err is BrowserObservedDialogBlockedError {
@@ -181,9 +200,24 @@ const cachedByCdpUrl = new Map<string, ConnectedBrowser>();
 const connectingByCdpUrl = new Map<string, Promise<ConnectedBrowser>>();
 const blockedTargetsByCdpUrl = new Set<string>();
 const blockedPageRefsByCdpUrl = new Map<string, WeakSet<Page>>();
+let cdpConnectRetryDelayMsForTests: number | undefined;
+
+/** Override CDP reconnect retry delay in tests. */
+export function setCdpConnectRetryDelayMsForTests(delayMs?: number): void {
+  cdpConnectRetryDelayMsForTests = delayMs;
+}
+
+function resolveObservedDialogTimeoutMs(timeoutMs: number | undefined): number {
+  const parsed = parseFiniteNumber(timeoutMs);
+  return Math.max(1, Math.floor(parsed ?? OBSERVED_DIALOG_TIMEOUT_MS));
+}
 
 function normalizeCdpUrl(raw: string) {
   return raw.replace(/\/$/, "");
+}
+
+function resolveCdpConnectRetryDelayMs(attempt: number): number {
+  return cdpConnectRetryDelayMsForTests ?? 250 + attempt * 250;
 }
 
 function buildManagedDownloadPath(fileName: string): string {
@@ -348,7 +382,7 @@ function observeDialog(pageState: PageState, dialog: Dialog): void {
   pageState.pendingDialogs.push(pending);
 
   const armed = pageState.armedDialogResponse;
-  if (armed && armed.expiresAt >= Date.now()) {
+  if (armed && isFutureDateTimestampMs(armed.expiresAt)) {
     clearArmedDialogResponse(pageState);
     void settleObservedDialog({
       state: pageState,
@@ -470,6 +504,7 @@ function hasBlockedTargetsForCdpUrl(cdpUrl: string): boolean {
   return false;
 }
 
+/** Raised when a page target has been quarantined after policy denial. */
 export class BlockedBrowserTargetError extends Error {
   constructor() {
     super("Browser target is unavailable after SSRF policy blocked its navigation.");
@@ -477,6 +512,7 @@ export class BlockedBrowserTargetError extends Error {
   }
 }
 
+/** Cache role refs for a target id after a snapshot. */
 export function rememberRoleRefsForTarget(opts: {
   cdpUrl: string;
   targetId: string;
@@ -502,6 +538,7 @@ export function rememberRoleRefsForTarget(opts: {
   }
 }
 
+/** Store role refs on the page and target cache. */
 export function storeRoleRefsForTarget(opts: {
   page: Page;
   cdpUrl: string;
@@ -527,6 +564,7 @@ export function storeRoleRefsForTarget(opts: {
   });
 }
 
+/** Restore cached role refs onto a newly resolved page. */
 export function restoreRoleRefsForTarget(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -549,6 +587,7 @@ export function restoreRoleRefsForTarget(opts: {
   state.roleRefsMode = cached.mode;
 }
 
+/** Ensure and attach state listeners for a Playwright page. */
 export function ensurePageState(page: Page): PageState {
   const existing = pageStates.get(page);
   if (existing) {
@@ -685,11 +724,13 @@ export function ensurePageState(page: Page): PageState {
   return state;
 }
 
+/** Read observed dialog state from a Playwright page. */
 export function getObservedBrowserStateForPage(page: Page): BrowserObservedState {
   const state = ensurePageState(page);
   return serializeObservedBrowserState(state);
 }
 
+/** Resolve a page and read its observed browser state. */
 export async function getObservedBrowserStateViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -720,6 +761,7 @@ function resolvePendingDialogForResponse(params: {
   throw new Error("No dialog is pending.");
 }
 
+/** Respond to a pending observed dialog on a page. */
 export async function respondToObservedDialogOnPage(opts: {
   page: Page;
   dialogId?: string;
@@ -741,6 +783,7 @@ export async function respondToObservedDialogOnPage(opts: {
   });
 }
 
+/** Resolve a page and respond to one of its observed dialogs. */
 export async function respondToObservedDialogViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -758,6 +801,7 @@ export async function respondToObservedDialogViaPlaywright(opts: {
   });
 }
 
+/** Mark pending observed dialogs as handled by a remote/browser-side hook. */
 export function markObservedDialogsHandledRemotelyForPage(page: Page): BrowserObservedState {
   const state = ensurePageState(page);
   const pending = state.pendingDialogs.splice(0);
@@ -776,6 +820,7 @@ export function markObservedDialogsHandledRemotelyForPage(page: Page): BrowserOb
   return serializeObservedBrowserState(state);
 }
 
+/** Arm a one-shot automatic dialog response for a page. */
 export function armObservedDialogResponseOnPage(opts: {
   page: Page;
   accept: boolean;
@@ -784,10 +829,14 @@ export function armObservedDialogResponseOnPage(opts: {
 }): void {
   const state = ensurePageState(opts.page);
   clearArmedDialogResponse(state);
-  const timeoutMs = Math.max(1, Math.floor(opts.timeoutMs ?? OBSERVED_DIALOG_TIMEOUT_MS));
+  const timeoutMs = resolveObservedDialogTimeoutMs(opts.timeoutMs);
+  const expiresAt = resolveExpiresAtMsFromDurationMs(timeoutMs);
+  if (expiresAt === undefined) {
+    return;
+  }
   const response: ArmedDialogResponse = {
     accept: opts.accept,
-    expiresAt: Date.now() + timeoutMs,
+    expiresAt,
     ...(opts.promptText !== undefined ? { promptText: opts.promptText } : {}),
   };
   response.timer = setTimeout(() => {
@@ -798,6 +847,7 @@ export function armObservedDialogResponseOnPage(opts: {
   state.armedDialogResponse = response;
 }
 
+/** Create an abort signal that fires while a dialog blocks the page. */
 export function createObservedDialogAbortSignalForPage(opts: {
   page: Page;
   parentSignal?: AbortSignal;
@@ -850,6 +900,7 @@ function observeContext(context: BrowserContext) {
   context.on("page", (page) => ensurePageState(page));
 }
 
+/** Ensure shared Playwright browser-context state. */
 export function ensureContextState(context: BrowserContext): ContextState {
   const existing = contextStates.get(context);
   if (existing) {
@@ -923,8 +974,10 @@ async function connectBrowser(cdpUrl: string, ssrfPolicy?: SsrFPolicy): Promise<
         if (errMsg.includes("rate limit")) {
           break;
         }
-        const delay = 250 + attempt * 250;
-        await new Promise((r) => setTimeout(r, delay));
+        const delay = resolveCdpConnectRetryDelayMs(attempt);
+        await new Promise((r) => {
+          setTimeout(r, delay);
+        });
       }
     }
     if (lastErr instanceof Error) {
@@ -1043,7 +1096,7 @@ async function findPageByTargetId(
   const pages = await getAllPages(browser);
   let resolvedViaCdp = false;
   for (const page of pages) {
-    let tid: string | null = null;
+    let tid: string | null;
     try {
       tid = await pageTargetId(page);
       resolvedViaCdp = true;
@@ -1129,6 +1182,7 @@ async function getPageForTargetIdOnce(opts: {
   throw new BrowserTabNotFoundError();
 }
 
+/** Resolve a Playwright page by target id, reconnecting once on stale state. */
 export async function getPageForTargetId(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -1147,7 +1201,7 @@ export async function getPageForTargetId(opts: {
 }
 
 function isTopLevelNavigationRequest(page: Page, request: Request): boolean {
-  let sameMainFrame = false;
+  let sameMainFrame;
   try {
     sameMainFrame = request.frame() === page.mainFrame();
   } catch {
@@ -1174,7 +1228,7 @@ function isTopLevelNavigationRequest(page: Page, request: Request): boolean {
 }
 
 function isSubframeDocumentNavigationRequest(page: Page, request: Request): boolean {
-  let sameMainFrame = false;
+  let sameMainFrame;
   try {
     sameMainFrame = request.frame() === page.mainFrame();
   } catch {
@@ -1203,6 +1257,7 @@ function isSubframeDocumentNavigationRequest(page: Page, request: Request): bool
   }
 }
 
+/** Return true when an error is a browser navigation policy denial. */
 export function isPolicyDenyNavigationError(err: unknown): boolean {
   return err instanceof SsrFBlockedError || err instanceof InvalidBrowserNavigationUrlError;
 }
@@ -1231,6 +1286,7 @@ async function quarantineBlockedTarget(opts: {
 // and the navigate-style entry points that wrap it) may invoke this — closing
 // a tab is a destructive action that must not happen on user-owned tabs from
 // read-only operations like snapshot/screenshot/interactions.
+/** Quarantine and close a tab that OpenClaw navigated to a blocked URL. */
 export async function closeBlockedNavigationTarget(opts: {
   cdpUrl: string;
   page: Page;
@@ -1242,6 +1298,7 @@ export async function closeBlockedNavigationTarget(opts: {
 
 // On policy denial: quarantines and rethrows (never closes).
 // Navigate-style callers catch the rethrow and close via closeBlockedNavigationTarget.
+/** Validate a completed page navigation and quarantine policy-denied targets. */
 export async function assertPageNavigationCompletedSafely(
   opts: {
     cdpUrl: string;
@@ -1286,6 +1343,7 @@ async function continueRouteSafely(route: Route): Promise<void> {
   }
 }
 
+/** Navigate a page while guarding requested URL and redirect chain. */
 export async function gotoPageWithNavigationGuard(
   opts: {
     cdpUrl: string;
@@ -1334,12 +1392,12 @@ export async function gotoPageWithNavigationGuard(
   try {
     const response = await opts.page.goto(opts.url, { timeout: opts.timeoutMs });
     if (blockedError) {
-      throw blockedError;
+      throw toLintErrorObject(blockedError, "Non-Error thrown");
     }
     return response;
   } catch (err) {
     if (blockedError) {
-      throw blockedError;
+      throw toLintErrorObject(blockedError, "Non-Error thrown");
     }
     throw err;
   } finally {
@@ -1354,6 +1412,7 @@ export async function gotoPageWithNavigationGuard(
   }
 }
 
+/** Resolve a browser snapshot ref into a Playwright locator. */
 export function refLocator(page: Page, ref: string) {
   const normalized = ref.startsWith("@")
     ? ref.slice(1)
@@ -1419,6 +1478,7 @@ export function refLocator(page: Page, ref: string) {
   return page.locator(`aria-ref=${normalized}`);
 }
 
+/** Close one or all cached Playwright browser connections. */
 export async function closePlaywrightBrowserConnection(opts?: { cdpUrl?: string }): Promise<void> {
   const normalized = opts?.cdpUrl ? normalizeCdpUrl(opts.cdpUrl) : null;
 
@@ -1471,7 +1531,7 @@ async function tryTerminateExecutionViaCdp(opts: {
       id?: string;
       webSocketDebuggerUrl?: string;
     }>
-  >(listUrl, 2000).catch(() => null);
+  >(listUrl, 2000, undefined, opts.ssrfPolicy).catch(() => null);
   if (!pages || pages.length === 0) {
     return;
   }
@@ -1483,6 +1543,7 @@ async function tryTerminateExecutionViaCdp(opts: {
     return;
   }
   const wsUrl = normalizeCdpWsUrl(wsUrlRaw, cdpHttpBase);
+  await assertCdpEndpointAllowed(wsUrl, opts.ssrfPolicy);
   const needsAttach = cdpSocketNeedsAttach(wsUrl);
 
   const runWithTimeout = async <T>(work: Promise<T>, ms: number): Promise<T> => {
@@ -1547,6 +1608,7 @@ async function tryTerminateExecutionViaCdp(opts: {
  * The old browser.close() eventually resolves when the in-browser evaluate timeout fires,
  * or the old connection gets GC'd. Either way, it doesn't affect the fresh connection.
  */
+/** Force-disconnect a Playwright connection to unblock a stuck target operation. */
 export async function forceDisconnectPlaywrightForTarget(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -1593,6 +1655,7 @@ async function withPlaywrightSafeReadReconnect<T>(
  * List all pages/tabs from the persistent Playwright connection.
  * Used for remote profiles where HTTP-based /json/list is ephemeral.
  */
+/** List pages through the persistent Playwright connection. */
 export async function listPagesViaPlaywright(opts: {
   cdpUrl: string;
   ssrfPolicy?: SsrFPolicy;
@@ -1664,6 +1727,7 @@ export async function listPagesViaPlaywright(opts: {
  * Used for remote profiles where HTTP-based /json/new is ephemeral.
  * Returns the new page's targetId and metadata.
  */
+/** Create and optionally navigate a page through Playwright. */
 export async function createPageViaPlaywright(
   opts: {
     cdpUrl: string;
@@ -1752,6 +1816,7 @@ export async function createPageViaPlaywright(
  * Close a page/tab by targetId using the persistent Playwright connection.
  * Used for remote profiles where HTTP-based /json/close is ephemeral.
  */
+/** Close a Playwright page by CDP target id. */
 export async function closePageByTargetIdViaPlaywright(opts: {
   cdpUrl: string;
   targetId: string;
@@ -1765,6 +1830,7 @@ export async function closePageByTargetIdViaPlaywright(opts: {
  * Focus a page/tab by targetId using the persistent Playwright connection.
  * Used for remote profiles where HTTP-based /json/activate can be ephemeral.
  */
+/** Bring a Playwright page to the front by CDP target id. */
 export async function focusPageByTargetIdViaPlaywright(opts: {
   cdpUrl: string;
   targetId: string;
@@ -1783,9 +1849,22 @@ export async function focusPageByTargetIdViaPlaywright(opts: {
           await send("Page.bringToFront");
         },
       });
-      return;
     } catch {
       throw err;
     }
   }
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

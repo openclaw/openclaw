@@ -32,7 +32,6 @@ concurrency:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.x"
-  PNPM_VERSION: "11.0.8"
   OPENCLAW_BUILD_PRIVATE_QA: "1"
   OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
 
@@ -57,7 +56,7 @@ jobs:
     steps:
       - name: Require maintainer-level repository access
         id: permission
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const allowed = new Set(["admin", "maintain", "write"]);
@@ -92,7 +91,7 @@ jobs:
     steps:
       - name: Resolve refs and target PR
         id: resolve
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const defaultBaseline = "0bf06e953fdda290799fc9fb9244a8f67fdae593";
@@ -255,7 +254,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Build Mantis harness
@@ -439,8 +437,17 @@ jobs:
             echo "::warning::Could not generate motion-trimmed desktop previews; continuing with screenshots and full MP4 links."
           fi
 
-          baseline_status="$(jq -r '.scenarios[0].status' "$root/baseline/discord-qa-summary.json")"
-          candidate_status="$(jq -r '.scenarios[0].status' "$root/candidate/discord-qa-summary.json")"
+          read_discord_status_reaction_status() {
+            local lane="$1"
+            if [[ -f "$root/$lane/qa-evidence.json" ]]; then
+              jq -r '.entries[0].result.status' "$root/$lane/qa-evidence.json"
+              return
+            fi
+            jq -r '.scenarios[0].status' "$root/$lane/discord-qa-summary.json"
+          }
+
+          baseline_status="$(read_discord_status_reaction_status baseline)"
+          candidate_status="$(read_discord_status_reaction_status candidate)"
 
           jq -n \
             --arg baseline_status "$baseline_status" \
@@ -583,7 +590,7 @@ jobs:
       issues: write
     steps:
       - name: Remove workflow eyes reaction
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const { owner, repo } = context.repo;

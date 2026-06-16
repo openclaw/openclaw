@@ -1,3 +1,4 @@
+// Discord tests cover send.sends basic channel messages plugin behavior.
 import { ChannelType, MessageFlags, PermissionFlagsBits, Routes } from "discord-api-types/v10";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { discordWebMediaMockFactory, makeDiscordRest } from "./send.test-harness.js";
@@ -469,29 +470,23 @@ describe("sendMessageDiscord", () => {
     expect(res.channelId).toBe("chan1");
   });
 
-  it("rejects bare numeric IDs as ambiguous", async () => {
-    const { rest } = makeDiscordRest();
-    await expect(
-      sendMessageDiscord("273512430271856640", "hello", {
-        rest,
-        token: "t",
-        cfg: DISCORD_TEST_CFG,
-      }),
-    ).rejects.toThrow(/Ambiguous Discord recipient/);
-    await expect(
-      sendMessageDiscord("273512430271856640", "hello", {
-        rest,
-        token: "t",
-        cfg: DISCORD_TEST_CFG,
-      }),
-    ).rejects.toThrow(/user:273512430271856640/);
-    await expect(
-      sendMessageDiscord("273512430271856640", "hello", {
-        rest,
-        token: "t",
-        cfg: DISCORD_TEST_CFG,
-      }),
-    ).rejects.toThrow(/channel:273512430271856640/);
+  it("treats bare numeric outbound IDs as channels", async () => {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({ type: ChannelType.GuildText });
+    postMock.mockResolvedValueOnce({
+      id: "msg1",
+      channel_id: "273512430271856640",
+    });
+
+    const result = await sendMessageDiscord("273512430271856640", "hello", {
+      rest,
+      token: "t",
+      cfg: DISCORD_TEST_CFG,
+    });
+
+    expect(result.channelId).toBe("273512430271856640");
+    expectRestRoute(postMock, 0, Routes.channelMessages("273512430271856640"));
+    expect(requireRestBody(postMock).content).toBe("hello");
   });
 
   it("adds missing permission hints on 50013", async () => {
@@ -844,6 +839,29 @@ describe("fetchChannelPermissionsDiscord", () => {
     expect(res.permissions).toContain("ViewChannel");
     expect(res.permissions).toContain("SendMessages");
     expect(res.isDm).toBe(false);
+  });
+
+  it("stops permission lookup when the caller deadline aborts", async () => {
+    const { rest, getMock } = makeDiscordRest();
+    const controller = new AbortController();
+    getMock.mockImplementationOnce(async () => {
+      controller.abort();
+      return {
+        id: "chan1",
+        guild_id: "guild1",
+        permission_overwrites: [],
+      };
+    });
+
+    await expect(
+      fetchChannelPermissionsDiscord("chan1", {
+        rest,
+        token: "t",
+        cfg: DISCORD_TEST_CFG,
+        signal: controller.signal,
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(getMock).toHaveBeenCalledTimes(1);
   });
 
   it("treats Administrator as all permissions despite overwrites", async () => {

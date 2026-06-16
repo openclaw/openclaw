@@ -1,3 +1,4 @@
+// Verifies WhatsApp provider schema parsing and defaults.
 import { describe, it, expect } from "vitest";
 import { WhatsAppConfigSchema, WhatsAppAccountSchema } from "./zod-schema.providers-whatsapp.js";
 
@@ -135,5 +136,81 @@ describe("WhatsApp prompt config Zod validation", () => {
     expect(schema.properties?.accounts?.additionalProperties?.properties?.exposeErrorText).toBe(
       undefined,
     );
+  });
+
+  it("accepts channel-level pluginHooks.messageReceived", () => {
+    const config = {
+      pluginHooks: {
+        messageReceived: true,
+      },
+    };
+
+    const result = WhatsAppConfigSchema.safeParse(config);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.pluginHooks?.messageReceived).toBe(true);
+    }
+  });
+
+  it("accepts account-level pluginHooks.messageReceived", () => {
+    const config = {
+      accounts: {
+        work: {
+          pluginHooks: {
+            messageReceived: true,
+          },
+        },
+      },
+    };
+
+    const result = WhatsAppConfigSchema.safeParse(config);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.accounts?.work?.pluginHooks?.messageReceived).toBe(true);
+    }
+  });
+
+  it("rejects extra properties in pluginHooks", () => {
+    const config = {
+      pluginHooks: {
+        messageReceived: true,
+        otherProp: "invalid",
+      },
+    };
+
+    const result = WhatsAppConfigSchema.safeParse(config);
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts channel-level pluginHooks.messageReceived: false", () => {
+    const config = {
+      pluginHooks: {
+        messageReceived: false,
+      },
+    };
+
+    const result = WhatsAppConfigSchema.safeParse(config);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.pluginHooks?.messageReceived).toBe(false);
+    }
+  });
+
+  it("accepts account-level pluginHooks.messageReceived: false", () => {
+    const config = {
+      accounts: {
+        work: {
+          pluginHooks: {
+            messageReceived: false,
+          },
+        },
+      },
+    };
+
+    const result = WhatsAppConfigSchema.safeParse(config);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.accounts?.work?.pluginHooks?.messageReceived).toBe(false);
+    }
   });
 });

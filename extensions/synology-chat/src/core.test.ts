@@ -1,4 +1,6 @@
+// Synology Chat tests cover core plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import {
   createPluginSetupWizardConfigure,
   createTestWizardPrompter,
@@ -324,6 +326,28 @@ describe("synology-chat account resolution", () => {
 
     process.env.SYNOLOGY_RATE_LIMIT = "0abc";
     expect(resolveAccount({ channels: { "synology-chat": {} } }).rateLimitPerMinute).toBe(30);
+
+    process.env.SYNOLOGY_RATE_LIMIT = "-1";
+    expect(resolveAccount({ channels: { "synology-chat": {} } }).rateLimitPerMinute).toBe(30);
+  });
+
+  it("ignores malformed configured rate limits", () => {
+    process.env.SYNOLOGY_RATE_LIMIT = "12";
+
+    expect(
+      resolveAccount({
+        channels: {
+          "synology-chat": { rateLimitPerMinute: -1 },
+        },
+      }).rateLimitPerMinute,
+    ).toBe(12);
+    expect(
+      resolveAccount({
+        channels: {
+          "synology-chat": { rateLimitPerMinute: 1.5 },
+        },
+      }).rateLimitPerMinute,
+    ).toBe(12);
   });
 });
 
@@ -423,5 +447,24 @@ describe("synology-chat security helpers", () => {
     expect(capped.check("user3")).toBe(true);
     expect(capped.check("user4")).toBe(true);
     expect(capped.size()).toBeLessThanOrEqual(3);
+  });
+
+  it("caps oversized rate limit windows before constructing the limiter", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      const limiter = new RateLimiter(1, Number.MAX_SAFE_INTEGER);
+
+      expect(limiter.check("user1")).toBe(true);
+      expect(limiter.check("user1")).toBe(false);
+
+      vi.setSystemTime(MAX_TIMER_TIMEOUT_MS - 1);
+      expect(limiter.check("user1")).toBe(false);
+
+      vi.setSystemTime(MAX_TIMER_TIMEOUT_MS);
+      expect(limiter.check("user1")).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

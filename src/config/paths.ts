@@ -1,7 +1,9 @@
+// Resolves config, state, cache, and runtime filesystem paths.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { resolveHomeRelativePath, resolveRequiredHomeDir } from "../infra/home-dir.js";
+import { parseTcpPort } from "../infra/tcp-port.js";
 import type { OpenClawConfig } from "./types.js";
 
 /**
@@ -15,7 +17,7 @@ export function resolveIsNixMode(env: NodeJS.ProcessEnv = process.env): boolean 
   return env.OPENCLAW_NIX_MODE === "1";
 }
 
-export const isNixMode = resolveIsNixMode();
+export let isNixMode = resolveIsNixMode();
 
 // Support the remaining legacy pre-rebrand state dir.
 const LEGACY_STATE_DIRNAMES = [".clawdbot"] as const;
@@ -88,6 +90,14 @@ export function resolveStateDir(
   return newDir;
 }
 
+export function normalizeStateDirEnv(env: NodeJS.ProcessEnv = process.env): void {
+  const effectiveHomedir = () => resolveRequiredHomeDir(env, envHomedir(env));
+  const openclawOverride = env.OPENCLAW_STATE_DIR?.trim();
+  if (openclawOverride) {
+    env.OPENCLAW_STATE_DIR = resolveUserPath(openclawOverride, env, effectiveHomedir);
+  }
+}
+
 function resolveUserPath(
   input: string,
   env: NodeJS.ProcessEnv = process.env,
@@ -136,7 +146,7 @@ export function resolveIncludeRoots(
   return roots;
 }
 
-export const STATE_DIR = resolveStateDir();
+export let STATE_DIR = resolveStateDir();
 
 /**
  * Config file path (JSON or JSON5).
@@ -219,7 +229,24 @@ export function resolveConfigPath(
   return path.join(stateDir, CONFIG_FILENAME);
 }
 
-export const CONFIG_PATH = resolveConfigPathCandidate();
+export let CONFIG_PATH = resolveConfigPathCandidate();
+
+/**
+ * Re-pins process-stable runtime paths after an early startup selector changes the environment.
+ *
+ * Gateway startup must call this before importing runtime modules that derive their own constants
+ * from these live bindings, otherwise one process can split reads and writes across two targets.
+ */
+export function pinRuntimePaths(env: NodeJS.ProcessEnv = process.env): {
+  configPath: string;
+  stateDir: string;
+} {
+  normalizeStateDirEnv(env);
+  isNixMode = resolveIsNixMode(env);
+  STATE_DIR = resolveStateDir(env);
+  CONFIG_PATH = resolveConfigPathCandidate(env);
+  return { configPath: CONFIG_PATH, stateDir: STATE_DIR };
+}
 
 /**
  * Resolve default config path candidates across default locations.
@@ -297,16 +324,14 @@ function parseGatewayPortEnvValue(raw: string | undefined): number | null {
     return null;
   }
   if (/^\d+$/.test(trimmed)) {
-    const parsed = Number.parseInt(trimmed, 10);
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+    return parseTcpPort(trimmed);
   }
 
   // Docker Compose publish strings can leak into host CLI env loading via repo `.env`,
   // for example `127.0.0.1:18789` or `[::1]:18789`. Accept only explicit host:port forms.
   const bracketedIpv6Match = trimmed.match(/^\[[^\]]+\]:(\d+)$/);
   if (bracketedIpv6Match?.[1]) {
-    const parsed = Number.parseInt(bracketedIpv6Match[1], 10);
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+    return parseTcpPort(bracketedIpv6Match[1]);
   }
 
   const firstColon = trimmed.indexOf(":");
@@ -318,8 +343,7 @@ function parseGatewayPortEnvValue(raw: string | undefined): number | null {
   if (!/^\d+$/.test(suffix)) {
     return null;
   }
-  const parsed = Number.parseInt(suffix, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  return parseTcpPort(suffix);
 }
 
 export function resolveGatewayPort(

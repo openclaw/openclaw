@@ -1,3 +1,4 @@
+// Bundled health check tests cover built-in doctor checks and repair advice.
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -44,7 +45,9 @@ describe("registerBundledHealthChecks", () => {
       dirName: "policy",
       artifactBasename: "api.js",
     });
-    expect(mocks.registerPolicyDoctorChecks).toHaveBeenCalled();
+    expect(mocks.registerPolicyDoctorChecks).toHaveBeenCalledWith({
+      registerHealthCheck: expect.any(Function),
+    });
   });
 
   it("does not use policy.jsonc existence as extension activation", () => {

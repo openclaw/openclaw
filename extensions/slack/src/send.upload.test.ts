@@ -1,3 +1,4 @@
+// Slack tests cover send.upload plugin behavior.
 import type { WebClient } from "@slack/web-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installSlackBlockTestMocks } from "./blocks.test-helpers.js";
@@ -54,19 +55,16 @@ vi.mock("./runtime-api.js", async () => {
   };
 });
 
-let sendMessageSlack: typeof import("./send.js").sendMessageSlack;
-let clearSlackDmChannelCache: typeof import("./send.js").clearSlackDmChannelCache;
-let clearSlackSendQueuesForTest: typeof import("./send.js").clearSlackSendQueuesForTest;
-({ sendMessageSlack, clearSlackDmChannelCache, clearSlackSendQueuesForTest } =
-  await import("./send.js"));
+const { sendMessageSlack, clearSlackDmChannelCache, clearSlackSendQueuesForTest } =
+  await import("./send.js");
 const SLACK_TEST_CFG = { channels: { slack: { botToken: "xoxb-test" } } };
 
 type UploadTestClient = WebClient & {
-  conversations: { open: ReturnType<typeof vi.fn> };
-  chat: { postMessage: ReturnType<typeof vi.fn> };
+  conversations: { open: ReturnType<typeof vi.fn<(...args: unknown[]) => Promise<unknown>>> };
+  chat: { postMessage: ReturnType<typeof vi.fn<(...args: unknown[]) => Promise<unknown>>> };
   files: {
-    getUploadURLExternal: ReturnType<typeof vi.fn>;
-    completeUploadExternal: ReturnType<typeof vi.fn>;
+    getUploadURLExternal: ReturnType<typeof vi.fn<(...args: unknown[]) => Promise<unknown>>>;
+    completeUploadExternal: ReturnType<typeof vi.fn<(...args: unknown[]) => Promise<unknown>>>;
   };
 };
 
@@ -74,30 +72,26 @@ type MockCalls = {
   mock: { calls: unknown[][] };
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(isRecord(value), `${label} should be an object`).toBe(true);
-  if (!isRecord(value)) {
+  const isObjectRecord = typeof value === "object" && value !== null && !Array.isArray(value);
+  expect(isObjectRecord, `${label} should be an object`).toBe(true);
+  if (!isObjectRecord) {
     throw new Error(`${label} should be an object`);
   }
-  return value;
+  return value as Record<string, unknown>;
 }
 
 function requireArray(value: unknown, label: string): unknown[] {
-  expect(Array.isArray(value), `${label} should be an array`).toBe(true);
-  if (!Array.isArray(value)) {
+  const values = Array.isArray(value) ? value : null;
+  expect(values, `${label} should be an array`).not.toBeNull();
+  if (!values) {
     throw new Error(`${label} should be an array`);
   }
-  return value;
+  return values;
 }
 
 function expectFields(record: Record<string, unknown>, expected: Record<string, unknown>) {
-  for (const [key, value] of Object.entries(expected)) {
-    expect(record[key], key).toEqual(value);
-  }
+  expect(record).toMatchObject(expected);
 }
 
 function expectCallFirstArg(
@@ -142,18 +136,24 @@ function expectCompletedUpload(params: {
 function createUploadTestClient(): UploadTestClient {
   return {
     conversations: {
-      open: vi.fn(async () => ({ channel: { id: "D99RESOLVED" } })),
+      open: vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => ({
+        channel: { id: "D99RESOLVED" },
+      })),
     },
     chat: {
-      postMessage: vi.fn(async () => ({ ts: "171234.567" })),
+      postMessage: vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => ({
+        ts: "171234.567",
+      })),
     },
     files: {
-      getUploadURLExternal: vi.fn(async () => ({
+      getUploadURLExternal: vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => ({
         ok: true,
         upload_url: "https://uploads.slack.test/upload",
         file_id: "F001",
       })),
-      completeUploadExternal: vi.fn(async () => ({ ok: true })),
+      completeUploadExternal: vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => ({
+        ok: true,
+      })),
     },
   } as unknown as UploadTestClient;
 }
@@ -242,8 +242,12 @@ describe("sendMessageSlack file upload with user IDs", () => {
   it("serializes concurrent sends to the same Slack target", async () => {
     const client = createUploadTestClient();
     let resolveFirst: (() => void) | undefined;
-    client.chat.postMessage.mockImplementation(async (payload: { text?: string }) => {
-      if (payload.text === "first") {
+    client.chat.postMessage.mockImplementation(async (payload: unknown) => {
+      const text =
+        typeof payload === "object" && payload !== null && "text" in payload
+          ? payload.text
+          : undefined;
+      if (text === "first") {
         await new Promise<void>((resolve) => {
           resolveFirst = resolve;
         });

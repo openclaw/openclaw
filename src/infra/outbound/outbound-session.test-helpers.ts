@@ -1,3 +1,9 @@
+// Test helpers build minimal plugin registries for outbound session-route
+// scenarios without importing real channel implementations.
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -14,14 +20,11 @@ import {
 } from "../../plugin-sdk/routing.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "../../shared/string-coerce.js";
-import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 
+// Session route fixtures cover direct, group, and threaded outbound routes without real plugins.
 function createSessionRouteTestPlugin(params: {
   id: ChannelPlugin["id"];
   label: string;
@@ -506,6 +509,7 @@ function resolveTlonOutboundSessionRouteForTest(params: ChannelOutboundSessionRo
   });
 }
 
+/** Installs a minimal channel registry for outbound session route tests. */
 export function setMinimalOutboundSessionPluginRegistryForTests(): void {
   const plugins: ChannelPlugin[] = [
     createSessionRouteTestPlugin({
@@ -585,9 +589,19 @@ export function setMinimalOutboundSessionPluginRegistryForTests(): void {
         capabilities: { chatTypes: ["direct", "group", "channel"] },
       }),
       messaging: {
-        parseExplicitTarget: ({ raw }) =>
-          raw.startsWith("spaces/") ? { to: raw, chatType: "group" } : null,
+        inferTargetChatType: ({ to }) => (to.startsWith("spaces/") ? "group" : undefined),
         targetPrefixes: ["fallbackchat"],
+      },
+    },
+    {
+      ...createChannelTestPluginBase({
+        id: "legacyparser",
+        label: "Legacy Parser",
+        capabilities: { chatTypes: ["direct", "group", "channel"] },
+      }),
+      messaging: {
+        parseExplicitTarget: ({ raw }) =>
+          raw === "team-ops" ? { to: raw, chatType: "group" } : null,
       },
     },
   ];

@@ -1,15 +1,22 @@
+/** Covers plugin runtime registration API behavior and registry mutation guards. */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { isPluginRegistryRetired } from "./registry-lifecycle.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import type { PluginHttpRouteRegistration } from "./registry.js";
 import {
+  getActivePluginGatewayCommandRegistry,
   getActivePluginHttpRouteRegistryVersion,
   getActivePluginRegistryVersion,
   getActivePluginRegistry,
+  getActivePluginSessionExtensionRegistry,
   listImportedRuntimePluginIds,
+  pinActivePluginChannelRegistry,
   pinActivePluginHttpRouteRegistry,
+  pinActivePluginSessionExtensionRegistry,
   recordImportedPluginId,
+  releasePinnedPluginChannelRegistry,
   releasePinnedPluginHttpRouteRegistry,
+  releasePinnedPluginSessionExtensionRegistry,
   resetPluginRuntimeStateForTest,
   resolveActivePluginHttpRouteRegistry,
   setActivePluginRegistry,
@@ -24,6 +31,19 @@ function createRegistryWithRoute(path: string) {
     match: path === "/plugins/diffs" ? "prefix" : "exact",
     handler: () => true,
     pluginId: path === "/plugins/diffs" ? "diffs" : "demo",
+    source: "test",
+  });
+  return registry;
+}
+
+function createRegistryWithSessionExtension(pluginId = "demo-plugin", namespace = "demo") {
+  const registry = createEmptyPluginRegistry();
+  registry.sessionExtensions?.push({
+    pluginId,
+    extension: {
+      namespace,
+      description: "Demo session extension",
+    },
     source: "test",
   });
   return registry;
@@ -87,7 +107,9 @@ async function waitForCleanupSignal(signal: Promise<void>, label: string): Promi
 
 describe("plugin runtime route registry", () => {
   afterEach(() => {
+    releasePinnedPluginChannelRegistry();
     releasePinnedPluginHttpRouteRegistry();
+    releasePinnedPluginSessionExtensionRegistry();
     resetPluginRuntimeStateForTest();
   });
 
@@ -146,6 +168,105 @@ describe("plugin runtime route registry", () => {
 
     expect(resolveActivePluginHttpRouteRegistry(laterRegistry)).toBe(laterRegistry);
     expect(isPluginRegistryRetired(startupRegistry)).toBe(true);
+  });
+
+  it("keeps pinned session extension registries across active registry churn", () => {
+    const startupRegistry = createRegistryWithSessionExtension("startup", "presence");
+    const laterRegistry = createRegistryWithSessionExtension("later", "presence");
+
+    setActivePluginRegistry(startupRegistry);
+    pinActivePluginSessionExtensionRegistry(startupRegistry);
+    setActivePluginRegistry(laterRegistry);
+
+    expect(getActivePluginSessionExtensionRegistry()).toBe(startupRegistry);
+    expect(
+      getActivePluginSessionExtensionRegistry()?.sessionExtensions?.map((entry) => entry.pluginId),
+    ).toEqual(["startup"]);
+    expect(isPluginRegistryRetired(startupRegistry)).toBe(false);
+  });
+
+  it("releases pinned session extension registries back to the active registry", () => {
+    const startupRegistry = createRegistryWithSessionExtension("startup", "presence");
+    const laterRegistry = createRegistryWithSessionExtension("later", "presence");
+
+    setActivePluginRegistry(startupRegistry);
+    pinActivePluginSessionExtensionRegistry(startupRegistry);
+    setActivePluginRegistry(laterRegistry);
+
+    releasePinnedPluginSessionExtensionRegistry(startupRegistry);
+
+    expect(getActivePluginSessionExtensionRegistry()).toBe(laterRegistry);
+    expect(isPluginRegistryRetired(startupRegistry)).toBe(true);
+  });
+
+  it("keeps empty pinned session extension registries authoritative over active extensions", () => {
+    const startupRegistry = createEmptyPluginRegistry();
+    const laterRegistry = createRegistryWithSessionExtension("later", "presence");
+
+    setActivePluginRegistry(startupRegistry);
+    pinActivePluginSessionExtensionRegistry(startupRegistry);
+    setActivePluginRegistry(laterRegistry);
+
+    expect(getActivePluginSessionExtensionRegistry()).toBe(startupRegistry);
+    expect(getActivePluginSessionExtensionRegistry()?.sessionExtensions).toHaveLength(0);
+  });
+
+  it("resolves the gateway command registry from pinned startup surfaces before active churn", () => {
+    const { startupRegistry, laterRegistry } = createRuntimeRegistryPair();
+    startupRegistry.commands.push({
+      pluginId: "startup",
+      command: {
+        name: "startup",
+        description: "Startup command",
+        handler: () => ({}),
+      },
+      source: "test",
+    });
+
+    setActivePluginRegistry(startupRegistry);
+    pinActivePluginChannelRegistry(startupRegistry);
+    setActivePluginRegistry(laterRegistry);
+
+    expect(getActivePluginGatewayCommandRegistry()).toBe(startupRegistry);
+  });
+
+  it("falls through from an empty pinned startup registry to the active command surface", () => {
+    const { startupRegistry, laterRegistry } = createRuntimeRegistryPair();
+    laterRegistry.commands.push({
+      pluginId: "later",
+      command: {
+        name: "later",
+        description: "Later command",
+        handler: () => ({}),
+      },
+      source: "test",
+    });
+
+    setActivePluginRegistry(startupRegistry);
+    pinActivePluginChannelRegistry(startupRegistry);
+    setActivePluginRegistry(laterRegistry);
+
+    expect(getActivePluginGatewayCommandRegistry()).toBe(laterRegistry);
+  });
+
+  it("prefers channel-pinned command registries over route-only pins", () => {
+    const routeRegistry = createRegistryWithRoute("/demo");
+    const channelRegistry = createEmptyPluginRegistry();
+    channelRegistry.commands.push({
+      pluginId: "channel",
+      command: {
+        name: "channel",
+        description: "Channel command",
+        handler: () => ({}),
+      },
+      source: "test",
+    });
+
+    setActivePluginRegistry(routeRegistry);
+    pinActivePluginHttpRouteRegistry(routeRegistry);
+    pinActivePluginChannelRegistry(channelRegistry);
+
+    expect(getActivePluginGatewayCommandRegistry()).toBe(channelRegistry);
   });
 
   it.each([
@@ -245,13 +366,13 @@ describe("setActivePluginRegistry", () => {
   it.each([
     {
       name: "same active registry is refreshed",
-      refresh(nextRegistry: ReturnType<typeof createEmptyPluginRegistry>) {
+      refresh: (nextRegistry: ReturnType<typeof createEmptyPluginRegistry>) => {
         setActivePluginRegistry(nextRegistry);
       },
     },
     {
       name: "active registry advances again",
-      refresh() {
+      refresh: () => {
         setActivePluginRegistry(createEmptyPluginRegistry());
       },
     },

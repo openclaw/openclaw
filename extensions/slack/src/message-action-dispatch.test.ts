@@ -1,5 +1,7 @@
+// Slack tests cover message action dispatch plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { handleSlackMessageAction } from "./message-action-dispatch.js";
+import { extractSlackToolSend } from "./message-actions.js";
 
 function createInvokeSpy() {
   return vi.fn(async (action: Record<string, unknown>, _cfg?: unknown, _toolContext?: unknown) => ({
@@ -383,6 +385,26 @@ describe("handleSlackMessageAction", () => {
     expect(firstInvokeCall(invoke)[1]).toEqual({});
   });
 
+  it("rejects fractional read limits before invoking Slack actions", async () => {
+    const invoke = createInvokeSpy();
+
+    await expect(
+      handleSlackMessageAction({
+        providerId: "slack",
+        ctx: {
+          action: "read",
+          cfg: {},
+          params: {
+            channelId: "C1",
+            limit: 2.5,
+          },
+        } as never,
+        invoke: invoke as never,
+      }),
+    ).rejects.toThrow("limit must be a positive integer.");
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
   it("requires filePath, path, or media for upload-file", async () => {
     await expect(
       handleSlackMessageAction({
@@ -423,6 +445,32 @@ describe("handleSlackMessageAction", () => {
     expect(action.channelId).toBe("C1");
     expect(action.threadId).toBe("111.222");
     expectForwardedCfg(invoke, cfg);
+  });
+
+  it("forwards tool context for current-channel download-file actions", async () => {
+    const invoke = createInvokeSpy();
+    const cfg = slackConfig();
+    const toolContext = { currentChannelId: "C1" };
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "download-file",
+        cfg,
+        toolContext,
+        params: {
+          fileId: "F123",
+        },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    const action = firstAction(invoke);
+    expect(action.action).toBe("downloadFile");
+    expect(action.fileId).toBe("F123");
+    expect(action.channelId).toBeUndefined();
+    expectForwardedCfg(invoke, cfg);
+    expect(firstInvokeCall(invoke)[2]).toBe(toolContext);
   });
 
   it("maps download-file target aliases to scope fields", async () => {
@@ -499,5 +547,83 @@ describe("handleSlackMessageAction", () => {
         invoke: createInvokeSpy() as never,
       }),
     ).rejects.toThrow(/fileId/i);
+  });
+});
+
+describe("extractSlackToolSend", () => {
+  it("maps native thread and top-level fields into send telemetry", () => {
+    expect(
+      extractSlackToolSend({
+        action: "sendMessage",
+        to: "channel:C1",
+        threadTs: "171.222",
+      }),
+    ).toMatchObject({
+      to: "channel:C1",
+      threadId: "171.222",
+    });
+    expect(
+      extractSlackToolSend({
+        action: "sendMessage",
+        to: "channel:C1",
+      }),
+    ).toMatchObject({
+      to: "channel:C1",
+      threadImplicit: true,
+    });
+    expect(
+      extractSlackToolSend({
+        action: "uploadFile",
+        to: "channel:C1",
+      }),
+    ).toMatchObject({
+      to: "channel:C1",
+      threadImplicit: true,
+    });
+    expect(
+      extractSlackToolSend({
+        action: "sendMessage",
+        to: "channel:C1",
+        threadTs: null,
+      }),
+    ).toMatchObject({
+      to: "channel:C1",
+      threadSuppressed: true,
+    });
+  });
+
+  it("maps generic send and upload thread precedence into telemetry", () => {
+    expect(
+      extractSlackToolSend({
+        action: "send",
+        to: "channel:C1",
+        threadId: "111.000",
+        replyTo: "999.000",
+      }),
+    ).toMatchObject({
+      to: "channel:C1",
+      threadId: "999.000",
+    });
+    expect(
+      extractSlackToolSend({
+        action: "upload-file",
+        to: "channel:C1",
+        threadId: "111.000",
+        replyTo: "999.000",
+      }),
+    ).toMatchObject({
+      to: "channel:C1",
+      threadId: "111.000",
+    });
+    expect(
+      extractSlackToolSend({
+        action: "upload-file",
+        to: "channel:C1",
+        replyTo: "999.000",
+      }),
+    ).toMatchObject({
+      to: "channel:C1",
+      threadId: "999.000",
+    });
   });
 });

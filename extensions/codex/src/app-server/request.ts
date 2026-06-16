@@ -1,3 +1,7 @@
+/**
+ * Sends typed JSON-RPC requests to the Codex app-server with sandbox guard
+ * checks, shared-client leasing, and isolated-client shutdown handling.
+ */
 import type { resolveCodexAppServerAuthProfileIdForAgent } from "./auth-bridge.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 import type {
@@ -6,12 +10,15 @@ import type {
   CodexAppServerRequestResult,
   JsonValue,
 } from "./protocol.js";
+import { resolveCodexAppServerDirectSandboxBypassBlock } from "./sandbox-guard.js";
 import {
   createIsolatedCodexAppServerClient,
-  getSharedCodexAppServerClient,
+  getLeasedSharedCodexAppServerClient,
+  releaseLeasedSharedCodexAppServerClient,
 } from "./shared-client.js";
 import { withTimeout } from "./timeout.js";
 
+/** Sends a typed Codex app-server request and returns the method-specific response shape. */
 export async function requestCodexAppServerJson<M extends CodexAppServerRequestMethod>(params: {
   method: M;
   requestParams: CodexAppServerRequestParams<M>;
@@ -20,6 +27,8 @@ export async function requestCodexAppServerJson<M extends CodexAppServerRequestM
   authProfileId?: string | null;
   agentDir?: string;
   config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
+  sessionKey?: string;
+  sessionId?: string;
   isolated?: boolean;
 }): Promise<CodexAppServerRequestResult<M>>;
 export async function requestCodexAppServerJson<T = JsonValue | undefined>(params: {
@@ -30,6 +39,8 @@ export async function requestCodexAppServerJson<T = JsonValue | undefined>(param
   authProfileId?: string | null;
   agentDir?: string;
   config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
+  sessionKey?: string;
+  sessionId?: string;
   isolated?: boolean;
 }): Promise<T>;
 export async function requestCodexAppServerJson<T = JsonValue | undefined>(params: {
@@ -40,13 +51,25 @@ export async function requestCodexAppServerJson<T = JsonValue | undefined>(param
   authProfileId?: string | null;
   agentDir?: string;
   config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
+  sessionKey?: string;
+  sessionId?: string;
   isolated?: boolean;
 }): Promise<T> {
+  const sandboxBlock = resolveCodexAppServerDirectSandboxBypassBlock({
+    method: params.method,
+    requestParams: params.requestParams,
+    config: params.config,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+  });
+  if (sandboxBlock) {
+    throw new Error(sandboxBlock);
+  }
   const timeoutMs = params.timeoutMs ?? 60_000;
   return await withTimeout(
     (async () => {
       const client = await (
-        params.isolated ? createIsolatedCodexAppServerClient : getSharedCodexAppServerClient
+        params.isolated ? createIsolatedCodexAppServerClient : getLeasedSharedCodexAppServerClient
       )({
         startOptions: params.startOptions,
         timeoutMs,
@@ -64,6 +87,8 @@ export async function requestCodexAppServerJson<T = JsonValue | undefined>(param
           // underlying codex binary, so the unref'd close() path can leave
           // the child running and keep the parent's event loop alive.
           await client.closeAndWait({ exitTimeoutMs: 2_000, forceKillDelayMs: 250 });
+        } else {
+          releaseLeasedSharedCodexAppServerClient(client);
         }
       }
     })(),

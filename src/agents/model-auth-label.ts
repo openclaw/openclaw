@@ -1,3 +1,7 @@
+/**
+ * Formats user-facing auth labels for resolved provider/model credentials.
+ */
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -12,9 +16,17 @@ import {
   readClaudeCliCredentialsCached,
   readCodexCliCredentialsCached,
 } from "./cli-credentials.js";
-import { resolveEnvApiKey, resolveUsableCustomProviderApiKey } from "./model-auth.js";
+import {
+  resolveEnvApiKey,
+  resolveProviderEntryApiKeyProfileReference,
+  resolveUsableCustomProviderApiKey,
+} from "./model-auth.js";
 import { normalizeProviderId } from "./model-selection.js";
 
+// Builds concise auth labels for UI/status surfaces without exposing credential
+// values. Resolution follows profile override, provider profiles, env, CLI, then
+// custom provider config.
+/** Resolve the display label that describes how a provider is authenticated. */
 export function resolveModelAuthLabel(params: {
   provider?: string;
   cfg?: OpenClawConfig;
@@ -41,23 +53,19 @@ export function resolveModelAuthLabel(params: {
           }),
         });
   const profileOverride = params.sessionEntry?.authProfileOverride?.trim();
-  const acceptedProviderKeys = [
-    ...new Set(
-      [...(params.acceptedProviderIds ?? []).map(normalizeProviderId), providerKey].filter(Boolean),
+  const acceptedProviderKeys = uniqueStrings(
+    [...(params.acceptedProviderIds ?? []).map(normalizeProviderId), providerKey].filter(Boolean),
+  );
+  const order = uniqueStrings(
+    acceptedProviderKeys.flatMap((acceptedProvider) =>
+      resolveAuthProfileOrder({
+        cfg: params.cfg,
+        store,
+        provider: acceptedProvider,
+        preferredProfile: profileOverride,
+      }),
     ),
-  ];
-  const order = [
-    ...new Set(
-      acceptedProviderKeys.flatMap((acceptedProvider) =>
-        resolveAuthProfileOrder({
-          cfg: params.cfg,
-          store,
-          provider: acceptedProvider,
-          preferredProfile: profileOverride,
-        }),
-      ),
-    ),
-  ];
+  );
   const candidates = [profileOverride, ...order].filter(Boolean) as string[];
 
   for (const profileId of candidates) {
@@ -86,6 +94,28 @@ export function resolveModelAuthLabel(params: {
       return `token${label ? ` (${label})` : ""}`;
     }
     return `api-key${label ? ` (${label})` : ""}`;
+  }
+
+  const providerEntryProfileRef = resolveProviderEntryApiKeyProfileReference({
+    cfg: params.cfg,
+    provider: providerKey,
+    store,
+  });
+  if (providerEntryProfileRef.kind === "profile") {
+    const label = resolveAuthProfileDisplayLabel({
+      cfg: params.cfg,
+      store,
+      profileId: providerEntryProfileRef.profileId,
+    });
+    if (providerEntryProfileRef.mode === "token") {
+      return `token${label ? ` (${label})` : ""}`;
+    }
+    return `api-key${label ? ` (${label})` : ""}`;
+  }
+  if (providerEntryProfileRef.kind === "profile-incompatible") {
+    // Preserve the fact that config pointed at a profile while avoiding a
+    // misleading auth mode for an incompatible provider/profile pairing.
+    return "unknown";
   }
 
   const envKey = resolveEnvApiKey(providerKey, process.env, {

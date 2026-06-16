@@ -1,3 +1,5 @@
+// Shared fs bridge test helpers install Docker/path-safety mocks and provide
+// seeded sandbox fixtures for boundary and shell tests.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -77,6 +79,8 @@ const DOCKER_SCRIPT_INDEX = 5;
 const DOCKER_FIRST_SCRIPT_ARG_INDEX = 7;
 
 export function getDockerScript(args: string[]): string {
+  // docker exec argv positions are stable in fs bridge tests; helpers keep
+  // script assertions readable across many call sites.
   return args[DOCKER_SCRIPT_INDEX] ?? "";
 }
 
@@ -172,7 +176,7 @@ function installDockerReadMock(params?: { canonicalPath?: string }) {
     if (script.includes('readlink -f -- "$cursor"')) {
       return dockerExecResult(`${canonicalPath ?? getDockerArg(args, 1)}\n`);
     }
-    if (script.includes('stat -c "%F|%s|%Y"')) {
+    if (script.includes('stat -c "%F|%s|%y"')) {
       return dockerExecResult("regular file|1|2");
     }
     if (script.includes('cat -- "$1"')) {

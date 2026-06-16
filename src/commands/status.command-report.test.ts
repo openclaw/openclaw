@@ -1,3 +1,4 @@
+// Status command report tests cover terminal report line rendering from report sections.
 import { describe, expect, it } from "vitest";
 import { buildStatusCommandReportLines } from "./status.command-report.ts";
 
@@ -16,6 +17,7 @@ describe("buildStatusCommandReportLines", () => {
       overviewRows: [{ Item: "OS", Value: "macOS" }],
       showTaskMaintenanceHint: true,
       taskMaintenanceHint: "maintenance hint",
+      retainedLostTaskLine: "retained lost line",
       pluginCompatibilityLines: ["warn 1"],
       pairingRecoveryLines: ["pairing needed"],
       modelSelectionLines: ["model warning"],
@@ -39,6 +41,7 @@ describe("buildStatusCommandReportLines", () => {
       "table:Item:1",
       "",
       "muted(maintenance hint)",
+      "retained lost line",
       "",
       "# Plugin compatibility",
       "warn 1",

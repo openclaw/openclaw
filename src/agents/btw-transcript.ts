@@ -1,17 +1,25 @@
+/**
+ * Reads prior session transcript context for `/btw` side-question handoffs.
+ */
 import { readFile } from "node:fs/promises";
-import {
-  buildSessionContext,
-  migrateSessionEntries,
-  parseSessionEntries,
-  type SessionEntry as PiSessionEntry,
-} from "@earendil-works/pi-coding-agent";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   type SessionEntry as StoredSessionEntry,
 } from "../config/sessions.js";
+import {
+  scanSessionTranscriptTree,
+  type SessionTranscriptTree,
+} from "../config/sessions/transcript-tree.js";
 import { diagnosticLogger as diag } from "../logging/diagnostic.js";
+import {
+  buildSessionContext,
+  migrateSessionEntries,
+  parseSessionEntries,
+  type SessionEntry as AgentSessionEntry,
+} from "./sessions/session-manager.js";
 
+/** Resolves the persisted transcript file for a BTW session handoff. */
 export function resolveBtwSessionTranscriptPath(params: {
   sessionId: string;
   sessionEntry?: StoredSessionEntry;
@@ -33,38 +41,26 @@ export function resolveBtwSessionTranscriptPath(params: {
   }
 }
 
-function readSessionEntryId(entry: PiSessionEntry): string | undefined {
+// Session entries can come from older transcript formats, so id fields are
+// narrowed at this boundary before branch reconstruction trusts them.
+function readSessionEntryId(entry: AgentSessionEntry): string | undefined {
   const id = (entry as { id?: unknown }).id;
   return typeof id === "string" && id.trim().length > 0 ? id : undefined;
 }
 
-function readSessionEntryParentId(entry: PiSessionEntry): string | null | undefined {
-  const parentId = (entry as { parentId?: unknown }).parentId;
-  if (parentId === null) {
-    return null;
-  }
-  return typeof parentId === "string" && parentId.trim().length > 0 ? parentId : undefined;
-}
-
-function hasParentLinkedEntries(entries: PiSessionEntry[]): boolean {
-  return entries.some((entry) => Boolean(readSessionEntryId(entry) && "parentId" in entry));
-}
-
+// Reconstructs the selected branch from leaf to root. Missing links or cycles
+// mean the snapshot cannot be trusted, so callers fall back to a safe branch.
 function buildSessionBranchEntries(
-  entries: PiSessionEntry[],
-  leafId: string | undefined,
-): PiSessionEntry[] | undefined {
+  tree: SessionTranscriptTree<AgentSessionEntry>,
+  leafId: string | null | undefined,
+): AgentSessionEntry[] | undefined {
+  if (leafId === null) {
+    return [];
+  }
   if (!leafId) {
     return undefined;
   }
-  const byId = new Map<string, PiSessionEntry>();
-  for (const entry of entries) {
-    const id = readSessionEntryId(entry);
-    if (id) {
-      byId.set(id, entry);
-    }
-  }
-  const branch: PiSessionEntry[] = [];
+  const branch: AgentSessionEntry[] = [];
   const seen = new Set<string>();
   let currentId: string | undefined = leafId;
   while (currentId) {
@@ -72,33 +68,36 @@ function buildSessionBranchEntries(
       return undefined;
     }
     seen.add(currentId);
-    const entry = byId.get(currentId);
-    if (!entry) {
+    const node = tree.byId.get(currentId);
+    if (!node) {
       return undefined;
     }
-    branch.push(entry);
-    currentId = readSessionEntryParentId(entry) ?? undefined;
+    if ((node.entry as { type?: unknown }).type !== "leaf") {
+      branch.push(
+        node.entry.parentId === node.parentId
+          ? node.entry
+          : ({ ...node.entry, parentId: node.parentId } as AgentSessionEntry),
+      );
+    }
+    currentId = node.parentId ?? undefined;
   }
   return branch.toReversed();
 }
 
-function readDefaultLeafId(entries: PiSessionEntry[]): string | undefined {
-  for (let index = entries.length - 1; index >= 0; index -= 1) {
-    const id = readSessionEntryId(entries[index]);
-    if (id) {
-      return id;
-    }
-  }
-  return undefined;
-}
-
-function isTrailingUserMessage(entry: PiSessionEntry | undefined): boolean {
+function isTrailingUserMessage(entry: AgentSessionEntry | undefined): boolean {
   return (
     entry?.type === "message" &&
     (entry as { message?: { role?: unknown } }).message?.role === "user"
   );
 }
 
+/**
+ * Reads prior messages for BTW continuation.
+ *
+ * When a transcript has fork links, this returns the selected snapshot branch
+ * instead of the full file so a resumed agent does not inherit sibling-branch
+ * messages.
+ */
 export async function readBtwTranscriptMessages(params: {
   sessionFile: string;
   sessionId: string;
@@ -108,24 +107,29 @@ export async function readBtwTranscriptMessages(params: {
     const entries = parseSessionEntries(await readFile(params.sessionFile, "utf-8"));
     migrateSessionEntries(entries);
     const sessionEntries = entries.filter(
-      (entry): entry is PiSessionEntry => entry.type !== "session",
+      (entry): entry is AgentSessionEntry => entry.type !== "session",
     );
-    if (!hasParentLinkedEntries(sessionEntries)) {
+    const tree = scanSessionTranscriptTree(sessionEntries);
+    if (!tree.hasLeafUpdate) {
       return buildSessionContext(sessionEntries).messages;
     }
 
-    let branchEntries = params.snapshotLeafId
-      ? buildSessionBranchEntries(sessionEntries, params.snapshotLeafId)
+    const hasSnapshotLeaf = params.snapshotLeafId !== undefined;
+    let branchEntries = hasSnapshotLeaf
+      ? buildSessionBranchEntries(tree, params.snapshotLeafId)
       : undefined;
-    if (params.snapshotLeafId && !branchEntries) {
+    if (hasSnapshotLeaf && branchEntries === undefined) {
       diag.debug(
         `btw snapshot leaf unavailable: sessionId=${params.sessionId} leaf=${params.snapshotLeafId}`,
       );
     }
-    branchEntries ??= buildSessionBranchEntries(sessionEntries, readDefaultLeafId(sessionEntries));
-    if (!params.snapshotLeafId && isTrailingUserMessage(branchEntries?.at(-1))) {
-      const parentId = readSessionEntryParentId(branchEntries!.at(-1)!);
-      branchEntries = parentId ? (buildSessionBranchEntries(sessionEntries, parentId) ?? []) : [];
+    branchEntries ??= buildSessionBranchEntries(tree, tree.leafId);
+    if (!hasSnapshotLeaf && isTrailingUserMessage(branchEntries?.at(-1))) {
+      // Auto-selecting the newest branch must not include the current user turn
+      // that triggered BTW handoff; the subagent should continue from its parent.
+      const trailingId = readSessionEntryId(branchEntries!.at(-1)!);
+      const parentId = trailingId ? tree.byId.get(trailingId)?.parentId : null;
+      branchEntries = parentId ? (buildSessionBranchEntries(tree, parentId) ?? []) : [];
     }
     const sessionContext = buildSessionContext(branchEntries ?? sessionEntries);
     return Array.isArray(sessionContext.messages) ? sessionContext.messages : [];

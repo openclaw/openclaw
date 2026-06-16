@@ -1,5 +1,6 @@
+// Line plugin module implements monitor behavior.
 import type { webhook } from "@line/bot-sdk";
-import { hasFinalChannelTurnDispatch } from "openclaw/plugin-sdk/channel-message";
+import { hasFinalInboundReplyDispatch } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { chunkMarkdownText } from "openclaw/plugin-sdk/reply-runtime";
 import {
@@ -11,6 +12,7 @@ import {
 import {
   isRequestBodyLimitError,
   normalizePluginHttpPath,
+  normalizeWebhookPath,
   registerWebhookTargetWithPluginRoute,
   requestBodyErrorToText,
   resolveSingleWebhookTarget,
@@ -224,7 +226,7 @@ export async function monitorLineProvider(
         const textLimit = 5000;
         let replyTokenUsed = false;
         const core = getLineRuntime();
-        const turnResult = await core.channel.turn.run({
+        const turnResult = await core.channel.inbound.run({
           channel: "line",
           accountId: route.accountId,
           raw: ctx,
@@ -313,7 +315,7 @@ export async function monitorLineProvider(
           },
         });
         const dispatchResult = turnResult.dispatched ? turnResult.dispatchResult : undefined;
-        if (!hasFinalChannelTurnDispatch(dispatchResult)) {
+        if (!hasFinalInboundReplyDispatch(dispatchResult)) {
           logVerbose(`line: no response generated for message from ${ctxPayload.From}`);
         }
       } catch (err) {
@@ -336,7 +338,9 @@ export async function monitorLineProvider(
     },
   });
 
-  const normalizedPath = normalizePluginHttpPath(webhookPath, "/line/webhook") ?? "/line/webhook";
+  const normalizedPath = normalizeWebhookPath(
+    normalizePluginHttpPath(webhookPath, "/line/webhook") ?? "/line/webhook",
+  );
   const createScopedLineWebhookHandler = (target: LineWebhookTarget) =>
     createLineNodeWebhookHandler({
       channelSecret: target.channelSecret,
@@ -437,7 +441,7 @@ export async function monitorLineProvider(
             logVerbose(`line: received ${body.events.length} webhook events`);
             void Promise.resolve()
               .then(() => match.target.bot.handleWebhook(body))
-              .catch((err) => {
+              .catch((err: unknown) => {
                 match.target.runtime.error?.(
                   danger(`line webhook dispatch failed: ${String(err)}`),
                 );

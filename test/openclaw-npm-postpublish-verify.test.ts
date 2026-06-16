@@ -1,3 +1,4 @@
+// OpenClaw npm postpublish tests validate postpublish verification behavior.
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -11,8 +12,19 @@ import {
   collectInstalledRootDependencyManifestErrors,
   collectInstalledPackageErrors,
   normalizeInstalledBinaryVersion,
+  resolveInstalledBinaryCommandInvocation,
   resolveInstalledBinaryPath,
 } from "../scripts/openclaw-npm-postpublish-verify.ts";
+
+const INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT = 10_000;
+
+function writeDistJavaScriptFiles(packageRoot: string, count: number): void {
+  const distDir = join(packageRoot, "dist");
+  mkdirSync(distDir, { recursive: true });
+  for (let index = 0; index < count; index += 1) {
+    writeFileSync(join(distDir, `chunk-${index}.js`), "export {};\n", "utf8");
+  }
+}
 
 describe("buildPublishedInstallScenarios", () => {
   it("uses a single fresh scenario for plain stable releases", () => {
@@ -145,6 +157,20 @@ describe("collectInstalledContextEngineRuntimeErrors", () => {
       rmSync(packageRoot, { recursive: true, force: true });
     }
   });
+
+  it("refuses unbounded packaged dist scans", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writeDistJavaScriptFiles(packageRoot, INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT + 1);
+
+      expect(collectInstalledContextEngineRuntimeErrors(packageRoot)).toEqual([
+        `installed package dist contains more than ${INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT} JavaScript files; refusing to scan unbounded package contents.`,
+      ]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("collectInstalledPluginSdkZodArtifactErrors", () => {
@@ -239,8 +265,43 @@ describe("resolveInstalledBinaryPath", () => {
 
   it("uses the Windows npm shim path on win32", () => {
     expect(resolveInstalledBinaryPath("C:/openclaw-prefix", "win32")).toBe(
-      "C:/openclaw-prefix/openclaw.cmd",
+      "C:\\openclaw-prefix\\openclaw.cmd",
     );
+  });
+});
+
+describe("resolveInstalledBinaryCommandInvocation", () => {
+  it("runs the Unix installed binary directly", () => {
+    expect(
+      resolveInstalledBinaryCommandInvocation("/tmp/openclaw-prefix", ["--version"], {
+        platform: "linux",
+      }),
+    ).toEqual({
+      command: "/tmp/openclaw-prefix/bin/openclaw",
+      args: ["--version"],
+    });
+  });
+
+  it("wraps the Windows installed npm shim without Node shell argv", () => {
+    expect(
+      resolveInstalledBinaryCommandInvocation(
+        "C:/openclaw prefix",
+        ["agent", "--message", "hello world"],
+        {
+          comSpec: "C:\\Windows\\System32\\cmd.exe",
+          platform: "win32",
+        },
+      ),
+    ).toEqual({
+      command: "C:\\Windows\\System32\\cmd.exe",
+      args: [
+        "/d",
+        "/s",
+        "/c",
+        '""C:\\openclaw prefix\\openclaw.cmd" agent --message "hello world""',
+      ],
+      windowsVerbatimArguments: true,
+    });
   });
 });
 
@@ -316,13 +377,13 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
         "utf8",
       );
       writeFileSync(
-        join(packageRoot, "dist", "discord-voice-runtime.js"),
-        'const OpusScript = require("opusscript");\nexport { OpusScript };\n',
-        "utf8",
-      );
-      writeFileSync(
         join(packageRoot, "dist", "externalized-plugin-runtime.js"),
-        'import * as lark from "@larksuiteoapi/node-sdk";\nexport { lark };\n',
+        [
+          'import * as lark from "@larksuiteoapi/node-sdk";',
+          'import prism from "prism-media";',
+          "export { lark, prism };",
+          "",
+        ].join("\n"),
         "utf8",
       );
       mkdirSync(join(packageRoot, "dist", "plugin-sdk"), { recursive: true });
@@ -451,6 +512,24 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
 
       expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
         "installed package root dist file 'oversized.js' is invalid or exceeds 6291456 bytes.",
+      ]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses unbounded root dist dependency scans", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writePackageFile(packageRoot, "package.json", {
+        version: "2026.4.22",
+        dependencies: {},
+      });
+      writeDistJavaScriptFiles(packageRoot, INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT + 1);
+
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
+        `installed package root dist contains more than ${INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT} JavaScript files; refusing to scan unbounded package contents.`,
       ]);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });

@@ -1,5 +1,7 @@
+// Qa Lab tests cover scenario packs plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
+  QA_OBSERVABILITY_SCENARIO_IDS,
   QA_PERSONAL_AGENT_SCENARIO_IDS,
   QA_SCENARIO_PACKS,
   readQaScenarioById,
@@ -7,7 +9,7 @@ import {
 } from "./scenario-catalog.js";
 
 describe("qa scenario packs", () => {
-  it("points every pack scenario id at a loadable markdown scenario", () => {
+  it("points every pack scenario id at a loadable YAML scenario", () => {
     expect(QA_SCENARIO_PACKS.length).toBeGreaterThan(0);
 
     for (const pack of QA_SCENARIO_PACKS) {
@@ -40,19 +42,29 @@ describe("qa scenario packs", () => {
       "personal-task-followthrough-status",
       "personal-share-safe-diagnostics-artifact",
       "personal-no-fake-progress",
+      "personal-failure-recovery",
     ]);
 
     for (const scenarioId of personalPack?.scenarioIds ?? []) {
       const scenario = readQaScenarioById(scenarioId);
 
       expect(scenario.sourcePath).toMatch(/^qa\/scenarios\/personal\//);
-      expect(scenario.coverage?.primary.some((id) => id.startsWith("personal."))).toBe(true);
+      expect(scenario.coverage?.primary.length).toBeGreaterThan(0);
+      expect(
+        scenario.coverage?.primary.every((id) => /^[a-z0-9]+(?:[.-][a-z0-9]+)*$/.test(id)),
+      ).toBe(true);
     }
   });
 
   it("expands the personal-agent pack in pack order", () => {
     expect(resolveQaScenarioPackScenarioIds({ pack: "personal-agent" })).toEqual([
       ...QA_PERSONAL_AGENT_SCENARIO_IDS,
+    ]);
+  });
+
+  it("expands the observability pack in pack order", () => {
+    expect(resolveQaScenarioPackScenarioIds({ pack: "observability" })).toEqual([
+      ...QA_OBSERVABILITY_SCENARIO_IDS,
     ]);
   });
 
@@ -67,7 +79,7 @@ describe("qa scenario packs", () => {
 
   it("rejects unknown scenario packs", () => {
     expect(() => resolveQaScenarioPackScenarioIds({ pack: "personal-admin" })).toThrow(
-      '--pack must be one of personal-agent, got "personal-admin"',
+      '--pack must be one of personal-agent, observability, got "personal-admin"',
     );
   });
 
@@ -87,6 +99,8 @@ describe("qa scenario packs", () => {
     const diagnosticsFlow = JSON.stringify(diagnosticsScenario.execution.flow);
     const noFakeProgressScenario = readQaScenarioById("personal-no-fake-progress");
     const noFakeProgressFlow = JSON.stringify(noFakeProgressScenario.execution.flow);
+    const failureRecoveryScenario = readQaScenarioById("personal-failure-recovery");
+    const failureRecoveryFlow = JSON.stringify(failureRecoveryScenario.execution.flow);
     const memoryScenario = readQaScenarioById("personal-memory-preference-recall");
     const memoryFlow = JSON.stringify(memoryScenario.execution.flow);
 
@@ -134,6 +148,19 @@ describe("qa scenario packs", () => {
     expect(noFakeProgressFlow).toContain("forbiddenNeedles");
     expect(noFakeProgressScenario.successCriteria.join("\n").toLowerCase()).toContain(
       "local evidence",
+    );
+
+    expect(failureRecoveryScenario.execution.config?.prompt).toContain(
+      "Personal failure recovery check",
+    );
+    expect(failureRecoveryScenario.execution.config?.artifactName).toBe(
+      "personal-failure-recovery.txt",
+    );
+    expect(failureRecoveryFlow).toContain("plannedToolName === 'write'");
+    expect(failureRecoveryFlow).toContain("readIndices[1] < firstWrite");
+    expect(failureRecoveryFlow).toContain("length === 1");
+    expect(failureRecoveryScenario.successCriteria.join("\n").toLowerCase()).toContain(
+      "retry boundary",
     );
 
     expect(memoryFlow).toContain("config.rememberPrompt");

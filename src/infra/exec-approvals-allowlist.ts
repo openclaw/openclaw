@@ -1,9 +1,10 @@
+// Evaluates exec approval allowlists and safe-bin usage.
 import path from "node:path";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
 import { isInterpreterLikeAllowlistPattern } from "./command-analysis/inline-eval.js";
 import { detectInlineEvalArgv } from "./command-analysis/risks.js";
 import {
@@ -36,6 +37,7 @@ import {
   validateSafeBinArgv,
 } from "./exec-safe-bin-policy.js";
 import { isTrustedSafeBinPath } from "./exec-safe-bin-trust.js";
+import { isSafeBuiltinSegment } from "./exec-safe-builtins.js";
 import {
   extractBindableShellWrapperInlineCommand,
   isShellWrapperExecutable,
@@ -131,7 +133,13 @@ export type ExecAllowlistEvaluation = {
   segmentSatisfiedBy: ExecSegmentSatisfiedBy[];
 };
 
-export type ExecSegmentSatisfiedBy = "allowlist" | "safeBins" | "inlineChain" | "skills" | null;
+export type ExecSegmentSatisfiedBy =
+  | "allowlist"
+  | "safeBins"
+  | "inlineChain"
+  | "safeBuiltins"
+  | "skills"
+  | null;
 export type SkillBinTrustEntry = {
   name: string;
   resolvedPath: string;
@@ -146,6 +154,7 @@ type ExecAllowlistContext = {
   trustedSafeBinDirs?: ReadonlySet<string>;
   skillBins?: readonly SkillBinTrustEntry[];
   autoAllowSkills?: boolean;
+  allowShellBuiltins?: boolean;
 };
 
 function pickExecAllowlistContext(params: ExecAllowlistContext): ExecAllowlistContext {
@@ -159,6 +168,7 @@ function pickExecAllowlistContext(params: ExecAllowlistContext): ExecAllowlistCo
     trustedSafeBinDirs: params.trustedSafeBinDirs,
     skillBins: params.skillBins,
     autoAllowSkills: params.autoAllowSkills,
+    allowShellBuiltins: params.allowShellBuiltins,
   };
 }
 
@@ -408,6 +418,7 @@ function resolveSegmentAllowlistMatch(params: {
           segment: allowlistSegment,
           cwd: params.context.cwd,
           env: params.context.env,
+          platform: params.context.platform,
         })
       : undefined;
   const shellPositionalArgvMatch = shellPositionalArgvCandidatePath
@@ -481,6 +492,12 @@ function resolveSegmentSatisfaction(params: {
   });
   if (safe) {
     return "safeBins";
+  }
+  if (
+    params.context.allowShellBuiltins === true &&
+    isSafeBuiltinSegment({ segment: params.segment, platform: params.context.platform })
+  ) {
+    return "safeBuiltins";
   }
   const skillAllow = isSkillAutoAllowedSegment({
     segment: params.segment,
@@ -589,7 +606,7 @@ function evaluateShellWrapperInlineCommand(params: {
 function evaluateSegments(
   segments: ExecCommandSegment[],
   params: ExecAllowlistContext,
-  inlineDepth: number = 0,
+  inlineDepth = 0,
 ): {
   satisfied: boolean;
   matches: ExecAllowlistEntry[];
@@ -822,6 +839,7 @@ function resolveShellWrapperPositionalArgvCandidatePath(params: {
   segment: ExecCommandSegment;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
+  platform?: string | null;
 }): string | undefined {
   if (!isShellWrapperSegment(params.segment)) {
     return undefined;
@@ -860,7 +878,12 @@ function resolveShellWrapperPositionalArgvCandidatePath(params: {
     return undefined;
   }
 
-  const resolution = resolveCommandResolutionFromArgv([carriedExecutable], params.cwd, params.env);
+  const resolution = resolveCommandResolutionFromArgv(
+    [carriedExecutable],
+    params.cwd,
+    params.env,
+    (params.platform ?? undefined) as NodeJS.Platform | undefined,
+  );
   return resolveExecutionTargetCandidatePath(resolution, params.cwd);
 }
 
@@ -965,7 +988,11 @@ function collectAllowAlwaysPatterns(params: {
     return;
   }
 
-  const trustPlan = resolveExecWrapperTrustPlan(params.segment.argv);
+  const trustPlan = resolveExecWrapperTrustPlan(
+    params.segment.argv,
+    undefined,
+    (params.platform ?? undefined) as NodeJS.Platform | undefined,
+  );
   if (trustPlan.policyBlocked) {
     return;
   }
@@ -976,7 +1003,12 @@ function collectAllowAlwaysPatterns(params: {
           raw: trustPlan.argv.join(" "),
           argv: trustPlan.argv,
           sourceArgv: params.segment.sourceArgv,
-          resolution: resolveCommandResolutionFromArgv(trustPlan.argv, params.cwd, params.env),
+          resolution: resolveCommandResolutionFromArgv(
+            trustPlan.argv,
+            params.cwd,
+            params.env,
+            (params.platform ?? undefined) as NodeJS.Platform | undefined,
+          ),
         };
 
   const candidatePath = resolveExecutionTargetTrustPath(segment.resolution, params.cwd);
@@ -1005,6 +1037,7 @@ function collectAllowAlwaysPatterns(params: {
           segment,
           cwd: params.cwd,
           env: params.env,
+          platform: params.platform,
         })
       : undefined;
   if (positionalArgvPath) {
@@ -1101,7 +1134,10 @@ export function evaluateShellAllowlist(
     env?: NodeJS.ProcessEnv;
   } & ExecAllowlistContext,
 ): ExecAllowlistAnalysis {
-  const allowlistContext = pickExecAllowlistContext(params);
+  const allowlistContext = {
+    ...pickExecAllowlistContext(params),
+    allowShellBuiltins: true,
+  };
   const analysisFailure = (): ExecAllowlistAnalysis => ({
     analysisOk: false,
     allowlistSatisfied: false,

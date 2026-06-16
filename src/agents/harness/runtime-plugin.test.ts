@@ -1,3 +1,4 @@
+// Verifies plugin loading needed before agent harness selection.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
@@ -16,6 +17,7 @@ vi.mock("../../plugins/providers.js", () => ({
   resolveActivatableProviderOwnerPluginIds: mocks.resolveActivatableProviderOwnerPluginIds,
   resolveBundledProviderCompatPluginIds: mocks.resolveBundledProviderCompatPluginIds,
   resolveOwningPluginIdsForProvider: mocks.resolveOwningPluginIdsForProvider,
+  resolveOwningPluginIdsForProviderRef: mocks.resolveOwningPluginIdsForProvider,
 }));
 
 describe("ensureSelectedAgentHarnessPlugin", () => {
@@ -27,14 +29,16 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
     mocks.resolveBundledProviderCompatPluginIds.mockReset();
     mocks.resolveOwningPluginIdsForProvider.mockReset();
     mocks.resolveOwningPluginIdsForProvider.mockImplementation(
-      ({ provider }: { provider: string }) =>
-        provider === "openai" || provider === "openai-codex" ? ["openai"] : undefined,
+      ({ provider }: { provider: string }) => (provider === "openai" ? ["openai"] : undefined),
     );
     mocks.resolveBundledProviderCompatPluginIds.mockImplementation(
       ({ onlyPluginIds }: { onlyPluginIds?: readonly string[] }) =>
         (onlyPluginIds ?? []).filter((pluginId) => pluginId === "openai"),
     );
-    mocks.resolveActivatableProviderOwnerPluginIds.mockReturnValue([]);
+    mocks.resolveActivatableProviderOwnerPluginIds.mockImplementation(
+      ({ pluginIds }: { pluginIds: readonly string[] }) =>
+        pluginIds.filter((pluginId) => pluginId === "memory-core"),
+    );
     vi.resetModules();
     ({ ensureSelectedAgentHarnessPlugin } = await import("./runtime-plugin.js"));
   });
@@ -61,7 +65,7 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
       expect.objectContaining({
         scope: "all",
         workspaceDir: "/tmp/workspace",
-        onlyPluginIds: ["codex", "openai"],
+        onlyPluginIds: ["codex", "openai", "memory-core"],
       }),
     );
   });
@@ -87,14 +91,93 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
       expect.objectContaining({
         scope: "all",
         workspaceDir: "/tmp/workspace",
-        onlyPluginIds: ["codex", "openai"],
+        onlyPluginIds: ["codex", "openai", "memory-core"],
       }),
     );
   });
 
-  it("widens a scoped harness allowlist with the provider owner for openai-codex models", async () => {
+  it("loads a configured Copilot harness plugin before selection", async () => {
     await ensureSelectedAgentHarnessPlugin({
-      provider: "openai-codex",
+      provider: "github-copilot",
+      modelId: "gpt-4o",
+      config: {
+        models: {
+          providers: {
+            "github-copilot": {
+              agentRuntime: { id: "copilot" },
+              baseUrl: "https://api.githubcopilot.com",
+              models: [],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(mocks.resolveOwningPluginIdsForProvider).not.toHaveBeenCalled();
+    expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: "all",
+        workspaceDir: "/tmp/workspace",
+        onlyPluginIds: ["copilot", "memory-core"],
+        config: expect.objectContaining({
+          plugins: expect.objectContaining({
+            allow: ["copilot", "memory-core"],
+            entries: expect.objectContaining({
+              copilot: expect.objectContaining({ enabled: true }),
+            }),
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("does not bypass a restrictive allowlist that omits a configured Copilot harness", async () => {
+    // A configured harness can request loading, but explicit plugin allowlists
+    // remain the operator's boundary and are not widened implicitly.
+    await ensureSelectedAgentHarnessPlugin({
+      provider: "github-copilot",
+      modelId: "gpt-4o",
+      config: {
+        plugins: {
+          allow: ["telegram"],
+          entries: {
+            telegram: { enabled: true },
+          },
+        },
+        models: {
+          providers: {
+            "github-copilot": {
+              agentRuntime: { id: "copilot" },
+              baseUrl: "https://api.githubcopilot.com",
+              models: [],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: "all",
+        workspaceDir: "/tmp/workspace",
+        onlyPluginIds: ["copilot"],
+        config: expect.objectContaining({
+          plugins: expect.objectContaining({
+            allow: ["telegram"],
+            entries: expect.not.objectContaining({
+              copilot: expect.anything(),
+            }),
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("widens a scoped harness allowlist with the provider owner for openai models", async () => {
+    await ensureSelectedAgentHarnessPlugin({
+      provider: "openai",
       modelId: "gpt-5.5-pro",
       config: {
         plugins: {
@@ -125,13 +208,86 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
     );
   });
 
+  it("keeps an allowed memory slot plugin in Codex harness scoped loads", async () => {
+    await ensureSelectedAgentHarnessPlugin({
+      provider: "openai",
+      modelId: "gpt-5.5-pro",
+      config: {
+        plugins: {
+          allow: ["codex", "openai", "memory-core"],
+          entries: {
+            codex: { enabled: true },
+            openai: { enabled: true },
+          },
+        },
+      } as OpenClawConfig,
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: "all",
+        workspaceDir: "/tmp/workspace",
+        onlyPluginIds: ["codex", "openai", "memory-core"],
+        config: expect.objectContaining({
+          plugins: expect.objectContaining({
+            allow: ["codex", "openai", "memory-core"],
+            entries: expect.objectContaining({
+              codex: expect.objectContaining({ enabled: true }),
+              openai: expect.objectContaining({ enabled: true }),
+              "memory-core": expect.objectContaining({ enabled: true }),
+            }),
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("does not auto-activate an untrusted workspace memory slot plugin", async () => {
+    await ensureSelectedAgentHarnessPlugin({
+      provider: "openai",
+      modelId: "gpt-5.5-pro",
+      config: {
+        plugins: {
+          slots: { memory: "workspace-memory" },
+        },
+      } as OpenClawConfig,
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(mocks.resolveActivatableProviderOwnerPluginIds).toHaveBeenCalledWith({
+      pluginIds: ["openai"],
+      config: expect.any(Object),
+      workspaceDir: "/tmp/workspace",
+    });
+    expect(mocks.resolveActivatableProviderOwnerPluginIds).not.toHaveBeenCalledWith(
+      expect.objectContaining({ pluginIds: ["workspace-memory"] }),
+    );
+    expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: "all",
+        workspaceDir: "/tmp/workspace",
+        onlyPluginIds: ["codex", "openai"],
+        config: expect.objectContaining({
+          plugins: expect.objectContaining({
+            entries: expect.not.objectContaining({
+              "workspace-memory": expect.anything(),
+            }),
+          }),
+        }),
+      }),
+    );
+  });
+
   it("does not auto-activate untrusted provider owners for Codex harness loads", async () => {
+    // Provider owner activation is limited to bundled-compatible/activatable
+    // owners so workspace plugins are not enabled just because Codex was chosen.
     mocks.resolveOwningPluginIdsForProvider.mockReturnValueOnce(["openai", "workspace-openai"]);
     mocks.resolveBundledProviderCompatPluginIds.mockReturnValueOnce(["openai"]);
     mocks.resolveActivatableProviderOwnerPluginIds.mockReturnValueOnce([]);
 
     await ensureSelectedAgentHarnessPlugin({
-      provider: "openai-codex",
+      provider: "openai",
       modelId: "gpt-5.5-pro",
       config: {
         plugins: {
@@ -165,7 +321,7 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
 
   it("does not bypass a restrictive allowlist that omits the Codex harness", async () => {
     await ensureSelectedAgentHarnessPlugin({
-      provider: "openai-codex",
+      provider: "openai",
       modelId: "gpt-5.5-pro",
       config: {
         plugins: {
@@ -199,47 +355,7 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
     );
   });
 
-  it("honors bundled discovery compat when a legacy allowlist omits the Codex harness", async () => {
-    await ensureSelectedAgentHarnessPlugin({
-      provider: "openai-codex",
-      modelId: "gpt-5.5-pro",
-      config: {
-        plugins: {
-          allow: ["telegram"],
-          bundledDiscovery: "compat",
-          entries: {
-            telegram: { enabled: true },
-          },
-        },
-      } as OpenClawConfig,
-      workspaceDir: "/tmp/workspace",
-    });
-
-    expect(mocks.resolveOwningPluginIdsForProvider).toHaveBeenCalledWith({
-      provider: "openai-codex",
-      config: expect.any(Object),
-      workspaceDir: "/tmp/workspace",
-    });
-    expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith(
-      expect.objectContaining({
-        scope: "all",
-        workspaceDir: "/tmp/workspace",
-        onlyPluginIds: ["codex", "openai"],
-        config: expect.objectContaining({
-          plugins: expect.objectContaining({
-            allow: ["telegram", "codex", "openai"],
-            entries: expect.objectContaining({
-              codex: expect.objectContaining({ enabled: true }),
-              openai: expect.objectContaining({ enabled: true }),
-              telegram: expect.objectContaining({ enabled: true }),
-            }),
-          }),
-        }),
-      }),
-    );
-  });
-
-  it("keeps a Codex scoped load narrow when the provider has no owner plugin", async () => {
+  it("keeps real bundled memory-core in a Codex scoped load when the provider has no owner plugin", async () => {
     mocks.resolveOwningPluginIdsForProvider.mockReturnValueOnce(undefined);
 
     await ensureSelectedAgentHarnessPlugin({
@@ -255,12 +371,12 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
       expect.objectContaining({
         scope: "all",
         workspaceDir: "/tmp/workspace",
-        onlyPluginIds: ["codex"],
+        onlyPluginIds: ["codex", "memory-core"],
       }),
     );
   });
 
-  it("keeps custom OpenAI-compatible providers on Pi when no runtime override is set", async () => {
+  it("keeps custom OpenAI-compatible providers on embedded OpenClaw when no runtime override is set", async () => {
     await ensureSelectedAgentHarnessPlugin({
       provider: "openai",
       modelId: "gpt-5.5",
@@ -269,6 +385,28 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
           providers: {
             openai: {
               baseUrl: "https://openai-compatible.example.test/v1",
+              models: [],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(mocks.ensurePluginRegistryLoaded).not.toHaveBeenCalled();
+    expect(mocks.resolveOwningPluginIdsForProvider).not.toHaveBeenCalled();
+  });
+
+  it("does not treat CLI backend runtime aliases as plugin ids", async () => {
+    await ensureSelectedAgentHarnessPlugin({
+      provider: "anthropic",
+      modelId: "claude-opus-4-7",
+      config: {
+        models: {
+          providers: {
+            anthropic: {
+              agentRuntime: { id: "claude-cli" },
+              baseUrl: "https://api.anthropic.com",
               models: [],
             },
           },

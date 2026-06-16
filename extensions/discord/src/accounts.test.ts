@@ -1,3 +1,4 @@
+// Discord tests cover accounts plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   clearRuntimeConfigSnapshot,
@@ -183,6 +184,65 @@ describe("resolveDiscordAccount botLoopProtection precedence", () => {
       maxEventsPerWindow: 4,
       windowSeconds: 10,
       cooldownSeconds: 30,
+    });
+  });
+});
+
+describe("resolveDiscordAccount agentComponents precedence", () => {
+  it("preserves a disabled channel default when an account only overrides ttlMs", () => {
+    const resolved = resolveDiscordAccount({
+      cfg: {
+        channels: {
+          discord: {
+            agentComponents: {
+              enabled: false,
+            },
+            accounts: {
+              work: {
+                token: "token-work",
+                agentComponents: {
+                  ttlMs: 120_000,
+                },
+              },
+            },
+          },
+        },
+      },
+      accountId: "work",
+    });
+
+    expect(resolved.config.agentComponents).toEqual({
+      enabled: false,
+      ttlMs: 120_000,
+    });
+  });
+
+  it("preserves channel ttlMs when an account only overrides enabled", () => {
+    const resolved = resolveDiscordAccount({
+      cfg: {
+        channels: {
+          discord: {
+            agentComponents: {
+              enabled: false,
+              ttlMs: 180_000,
+            },
+            accounts: {
+              work: {
+                token: "token-work",
+                agentComponents: {
+                  enabled: true,
+                },
+              },
+            },
+          },
+        },
+      },
+      accountId: "work",
+    });
+
+    expect(resolved.config.agentComponents).toEqual({
+      enabled: true,
+      ttlMs: 180_000,
     });
   });
 });

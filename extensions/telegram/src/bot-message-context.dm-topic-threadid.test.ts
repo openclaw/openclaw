@@ -1,3 +1,4 @@
+// Telegram tests cover bot message contextm topic threadid plugin behavior.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getRecordedUpdateLastRoute,
@@ -93,7 +94,8 @@ describe("buildTelegramMessageContext DM topic threadId in deliveryContext (#889
         },
       },
       sessionRuntime: {
-        buildChannelInboundEventContext: buildChannelInboundEventContextMock,
+        buildChannelInboundEventContext:
+          buildChannelInboundEventContextMock as unknown as typeof buildChannelInboundEventContext,
       },
     });
 
@@ -105,12 +107,30 @@ describe("buildTelegramMessageContext DM topic threadId in deliveryContext (#889
     expect(turnOptions?.message.rawBody).toBe("hello");
     expect(turnOptions?.message.bodyForAgent).toBe("hello");
     expect(turnOptions?.reply?.to).toBe("telegram:1234");
-    expect(turnOptions?.reply?.originatingTo).toBe("telegram:1234");
+    expect(turnOptions?.reply?.originatingTo).toBeUndefined();
     expect(turnOptions?.reply?.replyToId).toBe("9");
     expect(turnOptions?.supplemental?.quote?.id).toBe("9");
     expect(turnOptions?.supplemental?.quote?.body).toBe("parent");
     expect(turnOptions?.supplemental?.quote?.sender).toBe("Bob");
     expect(turnOptions?.supplemental?.quote?.senderAllowed).toBe(true);
+  });
+
+  it("preserves voice-note source modality without treating ordinary audio as voice", async () => {
+    const voiceCtx = await buildCtx({
+      message: {
+        chat: { id: 1234, type: "private" },
+        voice: { file_id: "voice-1" },
+      },
+    });
+    const audioCtx = await buildCtx({
+      message: {
+        chat: { id: 1234, type: "private" },
+        audio: { file_id: "audio-1" },
+      },
+    });
+
+    expect(voiceCtx?.ctxPayload.SourceModality).toBe("voice");
+    expect(audioCtx?.ctxPayload.SourceModality).toBeUndefined();
   });
 
   it("does not pass threadId for regular DM without topic", async () => {

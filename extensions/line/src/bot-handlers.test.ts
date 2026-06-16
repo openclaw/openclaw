@@ -1,3 +1,4 @@
+// Line tests cover bot handlers plugin behavior.
 import type { webhook } from "@line/bot-sdk";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -20,8 +21,9 @@ vi.mock("openclaw/plugin-sdk/channel-pairing", () => ({
       onCreated?.();
     },
 }));
-vi.mock("openclaw/plugin-sdk/command-auth", () => ({
+vi.mock("openclaw/plugin-sdk/command-auth-native", () => ({
   hasControlCommand: (text: string) => text.trim().startsWith("!"),
+  shouldComputeCommandAuthorized: (text: string) => text.trim().startsWith("!"),
   resolveControlCommandGate: ({
     hasControlCommand,
     authorizers,
@@ -321,7 +323,7 @@ describe("handleLineWebhookEvents", () => {
   afterAll(() => {
     vi.doUnmock("openclaw/plugin-sdk/channel-inbound");
     vi.doUnmock("openclaw/plugin-sdk/channel-pairing");
-    vi.doUnmock("openclaw/plugin-sdk/command-auth");
+    vi.doUnmock("openclaw/plugin-sdk/command-auth-native");
     vi.doUnmock("openclaw/plugin-sdk/runtime-group-policy");
     vi.doUnmock("openclaw/plugin-sdk/runtime-env");
     vi.doUnmock("openclaw/plugin-sdk/reply-history");

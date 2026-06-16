@@ -1,7 +1,8 @@
+/** Doctor repair for redacting historical config audit log argv records. */
 import fs from "node:fs/promises";
 import os from "node:os";
+import { note } from "../../packages/terminal-core/src/note.js";
 import { scrubConfigAuditLog } from "../config/io.audit.js";
-import { note } from "../terminal/note.js";
 
 const NOTE_TITLE = "Config audit";
 
@@ -9,6 +10,12 @@ function formatEntryCount(count: number): string {
   return `${count} ${count === 1 ? "entry" : "entries"}`;
 }
 
+/**
+ * Scrubs pre-redactor config audit records or previews the number of affected entries.
+ *
+ * The rewrite aborts if new records are appended while doctor is processing the JSONL file, so
+ * live gateways do not lose audit entries during cleanup.
+ */
 export async function maybeScrubConfigAuditLog(params: {
   shouldRepair: boolean;
   env?: NodeJS.ProcessEnv;

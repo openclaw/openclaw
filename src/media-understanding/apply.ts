@@ -1,23 +1,25 @@
+// Applies media-understanding outputs to inbound message context, including
+// attachment normalization, provider execution, file text extraction, and echoing.
 import path from "node:path";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { renderFileContextBlock } from "../media/file-context.js";
-import {
-  extractFileContentFromSource,
-  normalizeMimeType,
-  resolveInputFileLimits,
-} from "../media/input-files.js";
+import { extractFileContentFromSource, normalizeMimeType } from "../media/input-files.js";
 import { wrapExternalContent } from "../security/external-content.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
 import type { ActiveMediaModel } from "./active-model.types.js";
 import { resolveAttachmentKind } from "./attachments.js";
 import { runWithConcurrency } from "./concurrency.js";
 import { DEFAULT_ECHO_TRANSCRIPT_FORMAT, sendTranscriptEcho } from "./echo-transcript.js";
+import {
+  type FileExtractionLimits,
+  resolveFileExtractionLimits,
+} from "./file-extraction-limits.js";
 import {
   extractMediaUserText,
   formatAudioTranscripts,
@@ -97,15 +99,6 @@ export function sanitizeMimeType(value?: string): string | undefined {
   return match?.[1]?.toLowerCase();
 }
 
-function resolveFileLimits(cfg: OpenClawConfig) {
-  const files = cfg.gateway?.http?.endpoints?.responses?.files;
-  const allowedMimesConfigured = Boolean(files?.allowedMimes?.length);
-  return {
-    ...resolveInputFileLimits(files),
-    allowedMimesConfigured,
-  };
-}
-
 function appendFileBlocks(body: string | undefined, blocks: string[]): string {
   if (!blocks || blocks.length === 0) {
     return body ?? "";
@@ -126,6 +119,8 @@ function wrapUntrustedAttachmentContent(content: string): string {
 }
 
 function resolveUtf16Charset(buffer?: Buffer): "utf-16le" | "utf-16be" | undefined {
+  // Some chat attachments arrive as UTF-16 without a reliable MIME charset; the
+  // BOM and zero-byte distribution are enough to select a safe decoder.
   if (!buffer || buffer.length < 2) {
     return undefined;
   }
@@ -386,7 +381,7 @@ async function extractFileBlocks(params: {
   attachments: ReturnType<typeof normalizeMediaAttachments>;
   cache: ReturnType<typeof createMediaAttachmentCache>;
   cfg: OpenClawConfig;
-  limits: ReturnType<typeof resolveFileLimits>;
+  limits: FileExtractionLimits;
   skipAttachmentIndexes?: Set<number>;
 }): Promise<string[]> {
   const { attachments, cache, cfg, limits, skipAttachmentIndexes } = params;
@@ -522,6 +517,7 @@ async function extractFileBlocks(params: {
 export async function applyMediaUnderstanding(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
+  agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   providers?: Record<string, MediaUnderstandingProvider>;
@@ -556,6 +552,7 @@ export async function applyMediaUnderstanding(params: {
         ctx,
         attachments: cache,
         media: attachments,
+        agentId: params.agentId,
         agentDir: params.agentDir,
         workspaceDir: params.workspaceDir,
         providerRegistry,
@@ -677,7 +674,7 @@ export async function applyMediaUnderstanding(params: {
       attachments,
       cache,
       cfg,
-      limits: resolveFileLimits(cfg),
+      limits: resolveFileExtractionLimits(cfg),
       skipAttachmentIndexes: audioAttachmentIndexes.size > 0 ? audioAttachmentIndexes : undefined,
     });
     if (fileBlocks.length > 0) {

@@ -1,3 +1,6 @@
+// Qa Matrix plugin module implements request behavior.
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+
 export type MatrixQaFetchLike = typeof fetch;
 
 type MatrixQaRequestResult<T> = {
@@ -30,9 +33,9 @@ export async function requestMatrixJson<T>(params: {
       ...(params.accessToken ? { authorization: `Bearer ${params.accessToken}` } : {}),
     },
     ...(params.body !== undefined ? { body: JSON.stringify(params.body) } : {}),
-    signal: AbortSignal.timeout(params.timeoutMs ?? 20_000),
+    signal: AbortSignal.timeout(resolveTimerTimeoutMs(params.timeoutMs, 20_000)),
   });
-  let body: unknown = {};
+  let body: unknown;
   try {
     body = (await response.json()) as unknown;
   } catch {

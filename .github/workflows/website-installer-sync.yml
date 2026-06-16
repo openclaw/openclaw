@@ -75,16 +75,14 @@ jobs:
 
       - name: install.sh in Docker
         run: |
-          docker run --rm \
-            -e OPENCLAW_NO_ONBOARD=1 \
-            -e OPENCLAW_NO_PROMPT=1 \
+          timeout --kill-after=30s 20m docker run --rm \
             -v "$PWD/scripts/install.sh:/tmp/install.sh:ro" \
             node:24-bookworm-slim \
-            bash -lc 'bash /tmp/install.sh --no-prompt --no-onboard --version latest && openclaw --version'
+            bash -lc 'bash /tmp/install.sh --version latest && openclaw --version'
 
       - name: install-cli.sh in Docker
         run: |
-          docker run --rm \
+          timeout --kill-after=30s 20m docker run --rm \
             -e OPENCLAW_NO_ONBOARD=1 \
             -e OPENCLAW_NO_PROMPT=1 \
             -v "$PWD/scripts/install-cli.sh:/tmp/install-cli.sh:ro" \
@@ -92,7 +90,7 @@ jobs:
             bash -lc 'apt-get update -y && apt-get install -y curl && bash /tmp/install-cli.sh --prefix /tmp/openclaw --no-onboard --version latest && /tmp/openclaw/bin/openclaw --version'
 
   macos-installer:
-    runs-on: macos-latest
+    runs-on: macos-15
     steps:
       - name: Checkout
         uses: actions/checkout@v6

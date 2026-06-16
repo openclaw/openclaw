@@ -1,3 +1,4 @@
+// Memory Core plugin module implements manager status state behavior.
 import type { SQLInputValue } from "node:sqlite";
 import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 
@@ -27,8 +28,12 @@ export function resolveInitialMemoryDirty(params: {
   hasMemorySource: boolean;
   statusOnly: boolean;
   hasIndexedMeta: boolean;
+  indexIdentityMismatched?: boolean;
 }): boolean {
-  return params.hasMemorySource && (params.statusOnly ? !params.hasIndexedMeta : true);
+  return (
+    Boolean(params.indexIdentityMismatched) ||
+    (params.hasMemorySource && (params.statusOnly ? !params.hasIndexedMeta : true))
+  );
 }
 
 export function resolveStatusProviderInfo(params: {

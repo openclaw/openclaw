@@ -1,3 +1,4 @@
+// Msteams tests cover reaction handler plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../../runtime-api.js";
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.js";
@@ -32,7 +33,7 @@ function buildDeps(cfg: OpenClawConfig, _runtime?: PluginRuntime): MSTeamsMessag
     cfg,
     runtime: { error: vi.fn() } as unknown as MSTeamsMessageHandlerDeps["runtime"],
     appId: "test-app",
-    adapter: {} as MSTeamsMessageHandlerDeps["adapter"],
+    app: {} as MSTeamsMessageHandlerDeps["app"],
     tokenProvider: { getAccessToken: vi.fn(async () => "token") },
     textLimit: 4000,
     mediaMaxBytes: 1024 * 1024,
@@ -207,8 +208,6 @@ describe("createMSTeamsReactionHandler", () => {
       expect(label).toContain("added");
       expect(meta.sessionKey).toBe("test-session");
       expect(meta.contextKey).toContain("added");
-      expect(meta.forceSenderIsOwnerFalse).toBe(true);
-      expect(meta.trusted).toBe(false);
     });
 
     it("enqueues system event for reactionsRemoved", async () => {

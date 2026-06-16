@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements agentic parity report behavior.
 import {
   QA_AGENTIC_PARITY_SCENARIO_TITLES,
   QA_AGENTIC_PARITY_TOOL_BACKED_SCENARIO_TITLES,
@@ -58,11 +59,11 @@ type QaRuntimeParityScenarioReport = {
   status: "pass" | "fail";
   drift: RuntimeParityDrift | "missing";
   driftDetails?: string;
-  piStatus: "pass" | "fail" | "missing";
+  openclawStatus: "pass" | "fail" | "missing";
   codexStatus: "pass" | "fail" | "missing";
-  piTokens: number;
+  openclawTokens: number;
   codexTokens: number;
-  piToolCalls: number;
+  openclawToolCalls: number;
   codexToolCalls: number;
 };
 
@@ -166,6 +167,23 @@ function scenarioHasPattern(
   return text.length > 0 && patterns.some((pattern) => pattern.test(text));
 }
 
+function scenarioRuntimeParity(scenario: QaParityReportScenario): RuntimeParityResult | undefined {
+  return (scenario as QaRuntimeParitySuiteScenario).runtimeParity;
+}
+
+function scenarioHasRuntimeToolCallEvidence(scenario: QaParityReportScenario): boolean {
+  const parity = scenarioRuntimeParity(scenario);
+  if (!parity) {
+    return scenario.status === "pass";
+  }
+  return (
+    scenario.status === "pass" &&
+    isRuntimeParityResultPass(parity) &&
+    parity.cells.openclaw.toolCalls.length > 0 &&
+    parity.cells.codex.toolCalls.length > 0
+  );
+}
+
 export function computeQaAgenticParityMetrics(
   summary: QaParitySuiteSummary,
 ): QaAgenticParityMetrics {
@@ -176,11 +194,9 @@ export function computeQaAgenticParityMetrics(
   const toolBackedTitleSet: ReadonlySet<string> = new Set(
     QA_AGENTIC_PARITY_TOOL_BACKED_SCENARIO_TITLES,
   );
-  const totalScenarios = summary.counts?.total ?? scenarios.length;
-  const passedScenarios =
-    summary.counts?.passed ?? scenarios.filter((scenario) => scenario.status === "pass").length;
-  const failedScenarios =
-    summary.counts?.failed ?? scenarios.filter((scenario) => scenario.status === "fail").length;
+  const totalScenarios = scenarios.length;
+  const passedScenarios = scenarios.filter((scenario) => scenario.status === "pass").length;
+  const failedScenarios = scenarios.filter((scenario) => scenario.status === "fail").length;
   const unintendedStopCount = scenarios.filter(
     (scenario) =>
       scenario.status !== "pass" && scenarioHasPattern(scenario, UNINTENDED_STOP_PATTERNS),
@@ -213,7 +229,8 @@ export function computeQaAgenticParityMetrics(
     toolBackedTitleSet.has(scenario.name),
   ).length;
   const validToolCallCount = scenarios.filter(
-    (scenario) => toolBackedTitleSet.has(scenario.name) && scenario.status === "pass",
+    (scenario) =>
+      toolBackedTitleSet.has(scenario.name) && scenarioHasRuntimeToolCallEvidence(scenario),
   ).length;
 
   const rate = (value: number) => (totalScenarios > 0 ? value / totalScenarios : 0);
@@ -253,11 +270,13 @@ function isLiveProviderMode(providerMode: string | undefined) {
 
 function describeLiveUsageFailure(scenarioName: string, scenario: QaRuntimeParityScenarioReport) {
   const missing = [
-    scenario.piTokens > 0 ? undefined : `${scenario.piStatus === "pass" ? "pi" : "pi failed"}=0`,
+    scenario.openclawTokens > 0
+      ? undefined
+      : `${scenario.openclawStatus === "pass" ? "openclaw" : "openclaw failed"}=0`,
     scenario.codexTokens > 0
       ? undefined
       : `${scenario.codexStatus === "pass" ? "codex" : "codex failed"}=0`,
-  ].filter((entry): entry is string => !!entry);
+  ].filter((entry): entry is string => Boolean(entry));
   if (missing.length === 0) {
     return undefined;
   }
@@ -270,7 +289,7 @@ function normalizeRuntimePair(
   if (pair?.[0] && pair?.[1]) {
     return pair;
   }
-  return ["pi", "codex"];
+  return ["openclaw", "codex"];
 }
 
 function requiredCoverageStatus(
@@ -564,7 +583,7 @@ export function renderQaAgenticParityMarkdownReport(comparison: QaAgenticParityC
   // Title is parametrized from the candidate / baseline labels so reports
   // for any candidate/baseline pair (not only gpt-5.5 vs opus 4.6) render
   // with an accurate header. The default CLI labels are still
-  // openai/gpt-5.5 vs anthropic/claude-opus-4-7, but the helper works for
+  // openai/gpt-5.5 vs anthropic/claude-opus-4-8, but the helper works for
   // any parity comparison a caller configures.
   const lines = [
     `# OpenClaw Agentic Parity Report — ${comparison.candidateLabel} vs ${comparison.baselineLabel}`,
@@ -634,18 +653,18 @@ export function buildQaRuntimeParityReport(params: {
         status: scenario.status === "pass" ? "pass" : "fail",
         drift: "missing",
         driftDetails: scenario.details,
-        piStatus: "missing",
+        openclawStatus: "missing",
         codexStatus: "missing",
-        piTokens: 0,
+        openclawTokens: 0,
         codexTokens: 0,
-        piToolCalls: 0,
+        openclawToolCalls: 0,
         codexToolCalls: 0,
       } satisfies QaRuntimeParityScenarioReport;
     }
     driftCounts[parity.drift] += 1;
-    const piCell = parity.cells.pi;
+    const openclawCell = parity.cells.openclaw;
     const codexCell = parity.cells.codex;
-    const piStatus = runtimeParityCellStatus(piCell);
+    const openclawStatus = runtimeParityCellStatus(openclawCell);
     const codexStatus = runtimeParityCellStatus(codexCell);
     const parityStatus = isRuntimeParityResultPass(parity) ? "pass" : "fail";
     const reportScenario = {
@@ -653,11 +672,11 @@ export function buildQaRuntimeParityReport(params: {
       status: parityStatus,
       drift: parity.drift,
       driftDetails: parity.driftDetails,
-      piStatus,
+      openclawStatus,
       codexStatus,
-      piTokens: piCell.usage.totalTokens,
+      openclawTokens: openclawCell.usage.totalTokens,
       codexTokens: codexCell.usage.totalTokens,
-      piToolCalls: piCell.toolCalls.length,
+      openclawToolCalls: openclawCell.toolCalls.length,
       codexToolCalls: codexCell.toolCalls.length,
     } satisfies QaRuntimeParityScenarioReport;
     if (parityStatus === "fail") {
@@ -678,6 +697,9 @@ export function buildQaRuntimeParityReport(params: {
   const totalScenarios = params.summary.counts?.total ?? scenarios.length;
   const passedScenarios = scenarios.filter((scenario) => scenario.status === "pass").length;
   const failedScenarios = scenarios.filter((scenario) => scenario.status === "fail").length;
+  if (scenarios.length === 0 || totalScenarios <= 0) {
+    failures.push("Runtime parity report has no executed scenarios.");
+  }
 
   return {
     runtimePair,
@@ -737,7 +759,7 @@ export function renderQaRuntimeParityMarkdownReport(report: QaRuntimeParityRepor
     lines.push(`- status: ${scenario.status}`);
     lines.push(`- drift: ${scenario.drift}`);
     lines.push(
-      `- pi: ${scenario.piStatus} (${scenario.piToolCalls} tool calls, ${scenario.piTokens} tokens)`,
+      `- openclaw: ${scenario.openclawStatus} (${scenario.openclawToolCalls} tool calls, ${scenario.openclawTokens} tokens)`,
     );
     lines.push(
       `- codex: ${scenario.codexStatus} (${scenario.codexToolCalls} tool calls, ${scenario.codexTokens} tokens)`,

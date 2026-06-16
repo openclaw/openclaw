@@ -1,3 +1,4 @@
+// Telegram tests cover targets plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   isNumericTelegramSenderUserId,
@@ -14,6 +15,7 @@ import {
   isNumericTelegramChatId,
   normalizeTelegramChatId,
   normalizeTelegramLookupTarget,
+  normalizeTelegramOutboundTarget,
   parseTelegramTarget,
   stripTelegramInternalPrefixes,
 } from "./targets.js";
@@ -87,6 +89,17 @@ describe("parseTelegramTarget", () => {
     });
   });
 
+  it("does not route unsafe topic suffixes", () => {
+    expect(parseTelegramTarget("-1001234567890:9007199254740992")).toEqual({
+      chatId: "-1001234567890:9007199254740992",
+      chatType: "unknown",
+    });
+    expect(parseTelegramTarget("-1001234567890:topic:9007199254740992")).toEqual({
+      chatId: "-1001234567890:topic:9007199254740992",
+      chatType: "unknown",
+    });
+  });
+
   it("strips internal prefixes before parsing", () => {
     expect(parseTelegramTarget("telegram:group:-1001234567890:topic:456")).toEqual({
       chatId: "-1001234567890",
@@ -104,6 +117,25 @@ describe("telegram numeric target normalization", () => {
       expect(normalize("123456789")).toBe("123456789");
     },
   );
+});
+
+describe("normalizeTelegramOutboundTarget", () => {
+  it("normalizes legacy durable group retry targets for Telegram sends", () => {
+    expect(normalizeTelegramOutboundTarget("group:-1001234567890")).toBe("-1001234567890");
+  });
+
+  it("normalizes legacy durable group retry targets with topic suffixes", () => {
+    expect(normalizeTelegramOutboundTarget("group:-1001234567890:topic:77")).toBe(
+      "-1001234567890:topic:77",
+    );
+    expect(normalizeTelegramOutboundTarget("group:-1001234567890:77")).toBe("-1001234567890:77");
+  });
+
+  it("keeps already-valid numeric and non-numeric targets on the send path", () => {
+    expect(normalizeTelegramOutboundTarget("-1001234567890")).toBe("-1001234567890");
+    expect(normalizeTelegramOutboundTarget("group:not-a-number")).toBe("group:not-a-number");
+    expect(normalizeTelegramOutboundTarget("@mychannel")).toBe("@mychannel");
+  });
 });
 
 describe("normalizeTelegramChatId", () => {

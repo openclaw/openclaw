@@ -1,24 +1,37 @@
+// Codex plugin module implements thread lifecycle behavior.
 import {
+  buildSkillWorkshopPromptSection,
   embeddedAgentLog,
+  formatErrorMessage,
   isActiveHarnessContextEngine,
+  SKILL_WORKSHOP_TOOL_NAME,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { buildCodexUserMcpServersThreadConfigPatch } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { listRegisteredPluginAgentPromptGuidance } from "openclaw/plugin-sdk/plugin-runtime";
 import { CODEX_GPT5_HEARTBEAT_PROMPT_OVERLAY } from "../../prompt-overlay.js";
 import { isModernCodexModel } from "../../provider.js";
-import { isCodexAppServerConnectionClosedError, type CodexAppServerClient } from "./client.js";
+import {
+  CodexAppServerRpcError,
+  isCodexAppServerConnectionClosedError,
+  type CodexAppServerClient,
+} from "./client.js";
 import { codexSandboxPolicyForTurn, type CodexAppServerRuntimeOptions } from "./config.js";
 import {
   resolveCodexContextEngineProjectionMaxChars,
   resolveCodexContextEngineProjectionReserveTokens,
 } from "./context-engine-projection.js";
+import {
+  normalizeCodexDynamicToolName,
+  shouldDisableCodexToolSearchForModel,
+} from "./dynamic-tool-profile.js";
 import { invalidInlineImageText, sanitizeInlineImageDataUrl } from "./image-payload-sanitizer.js";
 import {
   isCodexPluginThreadBindingStale,
   mergeCodexThreadConfigs,
   type CodexPluginThreadConfig,
 } from "./plugin-thread-config.js";
+import { isCodexAppServerProfilerEnabled } from "./profiler-flag.js";
 import {
   assertCodexThreadResumeResponse,
   assertCodexThreadStartResponse,
@@ -29,6 +42,7 @@ import {
   type CodexSandboxPolicy,
   type CodexThreadResumeParams,
   type CodexThreadStartParams,
+  type CodexTurnEnvironmentParams,
   type CodexTurnStartParams,
   type JsonObject,
   type CodexUserInput,
@@ -44,14 +58,36 @@ import {
   type CodexAppServerContextEngineProjectionBinding,
   type CodexAppServerThreadBinding,
 } from "./session-binding.js";
+import { resolveCodexWebSearchPlan, type CodexNativeWebSearchSupport } from "./web-search.js";
 
 export type CodexAppServerThreadLifecycle = {
   action: "started" | "resumed";
   rotatedContextEngineBinding?: boolean;
+  activeTurnIds?: string[];
 };
 
 export type CodexAppServerThreadLifecycleBinding = CodexAppServerThreadBinding & {
   lifecycle: CodexAppServerThreadLifecycle;
+};
+
+class CodexThreadStartRequestError extends Error {
+  constructor(cause: unknown) {
+    super(formatErrorMessage(cause), { cause });
+    this.name = "CodexThreadStartRequestError";
+  }
+}
+
+export function isCodexThreadStartRequestError(error: unknown): boolean {
+  return error instanceof CodexThreadStartRequestError;
+}
+
+export type CodexThreadFinalConfigPatchDecision =
+  | { action: "resume"; binding: CodexAppServerThreadBinding }
+  | { action: "start" };
+
+export type CodexThreadFinalConfigPatchResult = {
+  configPatch?: JsonObject;
+  nativeHookRelayGeneration?: string;
 };
 
 export type CodexContextEngineThreadBootstrapProjection = {
@@ -67,9 +103,13 @@ export type CodexPluginThreadConfigProvider = {
   build: () => Promise<CodexPluginThreadConfig>;
 };
 
+export const CODEX_NATIVE_PERSONALITY_NONE = "none";
+
+// Stream structured patch snapshots so large generated edits keep the turn active.
 export const CODEX_CODE_MODE_THREAD_CONFIG: JsonObject = {
   "features.code_mode": true,
   "features.code_mode_only": false,
+  "features.apply_patch_streaming_events": true,
 };
 
 export const CODEX_CODE_MODE_DISABLED_THREAD_CONFIG: JsonObject = {
@@ -81,28 +121,222 @@ const CODEX_LIGHTWEIGHT_CONTEXT_THREAD_CONFIG: JsonObject = {
   project_doc_max_bytes: 0,
 };
 
+const CODEX_TOOL_SEARCH_UNSUPPORTED_THREAD_CONFIG: JsonObject = {
+  "features.multi_agent": false,
+};
+
+export type CodexThreadLifecycleTimingSpan = {
+  name: string;
+  durationMs: number;
+  elapsedMs: number;
+};
+
+export type CodexThreadLifecycleTimingSummary = {
+  totalMs: number;
+  spans: CodexThreadLifecycleTimingSpan[];
+};
+
+export type CodexThreadLifecycleTimingLogger = {
+  isEnabled?: (level: "trace") => boolean;
+  trace: (message: string, meta?: Record<string, unknown>) => void;
+  warn: (message: string, meta?: Record<string, unknown>) => void;
+};
+
+export type CodexThreadLifecycleTimingAction = "started" | "resumed" | "rotated";
+
+export type CodexThreadLifecycleTimingOptions = {
+  enabled?: boolean;
+  now?: () => number;
+  log?: CodexThreadLifecycleTimingLogger;
+  totalThresholdMs?: number;
+  stageThresholdMs?: number;
+};
+
+const CODEX_THREAD_LIFECYCLE_TIMING_WARN_TOTAL_MS = 1_000;
+const CODEX_THREAD_LIFECYCLE_TIMING_WARN_STAGE_MS = 500;
+
+export function shouldWarnCodexThreadLifecycleTimingSummary(
+  summary: CodexThreadLifecycleTimingSummary,
+  options: CodexThreadLifecycleTimingOptions = {},
+): boolean {
+  const totalThresholdMs = options.totalThresholdMs ?? CODEX_THREAD_LIFECYCLE_TIMING_WARN_TOTAL_MS;
+  const stageThresholdMs = options.stageThresholdMs ?? CODEX_THREAD_LIFECYCLE_TIMING_WARN_STAGE_MS;
+  return (
+    summary.totalMs >= totalThresholdMs ||
+    summary.spans.some((span) => span.durationMs >= stageThresholdMs)
+  );
+}
+
+export function formatCodexThreadLifecycleTimingSummary(params: {
+  runId: string;
+  sessionId: string;
+  sessionKey?: string;
+  action: CodexThreadLifecycleTimingAction;
+  summary: CodexThreadLifecycleTimingSummary;
+}): string {
+  const spans =
+    params.summary.spans.length > 0
+      ? params.summary.spans
+          .map((span) => `${span.name}:${span.durationMs}ms@${span.elapsedMs}ms`)
+          .join(",")
+      : "none";
+  return (
+    `[trace:codex-app-server] thread lifecycle: runId=${params.runId} ` +
+    `sessionId=${params.sessionId} sessionKey=${params.sessionKey ?? "unknown"} ` +
+    `action=${params.action} totalMs=${params.summary.totalMs} stages=${spans}`
+  );
+}
+
+function createCodexThreadLifecycleTimingTracker(options: CodexThreadLifecycleTimingOptions = {}): {
+  measure: <T>(name: string, run: () => Promise<T> | T) => Promise<T>;
+  measureSync: <T>(name: string, run: () => T) => T;
+  mark: (name: string) => void;
+  logSummary: (params: {
+    runId: string;
+    sessionId: string;
+    sessionKey?: string;
+    action: CodexThreadLifecycleTimingAction;
+    threadId?: string;
+  }) => void;
+} {
+  const log = options.log ?? embeddedAgentLog;
+  if (!options.enabled && log.isEnabled?.("trace") !== true) {
+    return {
+      async measure(_name, run) {
+        return await run();
+      },
+      measureSync(_name, run) {
+        return run();
+      },
+      mark() {},
+      logSummary() {},
+    };
+  }
+
+  const now = options.now ?? Date.now;
+  const startedAt = now();
+  let didLog = false;
+  const spans: CodexThreadLifecycleTimingSpan[] = [];
+  const toMs = (value: number) => Math.max(0, Math.round(value));
+  const record = (name: string, spanStartedAt: number) => {
+    const currentAt = now();
+    spans.push({
+      name,
+      durationMs: toMs(currentAt - spanStartedAt),
+      elapsedMs: toMs(currentAt - startedAt),
+    });
+  };
+  const snapshot = (): CodexThreadLifecycleTimingSummary => ({
+    totalMs: toMs(now() - startedAt),
+    spans: spans.slice(),
+  });
+  return {
+    async measure(name, run) {
+      const spanStartedAt = now();
+      try {
+        return await run();
+      } finally {
+        record(name, spanStartedAt);
+      }
+    },
+    measureSync(name, run) {
+      const spanStartedAt = now();
+      try {
+        return run();
+      } finally {
+        record(name, spanStartedAt);
+      }
+    },
+    mark(name) {
+      record(name, now());
+    },
+    logSummary(params) {
+      if (didLog) {
+        return;
+      }
+      const summary = snapshot();
+      const shouldWarn = shouldWarnCodexThreadLifecycleTimingSummary(summary, options);
+      if (!shouldWarn && !log.isEnabled?.("trace")) {
+        return;
+      }
+      didLog = true;
+      const message = formatCodexThreadLifecycleTimingSummary({
+        runId: params.runId,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        action: params.action,
+        summary,
+      });
+      const meta = {
+        runId: params.runId,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        action: params.action,
+        threadId: params.threadId,
+        totalMs: summary.totalMs,
+        spans: summary.spans,
+      };
+      if (shouldWarn) {
+        log.warn(message, meta);
+      } else {
+        log.trace(message, meta);
+      }
+    },
+  };
+}
+
 export async function startOrResumeThread(params: {
   client: CodexAppServerClient;
   params: EmbeddedRunAttemptParams;
   agentId?: string;
   cwd: string;
   dynamicTools: CodexDynamicToolSpec[];
+  persistentWebSearchAllowed?: boolean;
+  webSearchAllowed?: boolean;
   appServer: CodexAppServerRuntimeOptions;
   developerInstructions?: string;
   config?: JsonObject;
   finalConfigPatch?: JsonObject;
+  buildFinalConfigPatch?: (
+    decision: CodexThreadFinalConfigPatchDecision,
+  ) => CodexThreadFinalConfigPatchResult;
+  nativeHookRelayGeneration?: string;
   nativeCodeModeEnabled?: boolean;
+  nativeProviderWebSearchSupport?: CodexNativeWebSearchSupport;
   nativeCodeModeOnlyEnabled?: boolean;
   userMcpServersEnabled?: boolean;
   mcpServersFingerprint?: string;
   mcpServersFingerprintEvaluated?: boolean;
+  environmentSelection?: CodexTurnEnvironmentParams[];
   pluginThreadConfig?: CodexPluginThreadConfigProvider;
   contextEngineProjection?: CodexContextEngineThreadBootstrapProjection;
+  signal?: AbortSignal;
+  timing?: CodexThreadLifecycleTimingOptions;
 }): Promise<CodexAppServerThreadLifecycleBinding> {
-  const dynamicToolsFingerprint = fingerprintDynamicTools(params.dynamicTools);
-  const contextEngineBinding = buildContextEngineBinding(
-    params.params,
-    params.contextEngineProjection,
+  // Thread lifecycle spans are useful when profiling startup churn, but normal
+  // turns should not pay Date.now/span-array overhead while resuming threads.
+  const lifecycleTiming = createCodexThreadLifecycleTimingTracker({
+    ...params.timing,
+    enabled: params.timing?.enabled ?? isCodexAppServerProfilerEnabled(params.params.config),
+  });
+  const dynamicToolsFingerprint = lifecycleTiming.measureSync("dynamic-tools-fingerprint", () =>
+    fingerprintDynamicTools(params.dynamicTools),
+  );
+  const dynamicToolsContainDeferred = params.dynamicTools.some(
+    (tool) => tool.deferLoading === true,
+  );
+  const webSearchPlan = lifecycleTiming.measureSync("web-search-plan", () =>
+    resolveCodexWebSearchPlan({
+      config: params.params.config,
+      disableTools: params.params.disableTools,
+      nativeToolSurfaceEnabled: params.nativeCodeModeEnabled,
+      nativeProviderWebSearchSupport: params.nativeProviderWebSearchSupport,
+      webSearchAllowed: params.webSearchAllowed,
+    }),
+  );
+  const webSearchThreadConfigFingerprint = fingerprintJsonObject(webSearchPlan.threadConfig);
+  const contextEngineBinding = lifecycleTiming.measureSync("context-engine-binding", () =>
+    buildContextEngineBinding(params.params, params.contextEngineProjection),
   );
   const userMcpServersConfigPatch =
     params.userMcpServersEnabled === false
@@ -111,15 +345,89 @@ export async function startOrResumeThread(params: {
           agentId: params.agentId ?? params.params.agentId,
         });
   const userMcpServersFingerprint = fingerprintUserMcpServersConfigPatch(userMcpServersConfigPatch);
-  let binding = await readCodexAppServerBinding(params.params.sessionFile, {
+  const environmentSelectionFingerprint = fingerprintEnvironmentSelection(
+    params.environmentSelection,
+  );
+  let binding = await lifecycleTiming.measure("read-binding", () =>
+    readCodexAppServerBinding(params.params.sessionFile, {
+      authProfileStore: params.params.authProfileStore,
+      agentDir: params.params.agentDir,
+      config: params.params.config,
+    }),
+  );
+  const startModelSelection = resolveCodexAppServerThreadModelSelection({
+    provider: params.params.provider,
+    model: params.params.modelId,
+    binding,
+    authProfileId: params.params.authProfileId,
     authProfileStore: params.params.authProfileStore,
     agentDir: params.params.agentDir,
     config: params.params.config,
   });
-  let preserveExistingBinding = false;
+  const startModelProvider = startModelSelection.modelProvider;
+  // Capability read failures use managed search for this turn but must not
+  // create a binding that later looks like a confirmed provider-policy change.
+  let preserveExistingBinding =
+    params.nativeProviderWebSearchSupport === "unknown" && !binding?.threadId;
   let rotatedContextEngineBinding = false;
   let prebuiltPluginThreadConfig: CodexPluginThreadConfig | undefined;
-  if (binding?.threadId && params.nativeCodeModeEnabled === false) {
+  const throwIfAborted = () => {
+    if (!params.signal?.aborted) {
+      return;
+    }
+    const reason = params.signal.reason;
+    if (reason instanceof Error) {
+      throw reason;
+    }
+    const error = new Error(
+      typeof reason === "string" && reason.length > 0
+        ? reason
+        : "codex app-server thread lifecycle aborted",
+    );
+    error.name = "AbortError";
+    throw error;
+  };
+  const webSearchBindingChanged =
+    binding?.threadId &&
+    binding.webSearchThreadConfigFingerprint !== webSearchThreadConfigFingerprint;
+  const persistentWebSearchRestriction =
+    params.webSearchAllowed === false && params.persistentWebSearchAllowed === false;
+  // A transient native-tool restriction must not replace a legacy binding just
+  // because that binding predates search fingerprints. Explicit persistent
+  // search denial still rotates first so the restricted thread can persist.
+  const deferLegacyWebSearchRotationToTransientNativeSurface =
+    params.nativeCodeModeEnabled === false &&
+    binding?.webSearchThreadConfigFingerprint === undefined &&
+    !persistentWebSearchRestriction;
+  if (
+    binding?.threadId &&
+    webSearchBindingChanged &&
+    !deferLegacyWebSearchRotationToTransientNativeSurface
+  ) {
+    const transientWebSearchRestriction = isTransientWebSearchRestriction(params);
+    if (transientWebSearchRestriction) {
+      embeddedAgentLog.debug(
+        "codex app-server web search restricted for turn; starting transient thread",
+        {
+          threadId: binding.threadId,
+        },
+      );
+      preserveExistingBinding = true;
+    } else {
+      // Codex can ignore resume overrides for a loaded thread, so persistent
+      // search-policy changes and legacy bindings without metadata rotate first.
+      embeddedAgentLog.debug("codex app-server web search config changed; starting a new thread", {
+        threadId: binding.threadId,
+      });
+      await clearCodexAppServerBinding(params.params.sessionFile);
+    }
+    binding = undefined;
+  }
+  if (
+    binding?.threadId &&
+    params.nativeCodeModeEnabled === false &&
+    !persistentWebSearchRestriction
+  ) {
     embeddedAgentLog.debug(
       "codex app-server native tool surface disabled for turn; starting transient thread",
       {
@@ -162,6 +470,19 @@ export async function startOrResumeThread(params: {
   }
   if (
     binding?.threadId &&
+    binding.environmentSelectionFingerprint !== environmentSelectionFingerprint
+  ) {
+    embeddedAgentLog.debug(
+      "codex app-server environment selection changed; starting a new thread",
+      {
+        threadId: binding.threadId,
+      },
+    );
+    await clearCodexAppServerBinding(params.params.sessionFile);
+    binding = undefined;
+  }
+  if (
+    binding?.threadId &&
     params.mcpServersFingerprintEvaluated === true &&
     binding.mcpServersFingerprint !== params.mcpServersFingerprint
   ) {
@@ -187,7 +508,9 @@ export async function startOrResumeThread(params: {
       })
     ) {
       try {
-        prebuiltPluginThreadConfig = await params.pluginThreadConfig?.build();
+        prebuiltPluginThreadConfig = await lifecycleTiming.measure("plugin-config-recovery", () =>
+          params.pluginThreadConfig?.build(),
+        );
         pluginBindingStale =
           prebuiltPluginThreadConfig?.fingerprint !== binding.pluginAppsFingerprint;
       } catch (error) {
@@ -215,6 +538,23 @@ export async function startOrResumeThread(params: {
     });
     await clearCodexAppServerBinding(params.params.sessionFile);
     binding = undefined;
+  }
+  if (binding?.threadId) {
+    if (
+      binding.dynamicToolsFingerprint &&
+      params.dynamicTools.length > 0 &&
+      binding.dynamicToolsContainDeferred !== dynamicToolsContainDeferred &&
+      (binding.dynamicToolsContainDeferred !== undefined || !dynamicToolsContainDeferred)
+    ) {
+      embeddedAgentLog.debug(
+        "codex app-server dynamic tool loading changed; starting a new thread",
+        {
+          threadId: binding.threadId,
+        },
+      );
+      await clearCodexAppServerBinding(params.params.sessionFile);
+      binding = undefined;
+    }
   }
   if (binding?.threadId) {
     // `/codex resume <thread>` writes a binding before the next turn can know
@@ -249,60 +589,78 @@ export async function startOrResumeThread(params: {
     } else {
       try {
         const authProfileId = params.params.authProfileId ?? binding.authProfileId;
+        const finalConfigPatch = params.buildFinalConfigPatch?.({
+          action: "resume",
+          binding,
+        }) ?? {
+          configPatch: params.finalConfigPatch,
+          nativeHookRelayGeneration: params.nativeHookRelayGeneration,
+        };
         const resumeConfig = mergeCodexThreadConfigs(
           params.config,
           userMcpServersConfigPatch,
-          params.finalConfigPatch,
+          finalConfigPatch.configPatch,
         );
+        const resumeParams = lifecycleTiming.measureSync("thread-resume-params", () =>
+          buildThreadResumeParams(params.params, {
+            threadId: binding.threadId,
+            authProfileId,
+            model: startModelSelection.model,
+            modelProvider: startModelProvider,
+            appServer: params.appServer,
+            dynamicTools: params.dynamicTools,
+            developerInstructions: params.developerInstructions,
+            config: resumeConfig,
+            nativeCodeModeEnabled: params.nativeCodeModeEnabled,
+            nativeProviderWebSearchSupport: params.nativeProviderWebSearchSupport,
+            nativeCodeModeOnlyEnabled: params.nativeCodeModeOnlyEnabled,
+            webSearchAllowed: params.webSearchAllowed,
+          }),
+        );
+        const requestModelProvider =
+          typeof resumeParams.modelProvider === "string" && resumeParams.modelProvider.trim()
+            ? resumeParams.modelProvider
+            : undefined;
         const response = assertCodexThreadResumeResponse(
-          await params.client.request(
-            "thread/resume",
-            buildThreadResumeParams(params.params, {
-              threadId: binding.threadId,
-              authProfileId,
-              appServer: params.appServer,
-              dynamicTools: params.dynamicTools,
-              developerInstructions: params.developerInstructions,
-              config: resumeConfig,
-              nativeCodeModeEnabled: params.nativeCodeModeEnabled,
-              nativeCodeModeOnlyEnabled: params.nativeCodeModeOnlyEnabled,
-            }),
+          await lifecycleTiming.measure("thread-resume-request", () =>
+            params.client.request("thread/resume", resumeParams, { signal: params.signal }),
           ),
         );
+        throwIfAborted();
         const boundAuthProfileId = authProfileId;
-        const fallbackModelProvider = resolveCodexAppServerModelProvider({
-          provider: params.params.provider,
-          authProfileId: boundAuthProfileId,
-          authProfileStore: params.params.authProfileStore,
-          agentDir: params.params.agentDir,
-          config: params.params.config,
-        });
         const nextMcpServersFingerprint =
           params.mcpServersFingerprintEvaluated === true
             ? params.mcpServersFingerprint
             : binding.mcpServersFingerprint;
-        await writeCodexAppServerBinding(
-          params.params.sessionFile,
-          {
-            threadId: response.thread.id,
-            cwd: params.cwd,
-            authProfileId: boundAuthProfileId,
-            model: params.params.modelId,
-            modelProvider: response.modelProvider ?? fallbackModelProvider,
-            dynamicToolsFingerprint,
-            userMcpServersFingerprint,
-            mcpServersFingerprint: nextMcpServersFingerprint,
-            pluginAppsFingerprint: binding.pluginAppsFingerprint,
-            pluginAppsInputFingerprint: binding.pluginAppsInputFingerprint,
-            pluginAppPolicyContext: binding.pluginAppPolicyContext,
-            contextEngine: contextEngineBinding,
-            createdAt: binding.createdAt,
-          },
-          {
-            authProfileStore: params.params.authProfileStore,
-            agentDir: params.params.agentDir,
-            config: params.params.config,
-          },
+        await lifecycleTiming.measure("thread-resume-write-binding", () =>
+          writeCodexAppServerBinding(
+            params.params.sessionFile,
+            {
+              threadId: response.thread.id,
+              cwd: params.cwd,
+              authProfileId: boundAuthProfileId,
+              model: response.model ?? resumeParams.model ?? params.params.modelId,
+              modelProvider: response.modelProvider ?? requestModelProvider ?? startModelProvider,
+              dynamicToolsFingerprint,
+              dynamicToolsContainDeferred,
+              webSearchThreadConfigFingerprint,
+              userMcpServersFingerprint,
+              mcpServersFingerprint: nextMcpServersFingerprint,
+              nativeHookRelayGeneration:
+                finalConfigPatch.nativeHookRelayGeneration ?? binding.nativeHookRelayGeneration,
+              pluginAppsFingerprint: binding.pluginAppsFingerprint,
+              pluginAppsInputFingerprint: binding.pluginAppsInputFingerprint,
+              pluginAppPolicyContext: binding.pluginAppPolicyContext,
+              contextEngine: contextEngineBinding,
+              environmentSelectionFingerprint,
+              createdAt: binding.createdAt,
+            },
+            {
+              authProfileStore: params.params.authProfileStore,
+              agentDir: params.params.agentDir,
+              config: params.params.config,
+            },
+          ),
         );
         if (contextEngineBinding) {
           embeddedAgentLog.info("codex app-server wrote context-engine thread binding", {
@@ -315,21 +673,38 @@ export async function startOrResumeThread(params: {
             action: "resumed",
           });
         }
+        lifecycleTiming.mark("thread-ready");
+        lifecycleTiming.logSummary({
+          runId: params.params.runId,
+          sessionId: params.params.sessionId,
+          sessionKey: params.params.sessionKey,
+          threadId: response.thread.id,
+          action: "resumed",
+        });
+        const activeTurnIds = readActiveCodexTurnIds(response.thread);
         return {
           ...binding,
           threadId: response.thread.id,
           cwd: params.cwd,
           authProfileId: boundAuthProfileId,
-          model: params.params.modelId,
-          modelProvider: response.modelProvider ?? fallbackModelProvider,
+          model: response.model ?? resumeParams.model ?? params.params.modelId,
+          modelProvider: response.modelProvider ?? requestModelProvider ?? startModelProvider,
           dynamicToolsFingerprint,
+          dynamicToolsContainDeferred,
+          webSearchThreadConfigFingerprint,
           userMcpServersFingerprint,
           mcpServersFingerprint: nextMcpServersFingerprint,
+          nativeHookRelayGeneration:
+            finalConfigPatch.nativeHookRelayGeneration ?? binding.nativeHookRelayGeneration,
           pluginAppsFingerprint: binding.pluginAppsFingerprint,
           pluginAppsInputFingerprint: binding.pluginAppsInputFingerprint,
           pluginAppPolicyContext: binding.pluginAppPolicyContext,
           contextEngine: contextEngineBinding,
-          lifecycle: { action: "resumed" },
+          environmentSelectionFingerprint,
+          lifecycle: {
+            action: "resumed",
+            ...(activeTurnIds.length ? { activeTurnIds } : {}),
+          },
         };
       } catch (error) {
         if (isCodexAppServerConnectionClosedError(error)) {
@@ -344,28 +719,55 @@ export async function startOrResumeThread(params: {
   }
 
   const pluginThreadConfig = params.pluginThreadConfig?.enabled
-    ? (prebuiltPluginThreadConfig ?? (await params.pluginThreadConfig.build()))
+    ? (prebuiltPluginThreadConfig ??
+      (await lifecycleTiming.measure("plugin-config-build", () =>
+        params.pluginThreadConfig?.build(),
+      )))
     : undefined;
-  const config = mergeCodexThreadConfigs(
-    params.config,
-    userMcpServersConfigPatch,
-    pluginThreadConfig?.configPatch,
-    params.finalConfigPatch,
-  );
-  const response = assertCodexThreadStartResponse(
-    await params.client.request(
-      "thread/start",
-      buildThreadStartParams(params.params, {
-        cwd: params.cwd,
-        dynamicTools: params.dynamicTools,
-        appServer: params.appServer,
-        developerInstructions: params.developerInstructions,
-        config,
-        nativeCodeModeEnabled: params.nativeCodeModeEnabled,
-        nativeCodeModeOnlyEnabled: params.nativeCodeModeOnlyEnabled,
-      }),
+  const finalConfigPatch = params.buildFinalConfigPatch?.({ action: "start" }) ?? {
+    configPatch: params.finalConfigPatch,
+    nativeHookRelayGeneration: params.nativeHookRelayGeneration,
+  };
+  const config = lifecycleTiming.measureSync("merge-thread-config", () =>
+    mergeCodexThreadConfigs(
+      params.config,
+      userMcpServersConfigPatch,
+      pluginThreadConfig?.configPatch,
+      finalConfigPatch.configPatch,
     ),
   );
+  const startParams = lifecycleTiming.measureSync("thread-start-params", () =>
+    buildThreadStartParams(params.params, {
+      cwd: params.cwd,
+      dynamicTools: params.dynamicTools,
+      appServer: params.appServer,
+      developerInstructions: params.developerInstructions,
+      config,
+      nativeCodeModeEnabled: params.nativeCodeModeEnabled,
+      nativeProviderWebSearchSupport: params.nativeProviderWebSearchSupport,
+      nativeCodeModeOnlyEnabled: params.nativeCodeModeOnlyEnabled,
+      webSearchAllowed: params.webSearchAllowed,
+      environmentSelection: params.environmentSelection,
+      model: startModelSelection.model,
+      modelProvider: startModelProvider,
+    }),
+  );
+  const requestModelProvider =
+    typeof startParams.modelProvider === "string" && startParams.modelProvider.trim()
+      ? startParams.modelProvider
+      : undefined;
+  const threadStartResponse = await lifecycleTiming.measure("thread-start-request", async () => {
+    try {
+      return await params.client.request("thread/start", startParams, { signal: params.signal });
+    } catch (error) {
+      if (error instanceof CodexAppServerRpcError) {
+        throw new CodexThreadStartRequestError(error);
+      }
+      throw error;
+    }
+  });
+  const response = assertCodexThreadStartResponse(threadStartResponse);
+  throwIfAborted();
   const modelProvider = resolveCodexAppServerModelProvider({
     provider: params.params.provider,
     authProfileId: params.params.authProfileId,
@@ -377,28 +779,35 @@ export async function startOrResumeThread(params: {
   const nextMcpServersFingerprint =
     params.mcpServersFingerprintEvaluated === true ? params.mcpServersFingerprint : undefined;
   if (!preserveExistingBinding) {
-    await writeCodexAppServerBinding(
-      params.params.sessionFile,
-      {
-        threadId: response.thread.id,
-        cwd: params.cwd,
-        authProfileId: params.params.authProfileId,
-        model: response.model ?? params.params.modelId,
-        modelProvider: response.modelProvider ?? modelProvider,
-        dynamicToolsFingerprint,
-        userMcpServersFingerprint,
-        mcpServersFingerprint: nextMcpServersFingerprint,
-        pluginAppsFingerprint: pluginThreadConfig?.fingerprint,
-        pluginAppsInputFingerprint: pluginThreadConfig?.inputFingerprint,
-        pluginAppPolicyContext: pluginThreadConfig?.policyContext,
-        contextEngine: contextEngineBinding,
-        createdAt,
-      },
-      {
-        authProfileStore: params.params.authProfileStore,
-        agentDir: params.params.agentDir,
-        config: params.params.config,
-      },
+    await lifecycleTiming.measure("thread-start-write-binding", () =>
+      writeCodexAppServerBinding(
+        params.params.sessionFile,
+        {
+          threadId: response.thread.id,
+          cwd: params.cwd,
+          authProfileId: params.params.authProfileId,
+          model: response.model ?? startParams.model ?? params.params.modelId,
+          modelProvider:
+            response.modelProvider ?? requestModelProvider ?? startModelProvider ?? modelProvider,
+          dynamicToolsFingerprint,
+          dynamicToolsContainDeferred,
+          webSearchThreadConfigFingerprint,
+          userMcpServersFingerprint,
+          mcpServersFingerprint: nextMcpServersFingerprint,
+          nativeHookRelayGeneration: finalConfigPatch.nativeHookRelayGeneration,
+          pluginAppsFingerprint: pluginThreadConfig?.fingerprint,
+          pluginAppsInputFingerprint: pluginThreadConfig?.inputFingerprint,
+          pluginAppPolicyContext: pluginThreadConfig?.policyContext,
+          contextEngine: contextEngineBinding,
+          environmentSelectionFingerprint,
+          createdAt,
+        },
+        {
+          authProfileStore: params.params.authProfileStore,
+          agentDir: params.params.agentDir,
+          config: params.params.config,
+        },
+      ),
     );
     if (contextEngineBinding) {
       embeddedAgentLog.info("codex app-server wrote context-engine thread binding", {
@@ -412,21 +821,33 @@ export async function startOrResumeThread(params: {
       });
     }
   }
+  lifecycleTiming.mark("thread-ready");
+  lifecycleTiming.logSummary({
+    runId: params.params.runId,
+    sessionId: params.params.sessionId,
+    sessionKey: params.params.sessionKey,
+    threadId: response.thread.id,
+    action: rotatedContextEngineBinding ? "rotated" : "started",
+  });
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     threadId: response.thread.id,
     sessionFile: params.params.sessionFile,
     cwd: params.cwd,
     authProfileId: params.params.authProfileId,
-    model: response.model ?? params.params.modelId,
-    modelProvider: response.modelProvider ?? modelProvider,
+    model: response.model ?? startParams.model ?? params.params.modelId,
+    modelProvider:
+      response.modelProvider ?? requestModelProvider ?? startModelProvider ?? modelProvider,
     dynamicToolsFingerprint,
+    dynamicToolsContainDeferred,
     userMcpServersFingerprint,
     mcpServersFingerprint: nextMcpServersFingerprint,
+    nativeHookRelayGeneration: finalConfigPatch.nativeHookRelayGeneration,
     pluginAppsFingerprint: pluginThreadConfig?.fingerprint,
     pluginAppsInputFingerprint: pluginThreadConfig?.inputFingerprint,
     pluginAppPolicyContext: pluginThreadConfig?.policyContext,
     contextEngine: contextEngineBinding,
+    environmentSelectionFingerprint,
     createdAt,
     updatedAt: createdAt,
     lifecycle: {
@@ -434,6 +855,45 @@ export async function startOrResumeThread(params: {
       ...(rotatedContextEngineBinding ? { rotatedContextEngineBinding } : {}),
     },
   };
+}
+
+function isTransientWebSearchRestriction(
+  params: Pick<
+    Parameters<typeof startOrResumeThread>[0],
+    | "params"
+    | "nativeCodeModeEnabled"
+    | "nativeProviderWebSearchSupport"
+    | "persistentWebSearchAllowed"
+    | "webSearchAllowed"
+  >,
+): boolean {
+  if (params.nativeProviderWebSearchSupport === "unknown") {
+    return true;
+  }
+  if (params.params.config?.tools?.web?.search?.enabled === false) {
+    return false;
+  }
+  if (params.params.disableTools === true) {
+    return true;
+  }
+  const persistentWebSearchRestriction =
+    params.webSearchAllowed === false && params.persistentWebSearchAllowed === false;
+  if (params.nativeCodeModeEnabled === false && !persistentWebSearchRestriction) {
+    return true;
+  }
+  if (params.webSearchAllowed !== false) {
+    return false;
+  }
+  if (params.persistentWebSearchAllowed !== undefined) {
+    return params.persistentWebSearchAllowed;
+  }
+  if (params.params.toolsAllow === undefined) {
+    return false;
+  }
+  return !params.params.toolsAllow.some((name) => {
+    const normalized = normalizeCodexDynamicToolName(name);
+    return normalized === "*" || normalized === "web_search";
+  });
 }
 
 export function buildContextEngineBinding(
@@ -562,30 +1022,46 @@ export function buildThreadStartParams(
     developerInstructions?: string;
     config?: JsonObject;
     nativeCodeModeEnabled?: boolean;
+    nativeProviderWebSearchSupport?: CodexNativeWebSearchSupport;
     nativeCodeModeOnlyEnabled?: boolean;
+    webSearchAllowed?: boolean;
+    environmentSelection?: CodexTurnEnvironmentParams[];
+    model?: string | null;
+    modelProvider?: string | null;
   },
 ): CodexThreadStartParams {
-  const modelProvider = resolveCodexAppServerModelProvider({
+  const resolvedModelProvider = resolveCodexAppServerModelProvider({
     provider: params.provider,
     authProfileId: params.authProfileId,
     authProfileStore: params.authProfileStore,
     agentDir: params.agentDir,
     config: params.config,
   });
+  const modelSelection = resolveCodexAppServerRequestModelSelection({
+    model: options.model ?? params.modelId,
+    modelProvider: options.modelProvider ?? resolvedModelProvider,
+    authProfileId: params.authProfileId,
+    authProfileStore: params.authProfileStore,
+    agentDir: params.agentDir,
+    config: params.config,
+  });
   return {
-    model: params.modelId,
-    ...(modelProvider ? { modelProvider } : {}),
+    model: modelSelection.model,
+    ...(modelSelection.modelProvider ? { modelProvider: modelSelection.modelProvider } : {}),
     cwd: options.cwd,
     approvalPolicy: options.appServer.approvalPolicy,
     approvalsReviewer: options.appServer.approvalsReviewer,
     sandbox: options.appServer.sandbox,
     ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
+    personality: CODEX_NATIVE_PERSONALITY_NONE,
     serviceName: "OpenClaw",
     config: buildCodexRuntimeThreadConfigForRun(params, options.config, {
       nativeCodeModeEnabled: options.nativeCodeModeEnabled,
+      nativeProviderWebSearchSupport: options.nativeProviderWebSearchSupport,
       nativeCodeModeOnlyEnabled: options.nativeCodeModeOnlyEnabled,
+      webSearchAllowed: options.webSearchAllowed,
     }),
-    ...(options.nativeCodeModeEnabled === false ? { environments: [] } : {}),
+    ...resolveCodexThreadEnvironmentSelection(options),
     developerInstructions:
       options.developerInstructions ??
       buildDeveloperInstructions(params, { dynamicTools: options.dynamicTools }),
@@ -600,16 +1076,28 @@ export function buildThreadResumeParams(
   options: {
     threadId: string;
     authProfileId?: string;
+    modelProvider?: string | null;
     appServer: CodexAppServerRuntimeOptions;
     dynamicTools?: CodexDynamicToolSpec[];
     developerInstructions?: string;
     config?: JsonObject;
     nativeCodeModeEnabled?: boolean;
+    nativeProviderWebSearchSupport?: CodexNativeWebSearchSupport;
     nativeCodeModeOnlyEnabled?: boolean;
+    webSearchAllowed?: boolean;
+    model?: string | null;
   },
 ): CodexThreadResumeParams {
-  const modelProvider = resolveCodexAppServerModelProvider({
+  const resolvedModelProvider = resolveCodexAppServerModelProvider({
     provider: params.provider,
+    authProfileId: options.authProfileId ?? params.authProfileId,
+    authProfileStore: params.authProfileStore,
+    agentDir: params.agentDir,
+    config: params.config,
+  });
+  const modelSelection = resolveCodexAppServerRequestModelSelection({
+    model: options.model ?? params.modelId,
+    modelProvider: options.modelProvider ?? resolvedModelProvider,
     authProfileId: options.authProfileId ?? params.authProfileId,
     authProfileStore: params.authProfileStore,
     agentDir: params.agentDir,
@@ -617,21 +1105,124 @@ export function buildThreadResumeParams(
   });
   return {
     threadId: options.threadId,
-    model: params.modelId,
-    ...(modelProvider ? { modelProvider } : {}),
+    model: modelSelection.model,
+    ...(modelSelection.modelProvider ? { modelProvider: modelSelection.modelProvider } : {}),
     approvalPolicy: options.appServer.approvalPolicy,
     approvalsReviewer: options.appServer.approvalsReviewer,
     sandbox: options.appServer.sandbox,
     ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
+    personality: CODEX_NATIVE_PERSONALITY_NONE,
     config: buildCodexRuntimeThreadConfigForRun(params, options.config, {
       nativeCodeModeEnabled: options.nativeCodeModeEnabled,
+      nativeProviderWebSearchSupport: options.nativeProviderWebSearchSupport,
       nativeCodeModeOnlyEnabled: options.nativeCodeModeOnlyEnabled,
+      webSearchAllowed: options.webSearchAllowed,
     }),
     developerInstructions:
       options.developerInstructions ??
       buildDeveloperInstructions(params, { dynamicTools: options.dynamicTools }),
     persistExtendedHistory: true,
   };
+}
+
+export function resolveCodexBindingModelProviderFallback(params: {
+  provider?: string;
+  currentModel: string | undefined;
+  bindingModel: string | undefined;
+  bindingModelProvider: string | undefined;
+}): string | undefined {
+  const provider = params.provider?.trim().toLowerCase();
+  if (provider && provider !== "codex") {
+    return undefined;
+  }
+  const currentModel = params.currentModel?.trim();
+  const bindingModel = params.bindingModel?.trim();
+  if (
+    currentModel &&
+    bindingModel &&
+    currentModel === bindingModel &&
+    params.bindingModelProvider
+  ) {
+    return params.bindingModelProvider;
+  }
+  return hasProviderQualifiedModelRef(currentModel) ? undefined : params.bindingModelProvider;
+}
+
+export function resolveCodexAppServerThreadModelSelection(params: {
+  provider: string;
+  model: string;
+  binding?: Pick<
+    CodexAppServerThreadBinding,
+    "threadId" | "authProfileId" | "model" | "modelProvider"
+  >;
+  authProfileId?: string;
+  authProfileStore?: CodexAppServerAuthProfileLookup["authProfileStore"];
+  agentDir?: string;
+  config?: CodexAppServerAuthProfileLookup["config"];
+}): { model: string; modelProvider?: string } {
+  const authProfileId = params.authProfileId ?? params.binding?.authProfileId;
+  const explicitModelProvider = resolveCodexAppServerModelProvider({
+    provider: params.provider,
+    authProfileId,
+    authProfileStore: params.authProfileStore,
+    agentDir: params.agentDir,
+    config: params.config,
+  });
+  const bindingModelProvider = params.binding?.threadId
+    ? resolveCodexBindingModelProviderFallback({
+        provider: params.provider,
+        currentModel: params.model,
+        bindingModel: params.binding.model,
+        bindingModelProvider: params.binding.modelProvider,
+      })
+    : undefined;
+  return resolveCodexAppServerRequestModelSelection({
+    model: params.model,
+    modelProvider: explicitModelProvider ?? bindingModelProvider,
+    authProfileId,
+    authProfileStore: params.authProfileStore,
+    agentDir: params.agentDir,
+    config: params.config,
+  });
+}
+
+export function resolveCodexAppServerRequestModelSelection(params: {
+  model: string;
+  modelProvider?: string | null;
+  authProfileId?: string;
+  authProfileStore?: CodexAppServerAuthProfileLookup["authProfileStore"];
+  agentDir?: string;
+  config?: CodexAppServerAuthProfileLookup["config"];
+}): { model: string; modelProvider?: string } {
+  const model = params.model.trim();
+  const modelProvider = params.modelProvider?.trim();
+  if (modelProvider) {
+    return { model, modelProvider };
+  }
+  // Codex app-server expects provider-qualified refs as separate fields. Keep
+  // explicit providers intact so provider-owned slashy model ids are not split.
+  const slashIndex = model.indexOf("/");
+  if (slashIndex <= 0 || slashIndex >= model.length - 1) {
+    return { model };
+  }
+  const inferredProvider = model.slice(0, slashIndex);
+  const inferredModelProvider = resolveCodexAppServerModelProvider({
+    provider: inferredProvider,
+    authProfileId: params.authProfileId,
+    authProfileStore: params.authProfileStore,
+    agentDir: params.agentDir,
+    config: params.config,
+  });
+  return {
+    model: model.slice(slashIndex + 1).trim(),
+    ...(inferredModelProvider ? { modelProvider: inferredModelProvider } : {}),
+  };
+}
+
+function hasProviderQualifiedModelRef(model: string | undefined): boolean {
+  const trimmed = model?.trim();
+  const slashIndex = trimmed?.indexOf("/") ?? -1;
+  return slashIndex > 0 && slashIndex < (trimmed?.length ?? 0) - 1;
 }
 
 export function buildCodexRuntimeThreadConfig(
@@ -643,11 +1234,16 @@ export function buildCodexRuntimeThreadConfig(
     "features.code_mode_only": options.nativeCodeModeOnlyEnabled === true,
   };
   if (options.nativeCodeModeEnabled === false) {
-    return (
-      mergeCodexThreadConfigs(codeModeConfig, config, CODEX_CODE_MODE_DISABLED_THREAD_CONFIG) ?? {
-        ...CODEX_CODE_MODE_DISABLED_THREAD_CONFIG,
-      }
-    );
+    const disabledConfig = mergeCodexThreadConfigs(
+      config,
+      CODEX_CODE_MODE_DISABLED_THREAD_CONFIG,
+    ) ?? {
+      ...CODEX_CODE_MODE_DISABLED_THREAD_CONFIG,
+    };
+    // Native patch streaming is part of native code mode, so do not send it
+    // when runtime policy disables that tool surface.
+    delete disabledConfig["features.apply_patch_streaming_events"];
+    return disabledConfig;
   }
   if (options.nativeCodeModeOnlyEnabled === true) {
     return (
@@ -669,9 +1265,31 @@ export function buildCodexRuntimeThreadConfig(
 function buildCodexRuntimeThreadConfigForRun(
   params: EmbeddedRunAttemptParams,
   config: JsonObject | undefined,
-  options: { nativeCodeModeEnabled?: boolean; nativeCodeModeOnlyEnabled?: boolean } = {},
+  options: {
+    nativeCodeModeEnabled?: boolean;
+    nativeProviderWebSearchSupport?: CodexNativeWebSearchSupport;
+    nativeCodeModeOnlyEnabled?: boolean;
+    webSearchAllowed?: boolean;
+  } = {},
 ): JsonObject {
-  const runtimeConfig = buildCodexRuntimeThreadConfig(config, options);
+  const webSearchConfig = resolveCodexWebSearchPlan({
+    config: params.config,
+    disableTools: params.disableTools,
+    nativeToolSurfaceEnabled: options.nativeCodeModeEnabled,
+    nativeProviderWebSearchSupport: options.nativeProviderWebSearchSupport,
+    webSearchAllowed: options.webSearchAllowed,
+  }).threadConfig;
+  const baseConfig = buildCodexRuntimeThreadConfig(
+    mergeCodexThreadConfigs(config, webSearchConfig),
+    options,
+  );
+  const runtimeConfig =
+    mergeCodexThreadConfigs(
+      baseConfig,
+      shouldDisableCodexToolSearchForModel(params.modelId)
+        ? CODEX_TOOL_SEARCH_UNSUPPORTED_THREAD_CONFIG
+        : undefined,
+    ) ?? baseConfig;
   if (params.bootstrapContextMode !== "lightweight") {
     return runtimeConfig;
   }
@@ -691,9 +1309,23 @@ export function buildTurnStartParams(
     appServer: CodexAppServerRuntimeOptions;
     promptText?: string;
     sandboxPolicy?: CodexSandboxPolicy;
+    environmentSelection?: CodexTurnEnvironmentParams[];
+    model?: string | null;
+    modelProvider?: string | null;
+    turnScopedDeveloperInstructions?: string;
+    skillsCollaborationInstructions?: string;
+    memoryCollaborationInstructions?: string;
     heartbeatCollaborationInstructions?: string;
   },
 ): CodexTurnStartParams {
+  const modelSelection = resolveCodexAppServerRequestModelSelection({
+    model: options.model ?? params.modelId,
+    modelProvider: options.modelProvider,
+    authProfileId: params.authProfileId,
+    authProfileStore: params.authProfileStore,
+    agentDir: params.agentDir,
+    config: params.config,
+  });
   return {
     threadId: options.threadId,
     input: buildUserInput(params, options.promptText),
@@ -702,26 +1334,52 @@ export function buildTurnStartParams(
     approvalsReviewer: options.appServer.approvalsReviewer,
     sandboxPolicy:
       options.sandboxPolicy ?? codexSandboxPolicyForTurn(options.appServer.sandbox, options.cwd),
-    model: params.modelId,
+    model: modelSelection.model,
+    personality: CODEX_NATIVE_PERSONALITY_NONE,
     ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
-    effort: resolveReasoningEffort(params.thinkLevel, params.modelId),
+    effort: resolveReasoningEffort(params.thinkLevel, modelSelection.model),
+    ...(options.environmentSelection ? { environments: options.environmentSelection } : {}),
     collaborationMode: buildTurnCollaborationMode(params, {
+      model: modelSelection.model,
+      turnScopedDeveloperInstructions: options.turnScopedDeveloperInstructions,
+      skillsCollaborationInstructions: options.skillsCollaborationInstructions,
+      memoryCollaborationInstructions: options.memoryCollaborationInstructions,
       heartbeatCollaborationInstructions: options.heartbeatCollaborationInstructions,
     }),
   };
+}
+
+function resolveCodexThreadEnvironmentSelection(options: {
+  nativeCodeModeEnabled?: boolean;
+  environmentSelection?: CodexTurnEnvironmentParams[];
+}): Pick<CodexThreadStartParams, "environments"> {
+  if (options.nativeCodeModeEnabled === false) {
+    return { environments: [] };
+  }
+  if (options.environmentSelection) {
+    return { environments: options.environmentSelection };
+  }
+  return {};
 }
 
 type CodexTurnCollaborationMode = NonNullable<CodexTurnStartParams["collaborationMode"]>;
 
 export function buildTurnCollaborationMode(
   params: EmbeddedRunAttemptParams,
-  options: { heartbeatCollaborationInstructions?: string } = {},
+  options: {
+    model?: string;
+    turnScopedDeveloperInstructions?: string;
+    skillsCollaborationInstructions?: string;
+    memoryCollaborationInstructions?: string;
+    heartbeatCollaborationInstructions?: string;
+  } = {},
 ): CodexTurnCollaborationMode {
+  const model = options.model ?? params.modelId;
   return {
     mode: "default",
     settings: {
-      model: params.modelId,
-      reasoning_effort: resolveReasoningEffort(params.thinkLevel, params.modelId),
+      model,
+      reasoning_effort: resolveReasoningEffort(params.thinkLevel, model),
       developer_instructions: buildTurnScopedCollaborationInstructions(params, options),
     },
   };
@@ -729,18 +1387,51 @@ export function buildTurnCollaborationMode(
 
 function buildTurnScopedCollaborationInstructions(
   params: EmbeddedRunAttemptParams,
-  options: { heartbeatCollaborationInstructions?: string } = {},
+  options: {
+    turnScopedDeveloperInstructions?: string;
+    skillsCollaborationInstructions?: string;
+    memoryCollaborationInstructions?: string;
+    heartbeatCollaborationInstructions?: string;
+  } = {},
 ): string | null {
+  const contextInstructions = joinPresentSections(
+    options.turnScopedDeveloperInstructions,
+    options.memoryCollaborationInstructions,
+    options.skillsCollaborationInstructions,
+  );
   if (params.trigger === "cron") {
-    return buildCronCollaborationInstructions();
+    return joinPresentSections(buildCronCollaborationInstructions(), contextInstructions);
   }
   if (params.trigger === "heartbeat") {
     return joinPresentSections(
       buildHeartbeatCollaborationInstructions(),
+      contextInstructions,
       options.heartbeatCollaborationInstructions,
     );
   }
+  if (contextInstructions?.trim()) {
+    return joinPresentSections(buildDefaultCollaborationInstructions(), contextInstructions);
+  }
   return null;
+}
+
+function buildDefaultCollaborationInstructions(): string {
+  // Codex only applies the built-in Default-mode preset when `developer_instructions`
+  // is null. OpenClaw adds per-turn workspace instructions here, so preserve that
+  // pinned Codex default behavior before appending the workspace overlay.
+  return [
+    "# Collaboration Mode: Default",
+    "",
+    "You are now in Default mode. Any previous instructions for other modes (e.g. Plan mode) are no longer active.",
+    "",
+    "Your active mode changes only when new developer instructions with a different `<collaboration_mode>...</collaboration_mode>` change it; user requests or tool descriptions do not change mode by themselves. Known mode names are Default and Plan.",
+    "",
+    "## request_user_input availability",
+    "",
+    "Use the `request_user_input` tool only when it is listed in the available tools for this turn.",
+    "",
+    "In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. If you absolutely must ask a question because the answer cannot be discovered from local context and a reasonable assumption would be risky, ask the user directly with a concise plain-text question. Never write a multiple choice question as a textual assistant message.",
+  ].join("\n");
 }
 
 function buildCronCollaborationInstructions(): string {
@@ -787,6 +1478,16 @@ function fingerprintUserMcpServersConfigPatch(
   return configPatch ? JSON.stringify(stabilizeJsonValue(configPatch)) : undefined;
 }
 
+function fingerprintJsonObject(value: JsonObject): string {
+  return JSON.stringify(stabilizeJsonValue(value));
+}
+
+function fingerprintEnvironmentSelection(
+  environments: CodexTurnEnvironmentParams[] | undefined,
+): string | undefined {
+  return environments ? JSON.stringify(environments.map(stabilizeJsonValue)) : undefined;
+}
+
 function fingerprintDynamicToolSpec(tool: JsonValue): JsonValue {
   if (!isJsonObject(tool)) {
     return stabilizeJsonValue(tool);
@@ -817,6 +1518,14 @@ function stabilizeJsonValue(value: JsonValue): JsonValue {
     stable[key] = stabilizeJsonValue(child);
   }
   return stable;
+}
+
+function readActiveCodexTurnIds(thread: unknown): string[] {
+  const turns = (thread as { turns?: Array<{ id?: unknown; status?: unknown }> }).turns;
+  return (turns ?? [])
+    .filter((turn) => turn.status === "inProgress")
+    .map((turn) => (typeof turn.id === "string" ? turn.id : ""))
+    .filter((turnId) => turnId.trim().length > 0);
 }
 
 const EMPTY_DYNAMIC_TOOLS_FINGERPRINT = JSON.stringify([]);
@@ -851,6 +1560,7 @@ export function buildDeveloperInstructions(
   const sections = [
     "You are a personal agent running inside OpenClaw. OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes.",
     buildDeferredDynamicToolManifest(options.dynamicTools),
+    buildSkillWorkshopInstruction(options.dynamicTools),
     "Use Codex native `spawn_agent` for Codex subagents. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation.",
     buildVisibleReplyInstruction(params, options.dynamicTools),
     nativeCommandGuidance,
@@ -876,6 +1586,18 @@ function buildDeferredDynamicToolManifest(
   return `Deferred searchable OpenClaw dynamic tools available: ${deferredToolNames.join(", ")}. Use \`tool_search\` to load exact callable specs before use.`;
 }
 
+function buildSkillWorkshopInstruction(
+  dynamicTools: readonly CodexDynamicToolSpec[] | undefined,
+): string | undefined {
+  const hasSkillWorkshop = (dynamicTools ?? []).some(
+    (tool) => tool.name.trim() === SKILL_WORKSHOP_TOOL_NAME,
+  );
+  if (!hasSkillWorkshop) {
+    return undefined;
+  }
+  return buildSkillWorkshopPromptSection().join("\n");
+}
+
 function buildVisibleReplyInstruction(
   params: EmbeddedRunAttemptParams,
   dynamicTools: readonly CodexDynamicToolSpec[] | undefined,
@@ -884,9 +1606,12 @@ function buildVisibleReplyInstruction(
     ? dynamicTools.some((tool) => tool.name.trim() === "message")
     : params.disableMessageTool !== true;
   if (params.sourceReplyDeliveryMode === "message_tool_only" && messageToolAvailable) {
-    return "To send a visible message, use the `message` tool.";
+    return "Visible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. Do not repeat that visible content in your final answer.";
   }
-  return "To send a visible reply, use the active Codex delivery path.";
+  if (messageToolAvailable) {
+    return "For the current source conversation, reply normally in your final assistant message; OpenClaw will deliver it through the active source conversation. Use `message` only for explicit out-of-band sends, media/file sends, or sends to a different target.";
+  }
+  return "For the current source conversation, reply normally in your final assistant message; OpenClaw will deliver it through the active source conversation.";
 }
 
 function buildUserInput(
@@ -920,23 +1645,20 @@ export function resolveCodexAppServerModelProvider(params: {
     // native provider/auth selection instead of forcing the legacy OpenAI path.
     return undefined;
   }
-  if (
-    isCodexAppServerNativeAuthProfile(params) &&
-    (normalizedLower === "openai" || normalizedLower === "openai-codex")
-  ) {
+  if (isCodexAppServerNativeAuthProfile(params) && normalizedLower === "openai") {
     // When OpenClaw is forwarding ChatGPT/Codex OAuth, `openai` is Codex's
     // native provider id, not a public OpenAI API-key choice. Omit the override
     // so app-server keeps its configured provider/auth pair for this session.
     return undefined;
   }
-  return normalizedLower === "openai-codex" ? "openai" : normalized;
+  return normalizedLower === "openai" ? "openai" : normalized;
 }
 
-// Modern Codex models (gpt-5.5, gpt-5.4, gpt-5.4-mini, gpt-5.2) use the
+// Modern Codex models (gpt-5.5, gpt-5.4, gpt-5.4-mini, gpt-5.3-codex-spark) use the
 // none/low/medium/high/xhigh effort enum and reject "minimal". The CLI
 // defaults thinkLevel to "minimal", so without translation EVERY agent turn
 // on those models pays a wasted first request + retry-with-low fallback in
-// pi-embedded-runner. Map "minimal" -> "low" upfront for modern models so the
+// embedded-agent-runner. Map "minimal" -> "low" upfront for modern models so the
 // first request is accepted. Older Codex models still accept "minimal"
 // directly. (#71946)
 // Exported for unit-test coverage of the model-aware translation path.

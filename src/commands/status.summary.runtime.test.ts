@@ -1,8 +1,9 @@
+// Status summary runtime tests cover model context-token resolution.
 import { describe, expect, it } from "vitest";
 import { statusSummaryRuntime } from "./status.summary.runtime.js";
 
 describe("statusSummaryRuntime.resolveContextTokensForModel", () => {
-  it("matches provider context window overrides across canonical provider aliases", () => {
+  it("does not match provider context window overrides across provider id variants", () => {
     const contextTokens = statusSummaryRuntime.resolveContextTokensForModel({
       cfg: {
         models: {
@@ -18,7 +19,7 @@ describe("statusSummaryRuntime.resolveContextTokensForModel", () => {
       fallbackContextTokens: 999,
     });
 
-    expect(contextTokens).toBe(123_456);
+    expect(contextTokens).toBe(999);
   });
 
   it("prefers per-model contextTokens over contextWindow", () => {
@@ -26,19 +27,169 @@ describe("statusSummaryRuntime.resolveContextTokensForModel", () => {
       cfg: {
         models: {
           providers: {
-            "openai-codex": {
+            openai: {
               models: [{ id: "gpt-5.4", contextWindow: 1_050_000, contextTokens: 272_000 }],
             },
           },
         },
       } as never,
-      provider: "openai-codex",
+      provider: "openai",
       model: "gpt-5.4",
       fallbackContextTokens: 999,
     });
 
     expect(contextTokens).toBe(272_000);
   });
+
+  it("caps an oversized override without raising a lower override", () => {
+    const cfg = {
+      models: {
+        providers: {
+          openai: {
+            models: [{ id: "gpt-5.5", contextWindow: 272_000 }],
+          },
+        },
+      },
+    } as never;
+    const resolveOverride = (contextTokensOverride: number) =>
+      statusSummaryRuntime.resolveContextTokensForModel({
+        cfg,
+        provider: "openai",
+        model: "gpt-5.5",
+        contextTokensOverride,
+        fallbackContextTokens: 999,
+      });
+
+    expect(resolveOverride(1_000_000)).toBe(272_000);
+    expect(resolveOverride(128_000)).toBe(128_000);
+  });
+
+  it("caps cold-cache overrides with prepared static catalog metadata", () => {
+    expect(
+      statusSummaryRuntime.resolveContextTokensForModel({
+        cfg: {},
+        provider: "openai",
+        model: "gpt-5.5",
+        modelContextWindow: 1_000_000,
+        modelContextTokens: 272_000,
+        contextTokensOverride: 1_000_000,
+        fallbackContextTokens: 200_000,
+      }),
+    ).toBe(272_000);
+  });
+
+  it("combines configured native windows with lower prepared runtime caps", () => {
+    expect(
+      statusSummaryRuntime.resolveContextTokensForModel({
+        cfg: {
+          models: {
+            providers: {
+              openai: {
+                models: [{ id: "gpt-5.5", contextWindow: 1_000_000 }],
+              },
+            },
+          },
+        } as never,
+        provider: "openai",
+        model: "gpt-5.5",
+        modelContextTokens: 272_000,
+        contextTokensOverride: 1_000_000,
+      }),
+    ).toBe(272_000);
+  });
+
+  it("matches self-prefixed configured ids through provider ownership", () => {
+    expect(
+      statusSummaryRuntime.resolveContextTokensForModel({
+        cfg: {
+          models: {
+            providers: {
+              "google-gemini-cli": {
+                models: [
+                  {
+                    id: "google-gemini-cli/gemini-3.1-pro-preview",
+                    contextTokens: 1_000_000,
+                  },
+                ],
+              },
+            },
+          },
+        } as never,
+        provider: "google-gemini-cli",
+        model: "gemini-3.1-pro-preview",
+        contextTokensOverride: 2_000_000,
+      }),
+    ).toBe(1_000_000);
+  });
+
+  it("uses provider defaults and fixed Anthropic windows when capping overrides", () => {
+    expect(
+      statusSummaryRuntime.resolveContextTokensForModel({
+        cfg: {
+          models: {
+            providers: {
+              ollama: {
+                contextWindow: 32_000,
+                models: [{ id: "qwen3.5:9b" }],
+              },
+            },
+          },
+        } as never,
+        provider: "ollama",
+        model: "qwen3.5:9b",
+        contextTokensOverride: 100_000,
+      }),
+    ).toBe(32_000);
+
+    expect(
+      statusSummaryRuntime.resolveContextTokensForModel({
+        cfg: {
+          models: {
+            providers: {
+              anthropic: {
+                models: [{ id: "claude-sonnet-4-6", contextWindow: 200_000 }],
+              },
+            },
+          },
+        } as never,
+        sourceCfg: {},
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        contextTokensOverride: 1_200_000,
+      }),
+    ).toBe(1_048_576);
+  });
+
+  it.each([
+    { contextTokens: 200_000, expected: 200_000 },
+    { contextTokens: 2_000_000, expected: 1_048_576 },
+  ])(
+    "bounds Anthropic contextTokens=$contextTokens by the fixed native window",
+    ({ contextTokens, expected }) => {
+      expect(
+        statusSummaryRuntime.resolveContextTokensForModel({
+          cfg: {
+            models: {
+              providers: {
+                anthropic: {
+                  models: [
+                    {
+                      id: "claude-sonnet-4-6",
+                      contextWindow: 1_048_576,
+                      contextTokens,
+                    },
+                  ],
+                },
+              },
+            },
+          } as never,
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          contextTokensOverride: 1_200_000,
+        }),
+      ).toBe(expected);
+    },
+  );
 });
 
 describe("statusSummaryRuntime.classifySessionKey", () => {
@@ -96,7 +247,7 @@ describe("statusSummaryRuntime.resolveSessionRuntimeLabel", () => {
           agents: {
             defaults: {
               models: {
-                "openai/gpt-5.5": { agentRuntime: { id: "pi" } },
+                "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } },
               },
             },
             list: [
@@ -177,13 +328,13 @@ describe("statusSummaryRuntime.resolveSessionModelRef", () => {
   it("prefers explicit overrides ahead of fallback runtime fields", () => {
     expect(
       statusSummaryRuntime.resolveSessionModelRef(cfg, {
-        providerOverride: "openai-codex",
+        providerOverride: "openai",
         modelOverride: "gpt-5.4",
         modelProvider: "amazon-bedrock",
         model: "minimax.minimax-m2.5",
       }),
     ).toEqual({
-      provider: "openai-codex",
+      provider: "openai",
       model: "gpt-5.4",
     });
   });

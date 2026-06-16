@@ -1,9 +1,10 @@
+// Shared base compatibility normalizers reused by core and plugin setup migrations.
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   normalizeLegacyBrowserConfig,
   normalizeLegacyCrossContextMessageConfig,
   normalizeLegacyMediaProviderOptions,
-  normalizeLegacyMistralModelMaxTokens,
+  normalizeLegacyMistralModelDefaults,
   normalizeLegacyOpenAIModelProviderApi,
   normalizeLegacyOllamaNativeNumCtxParams,
   normalizeLegacyRuntimeModelRefs,
@@ -15,6 +16,7 @@ import { migrateLegacyWebFetchConfig } from "./legacy-web-fetch-migrate.js";
 import { migrateLegacyWebSearchConfig } from "./legacy-web-search-migrate.js";
 import { migrateLegacyXSearchConfig } from "./legacy-x-search-migrate.js";
 
+/** Run common compatibility migrations before caller-specific setup/channel passes. */
 export function normalizeBaseCompatibilityConfigValues(
   cfg: OpenClawConfig,
   changes: string[],
@@ -44,5 +46,5 @@ export function normalizeBaseCompatibilityConfigValues(
   next = normalizeLegacyCrossContextMessageConfig(next, changes);
   next = normalizeLegacyMediaProviderOptions(next, changes);
   next = normalizeLegacyOllamaNativeNumCtxParams(next, changes);
-  return normalizeLegacyMistralModelMaxTokens(next, changes);
+  return normalizeLegacyMistralModelDefaults(next, changes);
 }

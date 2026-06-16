@@ -66,6 +66,10 @@ fallback. Pin an exact version only when you need a reproducible install.
 openclaw channels login --channel whatsapp
 ```
 
+    Current login is QR-based. In remote or headless environments, make sure you
+    have a reliable path to deliver the live QR code to the phone that will scan
+    it before starting login.
+
     For a specific account:
 
 ```bash
@@ -104,6 +108,13 @@ openclaw pairing approve whatsapp <CODE>
 <Note>
 OpenClaw recommends running WhatsApp on a separate number when possible. (The channel metadata and setup flow are optimized for that setup, but personal-number setups are also supported.)
 </Note>
+
+<Warning>
+The current WhatsApp setup flow is QR-only. Terminal-rendered QRs, screenshots,
+PDFs, or chat attachments can expire or become unreadable while being relayed
+from a remote machine. For remote/headless hosts, prefer a direct QR image
+handoff path over manual terminal capture.
+</Warning>
 
 ## Deployment patterns
 
@@ -153,7 +164,7 @@ OpenClaw recommends running WhatsApp on a separate number when possible. (The ch
 
 - Gateway owns the WhatsApp socket and reconnect loop.
 - The reconnect watchdog uses WhatsApp Web transport activity, not only inbound app-message volume, so a quiet linked-device session is not restarted solely because nobody has sent a message recently. A longer application-silence cap still forces a reconnect if transport frames keep arriving but no application messages are handled for the watchdog window; after a transient reconnect for a recently active session, that application-silence check uses the normal message timeout for the first recovery window.
-- Baileys socket timings are explicit under `web.whatsapp.*`: `keepAliveIntervalMs` controls WhatsApp Web application pings, `connectTimeoutMs` controls the opening handshake timeout, and `defaultQueryTimeoutMs` controls Baileys query timeouts.
+- Baileys socket timings are explicit under `web.whatsapp.*`: `keepAliveIntervalMs` controls WhatsApp Web application pings, `connectTimeoutMs` controls the opening handshake timeout, and `defaultQueryTimeoutMs` controls Baileys query waits plus OpenClaw's local outbound send/presence and inbound read-receipt operation bounds.
 - Outbound sends require an active WhatsApp listener for the target account.
 - Group sends attach native mention metadata for `@+<digits>` and `@<digits>` tokens in text and media captions when the token matches current WhatsApp participant metadata, including LID-backed groups.
 - Status and broadcast chats are ignored (`@status`, `@broadcast`).
@@ -163,6 +174,38 @@ OpenClaw recommends running WhatsApp on a separate number when possible. (The ch
 - WhatsApp Channels/Newsletters can be explicit outbound targets with their native `@newsletter` JID. Outbound newsletter sends use channel session metadata (`agent:<agentId>:whatsapp:channel:<jid>`) rather than DM session semantics.
 - WhatsApp Web transport honors standard proxy environment variables on the gateway host (`HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` / lowercase variants). Prefer host-level proxy config over channel-specific WhatsApp proxy settings.
 - When `messages.removeAckAfterReply` is enabled, OpenClaw clears the WhatsApp ack reaction after a visible reply is delivered.
+
+## Approval prompts
+
+WhatsApp can render exec and plugin approval prompts with `👍` / `👎` reactions. Delivery is
+controlled by the top-level approval forwarding config:
+
+```json5
+{
+  approvals: {
+    exec: {
+      enabled: true,
+      mode: "session",
+    },
+    plugin: {
+      enabled: true,
+      mode: "targets",
+      targets: [{ channel: "whatsapp", to: "+15551234567" }],
+    },
+  },
+}
+```
+
+`approvals.exec` and `approvals.plugin` are independent. Enabling WhatsApp as a channel only links
+the transport; it does not send approval prompts unless the matching approval family is enabled
+and routes to WhatsApp. Session mode delivers native emoji approvals only for approvals that
+originate from WhatsApp. Target mode uses the shared forwarding pipeline for explicit WhatsApp
+targets and does not create separate approver-DM fanout.
+
+WhatsApp approval reactions require explicit WhatsApp approvers from `allowFrom` or `"*"`.
+`defaultTo` controls ordinary default message targets; it is not an approval approver. Manual
+`/approve` commands still pass through the normal WhatsApp sender authorization path before
+approval resolution.
 
 ## Plugin hooks and privacy
 
@@ -275,6 +318,40 @@ content and identifiers.
 
   </Tab>
 </Tabs>
+
+## Configured ACP bindings
+
+WhatsApp supports persistent ACP bindings with top-level `bindings[]` entries:
+
+```json5
+{
+  bindings: [
+    {
+      type: "acp",
+      agentId: "codex",
+      match: {
+        channel: "whatsapp",
+        accountId: "work",
+        peer: { kind: "direct", id: "+15555550123" },
+      },
+    },
+    {
+      type: "acp",
+      agentId: "codex",
+      match: {
+        channel: "whatsapp",
+        accountId: "work",
+        peer: { kind: "group", id: "120363424282127706@g.us" },
+      },
+    },
+  ],
+}
+```
+
+- Direct chats match E.164 numbers such as `+15555550123`.
+- Groups match WhatsApp group JIDs such as `120363424282127706@g.us`.
+- Group allowlists, sender policy, and mention or activation gating run before OpenClaw ensures the configured ACP session exists.
+- A matched configured ACP binding owns the route. WhatsApp broadcast groups do not fan out that turn to ordinary WhatsApp sessions.
 
 ## Personal-number and self-chat behavior
 
@@ -479,6 +556,7 @@ Ack reactions are gated by `reactionLevel` — they are suppressed when `reactio
 Behavior notes:
 
 - sent immediately after inbound is accepted (pre-reply)
+- if `ackReaction` is present without `emoji`, WhatsApp uses the routed agent's identity emoji, falling back to "👀"; omit `ackReaction` or set `emoji: ""` to send no ack reaction
 - failures are logged but do not block normal reply delivery
 - group mode `mentions` reacts on mention-triggered turns; group activation `always` acts as bypass for this check
 - WhatsApp uses `channels.whatsapp.ackReaction` (legacy `messages.ackReaction` is not used here)
@@ -505,6 +583,7 @@ Set `messages.statusReactions.enabled: true` to let WhatsApp replace the ack rea
 Behavior notes:
 
 - `channels.whatsapp.ackReaction` still controls whether status reactions are eligible for direct messages and groups.
+- The queued status reaction uses the same effective ack emoji as plain ack reactions.
 - WhatsApp has one bot reaction slot per message, so lifecycle updates replace the current reaction in place.
 - `messages.removeAckAfterReply: true` clears the final status reaction after the configured done/error hold.
 - Tool emoji categories include `tool`, `coding`, `web`, `deploy`, `build`, and `concierge`.
@@ -586,8 +665,20 @@ Behavior notes:
     Fix:
 
     ```bash
+    openclaw channels status --probe
     openclaw doctor
     openclaw logs --follow
+    openclaw gateway status
+    ```
+
+    If the loop persists after host connectivity and timing are fixed, back up
+    the account auth directory and re-link that account:
+
+    ```bash
+    cp -a ~/.openclaw/credentials/whatsapp/<accountId> \
+      ~/.openclaw/credentials/whatsapp/<accountId>.bak
+    openclaw channels logout --channel whatsapp --account <accountId>
+    openclaw channels login --channel whatsapp --account <accountId>
     ```
 
     If `~/.openclaw/logs/whatsapp-health.log` says `Gateway inactive` but

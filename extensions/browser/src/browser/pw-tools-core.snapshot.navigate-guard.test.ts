@@ -1,3 +1,4 @@
+// Browser tests cover pw tools core.snapshot.navigate guard plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import "../test-support/browser-security.mock.js";
@@ -107,6 +108,7 @@ describe("pw-tools-core.snapshot navigate guard", () => {
     expect(getPwToolsCoreSessionMocks().forceDisconnectPlaywrightForTarget).toHaveBeenCalledWith({
       cdpUrl: "http://127.0.0.1:18792",
       targetId: "tab-1",
+      ssrfPolicy: { allowPrivateNetwork: true },
       reason: "retry navigate after detached frame",
     });
     expect(getPwToolsCoreSessionMocks().gotoPageWithNavigationGuard).toHaveBeenCalledTimes(2);

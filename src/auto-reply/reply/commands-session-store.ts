@@ -1,3 +1,4 @@
+// Shared session-store helpers for command handlers that mutate sessions.
 import type { SessionEntry } from "../../config/sessions.js";
 import { updateSessionStore } from "../../config/sessions.js";
 import { applyAbortCutoffToSessionEntry, type AbortCutoff } from "./abort-cutoff.js";
@@ -12,9 +13,21 @@ export async function persistSessionEntry(params: CommandParams): Promise<boolea
   params.sessionEntry.updatedAt = Date.now();
   params.sessionStore[params.sessionKey] = params.sessionEntry;
   if (params.storePath) {
-    await updateSessionStore(params.storePath, (store) => {
-      store[params.sessionKey] = params.sessionEntry as SessionEntry;
-    });
+    // Slash commands mutate one known session entry; skipping global session
+    // maintenance avoids scanning the whole sessions directory for simple
+    // command-only writes.
+    await updateSessionStore(
+      params.storePath,
+      (store) => {
+        store[params.sessionKey] = params.sessionEntry as SessionEntry;
+        return params.sessionEntry as SessionEntry;
+      },
+      {
+        resolveSingleEntryPersistence: (entry) =>
+          entry ? { sessionKey: params.sessionKey, entry } : null,
+        skipMaintenance: true,
+      },
+    );
   }
   return true;
 }
@@ -37,16 +50,24 @@ export async function persistAbortTargetEntry(params: {
   sessionStore[key] = entry;
 
   if (storePath) {
-    await updateSessionStore(storePath, (store) => {
-      const nextEntry = store[key] ?? entry;
-      if (!nextEntry) {
-        return;
-      }
-      nextEntry.abortedLastRun = true;
-      applyAbortCutoffToSessionEntry(nextEntry, abortCutoff);
-      nextEntry.updatedAt = Date.now();
-      store[key] = nextEntry;
-    });
+    await updateSessionStore(
+      storePath,
+      (store) => {
+        const nextEntry = store[key] ?? entry;
+        if (!nextEntry) {
+          return undefined;
+        }
+        nextEntry.abortedLastRun = true;
+        applyAbortCutoffToSessionEntry(nextEntry, abortCutoff);
+        nextEntry.updatedAt = Date.now();
+        store[key] = nextEntry;
+        return nextEntry;
+      },
+      {
+        resolveSingleEntryPersistence: (updated) =>
+          updated ? { sessionKey: key, entry: updated } : null,
+      },
+    );
   }
 
   return true;

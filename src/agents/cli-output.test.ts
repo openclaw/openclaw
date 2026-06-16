@@ -1,11 +1,29 @@
+/** Tests CLI JSON/JSONL output parsing, streamed deltas, and error extraction. */
 import { describe, expect, it } from "vitest";
 import {
   createCliJsonlStreamingParser,
   extractCliErrorMessage,
   parseCliJson,
   parseCliJsonl,
+  supportsCliJsonlToolEvents,
+  type CliToolUseStartDelta,
 } from "./cli-output.js";
 import { createClaudeApiErrorFixture } from "./test-helpers/claude-api-error-fixture.js";
+
+describe("supportsCliJsonlToolEvents", () => {
+  it.each([
+    ["Claude provider", { command: "claude", output: "jsonl" as const }, "claude-cli", true],
+    [
+      "explicit Claude dialect",
+      { command: "custom", output: "jsonl" as const, jsonlDialect: "claude-stream-json" as const },
+      "custom-cli",
+      true,
+    ],
+    ["generic JSONL", { command: "custom", output: "jsonl" as const }, "custom-cli", false],
+  ])("%s: %s", (_name, backend, providerId, expected) => {
+    expect(supportsCliJsonlToolEvents({ backend, providerId })).toBe(expected);
+  });
+});
 
 describe("parseCliJson", () => {
   it("recovers mixed-output Claude session metadata from embedded JSON objects", () => {
@@ -322,6 +340,48 @@ describe("parseCliJsonl", () => {
     });
   });
 
+  it("does not let cumulative Claude result usage overwrite assistant usage", () => {
+    const result = parseCliJsonl(
+      [
+        JSON.stringify({ type: "init", session_id: "session-stream" }),
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            id: "msg-1",
+            usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 100 },
+          },
+        }),
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            id: "msg-2",
+            usage: { input_tokens: 11, output_tokens: 6, cache_read_input_tokens: 125 },
+          },
+        }),
+        JSON.stringify({
+          type: "result",
+          session_id: "session-stream",
+          result: "done",
+          usage: { input_tokens: 30, output_tokens: 15, cache_read_input_tokens: 300 },
+        }),
+      ].join("\n"),
+      {
+        command: "claude",
+        output: "jsonl",
+        sessionIdFields: ["session_id"],
+      },
+      "claude-cli",
+    );
+
+    expect(result?.usage).toEqual({
+      input: 11,
+      output: 6,
+      cacheRead: 125,
+      cacheWrite: undefined,
+      total: undefined,
+    });
+  });
+
   it("preserves Claude session metadata even when the final result text is empty", () => {
     const result = parseCliJsonl(
       [
@@ -407,6 +467,33 @@ describe("parseCliJsonl", () => {
     });
   });
 
+  it("captures the last Claude session_id when an ephemeral id precedes the canonical one", () => {
+    // claude-cli emits ephemeral session_ids from SessionStart hooks before the
+    // canonical resumed session_id surfaces in the init event and the terminal
+    // result event. First-wins capture would bind to the ephemeral id whose
+    // transcript JSONL never lands on disk; last-wins captures the canonical id.
+    const result = parseCliJsonl(
+      [
+        JSON.stringify({ type: "system", subtype: "init", session_id: "session-ephemeral" }),
+        JSON.stringify({ type: "system", subtype: "init", session_id: "session-canonical" }),
+        JSON.stringify({
+          type: "result",
+          session_id: "session-canonical",
+          result: "rotated reply",
+        }),
+      ].join("\n"),
+      {
+        command: "claude",
+        output: "jsonl",
+        sessionIdFields: ["session_id"],
+      },
+      "claude-cli",
+    );
+
+    expect(result?.sessionId).toBe("session-canonical");
+    expect(result?.text).toBe("rotated reply");
+  });
+
   it("extracts nested Claude API errors from failed stream-json output", () => {
     const { message, jsonl } = createClaudeApiErrorFixture();
     const result = extractCliErrorMessage(jsonl);
@@ -446,5 +533,647 @@ describe("createCliJsonlStreamingParser", () => {
     expect(deltas).toEqual([
       { text: "hello", delta: "hello", sessionId: "session-stream", usage: undefined },
     ]);
+  });
+
+  it("ignores cumulative usage from result events to avoid cache_read inflation", () => {
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "local-cli",
+      onAssistantDelta: () => {},
+    });
+
+    parser.push(
+      [
+        JSON.stringify({ type: "init", session_id: "session-stream" }),
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            id: "msg-1",
+            usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 100 },
+          },
+        }),
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            id: "msg-2",
+            usage: { input_tokens: 11, output_tokens: 6, cache_read_input_tokens: 125 },
+          },
+        }),
+        JSON.stringify({
+          type: "result",
+          result: "done",
+          usage: { input_tokens: 30, output_tokens: 15, cache_read_input_tokens: 300 },
+        }),
+      ].join("\n"),
+    );
+    parser.finish();
+
+    const output = parser.getOutput();
+    expect(output?.usage).toEqual({
+      input: 11,
+      output: 6,
+      cacheRead: 125,
+      cacheWrite: undefined,
+      total: undefined,
+    });
+  });
+
+  it("surfaces Claude tool_use start and result events", () => {
+    const starts: CliToolUseStartDelta[] = [];
+    const results: Array<{ toolCallId: string; name: string; isError: boolean; result?: unknown }> =
+      [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: () => undefined,
+      onToolUseStart: (delta) => starts.push(delta),
+      onToolResult: (delta) => results.push(delta),
+    });
+
+    parser.push(
+      [
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            role: "assistant",
+            content: [
+              { type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "ls -la" } },
+            ],
+          },
+        }),
+        JSON.stringify({
+          type: "user",
+          message: {
+            role: "user",
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: "toolu_1",
+                content: "total 0\n",
+                is_error: false,
+              },
+            ],
+          },
+        }),
+      ].join("\n") + "\n",
+    );
+    parser.finish();
+
+    expect(starts).toEqual([{ toolCallId: "toolu_1", name: "Bash", args: { command: "ls -la" } }]);
+    expect(results).toEqual([
+      { toolCallId: "toolu_1", name: "Bash", isError: false, result: "total 0\n" },
+    ]);
+  });
+
+  it("reassembles streamed tool args from input_json_delta chunks", () => {
+    const starts: CliToolUseStartDelta[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: () => undefined,
+      onToolUseStart: (delta) => starts.push(delta),
+    });
+
+    parser.push(
+      [
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            index: 0,
+            content_block: { type: "tool_use", id: "toolu_chunked", name: "Bash", input: {} },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "input_json_delta", partial_json: '{"command":' },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "input_json_delta", partial_json: ' "echo hi"}' },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: { type: "content_block_stop", index: 0 },
+        }),
+      ].join("\n") + "\n",
+    );
+    parser.finish();
+
+    expect(starts).toEqual([
+      { toolCallId: "toolu_chunked", name: "Bash", args: { command: "echo hi" } },
+    ]);
+  });
+
+  it("emits empty args when streamed tool args are malformed", () => {
+    const starts: CliToolUseStartDelta[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: () => undefined,
+      onToolUseStart: (delta) => starts.push(delta),
+    });
+
+    parser.push(
+      [
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            index: 0,
+            content_block: { type: "tool_use", id: "toolu_bad", name: "Bash", input: {} },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "input_json_delta", partial_json: '{"command": "ls' },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: { type: "content_block_stop", index: 0 },
+        }),
+      ].join("\n") + "\n",
+    );
+    parser.finish();
+
+    expect(starts).toEqual([{ toolCallId: "toolu_bad", name: "Bash", args: {} }]);
+  });
+
+  it.each(["server_tool_use", "mcp_tool_use"])("recognizes %s blocks", (type) => {
+    const starts: CliToolUseStartDelta[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: () => undefined,
+      onToolUseStart: (delta) => starts.push(delta),
+    });
+
+    parser.push(
+      [
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            index: 0,
+            content_block: { type, id: "toolu_hosted", name: "web_search", input: {} },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "input_json_delta", partial_json: '{"query":"openclaw"}' },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: { type: "content_block_stop", index: 0 },
+        }),
+      ].join("\n") + "\n",
+    );
+    parser.finish();
+
+    expect(starts).toEqual([
+      { toolCallId: "toolu_hosted", name: "web_search", args: { query: "openclaw" } },
+    ]);
+  });
+
+  it.each([
+    {
+      useType: "server_tool_use",
+      resultType: "web_search_tool_result",
+      toolCallId: "srvtoolu_1",
+      name: "web_search",
+      input: { query: "openclaw" },
+      result: [{ type: "web_search_result", title: "OpenClaw", url: "https://example.com" }],
+      isError: false,
+    },
+    {
+      useType: "mcp_tool_use",
+      resultType: "mcp_tool_result",
+      toolCallId: "mcptoolu_1",
+      name: "echo",
+      input: { value: "hello" },
+      result: [{ type: "text", text: "hello" }],
+      isError: false,
+    },
+  ])("emits hosted result events for $useType", (fixture) => {
+    const starts: CliToolUseStartDelta[] = [];
+    const results: Array<{ toolCallId: string; name: string; isError: boolean; result?: unknown }> =
+      [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: () => undefined,
+      onToolUseStart: (delta) => starts.push(delta),
+      onToolResult: (delta) => results.push(delta),
+    });
+
+    parser.push(
+      [
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: fixture.useType,
+                id: fixture.toolCallId,
+                name: fixture.name,
+                input: fixture.input,
+              },
+              {
+                type: fixture.resultType,
+                tool_use_id: fixture.toolCallId,
+                content: fixture.result,
+                is_error: fixture.isError,
+              },
+            ],
+          },
+        }),
+      ].join("\n") + "\n",
+    );
+    parser.finish();
+
+    expect(starts).toEqual([
+      { toolCallId: fixture.toolCallId, name: fixture.name, args: fixture.input },
+    ]);
+    expect(results).toEqual([
+      {
+        toolCallId: fixture.toolCallId,
+        name: fixture.name,
+        isError: fixture.isError,
+        result: fixture.result,
+      },
+    ]);
+  });
+
+  it("emits streamed server tool result blocks", () => {
+    const results: Array<{ toolCallId: string; name: string; isError: boolean; result?: unknown }> =
+      [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: () => undefined,
+      onToolUseStart: () => undefined,
+      onToolResult: (delta) => results.push(delta),
+    });
+
+    parser.push(
+      [
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            index: 0,
+            content_block: { type: "server_tool_use", id: "srvtoolu_stream", name: "web_search" },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_stop",
+            index: 0,
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            index: 1,
+            content_block: {
+              type: "web_search_tool_result",
+              tool_use_id: "srvtoolu_stream",
+              content: { type: "web_search_tool_result_error", error_code: "unavailable" },
+            },
+          },
+        }),
+      ].join("\n") + "\n",
+    );
+    parser.finish();
+
+    expect(results).toEqual([
+      {
+        toolCallId: "srvtoolu_stream",
+        name: "web_search",
+        isError: true,
+        result: { type: "web_search_tool_result_error", error_code: "unavailable" },
+      },
+    ]);
+  });
+
+  it("fires onCommentaryText with accumulated text before a tool_use block", () => {
+    const commentaryTexts: string[] = [];
+    const deltas: Array<{ text: string; delta: string }> = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "claude",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: (delta) => deltas.push({ text: delta.text, delta: delta.delta }),
+      onCommentaryText: (text) => commentaryTexts.push(text),
+    });
+
+    parser.push(
+      [
+        JSON.stringify({ type: "init", session_id: "session-commentary" }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: "Let me check " },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: "that for you." },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            index: 1,
+            content_block: { type: "tool_use", id: "toolu_1", name: "Bash", input: {} },
+          },
+        }),
+      ].join("\n") + "\n",
+    );
+    parser.finish();
+
+    expect(commentaryTexts).toEqual(["Let me check that for you."]);
+    expect(deltas).toEqual([]);
+  });
+
+  it("flushes Claude text as an assistant delta when no tool follows", () => {
+    const commentaryTexts: string[] = [];
+    const deltas: Array<{ text: string; delta: string }> = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "claude",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: (delta) => deltas.push({ text: delta.text, delta: delta.delta }),
+      onCommentaryText: (text) => commentaryTexts.push(text),
+    });
+
+    parser.push(
+      [
+        JSON.stringify({ type: "init", session_id: "session-answer" }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: "Final " },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: "answer." },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "message_stop",
+          },
+        }),
+      ].join("\n") + "\n",
+    );
+    parser.finish();
+
+    expect(commentaryTexts).toEqual([]);
+    expect(deltas).toEqual([{ text: "Final answer.", delta: "Final answer." }]);
+  });
+
+  it("keeps pre-tool text in assistant deltas when no commentary consumer is wired", () => {
+    const deltas: Array<{ text: string; delta: string }> = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "claude",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: (delta) => deltas.push({ text: delta.text, delta: delta.delta }),
+    });
+
+    parser.push(
+      [
+        JSON.stringify({ type: "init", session_id: "session-drop-commentary" }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: "Let me inspect the repo." },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            index: 1,
+            content_block: { type: "tool_use", id: "toolu_1", name: "Read", input: {} },
+          },
+        }),
+      ].join("\n") + "\n",
+    );
+    parser.finish();
+
+    expect(deltas).toEqual([
+      { text: "Let me inspect the repo.", delta: "Let me inspect the repo." },
+    ]);
+  });
+
+  it("does not fire onCommentaryText when no text precedes tool_use", () => {
+    const commentaryTexts: string[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "claude",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: () => undefined,
+      onCommentaryText: (text) => commentaryTexts.push(text),
+    });
+
+    parser.push(
+      [
+        JSON.stringify({ type: "init", session_id: "session-no-commentary" }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            index: 0,
+            content_block: { type: "tool_use", id: "toolu_1", name: "Bash", input: {} },
+          },
+        }),
+      ].join("\n") + "\n",
+    );
+    parser.finish();
+
+    expect(commentaryTexts).toEqual([]);
+  });
+
+  it("does not duplicate commentary when consecutive tool_use blocks have no new text", () => {
+    const commentaryTexts: string[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "claude",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: () => undefined,
+      onCommentaryText: (text) => commentaryTexts.push(text),
+    });
+
+    parser.push(
+      [
+        JSON.stringify({ type: "init", session_id: "session-multi-commentary" }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: "First, checking files." },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            index: 1,
+            content_block: { type: "tool_use", id: "toolu_1", name: "Read", input: {} },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            index: 2,
+            content_block: { type: "tool_use", id: "toolu_2", name: "Bash", input: {} },
+          },
+        }),
+      ].join("\n") + "\n",
+    );
+    parser.finish();
+
+    expect(commentaryTexts).toEqual(["First, checking files."]);
+  });
+
+  it("emits only the new segment on text-tool-text-tool sequences", () => {
+    const commentaryTexts: string[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "claude",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: () => undefined,
+      onCommentaryText: (text) => commentaryTexts.push(text),
+    });
+
+    parser.push(
+      [
+        JSON.stringify({ type: "init", session_id: "session-segment" }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: "Reading the file now." },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            index: 1,
+            content_block: { type: "tool_use", id: "toolu_a", name: "Read", input: {} },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: " Now searching." },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            index: 3,
+            content_block: { type: "tool_use", id: "toolu_b", name: "Grep", input: {} },
+          },
+        }),
+      ].join("\n") + "\n",
+    );
+    parser.finish();
+
+    expect(commentaryTexts).toEqual(["Reading the file now.", "Now searching."]);
   });
 });

@@ -1,4 +1,13 @@
+// Usage gateway methods aggregate provider and session cost/token metrics from
+// caches, logs, session stores, and discovered transcript files.
 import fs from "node:fs";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  ErrorCodes,
+  errorShape,
+  formatValidationErrors,
+  validateSessionsUsageParams,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   resolveSessionFilePath,
@@ -9,6 +18,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadProviderUsageSummary } from "../../infra/provider-usage.js";
 import type {
   CostUsageSummary,
+  CostUsageTotals,
   SessionCostSummary,
   SessionDailyModelUsage,
   SessionMessageCounts,
@@ -18,6 +28,7 @@ import {
   loadCostUsageSummaryFromCache,
   loadSessionLogs,
   loadSessionCostSummaryFromCache,
+  loadSessionCostSummariesFromCache,
   loadSessionUsageTimeSeries,
   discoverAllSessions,
   resolveExistingUsageSessionFile,
@@ -26,7 +37,6 @@ import {
 } from "../../infra/session-cost-usage.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../../sessions/session-id-resolution.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   buildUsageAggregateTail,
   mergeUsageDailyLatency,
@@ -38,12 +48,6 @@ import type {
   SessionsUsageResult,
 } from "../../shared/usage-types.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
-import {
-  ErrorCodes,
-  errorShape,
-  formatValidationErrors,
-  validateSessionsUsageParams,
-} from "../protocol/index.js";
 import {
   resolveSessionStoreAgentId,
   resolveStoredSessionKeyForAgentStore,
@@ -73,8 +77,39 @@ type CostUsageCacheEntry = {
 
 const costUsageCache = new Map<string, CostUsageCacheEntry>();
 
+function createEmptyCostUsageTotals(): CostUsageTotals {
+  return {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 0,
+    totalCost: 0,
+    inputCost: 0,
+    outputCost: 0,
+    cacheReadCost: 0,
+    cacheWriteCost: 0,
+    missingCostEntries: 0,
+  };
+}
+
+function addCostUsageTotals(target: CostUsageTotals, source: CostUsageTotals): void {
+  target.input += source.input;
+  target.output += source.output;
+  target.cacheRead += source.cacheRead;
+  target.cacheWrite += source.cacheWrite;
+  target.totalTokens += source.totalTokens;
+  target.totalCost += source.totalCost;
+  target.inputCost += source.inputCost;
+  target.outputCost += source.outputCost;
+  target.cacheReadCost += source.cacheReadCost;
+  target.cacheWriteCost += source.cacheWriteCost;
+  target.missingCostEntries += source.missingCostEntries;
+}
+
 function findCostUsageCacheEvictionKey(): string | undefined {
   for (const [key, entry] of costUsageCache) {
+    // Prefer evicting settled entries so duplicate callers can still join active loads.
     if (!entry.inFlight) {
       return key;
     }
@@ -145,7 +180,39 @@ const parseDateParts = (
   if (!Number.isFinite(year) || !Number.isFinite(monthIndex) || !Number.isFinite(day)) {
     return undefined;
   }
+  // The regex only checks shape; Date.* silently rolls impossible calendar dates over
+  // (e.g. 2026-02-30 -> 2026-03-02), so a typo'd day would return usage for the wrong day.
+  // Reject parts that don't round-trip through a UTC probe (also catches the JS 2-digit-year remap).
+  const probe = new Date(Date.UTC(year, monthIndex, day));
+  if (
+    probe.getUTCFullYear() !== year ||
+    probe.getUTCMonth() !== monthIndex ||
+    probe.getUTCDate() !== day
+  ) {
+    return undefined;
+  }
   return { year, monthIndex, day };
+};
+
+// usage.cost / sessions.usage accept optional startDate/endDate. parseDateParts returns
+// undefined for both absent and invalid input, so an explicitly supplied but unparseable
+// date (bad format or impossible calendar date like 2026-02-30) would otherwise silently
+// fall through to the default range and return a successful response for an unrelated range.
+// Return the offending field so handlers can reject it instead of querying the wrong window.
+const findInvalidExplicitDate = (params: {
+  startDate?: unknown;
+  endDate?: unknown;
+}): "startDate" | "endDate" | undefined => {
+  for (const field of ["startDate", "endDate"] as const) {
+    const raw = params[field];
+    if (raw === undefined || raw === null || (typeof raw === "string" && raw.trim() === "")) {
+      continue;
+    }
+    if (parseDateParts(raw) === undefined) {
+      return field;
+    }
+  }
+  return undefined;
 };
 
 /**
@@ -343,6 +410,7 @@ function buildStoreBySessionId(
 
   const storeBySessionId = new Map<string, { key: string; entry: SessionEntry }>();
   for (const [sessionId, matches] of matchesBySessionId) {
+    // Multiple store keys can point at one transcript; choose the UI-facing canonical key.
     const preferredKey = resolvePreferredSessionKeyForSessionIdMatches(matches, sessionId);
     if (!preferredKey) {
       continue;
@@ -437,6 +505,7 @@ function maybeMergeFamilyEntry(params: {
     params.base.storeEntry,
     params.base.sessionId,
   );
+  // Family rows keep historical transcript ids so usage survives session resets.
   const sessionFamilyKey = resolveUsageFamilyKey({
     key: params.base.key,
     entry: params.base.storeEntry,
@@ -720,8 +789,10 @@ async function loadCostUsageSummaryCached(params: {
   startMs: number;
   endMs: number;
   config: OpenClawConfig;
+  agentId?: string;
+  agentScope?: "all";
 }): Promise<CostUsageSummary> {
-  const cacheKey = `${params.startMs}-${params.endMs}`;
+  const cacheKey = `${params.agentScope === "all" ? "all" : `agent:${params.agentId ?? "__default__"}`}:${params.startMs}-${params.endMs}`;
   const now = Date.now();
   const cached = costUsageCache.get(cacheKey);
   if (
@@ -741,13 +812,22 @@ async function loadCostUsageSummaryCached(params: {
   }
 
   const entry: CostUsageCacheEntry = cached ?? {};
-  const inFlight = loadCostUsageSummaryFromCache({
-    startMs: params.startMs,
-    endMs: params.endMs,
-    config: params.config,
-    requestRefresh: true,
-    refreshMode: "background",
-  })
+  const inFlight = (
+    params.agentScope === "all"
+      ? loadAllAgentCostUsageSummary({
+          startMs: params.startMs,
+          endMs: params.endMs,
+          config: params.config,
+        })
+      : loadCostUsageSummaryFromCache({
+          startMs: params.startMs,
+          endMs: params.endMs,
+          config: params.config,
+          agentId: params.agentId,
+          requestRefresh: true,
+          refreshMode: "background",
+        })
+  )
     .then((summary) => {
       setCostUsageCache(cacheKey, {
         summary,
@@ -755,8 +835,9 @@ async function loadCostUsageSummaryCached(params: {
       });
       return summary;
     })
-    .catch((err) => {
+    .catch((err: unknown) => {
       if (entry.summary) {
+        // Serve the stale summary if background refresh fails; callers asked for usage, not repair.
         return entry.summary;
       }
       throw err;
@@ -776,6 +857,56 @@ async function loadCostUsageSummaryCached(params: {
     return entry.summary;
   }
   return await inFlight;
+}
+
+async function loadAllAgentCostUsageSummary(params: {
+  startMs: number;
+  endMs: number;
+  config: OpenClawConfig;
+}): Promise<CostUsageSummary> {
+  const agentIds = listAgentsForGateway(params.config).agents.map((agent) =>
+    normalizeAgentId(agent.id),
+  );
+  const summaries = await Promise.all(
+    agentIds.map((agentId) =>
+      loadCostUsageSummaryFromCache({
+        startMs: params.startMs,
+        endMs: params.endMs,
+        config: params.config,
+        agentId,
+        requestRefresh: true,
+        refreshMode: "background",
+      }),
+    ),
+  );
+  const dailyByDate = new Map<string, CostUsageTotals & { date: string }>();
+  const totals = createEmptyCostUsageTotals();
+  let cacheStatus: UsageCacheStatus | undefined;
+  let updatedAt = 0;
+  let days = 0;
+  for (const summary of summaries) {
+    updatedAt = Math.max(updatedAt, summary.updatedAt);
+    days = Math.max(days, summary.days);
+    addCostUsageTotals(totals, summary.totals);
+    if (summary.cacheStatus) {
+      cacheStatus = mergeUsageCacheStatus(cacheStatus, summary.cacheStatus);
+    }
+    for (const day of summary.daily) {
+      const entry = dailyByDate.get(day.date) ?? {
+        date: day.date,
+        ...createEmptyCostUsageTotals(),
+      };
+      addCostUsageTotals(entry, day);
+      dailyByDate.set(day.date, entry);
+    }
+  }
+  return {
+    updatedAt,
+    days,
+    daily: Array.from(dailyByDate.values()).toSorted((a, b) => a.date.localeCompare(b.date)),
+    totals,
+    ...(cacheStatus ? { cacheStatus } : {}),
+  };
 }
 
 function mergeUsageCacheStatus(
@@ -803,6 +934,7 @@ function mergeUsageCacheStatus(
 // Exposed for unit tests (kept as a single export to avoid widening the public API surface).
 export const testApi = {
   parseDateParts,
+  findInvalidExplicitDate,
   parseUtcOffsetToMinutes,
   resolveDateInterpretation,
   parseDateToMs,
@@ -823,6 +955,21 @@ export const usageHandlers: GatewayRequestHandlers = {
     respond(true, summary, undefined);
   },
   "usage.cost": async ({ respond, params, context }) => {
+    const invalidDate = findInvalidExplicitDate({
+      startDate: params?.startDate,
+      endDate: params?.endDate,
+    });
+    if (invalidDate) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid ${invalidDate}: expected a valid YYYY-MM-DD calendar date`,
+        ),
+      );
+      return;
+    }
     const config = context.getRuntimeConfig();
     const { startMs, endMs } = parseDateRange({
       startDate: params?.startDate,
@@ -832,7 +979,15 @@ export const usageHandlers: GatewayRequestHandlers = {
       mode: params?.mode,
       utcOffset: params?.utcOffset,
     });
-    const summary = await loadCostUsageSummaryCached({ startMs, endMs, config });
+    const agentId = normalizeOptionalString(params?.agentId);
+    const agentScope = params?.agentScope === "all" && !agentId ? "all" : undefined;
+    const summary = await loadCostUsageSummaryCached({
+      startMs,
+      endMs,
+      config,
+      agentId,
+      agentScope,
+    });
     respond(true, summary, undefined);
   },
   "sessions.usage": async ({ respond, params, context }) => {
@@ -849,6 +1004,18 @@ export const usageHandlers: GatewayRequestHandlers = {
     }
 
     const p = params;
+    const invalidDate = findInvalidExplicitDate({ startDate: p.startDate, endDate: p.endDate });
+    if (invalidDate) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid ${invalidDate}: expected a valid YYYY-MM-DD calendar date`,
+        ),
+      );
+      return;
+    }
     const config = context.getRuntimeConfig();
     const { startMs, endMs } = parseDateRange({
       startDate: p.startDate,
@@ -861,6 +1028,18 @@ export const usageHandlers: GatewayRequestHandlers = {
     const includeContextWeight = p.includeContextWeight ?? false;
     const specificKey = normalizeOptionalString(p.key) ?? null;
     const requestedAgentId = normalizeOptionalString(p.agentId);
+    const requestedAllAgents = p.agentScope === "all";
+    if (requestedAllAgents && (requestedAgentId || specificKey)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "agentScope=all cannot be combined with key or agentId",
+        ),
+      );
+      return;
+    }
     const specificKeyAgentId = specificKey ? parseAgentSessionKey(specificKey)?.agentId : undefined;
     if (
       requestedAgentId &&
@@ -874,21 +1053,22 @@ export const usageHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const effectiveAgentId = normalizeAgentId(
-      requestedAgentId ?? specificKeyAgentId ?? resolveDefaultAgentId(config),
-    );
+    const effectiveAgentId = requestedAllAgents
+      ? undefined
+      : normalizeAgentId(requestedAgentId ?? specificKeyAgentId ?? resolveDefaultAgentId(config));
     const groupingMode: UsageGroupingMode =
       p.groupBy === "family" || p.includeHistorical === true ? "family" : "instance";
 
     // Load session store for named sessions
-    const { storePath, store } = loadCombinedSessionStoreForGateway(config, {
-      agentId: effectiveAgentId,
-    });
-    const scopedStore = filterSessionStoreByAgent({
-      config,
-      store,
-      agentId: effectiveAgentId,
-    });
+    const sessionStoreOpts = effectiveAgentId ? { agentId: effectiveAgentId } : {};
+    const { storePath, store } = loadCombinedSessionStoreForGateway(config, sessionStoreOpts);
+    const scopedStore = effectiveAgentId
+      ? filterSessionStoreByAgent({
+          config,
+          store,
+          agentId: effectiveAgentId,
+        })
+      : store;
     const now = Date.now();
 
     const mergedEntries: MergedEntry[] = [];
@@ -897,11 +1077,12 @@ export const usageHandlers: GatewayRequestHandlers = {
     if (specificKey) {
       const scopedSpecificKey = resolveStoredSessionKeyForAgentStore({
         cfg: config,
-        agentId: effectiveAgentId,
+        agentId: effectiveAgentId ?? resolveDefaultAgentId(config),
         sessionKey: specificKey,
       });
       const scopedParsed = parseAgentSessionKey(scopedSpecificKey);
-      const agentIdFromKey = scopedParsed?.agentId ?? effectiveAgentId;
+      const agentIdFromKey =
+        scopedParsed?.agentId ?? effectiveAgentId ?? resolveDefaultAgentId(config);
       const keyRest = scopedParsed?.rest ?? specificKey;
 
       // Prefer the store entry when available, even if the caller provides a discovered key
@@ -969,7 +1150,7 @@ export const usageHandlers: GatewayRequestHandlers = {
       // Full discovery for list view
       const discoveredSessions = await discoverAllSessionsForUsage({
         config,
-        agentId: effectiveAgentId,
+        ...(effectiveAgentId ? { agentId: effectiveAgentId } : {}),
         startMs,
         endMs,
       });
@@ -1004,6 +1185,7 @@ export const usageHandlers: GatewayRequestHandlers = {
           });
         } else {
           if (groupingMode === "family" && storeFamilySessionIds.has(discovered.sessionId)) {
+            // The current store row will load this historical transcript through included ids.
             continue;
           }
           // Unnamed session - use session ID as key, no label
@@ -1024,7 +1206,6 @@ export const usageHandlers: GatewayRequestHandlers = {
     // Sort by most recent first
     mergedEntries.sort((a, b) => b.updatedAt - a.updatedAt);
 
-    // Apply limit
     const limitedEntries = mergedEntries.slice(0, limit);
 
     // Load usage for each session
@@ -1111,7 +1292,7 @@ export const usageHandlers: GatewayRequestHandlers = {
     };
 
     const usageByEntryIndex: Array<SessionCostSummary | null> = Array.from(
-      { length: limitedEntries.length },
+      { length: mergedEntries.length },
       () => null,
     );
     const usageLoadTasks: Array<
@@ -1168,7 +1349,7 @@ export const usageHandlers: GatewayRequestHandlers = {
       if (!loaded.summary) {
         continue;
       }
-      const merged = limitedEntries[loaded.entryIndex];
+      const merged = mergedEntries[loaded.entryIndex];
       const usage = usageByEntryIndex[loaded.entryIndex] ?? createEmptySessionCostSummary();
       usage.sessionId = merged.sessionId;
       usage.sessionFile = merged.sessionFile;
@@ -1176,7 +1357,54 @@ export const usageHandlers: GatewayRequestHandlers = {
       usageByEntryIndex[loaded.entryIndex] = usage;
     }
 
-    for (const [entryIndex, merged] of limitedEntries.entries()) {
+    const hiddenSessionsByAgent = new Map<
+      string | undefined,
+      Array<{ entryIndex: number; sessionId: string; sessionFile: string }>
+    >();
+    for (const [entryIndex, merged] of mergedEntries.entries()) {
+      if (entryIndex < limitedEntries.length) {
+        continue;
+      }
+      const hiddenSessions = hiddenSessionsByAgent.get(merged.agentId) ?? [];
+      for (const includedSessionId of merged.includedSessionIds ?? [merged.sessionId]) {
+        const sessionFile =
+          includedSessionId === merged.sessionId
+            ? merged.sessionFile
+            : resolveExistingUsageSessionFile({
+                sessionId: includedSessionId,
+                agentId: merged.agentId,
+              });
+        if (sessionFile) {
+          hiddenSessions.push({ entryIndex, sessionId: includedSessionId, sessionFile });
+        }
+      }
+      hiddenSessionsByAgent.set(merged.agentId, hiddenSessions);
+    }
+    for (const [agentId, hiddenSessions] of hiddenSessionsByAgent) {
+      const hiddenUsage = await loadSessionCostSummariesFromCache({
+        sessions: hiddenSessions,
+        config,
+        agentId,
+        startMs,
+        endMs,
+      });
+      cacheStatus = mergeUsageCacheStatus(cacheStatus, hiddenUsage.cacheStatus);
+      for (const [hiddenIndex, summary] of hiddenUsage.summaries.entries()) {
+        if (!summary) {
+          continue;
+        }
+        const hiddenSession = hiddenSessions[hiddenIndex];
+        const merged = mergedEntries[hiddenSession.entryIndex];
+        const usage =
+          usageByEntryIndex[hiddenSession.entryIndex] ?? createEmptySessionCostSummary();
+        usage.sessionId = merged.sessionId;
+        usage.sessionFile = merged.sessionFile;
+        mergeSessionUsageInto(usage, summary);
+        usageByEntryIndex[hiddenSession.entryIndex] = usage;
+      }
+    }
+
+    for (const [entryIndex, merged] of mergedEntries.entries()) {
       const agentId = merged.agentId;
       const usage = usageByEntryIndex[entryIndex];
 
@@ -1312,29 +1540,31 @@ export const usageHandlers: GatewayRequestHandlers = {
         }
       }
 
-      sessions.push({
-        key: merged.key,
-        label: merged.label,
-        sessionId: merged.sessionId,
-        scope: merged.scope ?? "instance",
-        sessionFamilyKey: merged.sessionFamilyKey,
-        currentSessionId: merged.currentSessionId,
-        includedSessionIds: merged.includedSessionIds,
-        historicalInstanceCount: merged.includedSessionIds?.length,
-        updatedAt: merged.updatedAt,
-        agentId,
-        channel,
-        chatType,
-        origin: merged.storeEntry?.origin,
-        modelOverride: merged.storeEntry?.modelOverride,
-        providerOverride: merged.storeEntry?.providerOverride,
-        modelProvider: merged.storeEntry?.modelProvider,
-        model: merged.storeEntry?.model,
-        usage,
-        contextWeight: includeContextWeight
-          ? (merged.storeEntry?.systemPromptReport ?? null)
-          : undefined,
-      });
+      if (entryIndex < limit) {
+        sessions.push({
+          key: merged.key,
+          label: merged.label,
+          sessionId: merged.sessionId,
+          scope: merged.scope ?? "instance",
+          sessionFamilyKey: merged.sessionFamilyKey,
+          currentSessionId: merged.currentSessionId,
+          includedSessionIds: merged.includedSessionIds,
+          historicalInstanceCount: merged.includedSessionIds?.length,
+          updatedAt: merged.updatedAt,
+          agentId,
+          channel,
+          chatType,
+          origin: merged.storeEntry?.origin,
+          modelOverride: merged.storeEntry?.modelOverride,
+          providerOverride: merged.storeEntry?.providerOverride,
+          modelProvider: merged.storeEntry?.modelProvider,
+          model: merged.storeEntry?.model,
+          usage,
+          contextWeight: includeContextWeight
+            ? (merged.storeEntry?.systemPromptReport ?? null)
+            : undefined,
+        });
+      }
     }
 
     // Format dates back to YYYY-MM-DD strings
@@ -1344,7 +1574,7 @@ export const usageHandlers: GatewayRequestHandlers = {
     };
 
     const tail = buildUsageAggregateTail({
-      byChannelMap: byChannelMap,
+      byChannelMap,
       latencyTotals,
       dailyLatencyMap,
       modelDailyMap,

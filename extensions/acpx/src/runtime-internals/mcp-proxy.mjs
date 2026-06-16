@@ -1,11 +1,21 @@
 #!/usr/bin/env node
 
+/**
+ * Stdio MCP proxy used by ACPX wrappers. It injects OpenClaw-provided MCP
+ * servers into session creation/load/fork requests before forwarding to target.
+ */
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
-import { formatErrorMessage } from "./error-format.mjs";
 import { splitCommandLine } from "./mcp-command-line.mjs";
+
+function formatErrorMessage(error) {
+  if (error instanceof Error) {
+    return error.message || error.name || "Error";
+  }
+  return String(error);
+}
 
 function decodePayload(argv) {
   const payloadIndex = argv.indexOf("--payload");
@@ -64,6 +74,7 @@ function rewriteLine(line, mcpServers) {
   }
 }
 
+/** Build spawn options for the proxied MCP target process. */
 export function createTargetSpawnOptions(platform = process.platform) {
   const options = {
     stdio: ["pipe", "pipe", "inherit"],

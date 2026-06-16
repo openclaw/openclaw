@@ -1,4 +1,9 @@
+// Tracks host hook state and scheduled turn identifiers.
 import { randomUUID } from "node:crypto";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { loadSessionStore, updateSessionStore, type SessionEntry } from "../config/sessions.js";
 import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
@@ -12,10 +17,6 @@ import {
   resolveSessionStoreKey,
 } from "../gateway/session-store-key.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
 export { clearPluginOwnedSessionState } from "./host-hook-cleanup.js";
 import {
   buildPluginAgentTurnPrepareContext,
@@ -28,7 +29,7 @@ import {
   type PluginSessionExtensionProjection,
   type PluginSessionExtensionRegistration,
 } from "./host-hooks.js";
-import { getActivePluginRegistry } from "./runtime.js";
+import { getActivePluginRegistry, getActivePluginSessionExtensionRegistry } from "./runtime.js";
 import { normalizeSessionEntrySlotKey } from "./session-entry-slot-keys.js";
 
 const log = createSubsystemLogger("plugins/host-hook-state");
@@ -457,7 +458,7 @@ export async function patchPluginSessionExtension(params: {
     return { ok: false, error: "plugin session extension value is required unless unset is true" };
   }
   const nextPluginValue = params.value as PluginJsonValue;
-  const registry = getActivePluginRegistry();
+  const registry = getActivePluginSessionExtensionRegistry();
   const registration = (registry?.sessionExtensions ?? []).find(
     (entry) => entry.pluginId === pluginId && entry.extension.namespace === namespace,
   );
@@ -583,7 +584,14 @@ export async function projectPluginSessionExtensions(params: {
   sessionKey: string;
   entry: SessionEntry;
 }): Promise<PluginSessionExtensionProjection[]> {
-  const registry = getActivePluginRegistry();
+  return collectPluginSessionExtensionProjections(params);
+}
+
+function collectPluginSessionExtensionProjections(params: {
+  sessionKey: string;
+  entry: SessionEntry;
+}): PluginSessionExtensionProjection[] {
+  const registry = getActivePluginSessionExtensionRegistry();
   const extensions = registry?.sessionExtensions ?? [];
   if (extensions.length === 0) {
     return [];
@@ -666,46 +674,5 @@ export function projectPluginSessionExtensionsSync(params: {
   sessionKey: string;
   entry: SessionEntry;
 }): PluginSessionExtensionProjection[] {
-  const registry = getActivePluginRegistry();
-  const extensions = registry?.sessionExtensions ?? [];
-  if (extensions.length === 0) {
-    return [];
-  }
-  const projections: PluginSessionExtensionProjection[] = [];
-  for (const registration of extensions) {
-    const state = params.entry.pluginExtensions?.[registration.pluginId]?.[
-      registration.extension.namespace
-    ] as PluginJsonValue | undefined;
-    if (state === undefined) {
-      continue;
-    }
-    const projected = projectSessionExtensionValue({
-      pluginId: registration.pluginId,
-      namespace: registration.extension.namespace,
-      project: registration.extension.project,
-      sessionKey: params.sessionKey,
-      sessionId: params.entry.sessionId,
-      state,
-    });
-    if (projected === PROJECTION_FAILED) {
-      continue;
-    }
-    if (isPromiseLike(projected)) {
-      discardUnexpectedPromiseProjection(projected);
-      continue;
-    }
-    if (projected === undefined || !isPluginJsonValue(projected)) {
-      // Validate the projection regardless of whether the extension has a
-      // `project` function: with a projector the value can be arbitrary;
-      // without one the persisted state could be hand-edited or malformed.
-      // Either way the size + shape check should run before projection.
-      continue;
-    }
-    projections.push({
-      pluginId: registration.pluginId,
-      namespace: registration.extension.namespace,
-      value: copyJsonValue(projected),
-    });
-  }
-  return projections;
+  return collectPluginSessionExtensionProjections(params);
 }

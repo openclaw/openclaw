@@ -1,13 +1,15 @@
+// Builds task status summaries and formatted status text for user-facing surfaces.
+import { sanitizeUserFacingText } from "../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
 } from "../agents/internal-runtime-context.js";
-import { sanitizeUserFacingText } from "../agents/pi-embedded-helpers/sanitize-user-facing-text.js";
 import { truncateUtf16Safe } from "../utils.js";
 import type { TaskRecord } from "./task-registry.types.js";
 
 const ACTIVE_TASK_STATUSES = new Set(["queued", "running"]);
 const FAILURE_TASK_STATUSES = new Set(["failed", "timed_out", "lost"]);
+/** Window for showing recently completed tasks in compact status output. */
 export const TASK_STATUS_RECENT_WINDOW_MS = 5 * 60_000;
 export const TASK_STATUS_TITLE_MAX_CHARS = 80;
 export const TASK_STATUS_DETAIL_MAX_CHARS = 120;
@@ -47,6 +49,7 @@ function truncateTaskStatusText(value: string, maxChars: number): string {
 }
 
 function stripInlineLeakedInternalContext(value: string): string {
+  // Completion text can accidentally include hidden runtime context; strip it before status output.
   const beginIndex = value.indexOf(INTERNAL_RUNTIME_CONTEXT_BEGIN);
   if (
     beginIndex !== -1 &&

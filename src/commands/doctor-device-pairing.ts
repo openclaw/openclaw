@@ -1,4 +1,8 @@
+/** Doctor diagnostics for pending, paired, and locally cached device auth state. */
 import path from "node:path";
+import { normalizeUniqueSingleOrTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import { note } from "../../packages/terminal-core/src/note.js";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -15,8 +19,6 @@ import { JsonFileReadError, tryReadJsonSync } from "../infra/json-files.js";
 import type { DeviceAuthStore } from "../shared/device-auth.js";
 import { normalizeDeviceAuthScopes } from "../shared/device-auth.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
-import { note } from "../terminal/note.js";
-import { sanitizeTerminalText } from "../terminal/safe-text.js";
 
 type GatewayListedPairedDevice = Omit<PairedDevice, "tokens" | "approvedScopes"> & {
   tokens?: DeviceAuthTokenSummary[];
@@ -101,29 +103,6 @@ function isDeviceAuthStoreTokenEntry(value: unknown): value is DeviceAuthStore["
     "updatedAtMs" in value &&
     typeof value.updatedAtMs === "number"
   );
-}
-
-function uniqueStrings(...items: Array<string | string[] | undefined>): string[] {
-  const values = new Set<string>();
-  for (const item of items) {
-    if (!item) {
-      continue;
-    }
-    if (Array.isArray(item)) {
-      for (const value of item) {
-        const trimmed = value.trim();
-        if (trimmed) {
-          values.add(trimmed);
-        }
-      }
-      continue;
-    }
-    const trimmed = item.trim();
-    if (trimmed) {
-      values.add(trimmed);
-    }
-  }
-  return [...values];
 }
 
 function normalizeGatewayPairedDevice(device: GatewayListedPairedDevice): DoctorPairedDevice {
@@ -273,7 +252,9 @@ function resolvePendingPairingIssue(
       removeCommand: formatCliArgs(["openclaw", "devices", "remove", pending.deviceId]),
     };
   }
-  const requestedRoles = uniqueStrings(pending.roles, pending.role);
+  const requestedRoles = normalizeUniqueSingleOrTrimmedStringList(
+    [pending.roles, pending.role].flat(),
+  );
   const approvedRoles = listApprovedPairedDeviceRoles(paired);
   if (requestedRoles.some((role) => !approvedRoles.includes(role))) {
     return {
@@ -486,6 +467,7 @@ function collectLocalDeviceAuthIssues(snapshot: DoctorPairingSnapshot): string[]
       role,
     ]);
     const gatewayIssuedAtMs = pairedToken.rotatedAtMs ?? pairedToken.createdAtMs;
+    // Local device auth survives gateway restarts; compare timestamps to catch stale cached tokens.
     if (entry.updatedAtMs < gatewayIssuedAtMs) {
       lines.push(
         `- Local cached ${role} device token for ${deviceLabel} predates the gateway rotation. This is a stale device-token pattern and can fail with device token mismatch. Reconnect with shared gateway auth to refresh it, or rotate again with ${rotateCommand}.`,
@@ -508,6 +490,12 @@ function formatPairingStoreReadIssue(error: JsonFileReadError): string {
   return `- Device pairing store ${error.filePath} ${problem}. OpenClaw refused to treat it as empty to avoid overwriting approved pairings. Fix the JSON or file permissions, or move it aside and re-pair devices.`;
 }
 
+/**
+ * Emits device pairing repair guidance from live gateway state or local pairing files.
+ *
+ * Remote gateways only report through the gateway API; local gateways can fall back to on-disk
+ * pairing state when the gateway is down.
+ */
 export async function noteDevicePairingHealth(params: {
   cfg: OpenClawConfig;
   healthOk: boolean;

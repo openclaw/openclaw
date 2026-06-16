@@ -1,3 +1,4 @@
+// Channel action schemas describe plugin-declared actions available through channel UIs.
 import { Type } from "typebox";
 import type { TSchema } from "typebox";
 import { stringEnum as createStringEnum } from "../agents/schema/typebox.js";
@@ -11,8 +12,10 @@ export {
   createActionGate,
   imageResultFromFile,
   jsonResult,
+  readNonNegativeIntegerParam,
   parseAvailableTags,
   readNumberParam,
+  readPositiveIntegerParam,
   readReactionParams,
   readStringArrayParam,
   readStringOrNumberParam,
@@ -23,7 +26,13 @@ export type { ActionGate } from "../agents/tools/common.js";
 export { withNormalizedTimestamp } from "../agents/date-time.js";
 export { assertMediaNotDataUrl } from "../agents/sandbox-paths.js";
 export { resolvePollMaxSelections } from "../polls.js";
-export { optionalStringEnum, stringEnum } from "../agents/schema/typebox.js";
+export {
+  optionalFiniteNumberSchema,
+  optionalNonNegativeIntegerSchema,
+  optionalPositiveIntegerSchema,
+  optionalStringEnum,
+  stringEnum,
+} from "../agents/schema/typebox.js";
 
 /**
  * @deprecated Use semantic `presentation` capabilities instead of exposing

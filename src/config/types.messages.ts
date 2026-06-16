@@ -1,5 +1,14 @@
+// Defines message queue and delivery configuration types.
 import type { QueueDropPolicy, QueueMode, QueueModeByProvider } from "./types.queue.js";
 import type { TtsConfig } from "./types.tts.js";
+
+export type MentionPatternsMode = "allow" | "deny";
+
+export type MentionPatternsPolicyConfig = {
+  mode?: MentionPatternsMode;
+  allowIn?: string[];
+  denyIn?: string[];
+};
 
 export type GroupChatConfig = {
   mentionPatterns?: string[];
@@ -79,9 +88,9 @@ export type StatusReactionsEmojiConfig = {
 export type StatusReactionsTimingConfig = {
   /** Debounce interval for intermediate states (ms). Default: 700. */
   debounceMs?: number;
-  /** Soft stall warning timeout (ms). Default: 25000. */
+  /** Soft stall warning timeout (ms). Default: 10000. */
   stallSoftMs?: number;
-  /** Hard stall warning timeout (ms). Default: 60000. */
+  /** Hard stall warning timeout (ms). Default: 30000. */
   stallHardMs?: number;
   /** How long to hold done emoji before cleanup (ms). Default: 1500. */
   doneHoldMs?: number;
@@ -130,6 +139,8 @@ export type MessagesConfig = {
    * Default: none
    */
   responsePrefix?: string;
+  /** Custom `/usage full` footer template, inline or JSON file path. */
+  usageTemplate?: string | Record<string, unknown>;
   groupChat?: GroupChatConfig;
   queue?: QueueConfig;
   /** Debounce rapid inbound messages per sender (global + per-channel overrides). */
@@ -182,7 +193,7 @@ export type CommandsConfig = {
   restart?: boolean;
   /** Enforce access-group allowlists/policies for commands (default: true). */
   useAccessGroups?: boolean;
-  /** Explicit owner allowlist for owner-only tools/commands (channel-native IDs). */
+  /** Explicit owner allowlist for owner-scoped commands (channel-native IDs). */
   ownerAllowFrom?: Array<string | number>;
   /** How owner IDs are rendered in system prompts. */
   ownerDisplay?: CommandOwnerDisplay;

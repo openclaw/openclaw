@@ -1,3 +1,5 @@
+// Mattermost plugin module implements client behavior.
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import {
   fetchWithSsrFGuard,
@@ -157,7 +159,6 @@ export function createMattermostClient(params: {
     if (contentType.includes("application/json")) {
       return (await res.json()) as T;
     }
-
     return (await res.text()) as T;
   };
 
@@ -241,6 +242,35 @@ export type CreateDmChannelRetryOptions = {
   onRetry?: (attempt: number, delayMs: number, error: Error) => void;
 };
 
+const DM_REPLY_DELIVERY_BARRIER_SLACK_MS = 60_000;
+
+/** Covers DM creation retries without extending channel-delivery stalls. */
+export function resolveMattermostReplyDeliveryBarrierTimeoutMs(params: {
+  isDirect: boolean;
+  dmRetryOptions?: CreateDmChannelRetryOptions;
+  queuedCounts: Readonly<Record<"tool" | "block" | "final", number>>;
+  humanDelayBudgetMs?: number;
+}): number | undefined {
+  if (!params.isDirect) {
+    return undefined;
+  }
+  const deliveryCount = Object.values(params.queuedCounts).reduce((sum, count) => sum + count, 0);
+  if (deliveryCount === 0) {
+    return undefined;
+  }
+  const maxRetries = params.dmRetryOptions?.maxRetries ?? 3;
+  const maxDelayMs = params.dmRetryOptions?.maxDelayMs ?? 10_000;
+  const timeoutMs = params.dmRetryOptions?.timeoutMs ?? 30_000;
+  const perDeliveryTimeoutMs =
+    (maxRetries + 1) * timeoutMs + maxRetries * maxDelayMs + DM_REPLY_DELIVERY_BARRIER_SLACK_MS;
+  const totalTimeoutMs =
+    perDeliveryTimeoutMs * deliveryCount + Math.max(0, params.humanDelayBudgetMs ?? 0);
+  return resolveTimerTimeoutMs(
+    Number.isFinite(totalTimeoutMs) ? totalTimeoutMs : Number.MAX_SAFE_INTEGER,
+    perDeliveryTimeoutMs,
+  );
+}
+
 const RETRYABLE_NETWORK_ERROR_CODES = new Set([
   "ECONNRESET",
   "ECONNREFUSED",
@@ -296,9 +326,10 @@ export async function createMattermostDirectChannelWithRetry(
     maxRetries = 3,
     initialDelayMs = 1000,
     maxDelayMs = 10000,
-    timeoutMs = 30000,
+    timeoutMs: rawTimeoutMs = 30000,
     onRetry,
   } = options;
+  const timeoutMs = resolveTimerTimeoutMs(rawTimeoutMs, 30000);
 
   let lastError: Error | undefined;
 
@@ -591,7 +622,6 @@ export async function uploadMattermostFile(
     const detail = await readMattermostError(res);
     throw new Error(`Mattermost API ${res.status} ${res.statusText}: ${detail || "unknown error"}`);
   }
-
   const data = (await res.json()) as { file_infos?: MattermostFileInfo[] };
   const info = data.file_infos?.[0];
   if (!info?.id) {

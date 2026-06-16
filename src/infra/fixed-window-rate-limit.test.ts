@@ -1,3 +1,4 @@
+// Covers fixed-window rate limiter boundaries.
 import { describe, expect, it } from "vitest";
 import { createFixedWindowRateLimiter } from "./fixed-window-rate-limit.js";
 
@@ -32,6 +33,21 @@ describe("fixed-window rate limiter", () => {
     const limiter = createFixedWindowRateLimiter({
       maxRequests: 0.2,
       windowMs: 0.4,
+      now: () => nowMs,
+    });
+
+    expectConsumeResult(limiter.consume(), { allowed: true, remaining: 0, retryAfterMs: 0 });
+    expectConsumeResult(limiter.consume(), { allowed: false, remaining: 0, retryAfterMs: 1 });
+
+    nowMs += 1;
+    expectConsumeResult(limiter.consume(), { allowed: true, remaining: 0, retryAfterMs: 0 });
+  });
+
+  it("falls back to minimums for non-finite required values", () => {
+    let nowMs = 100;
+    const limiter = createFixedWindowRateLimiter({
+      maxRequests: Number.NaN,
+      windowMs: Number.POSITIVE_INFINITY,
       now: () => nowMs,
     });
 

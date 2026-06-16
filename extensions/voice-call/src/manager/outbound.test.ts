@@ -1,8 +1,11 @@
+// Voice Call tests cover outbound plugin behavior.
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   addTranscriptEntryMock,
   clearMaxDurationTimerMock,
+  ensureMaxDurationTimerForLiveCallMock,
   generateDtmfRedirectTwimlMock,
   generateNotifyTwimlMock,
   getCallByProviderCallIdMock,
@@ -13,6 +16,11 @@ const {
 } = vi.hoisted(() => ({
   addTranscriptEntryMock: vi.fn(),
   clearMaxDurationTimerMock: vi.fn(),
+  ensureMaxDurationTimerForLiveCallMock: vi.fn(
+    (params: { call: { answeredAt?: number }; liveAt: number }) => {
+      params.call.answeredAt ??= params.liveAt;
+    },
+  ),
   generateDtmfRedirectTwimlMock: vi.fn(),
   generateNotifyTwimlMock: vi.fn(),
   getCallByProviderCallIdMock: vi.fn(),
@@ -34,6 +42,7 @@ vi.mock("./store.js", () => ({
 vi.mock("./timers.js", () => ({
   clearMaxDurationTimer: clearMaxDurationTimerMock,
   clearTranscriptWaiter: vi.fn(),
+  ensureMaxDurationTimerForLiveCall: ensureMaxDurationTimerForLiveCallMock,
   rejectTranscriptWaiter: rejectTranscriptWaiterMock,
   waitForFinalTranscript: vi.fn(),
 }));
@@ -51,7 +60,7 @@ vi.mock("./twiml.js", () => ({
   generateNotifyTwiml: generateNotifyTwimlMock,
 }));
 
-import { endCall, initiateCall, sendDtmf, speak } from "./outbound.js";
+import { endCall, initiateCall, sendDtmf, speak, speakInitialMessage } from "./outbound.js";
 
 function createActiveCallContext(params: { hangupCall?: ReturnType<typeof vi.fn> } = {}) {
   const call = { callId: "call-1", providerCallId: "provider-1", state: "active" };
@@ -357,6 +366,38 @@ describe("voice-call outbound helpers", () => {
       text: "hello",
       voice: "Telnyx.Qwen3TTS.12345678-1234-1234-1234-123456789abc",
     });
+  });
+
+  it("caps notify-mode auto-hangup delay before scheduling", async () => {
+    const call = {
+      callId: "call-1",
+      providerCallId: "provider-1",
+      state: "active",
+      metadata: { initialMessage: "hello", mode: "notify" },
+    };
+    const playTts = vi.fn(async () => {});
+    const timeoutSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockReturnValue(1 as unknown as ReturnType<typeof setTimeout>);
+    getCallByProviderCallIdMock.mockReturnValue(call);
+    const ctx = {
+      activeCalls: new Map([["call-1", call]]),
+      providerCallIdMap: new Map([["provider-1", "call-1"]]),
+      provider: { name: "twilio", playTts },
+      initialMessageInFlight: new Set(),
+      config: {
+        outbound: { notifyHangupDelaySec: Number.MAX_SAFE_INTEGER },
+        tts: { provider: "openai", providers: { openai: { voice: "alloy" } } },
+      },
+      storePath: "/tmp/voice-call.json",
+    };
+
+    try {
+      await speakInitialMessage(ctx as never, "provider-1");
+      expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
   });
 
   it("uses per-number route TTS voice for routed inbound calls", async () => {

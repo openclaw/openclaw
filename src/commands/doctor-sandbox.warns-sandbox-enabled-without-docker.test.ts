@@ -1,3 +1,4 @@
+// Doctor sandbox tests cover warnings when sandbox mode is enabled without Docker availability.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -26,7 +27,7 @@ vi.mock("../agents/sandbox/registry.js", () => ({
   migrateLegacySandboxRegistryFiles,
 }));
 
-vi.mock("../terminal/note.js", () => ({
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note,
 }));
 
@@ -63,6 +64,21 @@ describe("maybeRepairSandboxImages", () => {
         defaults: {
           sandbox: {
             mode,
+          },
+        },
+      },
+    };
+  }
+
+  function createSandboxConfigWithDockerNetwork(network: string): OpenClawConfig {
+    return {
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            docker: {
+              network,
+            },
           },
         },
       },
@@ -131,6 +147,98 @@ describe("maybeRepairSandboxImages", () => {
     );
     expect(dockerUnavailableWarning).toBeUndefined();
   });
+
+  it("warns when Codex bwrap namespaces are blocked on a sandboxed Linux host", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    runExec.mockImplementation(async (command: string, args: string[]) => {
+      if (command === "docker" && args[0] === "version") {
+        return { stdout: "24.0.0", stderr: "" };
+      }
+      if (command === "unshare") {
+        throw Object.assign(new Error("unshare failed"), {
+          stderr: "unshare: write failed /proc/self/uid_map: Operation not permitted",
+        });
+      }
+      return { stdout: "", stderr: "" };
+    });
+
+    try {
+      await maybeRepairSandboxImages(createSandboxConfig("all"), mockRuntime, mockPrompter);
+    } finally {
+      platformSpy.mockRestore();
+    }
+
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("Codex bwrap user namespace probe failed"),
+      "Sandbox",
+    );
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("kernel.apparmor_restrict_unprivileged_userns=0"),
+      "Sandbox",
+    );
+  });
+
+  it("checks Codex bwrap network namespaces only when Docker sandbox egress is offline", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    runExec.mockImplementation(async (command: string, args: string[]) => {
+      if (command === "docker" && args[0] === "version") {
+        return { stdout: "24.0.0", stderr: "" };
+      }
+      if (command === "unshare") {
+        if (args.includes("--net")) {
+          throw Object.assign(new Error("unshare failed"), {
+            stderr: "unshare: unshare failed: Operation not permitted",
+          });
+        }
+        return { stdout: "", stderr: "" };
+      }
+      return { stdout: "", stderr: "" };
+    });
+
+    try {
+      await maybeRepairSandboxImages(createSandboxConfig("all"), mockRuntime, mockPrompter);
+    } finally {
+      platformSpy.mockRestore();
+    }
+
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("Codex bwrap network namespace probe failed"),
+      "Sandbox",
+    );
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("bwrap: loopback: Failed RTM_NEWADDR"),
+      "Sandbox",
+    );
+  });
+
+  it("skips the Codex bwrap network namespace probe when Docker sandbox egress is enabled", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    runExec.mockImplementation(async (command: string, args: string[]) => {
+      if (command === "docker" && args[0] === "version") {
+        return { stdout: "24.0.0", stderr: "" };
+      }
+      if (command === "unshare") {
+        return { stdout: "", stderr: "" };
+      }
+      return { stdout: "", stderr: "" };
+    });
+
+    try {
+      await maybeRepairSandboxImages(
+        createSandboxConfigWithDockerNetwork("bridge"),
+        mockRuntime,
+        mockPrompter,
+      );
+    } finally {
+      platformSpy.mockRestore();
+    }
+
+    expect(
+      runExec.mock.calls.some(
+        ([command, args]) => command === "unshare" && Array.isArray(args) && args.includes("--net"),
+      ),
+    ).toBe(false);
+  });
 });
 
 describe("maybeRepairSandboxRegistryFiles", () => {
@@ -150,6 +258,7 @@ describe("maybeRepairSandboxRegistryFiles", () => {
         kind: "containers",
         registryPath: "/tmp/openclaw/sandbox/containers.json",
         shardedDir: "/tmp/openclaw/sandbox/containers",
+        source: "monolithic",
         exists: true,
         valid: true,
         entries: 2,
@@ -162,8 +271,8 @@ describe("maybeRepairSandboxRegistryFiles", () => {
     expect(note).toHaveBeenCalledWith(
       [
         "Legacy sandbox registry files detected.",
-        "- containers: /tmp/openclaw/sandbox/containers.json (2 entries)",
-        "Run openclaw doctor --fix to migrate them to sharded registry files.",
+        "- containers monolithic: /tmp/openclaw/sandbox/containers.json (2 entries)",
+        "Run openclaw doctor --fix to migrate them to SQLite.",
       ].join("\n"),
       "Sandbox",
     );
@@ -175,6 +284,7 @@ describe("maybeRepairSandboxRegistryFiles", () => {
         kind: "containers",
         registryPath: "/tmp/openclaw/sandbox/containers.json",
         shardedDir: "/tmp/openclaw/sandbox/containers",
+        source: "monolithic",
         exists: true,
         valid: true,
         entries: 2,
@@ -197,7 +307,7 @@ describe("maybeRepairSandboxRegistryFiles", () => {
 
     expect(migrateLegacySandboxRegistryFiles).toHaveBeenCalledTimes(1);
     expect(note).toHaveBeenCalledWith(
-      "- Migrated containers registry from /tmp/openclaw/sandbox/containers.json into 2 shards.",
+      "- Migrated containers registry into 2 SQLite rows.",
       "Doctor changes",
     );
   });

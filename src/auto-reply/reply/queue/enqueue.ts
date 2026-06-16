@@ -1,8 +1,16 @@
+// Enqueues follow-up reply runs and schedules queue drains.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeChatType } from "../../../channels/chat-type.js";
 import { resolveGlobalDedupeCache } from "../../../infra/dedupe.js";
 import { channelRouteDedupeKey } from "../../../plugin-sdk/channel-route.js";
-import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import { applyQueueDropPolicy, shouldSkipQueueItem } from "../../../utils/queue-helpers.js";
-import { kickFollowupDrainIfIdle, rememberFollowupDrainCallback } from "./drain.js";
+import {
+  createOverflowSummaryRetrySource,
+  kickFollowupDrainIfIdle,
+  rememberFollowupDrainCallback,
+  resolveFollowupDeliveryContextKey,
+  resolveFollowupReplyAnchor,
+} from "./drain.js";
 import { getExistingFollowupQueue, getFollowupQueue } from "./state.js";
 import {
   completeFollowupRunLifecycle,
@@ -25,12 +33,29 @@ const RECENT_QUEUE_MESSAGE_IDS = resolveGlobalDedupeCache(RECENT_QUEUE_MESSAGE_I
 });
 
 function followupRouteIdentityKey(run: FollowupRun): string {
-  return channelRouteDedupeKey({
-    channel: run.originatingChannel,
-    to: run.originatingTo,
-    accountId: run.originatingAccountId,
-    threadId: run.originatingThreadId,
-  });
+  return JSON.stringify([
+    channelRouteDedupeKey({
+      channel: run.originatingChannel,
+      to: run.originatingTo,
+      accountId: run.originatingAccountId,
+      threadId: run.originatingThreadId,
+    }),
+    resolveFollowupReplyAnchor(run) ?? "",
+    run.originatingReplyToMode ?? "",
+    normalizeChatType(run.originatingChatType) ?? "",
+  ]);
+}
+
+function followupMessageRouteIdentityKey(run: FollowupRun): string {
+  return JSON.stringify([
+    channelRouteDedupeKey({
+      channel: run.originatingChannel,
+      to: run.originatingTo,
+      accountId: run.originatingAccountId,
+      threadId: run.originatingThreadId,
+    }),
+    normalizeChatType(run.originatingChatType) ?? "",
+  ]);
 }
 
 function buildRecentMessageIdKey(run: FollowupRun, queueKey: string): string | undefined {
@@ -40,7 +65,7 @@ function buildRecentMessageIdKey(run: FollowupRun, queueKey: string): string | u
   }
   // Use JSON tuple serialization to avoid delimiter-collision edge cases when
   // channel/to/account values contain "|" characters.
-  return JSON.stringify(["queue", queueKey, followupRouteIdentityKey(run), messageId]);
+  return JSON.stringify(["queue", queueKey, followupMessageRouteIdentityKey(run), messageId]);
 }
 
 function isRunAlreadyQueued(
@@ -48,19 +73,22 @@ function isRunAlreadyQueued(
   items: FollowupRun[],
   allowPromptFallback = false,
 ): boolean {
-  const routeKey = followupRouteIdentityKey(run);
-  const hasSameRouting = (item: FollowupRun) => followupRouteIdentityKey(item) === routeKey;
-
   const messageId = normalizeOptionalString(run.messageId);
   if (messageId) {
+    const messageRouteKey = followupMessageRouteIdentityKey(run);
     return items.some(
-      (item) => normalizeOptionalString(item.messageId) === messageId && hasSameRouting(item),
+      (item) =>
+        normalizeOptionalString(item.messageId) === messageId &&
+        followupMessageRouteIdentityKey(item) === messageRouteKey,
     );
   }
   if (!allowPromptFallback) {
     return false;
   }
-  return items.some((item) => item.prompt === run.prompt && hasSameRouting(item));
+  const routeKey = followupRouteIdentityKey(run);
+  return items.some(
+    (item) => item.prompt === run.prompt && followupRouteIdentityKey(item) === routeKey,
+  );
 }
 
 export function enqueueFollowupRun(
@@ -90,7 +118,6 @@ export function enqueueFollowupRun(
   if (shouldSkipQueueItem({ item: run, items: queue.items, dedupe })) {
     return false;
   }
-
   queue.lastEnqueuedAt = Date.now();
   queue.lastRun = run.run;
 
@@ -112,6 +139,27 @@ export function enqueueFollowupRun(
     if (overflow > 0) {
       const removed = queue.summarySources.splice(0, overflow);
       for (const item of removed) {
+        const contextKey = resolveFollowupDeliveryContextKey(item);
+        const lastElision = queue.summaryElisions.at(-1);
+        if (lastElision?.contextKey === contextKey) {
+          lastElision.count += 1;
+          lastElision.source = createOverflowSummaryRetrySource(item);
+          lastElision.sourceRefs.add(item);
+        } else {
+          if (queue.summaryElisions.length >= queue.cap) {
+            const evicted = queue.summaryElisions.shift();
+            if (evicted) {
+              queue.evictedSummaryCount += evicted.count;
+              completeFollowupRunLifecycle(evicted.source);
+            }
+          }
+          queue.summaryElisions.push({
+            contextKey,
+            count: 1,
+            source: createOverflowSummaryRetrySource(item),
+            sourceRefs: new WeakSet([item]),
+          });
+        }
         completeFollowupRunLifecycle(item);
       }
     }

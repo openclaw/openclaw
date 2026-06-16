@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements ack reaction behavior.
 import {
   createAckReactionHandle,
   shouldAckReactionForWhatsApp,
@@ -6,15 +7,16 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getSenderIdentity } from "../../identity.js";
+import type { WebInboundMessage } from "../../inbound/types.js";
 import { resolveWhatsAppReactionLevel } from "../../reaction-level.js";
 import { sendReactionWhatsApp } from "../../send.js";
 import { formatError } from "../../session.js";
-import type { WebInboundMsg } from "../types.js";
+import { resolveWhatsAppAckEmoji } from "./ack-emoji.js";
 import { resolveGroupActivationFor } from "./group-activation.js";
 
 export async function maybeSendAckReaction(params: {
   cfg: OpenClawConfig;
-  msg: WebInboundMsg;
+  msg: WebInboundMessage;
   agentId: string;
   sessionKey: string;
   conversationId: string;
@@ -23,7 +25,7 @@ export async function maybeSendAckReaction(params: {
   info: (obj: unknown, msg: string) => void;
   warn: (obj: unknown, msg: string) => void;
 }): Promise<AckReactionHandle | null> {
-  if (!params.msg.id) {
+  if (!params.msg.event.id) {
     return null;
   }
 
@@ -38,7 +40,11 @@ export async function maybeSendAckReaction(params: {
   }
 
   const ackConfig = params.cfg.channels?.whatsapp?.ackReaction;
-  const emoji = (ackConfig?.emoji ?? "").trim();
+  const emoji = resolveWhatsAppAckEmoji({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    ackConfig,
+  });
   const directEnabled = ackConfig?.direct ?? true;
   const groupMode = ackConfig?.group ?? "mentions";
   const conversationIdForCheck = params.msg.conversationId ?? params.msg.from;
@@ -69,7 +75,7 @@ export async function maybeSendAckReaction(params: {
   }
 
   params.info(
-    { chatId: params.msg.chatId, messageId: params.msg.id, emoji },
+    { chatId: params.msg.platform.chatJid, messageId: params.msg.event.id, emoji },
     "sending ack reaction",
   );
   const sender = getSenderIdentity(params.msg);
@@ -82,18 +88,27 @@ export async function maybeSendAckReaction(params: {
   };
   return createAckReactionHandle({
     ackReactionValue: emoji,
-    send: () => sendReactionWhatsApp(params.msg.chatId, params.msg.id!, emoji, reactionOptions),
-    remove: () => sendReactionWhatsApp(params.msg.chatId, params.msg.id!, "", reactionOptions),
+    send: () =>
+      sendReactionWhatsApp(
+        params.msg.platform.chatJid,
+        params.msg.event.id!,
+        emoji,
+        reactionOptions,
+      ),
+    remove: () =>
+      sendReactionWhatsApp(params.msg.platform.chatJid, params.msg.event.id!, "", reactionOptions),
     onSendError: (err) => {
       params.warn(
         {
           error: formatError(err),
-          chatId: params.msg.chatId,
-          messageId: params.msg.id,
+          chatId: params.msg.platform.chatJid,
+          messageId: params.msg.event.id,
         },
         "failed to send ack reaction",
       );
-      logVerbose(`WhatsApp ack reaction failed for chat ${params.msg.chatId}: ${formatError(err)}`);
+      logVerbose(
+        `WhatsApp ack reaction failed for chat ${params.msg.platform.chatJid}: ${formatError(err)}`,
+      );
     },
   });
 }

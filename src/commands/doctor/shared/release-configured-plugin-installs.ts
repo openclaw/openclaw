@@ -1,11 +1,17 @@
+// Release-era repair for configs that imply official plugin installs before install records existed.
+import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
+import { normalizeNullableString as normalizeId } from "@openclaw/normalization-core/string-coerce";
 import { collectConfiguredAgentHarnessRuntimes } from "../../../agents/harness-runtimes.js";
 import { listPotentialConfiguredChannelPresenceSignals } from "../../../channels/config-presence.js";
 import { normalizeChatChannelId } from "../../../channels/registry.js";
 import { isChannelConfigured } from "../../../config/channel-configured.js";
-import { collectConfiguredModelRefs } from "../../../config/model-refs.js";
 import { detectPluginAutoEnableCandidates } from "../../../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { compareOpenClawVersions } from "../../../config/version.js";
+import {
+  createDeferredConfiguredPluginRepairDoctorResult,
+  type UpdatePostInstallDoctorResult,
+} from "../../../infra/update-doctor-result.js";
 import { getOfficialExternalPluginCatalogEntry } from "../../../plugins/official-external-plugin-catalog.js";
 import { resolveProviderInstallCatalogEntries } from "../../../plugins/provider-install-catalog.js";
 import { resolveWebSearchInstallCatalogEntry } from "../../../plugins/web-search-install-catalog.js";
@@ -25,10 +31,6 @@ type ReleaseConfiguredPluginIds = {
   pluginIds: string[];
   channelIds: string[];
 };
-
-function normalizeId(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
 
 function isPluginsGloballyDisabled(cfg: OpenClawConfig): boolean {
   return cfg.plugins?.enabled === false;
@@ -107,7 +109,10 @@ function collectSlotPluginIds(cfg: OpenClawConfig): string[] {
   const slots = asObjectRecord(cfg.plugins?.slots);
   return ["memory", "contextEngine"]
     .map((key) => normalizeId(slots?.[key]))
-    .filter((pluginId): pluginId is string => !!pluginId && pluginId.toLowerCase() !== "none");
+    .filter(
+      (pluginId): pluginId is string =>
+        typeof pluginId === "string" && pluginId.toLowerCase() !== "none",
+    );
 }
 
 function collectConfiguredChannelIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): string[] {
@@ -196,9 +201,9 @@ function collectProviderPluginIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): 
 
 function collectAgentHarnessRuntimePluginIds(
   cfg: OpenClawConfig,
-  env: NodeJS.ProcessEnv,
+  _env: NodeJS.ProcessEnv,
 ): string[] {
-  return collectConfiguredAgentHarnessRuntimes(cfg, env)
+  return collectConfiguredAgentHarnessRuntimes(cfg)
     .map((runtime) => AGENT_HARNESS_RUNTIME_PLUGIN_IDS[runtime])
     .filter((pluginId): pluginId is string => Boolean(pluginId))
     .toSorted((left, right) => left.localeCompare(right));
@@ -256,6 +261,7 @@ function addEligiblePluginId(cfg: OpenClawConfig, pluginIds: Set<string>, plugin
   pluginIds.add(normalized);
 }
 
+/** Return true when this config has not yet crossed the configured-plugin install release gate. */
 export function shouldRunConfiguredPluginInstallReleaseStep(params: {
   currentVersion?: string | null;
   touchedVersion?: string | null;
@@ -273,6 +279,7 @@ export function shouldRunConfiguredPluginInstallReleaseStep(params: {
   return touchedComparedToRelease === null || touchedComparedToRelease < 0;
 }
 
+/** Collect plugin/channel ids implied by config for the release install backfill step. */
 export function collectReleaseConfiguredPluginIds(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -327,6 +334,7 @@ export function collectReleaseConfiguredPluginIds(params: {
   };
 }
 
+/** Run the configured-plugin install release backfill when the config still needs it. */
 export async function maybeRunConfiguredPluginInstallReleaseStep(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -337,6 +345,7 @@ export async function maybeRunConfiguredPluginInstallReleaseStep(params: {
   warnings: string[];
   completed: boolean;
   touchedConfig: boolean;
+  postInstallDoctorResult?: UpdatePostInstallDoctorResult;
 }> {
   const env = params.env ?? process.env;
   const updateInProgress = shouldDeferConfiguredPluginInstallRepair(env);
@@ -356,11 +365,17 @@ export async function maybeRunConfiguredPluginInstallReleaseStep(params: {
       blockedPluginIds: collectBlockedPluginIds(params.cfg),
       env,
     });
+    const postInstallDoctorResult = createPostInstallDoctorResultForDeferredRepair({
+      updateInProgress,
+      details: repaired.deferredRepairDetails ?? [],
+      warnings: repaired.warnings,
+    });
     return {
       changes: repaired.changes,
       warnings: repaired.warnings,
       completed: repaired.warnings.length === 0,
       touchedConfig: false,
+      ...(postInstallDoctorResult ? { postInstallDoctorResult } : {}),
     };
   }
   if (configured.pluginIds.length === 0 && configured.channelIds.length === 0) {
@@ -374,10 +389,27 @@ export async function maybeRunConfiguredPluginInstallReleaseStep(params: {
     env,
   });
   const completed = repaired.warnings.length === 0 && !updateInProgress;
+  const postInstallDoctorResult = createPostInstallDoctorResultForDeferredRepair({
+    updateInProgress,
+    details: repaired.deferredRepairDetails ?? [],
+    warnings: repaired.warnings,
+  });
   return {
     changes: repaired.changes,
     warnings: repaired.warnings,
     completed,
     touchedConfig: completed,
+    ...(postInstallDoctorResult ? { postInstallDoctorResult } : {}),
   };
+}
+
+function createPostInstallDoctorResultForDeferredRepair(params: {
+  updateInProgress: boolean;
+  details: readonly string[];
+  warnings: readonly string[];
+}): UpdatePostInstallDoctorResult | undefined {
+  if (!params.updateInProgress || params.warnings.length > 0 || params.details.length === 0) {
+    return undefined;
+  }
+  return createDeferredConfiguredPluginRepairDoctorResult(params.details);
 }

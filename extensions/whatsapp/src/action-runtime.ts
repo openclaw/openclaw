@@ -1,4 +1,5 @@
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+// Whatsapp plugin module implements action runtime behavior.
+import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import {
   createActionGate,
   jsonResult,

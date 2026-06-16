@@ -202,6 +202,10 @@ Useful Slack desktop flags:
 - `--credential-source convex --credential-role ci` uses the shared credential pool instead of direct Slack env tokens.
 - `--provider-mode`, `--model`, `--alt-model`, and `--fast` pass through to the Slack live lane.
 
+Approval checkpoint runs render Slack API message snapshots into checkpoint PNGs
+for CI-safe visual proof. `slack-desktop-smoke.png` is only proof of Slack Web
+when the lease uses a warm browser profile that is already logged in.
+
 The GitHub smoke workflow is `Mantis Discord Smoke`. The before and after GitHub
 workflow for the first real scenario is `Mantis Discord Status Reactions`. It
 accepts:
@@ -243,12 +247,13 @@ of only a bot-to-bot Slack transcript.
 evidence pipeline. It checks out the trusted candidate ref in a separate
 worktree, runs `pnpm openclaw qa telegram --credential-source convex
 --credential-role ci`, writes a `mantis-evidence.json` manifest from the
-Telegram QA summary and observed-message artifact, renders the redacted
-transcript HTML through a Crabbox desktop browser, generates a motion-trimmed GIF
-with `crabbox media preview`, and posts the inline PR evidence comment when a PR
-number is available. This lane is transcript-visual rather than logged-in
-Telegram Web proof: the Telegram Bot API gives stable live message evidence, but
-Telegram Web login state is not required for normal Mantis automation.
+Telegram QA summary, `qa-evidence.json`, and report artifacts, renders the
+redacted evidence HTML through a Crabbox desktop browser, generates a
+motion-trimmed GIF with `crabbox media preview`, and posts the inline PR
+evidence comment when a PR number is available. This lane is QA-evidence visual
+rather than logged-in Telegram Web proof: the Telegram Bot API gives stable live
+message evidence, but Telegram Web login state is not required for normal Mantis
+automation.
 
 `Mantis Telegram Desktop Proof` is the agentic native Telegram Desktop
 before/after wrapper. A maintainer can trigger it from a PR comment with
@@ -490,8 +495,8 @@ zero:
 
 - `pnpm openclaw qa discord` already runs a live Discord lane with driver and
   SUT bots.
-- The live transport runner already writes reports and observed-message
-  artifacts under `.artifacts/qa-e2e/`.
+- The live transport runner already writes reports, QA evidence, and
+  transport-specific artifacts under `.artifacts/qa-e2e/`.
 - Convex credential leases already provide exclusive access to shared live
   transport credentials.
 - The browser control service already supports screenshots, snapshots,
