@@ -821,7 +821,6 @@ async function runEmbeddedAgentInternal(
         provider: params.provider,
         model: params.model,
       });
-      const requestedModelId = modelId;
       const agentDir =
         params.agentDir ?? resolveAgentDir(params.config ?? {}, workspaceResolution.agentId);
       const normalizedSessionKey = params.sessionKey?.trim();
