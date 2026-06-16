@@ -854,6 +854,29 @@ describe("session accessor file-backed seam", () => {
     expect(loadSessionEntry(scope)?.sessionFile).toBe(target.sessionFile);
   });
 
+  it("preserves an explicitly resolved runtime transcript file target", async () => {
+    const explicitSessionFile = path.join(tempDir, "explicit-session.jsonl");
+    const scope = {
+      agentId: "main",
+      sessionFile: explicitSessionFile,
+      sessionId: "session-1",
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+
+    await upsertSessionEntry(scope, {
+      sessionId: scope.sessionId,
+      updatedAt: 10,
+    });
+
+    const readTarget = await resolveSessionTranscriptRuntimeReadTarget(scope);
+    const writeTarget = await resolveSessionTranscriptRuntimeTarget(scope);
+
+    expect(readTarget.sessionFile).toBe(explicitSessionFile);
+    expect(writeTarget.sessionFile).toBe(explicitSessionFile);
+    expect(loadSessionEntry(scope)?.sessionFile).toBeUndefined();
+  });
+
   it("keeps read and write runtime targets aligned for new topic sessions", async () => {
     const scope = {
       agentId: "main",

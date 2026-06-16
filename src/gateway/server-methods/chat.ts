@@ -38,7 +38,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
-import { rewriteTranscriptEntriesInSessionFile } from "../../agents/embedded-agent-runner/transcript-rewrite.js";
+import { rewriteTranscriptEntriesInRuntimeTranscript } from "../../agents/embedded-agent-runner/transcript-rewrite.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { modelCatalogBrowseRequiresFullDiscovery } from "../../agents/model-catalog-browse.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
@@ -4763,11 +4763,14 @@ export const chatHandlers: GatewayRequestHandlers = {
                                 allowedSourceReplyMirrorIds.has(entryLocal.id),
                             ) === true;
                         if (canRewriteSourceReplyMirrors) {
-                          const result = await rewriteTranscriptEntriesInSessionFile({
-                            sessionFile: resolvedTranscriptPath,
-                            sessionKey,
-                            agentId,
-                            config: cfg,
+                          const result = await rewriteTranscriptEntriesInRuntimeTranscript({
+                            scope: {
+                              sessionId,
+                              sessionKey,
+                              sessionFile: resolvedTranscriptPath,
+                              agentId,
+                              ...(latestStorePath ? { storePath: latestStorePath } : {}),
+                            },
                             request: {
                               allowedRewriteSuffixEntryIds: [...allowedSourceReplyMirrorIds],
                               replacements: rewriteTargets.map((target) => ({
@@ -4779,6 +4782,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                                 } as unknown as AgentMessage,
                               })),
                             },
+                            config: cfg,
                           });
                           if (result.changed) {
                             await advanceSessionTranscriptMarker({

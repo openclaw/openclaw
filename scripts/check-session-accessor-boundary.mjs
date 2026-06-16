@@ -32,6 +32,7 @@ const legacyWriterNames = new Set([
 const legacyTranscriptWriterNames = new Set([
   "appendSessionTranscriptMessage",
   "emitSessionTranscriptUpdate",
+  "rewriteTranscriptEntriesInSessionFile",
 ]);
 
 export const migratedSessionAccessorFiles = new Set([
@@ -94,7 +95,9 @@ export const migratedSessionAccessorWriteFiles = new Set([
 
 export const migratedTranscriptWriterFiles = new Set([
   "src/agents/command/attempt-execution.ts",
+  "src/agents/embedded-agent-runner/context-engine-maintenance.ts",
   "src/config/sessions/transcript.ts",
+  "src/gateway/server-methods/chat.ts",
   "src/gateway/server-methods/chat-transcript-inject.ts",
   "src/sessions/user-turn-transcript.ts",
 ]);
@@ -251,6 +254,7 @@ export async function main() {
   const writeSourceRoots = resolveSourceRoots(repoRoot, ["src/agents", "src/auto-reply"]);
   const transcriptWriterSourceRoots = resolveSourceRoots(repoRoot, [
     "src/agents/command",
+    "src/agents/embedded-agent-runner",
     "src/config/sessions",
     "src/gateway/server-methods",
     "src/sessions",

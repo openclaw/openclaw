@@ -100,6 +100,8 @@ export type SessionTranscriptAccessScope = SessionTranscriptReadScope & {
 };
 
 export type SessionTranscriptRuntimeScope = SessionAccessScope & {
+  /** Resolved file-backed artifact for the current runtime target. */
+  sessionFile?: string;
   sessionId: string;
   threadId?: string | number;
 };
@@ -704,6 +706,14 @@ export async function resolveSessionTranscriptRuntimeTarget(
     : undefined;
   const sessionEntry = resolvedStoreEntry?.existing ?? loadSessionEntry(scope);
   const sessionKey = resolvedStoreEntry?.normalizedKey ?? scope.sessionKey;
+  if (scope.sessionFile?.trim()) {
+    return {
+      agentId,
+      sessionFile: path.resolve(scope.sessionFile),
+      sessionId: scope.sessionId,
+      sessionKey,
+    };
+  }
   if (sessionStore && scope.storePath) {
     const sessionsDir = path.dirname(path.resolve(scope.storePath));
     const threadId = scope.threadId ?? parseSessionThreadInfo(scope.sessionKey).threadId;
@@ -766,6 +776,14 @@ export async function resolveSessionTranscriptRuntimeReadTarget(
     : undefined;
   const sessionEntry = resolvedStoreEntry?.existing ?? loadSessionEntry(scope);
   const sessionKey = resolvedStoreEntry?.normalizedKey ?? scope.sessionKey;
+  if (scope.sessionFile?.trim()) {
+    return {
+      agentId,
+      sessionFile: path.resolve(scope.sessionFile),
+      sessionId: scope.sessionId,
+      sessionKey,
+    };
+  }
   const matchingSessionEntry =
     sessionEntry?.sessionId === scope.sessionId ? sessionEntry : undefined;
   if (scope.storePath) {

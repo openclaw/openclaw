@@ -33,7 +33,7 @@ import { findActiveSessionTask } from "../session-async-task-status.js";
 import { resolveContextEngineCapabilities } from "./context-engine-capabilities.js";
 import { log } from "./logger.js";
 import {
-  rewriteTranscriptEntriesInSessionFile,
+  rewriteTranscriptEntriesInRuntimeTranscript,
   rewriteTranscriptEntriesInSessionManager,
 } from "./transcript-rewrite.js";
 
@@ -336,16 +336,18 @@ export function buildContextEngineMaintenanceRuntimeContext(params: {
           ? await params.withSessionManagerRewriteLock(rewriteSessionManagerEntries)
           : rewriteSessionManagerEntries();
       }
-      const rewriteTranscriptEntriesInFile = async () =>
-        await rewriteTranscriptEntriesInSessionFile({
-          sessionFile: params.sessionFile,
-          sessionId: params.sessionId,
-          sessionKey: params.sessionKey,
-          agentId: params.agentId,
-          config: params.config,
+      const rewriteRuntimeTranscriptEntries = async () =>
+        await rewriteTranscriptEntriesInRuntimeTranscript({
+          scope: {
+            sessionId: params.sessionId,
+            sessionKey: params.sessionKey ?? params.sessionId,
+            sessionFile: params.sessionFile,
+            ...(params.agentId ? { agentId: params.agentId } : {}),
+          },
           request,
+          config: params.config,
         });
-      return await rewriteTranscriptEntriesInFile();
+      return await rewriteRuntimeTranscriptEntries();
     },
   };
 }
