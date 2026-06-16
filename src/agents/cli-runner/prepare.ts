@@ -484,7 +484,6 @@ export async function prepareCliRunContext(
       ? prepareDeps.resolveMcpLoopbackScopedTools({
           cfg: params.config ?? getRuntimeConfig(),
           sessionKey: params.sessionKey ?? "",
-          sessionId: params.sessionId,
           messageProvider: params.messageChannel ?? params.messageProvider,
           currentChannelId: params.currentChannelId,
           currentThreadTs: params.currentThreadTs,

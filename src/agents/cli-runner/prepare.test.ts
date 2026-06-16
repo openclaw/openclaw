@@ -1501,7 +1501,6 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
 
       expect(resolveMcpLoopbackScopedTools).toHaveBeenCalledWith({
         cfg: expect.any(Object),
-        sessionId: "session-test",
         sessionKey: "agent:main:test",
         messageProvider: undefined,
         currentChannelId: undefined,

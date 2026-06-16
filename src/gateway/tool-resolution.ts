@@ -24,6 +24,10 @@ import {
   resolveToolProfilePolicy,
 } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import {
+  replaceWithEffectiveCronCreatorToolAllowlist,
+  type CronCreatorToolAllowlistEntry,
+} from "../agents/tools/cron-tool.js";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -50,6 +54,7 @@ export function resolveGatewayScopedTools(params: {
   accountId?: string;
   inboundEventKind?: InboundEventKind;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  requireExplicitMessageTarget?: boolean;
   agentTo?: string;
   agentThreadId?: string;
   senderIsOwner?: boolean;
@@ -145,6 +150,7 @@ export function resolveGatewayScopedTools(params: {
   // Passed by reference to sessions_spawn and populated after the final policy
   // pass so child sessions inherit the actual parent tool surface.
   const inheritedToolAllowlist: string[] = [];
+  const cronCreatorToolAllowlist: CronCreatorToolAllowlistEntry[] = [];
   const shouldInheritEffectiveToolAllowlist = [
     profilePolicy,
     providerProfilePolicy,
@@ -157,6 +163,10 @@ export function resolveGatewayScopedTools(params: {
     inheritedToolPolicy,
     gatewayRequestedTools.length > 0 ? { allow: gatewayRequestedTools } : undefined,
   ].some(hasRestrictiveAllowPolicy);
+  const shouldCaptureCronCreatorToolAllowlist =
+    shouldInheritEffectiveToolAllowlist ||
+    explicitDenylist.length > 0 ||
+    excludedToolNames.length > 0;
 
   const allTools = createOpenClawTools({
     agentSessionKey: params.sessionKey,
@@ -170,8 +180,9 @@ export function resolveGatewayScopedTools(params: {
     currentThreadTs: params.currentThreadTs ?? params.agentThreadId,
     currentMessageId: params.currentMessageId,
     currentInboundAudio: params.currentInboundAudio,
-    ...(params.sessionId ? { sessionId: params.sessionId } : {}),
-    ...(params.onYield ? { onYield: params.onYield } : {}),
+    sessionId: params.sessionId,
+    onYield: params.onYield,
+    requireExplicitMessageTarget: params.requireExplicitMessageTarget,
     senderIsOwner: params.senderIsOwner,
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
     allowMediaInvokeCommands: params.allowMediaInvokeCommands,
@@ -192,6 +203,9 @@ export function resolveGatewayScopedTools(params: {
       gatewayRequestedTools.length > 0 ? { allow: gatewayRequestedTools } : undefined,
     ]),
     pluginToolDenylist: explicitDenylist,
+    cronCreatorToolAllowlist: shouldCaptureCronCreatorToolAllowlist
+      ? cronCreatorToolAllowlist
+      : undefined,
     inheritedToolAllowlist,
     inheritedToolDenylist,
   });
@@ -229,6 +243,11 @@ export function resolveGatewayScopedTools(params: {
   const tools = policyFiltered.filter((tool) => !gatewayDenySet.has(tool.name));
   if (shouldInheritEffectiveToolAllowlist) {
     replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, tools);
+  }
+  if (shouldCaptureCronCreatorToolAllowlist) {
+    replaceWithEffectiveCronCreatorToolAllowlist(cronCreatorToolAllowlist, tools, (tool) =>
+      getPluginToolMeta(tool),
+    );
   }
 
   return {

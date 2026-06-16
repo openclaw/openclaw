@@ -560,6 +560,7 @@ export async function executePreparedCliRun(
         : undefined;
       let gatewayCaptureKey: string | undefined;
       let cleanupMcpCaptureAttempt: (() => Promise<void>) | undefined;
+      let yielded = false;
       let didSendViaMessagingTool = false;
       let didDeliverSourceReplyViaMessageTool = false;
       let inFlightUnclassifiedMcpRequests = 0;
@@ -612,9 +613,10 @@ export async function executePreparedCliRun(
         runFailed = true;
         runError = error;
       };
-      const withMessagingDeliveryEvidence = (output: CliOutput): CliOutput => {
+      const withExecutionEvidence = (output: CliOutput): CliOutput => {
         return {
           ...output,
+          ...(yielded ? { yielded: true as const } : {}),
           ...(didSendViaMessagingTool ? { didSendViaMessagingTool: true } : {}),
           ...(didDeliverSourceReplyViaMessageTool
             ? { didDeliverSourceReplyViaMessageTool: true }
@@ -818,6 +820,9 @@ export async function executePreparedCliRun(
           };
           beginMcpLoopbackToolCallCapture({
             captureKey: gatewayCaptureKey,
+            onYield: () => {
+              yielded = true;
+            },
             onRequestStart: () => {
               inFlightUnclassifiedMcpRequests += 1;
             },
@@ -1424,7 +1429,7 @@ export async function executePreparedCliRun(
       if (!runOutput) {
         throw new Error("CLI run completed without output");
       }
-      return withMessagingDeliveryEvidence(runOutput);
+      return withExecutionEvidence(runOutput);
     });
     return completedOutput;
   } catch (error) {
