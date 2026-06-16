@@ -5,12 +5,19 @@ import {
   resolveProviderRequestHeaders,
 } from "openclaw/plugin-sdk/provider-http";
 import { captureWsEvent } from "openclaw/plugin-sdk/proxy-capture";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  fetchWithSsrFGuard,
+  ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   asFiniteNumber,
   asOptionalRecord as asObjectRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+
+const OPENAI_REALTIME_SSRF_POLICY = ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist(
+  "https://api.openai.com/v1",
+);
 
 export const trimToUndefined = normalizeOptionalString;
 export { asFiniteNumber, asObjectRecord };
@@ -103,6 +110,7 @@ async function createOpenAIRealtimeSecret(
       },
       body: JSON.stringify(params.body),
     },
+    policy: OPENAI_REALTIME_SSRF_POLICY,
     auditContext: params.auditContext,
   });
   const payload = await (async () => {
