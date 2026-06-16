@@ -202,6 +202,41 @@ describe("handleAssistantFailover", () => {
       expect(advanceAuthProfile).toHaveBeenCalledTimes(1);
     });
 
+    it("spends same-model retry budget on Gemini per-minute quota rate limits", async () => {
+      // Gemini's TPM/RPM 429 says "current quota" but links to the
+      // .../docs/rate-limits page; the rate-limits signal must route it to the
+      // short-window same-model retry instead of the long-window fallback.
+      const maybeRetrySameModelRateLimit = vi.fn(async () => true);
+      const maybeEscalateRateLimitProfileFallback = vi.fn();
+      const advanceAuthProfile = vi.fn(async () => true);
+
+      const outcome = await handleAssistantFailover(
+        makeParams({
+          initialDecision: { action: "rotate_profile", reason: "rate_limit" },
+          failoverReason: "rate_limit",
+          billingFailure: false,
+          rateLimitFailure: true,
+          lastAssistant: {
+            errorMessage:
+              "Google Generative AI API error (429): You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.",
+          } as Params["lastAssistant"],
+          maybeRetrySameModelRateLimit,
+          maybeEscalateRateLimitProfileFallback,
+          advanceAuthProfile,
+        }),
+      );
+
+      expect(outcome.action).toBe("retry");
+      if (outcome.action !== "retry") {
+        return;
+      }
+      expect(outcome.retryKind).toBe("same_model_rate_limit");
+      expect(maybeRetrySameModelRateLimit).toHaveBeenCalledTimes(1);
+      expect(maybeRetrySameModelRateLimit).toHaveBeenCalledWith({});
+      expect(maybeEscalateRateLimitProfileFallback).not.toHaveBeenCalled();
+      expect(advanceAuthProfile).not.toHaveBeenCalled();
+    });
+
     it("does not treat bare 429 quota_exceeded as a short-window throttle", async () => {
       const maybeRetrySameModelRateLimit = vi.fn(async () => true);
       const maybeEscalateRateLimitProfileFallback = vi.fn();

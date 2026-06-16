@@ -40,10 +40,14 @@ type ShortWindowRateLimitRetry = {
 
 const LONG_WINDOW_RATE_LIMIT_RE =
   /\b(?:daily|weekly|monthly|tokens per day|requests per day|usage limit|subscription|insufficient[_ -]?quota|current quota|quota[_ -]?exceeded|quota exceeded)\b/i;
+// Gemini's per-minute TPM/RPM 429 says "current quota" (a long-window phrase)
+// but links to .../gemini-api/docs/rate-limits, so `rate-limits` is the only
+// short-window signal in the message. Without it the message is classified
+// long-window and the same-model retry loop never fires for Gemini throttles.
 const SHORT_RATE_LIMIT_WINDOW_RE =
-  /\b(?:requests per minute|tokens per minute|per-minute|rpm|tpm)\b/i;
+  /\b(?:requests per minute|tokens per minute|per-minute|rpm|tpm|rate-limits)\b/i;
 const SHORT_WINDOW_RATE_LIMIT_RE =
-  /\b(?:requests per minute|tokens per minute|per-minute|rpm|tpm|model_cooldown)\b|请求过于频繁|调用频率|频率限制/i;
+  /\b(?:requests per minute|tokens per minute|per-minute|rpm|tpm|model_cooldown|rate-limits)\b|请求过于频繁|调用频率|频率限制/i;
 const RETRY_AFTER_VALUE_RE = /\bretry[- ]after\b\s*:?\s*(?:in\s*)?([^\r\n;]+)/i;
 const RETRY_AFTER_SECONDS_RE =
   /^(\d+(?:\.\d+)?)(?:\s*(milliseconds?|msecs?|ms|seconds?|secs?|s|minutes?|mins?|m))?\b/i;
