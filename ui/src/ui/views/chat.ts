@@ -473,6 +473,7 @@ interface ChatEphemeralState {
   searchOpen: boolean;
   searchQuery: string;
   pinnedExpanded: boolean;
+  composerComposing: boolean;
   historyRenderSessionKey: string | null;
   historyRenderMessagesRef: unknown[] | null;
   historyRenderMessageCount: number;
@@ -499,6 +500,7 @@ function createChatEphemeralState(): ChatEphemeralState {
     searchOpen: false,
     searchQuery: "",
     pinnedExpanded: false,
+    composerComposing: false,
     historyRenderSessionKey: null,
     historyRenderMessagesRef: null,
     historyRenderMessageCount: 0,
@@ -2352,15 +2354,35 @@ export function renderChat(props: ChatProps) {
     }
   };
 
-  const handleInput = (e: Event) => {
-    const target = e.target as HTMLTextAreaElement;
+  const syncComposerValue = (
+    target: HTMLTextAreaElement,
+    options: { forceCommit?: boolean } = {},
+  ) => {
     adjustTextareaHeight(target);
     draftMirror.value = target.value;
     const hostDraftNeeded = isBusy || showAbortableUi || props.queue.length > 0;
-    if (hostDraftNeeded || target.value.startsWith("/") || hasVisibleSlashMenuState()) {
+    if (
+      options.forceCommit ||
+      hostDraftNeeded ||
+      target.value.startsWith("/") ||
+      hasVisibleSlashMenuState()
+    ) {
       commitComposerDraft(props, target.value);
     }
     updateSlashMenu(target.value, requestUpdate, props, {}, () => target.value);
+  };
+  const handleInput = (e: InputEvent) => {
+    const target = e.target as HTMLTextAreaElement;
+    if (vs.composerComposing || e.isComposing) {
+      adjustTextareaHeight(target);
+      draftMirror.value = target.value;
+      return;
+    }
+    syncComposerValue(target);
+  };
+  const handleCompositionEnd = (e: CompositionEvent) => {
+    vs.composerComposing = false;
+    syncComposerValue(e.target as HTMLTextAreaElement, { forceCommit: true });
   };
   const handleBlur = (e: FocusEvent) => {
     const target = e.target as HTMLTextAreaElement;
@@ -2450,6 +2472,10 @@ export function renderChat(props: ChatProps) {
           aria-describedby=${SLASH_MENU_ACTIVE_ANNOUNCEMENT_ID}
           @keydown=${handleKeyDown}
           @input=${handleInput}
+          @compositionstart=${() => {
+            vs.composerComposing = true;
+          }}
+          @compositionend=${handleCompositionEnd}
           @blur=${handleBlur}
           @paste=${(e: ClipboardEvent) => handlePaste(e, props)}
           placeholder=${placeholder}
