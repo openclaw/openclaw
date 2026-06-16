@@ -31,6 +31,7 @@ export async function getRecentSessionContent(
     const lines = content.trim().split("\n");
 
     const allMessages: string[] = [];
+    let lastAssistantId: string | undefined;
     let lastAssistantText: string | undefined;
 
     for (const line of lines) {
@@ -49,11 +50,20 @@ export async function getRecentSessionContent(
             }
             const text = extractTextMessageContent(msg.content);
             if (text && !text.startsWith("/")) {
-              if (role === "assistant" && text === lastAssistantText) {
-                continue;
+              if (role === "assistant") {
+                const entryParentId = entry.parentId as string | undefined;
+                if (entryParentId && entryParentId === lastAssistantId && text === lastAssistantText) {
+                  continue;
+                }
               }
               allMessages.push(`${role}: ${text}`);
-              lastAssistantText = role === "assistant" ? text : undefined;
+              if (role === "assistant") {
+                lastAssistantId = entry.id as string | undefined;
+                lastAssistantText = text;
+              } else {
+                lastAssistantId = undefined;
+                lastAssistantText = undefined;
+              }
             }
           }
         }
