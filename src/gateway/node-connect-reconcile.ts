@@ -33,6 +33,10 @@ export type NodeConnectPairingReconcileResult = {
   shouldClearPendingPairings?: boolean;
 };
 
+type AutoApproveFirstTimeNodePairing = (
+  pendingPairing: RequestNodePairingResult,
+) => Promise<boolean>;
+
 function resolveApprovedReconnectCommands(params: {
   pairedCommands: readonly string[] | undefined;
   allowlist: Set<string>;
@@ -116,6 +120,7 @@ export async function reconcileNodePairingOnConnect(params: {
   pairedNode: NodePairingPairedNode | null;
   reportedClientIp?: string;
   requestPairing: (input: NodePairingRequestInput) => Promise<RequestNodePairingResult | null>;
+  autoApproveFirstTimePairing?: AutoApproveFirstTimeNodePairing;
 }): Promise<NodeConnectPairingReconcileResult> {
   const nodeId = params.connectParams.device?.id ?? params.connectParams.client.id;
   const policyNode = {
@@ -147,6 +152,20 @@ export async function reconcileNodePairingOnConnect(params: {
     );
     if (!pendingPairing) {
       throw new Error("node pairing request required");
+    }
+    if (
+      params.autoApproveFirstTimePairing &&
+      (await params.autoApproveFirstTimePairing(pendingPairing))
+    ) {
+      return {
+        nodeId,
+        declaredCaps,
+        effectiveCaps: declaredCaps,
+        declaredCommands: declared,
+        effectiveCommands: declared,
+        declaredPermissions,
+        effectivePermissions: declaredPermissions,
+      };
     }
     return {
       nodeId,

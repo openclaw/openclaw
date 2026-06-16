@@ -118,6 +118,35 @@ describe("reconcileNodePairingOnConnect", () => {
     );
   });
 
+  it("can auto-approve first-time node surfaces for explicit bootstrap callers", async () => {
+    const requestPairing = makePendingPairingRequest("req-bootstrap");
+    const autoApproveFirstTimePairing = vi.fn(async () => true);
+
+    const result = await reconcileNodePairingOnConnect({
+      cfg: {} as never,
+      connectParams: makeNodeConnectParams({
+        caps: ["camera"],
+        commands: [],
+        permissions: { camera: true },
+      }),
+      pairedNode: null,
+      requestPairing,
+      autoApproveFirstTimePairing,
+    });
+
+    expect(autoApproveFirstTimePairing).toHaveBeenCalledWith(
+      expect.objectContaining({
+        request: expect.objectContaining({
+          requestId: "req-bootstrap",
+        }),
+      }),
+    );
+    expect(result.pendingPairing).toBeUndefined();
+    expect(result.effectiveCaps).toEqual(["camera"]);
+    expect(result.effectiveCommands).toEqual([]);
+    expect(result.effectivePermissions).toEqual({ camera: true });
+  });
+
   it.each([
     ["conflicts with device family", { deviceFamily: "iPhone" }],
     ["omits device family", {}],

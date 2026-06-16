@@ -2033,7 +2033,7 @@ class NodeRuntime(
         }
       _nodesDevicesSummary.value =
         GatewayNodesDevicesSummary(
-          nodes = parseGatewayNodes(nodesRoot?.get("nodes") as? JsonArray),
+          nodes = parseGatewayNodeSummaries(nodesRoot?.get("nodes") as? JsonArray),
           pendingDevices = parsePendingDevices(devicesRoot?.get("pending") as? JsonArray),
           pairedDevices = parsePairedDevices(devicesRoot?.get("paired") as? JsonArray),
           devicePairingAvailable = devicesRoot != null,
@@ -2286,25 +2286,6 @@ class NodeRuntime(
       }.orEmpty()
 
   private fun skillMissingCount(missing: JsonObject?): Int = listOf("bins", "env", "config", "os").sumOf { key -> (missing?.get(key) as? JsonArray)?.size ?: 0 }
-
-  private fun parseGatewayNodes(nodes: JsonArray?): List<GatewayNodeSummary> =
-    nodes
-      ?.mapNotNull { item ->
-        val obj = item.asObjectOrNull() ?: return@mapNotNull null
-        val id = obj["nodeId"].asStringOrNull()?.trim().orEmpty()
-        if (id.isEmpty()) return@mapNotNull null
-        GatewayNodeSummary(
-          id = id,
-          displayName = obj["displayName"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
-          remoteIp = obj["remoteIp"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
-          version = obj["version"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
-          deviceFamily = obj["deviceFamily"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
-          paired = obj.boolean("paired"),
-          connected = obj.boolean("connected"),
-          capabilities = parseStringArray(obj["caps"] as? JsonArray),
-          commands = parseStringArray(obj["commands"] as? JsonArray),
-        )
-      }.orEmpty()
 
   private fun parsePendingDevices(devices: JsonArray?): List<GatewayPendingDeviceSummary> =
     devices
@@ -2840,9 +2821,19 @@ data class GatewayNodeSummary(
   val deviceFamily: String?,
   val paired: Boolean,
   val connected: Boolean,
+  val approvalState: GatewayNodeApprovalState = GatewayNodeApprovalState.Unknown,
+  val pendingRequestId: String? = null,
   val capabilities: List<String>,
   val commands: List<String>,
 )
+
+enum class GatewayNodeApprovalState {
+  Approved,
+  PendingApproval,
+  PendingReapproval,
+  Unapproved,
+  Unknown,
+}
 
 data class GatewayPendingDeviceSummary(
   val requestId: String,
@@ -2934,6 +2925,41 @@ data class GatewayLogEntry(
   val subsystem: String?,
   val message: String,
 )
+
+internal fun parseGatewayNodeSummaries(nodes: JsonArray?): List<GatewayNodeSummary> =
+  nodes
+    ?.mapNotNull { item ->
+      val obj = item.asObjectOrNull() ?: return@mapNotNull null
+      val id = obj["nodeId"].asStringOrNull()?.trim().orEmpty()
+      if (id.isEmpty()) return@mapNotNull null
+      GatewayNodeSummary(
+        id = id,
+        displayName = obj["displayName"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+        remoteIp = obj["remoteIp"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+        version = obj["version"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+        deviceFamily = obj["deviceFamily"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+        paired = obj.boolean("paired"),
+        connected = obj.boolean("connected"),
+        approvalState = parseGatewayNodeApprovalState(obj["approvalState"].asStringOrNull()),
+        pendingRequestId = obj["pendingRequestId"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+        capabilities = parseNodeSummaryStringArray(obj["caps"] as? JsonArray),
+        commands = parseNodeSummaryStringArray(obj["commands"] as? JsonArray),
+      )
+    }.orEmpty()
+
+internal fun parseGatewayNodeApprovalState(raw: String?): GatewayNodeApprovalState =
+  when (raw?.trim()) {
+    "approved" -> GatewayNodeApprovalState.Approved
+    "pending-approval" -> GatewayNodeApprovalState.PendingApproval
+    "pending-reapproval" -> GatewayNodeApprovalState.PendingReapproval
+    "unapproved" -> GatewayNodeApprovalState.Unapproved
+    else -> GatewayNodeApprovalState.Unknown
+  }
+
+private fun parseNodeSummaryStringArray(items: JsonArray?): List<String> =
+  items
+    ?.mapNotNull { it.asStringOrNull()?.trim()?.takeIf(String::isNotEmpty) }
+    .orEmpty()
 
 private fun JsonObject?.long(key: String): Long? = (this?.get(key) as? JsonPrimitive)?.content?.trim()?.toLongOrNull()
 

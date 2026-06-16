@@ -1062,6 +1062,7 @@ export function registerControlUiAndPairingSuite(): void {
     const { identityPath, identity } = await createOperatorIdentityFixture(
       "openclaw-bootstrap-node-",
     );
+    const { listNodePairing } = await import("../infra/node-pairing.js");
     const client = {
       id: "openclaw-ios",
       version: "2026.3.30",
@@ -1148,6 +1149,50 @@ export function registerControlUiAndPairingSuite(): void {
         "operator.talk.secrets",
         "operator.write",
       ]);
+      const nodePairing = await listNodePairing();
+      expect(nodePairing.pending.filter((entry) => entry.nodeId === identity.deviceId)).toEqual([]);
+      expect(nodePairing.paired.find((entry) => entry.nodeId === identity.deviceId)).toEqual(
+        expect.objectContaining({
+          nodeId: identity.deviceId,
+          platform: client.platform,
+          version: client.version,
+          commands: [],
+        }),
+      );
+
+      const wsOperator = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
+      try {
+        const operatorConnect = await connectReq(wsOperator, {
+          skipDefaultAuth: true,
+          deviceToken: issuedOperatorToken,
+          role: "operator",
+          scopes: operatorHandoff?.scopes ?? [],
+          client,
+          deviceIdentityPath: identityPath,
+        });
+        expect(operatorConnect.ok).toBe(true);
+        const nodeList = await rpcReq<{
+          nodes?: Array<{
+            nodeId: string;
+            approvalState?: string;
+            pendingRequestId?: string;
+          }>;
+        }>(wsOperator, "node.list", {});
+        expect(nodeList.ok).toBe(true);
+        expect(
+          nodeList.payload?.nodes?.find((entry) => entry.nodeId === identity.deviceId),
+        ).toEqual(
+          expect.objectContaining({
+            nodeId: identity.deviceId,
+            approvalState: "approved",
+          }),
+        );
+        expect(
+          nodeList.payload?.nodes?.find((entry) => entry.nodeId === identity.deviceId),
+        ).not.toHaveProperty("pendingRequestId");
+      } finally {
+        wsOperator.close();
+      }
 
       const wsReplay = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
       const replay = await connectReq(wsReplay, {

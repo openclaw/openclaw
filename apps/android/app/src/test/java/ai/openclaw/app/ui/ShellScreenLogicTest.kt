@@ -3,6 +3,8 @@ package ai.openclaw.app.ui
 import ai.openclaw.app.AppearanceThemeMode
 import ai.openclaw.app.GatewayChannelSummary
 import ai.openclaw.app.GatewayChannelsSummary
+import ai.openclaw.app.GatewayNodeApprovalState
+import ai.openclaw.app.GatewayNodeSummary
 import ai.openclaw.app.GatewayNodesDevicesSummary
 import ai.openclaw.app.GatewayPendingDeviceSummary
 import org.junit.Assert.assertEquals
@@ -118,7 +120,83 @@ class ShellScreenLogicTest {
     assertEquals(emptyList<String>(), rows.map { it.title })
   }
 
+  @Test
+  fun nodeRowsDistinguishTransportPairingFromCapabilityApproval() {
+    val pending = androidNode(approvalState = GatewayNodeApprovalState.PendingApproval, pendingRequestId = "node-request-1")
+    val unapproved = androidNode(approvalState = GatewayNodeApprovalState.Unapproved, connected = false)
+    val approved = androidNode(approvalState = GatewayNodeApprovalState.Approved, commands = listOf("device.status"))
+
+    assertEquals("Approval Pending", nodeStatusText(pending))
+    assertTrue(nodeSubtitle(pending).contains("Transport paired"))
+    assertTrue(nodeSubtitle(pending).contains("openclaw nodes pending"))
+    assertTrue(nodeSubtitle(pending).contains("openclaw nodes approve node-request-1"))
+    assertEquals("Unavailable", nodeStatusText(unapproved))
+    assertTrue(nodeSubtitle(unapproved).contains("Capabilities unavailable"))
+    assertEquals("Ready", nodeStatusText(approved))
+    assertTrue(nodeSubtitle(approved).contains("Ready"))
+  }
+
+  @Test
+  fun homeAttentionRowsSurfaceNodeCapabilityApprovalRequests() {
+    val rows =
+      homeAttentionRows(
+        isConnected = true,
+        pendingApprovals = 0,
+        channelsSummary = emptyChannels(),
+        nodesDevicesSummary =
+          GatewayNodesDevicesSummary(
+            nodes = listOf(androidNode(approvalState = GatewayNodeApprovalState.PendingApproval, pendingRequestId = "node-request-1")),
+            pendingDevices = emptyList(),
+            pairedDevices = emptyList(),
+          ),
+        readyProviderCount = 1,
+      )
+
+    assertEquals(listOf("Nodes & Devices"), rows.map { it.title })
+    assertEquals("1 pending", rows.single().subtitle)
+  }
+
+  @Test
+  fun homeAttentionRowsSurfaceUnavailableNodeCapabilitiesSeparatelyFromPendingRequests() {
+    val rows =
+      homeAttentionRows(
+        isConnected = true,
+        pendingApprovals = 0,
+        channelsSummary = emptyChannels(),
+        nodesDevicesSummary =
+          GatewayNodesDevicesSummary(
+            nodes = listOf(androidNode(approvalState = GatewayNodeApprovalState.Unapproved)),
+            pendingDevices = emptyList(),
+            pairedDevices = emptyList(),
+          ),
+        readyProviderCount = 1,
+      )
+
+    assertEquals(listOf("Nodes & Devices"), rows.map { it.title })
+    assertEquals("1 unavailable", rows.single().subtitle)
+  }
+
   private fun emptyChannels(): GatewayChannelsSummary = GatewayChannelsSummary(channels = emptyList())
 
   private fun emptyNodesDevices(): GatewayNodesDevicesSummary = GatewayNodesDevicesSummary(nodes = emptyList(), pendingDevices = emptyList(), pairedDevices = emptyList())
+
+  private fun androidNode(
+    approvalState: GatewayNodeApprovalState,
+    pendingRequestId: String? = null,
+    connected: Boolean = true,
+    commands: List<String> = emptyList(),
+  ): GatewayNodeSummary =
+    GatewayNodeSummary(
+      id = "android-node",
+      displayName = "Android",
+      remoteIp = null,
+      version = null,
+      deviceFamily = "Android",
+      paired = true,
+      connected = connected,
+      approvalState = approvalState,
+      pendingRequestId = pendingRequestId,
+      capabilities = emptyList(),
+      commands = commands,
+    )
 }

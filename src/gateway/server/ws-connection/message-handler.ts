@@ -69,6 +69,7 @@ import {
 } from "../../../infra/diagnostic-trace-context.js";
 import {
   beginNodePairingConnect,
+  approveNodePairing,
   finalizeNodePairingCleanupClaim,
   releaseNodePairingCleanupClaim,
   requestNodePairing,
@@ -101,7 +102,7 @@ import { AUTH_RATE_LIMIT_SCOPE_NODE_PAIRING, type AuthRateLimiter } from "../../
 import type { GatewayAuthResult, ResolvedGatewayAuth } from "../../auth.js";
 import { hasForwardedRequestHeaders, isLocalDirectRequest } from "../../auth.js";
 import { normalizeDeviceMetadataForAuth } from "../../device-auth.js";
-import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../../method-scopes.js";
+import { ADMIN_SCOPE, APPROVALS_SCOPE, PAIRING_SCOPE, WRITE_SCOPE } from "../../method-scopes.js";
 import type { GatewayMethodRegistry } from "../../methods/registry.js";
 import {
   isLocalishHost,
@@ -178,6 +179,7 @@ const DEVICE_CREDENTIAL_INVALIDATING_METHODS = new Set([
   "device.token.revoke",
 ]);
 const unauthorizedHandshakeLogLimiter = new HandshakeAuthLogLimiter();
+const BOOTSTRAP_NODE_APPROVAL_SCOPES = [PAIRING_SCOPE, WRITE_SCOPE, ADMIN_SCOPE];
 
 class NodePairingRateLimitError extends Error {
   constructor(readonly retryAfterMs: number) {
@@ -1147,6 +1149,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             ? await getDeviceBootstrapTokenProfile({ token: bootstrapTokenCandidate })
             : null;
         let handoffBootstrapProfile: DeviceBootstrapProfile | null = null;
+        let allowBootstrapNodeAutoApproval = false;
         const trustedProxyAuthOk = isTrustedProxyControlUiOperatorAuth({
           isControlUi,
           role,
@@ -1354,6 +1357,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
               if (approved?.status === "approved") {
                 if (allowSilentBootstrapPairing && boundBootstrapProfile) {
                   handoffBootstrapProfile = boundBootstrapProfile;
+                  allowBootstrapNodeAutoApproval = true;
                 }
                 logGateway.info(
                   `device pairing auto-approved device=${approved.device.deviceId} role=${approved.device.role ?? "unknown"}`,
@@ -1587,6 +1591,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                 // bootstrap token is restored while the paired device already has
                 // node+operator grants. Preserve the same bounded handoff on retry.
                 handoffBootstrapProfile = retryBootstrapHandoffProfile;
+                allowBootstrapNodeAutoApproval = true;
               }
             }
 
@@ -1689,6 +1694,17 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                   reapprovalCoordinator: nodeReapprovalCoordinator,
                 });
               },
+              autoApproveFirstTimePairing: allowBootstrapNodeAutoApproval
+                ? async (pendingPairing) => {
+                    // Setup-code bootstrap already proved possession of the device key and
+                    // bootstrap token; approve the initial node surface without granting the
+                    // handed-off operator token pairing/admin scope.
+                    const approved = await approveNodePairing(pendingPairing.request.requestId, {
+                      callerScopes: BOOTSTRAP_NODE_APPROVAL_SCOPES,
+                    });
+                    return approved !== null && !("status" in approved);
+                  }
+                : undefined,
             });
           } catch (error) {
             await releasePendingNodePairingCleanup();

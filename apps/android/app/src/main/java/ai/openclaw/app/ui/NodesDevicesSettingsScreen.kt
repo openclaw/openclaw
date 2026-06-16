@@ -1,6 +1,7 @@
 package ai.openclaw.app.ui
 
 import ai.openclaw.app.GatewayDeviceTokenSummary
+import ai.openclaw.app.GatewayNodeApprovalState
 import ai.openclaw.app.GatewayNodeSummary
 import ai.openclaw.app.GatewayNodesDevicesSummary
 import ai.openclaw.app.GatewayPairedDeviceSummary
@@ -60,7 +61,7 @@ internal fun NodesDevicesSettingsScreen(
           SettingsMetric("Nodes", summary.nodes.size.toString()),
           SettingsMetric("Online", summary.nodes.count { it.connected }.toString()),
           SettingsMetric("Devices", if (summary.devicePairingAvailable) summary.pairedDevices.size.toString() else "Admin"),
-          SettingsMetric("Pending", summary.pendingDevices.size.toString()),
+          SettingsMetric("Pending", summary.pendingApprovalCount().toString()),
         ),
     )
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -155,8 +156,8 @@ private fun NodeRow(node: GatewayNodeSummary) {
     badge = nodeBadge(node.displayName ?: node.id),
     title = node.displayName ?: node.id,
     subtitle = nodeSubtitle(node),
-    statusText = if (node.connected) "Online" else "Offline",
-    status = if (node.connected) ClawStatus.Success else ClawStatus.Warning,
+    statusText = nodeStatusText(node),
+    status = nodeStatus(node),
   )
 }
 
@@ -201,17 +202,94 @@ private fun DeviceListRow(
 /** True when the gateway returned no node or device rows to render. */
 private fun GatewayNodesDevicesSummary.isEmpty(): Boolean = nodes.isEmpty() && pendingDevices.isEmpty() && pairedDevices.isEmpty()
 
-private fun nodeSubtitle(node: GatewayNodeSummary): String {
+internal fun nodeSubtitle(node: GatewayNodeSummary): String {
   val kind = node.deviceFamily ?: "Node host"
   val version = node.version?.let { "OpenClaw $it" }
-  val status = if (node.paired) "Paired" else "Unpaired"
+  val transport = if (node.paired) "Transport paired" else "Transport unpaired"
+  val capability = nodeCapabilityText(node)
   val commands =
     node.commands
       .take(2)
       .joinToString(", ")
       .takeIf { it.isNotBlank() }
-  return listOfNotNull(kind, version, status, commands).joinToString(" · ")
+  return listOfNotNull(kind, version, transport, capability, commands).joinToString(" · ")
 }
+
+internal fun GatewayNodesDevicesSummary.pendingApprovalCount(): Int = pendingDevices.size + nodes.count { it.hasPendingCapabilityApproval() }
+
+internal fun GatewayNodesDevicesSummary.nodeCapabilityAttentionCount(): Int = nodes.count { it.needsCapabilityAttention() }
+
+internal fun GatewayNodeSummary.hasPendingCapabilityApproval(): Boolean =
+  paired &&
+    when (approvalState) {
+      GatewayNodeApprovalState.PendingApproval,
+      GatewayNodeApprovalState.PendingReapproval,
+      -> true
+      GatewayNodeApprovalState.Approved,
+      GatewayNodeApprovalState.Unapproved,
+      GatewayNodeApprovalState.Unknown,
+      -> false
+    }
+
+internal fun GatewayNodeSummary.needsCapabilityAttention(): Boolean =
+  paired &&
+    when (approvalState) {
+      GatewayNodeApprovalState.PendingApproval,
+      GatewayNodeApprovalState.PendingReapproval,
+      GatewayNodeApprovalState.Unapproved,
+      -> true
+      GatewayNodeApprovalState.Approved,
+      GatewayNodeApprovalState.Unknown,
+      -> false
+    }
+
+internal fun nodeStatusText(node: GatewayNodeSummary): String =
+  if (node.paired) {
+    when (node.approvalState) {
+      GatewayNodeApprovalState.Approved -> "Ready"
+      GatewayNodeApprovalState.PendingApproval -> "Approval Pending"
+      GatewayNodeApprovalState.PendingReapproval -> "Reapproval Pending"
+      GatewayNodeApprovalState.Unapproved -> "Unavailable"
+      GatewayNodeApprovalState.Unknown -> if (node.connected) "Online" else "Offline"
+    }
+  } else {
+    if (node.connected) "Online" else "Offline"
+  }
+
+internal fun nodeStatus(node: GatewayNodeSummary): ClawStatus =
+  if (node.paired) {
+    when (node.approvalState) {
+      GatewayNodeApprovalState.Approved -> ClawStatus.Success
+      GatewayNodeApprovalState.PendingApproval,
+      GatewayNodeApprovalState.PendingReapproval,
+      GatewayNodeApprovalState.Unapproved,
+      -> ClawStatus.Warning
+      GatewayNodeApprovalState.Unknown -> if (node.connected) ClawStatus.Success else ClawStatus.Warning
+    }
+  } else {
+    if (node.connected) ClawStatus.Success else ClawStatus.Warning
+  }
+
+private fun nodeCapabilityText(node: GatewayNodeSummary): String? =
+  if (!node.paired) {
+    null
+  } else {
+    when (node.approvalState) {
+      GatewayNodeApprovalState.Approved -> "Ready"
+      GatewayNodeApprovalState.PendingApproval -> approvalCommandText(node.pendingRequestId, "Approval pending")
+      GatewayNodeApprovalState.PendingReapproval -> approvalCommandText(node.pendingRequestId, "Reapproval pending")
+      GatewayNodeApprovalState.Unapproved -> "Capabilities unavailable"
+      GatewayNodeApprovalState.Unknown -> null
+    }
+  }
+
+private fun approvalCommandText(
+  requestId: String?,
+  label: String,
+): String =
+  requestId
+    ?.let { "$label; run openclaw nodes pending, then openclaw nodes approve $it" }
+    ?: "$label; run openclaw nodes pending"
 
 private fun pendingDeviceSubtitle(device: GatewayPendingDeviceSummary): String {
   val roles = formatDeviceList(device.roles, "role")

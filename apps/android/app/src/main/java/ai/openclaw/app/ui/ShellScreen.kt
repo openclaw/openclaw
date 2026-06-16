@@ -566,7 +566,7 @@ internal fun homeAttentionRows(
     } else {
       null
     },
-    if (nodesDevicesSummary.pendingDevices.isNotEmpty()) {
+    if (nodesDevicesSummary.pendingApprovalCount() > 0 || nodesDevicesSummary.nodeCapabilityAttentionCount() > 0) {
       HomeAttentionRow("Nodes & Devices", nodesDevicesSummaryText(nodesDevicesSummary), Icons.Default.Cloud, Tab.Settings, SettingsRoute.NodesDevices)
     } else {
       null
@@ -995,8 +995,11 @@ private fun skillsStatus(skills: List<GatewaySkillSummary>): Boolean? =
 private fun nodesDevicesSummaryText(summary: GatewayNodesDevicesSummary): String {
   val online = summary.nodes.count { it.connected }
   val devices = summary.pairedDevices.size
+  val pending = summary.pendingApprovalCount()
+  val unavailable = summary.nodeCapabilityAttentionCount() - summary.nodes.count { it.hasPendingCapabilityApproval() }
   return when {
-    summary.pendingDevices.isNotEmpty() -> "${summary.pendingDevices.size} pending"
+    pending > 0 -> "$pending pending"
+    unavailable > 0 -> "$unavailable unavailable"
     summary.nodes.isNotEmpty() -> "$online/${summary.nodes.size} online"
     devices > 0 -> "$devices paired"
     else -> "No devices"
@@ -1006,7 +1009,7 @@ private fun nodesDevicesSummaryText(summary: GatewayNodesDevicesSummary): String
 /** Maps node/device state to a settings status dot, treating pending pairings as attention-needed. */
 private fun nodesDevicesStatus(summary: GatewayNodesDevicesSummary): Boolean? =
   when {
-    summary.pendingDevices.isNotEmpty() -> false
+    summary.pendingApprovalCount() > 0 || summary.nodeCapabilityAttentionCount() > 0 -> false
     summary.nodes.any { it.connected } -> true
     summary.pairedDevices.isNotEmpty() -> true
     else -> null
