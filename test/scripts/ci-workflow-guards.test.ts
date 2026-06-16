@@ -197,6 +197,35 @@ describe("ci workflow guards", () => {
     );
   });
 
+  it("fails Windows Testbox setup when Blacksmith phone-home is not accepted", () => {
+    const workflow = readFileSync(".github/workflows/windows-blacksmith-testbox.yml", "utf8");
+
+    expect(workflow).toContain('echo "phone_home_hydrating_http=${hydrating_http_code}"');
+    expect(workflow).toContain('echo "phone_home_ready_http=${http_code}"');
+    const hydratingFailureBlock = workflow.slice(
+      workflow.indexOf('if [[ ! "$hydrating_http_code" =~ ^2 ]]; then'),
+      workflow.indexOf('response="$(cat "$hydrating_response")"'),
+    );
+    const missingSshKeyFailureBlock = workflow.slice(
+      workflow.indexOf('if [ -z "$ssh_public_key" ]; then'),
+      workflow.indexOf("mkdir -p ~/.ssh"),
+    );
+    const readyFailureBlock = workflow.slice(
+      workflow.indexOf('if [[ ! "$http_code" =~ ^2 ]]; then'),
+      workflow.indexOf('echo "============================================"'),
+    );
+
+    expect(hydratingFailureBlock).toContain("exit 1");
+    expect(missingSshKeyFailureBlock).toContain("exit 1");
+    expect(readyFailureBlock).toContain("exit 1");
+    expect(workflow).toContain(
+      "Blacksmith phone-home did not return an SSH public key; testbox cannot accept CLI connections.",
+    );
+    expect(workflow).not.toContain(
+      'phone_home_ready_http=${http_code}"\n\n          echo "============================================"',
+    );
+  });
+
   it("runs dependency policy guards in PR CI preflight", () => {
     const workflow = readFileSync(".github/workflows/ci.yml", "utf8");
     const preflightGuards = workflow.slice(
