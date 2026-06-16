@@ -40,7 +40,7 @@ const TEST_SESSION_CONFIG = {
 
 function makePoolMock() {
   return {
-    acquire: vi.fn(),
+    acquire: vi.fn<CopilotClientPool["acquire"]>(),
     invalidate: vi.fn(),
     release: vi.fn(),
     dispose: vi.fn().mockResolvedValue([]),
