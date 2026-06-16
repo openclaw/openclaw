@@ -101,9 +101,9 @@ Custom policy overlays cannot weaken the default decision unless `allowPolicyWea
 
 ## Before-Tool-Call Adapter
 
-`createSecurityMatrixBeforeToolCallAuditEvent` converts explicit before-tool-call facts into the shared audit event shape. It defaults the actor to `agent`, the approval state to `not_required`, and the operator policy to `unknown` when the caller does not supply stronger runtime facts.
+`createSecurityMatrixBeforeToolCallAuditEvent` converts explicit before-tool-call facts into the shared audit event shape. It defaults the actor to `agent`, the approval state to `not_required`, and the operator policy to `unknown` when the caller does not supply stronger runtime facts. When the approval state is later passed as `undefined` to the low-level evaluator, the evaluator normalizes it to `none`.
 
-`isSecurityMatrixBeforeToolCallAuditEnabled` defines the future opt-in config gate shape: `security.matrix.audit.enabled=true`. The adapter does not read global config, emit diagnostics, block, request confirmation, or mutate execution by itself.
+`isSecurityMatrixBeforeToolCallAuditEnabled` defines the future opt-in config gate shape: `security.matrix.audit.enabled=true`. The adapter does not read global config, emit diagnostics, block, request confirmation, or mutate execution by itself. No runtime diagnostic emission or enforcement is wired in this PR.
 
 ## Example Evaluations
 

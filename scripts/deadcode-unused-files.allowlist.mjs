@@ -1,14 +1,7 @@
 // Intentional Knip unused-file findings. These are dynamic entrypoints,
 // generated/build inputs, manifest-discovered plugin surfaces, live-test
 // helpers, or package bridge files that static production scanning cannot see.
-export const KNIP_UNUSED_FILE_ALLOWLIST = [
-  "src/security/security-matrix/before-tool-call.ts",
-  "src/security/security-matrix/default-policy.ts",
-  "src/security/security-matrix/evaluate.ts",
-  "src/security/security-matrix/facts.ts",
-  "src/security/security-matrix/tool-capability.ts",
-  "src/security/security-matrix/types.ts",
-];
+export const KNIP_UNUSED_FILE_ALLOWLIST = [];
 
 // Knip can disagree across supported local/CI platforms for files that are
 // only reachable through test-only import graphs, sparse-checkout proof
@@ -16,6 +9,12 @@ export const KNIP_UNUSED_FILE_ALLOWLIST = [
 // package bridge files. Ignore these when reported, but do not require them
 // to be reported.
 export const KNIP_OPTIONAL_UNUSED_FILE_ALLOWLIST = [
+  "src/security/security-matrix/before-tool-call.ts",
+  "src/security/security-matrix/default-policy.ts",
+  "src/security/security-matrix/evaluate.ts",
+  "src/security/security-matrix/facts.ts",
+  "src/security/security-matrix/tool-capability.ts",
+  "src/security/security-matrix/types.ts",
   "extensions/acpx/src/runtime-internals/mcp-command-line.mjs",
   "extensions/acpx/src/runtime-internals/mcp-proxy.mjs",
   "extensions/canvas/src/host/a2ui-app/bootstrap.js",
