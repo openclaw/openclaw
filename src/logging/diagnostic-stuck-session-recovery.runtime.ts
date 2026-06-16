@@ -215,6 +215,7 @@ export async function recoverStuckDiagnosticSession(
           settleMs: STUCK_SESSION_ABORT_SETTLE_MS,
           forceClear: true,
           reason: "stuck_recovery",
+          abortReason: "stuck_recovery",
         });
         aborted = result.aborted;
         drained = result.drained;

@@ -162,7 +162,10 @@ import {
   resolveBootstrapPromptTruncationWarningMode,
   resolveBootstrapTotalMaxChars,
 } from "../../embedded-agent-helpers.js";
-import { countActiveToolExecutions } from "../../embedded-agent-subscribe.handlers.tools.js";
+import {
+  countActivePotentialSideEffectToolExecutions,
+  countActiveToolExecutions,
+} from "../../embedded-agent-subscribe.handlers.tools.js";
 import { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
 import { isSignalTimeoutReason } from "../../failover-error.js";
 import { runAgentEndSideEffects } from "../../harness/agent-end-side-effects.js";
@@ -508,6 +511,7 @@ import {
   buildRuntimeContextCustomMessage,
   resolveRuntimeContextPromptParts,
 } from "./runtime-context-prompt.js";
+import { classifyStuckRecoveryAbort } from "./stuck-recovery-abort.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 export {
@@ -3144,6 +3148,7 @@ export async function runEmbeddedAttempt(
         );
       }
       let diagnosticModelCallSeq = 0;
+      let modelCallStartedForStuckRecovery = false;
       activeSession.agent.streamFn = wrapStreamFnWithDiagnosticModelCallEvents(
         activeSession.agent.streamFn,
         {
@@ -3167,6 +3172,7 @@ export async function runEmbeddedAttempt(
           contentCapture: resolveDiagnosticModelContentCapturePolicy(params.config),
           nextCallId: () => `${params.runId}:model:${(diagnosticModelCallSeq += 1)}`,
           onStarted: () => {
+            modelCallStartedForStuckRecovery = true;
             params.onExecutionPhase?.({
               phase: "model_call_started",
               provider: params.provider,
@@ -3712,9 +3718,22 @@ export async function runEmbeddedAttempt(
 
       const abortActiveRunExternally = (reason?: EmbeddedAgentAbortReason) => {
         if (reason === "stuck_recovery") {
-          idleTimedOut = true;
-          abortRun(true, makeTimeoutAbortReason());
-          return;
+          const classification = classifyStuckRecoveryAbort({
+            modelCallStarted: modelCallStartedForStuckRecovery,
+            activePotentialSideEffectToolExecutions: countActivePotentialSideEffectToolExecutions(
+              params.runId,
+            ),
+          });
+          if (classification === "model_idle_timeout") {
+            idleTimedOut = true;
+            abortRun(true, makeTimeoutAbortReason());
+            return;
+          }
+          if (classification === "tool_execution_timeout") {
+            timedOutDuringToolExecution = true;
+            abortRun(true, makeTimeoutAbortReason());
+            return;
+          }
         }
         externalAbort = true;
         params.onAttemptAbort?.();
