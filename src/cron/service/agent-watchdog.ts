@@ -129,7 +129,11 @@ export function createCronAgentWatchdog(params: {
       startPreExecutionTimeout();
       return;
     }
-    if (stage === "execution" || info.firstModelCallStarted) {
+    // Any phase notification proves the runner is alive and making progress.
+    // Clear the pre-execution timeout even for pre_execution stages so that
+    // conditionally-emitted phases (e.g. before_agent_reply gated behind
+    // hookRunner.hasHooks) do not cause false timeouts.
+    if (stage !== undefined || info.firstModelCallStarted) {
       state = "executing";
       clearPreExecutionTimeout();
     }
