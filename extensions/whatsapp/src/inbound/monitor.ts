@@ -61,6 +61,7 @@ import {
 } from "./durable-receive.js";
 import {
   describeReplyContext,
+  extractExternalAdReplyContext,
   extractLocationData,
   extractContactContext,
   extractMediaPlaceholder,
@@ -1001,6 +1002,7 @@ export async function attachWebInboxToSocket(
     body: string;
     location?: ReturnType<typeof extractLocationData>;
     contactContext?: ReturnType<typeof extractContactContext>;
+    externalAdReplyContext?: ReturnType<typeof extractExternalAdReplyContext>;
     replyContext?: ReturnType<typeof describeReplyContext>;
     mediaPath?: string;
     mediaType?: string;
@@ -1011,6 +1013,7 @@ export async function attachWebInboxToSocket(
     const location = extractLocationData(msg.message ?? undefined);
     const locationText = location ? formatLocationText(location) : undefined;
     const contactContext = extractContactContext(msg.message ?? undefined);
+    const externalAdReplyContext = extractExternalAdReplyContext(msg.message ?? undefined);
     let body = extractText(msg.message ?? undefined);
     if (locationText) {
       body = [body, locationText].filter(Boolean).join("\n").trim();
@@ -1055,6 +1058,7 @@ export async function attachWebInboxToSocket(
       body,
       location: location ?? undefined,
       contactContext,
+      externalAdReplyContext,
       replyContext,
       mediaPath,
       mediaType,
@@ -1137,6 +1141,28 @@ export async function attachWebInboxToSocket(
             mentions: groupMentions,
           }
         : undefined;
+    const untrustedStructuredContext = [
+      ...(enriched.contactContext
+        ? [
+            {
+              label: "WhatsApp contact",
+              source: "whatsapp",
+              type: enriched.contactContext.kind,
+              payload: enriched.contactContext,
+            },
+          ]
+        : []),
+      ...(enriched.externalAdReplyContext
+        ? [
+            {
+              label: "WhatsApp external ad reply",
+              source: "whatsapp",
+              type: "external_ad_reply",
+              payload: enriched.externalAdReplyContext,
+            },
+          ]
+        : []),
+    ];
     const inboundMessage: QueuedInboundMessage = withDeprecatedWebInboundMessageFlatAliases({
       admission: inbound.access.admission,
       event: {
@@ -1146,16 +1172,8 @@ export async function attachWebInboxToSocket(
       payload: {
         body: enriched.body,
         location: enriched.location ?? undefined,
-        untrustedStructuredContext: enriched.contactContext
-          ? [
-              {
-                label: "WhatsApp contact",
-                source: "whatsapp",
-                type: enriched.contactContext.kind,
-                payload: enriched.contactContext,
-              },
-            ]
-          : undefined,
+        untrustedStructuredContext:
+          untrustedStructuredContext.length > 0 ? untrustedStructuredContext : undefined,
         media,
       },
       platform: {
