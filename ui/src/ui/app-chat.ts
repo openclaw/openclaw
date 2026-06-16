@@ -25,6 +25,10 @@ import {
   type ChatInputHistoryState,
 } from "./chat/input-history.ts";
 import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
+import {
+  readChatMessageCacheSessionDefaults,
+  resolveEquivalentChatMessageCacheKeys,
+} from "./chat/session-message-cache-keys.ts";
 import type { ChatSideResult } from "./chat/side-result.ts";
 import { executeSlashCommand } from "./chat/slash-command-executor.ts";
 import {
@@ -1942,6 +1946,18 @@ async function dispatchSlashCommand(
   scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
 }
 
+function clearCachedChatMessagesForSession(host: ChatHost, sessionKey: string) {
+  if (!host.chatMessagesBySession) {
+    return;
+  }
+  const messagesBySession = { ...host.chatMessagesBySession };
+  const defaults = readChatMessageCacheSessionDefaults(host);
+  for (const cacheKey of resolveEquivalentChatMessageCacheKeys(sessionKey, defaults)) {
+    delete messagesBySession[cacheKey];
+  }
+  host.chatMessagesBySession = messagesBySession;
+}
+
 async function clearChatHistory(host: ChatHost) {
   if (!host.client || !host.connected) {
     return;
@@ -1953,6 +1969,7 @@ async function clearChatHistory(host: ChatHost) {
       ...scopedAgentParamsForSession(host, host.sessionKey),
     });
     host.chatMessages = [];
+    clearCachedChatMessagesForSession(host, host.sessionKey);
     host.chatSideResult = null;
     reconcileChatRunLifecycle(host as unknown as Parameters<typeof reconcileChatRunLifecycle>[0], {
       outcome: hadActiveRun ? "interrupted" : undefined,

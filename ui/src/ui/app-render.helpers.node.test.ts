@@ -1228,6 +1228,176 @@ describe("switchChatSession", () => {
       agentId: undefined,
     });
   });
+
+  it("restores visible messages when switching back before history reloads", () => {
+    const mainMessages = [{ role: "assistant", content: [{ type: "text", text: "main report" }] }];
+    const otherMessages = [{ role: "assistant", content: [{ type: "text", text: "other reply" }] }];
+    const settings = createSettings();
+    const state = {
+      sessionKey: "main",
+      chatMessage: "",
+      chatAttachments: [],
+      chatMessages: mainMessages,
+      chatToolMessages: [],
+      chatStreamSegments: [],
+      chatThinkingLevel: null,
+      chatStream: null,
+      chatSideResult: null,
+      lastError: null,
+      compactionStatus: null,
+      fallbackStatus: null,
+      chatAvatarUrl: null,
+      chatQueue: [],
+      chatQueueBySession: {},
+      chatMessagesBySession: {},
+      chatRunId: null,
+      sessionsShowArchived: false,
+      chatSideResultTerminalRuns: new Set<string>(),
+      chatStreamStartedAt: null,
+      settings,
+      announceSessionSwitch: vi.fn(),
+      applySettings(next: typeof settings) {
+        state.settings = next;
+      },
+      loadAssistantIdentity: vi.fn(),
+      resetToolStream: vi.fn(),
+      resetChatScroll: vi.fn(),
+      resetChatInputHistoryNavigation: vi.fn(),
+    } as unknown as AppViewState;
+
+    refreshChatAvatarMock.mockResolvedValue(undefined);
+    refreshSlashCommandsMock.mockResolvedValue(undefined);
+    loadChatHistoryMock.mockResolvedValue(undefined);
+    loadSessionsMock.mockResolvedValue(undefined);
+
+    switchChatSession(state, "agent:main:other");
+    state.chatMessages = otherMessages;
+
+    switchChatSession(state, "main");
+
+    expect(state.chatMessages).toEqual(mainMessages);
+    expect((state as unknown as Record<string, unknown>).chatMessagesBySession).toMatchObject({
+      "agent:main:other": otherMessages,
+    });
+  });
+
+  it("restores visible messages across configured default-session aliases", () => {
+    const mainMessages = [{ role: "assistant", content: [{ type: "text", text: "ops report" }] }];
+    const otherMessages = [{ role: "assistant", content: [{ type: "text", text: "other reply" }] }];
+    const settings = createSettings();
+    const state = {
+      sessionKey: "home",
+      chatMessage: "",
+      chatAttachments: [],
+      chatMessages: mainMessages,
+      chatToolMessages: [],
+      chatStreamSegments: [],
+      chatThinkingLevel: null,
+      chatStream: null,
+      chatSideResult: null,
+      lastError: null,
+      compactionStatus: null,
+      fallbackStatus: null,
+      chatAvatarUrl: null,
+      chatQueue: [],
+      chatQueueBySession: {},
+      chatMessagesBySession: {},
+      chatRunId: null,
+      sessionsShowArchived: false,
+      chatSideResultTerminalRuns: new Set<string>(),
+      chatStreamStartedAt: null,
+      settings,
+      announceSessionSwitch: vi.fn(),
+      applySettings(next: typeof settings) {
+        state.settings = next;
+      },
+      loadAssistantIdentity: vi.fn(),
+      resetToolStream: vi.fn(),
+      resetChatScroll: vi.fn(),
+      resetChatInputHistoryNavigation: vi.fn(),
+      hello: {
+        snapshot: {
+          sessionDefaults: {
+            defaultAgentId: "ops",
+            mainKey: "home",
+          },
+        },
+      },
+    } as unknown as AppViewState;
+
+    refreshChatAvatarMock.mockResolvedValue(undefined);
+    refreshSlashCommandsMock.mockResolvedValue(undefined);
+    loadChatHistoryMock.mockResolvedValue(undefined);
+    loadSessionsMock.mockResolvedValue(undefined);
+
+    switchChatSession(state, "agent:ops:other");
+    state.chatMessages = otherMessages;
+
+    switchChatSession(state, "agent:ops:home");
+
+    expect(state.chatMessages).toEqual(mainMessages);
+    const messagesBySession = (state as unknown as Record<string, unknown>)
+      .chatMessagesBySession as Record<string, unknown[]>;
+    expect(messagesBySession.home).toEqual(mainMessages);
+    expect(messagesBySession["agent:main:home"]).toEqual(mainMessages);
+    expect(messagesBySession["agent:ops:main"]).toEqual(mainMessages);
+    expect(messagesBySession["agent:ops:other"]).toEqual(otherMessages);
+  });
+
+  it("restores visible messages across plain and canonical non-main keys", () => {
+    const projectMessages = [
+      { role: "assistant", content: [{ type: "text", text: "project report" }] },
+    ];
+    const mainMessages = [{ role: "assistant", content: [{ type: "text", text: "main reply" }] }];
+    const settings = createSettings();
+    const state = {
+      sessionKey: "project",
+      chatMessage: "",
+      chatAttachments: [],
+      chatMessages: projectMessages,
+      chatToolMessages: [],
+      chatStreamSegments: [],
+      chatThinkingLevel: null,
+      chatStream: null,
+      chatSideResult: null,
+      lastError: null,
+      compactionStatus: null,
+      fallbackStatus: null,
+      chatAvatarUrl: null,
+      chatQueue: [],
+      chatQueueBySession: {},
+      chatMessagesBySession: {},
+      chatRunId: null,
+      sessionsShowArchived: false,
+      chatSideResultTerminalRuns: new Set<string>(),
+      chatStreamStartedAt: null,
+      settings,
+      announceSessionSwitch: vi.fn(),
+      applySettings(next: typeof settings) {
+        state.settings = next;
+      },
+      loadAssistantIdentity: vi.fn(),
+      resetToolStream: vi.fn(),
+      resetChatScroll: vi.fn(),
+      resetChatInputHistoryNavigation: vi.fn(),
+    } as unknown as AppViewState;
+
+    refreshChatAvatarMock.mockResolvedValue(undefined);
+    refreshSlashCommandsMock.mockResolvedValue(undefined);
+    loadChatHistoryMock.mockResolvedValue(undefined);
+    loadSessionsMock.mockResolvedValue(undefined);
+
+    switchChatSession(state, "main");
+    state.chatMessages = mainMessages;
+
+    switchChatSession(state, "agent:main:project");
+
+    expect(state.chatMessages).toEqual(projectMessages);
+    const messagesBySession = (state as unknown as Record<string, unknown>)
+      .chatMessagesBySession as Record<string, unknown[]>;
+    expect(messagesBySession.project).toEqual(projectMessages);
+    expect(messagesBySession["agent:main:project"]).toEqual(projectMessages);
+  });
 });
 
 describe("dismissChatError", () => {

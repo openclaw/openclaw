@@ -138,6 +138,138 @@ describe("handleChatEvent", () => {
     expect(handleChatEvent(state, payload)).toBe(null);
   });
 
+  it("caches final messages for a switched-away session", () => {
+    const visibleMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "main visible" }],
+    };
+    const state = createState({
+      sessionKey: "main",
+      chatMessages: [visibleMessage],
+      chatMessagesBySession: {},
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "other",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "other final" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe(null);
+    expect(state.chatMessages).toEqual([visibleMessage]);
+    expect(state.chatMessagesBySession?.other).toEqual([payload.message]);
+  });
+
+  it.each([
+    {
+      name: "canonical default-session finals under the main alias",
+      activeSessionKey: "agent:main:other",
+      payloadSessionKey: "agent:main:main",
+      cacheKeys: ["main", "agent:main:main"],
+      withConfiguredDefaults: false,
+    },
+    {
+      name: "configured default-session finals under runtime aliases",
+      activeSessionKey: "agent:ops:other",
+      payloadSessionKey: "agent:ops:home",
+      cacheKeys: ["home", "agent:main:home", "agent:ops:main", "agent:ops:home"],
+      withConfiguredDefaults: true,
+    },
+    {
+      name: "canonical non-main finals under the plain session key",
+      activeSessionKey: "main",
+      payloadSessionKey: "agent:main:project",
+      cacheKeys: ["project", "agent:main:project"],
+      withConfiguredDefaults: false,
+    },
+  ])(
+    "caches $name",
+    ({ activeSessionKey, payloadSessionKey, cacheKeys, withConfiguredDefaults }) => {
+      const state = createState({ sessionKey: activeSessionKey, chatMessagesBySession: {} });
+      const payload: ChatEventPayload = {
+        runId: "run-1",
+        sessionKey: payloadSessionKey,
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "cached final" }],
+        },
+      };
+
+      if (withConfiguredDefaults) {
+        (state as Record<string, unknown>).hello = {
+          snapshot: {
+            sessionDefaults: {
+              defaultAgentId: "ops",
+              mainKey: "home",
+            },
+          },
+        };
+      }
+
+      expect(handleChatEvent(state, payload)).toBe(null);
+      for (const cacheKey of cacheKeys) {
+        expect(state.chatMessagesBySession?.[cacheKey]).toEqual([payload.message]);
+      }
+    },
+  );
+
+  it.each([
+    {
+      name: "configured default-session",
+      activeSessionKey: "home",
+      payloadSessionKey: "agent:main:home",
+      text: "Live reply",
+      withConfiguredDefaults: true,
+      cacheKey: "agent:main:home",
+    },
+    {
+      name: "canonical non-main",
+      activeSessionKey: "project",
+      payloadSessionKey: "agent:main:project",
+      text: "Project reply",
+      withConfiguredDefaults: false,
+      cacheKey: "agent:main:project",
+    },
+  ])(
+    "caches $name final events through equivalent aliases when session is not active",
+    ({ activeSessionKey, payloadSessionKey, text, withConfiguredDefaults, cacheKey }) => {
+      const state = createState({
+        sessionKey: activeSessionKey,
+        chatRunId: null,
+        chatMessages: [],
+        chatMessagesBySession: {},
+      });
+      const payload: ChatEventPayload = {
+        runId: "run-1",
+        sessionKey: payloadSessionKey,
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text }],
+        },
+      };
+
+      if (withConfiguredDefaults) {
+        (state as Record<string, unknown>).hello = {
+          snapshot: {
+            sessionDefaults: {
+              defaultAgentId: "ops",
+              mainKey: "home",
+            },
+          },
+        };
+      }
+
+      expect(handleChatEvent(state, payload)).toBe(null);
+      expect(state.chatMessages).toEqual([]);
+      expect(state.chatMessagesBySession?.[cacheKey]).toEqual([payload.message]);
+    },
+  );
+
   it("does not arm stale active-row suppression for an unowned selected-session final", () => {
     const state = createState({ sessionKey: "main" }) as ChatState & {
       lastLocalTerminalReconcile?: unknown;

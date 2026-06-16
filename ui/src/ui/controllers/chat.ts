@@ -7,6 +7,11 @@ import {
 import { extractText } from "../chat/message-extract.ts";
 import { reconcileChatRunLifecycle } from "../chat/run-lifecycle.ts";
 import {
+  chatMessageCacheSessionKeysMatch,
+  readChatMessageCacheSessionDefaults,
+  resolveEquivalentChatMessageCacheKeys,
+} from "../chat/session-message-cache-keys.ts";
+import {
   appendTerminalAssistantMessage,
   clearToolStreamSegments,
   currentLiveToolCallIds,
@@ -390,6 +395,7 @@ export type ChatState = {
   currentSessionId?: string | null;
   chatLoading: boolean;
   chatMessages: unknown[];
+  chatMessagesBySession?: Record<string, unknown[]>;
   chatThinkingLevel: string | null;
   chatSending: boolean;
   chatMessage: string;
@@ -575,6 +581,34 @@ function recordChatHistoryTiming(
   );
 }
 
+function setCachedChatMessages(state: ChatState, sessionKey: string, messages: unknown[]) {
+  if (!state.chatMessagesBySession) {
+    return;
+  }
+  const messagesBySession = { ...state.chatMessagesBySession };
+  if (messages.length > 0) {
+    messagesBySession[sessionKey] = [...messages];
+  } else {
+    delete messagesBySession[sessionKey];
+  }
+  state.chatMessagesBySession = messagesBySession;
+}
+
+function appendCachedChatMessage(state: ChatState, sessionKey: string, message: unknown) {
+  const defaults = readChatMessageCacheSessionDefaults(state);
+  for (const cacheKey of resolveEquivalentChatMessageCacheKeys(sessionKey, defaults)) {
+    const current = state.chatMessagesBySession?.[cacheKey] ?? [];
+    setCachedChatMessages(state, cacheKey, [...current, message]);
+  }
+}
+
+function replaceCachedChatMessages(state: ChatState, sessionKey: string, messages: unknown[]) {
+  const defaults = readChatMessageCacheSessionDefaults(state);
+  for (const cacheKey of resolveEquivalentChatMessageCacheKeys(sessionKey, defaults)) {
+    setCachedChatMessages(state, cacheKey, messages);
+  }
+}
+
 export async function loadChatHistory(
   state: ChatState,
   opts: LoadChatHistoryOptions = {},
@@ -720,6 +754,7 @@ async function loadChatHistoryUncached(
     if (lateOptimisticTail.length > 0) {
       state.chatMessages = [...state.chatMessages, ...lateOptimisticTail];
     }
+    replaceCachedChatMessages(state, sessionKey, state.chatMessages);
     state.currentSessionId =
       typeof res.sessionInfo?.sessionId === "string" && res.sessionInfo.sessionId.trim()
         ? res.sessionInfo.sessionId
@@ -1236,6 +1271,12 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     typeof payload.runId === "string" &&
     payload.runId === state.chatRunId;
   if (!sessionMatches && !activeRunMatches) {
+    if (payload.state === "final") {
+      const finalMessage = normalizeFinalAssistantMessage(payload.message);
+      if (finalMessage && !shouldHideAssistantChatMessage(finalMessage)) {
+        appendCachedChatMessage(state, payload.sessionKey, finalMessage);
+      }
+    }
     return null;
   }
   if (!state.chatRunId && sessionMatches && typeof payload.runId === "string") {

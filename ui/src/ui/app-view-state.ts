@@ -141,6 +141,7 @@ export type AppViewState = {
   announceSessionSwitch?: (sessionKey: string, label: string) => void;
   chatQueue: ChatQueueItem[];
   chatQueueBySession: Record<string, ChatQueueItem[]>;
+  chatMessagesBySession: Record<string, unknown[]>;
   chatLocalInputHistoryBySession: Record<string, Array<{ text: string; ts: number }>>;
   chatInputHistorySessionKey: string | null;
   chatInputHistoryItems: string[] | null;

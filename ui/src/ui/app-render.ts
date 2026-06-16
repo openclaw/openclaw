@@ -35,6 +35,10 @@ import {
   resolvePreferredSessionForAgent,
 } from "./chat/session-controls.ts";
 import {
+  readChatMessageCacheSessionDefaults,
+  resolveEquivalentChatMessageCacheKeys,
+} from "./chat/session-message-cache-keys.ts";
+import {
   controlUiNowMs,
   recordControlUiRenderTiming,
   roundedControlUiDurationMs,
@@ -3584,6 +3588,17 @@ export function renderApp(state: AppViewState) {
                         ...scopedAgentParamsForSession(state, state.sessionKey),
                       });
                       state.chatMessages = [];
+                      {
+                        const messagesBySession = { ...state.chatMessagesBySession };
+                        const defaults = readChatMessageCacheSessionDefaults(state);
+                        for (const cacheKey of resolveEquivalentChatMessageCacheKeys(
+                          state.sessionKey,
+                          defaults,
+                        )) {
+                          delete messagesBySession[cacheKey];
+                        }
+                        state.chatMessagesBySession = messagesBySession;
+                      }
                       state.chatSideResult = null;
                       reconcileChatRunLifecycle(
                         state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0],
