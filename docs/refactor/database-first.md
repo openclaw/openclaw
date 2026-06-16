@@ -878,9 +878,9 @@ sessionId}` and session key context.
 - Plugin runtime no longer exposes `api.runtime.agent.session.resolveTranscriptLocatorPath`;
   plugin code uses SQLite row helpers and scope values.
 - The public `session-store-runtime` SDK surface now only exports session row
-  and transcript row helpers. Raw SQLite database open/path and close/reset
-  helpers live in the focused `sqlite-runtime` SDK surface, so plugin tests no
-  longer pull the deprecated broad testing barrel for database cleanup.
+  and transcript row helpers. Focused SQLite schema/path/transaction helpers
+  live in `sqlite-runtime`; raw open/close/reset helpers remain local-only for
+  first-party tests.
 - Legacy `.jsonl` trajectory/checkpoint filename classifiers now live in the
   doctor legacy session-file module. Core session validation no longer imports
   file-artifact helpers to decide normal SQLite session ids.
