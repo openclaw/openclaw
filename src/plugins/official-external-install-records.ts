@@ -34,7 +34,7 @@ function resolveRecordedClawHubPackageNames(record: PluginInstallRecord): string
   );
 }
 
-function isOfficialClawHubInstallRecord(record: PluginInstallRecord): boolean {
+export function isOfficialClawHubInstallRecord(record: PluginInstallRecord): boolean {
   if (record.source !== "clawhub" || record.clawhubChannel !== "official") {
     return false;
   }

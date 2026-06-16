@@ -751,6 +751,133 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins[0]?.trustedOfficialInstall).toBeUndefined();
   });
 
+  it("trusts ClawHub official-channel installs for npm-only catalog entries", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "msteams", configSchema: { type: "object" } });
+
+    const registry = loadPluginManifestRegistry({
+      installRecords: {
+        msteams: {
+          source: "clawhub",
+          clawhubUrl: "https://clawhub.ai",
+          clawhubPackage: "@openclaw/msteams",
+          clawhubChannel: "official",
+          clawhubFamily: "code-plugin",
+          artifactKind: "npm-pack",
+          artifactFormat: "tgz",
+          npmIntegrity: "sha512-msteams",
+          installPath: dir,
+          version: "1.0.0",
+        },
+      },
+      candidates: [
+        createPluginCandidate({
+          idHint: "msteams",
+          rootDir: dir,
+          packageName: "@openclaw/msteams",
+          origin: "global",
+        }),
+      ],
+    });
+
+    expect(registry.plugins[0]?.trustedOfficialInstall).toBe(true);
+  });
+
+  it("does not trust ClawHub community or private channel installs", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "copilot", configSchema: { type: "object" } });
+
+    // Test community channel - should NOT be trusted
+    const registryCommunity = loadPluginManifestRegistry({
+      installRecords: {
+        copilot: {
+          source: "clawhub",
+          clawhubUrl: "https://clawhub.ai",
+          clawhubPackage: "@openclaw/copilot",
+          clawhubChannel: "community",
+          clawhubFamily: "code-plugin",
+          artifactKind: "npm-pack",
+          artifactFormat: "tgz",
+          npmIntegrity: "sha512-community",
+          installPath: dir,
+          version: "1.0.0",
+        },
+      },
+      candidates: [
+        createPluginCandidate({
+          idHint: "copilot",
+          rootDir: dir,
+          packageName: "@openclaw/copilot",
+          origin: "global",
+        }),
+      ],
+    });
+
+    expect(registryCommunity.plugins[0]?.trustedOfficialInstall).toBeUndefined();
+
+    // Test private channel - should NOT be trusted
+    const registryPrivate = loadPluginManifestRegistry({
+      installRecords: {
+        copilot: {
+          source: "clawhub",
+          clawhubUrl: "https://clawhub.ai",
+          clawhubPackage: "@openclaw/copilot",
+          clawhubChannel: "private",
+          clawhubFamily: "code-plugin",
+          artifactKind: "npm-pack",
+          artifactFormat: "tgz",
+          npmIntegrity: "sha512-private",
+          installPath: dir,
+          version: "1.0.0",
+        },
+      },
+      candidates: [
+        createPluginCandidate({
+          idHint: "copilot",
+          rootDir: dir,
+          packageName: "@openclaw/copilot",
+          origin: "global",
+        }),
+      ],
+    });
+
+    expect(registryPrivate.plugins[0]?.trustedOfficialInstall).toBeUndefined();
+  });
+
+  it("does not trust ClawHub official-channel installs from custom ClawHub URLs", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "msteams", configSchema: { type: "object" } });
+
+    // Test with a custom ClawHub server (not the official https://clawhub.ai)
+    const registryCustomUrl = loadPluginManifestRegistry({
+      installRecords: {
+        msteams: {
+          source: "clawhub",
+          clawhubUrl: "https://custom-clawhub.example.com",
+          clawhubPackage: "@openclaw/msteams",
+          clawhubChannel: "official",
+          clawhubFamily: "code-plugin",
+          artifactKind: "npm-pack",
+          artifactFormat: "tgz",
+          npmIntegrity: "sha512-custom",
+          installPath: dir,
+          version: "1.0.0",
+        },
+      },
+      candidates: [
+        createPluginCandidate({
+          idHint: "msteams",
+          rootDir: dir,
+          packageName: "@openclaw/msteams",
+          origin: "global",
+        }),
+      ],
+    });
+
+    // Should NOT be trusted because the ClawHub URL is not the official one
+    expect(registryCustomUrl.plugins[0]?.trustedOfficialInstall).toBeUndefined();
+  });
+
   it("preserves provider auth env metadata from plugin manifests", () => {
     const dir = makeTempDir();
     writeManifest(dir, {

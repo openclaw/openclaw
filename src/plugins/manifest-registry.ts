@@ -55,6 +55,7 @@ import {
   type PluginPackageInstall,
 } from "./manifest.js";
 import { checkMinHostVersion } from "./min-host-version.js";
+import { isOfficialClawHubInstallRecord } from "./official-external-install-records.js";
 import {
   getOfficialExternalPluginCatalogEntryForPackage,
   getOfficialExternalPluginCatalogManifest,
@@ -849,11 +850,24 @@ function isTrustedOfficialPluginInstall(params: {
   }
   if (
     installRecord.source === "clawhub" &&
-    officialInstall?.clawhubSpec &&
     installRecord.clawhubChannel === "official" &&
+    isOfficialClawHubInstallRecord(installRecord) &&
     (installRecord.clawhubPackage === packageName ||
-      installRecord.spec === officialInstall.clawhubSpec ||
-      installRecord.resolvedSpec === officialInstall.clawhubSpec)
+      (officialInstall?.clawhubSpec &&
+        (installRecord.spec === officialInstall.clawhubSpec ||
+          installRecord.resolvedSpec === officialInstall.clawhubSpec)))
+  ) {
+    return true;
+  }
+  // Trust ClawHub official-channel installs for npm-only catalog entries
+  // when the package name matches the official catalog.
+  if (
+    installRecord.source === "clawhub" &&
+    installRecord.clawhubChannel === "official" &&
+    isOfficialClawHubInstallRecord(installRecord) &&
+    !officialInstall?.clawhubSpec &&
+    officialInstall?.npmSpec &&
+    installRecord.clawhubPackage === packageName
   ) {
     return true;
   }
