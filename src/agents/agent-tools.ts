@@ -14,7 +14,7 @@ import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import { resolveExecCommandHighlighting } from "../config/exec-command-highlighting.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveNodeScopedToolPolicy } from "../gateway/session-node-id-registry.js";
+import { resolveNodeScopedToolPolicy } from "../gateway/node-tool-policy.js";
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import {
@@ -451,6 +451,11 @@ export function createOpenClawCodingTools(options?: {
   oneShotCliRun?: boolean;
   /** Stable run identifier for this agent invocation. */
   runId?: string;
+  /**
+   * Authenticated node hosting this run (node-originated agent.request turns).
+   * Run-scoped; gates this turn's tools via gateway.tools.byNode.
+   */
+  hostingNodeId?: string;
   /** Diagnostic trace context for hook/log correlation during this run. */
   trace?: DiagnosticTraceContext;
   /** What initiated this run (for trigger-specific tool restrictions). */
@@ -937,7 +942,10 @@ export function createOpenClawCodingTools(options?: {
   // in-process builder (not resolveGatewayScopedTools), so the restriction must be
   // enforced here too; the shared helper keeps both paths identical. Restriction-
   // only: it can narrow the toolset, never escalate.
-  const { nodeAllow, nodeDeny } = resolveNodeScopedToolPolicy(options?.sessionKey, options?.config);
+  const { nodeAllow, nodeDeny } = resolveNodeScopedToolPolicy(
+    options?.hostingNodeId,
+    options?.config,
+  );
   const inheritedToolDenylist = [...pluginToolDenylist, ...nodeDeny];
   // Passed by reference to sessions_spawn and populated after the final policy
   // pass so child sessions inherit the actual parent tool surface.

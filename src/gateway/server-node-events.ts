@@ -47,7 +47,6 @@ import {
   sendDurableMessageBatch,
   updateSessionStore,
 } from "./server-node-events.runtime.js";
-import { setSessionHostingNodeId } from "./session-node-id-registry.js";
 
 const MAX_EXEC_EVENT_OUTPUT_CHARS = 180;
 const MAX_NOTIFICATION_EVENT_TEXT_CHARS = 120;
@@ -594,12 +593,13 @@ export const handleNodeEvent = async (
         );
       }
 
-      // Record the AUTHENTICATED node hosting this turn so the tool resolver can
-      // apply gateway.tools.byNode restrictions for it (restriction-only; the
-      // nodeId is from the node's authenticated connection, so it can't be forged).
-      setSessionHostingNodeId(canonicalKey, nodeId);
+      // Thread the AUTHENTICATED hosting node through this run (run-scoped, not a
+      // session-global map) so the tool resolver applies gateway.tools.byNode for
+      // it. Restriction-only; the nodeId comes from the node's authenticated
+      // connection, so a client cannot forge it.
       dispatchNodeAgentCommand(ctx, nodeId, {
         runId: sessionId,
+        hostingNodeId: nodeId,
         message,
         images,
         imageOrder,

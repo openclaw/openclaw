@@ -6,12 +6,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  resetSessionHostingNodeIdsForTest,
-  setSessionHostingNodeId,
-} from "../gateway/session-node-id-registry.js";
 import {
   findUnsupportedSchemaKeywords,
   GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS,
@@ -1604,50 +1600,48 @@ describe("createOpenClawCodingTools", () => {
   });
 
   // The embedded agent tool path is what a node-originated agent.request turn
-  // actually runs through (NOT resolveGatewayScopedTools), so gateway.tools.byNode
-  // must bite here. Keyed off the AUTHENTICATED hosting node recorded at dispatch.
-  describe("gateway.tools.byNode (authenticated hosting node restriction)", () => {
+  // runs through, so gateway.tools.byNode must bite here. The hosting node id is
+  // RUN-SCOPED (threaded via options.hostingNodeId), not a session-global lookup,
+  // so a node's policy never bleeds onto a later/concurrent turn for the session.
+  describe("gateway.tools.byNode (run-scoped hosting node restriction)", () => {
     const NODE = "node-browser-01";
     const SESSION = "agent:main:main";
-
-    beforeEach(() => resetSessionHostingNodeIdsForTest());
-    afterEach(() => resetSessionHostingNodeIdsForTest());
 
     function byNodeConfig(policy: { allow?: string[]; deny?: string[] }): OpenClawConfig {
       return { gateway: { tools: { byNode: { [NODE]: policy } } } };
     }
 
     it("intersects the embedded toolset to the hosting node's allow list", () => {
-      setSessionHostingNodeId(SESSION, NODE);
       const tools = createOpenClawCodingTools({
         sessionKey: SESSION,
+        hostingNodeId: NODE,
         config: byNodeConfig({ allow: ["read"] }),
       });
       expect(toolNameList(tools)).toEqual(["read"]);
     });
 
     it("cannot escalate: allowing an unavailable tool yields nothing extra", () => {
-      setSessionHostingNodeId(SESSION, NODE);
       const tools = createOpenClawCodingTools({
         sessionKey: SESSION,
+        hostingNodeId: NODE,
         config: byNodeConfig({ allow: ["read", "totally_not_a_real_tool"] }),
       });
       expect(toolNameList(tools)).toEqual(["read"]);
     });
 
     it("treats an explicit empty allow as no tools (fail-closed)", () => {
-      setSessionHostingNodeId(SESSION, NODE);
       const tools = createOpenClawCodingTools({
         sessionKey: SESSION,
+        hostingNodeId: NODE,
         config: byNodeConfig({ allow: [] }),
       });
       expect(toolNameList(tools)).toEqual([]);
     });
 
     it("removes the node's denied tools while leaving the rest", () => {
-      setSessionHostingNodeId(SESSION, NODE);
       const tools = createOpenClawCodingTools({
         sessionKey: SESSION,
+        hostingNodeId: NODE,
         config: byNodeConfig({ deny: ["exec"] }),
       });
       const names = new Set(toolNameList(tools));
@@ -1655,7 +1649,7 @@ describe("createOpenClawCodingTools", () => {
       expect(names.has("read")).toBe(true);
     });
 
-    it("is a no-op when no hosting node is recorded for the session", () => {
+    it("is a no-op when the run carries no hosting node", () => {
       const tools = createOpenClawCodingTools({
         sessionKey: SESSION,
         config: byNodeConfig({ allow: ["read"] }),
@@ -1666,9 +1660,9 @@ describe("createOpenClawCodingTools", () => {
     });
 
     it("is a no-op when the hosting node has no byNode entry", () => {
-      setSessionHostingNodeId(SESSION, "some-unconfigured-node");
       const tools = createOpenClawCodingTools({
         sessionKey: SESSION,
+        hostingNodeId: "some-unconfigured-node",
         config: byNodeConfig({ allow: ["read"] }),
       });
       const names = new Set(toolNameList(tools));
