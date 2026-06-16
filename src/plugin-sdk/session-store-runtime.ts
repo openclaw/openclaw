@@ -75,7 +75,7 @@ function toSessionAccessScope(params: SessionStoreReadParams): SessionAccessScop
 /**
  * @deprecated Use getSessionEntry/listSessionEntries for reads and
  * patchSessionEntry/upsertSessionEntry for writes. Whole-store helpers keep
- * the legacy mutable sessions.json shape and are compatibility escape hatches.
+ * the legacy mutable sessions.json shape only for pre-SQLite compatibility.
  */
 export const loadSessionStore = loadSessionStoreImpl;
 
@@ -141,14 +141,14 @@ export { resolveSessionStoreEntry } from "../config/sessions/store-entry.js";
 export { resolveSessionTranscriptPathInDir, resolveStorePath } from "../config/sessions/paths.js";
 /**
  * @deprecated Use getSessionEntry to read session metadata by agent/session
- * identity instead of resolving transcript file paths. File-shaped session
- * APIs are removed at the SQLite storage flip.
+ * identity instead of resolving transcript file paths. This file-shaped API is
+ * a deprecated pre-SQLite compatibility adapter, not a runtime storage path.
  */
 export { resolveSessionFilePath } from "../config/sessions/paths.js";
 /**
  * @deprecated Use patchSessionEntry/upsertSessionEntry to persist session
- * metadata by agent/session identity. File-shaped session APIs are removed at
- * the SQLite storage flip.
+ * metadata by agent/session identity. This file-shaped API is a deprecated
+ * pre-SQLite compatibility adapter, not a runtime storage path.
  */
 export { resolveAndPersistSessionFile } from "../config/sessions/session-file.js";
 export { readLatestAssistantTextFromSessionTranscript } from "../config/sessions/transcript.js";
@@ -162,8 +162,11 @@ export {
 } from "../config/sessions/store.js";
 /**
  * @deprecated Use patchSessionEntry/upsertSessionEntry for storage-neutral
- * writes. Whole-store helpers keep the legacy mutable sessions.json shape and
- * are removed at the SQLite storage flip.
+ * writes. Keep this whole-store adapter as one compatibility operation: the
+ * file backend owns the sessions.json writer, and a future SQLite bridge must
+ * diff before/after store shapes, apply changed/deleted rows in one write
+ * transaction, then publish updates after commit. Do not route this through
+ * independent per-entry accessors or make it a permanent storage path.
  */
 export { saveSessionStore, updateSessionStore } from "../config/sessions/store.js";
 export {

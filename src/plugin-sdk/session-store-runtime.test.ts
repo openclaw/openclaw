@@ -8,6 +8,8 @@ import {
   listSessionEntries,
   patchSessionEntry,
   readSessionUpdatedAt,
+  saveSessionStore,
+  updateSessionStore,
   updateSessionStoreEntry,
   upsertSessionEntry,
 } from "./session-store-runtime.js";
@@ -113,6 +115,68 @@ describe("session-store-runtime compatibility surface", () => {
       providerOverride: "openai",
       sessionId: "session-1",
     });
+  });
+
+  it("keeps deprecated whole-store mutations grouped as one compatibility operation", async () => {
+    const firstSessionKey = "agent:main:first";
+    const secondSessionKey = "agent:main:second";
+    const deletedSessionKey = "agent:main:deleted";
+    await saveSessionStore(
+      storePath,
+      {
+        [firstSessionKey]: {
+          sessionId: "session-1",
+          updatedAt: 10,
+        },
+        [secondSessionKey]: {
+          sessionId: "session-2",
+          updatedAt: 10,
+        },
+        [deletedSessionKey]: {
+          sessionId: "session-3",
+          updatedAt: 10,
+        },
+      },
+      { skipMaintenance: true },
+    );
+
+    await expect(
+      updateSessionStore(
+        storePath,
+        (store) => {
+          const first = store[firstSessionKey];
+          const second = store[secondSessionKey];
+          if (!first || !second) {
+            throw new Error("seed session entries missing");
+          }
+          store[firstSessionKey] = {
+            ...first,
+            model: "gpt-5.5",
+            updatedAt: 20,
+          };
+          store[secondSessionKey] = {
+            ...second,
+            providerOverride: "openai",
+            updatedAt: 30,
+          };
+          delete store[deletedSessionKey];
+          return "whole-store-updated";
+        },
+        { skipMaintenance: true },
+      ),
+    ).resolves.toBe("whole-store-updated");
+
+    expect(getSessionEntry({ sessionKey: firstSessionKey, storePath })).toMatchObject({
+      model: "gpt-5.5",
+      sessionId: "session-1",
+      updatedAt: 20,
+    });
+    expect(getSessionEntry({ sessionKey: secondSessionKey, storePath })).toMatchObject({
+      providerOverride: "openai",
+      sessionId: "session-2",
+      updatedAt: 30,
+    });
+    expect(getSessionEntry({ sessionKey: deletedSessionKey, storePath })).toBeUndefined();
   });
 
   it("preserves requireWriteSuccess for critical session entry updates", async () => {
