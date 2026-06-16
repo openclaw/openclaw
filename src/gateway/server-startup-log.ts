@@ -64,6 +64,12 @@ export async function logGatewayStartup(params: {
     params.log.info("gateway: running in Nix mode (config managed externally)");
   }
 
+  // Surface configured channels whose backing plugin was filtered out of the
+  // startup plan (e.g. an untrusted global/npm-installed channel plugin), so an
+  // upgrade no longer silently drops a configured channel with no failure log.
+  // See https://github.com/openclaw/openclaw/issues/91873.
+  await warnAboutBlockedConfiguredChannels({ cfg: params.cfg, log: params.log });
+
   const enabledDangerousFlags =
     collectEnabledInsecureOrDangerousFlagsFromCurrentSnapshot(params.cfg) ??
     (await import("../security/dangerous-config-flags.js")).collectEnabledInsecureOrDangerousFlags(
@@ -74,6 +80,34 @@ export async function logGatewayStartup(params: {
       `security warning: dangerous config flags enabled: ${enabledDangerousFlags.join(", ")}. ` +
       "Run `openclaw security audit`.";
     params.log.warn(warning);
+  }
+}
+
+/**
+ * Emit a loud warning for every configured channel whose backing plugin cannot
+ * load at startup (e.g. installed-but-untrusted external channel plugin after an
+ * upgrade), instead of silently omitting it from the ready banner.
+ */
+async function warnAboutBlockedConfiguredChannels(params: {
+  cfg: OpenClawConfig;
+  log: { warn: (msg: string) => void };
+}): Promise<void> {
+  try {
+    const channelPluginRuntime = await import(
+      "../commands/doctor/shared/channel-plugin-blockers.js"
+    );
+    const hits = channelPluginRuntime.scanConfiguredChannelPluginBlockers(params.cfg);
+    if (hits.length === 0) {
+      return;
+    }
+    const warnings = channelPluginRuntime.collectConfiguredChannelPluginBlockerWarnings(hits);
+    for (const warning of warnings) {
+      // collectConfiguredChannelPluginBlockerWarnings returns leading "- " bullets
+      // for doctor output; strip them for a single-line gateway warning.
+      params.log.warn(`configured channel not loaded: ${warning.replace(/^[\s-]+/, "")}`);
+    }
+  } catch {
+    // Startup warnings are advisory; never let blocker detection break gateway boot.
   }
 }
 

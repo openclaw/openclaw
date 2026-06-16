@@ -2,11 +2,13 @@
 // summaries, bind URLs, ANSI output, and dangerous config reporting.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import * as manifestRegistry from "../plugins/manifest-registry.js";
 import { formatAgentModelStartupDetails, logGatewayStartup } from "./server-startup-log.js";
 
 describe("gateway startup log", () => {
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   it("warns when dangerous config flags are enabled", async () => {
@@ -196,5 +198,85 @@ describe("gateway startup log", () => {
     expect(listeningMessages).toEqual([
       "http server listening (3 plugins: alpha, beta, delta; 16.0s)",
     ]);
+  });
+
+  // Regression coverage for https://github.com/openclaw/openclaw/issues/91873:
+  // an upgrade-time trust gate would silently drop a configured Slack channel.
+  // Startup must now loudly warn instead of omitting it without any log.
+  it("warns loudly when a configured channel plugin was filtered from startup", async () => {
+    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
+      plugins: [
+        {
+          id: "slack",
+          origin: "global",
+          channels: ["slack"],
+          enabledByDefault: false,
+        },
+      ],
+      diagnostics: [],
+    } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+
+    const info = vi.fn();
+    const warn = vi.fn();
+
+    await logGatewayStartup({
+      cfg: {
+        // Old-style config that worked before the upgrade: Slack channel is
+        // configured with credentials, but plugins.allow is not set.
+        channels: {
+          slack: { enabled: true, botToken: "xoxb-FAKE", appToken: "xapp-FAKE" },
+        },
+      },
+      bindHost: "127.0.0.1",
+      loadedPluginIds: [],
+      port: 18789,
+      log: { info, warn },
+      isNixMode: false,
+    });
+
+    const channelWarnings = warn.mock.calls
+      .map((call) => String(call[0]))
+      .filter((message) => message.startsWith("configured channel not loaded:"));
+    expect(channelWarnings).toHaveLength(1);
+    expect(channelWarnings[0]).toContain("channels.slack");
+    expect(channelWarnings[0]).toContain("slack");
+    expect(channelWarnings[0]).toContain("plugins.entries.slack.enabled=true");
+  });
+
+  it("does not warn when a configured channel plugin is explicitly trusted", async () => {
+    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
+      plugins: [
+        {
+          id: "slack",
+          origin: "global",
+          channels: ["slack"],
+          enabledByDefault: false,
+        },
+      ],
+      diagnostics: [],
+    } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+
+    const info = vi.fn();
+    const warn = vi.fn();
+
+    await logGatewayStartup({
+      cfg: {
+        channels: {
+          slack: { enabled: true, botToken: "xoxb-FAKE", appToken: "xapp-FAKE" },
+        },
+        // The reporter's confirmed workaround makes the channel trusted again.
+        plugins: { allow: ["slack"] },
+      },
+      bindHost: "127.0.0.1",
+      loadedPluginIds: ["slack"],
+      port: 18789,
+      log: { info, warn },
+      isNixMode: false,
+    });
+
+    const channelWarnings = warn.mock.calls
+      .map((call) => String(call[0]))
+      .filter((message) => message.startsWith("configured channel not loaded:"));
+    expect(channelWarnings).toEqual([]);
   });
 });
