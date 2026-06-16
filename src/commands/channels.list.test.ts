@@ -114,11 +114,13 @@ function createCatalogEntry(
   };
 }
 
-function createInstalledOfficialExternalCatalogEntry(): ChannelPluginCatalogEntry {
+function createInstalledOfficialExternalCatalogEntry(
+  origin: "global" | "config" = "global",
+): ChannelPluginCatalogEntry {
   return {
     id: "wecom",
     pluginId: "wecom-openclaw-plugin",
-    origin: "global",
+    origin,
     trustedSourceLinkedOfficialInstall: true,
     meta: {
       id: "wecom",
@@ -269,43 +271,46 @@ describe("channels list", () => {
     });
   });
 
-  it("uses verified official docs metadata for an installed official external channel", async () => {
-    const runtime = createTestRuntime();
-    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([
-      createMockChannelPlugin({
-        id: "wecom",
-        label: "WeCom",
-        accountIds: ["default"],
-        docsPath: "/unverified-installed-plugin-docs",
-      }),
-    ]);
-    mocks.listTrustedChannelPluginCatalogEntries.mockReturnValue([
-      createInstalledOfficialExternalCatalogEntry(),
-    ]);
-    mocks.buildChannelAccountSnapshot.mockResolvedValue({
-      accountId: "default",
-      configured: true,
-      enabled: true,
-    });
-    mocks.readConfigFileSnapshot.mockResolvedValue({
-      ...baseConfigSnapshot,
-      config: {
-        channels: {
-          wecom: { enabled: true },
+  it.each(["global", "config"] as const)(
+    "uses verified official docs metadata for an installed official external channel from %s",
+    async (origin) => {
+      const runtime = createTestRuntime();
+      mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([
+        createMockChannelPlugin({
+          id: "wecom",
+          label: "WeCom",
+          accountIds: ["default"],
+          docsPath: "/unverified-installed-plugin-docs",
+        }),
+      ]);
+      mocks.listTrustedChannelPluginCatalogEntries.mockReturnValue([
+        createInstalledOfficialExternalCatalogEntry(origin),
+      ]);
+      mocks.buildChannelAccountSnapshot.mockResolvedValue({
+        accountId: "default",
+        configured: true,
+        enabled: true,
+      });
+      mocks.readConfigFileSnapshot.mockResolvedValue({
+        ...baseConfigSnapshot,
+        config: {
+          channels: {
+            wecom: { enabled: true },
+          },
         },
-      },
-    });
+      });
 
-    await channelsListCommand({ json: true }, runtime);
+      await channelsListCommand({ json: true }, runtime);
 
-    const payload = JSON.parse(loggedText(runtime)) as {
-      chat: Record<string, { docsPath: string; label: string }>;
-    };
-    expect(payload.chat.wecom).toMatchObject({
-      docsPath: "/plugins/community#wecom",
-      label: "WeCom",
-    });
-  });
+      const payload = JSON.parse(loggedText(runtime)) as {
+        chat: Record<string, { docsPath: string; label: string }>;
+      };
+      expect(payload.chat.wecom).toMatchObject({
+        docsPath: "/plugins/community#wecom",
+        label: "WeCom",
+      });
+    },
+  );
 
   it("omits catalog docs metadata that is not an official root-relative path", async () => {
     const runtime = createTestRuntime();

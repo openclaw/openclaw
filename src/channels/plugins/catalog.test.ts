@@ -102,6 +102,30 @@ describe("channel plugin catalog", () => {
     ).toBe(official.meta.docsPath);
   });
 
+  it("resolves trusted config-origin official channels back to verified official metadata", () => {
+    const options = {
+      workspaceDir: "/tmp/openclaw-channel-catalog-empty-workspace",
+      env: {},
+    };
+    const official = getChannelPluginCatalogEntry("wecom", options);
+    if (!official) {
+      throw new Error("expected official WeCom catalog entry");
+    }
+    const { trustedSourceLinkedOfficialInstall: _trusted, ...installed } = official;
+
+    expect(
+      resolveOfficialChannelPluginCatalogEntry({
+        ...installed,
+        origin: "config",
+        trustedSourceLinkedOfficialInstall: true,
+        meta: {
+          ...installed.meta,
+          docsPath: "/unverified-config-plugin-docs",
+        },
+      })?.meta.docsPath,
+    ).toBe(official.meta.docsPath);
+  });
+
   it("resolves installed official channels whose catalog omits a plugin id", () => {
     const options = {
       workspaceDir: "/tmp/openclaw-channel-catalog-empty-workspace",

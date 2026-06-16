@@ -295,7 +295,7 @@ export function resolveOfficialChannelPluginCatalogEntry(
     return entry;
   }
   if (
-    entry.origin !== "global" ||
+    (entry.origin !== "global" && entry.origin !== "config") ||
     !entry.pluginId ||
     entry.trustedSourceLinkedOfficialInstall !== true
   ) {
