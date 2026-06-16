@@ -370,6 +370,24 @@ describe("createCopilotClientPool", () => {
     expect(sdk.ctorCalls).toHaveLength(2);
   });
 
+  it("double invalidate does not retire a client with another active lease", async () => {
+    const sdk = makeFake();
+    const pool = createCopilotClientPool({ sdkFactory: sdk.fake });
+    const key = makeKey();
+    const options = makeOptions();
+    const first = await pool.acquire(key, options);
+    const second = await pool.acquire(key, options);
+
+    await pool.invalidate(first);
+    await pool.invalidate(first);
+
+    expect(sdk.forceStops).toEqual([]);
+
+    await pool.release(second);
+
+    expect(sdk.forceStops).toEqual([1]);
+  });
+
   it("dispose stops all clients exactly once, aggregates errors, clears the map", async () => {
     const sdk = makeFake({
       stop: (client) => [new Error(`stop-${client.id}-a`), new Error(`stop-${client.id}-b`)],

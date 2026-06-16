@@ -255,6 +255,14 @@ async function awaitReadinessStep<T>(
   if (!signal) {
     return await work;
   }
+  const handleLateResult = () => {
+    if (onLateResult) {
+      void work.then(onLateResult).catch(() => undefined);
+    }
+  };
+  if (signal.aborted) {
+    handleLateResult();
+  }
   throwIfAborted(signal);
   let onAbort: (() => void) | undefined;
   const aborted = new Promise<never>((_, reject) => {
@@ -270,8 +278,8 @@ async function awaitReadinessStep<T>(
   try {
     return await Promise.race([work, aborted]);
   } catch (error) {
-    if (signal.aborted && onLateResult) {
-      void work.then(onLateResult).catch(() => undefined);
+    if (signal.aborted) {
+      handleLateResult();
     }
     throw error;
   } finally {

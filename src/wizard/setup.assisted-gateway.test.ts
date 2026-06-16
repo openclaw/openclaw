@@ -54,7 +54,7 @@ vi.mock("./setup.secret-input.js", () => ({
 }));
 
 type MockChild = EventEmitter & {
-  pid: number;
+  pid: number | undefined;
   exitCode: number | null;
   signalCode: NodeJS.Signals | null;
   stdout: PassThrough;
@@ -236,6 +236,27 @@ describe("agent-assisted Gateway runtime", () => {
       graceMs: 1500,
     });
     expect(detach).toHaveBeenCalledOnce();
+  });
+
+  it("surfaces child spawn failures before probing Gateway readiness", async () => {
+    const child = createMockChild();
+    child.pid = undefined;
+    spawn.mockImplementationOnce(() => {
+      queueMicrotask(() => child.emit("error", new Error("spawn ENOENT")));
+      return child;
+    });
+
+    await expect(
+      ensureAgentAssistedGatewayRuntime({
+        config: {},
+        settings,
+        prompter: createWizardPrompter(),
+      }),
+    ).rejects.toThrow("Unable to start Gateway for assisted setup: spawn ENOENT");
+
+    expect(waitForGatewayReachable).not.toHaveBeenCalled();
+    expect(killProcessTree).not.toHaveBeenCalled();
+    expect(detach).not.toHaveBeenCalled();
   });
 
   it("does not require listener discovery after the temporary Gateway responds", async () => {

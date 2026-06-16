@@ -380,6 +380,9 @@ export function createCopilotClientPool(options: CopilotClientPoolOptions = {}):
   };
 
   const invalidate = async (handle: PooledClient): Promise<void> => {
+    if (releasedHandles.has(handle)) {
+      return;
+    }
     releasedHandles.add(handle);
     const entry = entries.get(JSON.stringify(handle.key));
     if (!entry) {

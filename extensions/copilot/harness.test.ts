@@ -227,6 +227,49 @@ describe("createCopilotAgentHarness", () => {
     expect(client.start).not.toHaveBeenCalled();
   });
 
+  it("releases a client when abort lands while starting pool acquisition", async () => {
+    const acquired = createDeferred<Awaited<ReturnType<CopilotClientPool["acquire"]>>>();
+    const client = {
+      start: vi.fn(async () => {}),
+      getAuthStatus: vi.fn(),
+    };
+    const handle = {
+      key: { agentId: "test", authMode: "useLoggedInUser", copilotHome: "/tmp/copilot" },
+      client,
+    } as never;
+    const pool = makePoolMock();
+    const controller = new AbortController();
+    vi.mocked(pool.acquire).mockImplementationOnce(() => {
+      controller.abort();
+      return acquired.promise;
+    });
+    const harness = createCopilotAgentHarness({ pool });
+    if (!harness.checkReadiness) {
+      throw new Error("expected Copilot readiness probe");
+    }
+
+    const readiness = harness.checkReadiness({
+      config: {},
+      agentId: "test",
+      agentDir: "/tmp/agent",
+      workspaceDir: "/tmp/workspace",
+      provider: "github-copilot",
+      modelId: "gpt-5.5",
+      providerAuthAvailable: true,
+      signal: controller.signal,
+    });
+
+    await expect(readiness).resolves.toEqual({
+      ready: false,
+      reason: "Copilot runtime readiness check failed",
+    });
+    acquired.resolve(handle);
+    await flushAsyncWork();
+
+    expect(pool.release).toHaveBeenCalledWith(handle);
+    expect(client.start).not.toHaveBeenCalled();
+  });
+
   it("invalidates an aborted readiness client while startup is still pending", async () => {
     const started = createDeferred<void>();
     const client = {

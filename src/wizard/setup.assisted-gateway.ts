@@ -1,5 +1,5 @@
 // Ensures agent-assisted setup has a reachable local Gateway before handoff.
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
@@ -12,6 +12,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { findVerifiedGatewayListenerPidsOnPortSync } from "../infra/gateway-processes.js";
 import { attachChildProcessBridge } from "../process/child-process-bridge.js";
 import { killProcessTree } from "../process/kill-tree.js";
+import { spawnWithFallback } from "../process/spawn-utils.js";
 import { sleep } from "../utils.js";
 import { t } from "./i18n/index.js";
 import type { WizardPrompter } from "./prompts.js";
@@ -224,17 +225,27 @@ export async function ensureAgentAssistedGatewayRuntime(params: {
   if (!command) {
     throw new Error("Unable to resolve the OpenClaw Gateway command.");
   }
-  const child = spawn(command, args, {
-    cwd: workingDirectory,
-    detached: process.platform !== "win32",
-    env: {
-      ...process.env,
-      OPENCLAW_LOG_LEVEL: "silent",
-      OPENCLAW_SERVICE_MARKER: undefined,
-    },
-    stdio: ["ignore", "pipe", "pipe"],
-    windowsHide: true,
-  });
+  let child: ChildProcess;
+  try {
+    ({ child } = await spawnWithFallback({
+      argv: [command, ...args],
+      options: {
+        cwd: workingDirectory,
+        detached: process.platform !== "win32",
+        env: {
+          ...process.env,
+          OPENCLAW_LOG_LEVEL: "silent",
+          OPENCLAW_SERVICE_MARKER: undefined,
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true,
+      },
+    }));
+  } catch (error) {
+    throw new Error(`Unable to start Gateway for assisted setup: ${formatErrorMessage(error)}`, {
+      cause: error,
+    });
+  }
   const outputTail = collectOutputTail(child);
   const { detach } = attachChildProcessBridge(child);
   const temporaryRuntime: AgentAssistedGatewayRuntime = {
