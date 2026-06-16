@@ -322,6 +322,9 @@ export function resolveProviderVisionModelFromConfig(params: {
     params.provider,
   ) as unknown as { models?: Array<{ id?: string; input?: string[] }> } | undefined;
   const models = providerCfg?.models ?? [];
+  if (models.length === 0) {
+    return null;
+  }
   const providerId = normalizeProviderId(params.provider);
   const providerMetadata = resolveProviderMetadata({
     cfg: params.cfg,

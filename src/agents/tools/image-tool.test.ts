@@ -1864,6 +1864,16 @@ describe("image tool implicit imageModel config", () => {
     expect(resolveProviderVisionModelFromConfig({ cfg, provider: "qwen" })).toBeNull();
   });
 
+  it("does not load runtime provider metadata when no provider models are configured", () => {
+    const getProvider = vi.fn();
+    const providerRegistry = {
+      get: getProvider,
+    } as unknown as ReadonlyMap<string, MediaUnderstandingProviderModelCapabilities>;
+
+    expect(resolveProviderVisionModelFromConfig({ providerRegistry, provider: "qwen" })).toBeNull();
+    expect(getProvider).not.toHaveBeenCalled();
+  });
+
   it("runs providerless explicit image models on the inferred provider", async () => {
     await withTempAgentDir(async (agentDir) => {
       const describeImage = vi.fn(async (params: ImageDescriptionRequest) => ({
