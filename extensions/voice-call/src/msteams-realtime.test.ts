@@ -312,6 +312,25 @@ describe("createMsteamsRealtimeCall", () => {
     expect(mock.sendAudio).toHaveBeenCalledTimes(1);
   });
 
+  it("DTMF respects the recording gate — ignored while inactive, accepted after recording is active", () => {
+    const ctx = createMockSession("inactive"); // Media Access API: recording not active yet
+    const mock = createMockProvider();
+    const call = createMsteamsRealtimeCall({
+      session: ctx.session,
+      deps: { provider: mock.provider, providerConfig: {} },
+    });
+
+    // Recording inactive: a keypress is dropped — not forwarded to the realtime model.
+    call.notifyDtmf("1");
+    expect(mock.sendUserMessage).not.toHaveBeenCalled();
+
+    // Recording goes active → the next keypress reaches the model.
+    call.setRecordingActive(true);
+    call.notifyDtmf("2");
+    expect(mock.sendUserMessage).toHaveBeenCalledTimes(1);
+    expect(String(mock.sendUserMessage.mock.calls[0]?.[0] ?? "")).toContain('"2"');
+  });
+
   it("echo guard tracks the playout clock, not last-send time (burst-generated audio)", () => {
     vi.useFakeTimers();
     try {

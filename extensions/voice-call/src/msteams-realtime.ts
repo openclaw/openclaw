@@ -1431,6 +1431,12 @@ export function createMsteamsRealtimeCall(params: {
       humanCount = count;
     },
     notifyDtmf: (digit: string) => {
+      // Recording gate: DTMF tones are in-band, media-derived caller input, so they are subject to the
+      // same Media Access API obligation as audio/video/transcripts — do not forward or record them to
+      // the model before the call's recording status is active. No-op when requireRecordingStatus is off.
+      if (recordingGateBlocks()) {
+        return;
+      }
       // Surface the keypress to the model as a user message so it can drive IVR-style flows
       // ("press 1 to…"). Recorded in the transcript like any caller turn.
       const text = `[The caller pressed the "${digit}" key on their phone keypad.]`;
