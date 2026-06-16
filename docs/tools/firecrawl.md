@@ -53,6 +53,7 @@ Notes:
 
 - Choosing Firecrawl in onboarding or `openclaw configure --section web` enables the bundled Firecrawl plugin automatically.
 - `web_search` with Firecrawl supports `query` and `count`.
+- The keyless `firecrawl-free` web_search provider is opt-in only. It is never auto-detected for no-key installs and is used solely when explicitly selected via `tools.web.search.provider: firecrawl-free`.
 - For Firecrawl-specific controls like `sources`, `categories`, or result scraping, use `firecrawl_search`.
 - `baseUrl` defaults to hosted Firecrawl at `https://api.firecrawl.dev`. Self-hosted overrides are allowed only for private/internal endpoints; HTTP is accepted only for those private targets.
 - `FIRECRAWL_BASE_URL` is the shared env fallback for Firecrawl search and scrape base URLs.
