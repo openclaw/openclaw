@@ -22,6 +22,15 @@ export type {
 type ApprovalRequestEvent = ExecApprovalRequest | PluginApprovalRequest;
 type ApprovalResolvedEvent = ExecApprovalResolved | PluginApprovalResolved;
 
+const APPROVAL_RUNTIME_REQUEST_METHODS = new Set([
+  "exec.approval.resolve",
+  "plugin.approval.resolve",
+]);
+
+function isApprovalRuntimeRequestMethod(method: string): boolean {
+  return APPROVAL_RUNTIME_REQUEST_METHODS.has(method);
+}
+
 /** Error raised when the gateway pauses approval reconnects after a terminal startup failure. */
 export class ExecApprovalChannelRuntimeTerminalStartError extends Error {
   readonly detailCode: string | null;
@@ -425,6 +434,11 @@ export function createExecApprovalChannelRuntime<
     handleExpired,
 
     async request<T = unknown>(method: string, params: Record<string, unknown>): Promise<T> {
+      if (!isApprovalRuntimeRequestMethod(method)) {
+        throw new Error(
+          `${adapter.label}: operator approvals runtime cannot dispatch ${method}; use a write-capable gateway client`,
+        );
+      }
       if (!gatewayClient) {
         throw new Error(`${adapter.label}: gateway client not connected`);
       }
