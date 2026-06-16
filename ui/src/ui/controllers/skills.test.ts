@@ -685,6 +685,53 @@ describe("skill mutations", () => {
     expect(state.skillsBusyKey).toBeNull();
   });
 
+  it("refreshes the current agent after a stale global config mutation succeeds", async () => {
+    const { state, request } = createState();
+    const pendingRequests: Array<{
+      method: string;
+      payload: unknown;
+      resolve: (value: unknown) => void;
+    }> = [];
+    request.mockImplementation(
+      (method, payload) =>
+        new Promise((resolve) => {
+          pendingRequests.push({ method, payload, resolve });
+        }),
+    );
+    state.skillsAgentId = "alpha";
+
+    const mutation = updateSkillEnabled(state, "github", true);
+    await Promise.resolve();
+    setSkillsAgentId(state, "beta");
+    const betaLoad = loadSkills(state);
+    await Promise.resolve();
+    pendingRequests[1].resolve({
+      workspaceDir: "/tmp/beta-before-update",
+      managedSkillsDir: "/tmp/skills",
+      skills: [],
+    });
+    await betaLoad;
+
+    pendingRequests[0].resolve({});
+    await vi.waitFor(() => {
+      expect(pendingRequests).toHaveLength(3);
+    });
+    pendingRequests[2].resolve({
+      workspaceDir: "/tmp/beta-after-update",
+      managedSkillsDir: "/tmp/skills",
+      skills: [],
+    });
+    await mutation;
+
+    expect(pendingRequests.map(({ method, payload }) => [method, payload])).toEqual([
+      ["skills.update", { skillKey: "github", enabled: true }],
+      ["skills.status", { agentId: "beta" }],
+      ["skills.status", { agentId: "beta" }],
+    ]);
+    expect(state.skillsReport?.workspaceDir).toBe("/tmp/beta-after-update");
+    expect(state.skillMessages).toEqual({});
+  });
+
   it("routes selected agent installs through the selected workspace", async () => {
     const { state, request } = createState();
     state.skillsAgentId = "research";

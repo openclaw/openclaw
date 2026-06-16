@@ -397,6 +397,7 @@ async function runSkillMutation(
   state: SkillsState,
   skillKey: string,
   run: (client: GatewayBrowserClient) => Promise<SkillMessage>,
+  options?: { refreshCurrentScopeOnStaleSuccess?: boolean },
 ) {
   const client = state.client;
   if (!client || !state.connected) {
@@ -408,6 +409,9 @@ async function runSkillMutation(
   try {
     const message = await run(client);
     if (!isSkillsAgentScopeCurrent(state, agentScope)) {
+      if (options?.refreshCurrentScopeOnStaleSuccess) {
+        await loadSkills(state);
+      }
       return;
     }
     await loadSkills(state);
@@ -433,24 +437,34 @@ async function runSkillMutation(
 }
 
 export async function updateSkillEnabled(state: SkillsState, skillKey: string, enabled: boolean) {
-  await runSkillMutation(state, skillKey, async (client) => {
-    await client.request("skills.update", { skillKey, enabled });
-    return {
-      kind: "success",
-      message: enabled ? "Skill enabled" : "Skill disabled",
-    };
-  });
+  await runSkillMutation(
+    state,
+    skillKey,
+    async (client) => {
+      await client.request("skills.update", { skillKey, enabled });
+      return {
+        kind: "success",
+        message: enabled ? "Skill enabled" : "Skill disabled",
+      };
+    },
+    { refreshCurrentScopeOnStaleSuccess: true },
+  );
 }
 
 export async function saveSkillApiKey(state: SkillsState, skillKey: string) {
-  await runSkillMutation(state, skillKey, async (client) => {
-    const apiKey = state.skillEdits[skillKey] ?? "";
-    await client.request("skills.update", { skillKey, apiKey });
-    return {
-      kind: "success",
-      message: `API key saved — stored in openclaw.json (skills.entries.${skillKey})`,
-    };
-  });
+  await runSkillMutation(
+    state,
+    skillKey,
+    async (client) => {
+      const apiKey = state.skillEdits[skillKey] ?? "";
+      await client.request("skills.update", { skillKey, apiKey });
+      return {
+        kind: "success",
+        message: `API key saved — stored in openclaw.json (skills.entries.${skillKey})`,
+      };
+    },
+    { refreshCurrentScopeOnStaleSuccess: true },
+  );
 }
 
 export async function installSkill(
