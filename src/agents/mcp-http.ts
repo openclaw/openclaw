@@ -8,7 +8,7 @@ import {
   redactSensitiveUrl,
   redactSensitiveUrlLikeString,
 } from "@openclaw/net-policy/redact-sensitive-url";
-import { isMcpConfigRecord, toMcpStringRecord } from "./mcp-config-shared.js";
+import { isMcpConfigRecord, toMcpHttpHeaderRecord } from "./mcp-config-shared.js";
 
 /** Supported HTTP-based MCP transport flavors. */
 export type HttpMcpTransportType = "sse" | "streamable-http";
@@ -60,7 +60,7 @@ export function resolveHttpMcpServerLaunchConfig(
     if (!isMcpConfigRecord(raw.headers)) {
       options?.onMalformedHeaders?.(raw.headers);
     } else {
-      headers = toMcpStringRecord(raw.headers, {
+      headers = toMcpHttpHeaderRecord(raw.headers, {
         onDroppedEntry: options?.onDroppedHeader,
       });
     }

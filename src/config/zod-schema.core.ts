@@ -30,7 +30,7 @@ function isAbsolutePath(value: string): boolean {
   );
 }
 
-const EnvSecretRefSchema = z
+export const EnvSecretRefSchema = z
   .object({
     source: z.literal("env"),
     provider: z

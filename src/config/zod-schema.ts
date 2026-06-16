@@ -18,6 +18,7 @@ import { AgentsSchema, AudioSchema, BindingsSchema, BroadcastSchema } from "./zo
 import { ApprovalsSchema } from "./zod-schema.approvals.js";
 import { ChannelsSchema } from "./zod-schema.channels-config.js";
 import {
+  EnvSecretRefSchema,
   HexColorSchema,
   ModelsConfigSchema,
   SecretInputSchema,
@@ -383,6 +384,10 @@ const TalkSchema = z
     }
   });
 
+const McpHeaderInputSchema = z
+  .union([z.string(), EnvSecretRefSchema, z.number(), z.boolean()])
+  .register(sensitive);
+
 const McpServerSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -393,14 +398,7 @@ const McpServerSchema = z
     workingDirectory: z.string().optional(),
     url: HttpUrlSchema.optional(),
     transport: z.union([z.literal("sse"), z.literal("streamable-http")]).optional(),
-    headers: z
-      .record(
-        z.string(),
-        z
-          .union([SecretInputSchema.register(sensitive), z.number(), z.boolean()])
-          .register(sensitive),
-      )
-      .optional(),
+    headers: z.record(z.string(), McpHeaderInputSchema).optional(),
     connectionTimeoutMs: z.number().finite().positive().optional(),
     connectTimeout: z.number().finite().positive().optional(),
     connect_timeout: z.number().finite().positive().optional(),

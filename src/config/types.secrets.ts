@@ -17,6 +17,10 @@ export type SecretRef = {
   id: string;
 };
 
+/** Env-backed secret reference shape safe for runtime env-only resolution paths. */
+export type EnvSecretRef = SecretRef & { source: "env" };
+/** Secret input restricted to legacy literal strings or env-backed references. */
+export type EnvSecretInput = string | EnvSecretRef;
 /** Secret-bearing config input: either a literal string or a structured SecretRef. */
 export type SecretInput = string | SecretRef;
 /** Provider alias used when a SecretRef omits a source-specific provider. */

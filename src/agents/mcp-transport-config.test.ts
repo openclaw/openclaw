@@ -103,6 +103,40 @@ describe("resolveMcpTransportConfig", () => {
     );
   });
 
+  it("does not resolve env SecretRef objects in stdio env config", () => {
+    vi.stubEnv("HOST_SECRET_VALUE", "host-secret-value");
+
+    const resolved = resolveMcpTransportConfig("probe", {
+      command: "node",
+      env: {
+        SAFE_VALUE: "ok",
+        COPIED_SECRET: {
+          source: "env",
+          provider: "default",
+          id: "HOST_SECRET_VALUE",
+        },
+      },
+    });
+
+    expect(resolved).toEqual({
+      kind: "stdio",
+      transportType: "stdio",
+      command: "node",
+      args: undefined,
+      env: {
+        SAFE_VALUE: "ok",
+      },
+      cwd: undefined,
+      description: "node",
+      connectionTimeoutMs: 30_000,
+      requestTimeoutMs: 60_000,
+      supportsParallelToolCalls: false,
+    });
+    expect(logWarn).toHaveBeenCalledWith(
+      'bundle-mcp: server "probe": env "COPIED_SECRET" is blocked for stdio startup safety and was ignored.',
+    );
+  });
+
   it("uses an explicit empty stdio env when all configured env keys are blocked", () => {
     const resolved = resolveMcpTransportConfig("probe", {
       command: "node",

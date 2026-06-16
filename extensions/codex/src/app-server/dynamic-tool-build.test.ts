@@ -30,6 +30,7 @@ import {
   shouldUseDirectCodexDynamicToolsForModel,
 } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
+import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
 import { createCodexTestModel } from "./test-support.js";
 
 let tempDir: string;
@@ -100,6 +101,27 @@ function createRuntimeDynamicTool(name: string): RuntimeDynamicToolForTest {
   };
 }
 
+type DynamicToolSandboxContext = ReturnType<typeof createSandboxContext>;
+type DynamicToolSandboxContextOverrides = Omit<
+  Partial<DynamicToolSandboxContext>,
+  "docker" | "tools"
+> & {
+  docker?: Partial<DynamicToolSandboxContext["docker"]>;
+  tools?: Partial<DynamicToolSandboxContext["tools"]>;
+};
+
+function createDynamicToolSandboxContext(
+  overrides: DynamicToolSandboxContextOverrides = {},
+): DynamicToolSandboxContext {
+  const base = createSandboxContext({});
+  return {
+    ...base,
+    ...overrides,
+    docker: { ...base.docker, ...(overrides.docker ?? {}) },
+    tools: { ...base.tools, ...(overrides.tools ?? {}) },
+  };
+}
+
 async function buildDynamicToolsForTest(
   params: EmbeddedRunAttemptParams,
   workspaceDir: string,
@@ -114,7 +136,7 @@ async function buildDynamicToolsForTest(
     resolvedWorkspace: workspaceDir,
     effectiveWorkspace: workspaceDir,
     sandboxSessionKey,
-    sandbox: { enabled: false, backendId: "docker" } as never,
+    sandbox: createDynamicToolSandboxContext({ enabled: false, backendId: "docker" }),
     nativeToolSurfaceEnabled: true,
     runAbortController: new AbortController(),
     sessionAgentId: "main",
@@ -292,7 +314,7 @@ describe("Codex app-server dynamic tool build", () => {
     params.runtimePlan = createCodexRuntimePlanFixture();
     params.trigger = "memory";
     params.memoryFlushWritePath = "memory/2026-05-22.md";
-    const sandbox = { enabled: true, backendId: "docker" } as never;
+    const sandbox = createDynamicToolSandboxContext({ enabled: true, backendId: "docker" });
 
     const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(params, sandbox);
     const tools = await buildDynamicToolsForTest(params, workspaceDir, {
@@ -326,7 +348,7 @@ describe("Codex app-server dynamic tool build", () => {
     params.runtimePlan = createCodexRuntimePlanFixture();
 
     const tools = await buildDynamicToolsForTest(params, workspaceDir, {
-      sandbox: { enabled: true, backendId: "ssh" } as never,
+      sandbox: createDynamicToolSandboxContext({ enabled: true, backendId: "ssh" }),
       nativeToolSurfaceEnabled: false,
     });
 
@@ -350,7 +372,7 @@ describe("Codex app-server dynamic tool build", () => {
     const params = createParams(sessionFile, workspaceDir);
     params.disableTools = false;
     params.runtimePlan = createCodexRuntimePlanFixture();
-    const sandbox = { enabled: true, backendId: "docker" } as never;
+    const sandbox = createDynamicToolSandboxContext({ enabled: true, backendId: "docker" });
     const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(params, sandbox);
 
     const dockerTools = await buildDynamicToolsForTest(params, workspaceDir, {
@@ -426,11 +448,11 @@ describe("Codex app-server dynamic tool build", () => {
     params.runtimePlan = createCodexRuntimePlanFixture();
 
     const tools = await buildDynamicToolsForTest(params, workspaceDir, {
-      sandbox: {
+      sandbox: createDynamicToolSandboxContext({
         enabled: true,
         backendId: "docker",
         docker: { binds: ["/tmp/openclaw-data:/data:rw"] },
-      } as never,
+      }),
       nativeToolSurfaceEnabled: false,
     });
 
@@ -453,7 +475,7 @@ describe("Codex app-server dynamic tool build", () => {
     params.runtimePlan = createCodexRuntimePlanFixture();
 
     const disabledSandboxTools = await buildDynamicToolsForTest(params, workspaceDir, {
-      sandbox: { enabled: false, backendId: "ssh" } as never,
+      sandbox: createDynamicToolSandboxContext({ enabled: false, backendId: "ssh" }),
     });
 
     expect(disabledSandboxTools.map((tool) => tool.name)).toEqual(["message"]);
@@ -471,7 +493,8 @@ describe("Codex app-server dynamic tool build", () => {
     params.runtimePlan = createCodexRuntimePlanFixture();
 
     const tools = await buildDynamicToolsForTest(params, workspaceDir, {
-      sandbox: { enabled: true, backendId: "ssh" } as never,
+      sandbox: createDynamicToolSandboxContext({ enabled: true, backendId: "ssh" }),
+      nativeToolSurfaceEnabled: false,
     });
 
     expect(tools.map((tool) => tool.name)).toEqual(["message"]);
@@ -491,7 +514,7 @@ describe("Codex app-server dynamic tool build", () => {
 
     for (const excludedToolName of ["sandbox_exec", "process"]) {
       const tools = await buildDynamicToolsForTest(params, workspaceDir, {
-        sandbox: { enabled: true, backendId: "ssh" } as never,
+        sandbox: createDynamicToolSandboxContext({ enabled: true, backendId: "ssh" }),
         pluginConfig: { codexDynamicToolsExclude: [excludedToolName] },
       });
 
@@ -514,7 +537,7 @@ describe("Codex app-server dynamic tool build", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const tools = addSandboxShellDynamicToolsIfAvailable([], [execTool, processTool], {
       params: createParams(path.join(tempDir, "session.jsonl"), workspaceDir),
-      sandbox: { enabled: true, backendId: "ssh" },
+      sandbox: createDynamicToolSandboxContext({ enabled: true, backendId: "ssh" }),
       nativeToolSurfaceEnabled: false,
       sessionAgentId: "main",
       pluginConfig: {},
@@ -987,20 +1010,21 @@ describe("Codex app-server dynamic tool build", () => {
     const allTools = ["exec", "process", "read", "write", "edit", "apply_patch", "message"].map(
       createRuntimeDynamicTool,
     );
+    const sandbox = createDynamicToolSandboxContext({
+      enabled: true,
+      backendId: "docker",
+      tools: {
+        allow: ["exec", "process", "read", "write", "edit", "apply_patch"],
+        deny: [],
+      },
+    });
     const filteredTools = filterCodexDynamicTools(allTools, {});
     const input = {
       params,
       resolvedWorkspace: workspaceDir,
       effectiveWorkspace: workspaceDir,
-      sandboxSessionKey: params.sessionKey,
-      sandbox: {
-        enabled: true,
-        backendId: "docker",
-        tools: {
-          allow: ["exec", "process", "read", "write", "edit", "apply_patch"],
-          deny: [],
-        },
-      },
+      sandboxSessionKey: params.sessionKey ?? params.sessionId,
+      sandbox,
       nativeToolSurfaceEnabled: true,
       runAbortController: new AbortController(),
       sessionAgentId: "main",
@@ -1018,10 +1042,10 @@ describe("Codex app-server dynamic tool build", () => {
     expect(
       addSandboxNativeDynamicToolsIfAllowed(filteredTools, allTools, {
         ...input,
-        sandbox: {
+        sandbox: createDynamicToolSandboxContext({
           ...input.sandbox,
           tools: { allow: ["exec"], deny: [] },
-        },
+        }),
       }).map((tool) => tool.name),
     ).toEqual(["message"]);
 

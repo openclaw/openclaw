@@ -1,5 +1,5 @@
 // Defines MCP server and tool approval configuration types.
-import type { SecretInput } from "./types.secrets.js";
+import type { EnvSecretInput } from "./types.secrets.js";
 export type McpCodexToolApprovalMode = "auto" | "prompt" | "approve";
 
 export type McpServerCodexConfig = {
@@ -40,7 +40,7 @@ export type McpServerConfig = {
   /** HTTP transport type for remote MCP servers. */
   transport?: "sse" | "streamable-http";
   /** HTTP transport: extra HTTP headers sent with every request. */
-  headers?: Record<string, SecretInput | number | boolean>;
+  headers?: Record<string, EnvSecretInput | number | boolean>;
   /** Optional connection timeout in milliseconds. */
   connectionTimeoutMs?: number;
   /** Optional connection timeout in seconds. */

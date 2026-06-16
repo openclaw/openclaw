@@ -173,6 +173,42 @@ describe("config schema", () => {
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("codex");
   });
 
+  it("limits MCP header SecretRefs to env-backed refs", () => {
+    expect(
+      OpenClawSchema.safeParse({
+        mcp: {
+          servers: {
+            remote: {
+              url: "https://mcp.example.com/mcp",
+              headers: {
+                Authorization: {
+                  source: "env",
+                  provider: "default",
+                  id: "MCP_HEADER_VALUE",
+                },
+              },
+            },
+          },
+        },
+      }).success,
+    ).toBe(true);
+
+    expect(
+      OpenClawSchema.safeParse({
+        mcp: {
+          servers: {
+            remote: {
+              url: "https://mcp.example.com/mcp",
+              headers: {
+                Authorization: { source: "file", provider: "default", id: "/providers/mcp/token" },
+              },
+            },
+          },
+        },
+      }).success,
+    ).toBe(false);
+  });
+
   it("rejects empty Codex MCP agent scopes", () => {
     expect(() =>
       OpenClawSchema.parse({

@@ -63,6 +63,7 @@ function toMcpFilteredStringRecord(
   options?: {
     onDroppedEntry?: (key: string, value: unknown) => void;
     preserveEmptyWhenKeysDropped?: boolean;
+    resolveEnvSecretRefs?: boolean;
     shouldDropKey?: (key: string) => boolean;
   },
 ): Record<string, string> | undefined {
@@ -84,9 +85,11 @@ function toMcpFilteredStringRecord(
       if (typeof entry === "number" || typeof entry === "boolean") {
         return [key, String(entry)] as const;
       }
-      const secretValue = readEnvSecretRefValue(entry);
-      if (secretValue !== undefined) {
-        return [key, secretValue] as const;
+      if (options?.resolveEnvSecretRefs) {
+        const secretValue = readEnvSecretRefValue(entry);
+        if (secretValue !== undefined) {
+          return [key, secretValue] as const;
+        }
       }
       options?.onDroppedEntry?.(key, entry);
       return null;
@@ -104,6 +107,17 @@ export function toMcpStringRecord(
   options?: { onDroppedEntry?: (key: string, value: unknown) => void },
 ): Record<string, string> | undefined {
   return toMcpFilteredStringRecord(value, options);
+}
+
+/** Coerces HTTP header config, resolving only env-backed SecretRef values. */
+export function toMcpHttpHeaderRecord(
+  value: unknown,
+  options?: { onDroppedEntry?: (key: string, value: unknown) => void },
+): Record<string, string> | undefined {
+  return toMcpFilteredStringRecord(value, {
+    ...options,
+    resolveEnvSecretRefs: true,
+  });
 }
 
 /** Coerces MCP env config while dropping dangerous inherited host env names. */
