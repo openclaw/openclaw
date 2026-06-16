@@ -2629,7 +2629,9 @@ describe("createTelegramBot", () => {
             headers: { "content-type": "image/png" },
           }),
       );
+      const runtimeLog = vi.fn();
       const runtimeError = vi.fn();
+      const runtimeExit = vi.fn();
       const ssrfMock = mockPinnedHostnameResolution();
 
       try {
@@ -2637,7 +2639,7 @@ describe("createTelegramBot", () => {
           token: "tok",
           config: startupConfig,
           ...(optionGroupAllowFrom ? { groupAllowFrom: optionGroupAllowFrom } : {}),
-          runtime: { error: runtimeError },
+          runtime: { log: runtimeLog, error: runtimeError, exit: runtimeExit },
           telegramTransport: {
             fetch: mediaFetch as typeof fetch,
             sourceFetch: mediaFetch as typeof fetch,
