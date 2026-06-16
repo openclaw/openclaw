@@ -1003,28 +1003,32 @@ async function runEmbeddedAgentInternal(
         trigger: params.trigger,
         ...buildAgentHookContextChannelFields(params),
       };
-      if (params.trigger === "cron" && hookRunner?.hasHooks("before_agent_reply")) {
+      if (params.trigger === "cron") {
+        // Always emit the phase so the pre-execution watchdog can clear its
+        // timeout. Only run the hook when one is actually registered (#93530).
         notifyExecutionPhase("before_agent_reply", { provider, model: modelId });
-        const hookResult = await hookRunner.runBeforeAgentReply(
-          { cleanedBody: params.prompt },
-          hookCtx,
-        );
-        if (hookResult?.handled) {
-          return {
-            payloads: buildHandledReplyPayloads(hookResult.reply),
-            meta: {
-              durationMs: Date.now() - started,
-              agentMeta: {
-                sessionId: params.sessionId,
-                provider,
-                model: modelId,
+        if (hookRunner?.hasHooks("before_agent_reply")) {
+          const hookResult = await hookRunner.runBeforeAgentReply(
+            { cleanedBody: params.prompt },
+            hookCtx,
+          );
+          if (hookResult?.handled) {
+            return {
+              payloads: buildHandledReplyPayloads(hookResult.reply),
+              meta: {
+                durationMs: Date.now() - started,
+                agentMeta: {
+                  sessionId: params.sessionId,
+                  provider,
+                  model: modelId,
+                },
+                finalAssistantVisibleText: hookResult.reply?.text ?? SILENT_REPLY_TOKEN,
+                finalAssistantRawText: hookResult.reply?.text ?? SILENT_REPLY_TOKEN,
               },
-              finalAssistantVisibleText: hookResult.reply?.text ?? SILENT_REPLY_TOKEN,
-              finalAssistantRawText: hookResult.reply?.text ?? SILENT_REPLY_TOKEN,
-            },
-          };
+            };
+          }
+          notifyExecutionPhase("runtime_plugins", { provider, model: modelId });
         }
-        notifyExecutionPhase("runtime_plugins", { provider, model: modelId });
       }
 
       const hookSelection = await resolveHookModelSelection({
