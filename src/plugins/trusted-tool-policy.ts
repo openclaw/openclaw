@@ -1,6 +1,7 @@
 // Resolves trusted tool policy for plugins from runtime config.
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createSecurityMatrixBeforeToolCallAuditEvent } from "../security/security-matrix/before-tool-call.js";
 import { isPlainObject } from "../utils.js";
 import type {
   PluginHookBeforeToolCallEvent,
@@ -206,6 +207,10 @@ export async function runTrustedToolPolicies(
   };
   const { derivedPaths, toolKind, toolInputKind, ...eventWithoutDerivedPaths } = event;
   const { toolKind: ctxToolKind, toolInputKind: ctxToolInputKind, ...ctxWithoutToolIdentity } = ctx;
+  const securityMatrixAuditEvent = createSecurityMatrixBeforeToolCallAuditEvent({
+    toolName: event.toolName,
+  });
+  void securityMatrixAuditEvent;
   let currentDerivedEvent = normalizeDerivedEventFields({ derivedPaths });
   let currentEventToolIdentity = normalizeToolIdentity({ toolKind, toolInputKind });
   let currentContextToolIdentity = normalizeToolIdentity({

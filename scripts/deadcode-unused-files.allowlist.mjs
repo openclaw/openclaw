@@ -9,12 +9,6 @@ export const KNIP_UNUSED_FILE_ALLOWLIST = [];
 // package bridge files. Ignore these when reported, but do not require them
 // to be reported.
 export const KNIP_OPTIONAL_UNUSED_FILE_ALLOWLIST = [
-  "src/security/security-matrix/before-tool-call.ts",
-  "src/security/security-matrix/default-policy.ts",
-  "src/security/security-matrix/evaluate.ts",
-  "src/security/security-matrix/facts.ts",
-  "src/security/security-matrix/tool-capability.ts",
-  "src/security/security-matrix/types.ts",
   "extensions/acpx/src/runtime-internals/mcp-command-line.mjs",
   "extensions/acpx/src/runtime-internals/mcp-proxy.mjs",
   "extensions/canvas/src/host/a2ui-app/bootstrap.js",
