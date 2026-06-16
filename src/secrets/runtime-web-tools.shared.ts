@@ -341,11 +341,17 @@ export async function resolveRuntimeWebProviderSurface<
     params.rawProvider,
     params.normalizeConfiguredProviderAgainstActiveProviders ? providers : allProviders,
   );
+  const invalidConfiguredProvider =
+    params.normalizeConfiguredProviderAgainstActiveProviders === true &&
+    Boolean(params.rawProvider) &&
+    !configuredProvider;
 
   if (params.rawProvider && !configuredProvider) {
     const diagnostic: RuntimeWebDiagnostic = {
       code: params.invalidAutoDetectCode,
-      message: `${params.providerPath} is "${params.rawProvider}". Falling back to auto-detect precedence.`,
+      message: invalidConfiguredProvider
+        ? `${params.providerPath} is "${params.rawProvider}". No provider will be selected.`
+        : `${params.providerPath} is "${params.rawProvider}". Falling back to auto-detect precedence.`,
       path: params.providerPath,
     };
     params.diagnostics.push(diagnostic);
@@ -361,7 +367,9 @@ export async function resolveRuntimeWebProviderSurface<
     providers,
     configuredProvider,
     enabled:
-      hasConfiguredSurface && (!isRecord(params.toolConfig) || params.toolConfig.enabled !== false),
+      hasConfiguredSurface &&
+      !invalidConfiguredProvider &&
+      (!isRecord(params.toolConfig) || params.toolConfig.enabled !== false),
     hasConfiguredSurface,
   };
 }
