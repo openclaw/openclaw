@@ -1,4 +1,5 @@
 // Plans usable tools from descriptors, availability, and request constraints.
+import { logWarn } from "../logger.js";
 import { evaluateToolAvailability } from "./availability.js";
 import { ToolPlanContractError } from "./diagnostics.js";
 import type {
@@ -49,6 +50,14 @@ export function buildToolPlan(options: BuildToolPlanOptions): ToolPlan {
       ...evaluateToolAvailability({ descriptor, context: options.availability }),
     ];
     if (diagnostics.length > 0) {
+      for (const diag of diagnostics) {
+        if (diag.reason === "unsupported-signal") {
+          logWarn(
+            `tool "${descriptor.name}" hidden: ${diag.message || diag.reason}. ` +
+              "This is likely an authoring error — check the descriptor's availability expression.",
+          );
+        }
+      }
       hidden.push({ descriptor, diagnostics });
       continue;
     }
