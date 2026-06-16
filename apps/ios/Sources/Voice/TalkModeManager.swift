@@ -1042,7 +1042,7 @@ final class TalkModeManager: NSObject {
                         await self.streamAssistant(runId: runId, gateway: gateway)
                     }
                 }
-                completion = await waitForChatCompletion(runId: runId, gateway: gateway, timeoutSeconds: 120)
+                completion = await self.waitForChatCompletion(runId: runId, gateway: gateway, timeoutSeconds: 120)
                 if completion.state == .timeout {
                     self.logger.warning(
                         "chat completion timeout runId=\(runId, privacy: .public); attempting history fallback")
