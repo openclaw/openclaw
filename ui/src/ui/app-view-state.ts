@@ -5,6 +5,7 @@ import type { EventLogEntry } from "./app-events.ts";
 import type { CompactionStatus, FallbackStatus } from "./app-tool-stream.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./chat/input-history.ts";
 import type { RealtimeTalkConversationEntry } from "./chat/realtime-talk-conversation.ts";
+import type { RealtimeTalkCatalogProvider } from "./chat/realtime-talk-catalog.ts";
 import type { RealtimeTalkStatus } from "./chat/realtime-talk.ts";
 import type { ChatRunUiStatus } from "./chat/run-lifecycle.ts";
 import type { ChatSideResult } from "./chat/side-result.ts";
@@ -152,9 +153,7 @@ export type AppViewState = {
   realtimeTalkTranscript: string | null;
   realtimeTalkConversation: RealtimeTalkConversationEntry[];
   realtimeTalkOptionsOpen: boolean;
-  realtimeTalkCatalogProviders:
-    | { id: string; label: string; transports?: string[]; supportsBrowserSession?: boolean }[]
-    | null;
+  realtimeTalkCatalogProviders: RealtimeTalkCatalogProvider[] | null;
   realtimeTalkOptions: {
     provider: string;
     model: string;

@@ -34,6 +34,12 @@ import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../cha
 import { PinnedMessages } from "../chat/pinned-messages.ts";
 import { getPinnedMessageSummary } from "../chat/pinned-summary.ts";
 import type { RealtimeTalkConversationEntry } from "../chat/realtime-talk-conversation.ts";
+import {
+  REALTIME_TALK_FALLBACK_PROVIDERS,
+  listSelectableRealtimeTalkProviders,
+  resolveControlUiRealtimeTalkProviderTransports,
+  type RealtimeTalkCatalogProvider,
+} from "../chat/realtime-talk-catalog.ts";
 import type { RealtimeTalkStatus } from "../chat/realtime-talk.ts";
 import { renderChatRunControls } from "../chat/run-controls.ts";
 import type { ChatRunUiStatus } from "../chat/run-lifecycle.ts";
@@ -122,9 +128,7 @@ export type ChatProps = {
   realtimeTalkTranscript?: string | null;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
   realtimeTalkOptionsOpen?: boolean;
-  realtimeTalkCatalogProviders?:
-    | { id: string; label: string; transports?: string[]; supportsBrowserSession?: boolean }[]
-    | null;
+  realtimeTalkCatalogProviders?: RealtimeTalkCatalogProvider[] | null;
   realtimeTalkOptions?: {
     provider: string;
     model: string;
@@ -243,8 +247,10 @@ const TALK_SENSITIVITY_OPTIONS: TalkSelectOption[] = [
 const TALK_PROVIDER_AUTO_OPTION: TalkSelectOption = { label: "Auto", value: "" };
 const TALK_PROVIDER_FALLBACK_OPTIONS: TalkSelectOption[] = [
   TALK_PROVIDER_AUTO_OPTION,
-  { label: "OpenAI", value: "openai" },
-  { label: "Google", value: "google" },
+  ...REALTIME_TALK_FALLBACK_PROVIDERS.map((provider) => ({
+    label: provider.label,
+    value: provider.id,
+  })),
 ];
 const TALK_TRANSPORT_OPTIONS: TalkSelectOption[] = [
   { label: "Auto", value: "" },
@@ -252,8 +258,6 @@ const TALK_TRANSPORT_OPTIONS: TalkSelectOption[] = [
   { label: "Gateway relay", value: "gateway-relay" },
   { label: "Provider WebSocket", value: "provider-websocket" },
 ];
-const TALK_CONTROL_UI_TRANSPORTS = new Set(["webrtc", "gateway-relay"]);
-const TALK_CONTROL_UI_PROVIDER_WEBSOCKET_IDS = new Set(["google"]);
 const TALK_REASONING_OPTIONS: TalkSelectOption[] = [
   { label: "Default", value: "" },
   { label: "Minimal", value: "minimal" },
@@ -327,19 +331,7 @@ function renderRealtimeTalkOptions(props: ChatProps) {
     return nothing;
   }
   const catalogProviders = props.realtimeTalkCatalogProviders;
-  const providerTransports = (provider: NonNullable<typeof catalogProviders>[number]) =>
-    (provider.transports ?? []).filter(
-      (transport) =>
-        transport === "gateway-relay" ||
-        (provider.supportsBrowserSession === true &&
-          TALK_CONTROL_UI_TRANSPORTS.has(transport)) ||
-        (provider.supportsBrowserSession === true &&
-          transport === "provider-websocket" &&
-          TALK_CONTROL_UI_PROVIDER_WEBSOCKET_IDS.has(provider.id)),
-    );
-  const selectableProviders = (catalogProviders ?? []).filter(
-    (provider) => providerTransports(provider).length > 0,
-  );
+  const selectableProviders = listSelectableRealtimeTalkProviders(catalogProviders ?? []);
   const providerOptions: TalkSelectOption[] = catalogProviders
     ? [
         TALK_PROVIDER_AUTO_OPTION,
@@ -350,7 +342,7 @@ function renderRealtimeTalkOptions(props: ChatProps) {
     ? selectableProviders.find((provider) => provider.id === options.provider)
     : null;
   const selectedProviderTransports = selectedCatalogProvider
-    ? providerTransports(selectedCatalogProvider)
+    ? resolveControlUiRealtimeTalkProviderTransports(selectedCatalogProvider)
     : undefined;
   const transportOptions: TalkSelectOption[] = selectedProviderTransports
     ? [
@@ -417,7 +409,9 @@ function renderRealtimeTalkOptions(props: ChatProps) {
             options: providerOptions,
             onSelect: (provider) => {
               const selectedProvider = selectableProviders.find((entry) => entry.id === provider);
-              const transports = selectedProvider ? providerTransports(selectedProvider) : null;
+              const transports = selectedProvider
+                ? resolveControlUiRealtimeTalkProviderTransports(selectedProvider)
+                : null;
               const transport = options.transport;
               onChange(
                 transports && transport && !transports.includes(transport)

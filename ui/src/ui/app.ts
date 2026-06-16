@@ -84,6 +84,10 @@ import {
   type RealtimeTalkConversationState,
 } from "./chat/realtime-talk-conversation.ts";
 import {
+  reconcileRealtimeTalkCatalogSelection,
+  type RealtimeTalkCatalogProvider,
+} from "./chat/realtime-talk-catalog.ts";
+import {
   RealtimeTalkSession,
   type RealtimeTalkLaunchOptions,
   type RealtimeTalkStatus,
@@ -308,9 +312,7 @@ export class OpenClawApp extends LitElement {
   @state() realtimeTalkTranscript: string | null = null;
   @state() realtimeTalkConversation: RealtimeTalkConversationEntry[] = [];
   @state() realtimeTalkOptionsOpen = false;
-  @state() realtimeTalkCatalogProviders:
-    | { id: string; label: string; transports?: string[]; supportsBrowserSession?: boolean }[]
-    | null = null;
+  @state() realtimeTalkCatalogProviders: RealtimeTalkCatalogProvider[] | null = null;
   @state() realtimeTalkOptions = {
     provider: "",
     model: "",
@@ -1180,16 +1182,17 @@ export class OpenClawApp extends LitElement {
     this.realtimeTalkCatalogProviders = null;
     try {
       const result = await this.client.request<{
-        realtime?: {
-          providers?: {
-            id: string;
-            label: string;
-            transports?: string[];
-            supportsBrowserSession?: boolean;
-          }[];
-        };
+        realtime?: { providers?: RealtimeTalkCatalogProvider[] };
       }>("talk.catalog", {});
-      this.realtimeTalkCatalogProviders = result?.realtime?.providers ?? [];
+      const providers = result?.realtime?.providers ?? [];
+      this.realtimeTalkCatalogProviders = providers;
+      const update = reconcileRealtimeTalkCatalogSelection({
+        providers,
+        selection: this.realtimeTalkOptions,
+      });
+      if (update) {
+        this.updateRealtimeTalkOptions(update);
+      }
     } catch {
       this.realtimeTalkCatalogProviders = null;
     }

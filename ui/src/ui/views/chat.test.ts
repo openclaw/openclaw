@@ -1564,17 +1564,40 @@ describe("chat voice controls", () => {
         {
           id: "openai",
           label: "OpenAI",
+          configured: true,
           transports: ["webrtc", "provider-websocket"],
           supportsBrowserSession: true,
         },
-        { id: "plugin-realtime", label: "Plugin realtime", transports: ["gateway-relay"] },
+        {
+          id: "plugin-realtime",
+          label: "Plugin realtime",
+          configured: true,
+          transports: ["gateway-relay"],
+        },
+        {
+          id: "plugin-default-relay",
+          label: "Plugin default relay",
+          configured: true,
+        },
         {
           id: "plugin-websocket",
           label: "Unsupported plugin WebSocket",
+          configured: true,
           transports: ["provider-websocket"],
           supportsBrowserSession: true,
         },
-        { id: "relay-only", label: "No browser session", transports: ["webrtc"] },
+        {
+          id: "relay-only",
+          label: "No browser session",
+          configured: true,
+          transports: ["webrtc"],
+        },
+        {
+          id: "unconfigured",
+          label: "Unconfigured provider",
+          configured: false,
+          transports: ["gateway-relay"],
+        },
       ],
       realtimeTalkOptions: {
         provider: "openai",
@@ -1593,6 +1616,7 @@ describe("chat voice controls", () => {
       "",
       "openai",
       "plugin-realtime",
+      "plugin-default-relay",
     ]);
     expect(getTalkSelectOptionValues(container, "transport")).toEqual(["", "webrtc"]);
 
@@ -1611,6 +1635,7 @@ describe("chat voice controls", () => {
         {
           id: "google",
           label: "Google",
+          configured: true,
           transports: ["provider-websocket", "gateway-relay"],
           supportsBrowserSession: true,
         },
