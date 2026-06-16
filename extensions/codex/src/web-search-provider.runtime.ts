@@ -42,6 +42,7 @@ export async function executeCodexWebSearchProviderTool(
       "You are OpenClaw's bounded web-search worker. You must use Codex hosted web_search to answer the user's search query. Return a concise grounded answer with source URLs. Do not call other tools, edit files, or ask follow-up questions.",
     input: [{ type: "text", text: query, text_elements: [] }],
     requiredModalities: ["text"],
+    isolation: "private-stdio",
     threadConfig: buildCodexNativeWebSearchThreadConfig(ctx.config),
   });
   const searches = result.items

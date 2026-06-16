@@ -94,6 +94,7 @@ async function describeCodexImages(
       })),
     ],
     requiredModalities: ["text", "image"],
+    isolation: "configured-transport",
   });
   return { text, model };
 }
@@ -130,6 +131,7 @@ async function extractCodexStructured(
       "You are OpenClaw's bounded structured-extraction worker. Return only the requested extraction. Do not call tools, edit files, ask follow-up questions, or include secrets.",
     input: buildCodexStructuredInput(req),
     requiredModalities: requiredStructuredModalities(),
+    isolation: "configured-transport",
   });
   return normalizeStructuredExtractionResult({ text, model, provider: req.provider, req });
 }

@@ -293,6 +293,44 @@ describe("codex media understanding provider", () => {
     expect(requests[2]?.params).toEqual(expect.objectContaining({ cwd: process.cwd() }));
   });
 
+  it("preserves configured WebSocket transport for media turns", async () => {
+    const { client, requests } = createFakeClient();
+    const clientFactory = vi.fn(async () => client);
+    const provider = buildCodexMediaUnderstandingProvider({
+      pluginConfig: {
+        appServer: {
+          transport: "websocket",
+          url: "ws://127.0.0.1:4501",
+        },
+      },
+      clientFactory,
+    });
+
+    await provider.describeImage?.({
+      buffer: Buffer.from("image-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      provider: "codex",
+      model: "gpt-5.4",
+      timeoutMs: 30_000,
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+    });
+
+    expect(clientFactory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        transport: "websocket",
+        url: "ws://127.0.0.1:4501",
+      }),
+      undefined,
+      "/tmp/openclaw-agent",
+      {},
+      { timeoutMs: 30_000 },
+    );
+    expect(requests[1]?.params).toEqual(expect.objectContaining({ cwd: "/tmp/openclaw-agent" }));
+    expect(requests[2]?.params).toEqual(expect.objectContaining({ cwd: "/tmp/openclaw-agent" }));
+  });
+
   it("passes the scoped auth store into isolated app-server startup", async () => {
     const { client } = createFakeClient();
     sharedClientMocks.createIsolatedCodexAppServerClient.mockResolvedValue(client);

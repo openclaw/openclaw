@@ -61,6 +61,7 @@ type CodexBoundedTurnParams = {
   developerInstructions: string;
   input: CodexUserInput[];
   requiredModalities: string[];
+  isolation: "configured-transport" | "private-stdio";
   threadConfig?: JsonObject;
 };
 
@@ -70,6 +71,11 @@ export async function runBoundedCodexAppServerTurn(
   const appServer = resolveCodexAppServerRuntimeOptions({
     pluginConfig: params.options.pluginConfig,
   });
+  if (params.isolation === "configured-transport") {
+    return await runBoundedCodexAppServerTurnInWorkspace(params, appServer, {
+      cwd: params.agentDir?.trim() || process.cwd(),
+    });
+  }
   if (appServer.start.transport !== "stdio") {
     throw new Error("Bounded Codex turns require stdio transport so native tools can be isolated.");
   }
@@ -93,20 +99,25 @@ export async function runBoundedCodexAppServerTurn(
 async function runBoundedCodexAppServerTurnInWorkspace(
   params: CodexBoundedTurnParams,
   appServer: ReturnType<typeof resolveCodexAppServerRuntimeOptions>,
-  isolated: { codexHome: string; cwd: string },
+  workspace: { codexHome?: string; cwd: string },
 ): Promise<CodexBoundedTurnResult> {
   const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 100, 100);
   const agentDir = params.agentDir?.trim() || undefined;
-  const startOptions = {
-    ...appServer.start,
-    env: {
-      ...appServer.start.env,
-      CODEX_HOME: isolated.codexHome,
-    },
-    clearEnv: appServer.start.clearEnv?.filter(
-      (name) => name.trim().toUpperCase() !== "CODEX_HOME",
-    ),
-  };
+  // Hosted search needs a private Codex home and cwd so inherited native tools
+  // cannot escape the bounded turn. Media calls retain configured transport
+  // compatibility while still using an isolated ephemeral thread.
+  const startOptions = workspace.codexHome
+    ? {
+        ...appServer.start,
+        env: {
+          ...appServer.start.env,
+          CODEX_HOME: workspace.codexHome,
+        },
+        clearEnv: appServer.start.clearEnv?.filter(
+          (name) => name.trim().toUpperCase() !== "CODEX_HOME",
+        ),
+      }
+    : appServer.start;
   const ownsClient = !params.options.clientFactory;
   const client = params.options.clientFactory
     ? await params.options.clientFactory(startOptions, params.profile, agentDir, params.config, {
@@ -146,7 +157,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
         {
           model: params.model,
           modelProvider: "openai",
-          cwd: isolated.cwd,
+          cwd: workspace.cwd,
           approvalPolicy: "on-request",
           sandbox: "read-only",
           serviceName: "OpenClaw",
@@ -176,7 +187,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
           {
             threadId: thread.thread.id,
             input: params.input,
-            cwd: isolated.cwd,
+            cwd: workspace.cwd,
             approvalPolicy: "on-request",
             model: params.model,
             effort: "low",

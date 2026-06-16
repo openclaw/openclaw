@@ -352,13 +352,18 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
   });
   const senderScopedWebSearchRestriction =
     !webSearchPolicy.allowed && webSearchPolicy.persistentAllowed;
+  const transientWebSearchRestriction =
+    senderScopedWebSearchRestriction || isCodexMemoryFlushRun(params);
   const persistentCodexWebSearchSurface =
-    !isCodexMemoryFlushRun(params) &&
+    params.config?.tools?.web?.search?.enabled !== false &&
     !(input.pluginConfig.codexDynamicToolsExclude ?? []).some(
       (name) => normalizeCodexDynamicToolName(name) === "web_search",
     );
   input.onPersistentWebSearchPolicyResolved?.(
-    webSearchPresent || (persistentCodexWebSearchSurface && senderScopedWebSearchRestriction),
+    webSearchPresent ||
+      (persistentCodexWebSearchSurface &&
+        transientWebSearchRestriction &&
+        webSearchPolicy.persistentAllowed),
   );
   const toolsAllow = includeForcedCodexDynamicToolAllow(params.toolsAllow, params);
   const filteredTools = filterCodexDynamicToolsForAllowlist(visionFilteredTools, toolsAllow);
