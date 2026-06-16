@@ -12,14 +12,25 @@
     "zod": "4.4.3"
   },
   "devDependencies": {
+    "@beeper/chat-adapter-matrix": "^0.1.0",
+    "@chat-adapter/discord": "^4.30.0",
+    "@chat-adapter/gchat": "^4.30.0",
+    "@chat-adapter/shared": "^4.30.0",
+    "@chat-adapter/slack": "^4.30.0",
     "@chat-adapter/state-memory": "^4.30.0",
+    "@chat-adapter/teams": "^4.30.0",
     "@chat-adapter/telegram": "^4.30.0",
+    "@chat-adapter/whatsapp": "^4.30.0",
+    "@larksuite/vercel-chat-adapter": "^0.1.2",
     "@openclaw/discord": "workspace:*",
     "@openclaw/plugin-sdk": "workspace:*",
     "@openclaw/slack": "workspace:*",
     "@openclaw/whatsapp": "workspace:*",
     "chat": "^4.30.0",
-    "crabline": "github:openclaw/crabline#1ee8aa3a7e83af8f9bc6579e43688a646c899769",
+    "chat-adapter-imessage": "^0.1.1",
+    "chat-adapter-mattermost": "^1.1.3",
+    "chat-adapter-zalo": "^0.1.0",
+    "crabline": "github:openclaw/crabline#01a2a2e41f982920ae434cff5aa1a0647e4d16c4",
     "openclaw": "2026.5.28"
   },
   "peerDependencies": {
