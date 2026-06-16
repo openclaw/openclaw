@@ -10,7 +10,6 @@ import {
   collectQaSuitePluginIds,
   mapQaSuiteWithConcurrency,
   normalizeQaSuiteConcurrency,
-  partitionQaSuiteScenariosByChannelSupport,
   resolveQaSuiteScenarioChannel,
   resolveQaSuiteWorkerStartStaggerMs,
   resolveQaSuiteOutputDir,
@@ -282,31 +281,6 @@ describe("qa suite planning helpers", () => {
         ],
       }),
     ).toThrow("Selected QA scenarios require multiple channels");
-  });
-
-  it("partitions unsupported driver channels as infrastructure gaps", () => {
-    const { runnableScenarios, unsupportedScenarios } = partitionQaSuiteScenariosByChannelSupport({
-      defaultChannel: "telegram",
-      isChannelSupported: (channel) => channel === "telegram",
-      scenarios: [
-        makeQaSuiteTestScenario("default-flow"),
-        makeQaSuiteTestScenario("telegram-flow", { channel: "telegram" }),
-        makeQaSuiteTestScenario("slack-flow", { channel: "slack" }),
-      ],
-      unsupportedReason: (channel) => `unsupported ${channel}`,
-    });
-
-    expect(runnableScenarios.map((scenario) => scenario.id)).toEqual([
-      "default-flow",
-      "telegram-flow",
-    ]);
-    expect(unsupportedScenarios).toEqual([
-      {
-        channel: "slack",
-        reason: "unsupported slack",
-        scenario: expect.objectContaining({ id: "slack-flow" }),
-      },
-    ]);
   });
 
   it("collects unique scenario-declared bundled plugins in encounter order", () => {

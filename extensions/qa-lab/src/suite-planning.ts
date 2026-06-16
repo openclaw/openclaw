@@ -136,55 +136,6 @@ function resolveQaSuiteScenarioChannel(params: {
   );
 }
 
-type QaSuiteChannelSupportGap = {
-  channel: string;
-  reason: string;
-  scenario: QaSeedScenario;
-};
-
-function resolveQaSuiteScenarioRequiredChannel(params: {
-  defaultChannel: string;
-  explicitChannel?: string | null;
-  scenario: QaSeedScenario;
-}) {
-  return (
-    params.explicitChannel?.trim().toLowerCase() ||
-    params.scenario.execution.channel?.trim().toLowerCase() ||
-    params.defaultChannel
-  );
-}
-
-function partitionQaSuiteScenariosByChannelSupport(params: {
-  defaultChannel: string;
-  explicitChannel?: string | null;
-  isChannelSupported: (channel: string) => boolean;
-  unsupportedReason: (channel: string) => string;
-  scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"];
-}): {
-  runnableScenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"];
-  unsupportedScenarios: QaSuiteChannelSupportGap[];
-} {
-  const runnableScenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"] = [];
-  const unsupportedScenarios: QaSuiteChannelSupportGap[] = [];
-  for (const scenario of params.scenarios) {
-    const channel = resolveQaSuiteScenarioRequiredChannel({
-      defaultChannel: params.defaultChannel,
-      explicitChannel: params.explicitChannel,
-      scenario,
-    });
-    if (params.isChannelSupported(channel)) {
-      runnableScenarios.push(scenario);
-      continue;
-    }
-    unsupportedScenarios.push({
-      channel,
-      reason: params.unsupportedReason(channel),
-      scenario,
-    });
-  }
-  return { runnableScenarios, unsupportedScenarios };
-}
-
 function collectQaSuitePluginIds(
   scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"],
 ) {
@@ -365,7 +316,6 @@ export {
   collectQaSuitePluginIds,
   mapQaSuiteWithConcurrency,
   normalizeQaSuiteConcurrency,
-  partitionQaSuiteScenariosByChannelSupport,
   resolveQaSuiteScenarioChannel,
   resolveQaSuiteWorkerStartStaggerMs,
   resolveQaSuiteOutputDir,

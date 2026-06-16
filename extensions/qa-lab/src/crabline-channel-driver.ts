@@ -28,18 +28,6 @@ function listSupportedCrablineChannels(): QaCrablineChannelId[] {
   ) as QaCrablineChannelId[];
 }
 
-export function isQaCrablineChannelSupported(channel: string): channel is QaCrablineChannelId {
-  return Boolean(
-    findLocalChannelDriver({ channel: channel.trim().toLowerCase() as CrablineChannel }),
-  );
-}
-
-export function formatQaCrablineUnsupportedChannelMessage(channel: string): string {
-  const normalized = channel.trim().toLowerCase();
-  const supportedChannels = listSupportedCrablineChannels();
-  return `--channel must be one of ${supportedChannels.join(", ")} for --channel-driver crabline, got "${normalized}".`;
-}
-
 export function normalizeQaChannelDriverId(input?: string | null): QaChannelDriverId | null {
   const normalized = input?.trim().toLowerCase();
   if (!normalized) {
@@ -57,7 +45,10 @@ export function normalizeQaCrablineChannel(input?: string | null): QaCrablineCha
   if (findLocalChannelDriver({ channel })) {
     return channel;
   }
-  throw new Error(formatQaCrablineUnsupportedChannelMessage(normalized));
+  const supportedChannels = listSupportedCrablineChannels();
+  throw new Error(
+    `--channel must be one of ${supportedChannels.join(", ")} for --channel-driver crabline, got "${input}".`,
+  );
 }
 
 export function resolveQaCrablineChannelDriverSelection(params: {
