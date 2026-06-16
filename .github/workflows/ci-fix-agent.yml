@@ -1,7 +1,7 @@
 name: CI Fix Agent
 
 on:
-  workflow_run: # zizmor: ignore[dangerous-triggers] PR-only CI repair after failure; job gates repository, event, conclusion, actor, and PR lookup before checkout
+  workflow_run: # zizmor: ignore[dangerous-triggers] Triage only — no checkout of PR code in this workflow
     workflows:
       - CI
     types:
@@ -14,9 +14,9 @@ on:
         type: number
 
 permissions:
-  actions: read
+  actions: write
   checks: read
-  contents: write
+  contents: read
   pull-requests: write
 
 concurrency:
@@ -27,7 +27,7 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
-  fix-ci:
+  triage:
     # Only run on CI failure for PRs (not main pushes), skip bot actors
     if: >
       github.repository == 'openclaw/openclaw' &&
@@ -166,6 +166,9 @@ jobs:
           echo "$failed_with_logs" > "$RUNNER_TEMP/failed-checks.json"
           echo "has_failures=true" >> "$GITHUB_OUTPUT"
           echo "check_count=${check_count}" >> "$GITHUB_OUTPUT"
+          # Compact JSON for workflow_dispatch input (max ~65535 chars)
+          failed_json_compact="$(jq -c '.' "$RUNNER_TEMP/failed-checks.json" | head -c 65000)"
+          echo "failed_json=${failed_json_compact}" >> "$GITHUB_OUTPUT"
 
       - name: Dispatch CI failure to ClawSweeper
         if: steps.pr.outputs.skip != 'true' && steps.gate.outputs.run_agent == 'true' && steps.checks.outputs.has_failures == 'true'
@@ -220,137 +223,31 @@ jobs:
             echo "::warning::Could not dispatch to ClawSweeper; continuing with Codex fix attempt."
           fi
 
-      # --- Codex auto-fix (same-repo PRs only) ---
-      # Security model: only same-repo PRs (is_fork != true), cadence-limited,
-      # Codex runs in sandbox. Node setup uses pinned external actions (not local
-      # composite action) to avoid executing untrusted code from the PR branch.
+      # --- Dispatch Codex fix for same-repo PRs (separate workflow to avoid
+      #     untrusted checkout in this privileged workflow_run context) ---
 
-      - name: Checkout PR branch
-        if: > # zizmor: ignore[dangerous-triggers] same-repo gate + pinned actions only; no local composite action from PR branch
-          steps.pr.outputs.skip != 'true' &&
-          steps.gate.outputs.run_agent == 'true' &&
-          steps.checks.outputs.has_failures == 'true' &&
-          steps.pr.outputs.is_fork != 'true'
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ steps.pr.outputs.head_ref }}
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Setup Node.js
-        if: >
-          steps.pr.outputs.skip != 'true' &&
-          steps.gate.outputs.run_agent == 'true' &&
-          steps.checks.outputs.has_failures == 'true' &&
-          steps.pr.outputs.is_fork != 'true'
-        uses: actions/setup-node@v6
-        with:
-          node-version: "24.x"
-
-      - name: Setup pnpm
-        if: >
-          steps.pr.outputs.skip != 'true' &&
-          steps.gate.outputs.run_agent == 'true' &&
-          steps.checks.outputs.has_failures == 'true' &&
-          steps.pr.outputs.is_fork != 'true'
-        run: |
-          corepack enable
-          pnpm --version
-
-      - name: Install dependencies
-        if: >
-          steps.pr.outputs.skip != 'true' &&
-          steps.gate.outputs.run_agent == 'true' &&
-          steps.checks.outputs.has_failures == 'true' &&
-          steps.pr.outputs.is_fork != 'true'
-        # --ignore-scripts: prevent lifecycle script execution from untrusted PR code
-        # in this privileged workflow_run context (CodeQL actions/dangerous-triggers)
-        run: pnpm install --frozen-lockfile --ignore-scripts
-        continue-on-error: true
-
-      - name: Ensure CI fix agent key exists
+      - name: Dispatch Codex fix workflow
         if: >
           steps.pr.outputs.skip != 'true' &&
           steps.gate.outputs.run_agent == 'true' &&
           steps.checks.outputs.has_failures == 'true' &&
           steps.pr.outputs.is_fork != 'true'
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENCLAW_CI_FIX_AGENT_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
-        run: |
-          set -euo pipefail
-          if [ -z "${OPENAI_API_KEY:-}" ]; then
-            echo "Missing OPENCLAW_CI_FIX_AGENT_OPENAI_API_KEY or OPENAI_API_KEY secret." >&2
-            exit 1
-          fi
-
-      - name: Run Codex CI fix agent
-        if: >
-          steps.pr.outputs.skip != 'true' &&
-          steps.gate.outputs.run_agent == 'true' &&
-          steps.checks.outputs.has_failures == 'true' &&
-          steps.pr.outputs.is_fork != 'true'
-        uses: openai/codex-action@5c3f4ccdb2b8790f73d6b21751ac00e602aa0c02
-        env:
-          CI_FIX_FAILED_CHECKS: ${{ runner.temp }}/failed-checks.json
-          CI_FIX_PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
-        with:
-          openai-api-key: ${{ secrets.OPENCLAW_CI_FIX_AGENT_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
-          prompt-file: .github/codex/prompts/ci-fix-agent.md
-          model: ${{ vars.OPENCLAW_CI_OPENAI_MODEL_BARE }}
-          effort: high
-          sandbox: workspace-write
-          safety-strategy: drop-sudo
-          codex-args: '["--full-auto"]'
-
-      - name: Enforce fix-only patch
-        if: >
-          steps.pr.outputs.skip != 'true' &&
-          steps.gate.outputs.run_agent == 'true' &&
-          steps.checks.outputs.has_failures == 'true' &&
-          steps.pr.outputs.is_fork != 'true'
-        id: patch
-        run: |
-          set -euo pipefail
-
-          if git diff --quiet && [ -z "$(git ls-files --others --exclude-standard)" ]; then
-            echo "Codex made no changes; skipping commit."
-            echo "has_changes=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          echo "has_changes=true" >> "$GITHUB_OUTPUT"
-
-      - name: Commit and push fix
-        if: >
-          steps.pr.outputs.skip != 'true' &&
-          steps.gate.outputs.run_agent == 'true' &&
-          steps.checks.outputs.has_failures == 'true' &&
-          steps.pr.outputs.is_fork != 'true' &&
-          steps.patch.outputs.has_changes == 'true'
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          HEAD_REF: ${{ steps.pr.outputs.head_ref }}
+          GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
-          CHECK_COUNT: ${{ steps.checks.outputs.check_count }}
+          HEAD_REF: ${{ steps.pr.outputs.head_ref }}
+          FAILED_JSON: ${{ steps.checks.outputs.failed_json }}
         run: |
           set -euo pipefail
 
-          git config user.name "openclaw-ci-fix-agent[bot]"
-          git config user.email "openclaw-ci-fix-agent[bot]@users.noreply.github.com"
-          git add -A
-          git commit --no-verify -m "ci: auto-fix ${CHECK_COUNT} failing check(s) on PR #${PR_NUMBER}"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci-fix-codex.yml/dispatches" \
+            --method POST \
+            -f ref="${GITHUB_REF_NAME:-main}" \
+            -f "inputs[pr_number]=${PR_NUMBER}" \
+            -f "inputs[head_ref]=${HEAD_REF}" \
+            -f "inputs[failed_checks_json]=${FAILED_JSON}"
 
-          for attempt in 1 2 3 4 5; do
-            if git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:${HEAD_REF}"; then
-              echo "Pushed CI fix to ${HEAD_REF}."
-              exit 0
-            fi
-            echo "Push attempt ${attempt} failed; retrying."
-            sleep $((attempt * 2))
-          done
-
-          echo "Failed to push CI fix after retries." >&2
-          exit 1
+          echo "Dispatched Codex fix workflow for PR #${PR_NUMBER}."
 
       # --- Fork PR fallback: post comment with diagnosis ---
 
