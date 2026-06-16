@@ -74,6 +74,7 @@
     "!dist/plugin-sdk/src/test-utils/**",
     "!dist/plugin-sdk/src/plugin-sdk/test-helpers/**",
     "!dist/extensions/acpx/**",
+    "!dist/extensions/advisor/**",
     "!dist/extensions/amazon-bedrock/**",
     "!dist/extensions/amazon-bedrock-mantle/**",
     "!dist/extensions/anthropic-vertex/**",
