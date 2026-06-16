@@ -91,7 +91,6 @@ describe("tokenjuice plugin", () => {
       status: "completed",
       aggregated: "file contents\n",
       exitCode: 0,
-      cwd: "/tmp/openclaw-tokenjuice-test",
       truncation: { reason: "max_bytes" },
       fullOutputPath: "/tmp/out.txt",
     });
@@ -136,7 +135,54 @@ describe("tokenjuice plugin", () => {
     expect(received?.details).toBe(existingDetails);
   });
 
-  it("normalises bash results without details before passing them to tokenjuice", async () => {
+  it.each([
+    ["exit code", { exitCode: 7 }, "failed", 7],
+    ["success flag", { success: false }, "failed", 1],
+    ["ok flag", { ok: false }, "failed", 1],
+    ["timeout flag", { timedOut: true }, "failed", 1],
+    ["error value", { error: "command failed" }, "failed", 1],
+    ["successful exit code", { exitCode: 0 }, "completed", 0],
+    ["successful flag", { success: true }, "completed", 0],
+  ])(
+    "adds a canonical status while preserving bash details with a %s",
+    async (_label, existingDetails, status, exitCode) => {
+      let received:
+        | {
+            details: unknown;
+          }
+        | undefined;
+      tokenjuiceFactory.mockImplementationOnce(
+        (api: { on: (event: string, handler: unknown) => void }) => {
+          api.on("tool_result", async (event: typeof received) => {
+            received = event;
+          });
+        },
+      );
+
+      const middleware = createTokenjuiceAgentToolResultMiddleware();
+      await middleware(
+        {
+          toolCallId: "tool-call-tokenjuice-bash-terminal",
+          toolName: "bash",
+          args: { command: "exit 7", workdir: "/tmp" },
+          result: {
+            content: [{ type: "text", text: "failed\n" }],
+            details: existingDetails,
+          },
+          isError: false,
+        },
+        { runtime: "openclaw" },
+      );
+
+      expect(received?.details).toMatchObject({
+        ...existingDetails,
+        status,
+        exitCode,
+      });
+    },
+  );
+
+  it("normalizes bash results without details before passing them to tokenjuice", async () => {
     let received:
       | {
           toolName: string;
@@ -172,8 +218,8 @@ describe("tokenjuice plugin", () => {
       status: "completed",
       aggregated: "hello\n",
       exitCode: 0,
-      cwd: "/tmp/openclaw-tokenjuice-test",
     });
+    expect(received?.details).not.toHaveProperty("cwd");
     expect(result?.result.content).toEqual([{ type: "text", text: "compacted" }]);
   });
 });

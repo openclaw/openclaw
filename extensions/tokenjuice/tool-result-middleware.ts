@@ -18,6 +18,10 @@ type TokenjuiceToolResultHandler = (
   ctx: { cwd: string },
 ) => Promise<Partial<OpenClawAgentToolResult> | void> | Partial<OpenClawAgentToolResult> | void;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function readCwd(event: AgentToolResultMiddlewareEvent): string {
   if (event.cwd?.trim()) {
     return event.cwd;
@@ -55,34 +59,67 @@ function readCommand(args: Record<string, unknown>): string {
   return typeof command === "string" ? command : "";
 }
 
-function normaliseDetails(
+function hasStatus(details: Record<string, unknown>): boolean {
+  const status = details.status;
+  return typeof status === "string" && status.trim() !== "";
+}
+
+function hasFailureState(
+  event: AgentToolResultMiddlewareEvent,
+  details: Record<string, unknown> | undefined,
+): boolean {
+  const exitCode = details?.exitCode;
+  return (
+    event.isError === true ||
+    details?.ok === false ||
+    details?.success === false ||
+    details?.timedOut === true ||
+    Boolean(details?.error) ||
+    (typeof exitCode === "number" && Number.isFinite(exitCode) && exitCode !== 0)
+  );
+}
+
+function normalizeDetails(
   event: AgentToolResultMiddlewareEvent,
   current: OpenClawAgentToolResult,
 ): unknown {
   const isExecLike = event.toolName === "exec" || event.toolName === "bash";
-  const hasObjectDetails = current.details != null && typeof current.details === "object";
+  const details = isRecord(current.details) ? current.details : undefined;
 
   if (!isExecLike || !readCommand(event.args)) {
     return current.details;
   }
-  // Details already contain a completed/failed status — pass through unchanged.
-  if (hasObjectDetails && "status" in (current.details as Record<string, unknown>)) {
+  // A concrete status is already canonical. Other terminal hints are preserved below
+  // while supplying only the completed/failed status Tokenjuice requires.
+  if (details && hasStatus(details)) {
     return current.details;
   }
   const aggregated = readTextContent(current.content);
   if (!aggregated.trim()) {
     return current.details;
   }
+  const failed = hasFailureState(event, details);
+  const existingExitCode = details?.exitCode;
+  const exitCode =
+    typeof existingExitCode === "number" && Number.isFinite(existingExitCode)
+      ? existingExitCode
+      : failed
+        ? 1
+        : 0;
   const synthesized = {
-    status: event.isError ? "failed" : "completed",
+    status: failed ? "failed" : "completed",
     aggregated,
-    exitCode: event.isError ? 1 : 0,
-    cwd: readCwd(event),
+    exitCode,
   };
-  // Merge: preserve existing metadata fields, then overlay synthesized exec fields.
-  return hasObjectDetails
-    ? { ...(current.details as Record<string, unknown>), ...synthesized }
-    : synthesized;
+  if (!details) {
+    return synthesized;
+  }
+  return {
+    ...synthesized,
+    ...details,
+    status: synthesized.status,
+    exitCode: synthesized.exitCode,
+  };
 }
 
 export function createTokenjuiceAgentToolResultMiddleware(): AgentToolResultMiddleware {
@@ -103,7 +140,7 @@ export function createTokenjuiceAgentToolResultMiddleware(): AgentToolResultMidd
           toolName: event.toolName,
           input: event.args,
           content: current.content,
-          details: normaliseDetails(event, current),
+          details: normalizeDetails(event, current),
           isError: event.isError,
         },
         { cwd: readCwd(event) },
