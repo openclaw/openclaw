@@ -21,9 +21,36 @@ type GatewayRespawnOptions = {
   env?: NodeJS.ProcessEnv;
 };
 
+function hasValue(value: string | undefined): boolean {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
 function isTruthy(value: string | undefined): boolean {
   const normalized = normalizeOptionalLowercaseString(value);
   return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+}
+
+function detectOpenClawSupervisorMarker(
+  env: NodeJS.ProcessEnv,
+): ReturnType<typeof detectRespawnSupervisor> {
+  if (process.platform === "darwin" && hasValue(env.OPENCLAW_LAUNCHD_LABEL)) {
+    return "launchd";
+  }
+  if (process.platform === "linux" && hasValue(env.OPENCLAW_SYSTEMD_UNIT)) {
+    return "systemd";
+  }
+  if (process.platform === "win32") {
+    if (hasValue(env.OPENCLAW_WINDOWS_TASK_NAME)) {
+      return "schtasks";
+    }
+    if (
+      env.OPENCLAW_SERVICE_MARKER?.trim() === "openclaw" &&
+      env.OPENCLAW_SERVICE_KIND?.trim() === "gateway"
+    ) {
+      return "schtasks";
+    }
+  }
+  return null;
 }
 
 function spawnDetachedGatewayProcess(opts: GatewayRespawnOptions = {}): {
@@ -50,24 +77,16 @@ function spawnDetachedGatewayProcess(opts: GatewayRespawnOptions = {}): {
 export function restartGatewayProcessWithFreshPid(
   _opts: GatewayRespawnOptions = {},
 ): GatewayRespawnResult {
+  const explicitSupervisor = detectOpenClawSupervisorMarker(process.env);
+  if (explicitSupervisor) {
+    return completeSupervisorRespawn(explicitSupervisor);
+  }
   if (isTruthy(process.env.OPENCLAW_NO_RESPAWN)) {
     return { mode: "disabled" };
   }
   const supervisor = detectRespawnSupervisor(process.env);
   if (supervisor) {
-    // On macOS launchd, exit cleanly and let KeepAlive relaunch the service.
-    // Avoid detached kickstart/start handoffs here so restart timing stays tied
-    // to launchd's native supervision rather than a second helper process.
-    if (supervisor === "schtasks") {
-      const restart = triggerOpenClawRestart();
-      if (!restart.ok) {
-        return {
-          mode: "failed",
-          detail: restart.detail ?? `${restart.method} restart failed`,
-        };
-      }
-    }
-    return { mode: "supervised" };
+    return completeSupervisorRespawn(supervisor);
   }
   if (process.platform === "win32") {
     // Detached respawn is unsafe on Windows without an identified Scheduled Task:
@@ -88,6 +107,23 @@ export function restartGatewayProcessWithFreshPid(
     mode: "disabled",
     detail: "unmanaged: use in-process restart to keep custom supervisor PID tracking stable",
   };
+}
+
+function completeSupervisorRespawn(
+  supervisor: NonNullable<ReturnType<typeof detectRespawnSupervisor>>,
+): GatewayRespawnResult {
+  // Native supervisors already track the gateway process; exit cleanly and let
+  // them relaunch instead of creating a helper process or keeping the old PID.
+  if (supervisor === "schtasks") {
+    const restart = triggerOpenClawRestart();
+    if (!restart.ok) {
+      return {
+        mode: "failed",
+        detail: restart.detail ?? `${restart.method} restart failed`,
+      };
+    }
+  }
+  return { mode: "supervised" };
 }
 
 /**

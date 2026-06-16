@@ -87,6 +87,19 @@ describe("restartGatewayProcessWithFreshPid", () => {
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
+  it("lets explicit OpenClaw systemd supervision override OPENCLAW_NO_RESPAWN", () => {
+    clearSupervisorHints();
+    setPlatform("linux");
+    process.env.OPENCLAW_NO_RESPAWN = "1";
+    process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-gateway.service";
+
+    const result = restartGatewayProcessWithFreshPid();
+
+    expect(result).toEqual({ mode: "supervised" });
+    expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
   it("returns supervised when OpenClaw launchd markers are present on macOS (no kickstart)", () => {
     clearSupervisorHints();
     expectLaunchdSupervisedWithoutKickstart({ launchJobLabel: "ai.openclaw.gateway" });
