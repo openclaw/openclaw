@@ -39,14 +39,28 @@ export interface SequentialQueueOptions {
   onTaskTimeout?: (key: string, timeoutMs: number) => void;
 }
 
-export function createSequentialQueue(options: SequentialQueueOptions = {}) {
+export type SequentialQueue = {
+  (key: string, task: () => Promise<void>): Promise<void>;
+  has: (key: string) => boolean;
+  isRunning: (key: string) => boolean;
+};
+
+export function createSequentialQueue(options: SequentialQueueOptions = {}): SequentialQueue {
   const queues = new Map<string, Promise<void>>();
+  const runningKeys = new Set<string>();
   const taskTimeoutMs = options.taskTimeoutMs ?? DEFAULT_TASK_TIMEOUT_MS;
   const onTaskTimeout = options.onTaskTimeout;
 
-  return (key: string, task: () => Promise<void>): Promise<void> => {
+  const enqueue = ((key: string, task: () => Promise<void>): Promise<void> => {
     const previous = queues.get(key) ?? Promise.resolve();
-    const wrapped = () => boundedRun(key, task, taskTimeoutMs, onTaskTimeout);
+    const wrapped = async () => {
+      runningKeys.add(key);
+      try {
+        await boundedRun(key, task, taskTimeoutMs, onTaskTimeout);
+      } finally {
+        runningKeys.delete(key);
+      }
+    };
     const next = previous.then(wrapped, wrapped);
     queues.set(key, next);
     const cleanup = () => {
@@ -56,7 +70,10 @@ export function createSequentialQueue(options: SequentialQueueOptions = {}) {
     };
     next.then(cleanup, cleanup);
     return next;
-  };
+  }) as SequentialQueue;
+  enqueue.has = (key: string): boolean => queues.has(key);
+  enqueue.isRunning = (key: string): boolean => runningKeys.has(key);
+  return enqueue;
 }
 
 async function boundedRun(
