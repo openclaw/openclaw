@@ -228,7 +228,7 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
             sessionFile: "/tmp/cron-usage-session.jsonl",
             provider: "test-provider",
             model: "test-model",
-            usage: { input: 50, output: 100, cacheRead: 7, cacheWrite: 3 },
+            usage: { input: 50, output: 100, cacheRead: 7, cacheWrite: 3, total: 55 },
             lastCallUsage: { input: 40, output: 5, cacheRead: 6, cacheWrite: 4 },
           },
         },
