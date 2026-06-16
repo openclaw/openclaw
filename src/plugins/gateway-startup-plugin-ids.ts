@@ -1926,12 +1926,24 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
   const pluginIds: string[] = [];
   for (const plugin of params.index.plugins) {
     const manifest = findManifestPlugin(manifestLookup, plugin.pluginId);
+    // Non-bundled plugin that explicitly declares channels and is enabled
+    // in plugins.entries must be treated as a configured startup channel
+    // even when the channel itself is not listed in config.channels.
+    // Published install flows configure channels via plugins.entries, and
+    // the channel config may only have {enabled: true} which does not
+    // produce a `configuredChannelIds` entry.
+    const hasExplicitlyEnabledNonBundledChannel =
+      plugin.origin !== "bundled" &&
+      (manifest?.channels?.length ?? 0) > 0 &&
+      pluginsConfig.entries[plugin.pluginId]?.enabled === true &&
+      !pluginsConfig.deny.includes(plugin.pluginId);
     if (
       hasConfiguredStartupChannel({
         plugin,
         manifestLookup,
         configuredChannelIds,
-      })
+      }) ||
+      hasExplicitlyEnabledNonBundledChannel
     ) {
       const canStartConfiguredChannel = canStartConfiguredChannelPlugin({
         plugin,
