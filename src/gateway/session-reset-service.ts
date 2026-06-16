@@ -2,6 +2,7 @@
 // Rotates transcripts and coordinates lifecycle cleanup across runtimes/hooks.
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
@@ -840,6 +841,7 @@ export async function performGatewaySessionReset(params: {
   agentId?: string;
   reason: "new" | "reset";
   commandSource: string;
+  displayName?: string;
   assertCurrent?: () => void;
   onCommitted?: (commit: { key: string; sessionId: string }) => void;
 }): Promise<
@@ -1042,7 +1044,7 @@ export async function performGatewaySessionReset(params: {
         subagentRole: currentEntry?.subagentRole,
         subagentControlScope: currentEntry?.subagentControlScope,
         label: currentEntry?.label,
-        displayName: currentEntry?.displayName,
+        displayName: normalizeOptionalString(params.displayName) ?? currentEntry?.displayName,
         channel: currentEntry?.channel,
         groupId: currentEntry?.groupId,
         subject: currentEntry?.subject,

@@ -1400,6 +1400,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
             : {}),
           reason: "new",
           commandSource: "webchat",
+          ...("displayName" in p ? { displayName: normalizeOptionalString(p.displayName) } : {}),
         });
         if (!resetResult.ok) {
           respond(false, undefined, resetResult.error);
