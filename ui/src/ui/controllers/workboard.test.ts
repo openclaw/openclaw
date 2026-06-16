@@ -2364,6 +2364,41 @@ describe("workboard controller", () => {
     ).toBe(2);
   });
 
+  it("matches failed attempts to canonical default-agent task sessions", () => {
+    const card = {
+      ...sampleCard,
+      metadata: {
+        failureCount: 1,
+        attempts: [
+          {
+            id: "canonical-attempt",
+            sessionKey: sampleTaskSessionKey,
+            status: "failed",
+            startedAt: 1,
+          },
+        ],
+      },
+    } satisfies WorkboardCard;
+    const tasksByCardId = new Map<string, WorkboardTaskSummary>([
+      [
+        card.id,
+        {
+          ...sampleTask,
+          status: "failed",
+          childSessionKey: `agent:main:${sampleTaskSessionKey}`,
+        },
+      ],
+    ]);
+
+    expect(
+      summarizeWorkboardHealth({
+        cards: [card],
+        tasksByCardId,
+        sessions: [],
+      }).failedAttempts,
+    ).toBe(1);
+  });
+
   it("filters built-in Workboard view presets", () => {
     vi.setSystemTime(new Date("2026-06-03T12:00:00Z"));
     const now = Date.now();
@@ -5090,6 +5125,7 @@ describe("workboard controller", () => {
     }));
     state.loaded = true;
     state.cards = cards;
+    state.autoRefreshIntervalMs = 5000;
     const client = createClient((method, params) => {
       if (method === "tasks.list") {
         return { tasks: [] };
@@ -5447,6 +5483,68 @@ describe("workboard controller", () => {
     expect(client.request).not.toHaveBeenCalled();
   });
 
+  it("does not schedule failed task lifecycle retries while auto-refresh is off", async () => {
+    vi.useFakeTimers();
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [
+      {
+        ...sampleCard,
+        status: "running",
+        sessionKey: sampleTaskSessionKey,
+        taskId: sampleTask.taskId,
+      },
+    ];
+    state.tasksByCardId.set(sampleCard.id, sampleTask);
+    const requestUpdate = vi.fn();
+    const client = createClient(() => {
+      throw new Error("tasks unavailable");
+    });
+
+    await syncWorkboardLifecycle({ host, client: client as never, sessions: [], requestUpdate });
+    vi.clearAllMocks();
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(requestUpdate).not.toHaveBeenCalled();
+    expect(client.request).not.toHaveBeenCalled();
+  });
+
+  it("cancels failed task lifecycle retries when auto-refresh is turned off", async () => {
+    vi.useFakeTimers();
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [
+      {
+        ...sampleCard,
+        status: "running",
+        sessionKey: sampleTaskSessionKey,
+        taskId: sampleTask.taskId,
+      },
+    ];
+    state.tasksByCardId.set(sampleCard.id, sampleTask);
+    state.autoRefreshIntervalMs = 5000;
+    const requestUpdate = vi.fn();
+    const client = createClient(() => {
+      throw new Error("tasks unavailable");
+    });
+
+    await syncWorkboardLifecycle({ host, client: client as never, sessions: [], requestUpdate });
+    vi.clearAllMocks();
+    state.autoRefreshIntervalMs = 0;
+    configureWorkboardPolling({
+      host,
+      client: client as never,
+      enabled: false,
+      requestUpdate,
+    });
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(requestUpdate).not.toHaveBeenCalled();
+    expect(client.request).not.toHaveBeenCalled();
+  });
+
   it("retries a failed lifecycle task refresh after backoff", async () => {
     vi.useFakeTimers();
     const host = {};
@@ -5461,6 +5559,7 @@ describe("workboard controller", () => {
     state.loaded = true;
     state.cards = [linked];
     state.tasksByCardId.set("card-1", sampleTask);
+    state.autoRefreshIntervalMs = 5000;
     const requestUpdate = vi.fn();
     let tasksAvailable = false;
     const client = createClient((method) => {

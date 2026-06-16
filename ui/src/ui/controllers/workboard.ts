@@ -639,7 +639,7 @@ function setWorkboardLifecycleTaskRefreshFailed(
     return;
   }
   clearWorkboardLifecycleTaskRetryTimer(host);
-  if (!failed || !options.requestUpdate) {
+  if (!failed || !options.requestUpdate || state.autoRefreshIntervalMs === 0) {
     return;
   }
   const nextTimer = setTimeout(() => {
@@ -779,7 +779,7 @@ function taskFailureRepresentedByCard(
       return Boolean(
         attempt.sessionKey &&
         taskSessionKeys.some((sessionKey) =>
-          taskSessionKeyMatchesCardSession(attempt.sessionKey ?? "", sessionKey),
+          taskSessionKeyMatchesCardSession(sessionKey, attempt.sessionKey ?? ""),
         ),
       );
     }),
@@ -1516,8 +1516,8 @@ function sessionUpdatedAtValue(session: GatewaySessionRow): number | undefined {
 }
 
 function taskSessionKeyMatchesCardSession(
-  cardSessionKey: string,
   taskSessionKey: string | undefined,
+  cardSessionKey: string,
 ): boolean {
   if (!taskSessionKey) {
     return false;
@@ -1539,7 +1539,7 @@ function taskMatchesCard(task: WorkboardTaskSummary, card: WorkboardCard): boole
   const cardSessionKey = workboardCardSessionKey(card);
   const taskSessionMatches = cardSessionKey
     ? [task.sessionKey, task.childSessionKey, task.ownerKey].some((taskSessionKey) =>
-        taskSessionKeyMatchesCardSession(cardSessionKey, taskSessionKey),
+        taskSessionKeyMatchesCardSession(taskSessionKey, cardSessionKey),
       )
     : false;
   const cardRunId = workboardCardRunId(card);
@@ -2358,6 +2358,7 @@ export function configureWorkboardPolling(params: {
   if (!enabled) {
     clearWorkboardPolling(params.host);
     clearWorkboardLifecycleTaskPreparedTimer(params.host);
+    clearWorkboardLifecycleTaskRetryTimer(params.host);
     return;
   }
   const configChanged =
