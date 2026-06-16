@@ -458,7 +458,7 @@ function renderTelegramProgressLine(line: ChannelProgressDraftCompositorLine): s
       parts.push(renderTelegramProgressStringLine(text));
     }
   }
-  if (line.status && line.status !== line.detail) {
+  if (line.status && line.status !== "completed" && line.status !== line.detail) {
     parts.push(`<i>${escapeTelegramProgressHtml(line.status)}</i>`);
   }
   return parts.join(" ");

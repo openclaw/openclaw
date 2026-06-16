@@ -443,6 +443,9 @@ function buildCommandOutputProgressLine(
   if (!line || !status) {
     return line;
   }
+  if (status === "completed") {
+    return line;
+  }
   if (!line.detail || line.detail === status) {
     const statusLine = {
       ...line,
@@ -1055,11 +1058,14 @@ function getProgressDraftLineText(line: string | ChannelProgressDraftLine): stri
   const label = line.label.trim();
   const detail = line.detail?.trim();
   const status = line.status?.trim();
+  const displayStatus = status === "completed" ? undefined : status;
   if (detail) {
     const compactCommandLine =
       line.toolName === "exec" || line.toolName === "bash" || line.toolName === "shell";
-    if (line.kind === "command-output" && status && detail !== status) {
-      const outputDetail = detail.startsWith(`${status};`) ? detail : `${status}; ${detail}`;
+    if (line.kind === "command-output" && displayStatus && detail !== displayStatus) {
+      const outputDetail = detail.startsWith(`${displayStatus};`)
+        ? detail
+        : `${displayStatus}; ${detail}`;
       if (compactCommandLine) {
         return `${prefix}${outputDetail}`;
       }
@@ -1070,11 +1076,11 @@ function getProgressDraftLineText(line: string | ChannelProgressDraftLine): stri
     }
     return `${prefix}${detail}`;
   }
-  if (status) {
+  if (displayStatus) {
     if (label) {
-      return `${prefix}${label}: ${status}`;
+      return `${prefix}${label}: ${displayStatus}`;
     }
-    return `${prefix}${status}`;
+    return `${prefix}${displayStatus}`;
   }
   const text = line.text.trim();
   if (!icon && text && text !== label) {
