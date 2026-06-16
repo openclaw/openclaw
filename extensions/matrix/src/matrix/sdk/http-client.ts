@@ -9,6 +9,7 @@ type MatrixAuthedHttpClientParams = {
   accessToken: string;
   ssrfPolicy?: SsrFPolicy;
   dispatcherPolicy?: PinnedDispatcherPolicy;
+  apiPrefix?: string;
 };
 
 export class MatrixAuthedHttpClient {
@@ -16,12 +17,30 @@ export class MatrixAuthedHttpClient {
   private readonly accessToken: string;
   private readonly ssrfPolicy?: SsrFPolicy;
   private readonly dispatcherPolicy?: PinnedDispatcherPolicy;
+  private readonly apiPrefix: string;
 
   constructor(params: MatrixAuthedHttpClientParams) {
     this.homeserver = params.homeserver;
     this.accessToken = params.accessToken;
     this.ssrfPolicy = params.ssrfPolicy;
     this.dispatcherPolicy = params.dispatcherPolicy;
+    this.apiPrefix = params.apiPrefix ?? "/_matrix/client/v3";
+  }
+
+  private resolveEndpoint(endpoint: string): string {
+    // Absolute URLs are passed through unchanged (SSRF checks apply in transport).
+    if (endpoint.startsWith("http://") || endpoint.startsWith("https://")) {
+      return endpoint;
+    }
+    // Pass through any endpoint that already carries a Matrix API prefix
+    // (e.g. /_matrix/client/v1, /_matrix/client/v3, /_matrix/media/v3).
+    // Only truly bare paths like "/sync" get the configured apiPrefix prepended.
+    if (endpoint.startsWith("/_matrix/")) {
+      return endpoint;
+    }
+    // Bare paths get the configured apiPrefix prepended.
+    const prefixed = endpoint.startsWith("/") ? endpoint : `/${endpoint}`;
+    return `${this.apiPrefix}${prefixed}`;
   }
 
   async requestJson(params: {
@@ -32,11 +51,12 @@ export class MatrixAuthedHttpClient {
     timeoutMs: number;
     allowAbsoluteEndpoint?: boolean;
   }): Promise<unknown> {
+    const endpoint = this.resolveEndpoint(params.endpoint);
     const { response, text } = await performMatrixRequest({
       homeserver: this.homeserver,
       accessToken: this.accessToken,
       method: params.method,
-      endpoint: params.endpoint,
+      endpoint,
       qs: params.qs,
       body: params.body,
       timeoutMs: params.timeoutMs,
@@ -66,11 +86,12 @@ export class MatrixAuthedHttpClient {
     readIdleTimeoutMs?: number;
     allowAbsoluteEndpoint?: boolean;
   }): Promise<Buffer> {
+    const endpoint = this.resolveEndpoint(params.endpoint);
     const { response, buffer } = await performMatrixRequest({
       homeserver: this.homeserver,
       accessToken: this.accessToken,
       method: params.method,
-      endpoint: params.endpoint,
+      endpoint,
       qs: params.qs,
       timeoutMs: params.timeoutMs,
       raw: true,

@@ -30,9 +30,13 @@ type MatrixDispatcherRequestInit = RequestInit & {
 
 function normalizeEndpoint(endpoint: string): string {
   if (!endpoint) {
-    return "/";
+    return "";
   }
-  return endpoint.startsWith("/") ? endpoint : `/${endpoint}`;
+  // Strip the leading slash so that new URL(path, base) resolves relative to
+  // the full homeserver base path. If the path starts with "/", JavaScript's
+  // URL constructor resolves against the origin only, stripping any reverse
+  // proxy or gateway path prefix from the homeserver URL.
+  return endpoint.startsWith("/") ? endpoint.slice(1) : endpoint;
 }
 
 function applyQuery(url: URL, qs: QueryParams): void {
