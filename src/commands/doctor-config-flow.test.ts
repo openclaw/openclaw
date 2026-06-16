@@ -758,6 +758,7 @@ vi.mock("./doctor/channel-capabilities.js", () => {
         : fallback,
     resolveDoctorChannelAccountIds: () => undefined,
   };
+    resolveDoctorChannelAccountIds: () => undefined,
 });
 
 vi.mock("../plugins/doctor-contract-registry.js", () => {

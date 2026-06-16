@@ -9,6 +9,7 @@ vi.mock("../channel-capabilities.js", () => ({
     groupAllowFromFallbackToAllowFrom: channelName !== "imessage",
     warnOnEmptyGroupSenderAllowlist: channelName !== "discord",
   }),
+  resolveDoctorChannelAccountIds: () => undefined,
 }));
 
 vi.mock("./channel-doctor.js", () => ({

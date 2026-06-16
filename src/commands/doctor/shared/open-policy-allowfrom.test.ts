@@ -13,6 +13,7 @@ vi.mock("../channel-capabilities.js", () => ({
     groupAllowFromFallbackToAllowFrom: true,
     warnOnEmptyGroupSenderAllowlist: true,
   }),
+  resolveDoctorChannelAccountIds: () => undefined,
 }));
 
 describe("doctor open-policy allowFrom repair", () => {

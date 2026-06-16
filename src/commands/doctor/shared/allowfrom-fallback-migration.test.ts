@@ -9,6 +9,7 @@ vi.mock("../channel-capabilities.js", () => ({
     groupAllowFromFallbackToAllowFrom: channelName !== "discord",
     warnOnEmptyGroupSenderAllowlist: true,
   }),
+  resolveDoctorChannelAccountIds: () => undefined,
 }));
 
 describe("doctor group allowFrom fallback migration", () => {
