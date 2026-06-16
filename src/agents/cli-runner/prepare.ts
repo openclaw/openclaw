@@ -33,6 +33,7 @@ import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import { externalCliDiscoveryForProviderAuth } from "../auth-profiles/external-cli-discovery.js";
 import { resolveApiKeyForProfile } from "../auth-profiles/oauth.js";
+import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import { loadAuthProfileStoreForRuntime } from "../auth-profiles/store.js";
 import type { AuthProfileCredential, AuthProfileStore } from "../auth-profiles/types.js";
 import {
@@ -290,16 +291,29 @@ export async function prepareCliRunContext(
     requestedAuthProfileId ?? backendResolved.defaultAuthProfileId?.trim() ?? undefined;
   let authStore: AuthProfileStore | undefined;
   let authCredential: AuthProfileCredential | undefined;
-  if (effectiveAuthProfileId) {
-    authStore = loadAuthProfileStoreForRuntime(agentDir, {
-      readOnly: true,
+  const loadScopedAuthStore = (options: { profileId?: string; readOnly?: boolean } = {}) =>
+    loadAuthProfileStoreForRuntime(agentDir, {
+      readOnly: options.readOnly ?? true,
       externalCli: externalCliDiscoveryForProviderAuth({
         cfg: params.config,
         provider: params.provider,
-        profileId: effectiveAuthProfileId,
+        ...(options.profileId ? { profileId: options.profileId } : {}),
       }),
     });
+  if (effectiveAuthProfileId) {
+    authStore = loadScopedAuthStore({ profileId: effectiveAuthProfileId });
     authCredential = authStore.profiles[effectiveAuthProfileId];
+  } else if (backendResolved.prepareExecution || backendResolved.authEpochMode === "profile-only") {
+    authStore = loadScopedAuthStore();
+    effectiveAuthProfileId =
+      resolveAuthProfileOrder({
+        cfg: params.config,
+        store: authStore,
+        provider: params.provider,
+      })[0]?.trim() || undefined;
+    if (effectiveAuthProfileId) {
+      authCredential = authStore.profiles[effectiveAuthProfileId];
+    }
   }
   if (
     effectiveAuthProfileId &&
@@ -310,13 +324,7 @@ export async function prepareCliRunContext(
     })
   ) {
     const authProfileId = effectiveAuthProfileId;
-    const writableAuthStore = loadAuthProfileStoreForRuntime(agentDir, {
-      externalCli: externalCliDiscoveryForProviderAuth({
-        cfg: params.config,
-        provider: params.provider,
-        profileId: authProfileId,
-      }),
-    });
+    const writableAuthStore = loadScopedAuthStore({ profileId: authProfileId, readOnly: false });
     const resolvedAuth = await prepareDeps.resolveApiKeyForProfile({
       cfg: params.config,
       store: writableAuthStore,
@@ -325,14 +333,7 @@ export async function prepareCliRunContext(
     });
     const resolvedAuthProfileId = resolvedAuth?.profileId ?? authProfileId;
     const resolvedAuthCredential = resolvedAuth?.credential;
-    authStore = loadAuthProfileStoreForRuntime(agentDir, {
-      readOnly: true,
-      externalCli: externalCliDiscoveryForProviderAuth({
-        cfg: params.config,
-        provider: params.provider,
-        profileId: resolvedAuthProfileId,
-      }),
-    });
+    authStore = loadScopedAuthStore({ profileId: resolvedAuthProfileId });
     authCredential = resolvedAuthCredential ?? authStore.profiles[resolvedAuthProfileId];
     if (resolvedAuth && authCredential) {
       effectiveAuthProfileId = resolvedAuthProfileId;
