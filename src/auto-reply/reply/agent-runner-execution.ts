@@ -3298,6 +3298,7 @@ export async function runAgentTurnWithFallback(params: {
         : undefined;
       if (formattedErrorCandidate) {
         if (codexAppServerFailureText) {
+          params.replyOperation?.retainFailureUntilComplete();
           params.replyOperation?.fail(
             "run_failed",
             finalEmbeddedError ?? new Error(errorCandidate),

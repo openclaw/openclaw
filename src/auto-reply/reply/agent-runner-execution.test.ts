@@ -6145,7 +6145,7 @@ describe("runAgentTurnWithFallback", () => {
   );
 
   it("surfaces returned Codex app-server timeout payloads instead of completing silently", async () => {
-    const { replyOperation, failMock } = createMockReplyOperation();
+    const { replyOperation, failMock, retainFailureUntilCompleteMock } = createMockReplyOperation();
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [
         {
@@ -6175,7 +6175,11 @@ describe("runAgentTurnWithFallback", () => {
       }),
     ]);
     expect(result.runResult.payloads?.[0]?.text).toContain("did not replay the turn automatically");
+    expect(retainFailureUntilCompleteMock).toHaveBeenCalledTimes(1);
     expect(failMock).toHaveBeenCalledWith("run_failed", expect.any(Error));
+    expect(retainFailureUntilCompleteMock.mock.invocationCallOrder[0]).toBeLessThan(
+      failMock.mock.invocationCallOrder[0] ?? 0,
+    );
   });
 
   it("forwards sanitized generic errors on external chat channels when verbose is on", async () => {
