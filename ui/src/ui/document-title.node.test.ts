@@ -87,10 +87,54 @@ describe("resolveControlUiDocumentTitle", () => {
       resolveControlUiDocumentTitle({
         sessionKey: "agent:main:session-2",
         sessionsResult: sessionsResult([
-          sessionRow({ key: "agent:main:session-2", displayName: "Model debugging" }),
+          sessionRow({
+            key: "agent:main:session-2",
+            kind: "direct",
+            displayName: "Model debugging",
+          }),
         ]),
       }),
     ).toBe("Model debugging - OpenClaw Control");
+  });
+
+  it("prefers refreshed picker metadata over preserved active session metadata", () => {
+    expect(
+      resolveControlUiDocumentTitle({
+        sessionKey: "agent:older:searched",
+        activeSessionTitleRow: sessionRow({
+          key: "agent:older:searched",
+          label: "Old archive title",
+        }),
+        chatSessionPickerResult: sessionsResult([
+          sessionRow({
+            key: "agent:older:searched",
+            label: "Refreshed archive title",
+          }),
+        ]),
+      }),
+    ).toBe("Refreshed archive title - OpenClaw Control");
+  });
+
+  it("prefixes cron labels in document titles", () => {
+    expect(
+      resolveControlUiDocumentTitle({
+        sessionKey: "agent:main:cron:abc-123",
+        sessionsResult: sessionsResult([
+          sessionRow({ key: "agent:main:cron:abc-123", label: "daily-briefing" }),
+        ]),
+      }),
+    ).toBe("Cron: daily-briefing - OpenClaw Control");
+  });
+
+  it("prefixes subagent display names in document titles", () => {
+    expect(
+      resolveControlUiDocumentTitle({
+        sessionKey: "agent:main:subagent:abc-123",
+        sessionsResult: sessionsResult([
+          sessionRow({ key: "agent:main:subagent:abc-123", displayName: "Task Runner" }),
+        ]),
+      }),
+    ).toBe("Subagent: Task Runner - OpenClaw Control");
   });
 
   it("keeps the base title when label metadata is the raw session key", () => {

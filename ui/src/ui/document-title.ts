@@ -1,3 +1,4 @@
+import { parseSessionKey } from "./session-display.ts";
 // Control UI document title helpers.
 import { areUiSessionKeysEquivalent } from "./session-key.ts";
 import { normalizeOptionalString } from "./string-coerce.ts";
@@ -31,27 +32,58 @@ function findSessionTitleRow(state: DocumentTitleState, sessionKey: string) {
   return (
     findExactSessionTitleRow(state.sessionsResult?.sessions, sessionKey) ??
     findEquivalentSessionTitleRow(state.sessionsResult?.sessions, sessionKey) ??
+    findExactSessionTitleRow(state.chatSessionPickerResult?.sessions, sessionKey) ??
+    findEquivalentSessionTitleRow(state.chatSessionPickerResult?.sessions, sessionKey) ??
     (activeSessionTitleRow && activeSessionTitleRow.key === sessionKey
       ? activeSessionTitleRow
       : undefined) ??
     (activeSessionTitleRow && areUiSessionKeysEquivalent(activeSessionTitleRow.key, sessionKey)
       ? activeSessionTitleRow
-      : undefined) ??
-    findExactSessionTitleRow(state.chatSessionPickerResult?.sessions, sessionKey) ??
-    findEquivalentSessionTitleRow(state.chatSessionPickerResult?.sessions, sessionKey)
+      : undefined)
   );
 }
 
-function resolveSafeSessionTitle(row: SessionsListResult["sessions"][number]): string | null {
+function isRawSessionKeyTitle(value: string, rowKey: string, sessionKey: string): boolean {
+  return value === rowKey || value === sessionKey;
+}
+
+function isGeneratedConversationDisplayNameRow(
+  row: SessionsListResult["sessions"][number],
+): boolean {
+  return (
+    /^agent:[^:]+:[^:]+:(?:direct|group|channel):/.test(row.key) ||
+    /^(?:direct|group|channel):[^:]+:/.test(row.key) ||
+    row.key.includes(":group:") ||
+    row.key.includes(":channel:")
+  );
+}
+
+function applyTypedSessionPrefix(rowKey: string, title: string): string {
+  const { prefix } = parseSessionKey(rowKey);
+  if (!prefix) {
+    return title;
+  }
+  const prefixPattern = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*`, "i");
+  return prefixPattern.test(title) ? title : `${prefix} ${title}`;
+}
+
+function resolveSafeSessionTitle(
+  row: SessionsListResult["sessions"][number],
+  sessionKey: string,
+): string | null {
   const label = normalizeOptionalString(row.label);
-  if (label && label !== row.key) {
-    return label;
+  if (label && !isRawSessionKeyTitle(label, row.key, sessionKey)) {
+    return applyTypedSessionPrefix(row.key, label);
   }
   const displayName = normalizeOptionalString(row.displayName);
-  if (!displayName || displayName === row.key || row.kind === "direct" || row.kind === "group") {
+  if (
+    !displayName ||
+    isRawSessionKeyTitle(displayName, row.key, sessionKey) ||
+    isGeneratedConversationDisplayNameRow(row)
+  ) {
     return null;
   }
-  return displayName;
+  return applyTypedSessionPrefix(row.key, displayName);
 }
 
 export function resolveControlUiDocumentTitle(state: DocumentTitleState): string {
@@ -63,7 +95,7 @@ export function resolveControlUiDocumentTitle(state: DocumentTitleState): string
   if (!row) {
     return CONTROL_UI_DOCUMENT_TITLE;
   }
-  const sessionName = resolveSafeSessionTitle(row);
+  const sessionName = resolveSafeSessionTitle(row, sessionKey);
   if (!sessionName || sessionName === CONTROL_UI_DOCUMENT_TITLE) {
     return CONTROL_UI_DOCUMENT_TITLE;
   }
