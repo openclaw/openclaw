@@ -44,6 +44,8 @@ const OPENCLAW_TOOL_FACTORY_NAMES = new Set([
   "subagents",
   "tts",
   "update_goal",
+  "update_goal_plan",
+  "update_goal_plan_step",
   "update_plan",
   "video_generate",
   "web_fetch",

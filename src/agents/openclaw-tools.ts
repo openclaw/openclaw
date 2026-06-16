@@ -49,6 +49,10 @@ import {
   createGetGoalTool,
   createUpdateGoalTool,
 } from "./tools/goal-tools.js";
+import {
+  createSetGoalPlanTool,
+  createUpdateGoalPlanStepTool,
+} from "./tools/cot-planning-tools.js";
 import { createHeartbeatResponseTool } from "./tools/heartbeat-response-tool.js";
 import { createImageGenerateTool } from "./tools/image-generate-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
@@ -469,6 +473,18 @@ export function createOpenClawTools(
       config: resolvedConfig,
     }),
     createUpdateGoalTool({
+      agentSessionKey: options?.agentSessionKey,
+      runSessionKey: options?.runSessionKey,
+      sessionAgentId,
+      config: resolvedConfig,
+    }),
+    createSetGoalPlanTool({
+      agentSessionKey: options?.agentSessionKey,
+      runSessionKey: options?.runSessionKey,
+      sessionAgentId,
+      config: resolvedConfig,
+    }),
+    createUpdateGoalPlanStepTool({
       agentSessionKey: options?.agentSessionKey,
       runSessionKey: options?.runSessionKey,
       sessionAgentId,

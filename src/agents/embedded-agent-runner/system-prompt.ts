@@ -5,6 +5,7 @@ import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options
 import type { ChatType } from "../../channels/chat-type.js";
 import type { SubagentDelegationMode } from "../../config/types.agent-defaults.js";
 import type { MemoryCitationsMode } from "../../config/types.memory.js";
+import type { SessionGoal } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AgentPromptSurfaceKind } from "../../plugins/types.js";
 import type { ActiveProcessSessionReference } from "../bash-process-references.js";
@@ -88,6 +89,7 @@ export function buildEmbeddedSystemPrompt(params: {
   includeMemorySection?: boolean;
   memoryCitationsMode?: MemoryCitationsMode;
   promptContribution?: ProviderSystemPromptContribution;
+  goal?: SessionGoal | null;
 }): string {
   return buildConfiguredAgentSystemPrompt({
     config: params.config,
@@ -131,6 +133,7 @@ export function buildEmbeddedSystemPrompt(params: {
     includeMemorySection: params.includeMemorySection,
     memoryCitationsMode: params.memoryCitationsMode,
     promptContribution: params.promptContribution,
+    goal: params.goal,
   });
 }
 
