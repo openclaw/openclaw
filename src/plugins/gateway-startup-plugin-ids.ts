@@ -1893,6 +1893,9 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
     rootConfig: activationSourceConfig,
   };
   const manifestLookup = createManifestRegistryLookup(params.manifestRegistry);
+  const explicitlyDisabledChannelIds = new Set(
+    listExplicitlyDisabledChannelIdsForConfig(params.config),
+  );
   const configuredDeferredChannelPluginIds: string[] = [];
   const requiredAgentHarnessRuntimes = new Set(
     collectConfiguredAgentHarnessRuntimes(activationSourceConfig),
@@ -1934,7 +1937,8 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
     // produce a `configuredChannelIds` entry.
     const hasExplicitlyEnabledNonBundledChannel =
       plugin.origin !== "bundled" &&
-      (manifest?.channels?.length ?? 0) > 0 &&
+      (manifest?.channels?.some((channelId) => !explicitlyDisabledChannelIds.has(channelId)) ??
+        false) &&
       pluginsConfig.entries[plugin.pluginId]?.enabled === true &&
       !pluginsConfig.deny.includes(plugin.pluginId);
     if (

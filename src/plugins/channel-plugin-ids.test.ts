@@ -1318,6 +1318,32 @@ describe("resolveGatewayStartupPluginIds", () => {
       ["demo-channel", "browser", "voice-call", "memory-core", "demo-global-sidecar"],
     ],
     [
+      "includes explicitly enabled external channel plugins without channel config",
+      {
+        channels: {},
+        plugins: {
+          entries: {
+            "external-env-channel-plugin": { enabled: true },
+          },
+        },
+      } as OpenClawConfig,
+      ["browser", "external-env-channel-plugin", "memory-core"],
+    ],
+    [
+      "does not start explicitly enabled external channel plugins when every channel is disabled",
+      {
+        channels: {
+          "external-env-channel": { enabled: false },
+        },
+        plugins: {
+          entries: {
+            "external-env-channel-plugin": { enabled: true },
+          },
+        },
+      } as OpenClawConfig,
+      ["browser", "memory-core"],
+    ],
+    [
       "keeps default-enabled startup sidecars when a restrictive allowlist permits them",
       createStartupConfig({
         allowPluginIds: ["browser"],
