@@ -338,7 +338,7 @@ describe("createCopilotClientPool", () => {
     expect(sdk.ctorCalls).toHaveLength(2);
   });
 
-  it("invalidate releases its lease without stopping a client shared by another run", async () => {
+  it("invalidate retires a shared client after its remaining lease is released", async () => {
     const sdk = makeFake();
     const pool = createCopilotClientPool({ sdkFactory: sdk.fake });
     const key = makeKey();
@@ -352,9 +352,22 @@ describe("createCopilotClientPool", () => {
     expect(pool.size()).toBe(1);
     expect(second.client).toBe(first.client);
 
+    let thirdSettled = false;
+    const thirdPromise = pool.acquire(key, options).then((handle) => {
+      thirdSettled = true;
+      return handle;
+    });
+    await Promise.resolve();
+
+    expect(thirdSettled).toBe(false);
+    expect(sdk.ctorCalls).toHaveLength(1);
+
     await pool.release(second);
-    await pool.dispose();
-    expect(sdk.stops).toEqual([1]);
+    const third = await thirdPromise;
+
+    expect(sdk.forceStops).toEqual([1]);
+    expect(third.client).not.toBe(first.client);
+    expect(sdk.ctorCalls).toHaveLength(2);
   });
 
   it("dispose stops all clients exactly once, aggregates errors, clears the map", async () => {

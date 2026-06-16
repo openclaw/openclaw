@@ -56,6 +56,12 @@ type EntryState =
       idleTimer: ReturnType<typeof setTimeout>;
       idleSinceMs: number;
     }
+  | {
+      kind: "invalidated";
+      client: CopilotClient;
+      retired: Promise<void>;
+      resolveRetired: () => void;
+    }
   | { kind: "stopping"; client: CopilotClient; promise: Promise<Error[]> }
   | { kind: "stopped" };
 
@@ -157,6 +163,32 @@ export function createCopilotClientPool(options: CopilotClientPoolOptions = {}):
     return stopPromise;
   };
 
+  const markEntryInvalidated = (
+    entry: PoolEntry,
+    client: CopilotClient,
+    idleTimer?: ReturnType<typeof setTimeout>,
+  ) => {
+    if (idleTimer) {
+      clearTimeout(idleTimer);
+    }
+    let resolveRetired = () => {};
+    const retired = new Promise<void>((resolvePromise) => {
+      resolveRetired = resolvePromise;
+    });
+    entry.state = { kind: "invalidated", client, retired, resolveRetired };
+  };
+
+  const retireInvalidatedEntry = async (
+    entry: PoolEntry,
+    state: Extract<EntryState, { kind: "invalidated" }>,
+  ) => {
+    try {
+      return await forceStopReadyOrIdleEntry(entry, state.client);
+    } finally {
+      state.resolveRetired();
+    }
+  };
+
   const stopEntry = async (entry: PoolEntry): Promise<Error[]> => {
     switch (entry.state.kind) {
       case "creating": {
@@ -172,6 +204,9 @@ export function createCopilotClientPool(options: CopilotClientPoolOptions = {}):
         return stopReadyOrIdleEntry(entry, entry.state.client);
       case "idle":
         return stopReadyOrIdleEntry(entry, entry.state.client, entry.state.idleTimer);
+      case "invalidated":
+        entry.refCount = 0;
+        return retireInvalidatedEntry(entry, entry.state);
       case "stopping":
         return entry.state.promise;
       case "stopped":
@@ -276,6 +311,9 @@ export function createCopilotClientPool(options: CopilotClientPoolOptions = {}):
           existing.state = { kind: "ready", client };
           return { key: existing.key, client };
         }
+        case "invalidated":
+          await existing.state.retired;
+          continue;
         case "stopping":
           await existing.state.promise;
           continue;
@@ -304,6 +342,7 @@ export function createCopilotClientPool(options: CopilotClientPoolOptions = {}):
         return;
       case "ready":
       case "idle":
+      case "invalidated":
         if (entry.state.client !== handle.client) {
           return;
         }
@@ -321,6 +360,11 @@ export function createCopilotClientPool(options: CopilotClientPoolOptions = {}):
 
     if (disposed) {
       await stopEntry(entry);
+      return;
+    }
+
+    if (entry.state.kind === "invalidated") {
+      await retireInvalidatedEntry(entry, entry.state);
       return;
     }
 
@@ -352,6 +396,7 @@ export function createCopilotClientPool(options: CopilotClientPoolOptions = {}):
         }
         if (entry.refCount > 1) {
           entry.refCount -= 1;
+          markEntryInvalidated(entry, entry.state.client);
           break;
         }
         entry.refCount = 0;
@@ -363,10 +408,21 @@ export function createCopilotClientPool(options: CopilotClientPoolOptions = {}):
         }
         if (entry.refCount > 1) {
           entry.refCount -= 1;
+          markEntryInvalidated(entry, entry.state.client, entry.state.idleTimer);
           break;
         }
         entry.refCount = 0;
         await forceStopReadyOrIdleEntry(entry, entry.state.client, entry.state.idleTimer);
+        break;
+      case "invalidated":
+        if (entry.state.client !== handle.client || entry.refCount <= 0) {
+          break;
+        }
+        entry.refCount -= 1;
+        if (entry.refCount > 0) {
+          break;
+        }
+        await retireInvalidatedEntry(entry, entry.state);
         break;
     }
   };
