@@ -1,5 +1,7 @@
+// Gateway MCP loopback JSON-RPC handlers.
+// Implements initialize, tools/list, tools/call, and notification handling.
 import crypto from "node:crypto";
-import { runBeforeToolCallHook, type HookContext } from "../agents/pi-tools.before-tool-call.js";
+import { runBeforeToolCallHook, type HookContext } from "../agents/agent-tools.before-tool-call.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   MCP_LOOPBACK_SERVER_NAME,
@@ -9,13 +11,19 @@ import {
   jsonRpcResult,
   type JsonRpcRequest,
 } from "./mcp-http.protocol.js";
-import type { McpLoopbackTool, McpToolSchemaEntry } from "./mcp-http.schema.js";
+import {
+  readMcpLoopbackToolName,
+  type McpLoopbackTool,
+  type McpToolSchemaEntry,
+} from "./mcp-http.schema.js";
 
 type McpTextContent = {
   type: "text";
   text: string;
 };
 
+// Tool implementations may return MCP content blocks, plain strings, or
+// arbitrary JSON. Normalize them into text blocks for consistent loopback output.
 function normalizeToolCallContent(result: unknown): McpTextContent[] {
   const content = (result as { content?: unknown })?.content;
   if (Array.isArray(content)) {
@@ -32,6 +40,7 @@ function normalizeToolCallContent(result: unknown): McpTextContent[] {
   ];
 }
 
+/** Handles one MCP loopback JSON-RPC message and returns a response or notification null. */
 export async function handleMcpJsonRpc(params: {
   message: JsonRpcRequest;
   tools: McpLoopbackTool[];
@@ -44,6 +53,8 @@ export async function handleMcpJsonRpc(params: {
   switch (method) {
     case "initialize": {
       const clientVersion = (methodParams?.protocolVersion as string) ?? "";
+      // Prefer the client-requested protocol when supported, otherwise fall
+      // back to the newest/first supported version advertised by this server.
       const negotiated =
         MCP_LOOPBACK_SUPPORTED_PROTOCOL_VERSIONS.find((version) => version === clientVersion) ??
         MCP_LOOPBACK_SUPPORTED_PROTOCOL_VERSIONS[0];
@@ -62,9 +73,23 @@ export async function handleMcpJsonRpc(params: {
     case "tools/list":
       return jsonRpcResult(id, { tools: params.toolSchema });
     case "tools/call": {
-      const toolName = methodParams?.name as string;
+      const toolName = typeof methodParams?.name === "string" ? methodParams.name.trim() : "";
       const toolArgs = (methodParams?.arguments ?? {}) as Record<string, unknown>;
-      const tool = params.tools.find((candidate) => candidate.name === toolName);
+      if (!toolName) {
+        return jsonRpcResult(id, {
+          content: [{ type: "text", text: "Tool not available: unknown" }],
+          isError: true,
+        });
+      }
+      if (!params.toolSchema.some((tool) => tool.name === toolName)) {
+        return jsonRpcResult(id, {
+          content: [{ type: "text", text: `Tool not available: ${toolName}` }],
+          isError: true,
+        });
+      }
+      const tool = params.tools.find(
+        (candidate) => readMcpLoopbackToolName(candidate) === toolName,
+      );
       if (!tool) {
         return jsonRpcResult(id, {
           content: [{ type: "text", text: `Tool not available: ${toolName}` }],
@@ -73,6 +98,8 @@ export async function handleMcpJsonRpc(params: {
       }
       const toolCallId = `mcp-${crypto.randomUUID()}`;
       try {
+        // Gateway before-tool hooks still run for loopback MCP calls so policy
+        // and audit behavior matches native tool calls from normal chat runs.
         const hookResult = await runBeforeToolCallHook({
           toolName,
           params: toolArgs,

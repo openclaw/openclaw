@@ -1,3 +1,4 @@
+// Handles session reset requests produced during agent runner execution.
 import fs from "node:fs";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
@@ -62,6 +63,10 @@ export async function resetReplyRunSession(params: {
     sessionId: nextSessionId,
     updatedAt: now,
     sessionStartedAt: now,
+    usageFamilyKey: prevEntry.usageFamilyKey ?? params.sessionKey,
+    usageFamilySessionIds: Array.from(
+      new Set([...(prevEntry.usageFamilySessionIds ?? []), prevEntry.sessionId, nextSessionId]),
+    ),
     lastInteractionAt: now,
     systemSent: false,
     abortedLastRun: false,
@@ -75,6 +80,7 @@ export async function resetReplyRunSession(params: {
     cacheRead: undefined,
     cacheWrite: undefined,
     contextTokens: undefined,
+    contextBudgetStatus: undefined,
     systemPromptReport: undefined,
     fallbackNoticeSelectedModel: undefined,
     fallbackNoticeActiveModel: undefined,

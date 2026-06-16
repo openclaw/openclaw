@@ -1,4 +1,7 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+/**
+ * Parses exec approval tool output and formats denial messages for users.
+ */
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 type ExecApprovalResult =
   | {
@@ -25,6 +28,12 @@ type ExecApprovalResult =
 
 const EXEC_COMPLETED_RE = /^exec completed:\s*([\s\S]*)$/i;
 
+// Approval-system-generated wrappers always start with either `gateway id=` or
+// `node=` inside the parenthesized metadata (see bash-tools.exec-host-gateway.ts,
+// bash-tools.exec-host-node.ts, and gateway/server-node-events.ts). Untrusted
+// command stdout that happens to start with "Exec denied (...)" or
+// "Exec finished (...)" should be rejected by the parser to prevent CWE-841
+// spoofed approval events from arbitrary tool output.
 const APPROVAL_METADATA_SOURCE_RE = /^(?:gateway\s+id=|node=)/i;
 
 function parseExecApprovalResultWithMetadata(
@@ -32,7 +41,9 @@ function parseExecApprovalResultWithMetadata(
   prefix: string,
   bodySeparator: ":" | "\n",
 ): { metadata: string; body: string } | null {
-  if (!normalizeLowercaseStringOrEmpty(raw).startsWith(normalizeLowercaseStringOrEmpty(prefix))) {
+  const normalizedRaw = normalizeLowercaseStringOrEmpty(raw);
+  const normalizedPrefix = normalizeLowercaseStringOrEmpty(prefix);
+  if (!normalizedRaw.startsWith(normalizedPrefix)) {
     return null;
   }
 

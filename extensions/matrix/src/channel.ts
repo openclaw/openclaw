@@ -1,3 +1,4 @@
+// Matrix plugin module implements channel behavior.
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import {
   adaptScopedAccountAccessor,
@@ -6,9 +7,14 @@ import {
 import type { ChannelDoctorAdapter } from "openclaw/plugin-sdk/channel-contract";
 import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import {
+  createChannelMessageAdapterFromOutbound,
+  createRuntimeOutboundDelegates,
+} from "openclaw/plugin-sdk/channel-outbound";
+import {
   createAllowlistProviderOpenWarningCollector,
   projectAccountConfigWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
+import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import { createScopedAccountReplyToModeResolver } from "openclaw/plugin-sdk/conversation-runtime";
 import {
   createChannelDirectoryAdapter,
@@ -16,7 +22,6 @@ import {
   createRuntimeDirectoryLiveAdapter,
 } from "openclaw/plugin-sdk/directory-runtime";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
-import { createRuntimeOutboundDelegates } from "openclaw/plugin-sdk/outbound-runtime";
 import {
   buildProbeChannelStatusSummary,
   collectStatusIssuesFromLastError,
@@ -81,6 +86,12 @@ const loadMatrixChannelRuntime = createLazyRuntimeNamedExport(
   () => import("./channel.runtime.js"),
   "matrixChannelRuntime",
 );
+let matrixDoctorModulePromise: Promise<typeof import("./doctor.js")> | null = null;
+
+const loadMatrixDoctorModule = async () => {
+  matrixDoctorModulePromise ??= import("./doctor.js");
+  return await matrixDoctorModulePromise;
+};
 
 const meta = {
   id: "matrix",
@@ -90,6 +101,7 @@ const meta = {
   docsLabel: "matrix",
   blurb: "open protocol; configure a homeserver + access token.",
   order: 70,
+  markdownCapable: true,
   quickstartAllowFrom: true,
 };
 
@@ -113,9 +125,9 @@ const matrixDoctor: ChannelDoctorAdapter = {
   legacyConfigRules: MATRIX_LEGACY_CONFIG_RULES,
   normalizeCompatibilityConfig: normalizeMatrixCompatibilityConfig,
   runConfigSequence: async ({ cfg, env, shouldRepair }) =>
-    await (await import("./doctor.js")).runMatrixDoctorSequence({ cfg, env, shouldRepair }),
+    await (await loadMatrixDoctorModule()).runMatrixDoctorSequence({ cfg, env, shouldRepair }),
   cleanStaleConfig: async ({ cfg }) =>
-    await (await import("./doctor.js")).cleanStaleMatrixPluginConfig(cfg),
+    await (await loadMatrixDoctorModule()).cleanStaleMatrixPluginConfig(cfg),
 };
 
 const listMatrixDirectoryPeersFromConfig =
@@ -319,6 +331,85 @@ function resolveMatrixDeliveryTarget(params: {
   return null;
 }
 
+const matrixChannelOutbound: ChannelOutboundAdapter = {
+  deliveryMode: "direct",
+  chunker: chunkTextForOutbound,
+  chunkerMode: "markdown",
+  textChunkLimit: 4000,
+  deliveryCapabilities: {
+    durableFinal: {
+      text: true,
+      media: true,
+      replyTo: true,
+      thread: true,
+      messageSendingHooks: true,
+    },
+  },
+  presentationCapabilities: {
+    supported: true,
+    buttons: true,
+    selects: true,
+    context: true,
+    divider: true,
+    limits: {
+      text: {
+        markdownDialect: "markdown",
+        supportsEdit: true,
+      },
+    },
+  },
+  shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload }) =>
+    shouldSuppressLocalMatrixExecApprovalPrompt({
+      cfg,
+      accountId,
+      payload,
+    }),
+  ...createRuntimeOutboundDelegates({
+    getRuntime: loadMatrixChannelRuntime,
+    renderPresentation: {
+      resolve: (runtime) => runtime.matrixOutbound.renderPresentation,
+      unavailableMessage: "Matrix outbound presentation rendering is unavailable",
+    },
+    sendPayload: {
+      resolve: (runtime) => runtime.matrixOutbound.sendPayload,
+      unavailableMessage: "Matrix outbound payload delivery is unavailable",
+    },
+    sendText: {
+      resolve: (runtime) => runtime.matrixOutbound.sendText,
+      unavailableMessage: "Matrix outbound text delivery is unavailable",
+    },
+    sendMedia: {
+      resolve: (runtime) => runtime.matrixOutbound.sendMedia,
+      unavailableMessage: "Matrix outbound media delivery is unavailable",
+    },
+    sendPoll: {
+      resolve: (runtime) => runtime.matrixOutbound.sendPoll,
+      unavailableMessage: "Matrix outbound poll delivery is unavailable",
+    },
+  }),
+};
+
+const matrixMessageAdapter = createChannelMessageAdapterFromOutbound({
+  id: "matrix",
+  outbound: matrixChannelOutbound,
+  live: {
+    capabilities: {
+      draftPreview: true,
+      previewFinalization: true,
+      progressUpdates: true,
+      quietFinalization: true,
+    },
+    finalizer: {
+      capabilities: {
+        finalEdit: true,
+        normalFallback: true,
+        discardPending: true,
+        previewReceipt: true,
+      },
+    },
+  },
+});
+
 export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
   createChatChannelPlugin<ResolvedMatrixAccount, MatrixProbe>({
     base: {
@@ -375,6 +466,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
           }).map(projectMatrixConversationBinding),
       },
       messaging: {
+        defaultMarkdownTableMode: "bullets",
         targetPrefixes: ["matrix"],
         normalizeTarget: normalizeMatrixMessagingTarget,
         resolveInboundConversation: ({ to, conversationId, threadId }) =>
@@ -416,6 +508,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
       }),
       resolver: matrixResolverAdapter,
       actions: matrixMessageActions,
+      message: matrixMessageAdapter,
       secrets: {
         secretTargetRegistryEntries,
         collectRuntimeConfigAssignments,
@@ -450,9 +543,9 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
           buildProbeChannelStatusSummary(snapshot, { baseUrl: snapshot.baseUrl ?? null }),
         probeAccount: async ({ account, timeoutMs, cfg }) =>
           await createMatrixProbeAccount({
-            resolveMatrixAuth: async ({ cfg, accountId }) =>
+            resolveMatrixAuth: async ({ cfg: cfgLocal, accountId }) =>
               (await loadMatrixChannelRuntime()).resolveMatrixAuth({
-                cfg,
+                cfg: cfgLocal,
                 accountId,
               }),
             probeMatrix: async (params) =>
@@ -580,31 +673,5 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
         };
       },
     },
-    outbound: {
-      deliveryMode: "direct",
-      chunker: chunkTextForOutbound,
-      chunkerMode: "markdown",
-      textChunkLimit: 4000,
-      shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload }) =>
-        shouldSuppressLocalMatrixExecApprovalPrompt({
-          cfg,
-          accountId,
-          payload,
-        }),
-      ...createRuntimeOutboundDelegates({
-        getRuntime: loadMatrixChannelRuntime,
-        sendText: {
-          resolve: (runtime) => runtime.matrixOutbound.sendText,
-          unavailableMessage: "Matrix outbound text delivery is unavailable",
-        },
-        sendMedia: {
-          resolve: (runtime) => runtime.matrixOutbound.sendMedia,
-          unavailableMessage: "Matrix outbound media delivery is unavailable",
-        },
-        sendPoll: {
-          resolve: (runtime) => runtime.matrixOutbound.sendPoll,
-          unavailableMessage: "Matrix outbound poll delivery is unavailable",
-        },
-      }),
-    },
+    outbound: matrixChannelOutbound,
   });

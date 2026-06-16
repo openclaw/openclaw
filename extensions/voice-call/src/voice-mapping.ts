@@ -1,7 +1,5 @@
-/**
- * Voice mapping and XML utilities for voice call providers.
- */
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+// Voice Call plugin module implements voice mapping behavior.
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 /**
  * Escape XML special characters for TwiML and other XML responses.

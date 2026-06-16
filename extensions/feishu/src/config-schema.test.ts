@@ -1,3 +1,4 @@
+// Feishu tests cover config schema plugin behavior.
 import { describe, expect, it } from "vitest";
 import { FeishuConfigSchema, FeishuGroupSchema } from "./config-schema.js";
 
@@ -7,7 +8,7 @@ function expectSchemaIssue(
 ) {
   expect(result.success).toBe(false);
   if (!result.success) {
-    expect(result.error.issues.some((issue) => issue.path.join(".") === issuePath)).toBe(true);
+    expect(result.error.issues.map((issue) => issue.path.join("."))).toContain(issuePath);
   }
 }
 
@@ -259,11 +260,16 @@ describe("FeishuConfigSchema TTS overrides", () => {
       },
     });
 
-    expect(result.tts).toMatchObject({
+    expect(result.tts).toEqual({
       auto: "always",
       provider: "openai",
+      providers: {
+        openai: {
+          voice: "alloy",
+        },
+      },
     });
-    expect(result.accounts?.english?.tts).toMatchObject({
+    expect(result.accounts?.english?.tts).toEqual({
       providers: {
         openai: {
           voice: "shimmer",
@@ -315,9 +321,7 @@ describe("FeishuConfigSchema defaultAccount", () => {
 
     expect(result.success).toBe(false);
     if (!result.success) {
-      expect(result.error.issues.some((issue) => issue.path.join(".") === "defaultAccount")).toBe(
-        true,
-      );
+      expect(result.error.issues.map((issue) => issue.path.join("."))).toContain("defaultAccount");
     }
   });
 });

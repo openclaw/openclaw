@@ -1,3 +1,6 @@
+/**
+ * Browser test-support re-exports from shared plugin-sdk test fixtures.
+ */
 export {
   createCliRuntimeCapture,
   expectGeneratedTokenPersistedToGatewayAuth,
@@ -12,4 +15,4 @@ export {
   isLiveTestEnabled,
 } from "openclaw/plugin-sdk/test-env";
 export type { FetchMock, TempHomeEnv } from "openclaw/plugin-sdk/test-env";
-export type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+export type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";

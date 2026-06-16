@@ -1,3 +1,5 @@
+// Tool policy pipeline tests cover profile/allowlist filtering, diagnostics,
+// warning dedupe, and plugin-aware policy application.
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import {
   applyToolPolicyPipeline,
@@ -6,16 +8,15 @@ import {
 } from "./tool-policy-pipeline.js";
 import { resolveToolProfilePolicy } from "./tool-policy.js";
 
-const { toolPolicyAuditInfo } = vi.hoisted(() => ({
+const { toolPolicyAuditDebug, toolPolicyAuditInfo } = vi.hoisted(() => ({
+  toolPolicyAuditDebug: vi.fn(),
   toolPolicyAuditInfo: vi.fn(),
 }));
 
 vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({
-    debug: vi.fn(),
-    error: vi.fn(),
+    debug: toolPolicyAuditDebug,
     info: toolPolicyAuditInfo,
-    warn: vi.fn(),
   }),
 }));
 
@@ -26,6 +27,7 @@ function runAllowlistWarningStep(params: {
   label: string;
   suppressUnavailableCoreToolWarning?: boolean;
   suppressUnavailableCoreToolWarningAllowlist?: string[];
+  unavailableCoreToolReason?: string;
 }) {
   const warnings: string[] = [];
   const tools = [{ name: "exec" }] as unknown as DummyTool[];
@@ -41,6 +43,7 @@ function runAllowlistWarningStep(params: {
         suppressUnavailableCoreToolWarning: params.suppressUnavailableCoreToolWarning,
         suppressUnavailableCoreToolWarningAllowlist:
           params.suppressUnavailableCoreToolWarningAllowlist,
+        unavailableCoreToolReason: params.unavailableCoreToolReason,
       },
     ],
   });
@@ -50,6 +53,7 @@ function runAllowlistWarningStep(params: {
 describe("tool-policy-pipeline", () => {
   beforeEach(() => {
     resetToolPolicyWarningCacheForTest();
+    toolPolicyAuditDebug.mockClear();
     toolPolicyAuditInfo.mockClear();
   });
 
@@ -86,8 +90,9 @@ describe("tool-policy-pipeline", () => {
         },
       ],
     });
-    expect(warnings.length).toBe(1);
-    expect(warnings[0]).toContain("unknown entries (wat)");
+    expect(warnings).toEqual([
+      "tools: tools.allow allowlist contains unknown entries (wat). These entries won't match any tool unless the plugin is enabled.",
+    ]);
   });
 
   test("suppresses built-in profile warnings for unavailable gated core tools", () => {
@@ -96,7 +101,7 @@ describe("tool-policy-pipeline", () => {
       label: "tools.profile (coding)",
       suppressUnavailableCoreToolWarningAllowlist: ["apply_patch"],
     });
-    expect(warnings).toEqual([]);
+    expect(warnings).toStrictEqual([]);
   });
 
   test("still warns for profile steps when explicit alsoAllow entries are present", () => {
@@ -105,12 +110,9 @@ describe("tool-policy-pipeline", () => {
       label: "tools.profile (coding)",
       suppressUnavailableCoreToolWarningAllowlist: ["apply_patch"],
     });
-    expect(warnings.length).toBe(1);
-    expect(warnings[0]).toContain("unknown entries (browser)");
-    expect(warnings[0]).not.toContain("apply_patch");
-    expect(warnings[0]).toContain(
-      "shipped core tools but unavailable in the current runtime/provider/model/config",
-    );
+    expect(warnings).toEqual([
+      "tools: tools.profile (coding) allowlist contains unknown entries (browser). These entries are shipped core tools but unavailable in the current runtime/provider/model/config.",
+    ]);
   });
 
   test("still warns for explicit allowlists that mention unavailable gated core tools", () => {
@@ -118,13 +120,21 @@ describe("tool-policy-pipeline", () => {
       allow: ["apply_patch"],
       label: "tools.allow",
     });
-    expect(warnings.length).toBe(1);
-    expect(warnings[0]).toContain("unknown entries (apply_patch)");
-    expect(warnings[0]).toContain(
-      "shipped core tools but unavailable in the current runtime/provider/model/config",
-    );
-    expect(warnings[0]).not.toContain("Allowlist contains only plugin entries");
-    expect(warnings[0]).not.toContain("unless the plugin is enabled");
+    expect(warnings).toEqual([
+      "tools: tools.allow allowlist contains unknown entries (apply_patch). These entries are shipped core tools but unavailable in the current runtime/provider/model/config.",
+    ]);
+  });
+
+  test("includes the active reason for unavailable core tool warnings", () => {
+    const warnings = runAllowlistWarningStep({
+      allow: ["apply_patch", "wat"],
+      label: "tools.allow",
+      unavailableCoreToolReason:
+        "memory-triggered compaction runs expose only read and append-only write",
+    });
+    expect(warnings).toEqual([
+      "tools: tools.allow allowlist contains unknown entries (apply_patch, wat). Some entries are shipped core tools but unavailable here: memory-triggered compaction runs expose only read and append-only write; other entries won't match any tool unless the plugin is enabled.",
+    ]);
   });
 
   test("default profile steps suppress unavailable baseline profile entries", () => {
@@ -141,7 +151,7 @@ describe("tool-policy-pipeline", () => {
       }),
     });
 
-    expect(warnings).toEqual([]);
+    expect(warnings).toStrictEqual([]);
   });
 
   test("dedupes identical unknown-allowlist warnings across repeated runs", () => {
@@ -167,6 +177,8 @@ describe("tool-policy-pipeline", () => {
   });
 
   test("bounds the warning dedupe cache so new warnings still surface", () => {
+    // Warning dedupe is bounded so long-running agents do not grow unbounded
+    // memory while still surfacing new unknown allowlist entries.
     const warnings: string[] = [];
     const tools = [{ name: "exec" }] as unknown as DummyTool[];
 
@@ -243,8 +255,10 @@ describe("tool-policy-pipeline", () => {
       ],
     });
 
-    expect(warnings).toHaveLength(2);
-    expect(warnings[1]).toContain("unknown_0");
+    expect(warnings).toEqual([
+      "tools: tools.allow allowlist contains unknown entries (unknown_256). These entries won't match any tool unless the plugin is enabled.",
+      "tools: tools.allow allowlist contains unknown entries (unknown_0). These entries won't match any tool unless the plugin is enabled.",
+    ]);
   });
 
   test("applies allowlist filtering when core tools are explicitly listed", () => {
@@ -281,7 +295,7 @@ describe("tool-policy-pipeline", () => {
     expect(filtered.map((t) => (t as unknown as DummyTool).name)).toEqual(["exec"]);
   });
 
-  test("audits the policy rule that removes tools without changing sender grouping semantics", () => {
+  test("audits the policy rule that removes tools", () => {
     const tools = [
       { name: "exec" },
       { name: "browser" },
@@ -289,32 +303,61 @@ describe("tool-policy-pipeline", () => {
       { name: "read" },
     ] as unknown as DummyTool[];
 
-    const filtered = applyToolPolicyPipeline({
+    applyToolPolicyPipeline({
       tools: tools as any,
       toolMeta: () => undefined,
       warn: () => {},
       steps: [
         {
           policy: { allow: ["exec", "read"] },
-          label: "group tools.allow",
+          label: "agent tools.allow",
         },
       ],
     });
 
-    expect(filtered.map((t) => (t as unknown as DummyTool).name)).toEqual(["exec", "read"]);
     expect(toolPolicyAuditInfo).toHaveBeenCalledWith(
-      "tool policy removed 2 tool(s) via group tools.allow: browser, write",
+      "tool policy removed 2 tool(s) via agent tools.allow: browser, write",
       {
-        rule: "group tools.allow",
+        rule: "agent tools.allow",
         ruleKind: "allow",
         removedToolCount: 2,
         removedTools: ["browser", "write"],
         removedToolsTruncated: false,
       },
     );
+    expect(toolPolicyAuditDebug).not.toHaveBeenCalled();
   });
 
-  test("audits deny removals with the deny config key and matched rule", () => {
+  test("can lower removal audits for diagnostic-only policy probes", () => {
+    const tools = [{ name: "exec" }, { name: "browser" }] as unknown as DummyTool[];
+
+    applyToolPolicyPipeline({
+      tools: tools as any,
+      toolMeta: () => undefined,
+      warn: () => {},
+      auditLogLevel: "debug",
+      steps: [
+        {
+          policy: { allow: ["exec"] },
+          label: "doctor tools.profile (coding)",
+        },
+      ],
+    });
+
+    expect(toolPolicyAuditDebug).toHaveBeenCalledWith(
+      "tool policy removed 1 tool(s) via doctor tools.profile (coding): browser",
+      {
+        rule: "doctor tools.profile (coding)",
+        ruleKind: "allow",
+        removedToolCount: 1,
+        removedTools: ["browser"],
+        removedToolsTruncated: false,
+      },
+    );
+    expect(toolPolicyAuditInfo).not.toHaveBeenCalled();
+  });
+
+  test("audits deny removals with the deny config key", () => {
     const tools = [{ name: "exec" }, { name: "browser" }] as unknown as DummyTool[];
 
     applyToolPolicyPipeline({
@@ -340,6 +383,7 @@ describe("tool-policy-pipeline", () => {
         removedToolsTruncated: false,
       },
     );
+    expect(toolPolicyAuditDebug).not.toHaveBeenCalled();
   });
 
   test("splits mixed allow and deny policy audit entries by cause", () => {
@@ -382,6 +426,7 @@ describe("tool-policy-pipeline", () => {
         removedToolsTruncated: false,
       },
     );
+    expect(toolPolicyAuditDebug).not.toHaveBeenCalled();
   });
 
   test("does not audit policy steps that leave the tool surface unchanged", () => {
@@ -399,6 +444,7 @@ describe("tool-policy-pipeline", () => {
       ],
     });
 
+    expect(toolPolicyAuditDebug).not.toHaveBeenCalled();
     expect(toolPolicyAuditInfo).not.toHaveBeenCalled();
   });
 
@@ -427,5 +473,6 @@ describe("tool-policy-pipeline", () => {
         removedToolsTruncated: false,
       },
     );
+    expect(toolPolicyAuditDebug).not.toHaveBeenCalled();
   });
 });

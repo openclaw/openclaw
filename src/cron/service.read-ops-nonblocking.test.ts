@@ -1,3 +1,4 @@
+// Cron read operation tests cover nonblocking list/get behavior during service work.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -76,6 +77,20 @@ function createDeferredIsolatedRun() {
   };
 }
 
+function expectCronStatus(
+  status: Awaited<ReturnType<CronService["status"]>>,
+  params: { storePath: string; jobs: number },
+) {
+  expect(status.enabled).toBe(true);
+  expect(status.storePath).toBe(params.storePath);
+  expect(status.storage).toBe("sqlite");
+  expect(status.sqlitePath).toContain("openclaw.sqlite");
+  expect(status.jobs).toBe(params.jobs);
+  if (status.nextWakeAtMs !== null) {
+    expect(status.nextWakeAtMs).toBeTypeOf("number");
+  }
+}
+
 describe("CronService read ops while job is running", () => {
   it("keeps list and status responsive during a long isolated run", async () => {
     vi.useFakeTimers();
@@ -123,13 +138,13 @@ describe("CronService read ops while job is running", () => {
       });
 
       vi.setSystemTime(new Date("2025-12-13T00:00:01.000Z"));
-      await vi.runOnlyPendingTimersAsync();
+      await vi.advanceTimersByTimeAsync(1_000);
 
       await isolatedRun.runStarted;
       expect(isolatedRun.runIsolatedAgentJob).toHaveBeenCalledTimes(1);
 
-      await expect(cron.list({ includeDisabled: true })).resolves.toBeTypeOf("object");
-      await expect(cron.status()).resolves.toBeTypeOf("object");
+      await expect(cron.list({ includeDisabled: true })).resolves.toHaveLength(1);
+      expectCronStatus(await cron.status(), { storePath: store.storePath, jobs: 1 });
 
       const running = await cron.list({ includeDisabled: true });
       expect(running[0]?.state.runningAtMs).toBeTypeOf("number");
@@ -197,10 +212,11 @@ describe("CronService read ops while job is running", () => {
 
       await expect(
         withTimeout(cron.list({ includeDisabled: true }), 300, "cron.list during cron.run"),
-      ).resolves.toBeTypeOf("object");
-      await expect(withTimeout(cron.status(), 300, "cron.status during cron.run")).resolves.toEqual(
-        expect.objectContaining({ enabled: true, storePath: store.storePath }),
-      );
+      ).resolves.toHaveLength(1);
+      expectCronStatus(await withTimeout(cron.status(), 300, "cron.status during cron.run"), {
+        storePath: store.storePath,
+        jobs: 1,
+      });
 
       isolatedRun.completeRun({ status: "ok", summary: "manual done" });
       await expect(runPromise).resolves.toEqual({ ok: true, ran: true });
@@ -258,10 +274,11 @@ describe("CronService read ops while job is running", () => {
 
       await expect(
         withTimeout(cron.list({ includeDisabled: true }), 300, "cron.list during startup"),
-      ).resolves.toBeTypeOf("object");
-      await expect(withTimeout(cron.status(), 300, "cron.status during startup")).resolves.toEqual(
-        expect.objectContaining({ enabled: true, storePath: store.storePath }),
-      );
+      ).resolves.toHaveLength(1);
+      expectCronStatus(await withTimeout(cron.status(), 300, "cron.status during startup"), {
+        storePath: store.storePath,
+        jobs: 1,
+      });
 
       const jobs = await cron.list({ includeDisabled: true });
       expect(jobs[0]?.state.lastStatus).toBeUndefined();

@@ -1,6 +1,11 @@
+// Pre-action policy for `plugins install`: decide whether an install may bypass invalid
+// config so plugin-owned doctor/recovery code can repair broken plugin state.
 import fs from "node:fs";
 import path from "node:path";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { Command } from "commander";
+import { tryReadJsonSync } from "../infra/json-files.js";
+import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { findBundledPluginSource } from "../plugins/bundled-sources.js";
 import { loadPluginManifest } from "../plugins/manifest.js";
 import {
@@ -13,6 +18,7 @@ import { parseNpmPrefixSpec, resolveFileNpmSpecToLocalPath } from "./plugins-com
 
 type PluginInstallInvalidConfigPolicy = "deny" | "allow-plugin-recovery";
 
+/** Parsed install request plus recovery metadata needed by CLI pre-action config policy. */
 export type PluginInstallRequestContext = {
   rawSpec: string;
   normalizedSpec: string;
@@ -40,24 +46,17 @@ function readBundledInstallRecoveryMetadata(rootDir: string): {
   }
   const manifest = loadPluginManifest(rootDir, false);
   const pluginId = manifest.ok ? manifest.manifest.id : undefined;
-  try {
-    const parsed = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
-      openclaw?: {
-        install?: {
-          allowInvalidConfigRecovery?: boolean;
-        };
+  const parsed = tryReadJsonSync<{
+    openclaw?: {
+      install?: {
+        allowInvalidConfigRecovery?: boolean;
       };
     };
-    return {
-      ...(pluginId ? { pluginId } : {}),
-      allowInvalidConfigRecovery: parsed.openclaw?.install?.allowInvalidConfigRecovery === true,
-    };
-  } catch {
-    return {
-      ...(pluginId ? { pluginId } : {}),
-      allowInvalidConfigRecovery: false,
-    };
-  }
+  }>(packageJsonPath);
+  return {
+    ...(pluginId ? { pluginId } : {}),
+    allowInvalidConfigRecovery: parsed?.openclaw?.install?.allowInvalidConfigRecovery === true,
+  };
 }
 
 function resolveBundledInstallRecoveryMetadata(
@@ -105,7 +104,7 @@ function resolveBundledInstallRecoveryMetadata(
 }
 
 function resolveOfficialExternalInstallRecoveryMetadata(
-  request: Pick<PluginInstallRequestContext, "rawSpec" | "normalizedSpec" | "marketplace">,
+  request: Pick<PluginInstallRequestContext, "rawSpec" | "marketplace">,
 ): {
   pluginId?: string;
   allowInvalidConfigRecovery?: boolean;
@@ -113,12 +112,20 @@ function resolveOfficialExternalInstallRecoveryMetadata(
   if (request.marketplace) {
     return {};
   }
+  if (request.rawSpec.trim().startsWith("file:")) {
+    return {};
+  }
+  if (fs.existsSync(resolveUserPath(request.rawSpec))) {
+    return {};
+  }
   const rawNpmPrefixSpec = parseNpmPrefixSpec(request.rawSpec);
-  const normalizedNpmPrefixSpec = parseNpmPrefixSpec(request.normalizedSpec);
   const values = new Set(
-    [request.rawSpec, request.normalizedSpec, rawNpmPrefixSpec ?? "", normalizedNpmPrefixSpec ?? ""]
-      .map((value) => value.trim())
-      .filter(Boolean),
+    normalizeStringEntries([
+      request.rawSpec,
+      rawNpmPrefixSpec ?? "",
+      parseRegistryNpmSpec(request.rawSpec)?.name ?? "",
+      rawNpmPrefixSpec ? parseRegistryNpmSpec(rawNpmPrefixSpec)?.name : "",
+    ]),
   );
   if (values.size === 0) {
     return {};
@@ -182,6 +189,7 @@ function resolvePluginInstallArgvRequest(commandPath: string[], argv: string[]) 
   return rawSpec ? { rawSpec, marketplace } : null;
 }
 
+/** Resolve install metadata from the raw spec before Commander action handlers mutate config. */
 export function resolvePluginInstallRequestContext(params: {
   rawSpec: string;
   marketplace?: string;
@@ -212,7 +220,6 @@ export function resolvePluginInstallRequestContext(params: {
   });
   const officialRecovered = resolveOfficialExternalInstallRecoveryMetadata({
     rawSpec: params.rawSpec,
-    normalizedSpec,
     marketplace: params.marketplace,
   });
   const recovered =
@@ -233,6 +240,7 @@ export function resolvePluginInstallRequestContext(params: {
   };
 }
 
+/** Recover the plugin install request from Commander state plus raw argv fallback parsing. */
 export function resolvePluginInstallPreactionRequest(params: {
   actionCommand: Command;
   commandPath: string[];
@@ -258,6 +266,7 @@ export function resolvePluginInstallPreactionRequest(params: {
   return request.ok ? request.request : null;
 }
 
+/** Decide whether invalid config should block a command before plugin recovery can run. */
 export function resolvePluginInstallInvalidConfigPolicy(
   request: PluginInstallRequestContext | null,
 ): PluginInstallInvalidConfigPolicy {

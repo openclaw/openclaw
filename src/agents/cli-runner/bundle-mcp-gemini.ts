@@ -1,7 +1,11 @@
+/**
+ * Gemini CLI bundle MCP adapter that writes temporary system settings files.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { applyMergePatch } from "../../config/merge-patch.js";
+import { tryReadJson, writeJson } from "../../infra/json-files.js";
 import type { BundleMcpConfig, BundleMcpServerConfig } from "../../plugins/bundle-mcp.js";
 import {
   applyCommonServerConfig,
@@ -11,20 +15,18 @@ import {
 } from "./bundle-mcp-adapter-shared.js";
 
 async function readJsonObject(filePath: string): Promise<Record<string, unknown>> {
-  try {
-    const raw = JSON.parse(await fs.readFile(filePath, "utf-8")) as unknown;
-    return raw && typeof raw === "object" && !Array.isArray(raw)
-      ? ({ ...raw } as Record<string, unknown>)
-      : {};
-  } catch {
-    return {};
-  }
+  const raw = await tryReadJson<unknown>(filePath);
+  return raw && typeof raw === "object" && !Array.isArray(raw)
+    ? ({ ...raw } as Record<string, unknown>)
+    : {};
 }
 
 function resolveEnvPlaceholder(
   value: string,
   inheritedEnv: Record<string, string> | undefined,
 ): string {
+  // Gemini settings need concrete header values; resolve placeholders from the
+  // inherited run env first, then the process env.
   const decoded = decodeHeaderEnvPlaceholder(value);
   if (!decoded) {
     return value;
@@ -57,6 +59,7 @@ function normalizeGeminiServerConfig(
   return next;
 }
 
+/** Writes merged Gemini system settings and returns env plus cleanup hook. */
 export async function writeGeminiSystemSettings(
   mergedConfig: BundleMcpConfig,
   inheritedEnv: Record<string, string> | undefined,
@@ -86,13 +89,14 @@ export async function writeGeminiSystemSettings(
   if (!isRecord(settings.mcp) || !isRecord(settings.mcpServers)) {
     throw new Error("Gemini MCP settings merge produced an invalid object");
   }
-  await fs.writeFile(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, "utf-8");
+  await writeJson(settingsPath, settings, { trailingNewline: true });
   return {
     env: {
       ...inheritedEnv,
       GEMINI_CLI_SYSTEM_SETTINGS_PATH: settingsPath,
     },
     cleanup: async () => {
+      // Temp settings are per-run and must disappear with the prepared CLI run.
       await fs.rm(tempDir, { recursive: true, force: true });
     },
   };

@@ -1,10 +1,13 @@
+// Finds and cleans stale gateway process ids.
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { resolveGatewayPort } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { isGatewayArgv, parseProcCmdline } from "./gateway-process-argv.js";
+import { parseStrictPositiveInteger } from "./parse-finite-number.js";
 import { resolveLsofCommandSync } from "./ports-lsof.js";
 import { getWindowsInstallRoots } from "./windows-install-roots.js";
 import {
@@ -113,8 +116,7 @@ function readParentPidFromPs(pid: number, spawnTimeoutMs: number): number | null
     if (res.error || res.status !== 0 || !res.stdout.trim()) {
       return null;
     }
-    const parsed = Number.parseInt(res.stdout.trim(), 10);
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+    return parseStrictPositiveInteger(res.stdout.trim()) ?? null;
   } catch {
     return null;
   }
@@ -148,10 +150,10 @@ function readParentPidFromPs(pid: number, spawnTimeoutMs: number): number | null
  * syscall and is always available; transitive ancestors are read on Linux via
  * `/proc` and on macOS via `ps`. Windows stops at ppid.
  *
- * The function takes no parameters and exposes no hooks. Tests exercise
- * the real walk by stubbing `process.ppid` (and, on Linux, by mocking
- * `node:fs` to inject `/proc/<pid>/status` payloads) — there is no
- * reachable override for runtime callers to mutate.
+ * The function exposes no runtime hooks. Tests exercise the real walk by
+ * stubbing `process.ppid` (and, on Linux, by mocking `node:fs` to inject
+ * `/proc/<pid>/status` payloads) — there is no reachable override for
+ * runtime callers to mutate.
  */
 export function getSelfAndAncestorPidsSync(spawnTimeoutMs = SPAWN_TIMEOUT_MS): Set<number> {
   const pids = new Set<number>([process.pid]);
@@ -274,7 +276,7 @@ function parsePidsFromLsofOutput(stdout: string, spawnTimeoutMs: number): number
       pids.push(entry.pid);
     }
   }
-  return [...new Set(pids)];
+  return uniqueValues(pids);
 }
 
 /**
@@ -285,7 +287,7 @@ function parsePidsFromLsofOutput(stdout: string, spawnTimeoutMs: number): number
  */
 function filterVerifiedWindowsGatewayPids(rawPids: number[]): number[] {
   const excluded = getSelfAndAncestorPidsSync();
-  return Array.from(new Set(rawPids))
+  return uniqueValues(rawPids)
     .filter((pid) => Number.isFinite(pid) && pid > 0 && !excluded.has(pid))
     .filter((pid) => {
       const args = readWindowsProcessArgsSync(pid);
@@ -299,7 +301,7 @@ function filterVerifiedWindowsGatewayPidsResult(
 ): WindowsListeningPidsResult {
   const excluded = getSelfAndAncestorPidsSync();
   const verified: number[] = [];
-  for (const pid of Array.from(new Set(rawPids))) {
+  for (const pid of uniqueValues(rawPids)) {
     if (!Number.isFinite(pid) || pid <= 0 || excluded.has(pid)) {
       continue;
     }
@@ -620,7 +622,7 @@ export function cleanStaleGatewayProcessesSync(portOverride?: number): number[] 
   }
 }
 
-export const __testing = {
+export const testing = {
   setSleepSyncOverride(fn: ((ms: number) => void) | null) {
     sleepSyncOverride = fn;
   },
@@ -633,3 +635,4 @@ export const __testing = {
   /** Invoke sleepSync directly (bypasses the override) for unit-testing the real Atomics path. */
   callSleepSyncRaw: sleepSync,
 };
+export { testing as __testing };

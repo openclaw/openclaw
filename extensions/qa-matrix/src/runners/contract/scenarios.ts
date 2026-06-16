@@ -1,3 +1,4 @@
+// Qa Matrix plugin module implements scenarios behavior.
 import {
   MATRIX_QA_BOT_DM_ROOM_KEY,
   MATRIX_QA_DRIVER_DM_ROOM_KEY,
@@ -13,7 +14,7 @@ import {
   buildMatrixQaTopologyForScenarios,
   findMatrixQaScenarios,
   resolveMatrixQaScenarioRoomId,
-  __matrixQaProfileTesting,
+  matrixQaProfileTesting,
 } from "./scenario-catalog.js";
 import {
   buildMatrixReplyArtifact,
@@ -39,7 +40,7 @@ export type { MatrixQaCanaryArtifact, MatrixQaScenarioArtifacts };
 
 export type { MatrixQaScenarioContext };
 
-export const __testing = {
+export const testing = {
   MATRIX_QA_BOT_DM_ROOM_KEY,
   MATRIX_QA_DRIVER_DM_ROOM_KEY,
   MATRIX_QA_DRIVER_DM_SHARED_ROOM_KEY,
@@ -55,9 +56,10 @@ export const __testing = {
   buildMatrixReplyArtifact,
   buildMentionPrompt,
   findMatrixQaScenarios,
-  getMatrixQaProfileScenarioIds: __matrixQaProfileTesting.getMatrixQaProfileScenarioIds,
-  normalizeMatrixQaProfile: __matrixQaProfileTesting.normalizeMatrixQaProfile,
+  getMatrixQaProfileScenarioIds: matrixQaProfileTesting.getMatrixQaProfileScenarioIds,
+  normalizeMatrixQaProfile: matrixQaProfileTesting.normalizeMatrixQaProfile,
   readMatrixQaSyncCursor,
   resolveMatrixQaScenarioRoomId,
   writeMatrixQaSyncCursor,
 };
+export { testing as __testing };

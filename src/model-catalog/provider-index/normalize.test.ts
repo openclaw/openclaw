@@ -1,3 +1,4 @@
+// Provider-index normalization tests cover preview catalogs, install metadata, auth choices, and malformed input.
 import { describe, expect, it } from "vitest";
 import { loadOpenClawProviderIndex, normalizeOpenClawProviderIndex } from "./index.js";
 
@@ -144,22 +145,23 @@ describe("OpenClaw provider index", () => {
 
     expect(index.providers.moonshot?.previewCatalog).not.toHaveProperty("api");
     expect(index.providers.moonshot?.previewCatalog).not.toHaveProperty("baseUrl");
-    expect(index.providers.moonshot?.previewCatalog?.models).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "kimi-k2.6",
-          status: "preview",
-        }),
-      ]),
+    const kimi = index.providers.moonshot?.previewCatalog?.models.find(
+      (model) => model.id === "kimi-k2.6",
     );
+    expect(kimi?.status).toBe("preview");
+    const kimiCode = index.providers.moonshot?.previewCatalog?.models.find(
+      (model) => model.id === "kimi-k2.7-code",
+    );
+    expect(kimiCode).toMatchObject({
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 262144,
+      status: "preview",
+    });
     expect(index.providers.deepseek?.plugin.id).toBe("deepseek");
-    expect(index.providers.deepseek?.previewCatalog?.models).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "deepseek-chat",
-          contextWindow: 131072,
-        }),
-      ]),
+    const deepseekChat = index.providers.deepseek?.previewCatalog?.models.find(
+      (model) => model.id === "deepseek-chat",
     );
+    expect(deepseekChat?.contextWindow).toBe(131072);
   });
 });

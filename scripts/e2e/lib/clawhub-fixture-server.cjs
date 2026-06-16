@@ -1,3 +1,4 @@
+// CommonJS fixture server for ClawHub package/install E2E scenarios.
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const http = require("node:http");
@@ -87,10 +88,10 @@ async function buildNpmPackArtifact(fixture) {
 
 const profiles = {
   "kitchen-sink-plugin": {
-    version: "0.1.3",
+    version: "0.2.5",
     packageJson: {
       name: packageName,
-      version: "0.1.3",
+      version: "0.2.5",
       type: "module",
       dependencies: {
         "is-number": "7.0.0",
@@ -127,6 +128,28 @@ export default definePluginEntry({
       docsPath: "/providers/kitchen-sink",
       auth: [],
     });
+    api.registerContextEngine("${pluginId}", () => ({
+      info: {
+        id: "${pluginId}",
+        name: "Kitchen Sink Context Engine",
+      },
+      async ingest() {
+        return { ingested: false };
+      },
+      async assemble(params) {
+        return {
+          messages: params.messages,
+          estimatedTokens: 0,
+        };
+      },
+      async compact() {
+        return {
+          ok: true,
+          compacted: false,
+          reason: "kitchen-sink fixture does not compact",
+        };
+      },
+    }));
     api.registerChannel({
       plugin: {
         id: "kitchen-sink-channel",
@@ -151,7 +174,32 @@ export default definePluginEntry({
     manifest: {
       id: pluginId,
       name: "OpenClaw Kitchen Sink",
+      kind: "context-engine",
       channels: ["kitchen-sink-channel"],
+      channelConfigs: {
+        "kitchen-sink-channel": {
+          schema: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              enabled: { type: "boolean", default: true },
+              token: { type: "string" },
+            },
+          },
+          uiHints: {
+            token: {
+              sensitive: true,
+            },
+          },
+          label: "Kitchen Sink",
+          description:
+            "Credential-free channel fixture for deterministic Kitchen Sink install tests.",
+          commands: {
+            nativeCommandsAutoEnabled: true,
+            nativeSkillsAutoEnabled: true,
+          },
+        },
+      },
       providers: ["kitchen-sink-provider"],
       contracts: {
         tools: ["kitchen-sink-tool"],
@@ -420,7 +468,9 @@ async function main() {
   });
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+main().catch(
+  /** @param {unknown} error */ (error) => {
+    console.error(error);
+    process.exit(1);
+  },
+);

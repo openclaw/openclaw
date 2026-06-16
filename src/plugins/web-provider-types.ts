@@ -1,3 +1,4 @@
+// Defines web provider plugin schema and runtime types.
 import type { TSchema } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -30,6 +31,7 @@ export type WebSearchProviderContext = {
   config?: OpenClawConfig;
   searchConfig?: Record<string, unknown>;
   runtimeMetadata?: RuntimeWebSearchMetadata;
+  agentDir?: string;
 };
 
 export type WebSearchProviderToolExecutionContext = {
@@ -45,6 +47,11 @@ export type WebFetchProviderContext = {
 export type WebSearchCredentialResolutionSource = "config" | "secretRef" | "env" | "missing";
 
 export type WebSearchProviderConfiguredCredentialFallback = {
+  path: string;
+  value: unknown;
+};
+
+export type WebFetchProviderConfiguredCredentialFallback = {
   path: string;
   value: unknown;
 };
@@ -89,6 +96,8 @@ export type WebSearchProviderPlugin = {
   requiresCredential?: boolean;
   credentialLabel?: string;
   envVars: string[];
+  /** Optional model-provider auth profile id that can satisfy this web provider without a tool-specific API key. */
+  authProviderId?: string;
   placeholder: string;
   signupUrl: string;
   docsUrl?: string;
@@ -133,6 +142,9 @@ export type WebFetchProviderPlugin = {
   setCredentialValue: (fetchConfigTarget: Record<string, unknown>, value: unknown) => void;
   getConfiguredCredentialValue?: (config?: OpenClawConfig) => unknown;
   setConfiguredCredentialValue?: (configTarget: OpenClawConfig, value: unknown) => void;
+  getConfiguredCredentialFallback?: (
+    config?: OpenClawConfig,
+  ) => WebFetchProviderConfiguredCredentialFallback | undefined;
   applySelectionConfig?: (config: OpenClawConfig) => OpenClawConfig;
   resolveRuntimeMetadata?: (
     ctx: WebFetchRuntimeMetadataContext,

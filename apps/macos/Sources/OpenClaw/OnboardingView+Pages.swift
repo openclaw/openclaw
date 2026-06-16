@@ -321,7 +321,7 @@ extension OnboardingView {
                 return "Select a nearby gateway or open Advanced to enter a gateway URL."
             }
             if GatewayRemoteConfig.normalizeGatewayUrl(trimmedUrl) == nil {
-                return "Gateway URL must use wss:// for remote hosts (ws:// only for localhost)."
+                return "Gateway URL must use wss:// for public hosts; ws:// is allowed for localhost, LAN, or Tailnet hosts."
             }
             return nil
         case .ssh:
@@ -679,7 +679,7 @@ extension OnboardingView {
                 } else if !self.cliInstalled, self.cliInstallLocation == nil {
                     Text(
                         """
-                        Installs a user-space Node 22+ runtime and the CLI (no Homebrew).
+                        Installs a user-space Node 22.19+ runtime and the CLI (no Homebrew).
                         Rerun anytime to reinstall or update.
                         """)
                         .font(.footnote)

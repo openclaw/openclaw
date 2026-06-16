@@ -1,7 +1,9 @@
+// Line tests cover auto reply delivery plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { LineAutoReplyDeps } from "./auto-reply-delivery.js";
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";
 import { sendLineReplyChunks } from "./reply-chunks.js";
+import { createLineSendReceipt } from "./send-receipt.js";
 
 const createFlexMessage = (altText: string, contents: unknown) => ({
   type: "flex" as const,
@@ -45,7 +47,11 @@ describe("deliverLineAutoReply", () => {
       text,
     }));
     const createQuickReplyItems = vi.fn((labels: string[]) => ({ items: labels }));
-    const pushMessagesLine = vi.fn(async () => ({ messageId: "push", chatId: "u1" }));
+    const pushMessagesLine = vi.fn(async () => ({
+      messageId: "push",
+      chatId: "u1",
+      receipt: createLineSendReceipt({ messageId: "push", chatId: "u1", kind: "text" }),
+    }));
 
     const deps: LineAutoReplyDeps = {
       buildTemplateMessageFromPayload: () => null,

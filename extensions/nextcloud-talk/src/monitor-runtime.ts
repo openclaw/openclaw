@@ -1,7 +1,8 @@
+// Nextcloud Talk plugin module implements monitor runtime behavior.
 import os from "node:os";
 import { resolveLoggerBackedRuntime } from "openclaw/plugin-sdk/extension-shared";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveNextcloudTalkAccount } from "./accounts.js";
 import { handleNextcloudTalkInbound } from "./inbound.js";
 import {
@@ -110,7 +111,6 @@ export async function monitorNextcloudTalkProvider(
         logger.warn(
           `[nextcloud-talk:${account.accountId}] replayed webhook ignored room=${message.roomToken} messageId=${message.messageId}`,
         );
-        return;
       }
     },
     onMessage: async () => {},

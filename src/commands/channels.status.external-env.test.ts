@@ -1,3 +1,4 @@
+// Channels status external-env tests cover env-backed credentials and config-only status rendering.
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -125,13 +126,9 @@ describe("channelsStatusCommand external env-only channel fallback", () => {
 
     expect(fs.existsSync(fullMarker)).toBe(false);
     const payload = JSON.parse(logs.at(-1) ?? "{}");
-    expect(payload).toEqual(
-      expect.objectContaining({
-        gatewayReachable: false,
-        configOnly: true,
-        configuredChannels: ["external-env-channel"],
-      }),
-    );
+    expect(payload.gatewayReachable).toBe(false);
+    expect(payload.configOnly).toBe(true);
+    expect(payload.configuredChannels).toEqual(["external-env-channel"]);
   });
 });
 

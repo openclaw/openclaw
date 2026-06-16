@@ -1,13 +1,37 @@
+// Outbound session context carries canonical hook/session policy keys plus
+// requester metadata used by delivery policies and media roots.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 export type OutboundSessionContext = {
-  /** Canonical session key used for internal hook dispatch. */
+  /**
+   * Canonical session key used for internal hook dispatch.
+   *
+   * MUST equal the agent runtime's `params.sessionKey` for the run that
+   * produced the payload being delivered. Plugins observing both
+   * `agent_end`/`llm_input`/`llm_output`/`before_tool_call`/`after_tool_call`
+   * and `message_sending`/`message_sent` rely on this equality to correlate
+   * per-turn state across the agent-loop and delivery boundaries.
+   *
+   * Callers populating this field should use the same value the agent runner
+   * received as its sessionKey — in the chat path that is
+   * `targetSessionKey || ctx.SessionKey` (see
+   * `auto-reply/reply/get-reply.ts`). Followup, ACP, command, and cron
+   * delivery paths each have their own canonical value to forward; consult
+   * the relevant runner.
+   */
   key?: string;
-  /** Session key used for policy resolution when delivery differs from the control session. */
+  /**
+   * Session key used for policy resolution when delivery differs from the
+   * control session. Used to look up silent-reply policy, send rate limits,
+   * agent-scoped channel preferences, etc., for the chat the reply is being
+   * delivered into. May equal `key` when there is no redirect; otherwise
+   * `policyKey` describes the *delivery target*'s session while `key`
+   * describes the *control session* whose hooks fire.
+   */
   policyKey?: string;
   /** Explicit conversation type for policy resolution when a session key is generic. */
   conversationType?: SilentReplyConversationType;
@@ -25,6 +49,7 @@ export type OutboundSessionContext = {
   requesterSenderE164?: string;
 };
 
+/** Builds the outbound delivery session context, omitting empty policy fields. */
 export function buildOutboundSessionContext(params: {
   cfg: OpenClawConfig;
   sessionKey?: string | null;
@@ -60,6 +85,8 @@ export function buildOutboundSessionContext(params: {
   const derivedAgentId = key
     ? resolveSessionAgentId({ sessionKey: key, config: params.cfg })
     : undefined;
+  // Prefer explicit caller ownership, but derive from the canonical session key
+  // so redirected deliveries still get workspace-scoped media policy.
   const agentId = explicitAgentId ?? derivedAgentId;
   if (
     !key &&

@@ -1,11 +1,13 @@
+// Whatsapp tests cover web auto reply utils plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeMainKey } from "openclaw/plugin-sdk/routing";
-import { saveSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
-import type { WhatsAppSendResult } from "../inbound/send-result.js";
+import { createTestWebInboundMessage } from "../inbound/test-message.test-helper.js";
+import type { WebInboundMessage } from "../inbound/types.js";
 import {
   evaluateSessionFreshness,
   loadSessionStore,
@@ -22,34 +24,42 @@ import {
   resolveMentionTargets,
   resolveOwnerList,
 } from "./mentions.js";
-import type { WebInboundMsg } from "./types.js";
 import { elide, isLikelyWhatsAppCryptoError } from "./util.js";
 
-function acceptedSendResult(kind: "media" | "text", id: string): WhatsAppSendResult {
-  return {
-    kind,
-    messageId: id,
-    messageIds: [id],
-    keys: [{ id }],
-    providerAccepted: true,
-  };
-}
+type TestMessageOverrides = {
+  body?: string;
+  chatType?: "direct" | "group";
+  conversationId?: string;
+  from?: string;
+  mentionedJids?: string[];
+  selfE164?: string;
+  selfJid?: string;
+  selfLid?: string;
+};
 
-const makeMsg = (overrides: Partial<WebInboundMsg>): WebInboundMsg =>
-  ({
-    id: "m1",
-    from: "120363401234567890@g.us",
-    conversationId: "120363401234567890@g.us",
-    to: "15551234567@s.whatsapp.net",
+const makeMsg = (overrides: TestMessageOverrides): WebInboundMessage => {
+  const from = overrides.from ?? "120363401234567890@g.us";
+  return createTestWebInboundMessage({
+    event: { id: "m1" },
+    payload: { body: overrides.body ?? "" },
+    platform: {
+      chatJid: "120363401234567890@g.us",
+      recipientJid: "15551234567@s.whatsapp.net",
+      selfE164: overrides.selfE164,
+      selfJid: overrides.selfJid,
+      selfLid: overrides.selfLid,
+    },
+    from,
+    conversationId: overrides.conversationId ?? from,
     accountId: "default",
-    body: "",
-    chatType: "group",
-    chatId: "120363401234567890@g.us",
-    sendComposing: async () => {},
-    reply: async () => acceptedSendResult("text", "r1"),
-    sendMedia: async () => acceptedSendResult("media", "m1"),
-    ...overrides,
-  }) as WebInboundMsg;
+    chatType: overrides.chatType ?? "group",
+    group: {
+      mentions: {
+        jids: overrides.mentionedJids,
+      },
+    },
+  });
+};
 
 function getSessionSnapshotForTest(
   cfg: OpenClawConfig,
@@ -109,7 +119,7 @@ describe("isBotMentionedFromTargets", () => {
   const mentionCfg = { mentionRegexes: [/\bopenclaw\b/i] };
 
   function expectMentioned(
-    msg: WebInboundMsg,
+    msg: WebInboundMessage,
     cfg: { mentionRegexes: RegExp[]; allowFrom?: Array<string | number>; isSelfChat?: boolean },
     expected: boolean,
   ) {
@@ -235,11 +245,11 @@ describe("resolveMentionTargets with @lid mapping", () => {
         authDir,
       );
       expect(mentionTargets.normalizedMentions).toEqual([
-        expect.objectContaining({
+        {
           jid: null,
           lid: "777@lid",
           e164: "+1777",
-        }),
+        },
       ]);
 
       const selfTargets = resolveMentionTargets(
@@ -249,8 +259,11 @@ describe("resolveMentionTargets with @lid mapping", () => {
         }),
         authDir,
       );
-      expect(selfTargets.self.e164).toBe("+1777");
-      expect(selfTargets.self.lid).toBe("777@lid");
+      expect(selfTargets.self).toEqual({
+        jid: null,
+        lid: "777@lid",
+        e164: "+1777",
+      });
     });
   });
 });
@@ -264,8 +277,10 @@ describe("getSessionSnapshot", () => {
         const storePath = path.join(root, "sessions.json");
         const sessionKey = "agent:main:whatsapp:dm:s1";
 
-        await saveSessionStore(storePath, {
-          [sessionKey]: {
+        await upsertSessionEntry({
+          storePath,
+          sessionKey,
+          entry: {
             sessionId: "snapshot-session",
             updatedAt: new Date(2026, 0, 18, 3, 30, 0).getTime(),
             lastChannel: "whatsapp",
@@ -343,11 +358,11 @@ describe("web auto-reply util", () => {
   describe("isLikelyWhatsAppCryptoError", () => {
     it("matches known Baileys crypto auth errors (Error)", () => {
       const err = new Error("bad mac");
-      err.stack = "at something\nat @whiskeysockets/baileys/noise-handler\n";
+      err.stack = "at something\nat baileys/noise-handler\n";
       expect(isLikelyWhatsAppCryptoError(err)).toBe(true);
     });
 
-    it("does not throw on circular objects", () => {
+    it("returns false for circular objects", () => {
       const circular: Record<string, unknown> = {};
       circular.self = circular;
       expect(isLikelyWhatsAppCryptoError(circular)).toBe(false);

@@ -1,3 +1,4 @@
+// Plugin control-plane cold-import tests guard setup and plugin metadata paths against runtime-heavy imports.
 import { afterEach, describe, expect, it } from "vitest";
 import { refreshPluginRegistry } from "../plugins/plugin-registry.js";
 import {
@@ -44,21 +45,15 @@ describe("command control-plane plugin discovery", () => {
     const cfg = createColdPluginConfig(plugin.rootDir, plugin.pluginId);
     const env = createColdPluginHermeticEnv(workspaceDir);
 
-    expect(
-      buildAuthChoiceOptions({
-        store: {} as never,
-        includeSkip: false,
-        config: cfg,
-        workspaceDir,
-        env,
-      }),
-    ).toContainEqual(
-      expect.objectContaining({
-        value: plugin.authChoiceId,
-        label: "Cold Provider API key",
-        groupId: plugin.providerId,
-      }),
-    );
+    const authChoice = buildAuthChoiceOptions({
+      store: {} as never,
+      includeSkip: false,
+      config: cfg,
+      workspaceDir,
+      env,
+    }).find((choice) => choice.value === plugin.authChoiceId);
+    expect(authChoice?.label).toBe("Cold Provider API key");
+    expect(authChoice?.groupId).toBe(plugin.providerId);
     expect(
       formatAuthChoiceChoicesForCli({
         config: cfg,

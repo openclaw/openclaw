@@ -1,3 +1,4 @@
+// Child process adapter wraps spawned child processes for the supervisor.
 import type { ChildProcessWithoutNullStreams, SpawnOptions } from "node:child_process";
 import { assertOwnedChildEnv } from "../../../infra/owned-child-env.js";
 import { createWindowsOutputDecoder } from "../../../infra/windows-encoding.js";
@@ -79,35 +80,68 @@ export async function createChildAdapter(params: {
   });
 
   const child = spawned.child as ChildProcessWithoutNullStreams;
-  if (child.stdin) {
+  const childStdin = spawned.child.stdin;
+  let stdinDestroyed = childStdin?.destroyed ?? false;
+  let stdinEnded = childStdin?.writableEnded === true || childStdin?.writableFinished === true;
+  if (childStdin) {
+    childStdin.once("finish", () => {
+      stdinEnded = true;
+    });
+    childStdin.once("close", () => {
+      stdinEnded = true;
+      stdinDestroyed = true;
+    });
+    childStdin.once("error", () => {
+      stdinDestroyed = true;
+    });
     if (params.input !== undefined) {
-      child.stdin.write(params.input);
-      child.stdin.end();
+      childStdin.write(params.input);
+      stdinEnded = true;
+      childStdin.end();
     } else if (stdinMode === "pipe-closed") {
-      child.stdin.end();
+      stdinEnded = true;
+      childStdin.end();
     }
   }
 
-  const stdin: ManagedRunStdin | undefined = child.stdin
+  const stdin: ManagedRunStdin | undefined = childStdin
     ? {
-        destroyed: false,
+        get destroyed() {
+          return stdinDestroyed || childStdin.destroyed;
+        },
+        get writable() {
+          return !stdinDestroyed && !stdinEnded && childStdin.writable;
+        },
+        get writableEnded() {
+          return stdinEnded || childStdin.writableEnded;
+        },
+        get writableFinished() {
+          return childStdin.writableFinished;
+        },
         write: (data: string, cb?: (err?: Error | null) => void) => {
+          if (stdinDestroyed || stdinEnded || !childStdin.writable) {
+            cb?.(new Error("stdin is not writable"));
+            return;
+          }
           try {
-            child.stdin.write(data, cb);
+            childStdin.write(data, cb);
           } catch (err) {
             cb?.(err as Error);
           }
         },
         end: () => {
           try {
-            child.stdin.end();
+            stdinEnded = true;
+            childStdin.end();
           } catch {
             // ignore close errors
           }
         },
         destroy: () => {
           try {
-            child.stdin.destroy();
+            stdinDestroyed = true;
+            stdinEnded = true;
+            childStdin.destroy();
           } catch {
             // ignore destroy errors
           }
@@ -298,7 +332,7 @@ export async function createChildAdapter(params: {
       return waitResult;
     }
     if (waitError !== undefined) {
-      throw waitError;
+      throw toLintErrorObject(waitError, "Non-Error thrown");
     }
     if (!waitPromise) {
       waitPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
@@ -316,7 +350,7 @@ export async function createChildAdapter(params: {
             const error = waitError;
             resolveWait = null;
             rejectWait = null;
-            reject(error);
+            reject(toLintErrorObject(error, "Non-Error rejection"));
           }
         },
       );
@@ -330,24 +364,28 @@ export async function createChildAdapter(params: {
   // gateway's process group regardless of intent, so the kill must avoid
   // group-kill. (#71662 follow-up — caught by Greptile review)
   const childIsDetached = useDetached && !spawned.usedFallback;
+  const signalProcessTreeForChild = (pid: number, signal: "SIGTERM" | "SIGKILL") => {
+    signalProcessTree(pid, signal, { detached: childIsDetached });
+  };
   const kill = (signal?: NodeJS.Signals) => {
     const pid = child.pid ?? undefined;
-    if (signal === undefined || signal === "SIGKILL" || signal === "SIGTERM") {
-      const requestedSignal = signal ?? "SIGKILL";
+    if (signal === undefined || signal === "SIGKILL") {
       if (pid) {
         // Pass through whether the child is actually detached. Without this,
-        // tree signaling via `-pid` can take out the gateway's
+        // `signalProcessTree` group-kills via `-pid` and takes out the gateway's
         // own process group along with the child. (#71662)
-        signalProcessTree(pid, requestedSignal, { detached: childIsDetached });
+        signalProcessTreeForChild(pid, "SIGKILL");
       }
-      if (requestedSignal === "SIGKILL") {
-        try {
-          child.kill("SIGKILL");
-        } catch {
-          // ignore kill errors
-        }
-        scheduleForceKillWaitFallback("SIGKILL");
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // ignore kill errors
       }
+      scheduleForceKillWaitFallback("SIGKILL");
+      return;
+    }
+    if (signal === "SIGTERM" && pid) {
+      signalProcessTreeForChild(pid, "SIGTERM");
       return;
     }
     try {
@@ -372,4 +410,18 @@ export async function createChildAdapter(params: {
     kill,
     dispose,
   };
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

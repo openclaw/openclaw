@@ -56,6 +56,14 @@
           "preference-only"
         ]
       },
+      "toolsAllow": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "pattern": "^(?!\\*$)(?![Gg][Rr][Oo][Uu][Pp]:).+"
+        },
+        "maxItems": 32
+      },
       "promptOverride": { "type": "string" },
       "promptAppend": { "type": "string" },
       "maxSummaryChars": { "type": "integer", "minimum": 40, "maximum": 1000 },
@@ -115,11 +123,12 @@
       "help": "Optional explicit denylist of chat/user IDs. Sessions whose resolved conversation id matches the list are skipped even when the chat type is allowed. Applied after allowedChatIds."
     },
     "timeoutMs": {
-      "label": "Timeout (ms)"
+      "label": "Timeout (ms)",
+      "help": "Recall work budget on the main lane. Before recall, the hook allows up to 1500 ms for session/config preflight. After recall starts, it reserves another fixed 1500 ms only for abort settlement and transcript recovery."
     },
     "setupGraceTimeoutMs": {
       "label": "Setup Grace Timeout (ms)",
-      "help": "Advanced: extra blocking budget for cold embedded-run setup before the recall timeout is considered exhausted. Defaults to 0 so timeoutMs remains the main-lane hook budget unless you opt in."
+      "help": "Advanced: extra recall-work budget for cold embedded-run setup. Defaults to 0. The separate 1500 ms preflight cap and 1500 ms post-recall completion allowance still apply."
     },
     "queryMode": {
       "label": "Query Mode",
@@ -128,6 +137,10 @@
     "promptStyle": {
       "label": "Prompt Style",
       "help": "Choose how eager or strict the blocking memory sub-agent should be when deciding whether to return memory."
+    },
+    "toolsAllow": {
+      "label": "Allowed Memory Tools",
+      "help": "Advanced: tool names the blocking memory sub-agent may use. Defaults to memory_search and memory_get, or memory_recall when plugins.slots.memory selects memory-lancedb; configure this for other non-core memory providers. Wildcards, group entries, and core agent tools are ignored."
     },
     "thinking": {
       "label": "Thinking Override",

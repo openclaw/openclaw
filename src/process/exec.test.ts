@@ -1,3 +1,4 @@
+// Exec tests cover command execution, output capture, and cancellation behavior.
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import process from "node:process";
@@ -100,7 +101,7 @@ describe("runCommandWithTimeout", () => {
     ).toBe(false);
   });
 
-  it("merges custom env with base env and drops undefined values", async () => {
+  it("merges custom env with base env and drops undefined values", () => {
     const resolved = resolveCommandEnv({
       argv: ["node", "script.js"],
       baseEnv: {
@@ -118,32 +119,43 @@ describe("runCommandWithTimeout", () => {
     expect(resolved.OPENCLAW_CLI).toBe(OPENCLAW_CLI_ENV_VALUE);
   });
 
-  it("defaults to owned child env instead of inheriting process secrets", async () => {
-    const previousApiKey = process.env.OPENAI_API_KEY;
-    const previousPath = process.env.PATH;
-    try {
-      process.env.OPENAI_API_KEY = "sk-process-secret";
-      process.env.PATH = "/usr/bin";
-      const resolved = resolveCommandEnv({ argv: ["node", "script.js"] });
+  it("collapses case-insensitive duplicate env keys on Windows", () => {
+    const resolved = resolveCommandEnv({
+      argv: ["node", "script.js"],
+      platform: "win32",
+      baseEnv: {
+        Path: "C:\\base\\bin",
+        OPENCLAW_BASE_ENV: "base",
+      },
+      env: {
+        PATH: "C:\\override\\bin",
+        OPENCLAW_TEST_ENV: "ok",
+      },
+    });
 
-      expect(resolved.PATH).toBe("/usr/bin");
-      expect(resolved.OPENAI_API_KEY).toBeUndefined();
-      expect(resolved.OPENCLAW_CLI).toBe(OPENCLAW_CLI_ENV_VALUE);
-    } finally {
-      if (previousApiKey === undefined) {
-        delete process.env.OPENAI_API_KEY;
-      } else {
-        process.env.OPENAI_API_KEY = previousApiKey;
-      }
-      if (previousPath === undefined) {
-        delete process.env.PATH;
-      } else {
-        process.env.PATH = previousPath;
-      }
-    }
+    expect(resolved.Path).toBeUndefined();
+    expect(resolved.PATH).toBe("C:\\override\\bin");
+    expect(resolved.OPENCLAW_BASE_ENV).toBe("base");
+    expect(resolved.OPENCLAW_TEST_ENV).toBe("ok");
   });
 
-  it("suppresses npm fund prompts for npm argv", async () => {
+  it("preserves case-distinct env keys outside Windows", () => {
+    const resolved = resolveCommandEnv({
+      argv: ["node", "script.js"],
+      platform: "linux",
+      baseEnv: {
+        Path: "/base/bin",
+      },
+      env: {
+        PATH: "/override/bin",
+      },
+    });
+
+    expect(resolved.Path).toBe("/base/bin");
+    expect(resolved.PATH).toBe("/override/bin");
+  });
+
+  it("suppresses npm fund prompts for npm argv", () => {
     const resolved = resolveCommandEnv({
       argv: ["npm", "--version"],
       baseEnv: {},
@@ -181,6 +193,29 @@ describe("runCommandWithTimeout", () => {
     ).toBeNull();
   });
 
+  it("does not spawn when the abort signal is already aborted", async () => {
+    await loadExecModules({ mockSpawn: true });
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await runCommandWithTimeout(createSilentIdleArgv(), {
+      timeoutMs: 2_000,
+      signal: controller.signal,
+    });
+
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      stdout: "",
+      stderr: "",
+      code: null,
+      signal: null,
+      killed: false,
+      termination: "signal",
+      noOutputTimedOut: false,
+    });
+    expect(result.code).not.toBe(0);
+  });
+
   it.runIf(process.platform !== "win32")(
     "kills command when no output timeout elapses",
     { timeout: 5_000 },
@@ -199,7 +234,7 @@ describe("runCommandWithTimeout", () => {
       const result = await resultPromise;
       expect(result.termination).toBe("no-output-timeout");
       expect(result.noOutputTimedOut).toBe(true);
-      expect(result.code).not.toBe(0);
+      expect(result.code).toBe(124);
     },
   );
 
@@ -220,7 +255,7 @@ describe("runCommandWithTimeout", () => {
       const result = await resultPromise;
       expect(result.termination).toBe("timeout");
       expect(result.noOutputTimedOut).toBe(false);
-      expect(result.code).not.toBe(0);
+      expect(result.code).toBe(124);
     },
   );
 

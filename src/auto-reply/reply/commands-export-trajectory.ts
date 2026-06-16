@@ -1,9 +1,10 @@
-import fsp from "node:fs/promises";
+// Implements trajectory export command packaging for the active session agent.
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { createExecTool } from "../../agents/bash-tools.js";
 import type { ExecToolDetails } from "../../agents/bash-tools.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { ExecApprovalRequest } from "../../infra/exec-approvals.js";
+import { pathExists } from "../../infra/fs-safe.js";
 import {
   exportTrajectoryForCommand,
   formatTrajectoryCommandExportSummary,
@@ -19,11 +20,13 @@ import {
 import {
   buildCurrentOpenClawCliArgv,
   buildCurrentOpenClawCliCommand,
+  buildCurrentOpenClawCliExecEnv,
 } from "./commands-openclaw-cli.js";
 import {
   deliverPrivateCommandReply,
   readCommandDeliveryTarget,
   readCommandMessageThreadId,
+  resolvePrivateCommandApprovalRouteExpiresAtMs,
   resolvePrivateCommandRouteTargets,
   type PrivateCommandRouteTarget,
 } from "./commands-private-route.js";
@@ -53,17 +56,8 @@ type ExportTrajectoryCommandDeps = {
 const defaultExportTrajectoryCommandDeps: ExportTrajectoryCommandDeps = {
   createExecTool,
   resolvePrivateTrajectoryTargets: resolvePrivateTrajectoryTargetsForCommand,
-  deliverPrivateTrajectoryReply: deliverPrivateTrajectoryReply,
+  deliverPrivateTrajectoryReply,
 };
-
-async function fileExists(pathName: string): Promise<boolean> {
-  try {
-    await fsp.access(pathName);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 export async function buildExportTrajectoryCommandReply(
   params: HandleCommandsParams,
@@ -146,7 +140,7 @@ export async function buildExportTrajectoryReply(
   }
   const { entry, sessionFile } = sessionTarget;
 
-  if (!(await fileExists(sessionFile))) {
+  if (!(await pathExists(sessionFile))) {
     return { text: "❌ Session file not found." };
   }
 
@@ -225,7 +219,7 @@ function buildTrajectoryExportApprovalRequest(
       turnSourceThreadId: readCommandMessageThreadId(params) ?? null,
     },
     createdAtMs: now,
-    expiresAtMs: now + 5 * 60_000,
+    expiresAtMs: resolvePrivateCommandApprovalRouteExpiresAtMs(now),
   };
 }
 
@@ -251,10 +245,15 @@ async function requestTrajectoryExportApproval(
       trigger: "export-trajectory",
       scopeKey: EXPORT_TRAJECTORY_EXEC_SCOPE_KEY,
       allowBackground: true,
+      approvalFollowupMode: "agent",
       timeoutSec,
       cwd: params.workspaceDir,
       agentId,
       sessionKey: params.sessionKey,
+      sessionId: params.sessionEntry?.sessionId,
+      sessionStore: params.cfg.session?.store,
+      mainKey: params.cfg.session?.mainKey,
+      sessionScope: params.cfg.session?.scope,
       messageProvider: options.privateApprovalTarget?.channel ?? params.command.channel,
       currentChannelId: options.privateApprovalTarget?.to ?? readCommandDeliveryTarget(params),
       currentThreadTs: options.privateApprovalTarget
@@ -270,6 +269,7 @@ async function requestTrajectoryExportApproval(
     });
     const result = await execTool.execute("chat-export-trajectory", {
       command: request.command,
+      env: buildCurrentOpenClawCliExecEnv(),
       security: "allowlist",
       ask: "always",
       background: true,

@@ -1,3 +1,4 @@
+// Control UI controller manages exec approvals gateway state.
 import type { GatewayBrowserClient } from "../gateway.ts";
 import { cloneConfigObject, removePathValue, setPathValue } from "./config/form-utils.ts";
 
@@ -49,6 +50,7 @@ export type ExecApprovalsState = {
   execApprovalsForm: ExecApprovalsFile | null;
   execApprovalsSelectedAgent: string | null;
   lastError: string | null;
+  chatError?: string | null;
 };
 
 function resolveExecApprovalsRpc(target?: ExecApprovalsTarget | null): {
@@ -91,6 +93,7 @@ export async function loadExecApprovals(
   }
   state.execApprovalsLoading = true;
   state.lastError = null;
+  state.chatError = null;
   try {
     const rpc = resolveExecApprovalsRpc(target);
     if (!rpc) {
@@ -122,6 +125,7 @@ export async function saveExecApprovals(
   }
   state.execApprovalsSaving = true;
   state.lastError = null;
+  state.chatError = null;
   try {
     const baseHash = state.execApprovalsSnapshot?.hash;
     if (!baseHash) {

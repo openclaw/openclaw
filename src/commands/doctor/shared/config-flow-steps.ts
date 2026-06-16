@@ -1,9 +1,12 @@
+// Doctor config-flow steps for legacy compatibility and unknown-key cleanup.
 import { formatConfigIssueLines } from "../../../config/issue-format.js";
+import { protectActiveAuthProfileConfig } from "../../doctor-auth-profile-config.js";
 import { stripUnknownConfigKeys } from "../../doctor-config-analysis.js";
 import type { DoctorConfigPreflightResult } from "../../doctor-config-preflight.js";
 import type { DoctorConfigMutationState } from "./config-mutation-state.js";
 import { migrateLegacyConfig } from "./legacy-config-migrate.js";
 
+/** Apply legacy config migrations and update preview/fix state for doctor config flow. */
 export function applyLegacyCompatibilityStep(params: {
   snapshot: DoctorConfigPreflightResult["snapshot"];
   state: DoctorConfigMutationState;
@@ -68,6 +71,7 @@ export function applyLegacyCompatibilityStep(params: {
   };
 }
 
+/** Strip unknown config keys while preserving active auth profile settings. */
 export function applyUnknownConfigKeyStep(params: {
   state: DoctorConfigMutationState;
   shouldRepair: boolean;
@@ -75,21 +79,29 @@ export function applyUnknownConfigKeyStep(params: {
 }): {
   state: DoctorConfigMutationState;
   removed: string[];
+  repairs: string[];
+  warnings: string[];
 } {
   const unknown = stripUnknownConfigKeys(params.state.candidate);
   if (unknown.removed.length === 0) {
-    return { state: params.state, removed: [] };
+    return { state: params.state, removed: [], repairs: [], warnings: [] };
   }
+  const protectedAuth = protectActiveAuthProfileConfig({
+    before: params.state.candidate,
+    after: unknown.config,
+  });
 
   return {
     state: {
-      cfg: params.shouldRepair ? unknown.config : params.state.cfg,
-      candidate: unknown.config,
+      cfg: params.shouldRepair ? protectedAuth.config : params.state.cfg,
+      candidate: protectedAuth.config,
       pendingChanges: true,
       fixHints: params.shouldRepair
         ? params.state.fixHints
         : [...params.state.fixHints, `Run "${params.doctorFixCommand}" to remove these keys.`],
     },
     removed: unknown.removed,
+    repairs: protectedAuth.repairs,
+    warnings: protectedAuth.warnings,
   };
 }

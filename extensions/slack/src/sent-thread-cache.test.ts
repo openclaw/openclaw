@@ -1,3 +1,4 @@
+// Slack tests cover sent thread cache plugin behavior.
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearSlackRuntime, setSlackRuntime } from "./runtime.js";
@@ -108,13 +109,13 @@ describe("slack sent-thread-cache", () => {
       logging: { getChildLogger: () => ({ warn: vi.fn() }) },
     } as never);
 
+    vi.spyOn(Date, "now").mockReturnValue(1_711_406_400_000);
     recordSlackThreadParticipation("A1", "C123", "1700000000.000002");
 
     await vi.waitFor(() => expect(register).toHaveBeenCalledTimes(1));
-    expect(register).toHaveBeenCalledWith(
-      "A1:C123:1700000000.000002",
-      expect.objectContaining({ repliedAt: expect.any(Number) }),
-    );
+    expect(register).toHaveBeenCalledWith("A1:C123:1700000000.000002", {
+      repliedAt: 1_711_406_400_000,
+    });
 
     clearSlackThreadParticipationCache();
     await expect(

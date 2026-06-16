@@ -1,3 +1,4 @@
+// Verifies bundled package channel metadata stays aligned with catalogs.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -5,6 +6,7 @@ import { cleanupTempDirs, makeTempRepoRoot, writeJsonFile } from "../../test/hel
 
 vi.mock("./bundled-dir.js", () => ({
   resolveBundledPluginsDir: vi.fn(),
+  resolveSourceCheckoutDependencyDiagnostic: vi.fn(() => null),
 }));
 
 import { resolveBundledPluginsDir } from "./bundled-dir.js";

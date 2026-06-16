@@ -1,3 +1,4 @@
+// Openrouter plugin module implements thinking policy behavior.
 import type { ProviderThinkingProfile } from "openclaw/plugin-sdk/plugin-entry";
 import { isOpenRouterDeepSeekV4ModelId } from "./models.js";
 
@@ -8,7 +9,6 @@ const OPENROUTER_DEEPSEEK_V4_THINKING_LEVEL_IDS = [
   "medium",
   "high",
   "xhigh",
-  "max",
 ] as const;
 
 function buildOpenRouterDeepSeekV4ThinkingLevel(

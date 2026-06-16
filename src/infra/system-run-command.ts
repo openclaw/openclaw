@@ -1,3 +1,4 @@
+// Normalizes and validates system-run commands before approval binding.
 import {
   extractShellWrapperCommand,
   hasEnvManipulationBeforeShellWrapper,
@@ -7,10 +8,13 @@ import {
 } from "./exec-wrapper-resolution.js";
 import {
   POSIX_INLINE_COMMAND_FLAGS,
-  POWERSHELL_INLINE_COMMAND_FLAGS,
+  isPowerShellInlineRestCommandFlag,
   resolveInlineCommandMatch,
+  resolvePowerShellInlineCommandMatch,
 } from "./shell-inline-command.js";
 
+// System-run command helpers keep argv authoritative while still exposing a
+// human-readable shell preview when the wrapper shape is unambiguous.
 type SystemRunCommandValidation =
   | {
       ok: true;
@@ -38,6 +42,7 @@ type ResolvedSystemRunCommand =
       details?: Record<string, unknown>;
     };
 
+/** Format argv with minimal shell-style quoting for display and consistency checks. */
 export function formatExecCommand(argv: string[]): string {
   return argv
     .map((arg) => {
@@ -53,6 +58,7 @@ export function formatExecCommand(argv: string[]): string {
     .join(" ");
 }
 
+/** Extract the inline shell payload carried by a shell wrapper argv. */
 export function extractShellCommandFromArgv(argv: string[]): string | null {
   return extractShellWrapperCommand(argv).command;
 }
@@ -95,18 +101,31 @@ function hasTrailingPositionalArgvAfterInlineCommand(argv: string[]): boolean {
 
   const inlineCommandIndex =
     wrapper === "powershell" || wrapper === "pwsh"
-      ? resolveInlineCommandMatch(wrapperArgv, POWERSHELL_INLINE_COMMAND_FLAGS).valueTokenIndex
+      ? resolvePowerShellInlineCommandMatch(wrapperArgv).valueTokenIndex
       : resolveInlineCommandMatch(wrapperArgv, POSIX_INLINE_COMMAND_FLAGS, {
           allowCombinedC: true,
         }).valueTokenIndex;
   if (inlineCommandIndex === null) {
     return false;
   }
+  if (
+    (wrapper === "powershell" || wrapper === "pwsh") &&
+    isPowerShellInlineRestCommandFlag(wrapperArgv[inlineCommandIndex - 1] ?? "")
+  ) {
+    return false;
+  }
   return wrapperArgv.slice(inlineCommandIndex + 1).some((entry) => entry.trim().length > 0);
 }
 
-function buildSystemRunCommandDisplay(argv: string[]): SystemRunCommandDisplay {
-  const shellWrapperResolution = extractShellWrapperCommand(argv);
+function buildSystemRunCommandDisplay(
+  argv: string[],
+  rawCommand: string | null,
+): SystemRunCommandDisplay {
+  const rawlessShellWrapperResolution = extractShellWrapperCommand(argv);
+  const shellWrapperResolution =
+    rawlessShellWrapperResolution.command === null && rawCommand !== null
+      ? extractShellWrapperCommand(argv, rawCommand)
+      : rawlessShellWrapperResolution;
   const shellPayload = shellWrapperResolution.command;
   const shellWrapperPositionalArgv = hasTrailingPositionalArgvAfterInlineCommand(argv);
   const envManipulationBeforeShellWrapper =
@@ -133,9 +152,11 @@ export function validateSystemRunCommandConsistency(params: {
   allowLegacyShellText?: boolean;
 }): SystemRunCommandValidation {
   const raw = normalizeRawCommandText(params.rawCommand);
-  const display = buildSystemRunCommandDisplay(params.argv);
+  const display = buildSystemRunCommandDisplay(params.argv, raw);
 
   if (raw) {
+    // rawCommand is display-only metadata. Reject mismatches so approvals cannot
+    // show one command while executing a different argv.
     const matchesCanonicalArgv = raw === display.commandText;
     const matchesLegacyShellText =
       params.allowLegacyShellText === true &&
@@ -163,6 +184,7 @@ export function validateSystemRunCommandConsistency(params: {
   };
 }
 
+/** Resolve system-run command fields with strict rawCommand matching. */
 export function resolveSystemRunCommand(params: {
   command?: unknown;
   rawCommand?: unknown;
@@ -170,6 +192,7 @@ export function resolveSystemRunCommand(params: {
   return resolveSystemRunCommandWithMode(params, false);
 }
 
+/** Resolve request command fields while accepting the legacy shell-preview text. */
 export function resolveSystemRunCommandRequest(params: {
   command?: unknown;
   rawCommand?: unknown;

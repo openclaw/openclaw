@@ -1,7 +1,12 @@
+/** Auth probe planning and execution helpers for model diagnostics. */
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
-import { resolveOpenClawAgentDir } from "../../agents/agent-paths.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
+import {
+  resolveAgentDir,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../../agents/agent-scope.js";
 import {
   type AuthProfileCredential,
   type AuthProfileEligibilityReasonCode,
@@ -35,13 +40,14 @@ import { DEFAULT_PROVIDER, formatMs } from "./shared.js";
 const PROBE_PROMPT = "Reply with OK. Do not use tools.";
 
 const embeddedRunnerModuleLoader = createLazyImportLoader(
-  () => import("../../agents/pi-embedded.js"),
+  () => import("../../agents/embedded-agent.js"),
 );
 
 function loadEmbeddedRunnerModule() {
   return embeddedRunnerModuleLoader.load();
 }
 
+/** Normalized probe status bucket for auth/model diagnostics. */
 export type AuthProbeStatus =
   | "ok"
   | "auth"
@@ -52,6 +58,7 @@ export type AuthProbeStatus =
   | "unknown"
   | "no_model";
 
+/** Reason code for probes that never reached a model call. */
 export type AuthProbeReasonCode =
   | "excluded_by_auth_order"
   | "missing_credential"
@@ -61,6 +68,7 @@ export type AuthProbeReasonCode =
   | "ineligible_profile"
   | "no_model";
 
+/** Result for one profile/env/models.json auth probe target. */
 export type AuthProbeResult = {
   provider: string;
   model?: string;
@@ -83,6 +91,7 @@ type AuthProbeTarget = {
   mode?: string;
 };
 
+/** Summary for a full auth probe run. */
 export type AuthProbeSummary = {
   startedAt: number;
   finishedAt: number;
@@ -98,6 +107,7 @@ export type AuthProbeSummary = {
   results: AuthProbeResult[];
 };
 
+/** Runtime options controlling provider/profile filtering and probe cost. */
 export type AuthProbeOptions = {
   provider?: string;
   profileIds?: string[];
@@ -106,6 +116,7 @@ export type AuthProbeOptions = {
   maxTokens: number;
 };
 
+/** Maps runtime failover reasons into stable auth probe status buckets. */
 export function mapFailoverReasonToProbeStatus(reason?: string | null): AuthProbeStatus {
   if (!reason) {
     return "unknown";
@@ -149,6 +160,29 @@ function buildCandidateMap(modelCandidates: string[]): Map<string, string[]> {
   return map;
 }
 
+function catalogProbePriority(provider: string, modelId: string): number {
+  const id = modelId.trim().toLowerCase();
+  if (provider !== "anthropic") {
+    return 50;
+  }
+  if (/^claude-haiku-4-5-\d{8}$/.test(id)) {
+    return 0;
+  }
+  if (id === "claude-haiku-4-5") {
+    return 1;
+  }
+  if (id === "claude-sonnet-4-6" || id.startsWith("claude-sonnet-4-6-")) {
+    return 2;
+  }
+  if (id.startsWith("claude-sonnet-4-")) {
+    return 3;
+  }
+  if (id.startsWith("claude-3-")) {
+    return 100;
+  }
+  return 50;
+}
+
 function selectProbeModel(params: {
   provider: string;
   candidates: Map<string, string[]>;
@@ -159,7 +193,15 @@ function selectProbeModel(params: {
   if (direct && direct.length > 0) {
     return { provider, model: direct[0] };
   }
-  const fromCatalog = catalog.find((entry) => normalizeProviderId(entry.provider) === provider);
+  const fromCatalog = catalog
+    .map((entry, index) => ({ entry, index }))
+    .filter(({ entry }) => normalizeProviderId(entry.provider) === provider)
+    .toSorted((left, right) => {
+      const priority =
+        catalogProbePriority(provider, left.entry.id) -
+        catalogProbePriority(provider, right.entry.id);
+      return priority || left.index - right.index;
+    })[0]?.entry;
   if (fromCatalog) {
     return { provider, model: fromCatalog.id };
   }
@@ -250,6 +292,7 @@ async function maybeResolveUnresolvedRefIssue(params: {
   }
 }
 
+/** Builds probe targets plus preflight failures for missing/invalid credentials. */
 export async function buildProbeTargets(params: {
   cfg: OpenClawConfig;
   agentDir?: string;
@@ -269,7 +312,7 @@ export async function buildProbeTargets(params: {
   });
   const providerFilter = options.provider?.trim();
   const providerFilterKey = providerFilter ? normalizeProviderId(providerFilter) : null;
-  const profileFilter = new Set((options.profileIds ?? []).map((id) => id.trim()).filter(Boolean));
+  const profileFilter = new Set(normalizeUniqueStringEntries(options.profileIds));
   const refResolveCache: SecretRefResolveCache = {};
   const catalog = await loadModelCatalog({ config: cfg });
   const candidates = buildCandidateMap(modelCandidates);
@@ -299,6 +342,8 @@ export async function buildProbeTargets(params: {
       explicitOrder && explicitOrder.length > 0
         ? new Set(resolveAuthProfileOrder({ cfg, store, provider: providerKey }))
         : null;
+    // Explicit auth.order both selects and documents profile eligibility; report
+    // excluded profiles instead of silently skipping them.
     const filteredProfiles = profileFilter.size
       ? profileIds.filter((id) => profileFilter.has(id))
       : profileIds;
@@ -474,8 +519,8 @@ async function probeTarget(params: {
     latencyMs: Date.now() - start,
   });
   try {
-    const { runEmbeddedPiAgent } = await loadEmbeddedRunnerModule();
-    await runEmbeddedPiAgent({
+    const { runEmbeddedAgent } = await loadEmbeddedRunnerModule();
+    await runEmbeddedAgent({
       sessionId,
       sessionFile,
       agentId,
@@ -495,6 +540,7 @@ async function probeTarget(params: {
       verboseLevel: "off",
       streamParams: { maxTokens },
       disableTools: true,
+      modelRun: true,
       cleanupBundleMcpOnRunEnd: true,
     });
     return buildResult("ok");
@@ -522,7 +568,7 @@ async function runTargetsWithConcurrency(params: {
   const concurrency = Math.max(1, Math.min(targets.length || 1, params.concurrency));
 
   const agentId = params.agentId ?? resolveDefaultAgentId(cfg);
-  const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
+  const agentDir = params.agentDir ?? resolveAgentDir(cfg, agentId);
   const workspaceDir =
     params.workspaceDir ??
     resolveAgentWorkspaceDir(cfg, agentId) ??
@@ -569,6 +615,7 @@ async function runTargetsWithConcurrency(params: {
   return results.filter((entry): entry is AuthProbeResult => Boolean(entry));
 }
 
+/** Runs all auth probes with bounded concurrency and returns a summary. */
 export async function runAuthProbes(params: {
   cfg: OpenClawConfig;
   agentId?: string;
@@ -618,6 +665,7 @@ export async function runAuthProbes(params: {
   };
 }
 
+/** Formats probe latency for table output. */
 export function formatProbeLatency(latencyMs?: number | null) {
   if (!latencyMs && latencyMs !== 0) {
     return "-";
@@ -625,6 +673,7 @@ export function formatProbeLatency(latencyMs?: number | null) {
   return formatMs(latencyMs);
 }
 
+/** Groups probe results by provider. */
 export function groupProbeResults(results: AuthProbeResult[]): Map<string, AuthProbeResult[]> {
   const map = new Map<string, AuthProbeResult[]>();
   for (const result of results) {
@@ -635,6 +684,7 @@ export function groupProbeResults(results: AuthProbeResult[]): Map<string, AuthP
   return map;
 }
 
+/** Sorts probe results by provider and display label. */
 export function sortProbeResults(results: AuthProbeResult[]): AuthProbeResult[] {
   return results.slice().toSorted((a, b) => {
     const provider = a.provider.localeCompare(b.provider);
@@ -647,6 +697,7 @@ export function sortProbeResults(results: AuthProbeResult[]): AuthProbeResult[] 
   });
 }
 
+/** Produces the terse completion line for auth probe output. */
 export function describeProbeSummary(summary: AuthProbeSummary): string {
   if (summary.totalTargets === 0) {
     return "No probe targets.";

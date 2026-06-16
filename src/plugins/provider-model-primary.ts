@@ -1,3 +1,8 @@
+// Resolves primary model metadata for plugin-owned providers.
+import {
+  normalizeAgentModelMapForConfig,
+  normalizeAgentModelRefForConfig,
+} from "../config/model-input.js";
 import type { AgentModelListConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
@@ -11,14 +16,16 @@ function resolvePrimaryModel(model?: AgentModelListConfig | string): string | un
   return undefined;
 }
 
+/** Applies an agent default primary model and reports whether config changed. */
 export function applyAgentDefaultPrimaryModel(params: {
   cfg: OpenClawConfig;
   model: string;
   legacyModels?: Set<string>;
 }): { next: OpenClawConfig; changed: boolean } {
+  const model = normalizeAgentModelRefForConfig(params.model);
   const current = resolvePrimaryModel(params.cfg.agents?.defaults?.model)?.trim();
-  const normalizedCurrent = current && params.legacyModels?.has(current) ? params.model : current;
-  if (normalizedCurrent === params.model) {
+  const normalizedCurrent = current && params.legacyModels?.has(current) ? model : current;
+  if (normalizedCurrent === model) {
     return { next: params.cfg, changed: false };
   }
 
@@ -34,9 +41,9 @@ export function applyAgentDefaultPrimaryModel(params: {
             typeof params.cfg.agents.defaults.model === "object"
               ? {
                   ...params.cfg.agents.defaults.model,
-                  primary: params.model,
+                  primary: model,
                 }
-              : { primary: params.model },
+              : { primary: model },
         },
       },
     },
@@ -44,13 +51,17 @@ export function applyAgentDefaultPrimaryModel(params: {
   };
 }
 
+/** Applies a primary model to agent defaults while preserving model fallback metadata. */
 export function applyPrimaryModel(cfg: OpenClawConfig, model: string): OpenClawConfig {
+  const normalizedModel = normalizeAgentModelRefForConfig(model);
   const defaults = cfg.agents?.defaults;
   const existingModel = defaults?.model;
-  const existingModels = defaults?.models;
+  const existingModels = normalizeAgentModelMapForConfig(defaults?.models ?? {});
   const fallbacks =
     typeof existingModel === "object" && existingModel !== null && "fallbacks" in existingModel
-      ? (existingModel as { fallbacks?: string[] }).fallbacks
+      ? (existingModel as { fallbacks?: string[] }).fallbacks?.map((fallback) =>
+          normalizeAgentModelRefForConfig(fallback),
+        )
       : undefined;
   return {
     ...cfg,
@@ -60,11 +71,11 @@ export function applyPrimaryModel(cfg: OpenClawConfig, model: string): OpenClawC
         ...defaults,
         model: {
           ...(fallbacks ? { fallbacks } : undefined),
-          primary: model,
+          primary: normalizedModel,
         },
         models: {
           ...existingModels,
-          [model]: existingModels?.[model] ?? {},
+          [normalizedModel]: existingModels?.[normalizedModel] ?? {},
         },
       },
     },

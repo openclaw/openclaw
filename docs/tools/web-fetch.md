@@ -57,6 +57,21 @@ Truncate output to this many characters.
   </Step>
 </Steps>
 
+## Progress updates
+
+`web_fetch` emits a public progress line only when the fetch is still pending
+after five seconds:
+
+```text
+Fetching page content...
+```
+
+Fast cache hits and quick network responses finish before the timer fires, so
+they do not show a progress line. If the call is canceled, the timer is cleared.
+When the fetch eventually completes, the agent receives the normal tool result;
+the progress line is only channel UI state and never contains fetched page
+content.
+
 ## Config
 
 ```json5
@@ -143,7 +158,7 @@ Current runtime behavior:
 - If Readability is disabled, `web_fetch` skips straight to the selected
   provider fallback. If no provider is available, it fails closed.
 
-## Trusted Env Proxy
+## Trusted env proxy
 
 If your deployment requires `web_fetch` to go through a trusted outbound
 HTTP(S) proxy, set `tools.web.fetch.useTrustedEnvProxy: true`.

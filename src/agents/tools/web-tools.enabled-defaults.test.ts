@@ -1,3 +1,5 @@
+// Web tool default tests cover enablement, runtime provider discovery, and
+// late-bound runtime config for web_search/web_fetch tools.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -39,8 +41,8 @@ function readConfiguredSearchProvider(config: unknown): string | undefined {
   return typeof provider === "string" ? provider : undefined;
 }
 
-vi.mock("../../secrets/runtime.js", () => ({
-  getActiveSecretsRuntimeSnapshot: () => activeSecretsRuntimeSnapshot.current,
+vi.mock("../../secrets/runtime-state.js", () => ({
+  getActiveSecretsRuntimeConfigSnapshot: () => activeSecretsRuntimeSnapshot.current,
 }));
 
 vi.mock("../../web-search/runtime.js", async () => {
@@ -51,6 +53,8 @@ vi.mock("../../web-search/runtime.js", async () => {
     config?: unknown;
     runtimeWebSearch?: { selectedProvider?: string; providerConfigured?: string };
   }) => {
+    // The mock mirrors production provider resolution order closely enough to
+    // catch stale construction-time metadata in late-bound tool instances.
     const providerId =
       options?.runtimeWebSearch?.selectedProvider ??
       options?.runtimeWebSearch?.providerConfigured ??
@@ -166,8 +170,8 @@ describe("web tools defaults", () => {
 
     const result = await tool?.execute?.("call-runtime-provider", {});
 
-    expect(tool?.description).toContain("Search the web");
-    expect(result?.details).toMatchObject({ ok: true });
+    expect(tool?.description).toContain("Search web");
+    expect((result?.details as { ok?: boolean } | undefined)?.ok).toBe(true);
   });
 
   it("keeps runtime provider discovery enabled when runtime web_search metadata is missing", async () => {
@@ -211,12 +215,14 @@ describe("web tools defaults", () => {
 
     const result = await tool?.execute?.("call-runtime-provider-without-metadata", {});
 
-    expect(result?.details).toMatchObject({ provider: "custom" });
+    expect((result?.details as { provider?: string } | undefined)?.provider).toBe("custom");
     expect(runWebSearchCalls).toHaveLength(1);
     expect(runWebSearchCalls[0]?.preferRuntimeProviders).toBe(true);
   });
 
   it("late-binds managed web_search execution to the current runtime snapshot", async () => {
+    // Managed agents can outlive a credentials refresh; execution should read
+    // the active runtime snapshot just before dispatch.
     const registry = createEmptyPluginRegistry();
     registry.webSearchProviders.push(
       {
@@ -299,11 +305,12 @@ describe("web tools defaults", () => {
 
     const result = await tool?.execute?.("call-runtime-provider", {});
 
-    expect(result?.details).toMatchObject({ provider: "fresh" });
+    expect((result?.details as { provider?: string } | undefined)?.provider).toBe("fresh");
     expect(runWebSearchCalls).toHaveLength(1);
     expect(runWebSearchCalls[0]?.config).toBe(runtimeConfig);
-    expect(runWebSearchCalls[0]?.runtimeWebSearch).toMatchObject({
-      selectedProvider: "fresh",
-    });
+    expect(
+      (runWebSearchCalls[0]?.runtimeWebSearch as { selectedProvider?: string } | undefined)
+        ?.selectedProvider,
+    ).toBe("fresh");
   });
 });

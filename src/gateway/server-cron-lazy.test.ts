@@ -1,3 +1,6 @@
+/**
+ * Tests lazy cron startup behavior in the gateway server.
+ */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -40,7 +43,18 @@ describe("createLazyGatewayCronState", () => {
     await lazy.cron.status();
 
     expect(hoisted.buildGatewayCronService).toHaveBeenCalledTimes(1);
-    expect(cron.status).toHaveBeenCalledTimes(1);
+    expect(cron["status"]).toHaveBeenCalledTimes(1);
+  });
+
+  it("loads the cron service for direct job reads", async () => {
+    const cron = createCronService();
+    hoisted.setState(createCronState(cron));
+
+    const lazy = createLazyGatewayCronState(createParams());
+    await lazy.cron.readJob("demo");
+
+    expect(hoisted.buildGatewayCronService).toHaveBeenCalledTimes(1);
+    expect(cron["readJob"]).toHaveBeenCalledWith("demo");
   });
 
   it("starts the loaded cron service once", async () => {
@@ -53,7 +67,7 @@ describe("createLazyGatewayCronState", () => {
     await lazy.cron.start();
 
     expect(hoisted.buildGatewayCronService).toHaveBeenCalledTimes(1);
-    expect(cron.start).toHaveBeenCalledTimes(1);
+    expect(cron["start"]).toHaveBeenCalledTimes(1);
   });
 
   it("does not start cron after stop wins the lazy startup race", async () => {
@@ -66,8 +80,8 @@ describe("createLazyGatewayCronState", () => {
     lazy.cron.stop();
     await startPromise;
 
-    expect(cron.start).not.toHaveBeenCalled();
-    expect(cron.stop).toHaveBeenCalledTimes(1);
+    expect(cron["start"]).not.toHaveBeenCalled();
+    expect(cron["stop"]).toHaveBeenCalledTimes(1);
   });
 
   it("allows a stopped loaded cron service to start again", async () => {
@@ -81,8 +95,8 @@ describe("createLazyGatewayCronState", () => {
     await lazy.cron.start();
 
     expect(hoisted.buildGatewayCronService).toHaveBeenCalledTimes(1);
-    expect(cron.stop).toHaveBeenCalledTimes(1);
-    expect(cron.start).toHaveBeenCalledTimes(2);
+    expect(cron["stop"]).toHaveBeenCalledTimes(1);
+    expect(cron["start"]).toHaveBeenCalledTimes(2);
   });
 
   it("keeps synchronous wake non-blocking before the cron service is loaded", async () => {
@@ -96,7 +110,7 @@ describe("createLazyGatewayCronState", () => {
     await vi.waitFor(() => {
       expect(hoisted.buildGatewayCronService).toHaveBeenCalledTimes(1);
     });
-    expect(cron.wake).not.toHaveBeenCalled();
+    expect(cron["wake"]).not.toHaveBeenCalled();
   });
 
   it("preserves the startup cron enabled flag without loading cron runtime", () => {
@@ -140,6 +154,7 @@ function createCronService(): CronServiceContract {
     run: vi.fn(async () => ({ ok: true, ran: false, reason: "invalid-spec" }) as never),
     enqueueRun: vi.fn(async () => ({ ok: true, ran: false, reason: "invalid-spec" }) as never),
     getJob: vi.fn(() => undefined),
+    readJob: vi.fn(async () => undefined),
     getDefaultAgentId: vi.fn(() => "default"),
     wake: vi.fn(() => ({ ok: true })),
   };

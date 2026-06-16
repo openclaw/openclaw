@@ -1,9 +1,10 @@
+// Whatsapp plugin module implements group policy behavior.
 import {
   resolveChannelGroupRequireMention,
   resolveChannelGroupToolsPolicy,
   type GroupToolPolicyConfig,
 } from "openclaw/plugin-sdk/channel-policy";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 
 type WhatsAppGroupContext = {
   cfg: OpenClawConfig;

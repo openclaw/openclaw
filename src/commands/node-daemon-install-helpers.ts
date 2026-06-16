@@ -1,6 +1,8 @@
+/** Node-based daemon install plan builder for managed gateway services. */
 import { formatNodeServiceDescription } from "../daemon/constants.js";
 import { resolveNodeProgramArguments } from "../daemon/program-args.js";
 import { buildNodeServiceEnvironment } from "../daemon/service-env.js";
+import type { GatewayServiceEnvironmentValueSource } from "../daemon/service-types.js";
 import {
   emitDaemonInstallRuntimeWarning,
   resolveDaemonInstallRuntimeInputs,
@@ -13,9 +15,20 @@ type NodeInstallPlan = {
   programArguments: string[];
   workingDirectory?: string;
   environment: Record<string, string | undefined>;
+  environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource | undefined>;
   description?: string;
 };
 
+function buildNodeInstallEnvironmentValueSources(): Record<
+  string,
+  GatewayServiceEnvironmentValueSource | undefined
+> {
+  return {
+    OPENCLAW_GATEWAY_TOKEN: "file",
+  };
+}
+
+/** Builds launch arguments, environment, and metadata for a Node daemon service install. */
 export async function buildNodeInstallPlan(params: {
   env: Record<string, string | undefined>;
   host: string;
@@ -65,5 +78,11 @@ export async function buildNodeInstallPlan(params: {
     version: environment.OPENCLAW_SERVICE_VERSION,
   });
 
-  return { programArguments, workingDirectory, environment, description };
+  return {
+    programArguments,
+    workingDirectory,
+    environment,
+    environmentValueSources: buildNodeInstallEnvironmentValueSources(),
+    description,
+  };
 }

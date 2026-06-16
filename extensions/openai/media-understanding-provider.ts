@@ -1,3 +1,4 @@
+// Openai provider module implements model/runtime integration.
 import {
   describeImageWithModel,
   describeImagesWithModel,
@@ -21,21 +22,9 @@ export async function transcribeOpenAiAudio(params: AudioTranscriptionRequest) {
 export const openaiMediaUnderstandingProvider: MediaUnderstandingProvider = {
   id: "openai",
   capabilities: ["image", "audio"],
-  defaultModels: {
-    image: "gpt-5.4-mini",
-    audio: OPENAI_DEFAULT_AUDIO_TRANSCRIPTION_MODEL,
-  },
-  autoPriority: { image: 10, audio: 10 },
+  defaultModels: { image: "gpt-5.5", audio: OPENAI_DEFAULT_AUDIO_TRANSCRIPTION_MODEL },
+  autoPriority: { image: 20, audio: 20 },
   describeImage: describeImageWithModel,
   describeImages: describeImagesWithModel,
   transcribeAudio: transcribeOpenAiAudio,
-};
-
-export const openaiCodexMediaUnderstandingProvider: MediaUnderstandingProvider = {
-  id: "openai-codex",
-  capabilities: ["image"],
-  defaultModels: { image: "gpt-5.5" },
-  autoPriority: { image: 20 },
-  describeImage: describeImageWithModel,
-  describeImages: describeImagesWithModel,
 };

@@ -1,1 +1,3 @@
-export const CHAT_HISTORY_RENDER_LIMIT = 200;
+// Control UI chat module implements history limits behavior.
+export const CHAT_HISTORY_RENDER_LIMIT = 100;
+export const CHAT_HISTORY_RENDER_CHAR_BUDGET = 240_000;

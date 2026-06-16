@@ -1,6 +1,6 @@
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { buildOwnedChildEnv } from "../../infra/owned-child-env.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import type {
   SandboxBackendCommandParams,
   SandboxBackendCommandResult,
@@ -300,7 +300,10 @@ function assertProductionSshConfigDoesNotMaterializeIdentityData(params: {
   );
 }
 
-function resolveSshRuntimePaths(workspaceRoot: string, scopeKey: string): ResolvedSshRuntimePaths {
+export function resolveSshRuntimePaths(
+  workspaceRoot: string,
+  scopeKey: string,
+): ResolvedSshRuntimePaths {
   const runtimeId = buildSshSandboxRuntimeId(scopeKey);
   const runtimeRootDir = path.posix.join(workspaceRoot, runtimeId);
   return {

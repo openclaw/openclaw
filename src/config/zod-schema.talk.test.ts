@@ -1,15 +1,61 @@
+// Covers talk schema parsing and validation behavior.
 import { describe, expect, it } from "vitest";
 import { OpenClawSchema } from "./zod-schema.js";
 
 describe("OpenClawSchema talk validation", () => {
   it("accepts a positive integer talk.silenceTimeoutMs", () => {
+    const result = OpenClawSchema.safeParse({
+      talk: {
+        consultThinkingLevel: "low",
+        consultFastMode: true,
+        silenceTimeoutMs: 1500,
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects invalid talk.consultThinkingLevel", () => {
     expect(() =>
       OpenClawSchema.parse({
         talk: {
-          silenceTimeoutMs: 1500,
+          consultThinkingLevel: "turbo",
+        },
+      }),
+    ).toThrow(/consultThinkingLevel/i);
+  });
+
+  it("accepts additional realtime Talk instructions", () => {
+    expect(() =>
+      OpenClawSchema.parse({
+        talk: {
+          realtime: {
+            provider: "openai",
+            providers: {
+              openai: {
+                model: "gpt-realtime",
+                speakerVoice: "alloy",
+                speakerVoiceId: "voice-123",
+              },
+            },
+            instructions: "Speak with crisp diction.",
+            consultRouting: "force-agent-consult",
+          },
         },
       }),
     ).not.toThrow();
+  });
+
+  it("rejects invalid realtime Talk consult routing", () => {
+    expect(() =>
+      OpenClawSchema.parse({
+        talk: {
+          realtime: {
+            consultRouting: "always",
+          },
+        },
+      }),
+    ).toThrow(/consultRouting/i);
   });
 
   it.each([

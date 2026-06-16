@@ -1,4 +1,6 @@
+// Line type declarations define plugin contracts.
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
+import type { MessageReceipt } from "openclaw/plugin-sdk/channel-outbound";
 
 export type LineTokenSource = "config" | "env" | "file" | "none";
 
@@ -60,6 +62,7 @@ export interface ResolvedLineAccount {
 export interface LineSendResult {
   messageId: string;
   chatId: string;
+  receipt: MessageReceipt;
 }
 
 export type LineProbeResult = BaseProbeResult<string> & {

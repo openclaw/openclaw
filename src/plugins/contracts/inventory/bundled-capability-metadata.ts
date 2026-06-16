@@ -1,6 +1,8 @@
+// Bundled capability metadata inventory lists capability metadata used by plugin contracts.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { tryReadJsonSync } from "../../../infra/json-files.js";
 import {
   normalizeBundledPluginStringList,
   resolveBundledPluginScanDir,
@@ -21,11 +23,13 @@ export type BundledPluginContractSnapshot = {
   pluginId: string;
   cliBackendIds: string[];
   providerIds: string[];
-  providerAuthEnvVars: Record<string, string[]>;
+  providerEnvVars: Record<string, string[]>;
+  embeddingProviderIds: string[];
   speechProviderIds: string[];
   realtimeTranscriptionProviderIds: string[];
   realtimeVoiceProviderIds: string[];
   mediaUnderstandingProviderIds: string[];
+  transcriptSourceProviderIds: string[];
   documentExtractorIds: string[];
   imageGenerationProviderIds: string[];
   videoGenerationProviderIds: string[];
@@ -54,19 +58,15 @@ export type BundledCapabilityManifest = Pick<
   | "cliBackends"
   | "contracts"
   | "legacyPluginIds"
-  | "providerAuthEnvVars"
   | "providers"
+  | "setup"
 >;
 
 function readJsonRecord(filePath: string): Record<string, unknown> | undefined {
-  try {
-    const raw = JSON.parse(fs.readFileSync(filePath, "utf-8")) as unknown;
-    return raw && typeof raw === "object" && !Array.isArray(raw)
-      ? (raw as Record<string, unknown>)
-      : undefined;
-  } catch {
-    return undefined;
-  }
+  const raw = tryReadJsonSync(filePath);
+  return raw && typeof raw === "object" && !Array.isArray(raw)
+    ? (raw as Record<string, unknown>)
+    : undefined;
 }
 
 function readBundledCapabilityManifest(pluginDir: string): BundledCapabilityManifest | undefined {
@@ -103,17 +103,14 @@ function listBundledCapabilityManifests(): readonly BundledCapabilityManifest[] 
 
 const BUNDLED_CAPABILITY_MANIFESTS = listBundledCapabilityManifests();
 
-function normalizeStringListRecord(record: unknown): Record<string, string[]> {
-  if (!record || typeof record !== "object" || Array.isArray(record)) {
-    return {};
-  }
+function normalizeSetupProviderEnvVars(setup: PluginManifest["setup"]): Record<string, string[]> {
   return Object.fromEntries(
-    Object.entries(record)
+    (setup?.providers ?? [])
       .map(
-        ([key, values]) =>
+        (provider) =>
           [
-            key.trim(),
-            uniqueStrings(Array.isArray(values) ? values : [], (value) =>
+            provider.id.trim(),
+            uniqueStrings(provider.envVars ?? [], (value) =>
               typeof value === "string" ? value.trim() : "",
             ),
           ] as const,
@@ -130,7 +127,10 @@ export function buildBundledPluginContractSnapshot(
     pluginId: manifest.id,
     cliBackendIds: uniqueStrings(manifest.cliBackends, (value) => value.trim()),
     providerIds: uniqueStrings(manifest.providers, (value) => value.trim()),
-    providerAuthEnvVars: normalizeStringListRecord(manifest.providerAuthEnvVars),
+    providerEnvVars: normalizeSetupProviderEnvVars(manifest.setup),
+    embeddingProviderIds: uniqueStrings(manifest.contracts?.embeddingProviders, (value) =>
+      value.trim(),
+    ),
     speechProviderIds: uniqueStrings(manifest.contracts?.speechProviders, (value) => value.trim()),
     realtimeTranscriptionProviderIds: uniqueStrings(
       manifest.contracts?.realtimeTranscriptionProviders,
@@ -141,6 +141,10 @@ export function buildBundledPluginContractSnapshot(
     ),
     mediaUnderstandingProviderIds: uniqueStrings(
       manifest.contracts?.mediaUnderstandingProviders,
+      (value) => value.trim(),
+    ),
+    transcriptSourceProviderIds: uniqueStrings(
+      manifest.contracts?.transcriptSourceProviders,
       (value) => value.trim(),
     ),
     documentExtractorIds: uniqueStrings(manifest.contracts?.documentExtractors, (value) =>
@@ -180,10 +184,12 @@ export function hasBundledPluginContractSnapshotCapabilities(
   return (
     entry.cliBackendIds.length > 0 ||
     entry.providerIds.length > 0 ||
+    entry.embeddingProviderIds.length > 0 ||
     entry.speechProviderIds.length > 0 ||
     entry.realtimeTranscriptionProviderIds.length > 0 ||
     entry.realtimeVoiceProviderIds.length > 0 ||
     entry.mediaUnderstandingProviderIds.length > 0 ||
+    entry.transcriptSourceProviderIds.length > 0 ||
     entry.documentExtractorIds.length > 0 ||
     entry.imageGenerationProviderIds.length > 0 ||
     entry.videoGenerationProviderIds.length > 0 ||
@@ -220,7 +226,7 @@ export const BUNDLED_AUTO_ENABLE_PROVIDER_PLUGIN_IDS = Object.fromEntries(
 
 type BundledContractIdSnapshotKey = Exclude<
   keyof Omit<BundledPluginContractSnapshot, "pluginId">,
-  "providerAuthEnvVars"
+  "providerEnvVars"
 >;
 
 export function resolveBundledContractSnapshotPluginIds(

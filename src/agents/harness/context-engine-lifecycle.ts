@@ -1,11 +1,19 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+/**
+ * Manages context-engine lifecycle hooks for native agent harnesses.
+ */
 import type { MemoryCitationsMode } from "../../config/types.memory.js";
-import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
-import { runContextEngineMaintenance } from "../pi-embedded-runner/context-engine-maintenance.js";
+import type {
+  AssembleResult,
+  ContextEngine,
+  ContextEngineRuntimeContext,
+} from "../../context-engine/types.js";
+import { runContextEngineMaintenance } from "../embedded-agent-runner/context-engine-maintenance.js";
 import {
   buildAfterTurnRuntimeContext,
   buildAfterTurnRuntimeContextFromUsage,
-} from "../pi-embedded-runner/run/attempt.prompt-helpers.js";
+} from "../embedded-agent-runner/run/attempt.prompt-helpers.js";
+import { stripRuntimeContextCustomMessages } from "../internal-runtime-context.js";
+import type { AgentMessage } from "../runtime/index.js";
 import type { SessionWriteLockAcquireTimeoutConfig } from "../session-write-lock.js";
 
 export type HarnessContextEngine = ContextEngine;
@@ -71,16 +79,53 @@ export async function assembleHarnessContextEngine(params: {
   if (!params.contextEngine) {
     return undefined;
   }
-  return await params.contextEngine.assemble({
+  const messages = stripRuntimeContextCustomMessages(params.messages);
+  const result = await params.contextEngine.assemble({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
-    messages: params.messages,
+    messages,
     tokenBudget: params.tokenBudget,
     ...(params.availableTools ? { availableTools: params.availableTools } : {}),
     ...(params.citationsMode ? { citationsMode: params.citationsMode } : {}),
     model: params.modelId,
     ...(params.prompt !== undefined ? { prompt: params.prompt } : {}),
   });
+  return ensureAssembleResultShape(result, params.contextEngine.info.id);
+}
+
+/**
+ * Validate that a context engine's assemble() return value matches the
+ * AssembleResult contract before the runner consumes it. Engines that omit
+ * `messages` or return a non-array previously crashed the runner downstream
+ * when prompt assembly tried to read `activeSession.messages.length` (#75541).
+ *
+ * Throws a descriptive error so the runner's existing assemble try/catch can
+ * log the offending engine id and fall back to the unmodified pipeline
+ * messages instead of poisoning session state.
+ */
+function ensureAssembleResultShape(result: unknown, engineId: string): AssembleResult {
+  if (!result || typeof result !== "object") {
+    throw new Error(
+      `context engine "${engineId}" assemble() returned an invalid result: expected an object with a "messages" array (got ${describeAssembleResultType(result)})`,
+    );
+  }
+  const candidate = result as { messages?: unknown };
+  if (!Array.isArray(candidate.messages)) {
+    throw new Error(
+      `context engine "${engineId}" assemble() returned an invalid result: expected an object with a "messages" array (got messages of type ${describeAssembleResultType(candidate.messages)})`,
+    );
+  }
+  return result as AssembleResult;
+}
+
+function describeAssembleResultType(value: unknown): string {
+  if (value === null) {
+    return "null";
+  }
+  if (Array.isArray(value)) {
+    return "array";
+  }
+  return typeof value;
 }
 
 /**
@@ -102,11 +147,17 @@ export async function finalizeHarnessContextEngineTurn(params: {
   sessionManager?: unknown;
   config?: SessionWriteLockAcquireTimeoutConfig;
   warn: (message: string) => void;
+  /** True when this turn belongs to a heartbeat run. */
+  isHeartbeat?: boolean;
 }) {
   if (!params.contextEngine) {
     return { postTurnFinalizationSucceeded: true };
   }
 
+  const conversationSnapshot = buildContextEngineConversationSnapshot({
+    messagesSnapshot: params.messagesSnapshot,
+    prePromptMessageCount: params.prePromptMessageCount,
+  });
   let postTurnFinalizationSucceeded = true;
 
   if (typeof params.contextEngine.afterTurn === "function") {
@@ -115,17 +166,20 @@ export async function finalizeHarnessContextEngineTurn(params: {
         sessionId: params.sessionIdUsed,
         sessionKey: params.sessionKey,
         sessionFile: params.sessionFile,
-        messages: params.messagesSnapshot,
-        prePromptMessageCount: params.prePromptMessageCount,
+        messages: conversationSnapshot.messages,
+        prePromptMessageCount: conversationSnapshot.prePromptMessageCount,
         tokenBudget: params.tokenBudget,
         runtimeContext: params.runtimeContext,
+        isHeartbeat: params.isHeartbeat,
       });
     } catch (afterTurnErr) {
       postTurnFinalizationSucceeded = false;
       params.warn(`context engine afterTurn failed: ${String(afterTurnErr)}`);
     }
   } else {
-    const newMessages = params.messagesSnapshot.slice(params.prePromptMessageCount);
+    const newMessages = conversationSnapshot.messages.slice(
+      conversationSnapshot.prePromptMessageCount,
+    );
     if (newMessages.length > 0) {
       if (typeof params.contextEngine.ingestBatch === "function") {
         try {
@@ -133,6 +187,7 @@ export async function finalizeHarnessContextEngineTurn(params: {
             sessionId: params.sessionIdUsed,
             sessionKey: params.sessionKey,
             messages: newMessages,
+            isHeartbeat: params.isHeartbeat,
           });
         } catch (ingestErr) {
           postTurnFinalizationSucceeded = false;
@@ -145,6 +200,7 @@ export async function finalizeHarnessContextEngineTurn(params: {
               sessionId: params.sessionIdUsed,
               sessionKey: params.sessionKey,
               message: msg,
+              isHeartbeat: params.isHeartbeat,
             });
           } catch (ingestErr) {
             postTurnFinalizationSucceeded = false;
@@ -174,6 +230,22 @@ export async function finalizeHarnessContextEngineTurn(params: {
   }
 
   return { postTurnFinalizationSucceeded };
+}
+
+function buildContextEngineConversationSnapshot(params: {
+  messagesSnapshot: AgentMessage[];
+  prePromptMessageCount: number;
+}): { messages: AgentMessage[]; prePromptMessageCount: number } {
+  const prePromptMessages = stripRuntimeContextCustomMessages(
+    params.messagesSnapshot.slice(0, params.prePromptMessageCount),
+  );
+  const turnMessages = stripRuntimeContextCustomMessages(
+    params.messagesSnapshot.slice(params.prePromptMessageCount),
+  );
+  return {
+    messages: [...prePromptMessages, ...turnMessages],
+    prePromptMessageCount: prePromptMessages.length,
+  };
 }
 
 /**
@@ -206,6 +278,7 @@ export async function runHarnessContextEngineMaintenance(params: {
   sessionManager?: unknown;
   runtimeContext?: ContextEngineRuntimeContext;
   executionMode?: "foreground" | "background";
+  onDeferredMaintenance?: (promise: Promise<void>) => void;
   config?: SessionWriteLockAcquireTimeoutConfig;
 }) {
   return await runContextEngineMaintenance({
@@ -219,6 +292,7 @@ export async function runHarnessContextEngineMaintenance(params: {
     >[0]["sessionManager"],
     runtimeContext: params.runtimeContext,
     executionMode: params.executionMode,
+    onDeferredMaintenance: params.onDeferredMaintenance,
     config: params.config,
   });
 }

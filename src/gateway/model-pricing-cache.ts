@@ -1,3 +1,10 @@
+// Gateway model-pricing refresh and normalization.
+// Fetches, normalizes, and schedules cached pricing for model usage estimates.
+import type { ModelCatalogCost } from "@openclaw/model-catalog-core/model-catalog-types";
+import {
+  normalizeOptionalString,
+  resolvePrimaryStringValue,
+} from "../../packages/normalization-core/src/string-coerce.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import {
   buildModelAliasIndex,
@@ -11,7 +18,7 @@ import { resolvePluginWebSearchConfig } from "../config/plugin-web-search-config
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { planManifestModelCatalogRows, type ModelCatalogCost } from "../model-catalog/index.js";
+import { planManifestModelCatalogRows } from "../model-catalog/index.js";
 import { isInstalledPluginEnabled } from "../plugins/installed-plugin-index.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type {
@@ -19,14 +26,19 @@ import type {
   PluginManifestModelPricingProvider,
   PluginManifestModelPricingSource,
 } from "../plugins/manifest.js";
-import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import {
+  clearLoadPluginMetadataSnapshotMemo,
+  resolvePluginMetadataSnapshot,
+} from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataRegistryView } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginRegistrySnapshot } from "../plugins/plugin-registry.js";
-import { normalizeOptionalString, resolvePrimaryStringValue } from "../shared/string-coerce.js";
 import {
   clearGatewayModelPricingCacheState,
+  clearGatewayModelPricingFailures,
+  clearGatewayModelPricingSourceFailure,
   getCachedGatewayModelPricing,
   getGatewayModelPricingCacheMeta as getGatewayModelPricingCacheMetaState,
+  recordGatewayModelPricingSourceFailure,
   replaceGatewayModelPricingCache,
   type CachedModelPricing,
   type CachedPricingTier,
@@ -139,6 +151,21 @@ function parseNumberString(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function parsePricingContentLength(value: string | null): number | null {
+  if (value === null) {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    throw new Error(`invalid content-length header: ${value}`);
+  }
+  const parsed = Number(trimmed);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error(`invalid content-length header: ${value}`);
+  }
+  return parsed;
+}
+
 function formatTimeoutSeconds(timeoutMs: number): string {
   const seconds = timeoutMs / 1000;
   return Number.isInteger(seconds) ? `${seconds}s` : `${seconds.toFixed(1)}s`;
@@ -158,6 +185,8 @@ function isTimeoutError(error: unknown): boolean {
 }
 
 function createPricingFetchSignal(signal: AbortSignal | undefined): AbortSignal {
+  // Pricing fetches are background refreshes; bound them so startup/reload
+  // cannot leave an unbounded network request alive.
   const timeoutSignal = AbortSignal.timeout(FETCH_TIMEOUT_MS);
   return signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
 }
@@ -250,7 +279,7 @@ async function readPricingJsonObject(
   response: Response,
   source: string,
 ): Promise<Record<string, unknown>> {
-  const contentLength = parseNumberString(response.headers.get("content-length"));
+  const contentLength = parsePricingContentLength(response.headers.get("content-length"));
   if (contentLength !== null && contentLength > MAX_PRICING_CATALOG_BYTES) {
     throw new Error(`${source} pricing response too large: ${contentLength} bytes`);
   }
@@ -258,7 +287,12 @@ async function readPricingJsonObject(
   if (buffer.byteLength > MAX_PRICING_CATALOG_BYTES) {
     throw new Error(`${source} pricing response too large: ${buffer.byteLength} bytes`);
   }
-  const payload = JSON.parse(Buffer.from(buffer).toString("utf8")) as unknown;
+  let payload: unknown;
+  try {
+    payload = JSON.parse(Buffer.from(buffer).toString("utf8")) as unknown;
+  } catch {
+    throw new Error(`${source} pricing response is malformed JSON`);
+  }
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     throw new Error(`${source} pricing response is not a JSON object`);
   }
@@ -451,10 +485,12 @@ function resolveModelPricingManifestMetadata(params: {
       activeRegistry: emptyRegistry,
     };
   }
-  const snapshot = loadPluginMetadataSnapshot({
+  const env = params.env ?? process.env;
+  const snapshot = resolvePluginMetadataSnapshot({
     config: params.config,
-    env: params.env ?? process.env,
+    env,
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    allowWorkspaceScopedCurrent: params.workspaceDir === undefined,
   });
   return {
     allRegistry: snapshot.manifestRegistry,
@@ -889,6 +925,12 @@ export function collectConfiguredModelPricingRefs(
     ...normalizationParams,
   });
   addModelListLike({
+    value: config.agents?.defaults?.subagents?.model,
+    aliasIndex,
+    refs,
+    ...normalizationParams,
+  });
+  addModelListLike({
     value: config.agents?.defaults?.imageModel,
     aliasIndex,
     refs,
@@ -908,12 +950,6 @@ export function collectConfiguredModelPricingRefs(
   });
   addResolvedModelRef({
     raw: config.agents?.defaults?.heartbeat?.model,
-    aliasIndex,
-    refs,
-    ...normalizationParams,
-  });
-  addModelListLike({
-    value: config.tools?.subagents?.model,
     aliasIndex,
     refs,
     ...normalizationParams,
@@ -1122,7 +1158,11 @@ function scheduleRefresh(
       return;
     }
     void refreshGatewayModelPricingCache(params).catch((error: unknown) => {
-      log.warn(`pricing refresh failed: ${String(error)}`);
+      const message = `pricing refresh failed: ${String(error)}`;
+      log.warn(message);
+      if (!params.signal?.aborted) {
+        recordGatewayModelPricingSourceFailure("refresh", message);
+      }
     });
   }, CACHE_TTL_MS);
   refreshTimer.unref?.();
@@ -1161,6 +1201,7 @@ export async function refreshGatewayModelPricingCache(
 ): Promise<void> {
   if (!isGatewayModelPricingEnabled(params.config)) {
     clearRefreshTimer();
+    clearGatewayModelPricingFailures();
     return;
   }
   if (params.signal?.aborted) {
@@ -1215,6 +1256,7 @@ export async function refreshGatewayModelPricingCache(
         return;
       }
       replaceGatewayModelPricingCache(seededPricing);
+      clearGatewayModelPricingFailures();
       clearRefreshTimer();
       return;
     }
@@ -1224,16 +1266,34 @@ export async function refreshGatewayModelPricingCache(
     let openRouterFailed = false;
     let litellmFailed = false;
     const [catalogById, litellmCatalog] = await Promise.all([
-      fetchOpenRouterPricingCatalog(fetchImpl, params.signal).catch((error: unknown) => {
-        log.warn(formatPricingFetchFailure("OpenRouter", error));
-        openRouterFailed = true;
-        return new Map<string, OpenRouterPricingEntry>();
-      }),
-      fetchLiteLLMPricingCatalog(fetchImpl, params.signal).catch((error: unknown) => {
-        log.warn(formatPricingFetchFailure("LiteLLM", error));
-        litellmFailed = true;
-        return new Map<string, CachedModelPricing>() as LiteLLMPricingCatalog;
-      }),
+      fetchOpenRouterPricingCatalog(fetchImpl, params.signal)
+        .then((catalog) => {
+          clearGatewayModelPricingSourceFailure("openrouter");
+          return catalog;
+        })
+        .catch((error: unknown) => {
+          const message = formatPricingFetchFailure("OpenRouter", error);
+          log.warn(message);
+          openRouterFailed = true;
+          if (!params.signal?.aborted) {
+            recordGatewayModelPricingSourceFailure("openrouter", message);
+          }
+          return new Map<string, OpenRouterPricingEntry>();
+        }),
+      fetchLiteLLMPricingCatalog(fetchImpl, params.signal)
+        .then((catalog) => {
+          clearGatewayModelPricingSourceFailure("litellm");
+          return catalog;
+        })
+        .catch((error: unknown) => {
+          const message = formatPricingFetchFailure("LiteLLM", error);
+          log.warn(message);
+          litellmFailed = true;
+          if (!params.signal?.aborted) {
+            recordGatewayModelPricingSourceFailure("litellm", message);
+          }
+          return new Map<string, CachedModelPricing>() as LiteLLMPricingCatalog;
+        }),
     ]);
 
     if (params.signal?.aborted) {
@@ -1316,6 +1376,8 @@ export async function refreshGatewayModelPricingCache(
     if (params.signal?.aborted) {
       return;
     }
+    clearGatewayModelPricingSourceFailure("bootstrap");
+    clearGatewayModelPricingSourceFailure("refresh");
     replaceGatewayModelPricingCache(nextPricing);
     scheduleRefresh({ ...params, fetchImpl });
   })();
@@ -1332,6 +1394,7 @@ export function startGatewayModelPricingRefresh(
 ): () => void {
   if (!isGatewayModelPricingEnabled(params.config)) {
     clearRefreshTimer();
+    clearGatewayModelPricingFailures();
     return () => {};
   }
   let stopped = false;
@@ -1342,7 +1405,11 @@ export function startGatewayModelPricingRefresh(
     }
     void refreshGatewayModelPricingCache({ ...params, signal: abortController.signal }).catch(
       (error: unknown) => {
-        log.warn(`pricing bootstrap failed: ${String(error)}`);
+        const message = `pricing bootstrap failed: ${String(error)}`;
+        log.warn(message);
+        if (!abortController.signal.aborted) {
+          recordGatewayModelPricingSourceFailure("bootstrap", message);
+        }
       },
     );
   });
@@ -1353,8 +1420,9 @@ export function startGatewayModelPricingRefresh(
   };
 }
 
-export function __resetGatewayModelPricingCacheForTest(): void {
+export function resetGatewayModelPricingCacheForTest(): void {
   clearGatewayModelPricingCacheState();
+  clearLoadPluginMetadataSnapshotMemo();
   clearRefreshTimer();
   inFlightRefresh = null;
 }

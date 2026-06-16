@@ -1,3 +1,8 @@
+/**
+ * Tests auth profile API-key resolution.
+ * Covers token/api-key/OAuth profile compatibility, SecretRefs, and provider
+ * runtime formatting behavior.
+ */
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AuthProfileStore } from "./types.js";
@@ -355,6 +360,30 @@ describe("resolveApiKeyForProfile secret refs", () => {
         process.env.OPENAI_API_KEY = previous;
       }
     }
+  });
+
+  it("normalizes inline api_key values from auth profiles before header use", async () => {
+    const profileId = "openrouter:masked";
+    const result = await resolveApiKeyForProfile({
+      cfg: cfgFor(profileId, "openrouter", "api_key"),
+      store: {
+        version: 1,
+        profiles: {
+          [profileId]: {
+            type: "api_key",
+            provider: "openrouter",
+            key: " sk-or-\u202650ec ",
+          },
+        },
+      },
+      profileId,
+    });
+
+    expect(result).toEqual({
+      apiKey: "sk-or-50ec", // pragma: allowlist secret
+      provider: "openrouter",
+      email: undefined,
+    });
   });
 
   it("resolves token tokenRef from env", async () => {

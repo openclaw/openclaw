@@ -1,6 +1,8 @@
+// Irc plugin module implements client behavior.
 import net from "node:net";
 import tls from "node:tls";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { withTimeout } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   parseIrcLine,
   parseIrcPrefix,
@@ -64,24 +66,6 @@ function toError(err: unknown): Error {
   return new Error(typeof err === "string" ? err : JSON.stringify(err));
 }
 
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error(`${label} timed out after ${timeoutMs}ms`)),
-      timeoutMs,
-    );
-    promise
-      .then((result) => {
-        clearTimeout(timer);
-        resolve(result);
-      })
-      .catch((error) => {
-        clearTimeout(timer);
-        reject(error);
-      });
-  });
-}
-
 function buildFallbackNick(nick: string): string {
   const normalized = nick.replace(/\s+/g, "");
   const safe = normalized.replace(/[^A-Za-z0-9_\-[\]\\`^{}|]/g, "");
@@ -136,6 +120,7 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
   let closed = false;
   let nickServRecoverAttempted = false;
   let fallbackNickAttempted = false;
+  let removeAbortListener: (() => void) | null = null;
 
   const socket = options.tls
     ? tls.connect({
@@ -164,6 +149,11 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
       rejectReady = null;
       resolveReady = null;
     }
+  };
+
+  const failAndClose = (err: unknown) => {
+    fail(err);
+    close();
   };
 
   const sendRaw = (line: string) => {
@@ -242,6 +232,8 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
       return;
     }
     closed = true;
+    removeAbortListener?.();
+    removeAbortListener = null;
     const safeReason = sanitizeIrcOutboundText(reason != null ? reason : "bye");
     try {
       if (safeReason) {
@@ -260,6 +252,8 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
       return;
     }
     closed = true;
+    removeAbortListener?.();
+    removeAbortListener = null;
     socket.destroy();
   };
 
@@ -383,7 +377,7 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
               text,
               rawLine,
             }),
-          ).catch((error) => {
+          ).catch((error: unknown) => {
             fail(error);
           });
         }
@@ -419,12 +413,17 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
 
   if (options.abortSignal) {
     const abort = () => {
+      if (!ready) {
+        failAndClose(new Error("IRC connect aborted"));
+        return;
+      }
       quit("shutdown");
     };
     if (options.abortSignal.aborted) {
       abort();
     } else {
       options.abortSignal.addEventListener("abort", abort, { once: true });
+      removeAbortListener = () => options.abortSignal?.removeEventListener("abort", abort);
     }
   }
 

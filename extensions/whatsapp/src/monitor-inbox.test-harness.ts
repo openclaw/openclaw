@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements monitor inbox harness behavior.
 import { EventEmitter } from "node:events";
 import fsSync from "node:fs";
 import os from "node:os";
@@ -20,7 +21,7 @@ export const DEFAULT_WEB_INBOX_CONFIG = {
   channels: {
     whatsapp: {
       // Allow all in tests by default.
-      allowFrom: ["*"],
+      allowFrom: ["*"] as string[],
     },
   },
   messages: {
@@ -54,6 +55,106 @@ export type MockSock = {
 const sessionState = vi.hoisted(() => ({
   sock: undefined as MockSock | undefined,
 }));
+
+const channelActivityMocks = vi.hoisted(() => ({
+  recordChannelActivity: vi.fn(),
+}));
+
+const pluginRuntimeMocks = vi.hoisted(() => {
+  type StoreEntry = { key: string; value: unknown; createdAt: number };
+  const stores = new Map<string, Map<string, StoreEntry>>();
+  let nextRegisterIfAbsentError: Error | undefined;
+  let stateDir = `/tmp/openclaw-whatsapp-ingress-${Date.now()}-${Math.random()}`;
+
+  const openKeyedStore = vi.fn((options: { namespace: string }) => {
+    let store = stores.get(options.namespace);
+    if (!store) {
+      store = new Map();
+      stores.set(options.namespace, store);
+    }
+    return {
+      register: async (key: string, value: unknown) => {
+        store.set(key, { key, value, createdAt: Date.now() });
+      },
+      registerIfAbsent: async (key: string, value: unknown) => {
+        if (nextRegisterIfAbsentError) {
+          const error = nextRegisterIfAbsentError;
+          nextRegisterIfAbsentError = undefined;
+          throw error;
+        }
+        if (store.has(key)) {
+          return false;
+        }
+        store.set(key, { key, value, createdAt: Date.now() });
+        return true;
+      },
+      lookup: async (key: string) => store.get(key)?.value,
+      consume: async (key: string) => {
+        const value = store.get(key)?.value;
+        store.delete(key);
+        return value;
+      },
+      delete: async (key: string) => store.delete(key),
+      entries: async () => Array.from(store.values()),
+      clear: async () => {
+        store.clear();
+      },
+    };
+  });
+
+  return {
+    openKeyedStore,
+    stateDir: () => stateDir,
+    failNextRegisterIfAbsent: (error: Error) => {
+      nextRegisterIfAbsentError = error;
+    },
+    reset: () => {
+      stores.clear();
+      nextRegisterIfAbsentError = undefined;
+      openKeyedStore.mockClear();
+      stateDir = `/tmp/openclaw-whatsapp-ingress-${Date.now()}-${Math.random()}`;
+    },
+  };
+});
+
+export function getRecordChannelActivityMock(): AnyMockFn {
+  return channelActivityMocks.recordChannelActivity;
+}
+
+export function failNextWhatsAppPluginStateRegisterIfAbsent(error: Error) {
+  pluginRuntimeMocks.failNextRegisterIfAbsent(error);
+}
+
+vi.mock("openclaw/plugin-sdk/channel-activity-runtime", async () => {
+  const actual = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/channel-activity-runtime")
+  >("openclaw/plugin-sdk/channel-activity-runtime");
+  return {
+    ...actual,
+    recordChannelActivity: (...args: unknown[]) =>
+      channelActivityMocks.recordChannelActivity(...args),
+  };
+});
+
+vi.mock("./runtime.js", async () => {
+  const { createChannelIngressQueueForTests: createChannelIngressQueue } = await Promise.resolve(
+    vi.importActual<typeof import("openclaw/plugin-sdk/plugin-state-test-runtime")>(
+      "openclaw/plugin-sdk/plugin-state-test-runtime",
+    ),
+  );
+  return {
+    getWhatsAppRuntime: () => ({
+      state: {
+        resolveStateDir: pluginRuntimeMocks.stateDir,
+        openKeyedStore: pluginRuntimeMocks.openKeyedStore,
+        openChannelIngressQueue: (
+          options?: Omit<Parameters<typeof createChannelIngressQueue>[0], "channelId">,
+        ) => createChannelIngressQueue({ ...options, channelId: "whatsapp" }),
+      },
+    }),
+    setWhatsAppRuntime: vi.fn(),
+  };
+});
 
 const inboundRuntimeMocks = vi.hoisted(() => {
   const wrapperKeys = [
@@ -193,8 +294,19 @@ export function getMonitorWebInbox(): MonitorWebInbox {
 }
 
 export async function settleInboundWork() {
-  await new Promise((resolve) => setImmediate(resolve));
-  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => {
+    setImmediate(resolve);
+  });
+  await new Promise((resolve) => {
+    setImmediate(resolve);
+  });
+}
+
+export function resetWebInboundDedupeForTests() {
+  if (!resetWebInboundDedupe) {
+    throw new Error("resetWebInboundDedupe not initialized");
+  }
+  resetWebInboundDedupe();
 }
 
 export async function waitForMessageCalls(onMessage: ReturnType<typeof vi.fn>, count: number) {
@@ -253,7 +365,7 @@ export function buildNotifyMessageUpsert(params: {
 
 export function expectPairingPromptSent(sock: MockSock, jid: string, senderE164: string) {
   expect(sock.sendMessage).toHaveBeenCalledTimes(1);
-  const sendCall = sock.sendMessage.mock.calls[0];
+  const sendCall = sock.sendMessage.mock.calls.at(0);
   expect(sendCall?.[0]).toBe(jid);
   expectInboxPairingReplyText((sendCall?.[1] as { text?: string } | undefined)?.text ?? "", {
     channel: "whatsapp",
@@ -277,6 +389,8 @@ export function installWebMonitorInboxUnitTestHooks(opts?: { authDir?: boolean }
   beforeEach(async () => {
     vi.useRealTimers();
     vi.clearAllMocks();
+    channelActivityMocks.recordChannelActivity.mockClear();
+    pluginRuntimeMocks.reset();
     sessionState.sock = createMockSock();
     resetPairingSecurityMocks(DEFAULT_WEB_INBOX_CONFIG);
     if (!monitorWebInbox || !resetWebInboundDedupe) {

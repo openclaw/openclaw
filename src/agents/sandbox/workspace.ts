@@ -1,8 +1,13 @@
+/**
+ * Sandbox workspace bootstrapper.
+ *
+ * Creates sandbox workspaces and seeds agent bootstrap files through root-boundary reads.
+ */
 import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OptionalBootstrapFileName } from "../../config/types.agent-defaults.js";
-import { openBoundaryFile } from "../../infra/boundary-file-read.js";
+import { openRootFile } from "../../infra/boundary-file-read.js";
 import { resolveUserPath } from "../../utils.js";
 import {
   DEFAULT_AGENTS_FILENAME,
@@ -40,7 +45,7 @@ export async function ensureSandboxWorkspace(
         await fs.access(dest);
       } catch {
         try {
-          const opened = await openBoundaryFile({
+          const opened = await openRootFile({
             absolutePath: src,
             rootPath: seed,
             boundaryLabel: "sandbox seed workspace",

@@ -1,8 +1,23 @@
+/** Shared helpers for onboarding, reset, gateway checks, and wizard output. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { inspect } from "node:util";
 import { cancel, isCancel } from "@clack/prompts";
-import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../agents/workspace.js";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
+import {
+  decorativeEmoji,
+  supportsDecorativeEmoji,
+} from "../../packages/terminal-core/src/decorative-emoji.js";
+import { stylePromptTitle } from "../../packages/terminal-core/src/prompt-style.js";
+import {
+  DEFAULT_AGENT_WORKSPACE_DIR,
+  ensureAgentWorkspace,
+  resolveWorkspaceAttestationPaths,
+  shouldRemoveWorkspaceAttestation,
+} from "../agents/workspace.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveConfigPath } from "../config/paths.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
@@ -17,10 +32,8 @@ import {
   resolveBrowserOpenCommand,
 } from "../infra/browser-open.js";
 import { detectBinary } from "../infra/detect-binary.js";
-import { runCommandWithTimeout } from "../process/exec.js";
+import { movePathToTrash } from "../infra/fs-safe.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { stylePromptTitle } from "../terminal/prompt-style.js";
 import { resolveConfigDir, shortenHomeInString, shortenHomePath, sleep } from "../utils.js";
 import { VERSION } from "../version.js";
 import type { NodeManagerChoice, OnboardMode, ResetScope } from "./onboard-types.js";
@@ -30,6 +43,7 @@ export { detectBinary };
 export { detectBrowserOpenSupport, openUrl, resolveBrowserOpenCommand };
 export { resolveControlUiLinks };
 
+/** Handles Clack cancellation by exiting through the runtime. */
 export function guardCancel<T>(value: T | symbol, runtime: RuntimeEnv): T {
   if (isCancel(value)) {
     cancel(stylePromptTitle("Setup cancelled.") ?? "Setup cancelled.");
@@ -39,36 +53,84 @@ export function guardCancel<T>(value: T | symbol, runtime: RuntimeEnv): T {
   return value;
 }
 
+/** Summarizes existing config values before onboarding overwrites or reuses them. */
 export function summarizeExistingConfig(config: OpenClawConfig): string {
   const rows: string[] = [];
   const defaults = config.agents?.defaults;
   if (defaults?.workspace) {
-    rows.push(shortenHomeInString(`workspace: ${defaults.workspace}`));
+    rows.push(shortenHomeInString(`Workspace: ${defaults.workspace}`));
   }
   if (defaults?.model) {
     const model = resolveAgentModelPrimaryValue(defaults.model);
     if (model) {
-      rows.push(shortenHomeInString(`model: ${model}`));
+      rows.push(shortenHomeInString(`Model: ${model}`));
     }
   }
-  if (config.gateway?.mode) {
-    rows.push(shortenHomeInString(`gateway.mode: ${config.gateway.mode}`));
-  }
-  if (typeof config.gateway?.port === "number") {
-    rows.push(shortenHomeInString(`gateway.port: ${config.gateway.port}`));
-  }
-  if (config.gateway?.bind) {
-    rows.push(shortenHomeInString(`gateway.bind: ${config.gateway.bind}`));
-  }
-  if (config.gateway?.remote?.url) {
-    rows.push(shortenHomeInString(`gateway.remote.url: ${config.gateway.remote.url}`));
+  const gatewaySummary = summarizeGatewayConfig(config);
+  if (gatewaySummary) {
+    rows.push(shortenHomeInString(gatewaySummary));
   }
   if (config.skills?.install?.nodeManager) {
-    rows.push(shortenHomeInString(`skills.nodeManager: ${config.skills.install.nodeManager}`));
+    rows.push(shortenHomeInString(`Node manager: ${config.skills.install.nodeManager}`));
   }
   return rows.length ? rows.join("\n") : "No key settings detected.";
 }
 
+function summarizeGatewayConfig(config: OpenClawConfig): string | null {
+  const gateway = config.gateway;
+  if (
+    !gateway?.mode &&
+    typeof gateway?.port !== "number" &&
+    !gateway?.bind &&
+    !gateway?.remote?.url
+  ) {
+    return null;
+  }
+  const mode = normalizeOptionalString(gateway.mode);
+  const bind = formatGatewayBind(gateway.bind);
+  const remoteUrl = normalizeOptionalString(gateway.remote?.url);
+  const useRemoteUrl = remoteUrl !== undefined && mode !== "local";
+  const endpoint =
+    useRemoteUrl && remoteUrl
+      ? remoteUrl
+      : typeof gateway.port === "number"
+        ? `:${gateway.port}`
+        : undefined;
+  const words: string[] = [];
+  if (mode) {
+    words.push(mode);
+  }
+  if (bind) {
+    words.push(mode ? `via ${bind}` : bind);
+  }
+  if (mode === "remote" && !remoteUrl) {
+    words.push("(missing remote URL)");
+    return `Gateway: ${words.join(" ")}`;
+  }
+  if (endpoint) {
+    words.push(`${useRemoteUrl ? "at" : "on"} ${endpoint}`);
+  }
+  return `Gateway: ${words.length > 0 ? words.join(" ") : "configured"}`;
+}
+
+function formatGatewayBind(value: string | undefined): string | undefined {
+  switch (value) {
+    case "lan":
+      return "LAN";
+    case "loopback":
+      return "loopback";
+    case "tailnet":
+      return "tailnet";
+    case "auto":
+      return "auto";
+    case "custom":
+      return "custom";
+    default:
+      return normalizeOptionalString(value);
+  }
+}
+
+/** Normalizes gateway token prompts while rejecting JS stringification sentinels. */
 export function normalizeGatewayTokenInput(value: unknown): string {
   if (typeof value !== "string") {
     return "";
@@ -82,6 +144,7 @@ export function normalizeGatewayTokenInput(value: unknown): string {
   return trimmed;
 }
 
+/** Validates gateway password prompt input. */
 export function validateGatewayPasswordInput(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return "Required";
@@ -96,19 +159,26 @@ export function validateGatewayPasswordInput(value: unknown): string | undefined
   return undefined;
 }
 
+/** Prints the onboarding banner. */
 export function printWizardHeader(runtime: RuntimeEnv) {
+  const bannerWidth = 54;
+  const icon = decorativeEmoji("🦞");
+  const title = supportsDecorativeEmoji() && icon ? `${icon} OPENCLAW ${icon}` : "OPENCLAW";
+  const pad = Math.max(0, bannerWidth - visibleWidth(title));
+  const titleLine = `${" ".repeat(Math.floor(pad / 2))}${title}${" ".repeat(Math.ceil(pad / 2))}`;
   const header = [
     "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
     "██░▄▄▄░██░▄▄░██░▄▄▄██░▀██░██░▄▄▀██░████░▄▄▀██░███░██",
     "██░███░██░▀▀░██░▄▄▄██░█░█░██░█████░████░▀▀░██░█░█░██",
     "██░▀▀▀░██░█████░▀▀▀██░██▄░██░▀▀▄██░▀▀░█░██░██▄▀▄▀▄██",
     "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
-    "                  🦞 OPENCLAW 🦞                    ",
+    titleLine,
     " ",
   ].join("\n");
   runtime.log(header);
 }
 
+/** Records wizard provenance metadata on config writes. */
 export function applyWizardMetadata(
   cfg: OpenClawConfig,
   params: { command: string; mode: OnboardMode },
@@ -128,6 +198,7 @@ export function applyWizardMetadata(
   };
 }
 
+/** Formats the no-GUI SSH tunnel hint for opening the Control UI remotely. */
 export function formatControlUiSshHint(params: {
   port: number;
   basePath?: string;
@@ -146,6 +217,8 @@ export function formatControlUiSshHint(params: {
     "Then open:",
     localUrl,
     authedUrl,
+    "BYOH note: lan, tailnet, and custom bind are currently IPv4-only.",
+    "If your host is IPv6-only, use an IPv4 sidecar or proxy in front of the Gateway.",
     "Docs:",
     "https://docs.openclaw.ai/gateway/remote",
     "https://docs.openclaw.ai/web/control-ui",
@@ -161,6 +234,7 @@ function resolveSshTargetHint(): string {
   return `${user}@${host}`;
 }
 
+/** Ensures workspace bootstrap files and session transcript directories exist. */
 export async function ensureWorkspaceAndSessions(
   workspaceDir: string,
   runtime: RuntimeEnv,
@@ -181,6 +255,7 @@ export async function ensureWorkspaceAndSessions(
   runtime.log(`Sessions OK: ${shortenHomePath(sessionsDir)}`);
 }
 
+/** Returns package manager choices offered by onboarding. */
 export function resolveNodeManagerOptions(): Array<{
   value: NodeManagerChoice;
   label: string;
@@ -192,6 +267,7 @@ export function resolveNodeManagerOptions(): Array<{
   ];
 }
 
+/** Moves a path to Trash when it exists, logging a manual-delete fallback on failure. */
 export async function moveToTrash(pathname: string, runtime: RuntimeEnv): Promise<void> {
   if (!pathname) {
     return;
@@ -202,13 +278,37 @@ export async function moveToTrash(pathname: string, runtime: RuntimeEnv): Promis
     return;
   }
   try {
-    await runCommandWithTimeout(["trash", pathname], { timeoutMs: 5000 });
+    const targetPath = path.resolve(pathname);
+    const sourcePath = await resolveMoveToTrashSourcePath(targetPath);
+    await movePathToTrash(sourcePath, {
+      allowedRoots: await resolveMoveToTrashAllowedRoots(sourcePath),
+    });
     runtime.log(`Moved to Trash: ${shortenHomePath(pathname)}`);
   } catch {
     runtime.log(`Failed to move to Trash (manual delete): ${shortenHomePath(pathname)}`);
   }
 }
 
+async function resolveMoveToTrashSourcePath(targetPath: string): Promise<string> {
+  return path.join(await fs.realpath(path.dirname(targetPath)), path.basename(targetPath));
+}
+
+async function resolveMoveToTrashAllowedRoots(targetPath: string): Promise<string[]> {
+  const allowedRoots = [path.dirname(targetPath)];
+  const stat = await fs.lstat(targetPath);
+  if (stat.isSymbolicLink()) {
+    try {
+      // fs-safe resolves valid symlinks before allow-root checks; include the
+      // resolved parent so deleting a configured symlink moves the link itself.
+      allowedRoots.push(path.dirname(await fs.realpath(targetPath)));
+    } catch {
+      // Broken symlinks are handled lexically by fs-safe.
+    }
+  }
+  return uniqueStrings(allowedRoots);
+}
+
+/** Deletes onboarding-managed state according to the selected reset scope. */
 export async function handleReset(scope: ResetScope, workspaceDir: string, runtime: RuntimeEnv) {
   await moveToTrash(resolveConfigPath(), runtime);
   if (scope === "config") {
@@ -218,9 +318,17 @@ export async function handleReset(scope: ResetScope, workspaceDir: string, runti
   await moveToTrash(resolveSessionTranscriptsDirForAgent(), runtime);
   if (scope === "full") {
     await moveToTrash(workspaceDir, runtime);
+    for (const [index, attestationPath] of resolveWorkspaceAttestationPaths(
+      workspaceDir,
+    ).entries()) {
+      if (await shouldRemoveWorkspaceAttestation(attestationPath, { trustUnknown: index === 0 })) {
+        await moveToTrash(attestationPath, runtime);
+      }
+    }
   }
 }
 
+/** Runs a single lightweight gateway probe for onboarding readiness checks. */
 export async function probeGatewayReachable(params: {
   url: string;
   token?: string;
@@ -245,6 +353,7 @@ export async function probeGatewayReachable(params: {
   }
 }
 
+/** Polls gateway reachability until success or deadline. */
 export async function waitForGatewayReachable(params: {
   url: string;
   token?: string;
@@ -257,7 +366,7 @@ export async function waitForGatewayReachable(params: {
   pollMs?: number;
 }): Promise<{ ok: boolean; detail?: string }> {
   const deadlineMs = params.deadlineMs ?? 15_000;
-  const pollMs = params.pollMs ?? 400;
+  const pollMs = resolveTimerTimeoutMs(params.pollMs ?? 400, 400, 0);
   const probeTimeoutMs = params.probeTimeoutMs ?? 1500;
   const startedAt = Date.now();
   let lastDetail: string | undefined;
@@ -273,7 +382,11 @@ export async function waitForGatewayReachable(params: {
       return probe;
     }
     lastDetail = probe.detail;
-    await sleep(pollMs);
+    const remainingMs = deadlineMs - (Date.now() - startedAt);
+    if (remainingMs <= 0) {
+      break;
+    }
+    await sleep(Math.min(pollMs, remainingMs));
   }
 
   return { ok: false, detail: lastDetail };
@@ -296,4 +409,5 @@ function summarizeError(err: unknown): string {
   return line.length > 120 ? `${line.slice(0, 119)}…` : line;
 }
 
+/** Default workspace path shown by onboarding prompts. */
 export const DEFAULT_WORKSPACE = DEFAULT_AGENT_WORKSPACE_DIR;

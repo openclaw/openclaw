@@ -1,10 +1,11 @@
-import { runMatrixQaLive } from "./runners/contract/runtime.js";
-import type { LiveTransportQaCommandOptions } from "./shared/live-transport-cli.js";
+// Qa Matrix plugin module implements cli behavior.
 import {
   printLiveTransportQaArtifacts,
-  resolveLiveTransportQaRunOptions,
   startLiveTransportQaOutputTee,
-} from "./shared/live-transport-cli.runtime.js";
+} from "openclaw/plugin-sdk/qa-runtime";
+import { runMatrixQaLive } from "./runners/contract/runtime.js";
+import type { LiveTransportQaCommandOptions } from "./shared/live-transport-cli.js";
+import { resolveLiveTransportQaRunOptions } from "./shared/live-transport-cli.runtime.js";
 
 const RUN_NODE_OUTPUT_LOG_ENV = "OPENCLAW_RUN_NODE_OUTPUT_LOG";
 
@@ -83,9 +84,23 @@ export async function runQaMatrixCommand(opts: LiveTransportQaCommandOptions) {
         `Matrix QA output log error: ${formatMatrixQaOutputTeeError(outputTeeError)}\n`,
       );
     }
-    throw primaryError;
+    throw toLintErrorObject(primaryError, "Non-Error thrown");
   }
   if (outputTeeError) {
-    throw outputTeeError;
+    throw toLintErrorObject(outputTeeError, "Non-Error thrown");
   }
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

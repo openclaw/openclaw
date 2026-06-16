@@ -1,7 +1,11 @@
+// Legacy config migration bridge for channel doctor compatibility contracts.
 import { getBootstrapChannelPlugin } from "../../../channels/plugins/bootstrap-registry.js";
 import { loadBundledChannelDoctorContractApi } from "../../../channels/plugins/doctor-contract-api.js";
 import type { OpenClawConfig } from "../../../config/types.js";
-import { applyPluginDoctorCompatibilityMigrations } from "../../../plugins/doctor-contract-registry.js";
+import {
+  applyPluginDoctorCompatibilityMigrations,
+  collectRelevantDoctorPluginIds,
+} from "../../../plugins/doctor-contract-registry.js";
 import { isRecord } from "./legacy-config-record-shared.js";
 
 type ChannelDoctorCompatibilityMutation = {
@@ -34,6 +38,22 @@ function resolveBundledChannelCompatibilityNormalizer(
   return getBootstrapChannelPlugin(channelId)?.doctor?.normalizeCompatibilityConfig;
 }
 
+function collectPluginDoctorCompatibilityIds(params: {
+  raw: unknown;
+  unresolvedChannelIds: readonly string[];
+}): string[] {
+  const unresolvedChannelIds = new Set(params.unresolvedChannelIds);
+  return [
+    ...new Set([
+      ...params.unresolvedChannelIds,
+      ...collectRelevantDoctorPluginIds(params.raw).filter(
+        (pluginId) => !unresolvedChannelIds.has(pluginId),
+      ),
+    ]),
+  ].toSorted();
+}
+
+/** Apply bundled and plugin channel compatibility migrations to a legacy config object. */
 export function applyChannelDoctorCompatibilityMigrations(cfg: Record<string, unknown>): {
   next: Record<string, unknown>;
   changes: string[];
@@ -56,9 +76,11 @@ export function applyChannelDoctorCompatibilityMigrations(cfg: Record<string, un
     changes.push(...mutation.changes);
   }
 
-  if (unresolvedChannelIds.length > 0) {
+  const pluginIds = collectPluginDoctorCompatibilityIds({ raw: cfg, unresolvedChannelIds });
+  if (pluginIds.length > 0) {
     const compat = applyPluginDoctorCompatibilityMigrations(nextCfg, {
-      pluginIds: unresolvedChannelIds,
+      config: cfg as OpenClawConfig,
+      pluginIds,
     });
     nextCfg = compat.config;
     changes.push(...compat.changes);

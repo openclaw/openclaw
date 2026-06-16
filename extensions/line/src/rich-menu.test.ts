@@ -1,8 +1,9 @@
+// Line tests cover rich menu plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createDefaultMenuConfig,
   createGridLayout,
@@ -14,16 +15,24 @@ import {
 } from "./rich-menu.js";
 
 const { setRichMenuImageMock, MessagingApiBlobClientMock } = vi.hoisted(() => {
-  const setRichMenuImageMock = vi.fn();
-  const MessagingApiBlobClientMock = vi.fn(function () {
-    return { setRichMenuImage: setRichMenuImageMock };
+  const setRichMenuImageMockLocal = vi.fn();
+  const MessagingApiBlobClientMockLocal = vi.fn(function () {
+    return { setRichMenuImage: setRichMenuImageMockLocal };
   });
-  return { setRichMenuImageMock, MessagingApiBlobClientMock };
+  return {
+    setRichMenuImageMock: setRichMenuImageMockLocal,
+    MessagingApiBlobClientMock: MessagingApiBlobClientMockLocal,
+  };
 });
 
 vi.mock("@line/bot-sdk", () => ({
   messagingApi: { MessagingApiBlobClient: MessagingApiBlobClientMock },
 }));
+
+afterAll(() => {
+  vi.doUnmock("@line/bot-sdk");
+  vi.resetModules();
+});
 
 describe("messageAction", () => {
   it("creates message actions with explicit or default text", () => {

@@ -1,3 +1,4 @@
+// Browser tests cover pw session.connections plugin behavior.
 import { chromium } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as chromeModule from "./chrome.js";
@@ -17,7 +18,6 @@ type BrowserMockBundle = {
 };
 
 function makeBrowser(targetId: string, url: string): BrowserMockBundle {
-  let context: import("playwright-core").BrowserContext;
   const browserClose = vi.fn(async () => {});
   const page = {
     on: vi.fn(),
@@ -26,7 +26,7 @@ function makeBrowser(targetId: string, url: string): BrowserMockBundle {
     url: vi.fn(() => url),
   } as unknown as import("playwright-core").Page;
 
-  context = {
+  const context: import("playwright-core").BrowserContext = {
     pages: () => [page],
     on: vi.fn(),
     newCDPSession: vi.fn(async () => ({
@@ -66,7 +66,6 @@ function makeEmptyBrowser(): BrowserMockBundle {
 }
 
 function makeDisconnectedReadBrowser(): BrowserMockBundle {
-  let context: import("playwright-core").BrowserContext;
   const browserClose = vi.fn(async () => {});
   const page = {
     on: vi.fn(),
@@ -79,7 +78,7 @@ function makeDisconnectedReadBrowser(): BrowserMockBundle {
     }),
   } as unknown as import("playwright-core").Page;
 
-  context = {
+  const context: import("playwright-core").BrowserContext = {
     pages: () => [page],
     on: vi.fn(),
     newCDPSession: vi.fn(async () => {
@@ -154,16 +153,14 @@ describe("pw-session connection scoping", () => {
     await vi.waitFor(() => {
       expect(connectOverCdpSpy).toHaveBeenCalledTimes(2);
     });
-    expect(connectOverCdpSpy).toHaveBeenNthCalledWith(
-      1,
-      "http://127.0.0.1:9222",
-      expect.any(Object),
-    );
-    expect(connectOverCdpSpy).toHaveBeenNthCalledWith(
-      2,
-      "http://127.0.0.1:9333",
-      expect.any(Object),
-    );
+    expect(connectOverCdpSpy).toHaveBeenNthCalledWith(1, "http://127.0.0.1:9222", {
+      timeout: 5000,
+      headers: {},
+    });
+    expect(connectOverCdpSpy).toHaveBeenNthCalledWith(2, "http://127.0.0.1:9333", {
+      timeout: 5000,
+      headers: {},
+    });
 
     resolveA?.(browserA.browser);
     const [pagesA, pagesB] = await Promise.all([pendingA, pendingB]);

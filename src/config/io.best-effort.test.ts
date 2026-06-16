@@ -1,13 +1,32 @@
+// Covers best-effort config IO reads and warning behavior.
 import fs from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import {
   readBestEffortConfig,
+  readBestEffortConfigSnapshot,
   readConfigFileSnapshot,
   readSourceConfigBestEffort,
 } from "./config.js";
 import { withTempHome, writeOpenClawConfig } from "./test-helpers.js";
 
 describe("readBestEffortConfig", () => {
+  it("can read snapshots without updating config observation state", async () => {
+    await withTempHome(async (home) => {
+      await writeOpenClawConfig(home, {
+        gateway: { mode: "local" },
+      });
+
+      await readConfigFileSnapshot({ observe: false });
+
+      const healthPath = `${home}/.openclaw/logs/config-health.json`;
+      await expect(fs.stat(healthPath)).rejects.toMatchObject({ code: "ENOENT" });
+
+      await readConfigFileSnapshot();
+
+      await expect(fs.stat(healthPath)).resolves.toMatchObject({ isFile: expect.any(Function) });
+    });
+  });
+
   it("does not restore suspicious direct edits from .bak during ordinary reads", async () => {
     await withTempHome(async (home) => {
       const configPath = await writeOpenClawConfig(home, {
@@ -55,6 +74,29 @@ describe("readBestEffortConfig", () => {
       expect(
         bestEffort.agents?.defaults?.models?.["anthropic/claude-opus-4-6"]?.params?.cacheRetention,
       ).toBe("short");
+    });
+  });
+
+  it("returns source and materialized config from one snapshot", async () => {
+    await withTempHome(async (home) => {
+      await writeOpenClawConfig(home, {
+        auth: {
+          profiles: {
+            "anthropic:api": { provider: "anthropic", mode: "api_key" },
+          },
+        },
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-4-6" },
+          },
+        },
+      });
+
+      const snapshot = await readBestEffortConfigSnapshot();
+
+      expect(snapshot.sourceConfig.agents?.defaults?.contextPruning?.mode).toBeUndefined();
+      expect(snapshot.config.agents?.defaults?.contextPruning?.mode).toBe("cache-ttl");
+      expect(snapshot.config.agents?.defaults?.compaction?.mode).toBe("safeguard");
     });
   });
 });

@@ -1,10 +1,11 @@
+// Voice Call plugin module implements manager behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { VoiceCallConfig } from "./config.js";
-import type { CallManagerContext } from "./manager/context.js";
+import type { CallManagerContext, StreamSessionIssuer } from "./manager/context.js";
 import { processEvent as processManagerEvent } from "./manager/events.js";
 import { getCallByProviderCallId as getCallByProviderCallIdFromMaps } from "./manager/lookup.js";
 import {
@@ -20,6 +21,7 @@ import {
   loadActiveCallsFromStore,
   persistCallRecord,
 } from "./manager/store.js";
+import { resolveVoiceCallSecondsTimerDelayMs } from "./manager/timer-delays.js";
 import { startMaxDurationTimer } from "./manager/timers.js";
 import type { VoiceCallProvider } from "./providers/base.js";
 import {
@@ -43,6 +45,13 @@ function incrementRestoreStatusCount(
 ): void {
   const key = normalizeOptionalString(status) ?? "terminal";
   counts.set(key, (counts.get(key) ?? 0) + 1);
+}
+
+function resolveRestoredMaxDurationAnchor(call: CallRecord): number | undefined {
+  return (
+    call.answeredAt ??
+    (call.state === "speaking" || call.state === "listening" ? call.startedAt : undefined)
+  );
 }
 
 function resolveDefaultStoreBase(config: VoiceCallConfig, storePath?: string): string {
@@ -87,6 +96,13 @@ export class CallManager {
   private maxDurationTimers = new Map<CallId, NodeJS.Timeout>();
   private initialMessageInFlight = new Set<CallId>();
 
+  /**
+   * Carrier-side stream session issuer. Wired by the runtime when realtime is
+   * enabled so the manager can pre-issue stream URLs for providers (e.g.
+   * Telnyx) that attach Media Streaming at dial or answer time.
+   */
+  streamSessionIssuer: StreamSessionIssuer | undefined;
+
   constructor(config: VoiceCallConfig, storePath?: string) {
     this.config = config;
     this.storePath = resolveDefaultStoreBase(config, storePath);
@@ -117,12 +133,13 @@ export class CallManager {
       }
     }
 
-    // Restart max-duration timers for restored calls that are past the answered state
+    // Restart max-duration timers for restored calls that are past the answered/live state.
     let skippedAlreadyElapsedTimers = 0;
     for (const [callId, call] of verified) {
-      if (call.answeredAt && !TerminalStates.has(call.state)) {
-        const elapsed = Date.now() - call.answeredAt;
-        const maxDurationMs = this.config.maxDurationSeconds * 1000;
+      const maxDurationAnchor = resolveRestoredMaxDurationAnchor(call);
+      if (maxDurationAnchor !== undefined && !TerminalStates.has(call.state)) {
+        const elapsed = Date.now() - maxDurationAnchor;
+        const maxDurationMs = resolveVoiceCallSecondsTimerDelayMs(this.config.maxDurationSeconds);
         if (elapsed >= maxDurationMs) {
           // Already expired — remove instead of keeping
           verified.delete(callId);
@@ -131,6 +148,12 @@ export class CallManager {
           }
           skippedAlreadyElapsedTimers += 1;
           continue;
+        }
+        if (call.answeredAt === undefined) {
+          // Twilio streams can restore directly in speaking/listening without an
+          // answered webhook; anchoring at startedAt preserves bounded duration.
+          call.answeredAt = maxDurationAnchor;
+          persistCallRecord(this.storePath, call);
         }
         startMaxDurationTimer({
           ctx: this.getContext(),
@@ -167,7 +190,7 @@ export class CallManager {
       return new Map();
     }
 
-    const maxAgeMs = this.config.maxDurationSeconds * 1000;
+    const maxAgeMs = resolveVoiceCallSecondsTimerDelayMs(this.config.maxDurationSeconds);
     const now = Date.now();
     const verified = new Map<CallId, CallRecord>();
     const verifyTasks: Array<{ callId: CallId; call: CallRecord; promise: Promise<void> }> = [];
@@ -196,7 +219,7 @@ export class CallManager {
             providerCallId: call.providerCallId,
             reason: "timeout",
           })
-          .catch((err) => {
+          .catch((err: unknown) => {
             console.warn(
               `[voice-call] Failed to hang up expired restored call ${callId}:`,
               err instanceof Error ? err.message : String(err),
@@ -339,6 +362,7 @@ export class CallManager {
       onCallAnswered: (call) => {
         this.maybeSpeakInitialMessageOnAnswered(call);
       },
+      streamSessionIssuer: this.streamSessionIssuer,
     };
   }
 
@@ -392,7 +416,7 @@ export class CallManager {
       return;
     }
 
-    void this.speakInitialMessage(call.providerCallId).catch((err) => {
+    void this.speakInitialMessage(call.providerCallId).catch((err: unknown) => {
       console.warn(
         `[voice-call] Failed to speak initial message for call ${call.callId}: ${formatErrorMessage(err)}`,
       );

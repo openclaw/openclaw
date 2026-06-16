@@ -1,3 +1,4 @@
+// Browser tests cover pw session plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright-core";
@@ -53,6 +54,18 @@ function fakePage(): {
   } as unknown as Page;
 
   return { page, handlers, mocks: { on, getByRole, frameLocator, locator } };
+}
+
+function firstSavePath(saveAs: MutableDownload["saveAs"]): string {
+  const [call] = saveAs.mock.calls;
+  if (!call) {
+    throw new Error("Expected saveAs call");
+  }
+  const [savedPath] = call;
+  if (typeof savedPath !== "string") {
+    throw new Error("Expected saved download path");
+  }
+  return savedPath;
 }
 
 describe("pw-session refLocator", () => {
@@ -138,11 +151,14 @@ describe("pw-session role refs cache", () => {
 describe("pw-session ensurePageState", () => {
   it("stores unmanaged downloads under unique managed paths", async () => {
     const { page, handlers } = fakePage();
-    const mkdirSpy = vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
     ensurePageState(page);
 
-    const saveAsA = vi.fn(async () => {});
-    const saveAsB = vi.fn(async () => {});
+    const saveAsA = vi.fn(async (outPath: string) => {
+      await fs.writeFile(outPath, "download-a", "utf8");
+    });
+    const saveAsB = vi.fn(async (outPath: string) => {
+      await fs.writeFile(outPath, "download-b", "utf8");
+    });
     const downloadA: MutableDownload = {
       suggestedFilename: () => "report.pdf",
       saveAs: saveAsA,
@@ -163,9 +179,20 @@ describe("pw-session ensurePageState", () => {
     expect(path.dirname(managedPathB ?? "")).toBe(DEFAULT_DOWNLOAD_DIR);
     expect(path.basename(managedPathA ?? "")).toMatch(/-report\.pdf$/);
     expect(path.basename(managedPathB ?? "")).toMatch(/-report\.pdf$/);
-    expect(saveAsA).toHaveBeenCalledWith(managedPathA);
-    expect(saveAsB).toHaveBeenCalledWith(managedPathB);
-    expect(mkdirSpy).toHaveBeenCalledWith(DEFAULT_DOWNLOAD_DIR, { recursive: true });
+    const savedPathA = firstSavePath(saveAsA);
+    const savedPathB = firstSavePath(saveAsB);
+    expect(savedPathA).not.toBe(managedPathA);
+    expect(savedPathB).not.toBe(managedPathB);
+    for (const savedPath of [savedPathA, savedPathB]) {
+      expect(savedPath.length).toBeGreaterThan(0);
+      const savedParentName = path.basename(path.dirname(savedPath));
+      expect(
+        savedParentName.includes("fs-safe-output") ||
+          savedParentName === path.basename(DEFAULT_DOWNLOAD_DIR),
+      ).toBe(true);
+    }
+    await expect(fs.readFile(managedPathA ?? "", "utf8")).resolves.toBe("download-a");
+    await expect(fs.readFile(managedPathB ?? "", "utf8")).resolves.toBe("download-b");
   });
 
   it("suppresses unmanaged download save rejections until path is awaited", async () => {
@@ -186,9 +213,11 @@ describe("pw-session ensurePageState", () => {
 
     try {
       handlers.get("download")?.[0]?.(download);
-      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
 
-      expect(unhandled).toEqual([]);
+      expect(unhandled).toStrictEqual([]);
       await expect(download.path?.()).rejects.toThrow("save failed");
     } finally {
       process.off("unhandledRejection", onUnhandled);
@@ -233,14 +262,13 @@ describe("pw-session ensurePageState", () => {
     handlers.get("pageerror")?.[0]?.(new Error("boom"));
 
     expect(state.errors.at(-1)?.message).toBe("boom");
-    expect(state.requests.at(-1)).toMatchObject({
-      method: "GET",
-      url: "https://example.com/api",
-      resourceType: "xhr",
-      status: 500,
-      ok: false,
-      failureText: "net::ERR_FAILED",
-    });
+    const request = state.requests.at(-1);
+    expect(request?.method).toBe("GET");
+    expect(request?.url).toBe("https://example.com/api");
+    expect(request?.resourceType).toBe("xhr");
+    expect(request?.status).toBe(500);
+    expect(request?.ok).toBe(false);
+    expect(request?.failureText).toBe("net::ERR_FAILED");
   });
 
   it("drops state on page close", () => {
@@ -250,8 +278,8 @@ describe("pw-session ensurePageState", () => {
 
     const state2 = ensurePageState(page);
     expect(state2).not.toBe(state1);
-    expect(state2.console).toEqual([]);
-    expect(state2.errors).toEqual([]);
-    expect(state2.requests).toEqual([]);
+    expect(state2.console).toStrictEqual([]);
+    expect(state2.errors).toStrictEqual([]);
+    expect(state2.requests).toStrictEqual([]);
   });
 });

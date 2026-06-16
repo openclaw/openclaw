@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements session behavior.
 export {
   BufferJSON,
   DisconnectReason,
@@ -5,4 +6,4 @@ export {
   makeCacheableSignalKeyStore,
   makeWASocket,
   useMultiFileAuthState,
-} from "@whiskeysockets/baileys";
+} from "baileys";

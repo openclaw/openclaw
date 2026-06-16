@@ -1,8 +1,16 @@
+/**
+ * Runtime external auth profile overlays.
+ * Combines provider plugin auth profiles with scoped external CLI credentials
+ * and decides which runtime profiles may be persisted back to the store.
+ */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderExternalAuthProfile } from "../../plugins/provider-external-auth.types.js";
 import { resolveExternalAuthProfilesWithPlugins } from "../../plugins/provider-runtime.js";
+import { cloneAuthProfileStore } from "./clone.js";
+import { CLAUDE_CLI_PROFILE_ID, MINIMAX_CLI_PROFILE_ID } from "./constants.js";
 import * as externalCliSync from "./external-cli-sync.js";
 import {
+  areOAuthCredentialsEquivalent,
   overlayRuntimeExternalOAuthProfiles,
   shouldPersistRuntimeExternalOAuthProfile,
   type RuntimeExternalOAuthProfile,
@@ -20,7 +28,8 @@ type ExternalCliOverlayOptions = {
 
 let resolveExternalAuthProfilesForRuntime: ResolveExternalAuthProfiles | undefined;
 
-export const __testing = {
+/** Test-only resolver injection for provider external auth profiles. */
+export const testing = {
   resetResolveExternalAuthProfilesForTest(): void {
     resolveExternalAuthProfilesForRuntime = undefined;
   },
@@ -73,7 +82,7 @@ function resolveExternalAuthProfileMap(params: {
     resolved.set(profile.profileId, {
       profileId: profile.profileId,
       credential: profile.credential,
-      persistence: "runtime-only",
+      persistence: profile.persistence ?? "runtime-only",
     });
   }
   for (const rawProfile of profiles) {
@@ -86,7 +95,8 @@ function resolveExternalAuthProfileMap(params: {
   return resolved;
 }
 
-function listRuntimeExternalAuthProfiles(params: {
+/** List runtime-only and persisted external auth profiles for this store. */
+export function listRuntimeExternalAuthProfiles(params: {
   store: AuthProfileStore;
   agentDir?: string;
   env?: NodeJS.ProcessEnv;
@@ -102,6 +112,27 @@ function listRuntimeExternalAuthProfiles(params: {
   );
 }
 
+function hasPersistableExternalCliSyncCandidate(
+  store: AuthProfileStore,
+  params?: ExternalCliOverlayOptions,
+): boolean {
+  if (params?.externalCliProviderIds || params?.externalCliProfileIds) {
+    return true;
+  }
+  for (const profileId of [CLAUDE_CLI_PROFILE_ID, MINIMAX_CLI_PROFILE_ID]) {
+    const credential = store.profiles[profileId];
+    if (credential?.type === "oauth") {
+      return true;
+    }
+  }
+  return false;
+}
+
+function hasScopedExternalCliOverlay(params?: ExternalCliOverlayOptions): boolean {
+  return Boolean(params?.externalCliProviderIds || params?.externalCliProfileIds);
+}
+
+/** Overlay external auth profiles onto a cloned auth store for runtime use. */
 export function overlayExternalAuthProfiles(
   store: AuthProfileStore,
   params?: { agentDir?: string; env?: NodeJS.ProcessEnv } & ExternalCliOverlayOptions,
@@ -112,9 +143,12 @@ export function overlayExternalAuthProfiles(
     env: params?.env,
     externalCli: params,
   });
-  return overlayRuntimeExternalOAuthProfiles(store, profiles);
+  return overlayRuntimeExternalOAuthProfiles(store, profiles, {
+    runtimeExternalProfileIdsAuthoritative: !hasScopedExternalCliOverlay(params),
+  });
 }
 
+/** Return whether an external runtime OAuth profile should be persisted. */
 export function shouldPersistExternalAuthProfile(params: {
   store: AuthProfileStore;
   profileId: string;
@@ -142,6 +176,39 @@ export function shouldPersistExternalAuthProfile(params: {
   });
 }
 
+/** Persist safe external CLI OAuth profiles that own their local profile slot. */
+export function syncPersistedExternalCliAuthProfiles(
+  store: AuthProfileStore,
+  params?: { agentDir?: string; env?: NodeJS.ProcessEnv } & ExternalCliOverlayOptions,
+): AuthProfileStore {
+  if (!hasPersistableExternalCliSyncCandidate(store, params)) {
+    return store;
+  }
+  const cliProfiles =
+    externalCliSync.resolveExternalCliAuthProfiles?.(store, {
+      allowKeychainPrompt: params?.allowKeychainPrompt,
+      providerIds: params?.externalCliProviderIds,
+      profileIds: params?.externalCliProfileIds,
+    }) ?? [];
+  const persistedProfiles = cliProfiles.filter((profile) => profile.persistence === "persisted");
+  if (persistedProfiles.length === 0) {
+    return store;
+  }
+
+  let next: AuthProfileStore | undefined;
+  for (const profile of persistedProfiles) {
+    const target = next ?? store;
+    const existing = target.profiles[profile.profileId];
+    if (existing?.type === "oauth" && areOAuthCredentialsEquivalent(existing, profile.credential)) {
+      continue;
+    }
+    next ??= cloneAuthProfileStore(store);
+    next.profiles[profile.profileId] = profile.credential;
+  }
+  return next ?? store;
+}
+
 // Compat aliases while file/function naming catches up.
 export const overlayExternalOAuthProfiles = overlayExternalAuthProfiles;
 export const shouldPersistExternalOAuthProfile = shouldPersistExternalAuthProfile;
+export { testing as __testing };

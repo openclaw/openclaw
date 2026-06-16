@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements outbound media behavior.
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 
 export async function loadOutboundMediaFromUrl(
@@ -10,6 +11,7 @@ export async function loadOutboundMediaFromUrl(
     };
     mediaLocalRoots?: readonly string[];
     mediaReadFile?: (filePath: string) => Promise<Buffer>;
+    optimizeImages?: boolean;
   } = {},
 ) {
   const readFile = options.mediaAccess?.readFile ?? options.mediaReadFile;
@@ -19,17 +21,21 @@ export async function loadOutboundMediaFromUrl(
       : options.mediaLocalRoots && options.mediaLocalRoots.length > 0
         ? options.mediaLocalRoots
         : undefined;
+  const sharedOptions = {
+    ...(options.maxBytes !== undefined ? { maxBytes: options.maxBytes } : {}),
+    ...(options.optimizeImages !== undefined ? { optimizeImages: options.optimizeImages } : {}),
+  };
   return await loadWebMedia(
     mediaUrl,
     readFile
       ? {
-          ...(options.maxBytes !== undefined ? { maxBytes: options.maxBytes } : {}),
+          ...sharedOptions,
           localRoots: "any",
           readFile,
           hostReadCapability: true,
         }
       : {
-          ...(options.maxBytes !== undefined ? { maxBytes: options.maxBytes } : {}),
+          ...sharedOptions,
           ...(localRoots ? { localRoots } : {}),
         },
   );

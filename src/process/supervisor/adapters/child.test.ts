@@ -1,3 +1,4 @@
+// Child adapter tests cover adapting child processes to supervisor runs.
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
@@ -76,6 +77,36 @@ async function createAdapterHarness(params?: {
   return { adapter, killMock };
 }
 
+type SpawnWithFallbackParams = {
+  argv?: string[];
+  options?: {
+    detached?: boolean;
+    env?: NodeJS.ProcessEnv | Record<string, string>;
+    stdio?: string[];
+  };
+  fallbacks?: Array<{ options?: { detached?: boolean } }>;
+};
+
+function firstSpawnWithFallbackParams(): SpawnWithFallbackParams {
+  const [call] = spawnWithFallbackMock.mock.calls;
+  if (!call) {
+    throw new Error("expected spawnWithFallback call");
+  }
+  const [params] = call;
+  if (typeof params !== "object" || params === null || Array.isArray(params)) {
+    throw new Error("expected spawnWithFallback params to be an object");
+  }
+  return params;
+}
+
+function firstMockArg(mock: { mock: { calls: readonly unknown[][] } }, label: string): unknown {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call[0];
+}
+
 describe("createChildAdapter", () => {
   const originalServiceMarker = process.env.OPENCLAW_SERVICE_MARKER;
   const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
@@ -121,15 +152,12 @@ describe("createChildAdapter", () => {
   it("uses process-tree kill for default SIGKILL", async () => {
     const { adapter, killMock } = await createAdapterHarness({ pid: 4321 });
 
-    const spawnArgs = spawnWithFallbackMock.mock.calls[0]?.[0] as {
-      options?: { detached?: boolean };
-      fallbacks?: Array<{ options?: { detached?: boolean } }>;
-    };
+    const spawnArgs = firstSpawnWithFallbackParams();
     // On Windows, detached defaults to false (headless Scheduled Task compat);
     // on POSIX, detached is true with a no-detach fallback.
     if (process.platform === "win32") {
       expect(spawnArgs.options?.detached).toBe(false);
-      expect(spawnArgs.fallbacks).toEqual([]);
+      expect(spawnArgs.fallbacks).toStrictEqual([]);
     } else {
       expect(spawnArgs.options?.detached).toBe(true);
       expect(spawnArgs.fallbacks?.[0]?.options?.detached).toBe(false);
@@ -137,6 +165,8 @@ describe("createChildAdapter", () => {
 
     adapter.kill();
 
+    // Detachment flag is now passed to signalProcessTree so it knows whether
+    // it can safely group-kill via -pid. (#71662)
     const expectedDetached = process.platform !== "win32" && !process.env.OPENCLAW_SERVICE_MARKER;
     expect(signalProcessTreeMock).toHaveBeenCalledWith(4321, "SIGKILL", {
       detached: expectedDetached,
@@ -145,6 +175,9 @@ describe("createChildAdapter", () => {
   });
 
   it("passes detached:false to signalProcessTree when spawn fell back to no-detach (#71662 follow-up)", async () => {
+    // Simulate the fallback scenario: spawnWithFallback retried with
+    // detached:false because the initial detached spawn failed. The kill
+    // closure must NOT group-kill since the child shares the gateway's group.
     const { child, killMock } = createStubChild(8888);
     spawnWithFallbackMock.mockResolvedValue({
       child,
@@ -175,7 +208,7 @@ describe("createChildAdapter", () => {
     }
   });
 
-  it("uses process-tree signal for graceful SIGTERM", async () => {
+  it("uses process-tree kill for graceful SIGTERM cancellation", async () => {
     const { adapter, killMock } = await createAdapterHarness({ pid: 7654 });
 
     adapter.kill("SIGTERM");
@@ -185,6 +218,87 @@ describe("createChildAdapter", () => {
       detached: expectedDetached,
     });
     expect(killMock).not.toHaveBeenCalled();
+  });
+
+  it("passes detached:false to process-tree SIGTERM when spawn fell back to no-detach", async () => {
+    const { child, killMock } = createStubChild(8765);
+    spawnWithFallbackMock.mockResolvedValue({
+      child,
+      usedFallback: true,
+      fallbackLabel: "no-detach",
+    });
+    const adapter = await createChildAdapter({
+      argv: ["node", "-e", "setTimeout(() => {}, 1000)"],
+      stdinMode: "pipe-open",
+    });
+
+    adapter.kill("SIGTERM");
+
+    expect(signalProcessTreeMock).toHaveBeenCalledWith(8765, "SIGTERM", {
+      detached: false,
+    });
+    expect(killMock).not.toHaveBeenCalled();
+  });
+
+  it("uses direct child.kill for non-SIGTERM and non-SIGKILL signals", async () => {
+    const { adapter, killMock } = await createAdapterHarness({ pid: 7654 });
+
+    adapter.kill("SIGINT");
+
+    expect(signalProcessTreeMock).not.toHaveBeenCalled();
+    expect(killMock).toHaveBeenCalledWith("SIGINT");
+  });
+
+  it("preserves inherited stdin when no input pipe is requested", async () => {
+    const { child } = createStubChild(5656);
+    child.stdin = null;
+    spawnWithFallbackMock.mockResolvedValue({
+      child,
+      usedFallback: false,
+    });
+
+    const adapter = await createChildAdapter({
+      argv: ["node", "-e", "setTimeout(() => {}, 1000)"],
+    });
+
+    const spawnArgs = firstSpawnWithFallbackParams();
+    expect(spawnArgs.options?.stdio?.[0]).toBe("inherit");
+    expect(adapter.stdin).toBeUndefined();
+  });
+
+  it("reports stdin as non-writable after end or destroy", async () => {
+    const { adapter } = await createAdapterHarness({ pid: 6767 });
+
+    expect(adapter.stdin?.writable).toBe(true);
+    expect(adapter.stdin?.writableEnded).toBe(false);
+
+    adapter.stdin?.end();
+    expect(adapter.stdin?.writable).toBe(false);
+    expect(adapter.stdin?.writableEnded).toBe(true);
+
+    const writeCallback = vi.fn();
+    adapter.stdin?.write("late", writeCallback);
+    expect(firstMockArg(writeCallback, "write callback")).toBeInstanceOf(Error);
+
+    adapter.stdin?.destroy?.();
+    expect(adapter.stdin?.destroyed).toBe(true);
+    expect(adapter.stdin?.writable).toBe(false);
+  });
+
+  it("reports pipe-closed stdin as ended", async () => {
+    const { child } = createStubChild(3434);
+    spawnWithFallbackMock.mockResolvedValue({
+      child,
+      usedFallback: false,
+    });
+
+    const adapter = await createChildAdapter({
+      argv: ["node", "-e", "process.exit(0)"],
+      stdinMode: "pipe-closed",
+    });
+
+    expect(adapter.stdin?.writable).toBe(false);
+    expect(adapter.stdin?.writableEnded).toBe(true);
   });
 
   it("wait does not settle immediately on SIGKILL", async () => {
@@ -204,12 +318,12 @@ describe("createChildAdapter", () => {
         child: stub.child,
         usedFallback: false,
       });
-      const adapter = await createChildAdapter({
+      const adapterValue = await createChildAdapter({
         argv: ["node", "-e", "setTimeout(() => {}, 1000)"],
         env: { PATH: "/usr/bin" },
         stdinMode: "pipe-open",
       });
-      return { ...stub, adapter };
+      return { ...stub, adapter: adapterValue };
     })();
 
     await expectRealExitWinsOverSigkillFallback({
@@ -235,12 +349,12 @@ describe("createChildAdapter", () => {
         child: stub.child,
         usedFallback: false,
       });
-      const adapter = await createChildAdapter({
+      const adapterLocal = await createChildAdapter({
         argv: ["openclaw", "version"],
         env: { PATH: "/usr/bin" },
         stdinMode: "pipe-closed",
       });
-      return { ...stub, adapter };
+      return { ...stub, adapter: adapterLocal };
     })();
 
     const settled = vi.fn();
@@ -261,12 +375,9 @@ describe("createChildAdapter", () => {
 
     await createAdapterHarness({ pid: 7777 });
 
-    const spawnArgs = spawnWithFallbackMock.mock.calls[0]?.[0] as {
-      options?: { detached?: boolean };
-      fallbacks?: Array<{ options?: { detached?: boolean } }>;
-    };
+    const spawnArgs = firstSpawnWithFallbackParams();
     expect(spawnArgs.options?.detached).toBe(false);
-    expect(spawnArgs.fallbacks ?? []).toEqual([]);
+    expect(spawnArgs.fallbacks ?? []).toStrictEqual([]);
   });
 
   it("requires explicit env on non-Linux", async () => {
@@ -277,10 +388,7 @@ describe("createChildAdapter", () => {
       argv: ["node", "-e", "process.exit(0)"],
     });
 
-    const spawnArgs = spawnWithFallbackMock.mock.calls[0]?.[0] as {
-      argv?: string[];
-      options?: { env?: NodeJS.ProcessEnv };
-    };
+    const spawnArgs = firstSpawnWithFallbackParams();
     expect(spawnArgs.argv).toEqual(["node", "-e", "process.exit(0)"]);
     expect(spawnArgs.options?.env).toEqual({ PATH: "/usr/bin" });
   });
@@ -316,10 +424,7 @@ describe("createChildAdapter", () => {
       }
     }
 
-    const spawnArgs = spawnWithFallbackMock.mock.calls[0]?.[0] as {
-      argv?: string[];
-      options?: { env?: NodeJS.ProcessEnv };
-    };
+    const spawnArgs = firstSpawnWithFallbackParams();
     expect(spawnArgs.argv?.slice(0, 4)).toEqual([
       "/bin/sh",
       "-c",
@@ -327,10 +432,12 @@ describe("createChildAdapter", () => {
       "/usr/bin/node",
     ]);
     expect(spawnArgs.argv?.slice(4)).toEqual(["-e", "process.exit(0)"]);
-    expect(spawnArgs.options?.env).toBeDefined();
-    expect(spawnArgs.options?.env?.BASH_ENV).toBeUndefined();
-    expect(spawnArgs.options?.env?.ENV).toBeUndefined();
-    expect(spawnArgs.options?.env?.CDPATH).toBeUndefined();
+    if (!spawnArgs.options?.env) {
+      throw new Error("expected child process env options");
+    }
+    expect(spawnArgs.options.env.BASH_ENV).toBeUndefined();
+    expect(spawnArgs.options.env.ENV).toBeUndefined();
+    expect(spawnArgs.options.env.CDPATH).toBeUndefined();
   });
 
   it("passes explicit env overrides as strings", async () => {
@@ -340,9 +447,7 @@ describe("createChildAdapter", () => {
       env: { FOO: "bar", COUNT: "12", DROP_ME: undefined },
     });
 
-    const spawnArgs = spawnWithFallbackMock.mock.calls[0]?.[0] as {
-      options?: { env?: Record<string, string> };
-    };
+    const spawnArgs = firstSpawnWithFallbackParams();
     expect(spawnArgs.options?.env).toEqual({ FOO: "bar", COUNT: "12" });
   });
 

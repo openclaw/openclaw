@@ -54,32 +54,32 @@ Legend:
 
 ### Media delivery with block streaming
 
-`MEDIA:` directives are normal delivery metadata. When block streaming sends a
-media block early, OpenClaw remembers that delivery for the turn. If the final
-assistant payload repeats the same media URL, the final delivery strips the
-duplicate media instead of sending the attachment again.
+Streaming media must use structured payload fields such as `mediaUrl` or
+`mediaUrls`; streamed text is not parsed as an attachment command. When block
+streaming sends media early, OpenClaw remembers that delivery for the turn. If
+the final assistant payload repeats the same media URL, the final delivery
+strips the duplicate media instead of sending the attachment again.
 
 Exact duplicate final payloads are suppressed. If the final payload adds
 distinct text around media that was already streamed, OpenClaw still sends the
 new text while keeping the media single-delivery. This prevents duplicate voice
-notes or files on channels such as Telegram when an agent emits `MEDIA:` during
-streaming and the provider also includes it in the completed reply.
+notes or files on channels such as Telegram.
 
 ## Chunking algorithm (low/high bounds)
 
 Block chunking is implemented by `EmbeddedBlockChunker`:
 
-- **Low bound:** don’t emit until buffer >= `minChars` (unless forced).
+- **Low bound:** don't emit until buffer >= `minChars` (unless forced).
 - **High bound:** prefer splits before `maxChars`; if forced, split at `maxChars`.
 - **Break preference:** `paragraph` → `newline` → `sentence` → `whitespace` → hard break.
 - **Code fences:** never split inside fences; when forced at `maxChars`, close + reopen the fence to keep Markdown valid.
 
-`maxChars` is clamped to the channel `textChunkLimit`, so you can’t exceed per-channel caps.
+`maxChars` is clamped to the channel `textChunkLimit`, so you can't exceed per-channel caps.
 
 ## Coalescing (merge streamed blocks)
 
 When block streaming is enabled, OpenClaw can **merge consecutive block chunks**
-before sending them out. This reduces “single-line spam” while still providing
+before sending them out. This reduces "single-line spam" while still providing
 progressive output.
 
 - Coalescing waits for **idle gaps** (`idleMs`) before flushing.
@@ -98,7 +98,7 @@ block replies (after the first block). This makes multi-bubble responses feel
 more natural.
 
 - Config: `agents.defaults.humanDelay` (override per agent via `agents.list[].humanDelay`).
-- Modes: `off` (default), `natural` (800–2500ms), `custom` (`minMs`/`maxMs`).
+- Modes: `off` (default), `natural` (800-2500ms), `custom` (`minMs`/`maxMs`).
 - Applies only to **block replies**, not final replies or tool summaries.
 
 ## "Stream chunks or everything"
@@ -152,15 +152,18 @@ Slack-only:
 Legacy key migration:
 
 - Telegram: legacy `streamMode` and scalar/boolean `streaming` values are detected and migrated by doctor/config compatibility paths to `streaming.mode`.
-- Discord: `streamMode` + boolean `streaming` auto-migrate to `streaming` enum.
-- Slack: `streamMode` auto-migrates to `streaming.mode`; boolean `streaming` auto-migrates to `streaming.mode` plus `streaming.nativeTransport`; legacy `nativeStreaming` auto-migrates to `streaming.nativeTransport`.
+- Discord: `streamMode` + boolean `streaming` remain runtime aliases for the `streaming` enum; run `openclaw doctor --fix` to rewrite persisted config.
+- Slack: `streamMode` remains a runtime alias for `streaming.mode`; boolean `streaming` remains a runtime alias for `streaming.mode` plus `streaming.nativeTransport`; legacy `nativeStreaming` remains a runtime alias for `streaming.nativeTransport`. Run `openclaw doctor --fix` to rewrite persisted config.
 
 ### Runtime behavior
 
 Telegram:
 
 - Uses `sendMessage` + `editMessageText` preview updates across DMs and group/topics.
-- Sends a fresh final message instead of editing in place when a preview has been visible for about one minute, then cleans up the preview so Telegram's timestamp reflects reply completion.
+- Final text edits the active preview in place; long finals reuse that message for the first chunk and send only the remaining chunks.
+- `block` mode rotates the preview into a new message at `streaming.preview.chunk.maxChars` (default 800, capped at Telegram's 4096 edit limit); other modes grow one preview up to 4096 characters.
+- `progress` mode keeps tool progress in an editable status draft, clears that draft at completion, and sends the final answer through normal delivery.
+- If the final edit fails before the completed text is confirmed, OpenClaw uses normal final delivery and cleans up the stale preview.
 - Preview streaming is skipped when Telegram block streaming is explicitly enabled (to avoid double-streaming).
 - `/reasoning stream` can write reasoning to a transient preview that is deleted after final delivery.
 
@@ -193,11 +196,17 @@ Matrix:
 
 ### Tool-progress preview updates
 
-Preview streaming can also include **tool-progress** updates — short status lines like "searching the web", "reading file", or "calling tool" — that appear in the same preview message while tools are running, ahead of the final reply. This keeps multi-step tool turns visually alive rather than silent between the first thinking preview and the final answer.
+Preview streaming can also include **tool-progress** updates - short status lines like "searching the web", "reading file", or "calling tool" - that appear in the same preview message while tools are running, ahead of the final reply. In Codex app-server mode, Codex preamble/commentary messages use this same preview path, so short "I am checking..." progress notes can stream into the editable draft without becoming part of the final answer. This keeps multi-step tool turns visually alive rather than silent between the first thinking preview and the final answer.
+
+Long-running tools may emit typed progress before they return. For example,
+`web_fetch` arms a five-second timer when it starts: if the fetch is still
+pending, the preview can show `Fetching page content...`; if the fetch finishes
+or is canceled before then, no progress line is emitted. The later final tool
+result is still delivered normally to the model.
 
 Supported surfaces:
 
-- **Discord**, **Slack**, **Telegram**, and **Matrix** stream tool-progress into the live preview edit by default when preview streaming is active. Microsoft Teams uses its native progress stream in personal chats.
+- **Discord**, **Slack**, **Telegram**, and **Matrix** stream tool-progress and Codex preamble updates into the live preview edit by default when preview streaming is active. Microsoft Teams uses its native progress stream in personal chats.
 - Telegram has shipped with tool-progress preview updates enabled since `v2026.4.22`; keeping them enabled preserves that released behavior.
 - **Mattermost** already folds tool activity into its single draft preview post (see above).
 - Tool-progress edits follow the active preview streaming mode; they are skipped when preview streaming is `off` or when block streaming has taken over the message. On Telegram, `streaming.mode: "off"` is final-only: generic progress chatter is also suppressed instead of being delivered as standalone status messages, while approval prompts, media payloads, and errors still route normally.
@@ -242,7 +251,8 @@ Use the same shape under another compact progress channel key, for example `chan
 
 ## Related
 
-- [Progress drafts](/concepts/progress-drafts) — visible work-in-progress messages that update during long turns
-- [Messages](/concepts/messages) — message lifecycle and delivery
-- [Retry](/concepts/retry) — retry behavior on delivery failure
-- [Channels](/channels) — per-channel streaming support
+- [Message lifecycle refactor](/concepts/message-lifecycle-refactor) - target shared preview, edit, stream, and finalization design
+- [Progress drafts](/concepts/progress-drafts) - visible work-in-progress messages that update during long turns
+- [Messages](/concepts/messages) - message lifecycle and delivery
+- [Retry](/concepts/retry) - retry behavior on delivery failure
+- [Channels](/channels) - per-channel streaming support

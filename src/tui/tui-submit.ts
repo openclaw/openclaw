@@ -1,4 +1,5 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+// Handles TUI input submission and command dispatch.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 export function createEditorSubmitHandler(params: {
   editor: {
@@ -8,14 +9,16 @@ export function createEditorSubmitHandler(params: {
   handleCommand: (value: string) => Promise<void> | void;
   sendMessage: (value: string) => Promise<void> | void;
   handleBangLine: (value: string) => Promise<void> | void;
+  canSubmitMessage?: (value: string) => boolean;
+  onBlockedMessageSubmit?: (value: string) => void;
 }) {
   return (text: string) => {
     const raw = text;
     const value = raw.trim();
-    params.editor.setText("");
 
     // Keep previous behavior: ignore empty/whitespace-only submissions.
     if (!value) {
+      params.editor.setText("");
       return;
     }
 
@@ -23,19 +26,29 @@ export function createEditorSubmitHandler(params: {
     // IMPORTANT: use the raw (untrimmed) text so leading spaces do NOT trigger.
     // Per requirement: a lone '!' should be treated as a normal message.
     if (raw.startsWith("!") && raw !== "!") {
+      params.editor.setText("");
       params.editor.addToHistory(raw);
       void params.handleBangLine(raw);
       return;
     }
 
-    // Enable built-in editor prompt history navigation (up/down).
-    params.editor.addToHistory(value);
-
     if (value.startsWith("/")) {
+      params.editor.setText("");
+      // Enable built-in editor prompt history navigation (up/down).
+      params.editor.addToHistory(value);
       void params.handleCommand(value);
       return;
     }
 
+    if (params.canSubmitMessage && !params.canSubmitMessage(value)) {
+      params.editor.setText(value);
+      params.onBlockedMessageSubmit?.(value);
+      return;
+    }
+
+    params.editor.setText("");
+    // Enable built-in editor prompt history navigation (up/down).
+    params.editor.addToHistory(value);
     void params.sendMessage(value);
   };
 }

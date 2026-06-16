@@ -1,3 +1,10 @@
+/**
+ * Session cleanup command.
+ *
+ * It can delegate cleanup to a live gateway or run local store maintenance,
+ * with dry-run tables that explain every planned pruning action.
+ */
+import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { getRuntimeConfig } from "../config/config.js";
 import {
   resolveSessionCleanupAction,
@@ -10,7 +17,6 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway, isGatewayTransportError } from "../gateway/call.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import { isRich, theme } from "../terminal/theme.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { resolveSessionStoreTargetsOrExit } from "./session-store-targets.js";
 import { resolveSessionDisplayModel } from "./sessions-display-model.js";
@@ -25,7 +31,7 @@ import {
   toSessionDisplayRows,
 } from "./sessions-table.js";
 
-const ACTION_PAD = 12;
+const ACTION_PAD = 16;
 
 type SessionCleanupActionRow = ReturnType<typeof toSessionDisplayRows>[number] & {
   action: ReturnType<typeof resolveSessionCleanupAction>;
@@ -48,6 +54,9 @@ function formatCleanupActionCell(
   if (action === "prune-stale") {
     return theme.warn(label);
   }
+  if (action === "retire-dm-scope") {
+    return theme.warn(label);
+  }
   if (action === "cap-overflow") {
     return theme.accentBright(label);
   }
@@ -60,7 +69,10 @@ function buildActionRows(params: {
   staleKeys: Set<string>;
   cappedKeys: Set<string>;
   budgetEvictedKeys: Set<string>;
+  dmScopeRetiredKeys: Set<string>;
 }): SessionCleanupActionRow[] {
+  // Recompute row actions from the preview sets so dry-run output uses the same
+  // action labels as the cleanup engine without mutating the preview store.
   return toSessionDisplayRows(params.beforeStore).map((row) =>
     Object.assign({}, row, {
       action: resolveSessionCleanupAction({
@@ -69,6 +81,7 @@ function buildActionRows(params: {
         staleKeys: params.staleKeys,
         cappedKeys: params.cappedKeys,
         budgetEvictedKeys: params.budgetEvictedKeys,
+        dmScopeRetiredKeys: params.dmScopeRetiredKeys,
       }),
     }),
   );
@@ -91,8 +104,14 @@ function renderStoreDryRunPlan(params: {
     `Entries: ${params.summary.beforeCount} -> ${params.summary.afterCount} (remove ${params.summary.beforeCount - params.summary.afterCount})`,
   );
   params.runtime.log(`Would prune missing transcripts: ${params.summary.missing}`);
+  params.runtime.log(`Would retire stale direct DM sessions: ${params.summary.dmScopeRetired}`);
   params.runtime.log(`Would prune stale: ${params.summary.pruned}`);
   params.runtime.log(`Would cap overflow: ${params.summary.capped}`);
+  if (params.summary.unreferencedArtifacts?.scannedFiles) {
+    params.runtime.log(
+      `Would prune unreferenced artifacts: ${params.summary.unreferencedArtifacts.removedFiles}`,
+    );
+  }
   if (params.summary.diskBudget) {
     params.runtime.log(
       `Would enforce disk budget: ${params.summary.diskBudget.totalBytesBefore} -> ${params.summary.diskBudget.totalBytesAfter} bytes (files ${params.summary.diskBudget.removedFiles}, entries ${params.summary.diskBudget.removedEntries})`,
@@ -141,6 +160,11 @@ function renderAppliedSummaries(params: {
     }
     params.runtime.log(`Session store: ${summary.storePath}`);
     params.runtime.log(`Applied maintenance. Current entries: ${summary.appliedCount ?? 0}`);
+    if (summary.unreferencedArtifacts?.removedFiles) {
+      params.runtime.log(
+        `Pruned unreferenced artifacts: ${summary.unreferencedArtifacts.removedFiles}`,
+      );
+    }
   }
 }
 
@@ -148,6 +172,8 @@ async function maybeRunGatewayCleanup(
   opts: SessionsCleanupOptions,
 ): Promise<SessionsCleanupResult | null> {
   if (opts.store || opts.dryRun) {
+    // Explicit store paths and dry-runs must stay local; the gateway only owns
+    // live in-process cleanup for default stores.
     return null;
   }
   try {
@@ -159,6 +185,7 @@ async function maybeRunGatewayCleanup(
         enforce: opts.enforce,
         activeKey: opts.activeKey,
         fixMissing: opts.fixMissing,
+        fixDmScope: opts.fixDmScope,
       },
       mode: GATEWAY_CLIENT_MODES.CLI,
       clientName: GATEWAY_CLIENT_NAMES.CLI,
@@ -166,12 +193,15 @@ async function maybeRunGatewayCleanup(
     });
   } catch (error) {
     if (isGatewayTransportError(error)) {
+      // A stopped gateway should not block local maintenance; fall back to the
+      // on-disk session stores when transport is unavailable.
       return null;
     }
     throw error;
   }
 }
 
+/** Runs session cleanup, optionally using the live gateway for active stores. */
 export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runtime: RuntimeEnv) {
   const gatewayResult = await maybeRunGatewayCleanup(opts);
   if (gatewayResult) {
