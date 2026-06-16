@@ -1297,14 +1297,18 @@ export const registerTelegramHandlers = ({
   const resolveReplyMediaForChain = async (
     ctx: TelegramContext,
     chain: TelegramCachedMessageNode[],
-    shouldHydrateMedia: (node: TelegramCachedMessageNode) => Promise<boolean>,
+    shouldHydrateMedia: (node: TelegramCachedMessageNode, index: number) => Promise<boolean>,
   ): Promise<{ replyMedia: TelegramMediaRef[]; replyChain: TelegramReplyChainEntry[] }> => {
     const replyMedia: TelegramMediaRef[] = [];
     const replyChain: TelegramReplyChainEntry[] = [];
-    for (const node of chain) {
+    for (const [index, node] of chain.entries()) {
       let mediaRef: TelegramMediaRef | undefined;
       const replyFileId = resolveInboundMediaFileId(node.sourceMessage);
-      if (replyFileId && hasInboundMedia(node.sourceMessage) && (await shouldHydrateMedia(node))) {
+      if (
+        replyFileId &&
+        hasInboundMedia(node.sourceMessage) &&
+        (await shouldHydrateMedia(node, index))
+      ) {
         try {
           const media = await resolveMedia({
             ctx: {
@@ -1378,8 +1382,11 @@ export const registerTelegramHandlers = ({
         channel: "telegram",
         accountId,
       });
-      const shouldHydrateReplyMedia = async (node: TelegramCachedMessageNode): Promise<boolean> => {
-        if (!isGroupConversation || contextVisibilityMode !== "allowlist") {
+      const shouldHydrateReplyMedia = async (
+        node: TelegramCachedMessageNode,
+        index: number,
+      ): Promise<boolean> => {
+        if (!isGroupConversation) {
           return true;
         }
         const expandedAllowFrom = await expandTelegramAllowFromWithAccessGroups({
@@ -1398,7 +1405,7 @@ export const registerTelegramHandlers = ({
           : true;
         return evaluateSupplementalContextVisibility({
           mode: contextVisibilityMode,
-          kind: "quote",
+          kind: index === 0 ? "quote" : "thread",
           senderAllowed,
         }).include;
       };

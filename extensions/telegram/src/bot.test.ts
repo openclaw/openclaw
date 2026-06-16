@@ -2277,10 +2277,33 @@ describe("createTelegramBot", () => {
     expect(mediaFetch).toHaveBeenCalledTimes(1);
   });
 
-  it("hydrates bot reply targets cached from earlier Telegram replies", async () => {
+  it.each([
+    {
+      name: "hydrates allowlisted group reply ancestors",
+      allowFrom: ["1", "999"],
+      expectHydrated: true,
+      chatId: 7,
+    },
+    {
+      name: "does not hydrate unallowlisted group reply ancestors through quote override",
+      allowFrom: ["1"],
+      expectHydrated: false,
+      chatId: 8,
+    },
+  ])("$name", async ({ allowFrom, expectHydrated, chatId }) => {
     onSpy.mockClear();
     replySpy.mockClear();
     getFileSpy.mockClear();
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          contextVisibility: "allowlist_quote",
+          includeGroupHistoryContext: "recent",
+          allowFrom,
+        },
+      },
+    });
 
     const mediaFetch = vi.fn(
       async () =>
@@ -2305,7 +2328,7 @@ describe("createTelegramBot", () => {
         me: { id: 999, username: "openclaw_bot" },
         getFile: async () => ({ download: async () => new Uint8Array() }),
       };
-      const chat = { id: 7, type: "group", title: "Ops" };
+      const chat = { id: chatId, type: "group", title: "Ops" };
 
       await handler({
         ...baseCtx,
@@ -2372,9 +2395,14 @@ describe("createTelegramBot", () => {
       sender: "OpenClaw",
       body: "Done, here is the image",
     });
-    expect(payload.ReplyChain?.[1]?.mediaPath).toBeTypeOf("string");
-    expect(payload.ReplyChain?.[1]?.mediaPath).toContain("/media/inbound/");
-    expect(payload.ReplyChain?.[1]?.mediaRef).toBeUndefined();
+    if (expectHydrated) {
+      expect(payload.ReplyChain?.[1]?.mediaPath).toBeTypeOf("string");
+      expect(payload.ReplyChain?.[1]?.mediaPath).toContain("/media/inbound/");
+      expect(payload.ReplyChain?.[1]?.mediaRef).toBeUndefined();
+    } else {
+      expect(payload.ReplyChain?.[1]?.mediaPath).toBeUndefined();
+      expect(payload.ReplyChain?.[1]?.mediaRef).toBe("telegram:file/generated-photo-1");
+    }
     const [conversationContext] = requireArray(
       payload.UntrustedStructuredContext,
       "structured context",
@@ -2390,16 +2418,26 @@ describe("createTelegramBot", () => {
       body: "Done, here is the image",
       is_reply_target: true,
     });
-    expect(messagesById.get("101")?.media_path).toMatch(/^media:\/\/inbound\//);
-    expect(messagesById.get("101")?.media_ref).toBeUndefined();
+    if (expectHydrated) {
+      expect(messagesById.get("101")?.media_path).toMatch(/^media:\/\/inbound\//);
+      expect(messagesById.get("101")?.media_ref).toBeUndefined();
+    } else {
+      expect(messagesById.get("101")?.media_path).toBeUndefined();
+      expect(messagesById.get("101")?.media_ref).toBe("telegram:file/generated-photo-1");
+    }
     expect(messagesById.get("102")).toMatchObject({
       sender: "UserB",
       body: "Why is there a 4th person?",
       reply_to_id: "101",
       is_reply_target: true,
     });
-    expect(getFileSpy).toHaveBeenCalledWith("generated-photo-1");
-    expect(mediaFetch).toHaveBeenCalledTimes(1);
+    if (expectHydrated) {
+      expect(getFileSpy).toHaveBeenCalledWith("generated-photo-1");
+      expect(mediaFetch).toHaveBeenCalledTimes(1);
+    } else {
+      expect(getFileSpy).not.toHaveBeenCalled();
+      expect(mediaFetch).not.toHaveBeenCalled();
+    }
   });
 
   it("does not hydrate reply media denied by General forum topic visibility", async () => {
