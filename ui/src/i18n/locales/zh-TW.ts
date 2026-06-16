@@ -1570,7 +1570,9 @@ export const zh_TW: TranslationMap = {
       webhookHelp: "將執行摘要傳送到 webhook 端點。",
       to: "傳送至",
       toPlaceholder: "+1555... 或 chat id",
+      toPlaceholderTelegram: "-1001234567890 or @channel",
       toHelp: "選填的收件者覆寫值（chat id、電話號碼或 user id）。",
+      toHelpTelegram: "Telegram chat.id (e.g. -1001234567890), @username, or t.me link.",
       advanced: "進階",
       advancedHelp: "用於傳送保證、排程抖動和模型控制的選用覆寫設定。",
       deleteAfterRun: "執行後刪除",
@@ -1644,6 +1646,8 @@ export const zh_TW: TranslationMap = {
       timeoutInvalid: "若有設定，逾時必須大於 0 秒。",
       webhookUrlRequired: "Webhook URL 為必填。",
       webhookUrlInvalid: "Webhook URL 必須以 http:// 或 https:// 開頭。",
+      telegramChatIdInvalid:
+        "Telegram To must be a chat.id (e.g. -1001234567890), @username, or t.me link (optional :topicId).",
       invalidRunTime: "執行時間無效。",
       invalidIntervalAmount: "間隔數值無效。",
       cronExprRequiredShort: "Cron 運算式為必填。",

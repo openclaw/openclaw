@@ -1612,7 +1612,9 @@ export const uk: TranslationMap = {
       webhookHelp: "Надсилати підсумки запусків до endpoint webhook.",
       to: "Кому",
       toPlaceholder: "+1555... або id чату",
+      toPlaceholderTelegram: "-1001234567890 or @channel",
       toHelp: "Необов’язкове перевизначення одержувача (id чату, телефон або id користувача).",
+      toHelpTelegram: "Telegram chat.id (e.g. -1001234567890), @username, or t.me link.",
       advanced: "Додатково",
       advancedHelp:
         "Необов’язкові перевизначення для гарантій доставки, джитера розкладу та керування моделлю.",
@@ -1688,6 +1690,8 @@ export const uk: TranslationMap = {
       timeoutInvalid: "Якщо задано, тайм-аут має бути більшим за 0 секунд.",
       webhookUrlRequired: "URL webhook є обов’язковим.",
       webhookUrlInvalid: "URL webhook має починатися з http:// або https://.",
+      telegramChatIdInvalid:
+        "Telegram To must be a chat.id (e.g. -1001234567890), @username, or t.me link (optional :topicId).",
       invalidRunTime: "Недійсний час запуску.",
       invalidIntervalAmount: "Недійсне значення інтервалу.",
       cronExprRequiredShort: "Потрібен вираз Cron.",

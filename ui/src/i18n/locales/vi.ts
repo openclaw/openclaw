@@ -1599,7 +1599,9 @@ export const vi: TranslationMap = {
       webhookHelp: "Gửi tóm tắt lần chạy tới endpoint webhook.",
       to: "Đến",
       toPlaceholder: "+1555... hoặc id trò chuyện",
+      toPlaceholderTelegram: "-1001234567890 or @channel",
       toHelp: "Ghi đè người nhận tùy chọn (id trò chuyện, số điện thoại hoặc id người dùng).",
+      toHelpTelegram: "Telegram chat.id (e.g. -1001234567890), @username, or t.me link.",
       advanced: "Nâng cao",
       advancedHelp: "Ghi đè tùy chọn cho đảm bảo gửi, độ lệch lịch và điều khiển mô hình.",
       deleteAfterRun: "Xóa sau khi chạy",
@@ -1673,6 +1675,8 @@ export const vi: TranslationMap = {
       timeoutInvalid: "Nếu đặt, thời gian chờ phải lớn hơn 0 giây.",
       webhookUrlRequired: "Bắt buộc nhập URL webhook.",
       webhookUrlInvalid: "URL webhook phải bắt đầu bằng http:// hoặc https://.",
+      telegramChatIdInvalid:
+        "Telegram To must be a chat.id (e.g. -1001234567890), @username, or t.me link (optional :topicId).",
       invalidRunTime: "Thời gian chạy không hợp lệ.",
       invalidIntervalAmount: "Khoảng lặp không hợp lệ.",
       cronExprRequiredShort: "Bắt buộc nhập biểu thức cron.",

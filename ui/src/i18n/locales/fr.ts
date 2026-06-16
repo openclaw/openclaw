@@ -1625,7 +1625,9 @@ export const fr: TranslationMap = {
       webhookHelp: "Envoyez les résumés d’exécution vers un endpoint webhook.",
       to: "À",
       toPlaceholder: "+1555... ou ID de chat",
+      toPlaceholderTelegram: "-1001234567890 or @channel",
       toHelp: "Remplacement facultatif du destinataire (ID de chat, téléphone ou ID utilisateur).",
+      toHelpTelegram: "Telegram chat.id (e.g. -1001234567890), @username, or t.me link.",
       advanced: "Avancé",
       advancedHelp:
         "Remplacements facultatifs pour les garanties de distribution, le jitter de planification et les contrôles du modèle.",
@@ -1701,6 +1703,8 @@ export const fr: TranslationMap = {
       timeoutInvalid: "S’il est défini, le délai d’expiration doit être supérieur à 0 seconde.",
       webhookUrlRequired: "L’URL du webhook est obligatoire.",
       webhookUrlInvalid: "L’URL du webhook doit commencer par http:// ou https://.",
+      telegramChatIdInvalid:
+        "Telegram To must be a chat.id (e.g. -1001234567890), @username, or t.me link (optional :topicId).",
       invalidRunTime: "Heure d’exécution invalide.",
       invalidIntervalAmount: "Montant d’intervalle invalide.",
       cronExprRequiredShort: "Expression cron obligatoire.",

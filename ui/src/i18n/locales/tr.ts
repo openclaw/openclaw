@@ -1614,7 +1614,9 @@ export const tr: TranslationMap = {
       webhookHelp: "Çalıştırma özetlerini bir webhook uç noktasına gönderin.",
       to: "Kime",
       toPlaceholder: "+1555... veya sohbet kimliği",
+      toPlaceholderTelegram: "-1001234567890 or @channel",
       toHelp: "İsteğe bağlı alıcı geçersiz kılma (sohbet kimliği, telefon veya kullanıcı kimliği).",
+      toHelpTelegram: "Telegram chat.id (e.g. -1001234567890), @username, or t.me link.",
       advanced: "Gelişmiş",
       advancedHelp:
         "Teslimat garantileri, zamanlama jitter'ı ve model kontrolleri için isteğe bağlı geçersiz kılmalar.",
@@ -1690,6 +1692,8 @@ export const tr: TranslationMap = {
       timeoutInvalid: "Ayarlanırsa zaman aşımı 0 saniyeden büyük olmalıdır.",
       webhookUrlRequired: "Webhook URL gerekli.",
       webhookUrlInvalid: "Webhook URL http:// veya https:// ile başlamalıdır.",
+      telegramChatIdInvalid:
+        "Telegram To must be a chat.id (e.g. -1001234567890), @username, or t.me link (optional :topicId).",
       invalidRunTime: "Geçersiz çalıştırma zamanı.",
       invalidIntervalAmount: "Geçersiz aralık miktarı.",
       cronExprRequiredShort: "Cron ifadesi gerekli.",

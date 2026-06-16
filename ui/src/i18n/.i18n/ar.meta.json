@@ -30,6 +30,9 @@
     "chat.workspaceFiles.summary",
     "chat.workspaceFiles.truncated",
     "chat.workspaceFiles.workspace",
+    "cron.errors.telegramChatIdInvalid",
+    "cron.form.toHelpTelegram",
+    "cron.form.toPlaceholderTelegram",
     "cron.jobDetail.command",
     "cron.jobDetail.cwd",
     "skillWorkshop.header.useCurrentChat",
@@ -64,12 +67,12 @@
     "workboard.unknownStatus",
     "workboard.viewDetails"
   ],
-  "generatedAt": "2026-06-14T04:03:18.297Z",
+  "generatedAt": "2026-06-14T20:26:50.985Z",
   "locale": "ar",
   "model": "claude-opus-4-8",
   "provider": "anthropic",
-  "sourceHash": "cea79b090b14fca4ad1e3e07dc5dcd7f964b1f199fd028938e41054dc5167457",
-  "totalKeys": 1377,
+  "sourceHash": "a6a1b9475b3e850cfffb54c596a9461455dc5e73ec6f64d22132a6d56206304e",
+  "totalKeys": 1380,
   "translatedKeys": 1314,
   "workflow": 1
 }

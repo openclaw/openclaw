@@ -1607,7 +1607,9 @@ export const fa: TranslationMap = {
       webhookHelp: "خلاصه‌های اجرا را به یک نقطه پایانی وب‌هوک ارسال کنید.",
       to: "به",
       toPlaceholder: "+1555... یا شناسه چت",
+      toPlaceholderTelegram: "-1001234567890 or @channel",
       toHelp: "بازنویسی اختیاری گیرنده (شناسه چت، تلفن یا شناسه کاربر).",
+      toHelpTelegram: "Telegram chat.id (e.g. -1001234567890), @username, or t.me link.",
       advanced: "پیشرفته",
       advancedHelp: "بازنویسی‌های اختیاری برای تضمین‌های تحویل، نوسان زمان‌بندی و کنترل‌های مدل.",
       deleteAfterRun: "حذف پس از اجرا",
@@ -1681,6 +1683,8 @@ export const fa: TranslationMap = {
       timeoutInvalid: "اگر تنظیم شود، مهلت زمانی باید بیشتر از 0 ثانیه باشد.",
       webhookUrlRequired: "URL وب‌هوک ضروری است.",
       webhookUrlInvalid: "URL وب‌هوک باید با http:// یا https:// شروع شود.",
+      telegramChatIdInvalid:
+        "Telegram To must be a chat.id (e.g. -1001234567890), @username, or t.me link (optional :topicId).",
       invalidRunTime: "زمان اجرا نامعتبر است.",
       invalidIntervalAmount: "مقدار فاصله نامعتبر است.",
       cronExprRequiredShort: "عبارت Cron ضروری است.",

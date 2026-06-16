@@ -1588,7 +1588,9 @@ export const ar: TranslationMap = {
       webhookHelp: "أرسل ملخصات التشغيل إلى نقطة نهاية webhook.",
       to: "إلى",
       toPlaceholder: "+1555... أو معرّف الدردشة",
+      toPlaceholderTelegram: "-1001234567890 or @channel",
       toHelp: "تجاوز اختياري للمستلم (معرّف الدردشة، أو الهاتف، أو معرّف المستخدم).",
+      toHelpTelegram: "Telegram chat.id (e.g. -1001234567890), @username, or t.me link.",
       advanced: "متقدم",
       advancedHelp:
         "تجاوزات اختيارية لضمانات التسليم، وتباين الجدول العشوائي، وعناصر التحكم في النموذج.",
@@ -1663,6 +1665,8 @@ export const ar: TranslationMap = {
       timeoutInvalid: "إذا تم تعيينها، يجب أن تكون المهلة أكبر من 0 ثانية.",
       webhookUrlRequired: "عنوان URL للـ Webhook مطلوب.",
       webhookUrlInvalid: "يجب أن يبدأ عنوان URL للـ Webhook بـ http:// أو https://.",
+      telegramChatIdInvalid:
+        "Telegram To must be a chat.id (e.g. -1001234567890), @username, or t.me link (optional :topicId).",
       invalidRunTime: "وقت التشغيل غير صالح.",
       invalidIntervalAmount: "مقدار الفاصل غير صالح.",
       cronExprRequiredShort: "تعبير Cron مطلوب.",

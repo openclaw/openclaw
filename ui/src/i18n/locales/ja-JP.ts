@@ -1614,7 +1614,9 @@ export const ja_JP: TranslationMap = {
       webhookHelp: "実行結果の概要を Webhook エンドポイントに送信します。",
       to: "宛先",
       toPlaceholder: "+1555... または chat id",
+      toPlaceholderTelegram: "-1001234567890 or @channel",
       toHelp: "任意の受信者上書きです（chat id、電話番号、または user id）。",
+      toHelpTelegram: "Telegram chat.id (e.g. -1001234567890), @username, or t.me link.",
       advanced: "詳細",
       advancedHelp: "配信保証、スケジュールのジッター、モデル制御の任意の上書き設定。",
       deleteAfterRun: "実行後に削除",
@@ -1688,6 +1690,8 @@ export const ja_JP: TranslationMap = {
       timeoutInvalid: "設定する場合、タイムアウトは 0 秒より大きくする必要があります。",
       webhookUrlRequired: "Webhook URL は必須です。",
       webhookUrlInvalid: "Webhook URL は http:// または https:// で始まる必要があります。",
+      telegramChatIdInvalid:
+        "Telegram To must be a chat.id (e.g. -1001234567890), @username, or t.me link (optional :topicId).",
       invalidRunTime: "無効な実行時刻です。",
       invalidIntervalAmount: "無効な間隔の値です。",
       cronExprRequiredShort: "Cron 式は必須です。",

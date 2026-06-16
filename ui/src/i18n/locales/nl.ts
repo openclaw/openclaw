@@ -1612,7 +1612,9 @@ export const nl: TranslationMap = {
       webhookHelp: "Verzend runsamenvattingen naar een webhook-eindpunt.",
       to: "Aan",
       toPlaceholder: "+1555... of chat-id",
+      toPlaceholderTelegram: "-1001234567890 or @channel",
       toHelp: "Optionele ontvanger-override (chat-id, telefoonnummer of gebruikers-id).",
+      toHelpTelegram: "Telegram chat.id (e.g. -1001234567890), @username, or t.me link.",
       advanced: "Geavanceerd",
       advancedHelp: "Optionele overrides voor leveringsgaranties, schemajitter en modelbesturing.",
       deleteAfterRun: "Verwijderen na run",
@@ -1687,6 +1689,8 @@ export const nl: TranslationMap = {
       timeoutInvalid: "Als ingesteld, moet timeout groter zijn dan 0 seconden.",
       webhookUrlRequired: "Webhook-URL is verplicht.",
       webhookUrlInvalid: "Webhook-URL moet beginnen met http:// of https://.",
+      telegramChatIdInvalid:
+        "Telegram To must be a chat.id (e.g. -1001234567890), @username, or t.me link (optional :topicId).",
       invalidRunTime: "Ongeldige uitvoeringstijd.",
       invalidIntervalAmount: "Ongeldige intervalwaarde.",
       cronExprRequiredShort: "Cron-expressie vereist.",

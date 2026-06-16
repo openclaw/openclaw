@@ -1596,7 +1596,9 @@ export const ko: TranslationMap = {
       webhookHelp: "실행 요약을 webhook 엔드포인트로 보냅니다.",
       to: "받는 사람",
       toPlaceholder: "+1555... 또는 chat id",
+      toPlaceholderTelegram: "-1001234567890 or @channel",
       toHelp: "선택적 수신자 재정의(chat id, 전화번호 또는 user id).",
+      toHelpTelegram: "Telegram chat.id (e.g. -1001234567890), @username, or t.me link.",
       advanced: "고급",
       advancedHelp: "전달 보장, 일정 지터, 모델 제어를 위한 선택적 재정의입니다.",
       deleteAfterRun: "실행 후 삭제",
@@ -1670,6 +1672,8 @@ export const ko: TranslationMap = {
       timeoutInvalid: "설정하는 경우 타임아웃은 0초보다 커야 합니다.",
       webhookUrlRequired: "Webhook URL은 필수입니다.",
       webhookUrlInvalid: "Webhook URL은 http:// 또는 https://로 시작해야 합니다.",
+      telegramChatIdInvalid:
+        "Telegram To must be a chat.id (e.g. -1001234567890), @username, or t.me link (optional :topicId).",
       invalidRunTime: "잘못된 실행 시간입니다.",
       invalidIntervalAmount: "잘못된 간격 값입니다.",
       cronExprRequiredShort: "Cron 표현식이 필요합니다.",

@@ -1092,13 +1092,29 @@ export function renderCron(props: CronProps) {
                                     id="cron-delivery-to"
                                     .value=${props.form.deliveryTo}
                                     list="cron-delivery-to-suggestions"
+                                    aria-invalid=${props.fieldErrors.deliveryTo ? "true" : "false"}
+                                    aria-describedby=${ifDefined(
+                                      props.fieldErrors.deliveryTo
+                                        ? errorIdForField("deliveryTo")
+                                        : undefined,
+                                    )}
                                     @input=${(e: Event) =>
                                       props.onFormChange({
                                         deliveryTo: (e.target as HTMLInputElement).value,
                                       })}
-                                    placeholder=${t("cron.form.toPlaceholder")}
+                                    placeholder=${props.form.deliveryChannel === "telegram"
+                                      ? t("cron.form.toPlaceholderTelegram")
+                                      : t("cron.form.toPlaceholder")}
                                   />
-                                  <div class="cron-help">${t("cron.form.toHelp")}</div>
+                                  <div class="cron-help">
+                                    ${props.form.deliveryChannel === "telegram"
+                                      ? t("cron.form.toHelpTelegram")
+                                      : t("cron.form.toHelp")}
+                                  </div>
+                                  ${renderFieldError(
+                                    props.fieldErrors.deliveryTo,
+                                    errorIdForField("deliveryTo"),
+                                  )}
                                 </label>
                               `
                             : nothing}
