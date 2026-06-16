@@ -142,4 +142,17 @@ describe("shouldDropEmptyMattermostBody", () => {
       }),
     ).toBe(true);
   });
+
+  it.each(["@openclaw @openclaw", "@openclaw\n@openclaw"])(
+    "drops a repeated mention-only post: %j",
+    (rawText) => {
+      expect(
+        shouldDropEmptyMattermostBody({
+          bodyText: "",
+          rawText,
+          botUsername: "openclaw",
+        }),
+      ).toBe(true);
+    },
+  );
 });
