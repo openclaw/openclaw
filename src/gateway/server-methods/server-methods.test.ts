@@ -956,6 +956,25 @@ describe("projectRecentChatDisplayMessages", () => {
     ]);
   });
 
+  it("leaves attachment-only assistant errors unchanged", () => {
+    const attachment = {
+      type: "attachment",
+      name: "report.txt",
+      url: "https://example.test/report.txt",
+    };
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        content: [attachment],
+        stopReason: "error",
+        errorMessage: "Connection error.",
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result[0]?.content).toEqual([attachment]);
+  });
+
   it("leaves tool-bearing assistant errors unchanged", () => {
     const toolCall = {
       type: "toolCall",
