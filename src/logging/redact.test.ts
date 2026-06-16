@@ -986,7 +986,7 @@ describe("redactSensitiveText", () => {
     );
   });
 
-  it("forces redaction for tool details even when log redaction is disabled", () => {
+  it("respects redactSensitive off for tool details", () => {
     writeConfig(`{
       logging: {
         redactSensitive: "off",
@@ -994,7 +994,7 @@ describe("redactSensitiveText", () => {
     }`);
 
     expect(redactToolDetail("OPENAI_API_KEY=sk-1234567890abcdef")).toBe(
-      "OPENAI_API_KEY=sk-123…cdef",
+      "OPENAI_API_KEY=sk-1234567890abcdef",
     );
   });
 
