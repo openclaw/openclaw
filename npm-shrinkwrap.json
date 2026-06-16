@@ -2479,9 +2479,9 @@
       }
     },
     "node_modules/protobufjs": {
-      "version": "8.4.0",
-      "resolved": "https://registry.npmjs.org/protobufjs/-/protobufjs-8.4.0.tgz",
-      "integrity": "sha512-iriNhQ57SYA5Jbdi+41AyPdx6jPPkFO7DODzkOBmqFhgYn/JzX2HxgxYPY18eQAs3CP/AWqtPvkWn8rclRAxdQ==",
+      "version": "8.4.1",
+      "resolved": "https://registry.npmjs.org/protobufjs/-/protobufjs-8.4.1.tgz",
+      "integrity": "sha512-oXf2UgIty8jnwfN4yvL1x79VLhL5uiKjZJbSGXGCIUmHmItTP4eS/UIlWDCeNx3seg+ujfn9vDlPMSrsh7wO+Q==",
       "hasInstallScript": true,
       "license": "BSD-3-Clause",
       "dependencies": {

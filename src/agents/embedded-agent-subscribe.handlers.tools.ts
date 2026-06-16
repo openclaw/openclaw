@@ -15,6 +15,7 @@ import {
   HEARTBEAT_RESPONSE_TOOL_NAME,
   normalizeHeartbeatToolResponse,
 } from "../auto-reply/heartbeat-tool-response.js";
+import { parseSessionThreadInfoFast } from "../config/sessions/thread-info.js";
 import type {
   AgentApprovalEventData,
   AgentCommandOutputEventData,
@@ -29,19 +30,29 @@ import {
   emitAgentPatchSummaryEvent,
 } from "../infra/agent-events.js";
 import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
-import { normalizeInteractiveReply, normalizeMessagePresentation } from "../interactive/payload.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { normalizeAcceptedSessionSpawnResult } from "./accepted-session-spawn.js";
+import {
+  consumeAdjustedParamsForToolCall,
+  consumePreExecutionBlockedToolCall,
+  consumeStructuredReplaySafeToolCall,
+} from "./agent-tools.before-tool-call.state.js";
 import { REQUIRED_PARAM_GROUPS, type RequiredParamGroup } from "./agent-tools.params.js";
 import type { ApplyPatchSummary } from "./apply-patch.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import { sanitizeForConsole } from "./console-sanitize.js";
 import { normalizeTextForComparison } from "./embedded-agent-helpers.js";
-import { isDeliveredMessageToolOnlySourceReplyResult } from "./embedded-agent-message-tool-source-reply.js";
-import { isMessagingTool, isMessagingToolSendAction } from "./embedded-agent-messaging.js";
-import type { MessagingToolSourceReplyPayload } from "./embedded-agent-messaging.types.js";
+import {
+  isDeliveredMessageToolOnlySourceReplyResult,
+  isDeliveredMessagingToolResult,
+} from "./embedded-agent-message-tool-source-reply.js";
+import {
+  isMessagingTool,
+  isMessagingToolSendAction,
+  isMessagingToolTargetEvidenceAction,
+} from "./embedded-agent-messaging.js";
 import { mergeEmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
 import type {
   ToolCallSummary,
@@ -49,9 +60,13 @@ import type {
 } from "./embedded-agent-subscribe.handlers.types.js";
 import { isPromiseLike } from "./embedded-agent-subscribe.promise.js";
 import {
+  collectMessagingMediaUrlsFromRecord,
+  collectMessagingMediaUrlsFromToolResult,
+  extractMessagingToolSourceReplyPayload,
   extractToolResultMediaArtifact,
   extractToolErrorCode,
   extractMessagingToolSend,
+  extractMessagingToolSendResult,
   extractToolErrorMessage,
   extractToolResultText,
   filterToolResultMediaUrls,
@@ -68,7 +83,6 @@ import { normalizeToolName } from "./tool-policy.js";
 
 type ExecApprovalReplyModule = typeof import("../infra/exec-approval-reply.js");
 type HookRunnerGlobalModule = typeof import("../plugins/hook-runner-global.js");
-type BeforeToolCallModule = typeof import("./agent-tools.before-tool-call.js");
 type ChannelToolProgress = {
   text: string;
 };
@@ -78,9 +92,6 @@ const execApprovalReplyModuleLoader = createLazyImportLoader<ExecApprovalReplyMo
 );
 const hookRunnerGlobalModuleLoader = createLazyImportLoader<HookRunnerGlobalModule>(
   () => import("../plugins/hook-runner-global.js"),
-);
-const beforeToolCallModuleLoader = createLazyImportLoader<BeforeToolCallModule>(
-  () => import("./agent-tools.before-tool-call.js"),
 );
 const LIVE_EXEC_OUTPUT_MAX_CHARS = 8000;
 const LIVE_EXEC_UPDATE_MIN_INTERVAL_MS = 250;
@@ -109,10 +120,6 @@ function loadExecApprovalReply(): Promise<ExecApprovalReplyModule> {
 
 function loadHookRunnerGlobal(): Promise<HookRunnerGlobalModule> {
   return hookRunnerGlobalModuleLoader.load();
-}
-
-function loadBeforeToolCall(): Promise<BeforeToolCallModule> {
-  return beforeToolCallModuleLoader.load();
 }
 
 function getRequiredParamGroupsForTool(
@@ -197,6 +204,7 @@ const TOOL_START_WARNING_RAW_PREVIEW_MAX_CHARS = TOOL_START_WARNING_PREVIEW_MAX_
 type ToolStartRecord = {
   startTime: number;
   args: unknown;
+  hasRepliedRef?: { value: boolean };
 };
 
 /** Track tool execution start data for after_tool_call hook. */
@@ -226,11 +234,21 @@ function isCronAddAction(args: unknown): boolean {
   return normalizeOptionalLowercaseString(action) === "add";
 }
 
-function buildToolCallSummary(toolName: string, args: unknown, meta?: string): ToolCallSummary {
+function buildToolCallSummary(
+  toolName: string,
+  args: unknown,
+  meta: string | undefined,
+  instanceReplaySafe: boolean,
+  structuredReplaySafe: boolean,
+): ToolCallSummary {
   const mutation = buildToolMutationState(toolName, args, meta);
   return {
     meta,
+    instanceReplaySafe,
     mutatingAction: mutation.mutatingAction,
+    replaySafe:
+      (instanceReplaySafe && !mutation.mutatingAction) ||
+      (structuredReplaySafe && mutation.replaySafe),
     actionFingerprint: mutation.actionFingerprint,
     fileTarget: mutation.fileTarget,
   };
@@ -289,6 +307,36 @@ function emitTrackedItemEvent(ctx: ToolHandlerContext, itemData: AgentItemEventD
 
 function readToolResultDetailsRecord(result: unknown): Record<string, unknown> | undefined {
   return readRecordField(asOptionalObjectRecord(result)?.details);
+}
+
+function applyCurrentMessageProvider(
+  toolName: string,
+  args: Record<string, unknown>,
+  currentProvider: string | undefined,
+): Record<string, unknown> {
+  if (
+    toolName !== "message" ||
+    readStringValue(args.provider) ||
+    readStringValue(args.channel) ||
+    !currentProvider
+  ) {
+    return args;
+  }
+  return { ...args, provider: currentProvider };
+}
+
+function applyToolSendReceiptForExtraction(result: unknown, receiptResult: unknown): unknown {
+  const toolSend = readToolResultDetailsRecord(receiptResult)?.toolSend;
+  if (toolSend === undefined) {
+    return result;
+  }
+  return {
+    ...readRecordField(result),
+    details: {
+      ...readToolResultDetailsRecord(result),
+      toolSend,
+    },
+  };
 }
 
 function isAsyncStartedToolResult(result: unknown): boolean {
@@ -468,163 +516,14 @@ function extendExecMeta(toolName: string, args: unknown, meta?: string): string 
   return meta ? `${meta} · ${suffix}` : suffix;
 }
 
-function pushUniqueMediaUrl(urls: string[], seen: Set<string>, value: unknown): void {
-  if (typeof value !== "string") {
-    return;
-  }
-  const normalized = value.trim();
-  if (!normalized || seen.has(normalized)) {
-    return;
-  }
-  seen.add(normalized);
-  urls.push(normalized);
-}
-
-function collectMessagingMediaUrlsFromRecord(record: Record<string, unknown>): string[] {
-  const urls: string[] = [];
-  const seen = new Set<string>();
-  const pushAttachment = (value: unknown) => {
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
-      return;
-    }
-    const attachment = value as Record<string, unknown>;
-    pushUniqueMediaUrl(urls, seen, attachment.media);
-    pushUniqueMediaUrl(urls, seen, attachment.mediaUrl);
-    pushUniqueMediaUrl(urls, seen, attachment.path);
-    pushUniqueMediaUrl(urls, seen, attachment.filePath);
-    pushUniqueMediaUrl(urls, seen, attachment.fileUrl);
-    pushUniqueMediaUrl(urls, seen, attachment.url);
-  };
-
-  pushUniqueMediaUrl(urls, seen, record.media);
-  pushUniqueMediaUrl(urls, seen, record.mediaUrl);
-  pushUniqueMediaUrl(urls, seen, record.path);
-  pushUniqueMediaUrl(urls, seen, record.filePath);
-  pushUniqueMediaUrl(urls, seen, record.fileUrl);
-
-  const mediaUrls = record.mediaUrls;
-  if (Array.isArray(mediaUrls)) {
-    for (const mediaUrl of mediaUrls) {
-      pushUniqueMediaUrl(urls, seen, mediaUrl);
+function readMessagingText(record: Record<string, unknown>): string | undefined {
+  for (const key of ["content", "message", "text", "body"]) {
+    const value = readStringValue(record[key]);
+    if (value) {
+      return value;
     }
   }
-  const attachments = record.attachments;
-  if (Array.isArray(attachments)) {
-    for (const attachment of attachments) {
-      pushAttachment(attachment);
-    }
-  }
-
-  return urls;
-}
-
-function collectMessagingMediaUrlsFromToolResult(result: unknown): string[] {
-  const urls: string[] = [];
-  const seen = new Set<string>();
-  const appendFromRecord = (value: unknown) => {
-    if (!value || typeof value !== "object") {
-      return;
-    }
-    const extracted = collectMessagingMediaUrlsFromRecord(value as Record<string, unknown>);
-    for (const url of extracted) {
-      if (seen.has(url)) {
-        continue;
-      }
-      seen.add(url);
-      urls.push(url);
-    }
-  };
-
-  appendFromRecord(result);
-  if (result && typeof result === "object") {
-    appendFromRecord((result as Record<string, unknown>).details);
-  }
-
-  const outputText = extractToolResultText(result);
-  if (outputText) {
-    try {
-      appendFromRecord(JSON.parse(outputText));
-    } catch {
-      // Ignore non-JSON tool output.
-    }
-  }
-
-  return urls;
-}
-
-function readStringField(record: Record<string, unknown>, key: string): string | undefined {
-  const value = record[key];
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
-
-function readStringArrayField(record: Record<string, unknown>, key: string): string[] | undefined {
-  const value = record[key];
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const strings = value.filter(
-    (item): item is string => typeof item === "string" && item.trim().length > 0,
-  );
-  return strings.length ? strings : undefined;
-}
-
-function copyRecordField(
-  record: Record<string, unknown>,
-  key: string,
-): Record<string, unknown> | undefined {
-  const value = record[key];
-  return readRecordField(value) ? { ...(value as Record<string, unknown>) } : undefined;
-}
-
-function extractMessagingToolSourceReplyPayload(
-  result: unknown,
-): MessagingToolSourceReplyPayload | undefined {
-  const details = readToolResultDetailsRecord(result);
-  if (!details || details.sourceReplySink !== "internal-ui") {
-    return undefined;
-  }
-  const status = normalizeOptionalLowercaseString(details.deliveryStatus);
-  if (status && status !== "sent") {
-    return undefined;
-  }
-  const sourceReply = readRecordField(details.sourceReply) ?? details;
-  const payload: MessagingToolSourceReplyPayload = {};
-  const text = readStringField(sourceReply, "text") ?? readStringField(details, "message");
-  if (text) {
-    payload.text = text;
-  }
-  const mediaUrl = readStringField(sourceReply, "mediaUrl") ?? readStringField(details, "mediaUrl");
-  if (mediaUrl) {
-    payload.mediaUrl = mediaUrl;
-  }
-  const mediaUrls =
-    readStringArrayField(sourceReply, "mediaUrls") ?? readStringArrayField(details, "mediaUrls");
-  if (mediaUrls) {
-    payload.mediaUrls = mediaUrls;
-  }
-  const audioAsVoice =
-    sourceReply.audioAsVoice === true || details.audioAsVoice === true ? true : undefined;
-  if (audioAsVoice) {
-    payload.audioAsVoice = true;
-  }
-  const presentation = normalizeMessagePresentation(sourceReply.presentation);
-  if (presentation) {
-    payload.presentation = presentation;
-  }
-  const interactive = normalizeInteractiveReply(sourceReply.interactive);
-  if (interactive) {
-    payload.interactive = interactive;
-  }
-  const channelData = copyRecordField(sourceReply, "channelData");
-  if (channelData) {
-    payload.channelData = channelData;
-  }
-  const idempotencyKey =
-    readStringField(sourceReply, "idempotencyKey") ?? readStringField(details, "idempotencyKey");
-  if (idempotencyKey) {
-    payload.idempotencyKey = idempotencyKey;
-  }
-  return Object.keys(payload).length > 0 ? payload : undefined;
+  return undefined;
 }
 
 function queuePendingToolMedia(
@@ -856,7 +755,12 @@ async function emitToolResultOutput(params: {
 /** Handles a tool-execution start event and emits UI/telemetry start state. */
 export function handleToolExecutionStart(
   ctx: ToolHandlerContext,
-  evt: AgentEvent & { toolName: string; toolCallId: string; args: unknown },
+  evt: AgentEvent & {
+    toolName: string;
+    toolCallId: string;
+    args: unknown;
+    replaySafe?: boolean;
+  },
 ): void | Promise<void> {
   const continueAfterBlockReplyFlush = (): void | Promise<void> => {
     const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.();
@@ -885,7 +789,13 @@ export function handleToolExecutionStart(
 
     // Track start time and args for after_tool_call hook.
     const startedAt = Date.now();
-    toolStartData.set(buildToolStartKey(runId, toolCallId), { startTime: startedAt, args });
+    toolStartData.set(buildToolStartKey(runId, toolCallId), {
+      startTime: startedAt,
+      args,
+      ...(ctx.params.hasRepliedRef
+        ? { hasRepliedRef: { value: ctx.params.hasRepliedRef.value } }
+        : {}),
+    });
     traceToolExecutionStart({ ctx, toolName, toolCallId, args });
 
     if (toolName === "read") {
@@ -952,7 +862,14 @@ export function handleToolExecutionStart(
         detailMode: ctx.params.toolProgressDetail ?? "explain",
       }),
     );
-    ctx.state.toolMetaById.set(toolCallId, buildToolCallSummary(toolName, args, meta));
+    const instanceReplaySafe =
+      evt.replaySafe === true ||
+      ctx.params.replaySafeToolNames?.has(rawToolName) === true ||
+      ctx.params.replaySafeToolNames?.has(toolName) === true;
+    ctx.state.toolMetaById.set(
+      toolCallId,
+      buildToolCallSummary(toolName, args, meta, instanceReplaySafe, false),
+    );
     ctx.log.debug(
       `embedded run tool start: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
     );
@@ -1030,14 +947,30 @@ export function handleToolExecutionStart(
     if (isMessagingTool(toolName)) {
       const argsRecord = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
       const isMessagingSend = isMessagingToolSendAction(toolName, argsRecord);
-      if (isMessagingSend) {
-        const sendTarget = extractMessagingToolSend(toolName, argsRecord);
+      if (isMessagingToolTargetEvidenceAction(toolName, argsRecord)) {
+        const telemetryArgs = applyCurrentMessageProvider(
+          toolName,
+          argsRecord,
+          ctx.params.messageChannel,
+        );
+        const sendTarget = extractMessagingToolSend(toolName, telemetryArgs, {
+          config: ctx.params.config,
+          currentChannelId: ctx.params.currentChannelId,
+          currentMessagingTarget: ctx.params.currentMessagingTarget,
+          currentThreadId:
+            ctx.params.currentThreadId ??
+            parseSessionThreadInfoFast(ctx.params.sessionKey).threadId,
+          currentMessageId: ctx.params.currentMessageId,
+          replyToMode: ctx.params.replyToMode,
+          hasRepliedRef: ctx.params.hasRepliedRef,
+        });
         if (sendTarget) {
           ctx.state.pendingMessagingTargets.set(toolCallId, sendTarget);
         }
-        // Field names vary by tool: Discord/Slack use "content", sessions_send uses "message"
-        const text = (argsRecord.content as string) ?? (argsRecord.message as string);
-        if (text && typeof text === "string") {
+      }
+      if (isMessagingSend) {
+        const text = readMessagingText(argsRecord);
+        if (text) {
           ctx.state.pendingMessagingTexts.set(toolCallId, text);
           ctx.log.debug(`Tracking pending messaging text: tool=${toolName} len=${text.length}`);
         }
@@ -1153,12 +1086,7 @@ export function handleToolExecutionUpdate(
 /** Handles a tool-execution result and commits replay, media, hook, and error state. */
 export async function handleToolExecutionEnd(
   ctx: ToolHandlerContext,
-  evt: AgentEvent & {
-    toolName: string;
-    toolCallId: string;
-    isError: boolean;
-    result?: unknown;
-  },
+  evt: Extract<AgentEvent, { type: "tool_execution_end" }>,
 ) {
   const rawToolName = evt.toolName;
   const toolName = normalizeToolName(rawToolName);
@@ -1166,6 +1094,7 @@ export async function handleToolExecutionEnd(
   const runId = ctx.params.runId;
   const isError = evt.isError;
   const result = evt.result;
+  const toolSendReceiptResult = ctx.consumeToolSendReceipt?.(toolCallId);
   const observerIsError = isError || isToolResultError(result);
   const sanitizedResult = sanitizeToolResult(result);
   const approvalUnavailable =
@@ -1188,14 +1117,37 @@ export async function handleToolExecutionEnd(
   const startData = toolStartData.get(toolStartKey);
   toolStartData.delete(toolStartKey);
   ctx.state.execLiveUpdateStateById?.delete(toolCallId);
-  const callSummary = ctx.state.toolMetaById.get(toolCallId);
-  const completedMutatingAction = !isToolError && Boolean(callSummary?.mutatingAction);
-  const meta = callSummary?.meta;
+  const initialCallSummary = ctx.state.toolMetaById.get(toolCallId);
+  const initialArgs =
+    startData?.args && typeof startData.args === "object"
+      ? (startData.args as Record<string, unknown>)
+      : {};
+  const adjustedArgs = consumeAdjustedParamsForToolCall(toolCallId, runId);
+  const executionPrevented = consumePreExecutionBlockedToolCall(toolCallId, runId);
+  const structuredReplaySafe = consumeStructuredReplaySafeToolCall(toolCallId, runId);
+  const startArgs =
+    adjustedArgs && typeof adjustedArgs === "object"
+      ? (adjustedArgs as Record<string, unknown>)
+      : initialArgs;
+  const callSummary = buildToolCallSummary(
+    toolName,
+    startArgs,
+    initialCallSummary?.meta,
+    initialCallSummary?.instanceReplaySafe === true,
+    structuredReplaySafe,
+  );
+  // Older/custom event producers omit executionStarted. Treat omission as
+  // executed; only an explicit false can prove preparation stopped the call.
+  const executionStarted = evt.executionStarted !== false && !executionPrevented;
+  const attemptedMutatingAction = callSummary.mutatingAction && executionStarted;
+  const attemptedPotentialSideEffect = !callSummary.replaySafe && executionStarted;
+  const meta = callSummary.meta;
   const asyncStarted = !isToolError && isAsyncStartedToolResult(sanitizedResult);
   const asyncTaskIds = asyncStarted ? readAsyncStartedTaskIds(sanitizedResult) : {};
   ctx.state.toolMetas.push({
     toolName,
     meta,
+    replaySafe: callSummary.replaySafe,
     ...(asyncStarted ? { asyncStarted: true, ...asyncTaskIds } : {}),
   });
   const acceptedSessionSpawn =
@@ -1217,9 +1169,9 @@ export async function handleToolExecutionEnd(
       error: errorMessage,
       timedOut: isToolResultTimedOut(sanitizedResult) || undefined,
       middlewareError: isMiddlewareToolResultError(sanitizedResult) || undefined,
-      mutatingAction: callSummary?.mutatingAction,
-      actionFingerprint: callSummary?.actionFingerprint,
-      fileTarget: callSummary?.fileTarget,
+      mutatingAction: attemptedMutatingAction,
+      actionFingerprint: attemptedMutatingAction ? callSummary.actionFingerprint : undefined,
+      fileTarget: attemptedMutatingAction ? callSummary.fileTarget : undefined,
     };
   } else if (ctx.state.lastToolError) {
     // Keep unresolved mutating failures until the same action succeeds.
@@ -1241,7 +1193,7 @@ export async function handleToolExecutionEnd(
   if (asyncStarted) {
     ctx.state.hadDeterministicSideEffect = true;
   }
-  if (completedMutatingAction || acceptedSessionSpawn || asyncStarted) {
+  if (attemptedPotentialSideEffect || acceptedSessionSpawn || asyncStarted) {
     ctx.state.replayState = mergeEmbeddedRunReplayState(ctx.state.replayState, {
       replayInvalid: true,
       hadPotentialSideEffects: true,
@@ -1249,42 +1201,58 @@ export async function handleToolExecutionEnd(
   }
 
   // Commit messaging tool evidence on success, discard on error.
-  const pendingText = ctx.state.pendingMessagingTexts.get(toolCallId);
-  const pendingTarget = ctx.state.pendingMessagingTargets.get(toolCallId);
-  const pendingMediaUrls = ctx.state.pendingMessagingMediaUrls.get(toolCallId) ?? [];
-  const startArgs =
-    startData?.args && typeof startData.args === "object"
-      ? (startData.args as Record<string, unknown>)
-      : {};
-  const isMessagingSend =
-    pendingMediaUrls.length > 0 ||
-    (isMessagingTool(toolName) && isMessagingToolSendAction(toolName, startArgs));
+  const messagingArgs = applyCurrentMessageProvider(toolName, startArgs, ctx.params.messageChannel);
+  const isMessagingInvocation = isMessagingTool(toolName);
+  const isMessagingSend = isMessagingInvocation && isMessagingToolSendAction(toolName, startArgs);
+  const hasMessagingTargetEvidence =
+    isMessagingInvocation && isMessagingToolTargetEvidenceAction(toolName, startArgs);
+  const didDeliverMessagingResult =
+    isMessagingInvocation &&
+    isDeliveredMessagingToolResult({
+      toolName,
+      args: startArgs,
+      result,
+      hookResult: toolSendReceiptResult,
+      isError: isToolError,
+    });
+  const messageText = isMessagingSend ? readMessagingText(startArgs) : undefined;
+  const argumentMediaUrls = isMessagingSend ? collectMessagingMediaUrlsFromRecord(startArgs) : [];
+  const messageTarget = hasMessagingTargetEvidence
+    ? extractMessagingToolSend(toolName, messagingArgs, {
+        config: ctx.params.config,
+        currentChannelId: ctx.params.currentChannelId,
+        currentMessagingTarget: ctx.params.currentMessagingTarget,
+        currentThreadId:
+          ctx.params.currentThreadId ?? parseSessionThreadInfoFast(ctx.params.sessionKey).threadId,
+        currentMessageId: ctx.params.currentMessageId,
+        replyToMode: ctx.params.replyToMode,
+        hasRepliedRef: startData?.hasRepliedRef,
+      })
+    : undefined;
   const committedMediaUrls =
-    !isToolError && isMessagingSend
-      ? [...pendingMediaUrls, ...collectMessagingMediaUrlsFromToolResult(result)]
+    didDeliverMessagingResult && isMessagingSend
+      ? [...argumentMediaUrls, ...collectMessagingMediaUrlsFromToolResult(result)]
       : [];
-  if (pendingText) {
-    ctx.state.pendingMessagingTexts.delete(toolCallId);
-    if (!isToolError) {
-      ctx.state.messagingToolSentTexts.push(pendingText);
-      ctx.state.messagingToolSentTextsNormalized.push(normalizeTextForComparison(pendingText));
-      ctx.log.debug(`Committed messaging text: tool=${toolName} len=${pendingText.length}`);
-      ctx.trimMessagingToolSent();
-    }
-  }
-  if (pendingTarget) {
-    ctx.state.pendingMessagingTargets.delete(toolCallId);
-    if (!isToolError) {
-      ctx.state.messagingToolSentTargets.push({
-        ...pendingTarget,
-        ...(pendingText ? { text: pendingText } : {}),
-        ...(committedMediaUrls.length > 0 ? { mediaUrls: committedMediaUrls.slice() } : {}),
-      });
-      ctx.trimMessagingToolSent();
-    }
-  }
+  ctx.state.pendingMessagingTexts.delete(toolCallId);
+  ctx.state.pendingMessagingTargets.delete(toolCallId);
   ctx.state.pendingMessagingMediaUrls.delete(toolCallId);
-  if (!isToolError && isMessagingSend) {
+  if (didDeliverMessagingResult && messageText) {
+    ctx.state.messagingToolSentTexts.push(messageText);
+    ctx.state.messagingToolSentTextsNormalized.push(normalizeTextForComparison(messageText));
+    ctx.log.debug(`Committed messaging text: tool=${toolName} len=${messageText.length}`);
+    ctx.trimMessagingToolSent();
+  }
+  if (didDeliverMessagingResult && messageTarget) {
+    const extractionResult = applyToolSendReceiptForExtraction(result, toolSendReceiptResult);
+    const confirmedTarget = extractMessagingToolSendResult(messageTarget, extractionResult);
+    ctx.state.messagingToolSentTargets.push({
+      ...confirmedTarget,
+      ...(messageText ? { text: messageText } : {}),
+      ...(committedMediaUrls.length > 0 ? { mediaUrls: committedMediaUrls.slice() } : {}),
+    });
+    ctx.trimMessagingToolSent();
+  }
+  if (didDeliverMessagingResult && isMessagingSend) {
     if (committedMediaUrls.length > 0) {
       ctx.state.messagingToolSentMediaUrls.push(...committedMediaUrls);
       ctx.trimMessagingToolSent();
@@ -1308,7 +1276,7 @@ export async function handleToolExecutionEnd(
   }
 
   // Track committed reminders only when cron.add completed successfully.
-  if (!isToolError && toolName === "cron" && isCronAddAction(startData?.args)) {
+  if (!isToolError && toolName === "cron" && isCronAddAction(startArgs)) {
     ctx.state.successfulCronAdds += 1;
   }
   if (!isToolError && toolName === HEARTBEAT_RESPONSE_TOOL_NAME) {
@@ -1563,16 +1531,10 @@ export async function handleToolExecutionEnd(
   // Run after_tool_call plugin hook (fire-and-forget)
   const hookRunnerAfter = ctx.hookRunner ?? (await loadHookRunnerGlobal()).getGlobalHookRunner();
   if (hookRunnerAfter?.hasHooks("after_tool_call")) {
-    const { consumeAdjustedParamsForToolCall } = await loadBeforeToolCall();
-    const adjustedArgs = consumeAdjustedParamsForToolCall(toolCallId, runId);
-    const afterToolCallArgs =
-      adjustedArgs && typeof adjustedArgs === "object"
-        ? (adjustedArgs as Record<string, unknown>)
-        : startArgs;
     const durationMs = startData?.startTime != null ? Date.now() - startData.startTime : undefined;
     const hookEvent: PluginHookAfterToolCallEvent = {
       toolName,
-      params: afterToolCallArgs,
+      params: startArgs,
       runId,
       toolCallId,
       result: sanitizedResult,

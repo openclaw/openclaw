@@ -41,6 +41,10 @@ import {
   runMemoryEmbeddingRetryLoop,
 } from "./manager-embedding-policy.js";
 import { deleteMemoryFtsRows } from "./manager-fts-state.js";
+import {
+  resolveMemoryIndexProviderIdentities,
+  type MemoryIndexProviderIdentity,
+} from "./manager-reindex-state.js";
 import { MemoryManagerSyncOps, type MemoryIndexWorkItem } from "./manager-sync-ops.js";
 import { logMemoryVectorDegradedWrite } from "./manager-vector-warning.js";
 import { replaceMemoryVectorRow } from "./manager-vector-write.js";
@@ -306,14 +310,15 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   }
 
   protected computeProviderKey(): string {
-    // FTS-only mode: no provider, use a constant key
-    if (!this.provider) {
-      return hashText(JSON.stringify({ provider: "none", model: "fts-only" }));
-    }
-    if (this.providerRuntime?.cacheKeyData) {
-      return hashText(JSON.stringify(this.providerRuntime.cacheKeyData));
-    }
-    return hashText(JSON.stringify({ provider: this.provider.id, model: this.provider.model }));
+    return this.resolveProviderIndexIdentities()[0].providerKey;
+  }
+
+  protected resolveProviderIndexIdentities(): MemoryIndexProviderIdentity[] {
+    return resolveMemoryIndexProviderIdentities({
+      provider: this.provider,
+      cacheKeyData: this.providerRuntime?.cacheKeyData,
+      aliases: this.providerRuntime?.indexIdentityAliases,
+    });
   }
 
   private buildBatchDebug(
@@ -390,8 +395,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       cached: loadMemoryEmbeddingCache({
         db: this.db,
         enabled: this.cache.enabled,
-        provider: this.provider,
-        providerKey: this.providerKey,
+        providerIdentities: this.provider ? this.resolveProviderIndexIdentities() : [],
         hashes: chunks.map((chunk) => chunk.hash),
         tableName: EMBEDDING_CACHE_TABLE,
       }),

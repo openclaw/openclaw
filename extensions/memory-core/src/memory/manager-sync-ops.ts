@@ -41,25 +41,37 @@ import {
   createEmbeddingProvider,
   resolveEmbeddingProviderAdapterId,
   resolveEmbeddingProviderFallbackModel,
+  resolveEmbeddingProviderIndexIdentity,
   type EmbeddingProvider,
   type EmbeddingProviderId,
   type EmbeddingProviderRuntime,
 } from "./embeddings.js";
-import { runMemoryAtomicReindex } from "./manager-atomic-reindex.js";
-import { closeMemoryDatabase, openMemoryDatabaseAtPath } from "./manager-db.js";
+import { removeMemoryIndexFiles, runMemoryAtomicReindex } from "./manager-atomic-reindex.js";
+import {
+  cleanupAgedMemoryReindexTempFiles,
+  closeMemoryDatabase,
+  openMemoryDatabaseAtPath,
+  openMemoryReindexTempDatabaseAtPath,
+  releaseMemoryDatabaseSwapLock,
+  restoreMemoryDatabaseSwapLock,
+} from "./manager-db.js";
 import { isMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
 import {
   applyMemoryFallbackProviderState,
   resolveMemoryFallbackProviderRequest,
   resolveFallbackCurrentProviderId,
+  resolveMemoryPrimaryProviderRequest,
   type MemoryProviderLifecycleState,
 } from "./manager-provider-state.js";
+import { acquireMemoryReindexLock, type MemoryReindexLockHandle } from "./manager-reindex-lock.js";
 import {
   resolveConfiguredScopeHash,
   resolveConfiguredSourcesForMeta,
+  resolveMemoryIndexProviderIdentities,
   resolveMemoryIndexIdentityState,
-  type MemoryIndexMeta,
   type MemoryIndexIdentityState,
+  type MemoryIndexMeta,
+  type MemoryIndexProviderIdentity,
 } from "./manager-reindex-state.js";
 import { shouldSyncSessionsForReindex } from "./manager-session-reindex.js";
 import {
@@ -295,6 +307,7 @@ export abstract class MemoryManagerSyncOps {
   protected abstract readonly cache: { enabled: boolean; maxEntries?: number };
   protected abstract db: DatabaseSync;
   protected abstract computeProviderKey(): string;
+  protected abstract resolveProviderIndexIdentities(): MemoryIndexProviderIdentity[];
   protected abstract sync(params?: {
     reason?: string;
     force?: boolean;
@@ -487,19 +500,27 @@ export abstract class MemoryManagerSyncOps {
     hasIndexedChunks?: boolean;
   }): MemoryIndexIdentityState {
     const hasProviderOverride = params && "provider" in params;
+    const configuredIndexIdentity =
+      !hasProviderOverride && !this.provider && this.settings.provider !== "none"
+        ? resolveEmbeddingProviderIndexIdentity({
+            config: this.cfg,
+            agentDir: resolveAgentDir(this.cfg, this.agentId),
+            ...resolveMemoryPrimaryProviderRequest({ settings: this.settings }),
+          })
+        : undefined;
     // Plain status can compare identity before provider init. Mirror provider
     // init's empty-model fallback so adapter defaults do not look mismatched.
     const configuredProvider =
       this.settings.provider === "none"
         ? null
-        : {
+        : (configuredIndexIdentity?.provider ?? {
             id:
               resolveEmbeddingProviderAdapterId(this.settings.provider, this.cfg) ??
               this.settings.provider,
             model:
               this.settings.model.trim() ||
-              resolveEmbeddingProviderFallbackModel(this.settings.provider, "", this.cfg),
-          };
+              resolveEmbeddingProviderFallbackModel(this.settings.provider, "fts-only", this.cfg),
+          });
     const provider = hasProviderOverride
       ? params.provider!
       : this.provider
@@ -509,11 +530,35 @@ export abstract class MemoryManagerSyncOps {
       params && "vectorReady" in params
         ? Boolean(params.vectorReady)
         : this.vector.available === true;
+    const initializedProviderIdentities =
+      provider &&
+      this.provider &&
+      provider.id === this.provider.id &&
+      provider.model === this.provider.model
+        ? this.resolveProviderIndexIdentities()
+        : [];
+    const configuredProviderIdentities = configuredIndexIdentity
+      ? resolveMemoryIndexProviderIdentities({
+          provider: configuredIndexIdentity.provider,
+          cacheKeyData: configuredIndexIdentity.cacheKeyData,
+          aliases: configuredIndexIdentity.aliases,
+        })
+      : [];
+    const providerIdentities =
+      initializedProviderIdentities.length > 0
+        ? initializedProviderIdentities
+        : configuredProviderIdentities;
+    const configuredProviderKeyKnown = configuredProviderIdentities.length > 0;
     return resolveMemoryIndexIdentityState({
       meta: params && "meta" in params ? params.meta! : this.readMeta(),
       provider,
-      providerKey: params?.providerKeyKnown === false ? undefined : (this.providerKey ?? undefined),
-      providerKeyKnown: params?.providerKeyKnown,
+      providerKey: configuredProviderKeyKnown
+        ? providerIdentities[0]?.providerKey
+        : params?.providerKeyKnown === false
+          ? undefined
+          : (this.providerKey ?? undefined),
+      providerAliases: providerIdentities.slice(1),
+      providerKeyKnown: configuredProviderKeyKnown ? true : params?.providerKeyKnown,
       configuredSources: resolveConfiguredSourcesForMeta(this.sources),
       configuredScopeHash: resolveConfiguredScopeHash({
         workspaceDir: this.workspaceDir,
@@ -2137,6 +2182,7 @@ export abstract class MemoryManagerSyncOps {
       // Also detects provider→FTS-only transitions so orphaned old-model FTS rows are cleaned up.
       provider: this.provider ? { id: this.provider.id, model: this.provider.model } : null,
       providerKey: this.providerKey ?? undefined,
+      providerAliases: this.resolveProviderIndexIdentities().slice(1),
       configuredSources: resolveConfiguredSourcesForMeta(this.sources),
       configuredScopeHash: resolveConfiguredScopeHash({
         workspaceDir: this.workspaceDir,
@@ -2381,11 +2427,13 @@ export abstract class MemoryManagerSyncOps {
 
     const dbPath = resolveUserPath(this.settings.store.path);
     const tempDbPath = `${dbPath}.tmp-${randomUUID()}`;
-    const tempDb = openMemoryDatabaseAtPath(tempDbPath, this.settings.store.vector.enabled);
 
     const originalDb = this.db;
+    let reindexLock: MemoryReindexLockHandle | undefined;
+    let tempDb: DatabaseSync | undefined;
     let tempDbClosed = false;
     let originalDbClosed = false;
+    let originalDbSwapLockReleased = false;
     const originalRetryState = this.snapshotReindexRetryState();
     const shouldRetryMemoryOnFailure = this.sources.has("memory");
     const shouldRetrySessionsOnFailure = this.shouldSyncSessions(
@@ -2406,6 +2454,10 @@ export abstract class MemoryManagerSyncOps {
       if (originalDbClosed) {
         this.db = openMemoryDatabaseAtPath(dbPath, this.settings.store.vector.enabled, false);
       } else {
+        if (originalDbSwapLockReleased) {
+          restoreMemoryDatabaseSwapLock(originalDb, dbPath);
+          originalDbSwapLockReleased = false;
+        }
         this.db = originalDb;
       }
       this.fts.available = originalState.ftsAvailable;
@@ -2417,24 +2469,29 @@ export abstract class MemoryManagerSyncOps {
       this.vectorReady = originalDbClosed ? null : originalState.vectorReady;
     };
 
-    this.db = tempDb;
-    this.embeddingCacheMirrorDb = originalDb;
-    this.lastMetaSerialized = null;
-    this.resetVectorState();
-    this.fts.available = false;
-    this.fts.loadError = undefined;
-    this.ensureSchema();
-
-    let nextMeta: MemoryIndexMeta | null;
     let publishedIndex = false;
 
     try {
-      nextMeta = await runMemoryAtomicReindex({
+      cleanupAgedMemoryReindexTempFiles(dbPath);
+      reindexLock = acquireMemoryReindexLock(dbPath);
+      tempDb = openMemoryReindexTempDatabaseAtPath(tempDbPath, this.settings.store.vector.enabled);
+      const openedTempDb = tempDb;
+      this.db = openedTempDb;
+      this.embeddingCacheMirrorDb = originalDb;
+      this.lastMetaSerialized = null;
+      this.resetVectorState();
+      this.fts.available = false;
+      this.fts.loadError = undefined;
+      this.ensureSchema();
+
+      originalDbSwapLockReleased = true;
+      releaseMemoryDatabaseSwapLock(originalDb);
+      const nextMeta = await runMemoryAtomicReindex({
         targetPath: dbPath,
         tempPath: tempDbPath,
         beforeTempCleanup: () => {
           if (!tempDbClosed) {
-            closeMemoryDatabase(tempDb);
+            closeMemoryDatabase(openedTempDb);
             tempDbClosed = true;
           }
         },
@@ -2504,7 +2561,7 @@ export abstract class MemoryManagerSyncOps {
           this.writeMeta(meta);
           this.pruneEmbeddingCacheIfNeeded?.();
 
-          closeMemoryDatabase(tempDb);
+          closeMemoryDatabase(openedTempDb);
           tempDbClosed = true;
           closeMemoryDatabase(originalDb);
           originalDbClosed = true;
@@ -2520,7 +2577,7 @@ export abstract class MemoryManagerSyncOps {
     } catch (err) {
       this.embeddingCacheMirrorDb = null;
       try {
-        if (!tempDbClosed && this.db === tempDb) {
+        if (tempDb && !tempDbClosed && this.db === tempDb) {
           closeMemoryDatabase(tempDb);
           tempDbClosed = true;
         }
@@ -2532,6 +2589,9 @@ export abstract class MemoryManagerSyncOps {
         this.vector.dims = this.readMeta()?.vectorDims;
         throw err;
       }
+      try {
+        await removeMemoryIndexFiles(tempDbPath);
+      } catch {}
       restoreOriginalState();
       this.restoreReindexRetryState(originalRetryState);
       this.markFailedFullReindexRetry({
@@ -2539,6 +2599,12 @@ export abstract class MemoryManagerSyncOps {
         sessions: shouldRetrySessionsOnFailure,
       });
       throw err;
+    } finally {
+      try {
+        reindexLock?.release();
+      } catch (err) {
+        log.warn(`failed to release memory reindex lock for ${dbPath}: ${formatErrorMessage(err)}`);
+      }
     }
   }
 

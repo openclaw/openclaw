@@ -23,7 +23,15 @@
     "install": {
       "npmSpec": "@openclaw/codex",
       "defaultChoice": "npm",
-      "minHostVersion": ">=2026.5.1-beta.1"
+      "minHostVersion": ">=2026.5.1-beta.1",
+      "requiredPlatformPackages": [
+        "@openai/codex-linux-x64",
+        "@openai/codex-linux-arm64",
+        "@openai/codex-darwin-x64",
+        "@openai/codex-darwin-arm64",
+        "@openai/codex-win32-x64",
+        "@openai/codex-win32-arm64"
+      ]
     },
     "compat": {
       "pluginApi": ">=2026.6.2"

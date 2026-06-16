@@ -13,6 +13,7 @@ import type { RuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 
 type LlmBoundaryOptions = {
   timezone?: string;
+  includeTimestamp?: boolean;
   currentUserTimestampOverride?: {
     timestamp: number;
     text: string;
@@ -56,6 +57,7 @@ export function normalizeMessagesForCurrentPromptBoundary(params: {
   messages: AgentMessage[];
   prompt: string;
   timezone?: string;
+  includeTimestamp?: boolean;
   currentUserTimestamp?: number;
 }): AgentMessage[] {
   const promptMessage = {
@@ -63,7 +65,13 @@ export function normalizeMessagesForCurrentPromptBoundary(params: {
     content: [{ type: "text" as const, text: params.prompt }],
     timestamp: params.currentUserTimestamp ?? Date.now(),
   };
-  const boundaryOptions = params.timezone ? { timezone: params.timezone } : undefined;
+  const boundaryOptions =
+    params.timezone || params.includeTimestamp === false
+      ? {
+          ...(params.timezone ? { timezone: params.timezone } : {}),
+          ...(params.includeTimestamp === false ? { includeTimestamp: false } : {}),
+        }
+      : undefined;
   return normalizeMessagesForLlmBoundary(
     [...params.messages, promptMessage],
     boundaryOptions,
@@ -73,6 +81,7 @@ export function normalizeMessagesForCurrentPromptBoundary(params: {
 export function normalizeCurrentPromptTextForLlmBoundary(params: {
   prompt: string;
   timezone?: string;
+  includeTimestamp?: boolean;
   currentUserTimestamp?: number;
 }): string {
   const promptMessage = {
@@ -80,7 +89,13 @@ export function normalizeCurrentPromptTextForLlmBoundary(params: {
     content: [{ type: "text" as const, text: params.prompt }],
     timestamp: params.currentUserTimestamp ?? Date.now(),
   };
-  const boundaryOptions = params.timezone ? { timezone: params.timezone } : undefined;
+  const boundaryOptions =
+    params.timezone || params.includeTimestamp === false
+      ? {
+          ...(params.timezone ? { timezone: params.timezone } : {}),
+          ...(params.includeTimestamp === false ? { includeTimestamp: false } : {}),
+        }
+      : undefined;
   const [normalized] = normalizeMessagesForLlmBoundary([promptMessage], boundaryOptions);
   const content = (normalized as { content?: unknown } | undefined)?.content;
   return typeof content === "string" ? content : params.prompt;
@@ -372,11 +387,15 @@ function stampUserTextWithMessageTimestamp(
   text: string,
   timestamp: unknown,
   timezone: string | undefined,
+  includeTimestamp: boolean | undefined,
 ): string {
   // Stamping is opt-in: only the LLM-boundary call sites that pass a resolved
   // timezone (via resolveUserTimezone) stamp messages. When no timezone is
   // supplied, the boundary performs form/metadata normalization only — leaving
   // content bare (this also keeps non-stamping callers and unit fixtures clean).
+  if (includeTimestamp === false) {
+    return text;
+  }
   if (!timezone) {
     return text;
   }
@@ -480,7 +499,12 @@ function stripHistoricalInboundMetadataFromUserMessages(
         return `${envelope}${stripInboundMetadata(body)}`;
       }
       const stripped = isActive ? raw : stripInboundMetadata(raw);
-      return stampUserTextWithMessageTimestamp(stripped, messageTimestamp, options?.timezone);
+      return stampUserTextWithMessageTimestamp(
+        stripped,
+        messageTimestamp,
+        options?.timezone,
+        options?.includeTimestamp,
+      );
     };
 
     if (typeof content === "string") {

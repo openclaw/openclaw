@@ -337,6 +337,12 @@ export type CodexGetAccountResponse = {
   requiresOpenaiAuth?: boolean;
 };
 
+export type CodexModelProviderCapabilitiesReadResponse = {
+  namespaceTools: boolean;
+  imageGeneration: boolean;
+  webSearch: boolean;
+};
+
 export type CodexChatgptAuthTokensRefreshResponse = {
   accessToken: string;
   chatgptAccountId: string;
@@ -542,6 +548,7 @@ type CodexAppServerRequestResultMap = {
   "marketplace/add": JsonValue;
   "mcpServerStatus/list": CodexListMcpServerStatusResponse;
   "model/list": CodexModelListResponse;
+  "modelProvider/capabilities/read": CodexModelProviderCapabilitiesReadResponse;
   "plugin/install": CodexPluginInstallResponse;
   "plugin/list": CodexPluginListResponse;
   "plugin/read": CodexPluginReadResponse;

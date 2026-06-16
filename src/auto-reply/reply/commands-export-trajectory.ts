@@ -20,6 +20,7 @@ import {
 import {
   buildCurrentOpenClawCliArgv,
   buildCurrentOpenClawCliCommand,
+  buildCurrentOpenClawCliExecEnv,
 } from "./commands-openclaw-cli.js";
 import {
   deliverPrivateCommandReply,
@@ -268,6 +269,7 @@ async function requestTrajectoryExportApproval(
     });
     const result = await execTool.execute("chat-export-trajectory", {
       command: request.command,
+      env: buildCurrentOpenClawCliExecEnv(),
       security: "allowlist",
       ask: "always",
       background: true,

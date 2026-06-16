@@ -510,6 +510,7 @@ export type ProviderResolveDynamicModelContext = {
   config?: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
+  agentRuntimeId?: string;
   provider: string;
   modelId: string;
   modelRegistry: ModelRegistry;

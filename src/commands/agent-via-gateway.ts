@@ -290,6 +290,14 @@ function validateExplicitSessionKeyForDispatch(
 
 async function normalizeSessionKeyOptsForDispatch(opts: AgentCliOpts): Promise<AgentCliOpts> {
   const rawSessionKey = opts.sessionKey?.trim();
+  const rawTo = opts.to?.trim();
+  if (!rawSessionKey && !opts.sessionId?.trim() && classifySessionKeyShape(rawTo) === "agent") {
+    return {
+      ...opts,
+      to: undefined,
+      sessionKey: rawTo,
+    };
+  }
   const isLegacySessionKey =
     rawSessionKey && classifySessionKeyShape(rawSessionKey) === "legacy_or_alias";
   const agentIdRaw = opts.agent?.trim();
@@ -704,6 +712,7 @@ async function agentViaGatewayCommand(
             timeout: timeoutSeconds,
             lane: opts.lane,
             extraSystemPrompt: opts.extraSystemPrompt,
+            cleanupBundleMcpOnRunEnd: true,
             idempotencyKey,
           },
           expectFinal: true,

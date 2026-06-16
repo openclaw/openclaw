@@ -2408,6 +2408,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
             error: setupRegistration.loadError,
             logPrefix: `[plugins] ${record.id} failed to load setup entry from ${record.source}: `,
             diagnosticMessagePrefix: "failed to load setup entry: ",
+            diagnosticCode: "channel-setup-failure",
           });
           continue;
         }
@@ -2483,6 +2484,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
                 error: err,
                 logPrefix: `[plugins] ${record.id} failed to load setup-runtime entry from ${record.source}: `,
                 diagnosticMessagePrefix: "failed to load setup-runtime entry: ",
+                diagnosticCode: "channel-setup-failure",
               });
               continue;
             }
@@ -2509,6 +2511,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
                   error: err,
                   logPrefix: `[plugins] ${record.id} failed to apply setup-runtime channel runtime from ${record.source}: `,
                   diagnosticMessagePrefix: "failed to apply setup-runtime channel runtime: ",
+                  diagnosticCode: "channel-setup-failure",
                 });
                 continue;
               }
@@ -2528,6 +2531,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
                 error: runtimePluginRegistration.loadError,
                 logPrefix: `[plugins] ${record.id} failed to load setup-runtime channel entry from ${record.source}: `,
                 diagnosticMessagePrefix: "failed to load setup-runtime channel entry: ",
+                diagnosticCode: "channel-setup-failure",
               });
               continue;
             }
@@ -2583,6 +2587,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
                 error: err,
                 logPrefix: `[plugins] ${record.id} failed to apply setup channel runtime from ${record.source}: `,
                 diagnosticMessagePrefix: "failed to apply setup channel runtime: ",
+                diagnosticCode: "channel-setup-failure",
               });
               continue;
             }
@@ -2610,6 +2615,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
                   logPrefix: `[plugins] ${record.id} failed to register setup-runtime channel side effects from ${record.source}: `,
                   diagnosticMessagePrefix:
                     "failed to register setup-runtime channel side effects: ",
+                  diagnosticCode: "channel-setup-failure",
                 });
                 continue;
               }
@@ -2629,6 +2635,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
               error: err,
               logPrefix: `[plugins] ${record.id} failed to register setup channel from ${record.source}: `,
               diagnosticMessagePrefix: "failed to register setup channel: ",
+              diagnosticCode: "channel-setup-failure",
             });
             continue;
           }

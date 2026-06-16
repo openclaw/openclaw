@@ -284,7 +284,7 @@ describe("agent-runner-utils", () => {
   });
 
   it("prefers OriginatingChannel over Provider for messageProvider", () => {
-    const run = makeRun({ chatType: "group" });
+    const run = makeRun({ agentAccountId: "work", chatType: "group" });
 
     const resolved = buildEmbeddedRunContexts({
       run,
@@ -298,8 +298,52 @@ describe("agent-runner-utils", () => {
     });
 
     expect(resolved.embeddedContext.messageProvider).toBe("telegram");
+    expect(resolved.embeddedContext.agentAccountId).toBe("work");
     expect(resolved.embeddedContext.chatType).toBe("group");
     expect(resolved.embeddedContext.messageTo).toBe("268300329");
+  });
+
+  it("hydrates the queued route before resolving channel threading policy", () => {
+    hoisted.getChannelPluginMock.mockReturnValue({
+      threading: {
+        buildToolContext: ({
+          accountId,
+          context,
+        }: {
+          accountId?: string | null;
+          context: { ChatType?: string; NativeChannelId?: string; To?: string };
+        }) => ({
+          currentChannelId: context.NativeChannelId ?? context.To,
+          currentMessagingTarget: context.To,
+          replyToMode: accountId === "work" && context.ChatType === "direct" ? "off" : "all",
+        }),
+      },
+    });
+    const run = makeRun({ agentAccountId: "work", chatType: "direct" });
+
+    const resolved = buildEmbeddedRunContexts({
+      run,
+      sessionCtx: {
+        Provider: "cron-event",
+        NativeChannelId: "D1",
+      },
+      replyRoute: {
+        originatingChannel: "slack",
+        originatingTo: "user:U1",
+        originatingAccountId: "work",
+        originatingChatType: "direct",
+      },
+      hasRepliedRef: undefined,
+      provider: "openai",
+    });
+
+    expect(resolved.embeddedContext.messageProvider).toBe("slack");
+    expect(resolved.embeddedContext.messageTo).toBe("user:U1");
+    expect(resolved.embeddedContext.currentChannelId).toBe("D1");
+    expect(resolved.embeddedContext.currentMessagingTarget).toBe("user:U1");
+    expect(resolved.embeddedContext.agentAccountId).toBe("work");
+    expect(resolved.embeddedContext.chatType).toBe("direct");
+    expect(resolved.embeddedContext.replyToMode).toBe("off");
   });
 
   it("carries inbound audio context into embedded message tools", () => {

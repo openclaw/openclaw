@@ -506,6 +506,8 @@ export type PluginManifestCapabilityProviderMetadata = {
 
 export type PluginManifestToolMetadata = PluginManifestCapabilityProviderMetadata & {
   optional?: boolean;
+  /** Tool execution is safe to repeat after an incomplete model turn. */
+  replaySafe?: boolean;
 };
 
 export type PluginManifestProviderAuthChoice = {
@@ -849,6 +851,7 @@ function normalizePluginToolMetadata(
     const metadata = {
       ...providerMetadata,
       ...(rawMetadata.optional === true ? { optional: true } : {}),
+      ...(rawMetadata.replaySafe === true ? { replaySafe: true } : {}),
     } satisfies PluginManifestToolMetadata;
     if (Object.keys(metadata).length > 0) {
       normalized[toolName] = metadata;
@@ -1956,6 +1959,7 @@ export type PluginPackageInstall = {
   minHostVersion?: string;
   expectedIntegrity?: string;
   allowInvalidConfigRecovery?: boolean;
+  requiredPlatformPackages?: string[];
 };
 
 export type OpenClawPackageStartup = {

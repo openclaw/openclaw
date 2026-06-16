@@ -44,10 +44,8 @@ export function createDiscordDraftPreviewController(params: {
   const accountBlockStreamingEnabled =
     resolveChannelStreamingBlockEnabled(params.discordConfig) ??
     params.cfg.agents?.defaults?.blockStreamingDefault === "on";
-  const canStreamProgressDraftForToolOnlySource =
-    params.sourceRepliesAreToolOnly && discordStreamMode === "progress";
   const canStreamDraft =
-    (!params.sourceRepliesAreToolOnly || canStreamProgressDraftForToolOnlySource) &&
+    !params.sourceRepliesAreToolOnly &&
     discordStreamMode !== "off" &&
     !accountBlockStreamingEnabled;
   const draftStream = canStreamDraft

@@ -32,26 +32,45 @@ describe("ci workflow guards", () => {
     );
   });
 
+  it("runs the transcript reader ratchet as a visible additional check", () => {
+    const workflow = readCiWorkflow();
+    const additionalJob = workflow.jobs["check-additional-shard"];
+    const matrixRows = additionalJob.strategy.matrix.include;
+    expect(matrixRows).toContainEqual({
+      check_name: "check-session-transcript-reader-boundary",
+      group: "session-transcript-reader-boundary",
+    });
+
+    const runStep = additionalJob.steps.find((step) => step.name === "Run additional check shard");
+    expect(runStep.run).toContain("session-transcript-reader-boundary)");
+    expect(runStep.run).toContain(
+      'run_check "lint:tmp:session-transcript-reader-boundary" pnpm run lint:tmp:session-transcript-reader-boundary',
+    );
+  });
+
   it("kills timed manual checkout fetches after the grace period", () => {
     const workflowPaths = [
-      ".github/workflows/ci.yml",
-      ".github/workflows/workflow-sanity.yml",
-      ".github/workflows/ci-check-testbox.yml",
-      ".github/workflows/ci-check-arm-testbox.yml",
-      ".github/workflows/ci-build-artifacts-testbox.yml",
-      ".github/workflows/crabbox-hydrate.yml",
+      [".github/workflows/ci.yml", "120s"],
+      [".github/workflows/workflow-sanity.yml", "30s"],
+      [".github/workflows/ci-check-testbox.yml", "120s"],
+      [".github/workflows/ci-check-arm-testbox.yml", "120s"],
+      [".github/workflows/ci-build-artifacts-testbox.yml", "120s"],
+      [".github/workflows/crabbox-hydrate.yml", "30s"],
     ];
 
-    for (const workflowPath of workflowPaths) {
+    for (const [workflowPath, timeoutSeconds] of workflowPaths) {
       const workflow = readFileSync(workflowPath, "utf8");
       const fetchTimeouts = workflow.match(
-        /timeout --signal=TERM[^\n]* 30s git(?: -C "(?:\$workdir|\$GITHUB_WORKSPACE|clawhub-source)")?/g,
+        new RegExp(
+          `timeout --signal=TERM[^\\n]* ${timeoutSeconds} git(?: -C "(?:\\$workdir|\\$GITHUB_WORKSPACE|clawhub-source)")?`,
+          "g",
+        ),
       );
 
       expect(fetchTimeouts?.length, workflowPath).toBeGreaterThan(0);
       expect(
         fetchTimeouts?.every((line) =>
-          line.startsWith("timeout --signal=TERM --kill-after=10s 30s git"),
+          line.startsWith(`timeout --signal=TERM --kill-after=10s ${timeoutSeconds} git`),
         ),
         workflowPath,
       ).toBe(true);
@@ -74,7 +93,7 @@ describe("ci workflow guards", () => {
       const checkoutStep = workflow.jobs[jobName].steps.find((step) => step.name === "Checkout");
 
       expect(checkoutStep.run, jobName).toContain(
-        'timeout --signal=TERM --kill-after=10s 30s git -C "$GITHUB_WORKSPACE"',
+        'timeout --signal=TERM --kill-after=10s 120s git -C "$GITHUB_WORKSPACE"',
       );
       expect(checkoutStep.run, jobName).toContain("for attempt in 1 2 3");
       expect(checkoutStep.run, jobName).toContain("timed out on attempt $attempt; retrying");
@@ -113,6 +132,21 @@ describe("ci workflow guards", () => {
         "fetch --no-tags --prune --no-recurse-submodules --depth=1 origin",
       );
     }
+  });
+
+  it("runs plugin SDK API and surface drift checks in workflow sanity", () => {
+    const workflow = readWorkflowSanityWorkflow();
+    const steps = workflow.jobs["generated-doc-baselines"].steps;
+    const stepNames = steps.map((step) => step.name);
+
+    expect(stepNames).toContain("Check plugin SDK API baseline drift");
+    expect(stepNames).toContain("Check plugin SDK surface budget");
+    expect(stepNames.indexOf("Check plugin SDK API baseline drift")).toBeLessThan(
+      stepNames.indexOf("Check plugin SDK surface budget"),
+    );
+    expect(steps.find((step) => step.name === "Check plugin SDK surface budget").run).toBe(
+      "pnpm plugin-sdk:surface:check",
+    );
   });
 
   it("bounds platform checkout fetches without GNU timeout", () => {

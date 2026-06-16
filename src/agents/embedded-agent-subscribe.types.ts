@@ -73,6 +73,7 @@ export type SubscribeEmbeddedAgentSessionParams = {
     sessionKey?: string;
   }) => void | Promise<void>;
   onHeartbeatToolResponse?: (response: HeartbeatToolResponse) => void | Promise<void>;
+  /** "finishing" defers both success and error terminal ownership to the caller. */
   terminalLifecyclePhase?: "end" | "finishing";
   /** Read immediately before terminal lifecycle emission. */
   isTerminalAborted?: () => boolean | undefined;
@@ -95,6 +96,18 @@ export type SubscribeEmbeddedAgentSessionParams = {
   silentExpected?: boolean;
   config?: OpenClawConfig;
   sessionKey?: string;
+  /** Current transport channel resolved for this run. */
+  currentChannelId?: string;
+  /** Routable target for the current conversation when it differs from the native channel ID. */
+  currentMessagingTarget?: string;
+  /** Current transport thread resolved for this run. */
+  currentThreadId?: string;
+  /** Current inbound message id used to distinguish child replies from explicit roots. */
+  currentMessageId?: string | number;
+  /** Reply mode used by transport auto-threading. */
+  replyToMode?: "off" | "first" | "all" | "batched";
+  /** Shared one-shot reply state used by first/batched modes. */
+  hasRepliedRef?: { value: boolean };
   /** Ephemeral session UUID — regenerated on /new and /reset. */
   sessionId?: string;
   /** Agent identity for hook context — resolved from session config in attempt.ts. */
@@ -103,6 +116,8 @@ export type SubscribeEmbeddedAgentSessionParams = {
    * Exact raw names of OpenClaw tools registered for this run.
    */
   builtinToolNames?: ReadonlySet<string>;
+  /** Exact registered tool names whose concrete instances are safe to replay. */
+  replaySafeToolNames?: ReadonlySet<string>;
   /**
    * Exact raw names allowed to emit local media paths for this run.
    * Includes core trusted tools plus bundled plugin tools proven from the

@@ -1,7 +1,6 @@
 /** Cron timer loop, execution, catch-up, and run-result state transitions. */
 import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
-import { readSessionEntry } from "../../config/sessions/store-load.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { CronConfig, CronRetryOn } from "../../config/types.cron.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
@@ -228,7 +227,9 @@ export async function executeJobCoreWithTimeout(
     const triggerTimeout = (reason: string) => {
       timeoutReason = reason;
       if (!runAbortController.signal.aborted) {
-        runAbortController.abort(reason);
+        const timeoutError = new Error(reason);
+        timeoutError.name = "TimeoutError";
+        runAbortController.abort(timeoutError);
       }
       resolveTimeout?.(timeoutMarker);
     };
@@ -372,7 +373,11 @@ function resolveMainSessionCronDeliveryContext(
     return undefined;
   }
   try {
-    const sessionEntry = readSessionEntry(storePath, targetSessionKey) as SessionEntry | undefined;
+    const sessionEntry = loadSessionEntry({
+      agentId,
+      sessionKey: targetSessionKey,
+      storePath,
+    });
     return deliveryContextFromSession(sessionEntry);
   } catch {
     return undefined;

@@ -11,9 +11,9 @@ import type {
   OpenClawConfig,
 } from "openclaw/plugin-sdk/config-contracts";
 import { resolveDefaultGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
-import { resolveGroupSessionKey } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveWhatsAppAccount, type ResolvedWhatsAppAccount } from "./accounts.js";
 import { getSelfIdentity, getSenderIdentity } from "./identity.js";
+import { resolveWhatsAppGroupConversationId } from "./inbound/group-conversation.js";
 import type { WebInboundMessage } from "./inbound/types.js";
 import { resolveWhatsAppRuntimeGroupPolicy } from "./runtime-group-policy.js";
 import { isSelfChatMode, normalizeE164 } from "./text-runtime.js";
@@ -38,16 +38,6 @@ function normalizeWhatsAppIngressPhone(value: string): string | null {
     return null;
   }
   return normalizeE164(trimmed);
-}
-
-function resolveGroupConversationId(conversationId: string): string {
-  return (
-    resolveGroupSessionKey({
-      From: conversationId,
-      ChatType: "group",
-      Provider: "whatsapp",
-    })?.id ?? conversationId
-  );
 }
 
 function maybeSamePhoneDmAllowFrom(params: {
@@ -122,14 +112,14 @@ export function resolveWhatsAppInboundPolicy(params: {
       resolveChannelGroupPolicy({
         cfg: resolvedGroupCfg,
         channel: "whatsapp",
-        groupId: resolveGroupConversationId(conversationId),
+        groupId: resolveWhatsAppGroupConversationId(conversationId),
         hasGroupAllowFrom: groupAllowFrom.length > 0,
       }),
     resolveConversationRequireMention: (conversationId) =>
       resolveChannelGroupRequireMention({
         cfg: resolvedGroupCfg,
         channel: "whatsapp",
-        groupId: resolveGroupConversationId(conversationId),
+        groupId: resolveWhatsAppGroupConversationId(conversationId),
       }),
   };
 }
@@ -171,6 +161,7 @@ export async function resolveWhatsAppIngressAccess(params: {
     policy: {
       groupAllowFromFallbackToAllowFrom: false,
     },
+    providerMissingFallbackApplied: params.policy.providerMissingFallbackApplied,
     allowFrom: dmAllowFrom,
     groupAllowFrom: params.policy.groupAllowFrom,
     command: params.includeCommand === true ? {} : undefined,
