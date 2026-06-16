@@ -1,5 +1,6 @@
 // Gateway session lifecycle state projection.
 // Converts agent run lifecycle events into session row/store status updates.
+import { unlink } from "node:fs/promises";
 import {
   buildAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
@@ -296,4 +297,15 @@ export async function persistGatewaySessionLifecycleEvent(params: {
       return Object.keys(patch).length > 0 ? patch : null;
     },
   });
+
+  // On terminal events (end/error), clean up the orphaned .jsonl.lock file
+  // so the next inbound does not block on a stale lock (#93383).
+  if (phase === "end" || phase === "error") {
+    const lockPath = `${sessionEntry.storePath}.lock`;
+    try {
+      await unlink(lockPath);
+    } catch {
+      // Lock file may not exist — that's fine.
+    }
+  }
 }
