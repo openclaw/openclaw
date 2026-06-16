@@ -14,10 +14,12 @@ import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   markMcpLoopbackRequestClassified,
+  markMcpLoopbackRequestFinished,
   markMcpLoopbackRequestStarted,
   markMcpLoopbackToolCallFinished,
   markMcpLoopbackToolCallStarted,
   recordMcpLoopbackToolCallResult,
+  resolveMcpLoopbackYieldContext,
   updateMcpLoopbackToolCallCapture,
 } from "../gateway/mcp-http.loopback-runtime.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
@@ -1685,6 +1687,41 @@ describe("runCliAgent reliability", () => {
     expect(completion.finishReason).toBe("stop");
     expect(completion.stopReason).toBe("completed");
     expect(completion.refusal).toBe(false);
+  });
+
+  it("marks CLI runs as paused after sessions_yield", async () => {
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as Parameters<ReturnType<typeof getProcessSupervisor>["spawn"]>[0];
+      const captureHandle = markMcpLoopbackRequestStarted(input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY);
+      await resolveMcpLoopbackYieldContext(captureHandle)?.onYield("waiting on subagents");
+      markMcpLoopbackRequestFinished(captureHandle);
+      input.onStdout?.("yield acknowledged");
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+    const context = buildPreparedContext();
+    context.mcpDeliveryCapture = true;
+
+    const result = await runPreparedCliAgent(context);
+
+    expect(result.meta).toMatchObject({
+      yielded: true,
+      livenessState: "paused",
+      stopReason: "end_turn",
+      completion: {
+        finishReason: "end_turn",
+        stopReason: "end_turn",
+        refusal: false,
+      },
+    });
   });
 
   it("seeds fresh CLI sessions from the OpenClaw transcript", async () => {

@@ -122,10 +122,82 @@ describe("handleDiscordMessageAction", () => {
     });
   });
 
-  it("does not treat non-Discord requester ids as Discord guild admin sender ids", async () => {
+  it("rejects non-Discord requester ids for Discord guild admin actions", async () => {
+    const cfg = discordConfig({ channels: true });
+    await expect(
+      handleDiscordMessageAction({
+        action: "channel-delete",
+        params: {
+          channelId: "channel-1",
+        },
+        cfg,
+        requesterSenderId: "telegram-user-id",
+        toolContext: { currentChannelProvider: "telegram" },
+      }),
+    ).rejects.toThrow("trusted Discord sender identity");
+
+    expect(handleDiscordActionMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps no-context Discord guild admin actions on the manual runtime path", async () => {
     const cfg = discordConfig({ channels: true });
     await handleDiscordMessageAction({
       action: "channel-delete",
+      params: {
+        channelId: "channel-1",
+      },
+      cfg,
+      senderIsOwner: true,
+    });
+
+    expectDiscordActionCall({
+      payload: {
+        action: "channelDelete",
+        accountId: undefined,
+        channelId: "channel-1",
+      },
+      cfg,
+    });
+  });
+
+  it("rejects no-context Discord guild admin actions without owner trust", async () => {
+    const cfg = discordConfig({ channels: true });
+    await expect(
+      handleDiscordMessageAction({
+        action: "channel-delete",
+        params: {
+          channelId: "channel-1",
+        },
+        cfg,
+      }),
+    ).rejects.toThrow("trusted Discord sender identity");
+
+    expect(handleDiscordActionMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects non-Discord requester ids for Discord moderation actions", async () => {
+    const cfg = discordConfig({ moderation: true });
+    await expect(
+      handleDiscordMessageAction({
+        action: "timeout",
+        params: {
+          guildId: "guild-1",
+          userId: "user-2",
+          durationMin: 5,
+        },
+        cfg,
+        requesterSenderId: "telegram-user-id",
+        toolContext: { currentChannelProvider: "telegram" },
+      }),
+    ).rejects.toThrow("trusted Discord sender identity");
+
+    expect(handleDiscordActionMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps read-only guild lookups available from non-Discord requesters", async () => {
+    const cfg = discordConfig({ channelInfo: true });
+    await handleDiscordMessageAction({
+      action: "channel-info",
       params: {
         channelId: "channel-1",
       },
@@ -135,11 +207,7 @@ describe("handleDiscordMessageAction", () => {
     });
 
     expectDiscordActionCall({
-      payload: {
-        action: "channelDelete",
-        accountId: undefined,
-        channelId: "channel-1",
-      },
+      payload: { action: "channelInfo", accountId: undefined, channelId: "channel-1" },
       cfg,
     });
   });

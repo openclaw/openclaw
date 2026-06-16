@@ -936,6 +936,12 @@ if (isPrlctl) {
     expect(guestTransports.match(/umask 022/g)).toHaveLength(2);
   });
 
+  it("clears restored macOS npm content cache before install lanes", () => {
+    const macos = readFileSync(TS_PATHS.macos, "utf8");
+
+    expect(macos).toContain('rm -rf "$HOME/.npm/_cacache"');
+  });
+
   it("provisions portable Git before Windows dev update lanes", () => {
     const script = readFileSync(TS_PATHS.windows, "utf8");
     const windowsGit = readFileSync(TS_PATHS.windowsGit, "utf8");

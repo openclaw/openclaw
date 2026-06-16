@@ -34,6 +34,7 @@ export type CliOutput = {
   messagingToolSentMediaUrls?: string[];
   messagingToolSentTargets?: MessagingToolSend[];
   messagingToolSourceReplyPayloads?: MessagingToolSourceReplyPayload[];
+  yielded?: true;
 };
 
 /** Incremental assistant text emitted while parsing a streaming CLI response. */
