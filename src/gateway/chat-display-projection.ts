@@ -1627,7 +1627,7 @@ function projectEmptyAssistantErrorMessages(
       return message;
     }
     changed = true;
-    const next = {
+    const next: Record<string, unknown> = {
       ...message,
       content: [{ type: "text", text: GATEWAY_ASSISTANT_ERROR_FALLBACK_TEXT }],
     };
