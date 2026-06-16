@@ -12,6 +12,12 @@ type DevicesRpcOpts = {
   yes?: boolean;
   pending?: boolean;
   device?: string;
+  publicKey?: string;
+  displayName?: string;
+  platform?: string;
+  deviceFamily?: string;
+  clientId?: string;
+  clientMode?: string;
   role?: string;
   scope?: string[];
 };
@@ -97,6 +103,24 @@ export function registerDevicesCli(program: Command) {
         await runDevicesRejectCommand(requestId, opts);
       }),
   );
+
+  devices
+    .command("provision-local")
+    .description("Provision a paired device directly into the local gateway state")
+    .requiredOption("--device <id>", "Device id")
+    .requiredOption("--public-key <key>", "Device public key")
+    .requiredOption("--role <role>", "Role name")
+    .option("--scope <scope...>", "Scopes to approve for the role (repeatable)")
+    .option("--display-name <name>", "Device display name")
+    .option("--client-id <id>", "Client id")
+    .option("--client-mode <mode>", "Client mode")
+    .option("--platform <platform>", "Client platform")
+    .option("--device-family <family>", "Client device family")
+    .option("--json", "Output JSON", false)
+    .action(async (opts: DevicesRpcOpts) => {
+      const { runDevicesProvisionLocalCommand } = await loadDevicesRuntime();
+      await runDevicesProvisionLocalCommand(opts);
+    });
 
   devicesCallOpts(
     devices

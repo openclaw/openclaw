@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   })),
   listDevicePairing: vi.fn(),
   approveDevicePairing: vi.fn(),
+  provisionLocalDevicePairing: vi.fn(),
   summarizeDeviceTokens: vi.fn(),
   withProgress: vi.fn(async (_opts: unknown, fn: () => Promise<unknown>) => await fn()),
 }));
@@ -31,6 +32,7 @@ const {
   buildGatewayConnectionDetails,
   listDevicePairing,
   approveDevicePairing,
+  provisionLocalDevicePairing,
   summarizeDeviceTokens,
 } = mocks;
 
@@ -47,6 +49,7 @@ vi.mock("./progress.js", () => ({
 vi.mock("../infra/device-pairing.js", () => ({
   listDevicePairing: mocks.listDevicePairing,
   approveDevicePairing: mocks.approveDevicePairing,
+  provisionLocalDevicePairing: mocks.provisionLocalDevicePairing,
   summarizeDeviceTokens: mocks.summarizeDeviceTokens,
 }));
 
@@ -530,6 +533,108 @@ describe("devices cli clear", () => {
 });
 
 describe("devices cli tokens", () => {
+  it("provisions a local device without calling the gateway", async () => {
+    provisionLocalDevicePairing.mockResolvedValueOnce({
+      ok: true,
+      status: "provisioned",
+      requestId: "req-1",
+      device: {
+        deviceId: "broker-device-1",
+        publicKey: "broker-public-key-1",
+        roles: ["operator"],
+        scopes: ["operator.admin"],
+        approvedScopes: ["operator.admin"],
+        tokens: {
+          operator: {
+            token: "raw-device-token",
+            role: "operator",
+            scopes: ["operator.admin"],
+            createdAtMs: 1,
+          },
+        },
+        createdAtMs: 1,
+        approvedAtMs: 1,
+      },
+    });
+    summarizeDeviceTokens.mockReturnValueOnce([
+      { role: "operator", scopes: ["operator.admin"], createdAtMs: 1 },
+    ]);
+
+    await runDevicesCommand([
+      "provision-local",
+      "--device",
+      "broker-device-1",
+      "--public-key",
+      "broker-public-key-1",
+      "--role",
+      "operator",
+      "--scope",
+      "operator.admin",
+      "--display-name",
+      "Runtime Dashboard Broker",
+      "--client-id",
+      "gateway-client",
+      "--client-mode",
+      "backend",
+      "--platform",
+      "linux",
+      "--device-family",
+      "runtime-dashboard-broker",
+      "--json",
+    ]);
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(provisionLocalDevicePairing).toHaveBeenCalledWith({
+      deviceId: "broker-device-1",
+      publicKey: "broker-public-key-1",
+      displayName: "Runtime Dashboard Broker",
+      clientId: "gateway-client",
+      clientMode: "backend",
+      platform: "linux",
+      deviceFamily: "runtime-dashboard-broker",
+      role: "operator",
+      scopes: ["operator.admin"],
+    });
+    expect(runtime.writeJson).toHaveBeenCalledWith({
+      ok: true,
+      status: "provisioned",
+      requestId: "req-1",
+      device: {
+        deviceId: "broker-device-1",
+        publicKey: "broker-public-key-1",
+        roles: ["operator"],
+        scopes: ["operator.admin"],
+        approvedScopes: ["operator.admin"],
+        tokens: [{ role: "operator", scopes: ["operator.admin"], createdAtMs: 1 }],
+        createdAtMs: 1,
+        approvedAtMs: 1,
+      },
+    });
+    expect(JSON.stringify(runtime.writeJson.mock.calls[0]?.[0])).not.toContain("raw-device-token");
+  });
+
+  it("fails local provisioning when the device id is already paired to another key", async () => {
+    provisionLocalDevicePairing.mockResolvedValueOnce({
+      ok: false,
+      reason: "device-public-key-mismatch",
+      deviceId: "broker-device-1",
+    });
+
+    await runDevicesCommand([
+      "provision-local",
+      "--device",
+      "broker-device-1",
+      "--public-key",
+      "broker-public-key-2",
+      "--role",
+      "operator",
+    ]);
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(readRuntimeErrorOutput()).toContain("different public key");
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
   it.each([
     {
       label: "rotates a token for a device role",
@@ -1421,5 +1526,10 @@ afterEach(() => {
   });
   listDevicePairing.mockResolvedValue({ pending: [], paired: [] });
   approveDevicePairing.mockResolvedValue(undefined);
+  provisionLocalDevicePairing.mockResolvedValue({
+    ok: false,
+    reason: "approval-missing",
+    deviceId: "device-1",
+  });
   summarizeDeviceTokens.mockReturnValue(undefined);
 });

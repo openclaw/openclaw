@@ -154,6 +154,34 @@ export type ApproveDevicePairingResult =
   | DevicePairingForbiddenResult
   | null;
 
+export type ProvisionLocalDevicePairingInput = {
+  deviceId: string;
+  publicKey: string;
+  displayName?: string;
+  platform?: string;
+  deviceFamily?: string;
+  clientId?: string;
+  clientMode?: string;
+  role: string;
+  scopes?: string[];
+};
+
+export type ProvisionLocalDevicePairingResult =
+  | {
+      ok: true;
+      status: "already_provisioned" | "provisioned" | "updated";
+      requestId?: string;
+      device: PairedDevice;
+    }
+  | {
+      ok: false;
+      reason: "device-public-key-mismatch" | "approval-denied" | "approval-missing";
+      requestId?: string;
+      deviceId?: string;
+      scope?: string;
+      role?: string;
+    };
+
 type DevicePairingStateFile = {
   pendingById: Record<string, DevicePairingPendingRequest>;
   pairedByDeviceId: Record<string, PairedDevice>;
@@ -609,6 +637,179 @@ export async function getPendingDevicePairing(
 ): Promise<DevicePairingPendingRequest | null> {
   const state = await loadState(baseDir);
   return state.pendingById[requestId] ?? null;
+}
+
+function hasActiveDeviceTokenForRequestedScopes(params: {
+  device: PairedDevice;
+  role: string;
+  scopes: readonly string[];
+}): boolean {
+  const entry = params.device.tokens?.[params.role];
+  if (!entry || entry.revokedAtMs) {
+    return false;
+  }
+  if (entry.role !== params.role) {
+    return false;
+  }
+  return roleScopesAllow({
+    role: params.role,
+    requestedScopes: params.scopes,
+    allowedScopes: entry.scopes,
+  });
+}
+
+function localProvisionAlreadySatisfied(params: {
+  existing: PairedDevice;
+  publicKey: string;
+  role: string;
+  scopes: readonly string[];
+}): boolean {
+  if (params.existing.publicKey !== params.publicKey) {
+    return false;
+  }
+  if (!listApprovedPairedDeviceRoles(params.existing).includes(params.role)) {
+    return false;
+  }
+  if (
+    !scopesWithinApprovedDeviceBaseline({
+      role: params.role,
+      scopes: params.scopes,
+      approvedScopes: resolveApprovedDeviceScopeBaseline(params.existing),
+    })
+  ) {
+    return false;
+  }
+  return hasActiveDeviceTokenForRequestedScopes({
+    device: params.existing,
+    role: params.role,
+    scopes: params.scopes,
+  });
+}
+
+/** Provision or update a local paired device using explicit host-owner authority. */
+export async function provisionLocalDevicePairing(
+  input: ProvisionLocalDevicePairingInput,
+  baseDir?: string,
+): Promise<ProvisionLocalDevicePairingResult> {
+  const deviceId = normalizeDeviceId(input.deviceId);
+  if (!deviceId) {
+    throw new Error("deviceId required");
+  }
+  const publicKey = input.publicKey.trim();
+  if (!publicKey) {
+    throw new Error("publicKey required");
+  }
+  const role = normalizeRole(input.role);
+  if (!role) {
+    throw new Error("role required");
+  }
+  const scopes = normalizeDeviceAuthScopes(input.scopes);
+
+  return await withLock(async () => {
+    const state = await loadState(baseDir);
+    const existing = state.pairedByDeviceId[deviceId];
+    if (existing && existing.publicKey !== publicKey) {
+      return {
+        ok: false,
+        reason: "device-public-key-mismatch",
+        deviceId,
+      };
+    }
+    if (
+      existing &&
+      localProvisionAlreadySatisfied({
+        existing,
+        publicKey,
+        role,
+        scopes,
+      })
+    ) {
+      return {
+        ok: true,
+        status: "already_provisioned",
+        device: existing,
+      };
+    }
+
+    const pending = buildPendingDevicePairingRequest({
+      deviceId,
+      isRepair: Boolean(existing),
+      req: {
+        deviceId,
+        publicKey,
+        displayName: input.displayName,
+        platform: input.platform,
+        deviceFamily: input.deviceFamily,
+        clientId: input.clientId,
+        clientMode: input.clientMode,
+        role,
+        scopes,
+        silent: true,
+      },
+    });
+    const requestedRoles = mergeRoles(pending.roles, pending.role) ?? [];
+    const requestedScopes = normalizeDeviceAuthScopes(pending.scopes);
+    const roleMismatchScope = resolveScopeOutsideRequestedRoles({
+      requestedRoles,
+      requestedScopes,
+    });
+    if (roleMismatchScope) {
+      return {
+        ok: false,
+        reason: "approval-denied",
+        requestId: pending.requestId,
+        deviceId,
+        scope: roleMismatchScope,
+      };
+    }
+    const now = Date.now();
+    const roles = mergeRoles(existing?.roles, existing?.role, pending.roles, pending.role);
+    const approvedScopes = mergeScopes(
+      existing?.approvedScopes ?? existing?.scopes,
+      pending.scopes,
+    );
+    const tokens = existing?.tokens ? { ...existing.tokens } : {};
+    for (const roleForToken of requestedRoles) {
+      const existingToken = tokens[roleForToken];
+      const nextScopes = resolveApprovedTokenScopes({
+        role: roleForToken,
+        pending,
+        existingToken,
+        approvedScopes,
+        existing,
+      });
+      tokens[roleForToken] = {
+        token: newToken(),
+        role: roleForToken,
+        scopes: nextScopes,
+        createdAtMs: existingToken?.createdAtMs ?? now,
+        rotatedAtMs: existingToken ? now : undefined,
+        revokedAtMs: undefined,
+        lastUsedAtMs: existingToken?.lastUsedAtMs,
+      };
+    }
+    const device = buildApprovedPairedDevice({
+      pending,
+      existing,
+      roles,
+      approvedScopes,
+      tokens,
+      now,
+    });
+    for (const [requestId, request] of Object.entries(state.pendingById)) {
+      if (request.deviceId === deviceId) {
+        delete state.pendingById[requestId];
+      }
+    }
+    state.pairedByDeviceId[device.deviceId] = device;
+    await persistState(state, baseDir, "both");
+    return {
+      ok: true,
+      status: existing ? "updated" : "provisioned",
+      requestId: pending.requestId,
+      device,
+    };
+  });
 }
 
 /** Create or refresh a pending device pairing request for owner approval. */

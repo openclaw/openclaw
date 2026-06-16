@@ -13,6 +13,7 @@ import {
   hasEffectivePairedDeviceRole,
   listEffectivePairedDeviceRoles,
   listDevicePairing,
+  provisionLocalDevicePairing,
   removePairedDevice,
   requestDevicePairing,
   rejectDevicePairing,
@@ -1116,6 +1117,154 @@ describe("device pairing tokens", () => {
         baseDir,
       }),
     ).resolves.toEqual({ ok: true });
+  });
+
+  test("provisions a local operator device with an active token baseline", async () => {
+    const baseDir = await makeDevicePairingDir();
+
+    const result = await provisionLocalDevicePairing(
+      {
+        deviceId: "broker-device-1",
+        publicKey: "broker-public-key-1",
+        displayName: "Runtime Dashboard Broker",
+        platform: "linux",
+        deviceFamily: "runtime-dashboard-broker",
+        clientId: "gateway-client",
+        clientMode: "backend",
+        role: "operator",
+        scopes: ["operator.admin", "operator.read"],
+      },
+      baseDir,
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error(`expected provision success, got ${result.reason}`);
+    }
+    expect(result.status).toBe("provisioned");
+    expect(result.device.roles).toContain("operator");
+    expect(result.device.approvedScopes).toEqual([
+      "operator.admin",
+      "operator.read",
+      "operator.write",
+    ]);
+    const token = requireToken(result.device.tokens?.operator?.token);
+    await expect(
+      verifyDeviceToken({
+        deviceId: "broker-device-1",
+        token,
+        role: "operator",
+        scopes: ["operator.write"],
+        baseDir,
+      }),
+    ).resolves.toEqual({ ok: true });
+  });
+
+  test("keeps local provisioning idempotent when the approved token already covers scopes", async () => {
+    const baseDir = await makeDevicePairingDir();
+    const input = {
+      deviceId: "broker-device-1",
+      publicKey: "broker-public-key-1",
+      role: "operator",
+      scopes: ["operator.admin"],
+    };
+    const first = await provisionLocalDevicePairing(input, baseDir);
+    expect(first.ok).toBe(true);
+    if (!first.ok) {
+      throw new Error(`expected first provision success, got ${first.reason}`);
+    }
+    const token = requireToken(first.device.tokens?.operator?.token);
+
+    const second = await provisionLocalDevicePairing(input, baseDir);
+
+    expect(second.ok).toBe(true);
+    if (!second.ok) {
+      throw new Error(`expected second provision success, got ${second.reason}`);
+    }
+    expect(second.status).toBe("already_provisioned");
+    expect(second.device.tokens?.operator?.token).toBe(token);
+    expect(second.device.tokens?.operator?.rotatedAtMs).toBeUndefined();
+  });
+
+  test("updates local provisioning when requested scopes exceed the existing token", async () => {
+    const baseDir = await makeDevicePairingDir();
+    const first = await provisionLocalDevicePairing(
+      {
+        deviceId: "broker-device-1",
+        publicKey: "broker-public-key-1",
+        role: "operator",
+        scopes: ["operator.read"],
+      },
+      baseDir,
+    );
+    expect(first.ok).toBe(true);
+    if (!first.ok) {
+      throw new Error(`expected first provision success, got ${first.reason}`);
+    }
+    const firstToken = requireToken(first.device.tokens?.operator?.token);
+
+    const second = await provisionLocalDevicePairing(
+      {
+        deviceId: "broker-device-1",
+        publicKey: "broker-public-key-1",
+        role: "operator",
+        scopes: ["operator.admin"],
+      },
+      baseDir,
+    );
+
+    expect(second.ok).toBe(true);
+    if (!second.ok) {
+      throw new Error(`expected update success, got ${second.reason}`);
+    }
+    expect(second.status).toBe("updated");
+    expect(second.device.approvedScopes).toHaveLength(3);
+    expect(second.device.approvedScopes).toEqual(
+      expect.arrayContaining(["operator.admin", "operator.read", "operator.write"]),
+    );
+    expect(second.device.tokens?.operator?.token).not.toBe(firstToken);
+    await expect(
+      verifyDeviceToken({
+        deviceId: "broker-device-1",
+        token: requireToken(second.device.tokens?.operator?.token),
+        role: "operator",
+        scopes: ["operator.write"],
+        baseDir,
+      }),
+    ).resolves.toEqual({ ok: true });
+  });
+
+  test("refuses local provisioning when an existing device id has a different public key", async () => {
+    const baseDir = await makeDevicePairingDir();
+    await provisionLocalDevicePairing(
+      {
+        deviceId: "broker-device-1",
+        publicKey: "broker-public-key-1",
+        role: "operator",
+        scopes: ["operator.admin"],
+      },
+      baseDir,
+    );
+
+    const result = await provisionLocalDevicePairing(
+      {
+        deviceId: "broker-device-1",
+        publicKey: "broker-public-key-rotated",
+        role: "operator",
+        scopes: ["operator.admin"],
+      },
+      baseDir,
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      reason: "device-public-key-mismatch",
+      deviceId: "broker-device-1",
+    });
+    const list = await listDevicePairing(baseDir);
+    expect(list.pending).toEqual([]);
+    expect(list.paired).toHaveLength(1);
+    expect(list.paired[0]?.publicKey).toBe("broker-public-key-1");
   });
 
   test("tags browser tokens minted from shared gateway auth and rejects stale generations", async () => {

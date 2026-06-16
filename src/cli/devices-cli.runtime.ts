@@ -27,8 +27,10 @@ import {
   approveDevicePairing,
   formatDevicePairingForbiddenMessage,
   listDevicePairing,
+  provisionLocalDevicePairing,
   summarizeDeviceTokens,
   type PairedDevice as InfraPairedDevice,
+  type ProvisionLocalDevicePairingResult,
 } from "../infra/device-pairing.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../runtime.js";
@@ -52,6 +54,12 @@ type DevicesRpcOpts = {
   yes?: boolean;
   pending?: boolean;
   device?: string;
+  publicKey?: string;
+  displayName?: string;
+  platform?: string;
+  deviceFamily?: string;
+  clientId?: string;
+  clientMode?: string;
   role?: string;
   scope?: string[];
 };
@@ -687,6 +695,29 @@ function resolveRequiredDeviceRole(
   return null;
 }
 
+function redactProvisionLocalResult(result: ProvisionLocalDevicePairingResult) {
+  if (!result.ok) {
+    return result;
+  }
+  return {
+    ...result,
+    device: redactLocalPairedDevice(result.device),
+  };
+}
+
+function formatProvisionLocalFailure(
+  result: Extract<ProvisionLocalDevicePairingResult, { ok: false }>,
+) {
+  switch (result.reason) {
+    case "device-public-key-mismatch":
+      return "Refusing to provision local device: device id is already paired with a different public key.";
+    case "approval-denied":
+      return `Refusing to provision local device: ${result.scope ? `missing scope ${sanitizeForLog(result.scope)}` : "approval denied"}.`;
+    case "approval-missing":
+      return "Refusing to provision local device: generated pairing request was not found.";
+  }
+}
+
 export async function runDevicesListCommand(opts: DevicesRpcOpts): Promise<void> {
   let list: DevicePairingList;
   try {
@@ -955,6 +986,45 @@ export async function runDevicesRejectCommand(
   }
   const deviceId = (result as { deviceId?: string })?.deviceId;
   defaultRuntime.log(`${theme.warn("Rejected")} ${theme.command(deviceId ?? "ok")}`);
+}
+
+export async function runDevicesProvisionLocalCommand(opts: DevicesRpcOpts): Promise<void> {
+  const deviceId = normalizeStringifiedOptionalString(opts.device) ?? "";
+  const publicKey = normalizeStringifiedOptionalString(opts.publicKey) ?? "";
+  const role = normalizeStringifiedOptionalString(opts.role) ?? "";
+  if (!deviceId || !publicKey || !role) {
+    defaultRuntime.error("--device, --public-key, and --role are required.");
+    defaultRuntime.exit(1);
+    return;
+  }
+
+  const result = await provisionLocalDevicePairing({
+    deviceId,
+    publicKey,
+    displayName: normalizeOptionalString(opts.displayName),
+    platform: normalizeOptionalString(opts.platform),
+    deviceFamily: normalizeOptionalString(opts.deviceFamily),
+    clientId: normalizeOptionalString(opts.clientId),
+    clientMode: normalizeOptionalString(opts.clientMode),
+    role,
+    scopes: Array.isArray(opts.scope) ? opts.scope : undefined,
+  });
+  const redacted = redactProvisionLocalResult(result);
+  if (opts.json) {
+    defaultRuntime.writeJson(redacted);
+  }
+  if (!result.ok) {
+    if (!opts.json) {
+      defaultRuntime.error(formatProvisionLocalFailure(result));
+    }
+    defaultRuntime.exit(1);
+    return;
+  }
+  if (!opts.json) {
+    defaultRuntime.log(
+      `${theme.success("Provisioned")} ${theme.command(result.device.deviceId)} ${theme.muted(`(${result.status})`)}`,
+    );
+  }
 }
 
 export async function runDevicesRotateCommand(opts: DevicesRpcOpts): Promise<void> {
