@@ -231,6 +231,19 @@ describe("buildProviderStreamFamilyHooks", () => {
       "disabled",
     );
 
+    payloadSeed = { thinking: { type: "disabled" } };
+    await minimaxSimpleCompletionStream(
+      {
+        api: "anthropic-messages",
+        provider: "minimax",
+        id: "MiniMax-M3",
+      } as never,
+      {} as never,
+      {},
+    );
+    const minimaxM3Payload = requirePayload(capturedPayload);
+    expect(minimaxM3Payload).not.toHaveProperty("thinking");
+
     const kilocodeHooks = KILOCODE_THINKING_STREAM_HOOKS;
     void requireStreamFn(
       requireWrapStreamFn(kilocodeHooks.wrapStreamFn)({
