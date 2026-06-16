@@ -1742,7 +1742,7 @@ describe("TelegramPollingSession", () => {
       await adoptClaimOwner({
         spoolDir: tempDir,
         updateId: 42,
-        ownerId: `${process.pid}:other-process`,
+        ownerId: `1:other-process`,
         claimedAt: Date.now(),
       });
 
