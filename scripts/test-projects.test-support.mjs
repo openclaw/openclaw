@@ -417,6 +417,20 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ".github/workflows/openclaw-release-checks.yml",
     ["test/scripts/package-acceptance-workflow.test.ts"],
   ],
+  [
+    ".github/workflows/openclaw-npm-release.yml",
+    [
+      "test/scripts/package-acceptance-workflow.test.ts",
+      "test/scripts/sync-main-release-version.test.ts",
+    ],
+  ],
+  [
+    ".github/workflows/sync-main-release-version.yml",
+    [
+      "test/scripts/package-acceptance-workflow.test.ts",
+      "test/scripts/sync-main-release-version.test.ts",
+    ],
+  ],
   ["scripts/build-all.mjs", ["test/scripts/build-all.test.ts"]],
   ["scripts/crabbox-wrapper.mjs", ["test/scripts/crabbox-wrapper.test.ts"]],
   ["scripts/github/barnacle-auto-response.mjs", ["test/scripts/barnacle-auto-response.test.ts"]],
@@ -567,6 +581,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/docker-e2e-rerun.mjs", ["test/scripts/docker-e2e-helper-cli.test.ts"]],
   ["scripts/docker-e2e-timings.mjs", ["test/scripts/docker-e2e-helper-cli.test.ts"]],
   ["scripts/generate-npm-shrinkwrap.mjs", ["test/scripts/generate-npm-shrinkwrap.test.ts"]],
+  ["scripts/sync-main-release-version.mjs", ["test/scripts/sync-main-release-version.test.ts"]],
   ["scripts/ios-run.sh", ["test/scripts/ios-run.test.ts"]],
   ["scripts/create-dmg.sh", ["test/scripts/create-dmg.test.ts"]],
   ["scripts/kova-ci-summary.mjs", ["test/scripts/kova-ci-summary.test.ts"]],

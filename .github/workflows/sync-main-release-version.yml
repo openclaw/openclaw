@@ -1,0 +1,243 @@
+name: Sync Stable Version To Main
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published stable OpenClaw release tag to synchronize onto main
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: sync-main-release-version
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "24.15.0"
+
+jobs:
+  sync:
+    name: Open or refresh main version sync PR
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      base_sha: ${{ steps.pr.outputs.base_sha }}
+      changed: ${{ steps.sync.outputs.changed }}
+      head_sha: ${{ steps.pr.outputs.head_sha }}
+      pr_url: ${{ steps.pr.outputs.pr_url }}
+    steps:
+      - name: Checkout current main
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: main
+
+      - name: Validate stable tag input
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*)?$ ]]; then
+            echo "Invalid stable release tag: ${RELEASE_TAG}" >&2
+            exit 1
+          fi
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Sync stable package metadata
+        id: sync
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          git fetch --force origin "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+          pnpm release:sync-main-version -- --tag "${RELEASE_TAG}"
+          package_version="$(node -p "require('./package.json').version")"
+          echo "package_version=${package_version}" >> "$GITHUB_OUTPUT"
+          if [[ -z "$(git status --porcelain)" ]]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create release sync app token
+        id: app-token
+        if: steps.sync.outputs.changed == 'true'
+        continue-on-error: true
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: "2729701"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Create fallback release sync app token
+        id: app-token-fallback
+        if: steps.sync.outputs.changed == 'true' && steps.app-token.outcome == 'failure'
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: "2971289"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Open or refresh main version sync PR
+        id: pr
+        if: steps.sync.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
+          PACKAGE_VERSION: ${{ steps.sync.outputs.package_version }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          branch="automation/sync-main-${PACKAGE_VERSION}"
+          title="chore(release): sync ${PACKAGE_VERSION} metadata to main"
+          body_file="${RUNNER_TEMP}/main-version-sync-pr.md"
+          base_sha="$(git rev-parse HEAD)"
+
+          git config user.name "openclaw-release-bot"
+          git config user.email "release-bot@openclaw.ai"
+          gh auth setup-git
+          git switch -c "${branch}"
+          git add -A
+          git commit -m "${title}"
+          git fetch origin "${branch}:refs/remotes/origin/${branch}" || true
+          git push --force-with-lease origin "HEAD:refs/heads/${branch}"
+
+          cat > "${body_file}" <<EOF
+          ## Summary
+
+          - syncs current \`main\` package and official plugin metadata to published stable \`openclaw@${PACKAGE_VERSION}\`
+          - generated after successful npm publication for \`${RELEASE_TAG}\`
+          - automatically squash-merges after its pull request checks pass
+
+          ## Verification
+
+          - \`pnpm release:prep\`
+          - \`pnpm deps:shrinkwrap:generate\`
+          - \`pnpm deps:shrinkwrap:check\`
+          EOF
+
+          pr_url="$(gh pr list --head "${branch}" --base main --state open --json url --jq '.[0].url // empty')"
+          if [[ -z "${pr_url}" ]]; then
+            pr_url="$(gh pr create --head "${branch}" --base main --title "${title}" --body-file "${body_file}")"
+          else
+            gh pr edit "${pr_url}" --title "${title}" --body-file "${body_file}"
+          fi
+          echo "base_sha=${base_sha}" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "pr_url=${pr_url}" >> "$GITHUB_OUTPUT"
+          echo "Stable package metadata sync PR: ${pr_url}" >> "$GITHUB_STEP_SUMMARY"
+
+  merge:
+    name: Merge generated main version sync PR
+    needs: sync
+    if: needs.sync.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      actions: write
+      checks: read
+      contents: read
+      pull-requests: read
+      statuses: read
+    steps:
+      - name: Wait for generated PR checks
+        env:
+          EXPECTED_HEAD_SHA: ${{ needs.sync.outputs.head_sha }}
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ needs.sync.outputs.pr_url }}
+        run: |
+          set -euo pipefail
+
+          read -r pr_state pr_base pr_head < <(
+            gh pr view "${PR_URL}" --json baseRefName,headRefOid,state --jq '[.state, .baseRefName, .headRefOid] | @tsv'
+          )
+          if [[ "${pr_state}" != "OPEN" || "${pr_base}" != "main" || "${pr_head}" != "${EXPECTED_HEAD_SHA}" ]]; then
+            echo "Generated PR identity changed before checks started." >&2
+            exit 1
+          fi
+
+          for attempt in $(seq 1 60); do
+            checks_json="$(gh pr checks "${PR_URL}" --json bucket,name,state,workflow 2>/dev/null || true)"
+            if jq -e 'any(.[]; .name == "preflight" and .workflow == "CI")' <<<"${checks_json}" >/dev/null; then
+              break
+            fi
+            if [[ "${attempt}" == "60" ]]; then
+              echo "Timed out waiting for the generated PR CI preflight check." >&2
+              exit 1
+            fi
+            sleep 10
+          done
+
+          gh pr checks "${PR_URL}" --watch --fail-fast --interval 10
+          sleep 30
+          gh pr checks "${PR_URL}" --watch --fail-fast --interval 10
+
+          current_head="$(gh pr view "${PR_URL}" --json headRefOid --jq '.headRefOid')"
+          if [[ "${current_head}" != "${EXPECTED_HEAD_SHA}" ]]; then
+            echo "Generated PR head changed while checks were running." >&2
+            exit 1
+          fi
+
+      - name: Create release sync merge app token
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: "2729701"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Create fallback release sync merge app token
+        id: app-token-fallback
+        if: steps.app-token.outcome == 'failure'
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: "2971289"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Squash-merge exact generated PR head
+        env:
+          EXPECTED_BASE_SHA: ${{ needs.sync.outputs.base_sha }}
+          EXPECTED_HEAD_SHA: ${{ needs.sync.outputs.head_sha }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
+          PR_URL: ${{ needs.sync.outputs.pr_url }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          WORKFLOW_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          read -r pr_state pr_base pr_head < <(
+            gh pr view "${PR_URL}" --json baseRefName,headRefOid,state --jq '[.state, .baseRefName, .headRefOid] | @tsv'
+          )
+          if [[ "${pr_state}" != "OPEN" || "${pr_base}" != "main" || "${pr_head}" != "${EXPECTED_HEAD_SHA}" ]]; then
+            echo "Generated PR identity changed before merge." >&2
+            exit 1
+          fi
+
+          GH_TOKEN="${WORKFLOW_TOKEN}" gh pr checks "${PR_URL}"
+          current_main="$(GH_TOKEN="${WORKFLOW_TOKEN}" gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq '.object.sha')"
+          if [[ "${current_main}" != "${EXPECTED_BASE_SHA}" ]]; then
+            echo "main advanced before merge; queueing a fresh stable version sync." >> "$GITHUB_STEP_SUMMARY"
+            GH_TOKEN="${WORKFLOW_TOKEN}" gh workflow run sync-main-release-version.yml \
+              --repo "${GITHUB_REPOSITORY}" \
+              --ref main \
+              -f tag="${RELEASE_TAG}"
+            exit 0
+          fi
+
+          gh pr merge "${PR_URL}" --squash --delete-branch --match-head-commit "${EXPECTED_HEAD_SHA}"
+          echo "Merged stable package metadata sync PR: ${PR_URL}" >> "$GITHUB_STEP_SUMMARY"

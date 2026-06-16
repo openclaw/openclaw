@@ -2008,6 +2008,7 @@ describe("package artifact reuse", () => {
       NPM_TELEGRAM_WORKFLOW,
       ".github/workflows/openclaw-release-publish.yml",
       ".github/workflows/openclaw-npm-release.yml",
+      ".github/workflows/sync-main-release-version.yml",
       ".github/workflows/macos-release.yml",
       ".github/workflows/plugin-clawhub-release.yml",
       PACKAGE_ACCEPTANCE_WORKFLOW,

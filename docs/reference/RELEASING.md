@@ -120,7 +120,16 @@ the maintainer-only release runbook.
    created with GitHub `latest=false`. The workflow also uploads the preflight
    dependency evidence to the GitHub release as
    `openclaw-<version>-dependency-evidence.zip` for post-release incident
-   response. The publish workflow prints child run IDs immediately, auto-approves
+   response. After a stable OpenClaw npm publish succeeds, the npm workflow
+   dispatches `Sync Stable Version To Main`, which opens or refreshes a PR that
+   synchronizes the published package version, official plugin metadata, and
+   npm shrinkwraps onto current `main`. The sync waits for the generated PR's
+   checks and squash-merges the exact checked head automatically. If `main`
+   advances while checks run, it queues a fresh sync instead of merging stale
+   generated metadata. Prerelease publishes do not change `main` package
+   metadata. If dispatch fails after npm succeeds, run that workflow manually
+   with the stable release tag. The publish workflow prints
+   child run IDs immediately, auto-approves
    release environment gates the workflow token is allowed to approve, summarizes
    failed child jobs with log tails, closes out the GitHub release and dependency
    evidence as soon as OpenClaw npm publish succeeds, waits for ClawHub whenever
@@ -721,7 +730,14 @@ orchestrates the trusted-publisher workflows in the order the release needs:
 6. Dispatch `OpenClaw NPM Release` with the release tag, npm dist-tag, and
    saved `preflight_run_id` after verifying the saved
    `full_release_validation_run_id`.
-7. For stable releases, create or update the GitHub release as a draft, dispatch
+7. After a stable OpenClaw npm publish succeeds, dispatch
+   `Sync Stable Version To Main` to open or refresh the generated `main`
+   package metadata sync PR. The sync derives the package version from the
+   stable release tag, skips prereleases and downgrades, then runs
+   `pnpm release:prep` and npm shrinkwrap generation against current `main`.
+   It waits for the generated PR checks and squash-merges the exact checked
+   head automatically; if `main` advances first, it queues a fresh sync run.
+8. For stable releases, create or update the GitHub release as a draft, dispatch
    `Windows Node Release` with the explicit `windows_node_tag` and
    candidate-approved `windows_node_installer_digests`, and verify the canonical
    installer/checksum assets before publishing the draft.

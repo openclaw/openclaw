@@ -452,7 +452,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: npm-release
     permissions:
-      actions: read
+      actions: write
       contents: read
       id-token: write
     steps:
@@ -710,3 +710,20 @@ jobs:
             publish_target="./${publish_target}"
           fi
           bash scripts/openclaw-npm-publish.sh --publish "${publish_target}"
+
+      - name: Dispatch stable main version sync
+        id: main-version-sync
+        if: ${{ !contains(inputs.tag, '-alpha.') && !contains(inputs.tag, '-beta.') }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: gh workflow run sync-main-release-version.yml --ref main -f tag="${RELEASE_TAG}"
+
+      - name: Warn when stable main version sync dispatch fails
+        if: steps.main-version-sync.outcome == 'failure'
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          echo "::warning::Stable npm publish succeeded, but the main version sync workflow could not be dispatched for ${RELEASE_TAG}."
+          echo "Manually run Sync Stable Version To Main for ${RELEASE_TAG}." >> "$GITHUB_STEP_SUMMARY"
