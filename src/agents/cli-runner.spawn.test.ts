@@ -870,6 +870,42 @@ describe("runCliAgent spawn path", () => {
     }
   });
 
+  it("returns process diagnostics with byte counts and bounded output hashes", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 75,
+        stdout: "ok",
+        stderr: "warn\n",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    const result = await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "codex-cli",
+        model: "gpt-5.4",
+        runId: "run-process-diagnostics",
+      }),
+    );
+
+    expect(result.diagnostics?.process).toEqual({
+      backendId: "codex-cli",
+      processReason: "exit",
+      exitCode: 0,
+      exitSignal: null,
+      durationMs: 75,
+      stdoutBytes: 2,
+      stdoutHash: "2689367b205c",
+      stderrBytes: 5,
+      stderrHash: "7597e6b3a377",
+      useResume: false,
+    });
+  });
+
   it("passes Codex system prompts through model_instructions_file", async () => {
     let promptFileText = "";
     supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {

@@ -21,12 +21,28 @@ type CliUsage = {
   total?: number;
 };
 
+export type CliProcessDiagnostics = {
+  backendId: string;
+  processReason: string;
+  exitCode: number | null;
+  exitSignal: NodeJS.Signals | number | null;
+  durationMs: number;
+  stdoutBytes: number;
+  stdoutHash: string;
+  stderrBytes: number;
+  stderrHash: string;
+  useResume: boolean;
+};
+
 /** Normalized result from a CLI-backed model provider turn. */
 export type CliOutput = {
   text: string;
   rawText?: string;
   sessionId?: string;
   usage?: CliUsage;
+  diagnostics?: {
+    process?: CliProcessDiagnostics;
+  };
   finalPromptText?: string;
   didSendViaMessagingTool?: boolean;
   didDeliverSourceReplyViaMessageTool?: boolean;

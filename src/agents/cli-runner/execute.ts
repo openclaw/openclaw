@@ -1110,9 +1110,13 @@ export async function executePreparedCliRun(
           });
           let stdoutTail: Buffer = Buffer.alloc(0);
           let stdoutParseBuffer: Buffer = Buffer.alloc(0);
+          let stdoutBytes = 0;
+          const stdoutHash = crypto.createHash("sha256");
           let stdoutParseExceeded = false;
           let stderrTail: Buffer = Buffer.alloc(0);
           let stderrParseBuffer: Buffer = Buffer.alloc(0);
+          let stderrBytes = 0;
+          const stderrHash = crypto.createHash("sha256");
           let stderrParseExceeded = false;
 
           params.onExecutionPhase?.({
@@ -1135,6 +1139,8 @@ export async function executePreparedCliRun(
             input: stdinPayload,
             captureOutput: false,
             onStdout: (chunk: string) => {
+              stdoutBytes += Buffer.byteLength(chunk);
+              stdoutHash.update(chunk);
               stdoutTail = appendCliOutputTail(stdoutTail, chunk);
               if (!stdoutParseExceeded) {
                 const nextStdoutParse = appendCliOutputParseBuffer(stdoutParseBuffer, chunk);
@@ -1144,6 +1150,8 @@ export async function executePreparedCliRun(
               streamingParser?.push(chunk);
             },
             onStderr: (chunk: string) => {
+              stderrBytes += Buffer.byteLength(chunk);
+              stderrHash.update(chunk);
               stderrTail = appendCliOutputTail(stderrTail, chunk);
               if (!stderrParseExceeded) {
                 const nextStderrParse = appendCliOutputParseBuffer(stderrParseBuffer, chunk);
@@ -1191,6 +1199,18 @@ export async function executePreparedCliRun(
           const stdoutDiagnostic = stdoutTail.toString("utf8").trim();
           const stderr = stderrParseBuffer.toString("utf8").trim();
           const stderrDiagnostic = stderrTail.toString("utf8").trim();
+          const processDiagnostics = {
+            backendId: context.backendResolved.id,
+            processReason: result.reason,
+            exitCode: result.exitCode,
+            exitSignal: result.exitSignal,
+            durationMs: result.durationMs,
+            stdoutBytes,
+            stdoutHash: stdoutHash.digest("hex").slice(0, 12),
+            stderrBytes,
+            stderrHash: stderrHash.digest("hex").slice(0, 12),
+            useResume,
+          };
           if (logOutputText) {
             if (stdoutDiagnostic) {
               cliBackendLog.info(`cli stdout:\n${stdoutDiagnostic}`);
@@ -1347,6 +1367,10 @@ export async function executePreparedCliRun(
           );
           runOutput = {
             ...parsed,
+            diagnostics: {
+              ...(parsed.diagnostics ?? {}),
+              process: processDiagnostics,
+            },
             rawText,
             finalPromptText: prompt,
             text: applyPluginTextReplacements(
