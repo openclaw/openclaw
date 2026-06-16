@@ -1019,7 +1019,9 @@ describe("runSetupWizard", () => {
     // used in configure.gateway-auth.ts. Without this flag, configuring a
     // paid Google Gemini key would silently overwrite the user's default
     // model, causing existing heartbeat turns to consume paid API quota.
-    expect(call.preserveExistingDefaultModel).toBe(true);
+    expect((call as { preserveExistingDefaultModel?: boolean }).preserveExistingDefaultModel).toBe(
+      true,
+    );
   });
 
   it("shows plugin compatibility notices for an existing valid config", async () => {
