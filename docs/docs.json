@@ -1385,6 +1385,10 @@
                 "pages": [
                   "clawhub/api",
                   "clawhub/http-api",
+                  "clawhub/security",
+                  "clawhub/security-audits",
+                  "clawhub/moderation",
+                  "clawhub/plugin-validation-fixes",
                   "clawhub/acceptable-usage",
                   "clawhub/content-rights"
                 ]
