@@ -125,6 +125,18 @@ describe("package scripts", () => {
     );
   });
 
+  it("invokes the SecretRef docs generator through node --import tsx for cross-platform spawn", () => {
+    expect(readPackageJson().scripts["gen:secretref-docs"]).toBe(
+      "node scripts/run-with-env.mjs OPENCLAW_BUNDLED_PLUGINS_DIR=extensions OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR=1 -- node --import tsx scripts/generate-secretref-credential-matrix.ts",
+    );
+  });
+
+  it("invokes the SecretRef docs check through node --import tsx for cross-platform spawn", () => {
+    expect(readPackageJson().scripts["check:secretref-docs"]).toBe(
+      "node scripts/run-with-env.mjs OPENCLAW_BUNDLED_PLUGINS_DIR=extensions OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR=1 -- node --import tsx scripts/generate-secretref-credential-matrix.ts --check",
+    );
+  });
+
   it("uses the shipped package launcher for npm start", () => {
     expect(readPackageJson().scripts.start).toBe("node openclaw.mjs");
   });
