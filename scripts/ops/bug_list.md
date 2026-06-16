@@ -46,15 +46,15 @@
 
 <!-- AUTOSCAN:START -->
 
-_Last automated scan: 2026-06-15 06:00:10 UTC · hosts:eu us_
+_Last automated scan: 2026-06-16 06:00:10 UTC · hosts:eu us_
 
 | Pri | Host   | Agent                                | Issue                | Detail                                                                 |
 | --- | ------ | ------------------------------------ | -------------------- | ---------------------------------------------------------------------- |
-| P1  | eu     | -                                    | Heavy swap usage     | 1410MiB swap in use; host is memory-pressured. Consider a RAM rescale. |
+| P1  | eu     | -                                    | Heavy swap usage     | 1409MiB swap in use; host is memory-pressured. Consider a RAM rescale. |
 | P1  | models | nvidia/deepseek-ai/deepseek-r1       | Model not responding | NOT_FOUND (HTTP 404, 0.1s) on a 1-token probe via nvidia API.          |
 | P1  | models | nvidia/minimaxai/minimax-m2.7        | Model not responding | TIMEOUT (HTTP 000, 45.0s) on a 1-token probe via nvidia API.           |
-| P1  | models | venice/qwen3-235b-a22b-instruct-2507 | Model not responding | TIMEOUT (HTTP 000, 45.0s) on a 1-token probe via venice API.           |
-| P1  | us     | -                                    | Heavy swap usage     | 1696MiB swap in use; host is memory-pressured. Consider a RAM rescale. |
+| P1  | models | venice/qwen3-235b-a22b-instruct-2507 | Model not responding | RATE_LIMIT (HTTP 429, 0.2s) on a 1-token probe via venice API.         |
+| P1  | us     | -                                    | Heavy swap usage     | 1860MiB swap in use; host is memory-pressured. Consider a RAM rescale. |
 | P2  | us     | -                                    | Disk filling         | Root fs 85% used (warn>=80%).                                          |
 
 <!-- AUTOSCAN:END -->
