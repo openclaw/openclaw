@@ -39,6 +39,7 @@ type TalkConfigPayload = {
       };
       speechLocale?: string;
       silenceTimeoutMs?: number;
+      wakeCaptureSilenceMs?: number;
     };
     session?: { mainKey?: string };
     ui?: { seamColor?: string };
@@ -102,6 +103,7 @@ async function writeTalkConfig(config: {
   apiKey?: string | { source: "env" | "file" | "exec"; provider: string; id: string };
   voiceId?: string;
   silenceTimeoutMs?: number;
+  wakeCaptureSilenceMs?: number;
 }) {
   const { writeConfigFile } = await import("../config/config.js");
   const providerId = config.provider ?? GENERIC_TALK_PROVIDER_ID;
@@ -232,6 +234,9 @@ function expectTalkConfig(
   if ("silenceTimeoutMs" in expected) {
     expect(talk?.silenceTimeoutMs).toBe(expected.silenceTimeoutMs);
   }
+  if ("wakeCaptureSilenceMs" in expected) {
+    expect(talk?.wakeCaptureSilenceMs).toBe(expected.wakeCaptureSilenceMs);
+  }
 }
 
 describe("gateway talk.config", () => {
@@ -248,6 +253,7 @@ describe("gateway talk.config", () => {
         },
         speechLocale: "ru-RU",
         silenceTimeoutMs: 1500,
+        wakeCaptureSilenceMs: 3000,
       },
       session: {
         mainKey: "main-test",
@@ -265,6 +271,7 @@ describe("gateway talk.config", () => {
         apiKey: "__OPENCLAW_REDACTED__",
         speechLocale: "ru-RU",
         silenceTimeoutMs: 1500,
+        wakeCaptureSilenceMs: 3000,
       });
       expect(res.payload?.config?.session?.mainKey).toBe("main-test");
       expect(res.payload?.config?.ui?.seamColor).toBe("#112233");

@@ -337,6 +337,7 @@ const TARGET_KEYS = [
   "talk.consultFastMode",
   "talk.interruptOnSpeech",
   "talk.silenceTimeoutMs",
+  "talk.wakeCaptureSilenceMs",
   "talk.consultThinkingLevel",
   "meta",
   "env",

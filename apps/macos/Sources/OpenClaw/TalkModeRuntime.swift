@@ -1151,6 +1151,8 @@ extension TalkModeRuntime {
                         "\(configuredSilenceMs, privacy: .public)ms -> 2000ms")
         }
         self.silenceWindow = TimeInterval(effectiveSilenceMs) / 1000
+        await VoiceWakeRuntime.shared.setCaptureSilenceWindow(
+            TimeInterval(cfg.wakeCaptureSilenceMs) / 1000)
         self.speechLocaleID = cfg.speechLocaleID
         self.apiKey = cfg.apiKey
         let hasApiKey = (cfg.apiKey?.isEmpty == false)
@@ -1164,6 +1166,7 @@ extension TalkModeRuntime {
                     "apiKey=\(hasApiKey, privacy: .public) " +
                     "interrupt=\(cfg.interruptOnSpeech, privacy: .public) " +
                     "silenceTimeoutMs=\(cfg.silenceTimeoutMs, privacy: .public) " +
+                    "wakeCaptureSilenceMs=\(cfg.wakeCaptureSilenceMs, privacy: .public) " +
                     "speechLocale=\(cfg.speechLocaleID ?? "device", privacy: .public)")
     }
 

@@ -189,6 +189,8 @@ export const FIELD_HELP: Record<string, string> = {
   "talk.interruptOnSpeech":
     "If true (default), stop assistant speech when the user starts speaking in Talk mode. Keep enabled for conversational turn-taking.",
   "talk.silenceTimeoutMs": `Milliseconds of user silence before Talk mode finalizes and sends the current transcript. Leave unset to keep the platform default pause window (${describeTalkSilenceTimeoutDefaults()}).`,
+  "talk.wakeCaptureSilenceMs":
+    "Milliseconds of silence before the wake-word HUD capture stops listening and submits. Defaults to 2000 ms. Increase to allow longer natural pauses before auto-submit.",
   acp: "ACP runtime controls for enabling dispatch, selecting backends, constraining allowed agent targets, and tuning streamed turn projection behavior.",
   "acp.enabled":
     "Global ACP feature gate. Keep disabled unless ACP runtime + policy are configured.",

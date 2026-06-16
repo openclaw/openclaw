@@ -202,6 +202,10 @@ export function normalizeTalkSection(value: TalkConfig | undefined): TalkConfig 
   if (silenceTimeoutMs !== undefined) {
     normalized.silenceTimeoutMs = silenceTimeoutMs;
   }
+  const wakeCaptureSilenceMs = normalizeSilenceTimeoutMs(source.wakeCaptureSilenceMs);
+  if (wakeCaptureSilenceMs !== undefined) {
+    normalized.wakeCaptureSilenceMs = wakeCaptureSilenceMs;
+  }
 
   const providers = normalizeTalkProviders(source.providers);
   const realtime = normalizeTalkRealtimeConfig(source.realtime);
@@ -274,6 +278,9 @@ export function buildTalkConfigResponse(value: unknown): TalkConfigResponse | un
   }
   if (typeof normalized?.silenceTimeoutMs === "number") {
     payload.silenceTimeoutMs = normalized.silenceTimeoutMs;
+  }
+  if (typeof normalized?.wakeCaptureSilenceMs === "number") {
+    payload.wakeCaptureSilenceMs = normalized.wakeCaptureSilenceMs;
   }
   if (typeof normalized?.consultThinkingLevel === "string") {
     payload.consultThinkingLevel = normalized.consultThinkingLevel;

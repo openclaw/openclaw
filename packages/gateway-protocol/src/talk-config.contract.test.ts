@@ -81,7 +81,12 @@ describe("talk.config contract fixtures", () => {
   for (const fixture of fixtures.timeoutCases) {
     it(`timeout:${fixture.id}`, () => {
       const payload = buildTalkConfigResponse(fixture.talk);
-      expect(payload?.silenceTimeoutMs ?? fixture.fallback).toBe(fixture.expectedTimeoutMs);
+      // Distinguish silenceTimeoutMs vs wakeCaptureSilenceMs fixtures by key presence.
+      const field =
+        "wakeCaptureSilenceMs" in fixture.talk
+          ? ("wakeCaptureSilenceMs" as const)
+          : ("silenceTimeoutMs" as const);
+      expect(payload?.[field] ?? fixture.fallback).toBe(fixture.expectedTimeoutMs);
     });
   }
 });

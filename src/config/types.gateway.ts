@@ -108,6 +108,8 @@ export type TalkConfig = {
   interruptOnSpeech?: boolean;
   /** Milliseconds of user silence before Talk mode sends the transcript after a pause. */
   silenceTimeoutMs?: number;
+  /** Milliseconds of silence before the wake-word HUD capture finalizes and submits. Default: 2000. */
+  wakeCaptureSilenceMs?: number;
 };
 
 export type TalkConfigResponse = TalkConfig & {

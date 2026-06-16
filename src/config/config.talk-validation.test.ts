@@ -63,6 +63,22 @@ describe("talk config validation fail-closed behavior", () => {
     );
   });
 
+  it.each([
+    ["boolean", true],
+    ["string", "3000"],
+    ["float", 3000.5],
+  ])("rejects %s talk.wakeCaptureSilenceMs during config load", async (_label, value) => {
+    await expectInvalidTalkConfig(
+      {
+        agents: { list: [{ id: "main" }] },
+        talk: {
+          wakeCaptureSilenceMs: value,
+        },
+      },
+      /wakeCaptureSilenceMs|talk/i,
+    );
+  });
+
   it("rejects talk.provider when it does not match talk.providers during config load", async () => {
     await expectInvalidTalkConfig(
       {

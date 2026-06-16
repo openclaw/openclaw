@@ -9,6 +9,7 @@ describe("OpenClawSchema talk validation", () => {
         consultThinkingLevel: "low",
         consultFastMode: true,
         silenceTimeoutMs: 1500,
+        wakeCaptureSilenceMs: 3000,
       },
     });
 
@@ -70,6 +71,20 @@ describe("OpenClawSchema talk validation", () => {
         },
       }),
     ).toThrow(/silenceTimeoutMs|number|integer/i);
+  });
+
+  it.each([
+    ["boolean", true],
+    ["string", "3000"],
+    ["float", 3000.5],
+  ])("rejects %s talk.wakeCaptureSilenceMs", (_label, value) => {
+    expect(() =>
+      OpenClawSchema.parse({
+        talk: {
+          wakeCaptureSilenceMs: value,
+        },
+      }),
+    ).toThrow(/wakeCaptureSilenceMs|number|integer/i);
   });
 
   it("rejects talk.provider when it does not match talk.providers", () => {

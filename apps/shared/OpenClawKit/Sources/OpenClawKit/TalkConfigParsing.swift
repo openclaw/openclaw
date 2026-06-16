@@ -56,6 +56,10 @@ public enum TalkConfigParsing {
         self.resolvedPositiveInt(talk?["silenceTimeoutMs"], fallback: fallback)
     }
 
+    public static func resolvedWakeCaptureSilenceMs(_ talk: [String: AnyCodable]?, fallback: Int) -> Int {
+        self.resolvedPositiveInt(talk?["wakeCaptureSilenceMs"], fallback: fallback)
+    }
+
     public static func normalizedSpeechLocaleID(_ value: String?) -> String? {
         let trimmed = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed.replacingOccurrences(of: "_", with: "-")

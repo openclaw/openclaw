@@ -2,6 +2,7 @@ import Foundation
 
 enum TalkDefaults {
     static let silenceTimeoutMs = 900
+    static let wakeCaptureSilenceMs = 2000
     static let speakerphoneEnabledKey = "talk.speakerphone.enabled"
     static let speakerphoneEnabledByDefault = true
 

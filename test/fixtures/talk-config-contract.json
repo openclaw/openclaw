@@ -142,6 +142,30 @@
       "talk": {
         "silenceTimeoutMs": 1500.5
       }
+    },
+    {
+      "id": "wake_capture_positive_kept",
+      "fallback": 2000,
+      "expectedTimeoutMs": 3000,
+      "talk": {
+        "wakeCaptureSilenceMs": 3000
+      }
+    },
+    {
+      "id": "wake_capture_zero_falls_back",
+      "fallback": 2000,
+      "expectedTimeoutMs": 2000,
+      "talk": {
+        "wakeCaptureSilenceMs": 0
+      }
+    },
+    {
+      "id": "wake_capture_boolean_falls_back",
+      "fallback": 2000,
+      "expectedTimeoutMs": 2000,
+      "talk": {
+        "wakeCaptureSilenceMs": true
+      }
     }
   ]
 }

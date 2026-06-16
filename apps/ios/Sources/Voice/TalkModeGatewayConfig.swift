@@ -262,6 +262,7 @@ struct TalkModeGatewayConfigState {
     let rawConfigApiKey: String?
     let interruptOnSpeech: Bool?
     let silenceTimeoutMs: Int
+    let wakeCaptureSilenceMs: Int
     let speechLocaleID: String?
 }
 
@@ -316,6 +317,9 @@ enum TalkModeGatewayConfigParser {
         let silenceTimeoutMs = TalkConfigParsing.resolvedSilenceTimeoutMs(
             talk,
             fallback: defaultSilenceTimeoutMs)
+        let wakeCaptureSilenceMs = TalkConfigParsing.resolvedWakeCaptureSilenceMs(
+            talk,
+            fallback: TalkDefaults.wakeCaptureSilenceMs)
         let speechLocaleID = TalkConfigParsing.resolvedSpeechLocaleID(talk)
 
         return TalkModeGatewayConfigState(
@@ -333,6 +337,7 @@ enum TalkModeGatewayConfigParser {
             rawConfigApiKey: rawConfigApiKey,
             interruptOnSpeech: interruptOnSpeech,
             silenceTimeoutMs: silenceTimeoutMs,
+            wakeCaptureSilenceMs: wakeCaptureSilenceMs,
             speechLocaleID: speechLocaleID)
     }
 

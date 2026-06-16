@@ -51,7 +51,8 @@ actor VoiceWakeRuntime {
 
     /// Tunables
     /// Silence threshold once we've captured user speech (post-trigger).
-    private let silenceWindow: TimeInterval = 2.0
+    /// Overridden by talk.wakeCaptureSilenceMs config when set; defaults to 2000 ms.
+    private var silenceWindow: TimeInterval = 2.0
     /// Silence threshold when we only heard the trigger but no post-trigger speech yet.
     private let triggerOnlySilenceWindow: TimeInterval = 5.0
     // Maximum capture duration from trigger until we force-send, to avoid runaway sessions.
@@ -774,6 +775,12 @@ actor VoiceWakeRuntime {
     func pauseForPushToTalk() {
         self.listeningState = .pushToTalk
         self.stop(dismissOverlay: false)
+    }
+
+    /// Update the post-trigger capture silence window from gateway talk config.
+    func setCaptureSilenceWindow(_ window: TimeInterval) {
+        guard window > 0 else { return }
+        self.silenceWindow = window
     }
 
     private func updateHeardBeyondTrigger(withTrimmed trimmed: String) {

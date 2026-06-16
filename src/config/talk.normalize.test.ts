@@ -16,6 +16,7 @@ describe("talk normalization", () => {
       speechLocale: " ru-RU ",
       interruptOnSpeech: false,
       silenceTimeoutMs: 1500,
+      wakeCaptureSilenceMs: 3000,
     } as unknown as never);
 
     expect(normalized).toEqual({
@@ -24,6 +25,7 @@ describe("talk normalization", () => {
       consultFastMode: true,
       interruptOnSpeech: false,
       silenceTimeoutMs: 1500,
+      wakeCaptureSilenceMs: 3000,
     });
   });
 
