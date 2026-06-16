@@ -45,6 +45,8 @@ let capturedReplyOptions:
   | {
       disableBlockStreaming?: boolean;
       suppressDefaultToolProgressMessages?: boolean;
+      allowProgressCallbacksWhenSourceDeliverySuppressed?: boolean;
+      allowToolLifecycleWhenProgressHidden?: boolean;
       onAssistantMessageStart?: () => Promise<void> | void;
       onReasoningEnd?: () => Promise<void> | void;
       onReasoningStream?: (payload?: {
@@ -1749,6 +1751,8 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     );
 
     expect(capturedReplyOptions?.disableBlockStreaming).toBe(true);
+    expect(capturedReplyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed).toBe(true);
+    expect(capturedReplyOptions?.allowToolLifecycleWhenProgressHidden).toBe(true);
     expectRecordFields(requireRecord(capturedStatusReactionOptions, "status reaction options"), {
       enabled: true,
       initialEmoji: "eyes",

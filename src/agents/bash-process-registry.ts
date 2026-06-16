@@ -323,11 +323,6 @@ export function listFinishedSessions() {
   return Array.from(finishedSessions.values());
 }
 
-/** Clears retained finished sessions without touching running processes. */
-export function clearFinished() {
-  finishedSessions.clear();
-}
-
 /** Test-only reset for in-memory registry state and retention timers. */
 export function resetProcessRegistryForTests() {
   runningSessions.clear();

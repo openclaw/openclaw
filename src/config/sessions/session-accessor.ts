@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import {
+  acquireSessionWriteLock,
+  resolveSessionWriteLockOptions,
+} from "../../agents/session-write-lock.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import type { SessionTranscriptUpdate } from "../../sessions/transcript-events.js";
@@ -7,6 +11,7 @@ import { getRuntimeConfig } from "../io.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import {
   resolveSessionFilePath,
+  resolveSessionFilePathOptions,
   resolveSessionTranscriptPath,
   resolveSessionTranscriptPathInDir,
   resolveStorePath,
@@ -27,11 +32,20 @@ import {
 } from "./store.js";
 import { parseSessionThreadInfo } from "./thread-info.js";
 import {
+  type AppendSessionTranscriptMessageParams,
+  type AppendSessionTranscriptMessageResult,
   appendSessionTranscriptEvent,
   appendSessionTranscriptMessage,
+  appendSessionTranscriptMessageWithOwnedWriteLock,
+  withSessionTranscriptAppendQueue,
 } from "./transcript-append.js";
+import { resolveSessionTranscriptFile } from "./transcript-file-resolve.js";
 import { streamSessionTranscriptLines } from "./transcript-stream.js";
-import { resolveSessionTranscriptFile } from "./transcript.js";
+import {
+  type OwnedSessionTranscriptPublishedEntry,
+  resolveOwnedSessionTranscriptWriteLockRunner,
+  withOwnedSessionTranscriptWrites,
+} from "./transcript-write-context.js";
 import type { SessionEntry } from "./types.js";
 
 /**
@@ -87,6 +101,8 @@ export type SessionTranscriptAccessScope = SessionTranscriptReadScope & {
 };
 
 export type SessionTranscriptRuntimeScope = SessionAccessScope & {
+  /** Resolved file-backed artifact for the current runtime target. */
+  sessionFile?: string;
   sessionId: string;
   threadId?: string | number;
 };
@@ -140,6 +156,62 @@ export type TranscriptMessageAppendResult<TMessage> = {
 
 /** Transcript update fields supplied by callers; sessionFile is resolved here. */
 export type TranscriptUpdatePayload = Omit<SessionTranscriptUpdate, "sessionFile">;
+
+export type SessionTranscriptTurnUpdateMode = "inline" | "file-only" | "none";
+
+export type SessionTranscriptTurnMessageAppend = TranscriptMessageAppendOptions<unknown> & {
+  /**
+   * Runs inside the file-backed write lock before this message is appended.
+   * SQLite implementation note: duplicate/skip decisions should be evaluated
+   * inside the same write transaction as the transcript row append.
+   */
+  shouldAppend?: (context: SessionTranscriptTurnWriteContext) => Promise<boolean> | boolean;
+};
+
+export type SessionTranscriptTurnWriteContext = {
+  agentId?: string;
+  sessionFile: string;
+  sessionId?: string;
+  sessionKey?: string;
+};
+
+export type SessionTranscriptTurnPersistOptions = {
+  /** Runtime config used for lock settings, redaction, and header metadata. */
+  config?: OpenClawConfig;
+  /** Working directory recorded in a newly created transcript header. */
+  cwd?: string;
+  /**
+   * Rejects the turn when the persisted session key no longer points at this
+   * runtime session id. SQLite implementations must evaluate this guard inside
+   * the same write transaction as the transcript append and metadata touch.
+   */
+  expectedSessionId?: string;
+  /** Message rows to append under one transcript write lock. */
+  messages: readonly SessionTranscriptTurnMessageAppend[];
+  /** Controls whether the update event includes the last appended message. */
+  updateMode?: SessionTranscriptTurnUpdateMode;
+  /** Emit file-only updates even when every candidate message was skipped. */
+  publishWhen?: "always" | "when-appended";
+  /**
+   * Touch updatedAt/sessionFile metadata after appending.
+   * SQLite implementation note: transcript row append(s) plus this session
+   * metadata touch should be one SQLite write transaction; publish happens
+   * after that transaction commits.
+   */
+  touchSessionEntry?: boolean;
+};
+
+export type SessionTranscriptTurnPersistResult = {
+  appendedCount: number;
+  messages: TranscriptMessageAppendResult<unknown>[];
+  rejectedReason?: "session-rebound";
+  sessionEntry: SessionEntry | undefined;
+  sessionFile: string;
+};
+
+type SessionTranscriptTurnAppendRunner = <TMessage>(
+  params: AppendSessionTranscriptMessageParams<TMessage>,
+) => Promise<AppendSessionTranscriptMessageResult<TMessage> | undefined>;
 
 export type SessionTranscriptRuntimeTarget = {
   agentId: string;
@@ -392,6 +464,241 @@ export async function publishTranscriptUpdate(
 }
 
 /**
+ * Persists one logical transcript turn through the current file-backed writer.
+ * The file implementation resolves/rebinds the transcript file, holds one
+ * session write lock across all message appends, optionally touches session
+ * metadata, then publishes after the write has completed.
+ *
+ * SQLite implementation note: the transcript row append(s), sessionFile marker,
+ * and requested updatedAt touch become one SQLite write transaction; transcript
+ * update delivery must run only after commit.
+ */
+export async function persistSessionTranscriptTurn(
+  scope: SessionTranscriptWriteScope & {
+    sessionEntry?: SessionEntry;
+    sessionStore?: Record<string, SessionEntry>;
+  },
+  options: SessionTranscriptTurnPersistOptions,
+): Promise<SessionTranscriptTurnPersistResult> {
+  const expectedSessionId = options.expectedSessionId;
+  if (expectedSessionId) {
+    return await persistExpectedSessionTranscriptTurn(scope, { ...options, expectedSessionId });
+  }
+  const target = await resolveTranscriptTurnTarget(scope);
+  const appendedMessages = await appendTranscriptTurnMessages(target, options);
+  const appendedCount = countAppendedTranscriptMessages(appendedMessages);
+  const sessionEntry = await touchTranscriptTurnSessionEntry({
+    scope,
+    target,
+    shouldTouch: options.touchSessionEntry === true && appendedCount > 0,
+  });
+  await publishTranscriptTurnUpdate({
+    target,
+    updateMode: options.updateMode ?? "inline",
+    publishWhen: options.publishWhen ?? "when-appended",
+    appendedMessages,
+  });
+
+  return {
+    appendedCount,
+    messages: appendedMessages,
+    sessionEntry,
+    sessionFile: target.sessionFile,
+  };
+}
+
+async function appendTranscriptTurnMessages(
+  target: SessionTranscriptTurnWriteContext,
+  options: SessionTranscriptTurnPersistOptions,
+): Promise<TranscriptMessageAppendResult<unknown>[]> {
+  const appendedMessages: TranscriptMessageAppendResult<unknown>[] = [];
+  const publishedEntries: OwnedSessionTranscriptPublishedEntry[] = [];
+  const appendMessages = async (appendMessage: SessionTranscriptTurnAppendRunner) => {
+    for (const append of options.messages) {
+      const shouldAppend = append.shouldAppend
+        ? await append.shouldAppend({
+            ...(target.agentId ? { agentId: target.agentId } : {}),
+            sessionFile: target.sessionFile,
+            ...(target.sessionId ? { sessionId: target.sessionId } : {}),
+            ...(target.sessionKey ? { sessionKey: target.sessionKey } : {}),
+          })
+        : true;
+      if (!shouldAppend) {
+        continue;
+      }
+      const result = await appendMessage({
+        transcriptPath: target.sessionFile,
+        message: append.message,
+        ...(target.sessionId ? { sessionId: target.sessionId } : {}),
+        ...((append.cwd ?? options.cwd) ? { cwd: append.cwd ?? options.cwd } : {}),
+        ...((append.config ?? options.config) ? { config: append.config ?? options.config } : {}),
+        ...(append.idempotencyLookup ? { idempotencyLookup: append.idempotencyLookup } : {}),
+        ...(append.now !== undefined ? { now: append.now } : {}),
+        ...(append.prepareMessageAfterIdempotencyCheck
+          ? { prepareMessageAfterIdempotencyCheck: append.prepareMessageAfterIdempotencyCheck }
+          : {}),
+        onHeaderCreated: (header) => {
+          publishedEntries.push({ kind: "header", serialized: header });
+        },
+        ...(append.useRawWhenLinear !== undefined
+          ? { useRawWhenLinear: append.useRawWhenLinear }
+          : {}),
+      });
+      if (result) {
+        appendedMessages.push(result);
+        if (result.appended) {
+          publishedEntries.push({ kind: "id", id: result.messageId });
+        }
+      }
+    }
+  };
+  const activeLockRunner = resolveOwnedSessionTranscriptWriteLockRunner({
+    sessionFile: target.sessionFile,
+    sessionKey: target.sessionKey,
+  });
+  const runBatchWithOwnedLock = async () =>
+    await withOwnedSessionTranscriptWrites(
+      {
+        sessionFile: target.sessionFile,
+        sessionKey: target.sessionKey,
+        withSessionWriteLock: async (run) => await run(),
+      },
+      async () => await appendMessages(appendSessionTranscriptMessageWithOwnedWriteLock),
+    );
+  if (activeLockRunner) {
+    await activeLockRunner(
+      () => withSessionTranscriptAppendQueue(target.sessionFile, runBatchWithOwnedLock),
+      {
+        publishOwnedWrite: true,
+        resolvePublishedEntries: () => publishedEntries,
+        resolvePublishedEntriesAfterFailure: () => publishedEntries,
+      },
+    );
+  } else {
+    await withSessionTranscriptAppendQueue(target.sessionFile, async () => {
+      const lock = await acquireSessionWriteLock({
+        sessionFile: target.sessionFile,
+        ...resolveSessionWriteLockOptions(options.config),
+        allowReentrant: true,
+      });
+      try {
+        await runBatchWithOwnedLock();
+      } finally {
+        await lock.release();
+      }
+    });
+  }
+  return appendedMessages;
+}
+
+function countAppendedTranscriptMessages(
+  messages: readonly TranscriptMessageAppendResult<unknown>[],
+): number {
+  return messages.filter((message) => message.appended).length;
+}
+
+async function persistExpectedSessionTranscriptTurn(
+  scope: SessionTranscriptWriteScope & {
+    sessionEntry?: SessionEntry;
+    sessionStore?: Record<string, SessionEntry>;
+  },
+  options: SessionTranscriptTurnPersistOptions & { expectedSessionId: string },
+): Promise<SessionTranscriptTurnPersistResult> {
+  const sessionKey = scope.sessionKey?.trim();
+  if (!scope.storePath || !sessionKey) {
+    throw new Error("Cannot guard a transcript turn without a session store and key");
+  }
+  const expectedSessionId = options.expectedSessionId;
+  const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(sessionKey);
+  if (!agentId) {
+    throw new Error(`Cannot resolve transcript turn without an agent id: ${sessionKey}`);
+  }
+  const store =
+    scope.sessionStore ?? loadSessionStore(scope.storePath, { skipCache: true, clone: false });
+  const resolved = resolveSessionStoreEntry({ store, sessionKey });
+  let appendedMessages: TranscriptMessageAppendResult<unknown>[] = [];
+  let target: SessionTranscriptTurnWriteContext = {
+    agentId,
+    sessionFile:
+      scope.sessionFile ??
+      resolveSessionTranscriptPathInDir(expectedSessionId, path.dirname(scope.storePath)),
+    sessionId: expectedSessionId,
+    sessionKey: resolved.normalizedKey,
+  };
+  let rejectedEntry: SessionEntry | undefined;
+  let touchUpdatedAt: number | undefined;
+
+  const updated = await updateSessionEntry(
+    {
+      sessionKey: resolved.normalizedKey,
+      storePath: scope.storePath,
+    },
+    async (currentEntry) => {
+      if (currentEntry.sessionId !== expectedSessionId) {
+        rejectedEntry = currentEntry;
+        return null;
+      }
+      const sessionFile =
+        scope.sessionFile ??
+        resolveSessionFilePath(
+          currentEntry.sessionId,
+          currentEntry,
+          resolveSessionFilePathOptions({
+            agentId,
+            storePath: scope.storePath,
+          }),
+        );
+      target = {
+        agentId,
+        sessionFile,
+        sessionId: currentEntry.sessionId,
+        sessionKey: resolved.normalizedKey,
+      };
+      appendedMessages = await appendTranscriptTurnMessages(target, options);
+      const appendedCount = countAppendedTranscriptMessages(appendedMessages);
+      if (options.touchSessionEntry === true && appendedCount > 0) {
+        touchUpdatedAt = Date.now();
+      }
+      const patch = {
+        ...(currentEntry.sessionFile === sessionFile ? {} : { sessionFile }),
+        ...(touchUpdatedAt !== undefined
+          ? { updatedAt: Math.max(currentEntry.updatedAt ?? 0, touchUpdatedAt) }
+          : {}),
+      };
+      return Object.keys(patch).length > 0 ? patch : null;
+    },
+    { skipMaintenance: true },
+  );
+
+  if (rejectedEntry || updated?.sessionId !== expectedSessionId) {
+    return {
+      appendedCount: 0,
+      messages: [],
+      rejectedReason: "session-rebound",
+      sessionEntry: rejectedEntry ?? updated ?? undefined,
+      sessionFile: target.sessionFile,
+    };
+  }
+
+  await publishTranscriptTurnUpdate({
+    target,
+    updateMode: options.updateMode ?? "inline",
+    publishWhen: options.publishWhen ?? "when-appended",
+    appendedMessages,
+  });
+
+  if (updated && scope.sessionStore) {
+    scope.sessionStore[resolved.normalizedKey] = updated;
+  }
+  return {
+    appendedCount: countAppendedTranscriptMessages(appendedMessages),
+    messages: appendedMessages,
+    sessionEntry: updated ?? scope.sessionEntry,
+    sessionFile: target.sessionFile,
+  };
+}
+
+/**
  * Resolves the current file-backed target for a storage-neutral runtime
  * transcript scope. Callers use the scope as identity; sessionFile is returned
  * only for current file-backed implementation details such as locks/events.
@@ -411,6 +718,14 @@ export async function resolveSessionTranscriptRuntimeTarget(
     : undefined;
   const sessionEntry = resolvedStoreEntry?.existing ?? loadSessionEntry(scope);
   const sessionKey = resolvedStoreEntry?.normalizedKey ?? scope.sessionKey;
+  if (scope.sessionFile?.trim()) {
+    return {
+      agentId,
+      sessionFile: path.resolve(scope.sessionFile),
+      sessionId: scope.sessionId,
+      sessionKey,
+    };
+  }
   if (sessionStore && scope.storePath) {
     const sessionsDir = path.dirname(path.resolve(scope.storePath));
     const threadId = scope.threadId ?? parseSessionThreadInfo(scope.sessionKey).threadId;
@@ -473,6 +788,14 @@ export async function resolveSessionTranscriptRuntimeReadTarget(
     : undefined;
   const sessionEntry = resolvedStoreEntry?.existing ?? loadSessionEntry(scope);
   const sessionKey = resolvedStoreEntry?.normalizedKey ?? scope.sessionKey;
+  if (scope.sessionFile?.trim()) {
+    return {
+      agentId,
+      sessionFile: path.resolve(scope.sessionFile),
+      sessionId: scope.sessionId,
+      sessionKey,
+    };
+  }
   const matchingSessionEntry =
     sessionEntry?.sessionId === scope.sessionId ? sessionEntry : undefined;
   if (scope.storePath) {
@@ -567,5 +890,123 @@ async function resolveTranscriptAccess(scope: SessionTranscriptWriteScope): Prom
     ...scope,
     sessionId: scope.sessionId,
     sessionKey: scopeSessionKey,
+  });
+}
+
+async function resolveTranscriptTurnTarget(
+  scope: SessionTranscriptWriteScope & {
+    sessionEntry?: SessionEntry;
+    sessionStore?: Record<string, SessionEntry>;
+  },
+): Promise<
+  SessionTranscriptTurnWriteContext & {
+    sessionEntry: SessionEntry | undefined;
+  }
+> {
+  if (scope.sessionFile?.trim()) {
+    return {
+      ...(scope.agentId ? { agentId: scope.agentId } : {}),
+      sessionFile: scope.sessionFile,
+      ...(scope.sessionId ? { sessionId: scope.sessionId } : {}),
+      ...(scope.sessionKey ? { sessionKey: scope.sessionKey } : {}),
+      sessionEntry: scope.sessionEntry,
+    };
+  }
+  const sessionKey = scope.sessionKey?.trim();
+  if (!sessionKey || !scope.sessionId) {
+    throw new Error(
+      "Cannot persist a transcript turn without a session key and session id or explicit session file",
+    );
+  }
+  const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(sessionKey);
+  if (!agentId) {
+    throw new Error(`Cannot resolve transcript turn without an agent id: ${sessionKey}`);
+  }
+  const store =
+    scope.sessionStore ??
+    (scope.storePath ? loadSessionStore(scope.storePath, { skipCache: true }) : undefined);
+  const resolved = store ? resolveSessionStoreEntry({ store, sessionKey }) : undefined;
+  const sessionEntry =
+    resolved?.existing ?? scope.sessionEntry ?? loadSessionEntry({ ...scope, sessionKey });
+  const resolvedFile = await resolveSessionTranscriptFile({
+    agentId,
+    sessionEntry,
+    sessionId: scope.sessionId,
+    sessionKey,
+    ...(store ? { sessionStore: store } : {}),
+    ...(scope.storePath ? { storePath: scope.storePath } : {}),
+    ...(scope.threadId !== undefined ? { threadId: scope.threadId } : {}),
+  });
+  return {
+    agentId,
+    sessionFile: resolvedFile.sessionFile,
+    sessionId: scope.sessionId,
+    sessionKey: resolved?.normalizedKey ?? sessionKey,
+    sessionEntry: resolvedFile.sessionEntry,
+  };
+}
+
+async function touchTranscriptTurnSessionEntry(params: {
+  scope: SessionTranscriptWriteScope & {
+    sessionEntry?: SessionEntry;
+    sessionStore?: Record<string, SessionEntry>;
+  };
+  target: SessionTranscriptTurnWriteContext & {
+    sessionEntry: SessionEntry | undefined;
+  };
+  shouldTouch: boolean;
+}): Promise<SessionEntry | undefined> {
+  if (
+    !params.shouldTouch ||
+    !params.scope.storePath ||
+    !params.target.sessionKey ||
+    !params.target.sessionId
+  ) {
+    return params.target.sessionEntry;
+  }
+  const markerUpdatedAt = Date.now();
+  const updated = await updateSessionEntry(
+    {
+      sessionKey: params.target.sessionKey,
+      storePath: params.scope.storePath,
+    },
+    (current) =>
+      current.sessionId === params.target.sessionId
+        ? {
+            sessionFile: params.target.sessionFile,
+            updatedAt: Math.max(current.updatedAt ?? 0, markerUpdatedAt),
+          }
+        : null,
+    { skipMaintenance: true },
+  );
+  if (updated && params.scope.sessionStore) {
+    params.scope.sessionStore[params.target.sessionKey] = updated;
+  }
+  return updated ?? params.target.sessionEntry;
+}
+
+async function publishTranscriptTurnUpdate(params: {
+  target: SessionTranscriptTurnWriteContext;
+  updateMode: SessionTranscriptTurnUpdateMode;
+  publishWhen: "always" | "when-appended";
+  appendedMessages: TranscriptMessageAppendResult<unknown>[];
+}): Promise<void> {
+  if (params.updateMode === "none") {
+    return;
+  }
+  const lastAppended = params.appendedMessages.findLast((message) => message.appended);
+  if (params.publishWhen === "when-appended" && !lastAppended) {
+    return;
+  }
+  emitSessionTranscriptUpdate({
+    ...(params.target.sessionKey ? { sessionKey: params.target.sessionKey } : {}),
+    ...(params.target.agentId ? { agentId: params.target.agentId } : {}),
+    ...(params.updateMode === "inline" && lastAppended
+      ? {
+          message: lastAppended.message,
+          messageId: lastAppended.messageId,
+        }
+      : {}),
+    sessionFile: params.target.sessionFile,
   });
 }

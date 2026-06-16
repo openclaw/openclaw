@@ -1,6 +1,7 @@
 // Telegram plugin module implements bot message context.session behavior.
 import path from "node:path";
 import {
+  type BuildChannelInboundEventContextParams,
   type BuildChannelInboundEventContextAsyncParams,
   type BuiltChannelInboundEventContext,
   classifyChannelInboundEvent,
@@ -38,6 +39,10 @@ import type {
   TelegramMessageContextSessionRuntimeOverrides,
   TelegramPromptContextEntry,
 } from "./bot-message-context.types.js";
+
+type TelegramMentionFacts = NonNullable<
+  NonNullable<BuildChannelInboundEventContextParams["access"]>["mentions"]
+>;
 import {
   buildGroupLabel,
   buildSenderLabel,
@@ -225,6 +230,7 @@ export async function buildTelegramInboundContextPayload(params: {
   groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
   topicConfig?: TelegramTopicConfig;
   effectiveWasMentioned: boolean;
+  mentionFacts: TelegramMentionFacts;
   hasControlCommand: boolean;
   stickerCacheHit?: boolean;
   audioTranscribedMediaIndex?: number;
@@ -276,6 +282,7 @@ export async function buildTelegramInboundContextPayload(params: {
     groupConfig,
     topicConfig,
     effectiveWasMentioned,
+    mentionFacts,
     hasControlCommand,
     stickerCacheHit,
     audioTranscribedMediaIndex,
@@ -546,11 +553,13 @@ export async function buildTelegramInboundContextPayload(params: {
       bodyForAgent: bodyText,
       commandBody,
       inboundHistory,
+      sourceModality: msg.voice ? "voice" : undefined,
     },
     access: {
       commands: {
         authorized: commandAuthorized,
       },
+      mentions: mentionFacts,
     },
     command:
       commandSource === "native"

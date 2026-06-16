@@ -443,6 +443,9 @@ function buildCommandOutputProgressLine(
   if (!line || !status) {
     return line;
   }
+  if (status === "completed") {
+    return line;
+  }
   if (!line.detail || line.detail === status) {
     const statusLine = {
       ...line,
@@ -1055,11 +1058,14 @@ function getProgressDraftLineText(line: string | ChannelProgressDraftLine): stri
   const label = line.label.trim();
   const detail = line.detail?.trim();
   const status = line.status?.trim();
+  const displayStatus = status === "completed" ? undefined : status;
   if (detail) {
     const compactCommandLine =
       line.toolName === "exec" || line.toolName === "bash" || line.toolName === "shell";
-    if (line.kind === "command-output" && status && detail !== status) {
-      const outputDetail = detail.startsWith(`${status};`) ? detail : `${status}; ${detail}`;
+    if (line.kind === "command-output" && displayStatus && detail !== displayStatus) {
+      const outputDetail = detail.startsWith(`${displayStatus};`)
+        ? detail
+        : `${displayStatus}; ${detail}`;
       if (compactCommandLine) {
         return `${prefix}${outputDetail}`;
       }
@@ -1070,11 +1076,11 @@ function getProgressDraftLineText(line: string | ChannelProgressDraftLine): stri
     }
     return `${prefix}${detail}`;
   }
-  if (status) {
+  if (displayStatus) {
     if (label) {
-      return `${prefix}${label}: ${status}`;
+      return `${prefix}${label}: ${displayStatus}`;
     }
-    return `${prefix}${status}`;
+    return `${prefix}${displayStatus}`;
   }
   const text = line.text.trim();
   if (!icon && text && text !== label) {
@@ -1111,11 +1117,13 @@ export function mergeChannelProgressDraftLine<TLine extends string | ChannelProg
       resolveProgressDraftLineMergeKeys(entry).some((entryKey) => lineKeys.includes(entryKey)),
     );
     if (existingIndex >= 0) {
-      if (normalizeChannelProgressDraftLineIdentity(lines[existingIndex]) === normalized) {
+      const replacement = mergeProgressDraftLineUpdate(lines[existingIndex], line);
+      const replacementIdentity = normalizeChannelProgressDraftLineIdentity(replacement);
+      if (normalizeChannelProgressDraftLineIdentity(lines[existingIndex]) === replacementIdentity) {
         return lines;
       }
       const next = [...lines];
-      next[existingIndex] = line;
+      next[existingIndex] = replacement;
       return next.slice(-maxLines);
     }
   }
@@ -1124,6 +1132,36 @@ export function mergeChannelProgressDraftLine<TLine extends string | ChannelProg
     return lines;
   }
   return [...lines, line].slice(-maxLines);
+}
+
+function mergeProgressDraftLineUpdate<TLine extends string | ChannelProgressDraftLine>(
+  previous: TLine,
+  line: TLine,
+): TLine {
+  if (typeof previous !== "object" || typeof line !== "object") {
+    return line;
+  }
+  if (
+    line.kind !== "command-output" ||
+    !line.status ||
+    (line.detail && line.detail !== line.status)
+  ) {
+    return line;
+  }
+  const previousDetail = previous.detail?.trim();
+  if (!previousDetail || previousDetail === previous.status) {
+    return line;
+  }
+  const replacement = {
+    ...line,
+    detail: previousDetail,
+  };
+  replacement.text = getProgressDraftLineText(replacement);
+  setProgressDraftLineCorrelationKey(
+    replacement,
+    progressDraftLineCorrelationKeys.get(line) ?? progressDraftLineCorrelationKeys.get(previous),
+  );
+  return replacement;
 }
 
 function resolveProgressDraftLineMergeKeys(line: string | ChannelProgressDraftLine): string[] {

@@ -199,10 +199,22 @@ function parseCrabboxVersion(value) {
   if (!match) {
     return null;
   }
+  const tuple = match.slice(1, 4).map(parseVersionTuplePart);
+  if (tuple.some((part) => part === null)) {
+    return null;
+  }
   return {
-    tuple: match.slice(1, 4).map((part) => Number.parseInt(part, 10)),
+    tuple,
     suffix: match[4] ?? "",
   };
+}
+
+function parseVersionTuplePart(value) {
+  if (!/^\d+$/u.test(value)) {
+    return null;
+  }
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : null;
 }
 
 function compareVersionTuples(left, right) {

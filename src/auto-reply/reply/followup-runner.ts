@@ -157,7 +157,9 @@ async function forwardFollowupProgressEvent(params: {
 }) {
   const { evt, opts } = params;
   const emitChannelProgress = params.emitChannelProgress !== false;
-  if (!emitChannelProgress && evt.stream !== "compaction") {
+  const allowQuietToolLifecycle =
+    evt.stream === "tool" && opts?.allowToolLifecycleWhenProgressHidden === true;
+  if (!emitChannelProgress && evt.stream !== "compaction" && !allowQuietToolLifecycle) {
     return;
   }
 

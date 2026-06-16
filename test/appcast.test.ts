@@ -21,6 +21,11 @@ describe("canonicalSparkleBuildFromVersion", () => {
     expect(canonicalSparkleBuildFromVersion("2026.6.32-beta.1")).toBe(2606003201);
     expect(canonicalSparkleBuildFromVersion("2026.6.32")).toBe(2606003290);
   });
+
+  it("rejects invalid numeric prerelease lanes", () => {
+    expect(canonicalSparkleBuildFromVersion("2026.6.5-beta.0")).toBeNull();
+    expect(canonicalSparkleBuildFromVersion("2026.6.5-beta.9007199254740993")).toBeNull();
+  });
 });
 
 function parseItems(appcast: string): AppcastItem[] {

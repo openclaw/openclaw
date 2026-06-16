@@ -16,6 +16,7 @@ import {
   parseMode,
   parseProvider,
   modelProviderConfigBatchJson,
+  posixCodexPlatformPackageRepairFunction,
   posixProviderOnlyPluginIsolationScript,
   parsePositiveInt,
   readPositiveIntEnv,
@@ -1108,6 +1109,7 @@ rm -f "$provider_config_batch"`);
     this.restrictAgentTurnPlugins();
     this.guestSh(
       `${posixAgentWorkspaceScript("Parallels macOS smoke test assistant.")}
+${posixCodexPlatformPackageRepairFunction()}
 agent_ok=false
 for attempt in 1 2; do
   session_id="parallels-macos-smoke"
@@ -1122,6 +1124,11 @@ for attempt in 1 2; do
   set -e
   cat "$output_file"
   if [ "$rc" -ne 0 ]; then
+    if [ "$attempt" -lt 2 ] && repair_missing_codex_platform_package "$output_file"; then
+      rm -f "$output_file"
+      echo "agent turn attempt $attempt hit a missing Codex platform package; retrying"
+      continue
+    fi
     rm -f "$output_file"
     exit "$rc"
   fi

@@ -18,6 +18,7 @@ import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import {
   normalizeGeneratedHelpCommandArgv,
   normalizeRootHelpTargetArgv,
+  normalizeRootLogLevelArgv,
   normalizeRootNoColorArgv,
 } from "./argv.js";
 import {
@@ -425,10 +426,52 @@ function isNoColorConsumedAsCommandOptionValue(
   return pendingValue;
 }
 
+function isLogLevelConsumedAsCommandOption(
+  program: CommanderCommand,
+  remainingArgs: readonly string[],
+  logLevelIndex: number,
+): boolean {
+  let command = program;
+  let pendingValue = false;
+  for (let index = 0; index < logLevelIndex; index += 1) {
+    const arg = remainingArgs[index];
+    if (!arg || arg === FLAG_TERMINATOR) {
+      return false;
+    }
+    if (pendingValue) {
+      pendingValue = false;
+      continue;
+    }
+    if (arg.startsWith("-")) {
+      const option = findCommandOption(command, arg);
+      if (!option && index === logLevelIndex - 1 && !arg.includes("=")) {
+        return true;
+      }
+      pendingValue = shouldOptionConsumeFollowingToken(option, arg, remainingArgs[index + 1]);
+      continue;
+    }
+    command = findSubcommand(command, arg) ?? command;
+  }
+
+  if (pendingValue) {
+    return true;
+  }
+
+  const arg = remainingArgs[logLevelIndex];
+  return command !== program && arg !== undefined && findCommandOption(command, arg) !== undefined;
+}
+
 function normalizeRootNoColorArgvForProgram(argv: string[], program: CommanderCommand): string[] {
   return normalizeRootNoColorArgv(argv, {
     shouldPreserveNoColor: ({ remainingArgs, noColorIndex }) =>
       isNoColorConsumedAsCommandOptionValue(program, remainingArgs, noColorIndex),
+  });
+}
+
+function normalizeRootLogLevelArgvForProgram(argv: string[], program: CommanderCommand): string[] {
+  return normalizeRootLogLevelArgv(argv, {
+    shouldPreserveLogLevel: ({ remainingArgs, logLevelIndex }) =>
+      isLogLevelConsumedAsCommandOption(program, remainingArgs, logLevelIndex),
   });
 }
 
@@ -1051,7 +1094,10 @@ export async function runCli(argv: string[] = process.argv) {
         }
       }
 
-      parseArgv = normalizeRootNoColorArgvForProgram(parseArgv, program);
+      parseArgv = normalizeRootLogLevelArgvForProgram(
+        normalizeRootNoColorArgvForProgram(parseArgv, program),
+        program,
+      );
       stopStartupProgress();
 
       try {
