@@ -37,6 +37,12 @@ type SessionCleanupActionRow = ReturnType<typeof toSessionDisplayRows>[number] &
   action: ReturnType<typeof resolveSessionCleanupAction>;
 };
 
+type SessionCleanupLabelSummary = {
+  label: string;
+  kept: number;
+  pruned: number;
+};
+
 function formatCleanupActionCell(
   action: ReturnType<typeof resolveSessionCleanupAction>,
   rich: boolean,
@@ -85,6 +91,45 @@ function buildActionRows(params: {
       }),
     }),
   );
+}
+
+function buildLabelSummaries(actionRows: SessionCleanupActionRow[]): SessionCleanupLabelSummary[] {
+  const summaryByLabel = new Map<string, SessionCleanupLabelSummary>();
+  for (const actionRow of actionRows) {
+    const label = actionRow.label?.trim() || "Unlabeled";
+    let summary = summaryByLabel.get(label);
+    if (!summary) {
+      summary = { label, kept: 0, pruned: 0 };
+      summaryByLabel.set(label, summary);
+    }
+    if (actionRow.action === "keep") {
+      summary.kept += 1;
+    } else {
+      summary.pruned += 1;
+    }
+  }
+  return [...summaryByLabel.values()].toSorted((a, b) => a.label.localeCompare(b.label));
+}
+
+function renderLabelSummaries(params: {
+  actionRows: SessionCleanupActionRow[];
+  runtime: RuntimeEnv;
+}) {
+  const summaries = buildLabelSummaries(params.actionRows);
+  if (summaries.length === 0) {
+    return;
+  }
+  const labelPad = Math.max(...summaries.map((summary) => summary.label.length));
+  const totalKept = summaries.reduce((total, summary) => total + summary.kept, 0);
+  const totalPruned = summaries.reduce((total, summary) => total + summary.pruned, 0);
+  params.runtime.log("");
+  params.runtime.log("Summary by Label:");
+  for (const summary of summaries) {
+    params.runtime.log(
+      `${summary.label.padEnd(labelPad)}  ${summary.kept} kept, ${summary.pruned} pruned`,
+    );
+  }
+  params.runtime.log(`Total: ${totalKept} kept, ${totalPruned} pruned`);
 }
 
 function renderStoreDryRunPlan(params: {
@@ -141,6 +186,7 @@ function renderStoreDryRunPlan(params: {
     ].join(" ");
     params.runtime.log(line.trimEnd());
   }
+  renderLabelSummaries({ actionRows: params.actionRows, runtime: params.runtime });
 }
 
 function renderAppliedSummaries(params: {

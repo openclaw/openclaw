@@ -503,6 +503,80 @@ describe("sessionsCleanupCommand", () => {
     expect(stalePruneLines.length).toBeGreaterThan(0);
   });
 
+  it("renders a dry-run summary grouped by session label", async () => {
+    mocks.enforceSessionDiskBudget.mockResolvedValue(null);
+    mocks.runSessionsCleanup.mockResolvedValue({
+      mode: "warn",
+      previewResults: [
+        {
+          summary: {
+            agentId: "main",
+            storePath: "/resolved/sessions.json",
+            mode: "warn",
+            dryRun: true,
+            beforeCount: 4,
+            afterCount: 2,
+            missing: 0,
+            dmScopeRetired: 0,
+            pruned: 1,
+            capped: 1,
+            unreferencedArtifacts: {
+              scannedFiles: 0,
+              removedFiles: 0,
+              freedBytes: 0,
+              olderThanMs: 604800000,
+            },
+            diskBudget: null,
+            wouldMutate: true,
+          },
+          beforeStore: {
+            cronKept: {
+              sessionId: "cron-kept",
+              updatedAt: 4,
+              model: "test:opus",
+              label: "Cron: daily-commit",
+            },
+            cronPruned: {
+              sessionId: "cron-pruned",
+              updatedAt: 3,
+              model: "test:opus",
+              label: "Cron: daily-commit",
+            },
+            directKept: {
+              sessionId: "direct-kept",
+              updatedAt: 2,
+              model: "test:opus",
+            },
+            directCapped: {
+              sessionId: "direct-capped",
+              updatedAt: 1,
+              model: "test:opus",
+            },
+          },
+          missingKeys: new Set<string>(),
+          staleKeys: new Set(["cronPruned"]),
+          cappedKeys: new Set(["directCapped"]),
+          budgetEvictedKeys: new Set<string>(),
+          dmScopeRetiredKeys: new Set<string>(),
+        },
+      ],
+      appliedSummaries: [],
+    });
+
+    const { runtime, logs } = makeRuntime();
+    await sessionsCleanupCommand(
+      {
+        dryRun: true,
+      },
+      runtime,
+    );
+
+    expectLogsToInclude(logs, "Summary by Label:");
+    expectLogsToInclude(logs, "Cron: daily-commit  1 kept, 1 pruned");
+    expectLogsToInclude(logs, "Unlabeled           1 kept, 1 pruned");
+    expectLogsToInclude(logs, "Total: 2 kept, 2 pruned");
+  });
+
   it("returns grouped JSON for --all-agents dry-runs", async () => {
     mocks.resolveSessionStoreTargets.mockReturnValue([
       { agentId: "main", storePath: "/resolved/main-sessions.json" },
