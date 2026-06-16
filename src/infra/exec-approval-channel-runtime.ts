@@ -3,6 +3,7 @@ import { readConnectErrorDetailCode } from "../../packages/gateway-protocol/src/
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-readiness.js";
 import type { GatewayClient, GatewayReconnectPausedInfo } from "../gateway/client.js";
+import { isApprovalMethod } from "../gateway/method-scopes.js";
 import { createOperatorApprovalsGatewayClient } from "../gateway/operator-approvals-client.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { formatErrorMessage } from "./errors.js";
@@ -21,15 +22,6 @@ export type {
 
 type ApprovalRequestEvent = ExecApprovalRequest | PluginApprovalRequest;
 type ApprovalResolvedEvent = ExecApprovalResolved | PluginApprovalResolved;
-
-const APPROVAL_RUNTIME_REQUEST_METHODS = new Set([
-  "exec.approval.resolve",
-  "plugin.approval.resolve",
-]);
-
-function isApprovalRuntimeRequestMethod(method: string): boolean {
-  return APPROVAL_RUNTIME_REQUEST_METHODS.has(method);
-}
 
 /** Error raised when the gateway pauses approval reconnects after a terminal startup failure. */
 export class ExecApprovalChannelRuntimeTerminalStartError extends Error {
@@ -434,7 +426,7 @@ export function createExecApprovalChannelRuntime<
     handleExpired,
 
     async request<T = unknown>(method: string, params: Record<string, unknown>): Promise<T> {
-      if (!isApprovalRuntimeRequestMethod(method)) {
+      if (!isApprovalMethod(method)) {
         throw new Error(
           `${adapter.label}: operator approvals runtime cannot dispatch ${method}; use a write-capable gateway client`,
         );

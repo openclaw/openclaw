@@ -319,6 +319,7 @@ describe("createExecApprovalChannelRuntime", () => {
 
     await runtime.start();
     await runtime.request("exec.approval.resolve", { id: "abc", decision: "deny" });
+    await runtime.request("exec.approval.list", {});
 
     expect(mockGatewayClientStarts).toHaveBeenCalledTimes(1);
     expectStartGatewayClientCall();
@@ -326,6 +327,7 @@ describe("createExecApprovalChannelRuntime", () => {
       id: "abc",
       decision: "deny",
     });
+    expect(mockGatewayClientRequests).toHaveBeenCalledWith("exec.approval.list", {});
   });
 
   it("rejects write RPCs before they reach the approvals-only gateway client", async () => {
