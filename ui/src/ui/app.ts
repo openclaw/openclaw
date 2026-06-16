@@ -309,7 +309,7 @@ export class OpenClawApp extends LitElement {
   @state() realtimeTalkConversation: RealtimeTalkConversationEntry[] = [];
   @state() realtimeTalkOptionsOpen = false;
   @state() realtimeTalkCatalogProviders:
-    | { id: string; label: string; transports?: string[] }[]
+    | { id: string; label: string; transports?: string[]; supportsBrowserSession?: boolean }[]
     | null = null;
   @state() realtimeTalkOptions = {
     provider: "",
@@ -1179,7 +1179,14 @@ export class OpenClawApp extends LitElement {
     }
     try {
       const result = await this.client.request<{
-        realtime?: { providers?: { id: string; label: string; transports?: string[] }[] };
+        realtime?: {
+          providers?: {
+            id: string;
+            label: string;
+            transports?: string[];
+            supportsBrowserSession?: boolean;
+          }[];
+        };
       }>("talk.catalog", {});
       this.realtimeTalkCatalogProviders = result?.realtime?.providers ?? null;
     } catch {

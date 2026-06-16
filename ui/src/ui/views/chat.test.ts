@@ -1560,13 +1560,20 @@ describe("chat voice controls", () => {
     const container = renderChatView({
       realtimeTalkOptionsOpen: true,
       realtimeTalkCatalogProviders: [
-        { id: "openai", label: "OpenAI", transports: ["webrtc", "provider-websocket"] },
+        {
+          id: "openai",
+          label: "OpenAI",
+          transports: ["webrtc", "provider-websocket"],
+          supportsBrowserSession: true,
+        },
         { id: "plugin-realtime", label: "Plugin realtime", transports: ["gateway-relay"] },
         {
           id: "plugin-websocket",
           label: "Unsupported plugin WebSocket",
           transports: ["provider-websocket"],
+          supportsBrowserSession: true,
         },
+        { id: "relay-only", label: "No browser session", transports: ["webrtc"] },
       ],
       realtimeTalkOptions: {
         provider: "openai",
@@ -1600,7 +1607,12 @@ describe("chat voice controls", () => {
     const container = renderChatView({
       realtimeTalkOptionsOpen: true,
       realtimeTalkCatalogProviders: [
-        { id: "google", label: "Google", transports: ["provider-websocket", "gateway-relay"] },
+        {
+          id: "google",
+          label: "Google",
+          transports: ["provider-websocket", "gateway-relay"],
+          supportsBrowserSession: true,
+        },
       ],
       realtimeTalkOptions: {
         provider: "google",

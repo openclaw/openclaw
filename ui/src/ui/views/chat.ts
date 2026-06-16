@@ -122,7 +122,9 @@ export type ChatProps = {
   realtimeTalkTranscript?: string | null;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
   realtimeTalkOptionsOpen?: boolean;
-  realtimeTalkCatalogProviders?: { id: string; label: string; transports?: string[] }[] | null;
+  realtimeTalkCatalogProviders?:
+    | { id: string; label: string; transports?: string[]; supportsBrowserSession?: boolean }[]
+    | null;
   realtimeTalkOptions?: {
     provider: string;
     model: string;
@@ -323,8 +325,11 @@ function renderRealtimeTalkOptions(props: ChatProps) {
   const providerTransports = (provider: (typeof catalogProviders)[number]) =>
     (provider.transports ?? []).filter(
       (transport) =>
-        TALK_CONTROL_UI_TRANSPORTS.has(transport) ||
-        (transport === "provider-websocket" &&
+        transport === "gateway-relay" ||
+        (provider.supportsBrowserSession === true &&
+          TALK_CONTROL_UI_TRANSPORTS.has(transport)) ||
+        (provider.supportsBrowserSession === true &&
+          transport === "provider-websocket" &&
           TALK_CONTROL_UI_PROVIDER_WEBSOCKET_IDS.has(provider.id)),
     );
   const selectableProviders = catalogProviders.filter(

@@ -152,7 +152,9 @@ export type AppViewState = {
   realtimeTalkTranscript: string | null;
   realtimeTalkConversation: RealtimeTalkConversationEntry[];
   realtimeTalkOptionsOpen: boolean;
-  realtimeTalkCatalogProviders: { id: string; label: string; transports?: string[] }[] | null;
+  realtimeTalkCatalogProviders:
+    | { id: string; label: string; transports?: string[]; supportsBrowserSession?: boolean }[]
+    | null;
   realtimeTalkOptions: {
     provider: string;
     model: string;
