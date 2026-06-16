@@ -1,5 +1,4 @@
 // Google tests cover index plugin behavior.
-import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -16,6 +15,7 @@ import {
 import { createCapturedThinkingConfigStream } from "openclaw/plugin-sdk/provider-test-contracts";
 import type { RealtimeVoiceProviderPlugin } from "openclaw/plugin-sdk/realtime-voice";
 import { describe, expect, it, vi } from "vitest";
+import { resolveGeminiCliProfileHome } from "./gemini-cli-auth-home.js";
 import { registerGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
 import googlePlugin from "./index.js";
 import googleProviderDiscovery from "./provider-discovery.js";
@@ -38,15 +38,7 @@ describe("google provider plugin hooks", () => {
   it("exposes staged Gemini CLI OAuth homes as runtime external auth profiles", async () => {
     const agentDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-cli-auth-"));
     const profileId = "google-gemini-cli:user@example.test";
-    const profileHash = createHash("sha256").update(profileId).digest("hex").slice(0, 24);
-    const credentialsDir = path.join(
-      agentDir,
-      "cli-runtimes",
-      "google-gemini-cli",
-      "profiles",
-      profileHash,
-      ".gemini",
-    );
+    const credentialsDir = path.join(resolveGeminiCliProfileHome(agentDir, profileId), ".gemini");
     const idTokenPayload = Buffer.from(
       JSON.stringify({ sub: "google-account-42", email: "user@example.test" }),
     ).toString("base64url");

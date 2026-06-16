@@ -135,7 +135,7 @@ describe("google gemini cli backend auth bridge", () => {
       if (!context.agentDir) {
         throw new Error("expected Gemini test context to include an agent directory");
       }
-      expect(home).toContain(path.join(context.agentDir, "cli-runtimes", "google-gemini-cli"));
+      expect(home).toContain(path.join(context.agentDir, "google-gemini-cli-home"));
       expect(home).not.toContain("user@example.test");
 
       const raw = await fs.readFile(path.join(home ?? "", ".gemini", "oauth_creds.json"), "utf8");

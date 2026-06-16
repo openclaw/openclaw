@@ -6,13 +6,7 @@ export const GEMINI_CLI_OAUTH_CREDS_RELATIVE_PATH = ".gemini/oauth_creds.json";
 
 export function resolveGeminiCliProfileHome(agentDir: string, profileId: string): string {
   const profileHash = crypto.createHash("sha256").update(profileId).digest("hex").slice(0, 24);
-  return path.join(
-    agentDir,
-    "cli-runtimes",
-    GOOGLE_GEMINI_CLI_PROVIDER_ID,
-    "profiles",
-    profileHash,
-  );
+  return path.join(agentDir, `${GOOGLE_GEMINI_CLI_PROVIDER_ID}-home`, "profiles", profileHash);
 }
 
 export function resolveGeminiCliProfileCredentialsPath(
