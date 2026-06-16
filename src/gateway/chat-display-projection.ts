@@ -1598,7 +1598,7 @@ function projectSessionsSendInterSessionMessages(
 
 const GATEWAY_ASSISTANT_ERROR_FALLBACK_TEXT = "The agent run failed before producing a reply.";
 
-function sanitizeStructuredAssistantErrorMessage(
+function sanitizeAssistantErrorDisplayMessage(
   message: Record<string, unknown>,
 ): Record<string, unknown> {
   const { content, ...envelope } = message;
@@ -1652,7 +1652,7 @@ function projectEmptyAssistantErrorMessages(
       });
     if (hasDisplayableStructuredContent) {
       changed = true;
-      return sanitizeStructuredAssistantErrorMessage(message);
+      return sanitizeAssistantErrorDisplayMessage(message);
     }
     const sanitized = sanitizeChatHistoryMessage(message, Number.MAX_SAFE_INTEGER)
       .message as Record<string, unknown>;
@@ -1678,7 +1678,8 @@ function projectEmptyAssistantErrorMessages(
       (text) => text !== STREAM_ERROR_FALLBACK_TEXT && !isSuppressedControlReplyText(text),
     );
     if (!shouldDropAssistantHistoryMessage(sanitized) && hasVisibleReplyText) {
-      return message;
+      changed = true;
+      return sanitizeAssistantErrorDisplayMessage(message);
     }
     changed = true;
     const next: Record<string, unknown> = {

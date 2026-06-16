@@ -1028,6 +1028,30 @@ describe("projectRecentChatDisplayMessages", () => {
     ]);
 
     expect(result[0]?.text).toBe("A real reply before the run failed.");
+    expect(result[0]).not.toHaveProperty("errorMessage");
+  });
+
+  it("preserves partial error replies without hidden reasoning or diagnostics", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "private upstream reasoning" },
+          { type: "text", text: "A partial reply before the run failed." },
+        ],
+        stopReason: "error",
+        errorMessage: "private upstream at secret.internal.example failed",
+        diagnostics: { provider: "private-provider" },
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result[0]?.content).toEqual([
+      { type: "text", text: "A partial reply before the run failed." },
+    ]);
+    expect(result[0]).not.toHaveProperty("diagnostics");
+    expect(result[0]).not.toHaveProperty("errorMessage");
+    expect(JSON.stringify(result)).not.toContain("private upstream");
   });
 
   it.each(["[[reply_to_current]]", "NO_REPLY", STREAM_ERROR_FALLBACK_TEXT])(
