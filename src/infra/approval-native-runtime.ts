@@ -1,6 +1,11 @@
 // Creates channel-native approval runtimes and delivery flows.
 import type { ChannelApprovalNativeAdapter } from "../channels/plugins/approval-native.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { callGatewayLeastPrivilege } from "../gateway/call.js";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../packages/gateway-protocol/src/client-info.js";
 import {
   resolveChannelNativeApprovalDeliveryPlan,
   type ChannelApprovalNativePlannedTarget,
@@ -192,9 +197,6 @@ export function createChannelNativeApprovalRuntime<
   const nowMs = adapter.nowMs ?? Date.now;
   const resolveApprovalKind =
     adapter.resolveApprovalKind ?? ((request: TRequest) => defaultResolveApprovalKind(request));
-  let runtimeRequest:
-    | ((method: string, params: Record<string, unknown>) => Promise<unknown>)
-    | null = null;
   const handledEventKinds = new Set<ExecApprovalChannelRuntimeEventKind>(
     adapter.eventKinds ?? ["exec"],
   );
@@ -204,10 +206,13 @@ export function createChannelNativeApprovalRuntime<
     channelLabel: adapter.channelLabel,
     accountId: adapter.accountId,
     requestGateway: async <T>(method: string, params: Record<string, unknown>): Promise<T> => {
-      if (!runtimeRequest) {
-        throw new Error(`${adapter.label}: gateway client not connected`);
-      }
-      return (await runtimeRequest(method, params)) as T;
+      return await callGatewayLeastPrivilege<T>({
+        config: adapter.cfg,
+        method,
+        params,
+        clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+        mode: GATEWAY_CLIENT_MODES.BACKEND,
+      });
     },
   });
 
@@ -333,8 +338,6 @@ export function createChannelNativeApprovalRuntime<
       }
     },
   });
-
-  runtimeRequest = (method, params) => runtime.request(method, params);
 
   return {
     ...runtime,
