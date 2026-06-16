@@ -145,6 +145,7 @@ export type TuiBackend = {
   onGap?: (info: { expected: number; received: number }) => void;
   start: () => void;
   stop: () => void | Promise<void>;
+  subscribeSessionEvents?: () => Promise<unknown>;
   sendChat: (opts: ChatSendOptions) => Promise<TuiChatSendResult>;
   abortChat: (opts: {
     sessionKey: string;

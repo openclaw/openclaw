@@ -493,4 +493,58 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
       "utf-8",
     );
   });
+
+  it("keeps card titles visible when a column overflows its height", async () => {
+    const artifacts: ProofArtifacts = { screenshots: [], videos: [] };
+    const crowdedColumnCardCount = 8;
+    const overflowTitle = (index: number) =>
+      `Overflowing backlog card ${index + 1} with a long title that wraps onto two lines`;
+    const crowdedCards = Array.from({ length: crowdedColumnCardCount }, (_, index) =>
+      card({
+        id: `overflow-card-${index + 1}`,
+        notes: "Acceptance: title stays visible while the column scrolls.",
+        position: 1000 + index,
+        status: "todo",
+        title: overflowTitle(index),
+        updatedAt: baseTime + index,
+      }),
+    );
+
+    const recorded = await newRecordedPage("workboard-overflow");
+    await installMockGateway(recorded.page, {
+      methodResponses: {
+        "config.get": workboardConfigSnapshot(),
+        "sessions.list": sessionsListResponse([sessionRow()]),
+        "tasks.list": { nextCursor: null, tasks: [] },
+        "workboard.cards.list": cardsListResponse(crowdedCards),
+      },
+    });
+
+    try {
+      // Constrain the height so the Todo column must overflow its visible area.
+      await recorded.page.setViewportSize({ height: 720, width: 1400 });
+      const response = await recorded.page.goto(`${server.baseUrl}workboard`);
+      expect(response?.status()).toBe(200);
+      const column = statusColumn(recorded.page, "Todo");
+      await column.waitFor({ state: "visible" });
+      await cardInColumn(recorded.page, "Todo", overflowTitle(0)).waitFor({ state: "visible" });
+      await captureScreenshot(recorded.page, artifacts, "09-overflow-column");
+
+      const titleHeights = await column
+        .locator(".workboard-card h3")
+        .evaluateAll((titles) => titles.map((title) => title.getBoundingClientRect().height));
+      expect(titleHeights).toHaveLength(crowdedColumnCardCount);
+      for (const height of titleHeights) {
+        // Squeezed implicit grid rows previously collapsed the line-clamped title to 0px.
+        expect(height).toBeGreaterThan(0);
+      }
+
+      const columnScrolls = await column
+        .locator(".workboard-column__cards")
+        .evaluate((cards) => cards.scrollHeight > cards.clientHeight + 1);
+      expect(columnScrolls).toBe(true);
+    } finally {
+      await closeRecordedPage(recorded, artifacts, "workboard-overflow");
+    }
+  });
 });

@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../test/helpers/temp-dir.js";
 import {
   buildOpenClawCompileCacheRespawnPlan,
+  isNodeVersionAffectedByCompileCacheDeadlock,
   isSourceCheckoutInstallRoot,
   resolveOpenClawCompileCacheDirectory,
   resolveEntryInstallRoot,
@@ -58,11 +59,20 @@ describe("entry compile cache", () => {
   it("keeps compile cache enabled for packaged installs unless disabled by env", () => {
     const root = makeTempDir(tempDirs, "openclaw-compile-cache-package-");
 
-    expect(shouldEnableOpenClawCompileCache({ env: {}, installRoot: root })).toBe(true);
+    expect(
+      shouldEnableOpenClawCompileCache({
+        env: {},
+        installRoot: root,
+        nodeVersion: "24.15.0",
+        platform: "win32",
+      }),
+    ).toBe(true);
     expect(
       shouldEnableOpenClawCompileCache({
         env: { NODE_DISABLE_COMPILE_CACHE: "1" },
         installRoot: root,
+        nodeVersion: "24.15.0",
+        platform: "win32",
       }),
     ).toBe(false);
   });
@@ -101,12 +111,12 @@ describe("entry compile cache", () => {
       args: ["--no-warnings", path.join(root, "dist", "entry.js"), "status", "--json"],
       env: {
         NODE_DISABLE_COMPILE_CACHE: "1",
-        OPENCLAW_SOURCE_COMPILE_CACHE_RESPAWNED: "1",
+        OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED: "1",
       },
     });
   });
 
-  it("does not respawn packaged installs when NODE_COMPILE_CACHE is configured", () => {
+  it("does not respawn unaffected packaged installs when NODE_COMPILE_CACHE is configured", () => {
     const root = makeTempDir(tempDirs, "openclaw-compile-cache-package-respawn-");
 
     expect(
@@ -114,8 +124,35 @@ describe("entry compile cache", () => {
         currentFile: path.join(root, "dist", "entry.js"),
         env: { NODE_COMPILE_CACHE: "/tmp/openclaw-cache" },
         installRoot: root,
+        nodeVersion: "24.1.0",
+        platform: "linux",
       }),
     ).toBeUndefined();
+  });
+
+  it("builds a no-cache respawn plan for affected Windows packaged installs", () => {
+    const root = makeTempDir(tempDirs, "openclaw-compile-cache-package-win24-");
+    const entryFile = path.join(root, "dist", "entry.js");
+
+    const plan = buildOpenClawCompileCacheRespawnPlan({
+      currentFile: entryFile,
+      env: { NODE_COMPILE_CACHE: "/tmp/openclaw-cache" },
+      execArgv: ["--no-warnings"],
+      execPath: "/usr/bin/node",
+      installRoot: root,
+      argv: ["/usr/bin/node", entryFile, "doctor", "--fix", "--non-interactive"],
+      nodeVersion: "24.1.0",
+      platform: "win32",
+    });
+
+    expect(plan).toEqual({
+      command: "/usr/bin/node",
+      args: ["--no-warnings", entryFile, "doctor", "--fix", "--non-interactive"],
+      env: {
+        NODE_DISABLE_COMPILE_CACHE: "1",
+        OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED: "1",
+      },
+    });
   });
 
   it("does not respawn source checkouts twice", async () => {
@@ -128,7 +165,7 @@ describe("entry compile cache", () => {
         currentFile: path.join(root, "dist", "entry.js"),
         env: {
           NODE_COMPILE_CACHE: "/tmp/openclaw-cache",
-          OPENCLAW_SOURCE_COMPILE_CACHE_RESPAWNED: "1",
+          OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED: "1",
         },
         installRoot: root,
       }),
@@ -245,5 +282,98 @@ describe("entry compile cache", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("disables compile cache for early Node 24.x versions on Windows", () => {
+    const root = makeTempDir(tempDirs, "openclaw-compile-cache-node24-");
+    expect(
+      shouldEnableOpenClawCompileCache({
+        env: {},
+        installRoot: root,
+        nodeVersion: "24.1.0",
+        platform: "win32",
+      }),
+    ).toBe(false);
+    expect(
+      shouldEnableOpenClawCompileCache({
+        env: {},
+        installRoot: root,
+        nodeVersion: "24.14.0",
+        platform: "win32",
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps compile cache enabled for early Node 24.x on non-Windows packaged installs", () => {
+    const root = makeTempDir(tempDirs, "openclaw-compile-cache-node24-nonwin-");
+    expect(
+      shouldEnableOpenClawCompileCache({
+        env: {},
+        installRoot: root,
+        nodeVersion: "24.1.0",
+        platform: "linux",
+      }),
+    ).toBe(true);
+    expect(
+      shouldEnableOpenClawCompileCache({
+        env: {},
+        installRoot: root,
+        nodeVersion: "24.14.0",
+        platform: "darwin",
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps compile cache enabled for Node 24.15+ and other majors on Windows", () => {
+    const root = makeTempDir(tempDirs, "openclaw-compile-cache-node2415-");
+    expect(
+      shouldEnableOpenClawCompileCache({
+        env: {},
+        installRoot: root,
+        nodeVersion: "24.15.0",
+        platform: "win32",
+      }),
+    ).toBe(true);
+    expect(
+      shouldEnableOpenClawCompileCache({
+        env: {},
+        installRoot: root,
+        nodeVersion: "22.22.0",
+        platform: "win32",
+      }),
+    ).toBe(true);
+    expect(
+      shouldEnableOpenClawCompileCache({
+        env: {},
+        installRoot: root,
+        nodeVersion: "25.0.0",
+        platform: "win32",
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("isNodeVersionAffectedByCompileCacheDeadlock", () => {
+  it("flags Node 24.0 through 24.14 as affected", () => {
+    expect(isNodeVersionAffectedByCompileCacheDeadlock("24.0.0")).toBe(true);
+    expect(isNodeVersionAffectedByCompileCacheDeadlock("24.1.0")).toBe(true);
+    expect(isNodeVersionAffectedByCompileCacheDeadlock("24.14.0")).toBe(true);
+  });
+
+  it("does not flag Node 24.15+", () => {
+    expect(isNodeVersionAffectedByCompileCacheDeadlock("24.15.0")).toBe(false);
+    expect(isNodeVersionAffectedByCompileCacheDeadlock("24.20.1")).toBe(false);
+  });
+
+  it("does not flag other major versions", () => {
+    expect(isNodeVersionAffectedByCompileCacheDeadlock("22.22.0")).toBe(false);
+    expect(isNodeVersionAffectedByCompileCacheDeadlock("23.11.0")).toBe(false);
+    expect(isNodeVersionAffectedByCompileCacheDeadlock("25.0.0")).toBe(false);
+  });
+
+  it("handles missing or invalid versions", () => {
+    expect(isNodeVersionAffectedByCompileCacheDeadlock(undefined)).toBe(false);
+    expect(isNodeVersionAffectedByCompileCacheDeadlock("")).toBe(false);
+    expect(isNodeVersionAffectedByCompileCacheDeadlock("not-a-version")).toBe(false);
   });
 });

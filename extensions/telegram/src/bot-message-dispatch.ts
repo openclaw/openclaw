@@ -25,11 +25,11 @@ import {
   projectOutboundPayloadPlanForDelivery,
 } from "openclaw/plugin-sdk/channel-outbound";
 import {
+  buildChannelProgressDraftLine,
   buildChannelProgressDraftLineForEntry,
   type ChannelProgressDraftLine,
+  type ChannelProgressDraftCompositorLine,
   createChannelProgressDraftCompositor,
-  formatChannelProgressDraftLine,
-  formatChannelProgressDraftLineForEntry,
   resolveChannelStreamingBlockEnabled,
   resolveTranscriptBackedChannelFinalText,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -67,7 +67,6 @@ import {
   resolveDefaultModelForAgent,
 } from "./bot-message-dispatch.agent.runtime.js";
 import { deduplicateBlockSentMedia } from "./bot-message-dispatch.media-dedup.js";
-import { pruneStickerMediaFromContext } from "./bot-message-dispatch.media.js";
 import {
   generateTopicLabel,
   getAgentScopedMediaLocalRoots,
@@ -100,7 +99,7 @@ import {
 import type { TelegramStreamMode } from "./bot/types.js";
 import { resolveTelegramInlineButtons, type TelegramInlineButtons } from "./button-types.js";
 import { resolveTelegramDraftStreamingChunking } from "./draft-chunking.js";
-import { createTelegramDraftStream } from "./draft-stream.js";
+import { createTelegramDraftStream, type TelegramDraftPreview } from "./draft-stream.js";
 import {
   buildTelegramErrorScopeKey,
   isSilentErrorPolicy,
@@ -108,6 +107,8 @@ import {
   shouldSuppressTelegramError,
 } from "./error-policy.js";
 import { shouldSuppressLocalTelegramExecApprovalPrompt } from "./exec-approvals.js";
+import { renderTelegramHtmlText } from "./format.js";
+import { includesRecentTelegramGroupHistoryContext } from "./group-history-context.js";
 import { beginTelegramInboundEventDeliveryCorrelation } from "./inbound-event-delivery.js";
 import {
   createLaneDeliveryStateTracker,
@@ -116,12 +117,14 @@ import {
   type LaneDeliveryResult,
   type LaneName,
 } from "./lane-delivery.js";
+import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
 import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
 import {
   createTelegramReasoningStepState,
   splitTelegramReasoningText,
 } from "./reasoning-lane-coordinator.js";
 import {
+  buildTelegramRichHtml,
   buildTelegramRichMarkdown,
   splitTelegramRichMarkdownChunks,
   TELEGRAM_RICH_TEXT_LIMIT,
@@ -143,7 +146,6 @@ import {
   supersedeTelegramReplyFence,
 } from "./telegram-reply-fence.js";
 
-export { pruneStickerMediaFromContext } from "./bot-message-dispatch.media.js";
 export { getTelegramReplyFenceSizeForTests, resetTelegramReplyFenceForTests };
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
@@ -203,6 +205,22 @@ async function resolveStickerVisionSupport(cfg: OpenClawConfig, agentId: string)
   } catch {
     return false;
   }
+}
+
+function includeStickerDescription(body: string | undefined, formattedDescription: string): string {
+  if (!body) {
+    return formattedDescription;
+  }
+  const current = body.trim();
+  if (!current || current === "<media:image>") {
+    return formattedDescription;
+  }
+  // Cached descriptions can already be present from inbound context construction.
+  // Keep that body intact so captions, forwarded text, and supplemental context survive.
+  if (body.includes(formattedDescription)) {
+    return body;
+  }
+  return `${formattedDescription}\n${body}`;
 }
 
 type DispatchTelegramMessageParams = {
@@ -405,6 +423,63 @@ function formatTelegramProgressLine(text: string): string {
     : formatProgressAsMarkdownCode(text);
 }
 
+function escapeTelegramProgressHtml(text: string): string {
+  return text
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
+function renderTelegramProgressStringLine(text: string): string {
+  const clipped = clipProgressMarkdownText(text.trim());
+  const italic = clipped.match(/^_(.*)_$/u);
+  if (italic) {
+    return `<i>${escapeTelegramProgressHtml(italic[1] ?? "")}</i>`;
+  }
+  return `<code>${escapeTelegramProgressHtml(clipped)}</code>`;
+}
+
+function renderTelegramProgressLine(line: ChannelProgressDraftCompositorLine): string {
+  if (typeof line === "string") {
+    return line.split(/\r?\n/u).map(renderTelegramProgressStringLine).filter(Boolean).join("<br>");
+  }
+  if (!line.icon && line.label === "Commentary") {
+    return renderTelegramProgressStringLine(line.text);
+  }
+  const label = [line.icon, line.label].filter(Boolean).join(" ");
+  const parts = [`<b>${escapeTelegramProgressHtml(label)}</b>`];
+  const detail = line.detail && line.detail !== line.label ? line.detail : undefined;
+  if (detail) {
+    parts.push(`<code>${escapeTelegramProgressHtml(clipProgressMarkdownText(detail))}</code>`);
+  } else {
+    const text = line.text.trim();
+    if (text && text !== label) {
+      parts.push(renderTelegramProgressStringLine(text));
+    }
+  }
+  if (line.status && line.status !== line.detail) {
+    parts.push(`<i>${escapeTelegramProgressHtml(line.status)}</i>`);
+  }
+  return parts.join(" ");
+}
+
+function renderTelegramProgressDraftPreview(
+  text: string,
+  lines: readonly ChannelProgressDraftCompositorLine[],
+): TelegramDraftPreview {
+  const trimmed = text.trimEnd();
+  const [heading] = trimmed.split(/\r?\n/u, 1);
+  const renderedLines = lines.map(renderTelegramProgressLine).filter(Boolean);
+  const htmlParts = heading?.trim()
+    ? [`<b>${escapeTelegramProgressHtml(heading.trim())}</b>`, ...renderedLines]
+    : renderedLines;
+  return {
+    text: trimmed,
+    richMessage: buildTelegramRichHtml(htmlParts.join("<br>"), { skipEntityDetection: true }),
+  };
+}
+
 function normalizeTelegramThreadId(value: unknown): number | undefined {
   return parseStrictPositiveInteger(value);
 }
@@ -480,6 +555,14 @@ function extractCurrentTelegramBody(body: string | undefined): string {
   return body.slice(markerIndex + CURRENT_MESSAGE_MARKER.length).trimStart();
 }
 
+function includesRecoveredTelegramGroupHistoryContext(context: TelegramMessageContext): boolean {
+  return Boolean(
+    context.isGroup &&
+    context.groupHistoryContextMode &&
+    includesRecentTelegramGroupHistoryContext(context.groupHistoryContextMode),
+  );
+}
+
 function buildRecoveredTelegramBody(params: {
   cfg: OpenClawConfig;
   context: TelegramMessageContext;
@@ -487,7 +570,11 @@ function buildRecoveredTelegramBody(params: {
   historyKey?: string;
   threadSpec: TelegramThreadSpec;
 }): string {
-  if (!params.context.isGroup || !params.historyKey || params.context.historyLimit <= 0) {
+  if (
+    !includesRecoveredTelegramGroupHistoryContext(params.context) ||
+    !params.historyKey ||
+    params.context.historyLimit <= 0
+  ) {
     return params.currentMessage;
   }
   const groupLabel = buildGroupLabel(
@@ -549,7 +636,7 @@ function migrateRecoveredTelegramRoomEventHistory(params: {
   const originalHistoryKey = params.context.historyKey;
   const recoveredHistoryKey = params.recoveredHistoryKey;
   if (
-    !params.context.isGroup ||
+    !includesRecoveredTelegramGroupHistoryContext(params.context) ||
     params.context.ctxPayload.InboundEventKind !== "room_event" ||
     !originalHistoryKey ||
     !recoveredHistoryKey ||
@@ -616,12 +703,13 @@ function resolveDispatchTelegramContext(params: {
   const recoveredHistoryKey = params.context.isGroup
     ? buildTelegramGroupPeerId(params.context.chatId, threadSpec.id)
     : params.context.historyKey;
+  const includeRecoveredGroupHistory = includesRecoveredTelegramGroupHistoryContext(params.context);
   migrateRecoveredTelegramRoomEventHistory({
     context: params.context,
     recoveredHistoryKey,
   });
   const recoveredInboundHistory =
-    params.context.isGroup && recoveredHistoryKey && params.context.historyLimit > 0
+    includeRecoveredGroupHistory && recoveredHistoryKey && params.context.historyLimit > 0
       ? createChannelHistoryWindow({
           historyMap: params.context.groupHistories,
         }).buildInboundHistory({
@@ -805,16 +893,29 @@ export const dispatchTelegramMessage = async ({
   const draftMaxChars =
     streamMode === "block"
       ? Math.min(resolveTelegramDraftStreamingChunking(cfg, route.accountId).maxChars, textLimit)
-      : Math.min(textLimit, TELEGRAM_RICH_TEXT_LIMIT);
+      : Math.min(
+          textLimit,
+          telegramCfg.richMessages === true ? TELEGRAM_RICH_TEXT_LIMIT : TELEGRAM_TEXT_CHUNK_LIMIT,
+        );
   const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "telegram",
     accountId: route.accountId,
+    supportsBlockTables: telegramCfg.richMessages === true,
   });
-  const renderStreamText = (text: string) => ({
-    text,
-    richMessage: buildTelegramRichMarkdown(text),
-  });
+  const renderStreamText = (text: string): TelegramDraftPreview =>
+    telegramCfg.richMessages === true
+      ? {
+          text,
+          richMessage: buildTelegramRichMarkdown(text, {
+            tableMode,
+            skipEntityDetection: telegramCfg.linkPreview === false,
+          }),
+        }
+      : {
+          text: renderTelegramHtmlText(text, { tableMode }),
+          parseMode: "HTML",
+        };
   const accountBlockStreamingEnabled =
     resolveChannelStreamingBlockEnabled(telegramCfg) ??
     cfg.agents?.defaults?.blockStreamingDefault === "on";
@@ -898,6 +999,7 @@ export const dispatchTelegramMessage = async ({
           maxChars: draftMaxChars,
           thread: threadSpec,
           replyToMessageId: draftReplyToMessageId,
+          richMessages: telegramCfg.richMessages,
           minInitialChars: draftMinInitialChars,
           renderText: renderStreamText,
           onSupersededPreview: (superseded) => {
@@ -972,7 +1074,9 @@ export const dispatchTelegramMessage = async ({
       answerLane.lastPartialText = streamText;
       answerLane.hasStreamedMessage = true;
       answerLane.finalized = false;
-      answerLane.stream?.update(streamText);
+      answerLane.stream?.updatePreview(
+        renderTelegramProgressDraftPreview(streamText, options?.lines ?? []),
+      );
       if (options?.flush) {
         await answerLane.stream?.flush();
       }
@@ -1415,6 +1519,7 @@ export const dispatchTelegramMessage = async ({
     thread: threadSpec,
     tableMode,
     chunkMode,
+    richMessages: telegramCfg.richMessages,
     linkPreview: telegramCfg.linkPreview,
     replyQuoteMessageId,
     replyQuoteText,
@@ -1464,11 +1569,12 @@ export const dispatchTelegramMessage = async ({
 
         sticker.cachedDescription = description;
         if (!stickerSupportsVision) {
-          ctxPayload.Body = formattedDesc;
-          ctxPayload.BodyForAgent = formattedDesc;
-          pruneStickerMediaFromContext(ctxPayload, {
-            stickerMediaIncluded: ctxPayload.StickerMediaIncluded,
-          });
+          ctxPayload.Body = includeStickerDescription(ctxPayload.Body, formattedDesc);
+          ctxPayload.BodyForAgent = includeStickerDescription(
+            ctxPayload.BodyForAgent,
+            formattedDesc,
+          );
+          ctxPayload.SkipStickerMediaUnderstanding = true;
         }
         cacheSticker({
           fileId: sticker.fileId,
@@ -2276,10 +2382,12 @@ export const dispatchTelegramMessage = async ({
                   onToolStart: async (payload) => {
                     const toolName = payload.name?.trim();
                     const progressPromise = pushStreamToolProgress(
-                      formatChannelProgressDraftLineForEntry(
+                      buildChannelProgressDraftLineForEntry(
                         telegramCfg,
                         {
                           event: "tool",
+                          itemId: payload.itemId,
+                          toolCallId: payload.toolCallId,
                           name: toolName,
                           phase: payload.phase,
                           args: payload.args,
@@ -2307,6 +2415,7 @@ export const dispatchTelegramMessage = async ({
                       buildChannelProgressDraftLineForEntry(telegramCfg, {
                         event: "item",
                         itemId: payload.itemId,
+                        toolCallId: payload.toolCallId,
                         itemKind: payload.kind,
                         title: payload.title,
                         name: payload.name,
@@ -2323,7 +2432,7 @@ export const dispatchTelegramMessage = async ({
                       return;
                     }
                     await pushStreamToolProgress(
-                      formatChannelProgressDraftLine({
+                      buildChannelProgressDraftLine({
                         event: "plan",
                         phase: payload.phase,
                         title: payload.title,
@@ -2337,7 +2446,7 @@ export const dispatchTelegramMessage = async ({
                       return;
                     }
                     await pushStreamToolProgress(
-                      formatChannelProgressDraftLine({
+                      buildChannelProgressDraftLine({
                         event: "approval",
                         phase: payload.phase,
                         title: payload.title,
@@ -2352,8 +2461,10 @@ export const dispatchTelegramMessage = async ({
                       return;
                     }
                     await pushStreamToolProgress(
-                      formatChannelProgressDraftLine({
+                      buildChannelProgressDraftLineForEntry(telegramCfg, {
                         event: "command-output",
+                        itemId: payload.itemId,
+                        toolCallId: payload.toolCallId,
                         phase: payload.phase,
                         title: payload.title,
                         name: payload.name,
@@ -2367,8 +2478,10 @@ export const dispatchTelegramMessage = async ({
                       return;
                     }
                     await pushStreamToolProgress(
-                      formatChannelProgressDraftLine({
+                      buildChannelProgressDraftLine({
                         event: "patch",
+                        itemId: payload.itemId,
+                        toolCallId: payload.toolCallId,
                         phase: payload.phase,
                         title: payload.title,
                         name: payload.name,

@@ -690,6 +690,33 @@ describe("loadCliDotEnv", () => {
     });
   });
 
+  it("can defer global dotenv while loading only workspace env", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ base, cwdDir }) => {
+        process.env.HOME = base;
+        const defaultStateDir = path.join(base, ".openclaw");
+        process.env.OPENCLAW_STATE_DIR = defaultStateDir;
+        await writeEnvFile(path.join(cwdDir, ".env"), "BAZ=from-workspace\n");
+        await writeEnvFile(path.join(defaultStateDir, ".env"), "FOO=from-global\n");
+        await writeEnvFile(
+          path.join(base, ".config", "openclaw", "gateway.env"),
+          "BAR=from-gateway\n",
+        );
+
+        vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
+        delete process.env.FOO;
+        delete process.env.BAR;
+        delete process.env.BAZ;
+
+        loadCliDotEnv({ loadGlobalEnv: false, quiet: true });
+
+        expect(process.env.FOO).toBeUndefined();
+        expect(process.env.BAR).toBeUndefined();
+        expect(process.env.BAZ).toBe("from-workspace");
+      });
+    });
+  });
+
   it("does not load gateway.env when OPENCLAW_STATE_DIR is explicitly set", async () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ base, cwdDir }) => {

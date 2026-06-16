@@ -74,6 +74,7 @@ describe("appendProviderCatalogRows", () => {
     expect(mocks.shouldSuppressBuiltInModelFromManifest).toHaveBeenCalledWith({
       provider: "codex",
       id: "gpt-5.5",
+      baseUrl: "https://chatgpt.com/backend-api",
       config: {
         agents: { defaults: { model: { primary: "codex/gpt-5.5" } } },
         models: { providers: {} },
@@ -128,6 +129,7 @@ describe("appendProviderCatalogRows", () => {
     expect(mocks.shouldSuppressBuiltInModelFromManifest).toHaveBeenCalledWith({
       provider: "openai",
       id: "gpt-5.3-codex-spark",
+      baseUrl: "https://api.openai.com/v1",
       config: {
         agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
         models: { providers: {} },

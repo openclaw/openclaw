@@ -75,6 +75,7 @@ export type RunCliAgentParams = {
   jobId?: string;
   extraSystemPrompt?: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  requireExplicitMessageTarget?: boolean;
   silentReplyPromptMode?: SilentReplyPromptMode;
   allowEmptyAssistantReplyAsSilent?: boolean;
   /** Static portion of extraSystemPrompt (excluding per-message inbound metadata) for session reuse hashing. */
@@ -187,6 +188,8 @@ export type PreparedCliRunContext = {
   authEpoch?: string;
   authEpochVersion: number;
   extraSystemPromptHash?: string;
+  messageToolPolicyHash?: string;
   promptToolNamesHash?: string;
   cwdHash?: string;
+  mcpDeliveryCapture?: true;
 };

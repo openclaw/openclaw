@@ -677,6 +677,42 @@ describe("memory cli", () => {
     expect(close).toHaveBeenCalled();
   });
 
+  it("does not report qmd lexical search mode as embedding unavailable", async () => {
+    const close = vi.fn(async () => {});
+    const probeVectorStoreAvailability = vi.fn(async () => true);
+    const probeVectorAvailability = vi.fn(async () => false);
+    const probeEmbeddingAvailability = vi.fn(async () => ({ ok: true, checked: false }));
+    mockManager({
+      probeVectorStoreAvailability,
+      probeVectorAvailability,
+      probeEmbeddingAvailability,
+      status: () =>
+        makeMemoryStatus({
+          backend: "qmd",
+          provider: "qmd",
+          model: "qmd",
+          requestedProvider: "qmd",
+          vector: {
+            enabled: false,
+            semanticAvailable: false,
+            available: false,
+          },
+        }),
+      close,
+    });
+
+    const log = spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["status", "--deep"]);
+
+    expect(probeVectorStoreAvailability).not.toHaveBeenCalled();
+    expect(probeVectorAvailability).toHaveBeenCalled();
+    expect(probeEmbeddingAvailability).toHaveBeenCalled();
+    expectLogged(log, "Vector: disabled");
+    expectLogged(log, "Embeddings: skipped");
+    expectNotLogged(log, "Embeddings error:");
+    expect(close).toHaveBeenCalled();
+  });
+
   it("prints recall-store audit details during status", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await recordShortTermRecalls({

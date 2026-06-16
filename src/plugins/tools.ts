@@ -54,6 +54,7 @@ export type PluginToolMcpMeta = {
 export type PluginToolMeta = {
   pluginId: string;
   optional: boolean;
+  replaySafe?: boolean;
   trustedLocalMedia?: boolean;
   mcp?: PluginToolMcpMeta;
 };
@@ -262,6 +263,13 @@ function isPluginToolOptional(params: {
     params.entry.optional ||
     (params.manifestPlugin ? isManifestToolOptional(params.manifestPlugin, params.toolName) : false)
   );
+}
+
+function isManifestToolReplaySafe(params: {
+  manifestPlugin: PluginManifestRecord | undefined;
+  toolName: string;
+}): boolean {
+  return params.manifestPlugin?.toolMetadata?.[params.toolName]?.replaySafe === true;
 }
 
 function isTrustedManifestLocalMediaTool(params: {
@@ -733,6 +741,10 @@ function createCachedDescriptorPluginTool(params: {
   setPluginToolMeta(tool, {
     pluginId,
     optional: params.descriptor.optional,
+    replaySafe: isManifestToolReplaySafe({
+      manifestPlugin: params.plugin,
+      toolName,
+    }),
     trustedLocalMedia: isTrustedManifestLocalMediaTool({
       manifestPlugin: params.plugin,
       toolName,
@@ -1332,6 +1344,10 @@ export function resolvePluginTools(params: {
       pluginToolMeta.set(tool, {
         pluginId: entry.pluginId,
         optional,
+        replaySafe: isManifestToolReplaySafe({
+          manifestPlugin,
+          toolName: tool.name,
+        }),
         trustedLocalMedia: isTrustedManifestLocalMediaTool({
           manifestPlugin,
           toolName: tool.name,

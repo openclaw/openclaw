@@ -216,7 +216,7 @@ async function applyLegacyCronStoreRepair(params: {
 export async function repairLegacyCronStoreWithoutPrompt(params: {
   cfg: OpenClawConfig;
 }): Promise<LegacyCronRepairResult> {
-  const storePath = resolveCronJobsStorePath(params.cfg.cron?.store);
+  const storePath = resolveCronJobsStorePath(normalizeOptionalString(params.cfg.cron?.store));
   let state: LegacyCronRepairState | null;
   try {
     state = await loadLegacyCronRepairState({
@@ -368,9 +368,13 @@ export async function maybeRepairLegacyCronStore(params: {
     return;
   }
 
+  const noteHeading = legacyStoreDetected
+    ? `Legacy cron job storage detected at ${shortenHomePath(storePath)}.`
+    : `Cron store issues detected at ${shortenHomePath(storePath)}.`;
+
   note(
     [
-      `Legacy cron job storage detected at ${shortenHomePath(storePath)}.`,
+      noteHeading,
       ...previewLines,
       `Repair with ${formatCliCommand("openclaw doctor --fix")} to normalize the store before the next scheduler run.`,
     ].join("\n"),

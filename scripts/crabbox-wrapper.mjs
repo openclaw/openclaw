@@ -799,19 +799,23 @@ function isChangedGateCommand(commandArgs) {
     return shellCommandWordCandidates(commandArgs[0]).some(isChangedGateCommandWords);
   }
   const words = normalizedCommandWords(commandArgs);
-  return isChangedGateCommandWords(words);
+  return isChangedGateCommandWords(words, {
+    canShimIgnoreEnvironment: shellWordBasename(commandArgs[0]) === "env",
+  });
 }
 
-function isChangedGateCommandWords(wordsInput) {
+function isChangedGateCommandWords(wordsInput, options = {}) {
   let words = wordsInput;
-  words = normalizeExecutableWords(words);
+  words = normalizeExecutableWords(words, options);
   if (isChangedGateWords(words)) {
     return true;
   }
 
   const inlineCommand = shellInlineCommand(words);
   return inlineCommand
-    ? shellCommandWordCandidates(inlineCommand).some(isChangedGateCommandWords)
+    ? shellCommandWordCandidates(inlineCommand).some((candidateWords) =>
+        isChangedGateCommandWords(candidateWords),
+      )
     : false;
 }
 
@@ -880,13 +884,14 @@ function normalizedShellSegmentWords(segment) {
   return normalizedCommandWords(stripShellExecutionPrefixes(normalizedWords));
 }
 
-function normalizeExecutableWords(words) {
-  return normalizedCommandWords(stripShellExecutionPrefixes(words));
+function normalizeExecutableWords(words, options = {}) {
+  return normalizedCommandWords(stripShellExecutionPrefixes(words, options));
 }
 
-function stripShellExecutionPrefixes(wordsInput) {
+function stripShellExecutionPrefixes(wordsInput, options = {}) {
   let words = wordsInput;
   words = [...words];
+  let canShimIgnoreEnvironment = Boolean(options.canShimIgnoreEnvironment);
   for (;;) {
     const first = shellWordBasename(words[0]);
     if (shellCommandExecutionPrefixes.has(first)) {
@@ -901,9 +906,14 @@ function stripShellExecutionPrefixes(wordsInput) {
       continue;
     }
     if (first === "env") {
-      if (!stripEnvCommandOptions(words, { canShimIgnoreEnvironment: false })) {
+      if (
+        !stripEnvCommandOptions(words, {
+          canShimIgnoreEnvironment,
+        })
+      ) {
         return words;
       }
+      canShimIgnoreEnvironment = false;
       continue;
     }
     if (first === "time") {
@@ -922,6 +932,7 @@ function stripShellExecutionPrefixes(wordsInput) {
 function stripEnvCommandOptions(words, { canShimIgnoreEnvironment = true } = {}) {
   const originalWords = [...words];
   const envCommand = words.shift() ?? "";
+  const canShimThisEnv = canShimIgnoreEnvironment && isSupportedSystemEnvCommand(envCommand);
   let ignoresEnvironment = false;
   for (;;) {
     const word = words[0] ?? "";
@@ -966,7 +977,7 @@ function stripEnvCommandOptions(words, { canShimIgnoreEnvironment = true } = {})
       return words.length > 0;
     }
     if (word === "-i" || word === "--ignore-environment") {
-      if (!canShimIgnoreEnvironment || envCommand.includes("/")) {
+      if (!canShimThisEnv) {
         words.splice(0, words.length, ...originalWords);
         return false;
       }
@@ -987,7 +998,7 @@ function stripEnvCommandOptions(words, { canShimIgnoreEnvironment = true } = {})
     }
     if (word.startsWith("-") && word !== "-") {
       if (word.includes("i")) {
-        if (!canShimIgnoreEnvironment || envCommand.includes("/")) {
+        if (!canShimThisEnv) {
           words.splice(0, words.length, ...originalWords);
           return false;
         }
@@ -996,12 +1007,16 @@ function stripEnvCommandOptions(words, { canShimIgnoreEnvironment = true } = {})
       words.shift();
       continue;
     }
-    if (ignoresEnvironment && (!canShimIgnoreEnvironment || envCommand.includes("/"))) {
+    if (ignoresEnvironment && !canShimThisEnv) {
       words.splice(0, words.length, ...originalWords);
       return false;
     }
     return true;
   }
+}
+
+function isSupportedSystemEnvCommand(command) {
+  return command === "env" || command === "/usr/bin/env";
 }
 
 function shellWordBasename(word) {
@@ -1728,11 +1743,7 @@ function remoteAwsMacosJsBootstrap({ packageManager = false } = {}) {
 }
 
 function scopedAwsMacosEnvCommand(commandArgs) {
-  if (
-    commandArgs.length <= 1 ||
-    shellWordBasename(commandArgs[0]) !== "env" ||
-    commandArgs[0].includes("/")
-  ) {
+  if (commandArgs.length <= 1 || !isSupportedSystemEnvCommand(commandArgs[0])) {
     return null;
   }
 

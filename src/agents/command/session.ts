@@ -29,6 +29,7 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   buildAgentMainSessionKey,
+  classifySessionKeyShape,
   DEFAULT_AGENT_ID,
   isUnscopedSessionKeySentinel,
   normalizeAgentId,
@@ -252,8 +253,14 @@ export function resolveSessionKeyForRequest(opts: {
   const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(opts.cfg));
   const requestedAgentId = opts.agentId?.trim() ? normalizeAgentId(opts.agentId) : undefined;
   const requestedSessionId = opts.sessionId?.trim() || undefined;
+  const requestedSessionKey = opts.sessionKey?.trim() || undefined;
+  const toSessionKey =
+    !requestedSessionKey && !requestedSessionId && classifySessionKeyShape(opts.to) === "agent"
+      ? opts.to?.trim()
+      : undefined;
   const explicitSessionKey =
-    opts.sessionKey?.trim() ||
+    requestedSessionKey ||
+    toSessionKey ||
     (!requestedSessionId
       ? resolveExplicitAgentSessionKey({
           cfg: opts.cfg,

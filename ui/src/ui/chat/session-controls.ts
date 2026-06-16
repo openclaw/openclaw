@@ -739,7 +739,7 @@ function renderChatSessionPickerPopover(
   `;
 }
 
-function renderChatQuotaPill(state: AppViewState) {
+export function renderChatQuotaPill(state: AppViewState) {
   const windows = collectQuotaWindowsFromAuthStatus(
     state.modelAuthStatusResult,
     isMonitoredAuthProvider,

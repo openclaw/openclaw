@@ -40,13 +40,17 @@ CLICKCLACK_SERVER_LOG="$LOG_DIR/clickclack-server.log"
 GATEWAY_LOG="$LOG_DIR/gateway.log"
 MOCK_REQUEST_LOG="$scenario_tmp/openai-requests.jsonl"
 CLICKCLACK_STATE="$scenario_tmp/clickclack.json"
-BASELINE_SPEC="${OPENCLAW_RELEASE_UPGRADE_BASELINE_SPEC:-openclaw@latest}"
 export SUCCESS_MARKER MOCK_REQUEST_LOG CLICKCLACK_STATE
 
 candidate_version="$(
   tar -xOf "${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}" package/package.json |
     node -e 'let raw = ""; process.stdin.setEncoding("utf8"); process.stdin.on("data", (chunk) => { raw += chunk; }); process.stdin.on("end", () => { process.stdout.write(JSON.parse(raw).version); });'
 )"
+if [ -n "${OPENCLAW_RELEASE_UPGRADE_BASELINE_SPEC:-}" ]; then
+  BASELINE_SPEC="$OPENCLAW_RELEASE_UPGRADE_BASELINE_SPEC"
+else
+  BASELINE_SPEC="$(node scripts/lib/release-upgrade-baseline.mjs --candidate-version "$candidate_version")"
+fi
 
 mock_pid=""
 clickclack_pid=""

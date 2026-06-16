@@ -328,7 +328,6 @@ vi.mock("../routing/session-key.js", async () => {
   );
   return {
     ...actual,
-    isSubagentSessionKey: () => false,
     normalizeAgentId: (id: string) => id,
     normalizeMainKey: (key?: string | null) => key?.trim() || "main",
   };
@@ -1121,7 +1120,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     );
     expect(lifecycleFinishingCalls.length).toBeGreaterThanOrEqual(1);
     expectRecordFields(mockCallArg(state.runAgentAttemptMock), {
-      deferTerminalLifecycleEnd: true,
+      deferTerminalLifecycle: true,
     });
     const firstFinishingIndex = state.emitAgentEventMock.mock.calls.findIndex((call: unknown[]) => {
       const arg = call[0] as { stream?: string; data?: { phase?: string } };
@@ -1338,6 +1337,75 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       timeoutMs: 600_000,
       runTimeoutOverrideMs: 600_000,
     });
+  });
+
+  it("clamps unsupported explicit thinking for subagent spawns instead of throwing", async () => {
+    setupSingleAttemptFallback();
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("anthropic", "claude-fable-5"));
+    state.resolvedSessionKeyMock = "agent:planner:subagent:00000000-0000-4000-8000-000000000000";
+    state.isThinkingLevelSupportedMock.mockReturnValue(false);
+    state.resolveSupportedThinkingLevelMock.mockReturnValue("high");
+
+    await agentCommand({
+      message: "hello",
+      sessionKey: state.resolvedSessionKeyMock,
+      thinking: "xhigh",
+      lane: "subagent",
+    });
+
+    expect(state.resolveSupportedThinkingLevelMock).toHaveBeenCalled();
+    expectRecordFields(mockCallArg(state.runAgentAttemptMock), {
+      resolvedThinkLevel: "high",
+    });
+  });
+
+  it("rejects unsupported explicit thinking for interactive subagent-key runs", async () => {
+    setupSingleAttemptFallback();
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("anthropic", "claude-fable-5"));
+    state.resolvedSessionKeyMock = "agent:planner:subagent:00000000-0000-4000-8000-000000000000";
+    state.isThinkingLevelSupportedMock.mockReturnValue(false);
+
+    await expect(
+      agentCommand({
+        message: "hello",
+        sessionKey: state.resolvedSessionKeyMock,
+        thinking: "xhigh",
+      }),
+    ).rejects.toThrow(/is not supported/u);
+    expect(state.runAgentAttemptMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects unsupported explicit thinking for non-subagent sessions on the subagent lane", async () => {
+    setupSingleAttemptFallback();
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("anthropic", "claude-fable-5"));
+    state.resolvedSessionKeyMock = "agent:main:main";
+    state.isThinkingLevelSupportedMock.mockReturnValue(false);
+
+    await expect(
+      agentCommand({
+        message: "hello",
+        sessionKey: state.resolvedSessionKeyMock,
+        thinking: "xhigh",
+        lane: "subagent",
+      }),
+    ).rejects.toThrow(/is not supported/u);
+    expect(state.runAgentAttemptMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects unsupported explicit thinking for direct interactive runs", async () => {
+    setupSingleAttemptFallback();
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("anthropic", "claude-fable-5"));
+    state.resolvedSessionKeyMock = "agent:main:main";
+    state.isThinkingLevelSupportedMock.mockReturnValue(false);
+
+    await expect(
+      agentCommand({
+        message: "hello",
+        to: "+1234567890",
+        thinking: "xhigh",
+      }),
+    ).rejects.toThrow(/is not supported/u);
+    expect(state.runAgentAttemptMock).not.toHaveBeenCalled();
   });
 
   it("skips the initial session touch after gateway ingress already persisted activity", async () => {
@@ -2984,6 +3052,136 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       model: "claude",
       reason: "format",
     });
+  });
+
+  it("emits a failure lifecycle after delivering a preserved exhausted result", async () => {
+    const exhaustedResult = {
+      payloads: [{ text: "Terminal tool summary", isError: true }],
+      meta: {
+        durationMs: 100,
+        aborted: false,
+        stopReason: "end_turn",
+        error: {
+          kind: "incomplete_turn",
+          message: "All fallback candidates ended incomplete",
+          fallbackSafe: true,
+          terminalPresentation: true,
+        },
+        agentMeta: { provider: "anthropic", model: "claude" },
+      },
+    };
+    state.runAgentAttemptMock.mockImplementationOnce(async (attemptParams: unknown) => {
+      const params = attemptParams as {
+        deferTerminalLifecycle?: boolean;
+        onAgentEvent?: (event: { stream: string; data: Record<string, unknown> }) => void;
+      };
+      expect(params.deferTerminalLifecycle).toBe(true);
+      params.onAgentEvent?.({
+        stream: "lifecycle",
+        data: {
+          phase: "finishing",
+          error: "All fallback candidates ended incomplete",
+        },
+      });
+      return exhaustedResult;
+    });
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      outcome: "exhausted",
+      result: await params.run("anthropic", "claude"),
+      provider: "anthropic",
+      model: "claude",
+      attempts: [
+        {
+          provider: "anthropic",
+          model: "claude",
+          error: "All fallback candidates ended incomplete",
+          reason: "format",
+        },
+      ],
+    }));
+
+    await runBasicAgentCommand();
+
+    expect(state.deliverAgentCommandResultMock).toHaveBeenCalledTimes(1);
+    const lifecycleEvents = state.emitAgentEventMock.mock.calls
+      .map((call) => call[0] as { stream?: string; data?: Record<string, unknown> })
+      .filter((event) => event.stream === "lifecycle");
+    expect(lifecycleEvents.some((event) => event.data?.phase === "finishing")).toBe(false);
+    expect(lifecycleEvents.some((event) => event.data?.phase === "end")).toBe(false);
+    expect(lifecycleEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          data: expect.objectContaining({
+            phase: "error",
+            error: "All fallback candidates ended incomplete",
+            fallbackExhaustedFailure: true,
+          }),
+        }),
+      ]),
+    );
+  });
+
+  it("emits a failure lifecycle for completed non-fallbackable error results", async () => {
+    const terminalErrorResult = {
+      payloads: [{ text: "Command may have changed state", isError: true }],
+      meta: {
+        durationMs: 100,
+        aborted: false,
+        stopReason: "end_turn",
+        replayInvalid: true,
+        error: {
+          kind: "incomplete_turn",
+          message: "raw provider detail should stay private",
+          fallbackSafe: false,
+        },
+        agentMeta: { provider: "anthropic", model: "claude" },
+      },
+    };
+    state.runAgentAttemptMock.mockImplementationOnce(async (attemptParams: unknown) => {
+      const params = attemptParams as {
+        onAgentEvent?: (event: { stream: string; data: Record<string, unknown> }) => void;
+      };
+      params.onAgentEvent?.({
+        stream: "lifecycle",
+        data: {
+          phase: "finishing",
+          error: "Command may have changed state",
+          replayInvalid: true,
+        },
+      });
+      return terminalErrorResult;
+    });
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      outcome: "completed",
+      result: await params.run("anthropic", "claude"),
+      provider: "anthropic",
+      model: "claude",
+      attempts: [],
+    }));
+
+    await runBasicAgentCommand();
+
+    expect(state.deliverAgentCommandResultMock).toHaveBeenCalledTimes(1);
+    const lifecycleEvents = state.emitAgentEventMock.mock.calls
+      .map((call) => call[0] as { stream?: string; data?: Record<string, unknown> })
+      .filter((event) => event.stream === "lifecycle");
+    expect(lifecycleEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          data: expect.objectContaining({
+            phase: "error",
+            error: "Command may have changed state",
+            replayInvalid: true,
+          }),
+        }),
+      ]),
+    );
+    expect(
+      lifecycleEvents.some(
+        (event) => event.data?.phase === "end" || event.data?.fallbackExhaustedFailure === true,
+      ),
+    ).toBe(false);
+    expect(JSON.stringify(lifecycleEvents)).not.toContain("raw provider detail");
   });
 
   it("updates hasSessionModelOverride for fallback resolution after switch", async () => {

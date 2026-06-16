@@ -60,6 +60,9 @@ local while `web_search` and `x_search` can use xAI Responses under the hood.
   <Card title="Brave Search" icon="shield" href="/tools/brave-search">
     Structured results with snippets. Supports `llm-context` mode, country/language filters. Free tier available.
   </Card>
+  <Card title="Codex Hosted Search" icon="search" href="/plugins/codex-harness">
+    AI-synthesized grounded answers through your Codex app-server account.
+  </Card>
   <Card title="DuckDuckGo" icon="bird" href="/tools/duckduckgo-search">
     Key-free fallback. No API key needed. Unofficial HTML-based integration.
   </Card>
@@ -106,6 +109,7 @@ local while `web_search` and `x_search` can use xAI Responses under the hood.
 | Provider                                         | Result style                                                   | Filters                                          | API key                                                                                 |
 | ------------------------------------------------ | -------------------------------------------------------------- | ------------------------------------------------ | --------------------------------------------------------------------------------------- |
 | [Brave](/tools/brave-search)                     | Structured snippets                                            | Country, language, time, `llm-context` mode      | `BRAVE_API_KEY`                                                                         |
+| [Codex Hosted Search](/plugins/codex-harness)    | AI-synthesized + source URLs                                   | Domains, context size, user location             | None; uses Codex/OpenAI sign-in                                                         |
 | [DuckDuckGo](/tools/duckduckgo-search)           | Structured snippets                                            | --                                               | None (key-free)                                                                         |
 | [Exa](/tools/exa-search)                         | Structured + extracted                                         | Neural/keyword mode, date, content extraction    | `EXA_API_KEY`                                                                           |
 | [Firecrawl](/tools/firecrawl)                    | Structured snippets                                            | Via `firecrawl_search` tool                      | `FIRECRAWL_API_KEY`                                                                     |
@@ -128,13 +132,43 @@ Direct OpenAI Responses models use OpenAI's hosted `web_search` tool automatical
 
 ## Native Codex web search
 
-Codex-capable models can optionally use the provider-native Responses `web_search` tool instead of OpenClaw's managed `web_search` function.
+The Codex app-server runtime uses Codex's hosted `web_search` tool automatically
+when web search is enabled and no managed provider is selected. Native hosted
+search and OpenClaw's managed `web_search` dynamic tool are mutually exclusive,
+so managed search cannot bypass native domain restrictions. OpenClaw uses the
+managed tool when hosted search is unavailable, explicitly disabled, or
+replaced by a selected managed provider. OpenClaw keeps Codex's standalone
+`web.run` extension disabled because production app-server traffic rejects its
+user-defined `web` namespace.
 
-- Configure it under `tools.web.search.openaiCodex`
-- It only activates for Codex-capable OpenAI models (`openai/*` models using `api: "openai-chatgpt-responses"`)
-- Managed `web_search` still applies to non-Codex models
-- `mode: "cached"` is the default and recommended setting
+- Configure native search under `tools.web.search.openaiCodex`
+- Set `tools.web.search.provider: "codex"` to provision Codex Hosted Search as
+  the managed `web_search` provider for any parent model. Each call runs a
+  bounded ephemeral Codex app-server turn and fails if Codex does not emit a
+  hosted `webSearch` item.
+- `mode: "cached"` is the default preference, but Codex resolves it to live
+  external access for unrestricted app-server turns; set `"live"` to request
+  live access explicitly
+- Set `tools.web.search.provider` to a managed provider such as `brave` to use
+  OpenClaw's managed `web_search` instead
+- Set `tools.web.search.openaiCodex.enabled: false` to opt out of Codex-hosted
+  search; other managed providers remain available
+- Restricting the Codex native tool surface also keeps managed `web_search`
+  available
+- When `allowedDomains` is set, automatic managed fallback fails closed if
+  hosted search is unavailable so the native allowlist cannot be bypassed
+- Tool-disabled LLM-only runs disable both native and managed search
 - `tools.web.search.enabled: false` disables both managed and native search
+
+Persistent effective Codex search-policy changes start a fresh bound thread so
+an already loaded app-server thread cannot keep stale hosted-search access.
+Transient per-turn restrictions use a temporary restricted thread and preserve
+the existing binding for later resume.
+
+Direct OpenAI ChatGPT Responses traffic can also use OpenAI's hosted
+`web_search` tool. That separate path remains opt-in through
+`tools.web.search.openaiCodex.enabled: true` and only applies to eligible
+`openai/*` models using `api: "openai-chatgpt-responses"`.
 
 ```json5
 {
@@ -142,6 +176,8 @@ Codex-capable models can optionally use the provider-native Responses `web_searc
     web: {
       search: {
         enabled: true,
+        // Optional: use Codex Hosted Search from non-Codex parent models too.
+        provider: "codex",
         openaiCodex: {
           enabled: true,
           mode: "cached",
@@ -159,14 +195,25 @@ Codex-capable models can optionally use the provider-native Responses `web_searc
 }
 ```
 
-If native Codex search is enabled but the current model is not Codex-capable, OpenClaw keeps the normal managed `web_search` behavior.
+For runtimes and providers that do not support native Codex search, Codex can
+use the managed `web_search` fallback through OpenClaw's dynamic tool namespace.
+Use an explicit managed provider when you need OpenClaw's provider-specific
+network controls instead of Codex-hosted search.
+
+Selecting `provider: "codex"` enables the bundled `codex` plugin and uses the
+same `tools.web.search.openaiCodex` restrictions shown above. Authenticate the
+Codex app-server first with `openclaw models auth login --provider openai`.
+The parent agent can use any model or runtime; only the bounded search worker
+runs through Codex.
 
 ## Network safety
 
-Managed `web_search` provider calls use OpenClaw's guarded fetch path. For
+Managed HTTP `web_search` provider calls use OpenClaw's guarded fetch path. For
 trusted provider API hosts, OpenClaw allows Surge, Clash, and sing-box fake-IP
 DNS answers in `198.18.0.0/15` and `fc00::/7` only for that provider hostname.
 Other private, loopback, link-local, and metadata destinations remain blocked.
+Codex Hosted Search is the exception: its bounded worker delegates network
+access to Codex app-server's hosted `web_search` tool.
 
 This automatic allowance does not apply to arbitrary `web_fetch` URLs. For
 `web_fetch`, enable `tools.web.fetch.ssrfPolicy.allowRfc2544BenchmarkRange` and
@@ -200,6 +247,7 @@ Key-free fallbacks after that:
 12. **DuckDuckGo** -- key-free HTML fallback with no account or API key (order 100)
 13. **Ollama Web Search** -- key-free fallback via your configured local Ollama host when it is reachable and signed in with `ollama signin`; can reuse Ollama provider bearer auth when the host needs it, and can call direct `https://ollama.com` search when configured with `OLLAMA_API_KEY` (order 110)
 14. **SearXNG** -- `SEARXNG_BASE_URL` or `plugins.entries.searxng.config.webSearch.baseUrl` (order 200)
+15. **Codex Hosted Search** -- key-free provider contract that uses the active Codex/OpenAI sign-in (order 900)
 
 When no API-backed provider is configured, OpenClaw defaults to **Parallel
 Search (Free)**, so `web_search` works without an API key.
