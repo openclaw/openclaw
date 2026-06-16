@@ -31,12 +31,16 @@ export function resolveNormalizedAccountEntry<T>(
   if (!accounts || typeof accounts !== "object") {
     return undefined;
   }
-  if (Object.hasOwn(accounts, accountId)) {
+  if (Object.hasOwn(accounts, accountId) && !isBlockedObjectKey(accountId)) {
     return accounts[accountId];
   }
   const normalized = normalizeAccountId(accountId);
-  const matchKey = Object.keys(accounts).find(
-    (key) => !isBlockedObjectKey(key) && normalizeAccountId(key) === normalized,
-  );
+  const matchKey = Object.keys(accounts).find((key) => {
+    if (isBlockedObjectKey(key)) {
+      return false;
+    }
+    const normalizedKey = normalizeAccountId(key);
+    return !isBlockedObjectKey(normalizedKey) && normalizedKey === normalized;
+  });
   return matchKey ? accounts[matchKey] : undefined;
 }

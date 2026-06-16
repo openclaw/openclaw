@@ -36,7 +36,11 @@ import {
 } from "../../plugins/plugin-module-loader-cache.js";
 import { getActivePluginChannelRegistryVersion } from "../../plugins/runtime.js";
 import { resolveNormalizedAccountEntry } from "../../routing/account-lookup.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+  normalizeOptionalAccountId,
+} from "../../routing/session-key.js";
 import { getBundledChannelSetupPlugin } from "./bundled.js";
 import {
   isSafeManifestChannelId,
@@ -350,6 +354,10 @@ function getChannelConfigRecord(cfg: OpenClawConfig, channelId: string): Record<
     : {};
 }
 
+function normalizeManifestAccountConfigKey(accountId: string): string {
+  return normalizeOptionalAccountId(accountId) ?? "";
+}
+
 function listManifestChannelAccountIds(cfg: OpenClawConfig, channelId: string): string[] {
   const channelConfig = getChannelConfigRecord(cfg, channelId);
   const accounts = channelConfig.accounts;
@@ -357,8 +365,8 @@ function listManifestChannelAccountIds(cfg: OpenClawConfig, channelId: string): 
     return sortUniqueStrings(
       Object.keys(accounts)
         .filter((accountId) => !isBlockedObjectKey(accountId))
-        .map((accountId) => normalizeAccountId(accountId))
-        .filter((accountId) => !isBlockedObjectKey(accountId)),
+        .map((accountId) => normalizeOptionalAccountId(accountId))
+        .filter((accountId): accountId is string => Boolean(accountId)),
     );
   }
   return hasExplicitChannelConfig({ config: cfg, channelId }) ? [DEFAULT_ACCOUNT_ID] : [];
@@ -376,7 +384,7 @@ function resolveManifestChannelAccountConfig(params: {
     const accountConfig = resolveNormalizedAccountEntry(
       accounts as Record<string, unknown>,
       resolvedAccountId,
-      normalizeAccountId,
+      normalizeManifestAccountConfigKey,
     );
     if (accountConfig && typeof accountConfig === "object" && !Array.isArray(accountConfig)) {
       return accountConfig as Record<string, unknown>;

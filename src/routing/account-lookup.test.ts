@@ -84,6 +84,17 @@ describe("resolveNormalizedAccountEntry", () => {
       expected: undefined,
     },
     {
+      name: "does not resolve keys that normalize to blocked object keys",
+      accounts: {
+        "constructor ": { id: "blocked" },
+      },
+      resolve: (accounts: Record<string, { id: string }>) =>
+        resolveNormalizedAccountEntry(accounts, "constructor", (accountId) =>
+          accountId.trim().toLowerCase(),
+        ),
+      expected: undefined,
+    },
+    {
       name: "ignores prototype-chain values",
       resolve: () => undefined,
       expected: undefined,

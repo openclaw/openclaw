@@ -1075,6 +1075,42 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
     expect(inheritedAccount?.config?.token).not.toBe("prototype-token");
   });
 
+  it("ignores manifest account keys that normalize to blocked object keys", () => {
+    const { pluginDir } = writeExternalSetupChannelPlugin({
+      setupEntry: false,
+      pluginId: "external-chat-plugin",
+      channelId: "external-chat",
+      manifestChannelConfig: true,
+    });
+    const cfg = {
+      channels: {
+        "external-chat": {
+          accounts: {
+            "constructor ": {
+              token: "blocked-token",
+            },
+          },
+        },
+      },
+      plugins: {
+        load: { paths: [pluginDir] },
+        allow: ["external-chat-plugin"],
+      },
+    } as never;
+    const plugin = listReadOnlyChannelPluginsForConfig(cfg, {
+      env: { ...process.env },
+      includePersistedAuthState: false,
+    }).find((entry) => entry.id === "external-chat");
+
+    expect(plugin?.config.listAccountIds(cfg)).toEqual([]);
+    const account = plugin?.config.resolveAccount(cfg, "default");
+    const accountFields = expectRecordFields(account, {
+      accountId: "default",
+    });
+    const configFields = expectRecordFields(accountFields.config, {});
+    expect(configFields.token).toBeUndefined();
+  });
+
   it("resolves manifest channel account config from raw account keys with opaque provider ids", () => {
     const { pluginDir } = writeExternalSetupChannelPlugin({
       setupEntry: false,
