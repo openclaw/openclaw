@@ -300,18 +300,12 @@ describe("session transcript tree helpers", () => {
         appendMode: "side",
       },
       { type: "custom", id: "side-two", parentId: "side-one", appendMode: "side" },
-      {
-        type: "leaf",
-        id: "second-leaf",
-        parentId: "side-two",
-        targetId: "visible",
-        appendParentId: "side-two",
-        appendMode: "side",
-      },
     ];
 
     const tree = scanSessionTranscriptTree(entries);
 
+    expect(tree.leafId).toBe("visible");
+    expect(tree.appendParentId).toBe("side-two");
     expect(tree.byId.get("side-two")?.parentId).toBe("side-one");
     expect(selectSessionTranscriptLeafControlledPath(entries)).toEqual([entries[0]]);
   });

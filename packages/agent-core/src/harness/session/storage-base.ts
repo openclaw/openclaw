@@ -44,6 +44,9 @@ function generateEntryId(byId: { has(id: string): boolean }): string {
 
 /** Return the visible-leaf update represented by one session tree entry. */
 export function leafIdUpdateAfterEntry(entry: SessionTreeEntry): string | null | undefined {
+  if (entry.type !== "leaf" && isSideAppendEntry(entry)) {
+    return undefined;
+  }
   switch (entry.type) {
     case "leaf":
       return entry.targetId;

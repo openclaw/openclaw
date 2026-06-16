@@ -114,6 +114,72 @@ describe("JsonlSessionStorage timestamps", () => {
     expect(content.trim().split(/\r?\n/).at(-1)).toContain('"parentId":"plugin-metadata"');
   });
 
+  it("keeps a terminal side append off the visible branch", async () => {
+    let content = [
+      {
+        type: "session",
+        version: 3,
+        id: "session-1",
+        timestamp: "2026-06-15T00:00:00.000Z",
+        cwd: "/repo",
+      },
+      {
+        type: "custom",
+        id: "active-root",
+        parentId: null,
+        timestamp: "2026-06-15T00:00:01.000Z",
+        customType: "active",
+      },
+      {
+        type: "custom",
+        id: "side-one",
+        parentId: "active-root",
+        timestamp: "2026-06-15T00:00:02.000Z",
+        customType: "side",
+      },
+      {
+        type: "leaf",
+        id: "side-leaf",
+        parentId: "side-one",
+        timestamp: "2026-06-15T00:00:03.000Z",
+        targetId: "active-root",
+        appendParentId: "side-one",
+        appendMode: "side",
+      },
+      {
+        type: "custom",
+        id: "side-two",
+        parentId: "side-one",
+        timestamp: "2026-06-15T00:00:04.000Z",
+        customType: "side",
+        appendMode: "side",
+      },
+    ]
+      .map((entry) => JSON.stringify(entry))
+      .join("\n");
+    content += "\n";
+    const fs: JsonlStorageFs = {
+      ...createReadOnlyFs(content),
+      readTextFile: async () => ok(content),
+      appendFile: async (_path, appended) => {
+        content += String(appended);
+        return ok(undefined);
+      },
+    };
+    const storage = await JsonlSessionStorage.open(fs, "/sessions/session.jsonl");
+    const session = new Session(storage);
+
+    expect(await storage.getLeafId()).toBe("active-root");
+    expect(await storage.getAppendParentId()).toBe("side-two");
+    const entryId = await session.appendCustomEntry("continued");
+
+    expect(await storage.getEntry(entryId)).toMatchObject({ parentId: "side-two" });
+    expect((await storage.getPathToRoot(entryId)).map((entry) => entry.id)).toEqual([
+      "active-root",
+      entryId,
+    ]);
+  });
+
   it("does not let opaque rows replace the selected visible leaf", async () => {
     const content = [
       {

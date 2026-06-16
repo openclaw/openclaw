@@ -1619,6 +1619,8 @@ export class SessionManager {
           this.opaqueParentsById.set(leafEntry.id, leafState.leafId);
           this.leafId = leafState.leafId;
           this.appendParentId = leafState.appendParentId;
+          this.promptReleasedSideBranchParentId =
+            leafState.appendMode === "side" ? leafState.appendParentId : undefined;
           opaqueIndex += 1;
           continue;
         }
@@ -1626,6 +1628,9 @@ export class SessionManager {
         if (link) {
           this.opaqueParentsById.set(link.id, link.parentId);
           this.appendParentId = link.id;
+          if (this.promptReleasedSideBranchParentId !== undefined) {
+            this.promptReleasedSideBranchParentId = link.id;
+          }
         }
         opaqueIndex += 1;
       }
@@ -1643,8 +1648,13 @@ export class SessionManager {
         this.logicalParentsById.set(entry.id, this.leafId);
       }
       this.byId.set(entry.id, entry);
-      this.leafId = entry.id;
       this.appendParentId = entry.id;
+      if (isSessionTranscriptSideAppendEntry(entry)) {
+        this.promptReleasedSideBranchParentId = entry.id;
+      } else {
+        this.leafId = entry.id;
+        this.promptReleasedSideBranchParentId = undefined;
+      }
       if (entry.type === "label") {
         if (entry.label) {
           this.labelsById.set(entry.targetId, entry.label);
@@ -2133,7 +2143,8 @@ export class SessionManager {
         : this.promptReleasedSideBranchParentId;
     let persistedLeafId = this.leafId;
     let persistedAppendParentId = this.appendParentId;
-    let persistedAppendMode: "active" | "side" = "active";
+    let persistedAppendMode: "active" | "side" =
+      this.promptReleasedSideBranchParentId === undefined ? "active" : "side";
     let sawPersistedStateUpdate = false;
     let rawTailId: string | null = null;
     for (const sourceEntry of entries) {
@@ -2185,9 +2196,13 @@ export class SessionManager {
       this.fileEntries.push(entry);
       this.byId.set(entry.id, entry);
       sideBranchParentId = entry.id;
-      persistedLeafId = entry.id;
       persistedAppendParentId = entry.id;
-      persistedAppendMode = "active";
+      if (isSessionTranscriptSideAppendEntry(entry)) {
+        persistedAppendMode = "side";
+      } else {
+        persistedLeafId = entry.id;
+        persistedAppendMode = "active";
+      }
       sawPersistedStateUpdate = true;
       rawTailId = entry.id;
       if (entry.type === "label") {

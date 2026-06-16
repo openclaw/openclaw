@@ -143,19 +143,12 @@ describe("InMemorySessionStorage", () => {
           appendMode: "side",
         },
         sideTwo,
-        {
-          type: "leaf",
-          id: "second-leaf",
-          parentId: sideTwo.id,
-          timestamp: "2026-01-01T00:00:04.000Z",
-          targetId: "root",
-          appendParentId: sideTwo.id,
-          appendMode: "side",
-        },
       ],
     });
     const session = new Session(storage);
 
+    expect(await storage.getLeafId()).toBe("root");
+    expect(await storage.getAppendParentId()).toBe(sideTwo.id);
     expect((await storage.getPathToRoot(sideTwo.id)).map((entry) => entry.id)).toEqual([
       "root",
       sideOne.id,

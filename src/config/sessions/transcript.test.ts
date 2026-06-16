@@ -1541,19 +1541,6 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       appendMode: "side",
     });
 
-    fs.appendFileSync(
-      sessionFile,
-      `${JSON.stringify({
-        type: "leaf",
-        id: "restored-side-leaf",
-        parentId: appended.messageId,
-        timestamp: "2026-05-30T12:00:04.000Z",
-        targetId: activeEntry.id,
-        appendParentId: appended.messageId,
-        appendMode: "side",
-      })}\n`,
-      "utf8",
-    );
     const nextUser = await appendSessionTranscriptMessage({
       transcriptPath: sessionFile,
       message: { role: "user", content: "next question" },

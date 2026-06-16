@@ -1809,8 +1809,9 @@ describe("SessionManager.open", () => {
       timestamp: "2026-06-15T00:00:04.000Z",
       message: buildAssistantMessage("next side delivery"),
     };
+    const reopenedForNextMerge = SessionManager.open(sessionFile!, dir, dir);
     await fs.appendFile(sessionFile!, `${JSON.stringify(nextSideEntry)}\n`, "utf8");
-    sessionManager.mergePromptReleasedSessionEntries([nextSideEntry], {
+    reopenedForNextMerge.mergePromptReleasedSessionEntries([nextSideEntry], {
       persistLeaf: true,
     });
 
@@ -1832,10 +1833,9 @@ describe("SessionManager.open", () => {
       sideEntry.id,
     );
     expect(finalRecords.at(-1)).toMatchObject({
-      type: "leaf",
-      parentId: nextSideEntry.id,
-      targetId: baseAnswerId,
-      appendParentId: nextSideEntry.id,
+      type: "message",
+      id: nextSideEntry.id,
+      parentId: sideEntry.id,
       appendMode: "side",
     });
 

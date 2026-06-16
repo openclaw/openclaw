@@ -112,7 +112,8 @@ export function parseSessionTranscriptTreeEntry(
   return {
     id,
     parentId,
-    leafId: isCanonicalSessionTranscriptEntry(record) ? id : undefined,
+    leafId:
+      isCanonicalSessionTranscriptEntry(record) && record.appendMode !== "side" ? id : undefined,
     appendParentId: id,
     ...(record.appendMode === "side" ? { appendMode: record.appendMode } : {}),
   };
@@ -130,7 +131,7 @@ function parseParentlessCanonicalEntry(
     ? {
         id,
         parentId,
-        leafId: id,
+        leafId: record.appendMode === "side" ? undefined : id,
         appendParentId: id,
         ...(record.appendMode === "side" ? { appendMode: record.appendMode } : {}),
       }

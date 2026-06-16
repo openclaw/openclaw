@@ -534,9 +534,13 @@ function readableSessionState(fileEntries: FileEntry[]): ReadableSessionState {
     entries.push(repaired);
     acceptedIds.add(repaired.id);
     acceptedEntryById.set(repaired.id, repaired);
-    effectiveLeafId = repaired.id;
     effectiveAppendParentId = repaired.id;
-    effectiveAppendMode = isSessionTranscriptSideAppendEntry(rawRecord) ? "side" : undefined;
+    if (isSessionTranscriptSideAppendEntry(rawRecord)) {
+      effectiveAppendMode = "side";
+    } else {
+      effectiveLeafId = repaired.id;
+      effectiveAppendMode = undefined;
+    }
   }
   return {
     entries,
@@ -911,9 +915,13 @@ export class TranscriptFileState {
     }
     this.entries.push(entry);
     this.byId.set(entry.id, entry);
-    this.leafId = entry.id;
     this.appendParentId = entry.id;
-    this.appendMode = isSessionTranscriptSideAppendEntry(entry) ? "side" : undefined;
+    if (isSessionTranscriptSideAppendEntry(entry)) {
+      this.appendMode = "side";
+    } else {
+      this.leafId = entry.id;
+      this.appendMode = undefined;
+    }
     if (entry.type === "label") {
       if (entry.label) {
         this.labelsById.set(entry.targetId, entry.label);

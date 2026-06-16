@@ -1233,15 +1233,6 @@ describe("readTranscriptFileState", () => {
           appendMode: "side",
           message: { role: "assistant", content: "second side delivery" },
         },
-        {
-          type: "leaf",
-          id: "second-leaf",
-          parentId: "side-two",
-          timestamp: "2026-06-15T00:00:05.000Z",
-          targetId: "active-root",
-          appendParentId: "side-two",
-          appendMode: "side",
-        },
       ]
         .map((entry) => JSON.stringify(entry))
         .join("\n") + "\n",
@@ -1256,6 +1247,9 @@ describe("readTranscriptFileState", () => {
       "side-two",
     ]);
     expect(state.getBranch().map((entry) => entry.id)).toEqual(["active-root"]);
+    expect(state.getLeafId()).toBe("active-root");
+    expect(state.getAppendParentId()).toBe("side-two");
+    expect(state.getAppendMode()).toBe("side");
 
     const nextUser = state.appendMessage({
       role: "user",
