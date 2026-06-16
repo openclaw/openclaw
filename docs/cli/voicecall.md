@@ -17,8 +17,8 @@ When the Gateway is running, operational commands (`call`, `start`, `continue`, 
 ```bash
 openclaw voicecall setup    [--json]
 openclaw voicecall smoke    [-t <phone>] [--message <text>] [--mode <m>] [--yes] [--json]
-openclaw voicecall call     -m <text> [-t <phone>] [--mode <m>]
-openclaw voicecall start    --to <phone> [--message <text>] [--mode <m>]
+openclaw voicecall call     -m <text> [-t <phone>] [--mode <m>] [--objective <text>]
+openclaw voicecall start    --to <phone> [--message <text>] [--mode <m>] [--objective <text>]
 openclaw voicecall continue --call-id <id> --message <text>
 openclaw voicecall speak    --call-id <id> --message <text>
 openclaw voicecall dtmf     --call-id <id> --digits <digits>
@@ -39,7 +39,7 @@ openclaw voicecall expose   [--mode <m>] [--path <p>] [--port <port>] [--serve-p
 | `speak`    | Speak a message without waiting for a response.                 |
 | `dtmf`     | Send DTMF digits to an active call.                             |
 | `end`      | Hang up an active call.                                         |
-| `status`   | Inspect active calls (or one by `--call-id`).                   |
+| `status`   | Inspect active calls, or look up one by `--call-id`.            |
 | `tail`     | Tail `calls.jsonl` (useful during provider tests).              |
 | `latency`  | Summarize turn-latency metrics from `calls.jsonl`.              |
 | `expose`   | Toggle Tailscale serve/funnel for the webhook endpoint.         |
@@ -88,6 +88,7 @@ Initiate an outbound voice call.
 | `-m, --message <text>` | yes      | (none)            | Message to speak when the call connects.                                   |
 | `-t, --to <phone>`     | no       | config `toNumber` | E.164 phone number to call.                                                |
 | `--mode <mode>`        | no       | `conversation`    | Call mode: `notify` (hang up after message) or `conversation` (stay open). |
+| `--objective <text>`   | no       | (none)            | Private per-call objective for realtime task calls; not spoken as opener.  |
 
 ```bash
 openclaw voicecall call --to "+15555550123" --message "Hello"
@@ -98,11 +99,12 @@ openclaw voicecall call -m "Heads up" --mode notify
 
 Alias for `call` with a different default flag shape.
 
-| Flag               | Required | Default        | Description                              |
-| ------------------ | -------- | -------------- | ---------------------------------------- |
-| `--to <phone>`     | yes      | (none)         | Phone number to call.                    |
-| `--message <text>` | no       | (none)         | Message to speak when the call connects. |
-| `--mode <mode>`    | no       | `conversation` | Call mode: `notify` or `conversation`.   |
+| Flag                 | Required | Default        | Description                                                               |
+| -------------------- | -------- | -------------- | ------------------------------------------------------------------------- |
+| `--to <phone>`       | yes      | (none)         | Phone number to call.                                                     |
+| `--message <text>`   | no       | (none)         | Message to speak when the call connects.                                  |
+| `--mode <mode>`      | no       | `conversation` | Call mode: `notify` or `conversation`.                                    |
+| `--objective <text>` | no       | (none)         | Private per-call objective for realtime task calls; not spoken as opener. |
 
 ### `continue`
 
@@ -141,12 +143,12 @@ Hang up an active call.
 
 ### `status`
 
-Inspect active calls.
+Inspect active calls. When `--call-id` is provided, `status` first checks active calls, then searches the 100 most recent persisted call records by OpenClaw call ID or provider call ID.
 
-| Flag             | Default | Description                  |
-| ---------------- | ------- | ---------------------------- |
-| `--call-id <id>` | (none)  | Restrict output to one call. |
-| `--json`         | `false` | Print machine-readable JSON. |
+| Flag             | Default | Description                                  |
+| ---------------- | ------- | -------------------------------------------- |
+| `--call-id <id>` | (none)  | Look up one active or recent completed call. |
+| `--json`         | `false` | Print machine-readable JSON.                 |
 
 ```bash
 openclaw voicecall status

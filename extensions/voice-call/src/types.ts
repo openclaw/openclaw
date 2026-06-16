@@ -104,6 +104,7 @@ const NormalizedEventSchema = z.discriminatedUnion("type", [
   BaseEventSchema.extend({
     type: z.literal("call.speaking"),
     text: z.string(),
+    source: z.enum(["realtime"]).optional(),
   }),
   BaseEventSchema.extend({
     type: z.literal("call.speech"),
@@ -303,6 +304,8 @@ export type GetCallStatusResult = {
 export type OutboundCallOptions = {
   /** Message to speak when call connects */
   message?: string;
+  /** Private per-call objective for realtime task calls; not spoken as the opener */
+  objective?: string;
   /** Call mode (overrides config default) */
   mode?: CallMode;
   /** DTMF digits to send after the call is connected */
