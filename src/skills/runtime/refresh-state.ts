@@ -7,7 +7,7 @@ export type SkillsChangeEvent = {
 
 const listeners = new Set<(event: SkillsChangeEvent) => void>();
 const workspaceVersions = new Map<string, number>();
-const INITIAL_SKILLS_SNAPSHOT_VERSION = 1;
+const INITIAL_SKILLS_SNAPSHOT_VERSION = Date.now();
 let globalVersion = INITIAL_SKILLS_SNAPSHOT_VERSION;
 let listenerErrorHandler: ((err: unknown) => void) | undefined;
 

@@ -136,6 +136,24 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
     expect(snapshotParams.snapshotVersion).toBe(1);
   });
 
+  it("refreshes persisted timestamp-version snapshots from earlier processes", () => {
+    getSkillsSnapshotVersionMock.mockReturnValue(10_000);
+
+    const result = resolveReusableWorkspaceSkillSnapshot({
+      workspaceDir: TEST_WORKSPACE_DIR,
+      config: {},
+      existingSnapshot: strippedSnapshot("test", 9_999),
+    });
+
+    expect(result.shouldRefresh).toBe(true);
+    expect(shouldRefreshSnapshotForVersionMock).toHaveBeenCalledWith(9_999, 10_000);
+    expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
+    const [[, snapshotParams]] = buildWorkspaceSkillSnapshotMock.mock.calls as unknown as Array<
+      [string, { snapshotVersion?: number }]
+    >;
+    expect(snapshotParams.snapshotVersion).toBe(10_000);
+  });
+
   it("invalidates cached resolvedSkills when non-skills config gates change", () => {
     buildWorkspaceSkillSnapshotMock.mockImplementation((_workspaceDir, opts) => {
       const config = (opts as { config?: { channels?: { discord?: { token?: string } } } }).config;
