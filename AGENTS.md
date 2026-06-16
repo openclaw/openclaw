@@ -172,7 +172,7 @@ Skills own workflows; root owns hard policy and routing.
 - PR artifacts/screenshots: attach to PR/comment/external artifact store. Never push screenshots, videos, proof images, or proof assets to OpenClaw or any product repo branch, including temp artifact branches. Use Crabbox artifact publishing plus the manifest URL. Do not commit `.github/pr-assets`.
 - CI polling: exact SHA, relevant checks only, minimal fields. Skip routine noise (`Auto response`, `Labeler`, docs agents, performance/stale). Logs only after failure/completion or concrete need.
 - OpenClaw write-access maintainers may skip `Real behavior proof` when local tests or Crabbox verified behavior; record proof in PR verification.
-- Agent PR landing: run `scripts/pr-review <PR>`, `scripts/pr-prepare run <PR>`, then `scripts/pr-merge run <PR>`; do not idle on `auto-response` or `check-docs`.
+- Agent PR landing: use the complete repo-native workflow exposed by `scripts/pr`; run it without arguments for the review, prepare, and merge entrypoints, and do not idle on `auto-response` or `check-docs`.
 
 ## Code
 
