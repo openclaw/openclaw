@@ -117,7 +117,6 @@ export {
   archiveFileOnDisk,
   archiveSessionTranscripts,
   resolveSessionHistoryTranscriptPathAsync,
-  resolveSessionTranscriptCandidates,
 } from "./session-utils.fs.js";
 export {
   attachOpenClawTranscriptMeta,
@@ -143,6 +142,10 @@ export type {
   ReadSessionMessagesAsyncOptions,
   SessionTranscriptReadScope,
 } from "./session-transcript-readers.js";
+export {
+  resolveSessionTranscriptCandidates,
+  resolveSessionTranscriptResetArchiveCandidatesAsync,
+} from "./session-transcript-files.fs.js";
 export { canonicalizeSpawnedByForAgent, resolveSessionStoreKey } from "./session-store-key.js";
 export type {
   GatewayAgentRow,

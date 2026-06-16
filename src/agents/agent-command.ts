@@ -794,12 +794,13 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
   const runId = opts.runId?.trim() || sessionId;
   const { getAcpSessionManager } = await loadAcpManagerRuntime();
   const acpManager = getAcpSessionManager();
-  const acpResolution = sessionKey
-    ? acpManager.resolveSession({
-        cfg,
-        sessionKey,
-      })
-    : null;
+  const acpResolution =
+    sessionKey && !toSessionKey
+      ? acpManager.resolveSession({
+          cfg,
+          sessionKey,
+        })
+      : null;
   const body =
     !isRawModelRun && acpResolution?.kind === "ready"
       ? resolveAcpPromptBody(message, opts.internalEvents)

@@ -83,14 +83,16 @@ import {
 function withManifestLoadPaths<T extends { id: string }>(
   plugin: T,
 ): T & Pick<PluginManifestRecord, "rootDir" | "source" | "manifestPath" | "skills" | "hooks"> {
-  return {
-    rootDir: `/tmp/plugins/${plugin.id}`,
-    source: `/tmp/plugins/${plugin.id}/index.ts`,
-    manifestPath: `/tmp/plugins/${plugin.id}/openclaw.plugin.json`,
-    skills: [],
-    hooks: [],
-    ...plugin,
-  };
+  return Object.assign(
+    {
+      rootDir: `/tmp/plugins/${plugin.id}`,
+      source: `/tmp/plugins/${plugin.id}/index.ts`,
+      manifestPath: `/tmp/plugins/${plugin.id}/openclaw.plugin.json`,
+      skills: [],
+      hooks: [],
+    },
+    plugin,
+  );
 }
 
 function createManifestRegistryFixture(): PluginManifestRegistry {
@@ -1374,13 +1376,17 @@ describe("resolveGatewayStartupPluginIds", () => {
 
   it("matches explicitly disabled channel ids case-insensitively", () => {
     const registry = createManifestRegistryFixture();
-    useManifestRegistryFixture({
-      ...registry,
-      plugins: registry.plugins.map((plugin) =>
+    const plugins = [];
+    for (const plugin of registry.plugins) {
+      plugins.push(
         plugin.id === "external-env-channel-plugin"
           ? Object.assign({}, plugin, { channels: ["External-Env-Channel"] })
           : plugin,
-      ),
+      );
+    }
+    useManifestRegistryFixture({
+      ...registry,
+      plugins,
     });
 
     expectStartupPluginIdsCase({
@@ -1403,7 +1409,7 @@ describe("resolveGatewayStartupPluginIds", () => {
       allowPluginIds: ["browser"],
     });
     const effectiveConfig = {
-      ...rawConfig,
+      channels: rawConfig.channels,
       plugins: {
         allow: ["browser"],
         entries: {
@@ -1440,7 +1446,8 @@ describe("resolveGatewayStartupPluginIds", () => {
       },
     } as OpenClawConfig;
     const effectiveConfig = {
-      ...rawConfig,
+      channels: rawConfig.channels,
+      tools: rawConfig.tools,
       plugins: {
         allow: ["browser", "brave"],
         entries: {
