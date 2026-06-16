@@ -514,11 +514,11 @@ describe("sessionsCleanupCommand", () => {
             storePath: "/resolved/sessions.json",
             mode: "warn",
             dryRun: true,
-            beforeCount: 6,
+            beforeCount: 7,
             afterCount: 3,
             missing: 0,
             dmScopeRetired: 0,
-            pruned: 2,
+            pruned: 3,
             capped: 1,
             unreferencedArtifacts: {
               scannedFiles: 0,
@@ -564,9 +564,15 @@ describe("sessionsCleanupCommand", () => {
               model: "test:opus",
               label: "\u001b[31mAlert\nInjected",
             },
+            malformedLabelPruned: {
+              sessionId: "malformed-label-pruned",
+              updatedAt: 1,
+              model: "test:opus",
+              label: {} as unknown as string,
+            },
           },
           missingKeys: new Set<string>(),
-          staleKeys: new Set(["cronPruned", "unsafePruned"]),
+          staleKeys: new Set(["cronPruned", "unsafePruned", "malformedLabelPruned"]),
           cappedKeys: new Set(["directCapped"]),
           budgetEvictedKeys: new Set<string>(),
           dmScopeRetiredKeys: new Set<string>(),
@@ -586,13 +592,13 @@ describe("sessionsCleanupCommand", () => {
     expectLogsToInclude(logs, "Summary by Label:");
     const summaryLogs = logs.slice(logs.indexOf("Summary by Label:") + 1);
     expectLogsToInclude(logs, "Cron: daily-commit  1 kept, 1 pruned");
-    expect(summaryLogs.find((line) => line.includes("(unlabeled)"))).toContain("1 kept, 1 pruned");
+    expect(summaryLogs.find((line) => line.includes("(unlabeled)"))).toContain("1 kept, 2 pruned");
     expect(summaryLogs.find((line) => line.includes("Unlabeled"))).toContain("1 kept, 0 pruned");
     expect(summaryLogs.find((line) => line.includes("Alert\\nInjected"))).toContain(
       "0 kept, 1 pruned",
     );
     expect(logs.join("\n")).not.toContain("\u001b[31m");
-    expectLogsToInclude(logs, "Total: 3 kept, 3 pruned");
+    expectLogsToInclude(logs, "Total: 3 kept, 4 pruned");
   });
 
   it("returns grouped JSON for --all-agents dry-runs", async () => {

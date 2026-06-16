@@ -99,7 +99,8 @@ function buildActionRows(params: {
 function buildLabelSummaries(actionRows: SessionCleanupActionRow[]): SessionCleanupLabelSummary[] {
   const summaryByLabel = new Map<string, SessionCleanupLabelSummary>();
   for (const actionRow of actionRows) {
-    const label = sanitizeTerminalText(actionRow.label?.trim() || "") || "(unlabeled)";
+    const rawLabel = typeof actionRow.label === "string" ? actionRow.label.trim() : "";
+    const label = sanitizeTerminalText(rawLabel) || "(unlabeled)";
     let summary = summaryByLabel.get(label);
     if (!summary) {
       summary = { label, kept: 0, pruned: 0 };
