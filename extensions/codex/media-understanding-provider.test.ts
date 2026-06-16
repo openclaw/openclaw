@@ -229,6 +229,7 @@ describe("codex media understanding provider", () => {
       undefined,
       "/tmp/openclaw-agent",
       cfg,
+      { timeoutMs: 30_000 },
     );
     expect(requests[1]?.params).toEqual({
       model: "gpt-5.4",
@@ -285,7 +286,9 @@ describe("codex media understanding provider", () => {
       agentDir: " ",
     });
 
-    expect(clientFactory).toHaveBeenCalledWith(expect.any(Object), undefined, undefined, cfg);
+    expect(clientFactory).toHaveBeenCalledWith(expect.any(Object), undefined, undefined, cfg, {
+      timeoutMs: 30_000,
+    });
     expect(requests[1]?.params).toEqual(expect.objectContaining({ cwd: process.cwd() }));
     expect(requests[2]?.params).toEqual(expect.objectContaining({ cwd: process.cwd() }));
   });

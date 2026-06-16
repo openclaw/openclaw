@@ -561,12 +561,12 @@ describe("Codex app-server thread lifecycle bindings", () => {
     });
     params.config = { tools: { deny: ["web_search"] } };
     params.toolsAllow = [];
-    params.toolsAllowSource = "policy";
     const restrictedBinding = await startOrResumeThread({
       client: { request } as never,
       params,
       cwd: workspaceDir,
       dynamicTools: [],
+      persistentWebSearchAllowed: false,
       webSearchAllowed: false,
       appServer,
     });
@@ -575,6 +575,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       params,
       cwd: workspaceDir,
       dynamicTools: [],
+      persistentWebSearchAllowed: false,
       webSearchAllowed: false,
       appServer,
     });

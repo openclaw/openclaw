@@ -872,9 +872,6 @@ function isTransientWebSearchRestriction(
   if (params.params.disableTools === true) {
     return true;
   }
-  if (params.params.toolsAllowSource === "policy") {
-    return false;
-  }
   const persistentWebSearchRestriction =
     params.webSearchAllowed === false && params.persistentWebSearchAllowed === false;
   if (params.nativeCodeModeEnabled === false && !persistentWebSearchRestriction) {

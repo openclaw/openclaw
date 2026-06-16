@@ -130,7 +130,6 @@ export {
   normalizeHeartbeatToolResponse,
 } from "../auto-reply/heartbeat-tool-response.js";
 export { isMessagingTool, isMessagingToolSendAction } from "../agents/embedded-agent-messaging.js";
-export { hasCommittedMessagingToolResultDetails } from "../agents/embedded-agent-runner/delivery-evidence.js";
 export {
   extractMessagingToolSend,
   extractMessagingToolSendResult,
@@ -326,8 +325,6 @@ export {
 } from "../agents/embedded-agent-runner/run/preemptive-compaction.js";
 export { resolveContextEngineOwnerPluginId } from "../context-engine/registry.js";
 export {
-  consumeAgentHarnessToolExecutionDisposition,
-  resolveAgentHarnessToolCallArgs,
   runAgentHarnessAfterToolCallHook,
   runAgentHarnessBeforeMessageWriteHook,
 } from "../agents/harness/hook-helpers.js";

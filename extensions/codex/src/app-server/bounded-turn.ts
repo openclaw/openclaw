@@ -64,21 +64,19 @@ export async function runBoundedCodexAppServerTurn(params: {
     pluginConfig: params.options.pluginConfig,
   });
   const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 100, 100);
+  const agentDir = params.agentDir?.trim() || undefined;
+  const cwd = agentDir ?? process.cwd();
   const ownsClient = !params.options.clientFactory;
   const client = params.options.clientFactory
-    ? await params.options.clientFactory(
-        appServer.start,
-        params.profile,
-        params.agentDir,
-        params.config,
-        { timeoutMs },
-      )
+    ? await params.options.clientFactory(appServer.start, params.profile, agentDir, params.config, {
+        timeoutMs,
+      })
     : await import("./shared-client.js").then(({ createIsolatedCodexAppServerClient }) =>
         createIsolatedCodexAppServerClient({
           startOptions: appServer.start,
           timeoutMs,
           authProfileId: params.profile,
-          agentDir: params.agentDir,
+          agentDir,
           authProfileStore: params.authProfileStore,
           config: params.config,
         }),
@@ -107,7 +105,7 @@ export async function runBoundedCodexAppServerTurn(params: {
         {
           model: params.model,
           modelProvider: "openai",
-          cwd: params.agentDir || process.cwd(),
+          cwd,
           approvalPolicy: "on-request",
           sandbox: "read-only",
           serviceName: "OpenClaw",
@@ -137,7 +135,7 @@ export async function runBoundedCodexAppServerTurn(params: {
           {
             threadId: thread.thread.id,
             input: params.input,
-            cwd: params.agentDir || process.cwd(),
+            cwd,
             approvalPolicy: "on-request",
             model: params.model,
             effort: "low",

@@ -315,7 +315,6 @@ export function applyPluginHarnessDenyAllToolPolicy(
   return {
     ...params,
     toolsAllow: [],
-    toolsAllowSource: "policy",
     extraSystemPrompt: appendPluginHarnessToolPolicyPrompt(params.extraSystemPrompt, prompt),
   };
 }
