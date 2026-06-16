@@ -333,6 +333,31 @@ describe("outbound channel resolution", () => {
     expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledTimes(1);
   });
 
+  it("bootstraps instead of returning direct outbound metadata from a setup shell", async () => {
+    const setupPlugin = { id: "alpha", outbound: { deliveryMode: "direct" } };
+    const runtimePlugin = { id: "alpha", outbound: { deliveryMode: "direct", sendText: vi.fn() } };
+    getLoadedChannelPluginMock.mockReturnValue(setupPlugin);
+    getChannelPluginMock.mockReturnValue(undefined);
+    getActivePluginChannelRegistryMock.mockReturnValue({
+      channels: [{ plugin: setupPlugin }],
+    });
+    getActivePluginRegistryMock.mockImplementation(() =>
+      resolveRuntimePluginRegistryMock.mock.calls.length > 0
+        ? { channels: [{ plugin: runtimePlugin }] }
+        : { channels: [{ plugin: setupPlugin }] },
+    );
+    const channelResolution = await importChannelResolution("bootstrap-outbound-metadata-shell");
+
+    expect(
+      channelResolution.resolveOutboundChannelPlugin({
+        channel: "alpha",
+        cfg: { channels: {} } as never,
+        allowBootstrap: true,
+      }),
+    ).toBe(runtimePlugin);
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledTimes(1);
+  });
+
   it("does not return a setup shell when bootstrap does not produce a runtime plugin", async () => {
     const setupPlugin = { id: "alpha" };
     getLoadedChannelPluginMock.mockReturnValue(setupPlugin);

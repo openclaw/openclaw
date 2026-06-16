@@ -189,7 +189,11 @@ function resolveSendCapableMessageAdapter(
 }
 
 function channelPluginHasRuntimeOutboundSurface(plugin: ChannelPlugin | undefined): boolean {
-  return Boolean(plugin?.outbound ?? resolveSendCapableMessageAdapter(plugin));
+  return Boolean(
+    plugin?.outbound?.sendText ||
+    plugin?.outbound?.deliveryMode === "gateway" ||
+    resolveSendCapableMessageAdapter(plugin),
+  );
 }
 
 function resolveRuntimeOutboundPlugin(plugin: ChannelPlugin): ChannelPlugin | undefined {
