@@ -1,7 +1,6 @@
 // Creates channel-native approval runtimes and delivery flows.
 import type { ChannelApprovalNativeAdapter } from "../channels/plugins/approval-native.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { callGatewayLeastPrivilege } from "../gateway/call.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
   resolveChannelNativeApprovalDeliveryPlan,
@@ -202,15 +201,17 @@ export function createChannelNativeApprovalRuntime<
     channel: adapter.channel,
     channelLabel: adapter.channelLabel,
     accountId: adapter.accountId,
-    requestGateway: async <T>(method: string, params: Record<string, unknown>): Promise<T> =>
-      await callGatewayLeastPrivilege<T>({
+    requestGateway: async <T>(method: string, params: Record<string, unknown>): Promise<T> => {
+      const { callGatewayLeastPrivilege } = await import("../gateway/call.js");
+      return await callGatewayLeastPrivilege<T>({
         config: adapter.cfg,
         ...(adapter.gatewayUrl ? { url: adapter.gatewayUrl } : {}),
         method,
         params,
         clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
         mode: GATEWAY_CLIENT_MODES.BACKEND,
-      }),
+      });
+    },
   });
 
   const runtime = createExecApprovalChannelRuntime<TPendingEntry, TRequest, TResolved>({
