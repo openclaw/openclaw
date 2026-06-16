@@ -125,12 +125,14 @@ export async function loadLogs(state: LogsState, opts?: { reset?: boolean; quiet
       lines?: unknown;
       truncated?: boolean;
       reset?: boolean;
+      skippedBytes?: number;
     };
     const lines = Array.isArray(payload.lines)
       ? payload.lines.filter((line) => typeof line === "string")
       : [];
     const entries = lines.map(parseLogLine);
-    const shouldReset = opts?.reset || payload.reset || state.logsCursor == null;
+    const shouldReset =
+      opts?.reset || payload.reset || (payload.skippedBytes ?? 0) > 0 || state.logsCursor == null;
     state.logsEntries = shouldReset
       ? entries
       : [...state.logsEntries, ...entries].slice(-LOG_BUFFER_LIMIT);

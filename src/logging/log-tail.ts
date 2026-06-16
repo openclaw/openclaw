@@ -20,6 +20,7 @@ export type LogTailPayload = {
   lines: string[];
   truncated: boolean;
   reset: boolean;
+  skippedBytes: number;
 };
 
 function isRollingLogFile(file: string): boolean {
@@ -71,6 +72,7 @@ async function readLogSlice(params: {
       lines: [],
       truncated: false,
       reset: false,
+      skippedBytes: 0,
     };
   }
 
@@ -82,6 +84,7 @@ async function readLogSlice(params: {
       ? Math.max(0, Math.floor(params.cursor))
       : undefined;
   let reset = false;
+  let skippedBytes = 0;
   let truncated = false;
   let start;
 
@@ -98,9 +101,11 @@ async function readLogSlice(params: {
         // The file grew faster than --max-bytes between polls. The cursor is
         // still valid (we are reading forward from it), but we have to skip
         // bytes to fit the budget; the caller should report this as a tail
-        // truncation, not a rotation.
+        // truncation and re-anchor, not a rotation.
         truncated = true;
-        start = Math.max(0, size - maxBytes);
+        const boundedStart = Math.max(0, size - maxBytes);
+        skippedBytes = Math.max(0, boundedStart - start);
+        start = boundedStart;
       }
     }
   } else {
@@ -115,6 +120,7 @@ async function readLogSlice(params: {
       lines: [],
       truncated,
       reset,
+      skippedBytes,
     };
   }
 
@@ -151,6 +157,7 @@ async function readLogSlice(params: {
       lines,
       truncated,
       reset,
+      skippedBytes,
     };
   } finally {
     await handle.close();
