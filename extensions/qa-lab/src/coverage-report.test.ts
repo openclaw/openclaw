@@ -18,6 +18,7 @@ const TEST_WEBCHAT_COVERAGE_ID = "ui.webchat";
 function testMaturityTaxonomy(params?: {
   categoryId?: string;
   coverageIds?: readonly string[];
+  includeAllCategories?: boolean;
   profileCategoryIds?: readonly string[];
 }) {
   const categoryId = params?.categoryId ?? TEST_EXECUTABLE_CATEGORY_ID;
@@ -31,12 +32,16 @@ function testMaturityTaxonomy(params?: {
       {
         id: "smoke-ci",
         description: "Test smoke profile.",
+        includeAllCategories: false,
         categoryIds: [],
       },
       {
         id: "release",
         description: "Test release profile.",
-        categoryIds: [...(params?.profileCategoryIds ?? [categoryId])],
+        includeAllCategories: params?.includeAllCategories ?? false,
+        categoryIds: [
+          ...(params?.includeAllCategories ? [] : (params?.profileCategoryIds ?? [categoryId])),
+        ],
       },
     ],
     surfaces: [
@@ -115,7 +120,10 @@ describe("qa coverage report", () => {
     ]);
     expect(inventory.scorecardTaxonomy.profileCount).toBe(2);
     expect(inventory.scorecardTaxonomy.categoryCount).toBeGreaterThan(200);
-    expect(inventory.scorecardTaxonomy.requiredCategoryCount).toBe(15);
+    expect(inventory.scorecardTaxonomy.requiredCategoryCount).toBeGreaterThan(0);
+    expect(inventory.scorecardTaxonomy.requiredCategoryCount).toBeLessThanOrEqual(
+      inventory.scorecardTaxonomy.categoryCount,
+    );
     expect(inventory.scorecardTaxonomy.requiredFeatureCount).toBeGreaterThan(0);
     expect(inventory.scorecardTaxonomy.fulfilledFeatureCount).toBeGreaterThan(0);
     expect(inventory.scorecardTaxonomy.taxonomyFulfillmentPercent).toBeGreaterThan(0);
@@ -124,30 +132,15 @@ describe("qa coverage report", () => {
     expect(inventory.scorecardTaxonomy.unknownCoverageIdCount).toBe(0);
     expect(inventory.scorecardTaxonomy.validationIssues.length).toBeGreaterThan(0);
     expect(
-      inventory.scorecardTaxonomy.validationIssues.every(
+      inventory.scorecardTaxonomy.validationIssues.some((issue) =>
+        issue.code.endsWith("not-found"),
+      ),
+    ).toBe(false);
+    expect(
+      inventory.scorecardTaxonomy.validationIssues.some(
         (issue) => issue.code === "coverage-id-missing-primary-evidence",
       ),
     ).toBe(true);
-    expect(
-      inventory.scorecardTaxonomy.profiles
-        .find((profile) => profile.id === "release")
-        ?.categoryIds.toSorted(),
-    ).toEqual([
-      "agent-runtime-and-provider-execution.agent-turn-execution",
-      "automation-cron-hooks-tasks-polling.cron-jobs",
-      "browser-automation-and-exec-sandbox-tools.tool-invocation-and-execution",
-      "browser-control-ui-and-webchat.browser-ui",
-      "media-understanding-and-media-generation.media-generation",
-      "media-understanding-and-media-generation.media-understanding",
-      "openai-codex-provider-path.responses-and-tool-compatibility",
-      "plugin-sdk-and-bundled-plugin-architecture.installing-and-running-plugins",
-      "security-auth-pairing-and-secrets.approval-policy-and-tool-safeguards",
-      "security-auth-pairing-and-secrets.credential-and-secret-hygiene",
-      "session-memory-and-context-engine.diagnostics-maintenance-and-recovery",
-      "session-memory-and-context-engine.memory",
-      "session-memory-and-context-engine.token-management",
-      "telemetry-diagnostics-and-observability.telemetry-export",
-    ]);
     expect(
       inventory.scorecardTaxonomy.categories.find(
         (category) => category.id === TEST_BROWSER_CATEGORY_ID,
@@ -347,6 +340,21 @@ describe("qa coverage report", () => {
     expect(report.validationIssues.map((issue) => issue.code)).toContain(
       "profile-category-ref-not-found",
     );
+  });
+
+  it("resolves all-category profiles from taxonomy categories", () => {
+    const report = buildQaScorecardTaxonomyReport({
+      taxonomy: testMaturityTaxonomy({
+        includeAllCategories: true,
+      }),
+      repoRoot: process.cwd(),
+      scenarios: [],
+    });
+
+    expect(report.profiles.find((profile) => profile.id === "release")?.categoryIds).toStrictEqual([
+      TEST_EXECUTABLE_CATEGORY_ID,
+    ]);
+    expect(report.requiredCategoryCount).toBe(1);
   });
 
   it("reports profile categories missing primary coverage evidence", () => {

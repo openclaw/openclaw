@@ -775,6 +775,34 @@ function jsonSerializationCanRunUserCode(value: unknown, ancestors = new Set<obj
   }
 }
 
+function hasOwnProperty(value: object, key: string): boolean {
+  return Object.hasOwn(value, key);
+}
+
+function hasAssistantToolCallArguments(message: Extract<Message, { role: "assistant" }>): boolean {
+  if (!Array.isArray(message.content)) {
+    return false;
+  }
+  return message.content.some(
+    (part) => part.type === "toolCall" && hasOwnProperty(part, "arguments"),
+  );
+}
+
+function messageSerializesOwnedValues(
+  message: Message | CustomMessage | BashExecutionMessage,
+): boolean {
+  if (message.role === "toolResult") {
+    return hasOwnProperty(message, "details");
+  }
+  if (message.role === "assistant") {
+    return hasAssistantToolCallArguments(message);
+  }
+  if (message.role === "custom") {
+    return hasOwnProperty(message, "details");
+  }
+  return false;
+}
+
 function readSessionFileSnapshotIfExists(filePath: string): SessionFileSnapshot | undefined {
   try {
     return readSessionFileSnapshot(filePath);
@@ -1483,6 +1511,8 @@ export class SessionManager {
     message: Message | CustomMessage | BashExecutionMessage,
     options?: AppendPersistenceOptions,
   ): string {
+    const invalidateSerializedPrefixCache =
+      options?.invalidateSerializedPrefixCache === true || messageSerializesOwnedValues(message);
     const entry: SessionMessageEntry = {
       type: "message",
       id: generateId(this.byId),
@@ -1490,7 +1520,10 @@ export class SessionManager {
       timestamp: new Date().toISOString(),
       message,
     };
-    this.appendEntry(entry, options);
+    this.appendEntry(entry, {
+      ...options,
+      invalidateSerializedPrefixCache,
+    });
     return entry.id;
   }
 

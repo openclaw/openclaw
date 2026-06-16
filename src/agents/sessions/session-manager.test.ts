@@ -723,7 +723,7 @@ describe("SessionManager.open", () => {
     ).toEqual(["changed 1"]);
   });
 
-  it("invalidates assistant tool-call hook writes before advancing the cache", async () => {
+  it("detects tool-result detail hooks before advancing the cache", async () => {
     const dir = await makeTempDir();
     const sessionFile = path.join(dir, "session.jsonl");
     const assistantEntry = {
@@ -749,32 +749,136 @@ describe("SessionManager.open", () => {
         withSessionWriteLock: async (run) => await run(),
       },
       async () => {
-        sessionManager.appendMessage(
-          {
-            ...buildAssistantMessage("unused"),
-            content: [
-              {
-                type: "toolCall",
-                id: "call-1",
-                name: "custom",
-                arguments: {
-                  value: {
-                    toJSON() {
-                      writeFileSync(
-                        sessionFile,
-                        `${headerLine}\n${JSON.stringify(replacementEntry)}\n`,
-                        "utf8",
-                      );
-                      return "persisted";
-                    },
+        sessionManager.appendMessage({
+          role: "toolResult",
+          toolCallId: "call-1",
+          toolName: "custom",
+          content: [{ type: "text", text: "unused" }],
+          details: {
+            value: {
+              toJSON() {
+                writeFileSync(
+                  sessionFile,
+                  `${headerLine}\n${JSON.stringify(replacementEntry)}\n`,
+                  "utf8",
+                );
+                return "persisted";
+              },
+            },
+          },
+          isError: false,
+          timestamp: Date.now(),
+        });
+      },
+    );
+
+    const reopenedPrefix = SessionManager.open(sessionFile, dir, dir)
+      .getEntries()
+      .find((entry) => entry.id === "assistant-1");
+    expect(reopenedPrefix ? readMessageContent(reopenedPrefix) : undefined).toBe("changed 1");
+  });
+
+  it("does not warm-cache tool-result detail appends", async () => {
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "session.jsonl");
+    const assistantEntry = {
+      type: "message",
+      id: "assistant-1",
+      parentId: null,
+      timestamp: "2026-06-04T00:00:01.000Z",
+      message: buildAssistantMessage("message 1"),
+    };
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify(buildSessionHeader(dir))}\n${JSON.stringify(assistantEntry)}\n`,
+      "utf8",
+    );
+
+    const sessionManager = SessionManager.open(sessionFile, dir, dir);
+    await withOwnedSessionTranscriptWrites(
+      {
+        sessionFile,
+        canAdvanceSessionEntryCache: () => true,
+        publishSessionFileSnapshot: () => true,
+        withSessionWriteLock: async (run) => await run(),
+      },
+      async () => {
+        sessionManager.appendMessage({
+          role: "toolResult",
+          toolCallId: "call-1",
+          toolName: "custom",
+          content: [{ type: "text", text: "unused" }],
+          details: { source: "extension" },
+          isError: false,
+          timestamp: Date.now(),
+        });
+      },
+    );
+
+    const originalParse = JSON.parse;
+    let parseCount = 0;
+    JSON.parse = function countedParse(...args: Parameters<typeof JSON.parse>) {
+      parseCount += 1;
+      return originalParse.apply(originalParse, args);
+    } as typeof JSON.parse;
+
+    try {
+      expect(SessionManager.open(sessionFile, dir, dir).getEntries()).toHaveLength(2);
+      expect(parseCount).toBeGreaterThan(0);
+    } finally {
+      JSON.parse = originalParse;
+    }
+  });
+
+  it("detects assistant tool-call hook writes before advancing the cache", async () => {
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "session.jsonl");
+    const assistantEntry = {
+      type: "message",
+      id: "assistant-1",
+      parentId: null,
+      timestamp: "2026-06-04T00:00:01.000Z",
+      message: buildAssistantMessage("message 1"),
+    };
+    const replacementEntry = {
+      ...assistantEntry,
+      message: buildAssistantMessage("changed 1"),
+    };
+    const headerLine = JSON.stringify(buildSessionHeader(dir));
+    await fs.writeFile(sessionFile, `${headerLine}\n${JSON.stringify(assistantEntry)}\n`, "utf8");
+
+    const sessionManager = SessionManager.open(sessionFile, dir, dir);
+    await withOwnedSessionTranscriptWrites(
+      {
+        sessionFile,
+        canAdvanceSessionEntryCache: () => true,
+        publishSessionFileSnapshot: () => true,
+        withSessionWriteLock: async (run) => await run(),
+      },
+      async () => {
+        sessionManager.appendMessage({
+          ...buildAssistantMessage("unused"),
+          content: [
+            {
+              type: "toolCall",
+              id: "call-1",
+              name: "custom",
+              arguments: {
+                value: {
+                  toJSON() {
+                    writeFileSync(
+                      sessionFile,
+                      `${headerLine}\n${JSON.stringify(replacementEntry)}\n`,
+                      "utf8",
+                    );
+                    return "persisted";
                   },
                 },
               },
-            ],
-            stopReason: "toolUse",
-          },
-          { invalidateSerializedPrefixCache: true },
-        );
+            },
+          ],
+          stopReason: "toolUse",
+        });
       },
     );
 

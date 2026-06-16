@@ -25,6 +25,7 @@ const qaScorecardProfileSchema = z.object({
   id: qaScorecardIdSchema,
   description: z.string().trim().min(1),
   evidenceMode: qaScorecardEvidenceModeSchema.optional(),
+  includeAllCategories: z.boolean().default(false),
   categoryIds: z.array(qaScorecardIdSchema).default([]),
 });
 
@@ -66,6 +67,14 @@ const qaMaturityTaxonomySchema = z
         });
       }
       seenProfileIds.add(profile.id);
+
+      if (profile.includeAllCategories && profile.categoryIds.length > 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["profiles", profileIndex, "categoryIds"],
+          message: `profile ${profile.id} cannot set categoryIds when includeAllCategories is true`,
+        });
+      }
 
       const seenProfileCategoryIds = new Set<string>();
       for (const [categoryIndex, categoryId] of profile.categoryIds.entries()) {
@@ -466,7 +475,10 @@ export function buildQaScorecardTaxonomyReport(params: {
   const profiles =
     params.taxonomy?.profiles.map((profile) => {
       const validCategoryIds: string[] = [];
-      for (const categoryId of profile.categoryIds) {
+      const selectedCategoryIds = profile.includeAllCategories
+        ? [...maturityRefs.categories.keys()]
+        : profile.categoryIds;
+      for (const categoryId of selectedCategoryIds) {
         if (!maturityRefs.categories.has(categoryId)) {
           issues.push({
             code: "profile-category-ref-not-found",
