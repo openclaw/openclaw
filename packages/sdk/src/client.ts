@@ -643,8 +643,13 @@ export class Session {
   ) {}
 
   async send(input: string | Omit<SessionSendParams, "key">): Promise<Run> {
-    const params: SessionSendParams =
-      typeof input === "string" ? { key: this.key, message: input } : { ...input, key: this.key };
+    // "sessions.send" RPC schema uses additionalProperties: false, so any
+    // leftover tool-parameter name ("sessionKey") in the input will cause a
+    // 4 ms INVALID_REQUEST rejection before the handler runs. Strip it here.
+    const cleaned: Record<string, unknown> =
+      typeof input === "string" ? { message: input } : { ...input };
+    delete cleaned.sessionKey;
+    const params: SessionSendParams = { ...cleaned, key: this.key } as SessionSendParams;
     const raw = await this.client.request("sessions.send", params, { expectFinal: true });
     const record = asRecord(raw);
     const runId = readOptionalString(record.runId);
