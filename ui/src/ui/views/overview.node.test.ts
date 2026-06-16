@@ -52,6 +52,26 @@ describe("resolveGatewayTokenForUrlEdit", () => {
       ),
     ).toBe("");
   });
+
+  it("does not restore legacy durable tokens when the gateway endpoint changes", () => {
+    vi.stubGlobal("localStorage", createStorageMock());
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    localStorage.setItem(
+      "openclaw.control.settings.v1",
+      JSON.stringify({
+        gatewayUrl: "wss://other-gateway.example/openclaw",
+        token: "legacy-durable-token",
+      }),
+    );
+
+    expect(
+      resolveGatewayTokenForUrlEdit(
+        "wss://gateway.example/openclaw",
+        "wss://other-gateway.example/openclaw",
+        "abc123",
+      ),
+    ).toBe("");
+  });
 });
 
 describe("shouldShowPairingHint", () => {

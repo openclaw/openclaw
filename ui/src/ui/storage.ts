@@ -209,6 +209,8 @@ export function resolveGatewayTokenForUrlEdit(
   ) {
     return currentToken;
   }
+  // Gateway tokens stay session-scoped across endpoint edits.
+  // Durable settings may contain scrubbed legacy tokens, but must not restore them here.
   return loadSessionToken(nextGatewayUrl);
 }
 
