@@ -534,6 +534,95 @@ describe("Codex app-server thread lifecycle bindings", () => {
     });
   });
 
+  it("preserves the native-search binding when provider capability support is unknown", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    const appServer = createThreadLifecycleAppServerOptions();
+    let starts = 0;
+    const request = vi.fn(async (method: string, requestParams?: unknown) => {
+      if (method === "thread/start") {
+        starts += 1;
+        return threadStartResult(`thread-${starts}`);
+      }
+      if (method === "thread/resume") {
+        return threadStartResult((requestParams as { threadId: string }).threadId);
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      nativeProviderWebSearchSupport: "supported",
+      webSearchAllowed: true,
+      appServer,
+    });
+    const transientBinding = await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      nativeProviderWebSearchSupport: "unknown",
+      webSearchAllowed: true,
+      appServer,
+    });
+    const savedAfterUnknownSupport = await readCodexAppServerBinding(sessionFile);
+    const resumedBinding = await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      nativeProviderWebSearchSupport: "supported",
+      webSearchAllowed: true,
+      appServer,
+    });
+
+    expect(transientBinding.threadId).toBe("thread-2");
+    expect(savedAfterUnknownSupport?.threadId).toBe("thread-1");
+    expect(resumedBinding.threadId).toBe("thread-1");
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "thread/start",
+      "thread/start",
+      "thread/resume",
+    ]);
+    expect(request.mock.calls[0]?.[1]).toMatchObject({
+      config: { web_search: "cached" },
+    });
+    expect(request.mock.calls[1]?.[1]).toMatchObject({
+      config: { web_search: "disabled" },
+    });
+  });
+
+  it("does not persist a first-turn managed fallback when provider capability support is unknown", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const request = vi.fn(async (method: string, _requestParams?: unknown) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-transient");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const binding = await startOrResumeThread({
+      client: { request } as never,
+      params: createParams(sessionFile, workspaceDir),
+      cwd: workspaceDir,
+      dynamicTools: [],
+      nativeProviderWebSearchSupport: "unknown",
+      webSearchAllowed: true,
+      appServer: createThreadLifecycleAppServerOptions(),
+    });
+
+    expect(binding.threadId).toBe("thread-transient");
+    expect(await readCodexAppServerBinding(sessionFile)).toBeUndefined();
+    expect(request.mock.calls[0]?.[1]).toMatchObject({
+      config: { web_search: "disabled" },
+    });
+  });
+
   it("persists a restricted Codex thread when effective config policy denies web_search", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");

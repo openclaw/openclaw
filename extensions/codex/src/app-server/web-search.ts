@@ -7,6 +7,8 @@ export type CodexWebSearchPlan = {
   threadConfig: JsonObject;
 };
 
+export type CodexNativeWebSearchSupport = "supported" | "unsupported" | "unknown";
+
 const CODEX_NATIVE_WEB_SEARCH_DISABLED_CONFIG: JsonObject = {
   "features.standalone_web_search": false,
   web_search: "disabled",
@@ -81,7 +83,7 @@ export function resolveCodexWebSearchPlan(params: {
   config?: OpenClawConfig;
   disableTools?: boolean;
   nativeToolSurfaceEnabled?: boolean;
-  nativeProviderWebSearchSupported?: boolean;
+  nativeProviderWebSearchSupport?: CodexNativeWebSearchSupport;
   webSearchAllowed?: boolean;
 }): CodexWebSearchPlan {
   if (
@@ -98,9 +100,12 @@ export function resolveCodexWebSearchPlan(params: {
   const nativeConfig = params.config?.tools?.web?.search?.openaiCodex;
   const managedSearchExplicit =
     hasManagedSearchProvider(params.config) || nativeConfig?.enabled === false;
+  const nativeProviderSupportsSearch =
+    params.nativeProviderWebSearchSupport === undefined ||
+    params.nativeProviderWebSearchSupport === "supported";
   const nativeSearchEnabled =
     params.nativeToolSurfaceEnabled !== false &&
-    params.nativeProviderWebSearchSupported !== false &&
+    nativeProviderSupportsSearch &&
     nativeConfig?.enabled !== false &&
     !hasManagedSearchProvider(params.config);
   if (!nativeSearchEnabled) {

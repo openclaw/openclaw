@@ -390,7 +390,7 @@ describe("Codex app-server native code mode config", () => {
       dynamicTools: [],
       appServer: createAppServerOptions() as never,
       developerInstructions: "test instructions",
-      nativeProviderWebSearchSupported: false,
+      nativeProviderWebSearchSupport: "unsupported",
     });
 
     expect(request.config).toMatchObject({

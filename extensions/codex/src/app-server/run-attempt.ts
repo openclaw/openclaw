@@ -653,7 +653,7 @@ export async function runCodexAppServerAttempt(
     sandboxExecServerEnabled,
   });
   preDynamicStartupStages.mark("native-tool-surface");
-  const nativeProviderWebSearchSupported =
+  const nativeProviderWebSearchSupport =
     resolveCodexWebSearchPlan({
       config: params.config,
       disableTools: params.disableTools,
@@ -676,7 +676,7 @@ export async function runCodexAppServerAttempt(
           }).modelProvider,
           signal: runAbortController.signal,
         })
-      : false;
+      : "unsupported";
   preDynamicStartupStages.mark("provider-capabilities");
   for (const diagnostic of bundleMcpThreadConfig.diagnostics) {
     embeddedAgentLog.warn(`bundle-mcp: ${diagnostic.pluginId}: ${diagnostic.message}`);
@@ -754,7 +754,7 @@ export async function runCodexAppServerAttempt(
     sandboxSessionKey,
     sandbox,
     nativeToolSurfaceEnabled,
-    nativeProviderWebSearchSupported,
+    nativeProviderWebSearchSupport,
     runAbortController,
     sessionAgentId,
     pluginConfig,
@@ -778,7 +778,7 @@ export async function runCodexAppServerAttempt(
     sandboxSessionKey,
     sandbox,
     nativeToolSurfaceEnabled,
-    nativeProviderWebSearchSupported,
+    nativeProviderWebSearchSupport,
     runAbortController,
     sessionAgentId,
     pluginConfig,
@@ -1313,7 +1313,7 @@ export async function runCodexAppServerAttempt(
       buildFinalConfigPatch: buildNativeHookRelayFinalConfigPatch,
       bundleMcpThreadConfig,
       nativeToolSurfaceEnabled,
-      nativeProviderWebSearchSupported,
+      nativeProviderWebSearchSupport,
       sandboxExecServerEnabled,
       sandbox,
       contextEngineProjection,

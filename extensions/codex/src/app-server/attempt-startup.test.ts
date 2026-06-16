@@ -121,7 +121,7 @@ function startThreadWithHarness(
     finalConfigPatch: undefined,
     bundleMcpThreadConfig,
     nativeToolSurfaceEnabled: true,
-    nativeProviderWebSearchSupported: true,
+    nativeProviderWebSearchSupport: "supported",
     sandboxExecServerEnabled: false,
     sandbox: null,
     contextEngineProjection: undefined,

@@ -3,12 +3,13 @@ import type { CodexAppServerClientFactory } from "./client-factory.js";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
 import { releaseLeasedSharedCodexAppServerClient } from "./shared-client.js";
+import type { CodexNativeWebSearchSupport } from "./web-search.js";
 
 async function readConfiguredProviderWebSearchSupport(params: {
   client: CodexAppServerClient;
   timeoutMs: number;
   signal: AbortSignal;
-}): Promise<boolean> {
+}): Promise<CodexNativeWebSearchSupport> {
   const response = await params.client.request(
     "modelProvider/capabilities/read",
     {},
@@ -17,7 +18,7 @@ async function readConfiguredProviderWebSearchSupport(params: {
       signal: params.signal,
     },
   );
-  return response.webSearch;
+  return response.webSearch ? "supported" : "unsupported";
 }
 
 export async function resolveCodexProviderWebSearchSupportForClient(params: {
@@ -25,21 +26,21 @@ export async function resolveCodexProviderWebSearchSupportForClient(params: {
   timeoutMs: number;
   modelProviderOverride: string | undefined;
   signal: AbortSignal;
-}): Promise<boolean> {
+}): Promise<CodexNativeWebSearchSupport> {
   const modelProviderOverride = params.modelProviderOverride?.trim().toLowerCase();
   if (modelProviderOverride === "openai") {
-    return true;
+    return "supported";
   }
   if (modelProviderOverride) {
     // Codex's capability RPC only reports the configured provider, not a
     // thread-scoped override. Keep managed search for overrides whose hosted
     // capability cannot be proven from the configured-provider response.
-    return false;
+    return "unsupported";
   }
   try {
     return await readConfiguredProviderWebSearchSupport(params);
   } catch {
-    return false;
+    return "unknown";
   }
 }
 
@@ -51,7 +52,7 @@ export async function resolveCodexProviderWebSearchSupport(params: {
   config: EmbeddedRunAttemptParams["config"] | undefined;
   modelProviderOverride: string | undefined;
   signal: AbortSignal;
-}): Promise<boolean> {
+}): Promise<CodexNativeWebSearchSupport> {
   let client: CodexAppServerClient | undefined;
   try {
     client = await params.clientFactory(
@@ -68,7 +69,7 @@ export async function resolveCodexProviderWebSearchSupport(params: {
       signal: params.signal,
     });
   } catch {
-    return false;
+    return "unknown";
   } finally {
     if (client) {
       releaseLeasedSharedCodexAppServerClient(client);

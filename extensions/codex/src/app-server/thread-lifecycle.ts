@@ -58,7 +58,7 @@ import {
   type CodexAppServerContextEngineProjectionBinding,
   type CodexAppServerThreadBinding,
 } from "./session-binding.js";
-import { resolveCodexWebSearchPlan } from "./web-search.js";
+import { resolveCodexWebSearchPlan, type CodexNativeWebSearchSupport } from "./web-search.js";
 
 export type CodexAppServerThreadLifecycle = {
   action: "started" | "resumed";
@@ -302,7 +302,7 @@ export async function startOrResumeThread(params: {
   ) => CodexThreadFinalConfigPatchResult;
   nativeHookRelayGeneration?: string;
   nativeCodeModeEnabled?: boolean;
-  nativeProviderWebSearchSupported?: boolean;
+  nativeProviderWebSearchSupport?: CodexNativeWebSearchSupport;
   nativeCodeModeOnlyEnabled?: boolean;
   userMcpServersEnabled?: boolean;
   mcpServersFingerprint?: string;
@@ -330,7 +330,7 @@ export async function startOrResumeThread(params: {
       config: params.params.config,
       disableTools: params.params.disableTools,
       nativeToolSurfaceEnabled: params.nativeCodeModeEnabled,
-      nativeProviderWebSearchSupported: params.nativeProviderWebSearchSupported,
+      nativeProviderWebSearchSupport: params.nativeProviderWebSearchSupport,
       webSearchAllowed: params.webSearchAllowed,
     }),
   );
@@ -365,7 +365,10 @@ export async function startOrResumeThread(params: {
     config: params.params.config,
   });
   const startModelProvider = startModelSelection.modelProvider;
-  let preserveExistingBinding = false;
+  // Capability read failures use managed search for this turn but must not
+  // create a binding that later looks like a confirmed provider-policy change.
+  let preserveExistingBinding =
+    params.nativeProviderWebSearchSupport === "unknown" && !binding?.threadId;
   let rotatedContextEngineBinding = false;
   let prebuiltPluginThreadConfig: CodexPluginThreadConfig | undefined;
   const throwIfAborted = () => {
@@ -609,7 +612,7 @@ export async function startOrResumeThread(params: {
             developerInstructions: params.developerInstructions,
             config: resumeConfig,
             nativeCodeModeEnabled: params.nativeCodeModeEnabled,
-            nativeProviderWebSearchSupported: params.nativeProviderWebSearchSupported,
+            nativeProviderWebSearchSupport: params.nativeProviderWebSearchSupport,
             nativeCodeModeOnlyEnabled: params.nativeCodeModeOnlyEnabled,
             webSearchAllowed: params.webSearchAllowed,
           }),
@@ -741,7 +744,7 @@ export async function startOrResumeThread(params: {
       developerInstructions: params.developerInstructions,
       config,
       nativeCodeModeEnabled: params.nativeCodeModeEnabled,
-      nativeProviderWebSearchSupported: params.nativeProviderWebSearchSupported,
+      nativeProviderWebSearchSupport: params.nativeProviderWebSearchSupport,
       nativeCodeModeOnlyEnabled: params.nativeCodeModeOnlyEnabled,
       webSearchAllowed: params.webSearchAllowed,
       environmentSelection: params.environmentSelection,
@@ -857,9 +860,16 @@ export async function startOrResumeThread(params: {
 function isTransientWebSearchRestriction(
   params: Pick<
     Parameters<typeof startOrResumeThread>[0],
-    "params" | "nativeCodeModeEnabled" | "persistentWebSearchAllowed" | "webSearchAllowed"
+    | "params"
+    | "nativeCodeModeEnabled"
+    | "nativeProviderWebSearchSupport"
+    | "persistentWebSearchAllowed"
+    | "webSearchAllowed"
   >,
 ): boolean {
+  if (params.nativeProviderWebSearchSupport === "unknown") {
+    return true;
+  }
   if (params.params.config?.tools?.web?.search?.enabled === false) {
     return false;
   }
@@ -1012,7 +1022,7 @@ export function buildThreadStartParams(
     developerInstructions?: string;
     config?: JsonObject;
     nativeCodeModeEnabled?: boolean;
-    nativeProviderWebSearchSupported?: boolean;
+    nativeProviderWebSearchSupport?: CodexNativeWebSearchSupport;
     nativeCodeModeOnlyEnabled?: boolean;
     webSearchAllowed?: boolean;
     environmentSelection?: CodexTurnEnvironmentParams[];
@@ -1047,7 +1057,7 @@ export function buildThreadStartParams(
     serviceName: "OpenClaw",
     config: buildCodexRuntimeThreadConfigForRun(params, options.config, {
       nativeCodeModeEnabled: options.nativeCodeModeEnabled,
-      nativeProviderWebSearchSupported: options.nativeProviderWebSearchSupported,
+      nativeProviderWebSearchSupport: options.nativeProviderWebSearchSupport,
       nativeCodeModeOnlyEnabled: options.nativeCodeModeOnlyEnabled,
       webSearchAllowed: options.webSearchAllowed,
     }),
@@ -1072,7 +1082,7 @@ export function buildThreadResumeParams(
     developerInstructions?: string;
     config?: JsonObject;
     nativeCodeModeEnabled?: boolean;
-    nativeProviderWebSearchSupported?: boolean;
+    nativeProviderWebSearchSupport?: CodexNativeWebSearchSupport;
     nativeCodeModeOnlyEnabled?: boolean;
     webSearchAllowed?: boolean;
     model?: string | null;
@@ -1104,7 +1114,7 @@ export function buildThreadResumeParams(
     personality: CODEX_NATIVE_PERSONALITY_NONE,
     config: buildCodexRuntimeThreadConfigForRun(params, options.config, {
       nativeCodeModeEnabled: options.nativeCodeModeEnabled,
-      nativeProviderWebSearchSupported: options.nativeProviderWebSearchSupported,
+      nativeProviderWebSearchSupport: options.nativeProviderWebSearchSupport,
       nativeCodeModeOnlyEnabled: options.nativeCodeModeOnlyEnabled,
       webSearchAllowed: options.webSearchAllowed,
     }),
@@ -1257,7 +1267,7 @@ function buildCodexRuntimeThreadConfigForRun(
   config: JsonObject | undefined,
   options: {
     nativeCodeModeEnabled?: boolean;
-    nativeProviderWebSearchSupported?: boolean;
+    nativeProviderWebSearchSupport?: CodexNativeWebSearchSupport;
     nativeCodeModeOnlyEnabled?: boolean;
     webSearchAllowed?: boolean;
   } = {},
@@ -1266,7 +1276,7 @@ function buildCodexRuntimeThreadConfigForRun(
     config: params.config,
     disableTools: params.disableTools,
     nativeToolSurfaceEnabled: options.nativeCodeModeEnabled,
-    nativeProviderWebSearchSupported: options.nativeProviderWebSearchSupported,
+    nativeProviderWebSearchSupport: options.nativeProviderWebSearchSupport,
     webSearchAllowed: options.webSearchAllowed,
   }).threadConfig;
   const baseConfig = buildCodexRuntimeThreadConfig(

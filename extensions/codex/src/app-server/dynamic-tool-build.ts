@@ -29,7 +29,7 @@ import { resolveCodexNativeExecutionPolicy } from "./native-execution-policy.js"
 import type { CodexSandboxPolicy, CodexTurnEnvironmentParams } from "./protocol.js";
 import type { CodexSandboxExecEnvironment } from "./sandbox-exec-server.js";
 import { filterToolsForVisionInputs } from "./vision-tools.js";
-import { resolveCodexWebSearchPlan } from "./web-search.js";
+import { resolveCodexWebSearchPlan, type CodexNativeWebSearchSupport } from "./web-search.js";
 
 type OpenClawCodingToolsOptions = NonNullable<
   Parameters<(typeof import("openclaw/plugin-sdk/agent-harness"))["createOpenClawCodingTools"]>[0]
@@ -63,7 +63,7 @@ export type DynamicToolBuildParams = {
   sandboxSessionKey: string;
   sandbox: OpenClawSandboxContext;
   nativeToolSurfaceEnabled?: boolean;
-  nativeProviderWebSearchSupported?: boolean;
+  nativeProviderWebSearchSupport?: CodexNativeWebSearchSupport;
   runAbortController: AbortController;
   sessionAgentId: string;
   pluginConfig: CodexPluginConfig;
@@ -311,7 +311,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     config: params.config,
     disableTools: params.disableTools,
     nativeToolSurfaceEnabled: input.nativeToolSurfaceEnabled,
-    nativeProviderWebSearchSupported: input.nativeProviderWebSearchSupported,
+    nativeProviderWebSearchSupport: input.nativeProviderWebSearchSupport,
   });
   const readableAllTools = [...readableAllToolProjection.tools];
   const codexFilteredTools = addNodeShellDynamicToolsIfNeeded(

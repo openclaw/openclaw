@@ -394,7 +394,7 @@ describe("runCodexAppServerSideQuestion", () => {
     toolExecuteMock.mockReset();
     handleCodexAppServerApprovalRequestMock.mockReset();
     resolveCodexProviderWebSearchSupportForClientMock.mockReset();
-    resolveCodexProviderWebSearchSupportForClientMock.mockResolvedValue(true);
+    resolveCodexProviderWebSearchSupportForClientMock.mockResolvedValue("supported");
 
     toolExecuteMock.mockResolvedValue({
       content: [{ type: "text", text: "tool output" }],
@@ -701,7 +701,7 @@ describe("runCodexAppServerSideQuestion", () => {
   });
 
   it("keeps managed search for side forks when the configured provider lacks hosted search", async () => {
-    resolveCodexProviderWebSearchSupportForClientMock.mockResolvedValue(false);
+    resolveCodexProviderWebSearchSupportForClientMock.mockResolvedValue("unsupported");
 
     const { forkConfig, result, toolResponse } = await runSideQuestionWithManagedWebSearchCall();
 

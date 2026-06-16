@@ -107,7 +107,18 @@ describe("resolveCodexWebSearchPlan", () => {
   });
 
   it("keeps managed web_search when the active Codex provider lacks hosted search", () => {
-    expect(resolveCodexWebSearchPlan({ nativeProviderWebSearchSupported: false })).toEqual({
+    expect(resolveCodexWebSearchPlan({ nativeProviderWebSearchSupport: "unsupported" })).toEqual({
+      kind: "managed",
+      suppressManagedWebSearch: false,
+      threadConfig: {
+        "features.standalone_web_search": false,
+        web_search: "disabled",
+      },
+    });
+  });
+
+  it("keeps managed web_search when active provider support is unknown", () => {
+    expect(resolveCodexWebSearchPlan({ nativeProviderWebSearchSupport: "unknown" })).toEqual({
       kind: "managed",
       suppressManagedWebSearch: false,
       threadConfig: {
@@ -127,7 +138,7 @@ describe("resolveCodexWebSearchPlan", () => {
             },
           },
         },
-        nativeProviderWebSearchSupported: false,
+        nativeProviderWebSearchSupport: "unsupported",
       }),
     ).toEqual({
       kind: "disabled",

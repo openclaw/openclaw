@@ -90,7 +90,11 @@ import {
   resolveReasoningEffort,
 } from "./thread-lifecycle.js";
 import { filterToolsForVisionInputs } from "./vision-tools.js";
-import { resolveCodexWebSearchPlan, type CodexWebSearchPlan } from "./web-search.js";
+import {
+  resolveCodexWebSearchPlan,
+  type CodexNativeWebSearchSupport,
+  type CodexWebSearchPlan,
+} from "./web-search.js";
 
 const CODEX_SIDE_DYNAMIC_TOOL_TIMEOUT_MS = 90_000;
 const CODEX_SIDE_DYNAMIC_TOOL_MAX_TIMEOUT_MS = 600_000;
@@ -258,7 +262,7 @@ export async function runCodexAppServerSideQuestion(
     const sandbox = useModelScopedPolicy
       ? modelScopedAppServer.sandbox
       : (binding.sandbox ?? modelScopedAppServer.sandbox);
-    const nativeProviderWebSearchSupported =
+    const nativeProviderWebSearchSupport =
       resolveCodexWebSearchPlan({
         config: params.cfg,
         nativeToolSurfaceEnabled,
@@ -269,7 +273,7 @@ export async function runCodexAppServerSideQuestion(
             modelProviderOverride: modelSelection.modelProvider,
             signal: runAbortController.signal,
           })
-        : false;
+        : "unsupported";
     const { toolBridge, webSearchPlan } = await createCodexSideToolBridge({
       params,
       attemptParams: sideRunParams,
@@ -277,7 +281,7 @@ export async function runCodexAppServerSideQuestion(
       pluginConfig,
       sessionAgentId,
       nativeToolSurfaceEnabled,
-      nativeProviderWebSearchSupported,
+      nativeProviderWebSearchSupport,
       signal: runAbortController.signal,
     });
     removeRequestHandler = client.addRequestHandler(async (request) => {
@@ -630,7 +634,7 @@ async function createCodexSideToolBridge(input: {
   pluginConfig: ReturnType<typeof readCodexPluginConfig>;
   sessionAgentId: string;
   nativeToolSurfaceEnabled: boolean;
-  nativeProviderWebSearchSupported: boolean;
+  nativeProviderWebSearchSupport: CodexNativeWebSearchSupport;
   signal: AbortSignal;
 }): Promise<{ toolBridge: CodexDynamicToolBridge; webSearchPlan: CodexWebSearchPlan }> {
   const runtimeModel =
@@ -732,7 +736,7 @@ async function createCodexSideToolBridge(input: {
   const webSearchPlan = resolveCodexWebSearchPlan({
     config: input.params.cfg,
     nativeToolSurfaceEnabled: input.nativeToolSurfaceEnabled,
-    nativeProviderWebSearchSupported: input.nativeProviderWebSearchSupported,
+    nativeProviderWebSearchSupport: input.nativeProviderWebSearchSupport,
     webSearchAllowed: tools.some((tool) => tool.name === "web_search"),
   });
   const exposedTools = webSearchPlan.suppressManagedWebSearch

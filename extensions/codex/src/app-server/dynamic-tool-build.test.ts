@@ -358,7 +358,7 @@ describe("Codex app-server dynamic tool build", () => {
     ]);
 
     const tools = await buildDynamicToolsForTest(params, workspaceDir, {
-      nativeProviderWebSearchSupported: false,
+      nativeProviderWebSearchSupport: "unsupported",
     });
 
     expect(tools.map((tool) => tool.name)).toEqual(["web_search", "message"]);
