@@ -46,7 +46,7 @@ const discordBindings: ChannelConfiguredBindingProvider = {
       parentConversationId !== conversationId &&
       compiledBinding.conversationId === parentConversationId
     ) {
-      return { conversationId: parentConversationId, matchPriority: 1 };
+      return { conversationId, parentConversationId, matchPriority: 1 };
     }
     return null;
   },
@@ -396,7 +396,7 @@ describe("resolveConfiguredAcpBindingRecord", () => {
     expect(resolved?.record.metadata?.source).toBe("config");
   });
 
-  it("falls back to parent discord channel when conversation is a thread id", () => {
+  it("inherits parent discord channel bindings using the thread conversation id", () => {
     const cfg = createCfgWithBindings([
       createDiscordBinding({
         agentId: "codex",
@@ -408,8 +408,10 @@ describe("resolveConfiguredAcpBindingRecord", () => {
       parentConversationId: "channel-parent-1",
     });
 
-    expect(resolved?.spec.conversationId).toBe("channel-parent-1");
-    expect(resolved?.record.conversation.conversationId).toBe("channel-parent-1");
+    expect(resolved?.spec.conversationId).toBe("thread-123");
+    expect(resolved?.spec.parentConversationId).toBe("channel-parent-1");
+    expect(resolved?.record.conversation.conversationId).toBe("thread-123");
+    expect(resolved?.record.conversation.parentConversationId).toBe("channel-parent-1");
   });
 
   it("prefers direct discord thread binding over parent channel fallback", () => {

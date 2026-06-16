@@ -66,7 +66,8 @@ describe("Discord conversation identity", () => {
           parentConversationId: resolved.parentConversationId,
         }),
     ).toEqual({
-      conversationId: "channel:1510164477642014999",
+      conversationId: "1510164477642014740",
+      parentConversationId: "channel:1510164477642014999",
       matchPriority: 1,
     });
   });
