@@ -171,6 +171,7 @@ export type ChatProps = {
     next: Partial<NonNullable<ChatProps["realtimeTalkOptions"]>>,
   ) => void;
   onDismissError?: () => void;
+  onDismissRealtimeTalkError?: () => void;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
   onQueueRetry?: (id: string) => void;
@@ -2444,16 +2445,34 @@ export function renderChat(props: ChatProps) {
       ${renderRealtimeTalkOptions(props)}
       ${props.realtimeTalkActive || props.realtimeTalkDetail || props.realtimeTalkTranscript
         ? html`
-            <div class="agent-chat__stt-interim agent-chat__talk-status">
-              ${props.realtimeTalkDetail ??
-              ((props.realtimeTalkConversation?.length ?? 0) === 0
-                ? props.realtimeTalkTranscript
-                : null) ??
-              (props.realtimeTalkStatus === "thinking"
-                ? "Asking OpenClaw..."
-                : props.realtimeTalkStatus === "connecting"
-                  ? "Connecting Talk..."
-                  : "Talk live")}
+            <div
+              class="agent-chat__stt-interim agent-chat__talk-status"
+              role=${props.realtimeTalkStatus === "error" ? "alert" : nothing}
+            >
+              <span class="agent-chat__talk-status-text">
+                ${props.realtimeTalkDetail ??
+                ((props.realtimeTalkConversation?.length ?? 0) === 0
+                  ? props.realtimeTalkTranscript
+                  : null) ??
+                (props.realtimeTalkStatus === "thinking"
+                  ? "Asking OpenClaw..."
+                  : props.realtimeTalkStatus === "connecting"
+                    ? "Connecting Talk..."
+                    : "Talk live")}
+              </span>
+              ${props.realtimeTalkStatus === "error" && props.onDismissRealtimeTalkError
+                ? html`
+                    <button
+                      class="callout__dismiss"
+                      type="button"
+                      @click=${props.onDismissRealtimeTalkError}
+                      aria-label="Dismiss Talk error"
+                      title="Dismiss Talk error"
+                    >
+                      ${icons.x}
+                    </button>
+                  `
+                : nothing}
             </div>
           `
         : nothing}
