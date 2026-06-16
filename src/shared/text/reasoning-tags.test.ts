@@ -322,6 +322,39 @@ describe("stripReasoningTagsFromText", () => {
     });
   });
 
+  describe("mm: namespace (MiniMax reasoning tags)", () => {
+    it.each([
+      {
+        name: "strips mm:think tags",
+        input: "<mm:think>reasoning</mm:think>Answer",
+        expected: "Answer",
+      },
+      {
+        name: "strips mm:thinking tags",
+        input: "<mm:thinking>reasoning</mm:thinking>Answer",
+        expected: "Answer",
+      },
+      {
+        name: "strips mm:thought tags",
+        input: "<mm:thought>reasoning</mm:thought>Answer",
+        expected: "Answer",
+      },
+      {
+        name: "strips truncated unclosed mm:think tag",
+        input: "<mm:think>reasoning without close tag",
+        expected: "reasoning without close tag",
+        opts: { mode: "strict" as const },
+      },
+      {
+        name: "handles orphan mm:think close tag after text",
+        input: "Internal reasoning </mm:think>Answer",
+        expected: "Answer",
+      },
+    ] as const)("$name", (testCase) => {
+      expectStrippedCase(testCase);
+    });
+  });
+
   it.each([
     { input: "A <final>1</final> B", expected: "A 1 B" },
     { input: "C <final>2</final> D", expected: "C 2 D" },

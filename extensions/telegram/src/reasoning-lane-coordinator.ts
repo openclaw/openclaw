@@ -16,8 +16,14 @@ const REASONING_TAG_PREFIXES = [
   "</thinking",
   "</thought",
   "</antthinking",
+  "<mm:think",
+  "<mm:thinking",
+  "<mm:thought",
+  "</mm:think",
+  "</mm:thinking",
+  "</mm:thought",
 ];
-const THINKING_TAG_RE = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\b[^<>]*>/gi;
+const THINKING_TAG_RE = /<\s*(\/?)\s*(?:(?:(?:antml|mm):)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>/gi;
 
 function extractThinkingFromTaggedStreamOutsideCode(text: string): string {
   if (!text) {
