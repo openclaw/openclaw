@@ -396,7 +396,7 @@ function resolveCheckpointForkSource(
   if (preCompactionFile) {
     return {
       sourceFile: preCompactionFile,
-      sourceLeafId: checkpoint.preCompaction.leafId,
+      sourceLeafId: checkpoint.preCompaction.entryId ?? checkpoint.preCompaction.leafId,
       totalTokens: checkpoint.tokensBefore,
     };
   }
@@ -405,7 +405,7 @@ function resolveCheckpointForkSource(
     return null;
   }
   const postCompactionLeafId =
-    checkpoint.postCompaction.leafId ?? checkpoint.postCompaction.entryId;
+    checkpoint.postCompaction.entryId ?? checkpoint.postCompaction.leafId;
   if (!postCompactionLeafId) {
     return null;
   }

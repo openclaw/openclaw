@@ -42,6 +42,15 @@ struct OpenClawWatchApp: App {
                 },
                 onRefreshExecApprovalReview: {
                     self.refreshExecApprovalReview(force: true)
+                },
+                onRefreshAppSnapshot: {
+                    self.refreshAppSnapshot()
+                },
+                onAppCommand: { command in
+                    self.sendAppCommand(command)
+                },
+                onSendChatMessage: { text in
+                    self.sendChatMessage(text)
                 })
                 .task {
                     if OpenClawWatchApp.isScreenshotMode {
@@ -53,17 +62,57 @@ struct OpenClawWatchApp: App {
                         receiver.activate()
                         self.receiver = receiver
                     }
+                    self.refreshAppSnapshot()
                     self.refreshExecApprovalReview()
                 }
                 .onChange(of: self.scenePhase) { _, newPhase in
                     guard newPhase == .active else { return }
+                    self.refreshAppSnapshot()
                     self.refreshExecApprovalReview()
                 }
         }
     }
 
+    private func refreshAppSnapshot() {
+        guard let receiver else { return }
+        self.inboxStore.markAppSnapshotRequestStarted()
+        Task { @MainActor in
+            let result = await receiver.requestAppSnapshot()
+            self.inboxStore.markAppSnapshotRequestResult(result)
+        }
+    }
+
+    private func sendAppCommand(_ command: WatchAppCommand) {
+        guard let receiver else { return }
+        let message = self.inboxStore.makeAppCommand(command)
+        self.inboxStore.markAppCommandSending(command)
+        Task { @MainActor in
+            let result = await receiver.sendAppCommand(message)
+            self.inboxStore.markAppCommandResult(result, command: command)
+        }
+    }
+
+    private func sendChatMessage(_ text: String) {
+        guard let receiver else { return }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        guard self.inboxStore.hasGatewayTaggedAppSnapshot else {
+            self.inboxStore.markAppCommandBlocked(.sendChat, reason: "refreshing iPhone state")
+            self.refreshAppSnapshot()
+            return
+        }
+        let message = self.inboxStore.makeAppCommand(.sendChat, text: trimmed)
+        self.inboxStore.markAppCommandSending(.sendChat)
+        Task { @MainActor in
+            let result = await receiver.sendAppCommand(message)
+            self.inboxStore.markAppCommandResult(result, command: .sendChat)
+            try? await Task.sleep(nanoseconds: 900_000_000)
+            self.refreshAppSnapshot()
+        }
+    }
+
     private func refreshExecApprovalReview(force: Bool = false) {
-        guard let receiver = self.receiver else { return }
+        guard let receiver else { return }
         guard force || self.inboxStore.shouldAutoRequestExecApprovalSnapshot else { return }
 
         self.execApprovalRefreshTask?.cancel()
@@ -93,28 +142,42 @@ struct OpenClawWatchApp: App {
 @MainActor
 extension WatchInboxStore {
     fileprivate func configureScreenshotFixture() {
+        let sentAtMs = Int(Date().timeIntervalSince1970 * 1000)
+        self.greetingTextOverride = "Good morning"
         self.consume(
             execApprovalSnapshot: WatchExecApprovalSnapshotMessage(
                 approvals: [],
-                sentAtMs: Int(Date().timeIntervalSince1970 * 1000),
+                sentAtMs: sentAtMs,
                 snapshotId: nil),
             transport: "screenshot")
         self.consume(
-            message: WatchNotifyMessage(
-                id: "watch-screenshot-quick-reply",
-                title: "Molty request",
-                body: "Molty Gateway checklist ready.",
-                sentAtMs: Int(Date().timeIntervalSince1970 * 1000),
-                promptId: "watch-screenshot-prompt",
+            appSnapshot: WatchAppSnapshotMessage(
+                gatewayStatusText: "Connected",
+                gatewayConnected: true,
+                agentName: "Molty",
+                agentAvatarURL: nil,
+                agentAvatarText: "M",
                 sessionKey: "watch-screenshot-session",
-                kind: "release-checklist",
-                details: nil,
-                expiresAtMs: nil,
-                risk: "medium",
-                actions: [
-                    WatchPromptAction(id: "approve", label: "Approve", style: nil),
-                    WatchPromptAction(id: "later", label: "Later", style: "cancel"),
-                ]),
-            transport: "screenshot")
+                gatewayStableID: "watch-screenshot-gateway",
+                talkStatusText: "Ready",
+                talkEnabled: true,
+                talkListening: false,
+                talkSpeaking: false,
+                pendingApprovalCount: 0,
+                chatItems: [
+                    WatchChatItem(
+                        id: "watch-screenshot-user-chat",
+                        role: "user",
+                        text: "What's on deck?",
+                        timestampMs: sentAtMs - 90000),
+                    WatchChatItem(
+                        id: "watch-screenshot-molty-chat",
+                        role: "assistant",
+                        text: "Gateway is online and ready.",
+                        timestampMs: sentAtMs - 30000),
+                ],
+                chatStatusText: "Live gateway conversation",
+                sentAtMs: sentAtMs,
+                snapshotId: "watch-screenshot-now-face"))
     }
 }

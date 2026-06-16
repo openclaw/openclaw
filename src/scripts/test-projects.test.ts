@@ -887,7 +887,10 @@ describe("test-projects args", () => {
       {
         config: "test/vitest/vitest.agents.config.ts",
         forwardedArgs: [],
-        includePatterns: ["src/agents/models-config.file-mode.test.ts"],
+        includePatterns: [
+          "src/agents/models-config.file-mode.test.ts",
+          "src/agents/sandbox/ssh.test.ts",
+        ],
         watchMode: false,
       },
       {
