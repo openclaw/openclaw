@@ -104,4 +104,67 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
       warnings: [],
     });
   });
+
+  it("collects google-meet realtime provider SecretRef assignments from bundled manifest contracts", () => {
+    expect(
+      findBundledPluginMetadataById("google-meet", {
+        includeChannelConfigs: false,
+        includeSyntheticChannelConfigs: false,
+      })?.manifest.configContracts?.secretInputs?.paths,
+    ).toEqual([{ path: "realtime.providers.*.apiKey", expected: "string" }]);
+    const config = {
+      plugins: {
+        entries: {
+          "google-meet": {
+            enabled: true,
+            config: {
+              realtime: {
+                providers: {
+                  google: {
+                    apiKey: envRef("GEMINI_API_KEY"),
+                  },
+                  openai: {
+                    apiKey: envRef("OPENAI_API_KEY"),
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    expect(
+      resolvePluginConfigContractsById({
+        config,
+        workspaceDir: resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config)),
+        env: {},
+        fallbackToBundledMetadata: true,
+        fallbackToBundledMetadataForResolvedBundled: true,
+        pluginIds: ["google-meet"],
+        fallbackBundledPluginIds: ["google-meet"],
+      }).get("google-meet")?.configContracts.secretInputs?.paths,
+    ).toEqual([{ path: "realtime.providers.*.apiKey", expected: "string" }]);
+    const context = createResolverContext({
+      sourceConfig: config,
+      env: {},
+    });
+
+    collectPluginConfigAssignments({
+      config,
+      defaults: undefined,
+      context,
+      loadablePluginOrigins: new Map([["google-meet", "bundled"]]),
+    });
+
+    expect({
+      assignments: context.assignments.map((assignment) => assignment.path).toSorted(),
+      warnings: context.warnings,
+    }).toEqual({
+      assignments: [
+        "plugins.entries.google-meet.config.realtime.providers.google.apiKey",
+        "plugins.entries.google-meet.config.realtime.providers.openai.apiKey",
+      ],
+      warnings: [],
+    });
+  });
 });
