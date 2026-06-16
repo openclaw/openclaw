@@ -913,6 +913,14 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           deviceRaw,
         });
         const device = controlUiAuthPolicy.device;
+        const hasRawHandshakeCredentials =
+          hasSharedAuth ||
+          Boolean(connectParams.auth?.bootstrapToken) ||
+          Boolean(connectParams.auth?.deviceToken) ||
+          Boolean(device);
+        if (hasRawHandshakeCredentials) {
+          advanceHandshakePhase("auth_credentials_received");
+        }
         const connectAuthState = await resolveConnectAuthState({
           resolvedAuth,
           connectAuth: connectParams.auth,
@@ -929,9 +937,6 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           deviceTokenCandidate,
           deviceTokenCandidateSource,
         } = connectAuthState;
-        if (hasSharedAuth || bootstrapTokenCandidate || deviceTokenCandidate || device) {
-          advanceHandshakePhase("auth_credentials_received");
-        }
         let { authResult, authOk, authMethod } = connectAuthState;
         const rejectUnauthorized = (failedAuth: GatewayAuthResult) => {
           const { authProvided, canRetryWithDeviceToken, recommendedNextStep } =
@@ -2081,7 +2086,6 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             );
         }
 
-        advanceHandshakePhase("subscriptions_registered");
         const snapshot = buildGatewaySnapshot({
           includeSensitive: scopes.includes(ADMIN_SCOPE),
         });
@@ -2120,6 +2124,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             tickIntervalMs: TICK_INTERVAL_MS,
           },
         };
+        advanceHandshakePhase("hello_payload_prepared");
 
         let revokedBootstrapTokenRecord:
           | Awaited<ReturnType<typeof revokeDeviceBootstrapToken>>["record"]

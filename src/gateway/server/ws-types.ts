@@ -33,7 +33,7 @@ export const WS_HANDSHAKE_PHASES = [
   "auth_credentials_received",
   "auth_validated",
   "session_attached",
-  "subscriptions_registered",
+  "hello_payload_prepared",
   "ready",
 ] as const;
 
