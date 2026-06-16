@@ -124,7 +124,7 @@ function normalizeOutboundChannelForResolution(params: {
     return { channel: deliverable, didBootstrap: false };
   }
 
-  const activeRuntimePlugin = resolveRuntimeOutboundPluginFromRuntimeRegistries(normalized);
+  const activeRuntimePlugin = resolveActivatedOutboundPluginFromRuntimeRegistries(normalized);
   if (activeRuntimePlugin) {
     return {
       channel: activeRuntimePlugin.id as DeliverableMessageChannel,
@@ -141,7 +141,7 @@ function normalizeOutboundChannelForResolution(params: {
     channel: normalized as DeliverableMessageChannel,
     cfg: params.cfg,
   });
-  const bootstrappedRuntimePlugin = resolveRuntimeOutboundPluginFromRuntimeRegistries(normalized);
+  const bootstrappedRuntimePlugin = resolveActivatedOutboundPluginFromRuntimeRegistries(normalized);
   return {
     // The pinned channel registry may intentionally lag the active runtime
     // registry, so strict registry validation here would hide a usable plugin.
@@ -189,6 +189,10 @@ function resolveSendCapableMessageAdapter(
 }
 
 function channelPluginHasRuntimeOutboundSurface(plugin: ChannelPlugin | undefined): boolean {
+  return Boolean(plugin?.outbound ?? resolveSendCapableMessageAdapter(plugin));
+}
+
+function channelPluginHasActivatedOutboundSurface(plugin: ChannelPlugin | undefined): boolean {
   return Boolean(
     plugin?.outbound?.sendText ||
     plugin?.outbound?.deliveryMode === "gateway" ||
@@ -200,20 +204,28 @@ function resolveRuntimeOutboundPlugin(plugin: ChannelPlugin): ChannelPlugin | un
   return channelPluginHasRuntimeOutboundSurface(plugin) ? plugin : undefined;
 }
 
+function resolveActivatedOutboundPlugin(plugin: ChannelPlugin): ChannelPlugin | undefined {
+  return channelPluginHasActivatedOutboundSurface(plugin) ? plugin : undefined;
+}
+
 function resolveRuntimeOutboundPluginCandidate(params: {
   loaded?: ChannelPlugin;
   runtime?: ChannelPlugin;
   setupFallback?: ChannelPlugin;
   bundled?: ChannelPlugin;
   allowSetupShell?: boolean;
+  requireActivatedRuntime?: boolean;
 }): ChannelPlugin | undefined {
-  if (channelPluginHasRuntimeOutboundSurface(params.loaded)) {
+  const hasRuntimeSurface = params.requireActivatedRuntime
+    ? channelPluginHasActivatedOutboundSurface
+    : channelPluginHasRuntimeOutboundSurface;
+  if (hasRuntimeSurface(params.loaded)) {
     return params.loaded;
   }
-  if (params.runtime) {
+  if (hasRuntimeSurface(params.runtime)) {
     return params.runtime;
   }
-  if (channelPluginHasRuntimeOutboundSurface(params.bundled)) {
+  if (hasRuntimeSurface(params.bundled)) {
     return params.bundled;
   }
   if (params.allowSetupShell) {
@@ -252,6 +264,12 @@ function resolveRuntimeOutboundPluginFromRuntimeRegistries(
   channel: string,
 ): ChannelPlugin | undefined {
   return resolveValueFromRuntimeRegistries(channel, resolveRuntimeOutboundPlugin);
+}
+
+function resolveActivatedOutboundPluginFromRuntimeRegistries(
+  channel: string,
+): ChannelPlugin | undefined {
+  return resolveValueFromRuntimeRegistries(channel, resolveActivatedOutboundPlugin);
 }
 
 function toOutboundChannelRuntime(plugin: ChannelPlugin): OutboundChannelRuntime {
@@ -320,7 +338,9 @@ export function resolveOutboundChannelPlugin(params: {
   const resolveLoaded = () => getLoadedChannelPlugin(normalized);
   const resolve = () => getChannelPlugin(normalized);
   const current = resolveLoaded();
-  const runtimeCurrent = resolveRuntimeOutboundPluginFromRuntimeRegistries(normalized);
+  const runtimeCurrent = didBootstrap
+    ? resolveActivatedOutboundPluginFromRuntimeRegistries(normalized)
+    : resolveRuntimeOutboundPluginFromRuntimeRegistries(normalized);
   const setupFallback = resolveDirectFromRuntimeRegistries(normalized);
   const bundledCurrent = resolve();
   const candidate = resolveRuntimeOutboundPluginCandidate({
@@ -329,6 +349,7 @@ export function resolveOutboundChannelPlugin(params: {
     setupFallback,
     bundled: bundledCurrent,
     allowSetupShell: params.allowBootstrap !== true,
+    requireActivatedRuntime: didBootstrap,
   });
   if (candidate) {
     return candidate;
@@ -341,9 +362,10 @@ export function resolveOutboundChannelPlugin(params: {
   maybeBootstrapChannelPlugin({ channel: normalized, cfg: params.cfg });
   return resolveRuntimeOutboundPluginCandidate({
     loaded: resolveLoaded(),
-    runtime: resolveRuntimeOutboundPluginFromRuntimeRegistries(normalized),
+    runtime: resolveActivatedOutboundPluginFromRuntimeRegistries(normalized),
     setupFallback: resolveDirectFromRuntimeRegistries(normalized),
     bundled: resolve(),
+    requireActivatedRuntime: true,
   });
 }
 

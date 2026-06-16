@@ -334,8 +334,12 @@ describe("outbound channel resolution", () => {
   });
 
   it("bootstraps instead of returning direct outbound metadata from a setup shell", async () => {
-    const setupPlugin = { id: "alpha", outbound: { deliveryMode: "direct" } };
-    const runtimePlugin = { id: "alpha", outbound: { deliveryMode: "direct", sendText: vi.fn() } };
+    const setupPlugin = { id: "external-channel", outbound: { deliveryMode: "direct" } };
+    const runtimePlugin = {
+      id: "external-channel",
+      outbound: { deliveryMode: "direct", sendText: vi.fn() },
+    };
+    isDeliverableMessageChannelMock.mockReturnValue(false);
     getLoadedChannelPluginMock.mockReturnValue(setupPlugin);
     getChannelPluginMock.mockReturnValue(undefined);
     getActivePluginChannelRegistryMock.mockReturnValue({
@@ -350,7 +354,7 @@ describe("outbound channel resolution", () => {
 
     expect(
       channelResolution.resolveOutboundChannelPlugin({
-        channel: "alpha",
+        channel: "external-channel",
         cfg: { channels: {} } as never,
         allowBootstrap: true,
       }),
