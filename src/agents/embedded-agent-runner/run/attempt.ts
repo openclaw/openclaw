@@ -355,6 +355,7 @@ import {
   remapInjectedContextFilesToWorkspace,
 } from "./attempt.bootstrap-context.js";
 export { buildContextEnginePromptCacheInfo } from "./attempt.context-engine-helpers.js";
+import { isSystemEventInbound } from "../../../channels/inbound-event/kind.js";
 import { resolveUserTimezone } from "../../date-time.js";
 import {
   rotateTranscriptAfterCompaction,
@@ -5451,6 +5452,7 @@ export async function runEmbeddedAttempt(
           promptErrorSource,
           timedOutDuringCompaction,
         },
+        isSystemEventTurn: isSystemEventInbound(params.currentInboundEventKind),
       });
       const terminalAssistantTexts = resolveTerminalAssistantTexts({
         assistantTexts,

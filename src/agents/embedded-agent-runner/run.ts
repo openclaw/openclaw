@@ -8,6 +8,7 @@ import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import { isSystemEventInbound } from "../../channels/inbound-event/kind.js";
 import { getRuntimeConfigSnapshot } from "../../config/config.js";
 import { resolveStorePath } from "../../config/sessions.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -3416,6 +3417,7 @@ async function runEmbeddedAgentInternal(
             aborted,
             timedOut,
             attempt,
+            isSystemEventTurn: isSystemEventInbound(params.currentInboundEventKind),
           });
           const nextReasoningOnlyRetryInstruction = emptyAssistantReplyIsSilent
             ? null

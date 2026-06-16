@@ -41,10 +41,13 @@ export function resolveSilentReplyPolicyFromPolicies(params: {
   conversationType: SilentReplyConversationType;
   defaultPolicy?: SilentReplyPolicyShape;
   surfacePolicy?: SilentReplyPolicyShape;
+  allowDirectSilentForSystemEvent?: boolean;
 }): SilentReplyPolicy {
   if (params.conversationType === "direct") {
-    // Direct chats must never be silently swallowed, regardless of config overlays.
-    return "disallow";
+    // Direct chats must never be silently swallowed, regardless of config overlays —
+    // except for system/background-event turns (e.g. reactions, room events) that
+    // legitimately end with NO_REPLY and should not surface a "no response" warning.
+    return params.allowDirectSilentForSystemEvent ? "allow" : "disallow";
   }
   return (
     params.surfacePolicy?.[params.conversationType] ??

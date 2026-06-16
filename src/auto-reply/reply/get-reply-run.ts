@@ -20,6 +20,7 @@ import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/open
 import { resolveIngressWorkspaceOverrideForSpawnedRun } from "../../agents/spawned-context.js";
 import type { SilentReplyPromptMode } from "../../agents/system-prompt.types.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
+import { isSystemEventInbound } from "../../channels/inbound-event/kind.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import {
   resolveSessionFilePath,
@@ -538,6 +539,9 @@ export async function runPreparedReply(
     sessionKey: runtimePolicySessionKey,
     surface: promptSessionCtx.Surface ?? promptSessionCtx.Provider,
     conversationType: silentReplyConversationType,
+    // Direct turns driven by a system/background event (e.g. reactions, room events)
+    // may legitimately end with NO_REPLY; allow silence instead of warning the user.
+    allowDirectSilentForSystemEvent: isSystemEventInbound(inboundEventKind),
   });
   const useFastReplyRuntime = shouldUseReplyFastTestRuntime({
     cfg,

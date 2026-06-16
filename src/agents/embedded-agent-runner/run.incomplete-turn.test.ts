@@ -3102,6 +3102,67 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     ).toBe(false);
   });
 
+  it("treats system-event empty assistant turns with no tools as silent", () => {
+    const attempt = makeAttemptResult({
+      assistantTexts: [],
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        provider: "openai",
+        model: "gpt-5.5",
+        content: [{ type: "text", text: "" }],
+      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+    });
+
+    expect(
+      shouldTreatEmptyAssistantReplyAsSilent({
+        allowEmptyAssistantReplyAsSilent: true,
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt,
+        isSystemEventTurn: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("treats system-event empty turns after mutating tools as silent (post-tool + side-effect guards relaxed)", () => {
+    const attempt = makeAttemptResult({
+      assistantTexts: [],
+      toolMetas: [{ toolName: "exec" }],
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        provider: "openai",
+        model: "gpt-5.5",
+        content: [{ type: "text", text: "" }],
+      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+    });
+
+    // Both the post-tool guard and the hadPotentialSideEffects guard would normally
+    // block silence; a system event relaxes both so the turn stays silent.
+    expect(
+      shouldTreatEmptyAssistantReplyAsSilent({
+        allowEmptyAssistantReplyAsSilent: true,
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt,
+        isSystemEventTurn: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldTreatEmptyAssistantReplyAsSilent({
+        allowEmptyAssistantReplyAsSilent: true,
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt,
+        isSystemEventTurn: false,
+      }),
+    ).toBe(false);
+  });
+
   it("returns NO_REPLY without retrying clean empty assistant turns when silence is allowed", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedRunEmbeddedAttempt.mockResolvedValue(

@@ -632,6 +632,9 @@ function shouldSkipNonVisibleTurnRetry(params: {
   aborted: boolean;
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
+  // System/background-event turns (room_event) may legitimately end silent even after
+  // mutating tools ran; relax the side-effects gate so they are not surfaced as warnings.
+  isSystemEventTurn?: boolean;
 }): boolean {
   return Boolean(
     params.aborted ||
@@ -641,7 +644,8 @@ function shouldSkipNonVisibleTurnRetry(params: {
     params.attempt.didSendDeterministicApprovalPrompt ||
     params.attempt.lastToolError ||
     hasAcceptedSessionSpawn(params.attempt.acceptedSessionSpawns) ||
-    resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects,
+    (!params.isSystemEventTurn &&
+      resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects),
   );
 }
 
@@ -652,8 +656,20 @@ export function shouldTreatEmptyAssistantReplyAsSilent(params: {
   aborted: boolean;
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
+  // System/background-event turns (room_event) may legitimately end silent even after
+  // mutating tools ran; relax both the side-effects gate and the post-tool guard below
+  // so they are not surfaced as warnings instead of forcing a "no response".
+  isSystemEventTurn?: boolean;
 }): boolean {
-  if (!params.allowEmptyAssistantReplyAsSilent || shouldSkipNonVisibleTurnRetry(params)) {
+  if (
+    !params.allowEmptyAssistantReplyAsSilent ||
+    shouldSkipNonVisibleTurnRetry({
+      aborted: params.aborted,
+      timedOut: params.timedOut,
+      attempt: params.attempt,
+      isSystemEventTurn: params.isSystemEventTurn,
+    })
+  ) {
     return false;
   }
   if (hasCommittedMessagingToolDeliveryEvidence(params.attempt)) {
@@ -668,8 +684,10 @@ export function shouldTreatEmptyAssistantReplyAsSilent(params: {
     return true;
   }
   // Post-tool empty stops are ambiguous provider failures, not intentional silence.
-  // Let the retry/incomplete-turn paths decide whether replay is safe.
+  // Let the retry/incomplete-turn paths decide whether replay is safe — unless the
+  // turn was a system event, where post-tool silence is an expected outcome.
   if (
+    !params.isSystemEventTurn &&
     params.attempt.toolMetas.length > 0 &&
     isEmptyResponseAssistantTurn({
       payloadCount: params.payloadCount,

@@ -8085,6 +8085,54 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     });
   });
 
+  it("allows direct silence for system/background-event turns (no no-visible fallback)", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => undefined);
+    const ctx = buildTestCtx({
+      ChatType: "direct",
+      InboundEventKind: "room_event",
+      SessionKey: "test:session",
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    // emptyFinalAllowedAsSilent === true → noVisibleReplyFallbackEligible omitted.
+    // (room_event also routes through message-tool-only delivery.)
+    expect(result.queuedFinal).toBe(false);
+    expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
+  });
+
+  it("marks direct user-request silence eligible for no-visible fallback", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => undefined);
+    const ctx = buildTestCtx({
+      ChatType: "direct",
+      InboundEventKind: "user_request",
+      SessionKey: "test:session",
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    // Direct user-request turns must never be silently swallowed.
+    expect(result).toEqual({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+      noVisibleReplyFallbackEligible: true,
+    });
+  });
+
   it("suppresses tool result delivery when sendPolicy is deny", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {

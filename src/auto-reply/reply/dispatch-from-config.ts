@@ -40,6 +40,7 @@ import {
   touchConversationBindingRecord,
 } from "../../bindings/records.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
+import { isSystemEventInbound } from "../../channels/inbound-event/kind.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { shouldSuppressLocalExecApprovalPrompt } from "../../channels/plugins/exec-approval-local.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
@@ -1814,6 +1815,9 @@ export async function dispatchReplyFromConfig(
       surfacePolicy: silentReplySurface
         ? cfg.surfaces?.[silentReplySurface]?.silentReply
         : undefined,
+      // Direct turns driven by a system/background event (e.g. reactions, room events)
+      // may legitimately end with NO_REPLY; allow silence instead of warning the user.
+      allowDirectSilentForSystemEvent: isSystemEventInbound(ctx.InboundEventKind),
     }) === "allow";
   const configuredVisibleReplies =
     chatType === "group" || chatType === "channel"

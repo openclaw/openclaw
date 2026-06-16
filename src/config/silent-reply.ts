@@ -14,12 +14,14 @@ type ResolveSilentReplyParams = {
   sessionKey?: string;
   surface?: string;
   conversationType?: SilentReplyConversationType;
+  allowDirectSilentForSystemEvent?: boolean;
 };
 
 function resolveSilentReplyConversationContext(params: ResolveSilentReplyParams): {
   conversationType: SilentReplyConversationType;
   defaultPolicy?: SilentReplyPolicyShape;
   surfacePolicy?: SilentReplyPolicyShape;
+  allowDirectSilentForSystemEvent?: boolean;
 } {
   const conversationType = classifySilentReplyConversationType({
     sessionKey: params.sessionKey,
@@ -33,6 +35,7 @@ function resolveSilentReplyConversationContext(params: ResolveSilentReplyParams)
     conversationType,
     defaultPolicy: params.cfg?.agents?.defaults?.silentReply,
     surfacePolicy: surface?.silentReply,
+    allowDirectSilentForSystemEvent: params.allowDirectSilentForSystemEvent,
   };
 }
 

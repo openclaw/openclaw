@@ -66,4 +66,21 @@ describe("resolveSilentReplyPolicyFromPolicies", () => {
       }),
     ).toBe("disallow");
   });
+
+  it("allows direct silent replies for system/background events when opted in", () => {
+    expect(
+      resolveSilentReplyPolicyFromPolicies({
+        conversationType: "direct",
+        allowDirectSilentForSystemEvent: true,
+      }),
+    ).toBe("allow");
+  });
+
+  it("keeps direct silent replies disallowed without the system-event opt-in", () => {
+    expect(
+      resolveSilentReplyPolicyFromPolicies({
+        conversationType: "direct",
+      }),
+    ).toBe("disallow");
+  });
 });
