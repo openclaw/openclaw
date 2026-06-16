@@ -198,6 +198,9 @@ describe("prepareAcpxCodexAuthConfig", () => {
     const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
     expect(wrapper).toContain('"@agentclientprotocol/claude-agent-acp@0.39.0"');
     expect(wrapper).toContain('"--", "claude-agent-acp"');
+    expect(wrapper).toContain('process.platform === "win32"');
+    expect(wrapper).toContain("direct npx.cmd/npx.ps1 wrapper spawn is disabled");
+    expect(wrapper).not.toContain('"npx.cmd"');
     expect(wrapper).not.toContain("@agentclientprotocol/claude-agent-acp@^0.31.0");
     expect(wrapper).not.toContain("@agentclientprotocol/claude-agent-acp@0.31.0");
   });

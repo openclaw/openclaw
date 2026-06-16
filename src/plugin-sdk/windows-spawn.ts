@@ -338,6 +338,14 @@ export function resolveWindowsSpawnProgramCandidate(
     };
   }
 
+  if (ext === ".ps1") {
+    return {
+      command: resolvedCommand,
+      leadingArgv: [],
+      resolution: "unresolved-wrapper",
+    };
+  }
+
   return {
     command: resolvedCommand,
     leadingArgv: [],

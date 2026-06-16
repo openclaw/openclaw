@@ -274,6 +274,57 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(testing.normalizeClaudeAcpModelOverride("custom-model")).toBe("custom-model");
   });
 
+  it("logs and wraps ACP adapter spawn EINVAL failures with Windows guidance", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const logger = { error: vi.fn() };
+    const { runtime, delegate } = makeRuntime(baseStore, {
+      openclawLogger: logger,
+      agentRegistry: {
+        resolve: (agentName: string) =>
+          agentName === "claude"
+            ? "npx -y @agentclientprotocol/claude-agent-acp@0.39.0 --token sk-testsecret1234567890"
+            : agentName,
+        list: () => ["claude", "openclaw"],
+      },
+    });
+    const cause = Object.assign(new Error("spawn EINVAL"), { code: "EINVAL" });
+    vi.spyOn(delegate, "ensureSession").mockRejectedValue(
+      new Error("Failed to spawn agent command: npx -y @agentclientprotocol/claude-agent-acp", {
+        cause,
+      }),
+    );
+
+    const outcome = await runtime
+      .ensureSession({
+        sessionKey: "agent:claude:acp:test",
+        agent: "claude",
+        mode: "persistent",
+      })
+      .then(
+        () => ({ status: "resolved" as const }),
+        (error: unknown) => ({ status: "rejected" as const, error }),
+      );
+
+    expect(outcome.status).toBe("rejected");
+    if (outcome.status !== "rejected") {
+      return;
+    }
+    expect(outcome.error).toBeInstanceOf(AcpRuntimeError);
+    expect(outcome.error).toMatchObject({
+      code: "ACP_SESSION_INIT_FAILED",
+      message: expect.stringContaining("ACP adapter spawn failed"),
+    });
+    expect((outcome.error as Error).message).toContain("direct .cmd/.bat/.ps1 wrappers");
+    expect(logger.error).toHaveBeenCalledOnce();
+    const logLine = String(logger.error.mock.calls[0]?.[0] ?? "");
+    expect(logLine).toContain("embedded acpx runtime agent spawn failed");
+    expect(logLine).toContain("@agentclientprotocol/claude-agent-acp");
+    expect(logLine).not.toContain("sk-testsecret1234567890");
+  });
+
   it("leaves Codex ACP startup defaults alone when no model or thinking is provided", async () => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => undefined),

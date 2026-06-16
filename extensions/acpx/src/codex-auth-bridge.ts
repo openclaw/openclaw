@@ -415,19 +415,37 @@ if (installedBinPath) {
 } else if (npmCliPath) {
   defaultCommand = process.execPath;
   defaultArgs = [npmCliPath, "exec", "--yes", "--package", "${params.packageSpec}", "--", "${params.binName}"];
+} else if (process.platform === "win32") {
+  defaultCommand = undefined;
+  defaultArgs = [];
 } else {
-  defaultCommand = process.platform === "win32" ? "npx.cmd" : "npx";
+  defaultCommand = "npx";
   defaultArgs = ["--yes", "--package", "${params.packageSpec}", "--", "${params.binName}"];
 }
-const command =
-  configuredArgs[0] === "${RUN_CONFIGURED_COMMAND_SENTINEL}" ? configuredArgs[1] : defaultCommand;
+const usesConfiguredCommand = configuredArgs[0] === "${RUN_CONFIGURED_COMMAND_SENTINEL}";
+const command = usesConfiguredCommand ? configuredArgs[1] : defaultCommand;
 const args =
-  configuredArgs[0] === "${RUN_CONFIGURED_COMMAND_SENTINEL}"
+  usesConfiguredCommand
     ? configuredArgs.slice(2)
     : [...defaultArgs, ...configuredArgs];
 
 if (!command) {
-  console.error("[openclaw] missing configured ${params.displayName} ACP command");
+  if (usesConfiguredCommand) {
+    console.error("[openclaw] missing configured ${params.displayName} ACP command");
+  } else if (process.platform === "win32") {
+    console.error(
+      "[openclaw] cannot launch ${params.displayName} ACP adapter on Windows: npm CLI was not found and direct npx.cmd/npx.ps1 wrapper spawn is disabled. Reinstall @openclaw/acpx dependencies or install Node.js with npm, then retry.",
+    );
+  } else {
+    console.error("[openclaw] missing ${params.displayName} ACP command");
+  }
+  process.exit(1);
+}
+
+if (process.platform === "win32" && /\\.(?:cmd|bat|ps1)$/i.test(path.basename(command))) {
+  console.error(
+    "[openclaw] cannot launch ${params.displayName} ACP adapter on Windows through a direct .cmd/.bat/.ps1 wrapper. Configure an .exe or Node entrypoint, or use an explicit cmd.exe wrapper if shell execution is intentionally allowed.",
+  );
   process.exit(1);
 }
 

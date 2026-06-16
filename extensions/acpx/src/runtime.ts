@@ -26,7 +26,12 @@ import {
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { AcpRuntimeError, type AcpRuntime, type AcpRuntimeErrorCode } from "../runtime-api.js";
+import {
+  AcpRuntimeError,
+  type AcpRuntime,
+  type AcpRuntimeErrorCode,
+  type PluginLogger,
+} from "../runtime-api.js";
 import { splitCommandParts } from "./command-line.js";
 import {
   createAcpxProcessLeaseId,
@@ -49,6 +54,7 @@ type OpenClawAcpxRuntimeOptions = AcpRuntimeOptions & {
   openclawWrapperRoot?: string;
   openclawGatewayInstanceId?: string;
   openclawProcessLeaseStore?: AcpxProcessLeaseStore;
+  openclawLogger?: Pick<PluginLogger, "error">;
 };
 type AcpxRuntimeTestOptions = Record<string, unknown> & {
   openclawProcessCleanup?: AcpxProcessCleanupDeps;
@@ -107,6 +113,50 @@ function codexWrapperStderrLogFileName(leaseId: string): string {
 
 function compactDiagnosticText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
+}
+
+function collectErrorChainText(error: unknown): string[] {
+  const seen = new Set<unknown>();
+  const values: string[] = [];
+  let current = error;
+  while (current && !seen.has(current)) {
+    seen.add(current);
+    if (typeof current === "object") {
+      const { code, message, cause } = current as {
+        code?: unknown;
+        message?: unknown;
+        cause?: unknown;
+      };
+      for (const value of [code, message]) {
+        if (typeof value === "string" && value.trim()) {
+          values.push(value.trim());
+        }
+      }
+      current = cause;
+      continue;
+    }
+    if (typeof current === "string" && current.trim()) {
+      values.push(current.trim());
+    }
+    break;
+  }
+  return values;
+}
+
+function formatAcpSpawnFailureMessage(error: unknown): string | undefined {
+  const chain = collectErrorChainText(error);
+  const joined = chain.join(" ");
+  if (
+    !/\bspawn\b/i.test(joined) ||
+    !/\b(?:EINVAL|ENOENT|EACCES|EPERM|Failed to spawn agent command)\b/i.test(joined)
+  ) {
+    return undefined;
+  }
+  const detail = compactDiagnosticText(redactSensitiveText(chain.join(": "))).slice(0, 1_000);
+  return (
+    `ACP adapter spawn failed${detail ? `: ${detail}` : ""}. ` +
+    "On Windows, ACPX adapter commands must resolve to a Node or .exe entrypoint; direct .cmd/.bat/.ps1 wrappers are not spawned without an explicit safe shell wrapper."
+  );
 }
 
 function isGenericInternalAcpErrorMessage(message: string): boolean {
@@ -676,6 +726,7 @@ export class AcpxRuntime implements AcpRuntime {
   private readonly wrapperRoot: string | undefined;
   private readonly gatewayInstanceId: string | undefined;
   private readonly processLeaseStore: AcpxProcessLeaseStore | undefined;
+  private readonly logger: Pick<PluginLogger, "error"> | undefined;
   private readonly launchLeaseScope = new AsyncLocalStorage<AcpxLaunchLeaseContext | undefined>();
   private readonly cwd: string;
 
@@ -685,6 +736,7 @@ export class AcpxRuntime implements AcpRuntime {
     this.wrapperRoot = options.openclawWrapperRoot;
     this.gatewayInstanceId = options.openclawGatewayInstanceId;
     this.processLeaseStore = options.openclawProcessLeaseStore;
+    this.logger = options.openclawLogger;
     this.cwd = options.cwd;
     this.sessionStore = createResetAwareSessionStore(options.sessionStore, {
       gatewayInstanceId: this.gatewayInstanceId,
@@ -841,7 +893,13 @@ export class AcpxRuntime implements AcpRuntime {
     return await this.launchLeaseScope.run(launch, params.run);
   }
 
-  private async withCodexWrapperDiagnostics<T>(params: {
+  private logAcpSpawnFailure(params: { command: string | undefined; message: string }): void {
+    this.logger?.error(
+      `embedded acpx runtime agent spawn failed: command=${redactSensitiveText(params.command ?? "(unknown)")}; error=${redactSensitiveText(params.message)}`,
+    );
+  }
+
+  private async withSessionInitDiagnostics<T>(params: {
     command: string | undefined;
     fallbackCode: AcpRuntimeErrorCode;
     run: () => Promise<T>;
@@ -849,6 +907,16 @@ export class AcpxRuntime implements AcpRuntime {
     try {
       return await params.run();
     } catch (error) {
+      const spawnFailureMessage = formatAcpSpawnFailureMessage(error);
+      if (spawnFailureMessage) {
+        this.logAcpSpawnFailure({
+          command: params.command,
+          message: spawnFailureMessage,
+        });
+        throw new AcpRuntimeError(params.fallbackCode, spawnFailureMessage, {
+          cause: error,
+        });
+      }
       if (!isCodexAcpCommand(params.command) || !isGenericInternalAcpError(error)) {
         throw error;
       }
@@ -986,7 +1054,7 @@ export class AcpxRuntime implements AcpRuntime {
         command: stableLaunchCommand,
         enabled: shouldStartWithLease,
         run: () =>
-          this.withCodexWrapperDiagnostics({
+          this.withSessionInitDiagnostics({
             command: stableLaunchCommand,
             fallbackCode: "ACP_SESSION_INIT_FAILED",
             run: () => delegate.ensureSession(withAcpxSessionOptions(ensureInput)),
@@ -1006,7 +1074,7 @@ export class AcpxRuntime implements AcpRuntime {
       enabled: shouldStartWithLease,
       run: () =>
         this.codexAcpModelOverrideScope.run(codexModelOverride, () =>
-          this.withCodexWrapperDiagnostics({
+          this.withSessionInitDiagnostics({
             command: stableLaunchCommand,
             fallbackCode: "ACP_SESSION_INIT_FAILED",
             run: () => delegate.ensureSession(withAcpxSessionOptions(normalizedInput)),

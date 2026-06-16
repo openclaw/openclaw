@@ -57,6 +57,21 @@ describe("resolveWindowsSpawnProgram", () => {
     ).toThrow(/without shell execution/);
   });
 
+  it("fails closed by default for unresolved Windows PowerShell wrappers", async () => {
+    const dir = await createTempDir("openclaw-windows-spawn-test-");
+    const shimPath = path.join(dir, "npx.ps1");
+    await writeFile(shimPath, "Write-Output wrapper\n", "utf8");
+
+    expect(() =>
+      resolveWindowsSpawnProgram({
+        command: shimPath,
+        platform: "win32",
+        env: { PATH: dir, PATHEXT: ".PS1;.CMD;.EXE;.BAT" },
+        execPath: "C:\\node\\node.exe",
+      }),
+    ).toThrow(/without shell execution/);
+  });
+
   it("only returns shell fallback when explicitly opted in", async () => {
     const dir = await createTempDir("openclaw-windows-spawn-test-");
     const shimPath = path.join(dir, "wrapper.cmd");
