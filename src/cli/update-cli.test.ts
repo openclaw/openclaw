@@ -2215,6 +2215,15 @@ describe("update-cli", () => {
     await updateCommand({ yes: true });
 
     expectPackageInstallSpec("openclaw@latest");
+    const preflightParams = vi.mocked(fetchNpmPackageTargetStatus).mock.calls[0]?.[0];
+    expect(preflightParams).toEqual(
+      expect.objectContaining({
+        target: "latest",
+        spec: "openclaw@latest",
+        cwd: process.cwd(),
+      }),
+    );
+    expect(packageInstallCommandCall()?.[1].env).toBe(preflightParams?.env);
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
     expect(
       vi
