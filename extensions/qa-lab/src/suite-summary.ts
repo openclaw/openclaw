@@ -58,8 +58,6 @@ export type QaSuiteSummaryJson = {
     concurrency: number;
     channelDriver: QaCrablineChannelDriverSelection["channelDriver"] | null;
     channel: QaCrablineChannelDriverSelection["channel"] | null;
-    channelLive: boolean | null;
-    channelDriverId: QaCrablineChannelDriverSelection["channelDriverId"] | null;
     channelCapabilityMatrixPath: string | null;
     channelDriverSmokePath: string | null;
     scenarioIds: string[] | null;

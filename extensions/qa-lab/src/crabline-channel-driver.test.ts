@@ -1,7 +1,6 @@
 // Qa Lab tests cover Crabline channel-driver metadata behavior.
 import { describe, expect, it } from "vitest";
 import {
-  buildQaCrablineChannelCapabilityMatrix,
   runQaCrablineChannelDriverSmoke,
   resolveQaCrablineChannelDriverSelection,
 } from "./crabline-channel-driver.js";
@@ -21,43 +20,7 @@ describe("crabline channel driver metadata", () => {
       capabilityMatrixPath: "crabline-channel-capability-matrix.json",
       channel: "telegram",
       channelDriver: "crabline",
-      channelDriverId: "telegram-local-v1",
-      channelLive: false,
       smokeArtifactPath: "crabline-channel-smoke.json",
-    });
-    expect(
-      buildQaCrablineChannelCapabilityMatrix(selection!, [
-        {
-          capabilityId: "telegram.dm.text",
-          channel: "telegram",
-          driverId: "telegram-local-v1",
-          notes: "Direct-message text turn with source-visible transcript assertions.",
-          status: "covered",
-        },
-        {
-          capabilityId: "slack.dm.text",
-          channel: "slack",
-          notes: "Planned local Slack upstream driver.",
-          status: "planned",
-        },
-      ]),
-    ).toMatchObject({
-      source: "openclaw/crabline",
-      channelDriver: "crabline",
-      selectedChannel: "telegram",
-      rows: expect.arrayContaining([
-        expect.objectContaining({
-          capabilityId: "telegram.dm.text",
-          channel: "telegram",
-          driverId: "telegram-local-v1",
-          status: "covered",
-        }),
-        expect.objectContaining({
-          capabilityId: "slack.dm.text",
-          channel: "slack",
-          status: "planned",
-        }),
-      ]),
     });
   });
 
@@ -67,8 +30,6 @@ describe("crabline channel driver metadata", () => {
         capabilityMatrixPath: "crabline-channel-capability-matrix.json",
         channel: "telegram",
         channelDriver: "crabline",
-        channelDriverId: "telegram-local-v1",
-        channelLive: false,
         smokeArtifactPath: "crabline-channel-smoke.json",
       }),
     ).resolves.toMatchObject({

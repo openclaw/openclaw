@@ -14,7 +14,6 @@ import {
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { assertQaSuiteArtifactWritten } from "./artifact-assertion.js";
 import {
-  buildQaCrablineChannelCapabilityMatrix,
   createQaCrablineChannelReportNotes,
   runQaCrablineChannelDriverSmoke,
   type QaCrablineChannelDriverSelection,
@@ -601,8 +600,6 @@ export function buildQaSuiteSummaryJson(params: QaSuiteSummaryJsonParams): QaSui
       concurrency: params.concurrency,
       channelDriver: params.channelDriverSelection?.channelDriver ?? null,
       channel: params.channelDriverSelection?.channel ?? null,
-      channelLive: params.channelDriverSelection?.channelLive ?? null,
-      channelDriverId: params.channelDriverSelection?.channelDriverId ?? null,
       channelCapabilityMatrixPath: params.channelDriverSelection?.capabilityMatrixPath ?? null,
       channelDriverSmokePath: params.channelDriverSelection?.smokeArtifactPath ?? null,
       scenarioIds:
@@ -911,10 +908,14 @@ async function writeQaSuiteArtifacts(params: {
     await fs.writeFile(
       path.join(params.outputDir, params.channelDriverSelection.capabilityMatrixPath),
       `${JSON.stringify(
-        buildQaCrablineChannelCapabilityMatrix(
-          params.channelDriverSelection,
-          channelDriverSmoke.matrix,
-        ),
+        {
+          version: 1,
+          source: "openclaw/crabline",
+          channelDriver: params.channelDriverSelection.channelDriver,
+          selectedChannel: params.channelDriverSelection.channel,
+          driver: channelDriverSmoke.driver,
+          matrix: channelDriverSmoke.matrix,
+        },
         null,
         2,
       )}\n`,

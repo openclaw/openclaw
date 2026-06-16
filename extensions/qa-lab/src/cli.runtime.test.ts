@@ -559,8 +559,6 @@ describe("qa cli runtime", () => {
         capabilityMatrixPath: "crabline-channel-capability-matrix.json",
         channel: "telegram",
         channelDriver: "crabline",
-        channelDriverId: "telegram-local-v1",
-        channelLive: false,
         smokeArtifactPath: "crabline-channel-smoke.json",
       },
       providerMode: "mock-openai",

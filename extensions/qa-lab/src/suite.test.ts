@@ -303,16 +303,14 @@ describe("qa suite", () => {
           capabilityMatrixPath: "crabline-channel-capability-matrix.json",
           channel: "telegram",
           channelDriver: "crabline",
-          channelDriverId: "telegram-local-v1",
-          channelLive: false,
           smokeArtifactPath: "crabline-channel-smoke.json",
         },
       });
 
       const matrix = JSON.parse(
         await fs.readFile(path.join(outputDir, "crabline-channel-capability-matrix.json"), "utf8"),
-      ) as { rows?: Array<{ capabilityId?: string }> };
-      expect(matrix.rows).toEqual(
+      ) as { matrix?: Array<{ capabilityId?: string }> };
+      expect(matrix.matrix).toEqual(
         expect.arrayContaining([expect.objectContaining({ capabilityId: "telegram.dm.text" })]),
       );
       const smoke = JSON.parse(
