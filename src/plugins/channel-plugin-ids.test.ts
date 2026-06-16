@@ -2334,6 +2334,59 @@ describe("resolveGatewayStartupPluginIds", () => {
     expect(plan.configuredDeferredChannelPluginIds).toStrictEqual([]);
   });
 
+  it("includes external channel plugin enabled via plugins.entries without channels config", () => {
+    // Simulates the WeChat plugin flow: plugin installed, enabled via
+    // plugins.entries.<id>.enabled=true, but no channels.<id>.enabled=true.
+    const registry = createManifestRegistryFixtureWithWorkspaceDemoChannel();
+    const index = createInstalledPluginIndexFixture(registry);
+
+    // No channels config at all → configuredChannelIds is empty.
+    listPotentialConfiguredChannelIds.mockReturnValue([]);
+
+    const plan = resolveGatewayStartupPluginPlanFromRegistry({
+      config: {
+        plugins: {
+          entries: {
+            "workspace-demo-channel-plugin": { enabled: true },
+          },
+        },
+      } as OpenClawConfig,
+      env: createPluginPlanningTestEnv(),
+      index,
+      manifestRegistry: registry,
+    });
+
+    // The plugin should still be in the startup plan because
+    // isExternalChannelPlugin lets it past shouldConsiderForGatewayStartup,
+    // and the activation-state check sees explicitlyEnabled=true.
+    expect(plan.pluginIds).toContain("workspace-demo-channel-plugin");
+    expect(plan.channelPluginIds).toContain("demo-channel");
+  });
+
+  it("does not start external channel plugin with plugins.entries.enabled=false", () => {
+    // isExternalChannelPlugin lets the plugin through, but the
+    // activation-state check sees enabled=false → rejected.
+    const registry = createManifestRegistryFixtureWithWorkspaceDemoChannel();
+    const index = createInstalledPluginIndexFixture(registry);
+
+    listPotentialConfiguredChannelIds.mockReturnValue([]);
+
+    const plan = resolveGatewayStartupPluginPlanFromRegistry({
+      config: {
+        plugins: {
+          entries: {
+            "workspace-demo-channel-plugin": { enabled: false },
+          },
+        },
+      } as OpenClawConfig,
+      env: createPluginPlanningTestEnv(),
+      index,
+      manifestRegistry: registry,
+    });
+
+    expect(plan.pluginIds).not.toContain("workspace-demo-channel-plugin");
+  });
+
   it("carries deferred configured channel ids through the startup plan", () => {
     const registry = createManifestRegistryFixtureWithWorkspaceDemoChannel();
     const index = createInstalledPluginIndexFixture(registry);

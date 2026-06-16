@@ -206,6 +206,30 @@ function hasConfiguredStartupChannel(params: {
   );
 }
 
+/**
+ * Returns true for non-bundled plugins whose manifest declares at least one
+ * channel.  Externally-installed channel plugins (e.g. WeChat, Discord) may
+ * be enabled solely via `plugins.entries.<id>.enabled=true` without an
+ * explicit `channels.<id>.enabled=true` entry.  The startup planner must
+ * let them through to the activation-state check below, which enforces the
+ * `explicitlyEnabled` guard for non-bundled plugins.
+ */
+function isExternalChannelPlugin(params: {
+  plugin: InstalledPluginIndexRecord;
+  manifest: PluginManifestRecord | undefined;
+  manifestLookup: ManifestRegistryLookup;
+}): boolean {
+  if (params.plugin.origin === "bundled") {
+    return false;
+  }
+  if (!params.manifest) {
+    return false;
+  }
+  return (
+    listManifestChannelIds(params.manifestLookup, params.plugin.pluginId).length > 0
+  );
+}
+
 type ManifestRegistryLookup = ReadonlyMap<string, PluginManifestRecord>;
 
 function createManifestRegistryLookup(
@@ -2092,7 +2116,8 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
         startupDreamingPluginIds,
         memorySlotStartupPluginId,
         contextEngineSlotStartupPluginId,
-      })
+      }) &&
+      !isExternalChannelPlugin({ plugin, manifest, manifestLookup })
     ) {
       continue;
     }
