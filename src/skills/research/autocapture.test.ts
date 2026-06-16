@@ -119,8 +119,20 @@ describe("skill research auto-capture", () => {
       ctx: { sessionKey: "hook:gmail:message-1" },
     },
     {
-      name: "Active Memory session",
+      name: "Active Memory trigger",
       ctx: { trigger: "memory", sessionKey: "explicit:user-session:active-memory:abc123" },
+    },
+    {
+      name: "Active Memory helper session with main suffix",
+      ctx: { trigger: "manual", sessionKey: "agent:main:main:active-memory:abc123" },
+    },
+    {
+      name: "Active Memory helper session without main suffix",
+      ctx: { trigger: "manual", sessionKey: "agent:main:active-memory:abc123" },
+    },
+    {
+      name: "Active Memory recall helper session",
+      ctx: { trigger: "manual", sessionKey: "active-memory-recall-87504" },
     },
   ])("skips $name before queuing proposals", async ({ ctx }) => {
     const workspaceDir = await makeWorkspace();
