@@ -180,21 +180,19 @@ describe("enableExplicitlySelectedPluginInConfig", () => {
     expect(result.config.channels?.clickclack?.enabled).toBe(true);
   });
 
-  it("keeps unrelated explicit plugin enables blocked by a restrictive allowlist", () => {
-    const cfg = {
-      plugins: {
-        allow: ["memory-core"],
-      },
-    } as OpenClawConfig;
+  it("appends any explicitly selected plugin to a restrictive allowlist before enabling it", () => {
+    const result = enableExplicitlySelectedPluginInConfig(
+      {
+        plugins: {
+          allow: ["memory-core"],
+        },
+      } as OpenClawConfig,
+      "google",
+    );
 
-    const result = enableExplicitlySelectedPluginInConfig(cfg, "google");
-
-    expect(result).toEqual({
-      config: cfg,
-      enabled: false,
-      pluginId: "google",
-      reason: "blocked by allowlist",
-    });
+    expect(result.enabled).toBe(true);
+    expect(result.config.plugins?.allow).toEqual(["memory-core", "google"]);
+    expect(result.config.plugins?.entries?.google?.enabled).toBe(true);
   });
 
   it("keeps ClickClack blocked by the denylist without changing the allowlist", () => {

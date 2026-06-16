@@ -49,8 +49,10 @@ export function enablePluginInConfig(
 /**
  * Enables a plugin selected through an explicit user action.
  *
- * ClickClack is bundled without a separate install trust record, so selecting
- * it is the trust gesture that materializes its id in a restrictive allowlist.
+ * When a user explicitly selects a plugin (e.g. through channel setup or
+ * plugin install), that selection is the trust gesture. If a restrictive
+ * `plugins.allow` list blocks the plugin, the selection itself should
+ * materialize the plugin id in the allowlist before enabling.
  */
 export function enableExplicitlySelectedPluginInConfig(
   cfg: OpenClawConfig,
@@ -58,7 +60,7 @@ export function enableExplicitlySelectedPluginInConfig(
   options: PluginEnableOptions = {},
 ): PluginEnableResult {
   const result = enablePluginInConfig(cfg, pluginId, options);
-  if (result.reason !== "blocked by allowlist" || result.pluginId !== "clickclack") {
+  if (result.reason !== "blocked by allowlist") {
     return result;
   }
   return enablePluginInConfig(
