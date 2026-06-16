@@ -1135,7 +1135,17 @@ async function runScheduledTaskOrThrow(params: {
 }): Promise<void> {
   const run = await execSchtasks(["/Run", "/TN", params.taskName]);
   if (run.code !== 0) {
-    throw new Error(`schtasks run failed: ${run.stderr || run.stdout}`.trim());
+    const detail = [run.stderr?.trim(), run.stdout?.trim()].filter(Boolean).join("; ") || "(no output)";
+    const msg = `schtasks run failed (exit ${run.code}): ${detail}. Falling back to direct launch.`;
+    // Log the failure but try the fallback instead of throwing immediately.
+    // schtasks /Run can fail silently on Windows (empty stderr) for reasons
+    // like access denied or task-already-running; direct launch often succeeds.
+    try {
+      await launchFallbackTaskScript(params.env);
+      return;
+    } catch (fallbackErr) {
+      throw new Error(`${msg} Direct launch also failed: ${String(fallbackErr)}`);
+    }
   }
   if (
     !(await shouldFallbackScheduledTaskLaunch({ env: params.env, scriptPath: params.scriptPath }))
