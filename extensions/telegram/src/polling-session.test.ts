@@ -3137,14 +3137,19 @@ describe("TelegramPollingSession", () => {
     const regularTurnDone = new Promise<void>((resolve) => {
       releaseRegularTurn = resolve;
     });
-    const handleUpdate = vi.fn(async () => {
-      await Promise.race([
-        regularTurnDone,
-        waitForTestReplyFenceAbort({
-          key: "test-status-session:dm",
-          laneKey: "telegram:123",
-        }),
-      ]);
+    const handleUpdate = vi.fn(async (update?: { update_id?: number }) => {
+      // Only block for update 42 to simulate a stuck handler.  Update 43
+      // completes immediately after the restart, matching real-world behavior
+      // where the restart clears the stuck state.
+      if (update?.update_id === 42) {
+        await Promise.race([
+          regularTurnDone,
+          waitForTestReplyFenceAbort({
+            key: "test-status-session:dm",
+            laneKey: "telegram:123",
+          }),
+        ]);
+      }
     });
     createTelegramBotMock.mockImplementation(() => ({
       api: {

@@ -765,6 +765,16 @@ export class TelegramPollingSession {
     return laneKeys;
   }
 
+  #activeSpooledUpdateHandlerKeysForSpool(spoolDir: string): Set<string> {
+    const handlerKeys = new Set<string>();
+    for (const [handlerKey] of activeSpooledUpdateHandlersByLane) {
+      if (isSpooledUpdateHandlerKeyForSpool(handlerKey, spoolDir)) {
+        handlerKeys.add(handlerKey);
+      }
+    }
+    return handlerKeys;
+  }
+
   async #drainSpooledUpdates(params: {
     bot: TelegramBot;
     spoolDir: string;
@@ -1119,7 +1129,15 @@ export class TelegramPollingSession {
             this.#status.notePollingError(handler.timeoutMessage);
           }
         }
-        const timedOutRecovery = await this.#recoverTimedOutSpooledHandler(drain.blockedByLane);
+        // Include all active spooled handlers for this spool in the timeout
+        // candidate set, not just those blocked by same-lane backlog.  A lone
+        // active handler with no queued successor never appears in
+        // blockedByLane, so it would otherwise evade timeout recovery.
+        const timeoutCandidateKeys = new Set(drain.blockedByLane);
+        for (const key of this.#activeSpooledUpdateHandlerKeysForSpool(spoolDir)) {
+          timeoutCandidateKeys.add(key);
+        }
+        const timedOutRecovery = await this.#recoverTimedOutSpooledHandler(timeoutCandidateKeys);
         if (timedOutRecovery?.restart) {
           requestStopForRestart();
         } else if (timedOutRecovery) {
