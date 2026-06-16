@@ -152,6 +152,7 @@ import { enqueueSystemEvent } from "../../infra/system-events.js";
 import {
   dispatchCronDelivery,
   getCompletedDirectCronDeliveriesCountForTests,
+  queueCronMessageToolDeliveryAwareness,
   resetCompletedDirectCronDeliveriesForTests,
 } from "./delivery-dispatch.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
@@ -311,6 +312,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     vi.mocked(retireSessionMcpRuntime).mockResolvedValue(true);
     vi.mocked(resolveOutboundSessionRoute).mockResolvedValue(null);
     vi.mocked(ensureOutboundSessionEntry).mockResolvedValue(undefined);
+    vi.mocked(enqueueSystemEvent).mockReset();
     vi.mocked(appendAssistantMessageToSessionTranscript).mockResolvedValue({
       ok: true,
       sessionFile: "session.jsonl",
@@ -400,6 +402,148 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
     expect(state.deliveryAttempted).toBe(true);
     expect(state.delivered).toBe(true);
+  });
+
+  it("queues message-tool awareness to the resolved thread for implicit thread evidence", async () => {
+    mockResolvedOutboundRoute({
+      sessionKey: "agent:main:telegram:direct:123456:thread:42",
+      baseSessionKey: "agent:main:telegram:direct:123456",
+      to: "telegram:123456",
+      threadId: "42",
+    });
+    await queueCronMessageToolDeliveryAwareness({
+      cfg: {} as never,
+      job: {
+        id: "test-job",
+        name: "Test Job",
+        sessionTarget: "isolated",
+        deleteAfterRun: false,
+        payload: { kind: "agentTurn", message: "hello" },
+      } as never,
+      agentId: "main",
+      agentSessionKey: "agent:main",
+      runStartedAt: 1_000,
+      resolvedDelivery: makeResolvedDelivery({ threadId: "42" }),
+      sourceDeliveryOutcome: {
+        visibleDeliveries: [
+          {
+            via: "message_tool",
+            target: {
+              tool: "message",
+              provider: "telegram",
+              to: "123456",
+              threadImplicit: true,
+              text: "Threaded cron update.",
+            },
+            verifiedTarget: true,
+          },
+        ],
+        verifiedMessageToolDelivery: true,
+        satisfiesSourceDelivery: true,
+        unverifiedMessageToolDelivery: false,
+      },
+    });
+
+    expect(resolveOutboundSessionRoute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: "42",
+      }),
+    );
+    expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
+      "A scheduled cron job delivered this message to this channel:\nThreaded cron update.",
+      {
+        sessionKey: "agent:main:telegram:direct:123456:thread:42",
+        contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:42",
+      },
+    );
+  });
+
+  it("queues message-tool awareness when the target route resolves to the main session", async () => {
+    vi.mocked(resolveOutboundSessionRoute).mockResolvedValue(null);
+
+    await queueCronMessageToolDeliveryAwareness({
+      cfg: {} as never,
+      job: {
+        id: "test-job",
+        name: "Test Job",
+        sessionTarget: "isolated",
+        deleteAfterRun: false,
+        payload: { kind: "agentTurn", message: "hello" },
+      } as never,
+      agentId: "main",
+      agentSessionKey: "agent:main",
+      runStartedAt: 1_000,
+      resolvedDelivery: makeResolvedDelivery(),
+      sourceDeliveryOutcome: {
+        visibleDeliveries: [
+          {
+            via: "message_tool",
+            target: {
+              tool: "message",
+              provider: "telegram",
+              to: "123456",
+              text: "Main-scoped cron update.",
+            },
+            verifiedTarget: true,
+          },
+        ],
+        verifiedMessageToolDelivery: true,
+        satisfiesSourceDelivery: true,
+        unverifiedMessageToolDelivery: false,
+      },
+    });
+
+    expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
+      "A scheduled cron job delivered this message to this channel:\nMain-scoped cron update.",
+      {
+        sessionKey: "agent:main",
+        contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
+      },
+    );
+  });
+
+  it("queues message-tool awareness for verified media-only deliveries", async () => {
+    mockResolvedOutboundRoute();
+
+    await queueCronMessageToolDeliveryAwareness({
+      cfg: {} as never,
+      job: {
+        id: "test-job",
+        name: "Test Job",
+        sessionTarget: "isolated",
+        deleteAfterRun: false,
+        payload: { kind: "agentTurn", message: "hello" },
+      } as never,
+      agentId: "main",
+      agentSessionKey: "agent:main",
+      runStartedAt: 1_000,
+      resolvedDelivery: makeResolvedDelivery(),
+      sourceDeliveryOutcome: {
+        visibleDeliveries: [
+          {
+            via: "message_tool",
+            target: {
+              tool: "message",
+              provider: "telegram",
+              to: "123456",
+              mediaUrls: ["https://example.test/uploads/weather-map.png?token=secret"],
+            },
+            verifiedTarget: true,
+          },
+        ],
+        verifiedMessageToolDelivery: true,
+        satisfiesSourceDelivery: true,
+        unverifiedMessageToolDelivery: false,
+      },
+    });
+
+    expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
+      "A scheduled cron job delivered this message to this channel:\nweather-map.png",
+      {
+        sessionKey: "agent:main:telegram:direct:123456",
+        contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
+      },
+    );
   });
 
   it("keeps announce fallback when message-tool delivery is not verified for the target", async () => {
@@ -673,6 +817,13 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       sessionKey: "agent:main:main",
       contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
     });
+    expect(enqueueSystemEvent).toHaveBeenCalledWith(
+      "A scheduled cron job delivered this message to this channel:\nRedacted cron update.",
+      {
+        sessionKey: "agent:main:telegram:direct:123456",
+        contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
+      },
+    );
   });
 
   it("preserves all successful text payloads for direct delivery", async () => {
@@ -708,6 +859,13 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       sessionKey: "agent:main:main",
       contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
     });
+    expect(enqueueSystemEvent).toHaveBeenCalledWith(
+      "A scheduled cron job delivered this message to this channel:\nMorning briefing complete.",
+      {
+        sessionKey: "agent:main",
+        contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
+      },
+    );
   });
 
   it("does not mirror separately when the resolved delivery session is the awareness main session", async () => {
@@ -963,7 +1121,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
   });
 
-  it("skips main-session awareness for session-bound cron jobs", async () => {
+  it("queues target-session awareness for session-bound cron jobs without main awareness", async () => {
     const params = makeBaseParams({
       synthesizedText: "Session-bound cron update.",
       sessionTarget: "session:agent:main:main:thread:9999",
@@ -974,7 +1132,15 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(state.delivered).toBe(true);
     expect(state.deliveryAttempted).toBe(true);
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
-    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
+      "A scheduled cron job delivered this message to this channel:\nSession-bound cron update.",
+      {
+        sessionKey: "agent:main",
+        contextKey: expect.stringMatching(
+          /^cron-direct-delivery:v1:cron:test-job:\d+:telegram::123456:$/,
+        ),
+      },
+    );
   });
 
   it("skips main-session awareness for best-effort deliveries", async () => {

@@ -15,6 +15,7 @@ import {
   makeCronSession,
   mockRunCronFallbackPassthrough,
   preflightCronModelProviderMock,
+  queueCronMessageToolDeliveryAwarenessMock,
   resolveCronPayloadOutcomeMock,
   resolveCronSessionMock,
   resetRunCronIsolatedAgentTurnHarness,
@@ -1178,6 +1179,15 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
   it("skips cron fallback delivery when the message tool already sent to the same target", async () => {
     await expectCronFallbackSkippedForMessageToolDelivery({
       sentTargets: [{ tool: "message", provider: "messagechat", to: "123" }],
+    });
+    expect(queueCronMessageToolDeliveryAwarenessMock).toHaveBeenCalledTimes(1);
+    expect(queueCronMessageToolDeliveryAwarenessMock.mock.calls[0]?.[0]).toMatchObject({
+      job: { id: "message-tool-policy" },
+      resolvedDelivery: { ok: true, channel: "messagechat", to: "123" },
+      sourceDeliveryOutcome: {
+        verifiedMessageToolDelivery: true,
+        satisfiesSourceDelivery: true,
+      },
     });
   });
 
