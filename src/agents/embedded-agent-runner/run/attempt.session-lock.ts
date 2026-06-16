@@ -1686,32 +1686,43 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     }
   }
 
-  async function runWithRetainedLock<T>(
+  async function runWithPhysicalWriteLockScope<T>(
     run: () => Promise<T>,
-    releaseRetainedUse: () => void,
+    release: () => Promise<void> | void,
   ): Promise<T> {
     const scope = createActiveWriteLockScope();
-    let operationSucceeded = false;
+    let outcome: { ok: true; value: T } | { ok: false; error: unknown };
     try {
-      const result = await activeWriteLock.run(scope.state, run);
-      operationSucceeded = true;
-      return result;
+      outcome = { ok: true, value: await activeWriteLock.run(scope.state, run) };
+    } catch (error) {
+      outcome = { ok: false, error };
     } finally {
       try {
         await drainWriteLockScope(scope.state.scope);
-        if (operationSucceeded && takeoverDetected) {
-          throw new EmbeddedAttemptSessionTakeoverError(params.lockOptions.sessionFile);
-        }
       } finally {
         scope.state.active = false;
         scope.state.scope.active = false;
         try {
-          releaseRetainedUse();
+          await release();
         } finally {
           scope.complete();
         }
       }
     }
+    if (!outcome.ok) {
+      throw outcome.error;
+    }
+    if (takeoverDetected) {
+      throw new EmbeddedAttemptSessionTakeoverError(params.lockOptions.sessionFile);
+    }
+    return outcome.value;
+  }
+
+  async function runWithRetainedLock<T>(
+    run: () => Promise<T>,
+    releaseRetainedUse: () => void,
+  ): Promise<T> {
+    return await runWithPhysicalWriteLockScope(run, releaseRetainedUse);
   }
 
   async function runPublishingOwnedSessionFileWrite<T>(
@@ -1856,28 +1867,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       return await runWithRetainedLock(runLockedOperation, releaseRetainedUse ?? (() => {}));
     }
 
-    const scope = createActiveWriteLockScope();
-    let operationSucceeded = false;
-    try {
-      const result = await activeWriteLock.run(scope.state, runLockedOperation);
-      operationSucceeded = true;
-      return result;
-    } finally {
-      try {
-        await drainWriteLockScope(scope.state.scope);
-        if (operationSucceeded && takeoverDetected) {
-          throw new EmbeddedAttemptSessionTakeoverError(params.lockOptions.sessionFile);
-        }
-      } finally {
-        scope.state.active = false;
-        scope.state.scope.active = false;
-        try {
-          await lock.release();
-        } finally {
-          scope.complete();
-        }
-      }
-    }
+    return await runWithPhysicalWriteLockScope(runLockedOperation, () => lock.release());
   }
 
   return {

@@ -382,18 +382,20 @@ export function buildSessionContext(
   leafId?: string | null,
   byIdInput?: Map<string, SessionEntry>,
 ): SessionContext {
+  let contextEntries = entries;
+  let contextById = byIdInput;
   if (leafId === undefined) {
     const selectedEntries = selectSessionTranscriptLeafControlledPath(entries);
     if (selectedEntries !== undefined) {
-      entries = selectedEntries;
-      byIdInput = undefined;
+      contextEntries = selectedEntries;
+      contextById = undefined;
     }
   }
-  let byId = byIdInput;
+  let byId = contextById;
   // Build uuid index if not available
   if (!byId) {
     byId = new Map<string, SessionEntry>();
-    for (const entry of entries) {
+    for (const entry of contextEntries) {
       byId.set(entry.id, entry);
     }
   }
@@ -409,7 +411,7 @@ export function buildSessionContext(
   }
   if (!leaf) {
     // Fallback to last entry (when leafId is undefined)
-    leaf = entries[entries.length - 1];
+    leaf = contextEntries[contextEntries.length - 1];
   }
 
   if (!leaf) {
