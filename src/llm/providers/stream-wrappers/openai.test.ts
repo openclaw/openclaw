@@ -340,6 +340,53 @@ describe("createCodexNativeWebSearchWrapper", () => {
     ]);
   });
 
+  it("maps request-scoped native web search options into Codex payloads", () => {
+    const { baseStreamFn, payloads } = createPayloadCapture();
+    const wrapped = createCodexNativeWebSearchWrapper(baseStreamFn, {
+      config: {
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              openaiCodex: { enabled: true, mode: "cached", contextSize: "low" },
+            },
+          },
+        },
+      },
+      nativeWebSearch: {
+        searchContextSize: "high",
+        userLocation: {
+          type: "approximate",
+          country: "GB",
+          city: "London",
+        },
+      },
+    });
+
+    void wrapped(
+      {
+        api: "openai-chatgpt-responses",
+        provider: "gateway",
+        id: "gpt-5.5",
+      } as Model<"openai-chatgpt-responses">,
+      { messages: [] },
+      {},
+    );
+
+    expect(payloads[0]?.tools).toEqual([
+      {
+        type: "web_search",
+        external_web_access: false,
+        search_context_size: "high",
+        user_location: {
+          type: "approximate",
+          country: "GB",
+          city: "London",
+        },
+      },
+    ]);
+  });
+
   it("does not inject native web_search when agent policy denies web search", () => {
     const payloads: Array<Record<string, unknown>> = [];
     const baseStreamFn: StreamFn = (model, _context, options) => {

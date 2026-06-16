@@ -117,6 +117,16 @@ type FirstAgentCommandOptions = {
   streamParams?: {
     frequencyPenalty?: number;
     maxTokens?: number;
+    nativeWebSearch?: {
+      searchContextSize?: "low" | "medium" | "high";
+      userLocation?: {
+        type: "approximate";
+        city?: string;
+        country?: string;
+        region?: string;
+        timezone?: string;
+      } | null;
+    };
     presencePenalty?: number;
     responseFormat?: Record<string, unknown>;
     seed?: number;
@@ -1603,6 +1613,83 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     }
   });
 
+  it("maps inbound web_search_options into native web search streamParams", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
+
+    const res = await postChatCompletions(port, {
+      model: "openclaw",
+      web_search_options: {
+        search_context_size: "high",
+        user_location: {
+          type: "approximate",
+          approximate: {
+            city: "London",
+            country: "GB",
+            region: "London",
+            timezone: "Europe/London",
+          },
+        },
+      },
+      messages: [{ role: "user", content: "hi" }],
+    });
+
+    expect(res.status).toBe(200);
+    expect(firstAgentCommandOptions()?.streamParams?.nativeWebSearch).toEqual({
+      searchContextSize: "high",
+      userLocation: {
+        type: "approximate",
+        city: "London",
+        country: "GB",
+        region: "London",
+        timezone: "Europe/London",
+      },
+    });
+    await res.text();
+  });
+
+  it("allows null web_search_options user_location", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
+
+    const res = await postChatCompletions(port, {
+      model: "openclaw",
+      web_search_options: {
+        search_context_size: "low",
+        user_location: null,
+      },
+      messages: [{ role: "user", content: "hi" }],
+    });
+
+    expect(res.status).toBe(200);
+    expect(firstAgentCommandOptions()?.streamParams?.nativeWebSearch).toEqual({
+      searchContextSize: "low",
+      userLocation: null,
+    });
+    await res.text();
+  });
+
+  it("rejects unsupported web_search_options instead of ignoring them", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+
+    const res = await postChatCompletions(port, {
+      model: "openclaw",
+      web_search_options: {
+        search_context_size: "deep",
+      },
+      messages: [{ role: "user", content: "hi" }],
+    });
+
+    expect(res.status).toBe(400);
+    const json = (await res.json()) as { error?: { type?: string; message?: string } };
+    expect(json.error?.type).toBe("invalid_request_error");
+    expect(json.error?.message).toMatch(/web_search_options/);
+    expect(agentCommand).toHaveBeenCalledTimes(0);
+  });
+
   it("forwards inbound penalty and seed params into streamParams", async () => {
     const port = enabledPort;
     const mockAgentOnce = (payloads: Array<{ text: string }>) => {
@@ -1729,6 +1816,28 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     expect(json.error?.type).toBe("invalid_request_error");
     expect(json.error?.code).toBe("decimal_above_max_value");
     expect(json.error?.message).toContain("Invalid 'temperature'");
+    expect(agentCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it("maps native web search incompatibility to OpenAI-compatible 400 errors", async () => {
+    const port = enabledPort;
+
+    agentCommand.mockClear();
+    agentCommand.mockRejectedValueOnce(
+      new Error(
+        "web_search_options require native OpenAI web_search, but web search is disabled",
+      ) as never,
+    );
+
+    const res = await postChatCompletions(port, {
+      model: "openclaw",
+      web_search_options: {},
+      messages: [{ role: "user", content: "hi" }],
+    });
+    expect(res.status).toBe(400);
+    const json = (await res.json()) as { error?: { type?: string; message?: string } };
+    expect(json.error?.type).toBe("invalid_request_error");
+    expect(json.error?.message).toContain("web_search_options require native OpenAI web_search");
     expect(agentCommand).toHaveBeenCalledTimes(1);
   });
 
@@ -2203,6 +2312,52 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
           .flatMap((c) => (c.choices as Array<Record<string, unknown>> | undefined) ?? [])
           .find((choice) => choice.finish_reason === "stop");
         expect(stopChoice).toBeUndefined();
+      }
+
+      {
+        agentCommand.mockClear();
+        agentCommand.mockRejectedValueOnce(
+          new Error(
+            "web_search_options require native OpenAI web_search, but web search is disabled",
+          ),
+        );
+
+        const nativeSearchErrorRes = await postChatCompletions(port, {
+          stream: true,
+          model: "openclaw",
+          web_search_options: {},
+          messages: [{ role: "user", content: "hi" }],
+        });
+        expect(nativeSearchErrorRes.status).toBe(200);
+        const nativeSearchErrorText = await nativeSearchErrorRes.text();
+        const nativeSearchErrorData = parseSseDataLines(nativeSearchErrorText);
+        expect(nativeSearchErrorData[nativeSearchErrorData.length - 1]).toBe("[DONE]");
+
+        const nativeSearchErrorChunks = nativeSearchErrorData
+          .filter((d) => d !== "[DONE]")
+          .map((d) => JSON.parse(d) as Record<string, unknown>);
+        const protocolError = nativeSearchErrorChunks.find((chunk) => {
+          if (typeof chunk.error !== "object" || chunk.error === null) {
+            return false;
+          }
+          const error = chunk.error as { type?: unknown; message?: unknown };
+          return (
+            error.type === "invalid_request_error" &&
+            typeof error.message === "string" &&
+            error.message.includes("web_search_options require native OpenAI web_search")
+          );
+        });
+        if (!protocolError) {
+          throw new Error("expected native web_search_options protocol error");
+        }
+        const internalErrorChunk = nativeSearchErrorChunks
+          .flatMap((c) => (c.choices as Array<Record<string, unknown>> | undefined) ?? [])
+          .find(
+            (choice) =>
+              (choice.delta as { content?: unknown } | undefined)?.content ===
+              "Error: internal error",
+          );
+        expect(internalErrorChunk).toBeUndefined();
       }
 
       {

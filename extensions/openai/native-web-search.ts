@@ -7,7 +7,18 @@ import { streamWithPayloadPatch } from "openclaw/plugin-sdk/provider-stream-shar
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isOpenAIApiBaseUrl } from "./base-url.js";
 
-const OPENAI_WEB_SEARCH_TOOL = { type: "web_search" } as const;
+const OPENAI_WEB_SEARCH_TOOL_TYPE = "web_search";
+
+type OpenAINativeWebSearchRequest = {
+  searchContextSize?: "low" | "medium" | "high";
+  userLocation?: {
+    type: "approximate";
+    city?: string;
+    country?: string;
+    region?: string;
+    timezone?: string;
+  } | null;
+};
 
 type OpenAINativeWebSearchPatchResult =
   | "payload_not_object"
@@ -25,6 +36,10 @@ function isOpenAINativeWebSearchEligibleModel(model: {
   }
   const baseUrl = typeof model.baseUrl === "string" ? model.baseUrl : undefined;
   return !baseUrl || isOpenAIApiBaseUrl(baseUrl);
+}
+
+function isCodexNativeWebSearchEligibleModel(model: { api?: unknown }): boolean {
+  return model.api === "openai-chatgpt-responses";
 }
 
 function shouldUseOpenAINativeWebSearchProvider(config: OpenClawConfig | undefined): boolean {
@@ -47,12 +62,32 @@ function shouldEnableOpenAINativeWebSearch(params: {
   );
 }
 
-function isNativeWebSearchTool(tool: unknown): boolean {
-  return isRecord(tool) && tool.type === OPENAI_WEB_SEARCH_TOOL.type;
+function explainOpenAINativeWebSearchDisabled(params: {
+  config?: OpenClawConfig;
+  model: { api?: unknown; provider?: unknown; baseUrl?: unknown };
+  nativeWebSearchAllowedByToolPolicy?: boolean;
+}): string {
+  if (params.config?.tools?.web?.search?.enabled === false) {
+    return "web search is disabled";
+  }
+  if (!shouldUseOpenAINativeWebSearchProvider(params.config)) {
+    return "tools.web.search.provider is not auto or openai";
+  }
+  if (!isOpenAINativeWebSearchEligibleModel(params.model)) {
+    return "the selected model is not a direct OpenAI Responses model";
+  }
+  if (params.nativeWebSearchAllowedByToolPolicy === false) {
+    return "tool policy denies web_search";
+  }
+  return "native OpenAI web_search is unavailable";
+}
+
+function isNativeWebSearchTool(tool: unknown): tool is Record<string, unknown> {
+  return isRecord(tool) && tool.type === OPENAI_WEB_SEARCH_TOOL_TYPE;
 }
 
 function isManagedWebSearchTool(tool: unknown): boolean {
-  return isRecord(tool) && tool.type === "function" && tool.name === OPENAI_WEB_SEARCH_TOOL.type;
+  return isRecord(tool) && tool.type === "function" && tool.name === OPENAI_WEB_SEARCH_TOOL_TYPE;
 }
 
 function raiseMinimalReasoningForOpenAINativeWebSearch(payload: Record<string, unknown>): void {
@@ -63,8 +98,51 @@ function raiseMinimalReasoningForOpenAINativeWebSearch(payload: Record<string, u
   reasoning.effort = "low";
 }
 
+function buildOpenAIWebSearchTool(
+  nativeWebSearch?: OpenAINativeWebSearchRequest,
+): Record<string, unknown> {
+  return {
+    type: OPENAI_WEB_SEARCH_TOOL_TYPE,
+    ...(nativeWebSearch?.searchContextSize
+      ? { search_context_size: nativeWebSearch.searchContextSize }
+      : {}),
+    ...(nativeWebSearch?.userLocation ? { user_location: nativeWebSearch.userLocation } : {}),
+  };
+}
+
+function applyOpenAIWebSearchOptions(
+  tool: Record<string, unknown>,
+  nativeWebSearch: OpenAINativeWebSearchRequest | undefined,
+): void {
+  if (!nativeWebSearch) {
+    return;
+  }
+  if (nativeWebSearch.searchContextSize) {
+    tool.search_context_size = nativeWebSearch.searchContextSize;
+  }
+  if (nativeWebSearch.userLocation === null) {
+    delete tool.user_location;
+  } else if (nativeWebSearch.userLocation) {
+    tool.user_location = nativeWebSearch.userLocation;
+  }
+}
+
+export function resolveOpenAINativeWebSearchRequest(
+  extraParams: Record<string, unknown> | undefined,
+): OpenAINativeWebSearchRequest | undefined {
+  const value = extraParams?.nativeWebSearch;
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!isRecord(value)) {
+    throw new Error("nativeWebSearch must be an object");
+  }
+  return value as OpenAINativeWebSearchRequest;
+}
+
 export function patchOpenAINativeWebSearchPayload(
   payload: unknown,
+  nativeWebSearch?: OpenAINativeWebSearchRequest,
 ): OpenAINativeWebSearchPatchResult {
   if (!isRecord(payload)) {
     return "payload_not_object";
@@ -72,7 +150,9 @@ export function patchOpenAINativeWebSearchPayload(
 
   const existingTools = Array.isArray(payload.tools) ? payload.tools : [];
   const filteredTools = existingTools.filter((tool) => !isManagedWebSearchTool(tool));
-  if (filteredTools.some(isNativeWebSearchTool)) {
+  const existingNativeTool = filteredTools.find(isNativeWebSearchTool);
+  if (existingNativeTool) {
+    applyOpenAIWebSearchOptions(existingNativeTool, nativeWebSearch);
     if (filteredTools.length !== existingTools.length) {
       payload.tools = filteredTools;
     }
@@ -80,7 +160,7 @@ export function patchOpenAINativeWebSearchPayload(
     return "native_tool_already_present";
   }
 
-  payload.tools = [...filteredTools, OPENAI_WEB_SEARCH_TOOL];
+  payload.tools = [...filteredTools, buildOpenAIWebSearchTool(nativeWebSearch)];
   raiseMinimalReasoningForOpenAINativeWebSearch(payload);
   return "injected";
 }
@@ -91,18 +171,41 @@ export function createOpenAINativeWebSearchWrapper(
     config?: OpenClawConfig;
     agentId?: string;
     nativeWebSearchAllowedByToolPolicy?: boolean;
+    nativeWebSearch?: OpenAINativeWebSearchRequest;
   },
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
     if (!shouldEnableOpenAINativeWebSearch({ config: params.config, model })) {
+      if (params.nativeWebSearch && !isCodexNativeWebSearchEligibleModel(model)) {
+        throw new Error(
+          `web_search_options require native OpenAI web_search, but ${explainOpenAINativeWebSearchDisabled(
+            {
+              config: params.config,
+              model,
+              nativeWebSearchAllowedByToolPolicy: params.nativeWebSearchAllowedByToolPolicy,
+            },
+          )}`,
+        );
+      }
       return underlying(model, context, options);
     }
     if (params.nativeWebSearchAllowedByToolPolicy === false) {
+      if (params.nativeWebSearch) {
+        throw new Error(
+          `web_search_options require native OpenAI web_search, but ${explainOpenAINativeWebSearchDisabled(
+            {
+              config: params.config,
+              model,
+              nativeWebSearchAllowedByToolPolicy: params.nativeWebSearchAllowedByToolPolicy,
+            },
+          )}`,
+        );
+      }
       return underlying(model, context, options);
     }
     return streamWithPayloadPatch(underlying, model, context, options, (payload) => {
-      patchOpenAINativeWebSearchPayload(payload);
+      patchOpenAINativeWebSearchPayload(payload, params.nativeWebSearch);
     });
   };
 }

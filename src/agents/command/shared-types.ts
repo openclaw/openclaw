@@ -2,6 +2,17 @@
  * Shared command types that are imported by both public and runtime modules.
  */
 /** Best-effort provider stream parameter overrides for an agent command. */
+export type NativeWebSearchStreamParams = {
+  searchContextSize?: "low" | "medium" | "high";
+  userLocation?: {
+    type: "approximate";
+    city?: string;
+    country?: string;
+    region?: string;
+    timezone?: string;
+  } | null;
+};
+
 export type AgentStreamParams = {
   /** Provider stream params override (best-effort). */
   temperature?: number;
@@ -14,6 +25,8 @@ export type AgentStreamParams = {
   responseFormat?: Record<string, unknown>;
   frequencyPenalty?: number;
   presencePenalty?: number;
+  /** Request-scoped native web_search tool options. */
+  nativeWebSearch?: NativeWebSearchStreamParams;
   seed?: number;
 };
 

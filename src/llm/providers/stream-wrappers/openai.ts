@@ -6,6 +6,7 @@ import {
 import {
   patchCodexNativeWebSearchPayload,
   resolveCodexNativeSearchActivation,
+  type NativeWebSearchToolOptions,
 } from "../../../agents/codex-native-web-search-core.js";
 import { emitModelTransportDebug } from "../../../agents/model-transport-debug.js";
 import {
@@ -43,6 +44,19 @@ type OpenAIResponsesReplayOptions = Parameters<StreamFn>[2] & {
   replayResponsesItemIds?: boolean;
 };
 export { resolveOpenAITextVerbosity };
+
+export function resolveNativeWebSearchToolOptions(
+  extraParams: Record<string, unknown> | undefined,
+): NativeWebSearchToolOptions | undefined {
+  const value = extraParams?.nativeWebSearch;
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("nativeWebSearch must be an object");
+  }
+  return value as NativeWebSearchToolOptions;
+}
 
 function resolveOpenAITextVerbosityForModel(
   model: { api?: unknown; id?: unknown; provider?: unknown },
@@ -659,15 +673,25 @@ export function createCodexNativeWebSearchWrapper(
     senderUsername?: string | null;
     senderE164?: string | null;
     nativeWebSearchAllowedByToolPolicy?: boolean;
+    nativeWebSearch?: NativeWebSearchToolOptions;
     codeModeToolSurfaceEnabled?: boolean;
   },
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
+    const modelApi = readStringValue(model.api);
+    const modelProvider = readStringValue(model.provider);
+    const modelId = readStringValue(model.id);
+    const codexNativeSearchEligible = modelApi === "openai-chatgpt-responses";
     if (
       (params.codeModeToolSurfaceEnabled === true || isCodeModeEnabled(params.config)) &&
       hasCodeModeVisibleTools(context)
     ) {
+      if (params.nativeWebSearch && codexNativeSearchEligible) {
+        throw new Error(
+          "web_search_options require native Codex web_search, but code mode owns the model tool surface",
+        );
+      }
       emitModelTransportDebug(
         log,
         `skipping Codex native web search because code mode owns the model tool surface for ${
@@ -693,6 +717,11 @@ export function createCodexNativeWebSearchWrapper(
     }
 
     if (params.nativeWebSearchAllowedByToolPolicy === false) {
+      if (params.nativeWebSearch && codexNativeSearchEligible) {
+        throw new Error(
+          "web_search_options require native Codex web_search, but tool policy denies web_search",
+        );
+      }
       log.debug(
         `skipping Codex native web search (tool_policy_denied) for ${
           model.provider ?? "unknown"
@@ -703,9 +732,9 @@ export function createCodexNativeWebSearchWrapper(
 
     const activation = resolveCodexNativeSearchActivation({
       config: params.config,
-      modelProvider: readStringValue(model.provider),
-      modelApi: readStringValue(model.api),
-      modelId: readStringValue(model.id),
+      modelProvider,
+      modelApi,
+      modelId,
       agentId: params.agentId,
       sessionKey: params.sessionKey,
       sandboxToolPolicy: params.sandboxToolPolicy,
@@ -723,6 +752,13 @@ export function createCodexNativeWebSearchWrapper(
     });
 
     if (activation.state !== "native_active") {
+      if (params.nativeWebSearch && codexNativeSearchEligible) {
+        throw new Error(
+          `web_search_options require native Codex web_search, but ${
+            activation.inactiveReason ?? "native search is inactive"
+          }`,
+        );
+      }
       if (activation.codexNativeEnabled) {
         log.debug(
           `skipping Codex native web search (${activation.inactiveReason ?? "inactive"}) for ${
@@ -746,6 +782,7 @@ export function createCodexNativeWebSearchWrapper(
         const result = patchCodexNativeWebSearchPayload({
           payload,
           config: params.config,
+          nativeWebSearch: params.nativeWebSearch,
         });
         if (result.status === "payload_not_object") {
           log.debug(

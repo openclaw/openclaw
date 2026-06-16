@@ -20,6 +20,17 @@ const mocks = vi.hoisted(() => ({
   resolveProviderAuthProfileMetadata: vi.fn(),
 }));
 
+type MockNativeWebSearchToolOptions = {
+  searchContextSize?: "low" | "medium" | "high";
+  userLocation?: {
+    type: "approximate";
+    city?: string;
+    country?: string;
+    region?: string;
+    timezone?: string;
+  } | null;
+};
+
 vi.mock("./openai-chatgpt-provider.runtime.js", () => ({
   refreshOpenAICodexToken: mocks.refreshOpenAICodexToken,
 }));
@@ -32,6 +43,18 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
 vi.mock("openclaw/plugin-sdk/provider-stream-family", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("openclaw/plugin-sdk/provider-stream-family")>();
+  const resolveNativeWebSearchToolOptions = (
+    extraParams: Record<string, unknown> | undefined,
+  ): MockNativeWebSearchToolOptions | undefined => {
+    const value = extraParams?.nativeWebSearch;
+    if (value === undefined) {
+      return undefined;
+    }
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error("nativeWebSearch must be an object");
+    }
+    return value as MockNativeWebSearchToolOptions;
+  };
   const wrapStreamFn: NonNullable<typeof actual.OPENAI_RESPONSES_STREAM_HOOKS.wrapStreamFn> = (
     ctx,
   ) => {
@@ -55,6 +78,8 @@ vi.mock("openclaw/plugin-sdk/provider-stream-family", async (importOriginal) => 
       config: ctx.config,
       agentDir: ctx.agentDir,
       agentId: ctx.agentId,
+      nativeWebSearchAllowedByToolPolicy: ctx.nativeWebSearchAllowedByToolPolicy,
+      nativeWebSearch: resolveNativeWebSearchToolOptions(ctx.extraParams),
     });
     return actual.createOpenAIResponsesContextManagementWrapper(
       actual.createOpenAIReasoningCompatibilityWrapper(nextStreamFn),
@@ -1298,6 +1323,157 @@ describe("buildOpenAIProvider", () => {
       { type: "function", name: "read" },
       { type: "web_search" },
     ]);
+  });
+
+  it("maps request-scoped native OpenAI web search options onto the hosted tool", () => {
+    const provider = buildOpenAIProvider();
+    const wrap = provider.wrapStreamFn;
+    expect(wrap).toBeTypeOf("function");
+    if (!wrap) {
+      throw new Error("expected OpenAI wrapper");
+    }
+
+    const result = runWrappedPayloadCase({
+      wrap,
+      provider: "openai",
+      modelId: "gpt-5.4",
+      extraParams: {
+        nativeWebSearch: {
+          searchContextSize: "high",
+          userLocation: {
+            type: "approximate",
+            country: "GB",
+            city: "London",
+            region: "London",
+          },
+        },
+      },
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        baseUrl: "https://api.openai.com/v1",
+      } as Model<"openai-responses">,
+      payload: {
+        tools: [{ type: "function", name: "web_search" }],
+      },
+    });
+
+    expect(result.payload.tools).toEqual([
+      {
+        type: "web_search",
+        search_context_size: "high",
+        user_location: {
+          type: "approximate",
+          country: "GB",
+          city: "London",
+          region: "London",
+        },
+      },
+    ]);
+  });
+
+  it("lets ChatGPT Responses models reach the Codex native web search wrapper", () => {
+    const provider = buildOpenAIProvider();
+    const wrap = provider.wrapStreamFn;
+    expect(wrap).toBeTypeOf("function");
+    if (!wrap) {
+      throw new Error("expected OpenAI wrapper");
+    }
+
+    const result = runWrappedPayloadCase({
+      wrap,
+      provider: "openai",
+      modelId: "gpt-5.4",
+      cfg: {
+        auth: {
+          profiles: {
+            "openai:default": {
+              provider: "openai",
+              mode: "oauth",
+            },
+          },
+        },
+        tools: {
+          web: {
+            search: {
+              openaiCodex: { enabled: true, mode: "cached", contextSize: "low" },
+            },
+          },
+        },
+      },
+      extraParams: {
+        nativeWebSearch: {
+          searchContextSize: "high",
+          userLocation: {
+            type: "approximate",
+            country: "GB",
+            city: "London",
+          },
+        },
+      },
+      model: {
+        api: "openai-chatgpt-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        baseUrl: "https://chatgpt.com/backend-api/codex/responses",
+      } as Model<"openai-chatgpt-responses">,
+      payload: {
+        tools: [],
+      },
+    });
+
+    expect(result.payload.tools).toEqual([
+      {
+        type: "web_search",
+        external_web_access: false,
+        search_context_size: "high",
+        user_location: {
+          type: "approximate",
+          country: "GB",
+          city: "London",
+        },
+      },
+    ]);
+  });
+
+  it("clears existing native OpenAI web search location when request location is null", () => {
+    const provider = buildOpenAIProvider();
+    const wrap = provider.wrapStreamFn;
+    expect(wrap).toBeTypeOf("function");
+    if (!wrap) {
+      throw new Error("expected OpenAI wrapper");
+    }
+
+    const result = runWrappedPayloadCase({
+      wrap,
+      provider: "openai",
+      modelId: "gpt-5.4",
+      extraParams: {
+        nativeWebSearch: {
+          userLocation: null,
+        },
+      },
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        baseUrl: "https://api.openai.com/v1",
+      } as Model<"openai-responses">,
+      payload: {
+        tools: [
+          {
+            type: "web_search",
+            user_location: {
+              type: "approximate",
+              country: "US",
+            },
+          },
+        ],
+      },
+    });
+
+    expect(result.payload.tools).toEqual([{ type: "web_search" }]);
   });
 
   it("keeps managed OpenAI web_search when agent policy denies native web search", () => {
