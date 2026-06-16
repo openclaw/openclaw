@@ -120,12 +120,7 @@ function normalizeOutboundChannelForResolution(params: {
 }): { channel?: DeliverableMessageChannel; didBootstrap: boolean } {
   const normalized = normalizeMessageChannel(params.channel);
   const deliverable = normalizeDeliverableOutboundChannel(normalized);
-  if (
-    deliverable ||
-    !normalized ||
-    normalized === INTERNAL_MESSAGE_CHANNEL ||
-    params.allowBootstrap !== true
-  ) {
+  if (deliverable || !normalized || normalized === INTERNAL_MESSAGE_CHANNEL) {
     return { channel: deliverable, didBootstrap: false };
   }
 
@@ -135,6 +130,9 @@ function normalizeOutboundChannelForResolution(params: {
       channel: activeRuntimePlugin.id as DeliverableMessageChannel,
       didBootstrap: false,
     };
+  }
+  if (params.allowBootstrap !== true) {
+    return { channel: undefined, didBootstrap: false };
   }
 
   // External channel ids remain normalized before their runtime is registered.

@@ -908,23 +908,33 @@ describe("resolveSessionDeliveryTarget", () => {
 
   it("blocks heartbeat targets that route to direct chats after canonicalization", async () => {
     const alpha = createGenericTargetTestPlugin("alpha", "Alpha");
-    setActivePluginRegistry(
-      createTargetsTestRegistry([
-        {
-          ...alpha,
-          messaging: {
-            ...alpha.messaging,
-            resolveOutboundSessionRoute: () => ({
-              sessionKey: "main:alpha:user:u123",
-              baseSessionKey: "main:alpha:user:u123",
-              peer: { kind: "direct", id: "u123" },
-              chatType: "direct",
-              from: "alpha:u123",
-              to: "user:u123",
-            }),
-          },
-        },
-      ]),
+    const routedAlpha = {
+      ...alpha,
+      messaging: {
+        ...alpha.messaging,
+        resolveOutboundSessionRoute: () => ({
+          sessionKey: "main:alpha:user:u123",
+          baseSessionKey: "main:alpha:user:u123",
+          peer: { kind: "direct" as const, id: "u123" },
+          chatType: "direct" as const,
+          from: "alpha:u123",
+          to: "user:u123",
+        }),
+      },
+    };
+    setActivePluginRegistry(createTargetsTestRegistry([]));
+    mocks.resolveOutboundChannelPlugin.mockImplementation(
+      ({ channel, allowBootstrap }: { channel: string; allowBootstrap?: boolean }) => {
+        if (channel !== "alpha") {
+          return undefined;
+        }
+        if (allowBootstrap === true) {
+          setActivePluginRegistry(createTargetsTestRegistry([routedAlpha]));
+          return routedAlpha;
+        }
+        return getActivePluginRegistry()?.channels.find((entry) => entry?.plugin?.id === channel)
+          ?.plugin;
+      },
     );
 
     const resolved = await resolveHeartbeatDeliveryTargetWithSessionRoute({

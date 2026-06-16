@@ -274,11 +274,12 @@ describe("outbound channel resolution", () => {
     expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
   });
 
-  it("canonicalizes a bootstrapped external channel alias from the active registry", async () => {
+  it("keeps a bootstrapped external alias available to normal runtime lookups", async () => {
+    const message = { send: { text: vi.fn() } };
     const plugin = {
       id: "external-channel",
       meta: { aliases: ["external"] },
-      outbound: { sendText: vi.fn() },
+      message,
     };
     isDeliverableMessageChannelMock.mockReturnValue(false);
     getLoadedChannelPluginMock.mockReturnValue(undefined);
@@ -300,9 +301,14 @@ describe("outbound channel resolution", () => {
       channelResolution.resolveOutboundChannelPlugin({
         channel: "external",
         cfg: { channels: {} } as never,
-        allowBootstrap: true,
       }),
     ).toBe(plugin);
+    expect(
+      channelResolution.resolveOutboundChannelMessageAdapter({
+        channel: "external",
+        cfg: { channels: {} } as never,
+      }),
+    ).toBe(message);
     expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledTimes(1);
   });
 
