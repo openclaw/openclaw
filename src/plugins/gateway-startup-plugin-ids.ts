@@ -1929,6 +1929,11 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
   const pluginIds: string[] = [];
   for (const plugin of params.index.plugins) {
     const manifest = findManifestPlugin(manifestLookup, plugin.pluginId);
+    const hasEnabledManifestChannel =
+      manifest?.channels?.some((channelId) => {
+        const normalizedChannelId = normalizeOptionalLowercaseString(channelId);
+        return normalizedChannelId ? !explicitlyDisabledChannelIds.has(normalizedChannelId) : false;
+      }) ?? false;
     // Non-bundled plugin that explicitly declares channels and is enabled
     // in plugins.entries must be treated as a configured startup channel
     // even when the channel itself is not listed in config.channels.
@@ -1937,8 +1942,7 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
     // produce a `configuredChannelIds` entry.
     const hasExplicitlyEnabledNonBundledChannel =
       plugin.origin !== "bundled" &&
-      (manifest?.channels?.some((channelId) => !explicitlyDisabledChannelIds.has(channelId)) ??
-        false) &&
+      hasEnabledManifestChannel &&
       pluginsConfig.entries[plugin.pluginId]?.enabled === true &&
       !pluginsConfig.deny.includes(plugin.pluginId);
     if (

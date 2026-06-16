@@ -1362,6 +1362,32 @@ describe("resolveGatewayStartupPluginIds", () => {
     expectStartupPluginIdsCase({ config, expected });
   });
 
+  it("matches explicitly disabled channel ids case-insensitively", () => {
+    const registry = createManifestRegistryFixture();
+    useManifestRegistryFixture({
+      ...registry,
+      plugins: registry.plugins.map((plugin) =>
+        plugin.id === "external-env-channel-plugin"
+          ? { ...plugin, channels: ["External-Env-Channel"] }
+          : plugin,
+      ),
+    });
+
+    expectStartupPluginIdsCase({
+      config: {
+        channels: {
+          "external-env-channel": { enabled: false },
+        },
+        plugins: {
+          entries: {
+            "external-env-channel-plugin": { enabled: true },
+          },
+        },
+      } as OpenClawConfig,
+      expected: ["browser", "memory-core"],
+    });
+  });
+
   it("keeps effective-only bundled sidecars behind restrictive allowlists", () => {
     const rawConfig = createStartupConfig({
       allowPluginIds: ["browser"],
