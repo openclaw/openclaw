@@ -1874,8 +1874,7 @@ export async function sampleWindowsProcessByPort(port, options = {}) {
     const pid = stdout
       .split(/\r?\n/u)
       .map((line) => line.trim())
-      .filter((line) => line.includes(`:${safePort}`) && /\bLISTENING\b/iu.test(line))
-      .map((line) => Number.parseInt(line.split(/\s+/u).at(-1) ?? "", 10))
+      .map((line) => parseWindowsNetstatListeningPid(line, safePort))
       .find((candidate) => Number.isInteger(candidate) && candidate > 0);
     if (!pid) {
       return null;
@@ -1884,6 +1883,19 @@ export async function sampleWindowsProcessByPort(port, options = {}) {
   } catch {
     return null;
   }
+}
+
+function parseWindowsNetstatListeningPid(line, port) {
+  if (!/\bLISTENING\b/iu.test(line)) {
+    return null;
+  }
+  const fields = line.trim().split(/\s+/u);
+  const localPortMatch = fields[1]?.match(/:(\d+)$/u);
+  if (!localPortMatch || Number(localPortMatch[1]) !== port) {
+    return null;
+  }
+  const processId = Number(fields.at(-1) ?? "");
+  return Number.isSafeInteger(processId) && processId > 0 ? processId : null;
 }
 
 function powershellSingleQuoted(value) {

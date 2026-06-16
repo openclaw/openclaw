@@ -1358,6 +1358,8 @@ describe("kitchen-sink RPC process sampling", () => {
           return {
             stdout: [
               "  Proto  Local Address          Foreign Address        State           PID",
+              "  TCP    127.0.0.1:196750       0.0.0.0:0              LISTENING       1111",
+              "  TCP    127.0.0.1:1967         0.0.0.0:0              LISTENING       2222",
               "  TCP    127.0.0.1:19675        0.0.0.0:0              LISTENING       6789",
             ].join("\r\n"),
             stderr: "",
