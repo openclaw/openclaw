@@ -24,6 +24,8 @@ export type OpenClawPluginToolContext = {
   agentDir?: string;
   agentId?: string;
   sessionKey?: string;
+  /** Authenticated node hosting this turn (node-originated agent.request); plugin tools may pin to it. */
+  hostingNodeId?: string;
   /** Ephemeral session UUID - regenerated on /new and /reset. Use for per-conversation isolation. */
   sessionId?: string;
   /**

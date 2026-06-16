@@ -240,6 +240,12 @@ async function resolveBrowserNodeTarget(params: {
   requestedNode?: string;
   target?: "sandbox" | "host" | "node";
   sandboxBridgeUrl?: string;
+  /**
+   * Authenticated node hosting this turn (node-originated agent.request turns).
+   * Pins the browser proxy to that node so a node-confined agent drives the same
+   * node that hosts the user's tab. Explicit node=/config node keep priority.
+   */
+  hostingNodeId?: string;
 }): Promise<BrowserNodeTarget | null> {
   const cfg = browserToolDeps.getRuntimeConfig();
   const policy = cfg.gateway?.nodes?.browser;
@@ -274,6 +280,17 @@ async function resolveBrowserNodeTarget(params: {
     const nodeId = resolveNodeIdFromList(browserNodes, requested, false);
     const node = browserNodes.find((entry) => entry.nodeId === nodeId);
     return { nodeId, label: node?.displayName ?? node?.remoteIp ?? nodeId };
+  }
+
+  // A node-originated turn is implicitly targeted at its hosting node: pin the
+  // browser proxy to that node so a byNode-confined agent drives the same node
+  // that hosts the user's tab, not an arbitrary other connected browser node.
+  const hosting = params.hostingNodeId?.trim();
+  if (hosting) {
+    const node = browserNodes.find((entry) => entry.nodeId === hosting);
+    if (node) {
+      return { nodeId: node.nodeId, label: node.displayName ?? node.remoteIp ?? node.nodeId };
+    }
   }
 
   const selected = selectDefaultNodeFromList(browserNodes, {
@@ -452,6 +469,8 @@ export function createBrowserTool(opts?: {
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
   agentSessionKey?: string;
+  /** Authenticated node hosting this turn; pins the browser proxy to it. */
+  hostingNodeId?: string;
   agentDir?: string;
   workspaceDir?: string;
   activeModel?: {
@@ -515,6 +534,7 @@ export function createBrowserTool(opts?: {
           requestedNode: requestedNode ?? undefined,
           target,
           sandboxBridgeUrl: opts?.sandboxBridgeUrl,
+          hostingNodeId: opts?.hostingNodeId,
         });
       } catch (error) {
         // Keep the logged-in user browser usable on the host when auto-discovery

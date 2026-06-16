@@ -961,6 +961,7 @@ export function createOpenClawCodingTools(options?: {
       : resolveOpenClawPluginToolsForOptions({
           options: {
             agentSessionKey: options?.sessionKey,
+            hostingNodeId: options?.hostingNodeId,
             agentChannel: resolveGatewayMessageChannel(options?.messageProvider),
             agentAccountId: options?.agentAccountId,
             agentTo: options?.messageTo,
