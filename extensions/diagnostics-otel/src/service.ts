@@ -1009,6 +1009,171 @@ function assignOtelLogEventAttributes(
   }
 }
 
+function assignOtelSecurityEventAttributes(
+  attributes: Record<string, string | number | boolean>,
+  eventAttributes: Record<string, string | number | boolean> | undefined,
+): void {
+  if (!eventAttributes) {
+    return;
+  }
+  for (const rawKey in eventAttributes) {
+    if (Object.keys(attributes).length >= MAX_OTEL_LOG_ATTRIBUTE_COUNT) {
+      break;
+    }
+    if (!Object.hasOwn(eventAttributes, rawKey)) {
+      continue;
+    }
+    const key = rawKey.trim();
+    if (BLOCKED_OTEL_LOG_ATTRIBUTE_KEYS.has(key)) {
+      continue;
+    }
+    if (redactSensitiveText(key) !== key) {
+      continue;
+    }
+    if (!OTEL_LOG_RAW_ATTRIBUTE_KEY_RE.test(key)) {
+      continue;
+    }
+    const value = eventAttributes[rawKey];
+    assignOtelLogAttribute(
+      attributes,
+      `openclaw.security.attribute.${key}`,
+      typeof value === "string" ? lowCardinalityAttr(value) : value,
+    );
+  }
+}
+
+function securitySeverityText(
+  severity: Extract<DiagnosticEventPayload, { type: "security.event" }>["severity"],
+) {
+  switch (severity) {
+    case "critical":
+      return "FATAL";
+    case "high":
+      return "ERROR";
+    case "medium":
+      return "WARN";
+    case "info":
+    case "low":
+      return "INFO";
+  }
+}
+
+function assignOtelSecurityAttributes(
+  attributes: Record<string, string | number | boolean>,
+  evt: Extract<DiagnosticEventPayload, { type: "security.event" }>,
+): void {
+  assignOtelLogAttribute(attributes, "openclaw.security.event_id", evt.eventId);
+  assignOtelLogAttribute(attributes, "openclaw.security.category", evt.category);
+  assignOtelLogAttribute(attributes, "openclaw.security.action", lowCardinalityAttr(evt.action));
+  assignOtelLogAttribute(attributes, "openclaw.security.outcome", evt.outcome);
+  assignOtelLogAttribute(attributes, "openclaw.security.severity", evt.severity);
+  if (evt.reason) {
+    assignOtelLogAttribute(attributes, "openclaw.security.reason", lowCardinalityAttr(evt.reason));
+  }
+  if (evt.actor) {
+    assignOtelLogAttribute(attributes, "openclaw.security.actor.kind", evt.actor.kind);
+    if (evt.actor.idHash) {
+      assignOtelLogAttribute(
+        attributes,
+        "openclaw.security.actor.id_hash",
+        lowCardinalityAttr(evt.actor.idHash),
+      );
+    }
+    if (evt.actor.deviceIdHash) {
+      assignOtelLogAttribute(
+        attributes,
+        "openclaw.security.actor.device_id_hash",
+        lowCardinalityAttr(evt.actor.deviceIdHash),
+      );
+    }
+    if (evt.actor.channel) {
+      assignOtelLogAttribute(
+        attributes,
+        "openclaw.security.actor.channel",
+        lowCardinalityAttr(evt.actor.channel),
+      );
+    }
+    if (evt.actor.role) {
+      assignOtelLogAttribute(
+        attributes,
+        "openclaw.security.actor.role",
+        lowCardinalityAttr(evt.actor.role),
+      );
+    }
+    if (evt.actor.scopes?.length) {
+      assignOtelLogAttribute(
+        attributes,
+        "openclaw.security.actor.scopes",
+        evt.actor.scopes.map((scope) => lowCardinalityAttr(scope)).join(","),
+      );
+    }
+  }
+  if (evt.target) {
+    assignOtelLogAttribute(attributes, "openclaw.security.target.kind", evt.target.kind);
+    if (evt.target.idHash) {
+      assignOtelLogAttribute(
+        attributes,
+        "openclaw.security.target.id_hash",
+        lowCardinalityAttr(evt.target.idHash),
+      );
+    }
+    if (evt.target.name) {
+      assignOtelLogAttribute(
+        attributes,
+        "openclaw.security.target.name",
+        lowCardinalityAttr(evt.target.name),
+      );
+    }
+    if (evt.target.owner) {
+      assignOtelLogAttribute(
+        attributes,
+        "openclaw.security.target.owner",
+        lowCardinalityAttr(evt.target.owner),
+      );
+    }
+  }
+  if (evt.policy) {
+    if (evt.policy.id) {
+      assignOtelLogAttribute(
+        attributes,
+        "openclaw.security.policy.id",
+        lowCardinalityAttr(evt.policy.id),
+      );
+    }
+    if (evt.policy.decision) {
+      assignOtelLogAttribute(
+        attributes,
+        "openclaw.security.policy.decision",
+        evt.policy.decision,
+      );
+    }
+    if (evt.policy.reason) {
+      assignOtelLogAttribute(
+        attributes,
+        "openclaw.security.policy.reason",
+        lowCardinalityAttr(evt.policy.reason),
+      );
+    }
+  }
+  if (evt.control) {
+    if (evt.control.id) {
+      assignOtelLogAttribute(
+        attributes,
+        "openclaw.security.control.id",
+        lowCardinalityAttr(evt.control.id),
+      );
+    }
+    if (evt.control.family) {
+      assignOtelLogAttribute(
+        attributes,
+        "openclaw.security.control.family",
+        evt.control.family,
+      );
+    }
+  }
+  assignOtelSecurityEventAttributes(attributes, evt.attributes);
+}
+
 function traceFlagsToOtel(traceFlags: string | undefined): TraceFlags {
   const parsed = Number.parseInt(traceFlags ?? "00", 16);
   return (parsed & TraceFlags.SAMPLED) !== 0 ? TraceFlags.SAMPLED : TraceFlags.NONE;
@@ -1585,6 +1750,12 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             metadata: DiagnosticEventMetadata,
           ) => void)
         | undefined;
+      let recordSecurityEvent:
+        | ((
+            evt: Extract<DiagnosticEventPayload, { type: "security.event" }>,
+            metadata: DiagnosticEventMetadata,
+          ) => void)
+        | undefined;
       if (logsEnabled) {
         let logRecordExportFailureLastReportedAt = Number.NEGATIVE_INFINITY;
         const logExporter = new OTLPLogExporter({
@@ -1659,6 +1830,47 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             ) {
               logRecordExportFailureLastReportedAt = now;
               ctx.logger.error(`diagnostics-otel: log record export failed: ${formatError(err)}`);
+            }
+          }
+        };
+        recordSecurityEvent = (evt, metadata) => {
+          if (!metadata.trusted) {
+            return;
+          }
+          try {
+            const severityText = securitySeverityText(evt.severity);
+            const attributes = Object.create(null) as Record<string, string | number | boolean>;
+            assignOtelSecurityAttributes(attributes, evt);
+
+            const logRecord: LogRecord = {
+              body: "openclaw.security.event",
+              severityText,
+              severityNumber: logSeverityMap[severityText] ?? (9 as SeverityNumber),
+              attributes: redactOtelAttributes(attributes),
+              timestamp: evt.ts,
+            };
+            const logContext = contextForTrustedTraceContext(evt, metadata);
+            if (logContext) {
+              logRecord.context = logContext;
+            }
+            otelLogger.emit(logRecord);
+          } catch (err) {
+            emitExporterEvent({
+              exporter: "diagnostics-otel",
+              signal: "logs",
+              status: "failure",
+              reason: "emit_failed",
+              errorCategory: errorCategory(err),
+            });
+            const now = Date.now();
+            if (
+              now - logRecordExportFailureLastReportedAt >=
+              LOG_RECORD_EXPORT_FAILURE_REPORT_INTERVAL_MS
+            ) {
+              logRecordExportFailureLastReportedAt = now;
+              ctx.logger.error(
+                `diagnostics-otel: security event export failed: ${formatError(err)}`,
+              );
             }
           }
         };
@@ -3442,6 +3654,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               return;
             case "log.record":
               recordLogRecord?.(evt, metadata);
+              return;
+            case "security.event":
+              recordSecurityEvent?.(evt, metadata);
               return;
             case "tool.loop":
               recordToolLoop(evt);
