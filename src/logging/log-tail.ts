@@ -20,7 +20,7 @@ export type LogTailPayload = {
   lines: string[];
   truncated: boolean;
   reset: boolean;
-  skippedBytes: number;
+  skippedBytes?: number;
 };
 
 function isRollingLogFile(file: string): boolean {
