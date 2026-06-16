@@ -129,7 +129,7 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
       message: messageBody,
       now,
       useRawWhenLinear: true,
-      ...(params.idempotencyKey ? { idempotencyLookup: "scan" as const } : {}),
+      ...(params.idempotencyKey ? { idempotencyLookup: "scan-assistant" as const } : {}),
       config: params.config,
     });
     if (appended) {

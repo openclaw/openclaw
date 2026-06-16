@@ -6425,6 +6425,31 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
   });
 
+  it("does not persist a gateway failure after the started run is aborted", async () => {
+    createTranscriptFixture("openclaw-chat-send-assistant-error-aborted-");
+    const idempotencyKey = "idem-assistant-error-aborted";
+    const context = createChatContext();
+    mockState.triggerAgentRunStart = true;
+    mockState.onAfterAgentRunStart = () => {
+      context.chatAbortedRuns.set(idempotencyKey, Date.now());
+    };
+    mockState.dispatchErrorAfterAgentRunStart = new Error("aborted provider request");
+    const respond = vi.fn();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey,
+      message: "cancel this run",
+      expectBroadcast: false,
+    });
+
+    await waitForAssertion(() => {
+      expect(context.dedupe.get(`chat:${idempotencyKey}`)?.ok).toBe(false);
+    });
+    expect(readPersistedAssistantMessages()).toHaveLength(0);
+  });
+
   it("preserves one runtime-persisted assistant error without appending a duplicate", async () => {
     createTranscriptFixture("openclaw-chat-send-assistant-error-runtime-persisted-");
     mockState.triggerAgentRunStart = true;

@@ -3736,7 +3736,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         await persistGatewayUserTurnTranscript().catch(() => undefined);
       };
       const persistGatewayAssistantErrorTranscript = async () => {
-        if (runtimeAssistantErrorPersisted) {
+        if (runtimeAssistantErrorPersisted || context.chatAbortedRuns.has(clientRunId)) {
           return;
         }
         const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(
