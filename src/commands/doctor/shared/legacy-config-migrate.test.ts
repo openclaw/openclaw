@@ -96,7 +96,7 @@ describe("legacy memory search config migrate", () => {
       },
     });
 
-    expect(res.config?.memorySearch).toBeUndefined();
+    expect((res.config as Record<string, unknown> | undefined)?.memorySearch).toBeUndefined();
     expect(res.config?.agents?.defaults?.memorySearch?.store).toEqual({
       fts: { tokenizer: "trigram" },
       vector: { enabled: false },

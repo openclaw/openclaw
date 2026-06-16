@@ -12,9 +12,45 @@ import {
   ensureOpenClawAgentDatabaseSchema,
   runSqliteImmediateTransactionSync,
 } from "openclaw/plugin-sdk/sqlite-runtime";
+import {
+  tryAcquireMemoryReindexLock,
+  type MemoryReindexLockHandle,
+} from "./manager-reindex-lock.js";
 
 const MEMORY_REINDEX_SCHEMA = "memory_reindex";
 const MEMORY_DATABASE_FILE_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
+const MEMORY_REINDEX_ENTRY_SUFFIXES = ["-wal", "-shm", "-journal", ""] as const;
+const MEMORY_REINDEX_UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const MEMORY_REINDEX_ORPHAN_MIN_AGE_MS = 24 * 60 * 60_000;
+
+function resolveMemoryReindexBaseName(
+  databaseBaseName: string,
+  entryName: string,
+): string | undefined {
+  for (const suffix of MEMORY_REINDEX_ENTRY_SUFFIXES) {
+    if (!entryName.endsWith(suffix)) {
+      continue;
+    }
+    const baseName = entryName.slice(0, entryName.length - suffix.length);
+    const prefix = `${databaseBaseName}.memory-reindex-`;
+    if (
+      baseName.startsWith(prefix) &&
+      MEMORY_REINDEX_UUID_PATTERN.test(baseName.slice(prefix.length))
+    ) {
+      return baseName;
+    }
+  }
+  return undefined;
+}
+
+function isRegularFile(filePath: string): boolean {
+  try {
+    return fs.statSync(filePath).isFile();
+  } catch {
+    return false;
+  }
+}
 
 function tableExists(db: DatabaseSync, schema: string, tableName: string): boolean {
   const row = db
@@ -34,13 +70,17 @@ function replaceVirtualTable(params: {
   db: DatabaseSync;
   tableName: "chunks_fts" | "chunks_vec";
   columns: string;
-  dropWhenSourceMissing?: boolean;
+  ignoreDropErrorWhenSourceMissing?: boolean;
 }): void {
   const { db, tableName, columns } = params;
   const createSql = readTableSql(db, MEMORY_REINDEX_SCHEMA, tableName);
   if (!createSql) {
-    if (params.dropWhenSourceMissing !== false) {
+    try {
       db.exec(`DROP TABLE IF EXISTS main.${tableName}`);
+    } catch (err) {
+      if (!params.ignoreDropErrorWhenSourceMissing) {
+        throw err;
+      }
     }
     return;
   }
@@ -104,8 +144,9 @@ export function publishMemoryDatabaseTables(params: {
         tableName: "chunks_vec",
         columns: "id, embedding",
         // A vector-disabled connection may not have sqlite-vec loaded and cannot
-        // drop an old virtual table. It is unused and can remain until vec loads.
-        dropWhenSourceMissing: false,
+        // drop an old virtual table. Missing vector metadata forces a strict
+        // rebuild before that table can be queried again.
+        ignoreDropErrorWhenSourceMissing: true,
       });
     });
   } finally {
@@ -117,6 +158,81 @@ export function publishMemoryDatabaseTables(params: {
 export function removeMemoryDatabaseFiles(dbPath: string): void {
   for (const suffix of MEMORY_DATABASE_FILE_SUFFIXES) {
     fs.rmSync(`${dbPath}${suffix}`, { force: true });
+  }
+}
+
+/** Remove crash-left shadow databases only when no full reindex is active. */
+export function cleanupAgedMemoryReindexTempFiles(dbPath: string, nowMs = Date.now()): void {
+  if (!isRegularFile(dbPath)) {
+    return;
+  }
+
+  let reindexLock: MemoryReindexLockHandle | undefined;
+  try {
+    reindexLock = tryAcquireMemoryReindexLock(dbPath);
+  } catch {
+    return;
+  }
+  if (!reindexLock) {
+    return;
+  }
+
+  try {
+    const dir = path.dirname(dbPath);
+    const databaseBaseName = path.basename(dbPath);
+    const shadowBaseNames = new Set<string>();
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      if (!entry.isFile()) {
+        continue;
+      }
+      const shadowBaseName = resolveMemoryReindexBaseName(databaseBaseName, entry.name);
+      if (shadowBaseName) {
+        shadowBaseNames.add(shadowBaseName);
+      }
+    }
+
+    for (const shadowBaseName of shadowBaseNames) {
+      const filePaths = MEMORY_DATABASE_FILE_SUFFIXES.map((suffix) =>
+        path.join(dir, `${shadowBaseName}${suffix}`),
+      );
+      const stats: fs.Stats[] = [];
+      let hasUnknownFileState = false;
+      for (const filePath of filePaths) {
+        try {
+          stats.push(fs.statSync(filePath));
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+            hasUnknownFileState = true;
+            break;
+          }
+        }
+      }
+      if (hasUnknownFileState || stats.length === 0) {
+        continue;
+      }
+      if (
+        nowMs - Math.max(...stats.map((stat) => stat.mtimeMs)) <
+        MEMORY_REINDEX_ORPHAN_MIN_AGE_MS
+      ) {
+        continue;
+      }
+      for (const filePath of filePaths) {
+        try {
+          fs.rmSync(filePath, { force: true });
+        } catch {}
+      }
+    }
+  } finally {
+    try {
+      reindexLock.release();
+    } catch {}
   }
 }
 

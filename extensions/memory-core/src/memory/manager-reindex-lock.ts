@@ -33,22 +33,7 @@ function openMemoryLockDatabase(lockPath: string): DatabaseSync {
   }
 }
 
-/** Acquire an exclusive build lock without locking readers of the live agent database. */
-export function acquireMemoryReindexLock(dbPath: string): MemoryReindexLockHandle {
-  const lockPath = resolveMemoryReindexLockPath(dbPath);
-  const lockDb = openMemoryLockDatabase(lockPath);
-  try {
-    lockDb.exec("BEGIN EXCLUSIVE");
-  } catch (err) {
-    lockDb.close();
-    if (isSqliteBusyError(err)) {
-      throw Object.assign(
-        new Error(`Memory reindex lock is held at ${lockPath}; another reindex is active.`),
-        { code: "SQLITE_BUSY" },
-      );
-    }
-    throw err;
-  }
+function createMemoryReindexLockHandle(lockDb: DatabaseSync): MemoryReindexLockHandle {
   return {
     release: () => {
       let releaseError: unknown;
@@ -67,4 +52,33 @@ export function acquireMemoryReindexLock(dbPath: string): MemoryReindexLockHandl
       }
     },
   };
+}
+
+/** Try to acquire the build lock without locking readers of the live agent database. */
+export function tryAcquireMemoryReindexLock(dbPath: string): MemoryReindexLockHandle | undefined {
+  const lockDb = openMemoryLockDatabase(resolveMemoryReindexLockPath(dbPath));
+  try {
+    lockDb.exec("BEGIN EXCLUSIVE");
+  } catch (err) {
+    lockDb.close();
+    if (isSqliteBusyError(err)) {
+      return undefined;
+    }
+    throw err;
+  }
+  return createMemoryReindexLockHandle(lockDb);
+}
+
+/** Acquire an exclusive build lock without locking readers of the live agent database. */
+export function acquireMemoryReindexLock(dbPath: string): MemoryReindexLockHandle {
+  const lock = tryAcquireMemoryReindexLock(dbPath);
+  if (lock) {
+    return lock;
+  }
+  throw Object.assign(
+    new Error(
+      `Memory reindex lock is held at ${resolveMemoryReindexLockPath(dbPath)}; another reindex is active.`,
+    ),
+    { code: "SQLITE_BUSY" },
+  );
 }

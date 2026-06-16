@@ -341,15 +341,17 @@ describe("memory index", () => {
         };
       }
     ).db;
-    (manager as unknown as { resetIndex: () => void }).resetIndex();
-    const embeddingCacheTable = db
-      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
-      .get("embedding_cache");
-    if (embeddingCacheTable?.name === "embedding_cache") {
-      db.exec("DELETE FROM embedding_cache");
+    for (const table of ["files", "chunks", "embedding_cache", "chunks_fts", "chunks_vec"]) {
+      const existingTable = db
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+        .get(table);
+      if (existingTable?.name === table) {
+        db.exec(`DELETE FROM ${table}`);
+      }
     }
     (manager as unknown as { dirty: boolean }).dirty = true;
     (manager as unknown as { sessionsDirty: boolean }).sessionsDirty = false;
+    (manager as unknown as { sessionsDirtyFiles: Set<string> }).sessionsDirtyFiles.clear();
   }
 
   type TestCfg = Parameters<typeof getMemorySearchManager>[0]["cfg"];

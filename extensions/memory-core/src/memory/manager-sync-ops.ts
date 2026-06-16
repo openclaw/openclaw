@@ -47,6 +47,7 @@ import {
   type EmbeddingProviderRuntime,
 } from "./embeddings.js";
 import {
+  cleanupAgedMemoryReindexTempFiles,
   closeMemoryDatabase,
   openMemoryDatabaseAtPath,
   publishMemoryDatabaseTables,
@@ -608,6 +609,12 @@ export abstract class MemoryManagerSyncOps {
       return false;
     }
     if (ready && typeof dimensions === "number" && dimensions > 0) {
+      // Another process may have published a vectorless index while this
+      // connection retained the previous dimensions in memory.
+      const persistedMeta = this.readMeta();
+      if (persistedMeta && persistedMeta.vectorDims !== this.vector.dims) {
+        this.vector.dims = persistedMeta.vectorDims;
+      }
       this.ensureVectorTable(dimensions);
     }
     return ready;
@@ -645,8 +652,8 @@ export abstract class MemoryManagerSyncOps {
     if (this.vector.dims === dimensions) {
       return;
     }
-    if (this.vector.dims && this.vector.dims !== dimensions) {
-      this.dropVectorTable();
+    if (!this.dropVectorTable()) {
+      throw new Error(`Failed to reset ${VECTOR_TABLE} before rebuilding vector dimensions`);
     }
     this.db.exec(
       `CREATE VIRTUAL TABLE IF NOT EXISTS ${VECTOR_TABLE} USING vec0(\n` +
@@ -657,12 +664,14 @@ export abstract class MemoryManagerSyncOps {
     this.vector.dims = dimensions;
   }
 
-  private dropVectorTable(): void {
+  private dropVectorTable(): boolean {
     try {
       this.db.exec(`DROP TABLE IF EXISTS ${VECTOR_TABLE}`);
+      return true;
     } catch (err) {
       const message = formatErrorMessage(err);
       log.debug(`Failed to drop ${VECTOR_TABLE}: ${message}`);
+      return false;
     }
   }
 
@@ -2442,6 +2451,7 @@ export abstract class MemoryManagerSyncOps {
       this.vectorReady = originalState.vectorReady;
     };
     try {
+      cleanupAgedMemoryReindexTempFiles(dbPath);
       reindexLock = acquireMemoryReindexLock(dbPath);
       tempDb = openMemoryDatabaseAtPath(tempDbPath, this.settings.store.vector.enabled);
       this.db = tempDb;
@@ -2560,31 +2570,6 @@ export abstract class MemoryManagerSyncOps {
         log.warn(`failed to release memory reindex lock for ${dbPath}: ${formatErrorMessage(err)}`);
       }
     }
-  }
-
-  private resetIndex() {
-    this.db.exec(`DELETE FROM files`);
-    this.db.exec(`DELETE FROM chunks`);
-    if (this.fts.enabled && this.fts.available) {
-      try {
-        this.db.exec(`DROP TABLE IF EXISTS ${FTS_TABLE}`);
-      } catch {}
-    }
-    this.ensureSchema();
-    if (this.vector.enabled && this.vector.available) {
-      try {
-        this.db.exec(`DELETE FROM ${VECTOR_TABLE}`);
-      } catch {
-        this.dropVectorTable();
-        this.vector.dims = undefined;
-        this.vector.available = null;
-        this.vectorReady = null;
-      }
-    } else {
-      this.dropVectorTable();
-      this.vector.dims = undefined;
-    }
-    this.sessionsDirtyFiles.clear();
   }
 
   protected readMeta(): MemoryIndexMeta | null {
