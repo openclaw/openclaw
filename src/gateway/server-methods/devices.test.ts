@@ -1,6 +1,11 @@
 // Device method tests cover pairing approval/rejection, paired-device lookup,
 // token rotation/revocation, and operator scope enforcement.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  onInternalDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  type DiagnosticSecurityEvent,
+} from "../../infra/diagnostic-events.js";
 import { deviceHandlers } from "./devices.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -122,8 +127,22 @@ function expectRespondedErrorMessage(opts: GatewayRequestHandlerOptions, message
   expect(call[2]?.message).toBe(message);
 }
 
+function captureSecurityEvents(): {
+  events: DiagnosticSecurityEvent[];
+  stop: () => void;
+} {
+  const events: DiagnosticSecurityEvent[] = [];
+  const stop = onInternalDiagnosticEvent((event, metadata) => {
+    if (metadata.trusted && event.type === "security.event") {
+      events.push(event);
+    }
+  });
+  return { events, stop };
+}
+
 describe("deviceHandlers", () => {
   beforeEach(() => {
+    resetDiagnosticEventsForTest();
     vi.clearAllMocks();
   });
 
@@ -243,15 +262,20 @@ describe("deviceHandlers", () => {
   it("disconnects active clients after revoking a device token", async () => {
     revokeDeviceTokenMock.mockResolvedValue({
       ok: true,
-      entry: { role: "operator", revokedAtMs: 456 },
+      entry: { token: "raw-revoked-token", role: "operator", scopes: [], revokedAtMs: 456 },
     });
     const opts = createOptions("device.token.revoke", {
       deviceId: " device-1 ",
       role: " operator ",
     });
+    const captured = captureSecurityEvents();
 
-    await deviceHandlers["device.token.revoke"](opts);
-    await Promise.resolve();
+    try {
+      await deviceHandlers["device.token.revoke"](opts);
+      await Promise.resolve();
+    } finally {
+      captured.stop();
+    }
 
     expect(revokeDeviceTokenMock).toHaveBeenCalledWith({
       deviceId: " device-1 ",
@@ -266,6 +290,21 @@ describe("deviceHandlers", () => {
       { deviceId: "device-1", role: "operator", revokedAtMs: 456 },
       undefined,
     );
+    expect(captured.events).toHaveLength(1);
+    expect(captured.events[0]).toMatchObject({
+      type: "security.event",
+      category: "auth",
+      action: "device.token.revoked",
+      outcome: "success",
+      severity: "high",
+      target: { kind: "device", idHash: expect.stringMatching(/^sha256:[a-f0-9]{12}$/u) },
+      policy: { id: "gateway.device-token", decision: "allow" },
+      control: { id: "device.token.revoke", family: "auth" },
+      attributes: { role: "operator" },
+    });
+    const serialized = JSON.stringify(captured.events);
+    expect(serialized).not.toContain("device-1");
+    expect(serialized).not.toContain("raw-revoked-token");
   });
 
   it("allows admin-scoped callers to revoke another device's token", async () => {
@@ -299,12 +338,37 @@ describe("deviceHandlers", () => {
       { deviceId: "device-1", role: "node" },
       { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }) },
     );
+    const captured = captureSecurityEvents();
 
-    await deviceHandlers["device.token.revoke"](opts);
+    try {
+      await deviceHandlers["device.token.revoke"](opts);
+    } finally {
+      captured.stop();
+    }
 
     expect(revokeDeviceTokenMock).not.toHaveBeenCalled();
     expect(opts.context.disconnectClientsForDevice).not.toHaveBeenCalled();
     expectRespondedErrorMessage(opts, "device token revocation denied");
+    expect(captured.events).toHaveLength(1);
+    expect(captured.events[0]).toMatchObject({
+      action: "device.token.revocation_denied",
+      outcome: "denied",
+      reason: "role-management-requires-admin",
+      actor: {
+        kind: "operator",
+        deviceIdHash: expect.stringMatching(/^sha256:[a-f0-9]{12}$/u),
+        role: "operator",
+      },
+      target: { kind: "device", idHash: expect.stringMatching(/^sha256:[a-f0-9]{12}$/u) },
+      policy: {
+        id: "gateway.device-token",
+        decision: "deny",
+        reason: "role-management-requires-admin",
+      },
+      control: { id: "device.token.revoke", family: "auth" },
+      attributes: { role: "node" },
+    });
+    expect(JSON.stringify(captured.events)).not.toContain("device-1");
   });
 
   it("treats normalized device ids as self-owned for token revocation", async () => {
@@ -823,8 +887,13 @@ describe("deviceHandlers", () => {
         }),
       },
     );
+    const captured = captureSecurityEvents();
 
-    await deviceHandlers["device.pair.approve"](opts);
+    try {
+      await deviceHandlers["device.pair.approve"](opts);
+    } finally {
+      captured.stop();
+    }
 
     expect(getPendingDevicePairingMock).not.toHaveBeenCalled();
     expect(approveDevicePairingMock).toHaveBeenCalledWith("req-2", {
@@ -844,6 +913,25 @@ describe("deviceHandlers", () => {
       },
       undefined,
     );
+    expect(captured.events).toHaveLength(1);
+    expect(captured.events[0]).toMatchObject({
+      action: "device.pairing.approved",
+      outcome: "success",
+      severity: "low",
+      actor: {
+        kind: "operator",
+        deviceIdHash: expect.stringMatching(/^sha256:[a-f0-9]{12}$/u),
+        role: "admin",
+      },
+      target: { kind: "device", idHash: expect.stringMatching(/^sha256:[a-f0-9]{12}$/u) },
+      policy: { id: "gateway.device-pairing", decision: "allow" },
+      control: { id: "device.pair.approve", family: "auth" },
+      attributes: { role_count: 0, scope_count: 0 },
+    });
+    const serialized = JSON.stringify(captured.events);
+    expect(serialized).not.toContain("device-1");
+    expect(serialized).not.toContain("device-2");
+    expect(serialized).not.toContain("pk-2");
   });
 
   it("allows approving the caller device from a non-admin device session", async () => {
@@ -957,11 +1045,29 @@ describe("deviceHandlers", () => {
       { requestId: "req-1" },
       { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }) },
     );
+    const captured = captureSecurityEvents();
 
-    await deviceHandlers["device.pair.approve"](opts);
+    try {
+      await deviceHandlers["device.pair.approve"](opts);
+    } finally {
+      captured.stop();
+    }
 
     expect(approveDevicePairingMock).not.toHaveBeenCalled();
     expectRespondedErrorMessage(opts, "device pairing approval denied");
+    expect(captured.events).toHaveLength(1);
+    expect(captured.events[0]).toMatchObject({
+      action: "device.pairing.denied",
+      outcome: "denied",
+      reason: "role-management-requires-admin",
+      policy: {
+        id: "gateway.device-pairing",
+        decision: "deny",
+        reason: "role-management-requires-admin",
+      },
+      control: { id: "device.pair.approve", family: "auth" },
+    });
+    expect(JSON.stringify(captured.events)).not.toContain("device-1");
   });
 
   it("rejects approving node roles from non-admin shared-auth sessions", async () => {
