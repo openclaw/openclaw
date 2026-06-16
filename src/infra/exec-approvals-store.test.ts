@@ -198,7 +198,7 @@ describe("exec approvals store helpers", () => {
     expect(ensured.defaults).toEqual({
       security: "deny",
       ask: "always",
-      askFallback: "deny",
+      askFallback: undefined,
       autoAllowSkills: undefined,
     });
     expect(fs.existsSync(stateApprovalsFilePath(stateDir))).toBe(false);

@@ -351,15 +351,19 @@ function hasUnmigratedLegacyExecApprovals(filePath: string): boolean {
 }
 
 function createUnmigratedLegacyExecApprovalsFallback(): ExecApprovalsFile {
-  return normalizeExecApprovals({
-    version: 1,
-    defaults: {
-      security: "deny",
-      ask: "always",
-      askFallback: "deny",
-    },
-    agents: {},
-  });
+  try {
+    const legacyPath = resolveLegacyExecApprovalsPath();
+    if (fs.existsSync(legacyPath)) {
+      const raw = fs.readFileSync(legacyPath, "utf8");
+      const parsed = JSON.parse(raw) as ExecApprovalsFile;
+      if (parsed?.version === 1) {
+        return normalizeExecApprovals(parsed);
+      }
+    }
+  } catch {
+    // Best-effort read of the legacy file; fall through to defaults on failure.
+  }
+  return normalizeExecApprovals({ version: 1, agents: {} });
 }
 
 function normalizeAllowlistPattern(value: string | undefined): string | null {
