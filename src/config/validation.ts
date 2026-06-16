@@ -41,6 +41,7 @@ import {
 import { isRecord, resolveUserPath } from "../utils.js";
 import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-dirs.js";
 import { appendAllowedValuesHint, summarizeAllowedValues } from "./allowed-values.js";
+import { formatConfigPathForDisplay } from "./issue-format.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
 import { collectChannelSchemaMetadata } from "./channel-config-metadata.js";
 import { shouldSuppressMissingCodexPluginDiagnostics } from "./codex-plugin-diagnostics.js";
@@ -697,14 +698,17 @@ function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue {
   }
 
   if (!allowedValuesSummary) {
-    return { path: pathItem, message: enrichedMessage };
+    const displayPath = formatConfigPathForDisplay(pathItem);
+    return { path: pathItem, message: enrichedMessage, ...(displayPath ? { displayPath } : {}) };
   }
 
+  const displayPath = formatConfigPathForDisplay(pathItem);
   return {
     path: pathItem,
     message: appendAllowedValuesHint(enrichedMessage, allowedValuesSummary),
     allowedValues: allowedValuesSummary.values,
     allowedValuesHiddenCount: allowedValuesSummary.hiddenCount,
+    ...(displayPath ? { displayPath } : {}),
   };
 }
 

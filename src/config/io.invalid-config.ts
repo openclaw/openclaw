@@ -3,10 +3,12 @@
  * All terminal-facing text is sanitized here so callers can reuse the same failure surface.
  */
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { formatConfigPathForDisplay } from "./issue-format.js";
 
 /** Minimal validation issue shape accepted from schema and mutation validation paths. */
 type ConfigValidationIssueLike = {
   path: string;
+  displayPath?: string;
   message: string;
 };
 
@@ -14,9 +16,10 @@ type ConfigValidationIssueLike = {
 export function formatInvalidConfigDetails(issues: ConfigValidationIssueLike[]): string {
   return issues
     .map(
-      (issue) =>
-        // Validation paths/messages can contain user config text; sanitize before terminal output.
-        `- ${sanitizeTerminalText(issue.path || "<root>")}: ${sanitizeTerminalText(issue.message)}`,
+      (issue) => {
+        const displayPath = issue.displayPath ?? formatConfigPathForDisplay(issue.path) ?? issue.path;
+        return `- ${sanitizeTerminalText(displayPath || "<root>")}: ${sanitizeTerminalText(issue.message)}`;
+      },
     )
     .join("\n");
 }

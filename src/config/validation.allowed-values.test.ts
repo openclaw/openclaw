@@ -138,12 +138,11 @@ describe("config validation allowed-values metadata", () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.issues).toEqual([
-        {
-          path: "agents.list.0.model",
-          message: "Invalid input",
-        },
-      ]);
+      const { displayPath: _dp, ...issueWithoutDisplayPath } = result.issues[0];
+      expect(issueWithoutDisplayPath).toEqual({
+        path: "agents.list.0.model",
+        message: "Invalid input",
+      });
     }
   });
 });
