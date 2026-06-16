@@ -516,7 +516,10 @@ async function runBridgeRequest(params: {
         if (typeof id !== "string") {
           throw new ToolInputError("describe id must be a string.");
         }
-        value = await params.runtime.describe(id, { includeMcp: false });
+        value = await params.runtime.describe(id, {
+          includeMcp: false,
+          recoverySurface: "tools",
+        });
         break;
       }
       case "call": {
@@ -524,7 +527,10 @@ async function runBridgeRequest(params: {
         if (typeof id !== "string") {
           throw new ToolInputError("call id must be a string.");
         }
-        const described = await params.runtime.describe(id, { includeMcp: false });
+        const described = await params.runtime.describe(id, {
+          includeMcp: false,
+          recoverySurface: "tools",
+        });
         value = await params.runtime.callExactId(described.id, values[1] ?? {}, {
           parentToolCallId: params.parentToolCallId,
           signal: params.signal,

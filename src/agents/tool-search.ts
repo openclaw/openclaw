@@ -55,7 +55,7 @@ type CatalogTool = AnyAgentTool | ToolDefinition;
 type CatalogVisibilityOptions = {
   includeMcp?: boolean;
 };
-type UnknownToolRecoverySurface = "raw-tools" | "code-mode";
+type UnknownToolRecoverySurface = "raw-tools" | "code-mode" | "tools";
 type UnknownToolErrorOptions = {
   exactIdOnly?: boolean;
   recoverySurface?: UnknownToolRecoverySurface;
@@ -1597,7 +1597,9 @@ function formatUnknownToolIdError(
   const recoveryText =
     options.recoverySurface === "code-mode"
       ? "Use openclaw.tools.search to find a tool, openclaw.tools.describe to inspect it, then openclaw.tools.call with the exact id or name."
-      : "Use tool_search to find a tool, tool_describe to inspect it, then tool_call with the exact id or name.";
+      : options.recoverySurface === "tools"
+        ? "Use tools.search to find a tool, tools.describe to inspect it, then tools.call with the exact id or name."
+        : "Use tool_search to find a tool, tool_describe to inspect it, then tool_call with the exact id or name.";
   return `Unknown tool id: ${needle}. Did you mean: ${suggestions.join(", ")}? ${recoveryText}`;
 }
 
