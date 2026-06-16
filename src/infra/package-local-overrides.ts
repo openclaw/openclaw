@@ -289,6 +289,10 @@ function fileModesHaveSameExecutableSemantics(left: number, right: number): bool
   );
 }
 
+function mergeLocalOverrideFileMode(targetMode: number, overrideMode: number): number {
+  return (normalizeFileMode(targetMode) & ~0o111) | (normalizeFileMode(overrideMode) & 0o111);
+}
+
 async function writeFileWithMode(
   content: Buffer,
   destination: string,
@@ -487,6 +491,7 @@ async function replaceLocalOverrideTarget(params: {
   let backupWritten = false;
   let committed = false;
   let movedPath: string | undefined;
+  let replacementMode = params.mode;
   try {
     await params.packageFs.copyIn(temporaryPath, params.sourcePath, {
       maxBytes: Number.POSITIVE_INFINITY,
@@ -494,17 +499,6 @@ async function replaceLocalOverrideTarget(params: {
       mode: params.mode,
       sourceHardlinks: "reject",
     });
-    if (params.mode !== undefined && process.platform !== "win32") {
-      const temporary = await params.packageFs.open(temporaryPath, {
-        hardlinks: "reject",
-        symlinks: "reject",
-      });
-      try {
-        await temporary.handle.chmod(params.mode);
-      } finally {
-        await temporary.handle.close();
-      }
-    }
     if (params.expected) {
       if (!params.backupPath) {
         throw new Error(`missing local override rollback path: ${params.relativePath}`);
@@ -516,12 +510,26 @@ async function replaceLocalOverrideTarget(params: {
       });
       movedPath = moved.movedPath;
       backupMode = moved.mode;
+      if (replacementMode !== undefined) {
+        replacementMode = mergeLocalOverrideFileMode(moved.mode, replacementMode);
+      }
       await writeRollbackBackup({
         backupPath: params.backupPath,
         content: moved.content,
         mode: moved.mode,
       });
       backupWritten = true;
+    }
+    if (replacementMode !== undefined && process.platform !== "win32") {
+      const temporary = await params.packageFs.open(temporaryPath, {
+        hardlinks: "reject",
+        symlinks: "reject",
+      });
+      try {
+        await temporary.handle.chmod(replacementMode);
+      } finally {
+        await temporary.handle.close();
+      }
     }
     const cleanupPaths = [temporaryPath, ...(movedPath ? [movedPath] : [])];
     await publishLocalOverrideTarget({

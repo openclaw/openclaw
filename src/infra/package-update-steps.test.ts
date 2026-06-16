@@ -636,6 +636,7 @@ describe("runGlobalPackageUpdateSteps", () => {
         expect(result.applied).toBe(1);
         expect(result.conflicts).toEqual([]);
         await expect(fs.readFile(indexPath, "utf8")).resolves.toBe("export const local = true;\n");
+        expect((await fs.stat(indexPath)).mode & 0o777).toBe(0o600);
       });
     },
   );
