@@ -794,6 +794,11 @@ describe("resolveSessionDeliveryTarget", () => {
       cfg: {},
       allowBootstrap: true,
     });
+    expect(
+      mocks.resolveOutboundChannelPlugin.mock.calls.filter(
+        ([params]) => params.allowBootstrap === true,
+      ),
+    ).toHaveLength(1);
   });
 
   it("does not bypass target policy when bootstrapping plugin-channel heartbeat routes", () => {
@@ -819,6 +824,11 @@ describe("resolveSessionDeliveryTarget", () => {
 
     expect(resolved.channel).toBe("none");
     expect(resolved.reason).toBe("no-target");
+    expect(
+      mocks.resolveOutboundChannelPlugin.mock.calls.filter(
+        ([params]) => params.allowBootstrap === true,
+      ),
+    ).toHaveLength(1);
   });
 
   it("does not bypass account validation when bootstrapping plugin-channel heartbeat routes", () => {
@@ -852,6 +862,32 @@ describe("resolveSessionDeliveryTarget", () => {
 
     expect(resolved.channel).toBe("none");
     expect(resolved.reason).toBe("unknown-account");
+    expect(
+      mocks.resolveOutboundChannelPlugin.mock.calls.filter(
+        ([params]) => params.allowBootstrap === true,
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("does not bootstrap plugin-channel heartbeat routes without a concrete target", () => {
+    setActivePluginRegistry(createTargetsTestRegistry([]));
+
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg: {},
+      entry: {
+        sessionId: "sess-heartbeat-no-target",
+        updatedAt: 1,
+        lastChannel: "forum",
+      },
+      heartbeat: {
+        target: "last",
+        accountId: "configured-account",
+      },
+    });
+
+    expect(resolved.channel).toBe("none");
+    expect(resolved.reason).toBe("no-target");
+    expect(mocks.resolveOutboundChannelPlugin).not.toHaveBeenCalled();
   });
 
   it("resolves explicit heartbeat plugin targets through the outbound session route", async () => {

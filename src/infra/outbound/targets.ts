@@ -162,12 +162,24 @@ export function resolveHeartbeatDeliveryTarget(params: {
   // Use explicit accountId from heartbeat config if provided, otherwise fall back to session
   let effectiveAccountId = heartbeatAccountId || resolvedTarget.accountId;
 
-  if (heartbeatAccountId && resolvedTarget.channel) {
-    const plugin = resolveOutboundChannelPlugin({
-      channel: resolvedTarget.channel,
-      cfg,
-      allowBootstrap: true,
+  if (!resolvedTarget.channel || !resolvedTarget.to) {
+    return buildNoHeartbeatDeliveryTarget({
+      reason: "no-target",
+      accountId: effectiveAccountId,
+      lastChannel: resolvedTarget.lastChannel,
+      lastAccountId: resolvedTarget.lastAccountId,
     });
+  }
+
+  // Bootstrap once after a concrete route exists, then carry the prepared plugin
+  // through account validation, target policy, and allow-from comparison.
+  const plugin = resolveOutboundChannelPlugin({
+    channel: resolvedTarget.channel,
+    cfg,
+    allowBootstrap: true,
+  });
+
+  if (heartbeatAccountId) {
     const listAccountIds = plugin?.config.listAccountIds;
     const accountIds = listAccountIds ? listAccountIds(cfg) : [];
     if (accountIds.length > 0) {
@@ -187,24 +199,17 @@ export function resolveHeartbeatDeliveryTarget(params: {
     }
   }
 
-  if (!resolvedTarget.channel || !resolvedTarget.to) {
-    return buildNoHeartbeatDeliveryTarget({
-      reason: "no-target",
+  const resolved = resolveOutboundTargetWithPlugin({
+    plugin,
+    target: {
+      channel: resolvedTarget.channel,
+      to: resolvedTarget.to,
+      cfg,
       accountId: effectiveAccountId,
-      lastChannel: resolvedTarget.lastChannel,
-      lastAccountId: resolvedTarget.lastAccountId,
-    });
-  }
-
-  const resolved = resolveOutboundTarget({
-    channel: resolvedTarget.channel,
-    to: resolvedTarget.to,
-    cfg,
-    accountId: effectiveAccountId,
-    mode: "heartbeat",
-    allowBootstrap: true,
+      mode: "heartbeat",
+    },
   });
-  if (!resolved.ok) {
+  if (!resolved?.ok) {
     return buildNoHeartbeatDeliveryTarget({
       reason: "no-target",
       accountId: effectiveAccountId,
@@ -230,19 +235,18 @@ export function resolveHeartbeatDeliveryTarget(params: {
   }
 
   let reason: string | undefined;
-  const plugin = resolveOutboundChannelPlugin({
-    channel: resolvedTarget.channel,
-    cfg,
-  });
   if (plugin?.config.resolveAllowFrom) {
-    const explicit = resolveOutboundTarget({
-      channel: resolvedTarget.channel,
-      to: resolvedTarget.to,
-      cfg,
-      accountId: effectiveAccountId,
-      mode: "explicit",
+    const explicit = resolveOutboundTargetWithPlugin({
+      plugin,
+      target: {
+        channel: resolvedTarget.channel,
+        to: resolvedTarget.to,
+        cfg,
+        accountId: effectiveAccountId,
+        mode: "explicit",
+      },
     });
-    if (explicit.ok && explicit.to !== resolved.to) {
+    if (explicit?.ok && explicit.to !== resolved.to) {
       reason = "allowFrom-fallback";
     }
   }

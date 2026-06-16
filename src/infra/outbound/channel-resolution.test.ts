@@ -44,6 +44,7 @@ vi.mock("../../plugins/runtime.js", () => ({
 }));
 
 vi.mock("../../utils/message-channel.js", () => ({
+  INTERNAL_MESSAGE_CHANNEL: "webchat",
   normalizeMessageChannel: (...args: unknown[]) => normalizeMessageChannelMock(...args),
   isDeliverableMessageChannel: (...args: unknown[]) => isDeliverableMessageChannelMock(...args),
 }));
@@ -229,6 +230,80 @@ describe("outbound channel resolution", () => {
     expect(registryOptions.runtimeOptions).toEqual({
       allowGatewaySubagentBinding: true,
     });
+  });
+
+  it("bootstraps an external channel before strict deliverability validation", async () => {
+    const plugin = { id: "external-channel", outbound: { sendText: vi.fn() } };
+    isDeliverableMessageChannelMock.mockImplementation(
+      (value?: string) =>
+        value === "external-channel" && resolveRuntimePluginRegistryMock.mock.calls.length > 0,
+    );
+    getLoadedChannelPluginMock.mockImplementation(() =>
+      resolveRuntimePluginRegistryMock.mock.calls.length > 0 ? plugin : undefined,
+    );
+    const channelResolution = await importChannelResolution("bootstrap-external-channel");
+
+    expect(
+      channelResolution.resolveOutboundChannelPlugin({
+        channel: "external-channel",
+        cfg: { channels: {} } as never,
+        allowBootstrap: true,
+      }),
+    ).toBe(plugin);
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves a bootstrapped external channel from the active registry when the pin is stale", async () => {
+    const plugin = { id: "external-channel", outbound: { sendText: vi.fn() } };
+    isDeliverableMessageChannelMock.mockReturnValue(false);
+    getLoadedChannelPluginMock.mockReturnValue(undefined);
+    getChannelPluginMock.mockReturnValue(undefined);
+    getActivePluginChannelRegistryMock.mockReturnValue({
+      channels: [{ plugin: { id: "other-channel" } }],
+    });
+    getActivePluginRegistryMock.mockReturnValue({ channels: [{ plugin }] });
+    const channelResolution = await importChannelResolution("bootstrap-external-active-registry");
+
+    expect(
+      channelResolution.resolveOutboundChannelPlugin({
+        channel: "external-channel",
+        cfg: { channels: {} } as never,
+        allowBootstrap: true,
+      }),
+    ).toBe(plugin);
+    expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
+  });
+
+  it("canonicalizes a bootstrapped external channel alias from the active registry", async () => {
+    const plugin = {
+      id: "external-channel",
+      meta: { aliases: ["external"] },
+      outbound: { sendText: vi.fn() },
+    };
+    isDeliverableMessageChannelMock.mockReturnValue(false);
+    getLoadedChannelPluginMock.mockReturnValue(undefined);
+    getChannelPluginMock.mockReturnValue(undefined);
+    getActivePluginChannelRegistryMock.mockReturnValue({ channels: [] });
+    getActivePluginRegistryMock.mockImplementation(() =>
+      resolveRuntimePluginRegistryMock.mock.calls.length > 0 ? { channels: [{ plugin }] } : null,
+    );
+    const channelResolution = await importChannelResolution("bootstrap-external-alias");
+
+    expect(
+      channelResolution.resolveOutboundChannelPlugin({
+        channel: "external",
+        cfg: { channels: {} } as never,
+        allowBootstrap: true,
+      }),
+    ).toBe(plugin);
+    expect(
+      channelResolution.resolveOutboundChannelPlugin({
+        channel: "external",
+        cfg: { channels: {} } as never,
+        allowBootstrap: true,
+      }),
+    ).toBe(plugin);
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledTimes(1);
   });
 
   it("bootstraps instead of returning a pinned setup shell as the outbound plugin", async () => {
@@ -456,6 +531,28 @@ describe("outbound channel resolution", () => {
     expect(
       channelResolution.resolveOutboundChannelMessageAdapter({
         channel: "alpha",
+        cfg: { channels: {} } as never,
+        allowBootstrap: true,
+      }),
+    ).toBe(message);
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("bootstraps an external channel before resolving its message adapter", async () => {
+    const message = { send: { text: vi.fn() } };
+    const plugin = { id: "external-channel", message };
+    isDeliverableMessageChannelMock.mockImplementation(
+      (value?: string) =>
+        value === "external-channel" && resolveRuntimePluginRegistryMock.mock.calls.length > 0,
+    );
+    getLoadedChannelPluginMock.mockImplementation(() =>
+      resolveRuntimePluginRegistryMock.mock.calls.length > 0 ? plugin : undefined,
+    );
+    const channelResolution = await importChannelResolution("message-adapter-external-channel");
+
+    expect(
+      channelResolution.resolveOutboundChannelMessageAdapter({
+        channel: "external-channel",
         cfg: { channels: {} } as never,
         allowBootstrap: true,
       }),
