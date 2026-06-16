@@ -90,11 +90,15 @@ function resolveBundledProviderPolicyPluginId(
   for (const plugin of registry.plugins.toSorted((left, right) =>
     left.id.localeCompare(right.id),
   )) {
-    if (plugin.origin !== "bundled") {
+    try {
+      if (plugin.origin !== "bundled") {
+        continue;
+      }
+      if (pluginOwnsProviderPolicyRef(plugin, normalizedProviderId)) {
+        return plugin.id;
+      }
+    } catch {
       continue;
-    }
-    if (pluginOwnsProviderPolicyRef(plugin, normalizedProviderId)) {
-      return plugin.id;
     }
   }
 
