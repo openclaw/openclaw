@@ -11,6 +11,7 @@ import {
   captureCompactionCheckpointSnapshotAsync,
   cleanupCompactionCheckpointSnapshot,
   persistSessionCompactionCheckpoint,
+  readSessionLeafStateFromTranscriptAsync,
   resolveSessionCompactionCheckpointReason,
   type CapturedCompactionCheckpointSnapshot,
 } from "../../gateway/session-compaction-checkpoints.js";
@@ -1504,6 +1505,13 @@ async function compactEmbeddedAgentSessionDirectOnce(
           });
           if (params.config && params.sessionKey && checkpointSnapshot) {
             try {
+              const transcriptState =
+                await readSessionLeafStateFromTranscriptAsync(activeSessionFile);
+              const checkpointPostLeafId = activePostLeafId ?? transcriptState?.leafId ?? undefined;
+              const checkpointPostEntryId =
+                transcriptState && transcriptState.leafId === checkpointPostLeafId
+                  ? transcriptState.entryId
+                  : checkpointPostLeafId;
               const storedCheckpoint = await persistSessionCompactionCheckpoint({
                 cfg: params.config,
                 sessionKey: params.sessionKey,
@@ -1517,8 +1525,8 @@ async function compactEmbeddedAgentSessionDirectOnce(
                 tokensBefore: observedTokenCount ?? result.tokensBefore,
                 tokensAfter,
                 postSessionFile: activeSessionFile,
-                postLeafId: activePostLeafId,
-                postEntryId: activePostLeafId,
+                postLeafId: checkpointPostLeafId,
+                postEntryId: checkpointPostEntryId,
                 createdAt: compactStartedAt,
               });
               checkpointSnapshotRetained = storedCheckpoint !== null;

@@ -4,7 +4,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { readTranscriptFileState } from "./transcript-file-state.js";
+import {
+  persistTranscriptStateMutation,
+  readTranscriptFileState,
+} from "./transcript-file-state.js";
 import { rewriteTranscriptEntriesInState } from "./transcript-rewrite.js";
 
 const roots: string[] = [];
@@ -460,6 +463,54 @@ describe("readTranscriptFileState", () => {
     ]);
   });
 
+  it("canonicalizes opaque append parents before a legacy migration rewrite", async () => {
+    const root = await makeRoot("openclaw-transcript-state-v1-opaque-parent-");
+    const sessionFile = path.join(root, "session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      [
+        {
+          type: "session",
+          version: 1,
+          id: "session-1",
+          timestamp: "2026-06-15T00:00:00.000Z",
+          cwd: root,
+        },
+        {
+          type: "message",
+          timestamp: "2026-06-15T00:00:01.000Z",
+          message: { role: "assistant", content: "legacy active" },
+        },
+        {
+          type: "metadata",
+          id: "plugin-metadata",
+          parentId: "missing-before-migration",
+        },
+      ]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n") + "\n",
+      "utf8",
+    );
+
+    const state = await readTranscriptFileState(sessionFile);
+    const activeLeafId = state.getLeafId();
+    const appended = state.appendMessage({
+      role: "user",
+      content: "continued",
+      timestamp: Date.now(),
+    });
+    await persistTranscriptStateMutation({
+      sessionFile,
+      state,
+      appendedEntries: [appended],
+    });
+
+    expect(state.migrated).toBe(true);
+    expect(appended.parentId).toBe(activeLeafId);
+    const reopened = await readTranscriptFileState(sessionFile);
+    expect(reopened.getBranch().map((entry) => entry.id)).toEqual([activeLeafId, appended.id]);
+  });
+
   it("preserves legacy compaction keep indexes across JSON-valid non-object rows", async () => {
     const root = await makeRoot("openclaw-transcript-state-v1-compaction-null-row-");
     const sessionFile = path.join(root, "session.jsonl");
@@ -844,6 +895,55 @@ describe("readTranscriptFileState", () => {
     expect(state.getBranch().map((entry) => entry.id)).toEqual(["user-1"]);
   });
 
+  it("breaks cycles between canonical and opaque rows", async () => {
+    const root = await makeRoot("openclaw-transcript-state-canonical-opaque-cycle-");
+    const sessionFile = path.join(root, "session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      [
+        {
+          type: "session",
+          version: 3,
+          id: "session-1",
+          timestamp: "2026-06-15T00:00:00.000Z",
+          cwd: root,
+        },
+        {
+          type: "message",
+          id: "active-entry",
+          parentId: "opaque-cycle",
+          timestamp: "2026-06-15T00:00:01.000Z",
+          message: { role: "user", content: "kept through cycle" },
+        },
+        {
+          type: "metadata",
+          id: "opaque-cycle",
+          parentId: "active-entry",
+          payload: { source: "plugin" },
+        },
+      ]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n") + "\n",
+      "utf-8",
+    );
+
+    const state = await readTranscriptFileState(sessionFile);
+
+    expect(state.getBranch().map((entry) => ({ id: entry.id, parentId: entry.parentId }))).toEqual([
+      { id: "active-entry", parentId: null },
+    ]);
+    expect(state.buildSessionContext().messages).toMatchObject([
+      { role: "user", content: "kept through cycle" },
+    ]);
+    const appended = state.appendMessage({
+      role: "user",
+      content: "continued",
+      timestamp: Date.now(),
+    });
+    expect(appended.parentId).toBe("opaque-cycle");
+    expect(state.getBranch().map((entry) => entry.id)).toEqual(["active-entry", appended.id]);
+  });
+
   it("drops missing parents reached through rejected rows before rewrite replay", async () => {
     const root = await makeRoot("openclaw-transcript-state-rejected-missing-parent-");
     const sessionFile = path.join(root, "session.jsonl");
@@ -1030,6 +1130,141 @@ describe("readTranscriptFileState", () => {
       rootEntry.id,
       replacementEntry.id,
     ]);
+  });
+
+  it("keeps a terminal leaf control's opaque append parent", async () => {
+    const root = await makeRoot("openclaw-transcript-state-opaque-append-parent-");
+    const sessionFile = path.join(root, "session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      [
+        {
+          type: "session",
+          version: 3,
+          id: "session-1",
+          timestamp: "2026-06-15T00:00:00.000Z",
+          cwd: root,
+        },
+        {
+          type: "message",
+          id: "active-root",
+          parentId: null,
+          timestamp: "2026-06-15T00:00:01.000Z",
+          message: { role: "assistant", content: "active" },
+        },
+        {
+          type: "metadata",
+          id: "plugin-metadata",
+          parentId: null,
+          payload: { source: "plugin" },
+        },
+        {
+          type: "message",
+          id: "side-delivery",
+          parentId: "active-root",
+          timestamp: "2026-06-15T00:00:02.000Z",
+          message: { role: "assistant", content: "side delivery" },
+        },
+        {
+          type: "leaf",
+          id: "active-leaf",
+          parentId: "side-delivery",
+          timestamp: "2026-06-15T00:00:03.000Z",
+          targetId: "active-root",
+          appendParentId: "plugin-metadata",
+        },
+      ]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n") + "\n",
+      "utf8",
+    );
+
+    const state = await readTranscriptFileState(sessionFile);
+    const appended = state.appendMessage({
+      role: "user",
+      content: "continued",
+      timestamp: Date.now(),
+    });
+    await persistTranscriptStateMutation({
+      sessionFile,
+      state,
+      appendedEntries: [appended],
+    });
+    const persisted = (await fs.readFile(sessionFile, "utf8"))
+      .trim()
+      .split(/\r?\n/)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+
+    expect(state.getLeafId()).toBe(appended.id);
+    expect(appended.parentId).toBe("plugin-metadata");
+    expect(state.getBranch().map((entry) => entry.id)).toEqual(["active-root", appended.id]);
+    expect(persisted.at(-1)).toMatchObject({ id: appended.id, parentId: "plugin-metadata" });
+  });
+
+  it("ignores leaf controls with dangling target or append references", async () => {
+    const root = await makeRoot("openclaw-transcript-state-invalid-leaf-");
+    const sessionFile = path.join(root, "session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      [
+        {
+          type: "session",
+          version: 3,
+          id: "session-1",
+          timestamp: "2026-06-15T00:00:00.000Z",
+          cwd: root,
+        },
+        {
+          type: "message",
+          id: "active-root",
+          parentId: null,
+          timestamp: "2026-06-15T00:00:01.000Z",
+          message: { role: "assistant", content: "active" },
+        },
+        {
+          type: "metadata",
+          id: "plugin-metadata",
+          parentId: "active-root",
+          payload: { source: "plugin" },
+        },
+        {
+          type: "leaf",
+          id: "missing-target",
+          parentId: "plugin-metadata",
+          timestamp: "2026-06-15T00:00:02.000Z",
+          targetId: "missing",
+        },
+        {
+          type: "leaf",
+          id: "missing-append",
+          parentId: "missing-target",
+          timestamp: "2026-06-15T00:00:03.000Z",
+          targetId: "active-root",
+          appendParentId: "missing",
+        },
+      ]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n") + "\n",
+      "utf8",
+    );
+
+    const state = await readTranscriptFileState(sessionFile);
+    const appended = state.appendMessage({
+      role: "user",
+      content: "continued",
+      timestamp: Date.now(),
+    });
+    await persistTranscriptStateMutation({
+      sessionFile,
+      state,
+      appendedEntries: [appended],
+    });
+
+    expect(appended.parentId).toBe("plugin-metadata");
+    expect(state.getBranch().map((entry) => entry.id)).toEqual(["active-root", appended.id]);
+    const reopened = await readTranscriptFileState(sessionFile);
+    expect(reopened.getLeafId()).toBe(appended.id);
+    expect(reopened.getBranch().map((entry) => entry.id)).toEqual(["active-root", appended.id]);
   });
 
   it("keeps legacy roots that are missing tree metadata", async () => {

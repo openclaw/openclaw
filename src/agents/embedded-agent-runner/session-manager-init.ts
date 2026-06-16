@@ -5,7 +5,12 @@ import fs from "node:fs/promises";
 import { serializeJsonlLine, writeJsonlLines } from "../../config/sessions/transcript-jsonl.js";
 import { invalidateSessionFileRepairCache } from "../session-file-repair.js";
 
-type SessionHeaderEntry = { type: "session"; id?: string; cwd?: string };
+type SessionHeaderEntry = {
+  type: "session";
+  id?: string;
+  cwd?: string;
+  parentSession?: string;
+};
 type SessionMessageEntry = { type: "message"; message?: { role?: string } };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -77,7 +82,11 @@ export async function prepareSessionManagerForRun(params: {
   }
 
   if (params.hadSessionFile && header && !hasAssistant) {
-    if (sm.wasRecoveredFromCorruptHeader?.()) {
+    const preservesForkedBranch =
+      typeof header.parentSession === "string" && header.parentSession.length > 0;
+    if (sm.wasRecoveredFromCorruptHeader?.() || preservesForkedBranch) {
+      // Fork transcripts can intentionally select a user-only or empty branch.
+      // Keep their copied tree so the first run appends at the preserved cursor.
       header.id = params.sessionId;
       header.cwd = params.cwd;
       sm.sessionId = params.sessionId;

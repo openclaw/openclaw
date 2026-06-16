@@ -2,7 +2,6 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { StringDecoder } from "node:string_decoder";
 import { resolveTimestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import {
@@ -21,11 +20,14 @@ import {
   writeJsonlEntry,
   writeJsonlLines,
 } from "./transcript-jsonl.js";
-import { streamSessionTranscriptLinesReverse } from "./transcript-stream.js";
+import {
+  streamSessionTranscriptLines,
+  streamSessionTranscriptLinesReverse,
+} from "./transcript-stream.js";
+import { isCanonicalSessionTranscriptEntry } from "./transcript-tree.js";
 import { resolveOwnedSessionTranscriptWriteLockRunner } from "./transcript-write-context.js";
 import { CURRENT_SESSION_VERSION } from "./version.js";
 
-const TRANSCRIPT_APPEND_SCAN_CHUNK_BYTES = 64 * 1024;
 const SESSION_MANAGER_APPEND_MAX_BYTES = 8 * 1024 * 1024;
 
 const transcriptAppendQueues = new Map<string, Promise<void>>();
@@ -39,14 +41,13 @@ type TranscriptLeafInfo = {
 type TranscriptLineInfo = {
   isNonSessionEntry: boolean;
   hasParentLinkedEntry: boolean;
-  leafUpdate?: { leafId: string | null };
+  entryId?: string;
+  leafControl?: {
+    targetId: string | null;
+    appendParentId?: string | null;
+  };
+  invalidLeafControl?: boolean;
 };
-
-async function yieldTranscriptAppendScan(): Promise<void> {
-  await new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
-}
 
 function readTranscriptLineInfo(line: string): TranscriptLineInfo {
   if (!line.trim()) {
@@ -58,28 +59,55 @@ function readTranscriptLineInfo(line: string): TranscriptLineInfo {
       id?: unknown;
       parentId?: unknown;
       targetId?: unknown;
+      appendParentId?: unknown;
     };
     if (parsed.type === "session") {
       return { isNonSessionEntry: false, hasParentLinkedEntry: false };
     }
-    const entryId = typeof parsed.id === "string" ? parsed.id : undefined;
-    if (!entryId || !("parentId" in parsed)) {
+    const entryId = normalizeEntryId(parsed.id);
+    if (!entryId) {
       return { isNonSessionEntry: true, hasParentLinkedEntry: false };
     }
+    if (!("parentId" in parsed)) {
+      return {
+        isNonSessionEntry: true,
+        hasParentLinkedEntry: false,
+        ...(isCanonicalSessionTranscriptEntry(parsed) ? { entryId } : {}),
+      };
+    }
     if (parsed.type === "leaf") {
-      const targetId = parsed.targetId;
-      return targetId === null || typeof targetId === "string"
-        ? {
-            isNonSessionEntry: true,
-            hasParentLinkedEntry: true,
-            leafUpdate: { leafId: targetId },
-          }
-        : { isNonSessionEntry: true, hasParentLinkedEntry: true };
+      const targetId = parsed.targetId === null ? null : normalizeEntryId(parsed.targetId);
+      const appendParentId =
+        parsed.appendParentId === undefined
+          ? undefined
+          : parsed.appendParentId === null
+            ? null
+            : normalizeEntryId(parsed.appendParentId);
+      if (
+        (parsed.targetId !== null && targetId === undefined) ||
+        (parsed.appendParentId !== undefined && appendParentId === undefined)
+      ) {
+        return {
+          isNonSessionEntry: true,
+          hasParentLinkedEntry: true,
+          entryId,
+          invalidLeafControl: true,
+        };
+      }
+      return {
+        isNonSessionEntry: true,
+        hasParentLinkedEntry: true,
+        entryId,
+        leafControl: {
+          targetId: targetId ?? null,
+          ...(appendParentId !== undefined ? { appendParentId } : {}),
+        },
+      };
     }
     return {
       isNonSessionEntry: true,
       hasParentLinkedEntry: true,
-      leafUpdate: { leafId: entryId },
+      entryId,
     };
   } catch {
     return { isNonSessionEntry: false, hasParentLinkedEntry: false };
@@ -103,57 +131,102 @@ function generateEntryId(existingIds: Set<string>): string {
   return id;
 }
 
-async function readTranscriptLeafInfo(transcriptPath: string): Promise<TranscriptLeafInfo> {
-  const handle = await fs.open(transcriptPath, "r");
-  try {
-    const decoder = new StringDecoder("utf8");
-    const buffer = Buffer.allocUnsafe(TRANSCRIPT_APPEND_SCAN_CHUNK_BYTES);
-    let carry = "";
-    let leafId: string | undefined;
-    let hasParentLinkedEntries = false;
-    let nonSessionEntryCount = 0;
-    while (true) {
-      const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
-      if (bytesRead <= 0) {
-        break;
-      }
-      const text = carry + decoder.write(buffer.subarray(0, bytesRead));
-      const lines = text.split(/\r?\n/);
-      carry = lines.pop() ?? "";
-      for (const line of lines) {
-        const lineInfo = readTranscriptLineInfo(line);
-        if (lineInfo.isNonSessionEntry) {
-          nonSessionEntryCount += 1;
-        }
-        if (lineInfo.hasParentLinkedEntry) {
-          hasParentLinkedEntries = true;
-        }
-        if (lineInfo.leafUpdate) {
-          leafId = lineInfo.leafUpdate.leafId ?? undefined;
-        }
-      }
-      // Large transcripts are scanned cooperatively so appends do not monopolize the event loop.
-      await yieldTranscriptAppendScan();
+async function validateTranscriptLeafControlReferences(params: {
+  transcriptPath: string;
+  leafControlId: string;
+  leafControl: NonNullable<TranscriptLineInfo["leafControl"]>;
+}): Promise<boolean> {
+  const referenceIds = new Set(
+    [params.leafControl.targetId, params.leafControl.appendParentId].filter(
+      (id): id is string => typeof id === "string",
+    ),
+  );
+  if (referenceIds.size === 0) {
+    return true;
+  }
+
+  for await (const line of streamSessionTranscriptLines(params.transcriptPath)) {
+    const lineInfo = readTranscriptLineInfo(line);
+    if (lineInfo.entryId === params.leafControlId) {
+      break;
     }
-    const tail = carry + decoder.end();
-    const tailInfo = readTranscriptLineInfo(tail);
-    if (tailInfo.isNonSessionEntry) {
+    if (!lineInfo.entryId || !referenceIds.has(lineInfo.entryId)) {
+      continue;
+    }
+    if (
+      lineInfo.invalidLeafControl ||
+      (lineInfo.leafControl &&
+        !(await validateTranscriptLeafControlReferences({
+          transcriptPath: params.transcriptPath,
+          leafControlId: lineInfo.entryId,
+          leafControl: lineInfo.leafControl,
+        })))
+    ) {
+      return false;
+    }
+    referenceIds.delete(lineInfo.entryId);
+    if (referenceIds.size === 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+async function resolveTranscriptLeafIdFromTrailingControls(
+  transcriptPath: string,
+): Promise<string | undefined> {
+  for await (const line of streamSessionTranscriptLinesReverse(transcriptPath)) {
+    const lineInfo = readTranscriptLineInfo(line);
+    if (!lineInfo.entryId || lineInfo.invalidLeafControl) {
+      continue;
+    }
+    if (!lineInfo.leafControl) {
+      return lineInfo.entryId;
+    }
+    const valid = await validateTranscriptLeafControlReferences({
+      transcriptPath,
+      leafControlId: lineInfo.entryId,
+      leafControl: lineInfo.leafControl,
+    });
+    if (valid) {
+      const { targetId, appendParentId } = lineInfo.leafControl;
+      return (appendParentId === undefined ? targetId : appendParentId) ?? undefined;
+    }
+  }
+  return undefined;
+}
+
+async function readTranscriptLeafInfo(transcriptPath: string): Promise<TranscriptLeafInfo> {
+  let leafId: string | undefined;
+  let hasParentLinkedEntries = false;
+  let nonSessionEntryCount = 0;
+  let hasTrailingLeafControl = false;
+  for await (const line of streamSessionTranscriptLines(transcriptPath)) {
+    const lineInfo = readTranscriptLineInfo(line);
+    if (lineInfo.isNonSessionEntry) {
       nonSessionEntryCount += 1;
     }
-    if (tailInfo.hasParentLinkedEntry) {
+    if (lineInfo.hasParentLinkedEntry) {
       hasParentLinkedEntries = true;
     }
-    if (tailInfo.leafUpdate) {
-      leafId = tailInfo.leafUpdate.leafId ?? undefined;
+    if (!lineInfo.entryId) {
+      continue;
     }
-    return {
-      ...(leafId ? { leafId } : {}),
-      hasParentLinkedEntries,
-      nonSessionEntryCount,
-    };
-  } finally {
-    await handle.close();
+    if (lineInfo.invalidLeafControl || lineInfo.leafControl) {
+      hasTrailingLeafControl = true;
+      continue;
+    }
+    leafId = lineInfo.entryId;
+    hasTrailingLeafControl = false;
   }
+  if (hasTrailingLeafControl) {
+    leafId = await resolveTranscriptLeafIdFromTrailingControls(transcriptPath);
+  }
+  return {
+    ...(leafId ? { leafId } : {}),
+    hasParentLinkedEntries,
+    nonSessionEntryCount,
+  };
 }
 
 async function migrateLinearTranscriptToParentLinked(transcriptPath: string): Promise<{

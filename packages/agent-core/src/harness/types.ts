@@ -448,6 +448,8 @@ export interface SessionInfoEntry extends SessionTreeEntryBase {
 export interface LeafEntry extends SessionTreeEntryBase {
   type: "leaf";
   targetId: string | null;
+  /** Raw parent for the next append when it differs from the visible leaf. */
+  appendParentId?: string | null;
 }
 
 /** All persisted session tree entry variants. */
@@ -483,6 +485,7 @@ export interface JsonlSessionMetadata extends SessionMetadata {
 export interface SessionStorage<TMetadata extends SessionMetadata = SessionMetadata> {
   getMetadata(): Promise<TMetadata>;
   getLeafId(): Promise<string | null>;
+  getAppendParentId?(): Promise<string | null>;
   /** Persist a leaf entry that records the active session-tree leaf. */
   setLeafId(leafId: string | null): Promise<void>;
   createEntryId(): Promise<string>;

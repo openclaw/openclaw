@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import type { SessionTreeEntry } from "../types.js";
 import { InMemorySessionStorage } from "./memory-storage.js";
+import { Session } from "./session.js";
 
 const rootEntry: SessionTreeEntry = {
   type: "custom",
@@ -85,5 +86,46 @@ describe("InMemorySessionStorage", () => {
       "replacement",
     ]);
     expect((await storage.getPathToRoot(leafEntry.id)).map((entry) => entry.id)).toEqual(["root"]);
+  });
+
+  it("honors an explicit root append parent after a visible leaf selection", async () => {
+    const storage = new InMemorySessionStorage({
+      entries: [
+        rootEntry,
+        {
+          type: "leaf",
+          id: "leaf-1",
+          parentId: "root",
+          timestamp: "2026-01-01T00:00:01.000Z",
+          targetId: "root",
+          appendParentId: null,
+        },
+      ],
+    });
+    const session = new Session(storage);
+
+    const entryId = await session.appendCustomEntry("new-root");
+
+    expect(await session.getEntry(entryId)).toMatchObject({ parentId: null });
+    expect((await storage.getPathToRoot(entryId)).map((entry) => entry.id)).toEqual([
+      "root",
+      entryId,
+    ]);
+  });
+
+  it("rejects a leaf entry with a missing append parent before recording it", async () => {
+    const storage = new InMemorySessionStorage({ entries: [rootEntry] });
+
+    await expect(
+      storage.appendEntry({
+        type: "leaf",
+        id: "leaf-1",
+        parentId: "root",
+        timestamp: "2026-01-01T00:00:01.000Z",
+        targetId: "root",
+        appendParentId: "missing",
+      }),
+    ).rejects.toThrow("Append parent missing not found");
+    expect(await storage.getEntries()).toEqual([rootEntry]);
   });
 });

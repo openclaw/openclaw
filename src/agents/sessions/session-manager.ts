@@ -996,20 +996,39 @@ function parseParentLinkedOpaqueEntry(
   return { id: record.id, parentId: record.parentId };
 }
 
-function parseOpaqueLeafEntry(
-  record: unknown,
-): { id: string; targetId: string | null } | undefined {
+function parseOpaqueLeafEntry(record: unknown):
+  | {
+      id: string;
+      parentId: string | null;
+      targetId: string | null;
+      appendParentId?: string | null;
+    }
+  | undefined {
   if (
     !isJsonRecord(record) ||
     record.type !== "leaf" ||
     typeof record.id !== "string" ||
-    record.id.length === 0
+    record.id.length === 0 ||
+    (record.parentId !== null && typeof record.parentId !== "string")
   ) {
     return undefined;
   }
-  return record.targetId === null || typeof record.targetId === "string"
-    ? { id: record.id, targetId: record.targetId }
-    : undefined;
+  if (record.targetId !== null && typeof record.targetId !== "string") {
+    return undefined;
+  }
+  if (
+    record.appendParentId !== undefined &&
+    record.appendParentId !== null &&
+    typeof record.appendParentId !== "string"
+  ) {
+    return undefined;
+  }
+  return {
+    id: record.id,
+    parentId: record.parentId,
+    targetId: record.targetId,
+    ...(record.appendParentId !== undefined ? { appendParentId: record.appendParentId } : {}),
+  };
 }
 
 function partitionSessionFileEntries(entries: readonly FileEntry[]): {
@@ -1364,6 +1383,8 @@ export class SessionManager {
   private opaqueFileEntries: PreservedOpaqueFileEntry[] = [];
   private byId: Map<string, SessionEntry> = new Map();
   private opaqueParentsById: Map<string, string | null> = new Map();
+  private logicalParentsById: Map<string, string | null> = new Map();
+  private invalidLeafControlIds: Set<string> = new Set();
   private labelsById: Map<string, string> = new Map();
   private labelTimestampsById: Map<string, string> = new Map();
   private leafId: string | null = null;
@@ -1451,11 +1472,15 @@ export class SessionManager {
       const header = this.fileEntries.find((e) => e.type === "session");
       this.sessionId = header?.id ?? createSessionId();
 
-      if (migrateToCurrentVersion(this.fileEntries, partitioned.fileEntriesByOriginalIndex)) {
+      const migrated = migrateToCurrentVersion(
+        this.fileEntries,
+        partitioned.fileEntriesByOriginalIndex,
+      );
+      this.buildIndex();
+      if (migrated) {
         this.rewriteFile();
       }
 
-      this.buildIndex();
       this.flushed = true;
     } else {
       const explicitPath = this.sessionFile;
@@ -1481,6 +1506,8 @@ export class SessionManager {
     this.opaqueFileEntries = [];
     this.byId.clear();
     this.opaqueParentsById.clear();
+    this.logicalParentsById.clear();
+    this.invalidLeafControlIds.clear();
     this.labelsById.clear();
     this.leafId = null;
     this.appendParentId = null;
@@ -1501,9 +1528,44 @@ export class SessionManager {
     return this.resolveCanonicalParentId(targetId);
   }
 
+  private resolveOpaqueAppendParentId(parentId: string | null): string | null {
+    if (parentId === null || this.byId.has(parentId) || this.opaqueParentsById.has(parentId)) {
+      return parentId;
+    }
+    return this.resolveCanonicalParentId(parentId);
+  }
+
+  private resolveOpaqueLeafControl(
+    leafEntry: ReturnType<typeof parseOpaqueLeafEntry>,
+  ): { leafId: string | null; appendParentId: string | null } | undefined {
+    if (!leafEntry) {
+      return undefined;
+    }
+    const isKnownReference = (id: string | null): boolean =>
+      id === null ||
+      this.byId.has(id) ||
+      (this.opaqueParentsById.has(id) && !this.invalidLeafControlIds.has(id));
+    if (
+      !isKnownReference(leafEntry.targetId) ||
+      (leafEntry.appendParentId !== undefined && !isKnownReference(leafEntry.appendParentId))
+    ) {
+      return undefined;
+    }
+    const leafId = this.resolveOpaqueLeafTargetId(leafEntry.targetId);
+    return {
+      leafId,
+      appendParentId:
+        leafEntry.appendParentId === undefined
+          ? leafId
+          : this.resolveOpaqueAppendParentId(leafEntry.appendParentId),
+    };
+  }
+
   private buildIndex(): void {
     this.byId.clear();
     this.opaqueParentsById.clear();
+    this.logicalParentsById.clear();
+    this.invalidLeafControlIds.clear();
     this.labelsById.clear();
     this.labelTimestampsById.clear();
     this.leafId = null;
@@ -1515,10 +1577,21 @@ export class SessionManager {
         const opaqueRecord = this.opaqueFileEntries[opaqueIndex]?.record;
         const leafEntry = parseOpaqueLeafEntry(opaqueRecord);
         if (leafEntry) {
-          const canonicalLeafId = this.resolveOpaqueLeafTargetId(leafEntry.targetId);
-          this.opaqueParentsById.set(leafEntry.id, canonicalLeafId);
-          this.leafId = canonicalLeafId;
-          this.appendParentId = canonicalLeafId;
+          const leafState = this.resolveOpaqueLeafControl(leafEntry);
+          if (!leafState) {
+            // Ignore invalid controls while keeping their marker transparent
+            // for canonical descendants serialized after the opaque row.
+            this.invalidLeafControlIds.add(leafEntry.id);
+            this.opaqueParentsById.set(
+              leafEntry.id,
+              this.resolveOpaqueAppendParentId(leafEntry.parentId),
+            );
+            opaqueIndex += 1;
+            continue;
+          }
+          this.opaqueParentsById.set(leafEntry.id, leafState.leafId);
+          this.leafId = leafState.leafId;
+          this.appendParentId = leafState.appendParentId;
           opaqueIndex += 1;
           continue;
         }
@@ -1532,6 +1605,9 @@ export class SessionManager {
       const entry = this.fileEntries[index];
       if (!isIndexedSessionEntry(entry)) {
         continue;
+      }
+      if (entry.parentId === this.appendParentId && this.leafId !== this.appendParentId) {
+        this.logicalParentsById.set(entry.id, this.leafId);
       }
       this.byId.set(entry.id, entry);
       this.leafId = entry.id;
@@ -1562,7 +1638,9 @@ export class SessionManager {
   }
 
   private normalizeEntryParent(entry: SessionEntry): SessionEntry {
-    const parentId = this.resolveCanonicalParentId(entry.parentId);
+    const parentId = this.logicalParentsById.has(entry.id)
+      ? (this.logicalParentsById.get(entry.id) ?? null)
+      : this.resolveCanonicalParentId(entry.parentId);
     let normalized = parentId === entry.parentId ? entry : { ...entry, parentId };
     if (
       normalized.type === "compaction" &&
@@ -1669,6 +1747,56 @@ export class SessionManager {
       entries.push(this.opaqueFileEntries[opaqueIndex]?.record);
       opaqueIndex += 1;
     }
+    let persistedLeafId: string | null = null;
+    let persistedAppendParentId: string | null = null;
+    let rawTailId: string | null = null;
+    for (const entry of entries) {
+      const leafEntry = parseOpaqueLeafEntry(entry);
+      if (leafEntry) {
+        rawTailId = leafEntry.id;
+        if (this.invalidLeafControlIds.has(leafEntry.id)) {
+          continue;
+        }
+        const targetId = this.resolveOpaqueLeafTargetId(leafEntry.targetId);
+        persistedLeafId = targetId;
+        persistedAppendParentId =
+          leafEntry.appendParentId === undefined
+            ? targetId
+            : this.resolveOpaqueAppendParentId(leafEntry.appendParentId);
+        continue;
+      }
+      if (isIndexedSessionEntry(entry)) {
+        persistedLeafId = entry.id;
+        persistedAppendParentId = entry.id;
+        rawTailId = entry.id;
+        continue;
+      }
+      const opaqueLink = parseParentLinkedOpaqueEntry(entry);
+      if (opaqueLink) {
+        persistedAppendParentId = opaqueLink.id;
+        rawTailId = opaqueLink.id;
+      }
+    }
+    if (persistedLeafId !== this.leafId || persistedAppendParentId !== this.appendParentId) {
+      // Full rewrites preserve side branches in file order. Encode the active
+      // branch explicitly so reopening does not adopt the serialized side tail.
+      const leafEntry = {
+        type: "leaf",
+        id: generateId({
+          has: (id) => this.byId.has(id) || this.opaqueParentsById.has(id),
+        }),
+        parentId: rawTailId,
+        timestamp: new Date().toISOString(),
+        targetId: this.leafId,
+        ...(this.appendParentId !== this.leafId ? { appendParentId: this.appendParentId } : {}),
+      };
+      this.opaqueFileEntries.push({
+        index: this.fileEntries.length,
+        record: leafEntry,
+      });
+      this.opaqueParentsById.set(leafEntry.id, this.leafId);
+      entries.push(leafEntry);
+    }
     return entries;
   }
 
@@ -1679,6 +1807,7 @@ export class SessionManager {
   clearPreservedOpaqueFileEntries(): void {
     this.opaqueFileEntries = [];
     this.opaqueParentsById.clear();
+    this.invalidLeafControlIds.clear();
     this.appendParentId = null;
     this.promptReleasedSideBranchParentId = undefined;
   }
@@ -1811,9 +1940,14 @@ export class SessionManager {
           : undefined;
       const leafEntry = parseOpaqueLeafEntry(record);
       const targetId = leafEntry ? resolveRetainedParentId(leafEntry.targetId) : undefined;
+      const appendParentId =
+        leafEntry?.appendParentId !== undefined
+          ? resolveRetainedParentId(leafEntry.appendParentId)
+          : undefined;
       if (
         (parentId === undefined || parentId === record.parentId) &&
-        (targetId === undefined || targetId === leafEntry?.targetId)
+        (targetId === undefined || targetId === leafEntry?.targetId) &&
+        (appendParentId === undefined || appendParentId === leafEntry?.appendParentId)
       ) {
         return opaqueEntry;
       }
@@ -1823,6 +1957,7 @@ export class SessionManager {
           ...record,
           ...(parentId !== undefined ? { parentId } : {}),
           ...(targetId !== undefined ? { targetId } : {}),
+          ...(appendParentId !== undefined ? { appendParentId } : {}),
         },
       };
     });
@@ -1932,11 +2067,17 @@ export class SessionManager {
         });
         const leafEntry = parseOpaqueLeafEntry(sourceEntry.record);
         if (leafEntry) {
-          this.opaqueParentsById.set(
-            leafEntry.id,
-            this.resolveOpaqueLeafTargetId(leafEntry.targetId),
-          );
-          sideBranchParentId = leafEntry.targetId;
+          const leafState = this.resolveOpaqueLeafControl(leafEntry);
+          if (!leafState) {
+            this.invalidLeafControlIds.add(leafEntry.id);
+            this.opaqueParentsById.set(
+              leafEntry.id,
+              this.resolveOpaqueAppendParentId(leafEntry.parentId),
+            );
+            continue;
+          }
+          this.opaqueParentsById.set(leafEntry.id, leafState.leafId);
+          sideBranchParentId = leafState.appendParentId;
           continue;
         }
         const link = parseParentLinkedOpaqueEntry(sourceEntry.record);
@@ -1976,6 +2117,9 @@ export class SessionManager {
   }
 
   private appendEntry(entry: SessionEntry, options?: AppendPersistenceOptions): void {
+    if (entry.parentId === this.appendParentId && this.leafId !== this.appendParentId) {
+      this.logicalParentsById.set(entry.id, this.leafId);
+    }
     this.fileEntries.push(entry);
     this.byId.set(entry.id, entry);
     this.leafId = entry.id;
@@ -2154,8 +2298,9 @@ export class SessionManager {
   getChildren(parentId: string): SessionEntry[] {
     const children: SessionEntry[] = [];
     for (const entry of this.byId.values()) {
-      if (this.resolveCanonicalParentId(entry.parentId) === parentId) {
-        children.push(this.normalizeEntryParent(entry));
+      const normalizedEntry = this.normalizeEntryParent(entry);
+      if (normalizedEntry.parentId === parentId) {
+        children.push(normalizedEntry);
       }
     }
     return children;
@@ -2210,8 +2355,9 @@ export class SessionManager {
       seen.add(currentId);
       const current = this.byId.get(currentId);
       if (current) {
-        path.unshift(this.normalizeEntryParent(current));
-        currentId = current.parentId;
+        const normalizedCurrent = this.normalizeEntryParent(current);
+        path.unshift(normalizedCurrent);
+        currentId = normalizedCurrent.parentId;
       } else {
         currentId = this.opaqueParentsById.get(currentId) ?? null;
       }
@@ -2385,7 +2531,21 @@ export class SessionManager {
       const entry = this.byId.get(currentId);
       if (entry) {
         reversedNodes.push({ type: "entry", entry });
-        currentId = entry.parentId;
+        if (this.logicalParentsById.has(entry.id)) {
+          let physicalId = entry.parentId;
+          while (physicalId && !seen.has(physicalId)) {
+            const physicalRecord = opaqueById.get(physicalId);
+            if (!physicalRecord || !this.opaqueParentsById.has(physicalId)) {
+              break;
+            }
+            seen.add(physicalId);
+            reversedNodes.push({ type: "opaque", id: physicalId, record: physicalRecord });
+            physicalId = this.opaqueParentsById.get(physicalId) ?? null;
+          }
+          currentId = this.logicalParentsById.get(entry.id) ?? null;
+        } else {
+          currentId = entry.parentId;
+        }
         continue;
       }
       const record = opaqueById.get(currentId);

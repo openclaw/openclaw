@@ -211,6 +211,85 @@ describe("prepareSessionManagerForRun", () => {
     expect(JSON.parse(assistantLine ?? "{}")).toEqual(assistantEntry);
   });
 
+  it("preserves a forked empty branch and its opaque append cursor", async () => {
+    const sessionFile = await makeTempFile();
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "session",
+          version: 3,
+          id: "forked-session",
+          timestamp: "2026-06-15T00:00:00.000Z",
+          cwd: "/old/cwd",
+          parentSession: "/sessions/parent.jsonl",
+        }),
+        JSON.stringify({
+          type: "metadata",
+          id: "plugin-metadata",
+          parentId: null,
+        }),
+        JSON.stringify({
+          type: "leaf",
+          id: "empty-leaf",
+          parentId: "plugin-metadata",
+          targetId: null,
+          appendParentId: "plugin-metadata",
+        }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+    const sessionManager = SessionManager.open(sessionFile, path.dirname(sessionFile), "/old/cwd");
+
+    await prepareSessionManagerForRun({
+      sessionManager,
+      sessionFile,
+      hadSessionFile: true,
+      sessionId: "child-session",
+      cwd: "/tmp/task-repo",
+    });
+
+    const userId = sessionManager.appendMessage({
+      role: "user",
+      content: "continued",
+      timestamp: Date.now(),
+    });
+    sessionManager.appendMessage({
+      role: "assistant",
+      content: [],
+      api: "responses",
+      provider: "openai",
+      model: "gpt-test",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    });
+
+    const records = (await fs.readFile(sessionFile, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(records[0]).toMatchObject({
+      type: "session",
+      id: "child-session",
+      cwd: "/tmp/task-repo",
+      parentSession: "/sessions/parent.jsonl",
+    });
+    expect(records.some((record) => record.id === "plugin-metadata")).toBe(true);
+    expect(records.some((record) => record.id === "empty-leaf")).toBe(true);
+    expect(records.find((record) => record.id === userId)).toMatchObject({
+      type: "message",
+      parentId: "plugin-metadata",
+    });
+  });
+
   it("does not truncate an existing transcript with a corrupted header", async () => {
     // A corrupt header may still be followed by useful transcript entries; fail
     // closed instead of truncating unknown persisted user data.

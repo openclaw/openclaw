@@ -1726,10 +1726,21 @@ describe("SessionManager.open", () => {
     const records = (await fs.readFile(sessionFile!, "utf8"))
       .trim()
       .split("\n")
-      .map((line) => JSON.parse(line) as { id?: string; parentId?: string | null });
+      .map(
+        (line) =>
+          JSON.parse(line) as {
+            type?: string;
+            id?: string;
+            parentId?: string | null;
+            targetId?: string | null;
+          },
+      );
     expect(records.find((record) => record.id === deliveryEntry.id)?.parentId).toBe(metadata.id);
+    expect(records.at(-1)).toMatchObject({ type: "leaf", targetId: baseAnswerId });
 
     const reopened = SessionManager.open(sessionFile!, dir, dir);
+    expect(reopened.getLeafId()).toBe(baseAnswerId);
+    expect(JSON.stringify(reopened.buildSessionContext())).not.toContain("plugin delivery");
     expect(reopened.getBranch(deliveryEntry.id).map((entry) => entry.id)).toEqual([
       expect.any(String),
       baseAnswerId,
@@ -1791,13 +1802,216 @@ describe("SessionManager.open", () => {
     const records = (await fs.readFile(sessionFile!, "utf8"))
       .trim()
       .split("\n")
-      .map((line) => JSON.parse(line) as { id?: string; parentId?: string | null });
+      .map(
+        (line) =>
+          JSON.parse(line) as {
+            type?: string;
+            id?: string;
+            parentId?: string | null;
+            targetId?: string | null;
+          },
+      );
     expect(records.find((record) => record.id === deliveryEntry.id)?.parentId).toBe(baseAnswerId);
-    expect(
-      SessionManager.open(sessionFile!, dir, dir)
-        .getBranch(deliveryEntry.id)
-        .map((entry) => entry.id),
-    ).toEqual([expect.any(String), baseAnswerId, deliveryEntry.id]);
+    expect(records.at(-1)).toMatchObject({ type: "leaf", targetId: baseAnswerId });
+    const reopened = SessionManager.open(sessionFile!, dir, dir);
+    expect(reopened.getLeafId()).toBe(baseAnswerId);
+    expect(JSON.stringify(reopened.buildSessionContext())).not.toContain("plugin delivery");
+    expect(reopened.getBranch(deliveryEntry.id).map((entry) => entry.id)).toEqual([
+      expect.any(String),
+      baseAnswerId,
+      deliveryEntry.id,
+    ]);
+  });
+
+  it("round-trips a visible leaf with a distinct opaque append parent", async () => {
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "session.jsonl");
+    const baseAnswer = {
+      type: "message",
+      id: "base-answer",
+      parentId: null,
+      timestamp: "2026-06-15T00:00:01.000Z",
+      message: buildAssistantMessage("base answer"),
+    };
+    const metadata = {
+      type: "metadata",
+      id: "plugin-metadata",
+      parentId: null,
+      payload: { source: "plugin" },
+    };
+    await fs.writeFile(
+      sessionFile,
+      [buildSessionHeader(dir, "session-1"), baseAnswer, metadata]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n") + "\n",
+      "utf-8",
+    );
+
+    const sessionManager = SessionManager.open(sessionFile, dir, dir);
+    sessionManager.mergePromptReleasedSessionEntries([
+      {
+        type: "message",
+        id: "side-delivery",
+        parentId: baseAnswer.id,
+        timestamp: "2026-06-15T00:00:02.000Z",
+        message: buildAssistantMessage("side delivery"),
+      },
+    ]);
+    (
+      sessionManager as unknown as {
+        rewriteFile: () => void;
+      }
+    ).rewriteFile();
+
+    const rewritten = (await fs.readFile(sessionFile, "utf-8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(rewritten.at(-1)).toMatchObject({
+      type: "leaf",
+      targetId: baseAnswer.id,
+      appendParentId: metadata.id,
+    });
+
+    const reopened = SessionManager.open(sessionFile, dir, dir);
+    expect(reopened.getLeafId()).toBe(baseAnswer.id);
+    const nextId = reopened.appendMessage(buildAssistantMessage("active continuation"));
+    const records = (await fs.readFile(sessionFile, "utf-8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { id?: string; parentId?: string | null });
+    expect(records.find((entry) => entry.id === nextId)?.parentId).toBe(metadata.id);
+    expect(reopened.getBranch(nextId).map((entry) => entry.id)).toEqual([baseAnswer.id, nextId]);
+    const branchedFile = reopened.createBranchedSession(nextId);
+    expect(branchedFile).toBeDefined();
+    const branchedRecords = (await fs.readFile(branchedFile!, "utf-8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { id?: string; parentId?: string | null });
+    expect(branchedRecords.find((entry) => entry.id === metadata.id)).toMatchObject({
+      parentId: baseAnswer.id,
+    });
+    expect(branchedRecords.find((entry) => entry.id === nextId)).toMatchObject({
+      parentId: metadata.id,
+    });
+  });
+
+  it("ignores persisted leaf controls with dangling references", async () => {
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      [
+        buildSessionHeader(dir, "session-1"),
+        {
+          type: "message",
+          id: "active-root",
+          parentId: null,
+          timestamp: "2026-06-15T00:00:01.000Z",
+          message: buildAssistantMessage("active"),
+        },
+        {
+          type: "metadata",
+          id: "plugin-metadata",
+          parentId: "active-root",
+          payload: { source: "plugin" },
+        },
+        {
+          type: "leaf",
+          id: "missing-target",
+          parentId: "plugin-metadata",
+          timestamp: "2026-06-15T00:00:02.000Z",
+          targetId: "missing",
+        },
+        {
+          type: "leaf",
+          id: "missing-append",
+          parentId: "missing-target",
+          timestamp: "2026-06-15T00:00:03.000Z",
+          targetId: "active-root",
+          appendParentId: "missing",
+        },
+      ]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n") + "\n",
+      "utf-8",
+    );
+
+    const reopened = SessionManager.open(sessionFile, dir, dir);
+    expect(reopened.getLeafId()).toBe("active-root");
+    const nextId = reopened.appendMessage(buildAssistantMessage("continued"));
+    const records = (await fs.readFile(sessionFile, "utf-8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { id?: string; parentId?: string | null });
+    expect(records.find((entry) => entry.id === nextId)?.parentId).toBe("plugin-metadata");
+    expect(reopened.buildSessionContext().messages).toMatchObject([
+      { role: "assistant", content: [{ type: "text", text: "active" }] },
+      { role: "assistant", content: [{ type: "text", text: "continued" }] },
+    ]);
+  });
+
+  it("ignores dangling leaf controls merged while a prompt is released", async () => {
+    const dir = await makeTempDir();
+    const sessionManager = SessionManager.create(dir, dir);
+    const baseAnswerId = sessionManager.appendMessage(buildAssistantMessage("base answer"));
+    const metadata = {
+      type: "metadata",
+      id: "plugin-metadata",
+      parentId: baseAnswerId,
+      payload: { source: "plugin" },
+    };
+    sessionManager.mergePromptReleasedSessionEntries([
+      { type: "prompt_released_opaque", record: metadata },
+    ]);
+    sessionManager.mergePromptReleasedSessionEntries([
+      {
+        type: "prompt_released_opaque",
+        record: {
+          type: "leaf",
+          id: "missing-target",
+          parentId: metadata.id,
+          timestamp: "2026-06-15T00:00:02.000Z",
+          targetId: "missing",
+        },
+      },
+    ]);
+    sessionManager.mergePromptReleasedSessionEntries([
+      {
+        type: "prompt_released_opaque",
+        record: {
+          type: "leaf",
+          id: "missing-append",
+          parentId: "missing-target",
+          timestamp: "2026-06-15T00:00:03.000Z",
+          targetId: baseAnswerId,
+          appendParentId: "missing",
+        },
+      },
+    ]);
+    sessionManager.mergePromptReleasedSessionEntries([
+      {
+        type: "message",
+        id: "side-delivery",
+        parentId: baseAnswerId,
+        timestamp: "2026-06-15T00:00:04.000Z",
+        message: buildAssistantMessage("side delivery"),
+      },
+    ]);
+    (
+      sessionManager as unknown as {
+        rewriteFile: () => void;
+      }
+    ).rewriteFile();
+
+    expect(sessionManager.getLeafId()).toBe(baseAnswerId);
+    const sessionFile = sessionManager.getSessionFile();
+    expect(sessionFile).toBeDefined();
+    const records = (await fs.readFile(sessionFile!, "utf-8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { id?: string; parentId?: string | null });
+    expect(records.find((entry) => entry.id === "side-delivery")?.parentId).toBe(metadata.id);
   });
 
   it("removes leaf controls that target regenerated labels when branching", async () => {
