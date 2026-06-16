@@ -20,6 +20,7 @@ export type QaCrablineChannelDriverSelection = {
 
 export const QA_CRABLINE_CHANNEL_CAPABILITY_MATRIX_PATH = "crabline-channel-capability-matrix.json";
 export const QA_CRABLINE_CHANNEL_SMOKE_PATH = "crabline-channel-smoke.json";
+export const QA_CRABLINE_DEFAULT_CHANNEL = "telegram";
 
 function listSupportedCrablineChannels(): QaCrablineChannelId[] {
   return Array.from(
@@ -39,10 +40,7 @@ export function normalizeQaChannelDriverId(input?: string | null): QaChannelDriv
 }
 
 export function normalizeQaCrablineChannel(input?: string | null): QaCrablineChannelId {
-  const normalized = input?.trim().toLowerCase();
-  if (!normalized) {
-    throw new Error("--channel is required when --channel-driver crabline is set.");
-  }
+  const normalized = input?.trim().toLowerCase() || QA_CRABLINE_DEFAULT_CHANNEL;
   const channel = normalized as QaCrablineChannelId;
   if (findLocalChannelDriver({ channel })) {
     return channel;

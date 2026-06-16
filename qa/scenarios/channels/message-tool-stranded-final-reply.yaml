@@ -25,6 +25,7 @@ scenario:
     - src/auto-reply/reply/dispatch-from-config.ts
   execution:
     kind: flow
+    channel: telegram
     summary: Send a direct message_tool_only turn whose model reply omits the message tool, and verify a substantive private final warns without outbound delivery.
     config:
       conversationId: qa-stranded-dm

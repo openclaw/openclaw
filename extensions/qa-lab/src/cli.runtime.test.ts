@@ -560,13 +560,12 @@ describe("qa cli runtime", () => {
     });
   });
 
-  it("passes Crabline channel-driver selection into host suite runs", async () => {
+  it("resolves Crabline channel-driver channel from selected scenario execution", async () => {
     await runQaSuiteCommand({
       repoRoot: "/tmp/openclaw-repo",
       outputDir: ".artifacts/qa/multipass-telegram",
       providerMode: "mock-openai",
       channelDriver: "crabline",
-      channel: "telegram",
       scenarioIds: ["channel-chat-baseline"],
     });
 

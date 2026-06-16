@@ -27,6 +27,7 @@ scenario:
     - src/auto-reply/reply/dispatch-from-config.ts
   execution:
     kind: flow
+    channel: telegram
     summary: Send a mentioned group message and verify visible output uses the message tool in the source group.
     config:
       conversationId: qa-visible-tool-room

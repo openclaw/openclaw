@@ -133,14 +133,12 @@ describe("qa coverage report", () => {
     expect(
       inventory.scorecardTaxonomy.profiles.find((profile) => profile.id === "smoke-ci"),
     ).toMatchObject({
-      channel: "telegram",
       channelDriver: "crabline",
       evidenceMode: "slim",
     });
     expect(
       inventory.scorecardTaxonomy.profiles.find((profile) => profile.id === "release"),
     ).toMatchObject({
-      channel: null,
       channelDriver: "live",
     });
     expect(inventory.scorecardTaxonomy.categoryCount).toBeGreaterThan(200);

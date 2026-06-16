@@ -22,6 +22,7 @@ scenario:
     - extensions/qa-lab/src/gateway-log-sentinel.ts
   execution:
     kind: flow
+    channel: telegram
     summary: Run a direct current-chat reply and inspect the actual transcript for self-message routing.
     config:
       expectedMarker: WEBCHAT-DIRECT-REPLY-OK

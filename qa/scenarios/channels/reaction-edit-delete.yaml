@@ -20,6 +20,7 @@ scenario:
     - extensions/qa-lab/src/self-check-scenario.ts
   execution:
     kind: flow
+    channel: telegram
     summary: Verify the agent can use channel-owned message actions and that the QA transcript reflects them.
     config:
       target: "channel:qa-room"

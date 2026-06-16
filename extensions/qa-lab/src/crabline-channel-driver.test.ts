@@ -44,10 +44,13 @@ describe("crabline channel driver metadata", () => {
     });
   });
 
-  it("requires a supported channel when the driver is selected", () => {
-    expect(() => resolveQaCrablineChannelDriverSelection({ channelDriver: "crabline" })).toThrow(
-      "--channel is required",
-    );
+  it("defaults to Telegram and rejects unsupported channels when the driver is selected", () => {
+    expect(resolveQaCrablineChannelDriverSelection({ channelDriver: "crabline" })).toEqual({
+      capabilityMatrixPath: "crabline-channel-capability-matrix.json",
+      channel: "telegram",
+      channelDriver: "crabline",
+      smokeArtifactPath: "crabline-channel-smoke.json",
+    });
     expect(() =>
       resolveQaCrablineChannelDriverSelection({
         channel: "slack",

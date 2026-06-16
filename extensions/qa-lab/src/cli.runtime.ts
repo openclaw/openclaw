@@ -27,7 +27,10 @@ import {
   renderQaCoverageMarkdownReport,
   renderQaScenarioMatchesMarkdownReport,
 } from "./coverage-report.js";
-import { resolveQaCrablineChannelDriverSelection } from "./crabline-channel-driver.js";
+import {
+  QA_CRABLINE_DEFAULT_CHANNEL,
+  resolveQaCrablineChannelDriverSelection,
+} from "./crabline-channel-driver.js";
 import { buildQaDockerHarnessImage, writeQaDockerHarnessFiles } from "./docker-harness.js";
 import { runQaDockerUp } from "./docker-up.runtime.js";
 import { QaSuiteArtifactError, QaSuiteInfraError } from "./errors.js";
@@ -79,7 +82,7 @@ import {
 } from "./scorecard-taxonomy.js";
 import { isQaSelfCheckSuccessful } from "./self-check.js";
 import { runQaFlowSuiteFromRuntime, runQaSuite } from "./suite-launch.runtime.js";
-import { scenarioMatchesQaProviderLane } from "./suite-planning.js";
+import { resolveQaSuiteScenarioChannel, scenarioMatchesQaProviderLane } from "./suite-planning.js";
 import { readQaSuiteFailedOrSkippedScenarioCountFromFile } from "./suite-summary.js";
 import {
   buildTokenEfficiencyReport,
@@ -740,14 +743,37 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
 
 function qaSuiteChannelDriverOptionsForProfile(
   profile: QaScorecardProfileReport,
-): Pick<QaSuiteCommandOptions, "channelDriver" | "channel"> {
+): Pick<QaSuiteCommandOptions, "channelDriver"> {
   if (profile.channelDriver !== "crabline") {
     return {};
   }
   return {
     channelDriver: profile.channelDriver,
-    channel: profile.channel ?? undefined,
   };
+}
+
+function selectQaScenarioDefinitionsForChannelResolution(params: {
+  scenarioIds: string[];
+  providerMode: QaProviderMode;
+  primaryModel: string;
+  claudeCliAuthMode?: QaCliBackendAuthMode;
+}) {
+  const scenarios = readQaScenarioPack().scenarios;
+  if (params.scenarioIds.length > 0) {
+    const scenarioById = new Map(scenarios.map((scenario) => [scenario.id, scenario]));
+    return params.scenarioIds.flatMap((scenarioId) => {
+      const scenario = scenarioById.get(scenarioId);
+      return scenario ? [scenario] : [];
+    });
+  }
+  return scenarios.filter((scenario) =>
+    scenarioMatchesQaProviderLane({
+      scenario,
+      providerMode: params.providerMode,
+      primaryModel: params.primaryModel,
+      claudeCliAuthMode: params.claudeCliAuthMode,
+    }),
+  );
 }
 
 function normalizeQaRunProfile(value: string, profileIds: readonly string[]) {
@@ -812,10 +838,6 @@ async function withTemporaryQaProfileEnv<T>(profile: string, run: () => Promise<
 export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
   const transportId = normalizeQaTransportId(opts.transportId);
-  const channelDriverSelection = resolveQaCrablineChannelDriverSelection({
-    channel: opts.channel,
-    channelDriver: opts.channelDriver,
-  });
   const runner = (opts.runner ?? "host").trim().toLowerCase();
   const explicitScenarioIds = resolveQaScenarioPackScenarioIds({
     pack: opts.pack,
@@ -835,6 +857,23 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
   const claudeCliAuthMode = parseQaCliBackendAuthMode(opts.cliAuthMode);
   const primaryModel = normalizeQaOptionalModelRef(opts.primaryModel);
   const alternateModel = normalizeQaOptionalModelRef(opts.alternateModel);
+  const selectedScenarioChannel =
+    opts.channelDriver?.trim().toLowerCase() === "crabline"
+      ? resolveQaSuiteScenarioChannel({
+          defaultChannel: QA_CRABLINE_DEFAULT_CHANNEL,
+          explicitChannel: opts.channel,
+          scenarios: selectQaScenarioDefinitionsForChannelResolution({
+            scenarioIds,
+            providerMode,
+            primaryModel: primaryModel ?? defaultQaModelForMode(providerMode),
+            claudeCliAuthMode,
+          }),
+        })
+      : opts.channel;
+  const channelDriverSelection = resolveQaCrablineChannelDriverSelection({
+    channel: selectedScenarioChannel,
+    channelDriver: opts.channelDriver,
+  });
   if (runner !== "host" && runner !== "multipass") {
     throw new Error(`--runner must be one of host or multipass, got "${opts.runner}".`);
   }

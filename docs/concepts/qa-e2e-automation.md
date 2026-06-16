@@ -81,11 +81,13 @@ the root profile before the QA command:
 pnpm openclaw --profile work qa run --qa-profile smoke-ci
 ```
 
-The selected QA profile owns its channel driver. `smoke-ci` uses the internal
-host-only Crabline driver for deterministic channel proof; `release` uses the
-live driver for release-lane evidence. Direct `qa suite --channel-driver
-crabline --channel telegram` runs are maintainer-oriented probes for that same
-host driver path.
+The selected QA profile owns its channel driver. Individual scenarios own any
+specific channel requirement through `execution.channel`; if a scenario does not
+specify one, the driver default is used. `smoke-ci` uses the internal host-only
+Crabline driver for deterministic channel proof; `release` uses the live driver
+for release-lane evidence. Direct `qa suite --channel-driver crabline --channel
+telegram` runs are maintainer-oriented probes for overriding that same host
+driver path.
 
 ## Operator flow
 

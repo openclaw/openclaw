@@ -10,7 +10,6 @@ profiles:
     description: Deterministic PR and merge proof with mock model providers and Crabline channel mocks; no live external service required.
     evidenceMode: slim
     channelDriver: crabline
-    channel: telegram
     categoryIds:
       - agent-runtime-and-provider-execution.agent-turn-execution
       - agent-runtime-and-provider-execution.model-and-runtime-selection

@@ -458,7 +458,7 @@ export function registerQaLabCli(program: Command) {
     .option("--channel-driver <id>", "Internal host QA channel SDK driver id; currently crabline")
     .option(
       "--channel <id>",
-      "Internal host QA channel id for --channel-driver; currently telegram",
+      "Internal host QA channel override for --channel-driver; defaults to scenario/default",
     )
     .option("--provider-mode <mode>", formatQaProviderModeHelp())
     .option("--model <ref>", "Primary provider/model ref")
