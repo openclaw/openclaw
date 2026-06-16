@@ -490,12 +490,6 @@ async function createOpenAIRealtimeClientSecretWithAuthHint(params: {
   }
 }
 
-function hasOpenAIRealtimeBrowserAuthInput(params: {
-  configuredApiKey: string | undefined;
-  cfg: RealtimeVoiceBrowserSessionCreateRequest["cfg"] | undefined;
-}): boolean {
-  return hasOpenAIRealtimePlatformApiKeyInput(params);
-}
 function base64ToBuffer(b64: string): Buffer {
   return Buffer.from(b64, "base64");
 }
