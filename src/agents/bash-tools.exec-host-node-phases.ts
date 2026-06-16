@@ -399,6 +399,11 @@ export async function invokeNodeSystemRunDirect(params: {
       agentId: params.request.agentId,
       sessionKey: params.request.sessionKey,
       notifyOnExit: params.request.notifyOnExit,
+      // Direct bypass sends the command without interactive approval, but the
+      // Gateway has already resolved security=full, ask=off via policy.
+      // Forward approved=true so the Companion App's own exec policy evaluation
+      // does not reject an already-approved command with "No matching rule".
+      approved: true,
     }),
   );
   return formatNodeRunToolResult({ raw, startedAt, cwd: params.request.workdir });
