@@ -610,6 +610,32 @@ describe("buildMinimaxSpeechProvider", () => {
         }),
       ).rejects.toThrow("MiniMax TTS API error (401): Unauthorized");
     });
+
+    it("throws on MiniMax envelope errors instead of transcoding placeholder audio", async () => {
+      // MiniMax answers HTTP 200 with a nonzero base_resp on quota/billing
+      // failures; synthesize must reject so the shared TTS fallback loop tries
+      // the configured backup provider, and never transcode the placeholder.
+      vi.mocked(globalThis.fetch).mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            base_resp: { status_code: 1002, status_msg: "Quota exceeded" },
+            data: { audio: Buffer.from("placeholder").toString("hex") },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+
+      await expect(
+        provider.synthesize({
+          text: "Test",
+          cfg: {} as never,
+          providerConfig: { apiKey: "sk-test" },
+          target: "voice-note",
+          timeoutMs: 30000,
+        }),
+      ).rejects.toThrow("MiniMax TTS API error (1002): Quota exceeded");
+      expect(transcodeAudioBufferToOpusMock).not.toHaveBeenCalled();
+    });
   });
 
   describe("listVoices", () => {

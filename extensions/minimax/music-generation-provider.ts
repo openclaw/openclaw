@@ -18,6 +18,7 @@ import {
 } from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { assertMinimaxBaseResp, type MinimaxBaseResp } from "./base-resp.js";
 
 const DEFAULT_MINIMAX_MUSIC_BASE_URL = "https://api.minimax.io";
 const DEFAULT_MINIMAX_MUSIC_MODEL = "music-2.6";
@@ -26,11 +27,6 @@ const DEFAULT_OPERATION_TIMEOUT_MS = 300_000;
 const DEFAULT_GENERATED_MUSIC_MAX_BYTES = 16 * 1024 * 1024;
 const STREAM_ENVELOPE_MAX_BYTES_MULTIPLIER = 5;
 const STREAM_ENVELOPE_OVERHEAD_BYTES = 64 * 1024;
-
-type MinimaxBaseResp = {
-  status_code?: number;
-  status_msg?: string;
-};
 
 type MinimaxMusicCreateResponse = {
   task_id?: string;
@@ -66,15 +62,6 @@ function resolveMinimaxMusicBaseUrl(
   } catch {
     return DEFAULT_MINIMAX_MUSIC_BASE_URL;
   }
-}
-
-function assertMinimaxBaseResp(baseResp: MinimaxBaseResp | undefined, context: string): void {
-  if (!baseResp || typeof baseResp.status_code !== "number" || baseResp.status_code === 0) {
-    return;
-  }
-  throw new Error(
-    `${context} (${baseResp.status_code}): ${baseResp.status_msg ?? "unknown error"}`,
-  );
 }
 
 function decodePossibleBinaryWithLimit(data: string, maxBytes: number): Buffer {

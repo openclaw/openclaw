@@ -5,6 +5,7 @@ import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
 } from "openclaw/plugin-sdk/ssrf-runtime";
+import { assertMinimaxBaseResp, type MinimaxBaseResp } from "./base-resp.js";
 
 export const DEFAULT_MINIMAX_TTS_BASE_URL = "https://api.minimax.io";
 
@@ -27,6 +28,11 @@ export const MINIMAX_TTS_VOICES = [
   "Chinese (Mandarin)_Gentle_Boy",
   "Chinese (Mandarin)_Steady_Boy",
 ] as const;
+
+type MinimaxTtsResponse = {
+  data?: { audio?: string };
+  base_resp?: MinimaxBaseResp;
+};
 
 export function normalizeMinimaxTtsBaseUrl(baseUrl?: string): string {
   const trimmed = baseUrl?.trim();
@@ -103,7 +109,10 @@ export async function minimaxTTS(params: {
     try {
       await assertOkOrThrowProviderError(response, "MiniMax TTS API error");
 
-      const body = (await response.json()) as { data?: { audio?: string } };
+      const body = (await response.json()) as MinimaxTtsResponse;
+      // Surface MiniMax envelope errors (HTTP 200 + nonzero status_code) so the
+      // shared TTS fallback loop can advance to the configured backup provider.
+      assertMinimaxBaseResp(body.base_resp, "MiniMax TTS API error");
       const hexAudio = body?.data?.audio;
       if (!hexAudio) {
         throw new Error("MiniMax TTS API returned no audio data");

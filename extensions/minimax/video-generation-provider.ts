@@ -21,6 +21,7 @@ import type {
   VideoGenerationProvider,
   VideoGenerationRequest,
 } from "openclaw/plugin-sdk/video-generation";
+import { assertMinimaxBaseResp, type MinimaxBaseResp } from "./base-resp.js";
 
 const DEFAULT_MINIMAX_VIDEO_BASE_URL = "https://api.minimax.io";
 const DEFAULT_MINIMAX_VIDEO_MODEL = "MiniMax-Hailuo-2.3";
@@ -39,11 +40,6 @@ const MINIMAX_MODEL_ALLOWED_RESOLUTIONS: Readonly<Record<string, readonly string
   "MiniMax-Hailuo-02": ["768P", "1080P"],
 };
 const MINIMAX_RESOLUTION_ORDER = ["480P", "720P", "768P", "1080P"] as const;
-
-type MinimaxBaseResp = {
-  status_code?: number;
-  status_msg?: string;
-};
 
 type MinimaxCreateResponse = {
   task_id?: string;
@@ -87,15 +83,6 @@ function resolveGeneratedVideoMaxBytes(req: VideoGenerationRequest): number {
     return Math.floor(configured * 1024 * 1024);
   }
   return DEFAULT_GENERATED_VIDEO_MAX_BYTES;
-}
-
-function assertMinimaxBaseResp(baseResp: MinimaxBaseResp | undefined, context: string): void {
-  if (!baseResp || typeof baseResp.status_code !== "number" || baseResp.status_code === 0) {
-    return;
-  }
-  throw new Error(
-    `${context} (${baseResp.status_code}): ${baseResp.status_msg ?? "unknown error"}`,
-  );
 }
 
 function toDataUrl(buffer: Buffer, mimeType: string): string {
