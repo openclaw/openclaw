@@ -417,6 +417,10 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain(
       'gh_with_retry workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@"',
     );
+    expect(workflow).toContain(
+      "did not return an Actions run URL; refusing to guess from recent workflow_dispatch runs",
+    );
+    expect(workflow).not.toContain("BEFORE_IDS=");
     expect(workflow).toContain("child run used ${head_sha}, expected ${TARGET_SHA}");
     expect(workflow).toContain(
       "Dispatch Full Release Validation from a ref pinned to the target SHA",
@@ -1268,8 +1272,9 @@ describe("package artifact reuse", () => {
       TARGET_SHA: "${{ needs.resolve_target.outputs.sha }}",
     });
     expectTextToIncludeAll(dispatchStep.run, [
-      'gh_with_retry workflow run npm-telegram-beta-e2e.yml --ref "$CHILD_WORKFLOW_REF" "${args[@]}"',
-      'before_json="$(gh_with_retry run list --workflow npm-telegram-beta-e2e.yml',
+      'dispatch_output="$(gh_with_retry workflow run npm-telegram-beta-e2e.yml --ref "$CHILD_WORKFLOW_REF" "${args[@]}")"',
+      "sed -nE 's#.*actions/runs/([0-9]+).*#\\1#p'",
+      "did not return an Actions run URL; refusing to guess from recent workflow_dispatch runs",
       '-f harness_ref="$TARGET_SHA"',
       'args=(-f package_spec="${PACKAGE_SPEC:-openclaw@beta}"',
       'if [[ -z "${PACKAGE_SPEC// }" ]]; then',
@@ -1695,6 +1700,11 @@ describe("package artifact reuse", () => {
     const clawHubNewWorkflow = readFileSync(".github/workflows/plugin-clawhub-new.yml", "utf8");
     const pluginNpmWorkflow = readFileSync(".github/workflows/plugin-npm-release.yml", "utf8");
     const openclawNpmWorkflow = readFileSync(".github/workflows/openclaw-npm-release.yml", "utf8");
+    const fastPretagScript = readFileSync("scripts/release-fast-pretag-check.sh", "utf8");
+    const pluginPretagPackScript = readFileSync(
+      "scripts/plugin-release-pretag-pack-check.ts",
+      "utf8",
+    );
     const approvalScript = readFileSync("scripts/validate-release-publish-approval.mjs", "utf8");
     const clawHubReleasePlanScript = readFileSync(
       "scripts/lib/openclaw-release-clawhub-plan.ts",
@@ -1721,6 +1731,15 @@ describe("package artifact reuse", () => {
     expect(packageJson.scripts?.["release:fast-pretag-check"]).toBe(
       "bash scripts/release-fast-pretag-check.sh",
     );
+    expect(fastPretagScript).toContain(
+      "node --import tsx scripts/plugin-release-pretag-pack-check.ts",
+    );
+    expect(fastPretagScript).not.toContain(
+      "check-plugin-npm-runtime-builds.mjs --package extensions/diffs-language-pack",
+    );
+    expect(pluginPretagPackScript).toContain("scripts/check-plugin-npm-runtime-builds.mjs");
+    expect(pluginPretagPackScript).toContain("scripts/plugin-npm-publish.sh");
+    expect(pluginPretagPackScript).toContain("scripts/plugin-clawhub-publish.sh");
     expect(clawHubWorkflow).toContain('CLAWHUB_CLI_PACKAGE: "clawhub@0.21.0"');
     expect(clawHubWorkflow).not.toContain("CLAWHUB_REPOSITORY:");
     expect(clawHubWorkflow).not.toContain("CLAWHUB_REF:");
@@ -1834,6 +1853,8 @@ describe("package artifact reuse", () => {
       "already has a public GitHub release page without complete postpublish evidence",
     );
     expect(releaseWorkflow).toContain("registry tarball");
+    expect(releaseWorkflow).toContain("openclawNpmTarball");
+    expect(releaseWorkflow).not.toContain('npm view "openclaw@${release_version}" dist.tarball');
     expect(releaseWorkflow).toContain("release SHA");
     expect(clawHubReleasePlanScript).toContain("not awaited by this proof");
     expect(releaseWorkflow).toContain("wait_for_job_success");

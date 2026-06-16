@@ -1112,13 +1112,14 @@ jobs:
           }
 
           append_release_proof_to_github_release() {
-            local release_version body_file notes_file tarball integrity telegram_line clawhub_line clawhub_bootstrap_line clawhub_runtime_state_path windows_line
+            local release_version body_file notes_file evidence_path tarball integrity telegram_line clawhub_line clawhub_bootstrap_line clawhub_runtime_state_path windows_line
 
             release_version="${RELEASE_TAG#v}"
             body_file="${RUNNER_TEMP}/release-body.md"
             notes_file="${RUNNER_TEMP}/release-notes-with-proof.md"
-            tarball="$(npm view "openclaw@${release_version}" dist.tarball --json | jq -r '.')"
-            integrity="$(npm view "openclaw@${release_version}" dist.integrity --json | jq -r '.')"
+            evidence_path="${POSTPUBLISH_EVIDENCE_DIR}/release-postpublish-evidence.json"
+            tarball="$(jq -er '.openclawNpmTarball | select(type == "string" and length > 0)' "${evidence_path}")"
+            integrity="$(jq -er '.openclawNpmIntegrity | select(type == "string" and length > 0)' "${evidence_path}")"
             gh release view "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" --json body --jq .body > "${body_file}"
 
             if [[ -n "${NPM_TELEGRAM_RUN_ID// }" ]]; then

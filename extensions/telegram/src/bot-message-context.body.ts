@@ -41,6 +41,7 @@ import {
   hasBotMention,
   renderTelegramTextEntities,
   resolveTelegramPrimaryMedia,
+  resolveTelegramRichMessagePlaceholder,
 } from "./bot/body-helpers.js";
 import { buildTelegramGroupPeerId, buildTelegramInboundOriginTarget } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
@@ -239,13 +240,16 @@ export async function resolveTelegramInboundBody(params: {
   const hasUserText = Boolean(rawText || locationText);
   let rawBody = [rawText, locationText].filter(Boolean).join("\n").trim();
   if (!rawBody) {
-    rawBody = placeholder;
+    rawBody = resolveTelegramRichMessagePlaceholder(msg) ?? placeholder;
   }
   if (!rawBody && allMedia.length === 0) {
     return null;
   }
 
   let bodyText = rawBody;
+  if (stickerCacheHit && placeholder && rawBody !== placeholder) {
+    bodyText = `${placeholder}\n${bodyText}`.trim();
+  }
   if (allMedia.length === 0 && placeholder && rawBody !== placeholder) {
     const mediaTag = primaryMedia?.fileRef.file_id
       ? `${placeholder} [file_id:${primaryMedia.fileRef.file_id}]`
@@ -304,7 +308,13 @@ export async function resolveTelegramInboundBody(params: {
   }
 
   const savedMediaPlaceholder = formatSavedMediaPlaceholder(allMedia);
-  if (!hasAudio && savedMediaPlaceholder && placeholder && bodyText === placeholder) {
+  if (
+    !stickerCacheHit &&
+    !hasAudio &&
+    savedMediaPlaceholder &&
+    placeholder &&
+    bodyText === placeholder
+  ) {
     bodyText = savedMediaPlaceholder;
   }
   if (!bodyText && allMedia.length > 0) {

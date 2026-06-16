@@ -221,7 +221,11 @@ describe("runAgentLoop deferred tool hydration", () => {
                 stopReason: "stop" as const,
                 timestamp: Date.now(),
               };
-        stream.push({ type: "done", reason: message.stopReason, message });
+        stream.push({
+          type: "done",
+          reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
+          message,
+        });
       });
       return stream;
     };
@@ -289,7 +293,11 @@ describe("runAgentLoop deferred tool hydration", () => {
                 stopReason: "stop" as const,
                 timestamp: Date.now(),
               };
-        stream.push({ type: "done", reason: message.stopReason, message });
+        stream.push({
+          type: "done",
+          reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
+          message,
+        });
       });
       return stream;
     };
@@ -656,7 +664,63 @@ describe("agentLoop tool termination", () => {
     expect(turn).toBe(3);
     expect(executed).toEqual(["message", "exec"]);
     expect(events.filter((event) => event.type === "tool_execution_start")).toHaveLength(2);
+    expect(
+      events
+        .filter(
+          (event): event is Extract<AgentEvent, { type: "tool_execution_end" }> =>
+            event.type === "tool_execution_end",
+        )
+        .map((event) => event.executionStarted),
+    ).toEqual([true, true]);
     expect(events.at(-1)).toMatchObject({ type: "agent_end" });
+  });
+
+  it("marks policy-blocked tool calls as not executed", async () => {
+    const executed: string[] = [];
+    let turn = 0;
+    const streamFn: StreamFn = () => {
+      turn += 1;
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message =
+          turn === 1
+            ? makeAssistantMessage([
+                { type: "toolCall", id: "call-cron", name: "cron", arguments: {} },
+              ])
+            : makeAssistantMessage([{ type: "text", text: "done" }]);
+        stream.push({
+          type: "done",
+          reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
+          message,
+        });
+        stream.end();
+      });
+      return stream;
+    };
+
+    const stream = agentLoop(
+      [{ role: "user", content: "hello", timestamp: 1 }],
+      {
+        systemPrompt: "",
+        messages: [],
+        tools: [makeTool("cron", executed)],
+      },
+      {
+        ...config,
+        beforeToolCall: async () => ({ block: true, reason: "blocked" }),
+      },
+      undefined,
+      streamFn,
+    );
+
+    const events = await collectEvents(stream);
+    const endEvent = events.find(
+      (event): event is Extract<AgentEvent, { type: "tool_execution_end" }> =>
+        event.type === "tool_execution_end",
+    );
+
+    expect(executed).toEqual([]);
+    expect(endEvent?.executionStarted).toBe(false);
   });
 
   it("stops after a tool result only when the finalized result explicitly terminates", async () => {

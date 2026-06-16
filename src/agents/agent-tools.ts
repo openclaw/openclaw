@@ -116,9 +116,20 @@ import {
   type ToolSearchCatalogRef,
   type ToolSearchCatalogToolExecutor,
 } from "./tool-search.js";
+import {
+  replaceWithEffectiveCronCreatorToolAllowlist,
+  type CronCreatorToolAllowlistEntry,
+} from "./tools/cron-tool.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
 const MEMORY_FLUSH_ALLOWED_TOOL_NAMES = new Set(["read", "write"]);
+
+function hasExplicitDenyPolicy(policy?: { deny?: string[] }): boolean {
+  return (
+    Array.isArray(policy?.deny) &&
+    policy.deny.some((entry) => typeof entry === "string" && entry.trim())
+  );
+}
 
 type GuardContainerMount = {
   containerRoot: string;
@@ -516,6 +527,8 @@ export function createOpenClawCodingTools(options?: {
   allowGatewaySubagentBinding?: boolean;
   /** Runtime-scoped explicit allowlist used to materialize matching plugin tools. */
   runtimeToolAllowlist?: string[];
+  /** Mutable cron creator cap ref for callers that append final runtime tools later. */
+  cronCreatorToolAllowlistRef?: CronCreatorToolAllowlistEntry[];
   /** If true, the model has native vision capability */
   modelHasVision?: boolean;
   /** Require explicit message targets (no implicit last-route sends). */
@@ -553,6 +566,8 @@ export function createOpenClawCodingTools(options?: {
   toolPolicyAuditLogLevel?: "info" | "debug";
   /** Live observer called after wrapped tool outcomes are recorded. */
   onToolOutcome?: ToolOutcomeObserver;
+  /** Supplies run-global model-call ordering for parallel tool outcomes. */
+  allocateToolOutcomeOrdinal?: (toolCallId?: string) => number;
   /** Runtime-only resolved skill paths that the read tool may load under workspaceOnly. */
   skillsSnapshot?: SkillSnapshot;
 }): AnyAgentTool[] {
@@ -920,7 +935,7 @@ export function createOpenClawCodingTools(options?: {
   // Passed by reference to sessions_spawn and populated after the final policy
   // pass so child sessions inherit the actual parent tool surface.
   const inheritedToolAllowlist: string[] = [];
-  const shouldInheritEffectiveToolAllowlist = [
+  const toolPolicyInheritanceSources = [
     profilePolicy,
     providerProfilePolicy,
     globalPolicy,
@@ -933,7 +948,13 @@ export function createOpenClawCodingTools(options?: {
     subagentPolicy,
     inheritedToolPolicy,
     options?.runtimeToolAllowlist ? { allow: options.runtimeToolAllowlist } : undefined,
-  ].some(hasRestrictiveAllowPolicy);
+  ];
+  const shouldInheritEffectiveToolAllowlist =
+    toolPolicyInheritanceSources.some(hasRestrictiveAllowPolicy);
+  const cronCreatorToolAllowlist = options?.cronCreatorToolAllowlistRef ?? [];
+  const shouldCaptureCronCreatorToolAllowlist = toolPolicyInheritanceSources.some(
+    (policy) => hasRestrictiveAllowPolicy(policy) || hasExplicitDenyPolicy(policy),
+  );
   const pluginToolsOnly =
     includeOpenClawTools || !includePluginTools
       ? []
@@ -1043,6 +1064,9 @@ export function createOpenClawCodingTools(options?: {
           config: options?.config,
           pluginToolAllowlist,
           pluginToolDenylist,
+          cronCreatorToolAllowlist: shouldCaptureCronCreatorToolAllowlist
+            ? cronCreatorToolAllowlist
+            : undefined,
           currentChannelId: options?.currentChannelId,
           currentMessagingTarget: options?.currentMessagingTarget,
           currentThreadTs: options?.currentThreadTs,
@@ -1163,6 +1187,13 @@ export function createOpenClawCodingTools(options?: {
   if (shouldInheritEffectiveToolAllowlist) {
     replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, subagentFiltered);
   }
+  if (shouldCaptureCronCreatorToolAllowlist) {
+    replaceWithEffectiveCronCreatorToolAllowlist(
+      cronCreatorToolAllowlist,
+      subagentFiltered,
+      (tool) => getPluginToolMeta(tool),
+    );
+  }
   options?.recordToolPrepStage?.("authorization-policy");
   // Always normalize tool JSON Schemas before handing them to OpenClaw model runtime.
   // Without this, some providers (notably OpenAI) will reject root-level union schemas.
@@ -1191,6 +1222,7 @@ export function createOpenClawCodingTools(options?: {
     ...(options?.trace ? { trace: options.trace } : {}),
     loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
     onToolOutcome: options?.onToolOutcome,
+    allocateToolOutcomeOrdinal: options?.allocateToolOutcomeOrdinal,
   };
   const hookOptions = { emitDiagnostics: options?.emitBeforeToolCallDiagnostics };
   const withHooks = normalized.map((tool) =>

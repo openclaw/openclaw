@@ -65,6 +65,13 @@ gh workflow run openclaw-performance.yml \
 
 Prefer the trusted workflow on `main`, target the exact release SHA:
 
+- Keep trusted-workflow checks compatible with frozen release targets. If
+  `main` adds a target-owned guard script or package command after the release
+  branch cut, make the trusted workflow skip only when that target surface is
+  absent. Heal the trusted workflow before rerunning validation; do not port an
+  unrelated runtime refactor or mutate the release candidate just to satisfy a
+  newer `main`-only check.
+
 ```bash
 gh workflow run full-release-validation.yml \
   --repo openclaw/openclaw \

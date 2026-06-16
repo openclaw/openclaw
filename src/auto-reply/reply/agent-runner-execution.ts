@@ -40,6 +40,7 @@ import {
 } from "../../agents/embedded-agent-helpers.js";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import { isMessagingToolSendAction } from "../../agents/embedded-agent-messaging.js";
+import { mergeEmbeddedAgentRunResultForModelFallbackExhaustion } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { isFailoverError } from "../../agents/failover-error.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
@@ -64,11 +65,8 @@ import {
   resolveAgentRunAbortLifecycleFields,
 } from "../../agents/run-termination.js";
 import { buildAgentRuntimeOutcomePlan } from "../../agents/runtime-plan/build.js";
-import {
-  resolveGroupSessionKey,
-  type SessionEntry,
-  updateSessionStore,
-} from "../../config/sessions.js";
+import { resolveGroupSessionKey, type SessionEntry } from "../../config/sessions.js";
+import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolveSilentReplyPolicy } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
@@ -105,6 +103,11 @@ import {
   stripLeadingSilentToken,
 } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import {
+  createAgentLifecycleTerminalBackstop,
+  resolveAgentLifecycleTerminalMetadata,
+  type AgentLifecycleTerminalBackstop,
+} from "./agent-lifecycle-terminal.js";
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import {
   clearDroppedCliSessionBinding,
@@ -295,6 +298,83 @@ function readApprovalScopeValue(value: unknown): "turn" | "session" | undefined 
   return value === "turn" || value === "session" ? value : undefined;
 }
 
+function readRecordValue(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function readFiniteNumberValue(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function readNullableNumberValue(value: unknown): number | null | undefined {
+  if (value === null) {
+    return null;
+  }
+  return readFiniteNumberValue(value);
+}
+
+function isCommandToolName(name: string | undefined): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(name);
+  return normalized === "exec" || normalized === "bash" || normalized === "shell";
+}
+
+export function buildCommandOutputFromToolResultEvent(evt: {
+  stream: string;
+  data: Record<string, unknown>;
+}): Parameters<NonNullable<GetReplyOptions["onCommandOutput"]>>[0] | undefined {
+  if (evt.stream !== "tool" || readStringValue(evt.data.phase) !== "result") {
+    return undefined;
+  }
+  const name = readStringValue(evt.data.name);
+  if (!isCommandToolName(name)) {
+    return undefined;
+  }
+  const result = readRecordValue(evt.data.result);
+  const details = readRecordValue(result?.details);
+  const output =
+    readStringValue(evt.data.output) ??
+    readStringValue(result?.output) ??
+    readStringValue(details?.output);
+  const explicitStatus =
+    readStringValue(evt.data.status) ??
+    readStringValue(result?.status) ??
+    readStringValue(details?.status);
+  const exitCode = readNullableNumberValue(
+    result?.exitCode ?? details?.exitCode ?? evt.data.exitCode,
+  );
+  const durationMs = readFiniteNumberValue(
+    result?.durationMs ?? details?.durationMs ?? evt.data.durationMs,
+  );
+  const cwd = readStringValue(evt.data.cwd);
+  const hasConcreteCommandResult =
+    output !== undefined ||
+    explicitStatus !== undefined ||
+    exitCode !== undefined ||
+    durationMs !== undefined ||
+    cwd !== undefined ||
+    (result !== undefined && Object.keys(result).length > 0);
+  if (!hasConcreteCommandResult) {
+    return undefined;
+  }
+  const errorStatus =
+    evt.data.isError === true ? "failed" : evt.data.isError === false ? "completed" : undefined;
+  const status = explicitStatus ?? errorStatus;
+  return {
+    itemId: readStringValue(evt.data.itemId),
+    phase: "end",
+    title: readStringValue(evt.data.title),
+    toolCallId: readStringValue(evt.data.toolCallId),
+    name,
+    output,
+    status,
+    exitCode,
+    durationMs,
+    cwd,
+  };
+}
+
 /** One attempted runtime fallback candidate and its failure reason. */
 export type RuntimeFallbackAttempt = {
   provider: string;
@@ -313,6 +393,7 @@ export type AgentRunLoopResult =
       runResult: Awaited<ReturnType<typeof runEmbeddedAgent>>;
       fallbackProvider?: string;
       fallbackModel?: string;
+      fallbackExhausted?: true;
       fallbackAttempts: RuntimeFallbackAttempt[];
       didLogHeartbeatStrip: boolean;
       autoCompactionCount: number;
@@ -419,6 +500,13 @@ function snapshotFallbackSelectionState(entry: SessionEntry): FallbackSelectionS
     authProfileOverride: entry.authProfileOverride,
     authProfileOverrideSource: entry.authProfileOverrideSource,
     authProfileOverrideCompactionCount: entry.authProfileOverrideCompactionCount,
+  };
+}
+
+function buildFallbackSelectionStatePatch(entry: SessionEntry): Partial<SessionEntry> {
+  return {
+    ...snapshotFallbackSelectionState(entry),
+    updatedAt: entry.updatedAt,
   };
 }
 
@@ -1322,88 +1410,6 @@ function isReplyOperationRestartAbort(replyOperation?: ReplyOperation): boolean 
   );
 }
 
-function createEmbeddedLifecycleTerminalBackstop(params: {
-  runId: string;
-  sessionKey?: string;
-  getLifecycleGeneration: () => string;
-  resolveAbortLifecycleFields: () => {
-    aborted?: true;
-    stopReason?: string;
-  };
-}) {
-  let terminalEmitted = false;
-  let startedAt: number | undefined;
-
-  const note = (evt: { stream: string; data: Record<string, unknown> }) => {
-    if (evt.stream !== "lifecycle") {
-      return;
-    }
-    const phase = readStringValue(evt.data.phase);
-    if (phase === "start" && typeof evt.data.startedAt === "number") {
-      startedAt = evt.data.startedAt;
-    }
-    if (phase === "end" || phase === "error") {
-      terminalEmitted = true;
-    }
-  };
-
-  const emit = (phase: "end" | "error", resultOrError: unknown) => {
-    if (terminalEmitted) {
-      return;
-    }
-    terminalEmitted = true;
-    const abortLifecycleFields = params.resolveAbortLifecycleFields();
-    const restartAbort = abortLifecycleFields.stopReason === AGENT_RUN_RESTART_ABORT_STOP_REASON;
-    const terminalPhase = restartAbort ? "end" : phase;
-    const data: Record<string, unknown> = {
-      phase: terminalPhase,
-      endedAt: Date.now(),
-      ...(startedAt !== undefined ? { startedAt } : {}),
-    };
-    if (restartAbort) {
-      data.aborted = true;
-      data.stopReason = AGENT_RUN_RESTART_ABORT_STOP_REASON;
-    } else if (phase === "error") {
-      data.error = formatErrorMessage(resultOrError);
-      Object.assign(data, abortLifecycleFields);
-    } else {
-      const meta =
-        resultOrError && typeof resultOrError === "object" && "meta" in resultOrError
-          ? (resultOrError as { meta?: Record<string, unknown> }).meta
-          : undefined;
-      if (meta?.aborted === true) {
-        data.aborted = true;
-      }
-      const stopReason = readStringValue(meta?.stopReason);
-      if (stopReason) {
-        data.stopReason = stopReason;
-      }
-      const livenessState = readStringValue(meta?.livenessState);
-      if (livenessState) {
-        data.livenessState = livenessState;
-      }
-      if (meta?.replayInvalid === true) {
-        data.replayInvalid = true;
-      }
-      if (abortLifecycleFields.aborted === true) {
-        data.aborted = true;
-      }
-      if (abortLifecycleFields.stopReason && !readStringValue(data.stopReason)) {
-        data.stopReason = abortLifecycleFields.stopReason;
-      }
-    }
-    emitAgentEvent({
-      runId: params.runId,
-      lifecycleGeneration: params.getLifecycleGeneration(),
-      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-      stream: "lifecycle",
-      data,
-    });
-  };
-
-  return { emit, note };
-}
-
 function emitModelFallbackStepLifecycle(params: {
   runId: string;
   sessionKey?: string;
@@ -1722,6 +1728,19 @@ export async function runAgentTurnWithFallback(params: {
   let attemptedRuntimeProvider = fallbackProvider;
   let attemptedRuntimeModel = fallbackModel;
   let fallbackAttempts: RuntimeFallbackAttempt[] = [];
+  let fallbackExhausted = false;
+  let pendingLifecycleTerminal:
+    | {
+        provider: string;
+        model: string;
+        backstop: AgentLifecycleTerminalBackstop;
+      }
+    | undefined;
+  const takePendingLifecycleTerminal = () => {
+    const terminal = pendingLifecycleTerminal?.backstop;
+    pendingLifecycleTerminal = undefined;
+    return terminal;
+  };
   let transientHttpRetriesRemaining = 1;
   const consumeTransientHttpRetry = () => transientHttpRetriesRemaining-- > 0;
   let liveModelSwitchRetries = 0;
@@ -1832,14 +1851,13 @@ export async function runAgentTurnWithFallback(params: {
 
     try {
       if (params.storePath) {
-        await updateSessionStore(params.storePath, (store) => {
-          const persistedEntry = store[params.sessionKey!];
-          if (!persistedEntry) {
-            return;
-          }
-          applyFallbackSelectionState(persistedEntry, nextState);
-          store[params.sessionKey!] = persistedEntry;
-        });
+        await updateSessionEntry(
+          { storePath: params.storePath, sessionKey: params.sessionKey },
+          (persistedEntry) => {
+            applyFallbackSelectionState(persistedEntry, nextState);
+            return buildFallbackSelectionStatePatch(persistedEntry);
+          },
+        );
       }
     } catch (error) {
       rollbackFallbackSelectionStateIfUnchanged(activeSessionEntry, nextState, previousState);
@@ -1856,18 +1874,18 @@ export async function runAgentTurnWithFallback(params: {
       if (rolledBackInMemory) {
         params.activeSessionStore![params.sessionKey!] = activeSessionEntry;
       }
-      if (!params.storePath) {
+      if (!params.storePath || !params.sessionKey) {
         return;
       }
-      await updateSessionStore(params.storePath, (store) => {
-        const persistedEntry = store[params.sessionKey!];
-        if (!persistedEntry) {
-          return;
-        }
-        if (rollbackFallbackSelectionStateIfUnchanged(persistedEntry, nextState, previousState)) {
-          store[params.sessionKey!] = persistedEntry;
-        }
-      });
+      await updateSessionEntry(
+        { storePath: params.storePath, sessionKey: params.sessionKey },
+        (persistedEntry) => {
+          if (rollbackFallbackSelectionStateIfUnchanged(persistedEntry, nextState, previousState)) {
+            return buildFallbackSelectionStatePatch(persistedEntry);
+          }
+          return null;
+        },
+      );
     };
   };
   const clearRecoveredAutoFallbackPrimaryProbe = async (paramsForClear: {
@@ -1900,17 +1918,37 @@ export async function runAgentTurnWithFallback(params: {
     if (!params.storePath) {
       return;
     }
-    await updateSessionStore(params.storePath, (store) => {
-      const persistedEntry = store[params.sessionKey!];
-      if (!persistedEntry) {
-        return;
-      }
-      if (!entryMatchesAutoFallbackPrimaryProbe(persistedEntry, probe)) {
-        return;
-      }
-      clearAutoFallbackPrimaryProbeSelection(persistedEntry);
-      store[params.sessionKey!] = persistedEntry;
-    });
+    await updateSessionEntry(
+      { storePath: params.storePath, sessionKey: params.sessionKey },
+      (persistedEntry) => {
+        if (!entryMatchesAutoFallbackPrimaryProbe(persistedEntry, probe)) {
+          return null;
+        }
+        const shouldClearAuthProfile =
+          persistedEntry.authProfileOverrideSource === "auto" ||
+          (persistedEntry.authProfileOverrideSource === undefined &&
+            persistedEntry.authProfileOverrideCompactionCount !== undefined);
+        clearAutoFallbackPrimaryProbeSelection(persistedEntry);
+        return {
+          providerOverride: undefined,
+          modelOverride: undefined,
+          modelOverrideSource: undefined,
+          modelOverrideFallbackOriginProvider: undefined,
+          modelOverrideFallbackOriginModel: undefined,
+          ...(shouldClearAuthProfile
+            ? {
+                authProfileOverride: undefined,
+                authProfileOverrideSource: undefined,
+                authProfileOverrideCompactionCount: undefined,
+              }
+            : {}),
+          fallbackNoticeSelectedModel: undefined,
+          fallbackNoticeActiveModel: undefined,
+          fallbackNoticeReason: undefined,
+          updatedAt: persistedEntry.updatedAt,
+        };
+      },
+    );
   };
 
   while (true) {
@@ -2066,6 +2104,7 @@ export async function runAgentTurnWithFallback(params: {
             }
             return classification;
           },
+          mergeExhaustedResult: mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
           run: async (provider, model, runOptions) => {
             attemptedRuntimeProvider = provider;
             attemptedRuntimeModel = model;
@@ -2144,6 +2183,23 @@ export async function runAgentTurnWithFallback(params: {
                 params.getActiveSessionEntry(),
                 cliExecutionProvider,
               );
+              const cliLifecycleStartedAt = Date.now();
+              const lifecycleBackstop = createAgentLifecycleTerminalBackstop({
+                runId,
+                sessionKey: params.sessionKey,
+                startedAt: cliLifecycleStartedAt,
+                getLifecycleGeneration: () => lifecycleGeneration,
+                resolveAbortLifecycleFields: () => ({
+                  ...resolveAgentRunAbortLifecycleFields(runAbortSignal),
+                  ...(isReplyOperationRestartAbort(params.replyOperation)
+                    ? {
+                        aborted: true as const,
+                        stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON,
+                      }
+                    : {}),
+                }),
+              });
+              pendingLifecycleTerminal = { provider, model, backstop: lifecycleBackstop };
               const authProfile = resolveRunAuthProfile(candidateRun, cliExecutionProvider, {
                 config: runtimeConfig,
               });
@@ -2173,6 +2229,8 @@ export async function runAgentTurnWithFallback(params: {
                   runId,
                   lifecycleGeneration,
                   provider: cliExecutionProvider,
+                  startedAt: cliLifecycleStartedAt,
+                  emitLifecycleTerminal: false,
                   onAgentRunStart: notifyAgentRunStart,
                   suppressAssistantBridge: params.followupRun.run.silentExpected,
                   onAssistantText: async (text) => {
@@ -2351,7 +2409,7 @@ export async function runAgentTurnWithFallback(params: {
                 : undefined);
             return (async () => {
               let attemptCompactionCount = 0;
-              const lifecycleBackstop = createEmbeddedLifecycleTerminalBackstop({
+              const lifecycleBackstop = createAgentLifecycleTerminalBackstop({
                 runId,
                 sessionKey: params.sessionKey,
                 getLifecycleGeneration: () => lifecycleGeneration,
@@ -2365,6 +2423,7 @@ export async function runAgentTurnWithFallback(params: {
                     : {}),
                 }),
               });
+              pendingLifecycleTerminal = { provider, model, backstop: lifecycleBackstop };
               try {
                 // Profiler-only milestone: it exposes time spent before Codex
                 // dispatch while leaving the regular embedded run path inert.
@@ -2435,6 +2494,7 @@ export async function runAgentTurnWithFallback(params: {
                     imageOrder: currentTurnImages.imageOrder,
                     abortSignal: runAbortSignal,
                     replyOperation: params.replyOperation,
+                    deferTerminalLifecycle: true,
                     onExecutionStarted: (info) => {
                       if (info?.lifecycleGeneration) {
                         lifecycleGeneration = info.lifecycleGeneration;
@@ -2516,6 +2576,10 @@ export async function runAgentTurnWithFallback(params: {
                             toolStartProgressPromise,
                           ]);
                         }
+                        const commandOutput = buildCommandOutputFromToolResultEvent(evt);
+                        if (commandOutput) {
+                          await params.opts?.onCommandOutput?.(commandOutput);
+                        }
                       }
                       const suppressItemChannelProgress =
                         evt.stream === "item" &&
@@ -2547,6 +2611,7 @@ export async function runAgentTurnWithFallback(params: {
                       ) {
                         await params.opts?.onItemEvent?.({
                           itemId: readStringValue(evt.data.itemId),
+                          toolCallId: readStringValue(evt.data.toolCallId),
                           kind: readStringValue(evt.data.kind),
                           title: readStringValue(evt.data.title),
                           name: itemName,
@@ -2734,7 +2799,6 @@ export async function runAgentTurnWithFallback(params: {
                 bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
                   result.meta?.systemPromptReport,
                 );
-                lifecycleBackstop.emit("end", result);
                 const resultCompactionCount = Math.max(
                   0,
                   result.meta?.agentMeta?.compactionCount ?? 0,
@@ -2752,7 +2816,6 @@ export async function runAgentTurnWithFallback(params: {
                     );
                   }
                 }
-                lifecycleBackstop.emit("error", err);
                 throw err;
               } finally {
                 autoCompactionCount += attemptCompactionCount;
@@ -2767,15 +2830,23 @@ export async function runAgentTurnWithFallback(params: {
         sessionKey: params.sessionKey,
         outcome: "completed",
       });
+      runResult = fallbackResult.result;
+      fallbackProvider = fallbackResult.provider;
+      fallbackModel = fallbackResult.model;
+      fallbackExhausted = fallbackResult.outcome === "exhausted";
+      const settledLifecycleTerminal =
+        pendingLifecycleTerminal?.provider === fallbackProvider &&
+        pendingLifecycleTerminal.model === fallbackModel
+          ? pendingLifecycleTerminal.backstop
+          : undefined;
+      pendingLifecycleTerminal = undefined;
       const restartAbortReason = runAbortSignal?.reason;
       if (isReplyOperationRestartAbort(params.replyOperation)) {
+        settledLifecycleTerminal?.emit("end", runResult);
         throw isAgentRunRestartAbortReason(restartAbortReason)
           ? restartAbortReason
           : createAgentRunRestartAbortError();
       }
-      runResult = fallbackResult.result;
-      fallbackProvider = fallbackResult.provider;
-      fallbackModel = fallbackResult.model;
       fallbackAttempts = Array.isArray(fallbackResult.attempts)
         ? fallbackResult.attempts.map((attempt) => ({
             provider: attempt.provider,
@@ -2786,16 +2857,45 @@ export async function runAgentTurnWithFallback(params: {
             code: attempt.code || undefined,
           }))
         : [];
-      await clearRecoveredAutoFallbackPrimaryProbe({
-        provider: fallbackProvider,
-        model: fallbackModel,
-      });
+      if (!fallbackExhausted) {
+        await clearRecoveredAutoFallbackPrimaryProbe({
+          provider: fallbackProvider,
+          model: fallbackModel,
+        });
+      }
 
       // Some embedded runs surface context overflow as an error payload instead of throwing.
       // Preserve the active session mapping and surface explicit guidance instead
       // of silently rotating the session key to a new session id.
       const embeddedError = runResult.meta?.error;
+      const deferredLifecycleError = settledLifecycleTerminal?.getDeferredError();
+      const userFacingErrorPayload = runResult.payloads?.find(
+        (payload) => payload.isError === true && typeof payload.text === "string",
+      )?.text;
+      const terminalErrorMessage =
+        deferredLifecycleError ??
+        userFacingErrorPayload ??
+        (embeddedError ? "Agent run failed" : undefined);
+      const emitSettledLifecycleError = (error: Error, extraData?: Record<string, unknown>) => {
+        if (settledLifecycleTerminal) {
+          settledLifecycleTerminal.emit("error", error, extraData);
+          return;
+        }
+        emitAgentEvent({
+          runId,
+          lifecycleGeneration,
+          ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+          stream: "lifecycle",
+          data: {
+            phase: "error",
+            error: error.message,
+            endedAt: Date.now(),
+            ...extraData,
+          },
+        });
+      };
       if (embeddedError && isContextOverflowError(embeddedError.message)) {
+        emitSettledLifecycleError(new Error(terminalErrorMessage ?? "Agent run failed"));
         defaultRuntime.error(
           `Auto-compaction failed (${embeddedError.message}). Preserving existing session mapping for ${params.sessionKey ?? params.followupRun.run.sessionId}.`,
         );
@@ -2817,6 +2917,7 @@ export async function runAgentTurnWithFallback(params: {
         };
       }
       if (embeddedError?.kind === "role_ordering") {
+        emitSettledLifecycleError(new Error(terminalErrorMessage ?? "Agent run failed"));
         const providerRequestError = classifyProviderRequestError(embeddedError);
         params.replyOperation?.fail("run_failed", embeddedError);
         const embeddedErrorText = formatErrorMessage(embeddedError).replace(/\.\s*$/, "");
@@ -2831,6 +2932,25 @@ export async function runAgentTurnWithFallback(params: {
         };
       }
 
+      const terminalMetadata = resolveAgentLifecycleTerminalMetadata(runResult.meta);
+      if (fallbackExhausted) {
+        const exhaustionError = new Error(
+          terminalErrorMessage ?? "All model fallback candidates failed",
+        );
+        emitSettledLifecycleError(exhaustionError, {
+          ...terminalMetadata,
+          fallbackExhaustedFailure: true,
+        });
+        params.replyOperation?.retainFailureUntilComplete();
+        params.replyOperation?.fail("run_failed", exhaustionError);
+      } else if (deferredLifecycleError || embeddedError) {
+        const terminalError = new Error(terminalErrorMessage ?? "Agent run failed");
+        emitSettledLifecycleError(terminalError, terminalMetadata);
+        params.replyOperation?.retainFailureUntilComplete();
+        params.replyOperation?.fail("run_failed", terminalError);
+      } else {
+        settledLifecycleTerminal?.emit("end", runResult);
+      }
       break;
     } catch (err) {
       if (err instanceof LiveSessionModelSwitchError) {
@@ -2845,6 +2965,7 @@ export async function runAgentTurnWithFallback(params: {
             `Live model switch failed after ${MAX_LIVE_SWITCH_RETRIES} retries ` +
               `(${sanitizeForLog(err.provider)}/${sanitizeForLog(err.model)}). The requested model may be unavailable.`,
           );
+          takePendingLifecycleTerminal()?.emit("error", err);
           const switchErrorText = shouldSurfaceToControlUi
             ? "⚠️ Agent failed before reply: model switch could not be completed. " +
               "The requested model may be temporarily unavailable.\n" +
@@ -2873,6 +2994,7 @@ export async function runAgentTurnWithFallback(params: {
         if (effectiveRun !== runnableRun && effectiveRun !== params.followupRun.run) {
           applyLiveModelSwitchToRun(effectiveRun, err);
         }
+        pendingLifecycleTerminal = undefined;
         fallbackProvider = err.provider;
         fallbackModel = err.model;
         continue;
@@ -2895,6 +3017,7 @@ export async function runAgentTurnWithFallback(params: {
       const isTransientHttp = isTransientHttpError(message);
 
       if (isReplyOperationRestartAbort(params.replyOperation)) {
+        takePendingLifecycleTerminal()?.emit("end", err);
         return {
           kind: "final",
           payload: markAgentRunFailureReplyPayload({
@@ -2904,6 +3027,7 @@ export async function runAgentTurnWithFallback(params: {
       }
 
       if (isReplyOperationUserAbort(params.replyOperation)) {
+        takePendingLifecycleTerminal()?.emit("error", err);
         return {
           kind: "final",
           payload: {
@@ -2914,6 +3038,7 @@ export async function runAgentTurnWithFallback(params: {
 
       const restartLifecycleError = resolveRestartLifecycleError(err);
       if (restartLifecycleError instanceof GatewayDrainingError) {
+        takePendingLifecycleTerminal()?.emit("error", restartLifecycleError);
         params.replyOperation?.fail("gateway_draining", restartLifecycleError);
         return {
           kind: "final",
@@ -2924,6 +3049,7 @@ export async function runAgentTurnWithFallback(params: {
       }
 
       if (restartLifecycleError instanceof CommandLaneClearedError) {
+        takePendingLifecycleTerminal()?.emit("error", restartLifecycleError);
         params.replyOperation?.fail("command_lane_cleared", restartLifecycleError);
         return {
           kind: "final",
@@ -2934,6 +3060,7 @@ export async function runAgentTurnWithFallback(params: {
       }
 
       if (isCompactionFailure) {
+        takePendingLifecycleTerminal()?.emit("error", err);
         defaultRuntime.error(
           `Auto-compaction failed (${message}). Preserving existing session mapping for ${params.sessionKey ?? params.followupRun.run.sessionId}.`,
         );
@@ -2956,6 +3083,7 @@ export async function runAgentTurnWithFallback(params: {
         };
       }
       if (providerRequestError) {
+        takePendingLifecycleTerminal()?.emit("error", err);
         params.replyOperation?.fail("run_failed", err);
         return {
           kind: "final",
@@ -2966,6 +3094,7 @@ export async function runAgentTurnWithFallback(params: {
       }
 
       if (isTransientHttp && consumeTransientHttpRetry()) {
+        pendingLifecycleTerminal = undefined;
         // Retry the full runWithModelFallback() cycle — transient errors
         // (502/521/etc.) typically affect the whole provider, so falling
         // back to an alternate model first would not help. Instead we wait
@@ -3051,19 +3180,26 @@ export async function runAgentTurnWithFallback(params: {
           : {}),
       };
 
-      emitAgentEvent({
-        runId,
-        lifecycleGeneration,
-        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-        stream: "lifecycle",
-        data: {
-          phase: "error",
-          error: message,
-          endedAt: Date.now(),
-          ...abortLifecycleFields,
+      const failedLifecycleTerminal = takePendingLifecycleTerminal();
+      if (failedLifecycleTerminal) {
+        failedLifecycleTerminal.emit("error", err, {
           fallbackExhaustedFailure: true,
-        },
-      });
+        });
+      } else {
+        emitAgentEvent({
+          runId,
+          lifecycleGeneration,
+          ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+          stream: "lifecycle",
+          data: {
+            phase: "error",
+            error: message,
+            endedAt: Date.now(),
+            ...abortLifecycleFields,
+            fallbackExhaustedFailure: true,
+          },
+        });
+      }
 
       // Emit model_failure_terminal plugin hook (fire-and-forget). This gives plugins
       // a structured in-process signal when all model attempts have been exhausted,
@@ -3096,7 +3232,6 @@ export async function runAgentTurnWithFallback(params: {
           },
         );
       }
-
       params.replyOperation?.fail("run_failed", err);
       return {
         kind: "final",
@@ -3177,6 +3312,7 @@ export async function runAgentTurnWithFallback(params: {
     runResult,
     fallbackProvider,
     fallbackModel,
+    ...(fallbackExhausted ? { fallbackExhausted: true as const } : {}),
     fallbackAttempts,
     didLogHeartbeatStrip,
     autoCompactionCount,

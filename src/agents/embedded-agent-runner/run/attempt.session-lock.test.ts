@@ -66,6 +66,65 @@ function cloneBigIntStatWith(
 }
 
 describe("embedded attempt session lock lifecycle", () => {
+  it("recognizes an unchanged session file trusted by the previous prompt release", async () => {
+    const sessionFile = await createTempSessionFile();
+    const options = { ...lockOptions, sessionFile };
+    const first = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: options,
+    });
+
+    expect(await first.readTrustedCurrentSessionFileSnapshot()).toBeUndefined();
+    await first.releaseForPrompt();
+    await first.dispose();
+
+    const second = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: options,
+    });
+    expect(await second.readTrustedCurrentSessionFileSnapshot()).toBeDefined();
+    await second.dispose();
+  });
+
+  it("does not trust a session file changed after the previous prompt release", async () => {
+    const sessionFile = await createTempSessionFile();
+    const options = { ...lockOptions, sessionFile };
+    const first = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: options,
+    });
+    await first.releaseForPrompt();
+    await first.dispose();
+    await fs.appendFile(sessionFile, '{"type":"message","id":"external"}\n', "utf8");
+
+    const second = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: options,
+    });
+    expect(await second.readTrustedCurrentSessionFileSnapshot()).toBeUndefined();
+    await second.dispose();
+  });
+
+  it("publishes a known owned append for the next attempt", async () => {
+    const sessionFile = await createTempSessionFile();
+    const options = { ...lockOptions, sessionFile };
+    const first = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: options,
+    });
+    await fs.appendFile(sessionFile, '{"type":"message","id":"owned"}\n', "utf8");
+    first.refreshAfterOwnedSessionWrite();
+    await first.releaseForPrompt();
+    await first.dispose();
+
+    const second = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: options,
+    });
+    expect(await second.readTrustedCurrentSessionFileSnapshot()).toBeDefined();
+    await second.dispose();
+  });
+
   it("serializes embedded attempts that share a session file owner", async () => {
     const sessionFile = await createTempSessionFile();
     const firstOwner = await acquireEmbeddedAttemptSessionFileOwner({ sessionFile });
@@ -1043,6 +1102,90 @@ describe("embedded attempt session lock lifecycle", () => {
     expect(controller.hasSessionTakeover()).toBe(false);
     expect(acquireSessionWriteLockLocal4).toHaveBeenCalledTimes(3);
     expect(release).toHaveBeenCalledTimes(3);
+  });
+
+  it("authorizes entry-cache advancement only under the exact trusted file lock", async () => {
+    const sessionFile = await createTempSessionFile();
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLockLocal = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockLocal,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controller.releaseForPrompt();
+    const stat = await fs.stat(sessionFile, { bigint: true });
+    const snapshot = {
+      dev: stat.dev,
+      ino: stat.ino,
+      size: stat.size,
+      mtimeNs: stat.mtimeNs,
+      ctimeNs: stat.ctimeNs,
+    };
+
+    expect(controller.canAdvanceSessionEntryCache(snapshot)).toBe(false);
+    await expect(
+      controller.withSessionWriteLock(() => {
+        expect(controller.canAdvanceSessionEntryCache(snapshot)).toBe(true);
+        return "locked";
+      }),
+    ).resolves.toBe("locked");
+    expect(controller.canAdvanceSessionEntryCache(snapshot)).toBe(false);
+  });
+
+  it("publishes an exact owned snapshot only while the write lock is active", async () => {
+    const sessionFile = await createTempSessionFile();
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: vi.fn(async () => ({
+        release: vi.fn(async () => {}),
+      })),
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+    const readSnapshot = async () => {
+      const stat = await fs.stat(sessionFile, { bigint: true });
+      return {
+        dev: stat.dev,
+        ino: stat.ino,
+        size: stat.size,
+        mtimeNs: stat.mtimeNs,
+        ctimeNs: stat.ctimeNs,
+      };
+    };
+    const initialSnapshot = await readSnapshot();
+
+    expect(controller.publishOwnedSessionFileSnapshot(initialSnapshot)).toBe(false);
+    await controller.withSessionWriteLock(async () => {
+      expect(controller.publishOwnedSessionFileSnapshot(initialSnapshot)).toBe(true);
+      await fs.appendFile(sessionFile, '{"type":"message","id":"owned"}\n', "utf8");
+      expect(controller.publishOwnedSessionFileSnapshot(initialSnapshot)).toBe(false);
+      expect(controller.publishOwnedSessionFileSnapshot(await readSnapshot())).toBe(true);
+    });
+    expect(controller.publishOwnedSessionFileSnapshot(await readSnapshot())).toBe(false);
+    await controller.dispose();
+  });
+
+  it("publishes only an unchanged repair-validated snapshot while retaining the lock", async () => {
+    const sessionFile = await createTempSessionFile();
+    const acquireSessionWriteLockLocal = vi.fn(async () => ({
+      release: vi.fn(async () => {}),
+    }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockLocal,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+    const stat = await fs.stat(sessionFile, { bigint: true });
+    const snapshot = {
+      dev: stat.dev,
+      ino: stat.ino,
+      size: stat.size,
+      mtimeNs: stat.mtimeNs,
+      ctimeNs: stat.ctimeNs,
+    };
+
+    expect(controller.publishValidatedSessionFileSnapshot(snapshot)).toBe(true);
+    await fs.appendFile(sessionFile, '{"type":"message","id":"external"}\n', "utf8");
+    expect(controller.publishValidatedSessionFileSnapshot(snapshot)).toBe(false);
+    await controller.dispose();
   });
 
   it("refreshes the prompt fence after an owned session manager append", async () => {

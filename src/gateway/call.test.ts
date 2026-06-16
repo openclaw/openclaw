@@ -175,6 +175,7 @@ const {
   callGateway,
   callGatewayCli,
   callGatewayScoped,
+  formatGatewayClientRequestErrorJson,
   formatGatewayTransportErrorJson,
   isGatewayTransportError,
 } = await import("./call.js");
@@ -1464,6 +1465,47 @@ describe("callGateway error details", () => {
         bindDetail: "Bind: loopback",
       },
     });
+  });
+
+  it("formats typed request errors for CLI JSON output", () => {
+    const error = Object.assign(new Error("unauthorized role: operator"), {
+      name: "GatewayClientRequestError",
+      gatewayCode: "INVALID_REQUEST",
+      details: { method: "skills.bins" },
+      retryable: false,
+      retryAfterMs: 250,
+    });
+
+    expect(formatGatewayClientRequestErrorJson(error)).toEqual({
+      ok: false,
+      error: {
+        type: "gateway_request_error",
+        code: "INVALID_REQUEST",
+        message: "unauthorized role: operator",
+        details: { method: "skills.bins" },
+        retryable: false,
+        retryAfterMs: 250,
+      },
+    });
+    expect(
+      formatGatewayClientRequestErrorJson(
+        Object.assign(new Error("unauthorized role: operator"), {
+          name: "GatewayClientRequestError",
+          gatewayCode: "INVALID_REQUEST",
+          retryable: "no",
+        }),
+      ),
+    ).toBeNull();
+    expect(
+      formatGatewayClientRequestErrorJson(
+        Object.assign(new Error("unauthorized role: operator"), {
+          name: "GatewayClientRequestError",
+          gatewayCode: "INVALID_REQUEST",
+          retryable: false,
+          retryAfterMs: -1,
+        }),
+      ),
+    ).toBeNull();
   });
 
   it("charges event-loop readiness against the wrapper timeout", async () => {

@@ -322,6 +322,15 @@ export async function deliverWebReply(params: {
       whatsappOutboundLog.error(`Failed sending web media to ${msg.from}: ${formatError(error)}`);
       replyLogger.warn({ err: error, mediaUrl }, "failed to send web media reply");
       if (!isFirst) {
+        // Non-first media failures were silently dropped before. Notify the user
+        // so they know a trailing attachment did not arrive.
+        whatsappOutboundLog.warn(`Trailing media failed; sent warning to ${msg.from}`);
+        rememberSendResult(
+          await sendWithRetry(
+            () => msg.platform.reply("⚠️ Media unavailable.", getQuote()),
+            "media:fallback-unavailable",
+          ),
+        );
         return;
       }
       const warning = "⚠️ Media failed.";

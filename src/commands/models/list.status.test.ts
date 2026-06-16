@@ -41,10 +41,15 @@ const mocks = vi.hoisted(() => {
     resolveAgentDir: vi.fn().mockReturnValue("/tmp/openclaw-agent"),
     resolveAgentWorkspaceDir: vi.fn().mockReturnValue("/tmp/openclaw-agent/workspace"),
     resolveDefaultAgentId: vi.fn().mockReturnValue("main"),
+    resolveSessionAgentIds: vi.fn(({ agentId }: { agentId?: string } = {}) => ({
+      defaultAgentId: "main",
+      sessionAgentId: agentId ?? "main",
+    })),
     resolveAgentExplicitModelPrimary: vi.fn().mockReturnValue(undefined),
     resolveAgentEffectiveModelPrimary: vi.fn().mockReturnValue(undefined),
     resolveAgentModelFallbacksOverride: vi.fn().mockReturnValue(undefined),
     listAgentIds: vi.fn().mockReturnValue(["main", "jeremiah"]),
+    listAgentEntries: vi.fn().mockReturnValue([{ id: "main" }, { id: "jeremiah" }]),
     ensureAuthProfileStore: vi.fn().mockReturnValue(store),
     listProfilesForProvider: vi.fn((s: typeof store, provider: string) => {
       return Object.entries(s.profiles)
@@ -156,10 +161,12 @@ vi.mock("../../agents/agent-scope.js", () => ({
   resolveAgentDir: mocks.resolveAgentDir,
   resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
   resolveDefaultAgentId: mocks.resolveDefaultAgentId,
+  resolveSessionAgentIds: mocks.resolveSessionAgentIds,
   resolveAgentExplicitModelPrimary: mocks.resolveAgentExplicitModelPrimary,
   resolveAgentEffectiveModelPrimary: mocks.resolveAgentEffectiveModelPrimary,
   resolveAgentModelFallbacksOverride: mocks.resolveAgentModelFallbacksOverride,
   listAgentIds: mocks.listAgentIds,
+  listAgentEntries: mocks.listAgentEntries,
 }));
 vi.mock("../../agents/workspace.js", () => ({
   resolveDefaultAgentWorkspaceDir: vi.fn().mockReturnValue("/tmp/openclaw-agent/workspace"),
@@ -716,6 +723,89 @@ describe("modelsStatusCommand auth overview", () => {
       }
       if (originalHealthImpl) {
         buildAuthHealthSummaryMock.mockImplementation(originalHealthImpl);
+      }
+    }
+  });
+
+  it("reports Gemini CLI OAuth for canonical Google text routed through the CLI runtime", async () => {
+    const localRuntime = createRuntime();
+    const originalLoadConfig = mocks.loadConfig.getMockImplementation();
+    const originalProfiles = { ...mocks.store.profiles };
+    const originalEnvImpl = mocks.resolveEnvApiKey.getMockImplementation();
+    mocks.loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          model: { primary: "google/gemini-3-flash-preview", fallbacks: [] },
+          models: {
+            "google/*": { agentRuntime: { id: "google-gemini-cli" } },
+          },
+          cliBackends: { "google-gemini-cli": {} },
+        },
+      },
+      models: { providers: {} },
+      env: { shellEnv: { enabled: true } },
+    });
+    mocks.store.profiles = {
+      "google-gemini-cli:user@example.test": {
+        type: "oauth",
+        provider: "google-gemini-cli",
+        access: "gemini-cli-access-token",
+        refresh: "gemini-cli-refresh-token",
+        expires: Date.now() + 60_000,
+      },
+    };
+    mocks.resolveEnvApiKey.mockImplementation((provider: string) =>
+      provider === "google"
+        ? {
+            apiKey: "AIzaSyD-google-env-key-0123456789",
+            source: "env: GEMINI_API_KEY",
+          }
+        : null,
+    );
+
+    try {
+      await modelsStatusCommand({ json: true, check: true }, localRuntime as never);
+      const payload = parseFirstJsonLog(localRuntime);
+      expect(payload.auth.missingProvidersInUse).toStrictEqual([]);
+      expect(
+        requireRecord(
+          requireProvider(payload.auth.providers, "google").effective,
+          "google effective",
+        ),
+      ).toEqual(expect.objectContaining({ kind: "env" }));
+      expect(
+        requireRecord(
+          requireProvider(payload.auth.providers, "google-gemini-cli").effective,
+          "google-gemini-cli effective",
+        ),
+      ).toEqual({
+        kind: "profiles",
+        detail: "/tmp/openclaw-agent/auth-profiles.json",
+      });
+      expect(payload.auth.runtimeAuthRoutes).toEqual([
+        {
+          provider: "google",
+          runtime: "google-gemini-cli",
+          authProvider: "google-gemini-cli",
+          status: "usable",
+          effective: {
+            kind: "profiles",
+            detail: "/tmp/openclaw-agent/auth-profiles.json",
+          },
+        },
+      ]);
+      expect(localRuntime.exit).not.toHaveBeenCalledWith(1);
+    } finally {
+      mocks.store.profiles = originalProfiles;
+      if (originalLoadConfig) {
+        mocks.loadConfig.mockImplementation(originalLoadConfig);
+      }
+      if (originalEnvImpl) {
+        mocks.resolveEnvApiKey.mockImplementation(originalEnvImpl);
+      } else if (defaultResolveEnvApiKeyImpl) {
+        mocks.resolveEnvApiKey.mockImplementation(defaultResolveEnvApiKeyImpl);
+      } else {
+        mocks.resolveEnvApiKey.mockImplementation(() => null);
       }
     }
   });

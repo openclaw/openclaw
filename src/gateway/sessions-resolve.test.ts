@@ -146,7 +146,7 @@ describe("resolveSessionKeyFromResolveParams", () => {
     expect(typeof updateSessionStoreCall?.[1]).toBe("function");
   });
 
-  it("rejects sessions belonging to a deleted agent (key-based lookup)", async () => {
+  it("does not let allowMissing mask a deleted-agent error", async () => {
     const deletedAgentKey = "agent:deleted-agent:main";
     targetStore = {
       [deletedAgentKey]: { sessionId: "sess-orphan", updatedAt: 1 },
@@ -162,7 +162,7 @@ describe("resolveSessionKeyFromResolveParams", () => {
 
     const result = await resolveSessionKeyFromResolveParams({
       cfg: {},
-      p: { key: deletedAgentKey },
+      p: { key: deletedAgentKey, allowMissing: true },
     });
 
     expect(result).toEqual({
