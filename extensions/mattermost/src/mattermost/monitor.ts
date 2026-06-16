@@ -69,6 +69,7 @@ import {
   formatInboundFromLabel,
   normalizeMention,
   resolveThreadSessionKeys,
+  shouldDropEmptyMattermostBody,
 } from "./monitor-helpers.js";
 import { resolveOncharPrefixes, stripOncharPrefix } from "./monitor-onchar.js";
 import { createMattermostMonitorResources, type MattermostMediaInfo } from "./monitor-resources.js";
@@ -490,33 +491,6 @@ export function resolveMattermostReactionChannelId(
     normalizeOptionalString(payload.broadcast?.channel_id) ??
     normalizeOptionalString(payload.data?.channel_id)
   );
-}
-
-/**
- * Decide whether an inbound Mattermost message whose body is empty after mention
- * normalization should be dropped. A bare mention of the bot (just `@bot` with no
- * other text) normalizes to an empty body but is a deliberate wake signal, so it
- * must not be dropped. It is kept when the message was mentioned (group gate) or
- * its raw text still contains the bot's `@username` (covers groups and DMs, where
- * `wasMentioned` is not evaluated).
- */
-export function shouldDropEmptyMattermostBody(params: {
-  bodyText: string;
-  wasMentioned: boolean;
-  rawText: string;
-  botUsername?: string | null;
-}): boolean {
-  if (params.bodyText) {
-    return false;
-  }
-  if (params.wasMentioned) {
-    return false;
-  }
-  const botUsername = normalizeLowercaseStringOrEmpty(params.botUsername ?? "");
-  if (botUsername && normalizeLowercaseStringOrEmpty(params.rawText).includes(`@${botUsername}`)) {
-    return false;
-  }
-  return true;
 }
 
 function buildMattermostAttachmentPlaceholder(mediaList: MattermostMediaInfo[]): string {

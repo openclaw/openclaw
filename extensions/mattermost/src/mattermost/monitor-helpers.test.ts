@@ -1,6 +1,6 @@
 // Mattermost tests cover monitor helpers plugin behavior.
 import { describe, expect, it } from "vitest";
-import { normalizeMention } from "./monitor-helpers.js";
+import { normalizeMention, shouldDropEmptyMattermostBody } from "./monitor-helpers.js";
 
 describe("normalizeMention", () => {
   it("returns trimmed text when no mention provided", () => {
@@ -79,5 +79,62 @@ describe("normalizeMention", () => {
     const input = "@echobot\n    code line 1\n    code line 2";
     const result = normalizeMention(input, "echobot");
     expect(result).toBe("    code line 1\n    code line 2");
+  });
+});
+
+describe("shouldDropEmptyMattermostBody", () => {
+  it("drops a non-mention message that normalizes to an empty body", () => {
+    expect(
+      shouldDropEmptyMattermostBody({
+        bodyText: "",
+        wasMentioned: false,
+        rawText: "   ",
+        botUsername: "openclaw",
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps a message that still has body text", () => {
+    expect(
+      shouldDropEmptyMattermostBody({
+        bodyText: "hello",
+        wasMentioned: false,
+        rawText: "hello",
+        botUsername: "openclaw",
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps a bare mention in a group", () => {
+    expect(
+      shouldDropEmptyMattermostBody({
+        bodyText: "",
+        wasMentioned: true,
+        rawText: "@openclaw",
+        botUsername: "openclaw",
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps a bare mention in a direct message", () => {
+    expect(
+      shouldDropEmptyMattermostBody({
+        bodyText: "",
+        wasMentioned: false,
+        rawText: "@OpenClaw",
+        botUsername: "openclaw",
+      }),
+    ).toBe(false);
+  });
+
+  it("drops an empty body when the bot username is unknown", () => {
+    expect(
+      shouldDropEmptyMattermostBody({
+        bodyText: "",
+        wasMentioned: false,
+        rawText: "@someoneelse",
+        botUsername: undefined,
+      }),
+    ).toBe(true);
   });
 });

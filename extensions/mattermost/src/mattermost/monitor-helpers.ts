@@ -1,6 +1,7 @@
 // Mattermost helper module supports monitor helpers behavior.
 import { formatInboundFromLabel as formatInboundFromLabelShared } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveThreadSessionKeys as resolveThreadSessionKeysShared } from "openclaw/plugin-sdk/routing";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 
 export { rawDataToString };
@@ -52,4 +53,19 @@ export function normalizeMention(text: string, mention: string | undefined): str
   }
 
   return normalizedLines.map((line) => line.text).join("\n");
+}
+
+export function shouldDropEmptyMattermostBody(params: {
+  bodyText: string;
+  wasMentioned: boolean;
+  rawText: string;
+  botUsername?: string | null;
+}): boolean {
+  if (params.bodyText || params.wasMentioned) {
+    return false;
+  }
+  const botUsername = normalizeLowercaseStringOrEmpty(params.botUsername ?? "");
+  return (
+    !botUsername || !normalizeLowercaseStringOrEmpty(params.rawText).includes(`@${botUsername}`)
+  );
 }
