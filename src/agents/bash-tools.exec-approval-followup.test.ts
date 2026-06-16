@@ -16,8 +16,8 @@ vi.mock("../infra/outbound/message.js", () => ({
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { writeSessionStoreForTest } from "../config/sessions/test-helpers.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
+import { writeSessionStoreForTest } from "../config/sessions/test-helpers.js";
 import { sendMessage } from "../infra/outbound/message.js";
 import {
   buildExecApprovalFollowupPrompt,
@@ -138,6 +138,20 @@ describe("exec approval followup", () => {
       deliver: false,
       channel: undefined,
       to: undefined,
+    });
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("suppresses prompt persistence for session-resume followups", async () => {
+    await sendExecApprovalFollowup({
+      approvalId: "req-hidden-prompt",
+      sessionKey: "agent:main:main",
+      resultText: "Exec finished (gateway id=req-hidden-prompt, code 0)\nok",
+    });
+
+    expectGatewayAgentFollowup({
+      sessionKey: "agent:main:main",
+      suppressPromptPersistence: true,
     });
     expect(sendMessage).not.toHaveBeenCalled();
   });
