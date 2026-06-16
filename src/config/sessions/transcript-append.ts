@@ -371,7 +371,7 @@ type AppendSessionTranscriptMessageParams<TMessage = unknown> = {
   cwd?: string;
   useRawWhenLinear?: boolean;
   /** Opt into transcript idempotency lookup; default append stays O(1) for fresh keyed messages. */
-  idempotencyLookup?: "scan" | "scan-assistant" | "caller-checked";
+  idempotencyLookup?: "scan" | "caller-checked";
   /** Runs under the transcript write lock after idempotency replay checks and before append. */
   prepareMessageAfterIdempotencyCheck?: (message: TMessage) => TMessage | undefined;
   config?: OpenClawConfig;
@@ -510,13 +510,8 @@ async function appendSessionTranscriptMessageLocked<TMessage>(
   }
   const idempotencyKey = readMessageIdempotencyKey(params.message);
   const existing =
-    idempotencyKey &&
-    (params.idempotencyLookup === "scan" || params.idempotencyLookup === "scan-assistant")
-      ? await findTranscriptMessageByIdempotencyKey(
-          params.transcriptPath,
-          idempotencyKey,
-          params.idempotencyLookup === "scan-assistant" ? "assistant" : undefined,
-        )
+    idempotencyKey && params.idempotencyLookup === "scan"
+      ? await findTranscriptMessageByIdempotencyKey(params.transcriptPath, idempotencyKey)
       : undefined;
   if (existing) {
     return { ...existing, message: existing.message as TMessage, appended: false };
@@ -581,7 +576,6 @@ function readMessageIdempotencyKey(message: unknown): string | undefined {
 async function findTranscriptMessageByIdempotencyKey(
   transcriptPath: string,
   idempotencyKey: string,
-  role?: string,
 ): Promise<{ messageId: string; message: unknown } | undefined> {
   for await (const line of streamSessionTranscriptLinesReverse(transcriptPath)) {
     try {
@@ -590,14 +584,7 @@ async function findTranscriptMessageByIdempotencyKey(
         message?: unknown;
       };
       const message = parsed.message;
-      if (
-        readMessageIdempotencyKey(message) !== idempotencyKey ||
-        (role &&
-          (!message ||
-            typeof message !== "object" ||
-            Array.isArray(message) ||
-            (message as { role?: unknown }).role !== role))
-      ) {
+      if (readMessageIdempotencyKey(message) !== idempotencyKey) {
         continue;
       }
       return {

@@ -7645,8 +7645,7 @@ describe("runAgentTurnWithFallback", () => {
     });
   });
 
-  it("forwards and latches assistant error persistence across main fallback candidates", async () => {
-    const onAssistantErrorMessagePersisted = vi.fn();
+  it("latches assistant error stub suppression across main reply fallback candidates", async () => {
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
       await params.run("anthropic", "claude-opus-4-7").catch(() => undefined);
       await params.run("anthropic", "claude-opus-4-6").catch(() => undefined);
@@ -7658,8 +7657,18 @@ describe("runAgentTurnWithFallback", () => {
       };
     });
     state.runEmbeddedAgentMock.mockImplementationOnce(
-      async (args: { onAssistantErrorMessagePersisted?: () => void }) => {
-        args.onAssistantErrorMessagePersisted?.();
+      async (args: {
+        onAssistantErrorMessagePersisted?: (message: {
+          role: "assistant";
+          content: string;
+          stopReason: "error";
+        }) => void;
+      }) => {
+        args.onAssistantErrorMessagePersisted?.({
+          role: "assistant",
+          content: "[assistant turn failed before producing content]",
+          stopReason: "error",
+        });
         throw new Error("upstream 500");
       },
     );
@@ -7670,13 +7679,8 @@ describe("runAgentTurnWithFallback", () => {
     });
 
     const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    await runAgentTurnWithFallback(
-      createMinimalRunAgentTurnParams({
-        opts: { onAssistantErrorMessagePersisted },
-      }),
-    );
+    await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
 
-    expect(onAssistantErrorMessagePersisted).toHaveBeenCalledOnce();
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(3);
     expectMockCallArgFields(state.runEmbeddedAgentMock, 0, "primary candidate", {
       suppressAssistantErrorPersistence: false,

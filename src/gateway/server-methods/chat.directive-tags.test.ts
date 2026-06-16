@@ -14,7 +14,6 @@ import {
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../../../packages/gateway-protocol/src/schema.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
-import { STREAM_ERROR_FALLBACK_TEXT } from "../../agents/stream-message-shared.js";
 import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
@@ -234,7 +233,11 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
           markRuntimePersisted: (message: { role: "user"; content: string }) => void;
           markRuntimePersistencePending: (pending: Promise<void>) => void;
         };
-        onAssistantErrorMessagePersisted?: () => void;
+        onAssistantErrorMessagePersisted?: (message: {
+          role: "assistant";
+          content: Array<{ type: "text"; text: string }>;
+          stopReason: "error";
+        }) => void;
         images?: Array<{ mimeType: string; data: string }>;
         imageOrder?: string[];
       };
@@ -263,17 +266,11 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
         });
       }
       if (mockState.triggerAssistantErrorPersisted) {
-        const runtimeErrorMessage = {
+        params.replyOptions?.onAssistantErrorMessagePersisted?.({
           role: "assistant",
-          content: [{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }],
-          stopReason: "error" as const,
-          errorMessage: "runtime provider detail",
-        };
-        await appendSessionTranscriptMessage({
-          transcriptPath: mockState.transcriptPath,
-          message: runtimeErrorMessage,
+          content: [{ type: "text", text: "runtime persisted assistant error" }],
+          stopReason: "error",
         });
-        params.replyOptions?.onAssistantErrorMessagePersisted?.();
       }
       if (mockState.runtimeUserMessagePersistencePending) {
         params.replyOptions?.userTurnTranscriptRecorder?.markRuntimePersistencePending(
@@ -2287,7 +2284,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(finalBroadcasts).toStrictEqual([]);
   });
 
-  it("broadcasts returned agent errors but persists sanitized transcript content", async () => {
+  it("broadcasts returned agent-run error payloads after an agent starts", async () => {
     createTranscriptFixture("openclaw-chat-send-agent-returned-error-");
     const errorMessage = "LLM idle timeout (120s): no response from model";
     mockState.triggerAgentRunStart = true;
@@ -2334,11 +2331,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(assistantUpdates[0]?.sessionKey).toBe("main");
     const assistantMessage = assistantUpdates[0]?.message as Record<string, unknown> | undefined;
     expect(assistantMessage?.role).toBe("assistant");
-    expect(assistantMessage?.content).toEqual([
-      { type: "text", text: "The agent run failed before producing a reply." },
-    ]);
+    expect(assistantMessage?.content).toEqual([{ type: "text", text: errorMessage }]);
     expect(assistantMessage?.idempotencyKey).toBe("idem-agent-returned-error:assistant-error");
-    expect(JSON.stringify(assistantMessage)).not.toContain(errorMessage);
   });
 
   it("keeps visible text on non-agent TTS final media because no model transcript exists", async () => {
@@ -6261,12 +6255,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
   });
 
-  it("persists one sanitized assistant error when a started failure is replayed", async () => {
+  it("emits a user transcript update when chat.send fails after agent start but before runtime persistence", async () => {
     createTranscriptFixture("openclaw-chat-send-user-transcript-error-before-runtime-persist-");
     mockState.triggerAgentRunStart = true;
-    mockState.dispatchErrorAfterAgentRunStart = new Error(
-      "private upstream at secret.internal.example failed",
-    );
+    mockState.dispatchErrorAfterAgentRunStart = new Error("cli backend unavailable");
     const respond = vi.fn();
     const context = createChatContext();
 
@@ -6277,22 +6269,11 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       message: "hello before cli startup failure",
       expectBroadcast: false,
     });
-    const replayContext = createChatContext();
-    await runNonStreamingChatSend({
-      context: replayContext,
-      respond: vi.fn(),
-      idempotencyKey: "idem-user-transcript-error-before-runtime-persist",
-      message: "hello before cli startup failure",
-      expectBroadcast: false,
-    });
 
     await waitForAssertion(() => {
       expect(context.dedupe.get("chat:idem-user-transcript-error-before-runtime-persist")?.ok).toBe(
         false,
       );
-      expect(
-        replayContext.dedupe.get("chat:idem-user-transcript-error-before-runtime-persist")?.ok,
-      ).toBe(false);
       const userUpdate = findUserUpdate();
       const message = userUpdateMessage(userUpdate);
       expect(userUpdate?.sessionFile.endsWith("sess.jsonl")).toBe(true);
@@ -6304,12 +6285,11 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       const assistantMessages = readPersistedAssistantMessages();
       expect(assistantMessages).toHaveLength(1);
       expect(assistantMessages[0]?.content).toEqual([
-        { type: "text", text: "The agent run failed before producing a reply." },
+        { type: "text", text: "Error: cli backend unavailable" },
       ]);
       expect(assistantMessages[0]?.idempotencyKey).toBe(
         "idem-user-transcript-error-before-runtime-persist:assistant-error",
       );
-      expect(JSON.stringify(assistantMessages[0])).not.toContain("secret.internal.example");
     });
   });
 
@@ -6394,13 +6374,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
   });
 
-  it("persists a sanitized assistant error when a started agent returns an error", async () => {
+  it("persists one assistant error when a started agent returns an error before runtime persistence", async () => {
     createTranscriptFixture("openclaw-chat-send-assistant-error-no-runtime-persist-");
     mockState.triggerAgentRunStart = true;
-    mockState.finalPayload = {
-      text: "private upstream at secret.internal.example failed",
-      isError: true,
-    };
+    mockState.finalPayload = { text: "agent failed before prompt append", isError: true };
     const respond = vi.fn();
     const context = createChatContext();
 
@@ -6416,41 +6393,15 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       const assistantMessages = readPersistedAssistantMessages();
       expect(assistantMessages).toHaveLength(1);
       expect(assistantMessages[0]?.content).toEqual([
-        { type: "text", text: "The agent run failed before producing a reply." },
+        { type: "text", text: "agent failed before prompt append" },
       ]);
       expect(assistantMessages[0]?.idempotencyKey).toBe(
         "idem-assistant-error-no-runtime-persist:assistant-error",
       );
-      expect(JSON.stringify(assistantMessages[0])).not.toContain("secret.internal.example");
     });
   });
 
-  it("does not persist a gateway failure after the started run is aborted", async () => {
-    createTranscriptFixture("openclaw-chat-send-assistant-error-aborted-");
-    const idempotencyKey = "idem-assistant-error-aborted";
-    const context = createChatContext();
-    mockState.triggerAgentRunStart = true;
-    mockState.onAfterAgentRunStart = () => {
-      context.chatAbortedRuns.set(idempotencyKey, Date.now());
-    };
-    mockState.dispatchErrorAfterAgentRunStart = new Error("aborted provider request");
-    const respond = vi.fn();
-
-    await runNonStreamingChatSend({
-      context,
-      respond,
-      idempotencyKey,
-      message: "cancel this run",
-      expectBroadcast: false,
-    });
-
-    await waitForAssertion(() => {
-      expect(context.dedupe.get(`chat:${idempotencyKey}`)?.ok).toBe(false);
-    });
-    expect(readPersistedAssistantMessages()).toHaveLength(0);
-  });
-
-  it("preserves one runtime-persisted assistant error without appending a duplicate", async () => {
+  it("persists returned assistant errors even when runtime emitted an internal error stub", async () => {
     createTranscriptFixture("openclaw-chat-send-assistant-error-runtime-persisted-");
     mockState.triggerAgentRunStart = true;
     mockState.triggerAssistantErrorPersisted = true;
@@ -6471,9 +6422,11 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       const assistantMessages = readPersistedAssistantMessages();
       expect(assistantMessages).toHaveLength(1);
       expect(assistantMessages[0]?.content).toEqual([
-        { type: "text", text: STREAM_ERROR_FALLBACK_TEXT },
+        { type: "text", text: "agent failed after runtime append" },
       ]);
-      expect(assistantMessages[0]?.idempotencyKey).toBeUndefined();
+      expect(assistantMessages[0]?.idempotencyKey).toBe(
+        "idem-assistant-error-runtime-persisted:assistant-error",
+      );
     });
   });
 

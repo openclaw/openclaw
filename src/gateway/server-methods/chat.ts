@@ -200,7 +200,6 @@ type TranscriptAppendResult = {
   ok: boolean;
   messageId?: string;
   message?: Record<string, unknown>;
-  appended?: boolean;
   error?: string;
 };
 
@@ -1840,6 +1839,16 @@ async function appendAssistantTranscriptMessage(params: {
     }
   }
 
+  if (params.idempotencyKey) {
+    const existing = await findAssistantTranscriptMessageByIdempotencyKey(
+      transcriptPath,
+      params.idempotencyKey,
+    );
+    if (existing) {
+      return { ok: true, messageId: existing.messageId, message: existing.message };
+    }
+  }
+
   const appended = await appendInjectedAssistantMessageToTranscript({
     transcriptPath,
     sessionKey: params.sessionKey,
@@ -1852,7 +1861,7 @@ async function appendAssistantTranscriptMessage(params: {
     ttsSupplement: params.ttsSupplement,
     config: params.cfg,
   });
-  if (appended.ok && appended.appended) {
+  if (appended.ok) {
     await advanceSessionTranscriptMarker({
       storePath: params.storePath,
       sessionKey: params.sessionKey,
@@ -3735,18 +3744,25 @@ export const chatHandlers: GatewayRequestHandlers = {
       const persistGatewayUserTurnTranscriptBestEffort = async () => {
         await persistGatewayUserTurnTranscript().catch(() => undefined);
       };
-      const persistGatewayAssistantErrorTranscript = async () => {
-        if (runtimeAssistantErrorPersisted || context.chatAbortedRuns.has(clientRunId)) {
+      const persistGatewayAssistantErrorTranscript = async (
+        errorMessage?: string,
+        options?: { force?: boolean },
+      ) => {
+        if (runtimeAssistantErrorPersisted && !options?.force) {
           return;
         }
+        const assistantErrorTranscriptMessage =
+          sanitizeAssistantDisplayText(errorMessage) ??
+          errorMessage ??
+          "agent returned an error payload";
         const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(
           sessionKey,
           sessionLoadOptions,
         );
         const appended = await appendAssistantTranscriptMessage({
           sessionKey,
-          message: GATEWAY_ASSISTANT_ERROR_FALLBACK_TEXT,
-          content: [{ type: "text", text: GATEWAY_ASSISTANT_ERROR_FALLBACK_TEXT }],
+          message: assistantErrorTranscriptMessage,
+          content: [{ type: "text", text: assistantErrorTranscriptMessage }],
           sessionId: latestEntry?.sessionId ?? backingSessionId ?? clientRunId,
           storePath: latestStorePath,
           sessionFile: latestEntry?.sessionFile,
@@ -4878,7 +4894,9 @@ export const chatHandlers: GatewayRequestHandlers = {
               const shouldBroadcastAgentError =
                 returnedAgentErrorPayloads.length > 0 && !broadcastedSourceReplyFinal;
               if (shouldBroadcastAgentError) {
-                await persistGatewayAssistantErrorTranscript();
+                await persistGatewayAssistantErrorTranscript(returnedAgentErrorMessage, {
+                  force: true,
+                });
               }
               if (shouldBroadcastAgentError) {
                 broadcastChatError({
@@ -4938,9 +4956,6 @@ export const chatHandlers: GatewayRequestHandlers = {
               `webchat user transcript update failed after error: ${formatForLog(transcriptErr)}`,
             );
           });
-          if (agentRunStarted && !dispatchCompleted) {
-            await persistGatewayAssistantErrorTranscript();
-          }
           const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
           setGatewayDedupeEntry({
             dedupe: context.dedupe,

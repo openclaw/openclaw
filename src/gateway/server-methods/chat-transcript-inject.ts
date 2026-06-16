@@ -20,7 +20,6 @@ export type GatewayInjectedTranscriptAppendResult = {
   ok: boolean;
   messageId?: string;
   message?: Record<string, unknown>;
-  appended?: boolean;
   error?: string;
 };
 
@@ -120,33 +119,21 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   };
 
   try {
-    const {
-      messageId,
-      message: appendedMessage,
-      appended,
-    } = await appendSessionTranscriptMessage({
+    const { messageId, message: appendedMessage } = await appendSessionTranscriptMessage({
       transcriptPath: params.transcriptPath,
       message: messageBody,
       now,
       useRawWhenLinear: true,
-      ...(params.idempotencyKey ? { idempotencyLookup: "scan-assistant" as const } : {}),
       config: params.config,
     });
-    if (appended) {
-      emitSessionTranscriptUpdate({
-        sessionFile: params.transcriptPath,
-        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-        ...(params.agentId ? { agentId: params.agentId } : {}),
-        message: appendedMessage,
-        messageId,
-      });
-    }
-    return {
-      ok: true,
+    emitSessionTranscriptUpdate({
+      sessionFile: params.transcriptPath,
+      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      message: appendedMessage,
       messageId,
-      message: appendedMessage as unknown as Record<string, unknown>,
-      appended,
-    };
+    });
+    return { ok: true, messageId, message: appendedMessage as unknown as Record<string, unknown> };
   } catch (err) {
     return { ok: false, error: formatErrorMessage(err) };
   }
