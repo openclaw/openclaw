@@ -48,6 +48,7 @@ const rawSqliteAllowPathGroups = {
   "doctor legacy state migration": ["src/infra/state-migrations.ts"],
   "Kysely-backed stores that own a DatabaseSync boundary": [
     "src/acp/event-ledger.ts",
+    "src/agents/auth-profiles/sqlite.ts",
     "src/agents/subagent-registry.store.ts",
     "src/cron/run-log.ts",
     "src/cron/run-log/sqlite-store.ts",
