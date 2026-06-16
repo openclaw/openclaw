@@ -580,30 +580,6 @@ describe("runCliAgent spawn path", () => {
     );
   });
 
-  it("logs Gemini CLI runtime env key diagnostics without debug output enabled", async () => {
-    mockSuccessfulCliRun();
-    const infoSpy = vi.spyOn(cliBackendLog, "info");
-
-    await executePreparedCliRun(
-      buildPreparedCliRunContext({
-        provider: "google-gemini-cli",
-        model: "gemini-3.1-pro-preview",
-        runId: "run-gemini-env-diagnostics",
-        preparedEnv: {
-          GEMINI_CLI_HOME: "/tmp/openclaw-gemini-profile-home",
-          GEMINI_CLI_SYSTEM_SETTINGS_PATH: "/tmp/openclaw-gemini-system-settings.json",
-        },
-      }),
-    );
-
-    const envLog = infoSpy.mock.calls
-      .map((call) => String(call[0]))
-      .find((line) => line.startsWith("cli env auth:"));
-    expect(envLog).toContain("runtimeChild=GEMINI_CLI_HOME,GEMINI_CLI_SYSTEM_SETTINGS_PATH");
-    expect(envLog).not.toContain("/tmp/openclaw-gemini-profile-home");
-    expect(envLog).not.toContain("/tmp/openclaw-gemini-system-settings.json");
-  });
-
   it("passes OpenClaw skills to Claude as a session plugin", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-skills-"));
     const skillDir = path.join(workspaceDir, "skills", "weather");

@@ -715,8 +715,6 @@ export async function executePreparedCliRun(
 
           return next;
         })();
-        const logCliEnvDiagnostics =
-          logOutputText || context.backendResolved.id === "google-gemini-cli";
         if (logOutputText) {
           const logArgs = buildCliLogArgs({
             args,
@@ -727,8 +725,6 @@ export async function executePreparedCliRun(
             argsPrompt,
           });
           cliBackendLog.info(`cli argv: ${backend.command} ${logArgs.join(" ")}`);
-        }
-        if (logCliEnvDiagnostics) {
           cliBackendLog.info(`cli env auth: ${buildCliEnvAuthLog(env)}`);
           if (env.OPENCLAW_MCP_TOKEN || env.OPENCLAW_MCP_SESSION_KEY || env.OPENCLAW_MCP_AGENT_ID) {
             cliBackendLog.info(`cli env mcp: ${buildCliEnvMcpLog(env)}`);
