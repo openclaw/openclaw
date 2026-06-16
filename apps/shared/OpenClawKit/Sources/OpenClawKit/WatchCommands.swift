@@ -222,6 +222,7 @@ public struct OpenClawWatchAppSnapshotMessage: Codable, Sendable, Equatable {
     public var agentAvatarURL: String?
     public var agentAvatarText: String?
     public var sessionKey: String
+    public var gatewayStableID: String?
     public var talkStatusText: String
     public var talkEnabled: Bool
     public var talkListening: Bool
@@ -239,6 +240,7 @@ public struct OpenClawWatchAppSnapshotMessage: Codable, Sendable, Equatable {
         agentAvatarURL: String? = nil,
         agentAvatarText: String? = nil,
         sessionKey: String,
+        gatewayStableID: String? = nil,
         talkStatusText: String,
         talkEnabled: Bool,
         talkListening: Bool,
@@ -256,6 +258,7 @@ public struct OpenClawWatchAppSnapshotMessage: Codable, Sendable, Equatable {
         self.agentAvatarURL = agentAvatarURL
         self.agentAvatarText = agentAvatarText
         self.sessionKey = sessionKey
+        self.gatewayStableID = gatewayStableID
         self.talkStatusText = talkStatusText
         self.talkEnabled = talkEnabled
         self.talkListening = talkListening
@@ -293,6 +296,7 @@ public struct OpenClawWatchAppCommandMessage: Codable, Sendable, Equatable {
     public var command: OpenClawWatchAppCommand
     public var commandId: String
     public var sessionKey: String?
+    public var gatewayStableID: String?
     public var text: String?
     public var sentAtMs: Int?
 
@@ -300,6 +304,7 @@ public struct OpenClawWatchAppCommandMessage: Codable, Sendable, Equatable {
         command: OpenClawWatchAppCommand,
         commandId: String,
         sessionKey: String? = nil,
+        gatewayStableID: String? = nil,
         text: String? = nil,
         sentAtMs: Int? = nil)
     {
@@ -307,6 +312,7 @@ public struct OpenClawWatchAppCommandMessage: Codable, Sendable, Equatable {
         self.command = command
         self.commandId = commandId
         self.sessionKey = sessionKey
+        self.gatewayStableID = gatewayStableID
         self.text = text
         self.sentAtMs = sentAtMs
     }

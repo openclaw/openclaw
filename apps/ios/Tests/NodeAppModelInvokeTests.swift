@@ -520,6 +520,7 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
         let appModel = NodeAppModel(watchMessagingService: watchService)
         appModel._test_setGatewayConnected(true)
         appModel._test_setOperatorConnected(true)
+        appModel._test_setConnectedGatewayID("gateway-watch-snapshot")
         appModel.gatewayStatusText = "Connected"
         appModel.talkMode.setEnabled(true)
         appModel.talkMode.statusText = "Listening"
@@ -541,6 +542,7 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
         #expect(snapshot.gatewayStatusText == "Connected")
         #expect(snapshot.agentName == "Main")
         #expect(snapshot.sessionKey == "main")
+        #expect(snapshot.gatewayStableID == "gateway-watch-snapshot")
         #expect(!snapshot.talkStatusText.isEmpty)
         #expect(snapshot.talkEnabled == true)
         #expect(snapshot.pendingApprovalCount == 0)
@@ -670,6 +672,7 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
                 commandId: "watch-start-talk",
                 command: .startTalk,
                 sessionKey: "main",
+                gatewayStableID: nil,
                 text: nil,
                 sentAtMs: 123,
                 transport: "sendMessage"))
@@ -683,6 +686,7 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
                 commandId: "watch-stop-talk",
                 command: .stopTalk,
                 sessionKey: "main",
+                gatewayStableID: nil,
                 text: nil,
                 sentAtMs: 124,
                 transport: "sendMessage"))
@@ -701,6 +705,7 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
                 commandId: "watch-open-chat",
                 command: .openChat,
                 sessionKey: "incident-42",
+                gatewayStableID: nil,
                 text: nil,
                 sentAtMs: 125,
                 transport: "sendMessage"))
@@ -720,6 +725,7 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
                 commandId: "watch-send-chat",
                 command: .sendChat,
                 sessionKey: "main",
+                gatewayStableID: AppleReviewDemoMode.gatewayID,
                 text: "Watch says hello",
                 sentAtMs: 126,
                 transport: "sendMessage"))
@@ -763,13 +769,15 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
         defer { NodeAppModel._test_resetPersistedWatchChatQueueState() }
         let watchService = MockWatchMessagingService()
         let appModel = NodeAppModel(watchMessagingService: watchService)
-        appModel._test_setConnectedGatewayID("gateway-watch-chat-offline")
+        let gatewayID = "gateway-watch-chat-offline"
+        appModel._test_setConnectedGatewayID(gatewayID)
 
         watchService.emitAppCommand(
             WatchAppCommandEvent(
                 commandId: "watch-send-chat-offline",
                 command: .sendChat,
                 sessionKey: "main",
+                gatewayStableID: gatewayID,
                 text: "Queue this from watch",
                 sentAtMs: 127,
                 transport: "sendMessage"))
@@ -782,6 +790,7 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
                 commandId: "watch-send-chat-offline",
                 command: .sendChat,
                 sessionKey: "main",
+                gatewayStableID: gatewayID,
                 text: "Queue this from watch",
                 sentAtMs: 128,
                 transport: "sendMessage"))
@@ -790,18 +799,41 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
         #expect(appModel._test_queuedWatchChatCommandCount() == 1)
     }
 
+    @Test @MainActor func watchAppCommandDropsChatMessageForStaleGatewaySnapshot() async {
+        NodeAppModel._test_resetPersistedWatchChatQueueState()
+        defer { NodeAppModel._test_resetPersistedWatchChatQueueState() }
+        let watchService = MockWatchMessagingService()
+        let appModel = NodeAppModel(watchMessagingService: watchService)
+        appModel._test_setConnectedGatewayID("gateway-current")
+
+        watchService.emitAppCommand(
+            WatchAppCommandEvent(
+                commandId: "watch-send-chat-stale-gateway",
+                command: .sendChat,
+                sessionKey: "main",
+                gatewayStableID: "gateway-from-old-snapshot",
+                text: "Do not send to the new gateway",
+                sentAtMs: 128,
+                transport: "transferUserInfo"))
+        await Task.yield()
+
+        #expect(appModel._test_queuedWatchChatCommandCount() == 0)
+    }
+
     @Test @MainActor func watchAppCommandRestoresQueuedChatMessageAfterModelRestart() async {
         NodeAppModel._test_resetPersistedWatchChatQueueState()
         defer { NodeAppModel._test_resetPersistedWatchChatQueueState() }
 
+        let gatewayID = "gateway-watch-chat-restore"
         let firstWatchService = MockWatchMessagingService()
         let firstAppModel = NodeAppModel(watchMessagingService: firstWatchService)
-        firstAppModel._test_setConnectedGatewayID("gateway-watch-chat-restore")
+        firstAppModel._test_setConnectedGatewayID(gatewayID)
         firstWatchService.emitAppCommand(
             WatchAppCommandEvent(
                 commandId: "watch-send-chat-restore",
                 command: .sendChat,
                 sessionKey: "main",
+                gatewayStableID: gatewayID,
                 text: "Keep this through restart",
                 sentAtMs: 129,
                 transport: "sendMessage"))
@@ -811,7 +843,7 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
 
         let secondWatchService = MockWatchMessagingService()
         let secondAppModel = NodeAppModel(watchMessagingService: secondWatchService)
-        secondAppModel._test_setConnectedGatewayID("gateway-watch-chat-restore")
+        secondAppModel._test_setConnectedGatewayID(gatewayID)
 
         #expect(secondAppModel._test_queuedWatchChatCommandIds() == ["watch-send-chat-restore"])
 
@@ -820,6 +852,7 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
                 commandId: "watch-send-chat-restore",
                 command: .sendChat,
                 sessionKey: "main",
+                gatewayStableID: gatewayID,
                 text: "Keep this through restart",
                 sentAtMs: 130,
                 transport: "transferUserInfo"))
@@ -841,6 +874,7 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
             commandId: "watch-send-chat-gateway-a-1",
             command: .sendChat,
             sessionKey: "main",
+            gatewayStableID: "gateway-a",
             text: "First for gateway A",
             sentAtMs: 131,
             transport: "sendMessage")
@@ -848,6 +882,7 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
             commandId: "watch-send-chat-gateway-a-2",
             command: .sendChat,
             sessionKey: "main",
+            gatewayStableID: "gateway-a",
             text: "Second for gateway A",
             sentAtMs: 132,
             transport: "sendMessage")
@@ -881,6 +916,65 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
                 "watch-send-chat-gateway-a-2")
     }
 
+    @Test @MainActor func watchChatRequeueKeepsOriginalGatewayOwner() throws {
+        let suiteName = "watch-chat-requeue-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defaults.removePersistentDomain(forName: suiteName)
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let coordinator = WatchChatCoordinator(defaults: defaults)
+        let event = WatchAppCommandEvent(
+            commandId: "watch-send-chat-retry-gateway-a",
+            command: .sendChat,
+            sessionKey: "main",
+            gatewayStableID: "gateway-a",
+            text: "Retry for gateway A",
+            sentAtMs: 133,
+            transport: "sendMessage")
+
+        coordinator.requeueFront(event, gatewayStableID: event.gatewayStableID)
+
+        #expect(coordinator.nextQueuedCommand(isChatAvailable: true, gatewayStableID: "gateway-b") == nil)
+        #expect(
+            coordinator.nextQueuedCommand(isChatAvailable: true, gatewayStableID: "gateway-a")?.commandId ==
+                "watch-send-chat-retry-gateway-a")
+    }
+
+    @Test @MainActor func watchChatRestoreBackfillsGatewayOwnerIntoLegacyQueuedEvent() throws {
+        let suiteName = "watch-chat-restore-legacy-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defaults.removePersistentDomain(forName: suiteName)
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+        let legacyQueueJSON = """
+            [
+              {
+                "gatewayStableID": "gateway-a",
+                "event": {
+                  "commandId": "watch-send-chat-legacy",
+                  "command": "send-chat",
+                  "sessionKey": "main",
+                  "text": "Legacy queued text",
+                  "sentAtMs": 134,
+                  "transport": "transferUserInfo"
+                }
+              }
+            ]
+            """
+        defaults.set(
+            Data(legacyQueueJSON.utf8),
+            forKey: "watch.chat.command.queue.v1")
+
+        let coordinator = WatchChatCoordinator(defaults: defaults)
+        let restored = coordinator.nextQueuedCommand(isChatAvailable: true, gatewayStableID: "gateway-a")
+
+        #expect(restored?.commandId == "watch-send-chat-legacy")
+        #expect(restored?.gatewayStableID == "gateway-a")
+    }
+
     @Test @MainActor func watchChatCommandDedupingKeepsOnlyRecentForwardedCommands() throws {
         let suiteName = "watch-chat-recent-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
@@ -895,6 +989,7 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
                 commandId: "watch-forward-\(index)",
                 command: .sendChat,
                 sessionKey: "main",
+                gatewayStableID: nil,
                 text: "Message \(index)",
                 sentAtMs: index,
                 transport: "sendMessage")
@@ -912,6 +1007,7 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
             commandId: "watch-forward-0",
             command: .sendChat,
             sessionKey: "main",
+            gatewayStableID: nil,
             text: "Message 0 again",
             sentAtMs: 999,
             transport: "sendMessage")
@@ -928,6 +1024,7 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
             commandId: "watch-forward-139",
             command: .sendChat,
             sessionKey: "main",
+            gatewayStableID: nil,
             text: "Message 139 again",
             sentAtMs: 1000,
             transport: "sendMessage")
@@ -955,6 +1052,7 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
                 commandId: "watch-queued-\(index)",
                 command: .sendChat,
                 sessionKey: "main",
+                gatewayStableID: nil,
                 text: "Queued \(index)",
                 sentAtMs: index,
                 transport: "transferUserInfo")
@@ -976,6 +1074,7 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
             commandId: "watch-queued-0",
             command: .sendChat,
             sessionKey: "main",
+            gatewayStableID: nil,
             text: "Duplicate after delivery",
             sentAtMs: 999,
             transport: "transferUserInfo")

@@ -112,6 +112,7 @@ struct WatchAppCommandEvent: Codable, Equatable {
     var commandId: String
     var command: OpenClawWatchAppCommand
     var sessionKey: String?
+    var gatewayStableID: String?
     var text: String?
     var sentAtMs: Int?
     var transport: String

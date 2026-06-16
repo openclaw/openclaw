@@ -408,6 +408,8 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let sessionKey = (payload["sessionKey"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let gatewayStableID = (payload["gatewayStableID"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         let talkStatusText = (payload["talkStatusText"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let pendingApprovalCount = (payload["pendingApprovalCount"] as? Int)
@@ -425,6 +427,7 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
             agentAvatarURL: agentAvatarURL?.isEmpty == false ? agentAvatarURL : nil,
             agentAvatarText: agentAvatarText?.isEmpty == false ? agentAvatarText : nil,
             sessionKey: sessionKey.isEmpty ? "main" : sessionKey,
+            gatewayStableID: gatewayStableID?.isEmpty == false ? gatewayStableID : nil,
             talkStatusText: talkStatusText.isEmpty ? "Off" : talkStatusText,
             talkEnabled: Self.boolValue(payload["talkEnabled"]),
             talkListening: Self.boolValue(payload["talkListening"]),
@@ -487,6 +490,11 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
            !sessionKey.isEmpty
         {
             payload["sessionKey"] = sessionKey
+        }
+        if let gatewayStableID = message.gatewayStableID?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !gatewayStableID.isEmpty
+        {
+            payload["gatewayStableID"] = gatewayStableID
         }
         if let text = message.text?.trimmingCharacters(in: .whitespacesAndNewlines),
            !text.isEmpty

@@ -93,6 +93,7 @@ struct WatchAppSnapshotMessage: Codable, Equatable {
     var agentAvatarURL: String?
     var agentAvatarText: String?
     var sessionKey: String
+    var gatewayStableID: String?
     var talkStatusText: String
     var talkEnabled: Bool
     var talkListening: Bool
@@ -128,6 +129,7 @@ struct WatchAppCommandMessage: Codable, Equatable {
     var command: WatchAppCommand
     var commandId: String
     var sessionKey: String?
+    var gatewayStableID: String?
     var text: String?
     var sentAtMs: Int?
 }
@@ -461,12 +463,23 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
             command: command,
             commandId: UUID().uuidString,
             sessionKey: (snapshotSessionKey?.isEmpty == false) ? snapshotSessionKey : self.sessionKey,
+            gatewayStableID: self.appSnapshot?.gatewayStableID,
             text: text,
             sentAtMs: Self.nowMs())
     }
 
+    var hasGatewayTaggedAppSnapshot: Bool {
+        let gatewayStableID = self.appSnapshot?.gatewayStableID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return !gatewayStableID.isEmpty
+    }
+
     func markAppCommandSending(_ command: WatchAppCommand) {
         self.appCommandStatusText = "Sending \(Self.commandLabel(command))…"
+        self.persistState()
+    }
+
+    func markAppCommandBlocked(_ command: WatchAppCommand, reason: String) {
+        self.appCommandStatusText = "\(Self.commandLabel(command)): \(reason)"
         self.persistState()
     }
 

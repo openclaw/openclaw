@@ -90,7 +90,8 @@ final class WatchChatCoordinator {
         if !isChatAvailable {
             let owner = gatewayStableID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             guard !owner.isEmpty else { return .dropMissingTarget }
-            self.queuedCommands.append(QueuedCommand(gatewayStableID: owner, event: event))
+            self.queuedCommands.append(
+                QueuedCommand(gatewayStableID: owner, event: self.command(event, taggedFor: owner)))
             self.rebuildSeenCommandIds()
             self.persistQueue()
             return .queue(commandId: commandId)
@@ -124,7 +125,9 @@ final class WatchChatCoordinator {
             self.rememberRecentCommandId(commandId)
             self.queuedCommands.removeAll { $0.event.commandId == commandId }
         }
-        self.queuedCommands.insert(QueuedCommand(gatewayStableID: owner, event: event), at: 0)
+        self.queuedCommands.insert(
+            QueuedCommand(gatewayStableID: owner, event: self.command(event, taggedFor: owner)),
+            at: 0)
         self.rebuildSeenCommandIds()
         self.persistQueue()
     }
@@ -154,7 +157,7 @@ final class WatchChatCoordinator {
                 return nil
             }
             seen.append(commandId)
-            return QueuedCommand(gatewayStableID: owner, event: queued.event)
+            return QueuedCommand(gatewayStableID: owner, event: self.command(queued.event, taggedFor: owner))
         }
         self.recentCommandIds = Array(seen.suffix(Self.maxRecentCommandIds))
         self.rebuildSeenCommandIds()
@@ -186,6 +189,12 @@ final class WatchChatCoordinator {
         }
         guard let data = try? JSONEncoder().encode(queuedCommands) else { return }
         self.defaults.set(data, forKey: Self.persistedQueueKey)
+    }
+
+    private func command(_ event: WatchAppCommandEvent, taggedFor gatewayStableID: String) -> WatchAppCommandEvent {
+        var tagged = event
+        tagged.gatewayStableID = gatewayStableID
+        return tagged
     }
 
     static func resetPersistedQueue(defaults: UserDefaults = .standard) {

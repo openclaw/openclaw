@@ -172,6 +172,9 @@ enum WatchMessagingPayloadCodec {
         if let agentAvatarText = nonEmpty(message.agentAvatarText) {
             payload["agentAvatarText"] = agentAvatarText
         }
+        if let gatewayStableID = nonEmpty(message.gatewayStableID) {
+            payload["gatewayStableID"] = gatewayStableID
+        }
         if let sentAtMs = message.sentAtMs {
             payload["sentAtMs"] = sentAtMs
         }
@@ -292,12 +295,14 @@ enum WatchMessagingPayloadCodec {
         }
         let commandId = self.nonEmpty(payload["commandId"] as? String) ?? UUID().uuidString
         let sessionKey = self.nonEmpty(payload["sessionKey"] as? String)
+        let gatewayStableID = self.nonEmpty(payload["gatewayStableID"] as? String)
         let text = self.nonEmpty(payload["text"] as? String)
         let sentAtMs = (payload["sentAtMs"] as? Int) ?? (payload["sentAtMs"] as? NSNumber)?.intValue
         return WatchAppCommandEvent(
             commandId: commandId,
             command: command,
             sessionKey: sessionKey,
+            gatewayStableID: gatewayStableID,
             text: text,
             sentAtMs: sentAtMs,
             transport: transport)

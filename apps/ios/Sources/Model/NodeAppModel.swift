@@ -3522,6 +3522,7 @@ extension NodeAppModel {
             agentAvatarURL: self.chatAgentAvatarURL,
             agentAvatarText: self.chatAgentAvatarText,
             sessionKey: self.chatSessionKey,
+            gatewayStableID: self.currentWatchChatGatewayStableID(),
             talkStatusText: self.talkMode.statusText,
             talkEnabled: self.talkMode.isEnabled,
             talkListening: self.talkMode.isListening,
@@ -3557,10 +3558,16 @@ extension NodeAppModel {
     }
 
     private func handleWatchChatCommand(_ event: WatchAppCommandEvent) async {
+        guard self.watchChatCommandTargetsCurrentGateway(event) else {
+            GatewayDiagnostics.log("watch chat send skipped: stale gateway target")
+            await self.syncWatchAppSnapshot(reason: "watch_chat_stale_gateway", includeChat: true)
+            return
+        }
+        let eventGatewayID = self.normalizedWatchChatGatewayStableID(event)
         switch self.watchChatCoordinator.ingest(
             event,
             isChatAvailable: self.isWatchChatAvailableForSend(),
-            gatewayStableID: self.currentWatchChatGatewayStableID())
+            gatewayStableID: eventGatewayID)
         {
         case .dropMissingFields:
             GatewayDiagnostics.log("watch chat send skipped: missing commandId/text")
@@ -3582,6 +3589,13 @@ extension NodeAppModel {
             isChatAvailable: self.isWatchChatAvailableForSend(),
             gatewayStableID: gatewayStableID)
         {
+            guard self.watchChatCommandTargetsCurrentGateway(event) else {
+                GatewayDiagnostics.log("watch chat send skipped: stale queued gateway target")
+                self.watchChatCoordinator.removeQueuedCommand(
+                    commandId: event.commandId,
+                    gatewayStableID: gatewayStableID)
+                continue
+            }
             let sent = await self.forwardWatchChatMessage(event, requeueOnFailure: false)
             guard sent else { return }
             self.watchChatCoordinator.removeQueuedCommand(
@@ -3596,6 +3610,18 @@ extension NodeAppModel {
 
     private func currentWatchChatGatewayStableID() -> String? {
         self.connectedGatewayID?.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func normalizedWatchChatGatewayStableID(_ event: WatchAppCommandEvent) -> String? {
+        let gatewayStableID = event.gatewayStableID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return gatewayStableID.isEmpty ? nil : gatewayStableID
+    }
+
+    private func watchChatCommandTargetsCurrentGateway(_ event: WatchAppCommandEvent) -> Bool {
+        let eventGatewayID = self.normalizedWatchChatGatewayStableID(event) ?? ""
+        let currentGatewayID = self.currentWatchChatGatewayStableID() ?? ""
+        guard !eventGatewayID.isEmpty, !currentGatewayID.isEmpty else { return false }
+        return eventGatewayID == currentGatewayID
     }
 
     private func forwardWatchChatMessage(
@@ -3630,7 +3656,7 @@ extension NodeAppModel {
                 if requeueOnFailure {
                     self.watchChatCoordinator.requeueFront(
                         event,
-                        gatewayStableID: self.currentWatchChatGatewayStableID())
+                        gatewayStableID: self.normalizedWatchChatGatewayStableID(event))
                 }
                 return false
             }
@@ -3654,7 +3680,7 @@ extension NodeAppModel {
             if requeueOnFailure {
                 self.watchChatCoordinator.requeueFront(
                     event,
-                    gatewayStableID: self.currentWatchChatGatewayStableID())
+                    gatewayStableID: self.normalizedWatchChatGatewayStableID(event))
             }
             return false
         }
