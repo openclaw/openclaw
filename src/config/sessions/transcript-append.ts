@@ -490,7 +490,7 @@ export async function appendSessionTranscriptEvent(
     );
     return;
   }
-  return await withSessionTranscriptAppendQueue(params.transcriptPath, () =>
+  await withSessionTranscriptAppendQueue(params.transcriptPath, () =>
     withSessionTranscriptWriteLock(params, () => appendSessionTranscriptEventLocked(params)),
   );
 }
