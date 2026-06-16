@@ -253,6 +253,30 @@ describe("buildStatusMessage", () => {
     expect(normalized).not.toContain("Context: ?/1.0m");
   });
 
+  it("renders a brand-new session with no usage as 0 context, not ? (#93771)", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "anthropic/test:opus",
+        contextTokens: 1_000_000,
+      },
+      sessionEntry: {
+        sessionId: "fresh-session",
+        updatedAt: 0,
+        contextTokens: 1_000_000,
+        // A fresh /new session has no totalTokens persisted yet and is not stale.
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+      now: 10 * 60_000,
+    });
+    const normalized = normalizeTestText(text);
+
+    expect(normalized).toContain("Context: 0/1.0m");
+    expect(normalized).not.toContain("Context: ?/1.0m");
+  });
+
   it("uses estimated context budget status when fresh totalTokens are unavailable", () => {
     const text = buildStatusMessage({
       agent: {
