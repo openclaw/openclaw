@@ -11,7 +11,7 @@ import {
   type RespawnChildRuntime,
 } from "./process/respawn-child-runner.js";
 
-// Node 24.0–24.14 can deadlock during ESM module loading when compile cache is
+// Node 24.0-24.14 can deadlock during ESM module loading when compile cache is
 // enabled on Windows npm-global installs. Keep the skip scoped to that platform.
 const MIN_COMPILE_CACHE_NODE_24_MINOR = 15;
 const COMPILE_CACHE_DISABLED_RESPAWNED_ENV = "OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED";
