@@ -78,6 +78,67 @@ describe("Codex app-server attempt context", () => {
     expect(report.tools.schemaChars).toBe(message?.schemaChars);
   });
 
+  it("keeps prompt reports lossy-safe when dynamic tool metadata is unreadable", () => {
+    const unreadableTool = Object.defineProperties(
+      {},
+      {
+        name: {
+          get() {
+            throw new Error("report name getter exploded");
+          },
+        },
+        description: {
+          get() {
+            throw new Error("report description getter exploded");
+          },
+        },
+        inputSchema: {
+          get() {
+            throw new Error("report schema getter exploded");
+          },
+        },
+      },
+    ) as CodexDynamicToolSpec;
+    const tools = [
+      unreadableTool,
+      {
+        name: "message",
+        description: "Send a message.",
+        inputSchema: {
+          type: "object",
+          properties: {},
+        },
+      },
+    ] as CodexDynamicToolSpec[];
+
+    const report = buildCodexSystemPromptReport({
+      attempt: {
+        sessionId: "session-1",
+        provider: "codex",
+        modelId: "gpt-5.4-codex",
+      } as EmbeddedRunAttemptParams,
+      sessionKey: "agent:main:session-1",
+      workspaceDir: path.join("tmp", "workspace"),
+      developerInstructions: "test developer instructions",
+      workspaceBootstrapContext: {
+        bootstrapFiles: [],
+        contextFiles: [],
+        promptContextFiles: [],
+        developerInstructionFiles: [],
+        heartbeatReferenceFiles: [],
+      },
+      skillsPrompt: "",
+      tools,
+    });
+
+    expect(report.tools.entries.map((tool) => tool.name)).toEqual(["tool[0]", "message"]);
+    expect(report.tools.entries[0]).toMatchObject({
+      summaryChars: 0,
+      schemaChars: 4,
+      propertiesCount: null,
+    });
+  });
+
   it("keeps MEMORY.md injected when sandbox effective workspace differs", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-memory-workspace-"));
     const sandboxWorkspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-memory-sandbox-"));

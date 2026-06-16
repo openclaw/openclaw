@@ -280,7 +280,7 @@ export function buildCodexSystemPromptReport(params: {
   skillsPrompt: string;
   tools: CodexDynamicToolSpec[];
 }): CodexSystemPromptReport {
-  const toolEntries = params.tools.map(buildCodexToolReportEntry);
+  const toolEntries = params.tools.map((tool, index) => buildCodexToolReportEntry(tool, index));
   const schemaChars = toolEntries.reduce((sum, tool) => sum + tool.schemaChars, 0);
   const skillsPrompt = params.skillsPrompt.trim();
   const bootstrapMaxChars = readPositiveNumber(
@@ -344,11 +344,15 @@ function buildCodexSkillReportEntries(
     .filter((entry) => entry.blockChars > 0);
 }
 
-function buildCodexToolReportEntry(tool: CodexDynamicToolSpec): CodexToolReportEntry {
-  const summary = tool.description.trim();
-  if (tool.deferLoading === true) {
+function buildCodexToolReportEntry(
+  tool: CodexDynamicToolSpec,
+  index: number,
+): CodexToolReportEntry {
+  const name = readCodexToolReportName(tool, index);
+  const summary = readCodexToolReportDescription(tool);
+  if (readCodexToolReportDeferred(tool)) {
     return {
-      name: tool.name,
+      name,
       summaryChars: summary.length,
       summaryHash: sha256Text(summary),
       schemaChars: 0,
@@ -357,11 +361,44 @@ function buildCodexToolReportEntry(tool: CodexDynamicToolSpec): CodexToolReportE
     };
   }
   return {
-    name: tool.name,
+    name,
     summaryChars: summary.length,
     summaryHash: sha256Text(summary),
-    ...buildCodexToolSchemaStats(tool.inputSchema),
+    ...buildCodexToolSchemaStats(readCodexToolReportInputSchema(tool)),
   };
+}
+
+function readCodexToolReportName(tool: CodexDynamicToolSpec, index: number): string {
+  try {
+    const name = tool.name.trim();
+    return name || `tool[${index}]`;
+  } catch {
+    return `tool[${index}]`;
+  }
+}
+
+function readCodexToolReportDescription(tool: CodexDynamicToolSpec): string {
+  try {
+    return tool.description.trim();
+  } catch {
+    return "";
+  }
+}
+
+function readCodexToolReportDeferred(tool: CodexDynamicToolSpec): boolean {
+  try {
+    return tool.deferLoading === true;
+  } catch {
+    return false;
+  }
+}
+
+function readCodexToolReportInputSchema(tool: CodexDynamicToolSpec): JsonValue {
+  try {
+    return tool.inputSchema;
+  } catch {
+    return null;
+  }
 }
 
 function buildCodexToolSchemaStats(
