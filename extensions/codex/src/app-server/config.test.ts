@@ -125,6 +125,89 @@ describe("Codex app-server config", () => {
     });
   });
 
+  it("builds Codex permissions-profile config for app-server network proxy", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {
+        appServer: {
+          sandbox: "workspace-write",
+          networkProxy: {
+            enabled: true,
+            profileName: "mock-proxy",
+            mode: "limited",
+            domains: {
+              " api.openai.com ": "allow",
+              "blocked.example.com": "deny",
+            },
+            unixSockets: {
+              " /tmp/mock-proxy.sock ": "allow",
+            },
+            proxyUrl: "http://127.0.0.1:3128",
+            socksUrl: "socks5h://127.0.0.1:8081",
+            enableSocks5: true,
+            enableSocks5Udp: false,
+            allowUpstreamProxy: true,
+            allowLocalBinding: false,
+          },
+        },
+      },
+    });
+
+    expect(runtime.networkProxy).toEqual({
+      profileName: "mock-proxy",
+      configPatch: {
+        "features.network_proxy.enabled": true,
+        permissions: {
+          "mock-proxy": {
+            filesystem: {
+              ":minimal": "read",
+              ":workspace_roots": {
+                ".": "write",
+              },
+            },
+            network: {
+              enabled: true,
+              mode: "limited",
+              domains: {
+                "api.openai.com": "allow",
+                "blocked.example.com": "deny",
+              },
+              unix_sockets: {
+                "/tmp/mock-proxy.sock": "allow",
+              },
+              proxy_url: "http://127.0.0.1:3128",
+              socks_url: "socks5h://127.0.0.1:8081",
+              enable_socks5: true,
+              enable_socks5_udp: false,
+              allow_upstream_proxy: true,
+              allow_local_binding: false,
+            },
+          },
+        },
+      },
+    });
+  });
+
+  it("uses read-only filesystem rules for read-only network proxy profiles", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {
+        appServer: {
+          sandbox: "read-only",
+          networkProxy: {
+            enabled: true,
+            domains: { "example.com": "allow" },
+          },
+        },
+      },
+    });
+    const permissions = runtime.networkProxy?.configPatch.permissions as Record<
+      string,
+      { filesystem: { ":workspace_roots": { ".": string } } }
+    >;
+
+    expect(runtime.networkProxy?.profileName).toBe("openclaw-network");
+    expect(permissions["openclaw-network"]?.filesystem[":workspace_roots"]["."]).toBe("read");
+  });
+
   it("clamps oversized app-server timer config", () => {
     const runtime = resolveRuntimeForTest({
       pluginConfig: {

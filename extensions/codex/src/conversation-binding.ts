@@ -30,9 +30,11 @@ import {
 } from "./app-server/config.js";
 import type {
   CodexServiceTier,
+  CodexPermissionProfileSelection,
   CodexThreadResumeResponse,
   CodexThreadStartResponse,
   CodexTurnStartResponse,
+  JsonObject,
   JsonValue,
 } from "./app-server/protocol.js";
 import {
@@ -415,20 +417,41 @@ function buildThreadRequestRuntimeOptions(
 ): {
   approvalPolicy: ConversationAppServerRuntime["runtime"]["approvalPolicy"];
   approvalsReviewer: ConversationAppServerRuntime["runtime"]["approvalsReviewer"];
-  sandbox: ConversationAppServerRuntime["runtime"]["sandbox"];
+  sandbox?: ConversationAppServerRuntime["runtime"]["sandbox"];
   serviceTier?: CodexServiceTier;
+  permissions?: CodexPermissionProfileSelection;
+  config?: JsonObject;
 } {
   const serviceTier = params.serviceTier ?? resolved.runtime.serviceTier;
+  const sandbox = resolved.execPolicy?.touched
+    ? resolved.runtime.sandbox
+    : (params.sandbox ?? resolved.runtime.sandbox);
   return {
     approvalPolicy: resolved.execPolicy?.touched
       ? resolved.runtime.approvalPolicy
       : (params.approvalPolicy ?? resolved.runtime.approvalPolicy),
     approvalsReviewer: resolved.runtime.approvalsReviewer,
-    sandbox: resolved.execPolicy?.touched
-      ? resolved.runtime.sandbox
-      : (params.sandbox ?? resolved.runtime.sandbox),
+    ...codexConversationSandboxOrPermissions(resolved.runtime, sandbox),
     ...(serviceTier ? { serviceTier } : {}),
   };
+}
+
+function codexConversationSandboxOrPermissions(
+  runtime: Pick<ConversationAppServerRuntime["runtime"], "networkProxy">,
+  sandbox: ConversationAppServerRuntime["runtime"]["sandbox"],
+): {
+  sandbox?: ConversationAppServerRuntime["runtime"]["sandbox"];
+  permissions?: CodexPermissionProfileSelection;
+  config?: JsonObject;
+} {
+  const networkProxy = runtime.networkProxy;
+  if (networkProxy) {
+    return {
+      permissions: { type: "profile", id: networkProxy.profileName },
+      config: networkProxy.configPatch,
+    };
+  }
+  return { sandbox };
 }
 
 async function writeThreadBindingFromResponse(
@@ -459,6 +482,7 @@ async function writeThreadBindingFromResponse(
         ? resolved.runtime.sandbox
         : (params.sandbox ?? resolved.runtime.sandbox),
       serviceTier: params.serviceTier ?? resolved.runtime.serviceTier,
+      networkProxyProfileName: resolved.runtime.networkProxy?.profileName,
     },
     {
       ...resolved.agentLookup,
@@ -568,6 +592,9 @@ async function runBoundTurn(params: {
   const sandbox = useModelScopedPolicy
     ? modelScopedRuntime.sandbox
     : (binding.sandbox ?? modelScopedRuntime.sandbox);
+  const permissionProfile = modelScopedRuntime.networkProxy?.profileName;
+  const useStickyNetworkProfile =
+    permissionProfile !== undefined && binding.networkProxyProfileName === permissionProfile;
   assertNativeConversationApprovalPolicySupported({
     execPolicy,
     approvalPolicy,
@@ -641,7 +668,9 @@ async function runBoundTurn(params: {
         cwd: workspaceDir,
         approvalPolicy,
         approvalsReviewer: modelScopedRuntime.approvalsReviewer,
-        sandboxPolicy: codexSandboxPolicyForTurn(sandbox, workspaceDir),
+        ...(useStickyNetworkProfile
+          ? {}
+          : { sandboxPolicy: codexSandboxPolicyForTurn(sandbox, workspaceDir) }),
         ...(modelSelection?.model ? { model: modelSelection.model } : {}),
         personality: CODEX_NATIVE_PERSONALITY_NONE,
         ...((binding.serviceTier ?? runtime.serviceTier)

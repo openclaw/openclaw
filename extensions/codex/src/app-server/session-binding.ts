@@ -66,6 +66,7 @@ export type CodexAppServerThreadBinding = {
   approvalPolicy?: CodexAppServerApprovalPolicy;
   sandbox?: CodexAppServerSandboxMode;
   serviceTier?: CodexServiceTier;
+  networkProxyProfileName?: string;
   dynamicToolsFingerprint?: string;
   dynamicToolsContainDeferred?: boolean;
   webSearchThreadConfigFingerprint?: string;
@@ -181,6 +182,10 @@ export async function readCodexAppServerBinding(
       approvalPolicy: readApprovalPolicy(parsed.approvalPolicy),
       sandbox: readSandboxMode(parsed.sandbox),
       serviceTier: readServiceTier(parsed.serviceTier),
+      networkProxyProfileName:
+        typeof parsed.networkProxyProfileName === "string"
+          ? parsed.networkProxyProfileName
+          : undefined,
       dynamicToolsFingerprint:
         typeof parsed.dynamicToolsFingerprint === "string"
           ? parsed.dynamicToolsFingerprint
@@ -256,6 +261,7 @@ export async function writeCodexAppServerBinding(
       approvalPolicy: binding.approvalPolicy,
       sandbox: binding.sandbox,
       serviceTier: binding.serviceTier,
+      networkProxyProfileName: binding.networkProxyProfileName,
       dynamicToolsFingerprint: binding.dynamicToolsFingerprint,
       dynamicToolsContainDeferred: binding.dynamicToolsContainDeferred,
       webSearchThreadConfigFingerprint: binding.webSearchThreadConfigFingerprint,

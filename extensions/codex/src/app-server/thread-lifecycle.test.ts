@@ -86,6 +86,36 @@ function createAppServerOptions() {
   } as const;
 }
 
+function createNetworkProxyAppServerOptions() {
+  return {
+    ...createAppServerOptions(),
+    networkProxy: {
+      profileName: "mock-proxy",
+      configPatch: {
+        "features.network_proxy.enabled": true,
+        permissions: {
+          "mock-proxy": {
+            filesystem: {
+              ":minimal": "read",
+              ":workspace_roots": {
+                ".": "write",
+              },
+            },
+            network: {
+              enabled: true,
+              domains: {
+                "api.openai.com": "allow",
+              },
+              allow_upstream_proxy: true,
+              proxy_url: "http://127.0.0.1:3128",
+            },
+          },
+        },
+      },
+    },
+  } as const;
+}
+
 function createThreadLifecycleParams(
   sessionFile: string,
   workspaceDir: string,
@@ -423,6 +453,53 @@ describe("Codex app-server native code mode config", () => {
     });
   });
 
+  it("uses a Codex permissions profile for network-proxy thread/start requests", () => {
+    const request = buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
+      cwd: "/repo",
+      dynamicTools: [],
+      appServer: createNetworkProxyAppServerOptions() as never,
+      developerInstructions: "test instructions",
+    });
+
+    expect(request.permissions).toEqual({ type: "profile", id: "mock-proxy" });
+    expect(request).not.toHaveProperty("sandbox");
+    expect(request.config).toMatchObject({
+      "features.network_proxy.enabled": true,
+      permissions: {
+        "mock-proxy": {
+          network: {
+            enabled: true,
+            allow_upstream_proxy: true,
+            proxy_url: "http://127.0.0.1:3128",
+          },
+        },
+      },
+    });
+  });
+
+  it("uses a Codex permissions profile for network-proxy thread/resume requests", () => {
+    const request = buildThreadResumeParams(createAttemptParams({ provider: "openai" }), {
+      threadId: "thread-1",
+      appServer: createNetworkProxyAppServerOptions() as never,
+      developerInstructions: "test instructions",
+    });
+
+    expect(request.permissions).toEqual({ type: "profile", id: "mock-proxy" });
+    expect(request).not.toHaveProperty("sandbox");
+    expect(request.config).toMatchObject({
+      "features.network_proxy.enabled": true,
+      permissions: {
+        "mock-proxy": {
+          network: {
+            domains: {
+              "api.openai.com": "allow",
+            },
+          },
+        },
+      },
+    });
+  });
+
   it("disables Codex tool-search features for nano models", () => {
     const request = buildThreadStartParams(
       createAttemptParams({ provider: "openai", modelId: "gpt-5.4-nano" }),
@@ -638,6 +715,35 @@ describe("Codex app-server turn input image sanitizing", () => {
       networkAccess: true,
       excludeTmpdirEnvVar: false,
       excludeSlashTmp: false,
+    });
+  });
+
+  it("uses Codex permissions for network-proxy turn/start requests", () => {
+    const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
+      threadId: "thread-1",
+      cwd: "/repo",
+      appServer: createNetworkProxyAppServerOptions() as never,
+    });
+
+    expect(request).not.toHaveProperty("permissions");
+    expect(request).not.toHaveProperty("sandboxPolicy");
+  });
+
+  it("keeps explicit sandbox policy overrides ahead of network-proxy turn permissions", () => {
+    const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
+      threadId: "thread-1",
+      cwd: "/repo",
+      appServer: createNetworkProxyAppServerOptions() as never,
+      sandboxPolicy: {
+        type: "externalSandbox",
+        networkAccess: "enabled",
+      },
+    });
+
+    expect(request).not.toHaveProperty("permissions");
+    expect(request.sandboxPolicy).toEqual({
+      type: "externalSandbox",
+      networkAccess: "enabled",
     });
   });
 

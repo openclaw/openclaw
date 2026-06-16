@@ -180,6 +180,54 @@ describe("codex conversation binding", () => {
     );
   });
 
+  it("uses Codex permissions for network-proxy app-server bind threads", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
+      request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
+        requests.push({ method, params: requestParams });
+        return {
+          thread: { id: "thread-new", sessionId: "session-1", cwd: tempDir },
+          model: "gpt-5.4-mini",
+        };
+      }),
+    });
+
+    await startCodexConversationThread({
+      pluginConfig: {
+        appServer: {
+          networkProxy: {
+            enabled: true,
+            domains: { "api.openai.com": "allow" },
+            allowUpstreamProxy: true,
+            proxyUrl: "http://127.0.0.1:3128",
+          },
+        },
+      },
+      sessionFile,
+      workspaceDir: tempDir,
+      model: "gpt-5.4-mini",
+      modelProvider: "openai",
+    });
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.method).toBe("thread/start");
+    expect(requests[0]?.params.permissions).toEqual({ type: "profile", id: "openclaw-network" });
+    expect(requests[0]?.params).not.toHaveProperty("sandbox");
+    expect(requests[0]?.params.config).toMatchObject({
+      "features.network_proxy.enabled": true,
+      permissions: {
+        "openclaw-network": {
+          network: {
+            domains: { "api.openai.com": "allow" },
+            allow_upstream_proxy: true,
+            proxy_url: "http://127.0.0.1:3128",
+          },
+        },
+      },
+    });
+  });
+
   it("preserves Codex auth and omits the public OpenAI provider for native bind threads", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     agentRuntimeMocks.ensureAuthProfileStore.mockReturnValue({
@@ -937,7 +985,7 @@ describe("codex conversation binding", () => {
     await fs.writeFile(
       `${sessionFile}.codex-app-server.json`,
       JSON.stringify({
-        schemaVersion: 1,
+        schemaVersion: 2,
         threadId: "thread-1",
         cwd: tempDir,
         approvalPolicy: "never",
@@ -1126,6 +1174,7 @@ describe("codex conversation binding", () => {
         schemaVersion: 1,
         threadId: "thread-1",
         cwd: tempDir,
+        networkProxyProfileName: "openclaw-network",
       }),
     );
     let notificationHandler: ((notification: unknown) => void) | undefined;
@@ -1201,6 +1250,92 @@ describe("codex conversation binding", () => {
     expect(turnStartParams[0]?.sandboxPolicy).toEqual({
       type: "dangerFullAccess",
     });
+  });
+
+  it("uses Codex permissions for network-proxy bound app-server turns", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({
+        schemaVersion: 2,
+        threadId: "thread-1",
+        cwd: tempDir,
+        networkProxyProfileName: "openclaw-network",
+      }),
+    );
+    let notificationHandler: ((notification: unknown) => void) | undefined;
+    const turnStartParams: Record<string, unknown>[] = [];
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
+      request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
+        if (method === "turn/start") {
+          turnStartParams.push(requestParams);
+          setImmediate(() =>
+            notificationHandler?.({
+              method: "turn/completed",
+              params: {
+                threadId: "thread-1",
+                turn: {
+                  id: "turn-1",
+                  status: "completed",
+                  items: [{ type: "agentMessage", id: "item-1", text: "done" }],
+                },
+              },
+            }),
+          );
+          return { turn: { id: "turn-1" } };
+        }
+        throw new Error(`unexpected method: ${method}`);
+      }),
+      addNotificationHandler: vi.fn((handler: (notification: unknown) => void) => {
+        notificationHandler = handler;
+        return () => undefined;
+      }),
+      addRequestHandler: vi.fn(() => () => undefined),
+    });
+
+    const result = await handleCodexConversationInboundClaim(
+      {
+        content: "hello",
+        channel: "telegram",
+        isGroup: false,
+        commandAuthorized: true,
+      },
+      {
+        channelId: "telegram",
+        pluginBinding: {
+          bindingId: "binding-1",
+          pluginId: "codex",
+          pluginRoot: tempDir,
+          channel: "telegram",
+          accountId: "default",
+          conversationId: "5185575566",
+          boundAt: Date.now(),
+          data: {
+            kind: "codex-app-server-session",
+            version: 1,
+            sessionFile,
+            workspaceDir: tempDir,
+          },
+        },
+      },
+      {
+        pluginConfig: {
+          appServer: {
+            networkProxy: {
+              enabled: true,
+              domains: { "api.openai.com": "allow" },
+              allowUpstreamProxy: true,
+              proxyUrl: "http://127.0.0.1:3128",
+            },
+          },
+        },
+        timeoutMs: 50,
+      },
+    );
+
+    expect(result).toEqual({ handled: true, reply: { text: "done" } });
+    expect(turnStartParams[0]).not.toHaveProperty("permissions");
+    expect(turnStartParams[0]).not.toHaveProperty("sandboxPolicy");
   });
 
   it("blocks Guardian-mode bound turns with stale no-approval policy on custom model providers", async () => {
