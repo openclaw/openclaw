@@ -294,6 +294,7 @@ export async function prepareCliRunContext(
     authStore = loadAuthProfileStoreForRuntime(agentDir, {
       readOnly: true,
       externalCli: externalCliDiscoveryForProviderAuth({
+        cfg: params.config,
         provider: params.provider,
         profileId: effectiveAuthProfileId,
       }),
@@ -311,6 +312,7 @@ export async function prepareCliRunContext(
     const authProfileId = effectiveAuthProfileId;
     const writableAuthStore = loadAuthProfileStoreForRuntime(agentDir, {
       externalCli: externalCliDiscoveryForProviderAuth({
+        cfg: params.config,
         provider: params.provider,
         profileId: authProfileId,
       }),
@@ -326,6 +328,7 @@ export async function prepareCliRunContext(
     authStore = loadAuthProfileStoreForRuntime(agentDir, {
       readOnly: true,
       externalCli: externalCliDiscoveryForProviderAuth({
+        cfg: params.config,
         provider: params.provider,
         profileId: resolvedAuthProfileId,
       }),

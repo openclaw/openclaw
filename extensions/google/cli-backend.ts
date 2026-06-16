@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +6,10 @@ import {
   CLI_FRESH_WATCHDOG_DEFAULTS,
   CLI_RESUME_WATCHDOG_DEFAULTS,
 } from "openclaw/plugin-sdk/cli-backend";
+import {
+  GOOGLE_GEMINI_CLI_PROVIDER_ID,
+  resolveGeminiCliProfileHome as resolveGeminiCliProfileHomePath,
+} from "./gemini-cli-auth-home.js";
 
 const GEMINI_MODEL_ALIASES: Record<string, string> = {
   pro: "gemini-3.1-pro-preview",
@@ -14,7 +17,7 @@ const GEMINI_MODEL_ALIASES: Record<string, string> = {
   "flash-lite": "gemini-3.1-flash-lite",
 };
 const GEMINI_CLI_DEFAULT_MODEL_REF = "google-gemini-cli/gemini-3-flash-preview";
-const GEMINI_CLI_PROVIDER_ID = "google-gemini-cli";
+const GEMINI_CLI_PROVIDER_ID = GOOGLE_GEMINI_CLI_PROVIDER_ID;
 const GOOGLE_PROVIDER_ID = "google";
 const VERCEL_AI_GATEWAY_PROVIDER_ID = "vercel-ai-gateway";
 const GEMINI_CLI_CREDENTIALS_FILENAME = "gemini-credentials.json";
@@ -195,8 +198,7 @@ function resolveGeminiCliProfileHome(ctx: GeminiCliAuthHomeContext): {
     throw new Error("Gemini CLI auth profile execution requires a selected auth profile.");
   }
 
-  const profileHash = crypto.createHash("sha256").update(authProfileId).digest("hex").slice(0, 24);
-  const home = path.join(agentDir, "cli-runtimes", GEMINI_CLI_PROVIDER_ID, "profiles", profileHash);
+  const home = resolveGeminiCliProfileHomePath(agentDir, authProfileId);
   return { home, geminiDir: path.join(home, ".gemini") };
 }
 
