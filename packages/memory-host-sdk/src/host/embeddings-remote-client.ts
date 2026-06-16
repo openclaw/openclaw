@@ -28,7 +28,9 @@ export async function resolveRemoteEmbeddingBearerClient(params: {
         }),
         params.provider,
       );
-  const baseUrl = remoteBaseUrl || providerConfig?.baseUrl?.trim() || params.defaultBaseUrl;
+  // Support both baseUrl (camel) and baseURL (all caps) in provider config for compatibility.
+  const providerBaseUrl = providerConfig?.baseUrl?.trim() ?? providerConfig?.baseURL?.trim();
+  const baseUrl = remoteBaseUrl || providerBaseUrl || params.defaultBaseUrl;
   const headerOverrides = Object.assign({}, providerConfig?.headers, remote?.headers);
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
