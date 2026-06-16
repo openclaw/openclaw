@@ -156,13 +156,16 @@ describe("telegram custom commands schema", () => {
   it("accepts rich message opt-in per account", () => {
     const res = TelegramConfigSchema.safeParse({
       richMessages: true,
-      accounts: { ops: { richMessages: false } },
+      richMessagesAutoDetect: true,
+      accounts: { ops: { richMessages: false, richMessagesAutoDetect: false } },
     });
 
     expect(res.success).toBe(true);
     if (res.success) {
       expect(res.data.richMessages).toBe(true);
+      expect(res.data.richMessagesAutoDetect).toBe(true);
       expect(res.data.accounts?.ops?.richMessages).toBe(false);
+      expect(res.data.accounts?.ops?.richMessagesAutoDetect).toBe(false);
     }
   });
 

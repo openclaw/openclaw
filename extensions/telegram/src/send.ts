@@ -654,7 +654,9 @@ export async function sendMessageTelegram(
   });
 
   const textMode = opts.textMode ?? "markdown";
-  const useRichMessages = account.config.richMessages === true || detectTelegramRichContent(text);
+  const useRichMessages =
+    account.config.richMessages === true ||
+    (account.config.richMessagesAutoDetect === true && detectTelegramRichContent(text));
   const tableMode =
     opts.tableMode ??
     resolveMarkdownTableMode({
@@ -1528,7 +1530,9 @@ export async function editMessageTelegram(
   ) => requestWithDiag(fn, label, shouldLog ? { shouldLog } : undefined);
 
   const textMode = opts.textMode ?? "markdown";
-  const useRichMessages = account.config.richMessages === true || detectTelegramRichContent(text);
+  const useRichMessages =
+    account.config.richMessages === true ||
+    (account.config.richMessagesAutoDetect === true && detectTelegramRichContent(text));
   const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "telegram",
