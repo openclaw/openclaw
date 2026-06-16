@@ -974,6 +974,64 @@ describe("initSessionState RawBody", () => {
     expect(store[sessionKey]?.modelOverrideSource).toBe("user");
   });
 
+  it("preserves user-set behavior overrides across an implicit daily stale rollover (#92562)", async () => {
+    const root = await makeCaseDir("openclaw-daily-rollover-behavior-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:discord:channel:daily-rollover-behavior";
+    const existingSessionId = "session-before-daily-reset-behavior";
+    const staleStartedAt = Date.now() - 48 * 60 * 60 * 1000;
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: staleStartedAt,
+        sessionStartedAt: staleStartedAt,
+        lastInteractionAt: staleStartedAt,
+        systemSent: true,
+        // User-set behavior overrides (the thing /think, /verbose, etc. writes).
+        thinkingLevel: "medium",
+        verboseLevel: 2,
+        traceLevel: 1,
+        reasoningLevel: "high",
+        ttsAuto: true,
+        execHost: "node",
+      },
+    });
+
+    const cfg = {
+      session: { store: storePath },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        // Ordinary message — NOT a reset trigger.
+        RawBody: "hello again",
+        ChatType: "channel",
+        SessionKey: sessionKey,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    // The session rolled over implicitly (stale), not via /new.
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(false);
+    expect(result.sessionId).not.toBe(existingSessionId);
+    // Behavior overrides must survive the implicit rollover.
+    expect(result.sessionEntry.thinkingLevel).toBe("medium");
+    expect(result.sessionEntry.verboseLevel).toBe(2);
+    expect(result.sessionEntry.traceLevel).toBe(1);
+    expect(result.sessionEntry.reasoningLevel).toBe("high");
+    expect(result.sessionEntry.ttsAuto).toBe(true);
+
+    const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      { thinkingLevel?: string; verboseLevel?: number }
+    >;
+    expect(store[sessionKey]?.thinkingLevel).toBe("medium");
+    expect(store[sessionKey]?.verboseLevel).toBe(2);
+  });
+
   it("clears an auto-fallback model override on an implicit daily stale rollover (#90119)", async () => {
     // Counterpart: auto-created fallback overrides must still be cleared on a
     // daily rollover so stale sessions return to the configured default.

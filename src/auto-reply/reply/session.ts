@@ -543,18 +543,20 @@ export async function initSessionState(params: {
       persistedAuthProfileOverrideSource = preservedSelection.authProfileOverrideSource;
       persistedAuthProfileOverrideCompactionCount =
         preservedSelection.authProfileOverrideCompactionCount;
-    }
-    // When a reset trigger (/new, /reset) starts a new session, carry over
-    // user-set behavior overrides (verbose, thinking, reasoning, ttsAuto)
-    // so the user doesn't have to re-enable them every time.
-    if (resetTriggered && entry) {
+      // Preserve user-set behavior overrides (think, verbose, reasoning, ttsAuto)
+      // across ANY rollover — explicit /new AND implicit daily/idle reset —
+      // matching the same semantic used for model/auth overrides above.
+      // Previously this was gated on resetTriggered, so behavior overrides set
+      // after the daily reset hour were silently dropped on the next turn (#92562).
       persistedThinking = entry.thinkingLevel;
       persistedVerbose = entry.verboseLevel;
       persistedTrace = entry.traceLevel;
       persistedReasoning = entry.reasoningLevel;
       persistedTtsAuto = entry.ttsAuto;
-      // Explicit /new and /reset should rotate the underlying CLI conversation too.
-      // Keep the model/auth choice, but force the next turn to mint a fresh CLI binding.
+    }
+    // Explicit /new and /reset should rotate the underlying CLI conversation too.
+    // Keep the model/auth choice, but force the next turn to mint a fresh CLI binding.
+    if (resetTriggered && entry) {
       persistedLabel = entry.label;
       persistedSpawnedBy = entry.spawnedBy;
       persistedSpawnedWorkspaceDir = entry.spawnedWorkspaceDir;
