@@ -18,7 +18,6 @@ import {
   resolveMattermostReplyRootId,
   resolveMattermostThreadSessionContext,
   shouldFinalizeMattermostPreviewAfterDispatch,
-  shouldAllowMattermostProgressCallbacksWhenSourceDeliverySuppressed,
   shouldClearMattermostDraftPreview,
   shouldSuppressMattermostDefaultToolProgressMessages,
   shouldUpdateMattermostDraftToolProgress,
@@ -364,62 +363,6 @@ describe("shouldSuppressMattermostDefaultToolProgressMessages", () => {
       resolveSuppressDefaultProgress({
         streaming: {
           mode: "off",
-        },
-      }),
-    ).toBe(false);
-  });
-});
-
-describe("shouldAllowMattermostProgressCallbacksWhenSourceDeliverySuppressed", () => {
-  type MattermostConfig = NonNullable<NonNullable<OpenClawConfig["channels"]>["mattermost"]>;
-
-  function resolveAllowSuppressedProgress(mattermostConfig: MattermostConfig) {
-    const account = resolveMattermostAccount({
-      cfg: {
-        channels: {
-          mattermost: mattermostConfig,
-        },
-      },
-      accountId: "default",
-      allowUnresolvedSecretRef: true,
-    });
-    return shouldAllowMattermostProgressCallbacksWhenSourceDeliverySuppressed(account);
-  }
-
-  it("allows channel-owned progress callbacks while draft tool progress is active", () => {
-    expect(
-      resolveAllowSuppressedProgress({
-        streaming: {
-          mode: "progress",
-          progress: {
-            toolProgress: true,
-          },
-        },
-      }),
-    ).toBe(true);
-  });
-
-  it("does not allow suppressed-source progress callbacks when draft streaming is off", () => {
-    expect(
-      resolveAllowSuppressedProgress({
-        streaming: {
-          mode: "off",
-          progress: {
-            toolProgress: true,
-          },
-        },
-      }),
-    ).toBe(false);
-  });
-
-  it("does not allow suppressed-source progress callbacks when tool progress is disabled", () => {
-    expect(
-      resolveAllowSuppressedProgress({
-        streaming: {
-          mode: "progress",
-          progress: {
-            toolProgress: false,
-          },
         },
       }),
     ).toBe(false);

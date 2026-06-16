@@ -150,12 +150,6 @@ export function shouldSuppressMattermostDefaultToolProgressMessages(
   return account.streamingMode !== "off";
 }
 
-export function shouldAllowMattermostProgressCallbacksWhenSourceDeliverySuppressed(
-  account: Pick<ResolvedMattermostAccount, "config" | "streamingMode">,
-): boolean {
-  return shouldUpdateMattermostDraftToolProgress(account);
-}
-
 type MediaKind = "image" | "audio" | "video" | "document" | "unknown";
 
 type MattermostReaction = {
@@ -1929,11 +1923,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                         replyOptions: {
                           ...replyOptions,
                           allowProgressCallbacksWhenSourceDeliverySuppressed:
-                            shouldAllowMattermostProgressCallbacksWhenSourceDeliverySuppressed(
-                              account,
-                            )
-                              ? true
-                              : undefined,
+                            draftToolProgressEnabled ? true : undefined,
                           disableBlockStreaming: true,
                           ...(suppressDefaultToolProgressMessages
                             ? { suppressDefaultToolProgressMessages: true }
