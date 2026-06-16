@@ -1358,8 +1358,8 @@ importers:
         specifier: workspace:*
         version: link:../whatsapp
       crabline:
-        specifier: github:openclaw/crabline#e49faa968959c6afd92d24b33a451e3b56bb3e51
-        version: https://codeload.github.com/openclaw/crabline/tar.gz/e49faa968959c6afd92d24b33a451e3b56bb3e51
+        specifier: github:openclaw/crabline#5e8031a660f9f8c40746c79830c7caf780080ee7
+        version: https://codeload.github.com/openclaw/crabline/tar.gz/5e8031a660f9f8c40746c79830c7caf780080ee7
       openclaw:
         specifier: 2026.5.28
         version: 2026.5.28
@@ -4992,8 +4992,8 @@ packages:
     resolution: {integrity: sha512-tJtZBBHA6vjIAaF6EnIaq6laBBP9aq/Y3ouVJjEfoHbRBcHBAHYcMh/w8LDrk2PvIMMq8gmopa5D4V8RmbrxGw==}
     engines: {node: '>= 0.10'}
 
-  crabline@https://codeload.github.com/openclaw/crabline/tar.gz/e49faa968959c6afd92d24b33a451e3b56bb3e51:
-    resolution: {gitHosted: true, integrity: sha512-w33eccg+pQ3XZT1ZPYE5L1cd8nJSQ5+1XIfn77/CbpwfcGRk0++qHWSpd9jDI87cfnfOt+h3zQ4jhFqQ3dooWQ==, tarball: https://codeload.github.com/openclaw/crabline/tar.gz/e49faa968959c6afd92d24b33a451e3b56bb3e51}
+  crabline@https://codeload.github.com/openclaw/crabline/tar.gz/5e8031a660f9f8c40746c79830c7caf780080ee7:
+    resolution: {gitHosted: true, integrity: sha512-1lwm5SoLeQkoSa3HIxlgV5g+8rmYjwwTCxpB/lVcX7fzmuH/OyQsRQ6EUhhoszIE0UekbctU0IqmFusv4QUhng==, tarball: https://codeload.github.com/openclaw/crabline/tar.gz/5e8031a660f9f8c40746c79830c7caf780080ee7}
     version: 0.1.0
     engines: {node: '>=22'}
     hasBin: true
@@ -10421,7 +10421,7 @@ snapshots:
       '@vitest/mocker': 4.1.8(vite@8.0.16(@types/node@25.9.2)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       playwright: 1.60.0
       tinyrainbow: 3.1.0
-      vitest: 4.1.8(@opentelemetry/api@1.9.1)(@types/node@25.9.1)(@vitest/browser-playwright@4.1.8)(@vitest/coverage-v8@4.1.8)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@8.0.16(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.3)(yaml@2.9.0))
+      vitest: 4.1.8(@opentelemetry/api@1.9.1)(@types/node@25.9.2)(@vitest/browser-playwright@4.1.8)(@vitest/coverage-v8@4.1.8)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@8.0.16(@types/node@25.9.2)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
     transitivePeerDependencies:
       - bufferutil
       - msw
@@ -10455,7 +10455,7 @@ snapshots:
       pngjs: 7.0.0
       sirv: 3.0.2
       tinyrainbow: 3.1.0
-      vitest: 4.1.8(@opentelemetry/api@1.9.1)(@types/node@25.9.1)(@vitest/browser-playwright@4.1.8)(@vitest/coverage-v8@4.1.8)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@8.0.16(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.3)(yaml@2.9.0))
+      vitest: 4.1.8(@opentelemetry/api@1.9.1)(@types/node@25.9.2)(@vitest/browser-playwright@4.1.8)(@vitest/coverage-v8@4.1.8)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@8.0.16(@types/node@25.9.2)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       ws: 8.21.0
     transitivePeerDependencies:
       - bufferutil
@@ -10477,7 +10477,7 @@ snapshots:
       tinyrainbow: 3.1.0
       vitest: 4.1.8(@opentelemetry/api@1.9.1)(@types/node@25.9.2)(@vitest/browser-playwright@4.1.8)(@vitest/coverage-v8@4.1.8)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@8.0.16(@types/node@25.9.2)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
     optionalDependencies:
-      '@vitest/browser': 4.1.8(vite@8.0.16(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.3)(yaml@2.9.0))(vitest@4.1.8)
+      '@vitest/browser': 4.1.8(vite@8.0.16(@types/node@25.9.2)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(vitest@4.1.8)
 
   '@vitest/expect@4.1.8':
     dependencies:
@@ -11008,7 +11008,7 @@ snapshots:
       object-assign: 4.1.1
       vary: 1.1.2
 
-  crabline@https://codeload.github.com/openclaw/crabline/tar.gz/e49faa968959c6afd92d24b33a451e3b56bb3e51:
+  crabline@https://codeload.github.com/openclaw/crabline/tar.gz/5e8031a660f9f8c40746c79830c7caf780080ee7:
     dependencies:
       commander: 14.0.3
       picocolors: 1.1.1
