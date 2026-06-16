@@ -108,3 +108,41 @@ describe("bedrock embedding response parsers", () => {
     ).toThrow("Amazon Bedrock embedding response returned malformed JSON");
   });
 });
+
+describe("stripInferenceProfilePrefix", () => {
+  it("strips global prefix", () => {
+    expect(testing.stripInferenceProfilePrefix("global.cohere.embed-v4:0")).toBe(
+      "cohere.embed-v4:0",
+    );
+  });
+
+  it("strips us prefix", () => {
+    expect(testing.stripInferenceProfilePrefix("us.cohere.embed-v4:0")).toBe("cohere.embed-v4:0");
+  });
+
+  it("strips apac prefix", () => {
+    expect(testing.stripInferenceProfilePrefix("apac.cohere.embed-v4:0")).toBe(
+      "cohere.embed-v4:0",
+    );
+  });
+
+  it("strips eu prefix", () => {
+    expect(testing.stripInferenceProfilePrefix("eu.cohere.embed-v4:0")).toBe("cohere.embed-v4:0");
+  });
+
+  it("strips us-gov prefix", () => {
+    expect(testing.stripInferenceProfilePrefix("us-gov.cohere.embed-v4:0")).toBe(
+      "cohere.embed-v4:0",
+    );
+  });
+
+  it("returns unchanged model ID without prefix", () => {
+    expect(testing.stripInferenceProfilePrefix("cohere.embed-v4:0")).toBe("cohere.embed-v4:0");
+  });
+
+  it("returns unchanged model ID for amazon.titan-embed-text-v2:0", () => {
+    expect(testing.stripInferenceProfilePrefix("amazon.titan-embed-text-v2:0")).toBe(
+      "amazon.titan-embed-text-v2:0",
+    );
+  });
+});
