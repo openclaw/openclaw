@@ -129,14 +129,7 @@ function resolveAssistantFailoverRawErrorText(params: {
   if (rawError) {
     return rawError;
   }
-  return params.lastAssistant
-    ? formatAssistantErrorText(params.lastAssistant, {
-        cfg: params.config,
-        sessionKey: params.sessionKey,
-        provider: params.activeErrorContext.provider,
-        model: params.activeErrorContext.model,
-      })?.trim()
-    : undefined;
+  return undefined;
 }
 
 /**
@@ -342,7 +335,7 @@ export async function handleAssistantFailover(params: {
     // Backoff runs before throwing so the outer fallback model starts after the
     // provider-specific overload delay.
     await params.maybeBackoffBeforeOverloadFailover(params.failoverReason);
-    const message = resolveAssistantFailoverErrorMessage(params);
+    const message = resolveAssistantFailoverErrorMessage(params, assistantFailoverRawErrorText);
     const status =
       resolveFailoverStatus(decision.reason) ?? (isTimeoutErrorMessage(message) ? 408 : undefined);
     params.logAssistantFailoverDecision("fallback_model", { status });
@@ -359,7 +352,7 @@ export async function handleAssistantFailover(params: {
         model: params.activeErrorContext.model,
         profileId: params.lastProfileId,
         status,
-        rawError: assistantFailoverRawErrorText,
+        rawError: assistantFailoverRawErrorText ?? message,
         suspend: shouldSuspend,
       }),
     };
@@ -374,7 +367,7 @@ export async function handleAssistantFailover(params: {
     // payload synthesis, and stale classified text without failoverFailure
     // keep the normal payload path.
     if (!params.externalAbort && !params.timedOut && params.failoverFailure) {
-      const message = resolveAssistantFailoverErrorMessage(params);
+      const message = resolveAssistantFailoverErrorMessage(params, assistantFailoverRawErrorText);
       const reason = resolveSurfaceErrorReason(decision.reason, params);
       const status =
         resolveFailoverStatus(reason) ?? (isTimeoutErrorMessage(message) ? 408 : undefined);
@@ -390,7 +383,7 @@ export async function handleAssistantFailover(params: {
           model: params.activeErrorContext.model,
           profileId: params.lastProfileId,
           status,
-          rawError: assistantFailoverRawErrorText,
+          rawError: assistantFailoverRawErrorText ?? message,
           suspend: shouldSuspend,
         }),
       };
@@ -403,21 +396,31 @@ export async function handleAssistantFailover(params: {
   };
 }
 
-function resolveAssistantFailoverErrorMessage(params: {
-  lastAssistant: AssistantMessage | undefined;
-  assistantFailoverRawErrorText?: string;
-  config: OpenClawConfig | undefined;
-  sessionKey?: string;
-  activeErrorContext: { provider: string; model: string };
-  timedOut: boolean;
-  idleTimedOut: boolean;
-  rateLimitFailure: boolean;
-  billingFailure: boolean;
-  authFailure: boolean;
-}): string {
+function resolveAssistantFailoverErrorMessage(
+  params: {
+    lastAssistant: AssistantMessage | undefined;
+    assistantFailoverRawErrorText?: string;
+    config: OpenClawConfig | undefined;
+    sessionKey?: string;
+    activeErrorContext: { provider: string; model: string };
+    timedOut: boolean;
+    idleTimedOut: boolean;
+    rateLimitFailure: boolean;
+    billingFailure: boolean;
+    authFailure: boolean;
+  },
+  assistantRawErrorText?: string,
+): string {
   const timeoutFailure = params.timedOut || params.idleTimedOut;
-  const assistantRawErrorText = resolveAssistantFailoverRawErrorText(params);
   return (
+    (params.lastAssistant
+      ? formatAssistantErrorText(params.lastAssistant, {
+          cfg: params.config,
+          sessionKey: params.sessionKey,
+          provider: params.activeErrorContext.provider,
+          model: params.activeErrorContext.model,
+        })
+      : undefined) ||
     assistantRawErrorText ||
     (timeoutFailure
       ? "LLM request timed out."
