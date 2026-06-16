@@ -2,6 +2,10 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { setTimeout as sleep } from "node:timers/promises";
+import {
+  acquireMemoryReindexSwapLock,
+  type MemoryReindexLockHandle,
+} from "./manager-reindex-lock.js";
 
 type MemoryIndexFileOps = {
   rename: typeof fs.rename;
@@ -224,7 +228,9 @@ export async function runMemoryAtomicReindex<T>(params: {
   afterPublish?: () => Promise<void> | void;
   fileOptions?: MemoryIndexFileOptions;
 }): Promise<T> {
+  let swapLock: MemoryReindexLockHandle | undefined;
   try {
+    swapLock = acquireMemoryReindexSwapLock(params.targetPath);
     const result = await params.build();
     await swapMemoryIndexFiles(
       params.targetPath,
@@ -246,5 +252,7 @@ export async function runMemoryAtomicReindex<T>(params: {
       throw aggregateErr;
     }
     throw err;
+  } finally {
+    swapLock?.release();
   }
 }
