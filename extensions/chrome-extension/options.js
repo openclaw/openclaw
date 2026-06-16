@@ -1,5 +1,5 @@
-const DEFAULT_GATEWAY = "https://desktop-kuuq6fp.tailc4dc52.ts.net";
-const DEFAULT_TOKEN = "d8d08cc19ca3fae045ad74fad14daf51cb627b1842b5e985";
+const DEFAULT_GATEWAY = "http://127.0.0.1:18789";
+const DEFAULT_TOKEN = "";
 const statusEl = document.getElementById("status");
 
 function setStatus(kind, message) {
