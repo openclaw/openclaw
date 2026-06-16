@@ -12,6 +12,7 @@ import {
   loadSessionEntry,
   loadTranscriptEvents,
   patchSessionEntry,
+  persistSessionTranscriptTurn,
   publishTranscriptUpdate,
   readSessionUpdatedAt,
   replaceSessionEntry,
@@ -529,6 +530,87 @@ describe("session accessor file-backed seam", () => {
         messageId: appended.messageId,
         sessionFile: transcriptPath,
         sessionKey: scope.sessionKey,
+      },
+    ]);
+  });
+
+  it("persists a transcript turn, touches metadata, and publishes after the write", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "session-1",
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+    await upsertSessionEntry(scope, {
+      sessionId: scope.sessionId,
+      updatedAt: 10,
+    });
+    const updates: Array<{
+      lineCount: number;
+      sessionFile: string | undefined;
+      updatedAt: number | undefined;
+    }> = [];
+    const unsubscribe = onSessionTranscriptUpdate((update) => {
+      const lines = fs.readFileSync(update.sessionFile, "utf8").trim().split("\n");
+      updates.push({
+        lineCount: lines.length,
+        sessionFile: loadSessionEntry(scope)?.sessionFile,
+        updatedAt: loadSessionEntry(scope)?.updatedAt,
+      });
+    });
+
+    const result = await persistSessionTranscriptTurn(scope, {
+      cwd: tempDir,
+      messages: [
+        {
+          message: {
+            role: "user",
+            content: "hello",
+            timestamp: 100,
+          },
+        },
+        {
+          message: {
+            role: "assistant",
+            content: "hi there",
+            timestamp: 200,
+          },
+        },
+      ],
+      publishWhen: "always",
+      touchSessionEntry: true,
+      updateMode: "file-only",
+    });
+    unsubscribe();
+
+    expect(result.appendedCount).toBe(2);
+    expect(loadSessionEntry(scope)).toMatchObject({
+      sessionFile: result.sessionFile,
+      sessionId: scope.sessionId,
+      updatedAt: expect.any(Number),
+    });
+    expect(loadSessionEntry(scope)?.updatedAt).toBeGreaterThanOrEqual(10);
+    const events = await loadTranscriptEvents({ ...scope, sessionFile: result.sessionFile });
+    expect(events).toEqual([
+      expect.objectContaining({ type: "session" }),
+      expect.objectContaining({
+        id: result.messages[0]?.messageId,
+        message: expect.objectContaining({ role: "user", content: "hello" }),
+        parentId: null,
+        type: "message",
+      }),
+      expect.objectContaining({
+        id: result.messages[1]?.messageId,
+        message: expect.objectContaining({ role: "assistant", content: "hi there" }),
+        parentId: result.messages[0]?.messageId,
+        type: "message",
+      }),
+    ]);
+    expect(updates).toEqual([
+      {
+        lineCount: 3,
+        sessionFile: result.sessionFile,
+        updatedAt: expect.any(Number),
       },
     ]);
   });

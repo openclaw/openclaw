@@ -6,14 +6,8 @@ import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { formatAcpErrorChain } from "../../acp/runtime/errors.js";
 import { normalizeReplyPayload } from "../../auto-reply/reply/normalize-reply.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
-import {
-  appendTranscriptMessage,
-  publishTranscriptUpdate,
-} from "../../config/sessions/session-accessor.js";
-import {
-  readTailAssistantTextFromSessionTranscript,
-  resolveSessionTranscriptFile,
-} from "../../config/sessions/transcript.js";
+import { persistSessionTranscriptTurn } from "../../config/sessions/session-accessor.js";
+import { readTailAssistantTextFromSessionTranscript } from "../../config/sessions/transcript.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -28,7 +22,7 @@ import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snaps
 import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import {
-  appendUserTurnTranscriptMessage,
+  preparePersistedUserTurnMessageForTranscriptWrite,
   type PersistedUserTurnMessage,
 } from "../../sessions/user-turn-transcript.js";
 import { buildWorkspaceSkillSnapshot } from "../../skills/loading/workspace.js";
@@ -49,14 +43,12 @@ import { resolveOpenAIRuntimeProvider } from "../openai-routing.js";
 import { resolveAgentRunAbortLifecycleFields } from "../run-termination.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import type { AgentMessage } from "../runtime/index.js";
-import { acquireSessionWriteLock, resolveSessionWriteLockOptions } from "../session-write-lock.js";
 import { buildUsageWithNoCost } from "../stream-message-shared.js";
 import {
   buildClaudeCliFallbackContextPrelude,
   claudeCliSessionTranscriptHasContent,
   resolveFallbackRetryPrompt,
 } from "./attempt-execution.helpers.js";
-import { persistSessionEntry } from "./attempt-execution.shared.js";
 import { resolveAgentRunContext } from "./run-context.js";
 import { clearCliSessionInStore } from "./session-store.js";
 import type { AgentCommandOpts } from "./types.js";
@@ -239,113 +231,73 @@ async function persistTextTurnTranscript(
     return params.sessionEntry;
   }
 
-  const { sessionFile, sessionEntry } = await resolveSessionTranscriptFile({
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    sessionEntry: params.sessionEntry,
-    sessionStore: params.sessionStore,
-    storePath: params.storePath,
-    agentId: params.sessionAgentId,
-    threadId: params.threadId,
-  });
-  const lock = await acquireSessionWriteLock({
-    sessionFile,
-    ...resolveSessionWriteLockOptions(params.config),
-    allowReentrant: true,
-  });
-  const transcriptScope = {
-    sessionFile,
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    agentId: params.sessionAgentId,
-  };
-  let transcriptMarkerUpdatedAt: number | undefined;
-  try {
-    let wroteTranscript = false;
-    const userMessage = params.userMessage;
-    if (userMessage || promptText) {
-      await appendUserTurnTranscriptMessage({
-        transcriptPath: sessionFile,
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        cwd: params.sessionCwd,
-        config: params.config,
-        beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
-        ...(userMessage
-          ? { message: userMessage }
-          : {
-              input: {
-                text: promptText,
-                timestamp: Date.now(),
-              },
-            }),
-        updateMode: "none",
-      });
-      wroteTranscript = true;
-    }
+  const messages = [];
+  const userMessage =
+    params.userMessage ??
+    (promptText
+      ? ({
+          role: "user",
+          content: promptText,
+          timestamp: Date.now(),
+        } as PersistedUserTurnMessage)
+      : undefined);
+  if (userMessage) {
+    messages.push({
+      message: userMessage,
+      idempotencyLookup: "scan" as const,
+      prepareMessageAfterIdempotencyCheck: (message: unknown) =>
+        preparePersistedUserTurnMessageForTranscriptWrite(message as PersistedUserTurnMessage, {
+          agentId: params.sessionAgentId,
+          sessionKey: params.sessionKey,
+          beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+        }),
+    });
+  }
 
-    if (replyText) {
-      let appendAssistant = true;
-      if (params.embeddedAssistantGapFill) {
+  if (replyText) {
+    messages.push({
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: replyText }],
+        api: params.assistant.api,
+        provider: params.assistant.provider,
+        model: params.assistant.model,
+        usage: resolveTranscriptUsage(params.assistant.usage),
+        stopReason: "stop",
+        timestamp: Date.now(),
+      },
+      shouldAppend: async ({ sessionFile }: { sessionFile: string }) => {
+        if (!params.embeddedAssistantGapFill) {
+          return true;
+        }
         const latest = await readTailAssistantTextFromSessionTranscript(sessionFile);
         const normalizedReply = normalizeTranscriptMirrorText(replyText);
         const normalizedLatest = latest?.text ? normalizeTranscriptMirrorText(latest.text) : "";
-        if (normalizedLatest && normalizedLatest === normalizedReply) {
-          appendAssistant = false;
-        }
-      }
-      if (appendAssistant) {
-        await appendTranscriptMessage(transcriptScope, {
-          cwd: params.sessionCwd,
-          config: params.config,
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: replyText }],
-            api: params.assistant.api,
-            provider: params.assistant.provider,
-            model: params.assistant.model,
-            usage: resolveTranscriptUsage(params.assistant.usage),
-            stopReason: "stop",
-            timestamp: Date.now(),
-          },
-        });
-        wroteTranscript = true;
-      }
-    }
-    if (wroteTranscript) {
-      transcriptMarkerUpdatedAt = Date.now();
-    }
-  } finally {
-    await lock.release();
+        return !normalizedLatest || normalizedLatest !== normalizedReply;
+      },
+    });
   }
 
-  let updatedSessionEntry = sessionEntry;
-  if (params.sessionStore && params.storePath && transcriptMarkerUpdatedAt !== undefined) {
-    const currentEntry = params.sessionStore[params.sessionKey] ?? sessionEntry;
-    if (currentEntry?.sessionId === params.sessionId) {
-      // Keep updatedAt as the registry marker for transcript writes we own.
-      // Session reuse checks compare transcript mtime against this marker, not endedAt.
-      updatedSessionEntry =
-        (await persistSessionEntry({
-          sessionStore: params.sessionStore,
-          sessionKey: params.sessionKey,
-          storePath: params.storePath,
-          entry: {
-            sessionId: params.sessionId,
-            sessionFile,
-            updatedAt: transcriptMarkerUpdatedAt,
-          },
-          preserveTranscriptMarkerUpdatedAt: true,
-          shouldPersist: (current) => current?.sessionId === params.sessionId,
-        })) ?? updatedSessionEntry;
-    }
-  }
-
-  await publishTranscriptUpdate(transcriptScope, {
-    sessionKey: params.sessionKey,
-    agentId: params.sessionAgentId,
-  });
-  return updatedSessionEntry;
+  const turn = await persistSessionTranscriptTurn(
+    {
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      sessionEntry: params.sessionEntry,
+      sessionStore: params.sessionStore,
+      storePath: params.storePath,
+      agentId: params.sessionAgentId,
+      threadId: params.threadId,
+    },
+    {
+      config: params.config,
+      cwd: params.sessionCwd,
+      messages,
+      publishWhen: "always",
+      touchSessionEntry: true,
+      updateMode: "file-only",
+    },
+  );
+  return turn.sessionEntry;
 }
 
 function resolveCliTranscriptReplyText(result: EmbeddedAgentRunResult): string {

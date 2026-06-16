@@ -12,12 +12,11 @@ import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
 } from "./paths.js";
-import { appendTranscriptMessage, publishTranscriptUpdate } from "./session-accessor.js";
+import { persistSessionTranscriptTurn } from "./session-accessor.js";
 import { resolveAndPersistSessionFile } from "./session-file.js";
 import { loadSessionStore, resolveSessionStoreEntry, updateSessionStoreEntry } from "./store.js";
 import { resolveMirroredTranscriptText } from "./transcript-mirror.js";
 import { streamSessionTranscriptLinesReverse } from "./transcript-stream.js";
-import { runWithOwnedSessionTranscriptWriteLock } from "./transcript-write-context.js";
 import type { SessionEntry } from "./types.js";
 
 export type SessionTranscriptAppendResult =
@@ -270,109 +269,95 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   const appendToSessionFile = async (
     currentEntry: SessionEntry,
     sessionFile: string,
-  ): Promise<SessionTranscriptAppendResult> =>
-    await runWithOwnedSessionTranscriptWriteLock<SessionTranscriptAppendResult>(
-      { sessionFile, sessionKey: resolved.normalizedKey },
-      async (): Promise<SessionTranscriptAppendResult> => {
-        const explicitIdempotencyKey =
-          params.idempotencyKey ??
-          ((params.message as { idempotencyKey?: unknown }).idempotencyKey as string | undefined);
-        const message = {
-          ...params.message,
-          ...(explicitIdempotencyKey ? { idempotencyKey: explicitIdempotencyKey } : {}),
-        } as Parameters<SessionManager["appendMessage"]>[0];
-        const preparedUnkeyedMessage =
-          !explicitIdempotencyKey && params.beforeMessageWrite
-            ? applyBeforeMessageWriteToAssistant({
-                message,
-                beforeMessageWrite: params.beforeMessageWrite,
-                agentId: params.agentId,
-                sessionKey: resolved.normalizedKey,
-              })
-            : message;
-        if (!preparedUnkeyedMessage) {
-          return {
-            ok: false,
-            code: "blocked",
-            reason: "blocked by before_message_write",
-          };
-        }
-        const identifiedChannelFinal =
-          Boolean(explicitIdempotencyKey) && isChannelFinalDeliveryMirror(params.message);
-        const latestEquivalentAssistantId =
-          isRedundantDeliveryMirror(params.message) && !identifiedChannelFinal
-            ? await findLatestEquivalentAssistantMessageId(
-                sessionFile,
-                preparedUnkeyedMessage as SessionTranscriptAssistantMessage,
-                params.config,
-              )
-            : undefined;
-        // Unidentified delivery mirrors dedupe by latest text. Identified channel finals use their
-        // idempotency key so repeated replies on separate user turns remain distinct.
-        if (latestEquivalentAssistantId) {
-          return { ok: true, sessionFile, messageId: latestEquivalentAssistantId };
-        }
-        const transcriptScope = {
-          sessionFile,
-          sessionId: currentEntry.sessionId,
-          sessionKey: resolved.normalizedKey,
-          storePath,
-          ...(params.agentId ? { agentId: params.agentId } : {}),
-        };
-        const appendedResult = await appendTranscriptMessage(transcriptScope, {
-          cwd: currentEntry.spawnedCwd,
-          message: preparedUnkeyedMessage,
-          ...(explicitIdempotencyKey ? { idempotencyLookup: "scan" } : {}),
-          ...(explicitIdempotencyKey && params.beforeMessageWrite
-            ? {
-                prepareMessageAfterIdempotencyCheck: (
-                  candidate: Parameters<SessionManager["appendMessage"]>[0],
-                ) =>
-                  applyBeforeMessageWriteToAssistant({
-                    message: candidate,
-                    beforeMessageWrite: params.beforeMessageWrite,
-                    explicitIdempotencyKey,
-                    agentId: params.agentId,
-                    sessionKey: resolved.normalizedKey,
-                  }),
-              }
-            : {}),
-          ...(params.config ? { config: params.config } : {}),
-        });
-        if (!appendedResult) {
-          return {
-            ok: false,
-            code: "blocked",
-            reason: "blocked by before_message_write",
-          };
-        }
-        const { messageId, message: appendedMessage, appended } = appendedResult;
-        if (!appended) {
-          return { ok: true, sessionFile, messageId };
-        }
-        transcriptMarkerUpdatedAt = Date.now();
-
-        switch (params.updateMode ?? "inline") {
-          case "inline":
-            await publishTranscriptUpdate(transcriptScope, {
-              sessionKey,
-              ...(params.agentId ? { agentId: params.agentId } : {}),
-              message: appendedMessage,
-              messageId,
-            });
-            break;
-          case "file-only":
-            await publishTranscriptUpdate(transcriptScope, {
-              sessionKey,
-              ...(params.agentId ? { agentId: params.agentId } : {}),
-            });
-            break;
-          case "none":
-            break;
-        }
-        return { ok: true, sessionFile, messageId };
+  ): Promise<SessionTranscriptAppendResult> => {
+    const explicitIdempotencyKey =
+      params.idempotencyKey ??
+      ((params.message as { idempotencyKey?: unknown }).idempotencyKey as string | undefined);
+    const message = {
+      ...params.message,
+      ...(explicitIdempotencyKey ? { idempotencyKey: explicitIdempotencyKey } : {}),
+    } as Parameters<SessionManager["appendMessage"]>[0];
+    const preparedUnkeyedMessage =
+      !explicitIdempotencyKey && params.beforeMessageWrite
+        ? applyBeforeMessageWriteToAssistant({
+            message,
+            beforeMessageWrite: params.beforeMessageWrite,
+            agentId: params.agentId,
+            sessionKey: resolved.normalizedKey,
+          })
+        : message;
+    if (!preparedUnkeyedMessage) {
+      return {
+        ok: false,
+        code: "blocked",
+        reason: "blocked by before_message_write",
+      };
+    }
+    const identifiedChannelFinal =
+      Boolean(explicitIdempotencyKey) && isChannelFinalDeliveryMirror(params.message);
+    let latestEquivalentAssistantId: string | undefined;
+    // Unidentified delivery mirrors dedupe by latest text. Identified channel finals use their
+    // idempotency key so repeated replies on separate user turns remain distinct.
+    const turn = await persistSessionTranscriptTurn(
+      {
+        sessionFile,
+        sessionId: currentEntry.sessionId,
+        sessionKey: resolved.normalizedKey,
+        storePath,
+        ...(params.agentId ? { agentId: params.agentId } : {}),
+      },
+      {
+        cwd: currentEntry.spawnedCwd,
+        ...(params.config ? { config: params.config } : {}),
+        updateMode: params.updateMode ?? "inline",
+        messages: [
+          {
+            message: preparedUnkeyedMessage,
+            ...(explicitIdempotencyKey ? { idempotencyLookup: "scan" } : {}),
+            ...(explicitIdempotencyKey && params.beforeMessageWrite
+              ? {
+                  prepareMessageAfterIdempotencyCheck: (candidate: unknown) =>
+                    applyBeforeMessageWriteToAssistant({
+                      message: candidate as Parameters<SessionManager["appendMessage"]>[0],
+                      beforeMessageWrite: params.beforeMessageWrite,
+                      explicitIdempotencyKey,
+                      agentId: params.agentId,
+                      sessionKey: resolved.normalizedKey,
+                    }),
+                }
+              : {}),
+            shouldAppend: async (target) => {
+              latestEquivalentAssistantId =
+                isRedundantDeliveryMirror(params.message) && !identifiedChannelFinal
+                  ? await findLatestEquivalentAssistantMessageId(
+                      target.sessionFile,
+                      preparedUnkeyedMessage as SessionTranscriptAssistantMessage,
+                      params.config,
+                    )
+                  : undefined;
+              return !latestEquivalentAssistantId;
+            },
+          },
+        ],
       },
     );
+    if (latestEquivalentAssistantId) {
+      return { ok: true, sessionFile, messageId: latestEquivalentAssistantId };
+    }
+    const appendedResult = turn.messages[0];
+    if (!appendedResult) {
+      return {
+        ok: false,
+        code: "blocked",
+        reason: "blocked by before_message_write",
+      };
+    }
+    const { messageId, appended } = appendedResult;
+    if (appended) {
+      transcriptMarkerUpdatedAt = Date.now();
+    }
+    return { ok: true, sessionFile, messageId };
+  };
 
   let result: SessionTranscriptAppendResult;
   if (params.expectedSessionId) {
