@@ -526,7 +526,7 @@ describe("OpenAI-compatible completions params", () => {
     });
   });
 
-  it("adds reasoning_content replay fields for OpenRouter reasoning-enabled model", async () => {
+  it("preserves reasoning field for OpenRouter MiniMax M3 assistant history", async () => {
     let capturedMessages: unknown;
     const stream = streamOpenAICompletions(
       {
@@ -538,33 +538,24 @@ describe("OpenAI-compatible completions params", () => {
       },
       {
         messages: [
-          {
-            role: "user",
-            content: "think of a number",
-            timestamp: 1,
-          },
+          { role: "user", content: "think of a number", timestamp: 1 },
           {
             role: "assistant",
             api: "openai-completions",
             provider: "openrouter",
             model: "openrouter/minimax/minimax-m3",
+            content: [
+              { type: "thinking", thinking: "42 is the answer", thinkingSignature: "reasoning" },
+              { type: "text", text: "Got it" },
+            ],
+            stopReason: "stop",
             usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
+              input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
               cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
             },
-            stopReason: "stop",
-            content: [{ type: "text", text: "Got it" }],
             timestamp: 2,
           },
-          {
-            role: "user",
-            content: "reveal the number",
-            timestamp: 3,
-          },
+          { role: "user", content: "reveal", timestamp: 3 },
         ],
       },
       {
@@ -580,10 +571,9 @@ describe("OpenAI-compatible completions params", () => {
 
     expect(result.stopReason).toBe("error");
     const messages = capturedMessages as Array<Record<string, unknown>>;
-    expect(messages.find((message) => message.role === "assistant")).toMatchObject({
-      role: "assistant",
-      reasoning_content: "",
-    });
+    const assistant = messages.find((m) => m.role === "assistant");
+    expect(assistant).toBeDefined();
+    expect(assistant!.reasoning).toBe("42 is the answer");
   });
 });
 

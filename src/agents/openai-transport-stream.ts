@@ -4007,7 +4007,9 @@ function sanitizeReasoningContentReplayFields(record: Record<string, unknown>): 
     delete record.reasoning_content;
   }
   delete record.reasoning_details;
-  delete record.reasoning;
+  if ("reasoning" in record && typeof record.reasoning !== "string") {
+    delete record.reasoning;
+  }
   delete record.reasoning_text;
 }
 
@@ -4025,6 +4027,7 @@ const REASONING_CONTENT_REPLAY_MODEL_IDS = new Set([
   "mimo-v2.5",
   "mimo-v2.5-pro",
   "mimo-v2.6-pro",
+  "minimax-m3",
 ]);
 
 // Tier/access suffixes that some providers append to otherwise identical model
