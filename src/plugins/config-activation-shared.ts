@@ -21,6 +21,7 @@ export type PluginActivationCause =
   | "blocked-by-denylist"
   | "disabled-in-config"
   | "workspace-disabled-by-default"
+  | "selected-dreaming-sidecar"
   | "not-in-allowlist"
   | "enabled-by-effective-config"
   | "bundled-channel-configured"
@@ -65,6 +66,7 @@ export const PLUGIN_ACTIVATION_REASON_BY_CAUSE: Record<PluginActivationCause, st
   "blocked-by-denylist": "blocked by denylist",
   "disabled-in-config": "disabled in config",
   "workspace-disabled-by-default": "workspace plugin (disabled by default)",
+  "selected-dreaming-sidecar": "selected dreaming sidecar",
   "not-in-allowlist": "not in allowlist",
   "enabled-by-effective-config": "enabled by effective config",
   "bundled-channel-configured": "channel configured",
@@ -134,6 +136,7 @@ export function resolvePluginActivationDecisionShared<TRootConfig>(params: {
   activationSource?: PluginActivationConfigSourceLike<TRootConfig>;
   autoEnabledReason?: string;
   allowBundledChannelExplicitBypassesAllowlist?: boolean;
+  isDreamingSidecar?: boolean;
   isBundledChannelEnabledByChannelConfig: (
     rootConfig: TRootConfig | undefined,
     pluginId: string,
@@ -210,6 +213,21 @@ export function resolvePluginActivationDecisionShared<TRootConfig>(params: {
       explicitlyEnabled: true,
       source: "explicit",
       cause: "selected-context-engine-slot",
+    };
+  }
+  // The bundled dreaming engine runs as a sidecar of the selected memory slot
+  // plugin. Like the slot plugins above, it must activate even when a
+  // restrictive allowlist names the memory plugin but not the engine, otherwise
+  // dreaming sweeps silently stop. Higher-priority denials above (plugins
+  // disabled, denylist, disabled-in-config) still apply because they return
+  // earlier, so an operator can still explicitly disable the engine.
+  if (params.isDreamingSidecar === true) {
+    return {
+      enabled: true,
+      activated: true,
+      explicitlyEnabled: true,
+      source: "explicit",
+      cause: "selected-dreaming-sidecar",
     };
   }
   if (

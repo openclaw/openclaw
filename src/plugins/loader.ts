@@ -249,7 +249,7 @@ const CLI_METADATA_ENTRY_BASENAMES = [
   "cli-metadata.cjs",
 ] as const;
 
-function resolveDreamingSidecarEngineId(params: {
+export function resolveDreamingSidecarEngineId(params: {
   cfg: OpenClawConfig;
   memorySlot: string | null | undefined;
 }): string | null {
@@ -2006,6 +2006,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
         activationSource,
         autoEnabledReason: formatAutoEnabledActivationReason(autoEnabledReasons[pluginId]),
+        isDreamingSidecar: pluginId === dreamingEngineId,
       });
       const existingOrigin = seenIds.get(pluginId);
       if (existingOrigin) {
@@ -2046,6 +2047,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         rootConfig: cfg,
         enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
         activationSource,
+        isDreamingSidecar: pluginId === dreamingEngineId,
       });
       const entry = normalized.entries[pluginId];
       const record = createPluginRecord({
@@ -2973,6 +2975,7 @@ export async function loadOpenClawPluginCliRegistry(
       enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
       activationSource,
       autoEnabledReason: formatAutoEnabledActivationReason(autoEnabledReasons[pluginId]),
+      isDreamingSidecar: pluginId === dreamingEngineId,
     });
     const existingOrigin = seenIds.get(pluginId);
     if (existingOrigin) {
@@ -3013,6 +3016,7 @@ export async function loadOpenClawPluginCliRegistry(
       rootConfig: cfg,
       enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
       activationSource,
+      isDreamingSidecar: pluginId === dreamingEngineId,
     });
     const entry = normalized.entries[pluginId];
     const record = createPluginRecord({

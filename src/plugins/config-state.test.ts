@@ -569,6 +569,91 @@ describe("resolveEffectivePluginActivationState", () => {
       reason: "selected context engine slot",
     });
   });
+
+  it("activates the dreaming sidecar engine under a restrictive allowlist (#92536)", () => {
+    const rawConfig = {
+      plugins: {
+        allow: ["memory-lancedb-pro", "discord"],
+        slots: {
+          memory: "memory-lancedb-pro",
+        },
+      },
+    };
+
+    expect(
+      resolveEffectivePluginActivationState({
+        id: "memory-core",
+        origin: "bundled",
+        config: normalizePluginsConfig(rawConfig.plugins),
+        rootConfig: rawConfig,
+        activationSource: createPluginActivationSource({ config: rawConfig }),
+        isDreamingSidecar: true,
+      }),
+    ).toEqual({
+      enabled: true,
+      activated: true,
+      explicitlyEnabled: true,
+      source: "explicit",
+      reason: "selected dreaming sidecar",
+    });
+  });
+
+  it("still rejects a non-sidecar bundled plugin under the same allowlist (#92536)", () => {
+    const rawConfig = {
+      plugins: {
+        allow: ["memory-lancedb-pro", "discord"],
+        slots: {
+          memory: "memory-lancedb-pro",
+        },
+      },
+    };
+
+    expect(
+      resolveEffectivePluginActivationState({
+        id: "memory-core",
+        origin: "bundled",
+        config: normalizePluginsConfig(rawConfig.plugins),
+        rootConfig: rawConfig,
+        activationSource: createPluginActivationSource({ config: rawConfig }),
+        isDreamingSidecar: false,
+      }),
+    ).toEqual({
+      enabled: false,
+      activated: false,
+      explicitlyEnabled: false,
+      source: "disabled",
+      reason: "not in allowlist",
+    });
+  });
+
+  it("keeps the denylist authoritative over the dreaming sidecar exemption (#92536)", () => {
+    const rawConfig = {
+      plugins: {
+        allow: ["memory-lancedb-pro", "discord"],
+        deny: ["memory-core"],
+        slots: {
+          memory: "memory-lancedb-pro",
+        },
+      },
+    };
+
+    expect(
+      resolveEffectivePluginActivationState({
+        id: "memory-core",
+        origin: "bundled",
+        config: normalizePluginsConfig(rawConfig.plugins),
+        rootConfig: rawConfig,
+        activationSource: createPluginActivationSource({ config: rawConfig }),
+        isDreamingSidecar: true,
+      }),
+    ).toEqual({
+      enabled: false,
+      activated: false,
+      explicitlyEnabled: false,
+      source: "disabled",
+      reason: "blocked by denylist",
+    });
+  });
 });
 
 describe("resolveEnableState", () => {
