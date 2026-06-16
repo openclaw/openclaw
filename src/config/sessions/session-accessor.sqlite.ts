@@ -38,6 +38,13 @@ import type {
   TranscriptUpdatePayload,
 } from "./session-accessor.js";
 import { normalizeStoreSessionKey, resolveSessionStoreEntry } from "./store-entry.js";
+import { collectSessionMaintenancePreserveKeys } from "./store-maintenance-preserve.js";
+import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
+import {
+  capEntryCount,
+  pruneStaleEntries,
+  shouldRunSessionEntryMaintenance,
+} from "./store-maintenance.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import type { SessionEntry } from "./types.js";
 import { mergeSessionEntry, mergeSessionEntryPreserveActivity } from "./types.js";
@@ -57,6 +64,9 @@ type ResolvedSessionEntryRow = {
   entry: SessionEntry;
   legacyKeys: string[];
   row: SessionEntryRow;
+};
+type SqliteSessionEntryPatchOptions = SessionEntryPatchOptions & {
+  skipMaintenance?: boolean;
 };
 
 type ResolvedSqliteScope = {
@@ -167,7 +177,7 @@ export async function patchSqliteSessionEntry(
     entry: SessionEntry,
     context: SessionEntryPatchContext,
   ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null,
-  options: SessionEntryPatchOptions = {},
+  options: SqliteSessionEntryPatchOptions = {},
 ): Promise<SessionEntry | null> {
   const resolved = resolveSqliteScope(scope);
   return await runExclusiveSqliteSessionWrite(resolved, async () => {
@@ -199,6 +209,10 @@ export async function patchSqliteSessionEntry(
           : mergeSessionEntry(writeBase, patch);
       writeSessionEntry(writeDatabase, resolved.sessionKey, next);
       deleteLegacySessionEntryRows(writeDatabase, fresh?.legacyKeys ?? [], resolved.sessionKey);
+      applySqliteSessionEntryMaintenance(writeDatabase, {
+        activeSessionKey: resolved.sessionKey,
+        skipMaintenance: options.skipMaintenance,
+      });
       result = cloneSessionEntry(next);
     }, toDatabaseOptions(resolved));
     return result;
@@ -211,7 +225,7 @@ export async function updateSqliteSessionEntry(
   update: (
     entry: SessionEntry,
   ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null,
-  _options: SessionEntryUpdateOptions = {},
+  options: SessionEntryUpdateOptions = {},
 ): Promise<SessionEntry | null> {
   const resolved = resolveSqliteScope(scope);
   return await runExclusiveSqliteSessionWrite(resolved, async () => {
@@ -235,6 +249,10 @@ export async function updateSqliteSessionEntry(
       const next = mergeSessionEntry(fresh.entry, patch);
       writeSessionEntry(writeDatabase, resolved.sessionKey, next);
       deleteLegacySessionEntryRows(writeDatabase, fresh.legacyKeys, resolved.sessionKey);
+      applySqliteSessionEntryMaintenance(writeDatabase, {
+        activeSessionKey: resolved.sessionKey,
+        skipMaintenance: options.skipMaintenance,
+      });
       result = cloneSessionEntry(next);
     }, toDatabaseOptions(resolved));
     return result;
@@ -690,6 +708,76 @@ function deleteLegacySessionEntryRows(
       database.db,
       db.deleteFrom("session_entries").where("session_key", "=", legacyKey),
     );
+  }
+}
+
+function applySqliteSessionEntryMaintenance(
+  database: OpenClawAgentDatabase,
+  params: { activeSessionKey: string; skipMaintenance?: boolean },
+): void {
+  if (params.skipMaintenance) {
+    return;
+  }
+  const maintenance = resolveMaintenanceConfig();
+  if (maintenance.mode === "warn") {
+    return;
+  }
+
+  const db = getSessionKysely(database.db);
+  const rows = executeSqliteQuerySync(
+    database.db,
+    db.selectFrom("session_entries").select(["session_key", "entry_json"]).orderBy("session_key"),
+  ).rows;
+  const store: Record<string, SessionEntry> = {};
+  for (const row of rows) {
+    const entry = parseSessionEntryRow(row);
+    if (entry) {
+      store[row.session_key] = entry;
+    }
+  }
+
+  const removedKeys = new Set<string>();
+  const removedSessionIds = new Set<string>();
+  const rememberRemovedEntry = (params: { key: string; entry: SessionEntry }) => {
+    removedKeys.add(params.key);
+    removedSessionIds.add(params.entry.sessionId);
+  };
+  const preserveKeys = collectSessionMaintenancePreserveKeys([params.activeSessionKey]);
+  pruneStaleEntries(store, maintenance.pruneAfterMs, {
+    log: false,
+    onPruned: rememberRemovedEntry,
+    preserveKeys,
+  });
+  if (
+    shouldRunSessionEntryMaintenance({
+      entryCount: Object.keys(store).length,
+      maxEntries: maintenance.maxEntries,
+    })
+  ) {
+    capEntryCount(store, maintenance.maxEntries, {
+      log: false,
+      onCapped: rememberRemovedEntry,
+      preserveKeys,
+    });
+  }
+
+  for (const sessionKey of removedKeys) {
+    executeSqliteQuerySync(
+      database.db,
+      db.deleteFrom("session_routes").where("session_key", "=", sessionKey),
+    );
+    executeSqliteQuerySync(
+      database.db,
+      db.deleteFrom("session_entries").where("session_key", "=", sessionKey),
+    );
+  }
+  const referencedSessionIds = readReferencedSqliteSessionIds(database);
+  for (const sessionId of removedSessionIds) {
+    deleteSqliteSessionStateIfUnreferenced({
+      database,
+      referencedSessionIds,
+      sessionId,
+    });
   }
 }
 
