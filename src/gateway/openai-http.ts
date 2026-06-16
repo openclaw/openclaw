@@ -23,6 +23,7 @@ import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
 import type { GatewayHttpChatCompletionsConfig } from "../config/types.gateway.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
+import { createSseChunkBuffer } from "./gateway-streaming-chunker.js";
 import { logWarn } from "../logger.js";
 import {
   DEFAULT_INPUT_IMAGE_MAX_BYTES,
@@ -1181,6 +1182,22 @@ export async function handleOpenAiHttpRequest(
   let wroteStopChunk = false;
   let sawAssistantDelta = false;
   let bufferedAssistantContent = "";
+  const streamChunker = createSseChunkBuffer(
+    (chunkText) => {
+      if (!wroteRole) {
+        wroteRole = true;
+        writeAssistantRoleChunk(res, { runId, model });
+      }
+      sawAssistantDelta = true;
+      writeAssistantContentChunk(res, {
+        runId,
+        model,
+        content: chunkText,
+        finishReason: null,
+      });
+    },
+    opts.config?.streaming,
+  );
   let finalUsage: OpenAiChatCompletionsUsage | undefined;
   let finalizeRequested = false;
   let finalizeFinishReason: "stop" | "tool_calls" = "stop";
@@ -1201,6 +1218,8 @@ export async function handleOpenAiHttpRequest(
     closed = true;
     stopWatchingDisconnect();
     unsubscribe();
+    streamChunker.flush();
+    streamChunker.destroy();
     if (!wroteStopChunk) {
       writeAssistantFinishChunk(res, { runId, model, finishReason: finalizeFinishReason });
       wroteStopChunk = true;
@@ -1240,18 +1259,7 @@ export async function handleOpenAiHttpRequest(
         return;
       }
 
-      if (!wroteRole) {
-        wroteRole = true;
-        writeAssistantRoleChunk(res, { runId, model });
-      }
-
-      sawAssistantDelta = true;
-      writeAssistantContentChunk(res, {
-        runId,
-        model,
-        content,
-        finishReason: null,
-      });
+      streamChunker.push(content);
       return;
     }
 
@@ -1266,6 +1274,7 @@ export async function handleOpenAiHttpRequest(
   stopWatchingDisconnect = watchClientDisconnect(req, res, abortController, () => {
     closed = true;
     unsubscribe();
+    streamChunker.destroy();
   });
 
   wroteRole = true;
@@ -1297,6 +1306,8 @@ export async function handleOpenAiHttpRequest(
         closed = true;
         stopWatchingDisconnect();
         unsubscribe();
+        streamChunker.flush();
+        streamChunker.destroy();
         writeSse(res, {
           error: {
             message: resolveUnsatisfiedToolChoiceMessage(toolChoiceConstraint),
@@ -1361,6 +1372,8 @@ export async function handleOpenAiHttpRequest(
         closed = true;
         stopWatchingDisconnect();
         unsubscribe();
+        streamChunker.flush();
+        streamChunker.destroy();
         writeSse(res, {
           error: { message: "invalid tool configuration", type: "invalid_request_error" },
         });
@@ -1373,6 +1386,7 @@ export async function handleOpenAiHttpRequest(
         closed = true;
         stopWatchingDisconnect();
         unsubscribe();
+        streamChunker.destroy();
         writeSse(res, { error: mapped.error });
         writeDone(res);
         res.end();

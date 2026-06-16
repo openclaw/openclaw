@@ -34,6 +34,7 @@ import {
 } from "../media/input-files.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveAssistantStreamDeltaText } from "./agent-event-assistant-text.js";
+import { createSseChunkBuffer } from "./gateway-streaming-chunker.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import {
@@ -918,6 +919,20 @@ export async function handleOpenResponsesHttpRequest(
   let stopWatchingDisconnect = () => {};
   let finalUsage: Usage | undefined;
   let finalizeRequested: { status: ResponseResource["status"]; text: string } | null = null;
+  const streamChunker = createSseChunkBuffer(
+    (chunkText) => {
+      sawAssistantDelta = true;
+      accumulatedText += chunkText;
+      writeSseEvent(res, {
+        type: "response.output_text.delta",
+        item_id: outputItemId,
+        output_index: 0,
+        content_index: 0,
+        delta: chunkText,
+      });
+    },
+    opts.config?.streaming,
+  );
 
   const maybeFinalize = () => {
     if (closed) {
@@ -934,6 +949,8 @@ export async function handleOpenResponsesHttpRequest(
     closed = true;
     stopWatchingDisconnect();
     unsubscribe();
+    streamChunker.flush();
+    streamChunker.destroy();
 
     writeSseEvent(res, {
       type: "response.output_text.done",
@@ -1048,16 +1065,7 @@ export async function handleOpenResponsesHttpRequest(
         return;
       }
 
-      sawAssistantDelta = true;
-      accumulatedText += content;
-
-      writeSseEvent(res, {
-        type: "response.output_text.delta",
-        item_id: outputItemId,
-        output_index: 0,
-        content_index: 0,
-        delta: content,
-      });
+      streamChunker.push(content);
       return;
     }
 
@@ -1074,6 +1082,7 @@ export async function handleOpenResponsesHttpRequest(
   stopWatchingDisconnect = watchClientDisconnect(req, res, abortController, () => {
     closed = true;
     unsubscribe();
+    streamChunker.destroy();
   });
 
   void (async () => {
