@@ -1012,14 +1012,12 @@ final class TalkModeManager: NSObject {
             let runId = ack.runId
             let normalizedStatus = Self.normalizedChatSendStatus(ack.status)
             self.logger.info(
-                "chat.send ok runId=\(runId, privacy: .public) "
-                    + "status=\(normalizedStatus, privacy: .public)")
+                "chat.send ok runId=\(runId, privacy: .public) status=\(normalizedStatus, privacy: .public)")
             GatewayDiagnostics.log("talk: chat.send ok runId=\(runId) status=\(normalizedStatus)")
             if Self.isTerminalChatSendFailure(ack.status) {
                 self.statusText = normalizedStatus == "error" ? "Chat error" : "Aborted"
                 self.logger.warning(
-                    "chat.send terminal ack runId=\(runId, privacy: .public) "
-                        + "status=\(normalizedStatus, privacy: .public)")
+                    "chat.send terminal ack runId=\(runId, privacy: .public) status=\(normalizedStatus, privacy: .public)")
                 GatewayDiagnostics.log(
                     "talk: chat.send terminal ack runId=\(runId) status=\(normalizedStatus)")
                 if restartAfter {
