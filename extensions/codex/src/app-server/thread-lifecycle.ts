@@ -392,19 +392,18 @@ export async function startOrResumeThread(params: {
     binding.webSearchThreadConfigFingerprint !== webSearchThreadConfigFingerprint;
   const persistentWebSearchRestriction =
     params.webSearchAllowed === false && params.persistentWebSearchAllowed === false;
-  // A transient native-tool restriction must not replace a legacy binding just
-  // because that binding predates search fingerprints. Explicit persistent
-  // search denial still rotates first so the restricted thread can persist.
-  const deferLegacyWebSearchRotationToTransientNativeSurface =
-    params.nativeCodeModeEnabled === false &&
+  const transientWebSearchRestriction = isTransientWebSearchRestriction(params);
+  // A legacy binding predates web-search fingerprints, so a transient web-search
+  // restriction must not rotate it merely for lacking metadata: keep the binding
+  // so it resumes (or, when native code mode is off, so the native-tool-surface
+  // block below owns the throwaway thread) and the resume stamps the fingerprint.
+  // Explicit persistent denial and real config changes still rotate first so the
+  // restricted thread can persist.
+  const deferLegacyWebSearchRotation =
     binding?.webSearchThreadConfigFingerprint === undefined &&
+    transientWebSearchRestriction &&
     !persistentWebSearchRestriction;
-  if (
-    binding?.threadId &&
-    webSearchBindingChanged &&
-    !deferLegacyWebSearchRotationToTransientNativeSurface
-  ) {
-    const transientWebSearchRestriction = isTransientWebSearchRestriction(params);
+  if (binding?.threadId && webSearchBindingChanged && !deferLegacyWebSearchRotation) {
     if (transientWebSearchRestriction) {
       embeddedAgentLog.debug(
         "codex app-server web search restricted for turn; starting transient thread",
