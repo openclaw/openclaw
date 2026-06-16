@@ -4,7 +4,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import { resolveStoredSessionOwnerAgentId } from "../../gateway/session-store-key.js";
 import { getLogger } from "../../logging/logger.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
@@ -21,6 +20,7 @@ import {
 } from "./paths.js";
 import {
   applySessionEntryLifecycleMutation,
+  purgeDeletedAgentSessionEntries,
   type SessionEntryLifecycleRemoval,
 } from "./session-accessor.js";
 import { cloneSessionStoreRecord } from "./store-cache.js";
@@ -31,7 +31,7 @@ import {
   pruneStaleEntries,
   type ResolvedSessionMaintenanceConfig,
 } from "./store-maintenance.js";
-import { loadSessionStore, updateSessionStore } from "./store.js";
+import { loadSessionStore } from "./store.js";
 import {
   resolveSessionStoreTargets,
   type SessionStoreTarget,
@@ -634,18 +634,11 @@ export async function purgeAgentSessionStoreEntries(
         ? normalizedAgentId
         : normalizeAgentId(resolveDefaultAgentId(cfg));
     const storePath = resolveStorePath(cfg.session?.store, { agentId: normalizedAgentId });
-    await updateSessionStore(storePath, (store) => {
-      for (const key of Object.keys(store)) {
-        if (
-          resolveStoredSessionOwnerAgentId({
-            cfg,
-            agentId: storeAgentId,
-            sessionKey: key,
-          }) === normalizedAgentId
-        ) {
-          delete store[key];
-        }
-      }
+    await purgeDeletedAgentSessionEntries({
+      cfg,
+      agentId: normalizedAgentId,
+      storeAgentId,
+      storePath,
     });
   } catch (err) {
     getLogger().debug("session store purge skipped during agent delete", err);
