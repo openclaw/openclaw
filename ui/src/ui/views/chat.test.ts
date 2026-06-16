@@ -1510,6 +1510,7 @@ describe("chat voice controls", () => {
       "medium",
       "high",
     ]);
+    expect(getTalkSelectOptionValues(container, "provider")).toEqual(["", "openai", "google"]);
     expect(container.textContent).toContain("Sensitivity");
     expect(container.textContent).toContain("Advanced");
     expect(container.textContent).toContain("Pause before send");
@@ -1552,6 +1553,110 @@ describe("chat voice controls", () => {
       "0.65",
       "0.5",
       "0.35",
+    ]);
+  });
+
+  it("renders compatible catalog providers and limits transports to the selected provider", () => {
+    const onRealtimeTalkOptionsChange = vi.fn();
+    const container = renderChatView({
+      realtimeTalkOptionsOpen: true,
+      realtimeTalkCatalogProviders: [
+        {
+          id: "openai",
+          label: "OpenAI",
+          configured: true,
+          transports: ["webrtc", "provider-websocket"],
+          supportsBrowserSession: true,
+        },
+        {
+          id: "plugin-realtime",
+          label: "Plugin realtime",
+          configured: true,
+          transports: ["gateway-relay"],
+        },
+        {
+          id: "plugin-default-relay",
+          label: "Plugin default relay",
+          configured: true,
+        },
+        {
+          id: "plugin-websocket",
+          label: "Unsupported plugin WebSocket",
+          configured: true,
+          transports: ["provider-websocket"],
+          supportsBrowserSession: true,
+        },
+        {
+          id: "relay-only",
+          label: "No browser session",
+          configured: true,
+          transports: ["webrtc"],
+        },
+        {
+          id: "unconfigured",
+          label: "Unconfigured provider",
+          configured: false,
+          transports: ["gateway-relay"],
+        },
+      ],
+      realtimeTalkOptions: {
+        provider: "openai",
+        model: "",
+        voice: "",
+        transport: "webrtc",
+        vadThreshold: "",
+        silenceDurationMs: "",
+        prefixPaddingMs: "",
+        reasoningEffort: "",
+      },
+      onRealtimeTalkOptionsChange,
+    });
+
+    expect(getTalkSelectOptionValues(container, "provider")).toEqual([
+      "",
+      "openai",
+      "plugin-realtime",
+      "plugin-default-relay",
+    ]);
+    expect(getTalkSelectOptionValues(container, "transport")).toEqual(["", "webrtc"]);
+
+    clickTalkSelectOption(container, "provider", "plugin-realtime");
+
+    expect(onRealtimeTalkOptionsChange).toHaveBeenCalledWith({
+      provider: "plugin-realtime",
+      transport: "",
+    });
+  });
+
+  it("keeps the Google provider WebSocket transport available", () => {
+    const container = renderChatView({
+      realtimeTalkOptionsOpen: true,
+      realtimeTalkCatalogProviders: [
+        {
+          id: "google",
+          label: "Google",
+          configured: true,
+          transports: ["provider-websocket", "gateway-relay"],
+          supportsBrowserSession: true,
+        },
+      ],
+      realtimeTalkOptions: {
+        provider: "google",
+        model: "",
+        voice: "",
+        transport: "provider-websocket",
+        vadThreshold: "",
+        silenceDurationMs: "",
+        prefixPaddingMs: "",
+        reasoningEffort: "",
+      },
+      onRealtimeTalkOptionsChange: () => undefined,
+    });
+
+    expect(getTalkSelectOptionValues(container, "transport")).toEqual([
+      "",
+      "gateway-relay",
+      "provider-websocket",
     ]);
   });
 

@@ -20,6 +20,20 @@ describe("parseArgs", () => {
       "Choose exactly one of --from-gateway or --version <YYYY.M.PATCH>",
     );
   });
+
+  it("parses explicit version codes strictly", () => {
+    expect(parseArgs(["--version", "2026.6.5", "--version-code", "2026060502"])).toMatchObject({
+      explicitVersion: "2026.6.5",
+      explicitVersionCode: 2026060502,
+      fromGateway: false,
+    });
+
+    for (const value of ["2026060502abc", "2026060502.5", "2e9", "0"]) {
+      expect(() => parseArgs(["--version", "2026.6.5", "--version-code", value])).toThrow(
+        `Invalid value for --version-code: ${value}. Expected a positive integer.`,
+      );
+    }
+  });
 });
 
 describe("pinAndroidVersion", () => {

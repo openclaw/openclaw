@@ -1,12 +1,11 @@
 // Android Version script supports OpenClaw repository automation.
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { parseReleaseVersion } from "./npm-publish-plan.mjs";
 
 const ANDROID_VERSION_FILE = "apps/android/version.json";
 const ANDROID_VERSION_PROPERTIES_FILE = "apps/android/Config/Version.properties";
-
-const PINNED_ANDROID_VERSION_PATTERN = /^(\d{4}\.\d{1,2}\.[1-9]\d*)$/u;
-const GATEWAY_VERSION_PATTERN = /^(\d{4}\.\d{1,2}\.[1-9]\d*)(?:-(?:alpha\.\d+|beta\.\d+|\d+))?$/u;
+const ANDROID_VERSION_CODE_MAX = 2_100_000_000;
 
 type AndroidVersionManifest = {
   version: string;
@@ -26,20 +25,28 @@ function normalizeTrailingNewline(value: string): string {
   return value.endsWith("\n") ? value : `${value}\n`;
 }
 
+function parsePinnedReleaseVersion(rawVersion: string): string | null {
+  const parsed = parseReleaseVersion(rawVersion.trim());
+  if (!parsed || parsed.version !== parsed.baseVersion) {
+    return null;
+  }
+  return parsed.baseVersion;
+}
+
 export function normalizePinnedAndroidVersion(rawVersion: string): string {
   const trimmed = rawVersion.trim();
   if (!trimmed) {
     throw new Error(`Missing Android version in ${ANDROID_VERSION_FILE}.`);
   }
 
-  const match = PINNED_ANDROID_VERSION_PATTERN.exec(trimmed);
-  if (!match) {
+  const pinnedVersion = parsePinnedReleaseVersion(trimmed);
+  if (!pinnedVersion) {
     throw new Error(
       `Invalid Android version '${rawVersion}'. Expected pinned release version like 2026.6.5.`,
     );
   }
 
-  return match[1] ?? trimmed;
+  return pinnedVersion;
 }
 
 export function normalizeGatewayVersionToPinnedAndroidVersion(rawVersion: string): string {
@@ -48,14 +55,14 @@ export function normalizeGatewayVersionToPinnedAndroidVersion(rawVersion: string
     throw new Error("Missing root package.json version.");
   }
 
-  const match = GATEWAY_VERSION_PATTERN.exec(trimmed);
-  if (!match) {
+  const parsed = parseReleaseVersion(trimmed);
+  if (!parsed) {
     throw new Error(
       `Invalid gateway version '${rawVersion}'. Expected YYYY.M.PATCH, YYYY.M.PATCH-alpha.N, YYYY.M.PATCH-beta.N, or YYYY.M.PATCH-N.`,
     );
   }
 
-  return match[1] ?? trimmed;
+  return parsed.baseVersion;
 }
 
 export function canonicalAndroidVersionCode(version: string): number {
@@ -63,15 +70,23 @@ export function canonicalAndroidVersionCode(version: string): number {
   const [year, rawMonth, rawPatch] = canonicalVersion.split(".");
   const month = rawMonth?.padStart(2, "0");
   const patch = rawPatch?.padStart(2, "0");
-  const versionCode = Number.parseInt(`${year}${month}${patch}01`, 10);
-  if (!Number.isInteger(versionCode)) {
+  const versionCode = Number(`${year}${month}${patch}01`);
+  if (
+    !Number.isSafeInteger(versionCode) ||
+    versionCode <= 0 ||
+    versionCode > ANDROID_VERSION_CODE_MAX
+  ) {
     throw new Error(`Unable to derive Android versionCode from ${canonicalVersion}.`);
   }
   return versionCode;
 }
 
 export function normalizeAndroidVersionCode(rawVersionCode: number, version: string): number {
-  if (!Number.isInteger(rawVersionCode) || rawVersionCode <= 0 || rawVersionCode > 2_100_000_000) {
+  if (
+    !Number.isInteger(rawVersionCode) ||
+    rawVersionCode <= 0 ||
+    rawVersionCode > ANDROID_VERSION_CODE_MAX
+  ) {
     throw new Error(
       `Invalid Android versionCode '${rawVersionCode}'. Expected a positive integer no greater than 2100000000.`,
     );

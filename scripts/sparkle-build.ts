@@ -73,7 +73,11 @@ export function sparkleBuildFloorsFromShortVersion(
   if (suffix.length > 0) {
     const numericSuffix = /([0-9]+)$/.exec(suffix)?.[1];
     if (numericSuffix) {
-      lane = Math.min(Number.parseInt(numericSuffix, 10), 89);
+      const parsedLane = Number(numericSuffix);
+      if (!Number.isSafeInteger(parsedLane) || parsedLane < 1) {
+        return null;
+      }
+      lane = Math.min(parsedLane, 89);
     } else {
       lane = 1;
     }

@@ -84,6 +84,10 @@ import {
   type RealtimeTalkConversationState,
 } from "./chat/realtime-talk-conversation.ts";
 import {
+  reconcileRealtimeTalkCatalogSelection,
+  type RealtimeTalkCatalogProvider,
+} from "./chat/realtime-talk-catalog.ts";
+import {
   RealtimeTalkSession,
   type RealtimeTalkLaunchOptions,
   type RealtimeTalkStatus,
@@ -308,6 +312,7 @@ export class OpenClawApp extends LitElement {
   @state() realtimeTalkTranscript: string | null = null;
   @state() realtimeTalkConversation: RealtimeTalkConversationEntry[] = [];
   @state() realtimeTalkOptionsOpen = false;
+  @state() realtimeTalkCatalogProviders: RealtimeTalkCatalogProvider[] | null = null;
   @state() realtimeTalkOptions = {
     provider: "",
     model: "",
@@ -928,8 +933,8 @@ export class OpenClawApp extends LitElement {
     );
   }
 
-  async loadAssistantIdentity() {
-    await loadAssistantIdentityInternal(this);
+  async loadAssistantIdentity(opts?: { sessionKey?: string; expectedSessionKey?: string }) {
+    await loadAssistantIdentityInternal(this, opts);
   }
 
   applySettings(next: UiSettings) {
@@ -1168,6 +1173,29 @@ export class OpenClawApp extends LitElement {
 
   updateRealtimeTalkOptions(next: Partial<typeof this.realtimeTalkOptions>) {
     this.realtimeTalkOptions = { ...this.realtimeTalkOptions, ...next };
+  }
+
+  async fetchRealtimeTalkCatalog() {
+    if (!this.client || !this.connected) {
+      return;
+    }
+    this.realtimeTalkCatalogProviders = null;
+    try {
+      const result = await this.client.request<{
+        realtime?: { providers?: RealtimeTalkCatalogProvider[] };
+      }>("talk.catalog", {});
+      const providers = result?.realtime?.providers ?? [];
+      this.realtimeTalkCatalogProviders = providers;
+      const update = reconcileRealtimeTalkCatalogSelection({
+        providers,
+        selection: this.realtimeTalkOptions,
+      });
+      if (update) {
+        this.updateRealtimeTalkOptions(update);
+      }
+    } catch {
+      this.realtimeTalkCatalogProviders = null;
+    }
   }
 
   private buildRealtimeTalkLaunchOptions(): RealtimeTalkLaunchOptions {
