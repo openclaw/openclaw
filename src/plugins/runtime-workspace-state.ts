@@ -1,7 +1,11 @@
 // Shares plugin runtime workspace state across module reloads.
 import { AsyncLocalStorage } from "node:async_hooks";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 const PLUGIN_REGISTRY_STATE = Symbol.for("openclaw.pluginRegistryState");
+const PINNED_PLUGIN_REGISTRY_WORKSPACE_KEY = Symbol.for(
+  "openclaw.pinnedPluginRegistryWorkspaceDir",
+);
 
 type GlobalRegistryWorkspaceState = typeof globalThis & {
   [PLUGIN_REGISTRY_STATE]?: {
@@ -9,9 +13,9 @@ type GlobalRegistryWorkspaceState = typeof globalThis & {
   };
 };
 
-const pinnedWorkspaceDirStorage = new AsyncLocalStorage<{
-  workspaceDir: string | undefined;
-}>();
+const pinnedWorkspaceDirStorage = resolveGlobalSingleton<
+  AsyncLocalStorage<{ workspaceDir: string | undefined }>
+>(PINNED_PLUGIN_REGISTRY_WORKSPACE_KEY, () => new AsyncLocalStorage());
 
 /** Reads the active plugin registry workspace directory from global runtime state,
  *  respecting any pinned workspace from the current async context. */

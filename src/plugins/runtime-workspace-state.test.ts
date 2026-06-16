@@ -84,6 +84,19 @@ describe("runtime workspace state pin", () => {
     expect(getActivePluginRegistryWorkspaceDirFromState()).toBe("/workspace/b");
   });
 
+  it("preserves the pin across module reloads", async () => {
+    setActiveWorkspace("/workspace/a");
+
+    await withPinnedActivePluginRegistryWorkspaceDir(async () => {
+      setActiveWorkspace("/workspace/b");
+      const reloaded = await import(
+        new URL("./runtime-workspace-state.ts?workspace-pin-reload", import.meta.url).href
+      );
+
+      expect(reloaded.getActivePluginRegistryWorkspaceDirFromState()).toBe("/workspace/a");
+    });
+  });
+
   it("propagates rejections without leaking the pin", async () => {
     setActiveWorkspace("/workspace/a");
 
