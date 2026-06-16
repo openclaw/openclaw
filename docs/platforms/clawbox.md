@@ -32,7 +32,7 @@ a reduced build. Once the device is online:
 - Anything you can do with a self-hosted Gateway — pairing clients, managing
   tokens, connecting tools — works the same way.
 
-The device changes *how the Gateway is provisioned* (preinstalled on hardware),
+The device changes _how the Gateway is provisioned_ (preinstalled on hardware),
 not how OpenClaw behaves once it is running.
 
 ## Getting started
