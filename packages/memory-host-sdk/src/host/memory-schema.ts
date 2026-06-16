@@ -42,6 +42,45 @@ export function ensureMemoryIndexSchema(params: {
       updated_at INTEGER NOT NULL
     );
   `);
+  params.db.exec(`
+    CREATE TABLE IF NOT EXISTS memory_index_state (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      revision INTEGER NOT NULL
+    );
+    INSERT OR IGNORE INTO memory_index_state (id, revision) VALUES (1, 0);
+
+    CREATE TRIGGER IF NOT EXISTS memory_files_revision_after_insert
+    AFTER INSERT ON files
+    BEGIN
+      UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1;
+    END;
+    CREATE TRIGGER IF NOT EXISTS memory_files_revision_after_update
+    AFTER UPDATE ON files
+    BEGIN
+      UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1;
+    END;
+    CREATE TRIGGER IF NOT EXISTS memory_files_revision_after_delete
+    AFTER DELETE ON files
+    BEGIN
+      UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1;
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS memory_chunks_revision_after_insert
+    AFTER INSERT ON chunks
+    BEGIN
+      UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1;
+    END;
+    CREATE TRIGGER IF NOT EXISTS memory_chunks_revision_after_update
+    AFTER UPDATE ON chunks
+    BEGIN
+      UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1;
+    END;
+    CREATE TRIGGER IF NOT EXISTS memory_chunks_revision_after_delete
+    AFTER DELETE ON chunks
+    BEGIN
+      UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1;
+    END;
+  `);
   if (params.cacheEnabled) {
     params.db.exec(`
       CREATE TABLE IF NOT EXISTS ${params.embeddingCacheTable} (

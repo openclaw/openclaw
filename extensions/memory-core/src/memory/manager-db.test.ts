@@ -5,7 +5,11 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { ensureMemoryIndexSchema } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { cleanupAgedMemoryReindexTempFiles, publishMemoryDatabaseTables } from "./manager-db.js";
+import {
+  cleanupAgedMemoryReindexTempFiles,
+  publishMemoryDatabaseTables,
+  readMemoryDatabaseRevision,
+} from "./manager-db.js";
 import { acquireMemoryReindexLock } from "./manager-reindex-lock.js";
 
 function ensureTestMemorySchema(db: DatabaseSync): void {
@@ -49,6 +53,7 @@ describe("memory manager database publication", () => {
         targetDb,
         sourcePath,
         metaKey: "memory_index_meta",
+        expectedRevision: readMemoryDatabaseRevision(targetDb),
       });
 
       expect(
@@ -57,6 +62,51 @@ describe("memory manager database publication", () => {
           .get(),
       ).toBeUndefined();
     } finally {
+      try {
+        sourceDb.close();
+      } catch {}
+      targetDb.close();
+    }
+  });
+
+  it("rejects a stale shadow publish after a concurrent live memory update", () => {
+    const targetPath = path.join(fixtureRoot, "target.sqlite");
+    const sourcePath = path.join(fixtureRoot, "source.sqlite");
+    const targetDb = new DatabaseSync(targetPath);
+    const sourceDb = new DatabaseSync(sourcePath);
+    let concurrentDb: DatabaseSync | undefined;
+    try {
+      ensureTestMemorySchema(targetDb);
+      ensureTestMemorySchema(sourceDb);
+      targetDb
+        .prepare("INSERT INTO files (path, source, hash, mtime, size) VALUES (?, ?, ?, ?, ?)")
+        .run("memory.md", "memory", "published", 1, 1);
+      sourceDb
+        .prepare("INSERT INTO files (path, source, hash, mtime, size) VALUES (?, ?, ?, ?, ?)")
+        .run("memory.md", "memory", "shadow", 1, 1);
+      const expectedRevision = readMemoryDatabaseRevision(targetDb);
+      sourceDb.close();
+
+      concurrentDb = new DatabaseSync(targetPath);
+      concurrentDb.prepare("UPDATE files SET hash = ? WHERE path = ?").run("newer", "memory.md");
+      concurrentDb.close();
+      concurrentDb = undefined;
+
+      expect(() =>
+        publishMemoryDatabaseTables({
+          targetDb,
+          sourcePath,
+          metaKey: "memory_index_meta",
+          expectedRevision,
+        }),
+      ).toThrow(/changed while full reindex was building/);
+      expect(
+        targetDb.prepare("SELECT hash FROM files WHERE path = ?").get("memory.md"),
+      ).toEqual({ hash: "newer" });
+    } finally {
+      try {
+        concurrentDb?.close();
+      } catch {}
       try {
         sourceDb.close();
       } catch {}

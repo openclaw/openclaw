@@ -51,6 +51,7 @@ import {
   closeMemoryDatabase,
   openMemoryDatabaseAtPath,
   publishMemoryDatabaseTables,
+  readMemoryDatabaseRevision,
   removeMemoryDatabaseFiles,
 } from "./manager-db.js";
 import { isMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
@@ -2453,6 +2454,7 @@ export abstract class MemoryManagerSyncOps {
     try {
       cleanupAgedMemoryReindexTempFiles(dbPath);
       reindexLock = acquireMemoryReindexLock(dbPath);
+      const originalRevision = readMemoryDatabaseRevision(originalDb);
       tempDb = openMemoryDatabaseAtPath(tempDbPath, this.settings.store.vector.enabled);
       this.db = tempDb;
       this.lastMetaSerialized = null;
@@ -2532,6 +2534,7 @@ export abstract class MemoryManagerSyncOps {
         targetDb: originalDb,
         sourcePath: tempDbPath,
         metaKey: META_KEY,
+        expectedRevision: originalRevision,
       });
 
       this.db = originalDb;
