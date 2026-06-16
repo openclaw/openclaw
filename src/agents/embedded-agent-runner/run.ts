@@ -738,14 +738,14 @@ async function runEmbeddedAgentInternal(
 
   throwIfAborted();
 
-  return enqueueSession(() => {
+  return enqueueSession(async () => {
+    throwIfAborted();
+    // Same-session reads below must see any prior deferred transcript rewrite.
+    // Checkpoint before the global lane so unrelated sessions can still start
+    // while this session waits on its own maintenance lane.
+    await waitForDeferredTurnMaintenanceForSession(params.sessionKey);
     throwIfAborted();
     return enqueueGlobal(async () => {
-      throwIfAborted();
-      // Same-session reads below must see any prior deferred transcript rewrite.
-      // The maintenance lane is separate from the session lane, so foreground
-      // turns checkpoint here before bootstrap or attempt setup reads history.
-      await waitForDeferredTurnMaintenanceForSession(params.sessionKey);
       throwIfAborted();
       const started = Date.now();
       const startupStages = createEmbeddedRunStageTracker();

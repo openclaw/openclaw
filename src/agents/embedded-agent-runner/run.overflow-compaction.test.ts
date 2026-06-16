@@ -237,6 +237,16 @@ function expectRuntimePlanFields(
   }
 }
 
+async function waitForRunEvent(events: string[], expected: string): Promise<void> {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    if (events.includes(expected)) {
+      return;
+    }
+    await Promise.resolve();
+  }
+  throw new Error(`Expected run event ${expected}; saw ${events.join(", ")}`);
+}
+
 describe("runEmbeddedAgent overflow compaction trigger routing", () => {
   beforeAll(async () => {
     ({ runEmbeddedAgent } = await loadRunOverflowCompactionHarness());
@@ -304,6 +314,54 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     });
 
     expect(events).toEqual(["wait:agent:main:session-wait-deferred-maintenance", "attempt"]);
+  });
+
+  it("does not hold the global run lane while waiting for another session's deferred maintenance", async () => {
+    const events: string[] = [];
+    let releaseSessionA: (() => void) | undefined;
+    mockedWaitForDeferredTurnMaintenanceForSession.mockImplementation(async (sessionKey) => {
+      events.push(`wait:${sessionKey}`);
+      if (sessionKey !== "agent:main:session-a") {
+        return;
+      }
+      await new Promise<void>((resolve) => {
+        releaseSessionA = resolve;
+      });
+    });
+    mockedRunEmbeddedAttempt.mockImplementation(async (params) => {
+      events.push(`attempt:${(params as { sessionKey?: string }).sessionKey}`);
+      return makeAttemptResult({ promptError: null });
+    });
+
+    const sessionARun = runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      runId: "run-deferred-maintenance-session-a",
+      sessionKey: "agent:main:session-a",
+    });
+    await waitForRunEvent(events, "wait:agent:main:session-a");
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      runId: "run-deferred-maintenance-session-b",
+      sessionKey: "agent:main:session-b",
+    });
+
+    expect(events).toEqual([
+      "wait:agent:main:session-a",
+      "wait:agent:main:session-b",
+      "attempt:agent:main:session-b",
+    ]);
+    if (!releaseSessionA) {
+      throw new Error("Expected session A maintenance release callback to be initialized");
+    }
+    releaseSessionA();
+    await sessionARun;
+    expect(events).toEqual([
+      "wait:agent:main:session-a",
+      "wait:agent:main:session-b",
+      "attempt:agent:main:session-b",
+      "attempt:agent:main:session-a",
+    ]);
   });
 
   it("uses the lightweight auth profile store during reply startup", async () => {

@@ -16,6 +16,7 @@ import type {
   PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildResult,
 } from "../../plugins/types.js";
+import { resetCommandQueueStateForTest } from "../../process/command-queue.js";
 import type { FailoverReason } from "../embedded-agent-helpers/types.js";
 import { clearAgentHarnesses, registerAgentHarness } from "../harness/registry.js";
 import type { buildEmbeddedRunPayloads } from "./run/payloads.js";
@@ -298,6 +299,7 @@ export const overflowBaseRunParams = {
 
 /** Reset every mocked runner dependency to the default successful no-op state. */
 export function resetRunOverflowCompactionHarnessMocks(): void {
+  resetCommandQueueStateForTest();
   clearAgentHarnesses();
   registerAgentHarness({
     id: "codex",
@@ -706,11 +708,6 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     resolveContextWindowInfo: mockedResolveContextWindowInfo,
   }));
 
-  vi.doMock("../../process/command-queue.js", () => ({
-    enqueueCommandInLane: vi.fn((_lane: string, task: () => unknown) => task()),
-    clearCommandLane: vi.fn(() => 0),
-  }));
-
   vi.doMock("../../utils/message-channel.js", () => ({
     isMarkdownCapableMessageChannel: vi.fn(() => true),
   }));
@@ -729,8 +726,8 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   }));
 
   vi.doMock("./lanes.js", () => ({
-    resolveSessionLane: vi.fn(() => "session-lane"),
-    resolveEmbeddedSessionLane: vi.fn(() => "session-lane"),
+    resolveSessionLane: vi.fn((key: string) => `session:${key}`),
+    resolveEmbeddedSessionLane: vi.fn((key: string) => `session:${key}`),
     resolveGlobalLane: vi.fn(() => "global-lane"),
   }));
 
