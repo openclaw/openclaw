@@ -29,6 +29,22 @@ function runtimeContextMessage(content: string, timestamp: number): AgentMessage
   } as AgentMessage;
 }
 
+function stringUserMessage(text: string, timestamp: number): AgentMessage {
+  return {
+    role: "user",
+    content: text,
+    timestamp,
+  } as AgentMessage;
+}
+
+function metadataPrefixedUserMessage(text: string, timestamp: number): AgentMessage {
+  return {
+    role: "user",
+    content: `Conversation info (untrusted metadata):\n\`\`\`json\n{"chat_id":"channel:123"}\n\`\`\`\n\nSender (untrusted metadata):\n\`\`\`json\n{"name":"Syu"}\n\`\`\`\n\n${text}`,
+    timestamp,
+  } as AgentMessage;
+}
+
 function createContextEngine(overrides: Partial<ContextEngine> = {}): ContextEngine {
   return {
     info: { id: "test", name: "Test context engine" },
@@ -111,6 +127,42 @@ describe("harness context engine lifecycle", () => {
       beforePromptUser,
       beforePromptAssistant,
       turnUser,
+      turnAssistant,
+    ]);
+    expect(afterTurnParams?.prePromptMessageCount).toBe(2);
+  });
+
+  it("strips injected inbound metadata before context engine afterTurn hooks", async () => {
+    const beforePromptUser = metadataPrefixedUserMessage("old ask", 1);
+    const beforePromptAssistant = textMessage("assistant", "old answer", 3);
+    const turnUser = metadataPrefixedUserMessage("new ask", 4);
+    const turnAssistant = textMessage("assistant", "new answer", 6);
+    const afterTurn = vi.fn(async () => {});
+
+    await finalizeHarnessContextEngineTurn({
+      contextEngine: createContextEngine({ afterTurn }),
+      promptError: false,
+      aborted: false,
+      yieldAborted: false,
+      sessionIdUsed: sessionParams.sessionIdUsed,
+      sessionKey: sessionParams.sessionKey,
+      sessionFile: sessionParams.sessionFile,
+      messagesSnapshot: [beforePromptUser, beforePromptAssistant, turnUser, turnAssistant],
+      prePromptMessageCount: 2,
+      tokenBudget: 2048,
+      runtimeContext: {},
+      runMaintenance: async () => undefined,
+      warn: () => {},
+    });
+
+    const afterTurnCalls = (afterTurn as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+    const afterTurnParams = afterTurnCalls[0]?.[0] as
+      | { messages?: AgentMessage[]; prePromptMessageCount?: number }
+      | undefined;
+    expect(afterTurnParams?.messages).toEqual([
+      stringUserMessage("old ask", 1),
+      beforePromptAssistant,
+      stringUserMessage("new ask", 4),
       turnAssistant,
     ]);
     expect(afterTurnParams?.prePromptMessageCount).toBe(2);

@@ -1,6 +1,7 @@
 /**
  * Manages context-engine lifecycle hooks for native agent harnesses.
  */
+import { stripInboundMetadata } from "../../auto-reply/reply/strip-inbound-meta.js";
 import type { MemoryCitationsMode } from "../../config/types.memory.js";
 import type {
   AssembleResult,
@@ -242,10 +243,37 @@ function buildContextEngineConversationSnapshot(params: {
   const turnMessages = stripRuntimeContextCustomMessages(
     params.messagesSnapshot.slice(params.prePromptMessageCount),
   );
+  const strippedPrePromptMessages = prePromptMessages.map(stripInboundMetadataFromMessage);
+  const strippedTurnMessages = turnMessages.map(stripInboundMetadataFromMessage);
   return {
-    messages: [...prePromptMessages, ...turnMessages],
-    prePromptMessageCount: prePromptMessages.length,
+    messages: [...strippedPrePromptMessages, ...strippedTurnMessages],
+    prePromptMessageCount: strippedPrePromptMessages.length,
   };
+}
+
+function stripInboundMetadataFromMessage(message: AgentMessage): AgentMessage {
+  if (message.role !== "user") {
+    return message;
+  }
+  if (typeof message.content === "string") {
+    const stripped = stripInboundMetadata(message.content);
+    return stripped === message.content ? message : { ...message, content: stripped };
+  }
+  if (!Array.isArray(message.content)) {
+    return message;
+  }
+  let changed = false;
+  const strippedContent = message.content.map((part) => {
+    if (part && typeof part === "object" && part.type === "text" && typeof part.text === "string") {
+      const stripped = stripInboundMetadata(part.text);
+      if (stripped !== part.text) {
+        changed = true;
+        return { ...part, text: stripped };
+      }
+    }
+    return part;
+  });
+  return changed ? { ...message, content: strippedContent } : message;
 }
 
 /**

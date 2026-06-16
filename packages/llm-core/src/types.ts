@@ -281,6 +281,12 @@ export interface UserMessage {
   role: "user";
   content: string | (TextContent | ImageContent)[];
   timestamp: number; // Unix timestamp in milliseconds
+  /**
+   * Optional display label for the sender, typically derived from inbound
+   * channel metadata. Persisted separately so the raw message text can be
+   * stripped of transient metadata without losing sender attribution.
+   */
+  senderLabel?: string;
 }
 
 /** Assistant turn, including provider identity and final stop state. */

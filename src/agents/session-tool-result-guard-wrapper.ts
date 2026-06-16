@@ -3,6 +3,10 @@
  *
  * Installs message-write hooks, input provenance handling, and pending tool-result flush behavior once per manager.
  */
+import {
+  extractInboundSenderLabel,
+  stripInboundMetadata,
+} from "../auto-reply/reply/strip-inbound-meta.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import {
@@ -85,6 +89,11 @@ export function guardSessionManager(
       message = redacted;
       changed = true;
     }
+    const stripped = stripInboundMetadataFromUserMessage(message);
+    if (stripped !== message) {
+      message = stripped;
+      changed = true;
+    }
     return changed ? { message } : undefined;
   };
 
@@ -151,4 +160,76 @@ export function guardSessionManager(
   (sessionManager as GuardedSessionManager).flushPendingToolResults = guard.flushPendingToolResults;
   (sessionManager as GuardedSessionManager).clearPendingToolResults = guard.clearPendingToolResults;
   return sessionManager as GuardedSessionManager;
+}
+
+type UserAgentMessage = Extract<AgentMessage, { role: "user" }>;
+
+function stripInboundMetadataFromUserMessage(message: AgentMessage): AgentMessage {
+  if (message.role !== "user") {
+    return message;
+  }
+  const userMessage = message as UserAgentMessage;
+  const senderLabel =
+    (message as { senderLabel?: string }).senderLabel ||
+    extractInboundSenderLabelFromMessage(userMessage);
+  const stripped = stripInboundMetadataFromMessageContent(userMessage);
+  if (!stripped && !senderLabel) {
+    return message;
+  }
+  const next: AgentMessage = { ...message };
+  if (stripped) {
+    (next as UserAgentMessage).content = stripped;
+  }
+  if (senderLabel) {
+    (next as { senderLabel?: string }).senderLabel = senderLabel;
+  }
+  return next;
+}
+
+function extractInboundSenderLabelFromMessage(message: UserAgentMessage): string | undefined {
+  const content = message.content;
+  if (typeof content === "string") {
+    return extractInboundSenderLabel(content) ?? undefined;
+  }
+  if (Array.isArray(content)) {
+    for (const part of content) {
+      if (
+        part &&
+        typeof part === "object" &&
+        part.type === "text" &&
+        typeof part.text === "string"
+      ) {
+        const label = extractInboundSenderLabel(part.text);
+        if (label) {
+          return label;
+        }
+      }
+    }
+  }
+  return undefined;
+}
+
+function stripInboundMetadataFromMessageContent(
+  message: UserAgentMessage,
+): UserAgentMessage["content"] | undefined {
+  const content = message.content;
+  if (typeof content === "string") {
+    const stripped = stripInboundMetadata(content);
+    return stripped === content ? undefined : stripped;
+  }
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+  let changed = false;
+  const next = content.map((part) => {
+    if (part && typeof part === "object" && part.type === "text" && typeof part.text === "string") {
+      const stripped = stripInboundMetadata(part.text);
+      if (stripped !== part.text) {
+        changed = true;
+        return { ...part, text: stripped };
+      }
+    }
+    return part;
+  });
+  return changed ? next : undefined;
 }
