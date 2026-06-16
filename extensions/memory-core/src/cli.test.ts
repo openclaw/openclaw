@@ -708,7 +708,7 @@ describe("memory cli", () => {
     expect(probeVectorAvailability).toHaveBeenCalled();
     expect(probeEmbeddingAvailability).toHaveBeenCalled();
     expectLogged(log, "Vector: disabled");
-    expectLogged(log, "Embeddings: ready");
+    expectLogged(log, "Embeddings: skipped");
     expectNotLogged(log, "Embeddings error:");
     expect(close).toHaveBeenCalled();
   });
