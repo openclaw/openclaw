@@ -26,6 +26,7 @@ import {
   resolveWhatsAppOutboundMediaUrls,
 } from "./outbound-media-contract.js";
 import { loadOutboundMediaFromUrl } from "./outbound-media.runtime.js";
+import { cacheInboundMessageMeta } from "./quoted-message.js";
 import { markdownToWhatsApp, toWhatsappJid } from "./text-runtime.js";
 
 const outboundLog = createSubsystemLogger("gateway/channels/whatsapp").child("outbound");
@@ -253,6 +254,20 @@ export async function sendMessageWhatsApp(
     }
     const messageId = (result as { messageId?: string })?.messageId ?? "unknown";
     const sentRemoteJid = resolveActualSentRemoteJid(result, jid);
+    // Cache outbound message metadata so reply-quote lookups can resolve
+    // the bot's own messages (fromMe=true, participant=bot JID).
+    if (messageId && messageId !== "unknown") {
+      const selfIdentity =
+        getRegisteredWhatsAppConnectionController(resolvedAccountId)?.getSelfIdentity();
+      const selfJid = selfIdentity?.jid?.trim();
+      if (selfJid) {
+        cacheInboundMessageMeta(resolvedAccountId, sentRemoteJid, messageId, {
+          participant: selfJid,
+          body: text || undefined,
+          fromMe: true,
+        });
+      }
+    }
     if (messageId && messageId !== "unknown" && text) {
       registerWhatsAppApprovalReactionTargetForOutboundMessage({
         accountId: resolvedAccountId,
