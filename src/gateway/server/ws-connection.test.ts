@@ -262,7 +262,7 @@ describe("attachGatewayWsConnectionHandler", () => {
     ).toBe(true);
     handlerParams.setHandshakeState("connected");
     handlerParams.advanceHandshakePhase("session_attached");
-    handlerParams.advanceHandshakePhase("subscriptions_registered");
+    handlerParams.advanceHandshakePhase("hello_payload_prepared");
     handlerParams.advanceHandshakePhase("ready");
 
     socket.emit("close", 1000, Buffer.from("done"));
