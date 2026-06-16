@@ -487,7 +487,7 @@ describe("mattermost inbound user posts", () => {
 
     expect(mockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
     const ctx = mockState.dispatchReplyFromConfig.mock.calls.at(0)?.[0].ctx;
-    expect(ctx?.BodyForAgent).toBe("");
+    expect(ctx?.BodyForAgent).toBe("@openclaw");
     expect(ctx?.MessageSid).toBe("post-bare-mention");
     expect(ctx?.OriginatingChannel).toBe("mattermost");
     expect(ctx?.Provider).toBe("mattermost");
