@@ -148,6 +148,8 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
     this.cryptoRetrySignalsBound = true;
 
     const trigger = (reason: string): void => {
+      this.exhaustedDecryptRetries.clear();
+      this.failedDecryptionsNotified.clear();
       this.retryPendingNow(reason);
     };
 
