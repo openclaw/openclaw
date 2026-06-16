@@ -302,7 +302,7 @@ describe("createStatusReactionController", () => {
     expect(calls.length).toBe(callsAfterTerminal);
   });
 
-  it("should only fire last state when rapidly changing (debounce)", async () => {
+  it("should apply tool emojis immediately (not debounced)", async () => {
     const { calls, controller } = createEnabledController();
 
     void controller.setThinking();
@@ -314,9 +314,10 @@ describe("createStatusReactionController", () => {
     void controller.setTool("exec");
     await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
 
-    // Should only have the last one (exec → display emoji)
+    // Tool emojis are applied immediately, so each distinct tool name is visible.
+    // Duplicate tools share the same emoji and are skipped by applyEmoji dedup.
     const setEmojis = collectEmojisForMethod(calls, "set");
-    expect(setEmojis).toEqual(["🛠️"]);
+    expect(setEmojis).toEqual(["🔎", "🛠️"]);
   });
 
   it("should deduplicate same emoji calls", async () => {
