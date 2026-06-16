@@ -502,6 +502,7 @@ export function createBrowserTool(opts?: {
       "For multi-step browser work, login checks, stale refs, duplicate tabs, or Google Meet flows, use the bundled browser-automation skill when it is available.",
       'For stable, self-resolving refs across calls, use snapshot with refs="aria" (Playwright aria-ref ids). Default refs="role" are role+name-based.',
       "Use snapshot+act for UI automation. Avoid act:wait by default; use only in exceptional cases when no reliable UI state exists.",
+      "Click actions (act:kind=click) detect downloads: if a click triggers a file download, the result includes download.path. Downloaded files are saved under the OpenClaw tmp downloads directory.",
       `target selects browser location (sandbox|host|node). Default: ${targetDefault}.`,
       hostHint,
     ].join(" "),

@@ -542,7 +542,7 @@ export async function clickViaPlaywright(opts: {
   timeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
   signal?: AbortSignal;
-}): Promise<void> {
+}): Promise<{ downloadPath?: string }> {
   const resolved = requireRefOrSelector(opts.ref, opts.selector);
   const page = await getRestoredPageForTarget(opts);
   const label = resolved.ref ?? resolved.selector!;
@@ -585,6 +585,10 @@ export async function clickViaPlaywright(opts: {
       throw signal.reason ?? new Error("aborted");
     }
   }
+  const state = ensurePageState(page);
+  // Clear any previous download path so we only capture downloads triggered by *this* click.
+  state.lastDownloadPath = undefined;
+
   const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, signal);
   try {
     await assertInteractionNavigationCompletedSafely({
@@ -639,6 +643,22 @@ export async function clickViaPlaywright(opts: {
       signal.removeEventListener("abort", abortListener);
     }
   }
+
+  // Wait briefly for a download triggered by this click to be saved by the
+  // page-level listener. Downloads are async — the click triggers navigation or
+  // a download event, but the file save completes a short time later.
+  const DOWNLOAD_POLL_MS = 1500;
+  const started = Date.now();
+  let downloadPath: string | undefined;
+  while (Date.now() - started < DOWNLOAD_POLL_MS) {
+    if (state.lastDownloadPath) {
+      downloadPath = state.lastDownloadPath;
+      break;
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+
+  return { downloadPath };
 }
 
 /** Clicks absolute page coordinates with optional double-click and navigation guard. */
@@ -1519,8 +1539,8 @@ async function executeSingleAction(
   }
   const effectiveTargetId = action.targetId ?? targetId;
   switch (action.kind) {
-    case "click":
-      await clickViaPlaywright({
+    case "click": {
+      const clickResult = await clickViaPlaywright({
         cdpUrl,
         targetId: effectiveTargetId,
         ref: action.ref,
@@ -1535,7 +1555,11 @@ async function executeSingleAction(
         ssrfPolicy,
         signal,
       });
+      if (clickResult.downloadPath) {
+        return { download: { path: clickResult.downloadPath } };
+      }
       break;
+    }
     case "clickCoords":
       await clickCoordsViaPlaywright({
         cdpUrl,
@@ -1736,7 +1760,7 @@ export async function executeActViaPlaywright(opts: {
       0,
       dialogAbort.signal,
     );
-    if (opts.action.kind === "evaluate") {
+    if (result !== undefined) {
       return { result };
     }
     return {};

@@ -154,6 +154,8 @@ type PageState = {
   armIdUpload: number;
   armIdDownload: number;
   downloadWaiterDepth: number;
+  /** Path of the most recent auto-saved download (set by page-level listener). */
+  lastDownloadPath?: string;
   nextObservedDialogId: number;
   pendingDialogs: PendingObservedDialog[];
   recentDialogs: BrowserObservedDialogRecord[];
@@ -701,6 +703,7 @@ export function ensurePageState(page: Page): PageState {
               await download.saveAs?.(tempPath);
             },
           });
+          state.lastDownloadPath = managedPath;
           return managedPath;
         })();
         managedSave.catch(() => {});
