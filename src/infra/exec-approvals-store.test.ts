@@ -1021,4 +1021,34 @@ describe("exec approvals store helpers", () => {
       }),
     ).resolves.toBe("deny");
   });
+
+  it("reads legacy exec-approvals.json when OPENCLAW_STATE_DIR differs from home dir", () => {
+    const dir = createHomeDir();
+    const stateDir = path.join(dir, "custom-state");
+    const legacyApprovalsPath = approvalsFilePath(dir);
+    const stateApprovalsPath = path.join(stateDir, "exec-approvals.json");
+
+    fs.mkdirSync(path.dirname(legacyApprovalsPath), { recursive: true });
+    fs.writeFileSync(
+      legacyApprovalsPath,
+      JSON.stringify({
+        version: 1,
+        defaults: { security: "full", ask: "off", askFallback: "deny" },
+        agents: {},
+      }),
+      "utf8",
+    );
+
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    // ensure the state dir file does not exist yet
+    expect(fs.existsSync(stateApprovalsPath)).toBe(false);
+
+    const resolved = resolveExecApprovals();
+
+    // Should read the legacy file, not return hardcoded deny fallback
+    expect(resolved.agent.security).toBe("full");
+    expect(resolved.agent.ask).toBe("off");
+    expect(resolved.defaults.security).toBe("full");
+    expect(resolved.defaults.ask).toBe("off");
+  });
 });

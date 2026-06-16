@@ -351,6 +351,20 @@ function hasUnmigratedLegacyExecApprovals(filePath: string): boolean {
 }
 
 function createUnmigratedLegacyExecApprovalsFallback(): ExecApprovalsFile {
+  try {
+    const legacyPath = resolveLegacyExecApprovalsPath();
+    if (fs.existsSync(legacyPath)) {
+      const raw = fs.readFileSync(legacyPath, "utf8");
+      const parsed = JSON.parse(raw) as ExecApprovalsFile;
+      const normalized = normalizeExecApprovals(parsed);
+      if (normalized.version === 1) {
+        return normalized;
+      }
+    }
+  } catch {
+    // If legacy file can't be read (permissions, invalid JSON, etc.),
+    // fall through to safe deny-all defaults.
+  }
   return normalizeExecApprovals({
     version: 1,
     defaults: {
