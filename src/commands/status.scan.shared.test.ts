@@ -1,4 +1,8 @@
 // Status scan shared tests cover gateway probe snapshots, Tailscale URLs, and shared scan helpers.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildTailscaleHttpsUrl,
@@ -567,5 +571,38 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
     expect(result).toBeNull();
     expect(resolveMemoryConfig).not.toHaveBeenCalled();
     expect(getMemorySearchManager).not.toHaveBeenCalled();
+  });
+
+  it("does not initialize memory status for an agent database owned by another feature", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-status-memory-"));
+    const databasePath = path.join(tempDir, "openclaw-agent.sqlite");
+    const db = new DatabaseSync(databasePath);
+    db.exec(`
+      CREATE TABLE cache_entries (
+        scope TEXT NOT NULL,
+        key TEXT NOT NULL,
+        value_json TEXT,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (scope, key)
+      );
+    `);
+    db.close();
+    const getMemorySearchManager = vi.fn(async () => ({ manager: null }));
+
+    try {
+      const result = await resolveSharedMemoryStatusSnapshot({
+        cfg: {},
+        agentStatus: { defaultId: "main" },
+        memoryPlugin: { enabled: true, slot: "memory-core" },
+        resolveMemoryConfig: vi.fn(() => ({ store: { databasePath } })),
+        getMemorySearchManager,
+        requireDefaultDatabasePath: () => databasePath,
+      });
+
+      expect(result).toBeNull();
+      expect(getMemorySearchManager).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 });

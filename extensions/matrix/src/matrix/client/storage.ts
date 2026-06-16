@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { loadJsonFile } from "openclaw/plugin-sdk/json-store";
 import type {
   PluginStateKeyedStore,
   PluginStateSyncKeyedStore,
@@ -33,6 +34,7 @@ import type { MatrixAuth } from "./types.js";
 import type { MatrixStoragePaths } from "./types.js";
 
 const DEFAULT_ACCOUNT_KEY = "default";
+const STORAGE_META_FILENAME = "storage-meta.json";
 const STORAGE_META_NAMESPACE = "storage-meta";
 const STORAGE_META_STATE_KEY = "current";
 const STORAGE_META_MAX_ENTRIES = 10;
@@ -167,19 +169,21 @@ export async function writeMatrixStorageMetaStateToStore(params: {
 }
 
 function readStoredRootMetadata(rootDir: string): MatrixStorageMetadata {
-  if (!fs.existsSync(path.join(rootDir, "state", "openclaw.sqlite"))) {
-    return {};
-  }
-  try {
-    return (
-      normalizeMatrixStorageMetadata(
+  if (fs.existsSync(path.join(rootDir, "state", "openclaw.sqlite"))) {
+    try {
+      const stored = normalizeMatrixStorageMetadata(
         openStorageMetaStore(rootDir).lookup(STORAGE_META_STATE_KEY),
-      ) ?? {}
-    );
-  } catch {
-    // Root selection remains best-effort; a write path will surface SQLite failures.
-    return {};
+      );
+      if (stored) {
+        return stored;
+      }
+    } catch {
+      // Root selection remains best-effort; a write path will surface SQLite failures.
+    }
   }
+  return (
+    normalizeMatrixStorageMetadata(loadJsonFile(path.join(rootDir, STORAGE_META_FILENAME))) ?? {}
+  );
 }
 
 function isCompatibleStorageRoot(params: {

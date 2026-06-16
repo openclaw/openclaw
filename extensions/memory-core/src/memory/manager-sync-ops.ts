@@ -1,4 +1,5 @@
 // Memory Core plugin module implements manager sync ops behavior.
+import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -45,7 +46,12 @@ import {
   type EmbeddingProviderId,
   type EmbeddingProviderRuntime,
 } from "./embeddings.js";
-import { openMemoryDatabaseAtPath } from "./manager-db.js";
+import {
+  closeMemoryDatabase,
+  openMemoryDatabaseAtPath,
+  publishMemoryDatabaseTables,
+  removeMemoryDatabaseFiles,
+} from "./manager-db.js";
 import { isMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
 import {
   applyMemoryFallbackProviderState,
@@ -54,6 +60,7 @@ import {
   resolveMemoryPrimaryProviderRequest,
   type MemoryProviderLifecycleState,
 } from "./manager-provider-state.js";
+import { acquireMemoryReindexLock, type MemoryReindexLockHandle } from "./manager-reindex-lock.js";
 import {
   resolveConfiguredScopeHash,
   resolveConfiguredSourcesForMeta,
@@ -675,6 +682,69 @@ export abstract class MemoryManagerSyncOps {
   protected openDatabase(): DatabaseSync {
     const dbPath = resolveUserPath(this.settings.store.databasePath);
     return openMemoryDatabaseAtPath(dbPath, this.settings.store.vector.enabled, this.agentId);
+  }
+
+  private async seedEmbeddingCache(sourceDb: DatabaseSync): Promise<void> {
+    if (!this.cache.enabled) {
+      return;
+    }
+    let transactionStarted = false;
+    try {
+      const rows = sourceDb
+        .prepare(
+          `SELECT provider, model, provider_key, hash, embedding, dims, updated_at FROM ${EMBEDDING_CACHE_TABLE}`,
+        )
+        .iterate() as IterableIterator<{
+        provider: string;
+        model: string;
+        provider_key: string;
+        hash: string;
+        embedding: string;
+        dims: number | null;
+        updated_at: number;
+      }>;
+      let rowCount = 0;
+      let insert: ReturnType<DatabaseSync["prepare"]> | null = null;
+      for (const row of rows) {
+        if (!insert) {
+          insert = this.db.prepare(
+            `INSERT INTO ${EMBEDDING_CACHE_TABLE} (provider, model, provider_key, hash, embedding, dims, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(provider, model, provider_key, hash) DO UPDATE SET
+               embedding=excluded.embedding,
+               dims=excluded.dims,
+               updated_at=excluded.updated_at`,
+          );
+          this.db.exec("BEGIN");
+          transactionStarted = true;
+        }
+        insert.run(
+          row.provider,
+          row.model,
+          row.provider_key,
+          row.hash,
+          row.embedding,
+          row.dims,
+          row.updated_at,
+        );
+        rowCount += 1;
+        if (rowCount % 1000 === 0) {
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
+        }
+      }
+      if (transactionStarted) {
+        this.db.exec("COMMIT");
+      }
+    } catch (err) {
+      if (transactionStarted) {
+        try {
+          this.db.exec("ROLLBACK");
+        } catch {}
+      }
+      throw err;
+    }
   }
 
   protected ensureSchema() {
@@ -2336,16 +2406,51 @@ export abstract class MemoryManagerSyncOps {
     force?: boolean;
     progress?: MemorySyncProgressState;
   }): Promise<void> {
-    // Built-in memory shares the per-agent database. Full reindex must reset
-    // only memory-owned tables and never replace the shared database file.
+    // Build outside the shared agent DB, then publish only memory-owned tables
+    // in one short transaction so failed rebuilds leave the current index usable.
+    const dbPath = resolveUserPath(this.settings.store.databasePath);
+    const tempDbPath = `${dbPath}.memory-reindex-${randomUUID()}`;
+    const originalDb = this.db;
+    let reindexLock: MemoryReindexLockHandle | undefined;
+    let tempDb: DatabaseSync | undefined;
+    let tempDbClosed = false;
     const originalRetryState = this.snapshotReindexRetryState();
     const shouldRetryMemoryOnFailure = this.sources.has("memory");
     const shouldRetrySessionsOnFailure = this.shouldSyncSessions(
       { reason: params.reason, force: params.force },
       true,
     );
+    const originalState = {
+      ftsAvailable: this.fts.available,
+      ftsError: this.fts.loadError,
+      lastMetaSerialized: this.lastMetaSerialized,
+      vectorAvailable: this.vector.available,
+      vectorLoadError: this.vector.loadError,
+      vectorDims: this.vector.dims,
+      vectorDegradedWriteWarningShown: this.vectorDegradedWriteWarningShown,
+      vectorReady: this.vectorReady,
+    };
+    const restoreOriginalState = () => {
+      this.db = originalDb;
+      this.fts.available = originalState.ftsAvailable;
+      this.fts.loadError = originalState.ftsError;
+      this.lastMetaSerialized = originalState.lastMetaSerialized;
+      this.vector.available = originalState.vectorAvailable;
+      this.vector.loadError = originalState.vectorLoadError;
+      this.vector.dims = originalState.vectorDims;
+      this.vectorDegradedWriteWarningShown = originalState.vectorDegradedWriteWarningShown;
+      this.vectorReady = originalState.vectorReady;
+    };
     try {
-      this.resetIndex();
+      reindexLock = acquireMemoryReindexLock(dbPath);
+      tempDb = openMemoryDatabaseAtPath(tempDbPath, this.settings.store.vector.enabled);
+      this.db = tempDb;
+      this.lastMetaSerialized = null;
+      this.resetVectorState();
+      this.fts.available = false;
+      this.fts.loadError = undefined;
+      this.ensureSchema();
+      await this.seedEmbeddingCache(originalDb);
 
       const shouldSyncMemory = shouldRetryMemoryOnFailure;
       const shouldSyncSessions = shouldRetrySessionsOnFailure;
@@ -2406,13 +2511,54 @@ export abstract class MemoryManagerSyncOps {
 
       this.writeMeta(nextMeta);
       this.pruneEmbeddingCacheIfNeeded?.();
+      const nextFtsState = {
+        available: this.fts.available,
+        loadError: this.fts.loadError,
+      };
+
+      closeMemoryDatabase(tempDb);
+      tempDbClosed = true;
+      publishMemoryDatabaseTables({
+        targetDb: originalDb,
+        sourcePath: tempDbPath,
+        metaKey: META_KEY,
+      });
+
+      this.db = originalDb;
+      this.resetVectorState();
+      this.fts.available = nextFtsState.available;
+      this.fts.loadError = nextFtsState.loadError;
+      this.vector.dims = nextMeta.vectorDims;
     } catch (err) {
+      if (tempDb && !tempDbClosed) {
+        try {
+          closeMemoryDatabase(tempDb);
+          tempDbClosed = true;
+        } catch {}
+      }
+      restoreOriginalState();
       this.restoreReindexRetryState(originalRetryState);
       this.markFailedFullReindexRetry({
         memory: shouldRetryMemoryOnFailure,
         sessions: shouldRetrySessionsOnFailure,
       });
       throw err;
+    } finally {
+      if (tempDb && !tempDbClosed) {
+        try {
+          closeMemoryDatabase(tempDb);
+        } catch {}
+      }
+      try {
+        removeMemoryDatabaseFiles(tempDbPath);
+      } catch (err) {
+        log.warn(`failed to remove memory reindex shadow database: ${formatErrorMessage(err)}`);
+      }
+      try {
+        reindexLock?.release();
+      } catch (err) {
+        log.warn(`failed to release memory reindex lock for ${dbPath}: ${formatErrorMessage(err)}`);
+      }
     }
   }
 
