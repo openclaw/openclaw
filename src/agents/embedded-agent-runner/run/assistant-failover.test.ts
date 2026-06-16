@@ -237,6 +237,40 @@ describe("handleAssistantFailover", () => {
       expect(advanceAuthProfile).not.toHaveBeenCalled();
     });
 
+    it("keeps a Gemini daily (RPD) quota on the long-window fallback despite the rate-limits URL", async () => {
+      // Google's /rate-limits docs URL also covers RPD (daily) quotas, so the
+      // shared link must not promote a daily exhaustion to a same-model retry.
+      // The explicit "requests per day" signal forces the long-window path.
+      const maybeRetrySameModelRateLimit = vi.fn(async () => true);
+      const maybeEscalateRateLimitProfileFallback = vi.fn();
+      const advanceAuthProfile = vi.fn(async () => true);
+
+      const outcome = await handleAssistantFailover(
+        makeParams({
+          initialDecision: { action: "rotate_profile", reason: "rate_limit" },
+          failoverReason: "rate_limit",
+          billingFailure: false,
+          rateLimitFailure: true,
+          lastAssistant: {
+            errorMessage:
+              "Google Generative AI API error (429): You exceeded your current quota for requests per day, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.",
+          } as Params["lastAssistant"],
+          maybeRetrySameModelRateLimit,
+          maybeEscalateRateLimitProfileFallback,
+          advanceAuthProfile,
+        }),
+      );
+
+      expect(outcome.action).toBe("retry");
+      if (outcome.action !== "retry") {
+        return;
+      }
+      expect(outcome.retryKind).toBeUndefined();
+      expect(maybeRetrySameModelRateLimit).not.toHaveBeenCalled();
+      expect(maybeEscalateRateLimitProfileFallback).toHaveBeenCalledTimes(1);
+      expect(advanceAuthProfile).toHaveBeenCalledTimes(1);
+    });
+
     it("does not treat bare 429 quota_exceeded as a short-window throttle", async () => {
       const maybeRetrySameModelRateLimit = vi.fn(async () => true);
       const maybeEscalateRateLimitProfileFallback = vi.fn();

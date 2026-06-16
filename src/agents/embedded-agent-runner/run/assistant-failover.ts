@@ -40,9 +40,16 @@ type ShortWindowRateLimitRetry = {
 
 const LONG_WINDOW_RATE_LIMIT_RE =
   /\b(?:daily|weekly|monthly|tokens per day|requests per day|usage limit|subscription|insufficient[_ -]?quota|current quota|quota[_ -]?exceeded|quota exceeded)\b/i;
-// Gemini's per-minute TPM/RPM 429 says "current quota" (a long-window phrase)
-// but links to .../gemini-api/docs/rate-limits, so `rate-limits` is the only
-// short-window signal in the message. Without it the message is classified
+// Gemini's generic /rate-limits docs URL covers RPM, TPM, AND RPD (daily)
+// quotas, so the URL alone never proves a short window. When an explicit
+// daily/per-day/usage-limit signal is present, force the long-window path so a
+// daily quota does not burn same-model retry budget before model/profile
+// fallback. A short Retry-After under the cap still wins (provider-stated).
+const HARD_LONG_WINDOW_RATE_LIMIT_RE =
+  /\b(?:daily|weekly|monthly|tokens per day|requests per day|per[_ -]?day|rpd|usage limit|subscription)\b/i;
+// Gemini's per-minute TPM/RPM 429 says "current quota" (a soft long-window
+// phrase) but links to .../gemini-api/docs/rate-limits, so `rate-limits` is the
+// only short-window signal in the message. Without it the message is classified
 // long-window and the same-model retry loop never fires for Gemini throttles.
 const SHORT_RATE_LIMIT_WINDOW_RE =
   /\b(?:requests per minute|tokens per minute|per-minute|rpm|tpm|rate-limits)\b/i;
@@ -98,6 +105,13 @@ function resolveShortWindowRateLimitRetry(
   }
   const shortRetryAfter =
     retryAfterSeconds !== null && retryAfterSeconds <= MAX_SHORT_WINDOW_RETRY_AFTER_SECONDS;
+  // Explicit daily/RPD/usage-limit quotas stay long-window even when they carry
+  // the shared Gemini /rate-limits docs URL; only a short provider Retry-After
+  // overrides them. This keeps daily exhaustion on the model/profile fallback
+  // path instead of spending bounded same-model retry budget.
+  if (HARD_LONG_WINDOW_RATE_LIMIT_RE.test(raw) && !shortRetryAfter) {
+    return null;
+  }
   const hasShortWindowSignal = SHORT_RATE_LIMIT_WINDOW_RE.test(raw);
   if (RETRY_AFTER_VALUE_RE.test(raw) && retryAfterSeconds === null && !hasShortWindowSignal) {
     return null;
