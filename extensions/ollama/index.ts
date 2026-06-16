@@ -47,6 +47,7 @@ import {
   OLLAMA_PROVIDER_ID,
   isLocalOllamaBaseUrl,
   resolveOllamaDiscoveryResult,
+  resolveOllamaRuntimeBaseUrl,
   shouldUseSyntheticOllamaAuth,
   type OllamaPluginConfig,
 } from "./src/discovery-shared.js";
@@ -658,9 +659,15 @@ export default definePluginEntry({
         }
         const baseUrl = readProviderBaseUrl(providerConfig);
         const provider = await buildOllamaProvider(baseUrl, { quiet: true });
+        const dynamicApi = providerConfig?.api ?? provider.api;
         const dynamicProvider = {
           ...provider,
-          api: providerConfig?.api ?? provider.api,
+          baseUrl: resolveOllamaRuntimeBaseUrl({
+            api: dynamicApi,
+            configuredBaseUrl: baseUrl,
+            discoveredBaseUrl: provider.baseUrl,
+          }),
+          api: dynamicApi,
         };
         const dynamicModels = (dynamicProvider.models ?? []).map((model) =>
           toDynamicOllamaModel({

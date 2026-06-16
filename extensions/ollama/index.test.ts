@@ -516,6 +516,7 @@ describe("ollama plugin", () => {
       expect(resolved?.provider).toBe("ollama");
       expect(resolved?.id).toBe("qwen3-coder:cloud");
       expect(resolved?.api).toBe("openai-completions");
+      expect(resolved?.baseUrl).toBe("https://ollama.example.com/v1");
       expect(buildOllamaProviderMock).toHaveBeenCalledWith("https://ollama.example.com/v1", {
         quiet: true,
       });
