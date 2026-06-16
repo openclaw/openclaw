@@ -100,6 +100,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 ## Community tools
 
 - [Claude Max API Proxy](/providers/claude-max-api-proxy) - Community proxy for Claude subscription credentials (verify Anthropic policy/terms before use)
+- [Cowork-to-Code Bridge](/providers/cowork-to-code-bridge) - Community bridge that lets Claude Cowork escalate tasks to Claude Code on your local machine (verify Anthropic policy before use)
 
 For the full provider catalog (xAI, Groq, Mistral, etc.) and advanced configuration,
 see [Model providers](/concepts/model-providers).
