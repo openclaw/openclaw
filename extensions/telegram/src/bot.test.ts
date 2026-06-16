@@ -2482,7 +2482,116 @@ describe("createTelegramBot", () => {
     const hiddenMessage = messages.find((message) => message.message_id === "102");
     expect(hiddenMessage?.media_ref).toBe("telegram:file/hidden-photo-1");
     expect(hiddenMessage?.media_path).toBeUndefined();
-    expect(getFileSpy).toHaveBeenCalledWith("hidden-photo-1");
+    expect(getFileSpy).not.toHaveBeenCalled();
+    expect(mediaFetch).not.toHaveBeenCalled();
+  });
+
+  it("hydrates group reply media for a reply sender allowed through an access group", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+    getFileSpy.mockClear();
+    const runtimeConfig = {
+      accessGroups: {
+        operators: {
+          type: "message.senders",
+          members: { telegram: ["2"] },
+        },
+      },
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          contextVisibility: "allowlist",
+          includeGroupHistoryContext: "recent",
+          allowFrom: ["1", "accessGroup:operators"],
+          groups: {
+            "-1008": {
+              requireMention: false,
+            },
+          },
+        },
+      },
+    } satisfies NonNullable<Parameters<typeof createTelegramBot>[0]["config"]>;
+    const startupConfig = {
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          includeGroupHistoryContext: "recent",
+          groups: { "-1008": { requireMention: false } },
+        },
+      },
+    } satisfies NonNullable<Parameters<typeof createTelegramBot>[0]["config"]>;
+    loadConfig.mockReturnValue(runtimeConfig);
+
+    const mediaFetch = vi.fn(
+      async () =>
+        new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+    );
+    const runtimeError = vi.fn();
+    const ssrfMock = mockPinnedHostnameResolution();
+
+    try {
+      createTelegramBot({
+        token: "tok",
+        config: startupConfig,
+        runtime: { error: runtimeError },
+        telegramTransport: {
+          fetch: mediaFetch as typeof fetch,
+          sourceFetch: mediaFetch as typeof fetch,
+          close: async () => {},
+        },
+      });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+      const chat = { id: -1008, type: "group", title: "Ops" };
+
+      await handler({
+        me: { id: 999, username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+        message: {
+          chat,
+          message_id: 103,
+          text: "@openclaw_bot explain this",
+          date: 1736380800,
+          from: { id: 1, is_bot: false, first_name: "Allowed" },
+          reply_to_message: {
+            chat,
+            message_id: 102,
+            caption: "allowed image",
+            date: 1736380750,
+            from: { id: 2, is_bot: false, first_name: "Also allowed" },
+            photo: [{ file_id: "allowed-photo-1" }],
+          },
+        },
+      });
+    } finally {
+      ssrfMock.mockRestore();
+    }
+
+    expect(runtimeError).not.toHaveBeenCalled();
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = mockMsgContextArg(
+      replySpy as unknown as MockCallSource,
+      0,
+      0,
+      "replySpy call",
+    ) as {
+      UntrustedStructuredContext?: unknown[];
+    };
+    const [conversationContext] = requireArray(
+      payload.UntrustedStructuredContext,
+      "structured context",
+    );
+    const contextRecord = requireRecord(conversationContext, "conversation context");
+    const contextPayload = requireRecord(contextRecord.payload, "conversation context payload");
+    const messages = requireArray(contextPayload.messages, "conversation context messages").map(
+      (message, index) => requireRecord(message, `conversation context message ${index + 1}`),
+    );
+    const allowedMessage = messages.find((message) => message.message_id === "102");
+    expect(allowedMessage?.media_path).toMatch(/^media:\/\/inbound\//);
+    expect(allowedMessage?.media_ref).toBeUndefined();
+    expect(getFileSpy).toHaveBeenCalledWith("allowed-photo-1");
     expect(mediaFetch).toHaveBeenCalledTimes(1);
   });
 
