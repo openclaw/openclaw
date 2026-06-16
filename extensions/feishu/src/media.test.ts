@@ -899,7 +899,7 @@ describe("downloadMessageResourceFeishu", () => {
     expect(result.fileName).toBe("café-Â©.txt");
   });
 
-  it("recovers CJK filenames from JSON-derived file_name field", async () => {
+  it("keeps JSON-derived file_name metadata unchanged", async () => {
     const fileName = "武汉15座山登山信息汇总.csv";
     const latin1LookingFileName = Buffer.from(fileName, "utf8").toString("latin1");
     messageResourceGetMock.mockResolvedValueOnce({
@@ -914,23 +914,7 @@ describe("downloadMessageResourceFeishu", () => {
       type: "file",
     });
 
-    expect(result.fileName).toBe(fileName);
-  });
-
-  it("preserves non-CJK filenames from JSON-derived file_name field", async () => {
-    messageResourceGetMock.mockResolvedValueOnce({
-      data: Buffer.from("fake-file-data"),
-      file_name: "café-doc.txt",
-    });
-
-    const result = await downloadMessageResourceFeishu({
-      cfg: emptyConfig,
-      messageId: "om_json_file_msg2",
-      fileKey: "file_key_json2",
-      type: "file",
-    });
-
-    expect(result.fileName).toBe("café-doc.txt");
+    expect(result.fileName).toBe(latin1LookingFileName);
   });
 
   it("saves message resource streams directly to the media store", async () => {
@@ -960,6 +944,38 @@ describe("downloadMessageResourceFeishu", () => {
       await expect(fs.readFile(result.saved.path)).resolves.toEqual(
         Buffer.from([0xff, 0xd8, 0xff, 0x00]),
       );
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+      await fs.rm(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  it("recovers CJK filenames from the inbound message payload fallback", async () => {
+    const originalHome = process.env.HOME;
+    const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-feishu-media-"));
+    const fileName = "武汉15座山登山信息汇总.csv";
+    const latin1LookingFileName = Buffer.from(fileName, "utf8").toString("latin1");
+    try {
+      process.env.HOME = tempHome;
+      messageResourceGetMock.mockResolvedValueOnce({
+        getReadableStream: () => Readable.from([Buffer.from("a,b\n1,2\n")]),
+        headers: { "content-type": "text/csv" },
+      });
+
+      const result = await saveMessageResourceFeishu({
+        cfg: emptyConfig,
+        messageId: "om_stream_msg_cjk",
+        fileKey: "file_key_stream_cjk",
+        type: "file",
+        maxBytes: 1024,
+        originalFilename: latin1LookingFileName,
+      });
+
+      expect(result.saved.id).toMatch(/^武汉15座山登山信息汇总---[a-f0-9-]{36}\.csv$/);
     } finally {
       if (originalHome === undefined) {
         delete process.env.HOME;
