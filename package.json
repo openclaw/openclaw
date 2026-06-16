@@ -57,6 +57,8 @@
     "!dist/plugin-sdk/provider-test-contracts.d.ts",
     "!dist/plugin-sdk/reply-payload-testing.js",
     "!dist/plugin-sdk/reply-payload-testing.d.ts",
+    "!dist/plugin-sdk/sqlite-runtime-testing.js",
+    "!dist/plugin-sdk/sqlite-runtime-testing.d.ts",
     "!dist/plugin-sdk/ssrf-runtime-internal.js",
     "!dist/plugin-sdk/ssrf-runtime-internal.d.ts",
     "!dist/plugin-sdk/test-env.js",
