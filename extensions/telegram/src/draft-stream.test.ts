@@ -2,7 +2,7 @@
 import type { Bot } from "grammy";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTelegramDraftStream } from "./draft-stream.js";
-import type { TelegramInputRichMessage } from "./rich-message.js";
+import { buildTelegramRichMarkdown, type TelegramInputRichMessage } from "./rich-message.js";
 
 type TelegramDraftStreamParams = Parameters<typeof createTelegramDraftStream>[0];
 
@@ -308,7 +308,7 @@ describe("createTelegramDraftStream", () => {
     expect(api.raw.sendRichMessageDraft).toHaveBeenCalledWith({
       chat_id: 123,
       draft_id: expect.any(Number),
-      rich_message: { html: markdownToTelegramRichHtml("Hello") },
+      rich_message: buildTelegramRichMarkdown("Hello"),
       message_thread_id: 42,
     });
     expect(api.raw.sendRichMessage).not.toHaveBeenCalled();
@@ -347,11 +347,11 @@ describe("createTelegramDraftStream", () => {
     expect(api.raw.sendRichMessageDraft).toHaveBeenCalledWith({
       chat_id: 123,
       draft_id: expect.any(Number),
-      rich_message: { html: markdownToTelegramRichHtml("Hello") },
+      rich_message: buildTelegramRichMarkdown("Hello"),
     });
     expect(api.raw.sendRichMessage).toHaveBeenCalledWith({
       chat_id: 123,
-      rich_message: { html: markdownToTelegramRichHtml("Hello") },
+      rich_message: buildTelegramRichMarkdown("Hello"),
     });
   });
 
@@ -373,7 +373,7 @@ describe("createTelegramDraftStream", () => {
     expect(api.raw.sendRichMessageDraft).toHaveBeenCalledTimes(1);
     expect(api.raw.sendRichMessage).toHaveBeenCalledWith({
       chat_id: 123,
-      rich_message: { html: markdownToTelegramRichHtml("Hello") },
+      rich_message: buildTelegramRichMarkdown("Hello"),
     });
     expect(warn.mock.calls[0]?.[0]).toContain("falling back to preview message");
   });
@@ -386,7 +386,7 @@ describe("createTelegramDraftStream", () => {
     await stream.flush();
 
     expect(api.raw.sendRichMessageDraft).not.toHaveBeenCalled();
-    expectRichSend(api, "Hello", { message_thread_id: 99 });
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello", { message_thread_id: 99 });
   });
 
   it("deletes message preview on clear after finalization", async () => {
