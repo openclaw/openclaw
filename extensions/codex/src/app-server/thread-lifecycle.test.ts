@@ -318,8 +318,84 @@ describe("Codex app-server native code mode config", () => {
       "features.code_mode": true,
       "features.code_mode_only": false,
       "features.apply_patch_streaming_events": true,
+      "features.standalone_web_search": false,
+      web_search: "cached",
     });
     expect(request.personality).toBe("none");
+  });
+
+  it("enables hosted Codex web search on thread/start by default", () => {
+    const request = buildThreadStartParams(createAttemptParams({ provider: "codex" }), {
+      cwd: "/repo",
+      dynamicTools: [],
+      appServer: createAppServerOptions() as never,
+      developerInstructions: "test instructions",
+    });
+
+    expect(request.config).toMatchObject({
+      "features.standalone_web_search": false,
+      web_search: "cached",
+    });
+  });
+
+  it("disables hosted Codex web search for tool-disabled runs", () => {
+    const params = createAttemptParams({ provider: "codex" });
+    params.disableTools = true;
+    const request = buildThreadStartParams(params, {
+      cwd: "/repo",
+      dynamicTools: [],
+      appServer: createAppServerOptions() as never,
+      developerInstructions: "test instructions",
+    });
+
+    expect(request.config).toMatchObject({
+      "features.standalone_web_search": false,
+      web_search: "disabled",
+    });
+  });
+
+  it("disables hosted Codex web search when effective tool policy denies web_search", () => {
+    const request = buildThreadStartParams(createAttemptParams({ provider: "codex" }), {
+      cwd: "/repo",
+      dynamicTools: [],
+      webSearchAllowed: false,
+      appServer: createAppServerOptions() as never,
+      developerInstructions: "test instructions",
+    });
+
+    expect(request.config).toMatchObject({
+      "features.standalone_web_search": false,
+      web_search: "disabled",
+    });
+  });
+
+  it("disables native Codex search when runtime policy disables native tools", () => {
+    const request = buildThreadResumeParams(createAttemptParams({ provider: "codex" }), {
+      threadId: "thread-1",
+      appServer: createAppServerOptions() as never,
+      developerInstructions: "test instructions",
+      nativeCodeModeEnabled: false,
+    });
+
+    expect(request.config).toMatchObject({
+      "features.standalone_web_search": false,
+      web_search: "disabled",
+    });
+  });
+
+  it("disables hosted Codex web search when the active provider lacks support", () => {
+    const request = buildThreadStartParams(createAttemptParams({ provider: "codex" }), {
+      cwd: "/repo",
+      dynamicTools: [],
+      appServer: createAppServerOptions() as never,
+      developerInstructions: "test instructions",
+      nativeProviderWebSearchSupported: false,
+    });
+
+    expect(request.config).toMatchObject({
+      "features.standalone_web_search": false,
+      web_search: "disabled",
+    });
   });
 
   it("disables Codex tool-search features for nano models", () => {
@@ -338,6 +414,8 @@ describe("Codex app-server native code mode config", () => {
       "features.code_mode_only": false,
       "features.apply_patch_streaming_events": true,
       "features.multi_agent": false,
+      "features.standalone_web_search": false,
+      web_search: "cached",
     });
   });
 
@@ -376,6 +454,8 @@ describe("Codex app-server native code mode config", () => {
       "features.code_mode": true,
       "features.code_mode_only": true,
       "features.apply_patch_streaming_events": true,
+      "features.standalone_web_search": false,
+      web_search: "cached",
     });
   });
 
@@ -395,6 +475,8 @@ describe("Codex app-server native code mode config", () => {
       "features.code_mode": true,
       "features.code_mode_only": true,
       "features.apply_patch_streaming_events": true,
+      "features.standalone_web_search": false,
+      web_search: "cached",
     });
   });
 
@@ -409,6 +491,8 @@ describe("Codex app-server native code mode config", () => {
       "features.code_mode": true,
       "features.code_mode_only": false,
       "features.apply_patch_streaming_events": true,
+      "features.standalone_web_search": false,
+      web_search: "cached",
     });
   });
 
@@ -430,6 +514,8 @@ describe("Codex app-server native code mode config", () => {
     expect(request.config).toEqual({
       "features.code_mode": false,
       "features.code_mode_only": false,
+      "features.standalone_web_search": false,
+      web_search: "disabled",
     });
   });
 
@@ -447,6 +533,8 @@ describe("Codex app-server native code mode config", () => {
     expect(request.config).toEqual({
       "features.code_mode": false,
       "features.code_mode_only": false,
+      "features.standalone_web_search": false,
+      web_search: "disabled",
     });
   });
 
@@ -475,6 +563,8 @@ describe("Codex app-server native code mode config", () => {
       "features.code_mode": true,
       "features.code_mode_only": false,
       "features.apply_patch_streaming_events": true,
+      "features.standalone_web_search": false,
+      web_search: "cached",
     });
   });
 
@@ -496,6 +586,8 @@ describe("Codex app-server native code mode config", () => {
       "features.code_mode": true,
       "features.code_mode_only": false,
       "features.apply_patch_streaming_events": true,
+      "features.standalone_web_search": false,
+      web_search: "cached",
     });
   });
 });
@@ -614,6 +706,8 @@ describe("Codex app-server turn params", () => {
         "features.code_mode": true,
         "features.code_mode_only": false,
         "features.apply_patch_streaming_events": true,
+        "features.standalone_web_search": false,
+        web_search: "cached",
       },
       sandbox: "danger-full-access",
       serviceTier: "flex",

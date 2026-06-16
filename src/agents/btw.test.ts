@@ -610,6 +610,16 @@ describe("runBtwSideQuestion", () => {
       provider: "openai",
       model: "gpt-5.5",
       sessionKey: DEFAULT_SESSION_KEY,
+      sandboxSessionKey: "agent:main:runtime-policy",
+      agentAccountId: "account-1",
+      groupId: "group-1",
+      groupChannel: "#ops",
+      groupSpace: "workspace-1",
+      spawnedBy: "agent:main:parent",
+      senderId: "sender-1",
+      senderName: "Rosita",
+      senderUsername: "rosita",
+      senderE164: "+15550001",
     });
 
     expect(result).toEqual({ text: "Codex side answer." });
@@ -624,6 +634,16 @@ describe("runBtwSideQuestion", () => {
           agentId?: string;
           workspaceDir?: string;
           authProfileId?: string;
+          sandboxSessionKey?: string;
+          agentAccountId?: string;
+          groupId?: string;
+          groupChannel?: string;
+          groupSpace?: string;
+          spawnedBy?: string;
+          senderId?: string;
+          senderName?: string;
+          senderUsername?: string;
+          senderE164?: string;
         },
       ]
     >;
@@ -634,6 +654,18 @@ describe("runBtwSideQuestion", () => {
     expect(sideQuestionParams.agentId).toBe("main");
     expect(sideQuestionParams.workspaceDir).toBe("/tmp/workspace");
     expect(sideQuestionParams.authProfileId).toBe("openai:work");
+    expect(sideQuestionParams).toMatchObject({
+      agentAccountId: "account-1",
+      sandboxSessionKey: "agent:main:runtime-policy",
+      groupId: "group-1",
+      groupChannel: "#ops",
+      groupSpace: "workspace-1",
+      spawnedBy: "agent:main:parent",
+      senderId: "sender-1",
+      senderName: "Rosita",
+      senderUsername: "rosita",
+      senderE164: "+15550001",
+    });
     expect(
       (mockArg(codexSideQuestionMock, 0, 0) as { sessionFile?: string }).sessionFile,
     ).toContain("session-1.jsonl");

@@ -171,6 +171,136 @@ describe("Codex app-server dynamic tool build", () => {
     ]);
   });
 
+  it("removes managed web_search when domain-restricted Codex hosted search is active", async () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.config = {
+      tools: {
+        web: {
+          search: { openaiCodex: { allowedDomains: ["example.com"] } },
+        },
+      },
+    } as never;
+    setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("web_search"),
+      createRuntimeDynamicTool("message"),
+    ]);
+    let webSearchAllowed = false;
+
+    const tools = await buildDynamicToolsForTest(params, workspaceDir, {
+      onWebSearchPolicyResolved: (allowed) => {
+        webSearchAllowed = allowed;
+      },
+    });
+
+    expect(tools.map((tool) => tool.name)).toEqual(["message"]);
+    expect(webSearchAllowed).toBe(true);
+  });
+
+  it("reports hosted search denied when effective tool policy removes web_search", async () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    setOpenClawCodingToolsFactoryForTests(() => [createRuntimeDynamicTool("message")]);
+    let webSearchAllowed = true;
+
+    const tools = await buildDynamicToolsForTest(params, workspaceDir, {
+      onWebSearchPolicyResolved: (allowed) => {
+        webSearchAllowed = allowed;
+      },
+    });
+
+    expect(tools.map((tool) => tool.name)).toEqual(["message"]);
+    expect(webSearchAllowed).toBe(false);
+  });
+
+  it("separates persistent search policy from a runtime toolsAllow restriction", async () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.toolsAllow = ["message"];
+    setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("web_search"),
+      createRuntimeDynamicTool("message"),
+    ]);
+    let persistentWebSearchAllowed = false;
+    let webSearchAllowed = true;
+
+    const tools = await buildDynamicToolsForTest(params, workspaceDir, {
+      onPersistentWebSearchPolicyResolved: (allowed) => {
+        persistentWebSearchAllowed = allowed;
+      },
+      onWebSearchPolicyResolved: (allowed) => {
+        webSearchAllowed = allowed;
+      },
+    });
+
+    expect(tools.map((tool) => tool.name)).toEqual(["message"]);
+    expect(persistentWebSearchAllowed).toBe(true);
+    expect(webSearchAllowed).toBe(false);
+  });
+
+  it("keeps persistent search denied when runtime toolsAllow also excludes it", async () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.toolsAllow = ["message"];
+    setOpenClawCodingToolsFactoryForTests(() => [createRuntimeDynamicTool("message")]);
+    let persistentWebSearchAllowed = true;
+    let webSearchAllowed = true;
+
+    const tools = await buildDynamicToolsForTest(params, workspaceDir, {
+      onPersistentWebSearchPolicyResolved: (allowed) => {
+        persistentWebSearchAllowed = allowed;
+      },
+      onWebSearchPolicyResolved: (allowed) => {
+        webSearchAllowed = allowed;
+      },
+    });
+
+    expect(tools.map((tool) => tool.name)).toEqual(["message"]);
+    expect(persistentWebSearchAllowed).toBe(false);
+    expect(webSearchAllowed).toBe(false);
+  });
+
+  it("keeps managed web_search when a managed provider is explicitly selected", async () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.config = {
+      tools: {
+        web: {
+          search: { provider: "brave" },
+        },
+      },
+    } as never;
+    setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("web_search"),
+      createRuntimeDynamicTool("message"),
+    ]);
+
+    const tools = await buildDynamicToolsForTest(params, workspaceDir);
+
+    expect(tools.map((tool) => tool.name)).toEqual(["web_search", "message"]);
+  });
+
+  it("keeps managed web_search when the active Codex provider lacks hosted search", async () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("web_search"),
+      createRuntimeDynamicTool("message"),
+    ]);
+
+    const tools = await buildDynamicToolsForTest(params, workspaceDir, {
+      nativeProviderWebSearchSupported: false,
+    });
+
+    expect(tools.map((tool) => tool.name)).toEqual(["web_search", "message"]);
+  });
+
   it("applies additional Codex dynamic tool excludes without exposing Codex-native tools", () => {
     const tools = ["read", "exec", "message", "custom_tool"].map((name) => ({ name }));
 

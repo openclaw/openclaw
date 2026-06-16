@@ -357,6 +357,7 @@ type RunBtwSideQuestionParams = {
   sessionEntry: StoredSessionEntry;
   sessionStore?: Record<string, StoredSessionEntry>;
   sessionKey?: string;
+  sandboxSessionKey?: string;
   storePath?: string;
   resolvedThinkLevel?: ThinkLevel;
   resolvedReasoningLevel: ReasoningLevel;
@@ -366,6 +367,19 @@ type RunBtwSideQuestionParams = {
   isNewSession: boolean;
   messageChannel?: string;
   messageProvider?: string;
+  agentAccountId?: string;
+  messageTo?: string;
+  messageThreadId?: string | number;
+  groupId?: string | null;
+  groupChannel?: string | null;
+  groupSpace?: string | null;
+  memberRoleIds?: string[];
+  spawnedBy?: string | null;
+  senderId?: string | null;
+  senderName?: string | null;
+  senderUsername?: string | null;
+  senderE164?: string | null;
+  senderIsOwner?: boolean;
   currentChannelId?: string;
 };
 

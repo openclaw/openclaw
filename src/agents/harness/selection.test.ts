@@ -460,6 +460,7 @@ describe("runAgentHarnessAttempt", () => {
     expect(runAttempt).toHaveBeenCalledTimes(1);
     const attempt = runAttempt.mock.calls[0]?.[0];
     expect(attempt?.toolsAllow).toEqual([]);
+    expect(attempt?.toolsAllowSource).toBe("policy");
     expect(attempt?.extraSystemPrompt).toContain("Existing operator note.");
     expect(attempt?.extraSystemPrompt).toContain("this sender is not allowed by policy");
   });
@@ -488,6 +489,7 @@ describe("runAgentHarnessAttempt", () => {
     expect(runAttempt).toHaveBeenCalledTimes(1);
     const attempt = runAttempt.mock.calls[0]?.[0];
     expect(attempt?.toolsAllow).toEqual([]);
+    expect(attempt?.toolsAllowSource).toBe("policy");
     expect(attempt?.extraSystemPrompt).toContain("this chat is not allowed by policy");
   });
 

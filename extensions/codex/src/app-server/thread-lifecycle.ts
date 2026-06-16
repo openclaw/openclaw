@@ -21,7 +21,10 @@ import {
   resolveCodexContextEngineProjectionMaxChars,
   resolveCodexContextEngineProjectionReserveTokens,
 } from "./context-engine-projection.js";
-import { shouldDisableCodexToolSearchForModel } from "./dynamic-tool-profile.js";
+import {
+  normalizeCodexDynamicToolName,
+  shouldDisableCodexToolSearchForModel,
+} from "./dynamic-tool-profile.js";
 import { invalidInlineImageText, sanitizeInlineImageDataUrl } from "./image-payload-sanitizer.js";
 import {
   isCodexPluginThreadBindingStale,
@@ -55,6 +58,7 @@ import {
   type CodexAppServerContextEngineProjectionBinding,
   type CodexAppServerThreadBinding,
 } from "./session-binding.js";
+import { resolveCodexWebSearchPlan } from "./web-search.js";
 
 export type CodexAppServerThreadLifecycle = {
   action: "started" | "resumed";
@@ -287,6 +291,8 @@ export async function startOrResumeThread(params: {
   agentId?: string;
   cwd: string;
   dynamicTools: CodexDynamicToolSpec[];
+  persistentWebSearchAllowed?: boolean;
+  webSearchAllowed?: boolean;
   appServer: CodexAppServerRuntimeOptions;
   developerInstructions?: string;
   config?: JsonObject;
@@ -296,6 +302,7 @@ export async function startOrResumeThread(params: {
   ) => CodexThreadFinalConfigPatchResult;
   nativeHookRelayGeneration?: string;
   nativeCodeModeEnabled?: boolean;
+  nativeProviderWebSearchSupported?: boolean;
   nativeCodeModeOnlyEnabled?: boolean;
   userMcpServersEnabled?: boolean;
   mcpServersFingerprint?: string;
@@ -318,6 +325,16 @@ export async function startOrResumeThread(params: {
   const dynamicToolsContainDeferred = params.dynamicTools.some(
     (tool) => tool.deferLoading === true,
   );
+  const webSearchPlan = lifecycleTiming.measureSync("web-search-plan", () =>
+    resolveCodexWebSearchPlan({
+      config: params.params.config,
+      disableTools: params.params.disableTools,
+      nativeToolSurfaceEnabled: params.nativeCodeModeEnabled,
+      nativeProviderWebSearchSupported: params.nativeProviderWebSearchSupported,
+      webSearchAllowed: params.webSearchAllowed,
+    }),
+  );
+  const webSearchThreadConfigFingerprint = fingerprintJsonObject(webSearchPlan.threadConfig);
   const contextEngineBinding = lifecycleTiming.measureSync("context-engine-binding", () =>
     buildContextEngineBinding(params.params, params.contextEngineProjection),
   );
@@ -375,7 +392,47 @@ export async function startOrResumeThread(params: {
     error.name = "AbortError";
     throw error;
   };
-  if (binding?.threadId && params.nativeCodeModeEnabled === false) {
+  const webSearchBindingChanged =
+    binding?.threadId &&
+    binding.webSearchThreadConfigFingerprint !== webSearchThreadConfigFingerprint;
+  const persistentWebSearchRestriction =
+    params.webSearchAllowed === false && params.persistentWebSearchAllowed === false;
+  // A transient native-tool restriction must not replace a legacy binding just
+  // because that binding predates search fingerprints. Explicit persistent
+  // search denial still rotates first so the restricted thread can persist.
+  const deferLegacyWebSearchRotationToTransientNativeSurface =
+    params.nativeCodeModeEnabled === false &&
+    binding?.webSearchThreadConfigFingerprint === undefined &&
+    !persistentWebSearchRestriction;
+  if (
+    binding?.threadId &&
+    webSearchBindingChanged &&
+    !deferLegacyWebSearchRotationToTransientNativeSurface
+  ) {
+    const transientWebSearchRestriction = isTransientWebSearchRestriction(params);
+    if (transientWebSearchRestriction) {
+      embeddedAgentLog.debug(
+        "codex app-server web search restricted for turn; starting transient thread",
+        {
+          threadId: binding.threadId,
+        },
+      );
+      preserveExistingBinding = true;
+    } else {
+      // Codex can ignore resume overrides for a loaded thread, so persistent
+      // search-policy changes and legacy bindings without metadata rotate first.
+      embeddedAgentLog.debug("codex app-server web search config changed; starting a new thread", {
+        threadId: binding.threadId,
+      });
+      await clearCodexAppServerBinding(params.params.sessionFile);
+    }
+    binding = undefined;
+  }
+  if (
+    binding?.threadId &&
+    params.nativeCodeModeEnabled === false &&
+    !persistentWebSearchRestriction
+  ) {
     embeddedAgentLog.debug(
       "codex app-server native tool surface disabled for turn; starting transient thread",
       {
@@ -559,7 +616,9 @@ export async function startOrResumeThread(params: {
             developerInstructions: params.developerInstructions,
             config: resumeConfig,
             nativeCodeModeEnabled: params.nativeCodeModeEnabled,
+            nativeProviderWebSearchSupported: params.nativeProviderWebSearchSupported,
             nativeCodeModeOnlyEnabled: params.nativeCodeModeOnlyEnabled,
+            webSearchAllowed: params.webSearchAllowed,
           }),
         );
         const requestModelProvider =
@@ -588,6 +647,7 @@ export async function startOrResumeThread(params: {
               modelProvider: response.modelProvider ?? requestModelProvider ?? startModelProvider,
               dynamicToolsFingerprint,
               dynamicToolsContainDeferred,
+              webSearchThreadConfigFingerprint,
               userMcpServersFingerprint,
               mcpServersFingerprint: nextMcpServersFingerprint,
               nativeHookRelayGeneration:
@@ -635,6 +695,7 @@ export async function startOrResumeThread(params: {
           modelProvider: response.modelProvider ?? requestModelProvider ?? startModelProvider,
           dynamicToolsFingerprint,
           dynamicToolsContainDeferred,
+          webSearchThreadConfigFingerprint,
           userMcpServersFingerprint,
           mcpServersFingerprint: nextMcpServersFingerprint,
           nativeHookRelayGeneration:
@@ -687,7 +748,9 @@ export async function startOrResumeThread(params: {
       developerInstructions: params.developerInstructions,
       config,
       nativeCodeModeEnabled: params.nativeCodeModeEnabled,
+      nativeProviderWebSearchSupported: params.nativeProviderWebSearchSupported,
       nativeCodeModeOnlyEnabled: params.nativeCodeModeOnlyEnabled,
+      webSearchAllowed: params.webSearchAllowed,
       environmentSelection: params.environmentSelection,
       modelProvider: startModelProvider,
     }),
@@ -731,6 +794,7 @@ export async function startOrResumeThread(params: {
             response.modelProvider ?? requestModelProvider ?? startModelProvider ?? modelProvider,
           dynamicToolsFingerprint,
           dynamicToolsContainDeferred,
+          webSearchThreadConfigFingerprint,
           userMcpServersFingerprint,
           mcpServersFingerprint: nextMcpServersFingerprint,
           nativeHookRelayGeneration: finalConfigPatch.nativeHookRelayGeneration,
@@ -794,6 +858,41 @@ export async function startOrResumeThread(params: {
       ...(rotatedContextEngineBinding ? { rotatedContextEngineBinding } : {}),
     },
   };
+}
+
+function isTransientWebSearchRestriction(
+  params: Pick<
+    Parameters<typeof startOrResumeThread>[0],
+    "params" | "nativeCodeModeEnabled" | "persistentWebSearchAllowed" | "webSearchAllowed"
+  >,
+): boolean {
+  if (params.params.config?.tools?.web?.search?.enabled === false) {
+    return false;
+  }
+  if (params.params.disableTools === true) {
+    return true;
+  }
+  if (params.params.toolsAllowSource === "policy") {
+    return false;
+  }
+  const persistentWebSearchRestriction =
+    params.webSearchAllowed === false && params.persistentWebSearchAllowed === false;
+  if (params.nativeCodeModeEnabled === false && !persistentWebSearchRestriction) {
+    return true;
+  }
+  if (params.webSearchAllowed !== false) {
+    return false;
+  }
+  if (params.persistentWebSearchAllowed !== undefined) {
+    return params.persistentWebSearchAllowed;
+  }
+  if (params.params.toolsAllow === undefined) {
+    return false;
+  }
+  return !params.params.toolsAllow.some((name) => {
+    const normalized = normalizeCodexDynamicToolName(name);
+    return normalized === "*" || normalized === "web_search";
+  });
 }
 
 export function buildContextEngineBinding(
@@ -922,7 +1021,9 @@ export function buildThreadStartParams(
     developerInstructions?: string;
     config?: JsonObject;
     nativeCodeModeEnabled?: boolean;
+    nativeProviderWebSearchSupported?: boolean;
     nativeCodeModeOnlyEnabled?: boolean;
+    webSearchAllowed?: boolean;
     environmentSelection?: CodexTurnEnvironmentParams[];
     modelProvider?: string | null;
   },
@@ -954,7 +1055,9 @@ export function buildThreadStartParams(
     serviceName: "OpenClaw",
     config: buildCodexRuntimeThreadConfigForRun(params, options.config, {
       nativeCodeModeEnabled: options.nativeCodeModeEnabled,
+      nativeProviderWebSearchSupported: options.nativeProviderWebSearchSupported,
       nativeCodeModeOnlyEnabled: options.nativeCodeModeOnlyEnabled,
+      webSearchAllowed: options.webSearchAllowed,
     }),
     ...resolveCodexThreadEnvironmentSelection(options),
     developerInstructions:
@@ -977,7 +1080,9 @@ export function buildThreadResumeParams(
     developerInstructions?: string;
     config?: JsonObject;
     nativeCodeModeEnabled?: boolean;
+    nativeProviderWebSearchSupported?: boolean;
     nativeCodeModeOnlyEnabled?: boolean;
+    webSearchAllowed?: boolean;
   },
 ): CodexThreadResumeParams {
   const resolvedModelProvider = resolveCodexAppServerModelProvider({
@@ -1006,7 +1111,9 @@ export function buildThreadResumeParams(
     personality: CODEX_NATIVE_PERSONALITY_NONE,
     config: buildCodexRuntimeThreadConfigForRun(params, options.config, {
       nativeCodeModeEnabled: options.nativeCodeModeEnabled,
+      nativeProviderWebSearchSupported: options.nativeProviderWebSearchSupported,
       nativeCodeModeOnlyEnabled: options.nativeCodeModeOnlyEnabled,
+      webSearchAllowed: options.webSearchAllowed,
     }),
     developerInstructions:
       options.developerInstructions ??
@@ -1117,9 +1224,24 @@ export function buildCodexRuntimeThreadConfig(
 function buildCodexRuntimeThreadConfigForRun(
   params: EmbeddedRunAttemptParams,
   config: JsonObject | undefined,
-  options: { nativeCodeModeEnabled?: boolean; nativeCodeModeOnlyEnabled?: boolean } = {},
+  options: {
+    nativeCodeModeEnabled?: boolean;
+    nativeProviderWebSearchSupported?: boolean;
+    nativeCodeModeOnlyEnabled?: boolean;
+    webSearchAllowed?: boolean;
+  } = {},
 ): JsonObject {
-  const baseConfig = buildCodexRuntimeThreadConfig(config, options);
+  const webSearchConfig = resolveCodexWebSearchPlan({
+    config: params.config,
+    disableTools: params.disableTools,
+    nativeToolSurfaceEnabled: options.nativeCodeModeEnabled,
+    nativeProviderWebSearchSupported: options.nativeProviderWebSearchSupported,
+    webSearchAllowed: options.webSearchAllowed,
+  }).threadConfig;
+  const baseConfig = buildCodexRuntimeThreadConfig(
+    mergeCodexThreadConfigs(config, webSearchConfig),
+    options,
+  );
   const runtimeConfig =
     mergeCodexThreadConfigs(
       baseConfig,
@@ -1313,6 +1435,10 @@ function fingerprintUserMcpServersConfigPatch(
   configPatch: JsonObject | undefined,
 ): string | undefined {
   return configPatch ? JSON.stringify(stabilizeJsonValue(configPatch)) : undefined;
+}
+
+function fingerprintJsonObject(value: JsonObject): string {
+  return JSON.stringify(stabilizeJsonValue(value));
 }
 
 function fingerprintEnvironmentSelection(

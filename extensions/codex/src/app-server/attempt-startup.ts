@@ -96,12 +96,15 @@ export async function startCodexAttemptThread(params: {
   effectiveWorkspace: string;
   effectiveCwd: string;
   dynamicTools: CodexDynamicToolSpec[];
+  persistentWebSearchAllowed?: boolean;
+  webSearchAllowed: boolean;
   developerInstructions: string | undefined;
   finalConfigPatch?: Parameters<typeof startOrResumeThread>[0]["finalConfigPatch"];
   buildFinalConfigPatch?: Parameters<typeof startOrResumeThread>[0]["buildFinalConfigPatch"];
   nativeHookRelayGeneration?: string;
   bundleMcpThreadConfig: CodexBundleMcpThreadConfig;
   nativeToolSurfaceEnabled: boolean;
+  nativeProviderWebSearchSupported: boolean;
   sandboxExecServerEnabled: boolean;
   sandbox: CodexSandboxContext;
   contextEngineProjection: CodexContextEngineThreadBootstrapProjection | undefined;
@@ -300,6 +303,8 @@ export async function startCodexAttemptThread(params: {
                 agentId: params.sessionAgentId,
                 cwd: startupExecutionCwd,
                 dynamicTools: params.dynamicTools,
+                persistentWebSearchAllowed: params.persistentWebSearchAllowed,
+                webSearchAllowed: params.webSearchAllowed,
                 appServer: pluginAppServer,
                 developerInstructions: params.developerInstructions,
                 config: threadConfig,
@@ -307,6 +312,7 @@ export async function startCodexAttemptThread(params: {
                 buildFinalConfigPatch: params.buildFinalConfigPatch,
                 nativeHookRelayGeneration: params.nativeHookRelayGeneration,
                 nativeCodeModeEnabled: params.nativeToolSurfaceEnabled,
+                nativeProviderWebSearchSupported: params.nativeProviderWebSearchSupported,
                 nativeCodeModeOnlyEnabled: params.appServer.codeModeOnly,
                 userMcpServersEnabled: params.nativeToolSurfaceEnabled,
                 mcpServersFingerprint: params.bundleMcpThreadConfig.fingerprint,

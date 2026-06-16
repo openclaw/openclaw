@@ -305,7 +305,7 @@ export async function runAgentHarnessAttempt(
   }
 }
 
-function applyPluginHarnessDenyAllToolPolicy(
+export function applyPluginHarnessDenyAllToolPolicy(
   params: EmbeddedRunAttemptParams,
 ): EmbeddedRunAttemptParams {
   const prompt = resolvePluginHarnessDenyAllToolPolicyPrompt(params);
@@ -315,6 +315,7 @@ function applyPluginHarnessDenyAllToolPolicy(
   return {
     ...params,
     toolsAllow: [],
+    toolsAllowSource: "policy",
     extraSystemPrompt: appendPluginHarnessToolPolicyPrompt(params.extraSystemPrompt, prompt),
   };
 }

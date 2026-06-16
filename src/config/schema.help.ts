@@ -911,7 +911,7 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.web.search.openaiCodex.enabled":
     "Enable native Codex web search for Codex-capable models.",
   "tools.web.search.openaiCodex.mode":
-    'Native Codex web search mode: "cached" (default) or "live".',
+    'Native Codex web search preference: "cached" (default; unrestricted Codex turns resolve it to live) or "live".',
   "tools.web.search.openaiCodex.allowedDomains":
     "Optional domain allowlist passed to the native Codex web_search tool.",
   "tools.web.search.openaiCodex.contextSize":

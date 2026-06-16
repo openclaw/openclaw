@@ -217,6 +217,7 @@ import {
   type JsonObject,
   type JsonValue,
 } from "./protocol.js";
+import { resolveCodexProviderWebSearchSupport } from "./provider-capabilities.js";
 import { releaseCodexSandboxExecServerEnvironment } from "./sandbox-exec-server.js";
 import {
   clearCodexAppServerBinding,
@@ -234,6 +235,7 @@ import {
   buildTurnCollaborationMode,
   buildTurnStartParams,
   codexDynamicToolsFingerprint,
+  resolveCodexAppServerModelProvider,
   type CodexAppServerThreadLifecycleBinding,
   type CodexContextEngineThreadBootstrapProjection,
 } from "./thread-lifecycle.js";
@@ -261,6 +263,7 @@ import {
   refreshCodexUsageLimitPromptError,
 } from "./usage-limit-error.js";
 import { createCodexUserInputBridge } from "./user-input-bridge.js";
+import { resolveCodexWebSearchPlan } from "./web-search.js";
 
 const CODEX_NATIVE_HOOK_RELAY_RENEW_INTERVAL_MS = 60_000;
 const CODEX_APP_SERVER_PROJECTED_CHARS_PER_TOKEN = 4;
@@ -650,6 +653,29 @@ export async function runCodexAppServerAttempt(
     sandboxExecServerEnabled,
   });
   preDynamicStartupStages.mark("native-tool-surface");
+  const nativeProviderWebSearchSupported =
+    resolveCodexWebSearchPlan({
+      config: params.config,
+      disableTools: params.disableTools,
+      nativeToolSurfaceEnabled,
+    }).kind === "native-hosted"
+      ? await resolveCodexProviderWebSearchSupport({
+          clientFactory: attemptClientFactory,
+          appServer,
+          authProfileId: startupAuthProfileId,
+          agentDir,
+          config: params.config,
+          modelProviderOverride: resolveCodexAppServerModelProvider({
+            provider: params.provider,
+            authProfileId: startupAuthProfileId,
+            authProfileStore: params.authProfileStore,
+            agentDir,
+            config: params.config,
+          }),
+          signal: runAbortController.signal,
+        })
+      : false;
+  preDynamicStartupStages.mark("provider-capabilities");
   for (const diagnostic of bundleMcpThreadConfig.diagnostics) {
     embeddedAgentLog.warn(`bundle-mcp: ${diagnostic.pluginId}: ${diagnostic.message}`);
   }
@@ -716,6 +742,8 @@ export async function runCodexAppServerAttempt(
           ...(onCodexToolOutcome ? { onToolOutcome: onCodexToolOutcome } : {}),
         }
       : params;
+  let persistentWebSearchAllowed: boolean | undefined;
+  let webSearchAllowed = false;
   const tools = await buildDynamicTools({
     params: dynamicToolParams,
     resolvedWorkspace,
@@ -724,6 +752,7 @@ export async function runCodexAppServerAttempt(
     sandboxSessionKey,
     sandbox,
     nativeToolSurfaceEnabled,
+    nativeProviderWebSearchSupported,
     runAbortController,
     sessionAgentId,
     pluginConfig,
@@ -732,6 +761,12 @@ export async function runCodexAppServerAttempt(
       yieldDetected = true;
     },
     onCodexAppServerEvent: (event) => emitCodexAppServerEvent(params, event),
+    onPersistentWebSearchPolicyResolved: (allowed) => {
+      persistentWebSearchAllowed = allowed;
+    },
+    onWebSearchPolicyResolved: (allowed) => {
+      webSearchAllowed = allowed;
+    },
   });
   const registeredTools = await buildDynamicTools({
     params: dynamicToolParams,
@@ -741,6 +776,7 @@ export async function runCodexAppServerAttempt(
     sandboxSessionKey,
     sandbox,
     nativeToolSurfaceEnabled,
+    nativeProviderWebSearchSupported,
     runAbortController,
     sessionAgentId,
     pluginConfig,
@@ -1269,10 +1305,13 @@ export async function runCodexAppServerAttempt(
       effectiveWorkspace,
       effectiveCwd,
       dynamicTools: toolBridge.specs,
+      persistentWebSearchAllowed,
+      webSearchAllowed,
       developerInstructions: promptBuild.developerInstructions,
       buildFinalConfigPatch: buildNativeHookRelayFinalConfigPatch,
       bundleMcpThreadConfig,
       nativeToolSurfaceEnabled,
+      nativeProviderWebSearchSupported,
       sandboxExecServerEnabled,
       sandbox,
       contextEngineProjection,

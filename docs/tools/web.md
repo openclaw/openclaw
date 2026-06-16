@@ -128,13 +128,39 @@ Direct OpenAI Responses models use OpenAI's hosted `web_search` tool automatical
 
 ## Native Codex web search
 
-Codex-capable models can optionally use the provider-native Responses `web_search` tool instead of OpenClaw's managed `web_search` function.
+The Codex app-server runtime uses Codex's hosted `web_search` tool automatically
+when web search is enabled and no managed provider is selected. Native hosted
+search and OpenClaw's managed `web_search` dynamic tool are mutually exclusive,
+so managed search cannot bypass native domain restrictions. OpenClaw uses the
+managed tool when hosted search is unavailable, explicitly disabled, or
+replaced by a selected managed provider. OpenClaw keeps Codex's standalone
+`web.run` extension disabled because production app-server traffic rejects its
+user-defined `web` namespace.
 
-- Configure it under `tools.web.search.openaiCodex`
-- It only activates for Codex-capable OpenAI models (`openai/*` models using `api: "openai-chatgpt-responses"`)
-- Managed `web_search` still applies to non-Codex models
-- `mode: "cached"` is the default and recommended setting
+- Configure native search under `tools.web.search.openaiCodex`
+- `mode: "cached"` is the default preference, but Codex resolves it to live
+  external access for unrestricted app-server turns; set `"live"` to request
+  live access explicitly
+- Set `tools.web.search.provider` to a managed provider such as `brave` to use
+  OpenClaw's managed `web_search` instead
+- Set `tools.web.search.openaiCodex.enabled: false` to opt the Codex app-server
+  runtime out of hosted search while keeping managed search available
+- Restricting the Codex native tool surface also keeps managed `web_search`
+  available
+- When `allowedDomains` is set, automatic managed fallback fails closed if
+  hosted search is unavailable so the native allowlist cannot be bypassed
+- Tool-disabled LLM-only runs disable both native and managed search
 - `tools.web.search.enabled: false` disables both managed and native search
+
+Persistent effective Codex search-policy changes start a fresh bound thread so
+an already loaded app-server thread cannot keep stale hosted-search access.
+Transient per-turn restrictions use a temporary restricted thread and preserve
+the existing binding for later resume.
+
+Direct OpenAI ChatGPT Responses traffic can also use OpenAI's hosted
+`web_search` tool. That separate path remains opt-in through
+`tools.web.search.openaiCodex.enabled: true` and only applies to eligible
+`openai/*` models using `api: "openai-chatgpt-responses"`.
 
 ```json5
 {
@@ -159,7 +185,10 @@ Codex-capable models can optionally use the provider-native Responses `web_searc
 }
 ```
 
-If native Codex search is enabled but the current model is not Codex-capable, OpenClaw keeps the normal managed `web_search` behavior.
+For runtimes and providers that do not support native Codex search, Codex can
+use the managed `web_search` fallback through OpenClaw's dynamic tool namespace.
+Use an explicit managed provider when you need OpenClaw's provider-specific
+network controls instead of Codex-hosted search.
 
 ## Network safety
 
