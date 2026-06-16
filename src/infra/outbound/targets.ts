@@ -336,7 +336,8 @@ export async function resolveHeartbeatDeliveryTargetWithSessionRoute(params: {
     channel: delivery.channel,
     cfg: params.cfg,
   });
-  if (!plugin?.messaging?.resolveOutboundSessionRoute) {
+  const resolveSessionRoute = plugin?.messaging?.resolveOutboundSessionRoute;
+  if (!resolveSessionRoute && !plugin?.messaging?.targetResolver) {
     return delivery;
   }
   let routeResolvedTarget: ResolvedMessagingTarget | undefined;
@@ -357,6 +358,17 @@ export async function resolveHeartbeatDeliveryTargetWithSessionRoute(params: {
   })();
   if (targetResolution?.ok) {
     routeResolvedTarget = targetResolution.target;
+  }
+  if (routeResolvedTarget?.kind === "user" && heartbeat?.directPolicy === "block") {
+    return buildNoHeartbeatDeliveryTarget({
+      reason: "dm-blocked",
+      accountId: delivery.accountId,
+      lastChannel: delivery.lastChannel,
+      lastAccountId: delivery.lastAccountId,
+    });
+  }
+  if (!resolveSessionRoute) {
+    return delivery;
   }
   const route = await (async () => {
     try {

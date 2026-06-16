@@ -206,12 +206,15 @@ export function buildTargetResolverSignature(
   preparedPlugin?: ChannelPlugin,
 ): string {
   const plugin = preparedPlugin ?? resolveChannelPluginForTargetRead(channel);
+  const registryScope = preparedPlugin
+    ? `prepared:${getActivePluginChannelRegistryVersion()}`
+    : "pinned";
   const resolver = plugin?.messaging?.targetResolver;
   const hint = resolver?.hint ?? "";
   const looksLike = resolver?.looksLikeId;
   // Function source is only a cheap invalidation hint; resolver behavior still belongs to the plugin.
   const source = looksLike ? looksLike.toString() : "";
-  return hashSignature(`${hint}|${source}`);
+  return hashSignature(`${registryScope}|${hint}|${source}`);
 }
 
 function hashSignature(value: string): string {

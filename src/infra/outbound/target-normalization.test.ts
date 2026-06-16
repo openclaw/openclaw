@@ -1,6 +1,7 @@
 // Covers target input normalization, provider plugin normalizers, resolver
 // caching, and id-like lookup heuristics.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/config.js";
 
 const getLoadedChannelPluginMock = vi.hoisted(() => vi.fn());
@@ -327,5 +328,22 @@ describe("buildTargetResolverSignature", () => {
     const second = buildTargetResolverSignature("workspace");
 
     expect(first).not.toBe(second);
+  });
+
+  it("partitions prepared runtime plugins from pinned plugin cache entries", () => {
+    const plugin = {
+      messaging: {
+        targetResolver: {},
+      },
+    } as ChannelPlugin;
+    getLoadedChannelPluginMock.mockReturnValue(plugin);
+
+    const pinned = buildTargetResolverSignature("workspace");
+    const prepared = buildTargetResolverSignature("workspace", plugin);
+    getActivePluginChannelRegistryVersionMock.mockReturnValue(2);
+    const nextPrepared = buildTargetResolverSignature("workspace", plugin);
+
+    expect(prepared).not.toBe(pinned);
+    expect(nextPrepared).not.toBe(prepared);
   });
 });
