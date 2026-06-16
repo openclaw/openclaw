@@ -218,11 +218,17 @@ function resolveBoundedThreadConfig(
   params: CodexBoundedTurnParams,
   workspace: { codexHome?: string },
 ): JsonObject {
-  const boundedConfig =
-    mergeCodexThreadConfigs(CODEX_BOUNDED_THREAD_CONFIG, params.threadConfig) ??
-    CODEX_BOUNDED_THREAD_CONFIG;
+  const boundedConfig = mergeCodexThreadConfigs(
+    CODEX_BOUNDED_THREAD_CONFIG,
+    params.threadConfig,
+  ) ?? {
+    ...CODEX_BOUNDED_THREAD_CONFIG,
+  };
   return workspace.codexHome
-    ? (mergeCodexThreadConfigs(boundedConfig, CODEX_PRIVATE_BOUNDED_THREAD_CONFIG) ?? boundedConfig)
+    ? (mergeCodexThreadConfigs(boundedConfig, CODEX_PRIVATE_BOUNDED_THREAD_CONFIG) ?? {
+        ...boundedConfig,
+        ...CODEX_PRIVATE_BOUNDED_THREAD_CONFIG,
+      })
     : boundedConfig;
 }
 
