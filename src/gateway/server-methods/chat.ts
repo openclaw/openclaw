@@ -45,6 +45,7 @@ import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox/context.js";
+import { isSessionsYieldToolResult } from "../../agents/subagent-yield-output.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import {
@@ -137,8 +138,10 @@ import {
   augmentChatHistoryWithCanvasBlocks,
   dropPreSessionStartAnnouncePairs,
   projectChatDisplayMessage,
+  projectChatDisplayMessages,
   projectRecentChatDisplayMessages,
   resolveEffectiveChatHistoryMaxChars,
+  resolveSessionsYieldMirrorSourceMessageId,
 } from "../chat-display-projection.js";
 import { sanitizeChatSendMessageInput } from "../chat-input-sanitize.js";
 import { stripEnvelopeFromMessage } from "../chat-sanitize.js";
@@ -2558,6 +2561,37 @@ async function isChatMessageIdVisibleAfterHistoryFilters(params: {
   );
 }
 
+function isSessionsYieldHistoryResult(message: unknown): boolean {
+  return isSessionsYieldToolResult(message, true);
+}
+
+async function projectChatMessageWithHistoryContext(params: {
+  sessionId: string;
+  storePath: string | undefined;
+  sessionFile: string | undefined;
+  agentId?: string;
+  messageId: string;
+  sessionStartedAt?: number;
+  maxChars: number;
+}): Promise<Record<string, unknown> | undefined> {
+  const messages = await readSessionMessagesAsync(
+    {
+      agentId: params.agentId,
+      sessionFile: params.sessionFile,
+      sessionId: params.sessionId,
+      storePath: params.storePath,
+    },
+    {
+      mode: "full",
+      reason: "chat.message.get projection context",
+    },
+  );
+  const visibleMessages = dropPreSessionStartAnnouncePairs(messages, params.sessionStartedAt);
+  return projectChatDisplayMessages(visibleMessages, { maxChars: params.maxChars }).find(
+    (message) => readChatHistoryMessageId(message) === params.messageId,
+  );
+}
+
 function dropLocalHistoryOverreadContextMessage(
   messages: unknown[],
   contextMessage: unknown,
@@ -2853,6 +2887,8 @@ export const chatHandlers: GatewayRequestHandlers = {
       config: cfg,
       agentId: selectedAgent.agentId,
     });
+    const sourceMessageId = resolveSessionsYieldMirrorSourceMessageId(messageId);
+    const transcriptMessageId = sourceMessageId ?? messageId;
     const resolved = await readSessionMessageByIdAsync(
       {
         agentId: sessionAgentId,
@@ -2860,7 +2896,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         sessionId,
         storePath,
       },
-      messageId,
+      transcriptMessageId,
       { allowResetArchiveFallback: true },
     );
     if (!resolved.found) {
@@ -2872,7 +2908,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       storePath,
       sessionFile: entry?.sessionFile,
       agentId: sessionAgentId,
-      messageId,
+      messageId: transcriptMessageId,
       sessionStartedAt:
         typeof entry?.sessionStartedAt === "number" ? entry.sessionStartedAt : undefined,
       allowResetArchiveFallback: true,
@@ -2888,11 +2924,37 @@ export const chatHandlers: GatewayRequestHandlers = {
 
     const effectiveMaxChars =
       typeof maxChars === "number" ? maxChars : Math.min(MAX_PAYLOAD_BYTES, 1_000_000);
-    const projectedMessage = resolved.message
+    const projectedSingleMessage = resolved.message
       ? projectChatDisplayMessage(resolved.message, {
           maxChars: effectiveMaxChars,
         })
       : undefined;
+    let projectedMessage: Record<string, unknown> | undefined;
+    if (sourceMessageId !== undefined) {
+      projectedMessage = await projectChatMessageWithHistoryContext({
+        sessionId,
+        storePath,
+        sessionFile: entry?.sessionFile,
+        agentId: sessionAgentId,
+        messageId,
+        sessionStartedAt:
+          typeof entry?.sessionStartedAt === "number" ? entry.sessionStartedAt : undefined,
+        maxChars: effectiveMaxChars,
+      });
+    } else if (resolved.message && isSessionsYieldHistoryResult(resolved.message)) {
+      projectedMessage = await projectChatMessageWithHistoryContext({
+        sessionId,
+        storePath,
+        sessionFile: entry?.sessionFile,
+        agentId: sessionAgentId,
+        messageId,
+        sessionStartedAt:
+          typeof entry?.sessionStartedAt === "number" ? entry.sessionStartedAt : undefined,
+        maxChars: effectiveMaxChars,
+      });
+    } else {
+      projectedMessage = projectedSingleMessage;
+    }
     const projected = projectedMessage
       ? augmentChatHistoryWithCanvasBlocks([projectedMessage])[0]
       : undefined;
