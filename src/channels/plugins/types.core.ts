@@ -464,6 +464,8 @@ export type ChannelThreadingContext = {
   TransportThreadId?: string | number;
   /** Platform-native channel/conversation id (e.g. Slack DM channel "D…" id). */
   NativeChannelId?: string;
+  /** Run-context thread identifier carried from the originating session turn. */
+  currentThreadTs?: string | null;
 };
 
 export type ChannelThreadingToolContext = {
