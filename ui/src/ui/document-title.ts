@@ -12,23 +12,46 @@ type DocumentTitleState = {
   sessionsResult?: SessionsListResult | null;
 };
 
+function findExactSessionTitleRow(
+  rows: SessionsListResult["sessions"] | undefined,
+  sessionKey: string,
+) {
+  return rows?.find((entry) => entry.key === sessionKey);
+}
+
+function findEquivalentSessionTitleRow(
+  rows: SessionsListResult["sessions"] | undefined,
+  sessionKey: string,
+) {
+  return rows?.find((entry) => areUiSessionKeysEquivalent(entry.key, sessionKey));
+}
+
 function findSessionTitleRow(state: DocumentTitleState, sessionKey: string) {
   const activeSessionTitleRow = state.activeSessionTitleRow;
   return (
-    state.sessionsResult?.sessions.find((entry) =>
-      areUiSessionKeysEquivalent(entry.key, sessionKey),
-    ) ??
+    findExactSessionTitleRow(state.sessionsResult?.sessions, sessionKey) ??
+    findEquivalentSessionTitleRow(state.sessionsResult?.sessions, sessionKey) ??
+    (activeSessionTitleRow && activeSessionTitleRow.key === sessionKey
+      ? activeSessionTitleRow
+      : undefined) ??
     (activeSessionTitleRow && areUiSessionKeysEquivalent(activeSessionTitleRow.key, sessionKey)
       ? activeSessionTitleRow
       : undefined) ??
-    state.chatSessionPickerResult?.sessions.find((entry) =>
-      areUiSessionKeysEquivalent(entry.key, sessionKey),
-    )
+    findExactSessionTitleRow(state.chatSessionPickerResult?.sessions, sessionKey) ??
+    findEquivalentSessionTitleRow(state.chatSessionPickerResult?.sessions, sessionKey)
   );
 }
 
 function resolveSafeSessionTitle(row: SessionsListResult["sessions"][number]): string | null {
-  return normalizeOptionalString(row.label) ?? normalizeOptionalString(row.displayName) ?? null;
+  const label = normalizeOptionalString(row.label);
+  if (label && label !== row.key) {
+    return label;
+  }
+  const displayName = normalizeOptionalString(row.displayName);
+  if (!displayName || displayName === row.key || row.kind === "direct" || row.kind === "group") {
+    return null;
+  }
+  return displayName;
 }
 
 export function resolveControlUiDocumentTitle(state: DocumentTitleState): string {

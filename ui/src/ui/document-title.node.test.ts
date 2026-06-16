@@ -93,6 +93,80 @@ describe("resolveControlUiDocumentTitle", () => {
     ).toBe("Model debugging - OpenClaw Control");
   });
 
+  it("keeps the base title when label metadata is the raw session key", () => {
+    expect(
+      resolveControlUiDocumentTitle({
+        sessionKey: "agent:main:imessage:direct:+49123456789",
+        sessionsResult: sessionsResult([
+          sessionRow({
+            key: "agent:main:imessage:direct:+49123456789",
+            label: "agent:main:imessage:direct:+49123456789",
+          }),
+        ]),
+      }),
+    ).toBe(CONTROL_UI_DOCUMENT_TITLE);
+  });
+
+  it("keeps the base title when display name metadata is the raw session key", () => {
+    expect(
+      resolveControlUiDocumentTitle({
+        sessionKey: "agent:main:imessage:direct:+49123456789",
+        sessionsResult: sessionsResult([
+          sessionRow({
+            key: "agent:main:imessage:direct:+49123456789",
+            displayName: "agent:main:imessage:direct:+49123456789",
+          }),
+        ]),
+      }),
+    ).toBe(CONTROL_UI_DOCUMENT_TITLE);
+  });
+
+  it("does not use generated direct session display names as titles", () => {
+    expect(
+      resolveControlUiDocumentTitle({
+        sessionKey: "agent:main:telegram:direct:42",
+        sessionsResult: sessionsResult([
+          sessionRow({
+            key: "agent:main:telegram:direct:42",
+            kind: "direct",
+            displayName: "openclaw-tui",
+          }),
+        ]),
+      }),
+    ).toBe(CONTROL_UI_DOCUMENT_TITLE);
+  });
+
+  it("does not use generated group session display names as titles", () => {
+    expect(
+      resolveControlUiDocumentTitle({
+        sessionKey: "agent:main:whatsapp:group:123",
+        sessionsResult: sessionsResult([
+          sessionRow({
+            key: "agent:main:whatsapp:group:123",
+            kind: "group",
+            displayName: "Neighbors",
+          }),
+        ]),
+      }),
+    ).toBe(CONTROL_UI_DOCUMENT_TITLE);
+  });
+
+  it("allows explicit labels on direct sessions", () => {
+    expect(
+      resolveControlUiDocumentTitle({
+        sessionKey: "agent:main:telegram:direct:42",
+        sessionsResult: sessionsResult([
+          sessionRow({
+            key: "agent:main:telegram:direct:42",
+            kind: "direct",
+            label: "Support thread",
+            displayName: "openclaw-tui",
+          }),
+        ]),
+      }),
+    ).toBe("Support thread - OpenClaw Control");
+  });
+
   it("keeps the base title for rows without explicit safe title metadata", () => {
     expect(
       resolveControlUiDocumentTitle({
@@ -102,6 +176,18 @@ describe("resolveControlUiDocumentTitle", () => {
         ]),
       }),
     ).toBe(CONTROL_UI_DOCUMENT_TITLE);
+  });
+
+  it("prefers exact session rows before legacy main aliases", () => {
+    expect(
+      resolveControlUiDocumentTitle({
+        sessionKey: "agent:main:main",
+        sessionsResult: sessionsResult([
+          sessionRow({ key: "main", label: "Legacy title" }),
+          sessionRow({ key: "agent:main:main", label: "Canonical title" }),
+        ]),
+      }),
+    ).toBe("Canonical title - OpenClaw Control");
   });
 
   it("keeps the base title until session metadata loads", () => {
