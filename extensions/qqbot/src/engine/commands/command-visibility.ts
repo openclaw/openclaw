@@ -16,6 +16,7 @@ const GROUP_HIDDEN_CORE_COMMANDS = new Set([
   "send",
   "reset",
   "new",
+  "name",
   "compact",
   "think",
   "thinking",
@@ -103,14 +104,7 @@ export function classifyCoreCommandForGroup(
     if (STRICT_CORE_COMMANDS.has(commandName)) {
       return { commandName, visibility: "hidden" };
     }
-    if (
-      GROUP_VISIBLE_CORE_COMMANDS.has(commandName) ||
-      GROUP_HIDDEN_CORE_COMMANDS.has(commandName) ||
-      PRIVATE_ONLY_CORE_COMMANDS.has(commandName)
-    ) {
-      return { commandName, visibility: "private" };
-    }
-    return { commandName, visibility: "unknown" };
+    return { commandName, visibility: "private" };
   }
   if (GROUP_VISIBLE_CORE_COMMANDS.has(commandName)) {
     return { commandName, visibility: "group" };

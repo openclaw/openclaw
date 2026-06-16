@@ -111,6 +111,41 @@ describe("runGroupGateStage", () => {
     }
   });
 
+  it("enforces command level from accounts.default group config", () => {
+    const deps = buildDeps();
+    deps.cfg = {
+      channels: {
+        qqbot: {
+          appId: "1000000",
+          groups: {
+            G1: { requireMention: true, commandLevel: "all" },
+          },
+          accounts: {
+            default: {
+              groups: {
+                G1: { requireMention: true, commandLevel: "safety" },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const result = runGroupGateStage({
+      event: buildGroupEvent("/config show"),
+      deps,
+      accountId: "default",
+      sessionKey: "qqbot:group:G1",
+      userContent: "/config show",
+      access: buildAccess(),
+    });
+
+    expect(result.kind).toBe("skip");
+    if (result.kind === "skip") {
+      expect(result.skipReason).toBe("private_command_only");
+    }
+  });
+
   it("does not reply to private commands that only mention someone else", () => {
     const deps = buildDeps();
     (

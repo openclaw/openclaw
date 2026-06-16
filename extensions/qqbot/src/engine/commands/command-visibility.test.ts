@@ -18,9 +18,10 @@ describe("QQBot command visibility", () => {
   });
 
   it("keeps group-session controls callable but hidden from group menus", () => {
-    for (const command of ["/new", "/reset", "/compact"]) {
+    for (const command of ["/new", "/reset", "/name", "/compact"]) {
       expect(classifyCoreCommandForGroup(command).visibility).toBe("hidden");
     }
+    expect(classifyCoreCommandForGroup("/name", "safety").visibility).toBe("hidden");
   });
 
   it("marks sensitive core commands as private-only in groups", () => {
@@ -51,7 +52,7 @@ describe("QQBot command visibility", () => {
   });
 
   it("allows every recognized core command in all mode", () => {
-    for (const command of ["/config", "/bash", "/new", "/status"]) {
+    for (const command of ["/config", "/bash", "/new", "/name", "/status"]) {
       expect(classifyCoreCommandForGroup(command, "all").visibility).not.toBe("private");
     }
   });
@@ -63,8 +64,14 @@ describe("QQBot command visibility", () => {
   it("limits other core commands in strict mode", () => {
     expect(classifyCoreCommandForGroup("/new", "strict").visibility).toBe("hidden");
     expect(classifyCoreCommandForGroup("/reset", "strict").visibility).toBe("hidden");
+    expect(classifyCoreCommandForGroup("/name", "strict").visibility).toBe("private");
     expect(classifyCoreCommandForGroup("/status", "strict").visibility).toBe("private");
     expect(classifyCoreCommandForGroup("/config", "strict").visibility).toBe("private");
+  });
+
+  it("keeps strict mode fail-closed for unclassified slash commands", () => {
+    expect(classifyCoreCommandForGroup("/bot-dynamic", "strict").visibility).toBe("private");
+    expect(classifyCoreCommandForGroup("/unknown", "strict").visibility).toBe("private");
   });
 
   it("does not make plugin and unknown slash commands private in all mode", () => {
