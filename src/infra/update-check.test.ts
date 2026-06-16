@@ -56,7 +56,7 @@ describe("resolveNpmChannelTag", () => {
   beforeEach(() => {
     versionByTag = {};
     runCommandMock = vi.fn(async (argv: string[]) => {
-      const spec = String(argv[2] ?? "");
+      const spec = argv[2] ?? "";
       const tag = spec.slice(spec.lastIndexOf("@") + 1);
       const version = versionByTag[tag] ?? null;
       return {
@@ -131,7 +131,9 @@ describe("resolveNpmChannelTag", () => {
         );
       });
 
-      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
       try {
         const address = server.address() as AddressInfo;
         const registry = `http://127.0.0.1:${address.port}/user/`;
