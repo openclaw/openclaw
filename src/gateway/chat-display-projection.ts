@@ -1602,15 +1602,20 @@ function projectEmptyAssistantErrorMessages(
 ): Array<Record<string, unknown>> {
   let changed = false;
   const projected = messages.map((message) => {
-    const hasContent =
-      (typeof message.content === "string" && message.content.length > 0) ||
-      (Array.isArray(message.content) && message.content.length > 0);
+    const hasNonTextContent =
+      Array.isArray(message.content) &&
+      message.content.some((block) => {
+        if (!block || typeof block !== "object" || Array.isArray(block)) {
+          return true;
+        }
+        return (block as { type?: unknown }).type !== "text";
+      });
     if (
       message.role !== "assistant" ||
       message.stopReason !== "error" ||
       typeof message.errorMessage !== "string" ||
       !message.errorMessage.trim() ||
-      hasContent ||
+      hasNonTextContent ||
       extractProjectedText(message.content ?? message.text).trim()
     ) {
       return message;

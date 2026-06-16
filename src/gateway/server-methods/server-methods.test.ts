@@ -924,6 +924,22 @@ describe("projectRecentChatDisplayMessages", () => {
     expect(JSON.stringify(result[0]?.content)).not.toContain("secret.internal.example");
   });
 
+  it("projects empty text-block assistant errors as a generic safe failure", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "" }],
+        stopReason: "error",
+        errorMessage: "Connection error.",
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result[0]?.content).toEqual([
+      { type: "text", text: "The agent run failed before producing a reply." },
+    ]);
+  });
+
   it("leaves tool-bearing assistant errors unchanged", () => {
     const toolCall = {
       type: "toolCall",
