@@ -1,8 +1,29 @@
 // Doctor channel capability tests cover channel capability inspection and diagnostics.
-import { describe, expect, it } from "vitest";
-import { getDoctorChannelCapabilities } from "./channel-capabilities.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  getDoctorChannelCapabilities,
+  listDoctorChannelAccountIds,
+} from "./channel-capabilities.js";
+
+const channelPluginMocks = vi.hoisted(() => ({
+  getBundledChannelPlugin: vi.fn(() => undefined),
+  getChannelPlugin: vi.fn(() => undefined),
+}));
+
+vi.mock("../../channels/plugins/bundled.js", () => ({
+  getBundledChannelPlugin: channelPluginMocks.getBundledChannelPlugin,
+}));
+
+vi.mock("../../channels/plugins/index.js", () => ({
+  getChannelPlugin: channelPluginMocks.getChannelPlugin,
+}));
 
 describe("doctor channel capabilities", () => {
+  beforeEach(() => {
+    channelPluginMocks.getBundledChannelPlugin.mockReset().mockReturnValue(undefined);
+    channelPluginMocks.getChannelPlugin.mockReset().mockReturnValue(undefined);
+  });
+
   it("returns nested route semantics from googlechat plugin metadata", () => {
     expect(getDoctorChannelCapabilities("googlechat")).toEqual({
       dmAllowFromMode: "nestedOnly",
@@ -46,5 +67,13 @@ describe("doctor channel capabilities", () => {
       groupAllowFromFallbackToAllowFrom: true,
       warnOnEmptyGroupSenderAllowlist: true,
     });
+  });
+
+  it("falls back conservatively when channel plugin resolution throws", () => {
+    channelPluginMocks.getChannelPlugin.mockImplementation(() => {
+      throw new Error("missing generated bundled module");
+    });
+
+    expect(listDoctorChannelAccountIds("telegram", {})).toBeUndefined();
   });
 });

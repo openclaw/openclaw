@@ -14,7 +14,7 @@ vi.mock("../channel-capabilities.js", () => ({
     cfg: { channels?: Record<string, { accounts?: Record<string, unknown>; baseUrl?: string }> },
   ) => {
     const channel = cfg.channels?.[channelName];
-    const ids = Object.keys(channel?.accounts ?? {});
+    const ids = Object.keys(channel?.accounts ?? {}).map((accountId) => accountId.toLowerCase());
     return channelName === "qa-channel" && channel?.baseUrl ? ["default", ...ids] : ids;
   },
 }));
@@ -107,6 +107,25 @@ describe("doctor empty allowlist policy scan", () => {
     expect(warnings).toContain(
       '- channels.qa-channel.groupPolicy is "allowlist" but groupAllowFrom (and allowFrom) is empty — all group messages will be silently dropped. Add sender IDs to channels.qa-channel.groupAllowFrom or channels.qa-channel.allowFrom, or set groupPolicy to "open".',
     );
+  });
+
+  it("matches canonical runtime account ids to mixed-case config keys", () => {
+    const warnings = scanEmptyAllowlistPolicyWarnings(
+      {
+        channels: {
+          matrix: {
+            groupPolicy: "allowlist",
+            groupAllowFrom: [],
+            accounts: {
+              Work: { groupAllowFrom: ["matrix:group:work"] },
+            },
+          },
+        },
+      },
+      { doctorFixCommand: "openclaw doctor --fix" },
+    );
+
+    expect(warnings).toEqual([]);
   });
 
   it("allows provider-specific extra warnings without importing providers", () => {

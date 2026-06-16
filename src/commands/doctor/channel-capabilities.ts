@@ -77,8 +77,8 @@ export function listDoctorChannelAccountIds(
   if (!channelId) {
     return undefined;
   }
-  const plugin = getChannelPlugin(channelId) ?? getBundledChannelPlugin(channelId);
   try {
+    const plugin = getChannelPlugin(channelId) ?? getBundledChannelPlugin(channelId);
     return plugin?.config.listAccountIds(cfg);
   } catch {
     // Keep doctor warnings conservative when a plugin cannot inspect its account set.

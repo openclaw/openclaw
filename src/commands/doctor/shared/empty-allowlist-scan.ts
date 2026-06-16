@@ -1,6 +1,7 @@
 // Doctor scanner for empty allowlist policies across configured channels and accounts.
 import type { ChannelDoctorEmptyAllowlistAccountContext } from "../../../channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { normalizeAccountId } from "../../../routing/account-id.js";
 import {
   getDoctorChannelCapabilities,
   listDoctorChannelAccountIds,
@@ -101,7 +102,7 @@ export function scanEmptyAllowlistPolicyWarnings(
           Boolean(account && typeof account === "object" && !isDisabledRecord(account)),
         )
       : [];
-    const configuredAccountIds = new Set(Object.keys(accounts ?? {}));
+    const configuredAccountIds = new Set(Object.keys(accounts ?? {}).map(normalizeAccountId));
     const runtimeAccountIds = listDoctorChannelAccountIds(channelName, cfg);
     const hasImplicitActiveAccount =
       runtimeAccountIds === undefined ||
