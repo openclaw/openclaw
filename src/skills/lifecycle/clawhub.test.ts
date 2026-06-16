@@ -385,7 +385,8 @@ describe("skills-clawhub", () => {
 
   it("persists the source URL from server-resolved verification provenance", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skills-source-");
-    const sourceUrl = "https://github.com/openclaw/skills/tree/def456/agentreceipt";
+    const sourceUrl = "https://github.com/openclaw/skills/tree/main/agentreceipt";
+    const verifiedSourceUrl = "https://github.com/openclaw/skills/tree/def456/agentreceipt";
     fetchClawHubSkillDetailMock.mockResolvedValueOnce({
       skill: {
         slug: "agentreceipt",
@@ -440,7 +441,7 @@ describe("skills-clawhub", () => {
         await fs.readFile(path.join(workspaceDir, ".clawhub", "lock.json"), "utf8"),
       ) as { skills: Record<string, Record<string, unknown>> };
       expect(lock.skills.agentreceipt).toMatchObject({
-        sourceUrl,
+        sourceUrl: verifiedSourceUrl,
         verification: {
           provenance: {
             source: "server-resolved-github-import",
@@ -460,7 +461,7 @@ describe("skills-clawhub", () => {
           "utf8",
         ),
       ) as Record<string, unknown>;
-      expect(origin.sourceUrl).toBe(sourceUrl);
+      expect(origin.sourceUrl).toBe(verifiedSourceUrl);
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
