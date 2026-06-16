@@ -1,7 +1,13 @@
 // Feishu tests cover sequential key plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FeishuMessageEvent } from "./bot.js";
+import { FeishuConfigSchema } from "./config-schema.js";
 import { getFeishuSequentialKey } from "./sequential-key.js";
+import type { FeishuConfig } from "./types.js";
+
+function createFeishuConfig(overrides: Record<string, unknown> = {}): FeishuConfig {
+  return FeishuConfigSchema.parse(overrides);
+}
 
 function createTextEvent(params: {
   text: string;
@@ -85,7 +91,7 @@ describe("getFeishuSequentialKey", () => {
     [
       "default group scope",
       createTextEvent({ text: "hello", chatId: "oc_group", chatType: "group" }),
-      {},
+      createFeishuConfig(),
       "feishu:default:oc_group",
     ],
     [
@@ -96,7 +102,7 @@ describe("getFeishuSequentialKey", () => {
         chatType: "group",
         senderOpenId: "ou_sender_a",
       }),
-      { groupSessionScope: "group_sender" },
+      createFeishuConfig({ groupSessionScope: "group_sender" }),
       "feishu:default:oc_group:sender:ou_sender_a",
     ],
     [
@@ -107,7 +113,7 @@ describe("getFeishuSequentialKey", () => {
         chatType: "group",
         rootId: "om_root_topic",
       }),
-      { groupSessionScope: "group_topic" },
+      createFeishuConfig({ groupSessionScope: "group_topic" }),
       "feishu:default:oc_group:topic:om_root_topic",
     ],
     [
@@ -119,7 +125,7 @@ describe("getFeishuSequentialKey", () => {
         rootId: "om_root_topic",
         senderOpenId: "ou_sender_a",
       }),
-      { groupSessionScope: "group_topic_sender" },
+      createFeishuConfig({ groupSessionScope: "group_topic_sender" }),
       "feishu:default:oc_group:topic:om_root_topic:sender:ou_sender_a",
     ],
     [
@@ -130,7 +136,7 @@ describe("getFeishuSequentialKey", () => {
         chatType: "group",
         rootId: "om_root_topic",
       }),
-      { topicSessionMode: "enabled" },
+      createFeishuConfig({ topicSessionMode: "enabled" }),
       "feishu:default:oc_group:topic:om_root_topic",
     ],
   ] as const)(
@@ -162,14 +168,14 @@ describe("getFeishuSequentialKey", () => {
         getFeishuSequentialKey({
           accountId: "default",
           event,
-          feishuCfg: {
+          feishuCfg: createFeishuConfig({
             groupSessionScope: "group",
             groups: {
               oc_group: {
                 groupSessionScope: "group_topic_sender",
               },
             },
-          },
+          }),
         }),
       ),
     ).resolves.toBe("feishu:default:oc_group:topic:om_root_topic:sender:ou_sender_a");
@@ -195,7 +201,10 @@ describe("getFeishuSequentialKey", () => {
             chatId: "oc_group",
             chatType: "topic_group",
           }),
-          feishuCfg: { groupSessionScope: "group_topic", replyInThread: "enabled" },
+          feishuCfg: createFeishuConfig({
+            groupSessionScope: "group_topic",
+            replyInThread: "enabled",
+          }),
           fetchMessage,
         }),
       ),
@@ -223,7 +232,10 @@ describe("getFeishuSequentialKey", () => {
             rootId: "om_topic_starter",
             threadId: "omt_native_topic",
           }),
-          feishuCfg: { groupSessionScope: "group_topic", replyInThread: "enabled" },
+          feishuCfg: createFeishuConfig({
+            groupSessionScope: "group_topic",
+            replyInThread: "enabled",
+          }),
         }),
       ),
     ).resolves.toBe("feishu:default:oc_group:topic:omt_native_topic");
@@ -243,7 +255,10 @@ describe("getFeishuSequentialKey", () => {
             chatId: "oc_group",
             chatType: "topic_group",
           }),
-          feishuCfg: { groupSessionScope: "group_topic", replyInThread: "enabled" },
+          feishuCfg: createFeishuConfig({
+            groupSessionScope: "group_topic",
+            replyInThread: "enabled",
+          }),
           fetchMessage: vi.fn(async () => {
             throw new Error("api unavailable");
           }),
@@ -270,7 +285,10 @@ describe("getFeishuSequentialKey", () => {
           chatId: "oc_group",
           chatType: "topic_group",
         }),
-        feishuCfg: { groupSessionScope: "group_topic", replyInThread: "enabled" },
+        feishuCfg: createFeishuConfig({
+          groupSessionScope: "group_topic",
+          replyInThread: "enabled",
+        }),
         fetchMessage,
       }),
     );
@@ -298,7 +316,7 @@ describe("getFeishuSequentialKey", () => {
               chatId: "oc_group",
               chatType: "topic_group",
             }),
-            feishuCfg: { groupSessionScope: "group_topic" },
+            feishuCfg: createFeishuConfig({ groupSessionScope: "group_topic" }),
             fetchMessage,
           }),
         ),
