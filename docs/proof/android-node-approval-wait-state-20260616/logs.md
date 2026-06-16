@@ -1,8 +1,8 @@
-# Android Node Approval Wait-State Proof Logs
+# Android Node Approval Wait-State Proof Log
 
-This is the shareable proof bundle for PR #93792. Raw setup-code material,
-gateway tokens, and private API responses were preserved outside the repo and
-were not copied here.
+This is the shareable text proof log for PR #93792. Raw setup-code material,
+gateway tokens, private API responses, screenshots, and UIAutomator dumps were
+preserved outside the repo and were not copied here.
 
 ## Real Environment
 
@@ -32,11 +32,19 @@ Generated setup code with the same isolated gateway env/state.
 Cleared only ai.openclaw.app data, launched .MainActivity, drove first-run ->
 Advanced -> setup-code entry -> Pair with Gateway via ADB taps/text.
 
-Captured screenshots, UIAutomator dumps, sanitized node.list output, and
-projection assertions.
+Captured screenshots and UIAutomator dumps as private/external proof artifacts,
+then copied only sanitized node.list output and projection assertions into this
+repo log.
 ```
 
 ## After-Fix Live Output
+
+External image proof from the live AVD run:
+
+```text
+https://github.com/Solvely-Colin/openclaw-pr-93792-proof/blob/main/images/before-permission-setup.png
+https://github.com/Solvely-Colin/openclaw-pr-93792-proof/blob/main/images/after-node-approval-pending.png
+```
 
 Android UI text after setup-code pairing:
 
