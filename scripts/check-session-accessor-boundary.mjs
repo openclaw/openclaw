@@ -110,6 +110,7 @@ export const migratedSessionAccessorWriteFiles = new Set([
   "src/auto-reply/reply/session-usage.ts",
   "src/tui/embedded-backend.ts",
   "src/config/sessions/cleanup-service.ts",
+  "src/plugins/host-hook-cleanup.ts",
 ]);
 
 export const migratedTranscriptWriterFiles = new Set([
@@ -336,6 +337,7 @@ export async function main() {
     "src/agents",
     "src/auto-reply",
     "src/config/sessions",
+    "src/plugins",
     "src/tui",
   ]);
   const transcriptWriterSourceRoots = resolveSourceRoots(repoRoot, [
