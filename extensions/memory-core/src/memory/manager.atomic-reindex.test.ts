@@ -360,6 +360,46 @@ describe("memory manager atomic reindex", () => {
     expect(wait).not.toHaveBeenCalled();
   });
 
+  it("falls back to copyFile + unlink when rename fails permanently with EPERM", async () => {
+    const rename = vi.fn().mockRejectedValue(Object.assign(new Error("perm"), { code: "EPERM" }));
+    const copyFile = vi.fn().mockResolvedValue(undefined);
+    const unlink = vi.fn().mockResolvedValue(undefined);
+    const wait = vi.fn().mockResolvedValue(undefined);
+
+    await moveMemoryIndexFiles("index.sqlite.tmp", "index.sqlite", {
+      fileOps: { rename, rm: fs.rm, wait, copyFile, unlink },
+      maxRenameAttempts: 3,
+      renameRetryDelayMs: 10,
+    });
+
+    expect(rename).toHaveBeenCalledTimes(12);
+    expect(copyFile).toHaveBeenCalledTimes(4);
+    expect(unlink).toHaveBeenCalledTimes(4);
+    expect(wait).toHaveBeenCalledTimes(8);
+  });
+
+  it("throws if the EPERM copyFile fallback fails", async () => {
+    const rename = vi.fn().mockRejectedValue(Object.assign(new Error("perm"), { code: "EPERM" }));
+    const copyFile = vi
+      .fn()
+      .mockRejectedValue(Object.assign(new Error("copy fail"), { code: "EIO" }));
+    const unlink = vi.fn().mockResolvedValue(undefined);
+    const wait = vi.fn().mockResolvedValue(undefined);
+
+    await expectRejectCode(
+      moveMemoryIndexFiles("index.sqlite.tmp", "index.sqlite", {
+        fileOps: { rename, rm: fs.rm, wait, copyFile, unlink },
+        maxRenameAttempts: 3,
+        renameRetryDelayMs: 10,
+      }),
+      "EIO",
+    );
+
+    expect(rename).toHaveBeenCalledTimes(3);
+    expect(copyFile).toHaveBeenCalledTimes(1);
+    expect(unlink).not.toHaveBeenCalled();
+  });
+
   it.each(["EBUSY", "EPERM", "EACCES"] as const)(
     "retries transient %s rm failures during index file cleanup",
     async (code) => {

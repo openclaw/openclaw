@@ -11,6 +11,8 @@ type MemoryIndexFileOps = {
   rename: typeof fs.rename;
   rm: typeof fs.rm;
   wait: (ms: number) => Promise<void>;
+  copyFile?: typeof fs.copyFile;
+  unlink?: typeof fs.unlink;
 };
 
 type MemoryIndexFileOptions = {
@@ -64,21 +66,35 @@ async function renameWithRetry(
   options: ResolvedMemoryIndexFileOptions,
   optional = false,
 ): Promise<void> {
+  let lastErr: unknown;
   for (let attempt = 1; attempt <= options.maxRenameAttempts; attempt++) {
     try {
       await options.fileOps.rename(source, target);
       return;
     } catch (err) {
+      lastErr = err;
       if (optional && (err as NodeJS.ErrnoException).code === "ENOENT") {
         return;
       }
       if (!isTransientFileError(err) || attempt === options.maxRenameAttempts) {
-        throw err;
+        break;
       }
       await options.fileOps.wait(options.renameRetryDelayMs * attempt);
     }
   }
-  throw new Error("rename retry loop exited unexpectedly");
+  // Windows: rename can fail with EPERM when another handle holds the file.
+  // Copy the data to the target and remove the source as a non-atomic fallback.
+  if ((lastErr as NodeJS.ErrnoException).code === "EPERM") {
+    const copyFile = options.fileOps.copyFile ?? fs.copyFile;
+    const unlink = options.fileOps.unlink ?? fs.unlink;
+    await copyFile(source, target);
+    await unlink(source);
+    return;
+  }
+  if (lastErr instanceof Error) {
+    throw lastErr;
+  }
+  throw new Error("rename retry loop exited unexpectedly", { cause: lastErr });
 }
 
 export async function moveMemoryIndexFiles(
