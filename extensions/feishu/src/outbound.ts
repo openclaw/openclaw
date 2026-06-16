@@ -108,6 +108,29 @@ function escapeFeishuCardMarkdownText(text: string): string {
   });
 }
 
+function escapeFeishuCardPlainText(text: string): string {
+  return escapeFeishuCardMarkdownText(text)
+    .replace(/([\\`*_{}[\]()#+\-!|~])/g, "\\$1")
+    .replace(/(^|\r?\n)([ \t]*\d+)\./g, "$1$2\\.");
+}
+
+function sanitizeLegacyFeishuCardText(text: unknown): Record<string, unknown> | undefined {
+  if (
+    !isRecord(text) ||
+    (text.tag !== "lark_md" && text.tag !== "plain_text") ||
+    typeof text.content !== "string"
+  ) {
+    return undefined;
+  }
+  return {
+    tag: "markdown",
+    content:
+      text.tag === "plain_text"
+        ? escapeFeishuCardPlainText(text.content)
+        : escapeFeishuCardMarkdownText(text.content),
+  };
+}
+
 function resolveSafeFeishuButtonUrl(url: unknown): string | undefined {
   const trimmed = typeof url === "string" ? url.trim() : "";
   if (!trimmed) {
@@ -191,13 +214,25 @@ function sanitizeNativeFeishuCardElements(element: unknown): Record<string, unkn
   if (element.tag === "hr") {
     return [{ tag: "hr" }];
   }
-  if (element.tag === "markdown" && typeof element.content === "string") {
+  if (
+    (element.tag === "markdown" || element.tag === "lark_md") &&
+    typeof element.content === "string"
+  ) {
     return [
       {
         tag: "markdown",
         content: escapeFeishuCardMarkdownText(element.content),
       },
     ];
+  }
+  if (element.tag === "div") {
+    const text = sanitizeLegacyFeishuCardText(element.text);
+    const fields = Array.isArray(element.fields)
+      ? element.fields
+          .map((field) => (isRecord(field) ? sanitizeLegacyFeishuCardText(field.text) : undefined))
+          .filter((field): field is Record<string, unknown> => Boolean(field))
+      : [];
+    return text ? [text, ...fields] : fields;
   }
   if (element.tag === "button") {
     const button = sanitizeNativeFeishuCardButton(element);

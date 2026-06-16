@@ -360,6 +360,49 @@ describe("feishuPlugin actions", () => {
     expect(details.chatId).toBe("oc_group_1");
   });
 
+  it("sends card JSON from the message parameter as a native card", async () => {
+    sendCardFeishuMock.mockResolvedValueOnce({ messageId: "om_card", chatId: "oc_group_1" });
+
+    await feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: {
+        to: "chat:oc_group_1",
+        message: JSON.stringify({
+          header: { title: { tag: "plain_text", content: "Status" } },
+          elements: [
+            { tag: "div", text: { tag: "lark_md", content: "**Build completed**" } },
+            {
+              tag: "div",
+              text: { tag: "plain_text", content: "*literal*\n1. Restart" },
+              fields: [
+                { is_short: true, text: { tag: "plain_text", content: "Owner: *ops*" } },
+                { is_short: true, text: { tag: "lark_md", content: "**Healthy**" } },
+              ],
+            },
+          ],
+        }),
+      },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+    } as never);
+
+    const sendCardArgs = requireRecord(
+      mockCallArg(sendCardFeishuMock, 0, 0, "sendCardFeishu"),
+      "send card args",
+    );
+    const card = requireRecord(sendCardArgs.card, "card");
+    expect(card.body).toEqual({
+      elements: [
+        { tag: "markdown", content: "**Build completed**" },
+        { tag: "markdown", content: "\\*literal\\*\n1\\. Restart" },
+        { tag: "markdown", content: "Owner: \\*ops\\*" },
+        { tag: "markdown", content: "**Healthy**" },
+      ],
+    });
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
   it("renders presentation messages as cards", async () => {
     sendCardFeishuMock.mockResolvedValueOnce({ messageId: "om_card", chatId: "oc_group_1" });
 
