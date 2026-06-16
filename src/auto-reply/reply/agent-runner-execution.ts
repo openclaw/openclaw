@@ -2481,9 +2481,8 @@ export async function runAgentTurnWithFallback(params: {
                       params.followupRun.run.suppressTranscriptOnlyAssistantPersistence,
                     suppressAssistantErrorPersistence:
                       suppressAssistantErrorPersistenceForCandidate,
-                    onAssistantErrorMessagePersisted: (message) => {
+                    onAssistantErrorMessagePersisted: () => {
                       assistantErrorPersistedAcrossFallback = true;
-                      void params.opts?.onAssistantErrorMessagePersisted?.(message);
                     },
                     toolResultFormat: (() => {
                       const channel = resolveMessageChannel(

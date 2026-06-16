@@ -71,7 +71,6 @@ const mockState = vi.hoisted(() => ({
   }>,
   triggerAgentRunStart: false,
   triggerUserMessagePersisted: false,
-  triggerAssistantErrorPersisted: false,
   runtimeUserMessagePersistencePending: null as Promise<void> | null,
   onAfterAgentRunStart: null as (() => void) | null,
   agentRunId: "run-agent-1",
@@ -233,11 +232,6 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
           markRuntimePersisted: (message: { role: "user"; content: string }) => void;
           markRuntimePersistencePending: (pending: Promise<void>) => void;
         };
-        onAssistantErrorMessagePersisted?: (message: {
-          role: "assistant";
-          content: Array<{ type: "text"; text: string }>;
-          stopReason: "error";
-        }) => void;
         images?: Array<{ mimeType: string; data: string }>;
         imageOrder?: string[];
       };
@@ -263,13 +257,6 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
         params.replyOptions?.userTurnTranscriptRecorder?.markRuntimePersisted({
           role: "user",
           content: "persisted by runtime",
-        });
-      }
-      if (mockState.triggerAssistantErrorPersisted) {
-        params.replyOptions?.onAssistantErrorMessagePersisted?.({
-          role: "assistant",
-          content: [{ type: "text", text: "runtime persisted assistant error" }],
-          stopReason: "error",
         });
       }
       if (mockState.runtimeUserMessagePersistencePending) {
@@ -634,17 +621,6 @@ function readPersistedUserMessages(): Array<Record<string, unknown>> {
     );
 }
 
-function readPersistedAssistantMessages(): Array<Record<string, unknown>> {
-  return readTranscriptJsonLines(mockState.transcriptPath)
-    .map((entry) => entry.message)
-    .filter(
-      (candidate): candidate is Record<string, unknown> =>
-        typeof candidate === "object" &&
-        candidate !== null &&
-        (candidate as { role?: unknown }).role === "assistant",
-    );
-}
-
 function expectDispatchContextFields(expected: {
   OriginatingChannel?: unknown;
   OriginatingTo?: unknown;
@@ -842,7 +818,6 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.mainSessionKey = "main";
     mockState.triggerAgentRunStart = false;
     mockState.triggerUserMessagePersisted = false;
-    mockState.triggerAssistantErrorPersisted = false;
     mockState.runtimeUserMessagePersistencePending = null;
     mockState.onAfterAgentRunStart = null;
     mockState.agentRunId = "run-agent-1";
@@ -2327,12 +2302,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         update.message !== null &&
         (update.message as { role?: unknown }).role === "assistant",
     );
-    expect(assistantUpdates).toHaveLength(1);
-    expect(assistantUpdates[0]?.sessionKey).toBe("main");
-    const assistantMessage = assistantUpdates[0]?.message as Record<string, unknown> | undefined;
-    expect(assistantMessage?.role).toBe("assistant");
-    expect(assistantMessage?.content).toEqual([{ type: "text", text: errorMessage }]);
-    expect(assistantMessage?.idempotencyKey).toBe("idem-agent-returned-error:assistant-error");
+    expect(assistantUpdates).toStrictEqual([]);
   });
 
   it("keeps visible text on non-agent TTS final media because no model transcript exists", async () => {
@@ -6282,14 +6252,6 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect(message?.content).toBe("hello before cli startup failure");
       const persistedUser = readPersistedUserMessages()[0];
       expect(persistedUser?.content).toBe("hello before cli startup failure");
-      const assistantMessages = readPersistedAssistantMessages();
-      expect(assistantMessages).toHaveLength(1);
-      expect(assistantMessages[0]?.content).toEqual([
-        { type: "text", text: "Error: cli backend unavailable" },
-      ]);
-      expect(assistantMessages[0]?.idempotencyKey).toBe(
-        "idem-user-transcript-error-before-runtime-persist:assistant-error",
-      );
     });
   });
 
@@ -6371,62 +6333,6 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect(userUpdate?.sessionKey).toBe("main");
       expect(message?.role).toBe("user");
       expect(message?.content).toBe("hello before agent error payload");
-    });
-  });
-
-  it("persists one assistant error when a started agent returns an error before runtime persistence", async () => {
-    createTranscriptFixture("openclaw-chat-send-assistant-error-no-runtime-persist-");
-    mockState.triggerAgentRunStart = true;
-    mockState.finalPayload = { text: "agent failed before prompt append", isError: true };
-    const respond = vi.fn();
-    const context = createChatContext();
-
-    await runNonStreamingChatSend({
-      context,
-      respond,
-      idempotencyKey: "idem-assistant-error-no-runtime-persist",
-      message: "hello before agent error payload",
-      expectBroadcast: false,
-    });
-
-    await waitForAssertion(() => {
-      const assistantMessages = readPersistedAssistantMessages();
-      expect(assistantMessages).toHaveLength(1);
-      expect(assistantMessages[0]?.content).toEqual([
-        { type: "text", text: "agent failed before prompt append" },
-      ]);
-      expect(assistantMessages[0]?.idempotencyKey).toBe(
-        "idem-assistant-error-no-runtime-persist:assistant-error",
-      );
-    });
-  });
-
-  it("persists returned assistant errors even when runtime emitted an internal error stub", async () => {
-    createTranscriptFixture("openclaw-chat-send-assistant-error-runtime-persisted-");
-    mockState.triggerAgentRunStart = true;
-    mockState.triggerAssistantErrorPersisted = true;
-    mockState.finalPayload = { text: "agent failed after runtime append", isError: true };
-    const respond = vi.fn();
-    const context = createChatContext();
-
-    await runNonStreamingChatSend({
-      context,
-      respond,
-      idempotencyKey: "idem-assistant-error-runtime-persisted",
-      message: "hello before runtime-persisted agent error",
-      expectBroadcast: false,
-    });
-
-    await waitForAssertion(() => {
-      expect(context.dedupe.get("chat:idem-assistant-error-runtime-persisted")?.ok).toBe(false);
-      const assistantMessages = readPersistedAssistantMessages();
-      expect(assistantMessages).toHaveLength(1);
-      expect(assistantMessages[0]?.content).toEqual([
-        { type: "text", text: "agent failed after runtime append" },
-      ]);
-      expect(assistantMessages[0]?.idempotencyKey).toBe(
-        "idem-assistant-error-runtime-persisted:assistant-error",
-      );
     });
   });
 

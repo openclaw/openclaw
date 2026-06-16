@@ -3697,8 +3697,6 @@ export const chatHandlers: GatewayRequestHandlers = {
       const deliveredReplies: Array<{ payload: ReplyPayload; kind: "block" | "final" }> = [];
       let appendedWebchatAgentMedia = false;
       let agentRunStarted = false;
-      let dispatchCompleted = false;
-      let runtimeAssistantErrorPersisted = false;
       const userTurnRecorder: UserTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
         input: baseUserTurnInput,
         resolveInput: () => userTurnInputPromise,
@@ -3743,43 +3741,6 @@ export const chatHandlers: GatewayRequestHandlers = {
       };
       const persistGatewayUserTurnTranscriptBestEffort = async () => {
         await persistGatewayUserTurnTranscript().catch(() => undefined);
-      };
-      const persistGatewayAssistantErrorTranscript = async (
-        errorMessage?: string,
-        options?: { force?: boolean },
-      ) => {
-        if (runtimeAssistantErrorPersisted && !options?.force) {
-          return;
-        }
-        const assistantErrorTranscriptMessage =
-          sanitizeAssistantDisplayText(errorMessage) ??
-          errorMessage ??
-          "agent returned an error payload";
-        const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(
-          sessionKey,
-          sessionLoadOptions,
-        );
-        const appended = await appendAssistantTranscriptMessage({
-          sessionKey,
-          message: assistantErrorTranscriptMessage,
-          content: [{ type: "text", text: assistantErrorTranscriptMessage }],
-          sessionId: latestEntry?.sessionId ?? backingSessionId ?? clientRunId,
-          storePath: latestStorePath,
-          sessionFile: latestEntry?.sessionFile,
-          agentId,
-          createIfMissing: true,
-          idempotencyKey: `${clientRunId}:assistant-error`,
-          cfg,
-        });
-        if (appended.ok) {
-          runtimeAssistantErrorPersisted = true;
-          return;
-        }
-        context.logGateway.warn(
-          `webchat transcript append failed for agent error reply: ${
-            appended.error ?? "unknown error"
-          }`,
-        );
       };
       const appendWebchatAgentMediaTranscriptIfNeeded = async (payload: ReplyPayload) => {
         if (!agentRunStarted || appendedWebchatAgentMedia || !isMediaBearingPayload(payload)) {
@@ -3972,9 +3933,6 @@ export const chatHandlers: GatewayRequestHandlers = {
               thinkingLevelOverride: p.thinking,
               fastModeOverride: p.fastMode,
               userTurnTranscriptRecorder: userTurnRecorder,
-              onAssistantErrorMessagePersisted: () => {
-                runtimeAssistantErrorPersisted = true;
-              },
               onAgentRunStart: (runId) => {
                 agentRunStarted = true;
                 emitServerTiming(
@@ -4045,7 +4003,6 @@ export const chatHandlers: GatewayRequestHandlers = {
         },
       )
         .then(async () => {
-          dispatchCompleted = true;
           emitServerTiming("dispatch-completed", undefined, dispatchStartedAtMs);
           const postDispatchStartedAtMs = performance.now();
           await measureDiagnosticsTimelineSpan(
@@ -4893,11 +4850,6 @@ export const chatHandlers: GatewayRequestHandlers = {
               }
               const shouldBroadcastAgentError =
                 returnedAgentErrorPayloads.length > 0 && !broadcastedSourceReplyFinal;
-              if (shouldBroadcastAgentError) {
-                await persistGatewayAssistantErrorTranscript(returnedAgentErrorMessage, {
-                  force: true,
-                });
-              }
               if (shouldBroadcastAgentError) {
                 broadcastChatError({
                   context,
