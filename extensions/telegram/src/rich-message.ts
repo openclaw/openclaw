@@ -494,7 +494,9 @@ function escapeMarkdownCell(text: string): string {
 
 function padTableRow(cells: string[], width: number): string {
   const out = cells.slice(0, width);
-  while (out.length < width) out.push("");
+  while (out.length < width) {
+    out.push("");
+  }
   return out.map(escapeMarkdownCell).join(" | ");
 }
 
@@ -509,17 +511,19 @@ function buildTableMarkdown(table: { columns: string[]; rows: string[][] }): str
 }
 
 function buildListMarkdown(items: TelegramRichMessageSpecListItem[], asChecklist: boolean): string {
-  if (items.length === 0) return "";
+  if (items.length === 0) {
+    return "";
+  }
   if (asChecklist) {
-    return items
-      .map((item) => `- [${item.done === true ? "x" : " "}] ${item.text}`)
-      .join("\n");
+    return items.map((item) => `- [${item.done === true ? "x" : " "}] ${item.text}`).join("\n");
   }
   return items.map((item) => `- ${item.text}`).join("\n");
 }
 
 function buildDetailsMarkdown(blocks: TelegramRichMessageSpecDetailsBlock[]): string {
-  if (blocks.length === 0) return "";
+  if (blocks.length === 0) {
+    return "";
+  }
   return blocks
     .map((block) => {
       const summary = block.summary.replace(/[\r\n]+/g, " ").trim();
@@ -572,10 +576,15 @@ export function buildTelegramRichMarkdownFromSpec(
 }
 
 function clampHeadingLevel(level: number | undefined): 1 | 2 | 3 | 4 | 5 | 6 {
-  if (typeof level !== "number" || !Number.isFinite(level)) return 2;
+  if (typeof level !== "number" || !Number.isFinite(level)) {
+    return 2;
+  }
   const truncated = Math.trunc(level);
-  if (truncated < 1) return 1;
-  if (truncated > 6) return 6;
+  if (truncated < 1) {
+    return 1;
+  }
+  if (truncated > 6) {
+    return 6;
+  }
   return truncated as 1 | 2 | 3 | 4 | 5 | 6;
 }
-
