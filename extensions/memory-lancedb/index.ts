@@ -387,7 +387,8 @@ function mentionsEmbeddingDimensionsField(message: string): boolean {
     /\binput\.dimensions\b/.test(message) ||
     /\bparam(?:eter)?\s*[:=]\s*["'`]?dimensions["'`]?\b/.test(message) ||
     /\b(?:param(?:eter)?|field|argument)\s+["'`]?dimensions["'`]?\b/.test(message) ||
-    /\b["'`]?dimensions["'`]?\s+(?:param(?:eter)?|field|argument)\b/.test(message)
+    /\b["'`]?dimensions["'`]?\s+(?:param(?:eter)?|field|argument)\b/.test(message) ||
+    /(?:\(|\[)\s*['"](?:body|input)['"]\s*,\s*['"]dimensions['"]\s*(?:\)|\])/.test(message)
   );
 }
 
