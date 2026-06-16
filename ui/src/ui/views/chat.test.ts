@@ -1694,27 +1694,45 @@ describe("chat composer IME composition", () => {
     expect(onDraftChange).toHaveBeenLastCalledWith("当前");
   });
 
-  it("does not send or prevent Enter while IME composition is active", () => {
-    const onDraftChange = vi.fn();
+  it("leaves keyboard events to the browser while IME composition is active", () => {
+    const onHistoryKeydown = vi.fn(() => ({
+      handled: true,
+      preventDefault: true,
+      restoreCaret: null,
+      decision: "handled:history-up" as const,
+      historyNavigationActiveBefore: false,
+      historyNavigationActiveAfter: false,
+      selectionStart: 0,
+      selectionEnd: 0,
+      valueLength: 0,
+    }));
     const onSend = vi.fn();
-    const container = renderChatView({ onDraftChange, onSend });
+    const container = renderChatView({ onHistoryKeydown, onSend });
     const textarea = requireElement(
       container,
       ".agent-chat__composer-combobox > textarea",
       "composer textarea",
     ) as HTMLTextAreaElement;
-    const event = new KeyboardEvent("keydown", {
+
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    textarea.value = "dangqian";
+    const enterEvent = new KeyboardEvent("keydown", {
       key: "Enter",
       bubbles: true,
       cancelable: true,
     });
-    Object.defineProperty(event, "isComposing", { value: true });
+    const arrowEvent = new KeyboardEvent("keydown", {
+      key: "ArrowUp",
+      bubbles: true,
+      cancelable: true,
+    });
+    textarea.dispatchEvent(enterEvent);
+    textarea.dispatchEvent(arrowEvent);
 
-    textarea.dispatchEvent(event);
-
-    expect(event.defaultPrevented).toBe(false);
-    expect(onDraftChange).not.toHaveBeenCalled();
+    expect(enterEvent.defaultPrevented).toBe(false);
+    expect(arrowEvent.defaultPrevented).toBe(false);
     expect(onSend).not.toHaveBeenCalled();
+    expect(onHistoryKeydown).not.toHaveBeenCalled();
   });
 });
 
