@@ -160,6 +160,8 @@ import {
   type CronGetParams,
   CronGetParamsSchema,
   type CronJob,
+  type CronJobCompact,
+  CronJobCompactSchema,
   CronJobSchema,
   type CronListParams,
   CronListParamsSchema,

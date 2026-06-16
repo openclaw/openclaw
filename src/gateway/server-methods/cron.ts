@@ -320,6 +320,7 @@ export const cronHandlers: GatewayRequestHandlers = {
     }
     const p = params as {
       includeDisabled?: boolean;
+      compact?: boolean;
       limit?: number;
       offset?: number;
       query?: string;
@@ -332,6 +333,7 @@ export const cronHandlers: GatewayRequestHandlers = {
     };
     const page = await context.cron.listPage({
       includeDisabled: p.includeDisabled,
+      compact: p.compact,
       limit: p.limit,
       offset: p.offset,
       query: p.query,

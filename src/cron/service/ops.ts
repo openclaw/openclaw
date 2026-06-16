@@ -43,6 +43,27 @@ import type {
   CronListPageResult,
   CronSortDir,
 } from "./list-page-types.js";
+
+/** Lightweight cron job summary (6 fields). */
+export type CronJobCompact = {
+  id: string;
+  name: string;
+  enabled: boolean;
+  nextRunAtMs: number | null;
+  scheduleKind: "at" | "every" | "cron";
+  lastRunStatus: "ok" | "error" | "skipped" | null;
+};
+
+function compactJob(job: CronJob): CronJobCompact {
+  return {
+    id: job.id,
+    name: job.name,
+    enabled: job.enabled,
+    nextRunAtMs: typeof job.state.nextRunAtMs === "number" ? job.state.nextRunAtMs : null,
+    scheduleKind: job.schedule.kind,
+    lastRunStatus: job.state.lastRunStatus ?? job.state.lastStatus ?? null,
+  };
+}
 import { locked } from "./locked.js";
 import { normalizeOptionalAgentId } from "./normalize.js";
 import type { CronServiceState, CronWakeMode } from "./state.js";
@@ -423,6 +444,7 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
     const enabledFilter = resolveEnabledFilter(opts);
     const scheduleKindFilter = resolveScheduleKindFilter(opts);
     const lastRunStatusFilter = resolveLastRunStatusFilter(opts);
+    const compact = opts?.compact === true;
     const sortBy = opts?.sortBy ?? "nextRunAtMs";
     const sortDir = opts?.sortDir ?? "asc";
     const requestedAgentId = normalizeOptionalAgentId(opts?.agentId);
@@ -459,8 +481,9 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
     const offset = Math.max(0, Math.min(total, Math.floor(opts?.offset ?? 0)));
     const defaultLimit = total === 0 ? 50 : total;
     const limit = Math.max(1, Math.min(200, Math.floor(opts?.limit ?? defaultLimit)));
-    const jobs = sorted.slice(offset, offset + limit);
-    const nextOffset = offset + jobs.length;
+    const sliced = sorted.slice(offset, offset + limit);
+    const jobs = compact ? sliced.map((job) => compactJob(job)) : sliced;
+    const nextOffset = offset + sliced.length;
     return {
       jobs,
       total,

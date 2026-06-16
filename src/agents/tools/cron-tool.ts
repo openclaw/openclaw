@@ -307,6 +307,7 @@ export function createCronToolSchema(): TSchema {
       action: stringEnum(CRON_ACTIONS),
       ...gatewayCallOptionSchemaProperties(),
       includeDisabled: Type.Optional(Type.Boolean()),
+      compact: Type.Optional(Type.Boolean({ description: 'Return lightweight 6-field summaries for "list" action' })),
       job: createCronJobObjectSchema(),
       jobId: Type.Optional(Type.String()),
       id: Type.Optional(Type.String()),
@@ -759,7 +760,7 @@ Main cron => system events for heartbeat. Isolated cron => background task in \`
 
 ACTIONS:
 - status: scheduler status
-- list: jobs; includeDisabled true includes disabled; agentId filter auto-filled from session
+- list: jobs; includeDisabled true includes disabled; agentId filter auto-filled from session; compact true returns lightweight 6-field summaries (id/name/enabled/nextRunAtMs/scheduleKind/lastRunStatus) to reduce tokens with 10+ jobs
 - get: one job; needs jobId
 - add: create job; needs job object
 - update: patch job; needs jobId + patch
@@ -864,9 +865,11 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
           let offset = 0;
           let result: unknown;
           let shouldContinue = true;
+          const compact = Boolean(params.compact);
           while (shouldContinue) {
             result = await callGateway("cron.list", gatewayOpts, {
               includeDisabled,
+              compact,
               agentId: listAgentId,
               ...(selfRemoveOnlyJobId ? { limit: 200, offset } : {}),
             });

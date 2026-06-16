@@ -19,6 +19,8 @@ export type CronSortDir = "asc" | "desc";
 /** Input contract for filtered, sorted, offset-based cron job pages. */
 export type CronListPageOptions = {
   includeDisabled?: boolean;
+  /** Return lightweight 6-field summaries instead of full CronJob objects. */
+  compact?: boolean;
   limit?: number;
   offset?: number;
   query?: string;
@@ -31,7 +33,7 @@ export type CronListPageOptions = {
 };
 
 /** Offset-page result returned by cron listPage callers. */
-export type CronListPageResult<TJobs extends readonly CronJob[] = CronJob[]> = {
+export type CronListPageResult<TJobs extends readonly unknown[] = CronJob[]> = {
   jobs: TJobs;
   total: number;
   offset: number;

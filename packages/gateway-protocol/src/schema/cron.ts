@@ -450,10 +450,26 @@ export const CronJobSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Compact cron job summary (6 fields only). */
+export const CronJobCompactSchema = Type.Object(
+  {
+    id: NonEmptyString,
+    name: NonEmptyString,
+    enabled: Type.Boolean(),
+    nextRunAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    scheduleKind: Type.Union([Type.Literal("at"), Type.Literal("every"), Type.Literal("cron")]),
+    lastRunStatus: Type.Optional(
+      Type.Union([Type.Literal("ok"), Type.Literal("error"), Type.Literal("skipped"), Type.Null()]),
+    ),
+  },
+  { additionalProperties: false },
+);
+
 /** Query params for listing cron jobs with filters and pagination. */
 export const CronListParamsSchema = Type.Object(
   {
     includeDisabled: Type.Optional(Type.Boolean()),
+    compact: Type.Optional(Type.Boolean()),
     limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 200 })),
     offset: Type.Optional(Type.Integer({ minimum: 0 })),
     query: Type.Optional(Type.String()),
