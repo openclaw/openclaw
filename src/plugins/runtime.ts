@@ -327,6 +327,16 @@ export function getActivePluginChannelRegistryVersion(): number {
   return getActivePluginChannelRegistrySnapshotFromState().version;
 }
 
+/**
+ * Raw pinned channel registry, bypassing the channel/active selector. The selector in
+ * getActivePluginChannelRegistry() prefers the active registry when the pinned registry has no
+ * channels, which hides tool-only registries pinned by tool-discovery loads. Callers that must see
+ * a pinned tool-discovery registry (e.g. tool catalog metadata) read this instead.
+ */
+export function getPinnedActivePluginChannelRegistry(): PluginRegistry | null {
+  return state.channel.pinned ? asPluginRegistry(state.channel.registry) : null;
+}
+
 function countCommandChannelSurface(registry: PluginRegistry | null): number {
   return (registry?.commands.length ?? 0) + (registry?.channels.length ?? 0);
 }

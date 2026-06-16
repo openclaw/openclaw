@@ -19,7 +19,12 @@ import {
 } from "../../agents/tool-catalog.js";
 import { summarizeToolDescriptionText } from "../../agents/tool-description-summary.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { getActivePluginRegistry } from "../../plugins/runtime.js";
+import type { PluginRegistry } from "../../plugins/registry-types.js";
+import {
+  getActivePluginChannelRegistry,
+  getActivePluginRegistry,
+  getPinnedActivePluginChannelRegistry,
+} from "../../plugins/runtime.js";
 import {
   buildPluginToolMetadataKey,
   ensureStandalonePluginToolRegistryLoaded,
@@ -94,6 +99,23 @@ function buildPluginGroups(params: {
     allowGatewaySubagentBinding: true,
   });
   const activeRegistry = getActivePluginRegistry();
+  // Tool-discovery loads pin a tool-only registry to the channel surface without promoting it to the
+  // active registry (see standalone-runtime-registry-loader), so a tool-only plugin's catalog
+  // metadata and declared tools can live only on the pinned channel registry. The channel selector
+  // (getActivePluginChannelRegistry) can also hide that pinned registry behind an active registry
+  // that has channels, so read the raw pinned channel registry too. The active registry stays
+  // authoritative when the same metadata key exists in more than one.
+  const extraMetadataRegistries: PluginRegistry[] = [];
+  const seenMetadataRegistries = new Set<PluginRegistry>(activeRegistry ? [activeRegistry] : []);
+  for (const registry of [
+    getActivePluginChannelRegistry(),
+    getPinnedActivePluginChannelRegistry(),
+  ]) {
+    if (registry && !seenMetadataRegistries.has(registry)) {
+      seenMetadataRegistries.add(registry);
+      extraMetadataRegistries.push(registry);
+    }
+  }
   const groups = new Map<string, ToolCatalogGroup>();
   // Key metadata by plugin ownership and tool name so we only project metadata that
   // was registered BY the tool's owning plugin. Without this scoping, plugin-X
@@ -105,6 +127,14 @@ function buildPluginGroups(params: {
       entry.metadata,
     ]),
   );
+  for (const registry of extraMetadataRegistries) {
+    for (const entry of registry.toolMetadata ?? []) {
+      const metadataKey = buildPluginToolMetadataKey(entry.pluginId, entry.metadata.toolName);
+      if (!pluginToolMetadata.has(metadataKey)) {
+        pluginToolMetadata.set(metadataKey, entry.metadata);
+      }
+    }
+  }
   const seenToolIds = new Set<string>();
   for (const tool of pluginTools) {
     const meta = getPluginToolMeta(tool);
@@ -144,7 +174,11 @@ function buildPluginGroups(params: {
     seenToolIds.add(tool.name);
     groups.set(groupId, existing);
   }
-  for (const entry of activeRegistry?.tools ?? []) {
+  const declaredToolEntries = [
+    ...(activeRegistry?.tools ?? []),
+    ...extraMetadataRegistries.flatMap((registry) => registry.tools ?? []),
+  ];
+  for (const entry of declaredToolEntries) {
     const names = entry.names.length > 0 ? entry.names : (entry.declaredNames ?? []);
     for (const name of names) {
       if (seenToolIds.has(name) || params.existingToolNames.has(name)) {
