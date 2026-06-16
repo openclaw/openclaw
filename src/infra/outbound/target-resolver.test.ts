@@ -4,6 +4,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelDirectoryEntry } from "../../channels/plugins/types.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
 type TargetResolverModule = typeof import("./target-resolver.js");
 
 let resetDirectoryCache: TargetResolverModule["resetDirectoryCache"];
@@ -141,13 +142,15 @@ describe("resolveMessagingTarget (directory fallback)", () => {
         { kind: "group", id: "replacement-id", name: "support" } satisfies ChannelDirectoryEntry,
       ]);
     const firstPlugin = {
+      ...createChannelTestPluginBase({ id: "richchat" }),
       directory: { listGroups: firstListGroups },
       messaging: { targetResolver: {} },
-    } as ChannelPlugin;
+    } satisfies ChannelPlugin;
     const replacementPlugin = {
+      ...createChannelTestPluginBase({ id: "richchat" }),
       directory: { listGroups: replacementListGroups },
       messaging: { targetResolver: {} },
-    } as ChannelPlugin;
+    } satisfies ChannelPlugin;
 
     const first = await expectOkResolution({
       cfg,

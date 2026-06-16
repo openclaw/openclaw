@@ -3,6 +3,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
 import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbound-session.js";
 import { setMinimalOutboundSessionPluginRegistryForTests } from "./outbound-session.test-helpers.js";
 
@@ -67,6 +68,7 @@ describe("resolveOutboundSessionRoute", () => {
 
   it("uses a prepared runtime plugin for session-route resolution", async () => {
     const plugin = {
+      ...createChannelTestPluginBase({ id: "external-channel" }),
       messaging: {
         resolveOutboundSessionRoute: ({ target }: { target: string }) => ({
           sessionKey: `agent:main:external-channel:direct:${target}`,
@@ -77,7 +79,7 @@ describe("resolveOutboundSessionRoute", () => {
           to: `user:${target}`,
         }),
       },
-    } as ChannelPlugin;
+    } satisfies ChannelPlugin;
 
     const route = await resolveOutboundSessionRoute({
       cfg: baseConfig,
