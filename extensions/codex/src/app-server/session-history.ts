@@ -9,7 +9,6 @@ import {
   buildSessionContext,
   migrateSessionEntries,
   parseSessionEntries,
-  selectSessionTranscriptLeafControlledPath,
 } from "openclaw/plugin-sdk/agent-sessions";
 import { sanitizeCodexHistoryImagePayloads } from "./image-payload-sanitizer.js";
 
@@ -37,10 +36,8 @@ export async function readCodexMirroredSessionHistoryMessages(
     const sessionEntries = entries.filter(
       (entry): entry is SessionEntry => entry.type !== "session",
     );
-    const selectedEntries =
-      selectSessionTranscriptLeafControlledPath(sessionEntries) ?? sessionEntries;
     return sanitizeCodexHistoryImagePayloads(
-      buildSessionContext(selectedEntries).messages,
+      buildSessionContext(sessionEntries).messages,
       "codex mirrored history",
     );
   } catch (error) {

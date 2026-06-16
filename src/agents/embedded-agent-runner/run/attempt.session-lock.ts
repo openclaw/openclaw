@@ -20,8 +20,6 @@ import type { acquireSessionWriteLock } from "../../session-write-lock.js";
 import type {
   CustomEntry,
   LabelEntry,
-  PromptReleasedOpaqueEntry,
-  PromptReleasedSessionMergeResult,
   SessionInfoEntry,
   SessionMessageEntry,
 } from "../../sessions/session-manager.js";
@@ -243,12 +241,23 @@ function hasSessionEntryBase(record: Record<string, unknown>): boolean {
   );
 }
 
-export type PromptReleasedSessionMetadataEntry = CustomEntry | LabelEntry | SessionInfoEntry;
+type PromptReleasedSessionMetadataEntry = CustomEntry | LabelEntry | SessionInfoEntry;
 
-export type PromptReleasedSessionEntry =
+type PromptReleasedOpaqueEntry = {
+  type: "prompt_released_opaque";
+  record: unknown;
+};
+
+type PromptReleasedSessionEntry =
   | SessionMessageEntry
   | PromptReleasedSessionMetadataEntry
   | PromptReleasedOpaqueEntry;
+
+type PromptReleasedSessionMergeResult = {
+  sessionFileSnapshot: OwnedSessionTranscriptCacheSnapshot;
+  publishedEntries?: readonly OwnedSessionTranscriptPublishedEntry[];
+  requiresReload?: true;
+};
 
 function parsePromptReleasedGlobalMetadataLine(
   line: string,

@@ -26,7 +26,10 @@ import {
   serializeJsonlLine,
   writeJsonlEntriesSync,
 } from "../../config/sessions/transcript-jsonl.js";
-import { isSessionTranscriptSideAppendEntry } from "../../config/sessions/transcript-tree.js";
+import {
+  isSessionTranscriptSideAppendEntry,
+  selectSessionTranscriptLeafControlledPath,
+} from "../../config/sessions/transcript-tree.js";
 import {
   canAdvanceOwnedSessionEntryCache,
   type OwnedSessionTranscriptCacheSnapshot,
@@ -136,19 +139,19 @@ export interface SessionInfoEntry extends SessionEntryBase {
   name?: string;
 }
 
-export interface PromptReleasedOpaqueEntry {
+interface PromptReleasedOpaqueEntry {
   type: "prompt_released_opaque";
   record: unknown;
 }
 
-export type PromptReleasedSessionEntry =
+type PromptReleasedSessionEntry =
   | SessionMessageEntry
   | CustomEntry
   | LabelEntry
   | SessionInfoEntry
   | PromptReleasedOpaqueEntry;
 
-export type PromptReleasedSessionMergeResult = {
+type PromptReleasedSessionMergeResult = {
   sessionFileSnapshot: OwnedSessionTranscriptCacheSnapshot;
   publishedEntries?: readonly OwnedSessionTranscriptPublishedEntry[];
   requiresReload?: true;
@@ -379,6 +382,13 @@ export function buildSessionContext(
   leafId?: string | null,
   byIdInput?: Map<string, SessionEntry>,
 ): SessionContext {
+  if (leafId === undefined) {
+    const selectedEntries = selectSessionTranscriptLeafControlledPath(entries);
+    if (selectedEntries !== undefined) {
+      entries = selectedEntries;
+      byIdInput = undefined;
+    }
+  }
   let byId = byIdInput;
   // Build uuid index if not available
   if (!byId) {
