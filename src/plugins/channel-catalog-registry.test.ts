@@ -341,6 +341,39 @@ describe("listChannelCatalogEntries", () => {
     ).toBeUndefined();
   });
 
+  it("does not trust a matching official package without affirmative ClawHub provenance", async () => {
+    const { module } = await loadWithMocks({});
+    const rootDir = "/tmp/openclaw-test-matrix";
+    const candidate = {
+      ...createChannelCandidate({ idHint: "matrix" }),
+      source: `${rootDir}/index.js`,
+      rootDir,
+      packageName: "@openclaw/matrix",
+      packageManifest: {
+        channel: {
+          id: "matrix",
+          label: "Matrix",
+          blurb: "Matrix channel",
+        },
+      },
+    } satisfies PluginCandidate;
+
+    expect(
+      module.listChannelCatalogEntries({
+        env: ENV,
+        installRecords: {
+          matrix: {
+            source: "clawhub",
+            spec: "clawhub:@openclaw/matrix",
+            installPath: rootDir,
+            clawhubPackage: "@openclaw/matrix",
+          } as PluginInstallRecord,
+        },
+        discovery: { candidates: [candidate], diagnostics: [] },
+      })[0]?.trustedSourceLinkedOfficialInstall,
+    ).toBeUndefined();
+  });
+
   it("does not trust official identity without a matching install path", async () => {
     const { module } = await loadWithMocks({});
     const candidate = {

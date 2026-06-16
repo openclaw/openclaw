@@ -41,19 +41,6 @@ function isOfficialClawHubInstallRecord(record: PluginInstallRecord): boolean {
   return (record.clawhubUrl ?? "").replace(/\/+$/, "") === "https://clawhub.ai";
 }
 
-function isExplicitNonOfficialClawHubInstallRecord(record: PluginInstallRecord): boolean {
-  if (record.source !== "clawhub") {
-    return false;
-  }
-  if (record.clawhubChannel !== undefined && record.clawhubChannel !== "official") {
-    return true;
-  }
-  return (
-    record.clawhubUrl !== undefined &&
-    record.clawhubUrl.replace(/\/+$/, "") !== "https://clawhub.ai"
-  );
-}
-
 /** Resolves the official npm spec when an install record matches the trusted catalog package. */
 export function resolveTrustedSourceLinkedOfficialNpmSpec(params: {
   pluginId: string;
@@ -92,10 +79,7 @@ export function resolveTrustedSourceLinkedOfficialClawHubInstall(params: {
   pluginId: string;
   record: PluginInstallRecord;
 }): { clawhubSpec?: string; npmSpec?: string } | undefined {
-  if (
-    params.record.source !== "clawhub" ||
-    isExplicitNonOfficialClawHubInstallRecord(params.record)
-  ) {
+  if (!isOfficialClawHubInstallRecord(params.record)) {
     return undefined;
   }
   const entry = getOfficialExternalPluginCatalogEntry(params.pluginId);
@@ -118,11 +102,8 @@ export function resolveTrustedSourceLinkedOfficialClawHubInstall(params: {
   if (!matchesOfficialPackage) {
     return undefined;
   }
-  if (officialClawHubSpec || isOfficialClawHubInstallRecord(params.record)) {
-    return {
-      ...(officialClawHubSpec ? { clawhubSpec: officialClawHubSpec } : {}),
-      ...(officialNpmSpec ? { npmSpec: officialNpmSpec } : {}),
-    };
-  }
-  return undefined;
+  return {
+    ...(officialClawHubSpec ? { clawhubSpec: officialClawHubSpec } : {}),
+    ...(officialNpmSpec ? { npmSpec: officialNpmSpec } : {}),
+  };
 }
