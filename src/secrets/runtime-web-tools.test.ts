@@ -582,7 +582,7 @@ describe("runtime web tools resolution", () => {
     });
   });
 
-  it("auto-selects a keyless provider when no credentials are configured", async () => {
+  it("does not auto-select a keyless provider when no credentials are configured", async () => {
     const { metadata } = await runRuntimeWebTools({
       config: asConfig({
         tools: {
@@ -595,12 +595,9 @@ describe("runtime web tools resolution", () => {
       }),
     });
 
-    expect(metadata.search.selectedProvider).toBe("duckduckgo");
-    expect(metadata.search.providerSource).toBe("auto-detect");
-    expectDiagnostic(metadata.search.diagnostics, {
-      code: "WEB_SEARCH_AUTODETECT_SELECTED",
-      messageIncludes: 'keyless provider "duckduckgo"',
-    });
+    expect(metadata.search.selectedProvider).toBeUndefined();
+    expect(metadata.search.providerSource).toBe("none");
+    expect(metadata.search.diagnostics).toEqual([]);
   });
 
   it.each([

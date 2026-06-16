@@ -66,6 +66,8 @@ export type RuntimeWebProviderSelectionParams<
   resolvedConfig: OpenClawConfig;
   context: ResolverContext;
   defaults: SecretDefaults | undefined;
+  /** Allow keyless providers to be selected when no provider is explicitly configured. */
+  allowKeylessAutoSelect: boolean;
   /** Defer keyless providers until credential-bearing auto-detect candidates are exhausted. */
   deferKeylessFallback: boolean;
   fallbackUsedCode: RuntimeWebWarningCode;
@@ -395,6 +397,9 @@ export async function resolveRuntimeWebProviderSelection<
 
     for (const provider of candidates) {
       if (provider.requiresCredential === false) {
+        if (!params.configuredProvider && !params.allowKeylessAutoSelect) {
+          continue;
+        }
         if (params.deferKeylessFallback && !params.configuredProvider) {
           keylessFallbackProvider ||= provider;
           continue;
@@ -529,7 +534,7 @@ export async function resolveRuntimeWebProviderSelection<
       }
     }
 
-    if (!selectedProvider && keylessFallbackProvider) {
+    if (!selectedProvider && keylessFallbackProvider && params.allowKeylessAutoSelect) {
       selectedProvider = keylessFallbackProvider.id;
       selectedResolution = {
         source: "missing" as TSource,
@@ -570,7 +575,7 @@ export async function resolveRuntimeWebProviderSelection<
         );
         const selectedDetails =
           selectedProviderEntry?.requiresCredential === false
-            ? `${params.scopePath} auto-detected keyless provider "${selectedProvider}" as the default fallback.`
+            ? `${params.scopePath} auto-detected keyless provider "${selectedProvider}".`
             : `${params.scopePath} auto-detected provider "${selectedProvider}" from available credentials.`;
         const diagnostic: RuntimeWebDiagnostic = {
           code: params.autoDetectSelectedCode,
