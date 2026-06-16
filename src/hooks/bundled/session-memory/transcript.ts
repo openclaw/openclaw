@@ -31,6 +31,7 @@ export async function getRecentSessionContent(
     const lines = content.trim().split("\n");
 
     const allMessages: string[] = [];
+    let lastAssistantText: string | undefined;
     for (const line of lines) {
       try {
         const entry = JSON.parse(line);
@@ -47,7 +48,17 @@ export async function getRecentSessionContent(
             }
             const text = extractTextMessageContent(msg.content);
             if (text && !text.startsWith("/")) {
+              // Skip consecutive duplicate assistant messages — the session JSONL
+              // persists both raw (with thinking blocks) and cleaned copies when
+              // thinking/reasoning is enabled, which would otherwise produce
+              // duplicate entries in memory files.
+              if (role === "assistant" && text === lastAssistantText) {
+                continue;
+              }
               allMessages.push(`${role}: ${text}`);
+              if (role === "assistant") {
+                lastAssistantText = text;
+              }
             }
           }
         }
