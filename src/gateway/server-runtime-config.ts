@@ -30,11 +30,9 @@ type GatewayRuntimeConfig = {
   bindHost: string;
   controlUiEnabled: boolean;
   openAiChatCompletionsEnabled: boolean;
-   openAiChatCompletionsConfig?: import("../config/types.gateway.js").GatewayHttpChatCompletionsConfig;
-  openAiStreamingConfig?: import("../config/types.gateway.js").GatewayHttpStreamingConfig;
+  openAiChatCompletionsConfig?: import("../config/types.gateway.js").GatewayHttpChatCompletionsConfig;
   openResponsesEnabled: boolean;
   openResponsesConfig?: import("../config/types.gateway.js").GatewayHttpResponsesConfig;
-  openResponsesStreamingConfig?: import("../config/types.gateway.js").GatewayHttpStreamingConfig;
   strictTransportSecurityHeader?: string;
   controlUiBasePath: string;
   controlUiRoot?: string;
@@ -188,12 +186,10 @@ export async function resolveGatewayRuntimeConfig(params: {
     openAiChatCompletionsConfig: openAiChatCompletionsConfig
       ? { ...openAiChatCompletionsConfig, enabled: openAiChatCompletionsEnabled }
       : undefined,
-    openAiStreamingConfig: openAiChatCompletionsConfig?.streaming,
     openResponsesEnabled,
     openResponsesConfig: openResponsesConfig
       ? { ...openResponsesConfig, enabled: openResponsesEnabled }
       : undefined,
-    openResponsesStreamingConfig: openResponsesConfig?.streaming,
     strictTransportSecurityHeader,
     controlUiBasePath,
     controlUiRoot,
