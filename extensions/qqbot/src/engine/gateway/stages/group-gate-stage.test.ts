@@ -58,6 +58,18 @@ function buildDeps(): InboundPipelineDeps {
   };
 }
 
+function setMentionDecision(
+  deps: InboundPipelineDeps,
+  decision: ReturnType<
+    InboundPipelineDeps["adapters"]["mentionGate"]["resolveInboundMentionDecision"]
+  >,
+): void {
+  const mentionGate = deps.adapters.mentionGate as {
+    resolveInboundMentionDecision: ReturnType<typeof vi.fn>;
+  };
+  mentionGate.resolveInboundMentionDecision.mockReturnValue(decision);
+}
+
 describe("runGroupGateStage", () => {
   it("surfaces private-only commands before the mention skip hides them", () => {
     const result = runGroupGateStage({
@@ -104,7 +116,7 @@ describe("runGroupGateStage", () => {
     (
       deps.cfg as { channels: { qqbot: { groups: { G1: { ignoreOtherMentions: boolean } } } } }
     ).channels.qqbot.groups.G1.ignoreOtherMentions = true;
-    vi.mocked(deps.adapters.mentionGate.resolveInboundMentionDecision).mockReturnValue({
+    setMentionDecision(deps, {
       effectiveWasMentioned: false,
       shouldSkip: false,
       shouldBypassMention: false,
@@ -138,7 +150,7 @@ describe("runGroupGateStage", () => {
     (
       deps.cfg as { channels: { qqbot: { groups: { G1: { commandLevel: string } } } } }
     ).channels.qqbot.groups.G1.commandLevel = "strict";
-    vi.mocked(deps.adapters.mentionGate.resolveInboundMentionDecision).mockReturnValue({
+    setMentionDecision(deps, {
       effectiveWasMentioned: true,
       shouldSkip: false,
       shouldBypassMention: true,
