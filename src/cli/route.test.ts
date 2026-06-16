@@ -47,6 +47,7 @@ describe("tryRouteCli", () => {
   let loggingState: typeof import("../logging/state.js").loggingState;
   let originalDisableRouteFirst: string | undefined;
   let originalHideBanner: string | undefined;
+  let originalLogLevel: string | undefined;
   let originalForceStderr: boolean;
 
   beforeAll(async () => {
@@ -58,8 +59,10 @@ describe("tryRouteCli", () => {
     vi.clearAllMocks();
     originalDisableRouteFirst = process.env.OPENCLAW_DISABLE_ROUTE_FIRST;
     originalHideBanner = process.env.OPENCLAW_HIDE_BANNER;
+    originalLogLevel = process.env.OPENCLAW_LOG_LEVEL;
     delete process.env.OPENCLAW_DISABLE_ROUTE_FIRST;
     delete process.env.OPENCLAW_HIDE_BANNER;
+    delete process.env.OPENCLAW_LOG_LEVEL;
     originalForceStderr = loggingState.forceConsoleToStderr;
     loggingState.forceConsoleToStderr = false;
     findRoutedCommandMock.mockReturnValue({
@@ -81,6 +84,11 @@ describe("tryRouteCli", () => {
       delete process.env.OPENCLAW_HIDE_BANNER;
     } else {
       process.env.OPENCLAW_HIDE_BANNER = originalHideBanner;
+    }
+    if (originalLogLevel === undefined) {
+      delete process.env.OPENCLAW_LOG_LEVEL;
+    } else {
+      process.env.OPENCLAW_LOG_LEVEL = originalLogLevel;
     }
   });
 
@@ -181,6 +189,7 @@ describe("tryRouteCli", () => {
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
       scope: "channels",
     });
+    expect(process.env.OPENCLAW_LOG_LEVEL).toBe("debug");
   });
 
   it("respects OPENCLAW_HIDE_BANNER for routed commands", async () => {
@@ -203,5 +212,34 @@ describe("tryRouteCli", () => {
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
     expect(runRouteMock).not.toHaveBeenCalled();
+  });
+
+  it("applies --log-level to process.env for route-first commands", async () => {
+    await expect(tryRouteCli(["node", "openclaw", "status", "--log-level", "trace"])).resolves.toBe(
+      true,
+    );
+    expect(process.env.OPENCLAW_LOG_LEVEL).toBe("trace");
+  });
+
+  it("uses last --log-level when repeated", async () => {
+    await expect(
+      tryRouteCli(["node", "openclaw", "--log-level", "error", "--log-level", "warn", "status"]),
+    ).resolves.toBe(true);
+    expect(process.env.OPENCLAW_LOG_LEVEL).toBe("warn");
+  });
+
+  it("falls back to Commander when --log-level value is missing", async () => {
+    await expect(tryRouteCli(["node", "openclaw", "--log-level", "status"])).resolves.toBe(false);
+  });
+
+  it("falls back to Commander when --log-level value is invalid", async () => {
+    await expect(
+      tryRouteCli(["node", "openclaw", "status", "--log-level", "verbose"]),
+    ).resolves.toBe(false);
+  });
+
+  it("does not set OPENCLAW_LOG_LEVEL when --log-level is absent", async () => {
+    await expect(tryRouteCli(["node", "openclaw", "status"])).resolves.toBe(true);
+    expect(process.env.OPENCLAW_LOG_LEVEL).toBeUndefined();
   });
 });
