@@ -603,8 +603,7 @@ describe("channel-streaming", () => {
       kind: "command-output",
       detail: "install dependencies",
       status: "completed",
-      detail: "install dependencies",
-      text: "🛠️ completed; install dependencies",
+      text: "🛠️ install dependencies",
     });
     expect(
       formatChannelProgressDraftText({
@@ -643,8 +642,7 @@ describe("channel-streaming", () => {
         kind: "command-output",
         detail: "install dependencies failed",
         status: "completed",
-        detail: "install dependencies failed",
-        text: "🛠️ completed; install dependencies failed",
+        text: "🛠️ install dependencies failed",
       },
     ]);
   });
