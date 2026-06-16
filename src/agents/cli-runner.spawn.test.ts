@@ -83,7 +83,7 @@ afterEach(() => {
 });
 
 function buildPreparedCliRunContext(params: {
-  provider: "claude-cli" | "codex-cli";
+  provider: "claude-cli" | "codex-cli" | "google-gemini-cli";
   model: string;
   runId: string;
   prompt?: string;
@@ -106,33 +106,46 @@ function buildPreparedCliRunContext(params: {
   // Produces a prepared context without invoking prepare.runtime, keeping spawn
   // assertions focused on execute/runtime behavior.
   const workspaceDir = params.workspaceDir ?? "/tmp";
-  const baseBackend =
-    params.provider === "claude-cli"
-      ? {
-          command: "claude",
-          args: ["-p", "--output-format", "stream-json"],
-          output: "jsonl" as const,
-          input: "stdin" as const,
-          modelArg: "--model",
-          sessionArg: "--session-id",
-          sessionMode: "always" as const,
-          systemPromptFileArg: "--append-system-prompt-file",
-          systemPromptWhen: "first" as const,
-          serialize: true,
-        }
-      : {
-          command: "codex",
-          args: ["exec", "--json"],
-          resumeArgs: ["exec", "resume", "{sessionId}", "--skip-git-repo-check"],
-          output: "text" as const,
-          input: "arg" as const,
-          modelArg: "--model",
-          sessionMode: "existing" as const,
-          systemPromptFileConfigArg: "-c",
-          systemPromptFileConfigKey: "model_instructions_file",
-          systemPromptWhen: "first" as const,
-          serialize: true,
-        };
+  const baseBackend = (() => {
+    if (params.provider === "claude-cli") {
+      return {
+        command: "claude",
+        args: ["-p", "--output-format", "stream-json"],
+        output: "jsonl" as const,
+        input: "stdin" as const,
+        modelArg: "--model",
+        sessionArg: "--session-id",
+        sessionMode: "always" as const,
+        systemPromptFileArg: "--append-system-prompt-file",
+        systemPromptWhen: "first" as const,
+        serialize: true,
+      };
+    }
+    if (params.provider === "google-gemini-cli") {
+      return {
+        command: "gemini",
+        args: ["--skip-trust", "--output-format", "json", "--prompt", "{prompt}"],
+        output: "json" as const,
+        input: "arg" as const,
+        modelArg: "--model",
+        sessionMode: "existing" as const,
+        serialize: true,
+      };
+    }
+    return {
+      command: "codex",
+      args: ["exec", "--json"],
+      resumeArgs: ["exec", "resume", "{sessionId}", "--skip-git-repo-check"],
+      output: "text" as const,
+      input: "arg" as const,
+      modelArg: "--model",
+      sessionMode: "existing" as const,
+      systemPromptFileConfigArg: "-c",
+      systemPromptFileConfigKey: "model_instructions_file",
+      systemPromptWhen: "first" as const,
+      serialize: true,
+    };
+  })();
   const backend = { ...baseBackend, ...params.backend };
   return {
     params: {
@@ -158,7 +171,12 @@ function buildPreparedCliRunContext(params: {
       id: params.provider,
       config: backend,
       bundleMcp: params.provider === "claude-cli",
-      pluginId: params.provider === "claude-cli" ? "anthropic" : "openai",
+      pluginId:
+        params.provider === "claude-cli"
+          ? "anthropic"
+          : params.provider === "google-gemini-cli"
+            ? "google"
+            : "openai",
       resolveExecutionArgs: params.resolveExecutionArgs,
     },
     preparedBackend: {
@@ -560,6 +578,30 @@ describe("runCliAgent spawn path", () => {
     expect(input.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH).toBe(
       "/tmp/openclaw-gemini-system-settings.json",
     );
+  });
+
+  it("logs Gemini CLI runtime env key diagnostics without debug output enabled", async () => {
+    mockSuccessfulCliRun();
+    const infoSpy = vi.spyOn(cliBackendLog, "info");
+
+    await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "google-gemini-cli",
+        model: "gemini-3.1-pro-preview",
+        runId: "run-gemini-env-diagnostics",
+        preparedEnv: {
+          GEMINI_CLI_HOME: "/tmp/openclaw-gemini-profile-home",
+          GEMINI_CLI_SYSTEM_SETTINGS_PATH: "/tmp/openclaw-gemini-system-settings.json",
+        },
+      }),
+    );
+
+    const envLog = infoSpy.mock.calls
+      .map((call) => String(call[0]))
+      .find((line) => line.startsWith("cli env auth:"));
+    expect(envLog).toContain("runtimeChild=GEMINI_CLI_HOME,GEMINI_CLI_SYSTEM_SETTINGS_PATH");
+    expect(envLog).not.toContain("/tmp/openclaw-gemini-profile-home");
+    expect(envLog).not.toContain("/tmp/openclaw-gemini-system-settings.json");
   });
 
   it("passes OpenClaw skills to Claude as a session plugin", async () => {
