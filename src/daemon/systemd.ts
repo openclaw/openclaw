@@ -1485,10 +1485,16 @@ async function runSystemdServiceAction(params: {
       throw new Error(`systemctl ${params.action} failed: ${res.stderr || res.stdout}`.trim());
     }
     if (retiredUserUnit) {
-      await removeRetiredUserSystemdGatewayConflict(retiredUserUnit);
-      params.stdout.write(
-        `${formatLine("Retired conflicting systemd service", `${retiredUserUnit.unitName} (${retiredUserUnit.unitPath})`)}\n`,
-      );
+      try {
+        await removeRetiredUserSystemdGatewayConflict(retiredUserUnit);
+        params.stdout.write(
+          `${formatLine("Retired conflicting systemd service", `${retiredUserUnit.unitName} (${retiredUserUnit.unitPath})`)}\n`,
+        );
+      } catch (error) {
+        params.stdout.write(
+          `${formatLine("Could not retire conflicting systemd service", `${retiredUserUnit.unitName} (${retiredUserUnit.unitPath}): ${formatErrorMessage(error)}`)}\n`,
+        );
+      }
     }
     params.stdout.write(`${formatLine(params.label, unitName)}\n`);
     return;

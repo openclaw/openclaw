@@ -2864,6 +2864,68 @@ describe("systemd service control", () => {
     }
   });
 
+  it("keeps system restart successful when retired user unit cleanup fails", async () => {
+    const tempHomeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-systemd-control-"));
+    const home = path.join(tempHomeRoot, "home");
+    const userUnitPath = path.join(home, ".config", "systemd", "user", GATEWAY_SERVICE);
+    try {
+      await fs.mkdir(path.dirname(userUnitPath), { recursive: true });
+      await fs.writeFile(userUnitPath, "[Unit]\nDescription=OpenClaw Gateway\n", "utf8");
+      const realAccess = fs.access.bind(fs);
+      vi.spyOn(fs, "access").mockImplementation(async (pathname, mode) => {
+        const pathValue = pathLikeToString(pathname);
+        if (pathValue === "/etc/systemd/system/openclaw-gateway.service") {
+          return undefined;
+        }
+        return await realAccess(pathname, mode);
+      });
+      const realUnlink = fs.unlink.bind(fs);
+      vi.spyOn(fs, "unlink").mockImplementation(async (pathname) => {
+        const pathValue = pathLikeToString(pathname);
+        if (pathValue === userUnitPath) {
+          const error = new Error("permission denied") as NodeJS.ErrnoException;
+          error.code = "EACCES";
+          throw error;
+        }
+        return await realUnlink(pathname);
+      });
+      mockEffectiveUid(0);
+      execFileMock
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          expect(args).toEqual(["is-active", "--quiet", GATEWAY_SERVICE]);
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertMachineUserSystemctlArgs(args, "debian", "is-active", "--quiet", GATEWAY_SERVICE);
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertMachineUserSystemctlArgs(args, "debian", "is-enabled", GATEWAY_SERVICE);
+          cb(null, "enabled\n", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertMachineUserSystemctlArgs(args, "debian", "disable", "--now", GATEWAY_SERVICE);
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          expect(args).toEqual(["restart", GATEWAY_SERVICE]);
+          cb(null, "", "");
+        });
+
+      const { write, stdout } = createWritableStreamMock();
+      await restartSystemdService({ stdout, env: { HOME: home, SUDO_USER: "debian" } });
+
+      const output = write.mock.calls.map(([value]) => String(value)).join("\n");
+      expect(output).toContain("Could not retire conflicting systemd service");
+      expect(output).toContain("permission denied");
+      expect(output).toContain("Restarted systemd service");
+      expect(execFileMock).toHaveBeenCalledTimes(5);
+    } finally {
+      vi.restoreAllMocks();
+      await fs.rm(tempHomeRoot, { recursive: true, force: true });
+    }
+  });
+
   it("keeps a conflicting user unit when non-root restart needs sudo for the system unit", async () => {
     const tempHomeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-systemd-control-"));
     const home = path.join(tempHomeRoot, "home");
