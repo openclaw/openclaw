@@ -1921,11 +1921,13 @@ async function dispatchSlashCommand(
         return;
       }
       try {
+        const sessionScope = scopedAgentParamsForSession(host, host.sessionKey);
         await host.client.request("sessions.patch", {
           key: host.sessionKey,
+          ...sessionScope,
           displayName,
         });
-        await loadSessions(host as unknown as Parameters<typeof loadSessions>[0]);
+        await loadSessions(host as unknown as Parameters<typeof loadSessions>[0], sessionScope);
       } catch (err) {
         setChatError(host, String(err));
       }

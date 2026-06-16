@@ -2216,6 +2216,41 @@ describe("handleSendChat", () => {
     expect(host.sessionsError).toBeNull();
   });
 
+  it("scopes /label patches for selected-agent global sessions", async () => {
+    const request = vi.fn(async (method: string, params: unknown) => {
+      if (method === "sessions.patch") {
+        expect(params).toStrictEqual({
+          key: "global",
+          agentId: "work",
+          displayName: "Work Plan",
+        });
+        return { ok: true };
+      }
+      if (method === "sessions.list") {
+        expect(params).toMatchObject({ agentId: "work" });
+        return createSessionsResult([row("global", { displayName: "Work Plan" })]);
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "/label Work Plan",
+      sessionKey: "global",
+      assistantAgentId: "work",
+      agentsList: { defaultId: "main" },
+    });
+
+    await handleSendChat(host);
+
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "global",
+      agentId: "work",
+      displayName: "Work Plan",
+    });
+    expect(host.chatMessage).toBe("");
+    expect(host.sessionsError).toBeNull();
+  });
+
   it("shows an error when /label has no display name", async () => {
     const request = vi.fn(async (method: string) => {
       throw new Error(`Unexpected request: ${method}`);
