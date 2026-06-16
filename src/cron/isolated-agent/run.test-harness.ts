@@ -511,7 +511,7 @@ function resetRunOutcomeMocks(): void {
       failureSignal,
       runLevelError,
     }: {
-      payloads: Array<{ isError?: boolean }>;
+      payloads: Array<{ text?: string; isError?: boolean }>;
       failureSignal?: { fatalForCron?: boolean; message?: string };
       runLevelError?: unknown;
     }) => {
@@ -539,26 +539,33 @@ function resetRunOutcomeMocks(): void {
         failureSignal?.fatalForCron === true
           ? (failureSignal.message ?? "cron isolated run returned a fatal failure signal")
           : undefined;
-      const errorPayloadMessage = payloads.some((payload) => payload?.isError === true)
+      const errorPayloadMessage = [...payloads]
+        .toReversed()
+        .find((payload) => payload?.isError === true && payload.text?.trim())
+        ?.text?.trim();
+      const fallbackErrorPayloadMessage = payloads.some((payload) => payload?.isError === true)
         ? "cron isolated run returned an error payload"
         : undefined;
       const outputText =
         errorPayloadMessage ??
+        fallbackErrorPayloadMessage ??
         failureMessage ??
         runLevelErrorMessage ??
         pickLastNonEmptyTextFromPayloadsMock(payloads);
       const synthesizedText = outputText?.trim() || "summary";
-      const hasFatalErrorPayload =
-        errorPayloadMessage !== undefined ||
-        failureMessage !== undefined ||
-        runLevelErrorMessage !== undefined;
-      const hasFatalStructuredErrorPayload = errorPayloadMessage !== undefined;
-      const deliveryPayload =
-        errorPayloadMessage || failureMessage || runLevelErrorMessage
-          ? { text: errorPayloadMessage ?? failureMessage ?? runLevelErrorMessage, isError: true }
-          : undefined;
+      const fatalErrorMessage =
+        errorPayloadMessage ??
+        fallbackErrorPayloadMessage ??
+        failureMessage ??
+        runLevelErrorMessage;
+      const hasFatalErrorPayload = fatalErrorMessage !== undefined;
+      const hasFatalStructuredErrorPayload =
+        errorPayloadMessage !== undefined || fallbackErrorPayloadMessage !== undefined;
+      const deliveryPayload = fatalErrorMessage
+        ? { text: fatalErrorMessage, isError: true }
+        : undefined;
       return {
-        summary: errorPayloadMessage ?? failureMessage ?? runLevelErrorMessage ?? "summary",
+        summary: fatalErrorMessage ?? "summary",
         outputText,
         synthesizedText,
         deliveryPayload,
@@ -570,8 +577,7 @@ function resetRunOutcomeMocks(): void {
         deliveryPayloadHasStructuredContent: false,
         hasFatalErrorPayload,
         hasFatalStructuredErrorPayload,
-        embeddedRunError:
-          errorPayloadMessage ?? failureMessage ?? runLevelErrorMessage ?? undefined,
+        embeddedRunError: fatalErrorMessage,
       };
     },
   );

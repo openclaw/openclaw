@@ -1067,19 +1067,6 @@ async function finalizeCronRun(params: {
       ...telemetry,
     });
   }
-  if (finalRunResult.meta?.aborted === true) {
-    const metaErrorMessage = normalizeOptionalString(finalRunResult.meta.error?.message);
-    const error = metaErrorMessage ?? "cron isolated agent run aborted";
-    return prepared.withRunSession({
-      status: "error",
-      error,
-      diagnostics: mergeCronRunDiagnostics(
-        createCronRunDiagnosticsFromAgentResult(finalRunResult, { finalStatus: "error" }),
-        createCronRunDiagnosticsFromError("agent-run", error),
-      ),
-      ...telemetry,
-    });
-  }
   const cronPayloadOutcome = resolveCronPayloadOutcome({
     payloads,
     runLevelError: finalRunResult.meta?.error,
@@ -1091,6 +1078,23 @@ async function finalizeCronRun(params: {
       })
     ).preferFinalAssistantVisibleText,
   });
+  if (finalRunResult.meta?.aborted === true) {
+    const metaErrorMessage = normalizeOptionalString(finalRunResult.meta.error?.message);
+    const fatalPayloadMessage = cronPayloadOutcome.hasFatalErrorPayload
+      ? (normalizeOptionalString(cronPayloadOutcome.embeddedRunError) ??
+        normalizeOptionalString(cronPayloadOutcome.outputText))
+      : undefined;
+    const error = metaErrorMessage ?? fatalPayloadMessage ?? "cron isolated agent run aborted";
+    return prepared.withRunSession({
+      status: "error",
+      error,
+      diagnostics: mergeCronRunDiagnostics(
+        createCronRunDiagnosticsFromAgentResult(finalRunResult, { finalStatus: "error" }),
+        createCronRunDiagnosticsFromError("agent-run", error),
+      ),
+      ...telemetry,
+    });
+  }
   const {
     synthesizedText,
     deliveryPayloads,
