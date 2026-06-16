@@ -6,10 +6,18 @@ import type { CodexAppServerClient } from "./app-server/client.js";
 import type { CodexServerNotification, JsonValue } from "./app-server/protocol.js";
 import { createCodexWebSearchProvider } from "./web-search-provider.js";
 
-function codexModel() {
+function codexModel(
+  options: {
+    id?: string;
+    model?: string;
+    inputModalities?: string[];
+    isDefault?: boolean;
+  } = {},
+) {
+  const id = options.id ?? "gpt-5.5";
   return {
-    id: "gpt-5.5",
-    model: "gpt-5.5",
+    id,
+    model: options.model ?? id,
     upgrade: null,
     upgradeInfo: null,
     availabilityNux: null,
@@ -18,10 +26,10 @@ function codexModel() {
     hidden: false,
     supportedReasoningEfforts: [{ reasoningEffort: "low", description: "fast" }],
     defaultReasoningEffort: "low",
-    inputModalities: ["text", "image"],
+    inputModalities: options.inputModalities ?? ["text", "image"],
     supportsPersonality: false,
     additionalSpeedTiers: [],
-    isDefault: true,
+    isDefault: options.isDefault ?? true,
   };
 }
 
@@ -74,13 +82,16 @@ function turnStartResult(status = "inProgress") {
   };
 }
 
-function createFakeClient(options?: { emitWebSearch?: boolean }) {
+function createFakeClient(options?: {
+  emitWebSearch?: boolean;
+  models?: ReturnType<typeof codexModel>[];
+}) {
   const notifications = new Set<(notification: CodexServerNotification) => void>();
   const requests: Array<{ method: string; params?: JsonValue }> = [];
   const request = vi.fn(async (method: string, params?: JsonValue) => {
     requests.push({ method, params });
     if (method === "model/list") {
-      return { data: [codexModel()], nextCursor: null };
+      return { data: options?.models ?? [codexModel()], nextCursor: null };
     }
     if (method === "thread/start") {
       return threadStartResult();
@@ -283,6 +294,54 @@ describe("codex web search provider", () => {
       throw new Error("expected isolated Codex home and workspace");
     }
     expect(path.dirname(threadStartCwd)).toBe(path.dirname(isolatedCodexHome));
+  });
+
+  it("selects the live default text-capable model", async () => {
+    const { client, requests } = createFakeClient({
+      models: [
+        codexModel({ id: "available-first", isDefault: false }),
+        codexModel({ id: "available-default", model: "available-default-wire" }),
+      ],
+    });
+    const provider = createCodexWebSearchProvider({
+      clientFactory: async () => client,
+    });
+    const config = createConfig();
+    const tool = provider.createTool({
+      config,
+      searchConfig: config.tools?.web?.search,
+      agentDir: "/tmp/openclaw-agent",
+    });
+
+    const result = await tool?.execute({ query: "plumbers in Edmonton Alberta" });
+
+    expect(result?.model).toBe("available-default-wire");
+    expect(requests[1]?.params).toEqual(
+      expect.objectContaining({ model: "available-default-wire" }),
+    );
+    expect(requests[2]?.params).toEqual(
+      expect.objectContaining({ model: "available-default-wire" }),
+    );
+  });
+
+  it("fails closed when the live catalog has no text-capable model", async () => {
+    const { client, requests } = createFakeClient({
+      models: [codexModel({ id: "image-only", inputModalities: ["image"] })],
+    });
+    const provider = createCodexWebSearchProvider({
+      clientFactory: async () => client,
+    });
+    const config = createConfig();
+    const tool = provider.createTool({
+      config,
+      searchConfig: config.tools?.web?.search,
+      agentDir: "/tmp/openclaw-agent",
+    });
+
+    await expect(tool?.execute({ query: "plumbers in Edmonton Alberta" })).rejects.toThrow(
+      "Codex app-server has no model supporting text input.",
+    );
+    expect(requests.map((entry) => entry.method)).toEqual(["model/list"]);
   });
 
   it("fails closed when Codex returns an ungrounded answer", async () => {

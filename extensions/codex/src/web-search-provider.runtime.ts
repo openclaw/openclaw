@@ -6,16 +6,12 @@ import {
   wrapWebContent,
 } from "openclaw/plugin-sdk/provider-web-search";
 import type { WebSearchProviderPlugin } from "openclaw/plugin-sdk/provider-web-search-contract";
-import { FALLBACK_CODEX_MODELS } from "../provider-catalog.js";
 import {
   runBoundedCodexAppServerTurn,
   type CodexBoundedTurnOptions,
 } from "./app-server/bounded-turn.js";
 import { isJsonObject, type CodexThreadItem, type JsonObject } from "./app-server/protocol.js";
 import { buildCodexNativeWebSearchThreadConfig } from "./app-server/web-search.js";
-
-const DEFAULT_CODEX_WEB_SEARCH_MODEL =
-  FALLBACK_CODEX_MODELS.find((model) => model.isDefault)?.id ?? FALLBACK_CODEX_MODELS[0]?.id;
 
 type WebSearchProviderContext = Parameters<WebSearchProviderPlugin["createTool"]>[0];
 
@@ -25,14 +21,11 @@ export async function executeCodexWebSearchProviderTool(
   executionContext: WebSearchProviderToolExecutionContext | undefined,
   options: CodexBoundedTurnOptions,
 ): Promise<Record<string, unknown>> {
-  if (!DEFAULT_CODEX_WEB_SEARCH_MODEL) {
-    throw new Error("Codex hosted search has no configured text model.");
-  }
   const query = readStringParam(args, "query", { required: true });
   const start = Date.now();
   const result = await runBoundedCodexAppServerTurn({
     config: ctx.config,
-    model: DEFAULT_CODEX_WEB_SEARCH_MODEL,
+    model: { mode: "live-default" },
     timeoutMs: resolveSearchTimeoutSeconds(ctx.searchConfig as SearchConfigRecord) * 1_000,
     signal: executionContext?.signal,
     agentDir: ctx.agentDir,
@@ -54,7 +47,7 @@ export async function executeCodexWebSearchProviderTool(
   return {
     query,
     provider: "codex",
-    model: DEFAULT_CODEX_WEB_SEARCH_MODEL,
+    model: result.model,
     tookMs: Date.now() - start,
     externalContent: {
       untrusted: true,

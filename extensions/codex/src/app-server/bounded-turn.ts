@@ -46,11 +46,14 @@ export type CodexBoundedTurnOptions = {
 export type CodexBoundedTurnResult = {
   text: string;
   items: CodexThreadItem[];
+  model: string;
 };
+
+type CodexBoundedTurnModelSelection = { mode: "required"; id: string } | { mode: "live-default" };
 
 type CodexBoundedTurnParams = {
   config?: OpenClawConfig;
-  model: string;
+  model: CodexBoundedTurnModelSelection;
   profile?: string;
   timeoutMs: number;
   signal?: AbortSignal;
@@ -144,9 +147,9 @@ async function runBoundedCodexAppServerTurnInWorkspace(
   timeout.unref?.();
 
   try {
-    await assertCodexModelSupportsInput({
+    const model = await resolveCodexBoundedTurnModel({
       client,
-      model: params.model,
+      selection: params.model,
       requiredModalities: params.requiredModalities,
       timeoutMs,
       signal: abortController.signal,
@@ -155,7 +158,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
       await client.request<unknown>(
         "thread/start",
         {
-          model: params.model,
+          model,
           modelProvider: "openai",
           cwd: workspace.cwd,
           approvalPolicy: "on-request",
@@ -189,16 +192,19 @@ async function runBoundedCodexAppServerTurnInWorkspace(
             input: params.input,
             cwd: workspace.cwd,
             approvalPolicy: "on-request",
-            model: params.model,
+            model,
             effort: "low",
           } satisfies CodexTurnStartParams,
           { timeoutMs, signal: abortController.signal },
         ),
       );
-      return await collector.collect(turn.turn, {
-        timeoutMs,
-        signal: abortController.signal,
-      });
+      return {
+        ...(await collector.collect(turn.turn, {
+          timeoutMs,
+          signal: abortController.signal,
+        })),
+        model,
+      };
     } finally {
       requestCleanup();
       cleanup();
@@ -239,29 +245,44 @@ function createCodexBoundedApprovalHandler(taskLabel: string) {
   };
 }
 
-async function assertCodexModelSupportsInput(params: {
+async function resolveCodexBoundedTurnModel(params: {
   client: CodexAppServerClient;
-  model: string;
+  selection: CodexBoundedTurnModelSelection;
   requiredModalities: string[];
   timeoutMs: number;
   signal: AbortSignal;
-}): Promise<void> {
+}): Promise<string> {
   const result = await params.client.request<unknown>(
     "model/list",
-    { limit: 100, cursor: null, includeHidden: false },
+    { limit: null, cursor: null, includeHidden: false },
     { timeoutMs: Math.min(params.timeoutMs, 5_000), signal: params.signal },
   );
   const listed = readModelListResult(result).models;
-  const match = listed.find((entry) => entry.model === params.model || entry.id === params.model);
+  if (params.selection.mode === "live-default") {
+    const supported = listed.filter((entry) =>
+      params.requiredModalities.every((modality) => entry.inputModalities.includes(modality)),
+    );
+    const selected = supported.find((entry) => entry.isDefault) ?? supported[0];
+    if (!selected) {
+      throw new Error(
+        `Codex app-server has no model supporting ${params.requiredModalities.join(" and ")} input.`,
+      );
+    }
+    return selected.model;
+  }
+
+  const model = params.selection.id;
+  const match = listed.find((entry) => entry.model === model || entry.id === model);
   if (!match) {
-    throw new Error(`Codex app-server model not found: ${params.model}`);
+    throw new Error(`Codex app-server model not found: ${model}`);
   }
   if (params.requiredModalities.includes("image") && !match.inputModalities.includes("image")) {
-    throw new Error(`Codex app-server model does not support images: ${params.model}`);
+    throw new Error(`Codex app-server model does not support images: ${model}`);
   }
   if (params.requiredModalities.includes("text") && !match.inputModalities.includes("text")) {
-    throw new Error(`Codex app-server model does not support text: ${params.model}`);
+    throw new Error(`Codex app-server model does not support text: ${model}`);
   }
+  return model;
 }
 
 function createCodexBoundedTurnCollector(threadId: string, taskLabel: string) {
@@ -335,7 +356,7 @@ function createCodexBoundedTurnCollector(threadId: string, taskLabel: string) {
     async collect(
       startedTurn: CodexTurn,
       options: { timeoutMs: number; signal: AbortSignal },
-    ): Promise<CodexBoundedTurnResult> {
+    ): Promise<Omit<CodexBoundedTurnResult, "model">> {
       turnId = startedTurn.id;
       if (isTerminalTurn(startedTurn)) {
         completedTurn = startedTurn;
