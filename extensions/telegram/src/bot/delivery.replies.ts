@@ -775,7 +775,8 @@ export async function deliverReplies(params: {
   const transcriptMirror = params.transcriptMirror;
   const deliveredContents: Array<{ text: string; mediaUrls: string[] }> = [];
   const hookRunner = getGlobalHookRunner();
-  const hasMessageSendingHooks = hookRunner?.hasHooks("message_sending") ?? false;
+  // message_sending is handled at the dispatcher beforeDeliver layer;
+  // running it here would double-invoke for every outbound reply.
   const hasMessageSentHooks = hookRunner?.hasHooks("message_sent") ?? false;
   const chunkText = buildChunkTextResolver({
     textLimit:
@@ -833,11 +834,6 @@ export async function deliverReplies(params: {
     }
 
     const rawContent = resolvedReplyText;
-    const spokenHookContent =
-      !rawContent && reply.audioAsVoice === true && reply.spokenText?.trim()
-        ? reply.spokenText
-        : undefined;
-    const hookContent = spokenHookContent ?? rawContent;
     const replyToId =
       params.replyToMode === "off" ? undefined : resolveTelegramReplyId(reply.replyToId);
     const replyQuote = resolveReplyQuoteForSend({
@@ -848,34 +844,6 @@ export async function deliverReplies(params: {
       replyQuotePosition: params.replyQuotePosition,
       replyQuoteEntities: params.replyQuoteEntities,
     });
-    if (hasMessageSendingHooks) {
-      const hookResult = await hookRunner?.runMessageSending(
-        {
-          to: params.chatId,
-          content: hookContent,
-          replyToId,
-          threadId: params.thread?.id,
-          metadata: {
-            channel: "telegram",
-            mediaUrls: mediaList,
-            threadId: params.thread?.id,
-          },
-        },
-        {
-          channelId: "telegram",
-          accountId: params.accountId,
-          conversationId: params.chatId,
-        },
-      );
-      if (hookResult?.cancel) {
-        continue;
-      }
-      if (typeof hookResult?.content === "string" && hookResult.content !== hookContent) {
-        reply = spokenHookContent
-          ? { ...reply, spokenText: hookResult.content }
-          : { ...reply, text: hookResult.content };
-      }
-    }
 
     let contentForSentHook =
       reply.text || (reply.audioAsVoice === true ? resolveVoiceFallbackText(reply) : "") || "";
