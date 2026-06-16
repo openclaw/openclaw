@@ -20,7 +20,7 @@ import {
   type SessionEntry,
 } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
-import { readSessionMessagesAsync } from "../gateway/session-utils.fs.js";
+import { readSessionMessagesAsync } from "../gateway/session-transcript-readers.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveInternalSessionEffectsTranscriptPath } from "./internal-session-effects.js";
@@ -294,9 +294,12 @@ export async function recoverOrphanedSubagentSessions(params: {
         log.info(`found orphaned subagent session: ${childSessionKey} (run=${runId})`);
 
         const messages = await readSessionMessagesAsync(
-          entry.sessionId,
-          storePath,
-          entry.sessionFile,
+          {
+            agentId: resolveAgentIdFromSessionKey(childSessionKey),
+            sessionFile: entry.sessionFile,
+            sessionId: entry.sessionId,
+            storePath,
+          },
           {
             mode: "recent",
             maxMessages: 200,

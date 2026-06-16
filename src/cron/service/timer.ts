@@ -227,7 +227,9 @@ export async function executeJobCoreWithTimeout(
     const triggerTimeout = (reason: string) => {
       timeoutReason = reason;
       if (!runAbortController.signal.aborted) {
-        runAbortController.abort(reason);
+        const timeoutError = new Error(reason);
+        timeoutError.name = "TimeoutError";
+        runAbortController.abort(timeoutError);
       }
       resolveTimeout?.(timeoutMarker);
     };

@@ -15,6 +15,8 @@ type RegisterSubagentRunParams = {
   requesterDisplayKey: string;
   task: string;
   taskName?: string;
+  agentId?: string;
+  requesterAgentId?: string;
   cleanup: "delete" | "keep";
   label?: string;
   model?: string;

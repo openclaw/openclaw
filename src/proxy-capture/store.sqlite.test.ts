@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { listOpenFileDescriptorsForPath } from "../infra/open-file-descriptors.test-support.js";
 import {
   acquireDebugProxyCaptureStore,
   closeDebugProxyCaptureStore,
@@ -31,6 +32,18 @@ function makeStore() {
 }
 
 describe("DebugProxyCaptureStore", () => {
+  it.runIf(process.platform === "linux")("closes the database when initialization fails", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-proxy-capture-failed-open-"));
+    cleanupDirs.push(root);
+    const dbPath = path.join(root, "capture.sqlite");
+    fs.writeFileSync(dbPath, "not a sqlite database");
+
+    expect(() => new DebugProxyCaptureStore(dbPath, path.join(root, "blobs"))).toThrow(
+      "file is not a database",
+    );
+    expect(listOpenFileDescriptorsForPath(dbPath)).toEqual([]);
+  });
+
   it("keeps the cached store open until the last lease releases", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-proxy-capture-lease-"));
     cleanupDirs.push(root);
@@ -50,6 +63,27 @@ describe("DebugProxyCaptureStore", () => {
     const reopened = getDebugProxyCaptureStore(dbPath, blobDir);
     expect(Object.is(reopened, first.store)).toBe(false);
     expect(reopened.isClosed).toBe(false);
+  });
+
+  it("tracks and closes cached stores independently across paths", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-proxy-capture-paths-"));
+    cleanupDirs.push(root);
+    const first = acquireDebugProxyCaptureStore(
+      path.join(root, "first.sqlite"),
+      path.join(root, "first-blobs"),
+    );
+    const second = acquireDebugProxyCaptureStore(
+      path.join(root, "second.sqlite"),
+      path.join(root, "second-blobs"),
+    );
+
+    first.release();
+    expect(first.store.isClosed).toBe(true);
+    expect(second.store.isClosed).toBe(false);
+
+    closeDebugProxyCaptureStore();
+    expect(second.store.isClosed).toBe(true);
+    second.release();
   });
 
   it("uses rollback journaling for captures on NFS-backed volumes", () => {

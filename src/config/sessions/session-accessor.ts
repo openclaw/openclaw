@@ -6,11 +6,13 @@ import type { SessionTranscriptUpdate } from "../../sessions/transcript-events.j
 import { getRuntimeConfig } from "../io.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import {
+  resolveSessionFilePath,
   resolveSessionTranscriptPath,
   resolveSessionTranscriptPathInDir,
   resolveStorePath,
 } from "./paths.js";
 import { resolveAndPersistSessionFile } from "./session-file.js";
+import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import {
   getSessionEntry,
   cleanupSessionLifecycleArtifacts as cleanupFileSessionLifecycleArtifacts,
@@ -84,6 +86,11 @@ export type SessionTranscriptAccessScope = SessionTranscriptReadScope & {
   sessionKey?: string;
 };
 
+export type SessionTranscriptRuntimeScope = SessionAccessScope & {
+  sessionId: string;
+  threadId?: string | number;
+};
+
 export type SessionTranscriptWriteScope = Omit<SessionTranscriptAccessScope, "sessionId"> & {
   /** Optional for appenders that can operate on an existing explicit transcript target. */
   sessionId?: string;
@@ -134,6 +141,13 @@ export type TranscriptMessageAppendResult<TMessage> = {
 /** Transcript update fields supplied by callers; sessionFile is resolved here. */
 export type TranscriptUpdatePayload = Omit<SessionTranscriptUpdate, "sessionFile">;
 
+export type SessionTranscriptRuntimeTarget = {
+  agentId: string;
+  sessionFile: string;
+  sessionId: string;
+  sessionKey: string;
+};
+
 export type SessionEntryUpdateOptions = {
   /** Skip prune/cap/rotation maintenance for specialized internal updates. */
   skipMaintenance?: boolean;
@@ -144,6 +158,8 @@ export type SessionEntryUpdateOptions = {
 export type SessionEntryPatchOptions = {
   /** Entry to synthesize when a patch operation is allowed to create. */
   fallbackEntry?: SessionEntry;
+  /** Fully resolved maintenance settings when the caller already has config loaded. */
+  maintenanceConfig?: ResolvedSessionMaintenanceConfig;
   /** Keep the previous updatedAt value when the patch should not count as activity. */
   preserveActivity?: boolean;
   /** Replace the whole entry instead of merging the returned patch. */
@@ -254,6 +270,7 @@ export async function patchSessionEntry(
   return await patchFileSessionEntry({
     ...scope,
     fallbackEntry: options.fallbackEntry,
+    maintenanceConfig: options.maintenanceConfig,
     preserveActivity: options.preserveActivity,
     replaceEntry: options.replaceEntry,
     update,
@@ -374,6 +391,115 @@ export async function publishTranscriptUpdate(
   });
 }
 
+/**
+ * Resolves the current file-backed target for a storage-neutral runtime
+ * transcript scope. Callers use the scope as identity; sessionFile is returned
+ * only for current file-backed implementation details such as locks/events.
+ */
+export async function resolveSessionTranscriptRuntimeTarget(
+  scope: SessionTranscriptRuntimeScope,
+): Promise<SessionTranscriptRuntimeTarget> {
+  const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey);
+  if (!agentId) {
+    throw new Error(`Cannot resolve transcript scope without an agent id: ${scope.sessionKey}`);
+  }
+  const sessionStore = scope.storePath
+    ? loadSessionStore(scope.storePath, { skipCache: true })
+    : undefined;
+  const resolvedStoreEntry = sessionStore
+    ? resolveSessionStoreEntry({ store: sessionStore, sessionKey: scope.sessionKey })
+    : undefined;
+  const sessionEntry = resolvedStoreEntry?.existing ?? loadSessionEntry(scope);
+  const sessionKey = resolvedStoreEntry?.normalizedKey ?? scope.sessionKey;
+  if (sessionStore && scope.storePath) {
+    const sessionsDir = path.dirname(path.resolve(scope.storePath));
+    const threadId = scope.threadId ?? parseSessionThreadInfo(scope.sessionKey).threadId;
+    const shouldUseDerivedSessionFile =
+      !sessionEntry?.sessionFile || sessionEntry.sessionId !== scope.sessionId;
+    const fallbackSessionFile =
+      shouldUseDerivedSessionFile && threadId !== undefined
+        ? resolveSessionTranscriptPathInDir(scope.sessionId, sessionsDir, threadId)
+        : undefined;
+    const resolved = await resolveAndPersistSessionFile({
+      agentId,
+      fallbackSessionFile,
+      sessionEntry,
+      sessionId: scope.sessionId,
+      sessionKey,
+      sessionStore,
+      sessionsDir,
+      storePath: scope.storePath,
+    });
+    return {
+      agentId,
+      sessionFile: resolved.sessionFile,
+      sessionId: scope.sessionId,
+      sessionKey,
+    };
+  }
+  const resolved = await resolveSessionTranscriptFile({
+    agentId,
+    sessionEntry,
+    sessionId: scope.sessionId,
+    sessionKey: scope.sessionKey,
+    ...(sessionStore ? { sessionStore } : {}),
+    ...(scope.storePath ? { storePath: scope.storePath } : {}),
+    ...(scope.threadId !== undefined ? { threadId: scope.threadId } : {}),
+  });
+  return {
+    agentId,
+    sessionFile: resolved.sessionFile,
+    sessionId: scope.sessionId,
+    sessionKey,
+  };
+}
+
+/**
+ * Resolves the file-backed runtime transcript target for read/delete probes
+ * without persisting missing sessionFile metadata into the session store.
+ */
+export async function resolveSessionTranscriptRuntimeReadTarget(
+  scope: SessionTranscriptRuntimeScope,
+): Promise<SessionTranscriptRuntimeTarget> {
+  const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey);
+  if (!agentId) {
+    throw new Error(`Cannot resolve transcript scope without an agent id: ${scope.sessionKey}`);
+  }
+  const sessionStore = scope.storePath
+    ? loadSessionStore(scope.storePath, { skipCache: true })
+    : undefined;
+  const resolvedStoreEntry = sessionStore
+    ? resolveSessionStoreEntry({ store: sessionStore, sessionKey: scope.sessionKey })
+    : undefined;
+  const sessionEntry = resolvedStoreEntry?.existing ?? loadSessionEntry(scope);
+  const sessionKey = resolvedStoreEntry?.normalizedKey ?? scope.sessionKey;
+  const matchingSessionEntry =
+    sessionEntry?.sessionId === scope.sessionId ? sessionEntry : undefined;
+  if (scope.storePath) {
+    const sessionsDir = path.dirname(path.resolve(scope.storePath));
+    const threadId = scope.threadId ?? parseSessionThreadInfo(sessionKey).threadId;
+    const sessionFile = matchingSessionEntry?.sessionFile
+      ? resolveSessionFilePath(scope.sessionId, matchingSessionEntry, { agentId, sessionsDir })
+      : resolveSessionTranscriptPathInDir(scope.sessionId, sessionsDir, threadId);
+    return {
+      agentId,
+      sessionFile,
+      sessionId: scope.sessionId,
+      sessionKey,
+    };
+  }
+  const threadId = scope.threadId ?? parseSessionThreadInfo(sessionKey).threadId;
+  const sessionFile = matchingSessionEntry?.sessionFile
+    ? resolveSessionFilePath(scope.sessionId, matchingSessionEntry, { agentId })
+    : resolveSessionTranscriptPath(scope.sessionId, agentId, threadId);
+  return {
+    agentId,
+    sessionFile,
+    sessionId: scope.sessionId,
+    sessionKey,
+  };
+}
+
 function createFallbackSessionEntry(patch: Partial<SessionEntry>): SessionEntry {
   const now = Date.now();
   return {
@@ -437,44 +563,9 @@ async function resolveTranscriptAccess(scope: SessionTranscriptWriteScope): Prom
   if (!scope.sessionId) {
     throw new Error(`Cannot resolve transcript scope without a session id: ${scopeSessionKey}`);
   }
-  const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(scopeSessionKey);
-  if (!agentId) {
-    throw new Error(`Cannot resolve transcript scope without an agent id: ${scopeSessionKey}`);
-  }
-  const sessionStore = scope.storePath
-    ? loadSessionStore(scope.storePath, { skipCache: true })
-    : undefined;
-  const resolvedStoreEntry = sessionStore
-    ? resolveSessionStoreEntry({ store: sessionStore, sessionKey: scopeSessionKey })
-    : undefined;
-  const sessionEntry =
-    resolvedStoreEntry?.existing ?? loadSessionEntry({ ...scope, sessionKey: scopeSessionKey });
-  const sessionKey = resolvedStoreEntry?.normalizedKey ?? scopeSessionKey;
-  if (sessionStore && scope.storePath) {
-    const sessionsDir = path.dirname(path.resolve(scope.storePath));
-    const threadId = scope.threadId ?? parseSessionThreadInfo(scopeSessionKey).threadId;
-    const fallbackSessionFile =
-      !sessionEntry?.sessionFile && threadId !== undefined
-        ? resolveSessionTranscriptPathInDir(scope.sessionId, sessionsDir, threadId)
-        : undefined;
-    return await resolveAndPersistSessionFile({
-      agentId,
-      fallbackSessionFile,
-      sessionEntry,
-      sessionId: scope.sessionId,
-      sessionKey,
-      sessionStore,
-      sessionsDir,
-      storePath: scope.storePath,
-    });
-  }
-  return await resolveSessionTranscriptFile({
-    agentId,
-    sessionEntry,
+  return await resolveSessionTranscriptRuntimeTarget({
+    ...scope,
     sessionId: scope.sessionId,
     sessionKey: scopeSessionKey,
-    ...(sessionStore ? { sessionStore } : {}),
-    ...(scope.storePath ? { storePath: scope.storePath } : {}),
-    ...(scope.threadId !== undefined ? { threadId: scope.threadId } : {}),
   });
 }

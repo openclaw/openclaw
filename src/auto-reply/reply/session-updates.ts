@@ -10,9 +10,8 @@ import {
   resolveSessionFilePathOptions,
   rewriteSessionFileForNewSessionId,
   type SessionEntry,
-  updateSessionStore,
 } from "../../config/sessions.js";
-import { mergeSessionEntry } from "../../config/sessions/types.js";
+import { patchSessionEntry, upsertSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   forgetActiveSessionForShutdown,
@@ -44,17 +43,12 @@ async function persistSessionEntryUpdate(params: {
   if (!params.storePath) {
     return;
   }
-  await updateSessionStore(
-    params.storePath,
-    (store) => {
-      const next = { ...store[params.sessionKey!], ...params.nextEntry };
-      store[params.sessionKey!] = next;
-      return next;
-    },
+  await upsertSessionEntry(
     {
-      resolveSingleEntryPersistence: (entry) =>
-        entry && params.sessionKey ? { sessionKey: params.sessionKey, entry } : null,
+      storePath: params.storePath,
+      sessionKey: params.sessionKey,
     },
+    params.nextEntry,
   );
 }
 
@@ -299,12 +293,11 @@ export async function incrementCompactionCount(params: {
         storePath,
         newSessionId,
       });
-    // SessionId rotation handled by mergeSessionEntry policy: when sessionId
-    // changes, policy rolls sessionStartedAt to the merge-time updatedAt so
-    // sessionStartedAt === updatedAt holds for the new logical-session epoch.
-    // (Explicitly setting updates.sessionStartedAt here would short-circuit
-    // the policy + drift by ~1ms vs merge-time Date.now(), breaking the
-    // sessionStartedAt-equals-updatedAt invariant the rotation-test asserts.)
+    // SessionId rotation is handled by the session-accessor seam: when sessionId
+    // changes, the seam rolls sessionStartedAt to its own persist-time Date.now()
+    // (the same timestamp it stamps on updatedAt), so sessionStartedAt === updatedAt
+    // holds byte-identical for the new logical-session epoch. Setting it explicitly
+    // here would override the seam's rotation and drift ~1ms vs the seam's updatedAt.
     updates.usageFamilyKey = entry.usageFamilyKey ?? sessionKey;
     updates.usageFamilySessionIds = Array.from(
       new Set([...(entry.usageFamilySessionIds ?? []), entry.sessionId, newSessionId]),
@@ -325,22 +318,18 @@ export async function incrementCompactionCount(params: {
   } else if (incrementBy > 0) {
     updates.totalTokensFresh = false;
   }
-  sessionStore[sessionKey] = mergeSessionEntry(entry, updates, { now });
+  const nextEntry = {
+    ...entry,
+    ...updates,
+  };
+  sessionStore[sessionKey] = nextEntry;
   if (storePath) {
-    await updateSessionStore(
-      storePath,
-      (store) => {
-        // Merge-or-create from the active in-memory entry to preserve
-        // sessionId/sessionStartedAt/other-fields on the first-turn case
-        // (when on-disk store has no entry yet). canonical-primitive applies
-        // policy-based merge semantics (e.g. sessionStartedAt-rotation when
-        // sessionId changes). Thread captured `now` through both merge call
-        // sites so updatedAt + sessionStartedAt share a single-source-of-truth
-        // timestamp and remain byte-identical when sessionId rotates.
-        store[sessionKey] = mergeSessionEntry(store[sessionKey] ?? entry, updates, { now });
-      },
-      { activeSessionKey: sessionKey },
-    );
+    const persistedEntry = await patchSessionEntry({ storePath, sessionKey }, () => updates, {
+      fallbackEntry: entry,
+    });
+    if (persistedEntry) {
+      sessionStore[sessionKey] = persistedEntry;
+    }
   }
   if ((sessionIdChanged || sessionFileChanged) && cfg) {
     emitCompactionSessionLifecycleHooks({

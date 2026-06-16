@@ -11,11 +11,13 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   captureCompactionCheckpointSnapshotAsync,
+  captureRuntimeCompactionCheckpointSnapshotAsync,
   cleanupCompactionCheckpointSnapshot,
   forkCompactionCheckpointTranscriptAsync,
   MAX_COMPACTION_CHECKPOINT_LEAF_SCAN_BYTES,
   MAX_COMPACTION_CHECKPOINT_RETAINED_BYTES_PER_SESSION,
   persistSessionCompactionCheckpoint,
+  readRuntimeSessionLeafIdFromTranscriptAsync,
   readSessionLeafIdFromTranscriptAsync,
 } from "./session-compaction-checkpoints.js";
 
@@ -161,6 +163,25 @@ afterEach(async () => {
 });
 
 describe("session-compaction-checkpoints", () => {
+  test("runtime checkpoint probes do not create session metadata for missing transcripts", async () => {
+    const { storePath, sessionKey } = await makeTempSessionStore(
+      "openclaw-checkpoint-runtime-probe-",
+      "missing-session",
+    );
+    await fs.writeFile(storePath, "{}\n", "utf-8");
+    const scope = {
+      agentId: MAIN_AGENT_ID,
+      sessionId: "missing-session",
+      sessionKey,
+      storePath,
+    };
+
+    await expect(readRuntimeSessionLeafIdFromTranscriptAsync(scope)).resolves.toBeNull();
+    await expect(captureRuntimeCompactionCheckpointSnapshotAsync({ scope })).resolves.toBeNull();
+
+    expect(await fs.readFile(storePath, "utf-8")).toBe("{}\n");
+  });
+
   test("async capture stores pre-compaction identity without copying the transcript", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-checkpoint-async-"));
     tempDirs.push(dir);

@@ -1,6 +1,13 @@
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 // Whatsapp tests cover socket timing plugin behavior.
 import { describe, expect, it } from "vitest";
-import { DEFAULT_WHATSAPP_SOCKET_TIMING, resolveWhatsAppSocketTiming } from "./socket-timing.js";
+import {
+  DEFAULT_WHATSAPP_SOCKET_TIMING,
+  WhatsAppSocketOperationTimeoutError,
+  isWhatsAppSocketOperationTimeoutError,
+  resolveWhatsAppSocketOperationTimeoutMs,
+  resolveWhatsAppSocketTiming,
+} from "./socket-timing.js";
 
 describe("resolveWhatsAppSocketTiming", () => {
   it("uses OpenClaw's explicit WhatsApp Web socket defaults", () => {
@@ -46,5 +53,26 @@ describe("resolveWhatsAppSocketTiming", () => {
       connectTimeoutMs: 90_000,
       defaultQueryTimeoutMs: 120_000,
     });
+  });
+
+  it("marks operation timeout errors as unknown delivery state", () => {
+    const error = new WhatsAppSocketOperationTimeoutError(
+      "sendMessage",
+      DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs,
+    );
+
+    expect(error).toMatchObject({
+      name: "WhatsAppSocketOperationTimeoutError",
+      operation: "sendMessage",
+      timeoutMs: DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs,
+      deliveryState: "unknown",
+    });
+    expect(isWhatsAppSocketOperationTimeoutError(error)).toBe(true);
+  });
+
+  it("clamps oversized operation timeouts before scheduling timers", async () => {
+    expect(resolveWhatsAppSocketOperationTimeoutMs(Number.MAX_SAFE_INTEGER)).toBe(
+      MAX_TIMER_TIMEOUT_MS,
+    );
   });
 });

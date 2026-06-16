@@ -26,6 +26,10 @@ import {
   resolveToolProfilePolicy,
 } from "../../agents/tool-policy.js";
 import { buildInventoryContinuationToolOpts } from "../../agents/tools/continuation-inventory-opts.js";
+import {
+  replaceWithEffectiveCronCreatorToolAllowlist,
+  type CronCreatorToolAllowlistEntry,
+} from "../../agents/tools/cron-tool.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
@@ -153,7 +157,11 @@ export function resolveSkillDispatchTools(params: {
     subagentPolicy,
     inheritedToolPolicy,
   ];
+  const explicitDenylist = collectExplicitDenylist(explicitPolicyList);
   const inheritedToolAllowlist: string[] = [];
+  const cronCreatorToolAllowlist: CronCreatorToolAllowlistEntry[] = [];
+  const shouldCaptureCronCreatorToolAllowlist =
+    explicitPolicyList.some(hasRestrictiveAllowPolicy) || explicitDenylist.length > 0;
   const beforeToolCallHookContext = params.skillCommand
     ? {
         cwd: params.workspaceDir,
@@ -192,9 +200,12 @@ export function resolveSkillDispatchTools(params: {
     modelProvider: params.provider,
     modelId: params.model,
     pluginToolAllowlist: collectExplicitAllowlist(explicitPolicyList),
-    pluginToolDenylist: collectExplicitDenylist(explicitPolicyList),
+    pluginToolDenylist: explicitDenylist,
+    cronCreatorToolAllowlist: shouldCaptureCronCreatorToolAllowlist
+      ? cronCreatorToolAllowlist
+      : undefined,
     inheritedToolAllowlist,
-    inheritedToolDenylist: collectExplicitDenylist(explicitPolicyList),
+    inheritedToolDenylist: explicitDenylist,
     // Skills runtime tool-dispatch builds the tool catalog to look up + invoke a
     // single skill-command, not to register the full continuation tool set for
     // active-turn execution. Register continue_work + request_compaction via inert
@@ -232,6 +243,11 @@ export function resolveSkillDispatchTools(params: {
   });
   if (explicitPolicyList.some(hasRestrictiveAllowPolicy)) {
     replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, policyFiltered);
+  }
+  if (shouldCaptureCronCreatorToolAllowlist) {
+    replaceWithEffectiveCronCreatorToolAllowlist(cronCreatorToolAllowlist, policyFiltered, (tool) =>
+      getPluginToolMeta(tool),
+    );
   }
   return policyFiltered;
 }

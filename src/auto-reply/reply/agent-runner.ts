@@ -23,16 +23,14 @@ import { deriveContextPromptTokens, hasNonzeroUsage, normalizeUsage } from "../.
 import { enqueueCommitmentExtraction } from "../../commitments/runtime.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
-  applySessionStoreEntryPatch,
-  loadSessionStore,
   resolveSessionPluginStatusLines,
   resolveSessionPluginTraceLines,
   resolveSessionStoreEntry,
   type SessionEntry,
   type SessionPostCompactionDelegate,
   updateSessionStore,
-  updateSessionStoreEntry,
 } from "../../config/sessions.js";
+import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import type { TypingMode } from "../../config/types.js";
 import { resolveSessionTranscriptCandidates } from "../../gateway/session-utils.fs.js";
@@ -277,10 +275,12 @@ function hasSuccessfulSideEffectDelivery(params: {
   messagingToolSentTexts?: string[];
   messagingToolSentMediaUrls?: string[];
   messagingToolSentTargets?: unknown[];
+  didSendViaMessagingTool?: boolean;
   successfulCronAdds?: number;
   didSendDeterministicApprovalPrompt?: boolean;
 }): boolean {
   return (
+    params.didSendViaMessagingTool === true ||
     hasSuccessfulSourceReplyDelivery(params) ||
     (params.successfulCronAdds ?? 0) > 0 ||
     params.didSendDeterministicApprovalPrompt === true
@@ -496,7 +496,11 @@ function mergeExecutionTrace(params: {
   provider?: string;
   model?: string;
   runner: "embedded" | "cli";
+  exhausted?: boolean;
 }): TraceExecutionView | undefined {
+  const executionAttempts = params.exhausted
+    ? (params.executionTrace?.attempts ?? []).filter((attempt) => attempt.result !== "success")
+    : (params.executionTrace?.attempts ?? []);
   const attempts: TraceAttemptView[] = [
     ...(params.fallbackAttempts ?? []).map((attempt) =>
       Object.assign(
@@ -509,11 +513,14 @@ function mergeExecutionTrace(params: {
         typeof attempt.status === `number` ? { status: attempt.status } : {},
       ),
     ),
-    ...(params.executionTrace?.attempts ?? []),
+    ...executionAttempts,
   ];
-  const winnerProvider =
-    params.executionTrace?.winnerProvider ?? normalizeOptionalString(params.provider);
-  const winnerModel = params.executionTrace?.winnerModel ?? normalizeOptionalString(params.model);
+  const winnerProvider = params.exhausted
+    ? undefined
+    : (params.executionTrace?.winnerProvider ?? normalizeOptionalString(params.provider));
+  const winnerModel = params.exhausted
+    ? undefined
+    : (params.executionTrace?.winnerModel ?? normalizeOptionalString(params.model));
   if (
     winnerProvider &&
     winnerModel &&
@@ -1127,8 +1134,10 @@ function refreshSessionEntryFromStore(params: {
     return fallbackEntry;
   }
   try {
-    const latestStore = loadSessionStore(storePath, { skipCache: true, clone: false });
-    const latestEntry = latestStore?.[sessionKey];
+    const latestEntry = loadSessionEntry({
+      storePath,
+      sessionKey,
+    });
     if (!latestEntry) {
       return fallbackEntry;
     }
@@ -1265,12 +1274,9 @@ export async function runReplyAgent(replyParams: {
     activeSessionEntry.updatedAt = updatedAt;
     activeSessionStore[sessionKey] = activeSessionEntry;
     if (storePath) {
-      await applySessionStoreEntryPatch({
-        storePath,
-        sessionKey,
+      await updateSessionEntry({ storePath, sessionKey }, () => ({ updatedAt }), {
         skipMaintenance: true,
         takeCacheOwnership: true,
-        patch: { updatedAt },
       });
     }
   };
@@ -1510,14 +1516,16 @@ export async function runReplyAgent(replyParams: {
       restartRecoveryDeliveryRunId,
       updatedAt,
     };
-    const persisted = await updateSessionStoreEntry({
-      storePath,
-      sessionKey,
-      update: async (current) =>
+    const persisted = await updateSessionEntry(
+      {
+        storePath,
+        sessionKey,
+      },
+      async (current) =>
         current.sessionId === replyOperation.sessionId && current.abortedLastRun !== true
           ? patch
           : null,
-    });
+    );
     if (persisted) {
       activeSessionEntry = persisted;
       if (activeSessionStore) {
@@ -1536,16 +1544,18 @@ export async function runReplyAgent(replyParams: {
       restartRecoveryDeliveryRunId: undefined,
       updatedAt: Date.now(),
     };
-    const persisted = await updateSessionStoreEntry({
-      storePath,
-      sessionKey,
-      update: async (current) =>
+    const persisted = await updateSessionEntry(
+      {
+        storePath,
+        sessionKey,
+      },
+      async (current) =>
         current.sessionId === replyOperation.sessionId &&
         current.abortedLastRun !== true &&
         current.restartRecoveryDeliveryRunId === restartRecoveryDeliveryRunId
           ? patch
           : null,
-    });
+    );
     if (persisted) {
       activeSessionEntry = persisted;
       if (activeSessionStore) {
@@ -1891,6 +1901,7 @@ export async function runReplyAgent(replyParams: {
       runResult,
       fallbackProvider,
       fallbackModel,
+      fallbackExhausted,
       fallbackAttempts,
       directlySentBlockKeys,
       directlySentBlockPayloads,
@@ -1910,16 +1921,17 @@ export async function runReplyAgent(replyParams: {
       activeSessionEntry.updatedAt = updatedAt;
       activeSessionStore[sessionKey] = activeSessionEntry;
       if (storePath) {
-        await applySessionStoreEntryPatch({
-          storePath,
-          sessionKey,
-          skipMaintenance: true,
-          takeCacheOwnership: true,
-          patch: {
+        await updateSessionEntry(
+          { storePath, sessionKey },
+          () => ({
             groupActivationNeedsSystemIntro: false,
             updatedAt,
+          }),
+          {
+            skipMaintenance: true,
+            takeCacheOwnership: true,
           },
-        });
+        );
       }
     }
 
@@ -1974,8 +1986,12 @@ export async function runReplyAgent(replyParams: {
 
     let replyUsageState: PluginHookReplyUsageState | undefined;
     {
-      const winnerProvider = runResult.meta?.executionTrace?.winnerProvider ?? providerUsed;
-      const winnerModel = runResult.meta?.executionTrace?.winnerModel ?? modelUsed;
+      const winnerProvider = fallbackExhausted
+        ? undefined
+        : (runResult.meta?.executionTrace?.winnerProvider ?? providerUsed);
+      const winnerModel = fallbackExhausted
+        ? undefined
+        : (runResult.meta?.executionTrace?.winnerModel ?? modelUsed);
       const ctxTokens = runResult.meta?.agentMeta?.contextTokens;
       const compactions = runResult.meta?.agentMeta?.compactionCount;
       const lastCallUsage = runResult.meta?.agentMeta?.lastCallUsage;
@@ -2063,7 +2079,7 @@ export async function runReplyAgent(replyParams: {
       state: fallbackStateEntry,
       cfg,
     });
-    if (fallbackTransition.stateChanged && !preserveUserFacingSessionState) {
+    if (fallbackTransition.stateChanged && !fallbackExhausted && !preserveUserFacingSessionState) {
       if (fallbackStateEntry) {
         fallbackStateEntry.fallbackNoticeSelectedModel = fallbackTransition.nextState.selectedModel;
         fallbackStateEntry.fallbackNoticeActiveModel = fallbackTransition.nextState.activeModel;
@@ -2075,17 +2091,18 @@ export async function runReplyAgent(replyParams: {
         activeSessionStore[sessionKey] = fallbackStateEntry;
       }
       if (sessionKey && storePath) {
-        await applySessionStoreEntryPatch({
-          storePath,
-          sessionKey,
-          skipMaintenance: true,
-          takeCacheOwnership: true,
-          patch: {
+        await updateSessionEntry(
+          { storePath, sessionKey },
+          () => ({
             fallbackNoticeSelectedModel: fallbackTransition.nextState.selectedModel,
             fallbackNoticeActiveModel: fallbackTransition.nextState.activeModel,
             fallbackNoticeReason: fallbackTransition.nextState.reason,
+          }),
+          {
+            skipMaintenance: true,
+            takeCacheOwnership: true,
           },
-        });
+        );
       }
     }
     const usedCliProvider = isCliProvider(providerUsed, cfg);
@@ -2125,6 +2142,7 @@ export async function runReplyAgent(replyParams: {
       promptTokens,
       usageIsContextSnapshot: usedCliProvider ? true : undefined,
       isHeartbeat,
+      preserveRuntimeModel: fallbackExhausted,
       preserveUserFacingSessionModelState: preserveUserFacingSessionState,
       modelUsed,
       providerUsed,
@@ -2142,6 +2160,7 @@ export async function runReplyAgent(replyParams: {
       messagingToolSentTexts: runResult.messagingToolSentTexts,
       messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
       messagingToolSentTargets: runResult.messagingToolSentTargets,
+      didSendViaMessagingTool: runResult.didSendViaMessagingTool,
       successfulCronAdds: runResult.successfulCronAdds,
       didSendDeterministicApprovalPrompt: runResult.didSendDeterministicApprovalPrompt,
     });
@@ -2185,7 +2204,11 @@ export async function runReplyAgent(replyParams: {
     };
 
     const fallbackNoticePayloads: ReplyPayload[] = [];
-    if (!preserveUserFacingSessionState && fallbackTransition.fallbackTransitioned) {
+    if (
+      !fallbackExhausted &&
+      !preserveUserFacingSessionState &&
+      fallbackTransition.fallbackTransitioned
+    ) {
       emitAgentEvent({
         runId,
         sessionKey,
@@ -2218,7 +2241,11 @@ export async function runReplyAgent(replyParams: {
         );
       }
     }
-    if (!preserveUserFacingSessionState && fallbackTransition.fallbackCleared) {
+    if (
+      !fallbackExhausted &&
+      !preserveUserFacingSessionState &&
+      fallbackTransition.fallbackCleared
+    ) {
       emitAgentEvent({
         runId,
         sessionKey,
@@ -2550,6 +2577,7 @@ export async function runReplyAgent(replyParams: {
         provider: providerUsed,
         model: modelUsed,
         runner: isCliProvider(providerUsed, cfg) ? "cli" : "embedded",
+        exhausted: fallbackExhausted,
       });
       const requestShaping = {
         authMode:
@@ -3275,19 +3303,20 @@ export async function runReplyAgent(replyParams: {
           runtimePolicySessionKey,
           opts,
         });
-        await applySessionStoreEntryPatch({
-          storePath,
-          sessionKey,
-          skipMaintenance: true,
-          takeCacheOwnership: true,
-          patch: {
+        await updateSessionEntry(
+          { storePath, sessionKey },
+          () => ({
             pendingFinalDelivery: true,
             pendingFinalDeliveryText: resolvedPendingText,
             pendingFinalDeliveryContext,
             pendingFinalDeliveryCreatedAt: Date.now(),
             updatedAt: Date.now(),
+          }),
+          {
+            skipMaintenance: true,
+            takeCacheOwnership: true,
           },
-        });
+        );
       }
     }
 

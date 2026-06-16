@@ -29,6 +29,7 @@ import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import {
@@ -469,6 +470,8 @@ export async function runAgentAttempt(params: {
     data?: Record<string, unknown>;
     sessionKey?: string;
   }) => void;
+  deferTerminalLifecycle?: boolean;
+  /** @deprecated Use deferTerminalLifecycle. */
   deferTerminalLifecycleEnd?: boolean;
   authProfileProvider: string;
   sessionStore?: Record<string, SessionEntry>;
@@ -634,6 +637,8 @@ export async function runAgentAttempt(params: {
           lane: params.opts.lane,
           extraSystemPrompt: params.opts.extraSystemPrompt,
           inputProvenance: params.opts.inputProvenance,
+          sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode,
+          requireExplicitMessageTarget: isSubagentSessionKey(params.sessionKey),
           cliSessionId: nextCliSessionId,
           cliSessionBinding:
             nextCliSessionId === activeCliSessionBinding?.sessionId
@@ -851,6 +856,7 @@ export async function runAgentAttempt(params: {
       currentInboundAudio: params.runContext.currentInboundAudio,
       replyToMode: params.runContext.replyToMode,
       hasRepliedRef: params.runContext.hasRepliedRef,
+      senderId: params.runContext.senderId,
       senderIsOwner: params.opts.senderIsOwner,
       sessionFile: params.sessionFile,
       workspaceDir: params.workspaceDir,
@@ -874,6 +880,7 @@ export async function runAgentAttempt(params: {
       bashElevated: params.opts.bashElevated,
       timeoutMs: params.timeoutMs,
       runId: params.runId,
+      lifecycleGeneration: params.lifecycleGeneration,
       lane: params.opts.lane,
       abortSignal: params.opts.abortSignal,
       extraSystemPrompt: params.opts.extraSystemPrompt,
@@ -889,13 +896,21 @@ export async function runAgentAttempt(params: {
       agentDir: params.agentDir,
       allowTransientCooldownProbe: params.allowTransientCooldownProbe,
       cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
+      oneShotCliRun: params.opts.oneShotCliRun,
       modelRun: params.opts.modelRun,
       promptMode: params.opts.promptMode,
       disableTools: params.opts.modelRun === true,
       onAgentEvent: params.onAgentEvent,
+      deferTerminalLifecycle: params.deferTerminalLifecycle,
       deferTerminalLifecycleEnd: params.deferTerminalLifecycleEnd,
       suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
       onUserMessagePersisted: params.onUserMessagePersisted,
+      onExecutionStarted: (info) => {
+        if (info?.lifecycleGeneration) {
+          params.onLifecycleGenerationChanged?.(info.lifecycleGeneration);
+        }
+      },
+      onSessionIdChanged: params.opts.onSessionIdChanged,
       bootstrapPromptWarningSignaturesSeen,
       bootstrapPromptWarningSignature,
       continueWorkOpts,

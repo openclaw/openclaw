@@ -119,6 +119,16 @@ function expectWriteContains(mock: unknown, fragment: string): void {
   ).toBe(true);
 }
 
+function makeQaEvidence(entries: unknown[] = []) {
+  return {
+    kind: "openclaw.qa.evidence-summary",
+    schemaVersion: 2,
+    generatedAt: "2026-06-14T00:00:00.000Z",
+    evidenceMode: "full",
+    entries,
+  };
+}
+
 function flowSuiteRuntimeResult(params: {
   evidencePath?: string;
   reportPath: string;
@@ -178,7 +188,7 @@ describe("qa cli runtime", () => {
     telegramArtifactsDir = await fs.mkdtemp(path.join(os.tmpdir(), "qa-telegram-runtime-"));
     telegramSummaryPath = path.join(telegramArtifactsDir, QA_EVIDENCE_FILENAME);
     await fs.writeFile(suiteReportPath, "# QA Suite Report\n", "utf8");
-    await fs.writeFile(suiteEvidencePath, JSON.stringify({ entries: [] }), "utf8");
+    await fs.writeFile(suiteEvidencePath, JSON.stringify(makeQaEvidence()), "utf8");
     await fs.writeFile(
       suiteSummaryPath,
       JSON.stringify({
@@ -274,6 +284,13 @@ describe("qa cli runtime", () => {
       baseUrl: "http://127.0.0.1:58000",
       runSelfCheck: vi.fn().mockResolvedValue({
         outputPath: "/tmp/report.md",
+        report: "",
+        checks: [{ name: "QA self-check scenario", status: "pass" }],
+        scenarioResult: {
+          name: "QA self-check scenario",
+          status: "pass",
+          steps: [],
+        },
       }),
       stop: vi.fn(),
     });
@@ -301,7 +318,7 @@ describe("qa cli runtime", () => {
 
   it("runs selected Playwright scenarios through the suite command", async () => {
     const evidencePath = path.join(suiteArtifactsDir, "qa-evidence.json");
-    await fs.writeFile(evidencePath, JSON.stringify({ entries: [] }), "utf8");
+    await fs.writeFile(evidencePath, JSON.stringify(makeQaEvidence()), "utf8");
     runQaSuite.mockResolvedValueOnce(
       unifiedSuiteRuntimeResult({
         outputDir: suiteArtifactsDir,
@@ -349,6 +366,58 @@ describe("qa cli runtime", () => {
     try {
       runQaSuite.mockImplementationOnce(async () => {
         expect(process.env.OPENCLAW_QA_PROFILE).toBe("smoke-ci");
+        await fs.writeFile(
+          suiteEvidencePath,
+          JSON.stringify(
+            makeQaEvidence([
+              {
+                test: {
+                  kind: "qa-scenario",
+                  id: "dm-chat-baseline",
+                  title: "DM baseline conversation",
+                  source: {
+                    path: "qa/scenarios/channels/dm-chat-baseline.yaml",
+                  },
+                },
+                coverage: [
+                  {
+                    id: "channels.dm",
+                    role: "primary",
+                  },
+                ],
+                execution: {
+                  runner: "host",
+                  environment: {
+                    ref: null,
+                    os: process.platform,
+                    nodeVersion: process.version,
+                  },
+                  provider: {
+                    id: "openai",
+                    live: false,
+                    model: {
+                      name: "gpt-5.5",
+                      ref: "mock-openai/gpt-5.5",
+                    },
+                    fixture: "mock-openai",
+                  },
+                  channel: {
+                    id: "qa-channel",
+                    live: false,
+                  },
+                  packageSource: {
+                    kind: "source-checkout",
+                  },
+                  artifacts: [],
+                },
+                result: {
+                  status: "pass",
+                },
+              },
+            ]),
+          ),
+          "utf8",
+        );
         return flowSuiteRuntimeResult({
           reportPath: suiteReportPath,
           summaryPath: suiteSummaryPath,
@@ -379,7 +448,41 @@ describe("qa cli runtime", () => {
       expect(suiteArgs.scenarioIds).toEqual(expect.arrayContaining(["dm-chat-baseline"]));
       expect(suiteArgs.scenarioIds).not.toContain("thinking-slash-model-remap");
       expect(process.env.OPENCLAW_QA_PROFILE).toBe("release");
+      const evidence = JSON.parse(await fs.readFile(suiteEvidencePath, "utf8")) as {
+        evidenceMode?: unknown;
+        entries?: unknown[];
+        profile?: unknown;
+        scorecard?: {
+          run?: { evidenceEntryCount?: unknown };
+          features?: { fulfilled?: unknown };
+          categoryReports?: Array<{
+            id?: unknown;
+            features?: { fulfilled?: unknown };
+            missingCoverageIds?: unknown;
+          }>;
+        };
+      };
+      expect(evidence.profile).toBe("smoke-ci");
+      expect(evidence.evidenceMode).toBe("slim");
+      expect(evidence.scorecard).toMatchObject({
+        run: {
+          evidenceEntryCount: 1,
+        },
+      });
+      expect(evidence.scorecard).not.toHaveProperty("kind");
+      expect(evidence.scorecard).not.toHaveProperty("taxonomy");
+      expect(evidence.scorecard).not.toHaveProperty("profile");
+      expect(evidence.scorecard?.features?.fulfilled).toBe(1);
+      expect(evidence.scorecard?.categoryReports?.[0]).toMatchObject({
+        id: "agent-runtime-and-provider-execution.agent-turn-execution",
+        features: {
+          fulfilled: 1,
+        },
+      });
+      expect(evidence.entries?.[0]).not.toHaveProperty("execution");
+      expect(JSON.stringify(evidence.scorecard)).not.toContain("dm-chat-baseline");
       expectWriteContains(stdoutWrite, "QA run profile: smoke-ci; categories: 1; scenarios:");
+      expectWriteContains(stdoutWrite, `QA profile scorecard: ${suiteEvidencePath}`);
     } finally {
       if (previousProfile === undefined) {
         delete process.env.OPENCLAW_QA_PROFILE;
@@ -2056,6 +2159,33 @@ describe("qa cli runtime", () => {
       repoRoot: path.resolve("/tmp/openclaw-repo"),
       outputPath: path.resolve("/tmp/openclaw-repo", ".artifacts/qa/self-check.md"),
     });
+  });
+
+  it("fails unsuccessful self-checks after stopping the lab server", async () => {
+    const stop = vi.fn();
+    startQaLabServer.mockResolvedValueOnce({
+      baseUrl: "http://127.0.0.1:58000",
+      runSelfCheck: vi.fn().mockResolvedValue({
+        outputPath: "/tmp/failed-report.md",
+        report: "",
+        checks: [{ name: "QA self-check scenario", status: "fail" }],
+        scenarioResult: {
+          name: "QA self-check scenario",
+          status: "fail",
+          steps: [],
+        },
+      }),
+      stop,
+    });
+
+    await expect(
+      runQaLabSelfCheckCommand({
+        repoRoot: "/tmp/openclaw-repo",
+      }),
+    ).rejects.toThrow("QA self-check failed. See /tmp/failed-report.md.");
+
+    expect(stop).toHaveBeenCalledOnce();
+    expectWriteContains(stdoutWrite, "QA self-check report: /tmp/failed-report.md");
   });
 
   it("resolves docker scaffold paths relative to the explicit repo root", async () => {

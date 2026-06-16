@@ -136,6 +136,7 @@ export async function updateNpmInstalledHookPacks(params: {
     }
     const currentVersion = await readInstalledPackageVersion(installPath);
     const result = await installHooksFromNpmSpec({
+      config: params.config,
       spec: effectiveSpec,
       mode: "update",
       dryRun: params.dryRun,

@@ -135,6 +135,7 @@ type ConfigReadRecoveryParams = {
   parsed: unknown;
   validateBackup?: (backup: { raw: string; parsed: unknown }) => Promise<boolean>;
   validateBackupSync?: (backup: { raw: string; parsed: unknown }) => boolean;
+  allowBackupRecovery?: () => Promise<boolean>;
 };
 
 type ConfigReadRecoveryResult = {
@@ -724,6 +725,9 @@ export async function maybeRecoverSuspiciousConfigRead(
   if (!backup?.gatewayMode) {
     return returnOriginalConfigRead(params);
   }
+  if (params.allowBackupRecovery && !(await params.allowBackupRecovery())) {
+    return returnOriginalConfigRead(params);
+  }
 
   const clobberedPath = await persistBoundedClobberedConfigSnapshot({
     deps: params.deps,
@@ -735,7 +739,10 @@ export async function maybeRecoverSuspiciousConfigRead(
   let restoredFromBackup = false;
   let restoreError: unknown;
   try {
-    await params.deps.fs.promises.copyFile(backupPath, params.configPath);
+    await params.deps.fs.promises.writeFile(params.configPath, backupRaw, {
+      encoding: "utf-8",
+      mode: 0o600,
+    });
     await params.deps.fs.promises.chmod?.(params.configPath, 0o600).catch(() => {});
     restoredFromBackup = true;
   } catch (error) {
@@ -842,7 +849,10 @@ export function maybeRecoverSuspiciousConfigReadSync(
   let restoredFromBackup = false;
   let restoreError: unknown;
   try {
-    params.deps.fs.copyFileSync(backupPath, params.configPath);
+    params.deps.fs.writeFileSync(params.configPath, backupRaw, {
+      encoding: "utf-8",
+      mode: 0o600,
+    });
     try {
       params.deps.fs.chmodSync?.(params.configPath, 0o600);
     } catch {}
@@ -993,7 +1003,10 @@ export async function recoverConfigFromLastKnownGood(params: {
     raw: snapshot.raw,
     observedAt: now,
   });
-  await deps.fs.promises.copyFile(lastGoodPath, snapshot.path);
+  await deps.fs.promises.writeFile(snapshot.path, backupRaw, {
+    encoding: "utf-8",
+    mode: 0o600,
+  });
   await deps.fs.promises.chmod?.(snapshot.path, 0o600).catch(() => {});
   const issueSummary = formatConfigIssueSummary([...snapshot.issues, ...snapshot.legacyIssues]);
   deps.logger.warn(

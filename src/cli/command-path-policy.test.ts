@@ -339,6 +339,13 @@ describe("command-path-policy", () => {
     expect(resolveCliNetworkProxyPolicy(argv)).toBe("default");
   });
 
+  it("resolves gateway runs after root options with values", () => {
+    const argv = ["node", "openclaw", "--log-level", "debug", "gateway", "run"];
+
+    expect(resolveCliCatalogCommandPath(argv)).toEqual(["gateway"]);
+    expect(resolveCliNetworkProxyPolicy(argv)).toBe("default");
+  });
+
   it("does not let gateway run option values spoof bypass subcommands", () => {
     for (const argv of [
       ["node", "openclaw", "gateway", "--token", "status"],

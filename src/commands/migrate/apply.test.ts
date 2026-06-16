@@ -9,9 +9,15 @@ import { runMigrationApply } from "./apply.js";
 
 const stateDir = mkdtempSync(path.join(tmpdir(), "openclaw-migrate-apply-"));
 
-vi.mock("../../config/paths.js", () => ({
-  resolveStateDir: () => stateDir,
-}));
+vi.mock("../../config/paths.js", async () => {
+  const actual = await vi.importActual<typeof import("../../config/paths.js")>(
+    "../../config/paths.js",
+  );
+  return {
+    ...actual,
+    resolveStateDir: () => stateDir,
+  };
+});
 
 function buildEmptyPlan(): MigrationPlan {
   return {
