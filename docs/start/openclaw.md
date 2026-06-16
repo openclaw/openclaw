@@ -64,7 +64,7 @@ openclaw gateway --port 18789
 
 Now message the assistant number from your allowlisted phone.
 
-The default onboarding flow opens the local agent as soon as model authentication and the workspace are ready. Ask the agent to set up the Gateway and channels you need, or run `openclaw onboard --flow advanced` for the full infrastructure wizard. Open the Control UI later with `openclaw dashboard`.
+The default onboarding flow opens the local agent as soon as model authentication and the workspace are ready. Ask the agent to set up the Gateway and channels you need, or run `openclaw onboard --flow advanced` for the full infrastructure wizard. Its temporary Gateway remains available only while the assisted TUI is open. To use the Control UI afterward, start a foreground Gateway with `openclaw gateway run` or install a persistent one with `openclaw onboard --install-daemon`, then run `openclaw dashboard`.
 
 ## Give the agent a workspace (AGENTS)
 
