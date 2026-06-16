@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTempHome } from "../../config/home-env.test-harness.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { expectObjectFields, mockFirstObjectArg } from "../../test-utils/mock-call-assertions.js";
 import { createCommandWorkspaceHarness } from "./commands-filesystem.test-support.js";
 import { handlePluginsCommand } from "./commands-plugins.js";
@@ -64,6 +65,7 @@ function buildPluginsParams(
   commandBodyNormalized: string,
   workspaceDir: string,
   options: {
+    cfg?: OpenClawConfig;
     gatewayClientScopes?: string[];
     omitGatewayClientScopes?: boolean;
     senderIsOwner?: boolean;
@@ -72,6 +74,7 @@ function buildPluginsParams(
   const params = buildPluginsCommandParams({
     commandBodyNormalized,
     workspaceDir,
+    ...(options.cfg ? { cfg: options.cfg } : {}),
     gatewayClientScopes: options.gatewayClientScopes ?? [
       "operator.admin",
       "operator.write",
@@ -111,6 +114,72 @@ describe("handleCommands /plugins install", () => {
     installPluginFromGitSpecMock.mockReset();
     persistPluginInstallMock.mockReset();
     await workspaceHarness.cleanupWorkspaces();
+  });
+
+  it("passes the active config to npm install policy preflight", async () => {
+    const policyConfig: OpenClawConfig = {
+      commands: {
+        text: true,
+        plugins: true,
+      },
+      plugins: {
+        enabled: true,
+      },
+      security: {
+        installPolicy: {
+          enabled: true,
+          exec: {
+            source: "exec",
+            command: process.execPath,
+            args: ["-e", "process.exit(1)"],
+            allowInsecurePath: true,
+          },
+        },
+      },
+    };
+    installPluginFromNpmSpecMock.mockResolvedValue({
+      ok: true,
+      pluginId: "policy-plugin",
+      targetDir: "/tmp/policy-plugin",
+      version: "1.0.0",
+      extensions: ["index.js"],
+      npmResolution: {
+        name: "@acme/policy-plugin",
+        version: "1.0.0",
+        resolvedSpec: "@acme/policy-plugin@1.0.0",
+      },
+    });
+    persistPluginInstallMock.mockResolvedValue({});
+
+    await withTempHome("openclaw-command-plugins-home-", async (home) => {
+      await fs.writeFile(
+        path.join(home, ".openclaw", "openclaw.json"),
+        `${JSON.stringify(policyConfig, null, 2)}\n`,
+      );
+      const workspaceDir = await workspaceHarness.createWorkspace();
+      const params = buildPluginsParams(
+        "/plugins install @acme/policy-plugin@1.0.0",
+        workspaceDir,
+        { cfg: policyConfig },
+      );
+
+      const result = await handlePluginsCommand(params, true);
+
+      if (result === null) {
+        throw new Error("expected plugin install result");
+      }
+      expect(result.reply?.text).toContain('Installed plugin "policy-plugin"');
+      expectObjectFields(mockFirstObjectArg(installPluginFromNpmSpecMock), {
+        spec: "@acme/policy-plugin@1.0.0",
+        config: policyConfig,
+      });
+      expectPersistedInstall("policy-plugin", {
+        source: "npm",
+        spec: "@acme/policy-plugin@1.0.0",
+        installPath: "/tmp/policy-plugin",
+        version: "1.0.0",
+      });
+    });
   });
 
   it("installs a plugin from a local path", async () => {

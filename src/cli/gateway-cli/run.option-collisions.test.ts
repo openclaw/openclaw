@@ -21,7 +21,9 @@ const forceFreePortAndWait = vi.fn(async (_port: number, _opts: unknown) => ({
   waitedMs: 0,
   escalatedToSigkill: false,
 }));
-const cleanStaleGatewayProcessesSync = vi.fn((_port?: number) => []);
+const cleanStaleGatewayProcessesSync = vi.fn(
+  (_port?: number, _options?: { protectedPid?: number }) => [],
+);
 const waitForPortBindable = vi.fn(async (_port: number, _opts?: unknown) => 0);
 const ensureDevGatewayConfig = vi.fn(async (_opts?: unknown) => {});
 type GatewayLoopStart = (params?: { startupStartedAt?: number }) => Promise<unknown>;
@@ -193,7 +195,8 @@ vi.mock("../../gateway/net.js", async (importOriginal) => {
 });
 
 vi.mock("../../infra/restart-stale-pids.js", () => ({
-  cleanStaleGatewayProcessesSync: (port?: number) => cleanStaleGatewayProcessesSync(port),
+  cleanStaleGatewayProcessesSync: (port?: number, options?: { protectedPid?: number }) =>
+    cleanStaleGatewayProcessesSync(port, options),
 }));
 
 vi.mock("../../gateway/server.js", () => ({
@@ -821,6 +824,23 @@ describe("gateway run option collisions", () => {
       },
     );
     expect(normalizeStateDirEnv).toHaveBeenCalledWith(process.env);
+  });
+
+  it("protects the inherited service pid before replacing it", async () => {
+    await withEnvAsync(
+      {
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        [GATEWAY_SERVICE_RUNTIME_PID_ENV]: "4242",
+      },
+      async () => {
+        await runGatewayCli(["gateway", "run", "--allow-unconfigured"]);
+
+        expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(18789, {
+          protectedPid: 4242,
+        });
+        expect(process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV]).toBe(String(process.pid));
+      },
+    );
   });
 
   it("marks descendants when the final config supplies the service marker", async () => {

@@ -107,9 +107,6 @@ const mockState = vi.hoisted(() => ({
   // stageSandboxMedia silently skips over-cap files.
   unstagedSources: null as string[] | null,
   deleteMediaBufferCalls: [] as Array<{ id: string; subdir?: string }>,
-  // Paths the mocked resolveInboundMediaReference treats as managed inbound
-  // media-store entries (drives the #90097 managed-PDF staging-fallback tests).
-  managedInboundPaths: null as string[] | null,
 }));
 
 function readTranscriptJsonLines(transcriptPath: string): Array<Record<string, unknown>> {
@@ -428,22 +425,6 @@ vi.mock("../../media/store.js", async () => {
         mockState.activeSaveMediaCalls -= 1;
       }
     }),
-  };
-});
-
-vi.mock("../../media/media-reference.js", async () => {
-  const original = await vi.importActual<typeof import("../../media/media-reference.js")>(
-    "../../media/media-reference.js",
-  );
-  return {
-    ...original,
-    // Treat only test-declared paths as managed inbound media, so the #90097
-    // managed-PDF fallback can be exercised without a real on-disk media store.
-    resolveInboundMediaReference: vi.fn(async (source: string) =>
-      mockState.managedInboundPaths?.includes(source)
-        ? { id: source, normalizedSource: source, physicalPath: source, sourceType: "path" }
-        : null,
-    ),
   };
 });
 
@@ -861,7 +842,6 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.stagedRelativePaths = null;
     mockState.unstagedSources = null;
     mockState.deleteMediaBufferCalls = [];
-    mockState.managedInboundPaths = null;
     mockState.hasBeforeAgentRunHooks = false;
     mockState.beforeMessageWriteBlock = false;
     mockState.beforeMessageWriteContent = null;
@@ -5415,7 +5395,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(mockState.lastDispatchCtx?.MediaStaged).toBe(true);
   });
 
-  it("wraps stageSandboxMedia infrastructure errors as 5xx UNAVAILABLE and cleans up media-store files", async () => {
+  it("wraps stageSandboxMedia infrastructure errors as 5xx UNAVAILABLE for non-fallback refs and cleans up media-store files", async () => {
+    // A non-PDF managed offload cannot fall back to a managed path, so an infra
+    // staging error stays a retryable 5xx. (Managed PDFs fall back instead — see
+    // the staging-throw fallback test below.) #90097
     createTranscriptFixture("openclaw-chat-send-stage-unavailable-");
     mockState.finalText = "ok";
     mockState.sessionEntry = {
@@ -5431,7 +5414,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       },
     ];
     mockState.savedMediaResults = [
-      { path: "/home/user/.openclaw/media/inbound/report.pdf", contentType: "application/pdf" },
+      {
+        path: "/home/user/.openclaw/media/inbound/report.bin",
+        contentType: "application/octet-stream",
+      },
     ];
     mockState.sandboxWorkspace = { workspaceDir: "/sandbox/workspace" };
     const stageError = Object.assign(new Error("ENOSPC: no space left on device"), {
@@ -5442,7 +5428,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.stageSandboxMediaError = stageError;
     const respond = vi.fn();
     const context = createChatContext();
-    const pdf = Buffer.from("%PDF-1.4\n%µ¶\n1 0 obj\n<<>>\nendobj\n").toString("base64");
+    const binPayload = Buffer.from("OPENCLAW-BINARY\n").toString("base64");
 
     await runNonStreamingChatSend({
       context,
@@ -5453,9 +5439,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         attachments: [
           {
             type: "file",
-            mimeType: "application/pdf",
-            fileName: "report.pdf",
-            content: pdf,
+            mimeType: "application/octet-stream",
+            fileName: "report.bin",
+            content: binPayload,
           },
         ],
       },
@@ -5538,7 +5524,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     // absolute path, so a simple `stagedPaths.length === nonImage.length`
     // check could not detect when one of the files silently fell out (e.g. a
     // file between the RPC cap and the staging cap). Prestage must compare
-    // the returned `staged` map against the input refs.
+    // the returned `staged` map against the input refs. Non-PDF refs cannot fall
+    // back to a managed path, so an incomplete stage stays a 5xx. (Managed PDFs
+    // fall back instead — see the staging-skip fallback test below.) #90097
     createTranscriptFixture("openclaw-chat-send-partial-stage-");
     mockState.finalText = "ok";
     mockState.sessionEntry = {
@@ -5554,15 +5542,21 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       },
     ];
     mockState.savedMediaResults = [
-      { path: "/home/user/.openclaw/media/inbound/report.pdf", contentType: "application/pdf" },
-      { path: "/home/user/.openclaw/media/inbound/oversize.pdf", contentType: "application/pdf" },
+      {
+        path: "/home/user/.openclaw/media/inbound/report.bin",
+        contentType: "application/octet-stream",
+      },
+      {
+        path: "/home/user/.openclaw/media/inbound/data.bin",
+        contentType: "application/octet-stream",
+      },
     ];
     mockState.sandboxWorkspace = { workspaceDir: "/sandbox/workspace" };
-    mockState.stagedRelativePaths = ["media/inbound/report.pdf", "media/inbound/oversize.pdf"];
-    mockState.unstagedSources = ["/home/user/.openclaw/media/inbound/oversize.pdf"];
+    mockState.stagedRelativePaths = ["media/inbound/report.bin", "media/inbound/data.bin"];
+    mockState.unstagedSources = ["/home/user/.openclaw/media/inbound/data.bin"];
     const respond = vi.fn();
     const context = createChatContext();
-    const pdf = Buffer.from("%PDF-1.4\n").toString("base64");
+    const binPayload = Buffer.from("OPENCLAW-BINARY\n").toString("base64");
 
     await runNonStreamingChatSend({
       context,
@@ -5571,8 +5565,18 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       message: "read these",
       requestParams: {
         attachments: [
-          { type: "file", mimeType: "application/pdf", fileName: "report.pdf", content: pdf },
-          { type: "file", mimeType: "application/pdf", fileName: "oversize.pdf", content: pdf },
+          {
+            type: "file",
+            mimeType: "application/octet-stream",
+            fileName: "report.bin",
+            content: binPayload,
+          },
+          {
+            type: "file",
+            mimeType: "application/octet-stream",
+            fileName: "data.bin",
+            content: binPayload,
+          },
         ],
       },
       expectBroadcast: false,
@@ -5593,149 +5597,11 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     ]);
   });
 
-  it("falls back to the managed inbound PDF path when sandbox staging is incomplete (#90097)", async () => {
-    createTranscriptFixture("openclaw-chat-send-managed-pdf-incomplete-");
-    mockState.finalText = "ok";
-    mockState.sessionEntry = { modelProvider: "test-provider", model: "vision-model" };
-    mockState.modelCatalog = [
-      {
-        provider: "test-provider",
-        id: "vision-model",
-        name: "Vision model",
-        input: ["text", "image"],
-      },
-    ];
-    const managedPath = "/home/user/.openclaw/media/inbound/report.pdf";
-    mockState.savedMediaResults = [{ path: managedPath, contentType: "application/pdf" }];
-    mockState.sandboxWorkspace = { workspaceDir: "/sandbox/workspace" };
-    // Staging returns an incomplete map (the file silently fell out).
-    mockState.stagedRelativePaths = ["media/inbound/report.pdf"];
-    mockState.unstagedSources = [managedPath];
-    mockState.managedInboundPaths = [managedPath];
-    const respond = vi.fn();
-    const context = createChatContext();
-    const pdf = Buffer.from("%PDF-1.4\n").toString("base64");
-
-    await runNonStreamingChatSend({
-      context,
-      respond,
-      idempotencyKey: "idem-managed-pdf-incomplete",
-      message: "read this",
-      requestParams: {
-        attachments: [
-          { type: "file", mimeType: "application/pdf", fileName: "report.pdf", content: pdf },
-        ],
-      },
-      expectBroadcast: false,
-    });
-
-    // Send proceeds with the absolute managed path; buffers are NOT deleted.
-    expect(mockState.deleteMediaBufferCalls).toEqual([]);
-    expect(mockState.lastDispatchCtx?.MediaPaths).toEqual([managedPath]);
-    expect(mockState.lastDispatchCtx?.MediaPath).toBe(managedPath);
-    expect(mockState.lastDispatchCtx?.MediaTypes).toEqual(["application/pdf"]);
-    // Host-side readable: no sandbox workspace dir is carried for the fallback.
-    expect(mockState.lastDispatchCtx?.MediaWorkspaceDir).toBeUndefined();
-    // Marker still blocks the dispatch pipeline from re-running staging.
-    expect(mockState.lastDispatchCtx?.MediaStaged).toBe(true);
-  });
-
-  it("falls back to the managed inbound PDF path when sandbox staging throws (#90097)", async () => {
-    createTranscriptFixture("openclaw-chat-send-managed-pdf-throw-");
-    mockState.finalText = "ok";
-    mockState.sessionEntry = { modelProvider: "test-provider", model: "vision-model" };
-    mockState.modelCatalog = [
-      {
-        provider: "test-provider",
-        id: "vision-model",
-        name: "Vision model",
-        input: ["text", "image"],
-      },
-    ];
-    const managedPath = "/home/user/.openclaw/media/inbound/report.pdf";
-    mockState.savedMediaResults = [{ path: managedPath, contentType: "application/pdf" }];
-    mockState.sandboxWorkspace = { workspaceDir: "/sandbox/workspace" };
-    mockState.stageSandboxMediaError = new Error("ENOSPC: no space left on device");
-    mockState.managedInboundPaths = [managedPath];
-    const respond = vi.fn();
-    const context = createChatContext();
-    const pdf = Buffer.from("%PDF-1.4\n").toString("base64");
-
-    await runNonStreamingChatSend({
-      context,
-      respond,
-      idempotencyKey: "idem-managed-pdf-throw",
-      message: "read this",
-      requestParams: {
-        attachments: [
-          { type: "file", mimeType: "application/pdf", fileName: "report.pdf", content: pdf },
-        ],
-      },
-      expectBroadcast: false,
-    });
-
-    expect(mockState.deleteMediaBufferCalls).toEqual([]);
-    expect(mockState.lastDispatchCtx?.MediaPaths).toEqual([managedPath]);
-    expect(mockState.lastDispatchCtx?.MediaWorkspaceDir).toBeUndefined();
-    expect(mockState.lastDispatchCtx?.MediaStaged).toBe(true);
-  });
-
-  it("does not fall back when not every offloaded ref is a managed PDF (#90097)", async () => {
-    createTranscriptFixture("openclaw-chat-send-managed-pdf-mixed-");
-    mockState.finalText = "ok";
-    mockState.sessionEntry = { modelProvider: "test-provider", model: "vision-model" };
-    mockState.modelCatalog = [
-      {
-        provider: "test-provider",
-        id: "vision-model",
-        name: "Vision model",
-        input: ["text", "image"],
-      },
-    ];
-    const managedPdf = "/home/user/.openclaw/media/inbound/report.pdf";
-    const managedZip = "/home/user/.openclaw/media/inbound/data.zip";
-    mockState.savedMediaResults = [
-      { path: managedPdf, contentType: "application/pdf" },
-      { path: managedZip, contentType: "application/zip" },
-    ];
-    mockState.sandboxWorkspace = { workspaceDir: "/sandbox/workspace" };
-    mockState.stagedRelativePaths = ["media/inbound/report.pdf", "media/inbound/data.zip"];
-    mockState.unstagedSources = [managedPdf];
-    // Both managed, but the non-PDF ref must block the all-or-nothing fallback.
-    mockState.managedInboundPaths = [managedPdf, managedZip];
-    const respond = vi.fn();
-    const context = createChatContext();
-    const pdf = Buffer.from("%PDF-1.4\n").toString("base64");
-    const zip = Buffer.from("PKdata").toString("base64");
-
-    await runNonStreamingChatSend({
-      context,
-      respond,
-      idempotencyKey: "idem-managed-pdf-mixed",
-      message: "read these",
-      requestParams: {
-        attachments: [
-          { type: "file", mimeType: "application/pdf", fileName: "report.pdf", content: pdf },
-          { type: "file", mimeType: "application/zip", fileName: "data.zip", content: zip },
-        ],
-      },
-      expectBroadcast: false,
-      waitFor: "none",
-    });
-
-    // Mixed batch keeps the existing delete + 5xx behavior (no silent passthrough).
-    expect(mockState.lastDispatchCtx).toBeUndefined();
-    const [ok, , error] = lastRespondCall(respond) ?? [];
-    expect(ok).toBe(false);
-    expect(error?.code).toBe(ErrorCodes.UNAVAILABLE);
-    expect(mockState.deleteMediaBufferCalls.map((c) => c.id).toSorted()).toEqual([
-      "saved-media",
-      "saved-media",
-    ]);
-  });
-
-  it("passes sandbox-oversized managed inbound PDFs through instead of rejecting them (#90097)", async () => {
-    createTranscriptFixture("openclaw-chat-send-managed-pdf-oversize-");
+  it("passes already-managed oversized inbound PDFs through staging instead of rejecting", async () => {
+    // #90097: a managed inbound PDF above the sandbox staging cap is read
+    // host-side (media-understanding) rather than copied into the sandbox, so
+    // it must reach dispatch with its managed media path instead of a 4xx.
+    createTranscriptFixture("openclaw-chat-send-managed-pdf-pass-through-");
     mockState.finalText = "ok";
     mockState.sessionEntry = {
       modelProvider: "test-provider",
@@ -5749,19 +5615,20 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         input: ["text", "image"],
       },
     ];
-    const managedPath = "/home/user/.openclaw/media/inbound/huge.pdf";
-    mockState.savedMediaResults = [{ path: managedPath, contentType: "application/pdf" }];
+    mockState.savedMediaResults = [
+      { path: "/home/user/.openclaw/media/inbound/huge.pdf", contentType: "application/pdf" },
+    ];
     mockState.sandboxWorkspace = { workspaceDir: "/sandbox/workspace" };
-    mockState.managedInboundPaths = [managedPath];
     const respond = vi.fn();
     const context = createChatContext();
+    // 6MB PDF — above STAGED_MEDIA_MAX_BYTES (5MB) but below the 20MB parse cap.
     const oversized = Buffer.alloc(6 * 1024 * 1024);
     oversized.set(Buffer.from("%PDF-1.4\n"), 0);
 
     await runNonStreamingChatSend({
       context,
       respond,
-      idempotencyKey: "idem-managed-pdf-oversize",
+      idempotencyKey: "idem-managed-pdf-pass-through",
       message: "read this",
       requestParams: {
         attachments: [
@@ -5776,13 +5643,201 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expectBroadcast: false,
     });
 
-    expect(mockState.deleteMediaBufferCalls).toEqual([]);
-    expect(mockState.lastDispatchCtx?.MediaPath).toBe(managedPath);
-    expect(mockState.lastDispatchCtx?.MediaPaths).toEqual([managedPath]);
+    // Reaches dispatch with the managed media path; not staged into the sandbox,
+    // so no workspace dir, and the media-store entry is kept (not cleaned up).
+    expect(mockState.lastDispatchCtx?.MediaPath).toBe(
+      "/home/user/.openclaw/media/inbound/huge.pdf",
+    );
+    expect(mockState.lastDispatchCtx?.MediaPaths).toEqual([
+      "/home/user/.openclaw/media/inbound/huge.pdf",
+    ]);
     expect(mockState.lastDispatchCtx?.MediaType).toBe("application/pdf");
     expect(mockState.lastDispatchCtx?.MediaTypes).toEqual(["application/pdf"]);
     expect(mockState.lastDispatchCtx?.MediaWorkspaceDir).toBeUndefined();
     expect(mockState.lastDispatchCtx?.MediaStaged).toBe(true);
+    expect(mockState.deleteMediaBufferCalls).toEqual([]);
+  });
+
+  it("falls back to the managed path when sandbox staging throws for an already-managed PDF", async () => {
+    // #90097: an already-managed inbound PDF below the staging cap normally
+    // stages into the sandbox, but if staging throws (e.g. workspace mkdir
+    // ENOSPC) the PDF must still reach the agent via its managed media path
+    // instead of failing the send — host-side media-understanding reads it from
+    // the media-store root.
+    createTranscriptFixture("openclaw-chat-send-managed-pdf-stage-throw-");
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      modelProvider: "test-provider",
+      model: "vision-model",
+    };
+    mockState.modelCatalog = [
+      {
+        provider: "test-provider",
+        id: "vision-model",
+        name: "Vision model",
+        input: ["text", "image"],
+      },
+    ];
+    mockState.savedMediaResults = [
+      { path: "/home/user/.openclaw/media/inbound/report.pdf", contentType: "application/pdf" },
+    ];
+    mockState.sandboxWorkspace = { workspaceDir: "/sandbox/workspace" };
+    mockState.stageSandboxMediaError = Object.assign(new Error("ENOSPC: no space left on device"), {
+      code: "ENOSPC",
+    });
+    const respond = vi.fn();
+    const context = createChatContext();
+    // Small PDF (below the 5MB staging cap) so it takes the staging path, not the
+    // oversized pass-through path.
+    const pdf = Buffer.from("%PDF-1.4\n%µ¶\nendobj\n").toString("base64");
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-managed-pdf-stage-throw",
+      message: "read this",
+      requestParams: {
+        attachments: [
+          { type: "file", mimeType: "application/pdf", fileName: "report.pdf", content: pdf },
+        ],
+      },
+      expectBroadcast: false,
+    });
+
+    // Falls back to the absolute managed path; nothing staged (so no workspace
+    // dir) and the media-store entry is preserved for host-side extraction.
+    expect(mockState.lastDispatchCtx?.MediaPath).toBe(
+      "/home/user/.openclaw/media/inbound/report.pdf",
+    );
+    expect(mockState.lastDispatchCtx?.MediaPaths).toEqual([
+      "/home/user/.openclaw/media/inbound/report.pdf",
+    ]);
+    expect(mockState.lastDispatchCtx?.MediaType).toBe("application/pdf");
+    expect(mockState.lastDispatchCtx?.MediaWorkspaceDir).toBeUndefined();
+    expect(mockState.lastDispatchCtx?.MediaStaged).toBe(true);
+    expect(mockState.deleteMediaBufferCalls).toEqual([]);
+  });
+
+  it("falls back to the managed path when sandbox staging silently skips an already-managed PDF", async () => {
+    // #90097: stageSandboxMedia can silently skip a file (keeping its absolute
+    // path) and return it absent from the staged map. An already-managed PDF in
+    // that state falls back to its managed media path rather than failing the
+    // send; the staged workspace dir is still carried for any files that landed.
+    createTranscriptFixture("openclaw-chat-send-managed-pdf-stage-skip-");
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      modelProvider: "test-provider",
+      model: "vision-model",
+    };
+    mockState.modelCatalog = [
+      {
+        provider: "test-provider",
+        id: "vision-model",
+        name: "Vision model",
+        input: ["text", "image"],
+      },
+    ];
+    mockState.savedMediaResults = [
+      { path: "/home/user/.openclaw/media/inbound/report.pdf", contentType: "application/pdf" },
+    ];
+    mockState.sandboxWorkspace = { workspaceDir: "/sandbox/workspace" };
+    // No stagedRelativePaths → staged map is empty and ctx.MediaPaths keeps the
+    // absolute path, mirroring stageSandboxMedia silently skipping the file.
+    const respond = vi.fn();
+    const context = createChatContext();
+    const pdf = Buffer.from("%PDF-1.4\n%µ¶\nendobj\n").toString("base64");
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-managed-pdf-stage-skip",
+      message: "read this",
+      requestParams: {
+        attachments: [
+          { type: "file", mimeType: "application/pdf", fileName: "report.pdf", content: pdf },
+        ],
+      },
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchCtx?.MediaPath).toBe(
+      "/home/user/.openclaw/media/inbound/report.pdf",
+    );
+    expect(mockState.lastDispatchCtx?.MediaPaths).toEqual([
+      "/home/user/.openclaw/media/inbound/report.pdf",
+    ]);
+    expect(mockState.lastDispatchCtx?.MediaType).toBe("application/pdf");
+    expect(mockState.lastDispatchCtx?.MediaWorkspaceDir).toBe("/sandbox/workspace");
+    expect(mockState.lastDispatchCtx?.MediaStaged).toBe(true);
+    expect(mockState.deleteMediaBufferCalls).toEqual([]);
+  });
+
+  it("still fails the send when staging skips a non-PDF in a mixed managed batch", async () => {
+    // #90097: the PDF fallback is per-ref. A managed PDF that stages does not
+    // rescue a sibling non-PDF that silently fell out of staging; that batch must
+    // still surface a retryable 5xx and clean up every offloaded entry.
+    createTranscriptFixture("openclaw-chat-send-mixed-stage-skip-");
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      modelProvider: "test-provider",
+      model: "vision-model",
+    };
+    mockState.modelCatalog = [
+      {
+        provider: "test-provider",
+        id: "vision-model",
+        name: "Vision model",
+        input: ["text", "image"],
+      },
+    ];
+    mockState.savedMediaResults = [
+      { path: "/home/user/.openclaw/media/inbound/report.pdf", contentType: "application/pdf" },
+      {
+        path: "/home/user/.openclaw/media/inbound/data.bin",
+        contentType: "application/octet-stream",
+      },
+    ];
+    mockState.sandboxWorkspace = { workspaceDir: "/sandbox/workspace" };
+    mockState.stagedRelativePaths = ["media/inbound/report.pdf", "media/inbound/data.bin"];
+    mockState.unstagedSources = ["/home/user/.openclaw/media/inbound/data.bin"];
+    const respond = vi.fn();
+    const context = createChatContext();
+    const pdf = Buffer.from("%PDF-1.4\n").toString("base64");
+    const bin = Buffer.from("OPENCLAW-BINARY\n").toString("base64");
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-mixed-stage-skip",
+      message: "read these",
+      requestParams: {
+        attachments: [
+          { type: "file", mimeType: "application/pdf", fileName: "report.pdf", content: pdf },
+          {
+            type: "file",
+            mimeType: "application/octet-stream",
+            fileName: "data.bin",
+            content: bin,
+          },
+        ],
+      },
+      expectBroadcast: false,
+      waitFor: "none",
+    });
+
+    expect(mockState.lastDispatchCtx).toBeUndefined();
+    expect(respond).toHaveBeenCalledTimes(1);
+    const [ok, payload, error] = lastRespondCall(respond) ?? [];
+    expect(ok).toBe(false);
+    expect(payload).toBeUndefined();
+    expect(error?.code).toBe(ErrorCodes.UNAVAILABLE);
+    expect(responseErrorMessage(error)).toMatch(/staging incomplete/i);
+    // The whole batch is cleaned up — including the PDF that would have fallen
+    // back on its own — because the non-PDF cannot be delivered.
+    expect(mockState.deleteMediaBufferCalls.map((c) => c.id).toSorted()).toEqual([
+      "saved-media",
+      "saved-media",
+    ]);
   });
 
   it("rejects sandbox-oversized non-image attachments as 4xx before staging", async () => {
@@ -5791,7 +5846,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     // silently drops oversize files. Without a pre-check, a sandbox session
     // accepting a 5-20MB non-image would fail staging and surface as a
     // retryable 5xx UNAVAILABLE, misleading clients into retrying a
-    // deterministically broken request.
+    // deterministically broken request. Managed PDFs pass through (see above);
+    // other oversized non-image files must still be rejected.
     createTranscriptFixture("openclaw-chat-send-sandbox-oversize-");
     mockState.finalText = "ok";
     mockState.sessionEntry = {

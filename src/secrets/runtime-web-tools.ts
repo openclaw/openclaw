@@ -681,6 +681,7 @@ export async function resolveRuntimeWebTools(params: {
       resolvedConfig: params.resolvedConfig,
       context: params.context,
       defaults,
+      allowKeylessAutoSelect: false,
       deferKeylessFallback: true,
       fallbackUsedCode: "WEB_SEARCH_KEY_UNRESOLVED_FALLBACK_USED",
       noFallbackCode: "WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK",
@@ -800,6 +801,9 @@ export async function resolveRuntimeWebTools(params: {
       resolvedConfig: params.resolvedConfig,
       context: params.context,
       defaults,
+      // Keep keyless web_fetch (e.g. firecrawl-free) opt-in only, matching the
+      // web_search policy: never auto-selected, only used when explicitly chosen.
+      allowKeylessAutoSelect: false,
       deferKeylessFallback: true,
       fallbackUsedCode: "WEB_FETCH_PROVIDER_KEY_UNRESOLVED_FALLBACK_USED",
       noFallbackCode: "WEB_FETCH_PROVIDER_KEY_UNRESOLVED_NO_FALLBACK",

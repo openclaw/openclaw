@@ -268,6 +268,7 @@ describe("cron protocol validators", () => {
         sortBy: "nextRunAtMs",
         sortDir: "asc",
         agentId: "ops",
+        compact: true,
       }),
     ).toBe(true);
     expect(validateCronListParams({ offset: -1 })).toBe(false);

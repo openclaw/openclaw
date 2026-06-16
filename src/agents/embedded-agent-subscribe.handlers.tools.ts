@@ -44,8 +44,15 @@ import type { ApplyPatchSummary } from "./apply-patch.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import { sanitizeForConsole } from "./console-sanitize.js";
 import { normalizeTextForComparison } from "./embedded-agent-helpers.js";
-import { isDeliveredMessageToolOnlySourceReplyResult } from "./embedded-agent-message-tool-source-reply.js";
-import { isMessagingTool, isMessagingToolSendAction } from "./embedded-agent-messaging.js";
+import {
+  isDeliveredMessageToolOnlySourceReplyResult,
+  isDeliveredMessagingToolResult,
+} from "./embedded-agent-message-tool-source-reply.js";
+import {
+  isMessagingTool,
+  isMessagingToolSendAction,
+  isMessagingToolTargetEvidenceAction,
+} from "./embedded-agent-messaging.js";
 import { mergeEmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
 import type {
   ToolCallSummary,
@@ -940,7 +947,7 @@ export function handleToolExecutionStart(
     if (isMessagingTool(toolName)) {
       const argsRecord = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
       const isMessagingSend = isMessagingToolSendAction(toolName, argsRecord);
-      if (isMessagingSend) {
+      if (isMessagingToolTargetEvidenceAction(toolName, argsRecord)) {
         const telemetryArgs = applyCurrentMessageProvider(
           toolName,
           argsRecord,
@@ -960,6 +967,8 @@ export function handleToolExecutionStart(
         if (sendTarget) {
           ctx.state.pendingMessagingTargets.set(toolCallId, sendTarget);
         }
+      }
+      if (isMessagingSend) {
         const text = readMessagingText(argsRecord);
         if (text) {
           ctx.state.pendingMessagingTexts.set(toolCallId, text);
@@ -1193,11 +1202,22 @@ export async function handleToolExecutionEnd(
 
   // Commit messaging tool evidence on success, discard on error.
   const messagingArgs = applyCurrentMessageProvider(toolName, startArgs, ctx.params.messageChannel);
-  const isMessagingSend =
-    isMessagingTool(toolName) && isMessagingToolSendAction(toolName, startArgs);
+  const isMessagingInvocation = isMessagingTool(toolName);
+  const isMessagingSend = isMessagingInvocation && isMessagingToolSendAction(toolName, startArgs);
+  const hasMessagingTargetEvidence =
+    isMessagingInvocation && isMessagingToolTargetEvidenceAction(toolName, startArgs);
+  const didDeliverMessagingResult =
+    isMessagingInvocation &&
+    isDeliveredMessagingToolResult({
+      toolName,
+      args: startArgs,
+      result,
+      hookResult: toolSendReceiptResult,
+      isError: isToolError,
+    });
   const messageText = isMessagingSend ? readMessagingText(startArgs) : undefined;
   const argumentMediaUrls = isMessagingSend ? collectMessagingMediaUrlsFromRecord(startArgs) : [];
-  const messageTarget = isMessagingSend
+  const messageTarget = hasMessagingTargetEvidence
     ? extractMessagingToolSend(toolName, messagingArgs, {
         config: ctx.params.config,
         currentChannelId: ctx.params.currentChannelId,
@@ -1210,19 +1230,19 @@ export async function handleToolExecutionEnd(
       })
     : undefined;
   const committedMediaUrls =
-    !isToolError && isMessagingSend
+    didDeliverMessagingResult && isMessagingSend
       ? [...argumentMediaUrls, ...collectMessagingMediaUrlsFromToolResult(result)]
       : [];
   ctx.state.pendingMessagingTexts.delete(toolCallId);
   ctx.state.pendingMessagingTargets.delete(toolCallId);
   ctx.state.pendingMessagingMediaUrls.delete(toolCallId);
-  if (!isToolError && messageText) {
+  if (didDeliverMessagingResult && messageText) {
     ctx.state.messagingToolSentTexts.push(messageText);
     ctx.state.messagingToolSentTextsNormalized.push(normalizeTextForComparison(messageText));
     ctx.log.debug(`Committed messaging text: tool=${toolName} len=${messageText.length}`);
     ctx.trimMessagingToolSent();
   }
-  if (!isToolError && messageTarget) {
+  if (didDeliverMessagingResult && messageTarget) {
     const extractionResult = applyToolSendReceiptForExtraction(result, toolSendReceiptResult);
     const confirmedTarget = extractMessagingToolSendResult(messageTarget, extractionResult);
     ctx.state.messagingToolSentTargets.push({
@@ -1232,7 +1252,7 @@ export async function handleToolExecutionEnd(
     });
     ctx.trimMessagingToolSent();
   }
-  if (!isToolError && isMessagingSend) {
+  if (didDeliverMessagingResult && isMessagingSend) {
     if (committedMediaUrls.length > 0) {
       ctx.state.messagingToolSentMediaUrls.push(...committedMediaUrls);
       ctx.trimMessagingToolSent();

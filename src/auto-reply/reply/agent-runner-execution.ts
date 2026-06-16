@@ -65,11 +65,8 @@ import {
   resolveAgentRunAbortLifecycleFields,
 } from "../../agents/run-termination.js";
 import { buildAgentRuntimeOutcomePlan } from "../../agents/runtime-plan/build.js";
-import {
-  resolveGroupSessionKey,
-  type SessionEntry,
-  updateSessionStore,
-} from "../../config/sessions.js";
+import { resolveGroupSessionKey, type SessionEntry } from "../../config/sessions.js";
+import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolveSilentReplyPolicy } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
@@ -166,8 +163,25 @@ type AgentTurnTimingSummary = {
 };
 
 const agentTurnTimingLog = createSubsystemLogger("auto-reply/agent-turn-timing");
+const agentCompactionLog = createSubsystemLogger("auto-reply/compaction");
+const CODEX_APP_SERVER_COMPACTION_BACKEND = "codex-app-server";
 const AGENT_TURN_TIMING_WARN_TOTAL_MS = 1_000;
 const AGENT_TURN_TIMING_WARN_STAGE_MS = 500;
+
+function formatCompactionModelRef(provider?: string, model?: string): string {
+  const normalizedProvider = normalizeOptionalString(provider);
+  const normalizedModel = normalizeOptionalString(model);
+  if (normalizedProvider && normalizedModel) {
+    return `${sanitizeForLog(normalizedProvider)}/${sanitizeForLog(normalizedModel)}`;
+  }
+  if (normalizedProvider) {
+    return sanitizeForLog(normalizedProvider);
+  }
+  if (normalizedModel) {
+    return sanitizeForLog(normalizedModel);
+  }
+  return "unknown model";
+}
 
 function createAgentTurnTimingTracker(options: { profilerEnabled?: boolean } = {}): {
   measure: <T>(name: string, run: () => Promise<T> | T) => Promise<T>;
@@ -502,6 +516,13 @@ function snapshotFallbackSelectionState(entry: SessionEntry): FallbackSelectionS
     authProfileOverride: entry.authProfileOverride,
     authProfileOverrideSource: entry.authProfileOverrideSource,
     authProfileOverrideCompactionCount: entry.authProfileOverrideCompactionCount,
+  };
+}
+
+function buildFallbackSelectionStatePatch(entry: SessionEntry): Partial<SessionEntry> {
+  return {
+    ...snapshotFallbackSelectionState(entry),
+    updatedAt: entry.updatedAt,
   };
 }
 
@@ -1846,14 +1867,13 @@ export async function runAgentTurnWithFallback(params: {
 
     try {
       if (params.storePath) {
-        await updateSessionStore(params.storePath, (store) => {
-          const persistedEntry = store[params.sessionKey!];
-          if (!persistedEntry) {
-            return;
-          }
-          applyFallbackSelectionState(persistedEntry, nextState);
-          store[params.sessionKey!] = persistedEntry;
-        });
+        await updateSessionEntry(
+          { storePath: params.storePath, sessionKey: params.sessionKey },
+          (persistedEntry) => {
+            applyFallbackSelectionState(persistedEntry, nextState);
+            return buildFallbackSelectionStatePatch(persistedEntry);
+          },
+        );
       }
     } catch (error) {
       rollbackFallbackSelectionStateIfUnchanged(activeSessionEntry, nextState, previousState);
@@ -1870,18 +1890,18 @@ export async function runAgentTurnWithFallback(params: {
       if (rolledBackInMemory) {
         params.activeSessionStore![params.sessionKey!] = activeSessionEntry;
       }
-      if (!params.storePath) {
+      if (!params.storePath || !params.sessionKey) {
         return;
       }
-      await updateSessionStore(params.storePath, (store) => {
-        const persistedEntry = store[params.sessionKey!];
-        if (!persistedEntry) {
-          return;
-        }
-        if (rollbackFallbackSelectionStateIfUnchanged(persistedEntry, nextState, previousState)) {
-          store[params.sessionKey!] = persistedEntry;
-        }
-      });
+      await updateSessionEntry(
+        { storePath: params.storePath, sessionKey: params.sessionKey },
+        (persistedEntry) => {
+          if (rollbackFallbackSelectionStateIfUnchanged(persistedEntry, nextState, previousState)) {
+            return buildFallbackSelectionStatePatch(persistedEntry);
+          }
+          return null;
+        },
+      );
     };
   };
   const clearRecoveredAutoFallbackPrimaryProbe = async (paramsForClear: {
@@ -1914,17 +1934,37 @@ export async function runAgentTurnWithFallback(params: {
     if (!params.storePath) {
       return;
     }
-    await updateSessionStore(params.storePath, (store) => {
-      const persistedEntry = store[params.sessionKey!];
-      if (!persistedEntry) {
-        return;
-      }
-      if (!entryMatchesAutoFallbackPrimaryProbe(persistedEntry, probe)) {
-        return;
-      }
-      clearAutoFallbackPrimaryProbeSelection(persistedEntry);
-      store[params.sessionKey!] = persistedEntry;
-    });
+    await updateSessionEntry(
+      { storePath: params.storePath, sessionKey: params.sessionKey },
+      (persistedEntry) => {
+        if (!entryMatchesAutoFallbackPrimaryProbe(persistedEntry, probe)) {
+          return null;
+        }
+        const shouldClearAuthProfile =
+          persistedEntry.authProfileOverrideSource === "auto" ||
+          (persistedEntry.authProfileOverrideSource === undefined &&
+            persistedEntry.authProfileOverrideCompactionCount !== undefined);
+        clearAutoFallbackPrimaryProbeSelection(persistedEntry);
+        return {
+          providerOverride: undefined,
+          modelOverride: undefined,
+          modelOverrideSource: undefined,
+          modelOverrideFallbackOriginProvider: undefined,
+          modelOverrideFallbackOriginModel: undefined,
+          ...(shouldClearAuthProfile
+            ? {
+                authProfileOverride: undefined,
+                authProfileOverrideSource: undefined,
+                authProfileOverrideCompactionCount: undefined,
+              }
+            : {}),
+          fallbackNoticeSelectedModel: undefined,
+          fallbackNoticeActiveModel: undefined,
+          fallbackNoticeReason: undefined,
+          updatedAt: persistedEntry.updatedAt,
+        };
+      },
+    );
   };
 
   while (true) {
@@ -2687,6 +2727,7 @@ export async function runAgentTurnWithFallback(params: {
                       }
                       if (evt.stream === "compaction") {
                         const phase = readStringValue(evt.data.phase) ?? "";
+                        const backend = readStringValue(evt.data.backend);
                         const hookMessages = readCompactionHookMessages(evt.data.messages);
                         const sendCompactionUserNotices = async (
                           noticePhase: "start" | "end" | "incomplete",
@@ -2708,6 +2749,28 @@ export async function runAgentTurnWithFallback(params: {
                           const completed = evt.data?.completed === true;
                           if (completed) {
                             attemptCompactionCount += 1;
+                            if (backend === CODEX_APP_SERVER_COMPACTION_BACKEND) {
+                              const modelRef = formatCompactionModelRef(provider, model);
+                              const consoleMessage =
+                                `codex app-server auto-compaction succeeded for ${modelRef}; ` +
+                                "refreshed session context";
+                              agentCompactionLog.info(
+                                "codex app-server auto-compaction succeeded",
+                                {
+                                  event: "codex_app_server_compaction_succeeded",
+                                  backend,
+                                  provider,
+                                  model,
+                                  sessionKey: params.sessionKey,
+                                  sessionId: effectiveRun.sessionId,
+                                  threadId: readStringValue(evt.data.threadId),
+                                  turnId: readStringValue(evt.data.turnId),
+                                  itemId: readStringValue(evt.data.itemId),
+                                  compactionCount: attemptCompactionCount,
+                                  consoleMessage,
+                                },
+                              );
+                            }
                             if (params.opts?.onCompactionEnd) {
                               await params.opts.onCompactionEnd();
                             }

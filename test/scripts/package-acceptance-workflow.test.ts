@@ -21,6 +21,8 @@ const CRABBOX_CONFIG = ".crabbox.yaml";
 const SCHEDULED_LIVE_CHECKS_WORKFLOW = ".github/workflows/openclaw-scheduled-live-checks.yml";
 const TUI_PTY_WORKFLOW = ".github/workflows/tui-pty.yml";
 const CI_HYDRATE_LIVE_AUTH_SCRIPT = "scripts/ci-hydrate-live-auth.sh";
+const VERIFY_PROVIDER_SECRETS_SCRIPT =
+  ".agents/skills/release-openclaw-ci/scripts/verify-provider-secrets.mjs";
 const UPGRADE_SURVIVOR_RUN_SCRIPT = "scripts/e2e/lib/upgrade-survivor/run.sh";
 
 type WorkflowStep = {
@@ -417,6 +419,10 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain(
       'gh_with_retry workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@"',
     );
+    expect(workflow).toContain(
+      "did not return an Actions run URL; refusing to guess from recent workflow_dispatch runs",
+    );
+    expect(workflow).not.toContain("BEFORE_IDS=");
     expect(workflow).toContain("child run used ${head_sha}, expected ${TARGET_SHA}");
     expect(workflow).toContain(
       "Dispatch Full Release Validation from a ref pinned to the target SHA",
@@ -982,8 +988,13 @@ describe("package artifact reuse", () => {
     const testboxWorkflow = readFileSync(CI_CHECK_TESTBOX_WORKFLOW, "utf8");
     const dockerPlanAction = readFileSync(DOCKER_E2E_PLAN_ACTION, "utf8");
     const hydrateScript = readFileSync(CI_HYDRATE_LIVE_AUTH_SCRIPT, "utf8");
+    const providerVerifier = readFileSync(VERIFY_PROVIDER_SECRETS_SCRIPT, "utf8");
 
     expect(hydrateScript).toContain("  FACTORY_API_KEY \\");
+    expect(providerVerifier).toContain('url: "https://api.anthropic.com/v1/messages"');
+    expect(providerVerifier).toContain('model: "claude-haiku-4-5"');
+    expect(providerVerifier).toContain("validateResponse:");
+    expect(providerVerifier).not.toContain("ANTHROPIC_OAUTH_TOKEN");
     expect(dockerPlanAction).toContain('if [[ "$credentials" == *",factory,"* ]]; then');
     expectTextToIncludeAll(dockerPlanAction, [
       'if [[ "$credentials" == *",openai,"* ]]; then',
@@ -1020,6 +1031,12 @@ describe("package artifact reuse", () => {
       'if [[ "$credentials" == *",opencode,"* ]]; then',
       "require_any OpenCode OPENCODE_API_KEY OPENCODE_ZEN_API_KEY",
     ]);
+    expect(reusableWorkflow.match(/OPENCLAW_LIVE_CLI_BACKEND_AUTH=subscription/g)).toHaveLength(2);
+    expect(
+      reusableWorkflow.match(
+        /if \[\[ -n "\$\{OPENCLAW_CLAUDE_CREDENTIALS_JSON:-\}" \|\| -n "\$\{CLAUDE_CODE_OAUTH_TOKEN:-\}" \]\]; then/g,
+      ),
+    ).toHaveLength(2);
   });
 
   it("fails Testbox changed-check delegation when the remote command fails", () => {
@@ -1268,8 +1285,9 @@ describe("package artifact reuse", () => {
       TARGET_SHA: "${{ needs.resolve_target.outputs.sha }}",
     });
     expectTextToIncludeAll(dispatchStep.run, [
-      'gh_with_retry workflow run npm-telegram-beta-e2e.yml --ref "$CHILD_WORKFLOW_REF" "${args[@]}"',
-      'before_json="$(gh_with_retry run list --workflow npm-telegram-beta-e2e.yml',
+      'dispatch_output="$(gh_with_retry workflow run npm-telegram-beta-e2e.yml --ref "$CHILD_WORKFLOW_REF" "${args[@]}")"',
+      "sed -nE 's#.*actions/runs/([0-9]+).*#\\1#p'",
+      "did not return an Actions run URL; refusing to guess from recent workflow_dispatch runs",
       '-f harness_ref="$TARGET_SHA"',
       'args=(-f package_spec="${PACKAGE_SPEC:-openclaw@beta}"',
       'if [[ -z "${PACKAGE_SPEC// }" ]]; then',
@@ -1848,6 +1866,8 @@ describe("package artifact reuse", () => {
       "already has a public GitHub release page without complete postpublish evidence",
     );
     expect(releaseWorkflow).toContain("registry tarball");
+    expect(releaseWorkflow).toContain("openclawNpmTarball");
+    expect(releaseWorkflow).not.toContain('npm view "openclaw@${release_version}" dist.tarball');
     expect(releaseWorkflow).toContain("release SHA");
     expect(clawHubReleasePlanScript).toContain("not awaited by this proof");
     expect(releaseWorkflow).toContain("wait_for_job_success");

@@ -1,6 +1,6 @@
 // Input provenance helpers normalize source metadata for session messages.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { AgentMessage } from "../agents/runtime/index.js";
+import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 
 // Input provenance marks whether a user-role message actually came from an
 // external user, another session, or an internal system/tool handoff.

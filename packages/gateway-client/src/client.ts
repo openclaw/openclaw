@@ -361,6 +361,11 @@ export type GatewayReconnectPausedInfo = {
   detailCode: string | null;
 };
 
+export type GatewayClientCloseInfo = {
+  phase: "pre-hello" | "post-hello";
+  transientPreHelloCleanClose: boolean;
+};
+
 export class GatewayClientRequestError extends Error {
   readonly gatewayCode: string;
   readonly details?: unknown;
@@ -374,6 +379,13 @@ export class GatewayClientRequestError extends Error {
     this.details = error.details;
     this.retryable = error.retryable === true;
     this.retryAfterMs = error.retryAfterMs;
+  }
+}
+
+class GatewayClientTransientPreHelloCloseError extends Error {
+  constructor() {
+    super("gateway transient pre-hello clean close");
+    this.name = "GatewayClientTransientPreHelloCloseError";
   }
 }
 
@@ -439,7 +451,7 @@ export type GatewayClientOptions = {
   onHelloOk?: (hello: HelloOk) => void;
   onConnectError?: (err: Error) => void;
   onReconnectPaused?: (info: GatewayReconnectPausedInfo) => void;
-  onClose?: (code: number, reason: string) => void;
+  onClose?: (code: number, reason: string, info?: GatewayClientCloseInfo) => void;
   onGap?: (info: { expected: number; received: number }) => void;
 };
 
@@ -498,6 +510,7 @@ export function resolveGatewayClientConnectChallengeTimeoutMs(
 
 const FORCE_STOP_TERMINATE_GRACE_MS = 250;
 const STOP_AND_WAIT_TIMEOUT_MS = 1_000;
+const MAX_SUPPRESSED_TRANSIENT_PRE_HELLO_CLEAN_CLOSES = 1;
 
 type PendingStop = {
   ws: WebSocket;
@@ -532,6 +545,8 @@ export class GatewayClient {
   private readonly requestTimeoutMs: number;
   private pendingStop: PendingStop | null = null;
   private socketOpened = false;
+  private helloOkReceived = false;
+  private suppressedTransientPreHelloCleanCloses = 0;
 
   constructor(opts: GatewayClientOptions) {
     this.deps = {
@@ -653,6 +668,7 @@ export class GatewayClient {
     }
     this.ws = ws;
     this.socketOpened = false;
+    this.helloOkReceived = false;
     this.connectNonce = null;
     this.connectSent = false;
     this.clearConnectChallengeTimeout();
@@ -672,6 +688,10 @@ export class GatewayClient {
     ws.on("message", (data) => this.handleMessage(rawDataToString(data)));
     ws.on("close", (code, reason) => {
       const reasonText = rawDataToString(reason);
+      const closeInfo: GatewayClientCloseInfo = {
+        phase: this.helloOkReceived ? "post-hello" : "pre-hello",
+        transientPreHelloCleanClose: !this.helloOkReceived && code === 1000 && reasonText === "",
+      };
       const connectErrorDetailCode = this.pendingConnectErrorDetailCode;
       const connectErrorDetails = this.pendingConnectErrorDetails;
       this.pendingConnectErrorDetailCode = null;
@@ -683,6 +703,17 @@ export class GatewayClient {
       this.resolvePendingStop(ws);
       if (this.pendingStartupReconnectDelayMs !== null) {
         this.scheduleReconnect();
+        return;
+      }
+      if (
+        closeInfo.transientPreHelloCleanClose &&
+        this.suppressedTransientPreHelloCleanCloses <
+          MAX_SUPPRESSED_TRANSIENT_PRE_HELLO_CLEAN_CLOSES
+      ) {
+        this.suppressedTransientPreHelloCleanCloses += 1;
+        this.flushPendingErrors(new GatewayClientTransientPreHelloCloseError());
+        this.scheduleReconnect();
+        this.opts.onClose?.(code, reasonText, closeInfo);
         return;
       }
       // Clear persisted device auth state only when device-token auth was active.
@@ -860,11 +891,13 @@ export class GatewayClient {
 
     void this.request<HelloOk>("connect", assembled.params)
       .then((helloOk) => {
+        this.helloOkReceived = true;
         this.pendingDeviceTokenRetry = false;
         this.deviceTokenRetryBudgetUsed = false;
         this.pendingStartupReconnectDelayMs = null;
         this.pendingConnectErrorDetailCode = null;
         this.pendingConnectErrorDetails = null;
+        this.suppressedTransientPreHelloCleanCloses = 0;
         const authInfo = helloOk?.auth;
         if (authInfo?.deviceToken && this.opts.deviceIdentity) {
           this.deps.storeDeviceAuthToken({
@@ -885,6 +918,9 @@ export class GatewayClient {
         this.opts.onHelloOk?.(helloOk);
       })
       .catch((err: unknown) => {
+        if (err instanceof GatewayClientTransientPreHelloCloseError) {
+          return;
+        }
         this.pendingConnectErrorDetailCode =
           err instanceof GatewayClientRequestError ? readConnectErrorDetailCode(err.details) : null;
         this.pendingConnectErrorDetails =
