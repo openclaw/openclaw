@@ -1078,13 +1078,9 @@ async function finalizeCronRun(params: {
       })
     ).preferFinalAssistantVisibleText,
   });
-  if (finalRunResult.meta?.aborted === true) {
+  if (finalRunResult.meta?.aborted === true && !cronPayloadOutcome.hasFatalErrorPayload) {
     const metaErrorMessage = normalizeOptionalString(finalRunResult.meta.error?.message);
-    const fatalPayloadMessage = cronPayloadOutcome.hasFatalErrorPayload
-      ? (normalizeOptionalString(cronPayloadOutcome.embeddedRunError) ??
-        normalizeOptionalString(cronPayloadOutcome.outputText))
-      : undefined;
-    const error = metaErrorMessage ?? fatalPayloadMessage ?? "cron isolated agent run aborted";
+    const error = metaErrorMessage ?? "cron isolated agent run aborted";
     return prepared.withRunSession({
       status: "error",
       error,
