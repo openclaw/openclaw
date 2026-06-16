@@ -191,12 +191,26 @@ const LEGACY_BROWSER_ACT_REQUEST_KEYS = [
   "timeoutMs",
 ] as const;
 
+const LEGACY_BROWSER_ACT_SHARED_REQUEST_KEYS = new Set<
+  (typeof LEGACY_BROWSER_ACT_REQUEST_KEYS)[number]
+>(["targetId"]);
+
 function readActRequestParam(params: Record<string, unknown>) {
   const requestParam = params.request;
   if (requestParam && typeof requestParam === "object") {
     const request = { ...(requestParam as Record<string, unknown>) };
+    const hasMismatchedKind =
+      typeof request.kind === "string" &&
+      typeof params.kind === "string" &&
+      request.kind !== params.kind;
     for (const key of LEGACY_BROWSER_ACT_REQUEST_KEYS) {
       if (Object.hasOwn(request, key) || !Object.hasOwn(params, key)) {
+        continue;
+      }
+      // Flattened act fields are legacy shape repair. Only the tab scope is
+      // safe across kind mismatches; action-specific fields can corrupt the
+      // explicit nested request.
+      if (hasMismatchedKind && !LEGACY_BROWSER_ACT_SHARED_REQUEST_KEYS.has(key)) {
         continue;
       }
       request[key] = params[key];
