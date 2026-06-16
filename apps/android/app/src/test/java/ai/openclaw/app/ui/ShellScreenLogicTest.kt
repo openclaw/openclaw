@@ -3,6 +3,8 @@ package ai.openclaw.app.ui
 import ai.openclaw.app.AppearanceThemeMode
 import ai.openclaw.app.GatewayChannelSummary
 import ai.openclaw.app.GatewayChannelsSummary
+import ai.openclaw.app.GatewayNodeApprovalState
+import ai.openclaw.app.GatewayNodeSummary
 import ai.openclaw.app.GatewayNodesDevicesSummary
 import ai.openclaw.app.GatewayPendingDeviceSummary
 import org.junit.Assert.assertEquals
@@ -116,6 +118,41 @@ class ShellScreenLogicTest {
       )
 
     assertEquals(emptyList<String>(), rows.map { it.title })
+  }
+
+  @Test
+  fun homeAttentionRowsSurfacePendingNodeCapabilityApproval() {
+    val rows =
+      homeAttentionRows(
+        isConnected = true,
+        pendingApprovals = 0,
+        channelsSummary = emptyChannels(),
+        nodesDevicesSummary =
+          GatewayNodesDevicesSummary(
+            nodes =
+              listOf(
+                GatewayNodeSummary(
+                  id = "android-node",
+                  displayName = "Android",
+                  remoteIp = null,
+                  version = null,
+                  deviceFamily = "Android",
+                  paired = true,
+                  connected = true,
+                  approvalState = GatewayNodeApprovalState.PendingApproval,
+                  pendingRequestId = null,
+                  capabilities = emptyList(),
+                  commands = emptyList(),
+                ),
+              ),
+            pendingDevices = emptyList(),
+            pairedDevices = emptyList(),
+          ),
+        readyProviderCount = 1,
+      )
+
+    assertEquals(listOf("Nodes & Devices"), rows.map { it.title })
+    assertEquals("Node approval pending", rows.single().subtitle)
   }
 
   private fun emptyChannels(): GatewayChannelsSummary = GatewayChannelsSummary(channels = emptyList())

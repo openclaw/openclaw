@@ -270,6 +270,22 @@ function resolvePairedAccessScopes(
   return normalizeSortedUniqueTrimmedStringList(scopes);
 }
 
+function isSetupCodeMobileBootstrapClient(client: {
+  id?: string;
+  platform?: string;
+  deviceFamily?: string;
+}): boolean {
+  const platform = normalizeDeviceMetadataForAuth(client.platform);
+  const deviceFamily = normalizeDeviceMetadataForAuth(client.deviceFamily);
+  if (client.id === GATEWAY_CLIENT_IDS.ANDROID_APP) {
+    return /^android(?:\s|$)/.test(platform) && deviceFamily === "android";
+  }
+  if (client.id === GATEWAY_CLIENT_IDS.IOS_APP) {
+    return /^(?:ios|ipados)(?:\s|$)/.test(platform) && /^(?:iphone|ipad|ios)$/.test(deviceFamily);
+  }
+  return false;
+}
+
 function resolveTrustedProxyControlUiScopes(params: {
   requestedScopes: string[];
   upgradeReq: IncomingMessage;
@@ -1283,15 +1299,16 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                     publicKey: devicePublicKey,
                   })
                 : null;
-            const allowSilentBootstrapPairing =
+            const allowSetupCodeMobileBootstrapPairing =
               boundBootstrapProfile !== null &&
-              isPairingSetupBootstrapProfile(boundBootstrapProfile);
+              isPairingSetupBootstrapProfile(boundBootstrapProfile) &&
+              isSetupCodeMobileBootstrapClient(connectParams.client);
+            const allowSilentBootstrapPairing = allowSetupCodeMobileBootstrapPairing;
             // This is the native QR/setup-code onboarding seam. Mobile clients
-            // connect as node with bootstrap auth, then clear bootstrap auth and
-            // start their operator loop only if hello-ok includes the bounded
-            // operator token below. Keep this limited to the exact current
-            // setup-code profile; admin/pairing scopes still require an explicit
-            // owner flow.
+            // must prove their canonical client id and platform/family metadata
+            // agree before the Gateway can skip owner approval and hand off the
+            // bounded operator token below. Admin/pairing scopes still require
+            // an explicit owner flow.
             const bootstrapPairingRoles = allowSilentBootstrapPairing
               ? uniqueStrings([role, ...boundBootstrapProfile.roles])
               : undefined;

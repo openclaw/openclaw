@@ -69,6 +69,7 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -301,6 +302,8 @@ class NodeRuntime(
   val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
   private val _nodeConnected = MutableStateFlow(false)
   val nodeConnected: StateFlow<Boolean> = _nodeConnected.asStateFlow()
+  private val _nodeCapabilityApprovalState = MutableStateFlow(GatewayNodeApprovalState.Unknown)
+  val nodeCapabilityApprovalState: StateFlow<GatewayNodeApprovalState> = _nodeCapabilityApprovalState.asStateFlow()
 
   private val _statusText = MutableStateFlow("Offline")
   val statusText: StateFlow<String> = _statusText.asStateFlow()
@@ -472,6 +475,7 @@ class NodeRuntime(
             pendingDevices = emptyList(),
             pairedDevices = emptyList(),
           )
+        _nodeCapabilityApprovalState.value = GatewayNodeApprovalState.Unknown
         _channelsSummary.value = GatewayChannelsSummary(channels = emptyList())
         _dreamingSummary.value = GatewayDreamingSummary()
         _healthLogsSummary.value = GatewayHealthLogsSummary()
@@ -2018,6 +2022,7 @@ class NodeRuntime(
           pendingDevices = emptyList(),
           pairedDevices = emptyList(),
         )
+      _nodeCapabilityApprovalState.value = GatewayNodeApprovalState.Unknown
       _nodesDevicesRefreshing.value = false
       return
     }
@@ -2031,9 +2036,15 @@ class NodeRuntime(
         } catch (_: Throwable) {
           null
         }
+      val nodes = parseGatewayNodes(nodesRoot?.get("nodes") as? JsonArray)
+      _nodeCapabilityApprovalState.value =
+        currentNodeCapabilityApprovalState(
+          nodes = nodes,
+          selfNodeId = identityStore.loadOrCreate().deviceId,
+        )
       _nodesDevicesSummary.value =
         GatewayNodesDevicesSummary(
-          nodes = parseGatewayNodes(nodesRoot?.get("nodes") as? JsonArray),
+          nodes = nodes,
           pendingDevices = parsePendingDevices(devicesRoot?.get("pending") as? JsonArray),
           pairedDevices = parsePairedDevices(devicesRoot?.get("paired") as? JsonArray),
           devicePairingAvailable = devicesRoot != null,
@@ -2289,22 +2300,8 @@ class NodeRuntime(
 
   private fun parseGatewayNodes(nodes: JsonArray?): List<GatewayNodeSummary> =
     nodes
-      ?.mapNotNull { item ->
-        val obj = item.asObjectOrNull() ?: return@mapNotNull null
-        val id = obj["nodeId"].asStringOrNull()?.trim().orEmpty()
-        if (id.isEmpty()) return@mapNotNull null
-        GatewayNodeSummary(
-          id = id,
-          displayName = obj["displayName"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
-          remoteIp = obj["remoteIp"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
-          version = obj["version"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
-          deviceFamily = obj["deviceFamily"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
-          paired = obj.boolean("paired"),
-          connected = obj.boolean("connected"),
-          capabilities = parseStringArray(obj["caps"] as? JsonArray),
-          commands = parseStringArray(obj["commands"] as? JsonArray),
-        )
-      }.orEmpty()
+      ?.mapNotNull(::parseGatewayNodeSummary)
+      .orEmpty()
 
   private fun parsePendingDevices(devices: JsonArray?): List<GatewayPendingDeviceSummary> =
     devices
@@ -2832,6 +2829,51 @@ data class GatewayNodesDevicesSummary(
   val devicePairingAvailable: Boolean = true,
 )
 
+enum class GatewayNodeApprovalState {
+  Unknown,
+  Approved,
+  PendingApproval,
+  PendingReapproval,
+  Unapproved,
+}
+
+internal fun parseGatewayNodeApprovalState(raw: String?): GatewayNodeApprovalState =
+  when (raw?.trim()?.lowercase()) {
+    "approved" -> GatewayNodeApprovalState.Approved
+    "pending-approval" -> GatewayNodeApprovalState.PendingApproval
+    "pending-reapproval" -> GatewayNodeApprovalState.PendingReapproval
+    "unapproved" -> GatewayNodeApprovalState.Unapproved
+    else -> GatewayNodeApprovalState.Unknown
+  }
+
+internal fun currentNodeCapabilityApprovalState(
+  nodes: List<GatewayNodeSummary>,
+  selfNodeId: String,
+): GatewayNodeApprovalState =
+  nodes
+    .firstOrNull { it.id == selfNodeId }
+    ?.approvalState
+    ?: GatewayNodeApprovalState.Unknown
+
+internal fun parseGatewayNodeSummary(item: JsonElement): GatewayNodeSummary? {
+  val obj = item.asObjectOrNull() ?: return null
+  val id = obj["nodeId"].asStringOrNull()?.trim().orEmpty()
+  if (id.isEmpty()) return null
+  return GatewayNodeSummary(
+    id = id,
+    displayName = obj["displayName"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+    remoteIp = obj["remoteIp"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+    version = obj["version"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+    deviceFamily = obj["deviceFamily"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+    paired = obj.boolean("paired"),
+    connected = obj.boolean("connected"),
+    approvalState = parseGatewayNodeApprovalState(obj["approvalState"].asStringOrNull()),
+    pendingRequestId = obj["pendingRequestId"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+    capabilities = parseGatewayStringArray(obj["caps"] as? JsonArray),
+    commands = parseGatewayStringArray(obj["commands"] as? JsonArray),
+  )
+}
+
 data class GatewayNodeSummary(
   val id: String,
   val displayName: String?,
@@ -2840,6 +2882,8 @@ data class GatewayNodeSummary(
   val deviceFamily: String?,
   val paired: Boolean,
   val connected: Boolean,
+  val approvalState: GatewayNodeApprovalState,
+  val pendingRequestId: String?,
   val capabilities: List<String>,
   val commands: List<String>,
 )
@@ -2961,6 +3005,11 @@ private fun JsonObject?.cronStatus(key: String): String? =
     .asStringOrNull()
     ?.trim()
     ?.takeIf { it.isNotEmpty() }
+
+private fun parseGatewayStringArray(items: JsonArray?): List<String> =
+  items
+    ?.mapNotNull { it.asStringOrNull()?.trim()?.takeIf { value -> value.isNotEmpty() } }
+    .orEmpty()
 
 fun providerDisplayName(provider: String): String =
   when (provider.trim().lowercase()) {

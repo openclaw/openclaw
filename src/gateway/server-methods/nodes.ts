@@ -46,12 +46,13 @@ import {
   resolveApnsAuthConfigFromEnv,
   resolveApnsRelayConfigFromEnv,
 } from "../../infra/push-apns.js";
+import type { NodeListNode } from "../../shared/node-list-types.js";
 import {
   recordRemoteNodeInfo,
   refreshRemoteNodeBins,
   removeRemoteNodeInfo,
 } from "../../skills/runtime/remote.js";
-import { createKnownNodeCatalog, getKnownNode, listKnownNodes } from "../node-catalog.js";
+import { createKnownNodeCatalog, listKnownNodes } from "../node-catalog.js";
 import {
   isForegroundRestrictedPluginNodeCommand,
   isNodeCommandAllowed,
@@ -123,6 +124,40 @@ const pendingNodeActionsById = new Map<string, PendingNodeAction[]>();
 function canReadPendingNodePairing(client: GatewayClient | null): boolean {
   const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
   return scopes.includes(ADMIN_SCOPE) || scopes.includes(PAIRING_SCOPE);
+}
+
+function safeNodeReadProjection(node: NodeListNode): NodeListNode | null {
+  if (!node.paired && !node.connected) {
+    return null;
+  }
+  const {
+    pendingRequestId: _pendingRequestId,
+    pendingDeclaredCaps: _pendingDeclaredCaps,
+    pendingDeclaredCommands: _pendingDeclaredCommands,
+    pendingDeclaredPermissions: _pendingDeclaredPermissions,
+    ...safeNode
+  } = node;
+  return safeNode;
+}
+
+function listNodesForClient(params: {
+  client: GatewayClient | null;
+  pairedDevices: Awaited<ReturnType<typeof listDevicePairing>>["paired"];
+  pairedNodes: Awaited<ReturnType<typeof listNodePairing>>["paired"];
+  pendingNodes: Awaited<ReturnType<typeof listNodePairing>>["pending"];
+  connectedNodes: readonly NodeSession[];
+}): NodeListNode[] {
+  const catalog = createKnownNodeCatalog({
+    pairedDevices: params.pairedDevices,
+    pairedNodes: params.pairedNodes,
+    pendingNodes: params.pendingNodes,
+    connectedNodes: params.connectedNodes,
+  });
+  const nodes = listKnownNodes(catalog);
+  if (canReadPendingNodePairing(params.client)) {
+    return nodes;
+  }
+  return nodes.map(safeNodeReadProjection).filter((node) => node !== null);
 }
 
 function normalizeBrowserProxyPath(value: string): string {
@@ -952,13 +987,13 @@ export const nodeHandlers: GatewayRequestHandlers = {
         listDevicePairing(),
         listNodePairing(),
       ]);
-      const catalog = createKnownNodeCatalog({
+      const nodes = listNodesForClient({
+        client,
         pairedDevices: devicePairing.paired,
         pairedNodes: nodePairing.paired,
-        pendingNodes: canReadPendingNodePairing(client) ? nodePairing.pending : undefined,
+        pendingNodes: nodePairing.pending,
         connectedNodes: context.nodeRegistry.listConnected(),
       });
-      const nodes = listKnownNodes(catalog);
       respond(true, { ts: Date.now(), nodes }, undefined);
     });
   },
@@ -982,13 +1017,14 @@ export const nodeHandlers: GatewayRequestHandlers = {
         listDevicePairing(),
         listNodePairing(),
       ]);
-      const catalog = createKnownNodeCatalog({
+      const nodes = listNodesForClient({
+        client,
         pairedDevices: devicePairing.paired,
         pairedNodes: nodePairing.paired,
-        pendingNodes: canReadPendingNodePairing(client) ? nodePairing.pending : undefined,
+        pendingNodes: nodePairing.pending,
         connectedNodes: context.nodeRegistry.listConnected(),
       });
-      const node = getKnownNode(catalog, id);
+      const node = nodes.find((entry) => entry.nodeId === id);
       if (!node) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown nodeId"));
         return;
