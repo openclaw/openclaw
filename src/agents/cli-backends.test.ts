@@ -1,3 +1,4 @@
+/** Tests CLI backend config resolution, normalization, and live-test defaults. */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { CliBackendConfig } from "../config/types.js";
@@ -31,6 +32,7 @@ function createBackendEntry(params: {
   bundleMcpMode?: CliBundleMcpMode;
   defaultAuthProfileId?: string;
   authEpochMode?: CliBackendAuthEpochMode;
+  ownsNativeCompaction?: boolean;
   prepareExecution?: () => Promise<null>;
   resolveExecutionArgs?: CliBackendResolveExecutionArgs;
   normalizeConfig?: (
@@ -38,6 +40,8 @@ function createBackendEntry(params: {
     context?: CliBackendNormalizeConfigContext,
   ) => CliBackendConfig;
 }) {
+  // Runtime/setup backend entries share most shape; tests build both from one
+  // helper so registry behavior stays aligned.
   return {
     pluginId: params.pluginId,
     source: "test",
@@ -48,6 +52,7 @@ function createBackendEntry(params: {
       ...(params.bundleMcpMode ? { bundleMcpMode: params.bundleMcpMode } : {}),
       ...(params.defaultAuthProfileId ? { defaultAuthProfileId: params.defaultAuthProfileId } : {}),
       ...(params.authEpochMode ? { authEpochMode: params.authEpochMode } : {}),
+      ...(params.ownsNativeCompaction ? { ownsNativeCompaction: params.ownsNativeCompaction } : {}),
       ...(params.prepareExecution ? { prepareExecution: params.prepareExecution } : {}),
       ...(params.resolveExecutionArgs ? { resolveExecutionArgs: params.resolveExecutionArgs } : {}),
       ...(params.normalizeConfig ? { normalizeConfig: params.normalizeConfig } : {}),
@@ -150,6 +155,7 @@ function normalizeTestClaudeArgs(
   args: string[] | undefined,
   permission: { mode?: string; overrideExisting: boolean },
 ): string[] | undefined {
+  // Mirrors Claude backend normalization without loading the bundled runtime.
   if (!args) {
     return permission.mode ? ["--permission-mode", permission.mode] : args;
   }
@@ -230,6 +236,7 @@ beforeEach(() => {
       id: "claude-cli",
       bundleMcp: true,
       bundleMcpMode: "claude-config-file",
+      ownsNativeCompaction: true,
       config: {
         command: "claude",
         args: [
@@ -544,6 +551,11 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
     expect(resolved?.config.resumeArgs).toContain("--permission-mode");
     expect(resolved?.config.resumeArgs).toContain("bypassPermissions");
     expect(resolved?.config.resumeArgs).not.toContain("--dangerously-skip-permissions");
+  });
+
+  it("declares ownsNativeCompaction for claude-cli", () => {
+    const resolved = requireCliBackendConfig("claude-cli");
+    expect(resolved?.ownsNativeCompaction).toBe(true);
   });
 
   it("keeps Claude permission mode unset when OpenClaw exec policy is not YOLO", () => {

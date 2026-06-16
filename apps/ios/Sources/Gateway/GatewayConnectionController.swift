@@ -3,7 +3,6 @@ import Contacts
 import CoreLocation
 import CoreMotion
 import CryptoKit
-import Darwin
 import EventKit
 import Foundation
 import Network
@@ -126,12 +125,20 @@ final class GatewayConnectionController {
     private(set) var pendingTrustPrompt: TrustPrompt?
 
     private let discovery = GatewayDiscoveryModel()
+    private let discoveryEnabled: Bool
     private weak var appModel: NodeAppModel?
     private var didAutoConnect = false
     private var pendingServiceResolvers: [String: GatewayServiceResolver] = [:]
     private var pendingTrustConnect: PendingTrustConnect?
 
+    private struct SavedManualEndpoint: Equatable {
+        let host: String
+        let port: Int
+        let useTLS: Bool
+    }
+
     init(appModel: NodeAppModel, startDiscovery: Bool = true) {
+        self.discoveryEnabled = startDiscovery
         self.appModel = appModel
 
         GatewaySettingsStore.bootstrapPersistence()
@@ -141,7 +148,7 @@ final class GatewayConnectionController {
         self.updateFromDiscovery()
         self.observeDiscovery()
 
-        if startDiscovery {
+        if self.discoveryEnabled {
             self.discovery.start()
         }
     }
@@ -151,6 +158,11 @@ final class GatewayConnectionController {
     }
 
     func setScenePhase(_ phase: ScenePhase) {
+        guard self.discoveryEnabled else {
+            self.discovery.stop()
+            return
+        }
+
         switch phase {
         case .background:
             self.discovery.stop()
@@ -163,12 +175,13 @@ final class GatewayConnectionController {
         }
     }
 
-    func allowAutoConnectAgain() {
-        self.didAutoConnect = false
-        self.maybeAutoConnect()
-    }
-
     func restartDiscovery() {
+        guard self.discoveryEnabled else {
+            self.discovery.stop()
+            self.updateFromDiscovery()
+            return
+        }
+
         self.discovery.stop()
         self.didAutoConnect = false
         self.discovery.start()
@@ -181,7 +194,8 @@ final class GatewayConnectionController {
     }
 
     private func connectDiscoveredGateway(
-        _ gateway: GatewayDiscoveryModel.DiscoveredGateway) async -> String?
+        _ gateway: GatewayDiscoveryModel.DiscoveredGateway,
+        forceReconnect: Bool = false) async -> String?
     {
         let instanceId = UserDefaults.standard.string(forKey: "node.instanceId")?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -245,7 +259,8 @@ final class GatewayConnectionController {
             tls: tlsParams,
             token: token,
             bootstrapToken: bootstrapToken,
-            password: password)
+            password: password,
+            forceReconnect: forceReconnect)
         return nil
     }
 
@@ -257,7 +272,8 @@ final class GatewayConnectionController {
         host: String,
         port: Int,
         useTLS: Bool,
-        authOverride: ManualAuthOverride? = nil) async
+        authOverride: ManualAuthOverride? = nil,
+        forceReconnect: Bool = false) async
     {
         let instanceId = GatewaySettingsStore.currentInstanceID()
         let token =
@@ -319,27 +335,38 @@ final class GatewayConnectionController {
             tls: tlsParams,
             token: token,
             bootstrapToken: bootstrapToken,
-            password: password)
+            password: password,
+            forceReconnect: forceReconnect)
     }
 
     func connectLastKnown() async {
         guard let last = GatewaySettingsStore.loadLastGatewayConnection() else { return }
         switch last {
         case let .manual(host, port, useTLS, _):
-            await self.connectManual(host: host, port: port, useTLS: useTLS)
+            await self.connectManual(host: host, port: port, useTLS: useTLS, forceReconnect: true)
         case let .discovered(stableID, _):
-            guard let gateway = self.gateways.first(where: { $0.stableID == stableID }) else { return }
-            _ = await self.connectDiscoveredGateway(gateway)
+            guard let gateway = self.gateways.first(where: { $0.stableID == stableID }) else {
+                _ = await self.connectSavedManualEndpointFallback()
+                return
+            }
+            _ = await self.connectDiscoveredGateway(gateway, forceReconnect: true)
         }
     }
 
     /// Rebuild connect options from current local settings (caps/commands/permissions)
     /// and re-apply the active gateway config so capability changes take effect immediately.
     func refreshActiveGatewayRegistrationFromSettings() {
+        Task { [weak self] in
+            await self?.refreshActiveGatewayRegistrationFromSettingsAsync()
+        }
+    }
+
+    private func refreshActiveGatewayRegistrationFromSettingsAsync() async {
         guard let appModel else { return }
         guard let cfg = appModel.activeGatewayConnectConfig else { return }
         guard appModel.gatewayAutoReconnectEnabled else { return }
 
+        let nodeOptions = await self.makeConnectOptions(stableID: cfg.stableID)
         let refreshedConfig = GatewayConnectConfig(
             url: cfg.url,
             stableID: cfg.stableID,
@@ -347,7 +374,7 @@ final class GatewayConnectionController {
             token: cfg.token,
             bootstrapToken: cfg.bootstrapToken,
             password: cfg.password,
-            nodeOptions: self.makeConnectOptions(stableID: cfg.stableID))
+            nodeOptions: nodeOptions)
         appModel.applyGatewayConnectConfig(refreshedConfig)
     }
 
@@ -502,8 +529,7 @@ final class GatewayConnectionController {
             let stableID = self.manualStableID(host: manualHost, port: resolvedPort)
             let tlsParams = self.resolveManualTLSParams(
                 stableID: stableID,
-                tlsEnabled: resolvedUseTLS,
-                allowTOFUReset: self.shouldRequireTLS(host: manualHost))
+                tlsEnabled: resolvedUseTLS)
 
             guard let url = self.buildGatewayURL(
                 host: manualHost,
@@ -522,32 +548,14 @@ final class GatewayConnectionController {
             return
         }
 
-        if let lastKnown = GatewaySettingsStore.loadLastGatewayConnection() {
-            if case let .manual(host, port, useTLS, stableID) = lastKnown {
-                let resolvedUseTLS = self.resolveManualUseTLS(host: host, useTLS: useTLS)
-                let stored = GatewayTLSStore.loadFingerprint(stableID: stableID)
-                let tlsParams = stored.map { fp in
-                    GatewayTLSParams(required: true, expectedFingerprint: fp, allowTOFU: false, storeKey: stableID)
-                }
-                guard let url = self.buildGatewayURL(
-                    host: host,
-                    port: port,
-                    useTLS: resolvedUseTLS && tlsParams != nil)
-                else { return }
-
-                // Security: autoconnect only to previously trusted gateways (stored TLS pin).
-                guard tlsParams != nil else { return }
-
-                self.didAutoConnect = true
-                self.startAutoConnect(
-                    url: url,
-                    gatewayStableID: stableID,
-                    tls: tlsParams,
-                    token: token,
-                    bootstrapToken: bootstrapToken,
-                    password: password)
-                return
-            }
+        if let lastKnown = GatewaySettingsStore.loadLastGatewayConnection(),
+           self.startLastKnownAutoConnect(
+               lastKnown,
+               token: token,
+               bootstrapToken: bootstrapToken,
+               password: password)
+        {
+            return
         }
 
         let preferredStableID = defaults.string(forKey: "gateway.preferredStableID")?
@@ -582,6 +590,44 @@ final class GatewayConnectionController {
             }
             return
         }
+
+        _ = self.startSavedManualEndpointFallback()
+    }
+
+    private func startLastKnownAutoConnect(
+        _ lastKnown: GatewaySettingsStore.LastGatewayConnection,
+        token: String?,
+        bootstrapToken: String?,
+        password: String?) -> Bool
+    {
+        switch lastKnown {
+        case let .manual(host, port, useTLS, stableID):
+            let resolvedUseTLS = self.resolveManualUseTLS(host: host, useTLS: useTLS)
+            let stored = GatewayTLSStore.loadFingerprint(stableID: stableID)
+            let tlsParams = stored.map { fp in
+                GatewayTLSParams(required: true, expectedFingerprint: fp, allowTOFU: false, storeKey: stableID)
+            }
+            guard let url = self.buildGatewayURL(
+                host: host,
+                port: port,
+                useTLS: resolvedUseTLS && tlsParams != nil)
+            else { return false }
+
+            // Security: autoconnect only to previously trusted gateways (stored TLS pin).
+            guard tlsParams != nil else { return false }
+
+            self.didAutoConnect = true
+            self.startAutoConnect(
+                url: url,
+                gatewayStableID: stableID,
+                tls: tlsParams,
+                token: token,
+                bootstrapToken: bootstrapToken,
+                password: password)
+            return true
+        case .discovered:
+            return false
+        }
     }
 
     private func attemptAutoReconnectIfNeeded() {
@@ -592,6 +638,46 @@ final class GatewayConnectionController {
         guard UserDefaults.standard.bool(forKey: "gateway.autoconnect") else { return }
         self.didAutoConnect = false
         self.maybeAutoConnect()
+    }
+
+    private func savedManualEndpointFallback(defaults: UserDefaults = .standard) -> SavedManualEndpoint? {
+        guard defaults.bool(forKey: "gateway.autoconnect") else { return nil }
+        guard defaults.bool(forKey: "gateway.manual.enabled") else { return nil }
+        let host = defaults.string(forKey: "gateway.manual.host")?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !host.isEmpty else { return nil }
+
+        let configuredPort = defaults.integer(forKey: "gateway.manual.port")
+        let configuredUseTLS = defaults.bool(forKey: "gateway.manual.tls")
+        let resolvedUseTLS = self.resolveManualUseTLS(host: host, useTLS: configuredUseTLS)
+        guard let resolvedPort = self.resolveManualPort(
+            host: host,
+            port: configuredPort,
+            useTLS: resolvedUseTLS)
+        else { return nil }
+
+        return SavedManualEndpoint(host: host, port: resolvedPort, useTLS: resolvedUseTLS)
+    }
+
+    private func startSavedManualEndpointFallback() -> Bool {
+        guard let endpoint = self.savedManualEndpointFallback() else { return false }
+        self.didAutoConnect = true
+        Task { [weak self] in
+            await self?.connectManual(
+                host: endpoint.host,
+                port: endpoint.port,
+                useTLS: endpoint.useTLS)
+        }
+        return true
+    }
+
+    private func connectSavedManualEndpointFallback() async -> Bool {
+        guard let endpoint = self.savedManualEndpointFallback() else { return false }
+        await self.connectManual(
+            host: endpoint.host,
+            port: endpoint.port,
+            useTLS: endpoint.useTLS)
+        return true
     }
 
     private func updateLastDiscoveredGateway(from gateways: [GatewayDiscoveryModel.DiscoveredGateway]) {
@@ -615,16 +701,17 @@ final class GatewayConnectionController {
         tls: GatewayTLSParams?,
         token: String?,
         bootstrapToken: String?,
-        password: String?)
+        password: String?,
+        forceReconnect: Bool = false)
     {
         guard let appModel else { return }
-        let connectOptions = self.makeConnectOptions(stableID: gatewayStableID)
-
-        Task { [weak appModel] in
-            guard let appModel else { return }
-            await MainActor.run {
-                appModel.gatewayStatusText = "Connecting…"
+        appModel.gatewayStatusText = "Connecting…"
+        Task { [weak self, weak appModel] in
+            guard let self, let appModel else { return }
+            if forceReconnect {
+                await appModel.resetGatewaySessionsForForcedReconnect()
             }
+            let nodeOptions = await self.makeConnectOptions(stableID: gatewayStableID)
             let cfg = GatewayConnectConfig(
                 url: url,
                 stableID: gatewayStableID,
@@ -632,14 +719,13 @@ final class GatewayConnectionController {
                 token: token,
                 bootstrapToken: bootstrapToken,
                 password: password,
-                nodeOptions: connectOptions)
-            appModel.applyGatewayConnectConfig(cfg)
+                nodeOptions: nodeOptions)
+            appModel.applyGatewayConnectConfig(cfg, forceReconnect: forceReconnect)
         }
     }
 
     private func resolveDiscoveredTLSParams(
-        gateway: GatewayDiscoveryModel.DiscoveredGateway,
-        allowTOFU: Bool) -> GatewayTLSParams?
+        gateway: GatewayDiscoveryModel.DiscoveredGateway) -> GatewayTLSParams?
     {
         let stableID = gateway.stableID
         let stored = GatewayTLSStore.loadFingerprint(stableID: stableID)
@@ -666,8 +752,7 @@ final class GatewayConnectionController {
 
     private func resolveManualTLSParams(
         stableID: String,
-        tlsEnabled: Bool,
-        allowTOFUReset: Bool = false) -> GatewayTLSParams?
+        tlsEnabled: Bool) -> GatewayTLSParams?
     {
         let stored = GatewayTLSStore.loadFingerprint(stableID: stableID)
         if tlsEnabled || stored != nil {
@@ -704,127 +789,9 @@ final class GatewayConnectionController {
             resolver.start()
         }
     }
+}
 
-    private func resolveHostPortFromBonjourEndpoint(_ endpoint: NWEndpoint) async -> (host: String, port: Int)? {
-        switch endpoint {
-        case let .hostPort(host, port):
-            (host: host.debugDescription, port: Int(port.rawValue))
-        case let .service(name, type, domain, _):
-            await Self.resolveBonjourServiceToHostPort(name: name, type: type, domain: domain)
-        default:
-            nil
-        }
-    }
-
-    private static func resolveBonjourServiceToHostPort(
-        name: String,
-        type: String,
-        domain: String,
-        timeoutSeconds: TimeInterval = 3.0) async -> (host: String, port: Int)?
-    {
-        // NetService callbacks are delivered via a run loop. If we resolve from a thread without one,
-        // we can end up never receiving callbacks, which in turn leaks the continuation and leaves
-        // the UI stuck "connecting". Keep the whole lifecycle on the main run loop and always
-        // resume the continuation exactly once (timeout/cancel safe).
-        @MainActor
-        final class Resolver: NSObject, @preconcurrency NetServiceDelegate {
-            private var cont: CheckedContinuation<(host: String, port: Int)?, Never>?
-            private let service: NetService
-            private var timeoutTask: Task<Void, Never>?
-            private var finished = false
-
-            init(cont: CheckedContinuation<(host: String, port: Int)?, Never>, service: NetService) {
-                self.cont = cont
-                self.service = service
-                super.init()
-            }
-
-            func start(timeoutSeconds: TimeInterval) {
-                self.service.delegate = self
-                self.service.schedule(in: .main, forMode: .default)
-
-                // NetService has its own timeout, but we keep a manual one as a backstop in case
-                // callbacks never arrive (e.g. local network permission issues).
-                self.timeoutTask = Task { @MainActor [weak self] in
-                    guard let self else { return }
-                    let ns = UInt64(max(0.1, timeoutSeconds) * 1_000_000_000)
-                    try? await Task.sleep(nanoseconds: ns)
-                    self.finish(nil)
-                }
-
-                self.service.resolve(withTimeout: timeoutSeconds)
-            }
-
-            func netServiceDidResolveAddress(_ sender: NetService) {
-                self.finish(Self.extractHostPort(sender))
-            }
-
-            func netService(_ sender: NetService, didNotResolve errorDict: [String: NSNumber]) {
-                _ = errorDict // currently best-effort; callers surface a generic failure
-                self.finish(nil)
-            }
-
-            private func finish(_ result: (host: String, port: Int)?) {
-                guard !self.finished else { return }
-                self.finished = true
-
-                self.timeoutTask?.cancel()
-                self.timeoutTask = nil
-
-                self.service.stop()
-                self.service.remove(from: .main, forMode: .default)
-
-                let c = self.cont
-                self.cont = nil
-                c?.resume(returning: result)
-            }
-
-            private static func extractHostPort(_ svc: NetService) -> (host: String, port: Int)? {
-                let port = svc.port
-
-                if let host = svc.hostName?.trimmingCharacters(in: .whitespacesAndNewlines), !host.isEmpty {
-                    return (host: host, port: port)
-                }
-
-                guard let addrs = svc.addresses else { return nil }
-                for addrData in addrs {
-                    let host = addrData.withUnsafeBytes { ptr -> String? in
-                        guard let base = ptr.baseAddress, !ptr.isEmpty else { return nil }
-                        var buffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-
-                        let rc = getnameinfo(
-                            base.assumingMemoryBound(to: sockaddr.self),
-                            socklen_t(ptr.count),
-                            &buffer,
-                            socklen_t(buffer.count),
-                            nil,
-                            0,
-                            NI_NUMERICHOST)
-                        guard rc == 0 else { return nil }
-                        let bytes = buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
-                        return String(bytes: bytes, encoding: .utf8)
-                    }
-
-                    if let host, !host.isEmpty {
-                        return (host: host, port: port)
-                    }
-                }
-
-                return nil
-            }
-        }
-
-        return await withCheckedContinuation { cont in
-            Task { @MainActor in
-                let service = NetService(domain: domain, type: type, name: name)
-                let resolver = Resolver(cont: cont, service: service)
-                // Keep the resolver alive for the lifetime of the NetService resolve.
-                objc_setAssociatedObject(service, "resolver", resolver, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
-                resolver.start(timeoutSeconds: timeoutSeconds)
-            }
-        }
-    }
-
+extension GatewayConnectionController {
     private func buildGatewayURL(host: String, port: Int, useTLS: Bool) -> URL? {
         let scheme = useTLS ? "wss" : "ws"
         var components = URLComponents()
@@ -852,17 +819,18 @@ final class GatewayConnectionController {
         "manual|\(host.lowercased())|\(port)"
     }
 
-    private func makeConnectOptions(stableID: String?) -> GatewayConnectOptions {
+    private func makeConnectOptions(stableID: String?) async -> GatewayConnectOptions {
         let defaults = UserDefaults.standard
         let displayName = self.resolvedDisplayName(defaults: defaults)
         let resolvedClientId = self.resolvedClientId(defaults: defaults, stableID: stableID)
+        let permissions = await self.currentPermissions()
 
         return GatewayConnectOptions(
             role: "node",
             scopes: [],
             caps: self.currentCaps(),
             commands: self.currentCommands(),
-            permissions: self.currentPermissions(),
+            permissions: permissions,
             clientId: resolvedClientId,
             clientMode: "node",
             clientDisplayName: displayName)
@@ -909,7 +877,10 @@ final class GatewayConnectionController {
     }
 
     private func currentCaps() -> [String] {
-        var caps = [OpenClawCapability.canvas.rawValue, OpenClawCapability.screen.rawValue]
+        var caps = [
+            OpenClawCapability.canvas.rawValue,
+            OpenClawCapability.screen.rawValue,
+        ]
 
         // Default-on: if the key doesn't exist yet, treat it as enabled.
         let cameraEnabled =
@@ -1000,14 +971,16 @@ final class GatewayConnectionController {
         return commands
     }
 
-    private func currentPermissions() -> [String: Bool] {
+    private func currentPermissions() async -> [String: Bool] {
         var permissions: [String: Bool] = [:]
         permissions["camera"] = AVCaptureDevice.authorizationStatus(for: .video) == .authorized
         permissions["microphone"] = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
         permissions["speechRecognition"] = SFSpeechRecognizer.authorizationStatus() == .authorized
-        permissions["location"] = Self.isLocationAuthorized(
-            status: CLLocationManager().authorizationStatus)
-            && CLLocationManager.locationServicesEnabled()
+        let locationStatus = CLLocationManager().authorizationStatus
+        let locationServicesEnabled = await Self.locationServicesEnabled()
+        permissions["location"] = Self.isLocationAvailable(
+            servicesEnabled: locationServicesEnabled,
+            status: locationStatus)
         permissions["screenRecording"] = RPScreenRecorder.shared().isAvailable
 
         let photoStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
@@ -1034,12 +1007,19 @@ final class GatewayConnectionController {
         return permissions
     }
 
-    private static func isLocationAuthorized(status: CLAuthorizationStatus) -> Bool {
+    private static func locationServicesEnabled() async -> Bool {
+        await Task.detached(priority: .utility) {
+            CLLocationManager.locationServicesEnabled()
+        }.value
+    }
+
+    private static func isLocationAvailable(servicesEnabled: Bool, status: CLAuthorizationStatus) -> Bool {
+        guard servicesEnabled else { return false }
         switch status {
         case .authorizedAlways, .authorizedWhenInUse:
-            true
+            return true
         default:
-            false
+            return false
         }
     }
 
@@ -1066,24 +1046,8 @@ extension GatewayConnectionController {
         self.currentCommands()
     }
 
-    func _test_currentPermissions() -> [String: Bool] {
-        self.currentPermissions()
-    }
-
-    func _test_platformString() -> String {
-        DeviceInfoHelper.platformString()
-    }
-
-    func _test_deviceFamily() -> String {
-        DeviceInfoHelper.deviceFamily()
-    }
-
-    func _test_modelIdentifier() -> String {
-        DeviceInfoHelper.modelIdentifier()
-    }
-
-    func _test_appVersion() -> String {
-        DeviceInfoHelper.appVersion()
+    static func _test_isLocationAvailable(servicesEnabled: Bool, status: CLAuthorizationStatus) -> Bool {
+        self.isLocationAvailable(servicesEnabled: servicesEnabled, status: status)
     }
 
     func _test_setGateways(_ gateways: [GatewayDiscoveryModel.DiscoveredGateway]) {
@@ -1099,10 +1063,9 @@ extension GatewayConnectionController {
     }
 
     func _test_resolveDiscoveredTLSParams(
-        gateway: GatewayDiscoveryModel.DiscoveredGateway,
-        allowTOFU: Bool) -> GatewayTLSParams?
+        gateway: GatewayDiscoveryModel.DiscoveredGateway) -> GatewayTLSParams?
     {
-        self.resolveDiscoveredTLSParams(gateway: gateway, allowTOFU: allowTOFU)
+        self.resolveDiscoveredTLSParams(gateway: gateway)
     }
 
     func _test_resolveManualUseTLS(host: String, useTLS: Bool) -> Bool {
@@ -1111,6 +1074,14 @@ extension GatewayConnectionController {
 
     func _test_resolveManualPort(host: String, port: Int, useTLS: Bool) -> Int? {
         self.resolveManualPort(host: host, port: port, useTLS: useTLS)
+    }
+
+    func _test_savedManualEndpointFallback(
+        defaults: UserDefaults = .standard) -> (host: String, port: Int, useTLS: Bool)?
+    {
+        self.savedManualEndpointFallback(defaults: defaults).map { endpoint in
+            (host: endpoint.host, port: endpoint.port, useTLS: endpoint.useTLS)
+        }
     }
 }
 #endif

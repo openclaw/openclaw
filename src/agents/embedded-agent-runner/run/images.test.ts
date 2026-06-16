@@ -1,8 +1,11 @@
+// Prompt image tests cover local reference parsing, sandbox-aware loading, and
+// attachment ordering for embedded runs that send images to vision models.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
+import { resolvePreferredOpenClawTmpDir } from "../../../infra/tmp-openclaw-dir.js";
 import { createHostSandboxFsBridge } from "../../test-helpers/host-sandbox-fs-bridge.js";
 import { createUnsafeMountedSandbox } from "../../test-helpers/unsafe-mounted-sandbox.js";
 import {
@@ -34,6 +37,8 @@ function expectImageReferenceCount(prompt: string, count: number) {
 }
 
 function expectSingleImageReference(prompt: string) {
+  // Most parser cases should find exactly one local image ref; this helper
+  // keeps failures about over-detection obvious.
   const refs = expectImageReferenceCount(prompt, 1);
   return refs[0];
 }
@@ -79,6 +84,56 @@ describe("detectImageReferences", () => {
       type: "path",
       resolved: path.join(process.env.HOME ?? os.homedir(), "Pictures/vacation.png"),
     });
+  });
+
+  it("ignores OpenClaw CLI image cache paths from prior prompt transcripts", () => {
+    // Cache paths from generated tool reminders are replay artifacts, not new
+    // user attachments to hydrate again.
+    const refs = detectImageReferences(
+      [
+        '<system-reminder>Called the Read tool with {"file_path":"/Users/ada/.openclaw/workspace/.openclaw-cli-images/stale.png"}</system-reminder>',
+        "Compare it with /Users/ada/Pictures/current.png",
+      ].join("\n"),
+    );
+
+    expect(refs).toStrictEqual([
+      {
+        raw: "/Users/ada/Pictures/current.png",
+        type: "path",
+        resolved: "/Users/ada/Pictures/current.png",
+      },
+    ]);
+  });
+
+  it("ignores temporary OpenClaw CLI image cache paths", () => {
+    expectNoImageReferences(
+      `Prior turn wrote ${path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-images", "stale.jpg")}`,
+    );
+    expectNoImageReferences(
+      `[media attached: ${path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-images", "stale.jpg")} (image/jpeg)]`,
+    );
+    expectNoImageReferences(
+      `Prior turn wrote ${path.join(os.tmpdir(), "openclaw", "openclaw-cli-images", "stale.jpg")}`,
+    );
+    expectNoImageReferences(
+      `Prior turn wrote ${path.join(os.tmpdir(), "openclaw-501", "openclaw-cli-images", "stale.jpg")}`,
+    );
+  });
+
+  it("ignores file URLs into the OpenClaw CLI image cache", () => {
+    const stalePath = path.join(os.tmpdir(), "openclaw", "openclaw-cli-images", "stale.png");
+
+    expectNoImageReferences(`Prior turn wrote ${pathToFileURL(stalePath).href}`);
+  });
+
+  it("detects normal user image paths in similarly named directories", () => {
+    expect(detectImageReferences("/workspace/openclaw-cli-images/current.png")).toStrictEqual([
+      {
+        raw: "/workspace/openclaw-cli-images/current.png",
+        type: "path",
+        resolved: "/workspace/openclaw-cli-images/current.png",
+      },
+    ]);
   });
 
   it("detects multiple image references in a prompt", () => {
@@ -145,6 +200,8 @@ describe("detectImageReferences", () => {
   });
 
   it("dedupe casing follows host filesystem conventions", () => {
+    // Windows resolves these as the same path, while POSIX hosts preserve both
+    // candidates because case can identify different files.
     const prompt = "Look at /tmp/Image.png and /tmp/image.png";
     if (process.platform === "win32") {
       expect(detectImageReferences(prompt)).toStrictEqual([
@@ -354,6 +411,8 @@ describe("modelSupportsImages", () => {
 
 describe("loadImageFromRef", () => {
   it("hydrates managed inbound media URIs before workspace path resolution", async () => {
+    // Managed media URIs are canonical inbound attachment handles and should
+    // work even when workspaceOnly would reject ordinary outside paths.
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-native-image-uri-"));
     const workspaceDir = path.join(stateDir, "workspace-agent");
     const inboundDir = path.join(stateDir, "media", "inbound");
@@ -526,6 +585,8 @@ describe("detectAndLoadPromptImages", () => {
   });
 
   it("preserves attachment order when offloaded refs and inline images are mixed", () => {
+    // The model receives images in the user's attachment order, not grouped by
+    // storage mechanism.
     const merged = mergePromptAttachmentImages({
       imageOrder: ["offloaded", "inline"],
       existingImages: [{ type: "image", data: "small-b", mimeType: "image/png" }],
@@ -567,6 +628,8 @@ describe("detectAndLoadPromptImages", () => {
   });
 
   it("blocks prompt image refs outside workspace when sandbox workspaceOnly is enabled", async () => {
+    // Sandbox workspaceOnly uses the bridge to validate mounted paths; ordinary
+    // prompt refs outside the workspace are detected but intentionally skipped.
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-native-image-sandbox-"));
     const sandboxRoot = path.join(stateDir, "sandbox");
     const agentRoot = path.join(stateDir, "agent");

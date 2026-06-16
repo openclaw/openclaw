@@ -1,5 +1,10 @@
+// Discord plugin module implements realtime behavior.
 import { PassThrough } from "node:stream";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import {
   buildRealtimeVoiceAgentConsultChatMessage,
   buildRealtimeVoiceAgentConsultPolicyInstructions,
@@ -1119,7 +1124,17 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       session.submitToolResult(callId, { text: exactSpeechText });
       return;
     }
-    const consultMessage = buildRealtimeVoiceAgentConsultChatMessage(event.args);
+    let consultMessage: string;
+    try {
+      consultMessage = buildRealtimeVoiceAgentConsultChatMessage(event.args);
+    } catch (error) {
+      const message = formatErrorMessage(error);
+      logger.warn(
+        `discord voice: realtime consult rejected malformed args call=${callId || "unknown"}: ${message}`,
+      );
+      session.submitToolResult(callId, { error: message });
+      return;
+    }
     logger.info(
       `discord voice: realtime consult requested call=${callId || "unknown"} voiceSession=${this.params.entry.voiceSessionKey} supervisorSession=${this.params.entry.route.sessionKey} agent=${this.params.entry.route.agentId} question=${formatRealtimeLogPreview(consultMessage)}`,
     );
@@ -1497,10 +1512,14 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       );
       return;
     }
+    const expiresAt = resolveExpiresAtMsFromDurationMs(DISCORD_REALTIME_WAKE_NAME_FOLLOWUP_TTL_MS);
+    if (expiresAt === undefined) {
+      return;
+    }
     this.pendingWakeNameFollowup = {
       context,
       startedAt: turn?.startedAt ?? Date.now(),
-      expiresAt: Date.now() + DISCORD_REALTIME_WAKE_NAME_FOLLOWUP_TTL_MS,
+      expiresAt,
     };
     logger.info(
       `discord voice: realtime wake-name follow-up armed speaker=${context.speakerLabel} voiceSession=${this.params.entry.voiceSessionKey} agent=${this.params.entry.route.agentId}`,
@@ -1510,7 +1529,9 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
   private consumePendingWakeNameFollowup(): TranscriptUtteranceAttribution | undefined {
     const pending = this.pendingWakeNameFollowup;
     this.pendingWakeNameFollowup = undefined;
-    if (!pending || Date.now() > pending.expiresAt) {
+    const now = asDateTimestampMs(Date.now());
+    const expiresAt = pending ? asDateTimestampMs(pending.expiresAt) : undefined;
+    if (!pending || now === undefined || expiresAt === undefined || now > expiresAt) {
       return undefined;
     }
     const currentTurn = this.peekPendingSpeakerTurn();
@@ -1675,7 +1696,13 @@ function buildProviderConfigOverrides(
 ): RealtimeVoiceProviderConfig | undefined {
   const overrides = {
     ...(realtimeConfig?.model ? { model: realtimeConfig.model } : {}),
-    ...(realtimeConfig?.voice ? { voice: realtimeConfig.voice } : {}),
+    ...(realtimeConfig?.speakerVoice
+      ? { voice: realtimeConfig.speakerVoice }
+      : realtimeConfig?.speakerVoiceId
+        ? { voice: realtimeConfig.speakerVoiceId }
+        : realtimeConfig?.voice
+          ? { voice: realtimeConfig.voice }
+          : {}),
     ...(typeof realtimeConfig?.minBargeInAudioEndMs === "number"
       ? { minBargeInAudioEndMs: realtimeConfig.minBargeInAudioEndMs }
       : {}),

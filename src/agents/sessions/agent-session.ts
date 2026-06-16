@@ -283,6 +283,12 @@ interface ToolDefinitionEntry {
   sourceInfo: SourceInfo;
 }
 
+type ActiveToolPromptMetadata = {
+  validToolNames: string[];
+  toolSnippets: Record<string, string>;
+  promptGuidelines: string[];
+};
+
 type CompactionReason = "manual" | "threshold" | "overflow";
 
 type CompactionWorkOutcome =
@@ -326,6 +332,7 @@ export class AgentSession {
 
   // Branch summarization state
   private branchSummaryAbortController: AbortController | undefined = undefined;
+  private extensionModifiedToolResultIds = new Set<string>();
 
   // Retry state
   private retryAbortController: AbortController | undefined = undefined;
@@ -369,6 +376,7 @@ export class AgentSession {
   // Base system prompt (without extension appends) - used to apply fresh appends each turn
   private baseSystemPrompt = "";
   private baseSystemPromptOptions!: BuildSystemPromptOptions;
+  private exactBaseSystemPrompt: string | undefined;
 
   constructor(config: AgentSessionConfig) {
     this.agent = config.agent;
@@ -508,6 +516,7 @@ export class AgentSession {
       if (!hookResult) {
         return undefined;
       }
+      this.extensionModifiedToolResultIds.add(toolCall.id);
 
       return {
         content: hookResult.content,
@@ -572,7 +581,7 @@ export class AgentSession {
     }
 
     // Emit to extensions first
-    await this.emitExtensionEvent(event);
+    const messageChangedByExtension = await this.emitExtensionEvent(event);
 
     // Notify all listeners
     this.emit(
@@ -598,7 +607,13 @@ export class AgentSession {
         event.message.role === "toolResult"
       ) {
         // Regular LLM message - persist as SessionMessageEntry
-        this.sessionManager.appendMessage(event.message);
+        const toolResultChangedByExtension =
+          event.message.role === "toolResult" &&
+          this.extensionModifiedToolResultIds.delete(event.message.toolCallId);
+        this.sessionManager.appendMessage(event.message, {
+          invalidateSerializedPrefixCache:
+            messageChangedByExtension || toolResultChangedByExtension,
+        });
       }
       // Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere
 
@@ -682,7 +697,7 @@ export class AgentSession {
   }
 
   /** Emit extension events based on agent events */
-  private async emitExtensionEvent(event: AgentEvent): Promise<void> {
+  private async emitExtensionEvent(event: AgentEvent): Promise<boolean> {
     if (event.type === "agent_start") {
       this.turnIndex = 0;
       await this.currentExtensionRunner.emit({ type: "agent_start" });
@@ -725,6 +740,7 @@ export class AgentSession {
       const replacement = await this.currentExtensionRunner.emitMessageEnd(extensionEvent);
       if (replacement) {
         this.replaceMessageInPlace(event.message, replacement);
+        return true;
       }
     } else if (event.type === "tool_execution_start") {
       const extensionEvent: ToolExecutionStartEvent = {
@@ -753,6 +769,7 @@ export class AgentSession {
       };
       await this.currentExtensionRunner.emit(extensionEvent);
     }
+    return false;
   }
 
   /**
@@ -889,6 +906,23 @@ export class AgentSession {
     this.agent.state.systemPrompt = this.baseSystemPrompt;
   }
 
+  /** Set an exact base prompt owned by the current runtime. */
+  setBaseSystemPrompt(systemPrompt: string): void {
+    const { validToolNames, toolSnippets, promptGuidelines } = this.collectActiveToolPromptMetadata(
+      this.getActiveToolNames(),
+    );
+    this.exactBaseSystemPrompt = systemPrompt;
+    this.baseSystemPrompt = systemPrompt;
+    this.baseSystemPromptOptions = {
+      cwd: this.cwd,
+      selectedTools: validToolNames,
+      toolSnippets,
+      promptGuidelines,
+      customPrompt: systemPrompt,
+    };
+    this.agent.state.systemPrompt = systemPrompt;
+  }
+
   /** Whether compaction or branch summarization is currently running */
   get isCompacting(): boolean {
     return (
@@ -969,7 +1003,7 @@ export class AgentSession {
     return Array.from(unique);
   }
 
-  private rebuildSystemPrompt(toolNames: string[]): string {
+  private collectActiveToolPromptMetadata(toolNames: string[]): ActiveToolPromptMetadata {
     const validToolNames = toolNames.filter((name) => this.toolRegistry.has(name));
     const toolSnippets: Record<string, string> = {};
     const promptGuidelines: string[] = [];
@@ -983,6 +1017,25 @@ export class AgentSession {
       if (toolGuidelines) {
         promptGuidelines.push(...toolGuidelines);
       }
+    }
+
+    return { validToolNames, toolSnippets, promptGuidelines };
+  }
+
+  private rebuildSystemPrompt(toolNames: string[]): string {
+    const { validToolNames, toolSnippets, promptGuidelines } =
+      this.collectActiveToolPromptMetadata(toolNames);
+
+    if (this.exactBaseSystemPrompt !== undefined) {
+      this.baseSystemPromptOptions = {
+        ...this.baseSystemPromptOptions,
+        cwd: this.cwd,
+        customPrompt: this.exactBaseSystemPrompt,
+        selectedTools: validToolNames,
+        toolSnippets,
+        promptGuidelines,
+      };
+      return this.exactBaseSystemPrompt;
     }
 
     const loaderSystemPrompt = this.sessionResourceLoader.getSystemPrompt();
@@ -1686,7 +1739,7 @@ export class AgentSession {
    * Check if current model supports thinking/reasoning.
    */
   supportsThinking(): boolean {
-    return !!this.model?.reasoning;
+    return Boolean(this.model?.reasoning);
   }
 
   private getThinkingLevelForModelSwitch(explicitLevel?: ThinkingLevel): ThinkingLevel {
@@ -2248,7 +2301,7 @@ export class AgentSession {
     runner.bindCore(
       {
         sendMessage: (message, options) => {
-          this.sendCustomMessage(message, options).catch((err) => {
+          this.sendCustomMessage(message, options).catch((err: unknown) => {
             runner.emitError({
               extensionPath: "<runtime>",
               event: "send_message",
@@ -2257,7 +2310,7 @@ export class AgentSession {
           });
         },
         sendUserMessage: (content, options) => {
-          this.sendUserMessage(content, options).catch((err) => {
+          this.sendUserMessage(content, options).catch((err: unknown) => {
             runner.emitError({
               extensionPath: "<runtime>",
               event: "send_user_message",

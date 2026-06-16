@@ -1,4 +1,5 @@
-import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
+// Bench Gateway Startup script supports OpenClaw repository automation.
+import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import { createServer } from "node:net";
@@ -7,6 +8,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 import { parseStrictIntegerOption } from "./lib/dev-tooling-safety.ts";
+import { delay, stopChild } from "./lib/gateway-bench-child.ts";
 
 type GatewayBenchCase = {
   config: Record<string, unknown>;
@@ -80,15 +82,6 @@ type BenchmarkFailure = {
   sampleIndex: number;
 };
 
-type ChildExit = {
-  exitCode: number | null;
-  signal: string | null;
-};
-
-type StopChildResult = ChildExit & {
-  exitedBeforeTeardown: boolean;
-};
-
 type PluginFixtureResult = {
   pluginIds: string[];
   pluginsDir: string;
@@ -109,8 +102,6 @@ const DEFAULT_RUNS = 5;
 const DEFAULT_WARMUP = 1;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_ENTRY = "dist/entry.js";
-const TEARDOWN_GRACE_MS = 2_000;
-const TEARDOWN_KILL_GRACE_MS = 1_000;
 
 const BASE_CONFIG = {
   browser: { enabled: false },
@@ -187,27 +178,37 @@ const GATEWAY_CASES: readonly GatewayBenchCase[] = [
   },
 ] as const;
 
-function parseFlagValue(flag: string): string | undefined {
-  const index = process.argv.indexOf(flag);
-  if (index === -1) {
-    return undefined;
+function readRequiredFlagValue(argv: string[], index: number, flag: string): string {
+  const value = argv[index + 1];
+  if (!value || value.startsWith("-")) {
+    throw new Error(`${flag} requires a value`);
   }
-  return process.argv[index + 1];
+  return value;
 }
 
-function hasFlag(flag: string): boolean {
-  return process.argv.includes(flag);
+function parseFlagValue(argv: string[], flag: string): string | undefined {
+  for (let index = 0; index < argv.length; index += 1) {
+    if (argv[index] === flag) {
+      return readRequiredFlagValue(argv, index, flag);
+    }
+  }
+  return undefined;
 }
 
-function hasHelpFlag(): boolean {
-  return hasFlag("--help") || hasFlag("-h");
+function hasFlag(argv: string[], flag: string): boolean {
+  return argv.includes(flag);
 }
 
-function parseRepeatableFlag(flag: string): string[] {
+function hasHelpFlag(argv: string[]): boolean {
+  return hasFlag(argv, "--help") || hasFlag(argv, "-h");
+}
+
+function parseRepeatableFlag(argv: string[], flag: string): string[] {
   const values: string[] = [];
-  for (let index = 0; index < process.argv.length; index += 1) {
-    if (process.argv[index] === flag && process.argv[index + 1]) {
-      values.push(process.argv[index + 1]);
+  for (let index = 0; index < argv.length; index += 1) {
+    if (argv[index] === flag) {
+      values.push(readRequiredFlagValue(argv, index, flag));
+      index += 1;
     }
   }
   return values;
@@ -257,16 +258,20 @@ function resolveCases(caseIds: string[]): GatewayBenchCase[] {
   });
 }
 
-function parseOptions(): CliOptions {
+function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
   return {
-    cases: resolveCases(parseRepeatableFlag("--case")),
-    cpuProfDir: parseFlagValue("--cpu-prof-dir"),
-    entry: resolveEntry(parseFlagValue("--entry")),
-    json: hasFlag("--json"),
-    output: resolveOutputPath(parseFlagValue("--output")),
-    runs: parsePositiveInt(parseFlagValue("--runs"), DEFAULT_RUNS, "--runs"),
-    timeoutMs: parsePositiveInt(parseFlagValue("--timeout-ms"), DEFAULT_TIMEOUT_MS, "--timeout-ms"),
-    warmup: parseNonNegativeInt(parseFlagValue("--warmup"), DEFAULT_WARMUP, "--warmup"),
+    cases: resolveCases(parseRepeatableFlag(argv, "--case")),
+    cpuProfDir: parseFlagValue(argv, "--cpu-prof-dir"),
+    entry: resolveEntry(parseFlagValue(argv, "--entry")),
+    json: hasFlag(argv, "--json"),
+    output: resolveOutputPath(parseFlagValue(argv, "--output")),
+    runs: parsePositiveInt(parseFlagValue(argv, "--runs"), DEFAULT_RUNS, "--runs"),
+    timeoutMs: parsePositiveInt(
+      parseFlagValue(argv, "--timeout-ms"),
+      DEFAULT_TIMEOUT_MS,
+      "--timeout-ms",
+    ),
+    warmup: parseNonNegativeInt(parseFlagValue(argv, "--warmup"), DEFAULT_WARMUP, "--warmup"),
   };
 }
 
@@ -624,10 +629,6 @@ function requestStatus(port: number, pathname: string): Promise<number> {
   });
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 function writePluginFixtures(
   root: string,
   count: number,
@@ -708,83 +709,6 @@ function sanitizedEnv(
     ...benchCase.env,
   };
   return env;
-}
-
-async function stopChild(
-  child: ChildProcessWithoutNullStreams,
-  options: { killGraceMs?: number; teardownGraceMs?: number } = {},
-): Promise<StopChildResult> {
-  const currentExit = (): ChildExit | null =>
-    child.exitCode != null || child.signalCode != null
-      ? { exitCode: child.exitCode, signal: child.signalCode }
-      : null;
-
-  const existingExit = currentExit();
-  if (existingExit != null) {
-    return { ...existingExit, exitedBeforeTeardown: true };
-  }
-
-  let observedExit: ChildExit | null = null;
-  const exited = new Promise<ChildExit>((resolve) => {
-    child.once("exit", (exitCode, signal) => {
-      observedExit = { exitCode, signal };
-      resolve(observedExit);
-    });
-  });
-  const waitForExit = async (ms: number): Promise<ChildExit | null> =>
-    await Promise.race([exited, delay(ms).then(() => null)]);
-
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  const queuedExit = observedExit ?? currentExit();
-  if (queuedExit != null) {
-    return { ...queuedExit, exitedBeforeTeardown: true };
-  }
-
-  const teardownGraceMs = options.teardownGraceMs ?? TEARDOWN_GRACE_MS;
-  const killGraceMs = options.killGraceMs ?? TEARDOWN_KILL_GRACE_MS;
-  const sentTeardownSignal = killProcessTree(child, "SIGTERM");
-  const gracefulExit = await waitForExit(teardownGraceMs);
-  if (gracefulExit != null) {
-    return { ...gracefulExit, exitedBeforeTeardown: !sentTeardownSignal };
-  }
-
-  const postGraceExit = currentExit() ?? observedExit;
-  if (postGraceExit != null) {
-    return { ...postGraceExit, exitedBeforeTeardown: !sentTeardownSignal };
-  }
-  if (!sentTeardownSignal) {
-    releaseUnsettledChild(child);
-    return { exitCode: null, exitedBeforeTeardown: true, signal: null };
-  }
-
-  killProcessTree(child, "SIGKILL");
-  const killedExit = await waitForExit(killGraceMs);
-  const finalExit = killedExit ?? currentExit() ?? observedExit;
-  if (finalExit != null) {
-    return { ...finalExit, exitedBeforeTeardown: false };
-  }
-
-  releaseUnsettledChild(child);
-  return { exitCode: null, exitedBeforeTeardown: false, signal: "SIGKILL" };
-}
-
-function releaseUnsettledChild(child: ChildProcessWithoutNullStreams): void {
-  child.stdin.destroy();
-  child.stdout.destroy();
-  child.stderr.destroy();
-  child.unref();
-}
-
-function killProcessTree(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): boolean {
-  if (process.platform !== "win32" && child.pid !== undefined) {
-    try {
-      process.kill(-child.pid, signal);
-      return true;
-    } catch {
-      // Fall back to the direct child below.
-    }
-  }
-  return child.kill(signal);
 }
 
 function collectStartupTrace(line: string, startupTrace: Record<string, number>): void {
@@ -1123,12 +1047,13 @@ function printResult(result: CaseResult): void {
 }
 
 async function main() {
-  if (hasHelpFlag()) {
+  const argv = process.argv.slice(2);
+  if (hasHelpFlag(argv)) {
     printUsage();
     return;
   }
 
-  const options = parseOptions();
+  const options = parseOptions(argv);
   if (options.cpuProfDir) {
     mkdirSync(options.cpuProfDir, { recursive: true });
   }
@@ -1175,6 +1100,7 @@ export const testing = {
   classifyProbeErrorKind,
   collectResultFailures,
   collectStartupTrace,
+  parseOptions,
   parseNonNegativeInt,
   parsePositiveInt,
   resolveEntry,
@@ -1186,7 +1112,7 @@ export const testing = {
 };
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  main().catch((err) => {
+  main().catch((err: unknown) => {
     console.error(err instanceof Error ? err.stack : String(err));
     process.exitCode = 1;
   });

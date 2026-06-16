@@ -170,12 +170,17 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
     private var hasCompletedExecApprovalSnapshotRefreshInSession = false
     private var lastDeliveryKey: String?
 
-    init(defaults: UserDefaults = .standard) {
+    init(
+        defaults: UserDefaults = .standard,
+        requestNotificationAuthorization: Bool = true)
+    {
         self.defaults = defaults
         self.restorePersistedState()
         self.pruneExpiredExecApprovals(nowMs: Self.nowMs())
-        Task {
-            await self.ensureNotificationAuthorization()
+        if requestNotificationAuthorization {
+            Task {
+                await self.ensureNotificationAuthorization()
+            }
         }
     }
 

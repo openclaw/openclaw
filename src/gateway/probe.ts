@@ -1,5 +1,11 @@
+// Gateway reachability probe client.
+// Connects to a gateway and summarizes auth, health, status, and presence.
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../packages/gateway-protocol/src/client-info.js";
 import { resolveStateDir } from "../config/paths.js";
 import { loadDeviceAuthToken } from "../infra/device-auth-store.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -8,7 +14,6 @@ import { MAX_SAFE_TIMEOUT_DELAY_MS, resolveSafeTimeoutDelayMs } from "../utils/t
 import { startGatewayClientWhenEventLoopReady } from "./client-start-readiness.js";
 import { GatewayClient, GatewayClientRequestError } from "./client.js";
 import { READ_SCOPE } from "./method-scopes.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "./protocol/client-info.js";
 
 export type GatewayProbeAuth = {
   token?: string;
@@ -102,6 +107,8 @@ function hasProbeAuth(auth: GatewayProbeAuth | undefined): boolean {
 }
 
 function shouldShortCircuitDeviceRequiredProbe(cacheKey: string, nowMs: number): boolean {
+  // Repeated unauthenticated probes can trigger pairing/device-required closes.
+  // Short-circuit briefly so status checks do not spam the gateway.
   const entry = deviceRequiredProbeCache.get(cacheKey);
   if (!entry) {
     return false;
@@ -383,84 +390,86 @@ export async function probeGateway(opts: {
           });
         }
       },
-      onHelloOk: async (hello) => {
-        connectLatencyMs = Date.now() - startedAt;
-        authMetadataPresent = typeof hello?.auth === "object" && hello.auth !== null;
-        server = {
-          version: typeof hello?.server?.version === "string" ? hello.server.version : null,
-          connId: typeof hello?.server?.connId === "string" ? hello.server.connId : null,
-        };
-        auth = resolveProbeAuthSummary({
-          role: typeof hello?.auth?.role === "string" ? hello.auth.role : null,
-          scopes: Array.isArray(hello?.auth?.scopes)
-            ? hello.auth.scopes.filter((scope): scope is string => typeof scope === "string")
-            : [],
-          authMetadataPresent,
-        });
-        if (detailLevel === "none") {
-          settleProbe({
-            ok: true,
-            error: null,
-            verifiedRead: false,
-            health: null,
-            status: null,
-            presence: null,
-            configSnapshot: null,
+      onHelloOk: (hello) => {
+        void (async () => {
+          connectLatencyMs = Date.now() - startedAt;
+          authMetadataPresent = typeof hello?.auth === "object" && hello.auth !== null;
+          server = {
+            version: typeof hello?.server?.version === "string" ? hello.server.version : null,
+            connId: typeof hello?.server?.connId === "string" ? hello.server.connId : null,
+          };
+          auth = resolveProbeAuthSummary({
+            role: typeof hello?.auth?.role === "string" ? hello.auth.role : null,
+            scopes: Array.isArray(hello?.auth?.scopes)
+              ? hello.auth.scopes.filter((scope): scope is string => typeof scope === "string")
+              : [],
+            authMetadataPresent,
           });
-          return;
-        }
-        // Once the gateway has accepted the session, a slow follow-up RPC should no longer
-        // downgrade the probe to "unreachable". Give detail fetching its own budget.
-        armProbeTimer(() => {
-          settleProbe({
-            ok: false,
-            error: "timeout",
-            health: null,
-            status: null,
-            presence: null,
-            configSnapshot: null,
-          });
-        });
-        try {
-          if (detailLevel === "presence") {
-            const presence = await client.request("system-presence");
+          if (detailLevel === "none") {
             settleProbe({
               ok: true,
               error: null,
-              verifiedRead: true,
+              verifiedRead: false,
               health: null,
               status: null,
-              presence: Array.isArray(presence) ? (presence as SystemPresence[]) : null,
+              presence: null,
               configSnapshot: null,
             });
             return;
           }
-          const [health, status, presence, configSnapshot] = await Promise.all([
-            client.request("health"),
-            client.request("status"),
-            client.request("system-presence"),
-            client.request("config.get", {}),
-          ]);
-          settleProbe({
-            ok: true,
-            error: null,
-            verifiedRead: true,
-            health,
-            status,
-            presence: Array.isArray(presence) ? (presence as SystemPresence[]) : null,
-            configSnapshot,
+          // Once the gateway has accepted the session, a slow follow-up RPC should no longer
+          // downgrade the probe to "unreachable". Give detail fetching its own budget.
+          armProbeTimer(() => {
+            settleProbe({
+              ok: false,
+              error: "timeout",
+              health: null,
+              status: null,
+              presence: null,
+              configSnapshot: null,
+            });
           });
-        } catch (err) {
-          const error = formatErrorMessage(err);
-          settleProbe({
-            ok: false,
-            error,
-            health: null,
-            status: null,
-            presence: null,
-            configSnapshot: null,
-          });
-        }
+          try {
+            if (detailLevel === "presence") {
+              const presence = await client.request("system-presence");
+              settleProbe({
+                ok: true,
+                error: null,
+                verifiedRead: true,
+                health: null,
+                status: null,
+                presence: Array.isArray(presence) ? (presence as SystemPresence[]) : null,
+                configSnapshot: null,
+              });
+              return;
+            }
+            const [health, status, presence, configSnapshot] = await Promise.all([
+              client.request("health"),
+              client.request("status"),
+              client.request("system-presence"),
+              client.request("config.get", {}),
+            ]);
+            settleProbe({
+              ok: true,
+              error: null,
+              verifiedRead: true,
+              health,
+              status,
+              presence: Array.isArray(presence) ? (presence as SystemPresence[]) : null,
+              configSnapshot,
+            });
+          } catch (err) {
+            const error = formatErrorMessage(err);
+            settleProbe({
+              ok: false,
+              error,
+              health: null,
+              status: null,
+              presence: null,
+              configSnapshot: null,
+            });
+          }
+        })();
       },
     });
 
@@ -493,7 +502,7 @@ export async function probeGateway(opts: {
           configSnapshot: null,
         });
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         if (settled) {
           return;
         }

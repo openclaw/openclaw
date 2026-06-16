@@ -1,5 +1,6 @@
+// Skills CLI tests cover skill listing, install, and command output behavior.
 import { describe, expect, it, vi } from "vitest";
-import type { SkillStatusEntry, SkillStatusReport } from "../agents/skills-status.js";
+import type { SkillStatusEntry, SkillStatusReport } from "../skills/discovery/status.js";
 import { createEmptyInstallChecks } from "./requirements-test-fixtures.js";
 import { formatSkillInfo, formatSkillsCheck, formatSkillsList } from "./skills-cli.format.js";
 
@@ -25,6 +26,7 @@ function createMockSkill(overrides: Partial<SkillStatusEntry> = {}): SkillStatus
     blockedByAllowlist: false,
     blockedByAgentFilter: false,
     eligible: true,
+    platformIncompatible: false,
     modelVisible: true,
     userInvocable: true,
     commandVisible: true,
@@ -64,6 +66,7 @@ describe("skills-cli", () => {
           description: "Capture UI screenshots",
           emoji: "📸",
           eligible: true,
+          platformIncompatible: false,
         }),
       ]);
       const output = formatSkillsList(report, {});
@@ -78,6 +81,7 @@ describe("skills-cli", () => {
           name: "disabled-skill",
           disabled: true,
           eligible: false,
+          platformIncompatible: false,
         }),
       ]);
       const output = formatSkillsList(report, {});
@@ -90,6 +94,7 @@ describe("skills-cli", () => {
         createMockSkill({
           name: "needs-stuff",
           eligible: false,
+          platformIncompatible: false,
           missing: {
             bins: ["ffmpeg"],
             anyBins: ["rg", "grep"],
@@ -112,6 +117,7 @@ describe("skills-cli", () => {
         createMockSkill({
           name: "not-eligible",
           eligible: false,
+          platformIncompatible: false,
           disabled: true,
         }),
       ]);
@@ -126,6 +132,7 @@ describe("skills-cli", () => {
         createMockSkill({
           name: "agent-excluded",
           eligible: true,
+          platformIncompatible: false,
           blockedByAgentFilter: true,
         }),
       ]);
@@ -247,6 +254,7 @@ describe("skills-cli", () => {
         createMockSkill({
           name: "agent-excluded",
           eligible: true,
+          platformIncompatible: false,
           blockedByAgentFilter: true,
         }),
       ]);
@@ -267,6 +275,7 @@ describe("skills-cli", () => {
         createMockSkill({
           name: "not-ready",
           eligible: false,
+          platformIncompatible: false,
           missing: { bins: ["go"], anyBins: [], env: [], config: [], os: [] },
         }),
         createMockSkill({ name: "disabled", eligible: false, disabled: true }),
@@ -287,6 +296,7 @@ describe("skills-cli", () => {
           name: "missing-emoji",
           emoji: "🎙\uFE0E",
           eligible: false,
+          platformIncompatible: false,
           missing: { bins: ["ffmpeg"], anyBins: [], env: [], config: [], os: [] },
         }),
       ]);
@@ -303,12 +313,14 @@ describe("skills-cli", () => {
           createMockSkill({
             name: "prompt-hidden",
             eligible: true,
+            platformIncompatible: false,
             modelVisible: false,
             commandVisible: true,
           }),
           createMockSkill({
             name: "not-assigned",
             eligible: true,
+            platformIncompatible: false,
             blockedByAgentFilter: true,
           }),
         ]),
@@ -337,6 +349,7 @@ describe("skills-cli", () => {
         createMockSkill({
           name: "internal-hidden",
           eligible: true,
+          platformIncompatible: false,
           modelVisible: false,
           commandVisible: false,
           userInvocable: false,
@@ -357,12 +370,14 @@ describe("skills-cli", () => {
             createMockSkill({
               name: "prompt-hidden",
               eligible: true,
+              platformIncompatible: false,
               modelVisible: false,
               commandVisible: true,
             }),
             createMockSkill({
               name: "slash-hidden",
               eligible: true,
+              platformIncompatible: false,
               modelVisible: true,
               userInvocable: false,
               commandVisible: false,
@@ -370,17 +385,20 @@ describe("skills-cli", () => {
             createMockSkill({
               name: "agent-filtered",
               eligible: true,
+              platformIncompatible: false,
               blockedByAgentFilter: true,
             }),
             createMockSkill({
               name: "missing-bin",
               eligible: false,
+              platformIncompatible: false,
               missing: { bins: ["missing-tool"], anyBins: [], env: [], config: [], os: [] },
             }),
             createMockSkill({ name: "disabled", eligible: false, disabled: true }),
             createMockSkill({
               name: "blocked-bundled",
               eligible: false,
+              platformIncompatible: false,
               blockedByAllowlist: true,
             }),
           ]),

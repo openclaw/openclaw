@@ -1,3 +1,4 @@
+// Read-only channel tests cover read-only plugin registration and runtime behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -550,6 +551,37 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
             entry.modulePath.endsWith("/plugins/loader.ts")),
       ),
     ).toBe(true);
+  });
+
+  it("uses activation source config to discover channel setup metadata after secret stripping", () => {
+    const { pluginDir, fullMarker, setupMarker } = writeExternalSetupChannelPlugin();
+    const plugins = listReadOnlyChannelPluginsForConfig(
+      {
+        channels: {
+          "external-chat": {},
+        },
+        plugins: {
+          load: { paths: [pluginDir] },
+          allow: ["external-chat"],
+        },
+      } as never,
+      {
+        activationSourceConfig: {
+          channels: {
+            "external-chat": { token: "configured" },
+          },
+          plugins: {
+            load: { paths: [pluginDir] },
+            allow: ["external-chat"],
+          },
+        } as never,
+        env: { ...process.env },
+        includePersistedAuthState: false,
+        includeSetupFallbackPlugins: true,
+      },
+    );
+
+    expectExternalChatSetupOnlyPluginLoaded({ plugins, setupMarker, fullMarker });
   });
 
   it("reuses default read-only channel plugin resolution for the same config", () => {

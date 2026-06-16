@@ -1,7 +1,9 @@
+// QA runtime helpers register and execute plugin QA scenarios from local files.
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import { createServer } from "node:net";
 import path from "node:path";
+import type { Command } from "commander";
 import { formatErrorMessage } from "./error-runtime.js";
 import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
 import { resolvePrivateQaBundledPluginsEnv } from "./private-qa-bundled-env.js";
@@ -28,6 +30,7 @@ function isMissingQaRuntimeError(error: unknown) {
   );
 }
 
+/** Load the bundled QA lab runtime surface, throwing when the private bundle is absent. */
 export function loadQaRuntimeModule(): QaRuntimeSurface {
   const env = resolvePrivateQaBundledPluginsEnv();
   return loadBundledPluginPublicSurfaceModuleSync<QaRuntimeSurface>({
@@ -37,6 +40,7 @@ export function loadQaRuntimeModule(): QaRuntimeSurface {
   });
 }
 
+/** Check whether the bundled QA lab runtime surface is present without hiding other load errors. */
 export function isQaRuntimeAvailable(): boolean {
   try {
     loadQaRuntimeModule();
@@ -49,12 +53,178 @@ export function isQaRuntimeAvailable(): boolean {
   }
 }
 
+/** Normalized options passed from live-transport QA CLIs into lane runners. */
+export type LiveTransportQaCommandOptions = {
+  repoRoot?: string;
+  outputDir?: string;
+  providerMode?: string;
+  primaryModel?: string;
+  alternateModel?: string;
+  fastMode?: boolean;
+  allowFailures?: boolean;
+  failFast?: boolean;
+  profile?: string;
+  scenarioIds?: string[];
+  listScenarios?: boolean;
+  sutAccountId?: string;
+  credentialSource?: string;
+  credentialRole?: string;
+};
+
+type LiveTransportQaCommanderOptions = {
+  repoRoot?: string;
+  outputDir?: string;
+  providerMode?: string;
+  model?: string;
+  altModel?: string;
+  scenario?: string[];
+  listScenarios?: boolean;
+  fast?: boolean;
+  allowFailures?: boolean;
+  failFast?: boolean;
+  profile?: string;
+  sutAccount?: string;
+  credentialSource?: string;
+  credentialRole?: string;
+};
+
+/** Commander registration hook for one live-transport QA subcommand. */
+export type LiveTransportQaCliRegistration = {
+  commandName: string;
+  register(qa: Command): void;
+};
+
+/** Help text customizations for live credential source and role flags. */
+export type LiveTransportQaCredentialCliOptions = {
+  sourceDescription?: string;
+  roleDescription?: string;
+};
+
+/** Declarative command metadata and runner used to install a live-transport QA CLI. */
+export type LiveTransportQaCliRegistrationOptions = {
+  commandName: string;
+  credentialOptions?: LiveTransportQaCredentialCliOptions;
+  defaultProviderMode: string;
+  description: string;
+  providerModeHelp: string;
+  listScenariosHelp?: string;
+  outputDirHelp: string;
+  profileHelp?: string;
+  failFastHelp?: string;
+  allowFailuresHelp?: string;
+  scenarioHelp: string;
+  sutAccountHelp: string;
+  run: (opts: LiveTransportQaCommandOptions) => Promise<void>;
+};
+
+/** Memoize a lazy CLI runtime import so repeated command paths share one loaded module. */
+export function createLazyCliRuntimeLoader<T>(load: () => Promise<T>) {
+  let promise: Promise<T> | null = null;
+  return async () => {
+    promise ??= load();
+    return await promise;
+  };
+}
+
+function collectLiveTransportQaStringOption(value: string, previous: string[]) {
+  const trimmed = value.trim();
+  return trimmed ? [...previous, trimmed] : previous;
+}
+
+function mapLiveTransportQaCommanderOptions(
+  opts: LiveTransportQaCommanderOptions,
+): LiveTransportQaCommandOptions {
+  return {
+    repoRoot: opts.repoRoot,
+    outputDir: opts.outputDir,
+    providerMode: opts.providerMode,
+    primaryModel: opts.model,
+    alternateModel: opts.altModel,
+    fastMode: opts.fast,
+    allowFailures: opts.allowFailures,
+    failFast: opts.failFast,
+    profile: opts.profile,
+    scenarioIds: opts.scenario,
+    listScenarios: opts.listScenarios,
+    sutAccountId: opts.sutAccount,
+    credentialSource: opts.credentialSource,
+    credentialRole: opts.credentialRole,
+  };
+}
+
+function registerLiveTransportQaCli(
+  params: LiveTransportQaCliRegistrationOptions & {
+    qa: Command;
+  },
+) {
+  const command = params.qa
+    .command(params.commandName)
+    .description(params.description)
+    .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
+    .option("--output-dir <path>", params.outputDirHelp)
+    .option("--provider-mode <mode>", params.providerModeHelp, params.defaultProviderMode)
+    .option("--model <ref>", "Primary provider/model ref")
+    .option("--alt-model <ref>", "Alternate provider/model ref")
+    .option("--scenario <id>", params.scenarioHelp, collectLiveTransportQaStringOption, [])
+    .option("--fast", "Enable provider fast mode where supported", false);
+
+  if (params.allowFailuresHelp) {
+    command.option("--allow-failures", params.allowFailuresHelp, false);
+  }
+
+  command.option("--sut-account <id>", params.sutAccountHelp, "sut");
+
+  if (params.listScenariosHelp) {
+    command.option("--list-scenarios", params.listScenariosHelp, false);
+  }
+
+  if (params.profileHelp) {
+    command.option("--profile <profile>", params.profileHelp);
+  }
+
+  if (params.failFastHelp) {
+    command.option("--fail-fast", params.failFastHelp, false);
+  }
+
+  if (params.credentialOptions) {
+    command.option(
+      "--credential-source <source>",
+      params.credentialOptions.sourceDescription ??
+        "Credential source for live lanes: env or convex (default: env)",
+    );
+    if (params.credentialOptions.roleDescription) {
+      command.option("--credential-role <role>", params.credentialOptions.roleDescription);
+    }
+  }
+
+  command.action(async (opts: LiveTransportQaCommanderOptions) => {
+    await params.run(mapLiveTransportQaCommanderOptions(opts));
+  });
+}
+
+/** Build a Commander registration object for one live-transport QA command. */
+export function createLiveTransportQaCliRegistration(
+  params: LiveTransportQaCliRegistrationOptions,
+): LiveTransportQaCliRegistration {
+  return {
+    commandName: params.commandName,
+    register(qa: Command) {
+      registerLiveTransportQaCli({
+        ...params,
+        qa,
+      });
+    },
+  };
+}
+
+/** One top-level check row in a rendered QA markdown report. */
 export type QaReportCheck = {
   name: string;
   status: "pass" | "fail" | "skip";
   details?: string;
 };
 
+/** One scenario section in a rendered QA markdown report. */
 export type QaReportScenario = {
   name: string;
   status: "pass" | "fail" | "skip";
@@ -62,12 +232,23 @@ export type QaReportScenario = {
   steps?: QaReportCheck[];
 };
 
+export {
+  LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS,
+  collectLiveTransportStandardScenarioCoverage,
+  findMissingLiveTransportStandardScenarios,
+  selectLiveTransportScenarios,
+  type LiveTransportScenarioDefinition,
+  type LiveTransportStandardScenarioId,
+} from "./qa-live-transport-scenarios.js";
+
+/** Docker command runner abstraction used by QA Docker helpers and tests. */
 export type QaDockerRunCommand = (
   command: string,
   args: string[],
   cwd: string,
 ) => Promise<{ stdout: string; stderr: string }>;
 
+/** Minimal fetch-like health probe used by QA Docker runtime helpers. */
 export type QaDockerFetchLike = (input: string) => Promise<{ ok: boolean }>;
 
 const DEFAULT_QA_DOCKER_COMMAND_TIMEOUT_MS = 120_000;
@@ -81,6 +262,7 @@ function pushQaReportDetailsBlock(lines: string[], label: string, details: strin
   lines.push("", "```text", details, "```");
 }
 
+/** Render checks, scenarios, timeline, and notes into the standard QA markdown report format. */
 export function renderQaMarkdownReport(params: {
   title: string;
   startedAt: Date;
@@ -160,10 +342,12 @@ export function renderQaMarkdownReport(params: {
   return lines.join("\n");
 }
 
+/** Append a formatted live-lane issue while preserving the caller-owned issue list. */
 export function appendQaLiveLaneIssue(issues: string[], label: string, error: unknown) {
   issues.push(`${label}: ${formatErrorMessage(error)}`);
 }
 
+/** Format a live-lane failure message that includes artifact labels and paths. */
 export function buildQaLiveLaneArtifactsError(params: {
   heading: string;
   artifacts: Record<string, string>;
@@ -177,6 +361,7 @@ export function buildQaLiveLaneArtifactsError(params: {
   ].join("\n");
 }
 
+/** Print live-transport QA artifact paths with a lane label for CI log parsers. */
 export function printLiveTransportQaArtifacts(
   laneLabel: string,
   artifacts: Record<string, string>,
@@ -228,6 +413,7 @@ async function findFreeQaDockerPort() {
   });
 }
 
+/** Return the preferred Docker host port unless it is unpinned and already occupied. */
 export async function resolveQaDockerHostPort(preferredPort: number, pinned: boolean) {
   if (pinned || (await isQaDockerPortFree(preferredPort))) {
     return preferredPort;
@@ -302,6 +488,7 @@ async function isQaDockerHealthy(url: string, fetchImpl: QaDockerFetchLike) {
   }
 }
 
+/** Create Docker command, health-check, and compose helpers for QA harnesses. */
 export function createQaDockerRuntime(params: {
   auditContext: string;
   commandTimeoutMs?: number | null;
@@ -470,6 +657,7 @@ export function createQaDockerRuntime(params: {
 
 type ProcessWriteCallback = (err?: Error | null) => void;
 
+/** Tee stdout and stderr into a private artifact file until the returned stop hook runs. */
 export async function startLiveTransportQaOutputTee(params: {
   fileName: string;
   outputDir: string;
@@ -524,8 +712,22 @@ export async function startLiveTransportQaOutputTee(params: {
         output.end(resolve);
       });
       if (outputError) {
-        throw outputError;
+        throw toLintErrorObject(outputError, "Non-Error thrown");
       }
     },
   };
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

@@ -1,3 +1,4 @@
+// Covers plugin config contract validation and ownership boundaries.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
 
@@ -296,6 +297,18 @@ describe("collectPluginConfigContractMatches", () => {
       collectPluginConfigContractMatches({
         root,
         pathPattern: "items.01",
+      }),
+    ).toEqual([]);
+  });
+
+  it("rejects array indexes outside canonical config path bounds", () => {
+    const items = Array<string>(100_002);
+    items[100_001] = "too far";
+
+    expect(
+      collectPluginConfigContractMatches({
+        root: { items },
+        pathPattern: "items.100001",
       }),
     ).toEqual([]);
   });

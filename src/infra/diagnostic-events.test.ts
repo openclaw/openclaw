@@ -1,3 +1,4 @@
+// Covers diagnostic event emission and metadata handling.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   emitDiagnosticEvent,
@@ -204,7 +205,9 @@ describe("diagnostic-events", () => {
       model: "gpt-5.4",
     });
 
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(events).toEqual([
       { internal: false, metadataTrusted: false, type: "message.queued" },
       { internal: true, metadataTrusted: false, type: "webhook.received" },
@@ -237,6 +240,12 @@ describe("diagnostic-events", () => {
 
     expect(traceparents).toEqual([undefined, `00-${trace.traceId}-${trace.spanId}-01`]);
     expect(formatDiagnosticTraceparentForPropagation({ trace }, { trusted: true })).toBeUndefined();
+    expect(
+      formatDiagnosticTraceparentForPropagation(
+        { trace },
+        { trusted: false, trustedTraceContext: true },
+      ),
+    ).toBeUndefined();
   });
 
   it("shares diagnostic state across duplicate module instances", async () => {
@@ -275,7 +284,9 @@ describe("diagnostic-events", () => {
       model: "gpt-5.4",
     });
 
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(events).toEqual([false]);
     delete globalStore[Symbol.for("openclaw.diagnosticEventsState")];
   });
@@ -298,7 +309,9 @@ describe("diagnostic-events", () => {
       model: "gpt-5.4",
     });
 
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(publicEvents).toStrictEqual([]);
     expect(internalEvents).toEqual([{ trusted: true, type: "model.call.started" }]);
   });
@@ -348,7 +361,9 @@ describe("diagnostic-events", () => {
       trace,
     });
 
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(seen).toEqual([{ traceId: trace.traceId, trusted: true }]);
     expectConsoleErrorPrefix(
       errorSpy,
@@ -426,7 +441,9 @@ describe("diagnostic-events", () => {
     });
 
     expect(events).toStrictEqual([]);
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(events).toEqual(["tool.execution.started", "model.call.started"]);
   });
 
@@ -447,11 +464,17 @@ describe("diagnostic-events", () => {
     }
 
     expect(events).toStrictEqual([]);
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(events).toHaveLength(100);
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(events).toHaveLength(200);
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(events).toHaveLength(250);
   });
 
@@ -698,7 +721,9 @@ describe("diagnostic-events", () => {
       message: "private log",
     });
 
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(publicEvents).toStrictEqual([]);
     expect(internalEvents).toEqual(["log.record"]);
   });

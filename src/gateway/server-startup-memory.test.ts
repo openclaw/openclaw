@@ -1,3 +1,6 @@
+/**
+ * Gateway startup memory-service tests.
+ */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { MemoryQmdUpdateConfig } from "../config/types.memory.js";
@@ -34,6 +37,53 @@ function createQmdManagerMock() {
   };
 }
 
+async function startMemoryBackendForTest(cfg: OpenClawConfig) {
+  const log = createGatewayLogMock();
+  await startGatewayMemoryBackend({ cfg, log });
+  return log;
+}
+
+async function startQmdBackendWithManager(cfg: OpenClawConfig) {
+  getMemorySearchManagerMock.mockResolvedValue({ manager: createQmdManagerMock() });
+  return await startMemoryBackendForTest(cfg);
+}
+
+function expectNoMemoryBackendStartup(log: ReturnType<typeof createGatewayLogMock>) {
+  expect(getMemorySearchManagerMock).not.toHaveBeenCalled();
+  expect(log.info).not.toHaveBeenCalled();
+  expect(log.warn).not.toHaveBeenCalled();
+}
+
+function expectQmdManagerRequests(cfg: OpenClawConfig, agentIds: string[]) {
+  expectQmdManagerRequestsWithPurpose(cfg, agentIds, "cli");
+}
+
+function expectQmdManagerRequestsWithPurpose(
+  cfg: OpenClawConfig,
+  agentIds: string[],
+  purpose: "cli" | "default",
+) {
+  expect(getMemorySearchManagerMock).toHaveBeenCalledTimes(agentIds.length);
+  for (const [index, agentId] of agentIds.entries()) {
+    expect(getMemorySearchManagerMock).toHaveBeenNthCalledWith(index + 1, {
+      cfg,
+      agentId,
+      purpose,
+    });
+  }
+}
+
+function expectBootSyncCompleted(
+  log: ReturnType<typeof createGatewayLogMock>,
+  count: number,
+  agents: string,
+) {
+  const noun = count === 1 ? "agent" : "agents";
+  expect(log.info).toHaveBeenCalledWith(
+    `qmd memory startup boot sync completed for ${count} ${noun}: ${agents}`,
+  );
+}
+
 describe("startGatewayMemoryBackend", () => {
   beforeEach(() => {
     getMemorySearchManagerMock.mockClear();
@@ -44,13 +94,10 @@ describe("startGatewayMemoryBackend", () => {
       agents: { list: [{ id: "main", default: true }] },
       memory: { backend: "builtin" },
     } as OpenClawConfig;
-    const log = { info: vi.fn(), warn: vi.fn() };
 
-    await startGatewayMemoryBackend({ cfg, log });
+    const log = await startMemoryBackendForTest(cfg);
 
-    expect(getMemorySearchManagerMock).not.toHaveBeenCalled();
-    expect(log.info).not.toHaveBeenCalled();
-    expect(log.warn).not.toHaveBeenCalled();
+    expectNoMemoryBackendStartup(log);
   });
 
   it("keeps qmd managers lazy when startup refresh is not opted in", async () => {
@@ -58,42 +105,28 @@ describe("startGatewayMemoryBackend", () => {
       agents: { list: [{ id: "main", default: true }] },
       memory: { backend: "qmd", qmd: {} },
     } as OpenClawConfig;
-    const log = createGatewayLogMock();
 
-    await startGatewayMemoryBackend({ cfg, log });
+    const log = await startMemoryBackendForTest(cfg);
 
-    expect(getMemorySearchManagerMock).not.toHaveBeenCalled();
-    expect(log.info).not.toHaveBeenCalled();
-    expect(log.warn).not.toHaveBeenCalled();
+    expectNoMemoryBackendStartup(log);
   });
 
   it("runs qmd boot sync for the default and explicitly configured agents", async () => {
-    const cfg = createQmdConfig({
-      list: [
-        { id: "ops", default: true },
-        { id: "main", memorySearch: { enabled: true } },
-        { id: "lazy" },
-      ],
-    });
-    const log = createGatewayLogMock();
-    getMemorySearchManagerMock.mockResolvedValue({ manager: createQmdManagerMock() });
-
-    await startGatewayMemoryBackend({ cfg, log });
-
-    expect(getMemorySearchManagerMock).toHaveBeenCalledTimes(2);
-    expect(getMemorySearchManagerMock).toHaveBeenNthCalledWith(1, {
-      cfg,
-      agentId: "ops",
-      purpose: "cli",
-    });
-    expect(getMemorySearchManagerMock).toHaveBeenNthCalledWith(2, {
-      cfg,
-      agentId: "main",
-      purpose: "cli",
-    });
-    expect(log.info).toHaveBeenCalledWith(
-      'qmd memory startup boot sync completed for 2 agents: "ops", "main"',
+    const cfg = createQmdConfig(
+      {
+        list: [
+          { id: "ops", default: true },
+          { id: "main", memorySearch: { enabled: true } },
+          { id: "lazy" },
+        ],
+      },
+      { startup: "immediate", interval: "0s", embedInterval: "0s" },
     );
+
+    const log = await startQmdBackendWithManager(cfg);
+
+    expectQmdManagerRequests(cfg, ["ops", "main"]);
+    expectBootSyncCompleted(log, 2, '"ops", "main"');
     expect(log.info).toHaveBeenCalledWith(
       'qmd memory startup initialization deferred for 1 agent: "lazy"',
     );
@@ -101,41 +134,33 @@ describe("startGatewayMemoryBackend", () => {
   });
 
   it("initializes all qmd agents when memory search is explicitly enabled in defaults", async () => {
-    const cfg = createQmdConfig({
-      defaults: { memorySearch: { enabled: true } },
-      list: [{ id: "ops", default: true }, { id: "main" }],
-    });
-    const log = createGatewayLogMock();
-    getMemorySearchManagerMock.mockResolvedValue({ manager: createQmdManagerMock() });
-
-    await startGatewayMemoryBackend({ cfg, log });
-
-    expect(getMemorySearchManagerMock).toHaveBeenCalledTimes(2);
-    expect(getMemorySearchManagerMock).toHaveBeenNthCalledWith(1, {
-      cfg,
-      agentId: "ops",
-      purpose: "cli",
-    });
-    expect(getMemorySearchManagerMock).toHaveBeenNthCalledWith(2, {
-      cfg,
-      agentId: "main",
-      purpose: "cli",
-    });
-    expect(log.info).toHaveBeenCalledWith(
-      'qmd memory startup boot sync completed for 2 agents: "ops", "main"',
+    const cfg = createQmdConfig(
+      {
+        defaults: { memorySearch: { enabled: true } },
+        list: [{ id: "ops", default: true }, { id: "main" }],
+      },
+      { startup: "immediate", interval: "0s", embedInterval: "0s" },
     );
+
+    const log = await startQmdBackendWithManager(cfg);
+
+    expectQmdManagerRequests(cfg, ["ops", "main"]);
+    expectBootSyncCompleted(log, 2, '"ops", "main"');
     expect(log.info.mock.calls.some(([message]) => String(message).includes("deferred"))).toBe(
       false,
     );
   });
 
   it("logs a warning when qmd manager init fails and continues with other agents", async () => {
-    const cfg = createQmdConfig({
-      list: [
-        { id: "main", default: true },
-        { id: "ops", memorySearch: { enabled: true } },
-      ],
-    });
+    const cfg = createQmdConfig(
+      {
+        list: [
+          { id: "main", default: true },
+          { id: "ops", memorySearch: { enabled: true } },
+        ],
+      },
+      { startup: "immediate", interval: "0s", embedInterval: "0s" },
+    );
     const log = createGatewayLogMock();
     getMemorySearchManagerMock
       .mockResolvedValueOnce({ manager: null, error: "qmd missing" })
@@ -146,33 +171,25 @@ describe("startGatewayMemoryBackend", () => {
     expect(log.warn).toHaveBeenCalledWith(
       'qmd memory startup initialization failed for agent "main": qmd missing',
     );
-    expect(log.info).toHaveBeenCalledWith(
-      'qmd memory startup boot sync completed for 1 agent: "ops"',
-    );
+    expectBootSyncCompleted(log, 1, '"ops"');
   });
 
   it("skips agents with memory search disabled", async () => {
-    const cfg = createQmdConfig({
-      defaults: { memorySearch: { enabled: true } },
-      list: [
-        { id: "main", default: true },
-        { id: "ops", memorySearch: { enabled: false } },
-      ],
-    });
-    const log = createGatewayLogMock();
-    getMemorySearchManagerMock.mockResolvedValue({ manager: createQmdManagerMock() });
-
-    await startGatewayMemoryBackend({ cfg, log });
-
-    expect(getMemorySearchManagerMock).toHaveBeenCalledTimes(1);
-    expect(getMemorySearchManagerMock).toHaveBeenCalledWith({
-      cfg,
-      agentId: "main",
-      purpose: "cli",
-    });
-    expect(log.info).toHaveBeenCalledWith(
-      'qmd memory startup boot sync completed for 1 agent: "main"',
+    const cfg = createQmdConfig(
+      {
+        defaults: { memorySearch: { enabled: true } },
+        list: [
+          { id: "main", default: true },
+          { id: "ops", memorySearch: { enabled: false } },
+        ],
+      },
+      { startup: "immediate", interval: "0s", embedInterval: "0s" },
     );
+
+    const log = await startQmdBackendWithManager(cfg);
+
+    expectQmdManagerRequests(cfg, ["main"]);
+    expectBootSyncCompleted(log, 1, '"main"');
     expect(log.warn).not.toHaveBeenCalled();
   });
 
@@ -186,12 +203,46 @@ describe("startGatewayMemoryBackend", () => {
         },
       },
     } as OpenClawConfig;
-    const log = createGatewayLogMock();
 
-    await startGatewayMemoryBackend({ cfg, log });
+    const log = await startMemoryBackendForTest(cfg);
 
-    expect(getMemorySearchManagerMock).not.toHaveBeenCalled();
-    expect(log.info).not.toHaveBeenCalled();
+    expectNoMemoryBackendStartup(log);
+  });
+
+  it("keeps the full qmd manager alive for startup interval maintenance", async () => {
+    const manager = createQmdManagerMock();
+    getMemorySearchManagerMock.mockResolvedValue({ manager });
+    const cfg = createQmdConfig(
+      { list: [{ id: "main", default: true }] },
+      { startup: "immediate", onBoot: false, interval: "5m", embedInterval: "0s" },
+    );
+
+    const log = await startMemoryBackendForTest(cfg);
+
+    expectQmdManagerRequestsWithPurpose(cfg, ["main"], "default");
+    expect(manager.sync).not.toHaveBeenCalled();
+    expect(manager.close).not.toHaveBeenCalled();
+    expect(log.info).toHaveBeenCalledWith(
+      'qmd memory startup manager initialized for 1 agent: "main"',
+    );
     expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it("does not manually boot sync full qmd managers that own their startup update", async () => {
+    const manager = createQmdManagerMock();
+    getMemorySearchManagerMock.mockResolvedValue({ manager });
+    const cfg = createQmdConfig(
+      { list: [{ id: "main", default: true }] },
+      { startup: "immediate", onBoot: true, interval: "5m", embedInterval: "0s" },
+    );
+
+    const log = await startMemoryBackendForTest(cfg);
+
+    expectQmdManagerRequestsWithPurpose(cfg, ["main"], "default");
+    expect(manager.sync).not.toHaveBeenCalled();
+    expect(manager.close).not.toHaveBeenCalled();
+    expect(log.info).toHaveBeenCalledWith(
+      'qmd memory startup manager initialized for 1 agent: "main"',
+    );
   });
 });

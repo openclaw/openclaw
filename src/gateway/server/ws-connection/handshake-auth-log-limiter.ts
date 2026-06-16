@@ -1,3 +1,7 @@
+// Rate limiter for noisy websocket handshake auth logs.
+import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
+
+/** Decision returned for a handshake auth log attempt. */
 export type HandshakeAuthLogDecision = {
   shouldLog: boolean;
   suppressedSinceLastLog: number;
@@ -8,16 +12,18 @@ type HandshakeAuthLogState = {
   suppressedSinceLastLog: number;
 };
 
+/** Per-key log limiter that reports suppressed auth attempts on the next emitted log. */
 export class HandshakeAuthLogLimiter {
   private readonly intervalMs: number;
   private readonly maxEntries: number;
   private readonly entries = new Map<string, HandshakeAuthLogState>();
 
   constructor(options?: { intervalMs?: number; maxEntries?: number }) {
-    this.intervalMs = Math.max(1, Math.floor(options?.intervalMs ?? 30_000));
-    this.maxEntries = Math.max(1, Math.floor(options?.maxEntries ?? 256));
+    this.intervalMs = resolveIntegerOption(options?.intervalMs, 30_000, { min: 1 });
+    this.maxEntries = resolveIntegerOption(options?.maxEntries, 256, { min: 1 });
   }
 
+  /** Register one auth event key and decide whether it should be logged now. */
   register(key: string, nowMs = Date.now()): HandshakeAuthLogDecision {
     const entry = this.entries.get(key);
     if (!entry) {
@@ -51,6 +57,7 @@ export class HandshakeAuthLogLimiter {
   }
 }
 
+/** Build the limiter key from auth failure context. */
 export function buildHandshakeAuthLogKey(params: {
   reason?: string;
   remoteAddr?: string;
@@ -67,6 +74,7 @@ export function buildHandshakeAuthLogKey(params: {
   ].join("|");
 }
 
+/** Return whether a missing-credential failure should use log rate limiting. */
 export function shouldLimitMissingCredentialAuthLog(params: {
   reason?: string;
   authProvided?: string;

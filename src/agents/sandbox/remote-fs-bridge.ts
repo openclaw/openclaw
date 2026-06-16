@@ -1,4 +1,10 @@
+/**
+ * Remote shell-backed sandbox filesystem bridge.
+ *
+ * Resolves sandbox paths against uploaded remote mounts and performs guarded operations through backend shell commands.
+ */
 import path from "node:path";
+import { parseStrictNonNegativeInteger } from "../../infra/parse-finite-number.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import type {
   SandboxBackendCommandParams,
@@ -7,22 +13,17 @@ import type {
 } from "./backend-handle.types.js";
 import { SANDBOX_PINNED_MUTATION_PYTHON } from "./fs-bridge-mutation-helper.js";
 import { createWritableRenameTargetResolver } from "./fs-bridge-rename-targets.js";
+import { parseSandboxStatMtimeMs, parseSandboxStatSize } from "./fs-bridge-stat-parse.js";
 import type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "./fs-bridge.types.js";
 import {
   isPathInsideContainerRoot,
   normalizeContainerPath as normalizeSandboxContainerPath,
   relativePathEscapesContainerRoot,
 } from "./path-utils.js";
-import { isExistingWorkspaceSkillMountSource } from "./workspace-mounts.js";
-
-function parseStatMtimeMs(value: string | undefined): number {
-  const raw = value ?? "0";
-  if (/^\d+(?:\.\d+)?$/.test(raw)) {
-    return Number(raw) * 1000;
-  }
-  const parsed = Date.parse(raw);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
+import {
+  isExistingWorkspaceSkillMountSource,
+  resolveMaterializedSandboxSkillsWorkspaceDir,
+} from "./workspace-mounts.js";
 
 type RemoteMountSource = "workspace" | "agent" | "protectedSkill";
 
@@ -32,6 +33,14 @@ type ResolvedRemotePath = SandboxResolvedPath & {
   source: RemoteMountSource;
 };
 
+function hasMultipleHardlinks(raw: string): boolean {
+  const linkCount = parseStrictNonNegativeInteger(raw);
+  if (linkCount !== undefined) {
+    return linkCount > 1;
+  }
+  return /^\d+$/.test(raw);
+}
+
 type MountInfo = {
   localRoot: string;
   containerRoot: string;
@@ -39,12 +48,14 @@ type MountInfo = {
   source: RemoteMountSource;
 };
 
+/** Minimal remote shell contract used by the SSH filesystem bridge. */
 export type RemoteShellSandboxHandle = {
   remoteWorkspaceDir: string;
   remoteAgentWorkspaceDir: string;
   runRemoteShellScript(params: SandboxBackendCommandParams): Promise<SandboxBackendCommandResult>;
 };
 
+/** Create the filesystem bridge for remote shell-backed sandbox runtimes. */
 export function createRemoteShellSandboxFsBridge(params: {
   sandbox: SandboxFsBridgeContext;
   runtime: RemoteShellSandboxHandle;
@@ -252,8 +263,8 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     const [kindRaw = "", sizeRaw = "0", mtimeRaw = "0"] = output.split("|");
     return {
       type: kindRaw === "directory" ? "directory" : kindRaw === "regular file" ? "file" : "other",
-      size: Number(sizeRaw),
-      mtimeMs: parseStatMtimeMs(mtimeRaw),
+      size: parseSandboxStatSize(sizeRaw),
+      mtimeMs: parseSandboxStatMtimeMs(mtimeRaw),
     };
   }
 
@@ -282,9 +293,12 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       });
     }
     if (this.sandbox.workspaceAccess === "rw") {
+      // Skill directories inside writable remote workspaces stay protected when
+      // the original host mount exists, matching local bridge read-only rules.
       mounts.push(
         ...buildRemoteProtectedSkillMounts({
           localRoot: agentRoot,
+          skillsWorkspaceDir: this.sandbox.skillsWorkspaceDir,
           workspaceContainerRoot,
           agentContainerRoot,
           includeAgentMount:
@@ -444,11 +458,13 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     const roots = [
       path.posix.join(workspaceContainerRoot, "skills"),
       path.posix.join(workspaceContainerRoot, ".agents", "skills"),
+      path.posix.join(workspaceContainerRoot, ".openclaw", "sandbox-skills", "skills"),
     ];
     if (path.resolve(this.sandbox.agentWorkspaceDir) !== path.resolve(this.sandbox.workspaceDir)) {
       roots.push(
         path.posix.join(agentContainerRoot, "skills"),
         path.posix.join(agentContainerRoot, ".agents", "skills"),
+        path.posix.join(agentContainerRoot, ".openclaw", "sandbox-skills", "skills"),
       );
     }
     return roots;
@@ -469,6 +485,8 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     allowFinalSymlinkForUnlink?: boolean;
     signal?: AbortSignal;
   }): Promise<string> {
+    // Canonicalize the nearest existing ancestor and append the missing suffix.
+    // This lets create/write operations validate paths that do not exist yet.
     const script = [
       "set -eu",
       'target="$1"',
@@ -506,6 +524,8 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     action: string;
     signal?: AbortSignal;
   }): Promise<void> {
+    // Remote mutation helpers pin by parent path. Rejecting hardlinked regular
+    // files avoids editing another mount-visible name through the same inode.
     const result = await this.runRemoteScript({
       script: [
         'if [ ! -e "$1" ] && [ ! -L "$1" ]; then exit 0; fi',
@@ -521,7 +541,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       return;
     }
     const [kind = "", linksRaw = "1"] = output.split("|");
-    if (kind === "regular file" && Number(linksRaw) > 1) {
+    if (kind === "regular file" && hasMultipleHardlinks(linksRaw)) {
       throw new Error(
         `Hardlinked path is not allowed under sandbox mount root: ${params.containerPath}`,
       );
@@ -615,22 +635,40 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
 
 function buildRemoteProtectedSkillMounts(params: {
   localRoot: string;
+  skillsWorkspaceDir?: string;
   workspaceContainerRoot: string;
   agentContainerRoot: string;
   includeAgentMount: boolean;
 }): MountInfo[] {
-  const mounts: MountInfo[] = [
+  const materializedSkillsWorkspaceDir = path.resolve(
+    params.skillsWorkspaceDir ?? resolveMaterializedSandboxSkillsWorkspaceDir(params.localRoot),
+  );
+  const mounts: Array<MountInfo & { allowedRoot: string }> = [
     {
       localRoot: path.join(params.localRoot, "skills"),
       containerRoot: path.posix.join(params.workspaceContainerRoot, "skills"),
       writable: false,
       source: "protectedSkill",
+      allowedRoot: params.localRoot,
     },
     {
       localRoot: path.join(params.localRoot, ".agents", "skills"),
       containerRoot: path.posix.join(params.workspaceContainerRoot, ".agents", "skills"),
       writable: false,
       source: "protectedSkill",
+      allowedRoot: params.localRoot,
+    },
+    {
+      localRoot: path.join(materializedSkillsWorkspaceDir, "skills"),
+      containerRoot: path.posix.join(
+        params.workspaceContainerRoot,
+        ".openclaw",
+        "sandbox-skills",
+        "skills",
+      ),
+      writable: false,
+      source: "protectedSkill",
+      allowedRoot: materializedSkillsWorkspaceDir,
     },
   ];
   if (params.includeAgentMount) {
@@ -640,21 +678,37 @@ function buildRemoteProtectedSkillMounts(params: {
         containerRoot: path.posix.join(params.agentContainerRoot, "skills"),
         writable: false,
         source: "protectedSkill",
+        allowedRoot: params.localRoot,
       },
       {
         localRoot: path.join(params.localRoot, ".agents", "skills"),
         containerRoot: path.posix.join(params.agentContainerRoot, ".agents", "skills"),
         writable: false,
         source: "protectedSkill",
+        allowedRoot: params.localRoot,
+      },
+      {
+        localRoot: path.join(materializedSkillsWorkspaceDir, "skills"),
+        containerRoot: path.posix.join(
+          params.agentContainerRoot,
+          ".openclaw",
+          "sandbox-skills",
+          "skills",
+        ),
+        writable: false,
+        source: "protectedSkill",
+        allowedRoot: materializedSkillsWorkspaceDir,
       },
     );
   }
-  return mounts.filter((mount) =>
-    isExistingWorkspaceSkillMountSource({
-      agentWorkspaceDir: params.localRoot,
-      hostPath: mount.localRoot,
-    }),
-  );
+  return mounts
+    .filter((mount) =>
+      isExistingWorkspaceSkillMountSource({
+        rootDir: mount.allowedRoot,
+        hostPath: mount.localRoot,
+      }),
+    )
+    .map(({ allowedRoot: _allowedRoot, ...mount }) => mount);
 }
 
 function compareRemoteMountsByContainerPath(a: MountInfo, b: MountInfo): number {

@@ -1,9 +1,36 @@
+// Telegram helper module supports group config helpers behavior.
 import type {
+  TelegramAccountConfig,
   TelegramDirectConfig,
   TelegramGroupConfig,
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-contracts";
 import { firstDefined } from "./bot-access.js";
+
+export function resolveTelegramScopedGroupConfig(
+  telegramCfg: TelegramAccountConfig,
+  chatId: string | number,
+  messageThreadId?: number,
+) {
+  const resolveTopicConfig = <T extends object>(
+    scopedConfig: { topics?: Record<string, T | undefined> } | undefined,
+  ): T | undefined => {
+    if (!scopedConfig || messageThreadId == null) {
+      return undefined;
+    }
+    const defaultConfig = scopedConfig.topics?.["*"];
+    const exactConfig = scopedConfig.topics?.[String(messageThreadId)];
+    if (defaultConfig && exactConfig) {
+      return { ...defaultConfig, ...exactConfig };
+    }
+    return exactConfig ?? defaultConfig;
+  };
+  const chatIdStr = String(chatId);
+  const scopedConfigs = chatIdStr.startsWith("-") ? telegramCfg.groups : telegramCfg.direct;
+  const groupConfig = scopedConfigs?.[chatIdStr] ?? scopedConfigs?.["*"];
+  const topicConfig = resolveTopicConfig(groupConfig);
+  return { groupConfig, topicConfig };
+}
 
 export function resolveTelegramGroupPromptSettings(params: {
   groupConfig?: TelegramGroupConfig | TelegramDirectConfig;

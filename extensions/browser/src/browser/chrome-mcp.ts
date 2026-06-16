@@ -1,3 +1,9 @@
+/**
+ * Chrome MCP existing-session adapter.
+ *
+ * Manages chrome-devtools-mcp processes and sessions, maps Browser actions to
+ * MCP tools, and exposes tab/snapshot/action helpers for logged-in browsers.
+ */
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
@@ -7,6 +13,11 @@ import { setTimeout as sleepTimeout } from "node:timers/promises";
 import { promisify } from "node:util";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import {
+  addTimerTimeoutGraceMs,
+  parseStrictPositiveInteger,
+  resolveNonNegativeIntegerOption,
+} from "openclaw/plugin-sdk/number-runtime";
 import {
   normalizeOptionalString,
   readStringValue,
@@ -49,6 +60,7 @@ type ChromeMcpCallOptions = {
   signal?: AbortSignal;
 };
 
+/** Browser profile options used to connect or launch chrome-devtools-mcp. */
 export type ChromeMcpProfileOptions = {
   userDataDir?: string;
   cdpUrl?: string;
@@ -75,11 +87,29 @@ type ChromeMcpSessionFactory = (
   options?: NormalizedChromeMcpProfileOptions,
 ) => Promise<ChromeMcpSession>;
 
+type PendingChromeMcpSession = {
+  cacheKey: string;
+  id: symbol;
+  promise: Promise<ChromeMcpSession>;
+  abortController: AbortController;
+  state: {
+    waiters: number;
+    settled: boolean;
+  };
+};
+
+type PendingChromeMcpSessionLease = {
+  session: ChromeMcpSession;
+  release: (closeIfLastWaiter: boolean) => Promise<boolean>;
+};
+
+/** Minimal process info used when cleaning up MCP child process trees. */
 export type ChromeMcpProcessInfo = {
   pid: number;
   ppid: number;
 };
 
+/** Injectable process cleanup dependencies for platform-specific tests. */
 export type ChromeMcpProcessCleanupDeps = {
   listProcesses?: () => Promise<ChromeMcpProcessInfo[]>;
   killProcess?: (pid: number, signal: NodeJS.Signals) => void;
@@ -113,14 +143,30 @@ const CHROME_MCP_HANDSHAKE_TIMEOUT_MS = 30_000;
 const CHROME_MCP_STDERR_MAX_BYTES = 8 * 1024;
 const CHROME_MCP_PROCESS_EXIT_GRACE_MS = 250;
 const CDP_URL_IN_TEXT_RE = /\b(?:https?|wss?):\/\/[^\s"'<>`]+/gi;
+const DEVTOOLS_ACTIVE_PORT_RE = /\bDevToolsActivePort\b/i;
+const CHROME_CONNECTION_TOOL_ERROR_RE =
+  /(?:Could not connect to Chrome|DevToolsActivePort|ECONNREFUSED|ECONNRESET|websocket|timed out)/i;
 const STALE_SELECTED_PAGE_ERROR =
   "The selected page has been closed. Call list_pages to see open pages.";
 
 const execFileAsync = promisify(execFile);
 const sessions = new Map<string, ChromeMcpSession>();
-const pendingSessions = new Map<string, Promise<ChromeMcpSession>>();
+const pendingSessions = new Map<string, PendingChromeMcpSession>();
 let sessionFactory: ChromeMcpSessionFactory | null = null;
 let chromeMcpProcessCleanupDepsForTest: ChromeMcpProcessCleanupDeps | null = null;
+
+/** Decode a bounded UTF-8-safe stderr tail for Chrome MCP diagnostics. */
+export function decodeChromeMcpStderrTail(buffer: Buffer): string {
+  if (buffer.length <= CHROME_MCP_STDERR_MAX_BYTES) {
+    return buffer.toString("utf8").trim();
+  }
+
+  let start = buffer.length - CHROME_MCP_STDERR_MAX_BYTES;
+  while (start < buffer.length && (buffer[start] & 0xc0) === 0x80) {
+    start++;
+  }
+  return buffer.subarray(start).toString("utf8").trim();
+}
 
 function asPages(value: unknown): ChromeMcpStructuredPage[] {
   if (!Array.isArray(value)) {
@@ -142,8 +188,8 @@ function asPages(value: unknown): ChromeMcpStructuredPage[] {
 }
 
 function parsePageId(targetId: string): number {
-  const parsed = Number.parseInt(targetId.trim(), 10);
-  if (!Number.isFinite(parsed)) {
+  const parsed = parseStrictPositiveInteger(targetId);
+  if (parsed === undefined) {
     throw new BrowserTabNotFoundError();
   }
   return parsed;
@@ -224,6 +270,41 @@ function extractToolErrorMessage(result: ChromeMcpToolResult, name: string): str
   return message || `Chrome MCP tool "${name}" failed.`;
 }
 
+function formatChromeMcpEndpointForDiagnostic(browserUrl: string): string {
+  return redactToolPayloadText(redactCdpUrl(browserUrl) ?? browserUrl);
+}
+
+function formatChromeMcpToolErrorMessage(params: {
+  profileName: string;
+  options: NormalizedChromeMcpProfileOptions;
+  toolName: string;
+  message: string;
+}): string {
+  const detail = redactChromeMcpDiagnosticTextWithLocalPaths(params.message);
+  const profileLabel = redactChromeMcpProfileLabelForDiagnostic(params.profileName);
+  if (params.options.browserUrl && CHROME_CONNECTION_TOOL_ERROR_RE.test(params.message)) {
+    return (
+      `Chrome MCP tool "${params.toolName}" failed for profile "${profileLabel}" while using ` +
+      `the configured Chrome endpoint (${formatChromeMcpEndpointForDiagnostic(params.options.browserUrl)}). ` +
+      `Details: ${detail}`
+    );
+  }
+  if (
+    !params.options.browserUrl &&
+    params.options.userDataDir &&
+    DEVTOOLS_ACTIVE_PORT_RE.test(params.message)
+  ) {
+    const cdpUrlPath = path.isAbsolute(params.profileName)
+      ? "this existing-session profile's cdpUrl"
+      : `browser.profiles.${params.profileName}.cdpUrl`;
+    return (
+      `${detail} If this browser was started with --remote-debugging-port, set ${cdpUrlPath} ` +
+      "to that DevTools endpoint instead of relying on Chrome MCP auto-connect."
+    );
+  }
+  return detail;
+}
+
 function shouldReconnectForToolError(name: string, message: string): boolean {
   return name === "list_pages" && message.includes(STALE_SELECTED_PAGE_ERROR);
 }
@@ -241,7 +322,7 @@ function extractJsonMessage(result: ChromeMcpToolResult): unknown {
     }
   }
   if (lastError) {
-    throw lastError;
+    throw toLintErrorObject(lastError, "Non-Error thrown");
   }
   return null;
 }
@@ -345,9 +426,10 @@ async function closeChromeMcpSessionsForProfile(
 ): Promise<boolean> {
   let closed = false;
 
-  for (const key of Array.from(pendingSessions.keys())) {
+  for (const [key, pending] of Array.from(pendingSessions.entries())) {
     if (key !== keepKey && cacheKeyMatchesProfileName(key, profileName)) {
       pendingSessions.delete(key);
+      abortPendingChromeMcpSession(pending, new Error("Chrome MCP profile session was replaced"));
       closed = true;
     }
   }
@@ -380,6 +462,7 @@ function buildChromeMcpArgsFromOptions(options: NormalizedChromeMcpProfileOption
   ];
 }
 
+/** Build command-line args for launching chrome-devtools-mcp. */
 export function buildChromeMcpArgs(input?: string | ChromeMcpProfileOptions): string[] {
   return buildChromeMcpArgsFromOptions(normalizeChromeMcpOptions(input));
 }
@@ -407,7 +490,7 @@ function drainStderr(transport: StdioClientTransport): () => string {
     }
   });
   stream.on("error", () => {});
-  return () => Buffer.concat(chunks).toString("utf8").trim().slice(-CHROME_MCP_STDERR_MAX_BYTES);
+  return () => decodeChromeMcpStderrTail(Buffer.concat(chunks));
 }
 
 function redactChromeMcpDiagnosticText(text: string): string {
@@ -612,7 +695,7 @@ async function closeChromeMcpClientAndProcess(params: {
     return;
   }
   await params.client.close().catch(() => {});
-  await terminateChromeMcpProcessTree(rootPid, descendantPids).catch((err) => {
+  await terminateChromeMcpProcessTree(rootPid, descendantPids).catch((err: unknown) => {
     log.trace(
       `Unable to fully terminate Chrome MCP subprocess tree for pid ${rootPid}: ${err instanceof Error ? err.message : String(err)}`,
     );
@@ -633,10 +716,9 @@ async function withChromeMcpHandshakeTimeout<T>(task: Promise<T>): Promise<T> {
     return await Promise.race([
       task,
       new Promise<never>((_, reject) => {
-        timer = setTimeout(
-          () => reject(new Error("Chrome MCP handshake timed out")),
-          CHROME_MCP_HANDSHAKE_TIMEOUT_MS,
-        );
+        timer = setTimeout(() => {
+          reject(new Error("Chrome MCP handshake timed out"));
+        }, CHROME_MCP_HANDSHAKE_TIMEOUT_MS);
         timer.unref?.();
       }),
     ]);
@@ -744,7 +826,8 @@ async function waitForChromeMcpReady(
     if (signal) {
       racers.push(
         new Promise<never>((_, reject) => {
-          abortListener = () => reject(signal.reason ?? new Error("aborted"));
+          abortListener = () =>
+            reject(toLintErrorObject(signal.reason ?? new Error("aborted"), "Non-Error rejection"));
           signal.addEventListener("abort", abortListener, { once: true });
         }),
       );
@@ -776,7 +859,8 @@ async function waitForChromeMcpPendingSession(
     return await Promise.race([
       pending,
       new Promise<never>((_, reject) => {
-        abortListener = () => reject(signal.reason ?? new Error("aborted"));
+        abortListener = () =>
+          reject(toLintErrorObject(signal.reason ?? new Error("aborted"), "Non-Error rejection"));
         signal.addEventListener("abort", abortListener, { once: true });
       }),
     ]);
@@ -793,17 +877,128 @@ async function createChromeMcpSession(
   signal?: AbortSignal,
 ): Promise<ChromeMcpSession> {
   const created = (sessionFactory ?? createRealSession)(profileName, options);
+  let closedAfterAbort = false;
   try {
     const session = await waitForChromeMcpPendingSession(created, signal);
     if (signal?.aborted) {
+      closedAfterAbort = true;
       await closeChromeMcpSessionHandle(session);
       throw signal.reason ?? new Error("aborted");
     }
     return session;
   } catch (err) {
-    if (signal?.aborted) {
+    if (signal?.aborted && !closedAfterAbort) {
       void created.then((session) => closeChromeMcpSessionHandle(session)).catch(() => {});
     }
+    throw err;
+  }
+}
+
+function abortPendingChromeMcpSession(
+  pending: PendingChromeMcpSession,
+  reason: unknown = new Error("Chrome MCP session attach no longer has active waiters"),
+): void {
+  if (!pending.state.settled && !pending.abortController.signal.aborted) {
+    pending.abortController.abort(reason);
+  }
+}
+
+function forgetCachedChromeMcpSessionIfCurrent(
+  cacheKey: string,
+  session: ChromeMcpSession,
+): boolean {
+  const current = sessions.get(cacheKey);
+  if (current?.transport !== session.transport) {
+    return false;
+  }
+  sessions.delete(cacheKey);
+  return true;
+}
+
+function forgetPendingChromeMcpSessionIfCurrent(
+  cacheKey: string,
+  pending: PendingChromeMcpSession,
+): boolean {
+  if (pendingSessions.get(cacheKey) !== pending) {
+    return false;
+  }
+  pendingSessions.delete(cacheKey);
+  return true;
+}
+
+function createSharedPendingChromeMcpSession(
+  cacheKey: string,
+  profileName: string,
+  options: NormalizedChromeMcpProfileOptions,
+): PendingChromeMcpSession {
+  const id = Symbol(cacheKey);
+  const abortController = new AbortController();
+  const state = {
+    waiters: 0,
+    settled: false,
+  };
+  const promise = (async () => {
+    try {
+      const created = await createChromeMcpSession(profileName, options, abortController.signal);
+      if (pendingSessions.get(cacheKey)?.id === id) {
+        sessions.set(cacheKey, created);
+      } else {
+        await closeChromeMcpSessionHandle(created);
+      }
+      return created;
+    } finally {
+      state.settled = true;
+      if (state.waiters === 0 && pendingSessions.get(cacheKey)?.id === id) {
+        pendingSessions.delete(cacheKey);
+      }
+    }
+  })();
+  const pending: PendingChromeMcpSession = {
+    cacheKey,
+    id,
+    promise,
+    abortController,
+    state,
+  };
+  void promise.catch(() => {});
+  return pending;
+}
+
+async function waitForSharedPendingChromeMcpSession(
+  pending: PendingChromeMcpSession,
+  signal?: AbortSignal,
+): Promise<PendingChromeMcpSessionLease> {
+  pending.state.waiters += 1;
+  let released = false;
+  let leasedSession: ChromeMcpSession | undefined;
+  const release = async (closeIfLastWaiter: boolean) => {
+    if (released) {
+      return false;
+    }
+    released = true;
+    pending.state.waiters = Math.max(0, pending.state.waiters - 1);
+    if (pending.state.waiters !== 0) {
+      return false;
+    }
+    if (pendingSessions.get(pending.cacheKey) === pending) {
+      pendingSessions.delete(pending.cacheKey);
+    }
+    if (!pending.state.settled) {
+      abortPendingChromeMcpSession(pending, signal?.reason);
+    } else if (closeIfLastWaiter && leasedSession) {
+      forgetCachedChromeMcpSessionIfCurrent(pending.cacheKey, leasedSession);
+      await closeChromeMcpSessionHandle(leasedSession);
+    }
+    return true;
+  };
+  try {
+    leasedSession = await waitForChromeMcpPendingSession(pending.promise, signal);
+    return {
+      session: leasedSession,
+      release,
+    };
+  } catch (err) {
+    await release(signal?.aborted === true);
     throw err;
   }
 }
@@ -817,43 +1012,79 @@ async function getSession(
   const options = normalizeChromeMcpOptions(profileOptions);
   const cacheKey = buildChromeMcpSessionCacheKey(profileName, options);
   await closeChromeMcpSessionsForProfile(profileName, cacheKey);
+  if (signal?.aborted) {
+    throw signal.reason ?? new Error("aborted");
+  }
 
-  let session = sessions.get(cacheKey);
-  if (session && session.transport.pid === null) {
-    sessions.delete(cacheKey);
-    session = undefined;
-  }
-  if (!session) {
-    let pending = pendingSessions.get(cacheKey);
-    if (!pending) {
-      pending = (async () => {
-        const created = await createChromeMcpSession(profileName, options, signal);
-        if (pendingSessions.get(cacheKey) === pending) {
-          sessions.set(cacheKey, created);
-        } else {
-          await closeChromeMcpSessionHandle(created);
-        }
-        return created;
-      })();
-      pendingSessions.set(cacheKey, pending);
-    }
-    try {
-      session = await pending;
-    } finally {
-      if (pendingSessions.get(cacheKey) === pending) {
-        pendingSessions.delete(cacheKey);
-      }
-    }
-  }
-  try {
-    await waitForChromeMcpReady(session, profileName, timeoutMs, signal);
-    return session;
-  } catch (err) {
-    const current = sessions.get(cacheKey);
-    if (current?.transport === session.transport) {
+  let staleReadySessionRetries = 0;
+  for (;;) {
+    let session = sessions.get(cacheKey);
+    if (session && session.transport.pid === null) {
       sessions.delete(cacheKey);
+      session = undefined;
     }
-    throw err;
+
+    let pendingLease: PendingChromeMcpSessionLease | undefined;
+    let leasedPending: PendingChromeMcpSession | undefined;
+    const pending = pendingSessions.get(cacheKey);
+    if (pending) {
+      leasedPending = pending;
+      pendingLease = await waitForSharedPendingChromeMcpSession(pending, signal);
+      session = pendingLease.session;
+    }
+
+    if (!session) {
+      const createdPending = createSharedPendingChromeMcpSession(cacheKey, profileName, options);
+      pendingSessions.set(cacheKey, createdPending);
+      leasedPending = createdPending;
+      pendingLease = await waitForSharedPendingChromeMcpSession(createdPending, signal);
+      session = pendingLease.session;
+    }
+
+    try {
+      await waitForChromeMcpReady(session, profileName, timeoutMs, signal);
+      if (session.transport.pid === null) {
+        forgetCachedChromeMcpSessionIfCurrent(cacheKey, session);
+        if (leasedPending) {
+          forgetPendingChromeMcpSessionIfCurrent(cacheKey, leasedPending);
+        }
+        if (pendingLease) {
+          await pendingLease.release(true);
+          pendingLease = undefined;
+        }
+        staleReadySessionRetries += 1;
+        if (staleReadySessionRetries > 1) {
+          throw new BrowserProfileUnavailableError(
+            `Chrome MCP existing-session attach failed for profile "${redactChromeMcpProfileLabelForDiagnostic(profileName)}". ` +
+              "The Chrome MCP subprocess exited before it became usable.",
+          );
+        }
+        continue;
+      }
+      return session;
+    } catch (err) {
+      if (signal?.aborted && pendingLease) {
+        await pendingLease.release(true);
+        pendingLease = undefined;
+      } else if (pendingLease && leasedPending && leasedPending.state.waiters > 1) {
+        await pendingLease.release(false);
+        pendingLease = undefined;
+      } else {
+        forgetCachedChromeMcpSessionIfCurrent(cacheKey, session);
+        if (leasedPending) {
+          forgetPendingChromeMcpSessionIfCurrent(cacheKey, leasedPending);
+        }
+        if (pendingLease) {
+          await pendingLease.release(true);
+          pendingLease = undefined;
+        } else {
+          await closeChromeMcpSessionHandle(session);
+        }
+      }
+      throw err;
+    } finally {
+      await pendingLease?.release(false);
+    }
   }
 }
 
@@ -862,41 +1093,65 @@ async function getExistingSession(
   profileName: string,
   timeoutMs?: number,
   signal?: AbortSignal,
+  includePending = true,
 ): Promise<ChromeMcpSession | null> {
+  if (!includePending && pendingSessions.has(cacheKey)) {
+    return null;
+  }
+
   let session = sessions.get(cacheKey);
   if (session && session.transport.pid === null) {
     sessions.delete(cacheKey);
     session = undefined;
   }
+
+  const pending = pendingSessions.get(cacheKey);
+  if (includePending && pending) {
+    const pendingLease = await waitForSharedPendingChromeMcpSession(pending, signal);
+    let pendingLeaseReleased = false;
+    session = pendingLease.session;
+    try {
+      await waitForChromeMcpReady(session, profileName, timeoutMs, signal);
+      if (session.transport.pid === null) {
+        forgetCachedChromeMcpSessionIfCurrent(cacheKey, session);
+        forgetPendingChromeMcpSessionIfCurrent(cacheKey, pending);
+        await pendingLease.release(true);
+        pendingLeaseReleased = true;
+        return null;
+      }
+      return session;
+    } catch (err) {
+      if (signal?.aborted) {
+        await pendingLease.release(true);
+        pendingLeaseReleased = true;
+      } else if (pending.state.waiters > 1) {
+        await pendingLease.release(false);
+        pendingLeaseReleased = true;
+      } else {
+        forgetCachedChromeMcpSessionIfCurrent(cacheKey, session);
+        forgetPendingChromeMcpSessionIfCurrent(cacheKey, pending);
+        await pendingLease.release(true);
+        pendingLeaseReleased = true;
+      }
+      throw err;
+    } finally {
+      if (!pendingLeaseReleased) {
+        await pendingLease.release(false);
+      }
+    }
+  }
+
   if (session) {
     try {
       await waitForChromeMcpReady(session, profileName, timeoutMs, signal);
       return session;
     } catch (err) {
-      const current = sessions.get(cacheKey);
-      if (current?.transport === session.transport) {
-        sessions.delete(cacheKey);
-      }
+      forgetCachedChromeMcpSessionIfCurrent(cacheKey, session);
       throw err;
     }
   }
 
-  const pending = pendingSessions.get(cacheKey);
-  if (!pending) {
-    return null;
-  }
-
-  session = await waitForChromeMcpPendingSession(pending, signal);
-  try {
-    await waitForChromeMcpReady(session, profileName, timeoutMs, signal);
-    return session;
-  } catch (err) {
-    const current = sessions.get(cacheKey);
-    if (current?.transport === session.transport) {
-      sessions.delete(cacheKey);
-    }
-    throw err;
-  }
+  return null;
 }
 
 async function createEphemeralSession(
@@ -943,6 +1198,7 @@ async function leaseSession(
     profileName,
     options.timeoutMs,
     options.signal,
+    false,
   );
   if (existingSession) {
     return {
@@ -976,9 +1232,10 @@ async function callTool(
   if (signal?.aborted) {
     throw signal.reason ?? new Error("aborted");
   }
+  const normalizedProfileOptions = normalizeChromeMcpOptions(profileOptions);
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const lease = await leaseSession(profileName, profileOptions, options);
+    const lease = await leaseSession(profileName, normalizedProfileOptions, options);
     const rawCall = lease.session.client.callTool({
       name,
       arguments: args,
@@ -1005,7 +1262,8 @@ async function callTool(
     if (signal) {
       racers.push(
         new Promise<never>((_, reject) => {
-          abortListener = () => reject(signal.reason ?? new Error("aborted"));
+          abortListener = () =>
+            reject(toLintErrorObject(signal.reason ?? new Error("aborted"), "Non-Error rejection"));
           signal.addEventListener("abort", abortListener, { once: true });
         }),
       );
@@ -1054,7 +1312,14 @@ async function callTool(
           continue;
         }
       }
-      throw new Error(message);
+      throw new Error(
+        formatChromeMcpToolErrorMessage({
+          profileName,
+          options: normalizedProfileOptions,
+          toolName: name,
+          message,
+        }),
+      );
     }
     return result;
   }
@@ -1084,6 +1349,7 @@ async function findPageById(
   return page;
 }
 
+/** Ensure a Chrome MCP session can be started for the profile. */
 export async function ensureChromeMcpAvailable(
   profileName: string,
   profileOptions?: string | ChromeMcpProfileOptions,
@@ -1095,6 +1361,7 @@ export async function ensureChromeMcpAvailable(
   }
 }
 
+/** Return the cached Chrome MCP process pid for a profile, when present. */
 export function getChromeMcpPid(profileName: string): number | null {
   for (const [key, session] of sessions.entries()) {
     if (cacheKeyMatchesProfileName(key, profileName)) {
@@ -1104,10 +1371,12 @@ export function getChromeMcpPid(profileName: string): number | null {
   return null;
 }
 
+/** Close cached Chrome MCP sessions for one profile. */
 export async function closeChromeMcpSession(profileName: string): Promise<boolean> {
   return await closeChromeMcpSessionsForProfile(profileName);
 }
 
+/** Close every cached Chrome MCP session. */
 export async function stopAllChromeMcpSessions(): Promise<void> {
   const names = uniqueStrings([...sessions.keys()].map((key) => JSON.parse(key)[0] as string));
   for (const name of names) {
@@ -1115,6 +1384,7 @@ export async function stopAllChromeMcpSessions(): Promise<void> {
   }
 }
 
+/** List raw Chrome MCP pages for a profile. */
 export async function listChromeMcpPages(
   profileName: string,
   profileOptions?: string | ChromeMcpProfileOptions,
@@ -1124,6 +1394,7 @@ export async function listChromeMcpPages(
   return extractStructuredPages(result);
 }
 
+/** List Chrome MCP pages converted to BrowserTab records. */
 export async function listChromeMcpTabs(
   profileName: string,
   profileOptions?: string | ChromeMcpProfileOptions,
@@ -1132,6 +1403,7 @@ export async function listChromeMcpTabs(
   return toBrowserTabs(await listChromeMcpPages(profileName, profileOptions, options));
 }
 
+/** Open a new Chrome MCP tab and navigate it to the requested URL. */
 export async function openChromeMcpTab(
   profileName: string,
   url: string,
@@ -1169,6 +1441,7 @@ export async function openChromeMcpTab(
   };
 }
 
+/** Bring a Chrome MCP page to the foreground. */
 export async function focusChromeMcpTab(
   profileName: string,
   targetId: string,
@@ -1180,6 +1453,7 @@ export async function focusChromeMcpTab(
   });
 }
 
+/** Close a Chrome MCP page by target id. */
 export async function closeChromeMcpTab(
   profileName: string,
   targetId: string,
@@ -1188,6 +1462,7 @@ export async function closeChromeMcpTab(
   await callTool(profileName, profileOptions, "close_page", { pageId: parsePageId(targetId) });
 }
 
+/** Navigate a Chrome MCP page and return its resolved URL. */
 export async function navigateChromeMcpPage(params: {
   profileName: string;
   profile?: ChromeMcpProfileOptions;
@@ -1197,6 +1472,7 @@ export async function navigateChromeMcpPage(params: {
   timeoutMs?: number;
 }): Promise<{ url: string }> {
   const resolvedTimeoutMs = params.timeoutMs ?? CHROME_MCP_NAVIGATE_TIMEOUT_MS;
+  const callTimeoutMs = resolveChromeMcpNavigateCallTimeoutMs(resolvedTimeoutMs);
   await callTool(
     params.profileName,
     chromeMcpProfileOptionsFromParams(params),
@@ -1207,7 +1483,7 @@ export async function navigateChromeMcpPage(params: {
       url: params.url,
       timeout: resolvedTimeoutMs,
     },
-    { timeoutMs: resolvedTimeoutMs + 5_000 },
+    { timeoutMs: callTimeoutMs },
   );
   const page = await findPageById(
     params.profileName,
@@ -1217,6 +1493,12 @@ export async function navigateChromeMcpPage(params: {
   return { url: page.url ?? params.url };
 }
 
+/** Add call-level grace around the MCP navigate timeout. */
+export function resolveChromeMcpNavigateCallTimeoutMs(timeoutMs: number): number {
+  return addTimerTimeoutGraceMs(timeoutMs) ?? 1;
+}
+
+/** Take a structured Chrome MCP snapshot for one page. */
 export async function takeChromeMcpSnapshot(params: {
   profileName: string;
   profile?: ChromeMcpProfileOptions;
@@ -1236,6 +1518,7 @@ export async function takeChromeMcpSnapshot(params: {
   return extractSnapshot(result);
 }
 
+/** Take a screenshot via Chrome MCP and return the image bytes. */
 export async function takeChromeMcpScreenshot(params: {
   profileName: string;
   profile?: ChromeMcpProfileOptions;
@@ -1265,6 +1548,7 @@ export async function takeChromeMcpScreenshot(params: {
   });
 }
 
+/** Click a Chrome MCP snapshot element by uid. */
 export async function clickChromeMcpElement(params: {
   profileName: string;
   profile?: ChromeMcpProfileOptions;
@@ -1291,6 +1575,7 @@ export async function clickChromeMcpElement(params: {
   );
 }
 
+/** Dispatch mouse events at page coordinates through an in-page script. */
 export async function clickChromeMcpCoords(params: {
   profileName: string;
   profile?: ChromeMcpProfileOptions;
@@ -1307,7 +1592,7 @@ export async function clickChromeMcpCoords(params: {
   const pressedButtons = button === "middle" ? 4 : button === "right" ? 2 : 1;
   const x = JSON.stringify(params.x);
   const y = JSON.stringify(params.y);
-  const delayMs = JSON.stringify(Math.max(0, Math.floor(params.delayMs ?? 0)));
+  const delayMs = JSON.stringify(resolveNonNegativeIntegerOption(params.delayMs, 0));
   const doubleClick = params.doubleClick ? "true" : "false";
   await evaluateChromeMcpScript({
     profileName: params.profileName,
@@ -1352,6 +1637,7 @@ export async function clickChromeMcpCoords(params: {
   });
 }
 
+/** Fill one Chrome MCP element by uid. */
 export async function fillChromeMcpElement(params: {
   profileName: string;
   profile?: ChromeMcpProfileOptions;
@@ -1367,6 +1653,7 @@ export async function fillChromeMcpElement(params: {
   });
 }
 
+/** Fill multiple Chrome MCP form elements in one tool call. */
 export async function fillChromeMcpForm(params: {
   profileName: string;
   profile?: ChromeMcpProfileOptions;
@@ -1380,6 +1667,7 @@ export async function fillChromeMcpForm(params: {
   });
 }
 
+/** Hover a Chrome MCP snapshot element by uid. */
 export async function hoverChromeMcpElement(params: {
   profileName: string;
   profile?: ChromeMcpProfileOptions;
@@ -1393,6 +1681,7 @@ export async function hoverChromeMcpElement(params: {
   });
 }
 
+/** Drag between two Chrome MCP snapshot element uids. */
 export async function dragChromeMcpElement(params: {
   profileName: string;
   profile?: ChromeMcpProfileOptions;
@@ -1408,6 +1697,7 @@ export async function dragChromeMcpElement(params: {
   });
 }
 
+/** Upload a local file into a Chrome MCP file input by uid. */
 export async function uploadChromeMcpFile(params: {
   profileName: string;
   profile?: ChromeMcpProfileOptions;
@@ -1423,6 +1713,7 @@ export async function uploadChromeMcpFile(params: {
   });
 }
 
+/** Press a keyboard key in a Chrome MCP page. */
 export async function pressChromeMcpKey(params: {
   profileName: string;
   profile?: ChromeMcpProfileOptions;
@@ -1436,6 +1727,7 @@ export async function pressChromeMcpKey(params: {
   });
 }
 
+/** Resize a Chrome MCP page viewport. */
 export async function resizeChromeMcpPage(params: {
   profileName: string;
   profile?: ChromeMcpProfileOptions;
@@ -1451,6 +1743,7 @@ export async function resizeChromeMcpPage(params: {
   });
 }
 
+/** Accept or dismiss a Chrome MCP browser dialog. */
 export async function handleChromeMcpDialog(params: {
   profileName: string;
   profile?: ChromeMcpProfileOptions;
@@ -1466,6 +1759,7 @@ export async function handleChromeMcpDialog(params: {
   });
 }
 
+/** Evaluate a JavaScript function in a Chrome MCP page. */
 export async function evaluateChromeMcpScript(params: {
   profileName: string;
   profile?: ChromeMcpProfileOptions;
@@ -1487,6 +1781,7 @@ export async function evaluateChromeMcpScript(params: {
   return extractJsonMessage(result);
 }
 
+/** Wait for text conditions in a Chrome MCP page. */
 export async function waitForChromeMcpText(params: {
   profileName: string;
   profile?: ChromeMcpProfileOptions;
@@ -1502,19 +1797,39 @@ export async function waitForChromeMcpText(params: {
   });
 }
 
+/** Replace Chrome MCP session creation for focused tests. */
 export function setChromeMcpSessionFactoryForTest(factory: ChromeMcpSessionFactory | null): void {
   sessionFactory = factory;
 }
 
+/** Replace process cleanup hooks for focused tests. */
 export function setChromeMcpProcessCleanupDepsForTest(
   deps: ChromeMcpProcessCleanupDeps | null,
 ): void {
   chromeMcpProcessCleanupDepsForTest = deps;
 }
 
+/** Reset cached sessions and test hooks. */
 export async function resetChromeMcpSessionsForTest(): Promise<void> {
   sessionFactory = null;
+  for (const pending of pendingSessions.values()) {
+    abortPendingChromeMcpSession(pending, new Error("Chrome MCP sessions reset for test"));
+  }
   pendingSessions.clear();
   await stopAllChromeMcpSessions();
   chromeMcpProcessCleanupDepsForTest = null;
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

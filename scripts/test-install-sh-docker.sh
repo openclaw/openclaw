@@ -14,23 +14,30 @@ run_install_smoke_container() {
 }
 
 resolve_default_smoke_platform() {
-  local host_os
   local host_arch
   if [[ -n "${OPENCLAW_INSTALL_SMOKE_PLATFORM:-}" ]]; then
     printf "%s" "$OPENCLAW_INSTALL_SMOKE_PLATFORM"
     return
   fi
+  host_arch="$(uname -m)"
   if [[ "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" ]]; then
+    case "$host_arch" in
+      arm64 | aarch64)
+        printf "linux/arm64"
+        return
+        ;;
+    esac
     printf "linux/amd64"
     return
   fi
-  host_os="$(uname -s)"
-  host_arch="$(uname -m)"
-  if [[ "$host_os" == "Darwin" && "$host_arch" == "arm64" ]]; then
-    printf "linux/arm64"
-    return
-  fi
-  printf "linux/amd64"
+  case "$host_arch" in
+    arm64 | aarch64)
+      printf "linux/arm64"
+      ;;
+    *)
+      printf "linux/amd64"
+      ;;
+  esac
 }
 
 print_pack_audit() {
@@ -443,6 +450,10 @@ else
   LATEST_VERSION=""
   if [[ -f "$LATEST_FILE" ]]; then
     LATEST_VERSION="$(cat "$LATEST_FILE")"
+  fi
+  public_latest_version="$(quiet_npm view "$PACKAGE_NAME" version 2>/dev/null || true)"
+  if [[ -n "$public_latest_version" ]]; then
+    LATEST_VERSION="$public_latest_version"
   fi
 
   echo "==> Run update smoke (${UPDATE_BASELINE_VERSION} -> ${UPDATE_EXPECT_VERSION})"

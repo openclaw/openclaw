@@ -1,3 +1,4 @@
+// Session memory transcript helpers persist compact session transcript excerpts.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { hasInterSessionUserProvenance } from "../../../sessions/input-provenance.js";
@@ -23,7 +24,7 @@ function extractTextMessageContent(content: unknown): string | undefined {
 
 export async function getRecentSessionContent(
   sessionFilePath: string,
-  messageCount: number = 15,
+  messageCount = 15,
 ): Promise<string | null> {
   try {
     const content = await fs.readFile(sessionFilePath, "utf-8");
@@ -63,7 +64,7 @@ export async function getRecentSessionContent(
 
 export async function getRecentSessionContentWithResetFallback(
   sessionFilePath: string,
-  messageCount: number = 15,
+  messageCount = 15,
 ): Promise<string | null> {
   const primary = await getRecentSessionContent(sessionFilePath, messageCount);
   if (primary) {

@@ -1,4 +1,5 @@
-import { isSensitiveUrlConfigPath } from "../shared/net/redact-sensitive-url.js";
+// Builds base config schema metadata shared across generated config surfaces.
+import { isSensitiveUrlConfigPath } from "@openclaw/net-policy/redact-sensitive-url";
 import { VERSION } from "../version.js";
 import { FIELD_HELP } from "./schema.help.js";
 import type { ConfigUiHints } from "./schema.hints.js";

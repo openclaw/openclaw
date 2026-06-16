@@ -1,3 +1,4 @@
+// Covers session cost and usage summary loading.
 import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -16,6 +17,7 @@ import {
   loadCostUsageSummaryFromCache,
   loadSessionCostSummary,
   loadSessionCostSummaryFromCache,
+  loadSessionCostSummariesFromCache,
   loadSessionLogs,
   loadSessionUsageTimeSeries,
   requestCostUsageCacheRefresh,
@@ -345,6 +347,45 @@ describe("session cost usage", () => {
     });
   });
 
+  it("loads multiple session summaries from one durable cache snapshot", async () => {
+    const root = await makeSessionCostRoot("cost-cache-batch");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFiles = await Promise.all(
+      ["sess-a", "sess-b"].map(async (sessionId, index) => {
+        const sessionFile = path.join(sessionsDir, `${sessionId}.jsonl`);
+        await fs.writeFile(
+          sessionFile,
+          transcriptText(sessionId, {
+            type: "message",
+            timestamp: `2026-02-05T12:0${index}:00.000Z`,
+            message: {
+              role: "assistant",
+              provider: "openai",
+              model: "gpt-5.5",
+              usage: { input: index + 1, output: 0, totalTokens: index + 1 },
+            },
+          }),
+          "utf-8",
+        );
+        return { sessionId, sessionFile };
+      }),
+    );
+
+    await withStateDir(root, async () => {
+      await refreshCostUsageCache({ sessionFiles: sessionFiles.map((entry) => entry.sessionFile) });
+      const result = await loadSessionCostSummariesFromCache({
+        sessions: sessionFiles,
+        agentId: "main",
+        startMs: Date.UTC(2026, 1, 5),
+        endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
+      });
+
+      expect(result.cacheStatus.status).toBe("fresh");
+      expect(result.summaries.map((summary) => summary?.totalTokens)).toEqual([1, 2]);
+    });
+  });
+
   it("ignores compaction checkpoint transcript snapshots in daily totals and discovery", async () => {
     const root = await makeSessionCostRoot("cost-checkpoint");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
@@ -596,7 +637,9 @@ describe("session cost usage", () => {
         activeStats += 1;
         maxActiveStats = Math.max(maxActiveStats, activeStats);
         try {
-          await new Promise((resolve) => setTimeout(resolve, 2));
+          await new Promise((resolve) => {
+            setTimeout(resolve, 2);
+          });
           return await originalStat(target);
         } finally {
           activeStats -= 1;
@@ -1404,6 +1447,78 @@ describe("session cost usage", () => {
       });
       expect(summary.totals.totalTokens).toBe(10);
       expect(summary.cacheStatus?.status).toBe("fresh");
+    });
+  });
+
+  it("throttles cache writes during a large stale refresh and skips writes when nothing changed", async () => {
+    const root = await makeSessionCostRoot("cost-cache-throttle");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
+
+    const sessionCount = 300; // > USAGE_COST_CACHE_CHECKPOINT_FILES (256)
+    const baseTimestamp = "2026-02-05T12:00:00.000Z";
+    const makeEntry = (totalTokens: number, timestamp: string) =>
+      JSON.stringify({
+        type: "message",
+        timestamp,
+        message: {
+          role: "assistant",
+          provider: "openai",
+          model: "gpt-5.4",
+          usage: {
+            input: totalTokens,
+            output: 0,
+            totalTokens,
+            cost: { total: totalTokens / 1000 },
+          },
+        },
+      });
+
+    for (let index = 0; index < sessionCount; index += 1) {
+      const sessionId = `sess-throttle-${index}`;
+      await fs.writeFile(
+        path.join(sessionsDir, `${sessionId}.jsonl`),
+        `${JSON.stringify({ type: "session", version: 1, id: sessionId })}\n${makeEntry(1, baseTimestamp)}\n`,
+        "utf-8",
+      );
+    }
+
+    await withStateDir(root, async () => {
+      const renameSpy = vi.spyOn(fs, "rename");
+      const cacheRenamesBefore = renameSpy.mock.calls.length;
+      try {
+        await refreshCostUsageCache();
+        const cacheRenamesAfterCold = renameSpy.mock.calls.filter(
+          ([, dest]) => dest === cachePath,
+        ).length;
+
+        // Without throttling this cold refresh would rewrite once per file plus a final flush.
+        // With checkpointing it must be far fewer than the file count.
+        expect(cacheRenamesAfterCold).toBeGreaterThan(0);
+        expect(cacheRenamesAfterCold).toBeLessThan(sessionCount / 4);
+
+        const summary = await loadCostUsageSummaryFromCache({
+          startMs: Date.UTC(2026, 1, 5),
+          endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
+          requestRefresh: false,
+        });
+        expect(summary.totals.totalTokens).toBe(sessionCount);
+        expect(summary.cacheStatus?.status).toBe("fresh");
+
+        // No-op refresh: nothing stale, nothing deleted -> no cache rewrite.
+        const renamesBeforeNoOp = renameSpy.mock.calls.filter(
+          ([, dest]) => dest === cachePath,
+        ).length;
+        await refreshCostUsageCache();
+        const renamesAfterNoOp = renameSpy.mock.calls.filter(
+          ([, dest]) => dest === cachePath,
+        ).length;
+        expect(renamesAfterNoOp).toBe(renamesBeforeNoOp);
+      } finally {
+        renameSpy.mockRestore();
+        void cacheRenamesBefore;
+      }
     });
   });
 
@@ -2521,20 +2636,26 @@ example
       "utf-8",
     );
 
-    await expect(loadSessionUsageTimeSeries({ sessionFile, maxPoints: 0 })).resolves.toEqual({
-      sessionId: undefined,
-      points: [],
-    });
-    await expect(loadSessionUsageTimeSeries({ sessionFile, maxPoints: -1 })).resolves.toEqual({
-      sessionId: undefined,
-      points: [],
-    });
-    await expect(
-      loadSessionUsageTimeSeries({ sessionFile, maxPoints: Number.NaN }),
-    ).resolves.toEqual({ sessionId: undefined, points: [] });
-    await expect(
-      loadSessionUsageTimeSeries({ sessionFile, maxPoints: Number.POSITIVE_INFINITY }),
-    ).resolves.toEqual({ sessionId: undefined, points: [] });
+    const createReadStream = vi.spyOn(nodeFs, "createReadStream");
+    try {
+      await expect(loadSessionUsageTimeSeries({ sessionFile, maxPoints: 0 })).resolves.toEqual({
+        sessionId: undefined,
+        points: [],
+      });
+      await expect(loadSessionUsageTimeSeries({ sessionFile, maxPoints: -1 })).resolves.toEqual({
+        sessionId: undefined,
+        points: [],
+      });
+      await expect(
+        loadSessionUsageTimeSeries({ sessionFile, maxPoints: Number.NaN }),
+      ).resolves.toEqual({ sessionId: undefined, points: [] });
+      await expect(
+        loadSessionUsageTimeSeries({ sessionFile, maxPoints: Number.POSITIVE_INFINITY }),
+      ).resolves.toEqual({ sessionId: undefined, points: [] });
+      expect(createReadStream).not.toHaveBeenCalled();
+    } finally {
+      createReadStream.mockRestore();
+    }
   });
 
   it("returns empty logs for zero, negative, and non-finite limits", async () => {

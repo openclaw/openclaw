@@ -1,3 +1,5 @@
+// Outbound target helpers resolve direct send targets, heartbeat destinations,
+// sender context, and session-route aware heartbeat refinements.
 import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
 import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.core.js";
@@ -30,10 +32,13 @@ import {
   type OutboundTargetResolution,
 } from "./targets-resolve-shared.js";
 
+/** Deliverable channel id accepted by outbound target resolution. */
 export type OutboundChannel = DeliverableMessageChannel;
 
+/** Heartbeat target channel id from agent/default heartbeat config. */
 export type HeartbeatTarget = OutboundChannel;
 
+/** Resolved outbound delivery destination and routing hints. */
 export type OutboundTarget = {
   channel: OutboundChannel;
   to?: string;
@@ -45,6 +50,7 @@ export type OutboundTarget = {
   lastAccountId?: string;
 };
 
+/** Sender identity context used when a heartbeat needs channel-compatible metadata. */
 export type HeartbeatSenderContext = {
   sender: string;
   provider?: DeliverableMessageChannel;
@@ -55,7 +61,7 @@ export type { OutboundTargetResolution } from "./targets-resolve-shared.js";
 export { resolveSessionDeliveryTarget, type SessionDeliveryTarget } from "./targets-session.js";
 import { resolveSessionDeliveryTarget, type SessionDeliveryTarget } from "./targets-session.js";
 
-// Channel docking: prefer plugin.outbound.resolveTarget + allowFrom to normalize destinations.
+/** Resolves a user-supplied outbound destination through the channel plugin. */
 export function resolveOutboundTarget(params: {
   channel: GatewayMessageChannel;
   to?: string;
@@ -87,6 +93,7 @@ export function resolveOutboundTarget(params: {
   );
 }
 
+/** Resolves the heartbeat delivery destination from config, session state, and turn source. */
 export function resolveHeartbeatDeliveryTarget(params: {
   cfg: OpenClawConfig;
   entry?: SessionEntry;
@@ -104,6 +111,18 @@ export function resolveHeartbeatDeliveryTarget(params: {
     if (normalized) {
       target = normalized;
     }
+  } else if (
+    rawTarget === undefined &&
+    params.turnSource?.to &&
+    params.turnSource.channel &&
+    isDeliverableMessageChannel(params.turnSource.channel)
+  ) {
+    // No heartbeat target configured, but this run drains an event that
+    // explicitly carried its origin delivery context (e.g. a cron wake from a
+    // channel thread/topic). The event named its destination, so deliver to it
+    // instead of silently dropping the reply. An explicit `target: "none"`
+    // still suppresses delivery (operator opt-out above takes precedence).
+    target = "last";
   }
 
   if (target === "none") {
@@ -266,6 +285,7 @@ function buildNoHeartbeatDeliveryTarget(params: {
   };
 }
 
+/** Resolves heartbeat delivery and lets plugins refine the outbound session route. */
 export async function resolveHeartbeatDeliveryTargetWithSessionRoute(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -298,6 +318,7 @@ export async function resolveHeartbeatDeliveryTargetWithSessionRoute(params: {
         unknownTargetMode: "normalized",
       });
     } catch {
+      // Target normalization failure should not suppress an otherwise deliverable heartbeat.
       return null;
     }
   })();
@@ -436,6 +457,7 @@ function resolveHeartbeatSenderId(params: {
   return candidates[0] ?? "heartbeat";
 }
 
+/** Resolves the sender id/allow-list context used for heartbeat sends. */
 export function resolveHeartbeatSenderContext(params: {
   cfg: OpenClawConfig;
   entry?: SessionEntry;

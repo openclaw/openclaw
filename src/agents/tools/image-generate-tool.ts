@@ -1,3 +1,8 @@
+/**
+ * image_generate built-in tool.
+ *
+ * Loads references, resolves providers/options, saves generated images, and supports detached background runs.
+ */
 import { Type } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -32,6 +37,7 @@ import {
 import { getImageMetadata } from "../../media/media-services.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { loadWebMedia } from "../../media/web-media.js";
+import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { resolveUserPath } from "../../utils.js";
 import type { DeliveryContext } from "../../utils/delivery-context.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
@@ -44,7 +50,12 @@ import {
   recordRecentMediaGenerationTaskStartForSession,
 } from "../media-generation-task-status-shared.js";
 import { optionalStringEnum } from "../schema/string-enum.js";
-import { ToolInputError, readNumberParam, readStringParam } from "./common.js";
+import {
+  ToolInputError,
+  readNonNegativeIntegerParam,
+  readPositiveIntegerParam,
+  readStringParam,
+} from "./common.js";
 import {
   completeImageGenerationTaskRun,
   createImageGenerationTaskRun,
@@ -64,6 +75,7 @@ import {
   createDefaultMediaGenerateBackgroundScheduler,
   notifyMediaGenerationAsyncTaskStarted,
   scheduleMediaGenerationTaskCompletion,
+  shouldDetachMediaGenerationTask,
   type MediaGenerateAsyncStartCallback,
   type MediaGenerateBackgroundScheduler,
 } from "./media-generate-background-shared.js";
@@ -74,6 +86,7 @@ import {
   hasGenerationToolAvailability,
   normalizeMediaReferenceInputs,
   readGenerationTimeoutMs,
+  REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS,
   resolveRemoteMediaSsrfPolicy,
   resolveCapabilityModelConfigForTool,
   resolveGenerateAction,
@@ -95,16 +108,19 @@ import {
 
 const DEFAULT_COUNT = 1;
 const MAX_COUNT = 4;
-const MAX_INPUT_IMAGES = 5;
+const MAX_INPUT_IMAGES = 10;
 const DEFAULT_RESOLUTION: ImageGenerationResolution = "1K";
 const SUPPORTED_QUALITIES = ["low", "medium", "high", "auto"] as const;
 const SUPPORTED_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
 const SUPPORTED_BACKGROUNDS = ["transparent", "opaque", "auto"] as const;
 const SUPPORTED_OPENAI_MODERATIONS = ["low", "auto"] as const;
+const SUPPORTED_FAL_CREATIVITY = ["raw", "low", "medium", "high"] as const;
+type FalCreativity = (typeof SUPPORTED_FAL_CREATIVITY)[number];
 const SUPPORTED_ASPECT_RATIOS = new Set([
   "1:1",
   "2:3",
   "3:2",
+  "2.35:1",
   "3:4",
   "4:3",
   "4:5",
@@ -112,6 +128,10 @@ const SUPPORTED_ASPECT_RATIOS = new Set([
   "9:16",
   "16:9",
   "21:9",
+  "4:1",
+  "1:4",
+  "8:1",
+  "1:8",
 ]);
 
 const log = createSubsystemLogger("agents/tools/image-generate");
@@ -130,7 +150,7 @@ const ImageGenerateToolSchema = Type.Object({
   ),
   images: Type.Optional(
     Type.Array(Type.String(), {
-      description: `Reference images for edit; max ${MAX_INPUT_IMAGES}.`,
+      description: `Reference images for edit or style reference; max ${MAX_INPUT_IMAGES}.`,
     }),
   ),
   model: Type.Optional(
@@ -151,7 +171,8 @@ const ImageGenerateToolSchema = Type.Object({
   ),
   aspectRatio: Type.Optional(
     Type.String({
-      description: "Aspect ratio: 1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, 21:9.",
+      description:
+        "Aspect ratio: 1:1, 2:3, 3:2, 2.35:1, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, 21:9, 4:1, 1:4, 8:1, 1:8.",
     }),
   ),
   resolution: Type.Optional(
@@ -178,7 +199,7 @@ const ImageGenerateToolSchema = Type.Object({
         description: "OpenAI moderation: low, auto.",
       }),
       outputCompression: Type.Optional(
-        Type.Number({
+        Type.Integer({
           description: "OpenAI jpeg/webp compression 0-100.",
           minimum: 0,
           maximum: 100,
@@ -191,15 +212,22 @@ const ImageGenerateToolSchema = Type.Object({
       ),
     }),
   ),
+  fal: Type.Optional(
+    Type.Object({
+      creativity: optionalStringEnum(SUPPORTED_FAL_CREATIVITY, {
+        description: "fal Krea creativity: raw, low, medium, high.",
+      }),
+    }),
+  ),
   count: Type.Optional(
-    Type.Number({
+    Type.Integer({
       description: `Image count 1-${MAX_COUNT}.`,
       minimum: 1,
       maximum: MAX_COUNT,
     }),
   ),
   timeoutMs: Type.Optional(
-    Type.Number({
+    Type.Integer({
       description: "Provider timeout ms (300000 tends to be a safe amount).",
       minimum: 1,
     }),
@@ -235,7 +263,12 @@ function resolveAction(args: Record<string, unknown>): "generate" | "list" | "st
 }
 
 function resolveRequestedCount(args: Record<string, unknown>): number {
-  const count = readNumberParam(args, "count", { integer: true });
+  if (readSnakeCaseParamRaw(args, "count") === null) {
+    throw new ToolInputError(`count must be between 1 and ${MAX_COUNT}`);
+  }
+  const count = readPositiveIntegerParam(args, "count", {
+    message: `count must be between 1 and ${MAX_COUNT}`,
+  });
   if (count === undefined) {
     return DEFAULT_COUNT;
   }
@@ -265,7 +298,7 @@ function normalizeAspectRatio(raw: string | undefined): string | undefined {
     return normalized;
   }
   throw new ToolInputError(
-    "aspectRatio must be one of 1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, or 21:9",
+    "aspectRatio must be one of 1:1, 2:3, 3:2, 2.35:1, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, 21:9, 4:1, 1:4, 8:1, or 1:8",
   );
 }
 
@@ -328,6 +361,17 @@ function normalizeOpenAIModeration(
   throw new ToolInputError("openai.moderation must be one of low or auto");
 }
 
+function normalizeFalCreativity(raw: string | undefined): FalCreativity | undefined {
+  const normalized = raw?.trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  if ((SUPPORTED_FAL_CREATIVITY as readonly string[]).includes(normalized)) {
+    return normalized as FalCreativity;
+  }
+  throw new ToolInputError("fal.creativity must be one of raw, low, medium, or high");
+}
+
 function readRecordParam(params: Record<string, unknown>, key: string): Record<string, unknown> {
   const raw = params[key];
   return raw && typeof raw === "object" && !Array.isArray(raw)
@@ -339,7 +383,12 @@ function normalizeOpenAIOptions(args: Record<string, unknown>): ImageGenerationO
   const raw = readRecordParam(args, "openai");
   const background = normalizeOpenAIBackground(readStringParam(raw, "background"));
   const moderation = normalizeOpenAIModeration(readStringParam(raw, "moderation"));
-  const outputCompression = readNumberParam(raw, "outputCompression", { integer: true });
+  if (readSnakeCaseParamRaw(raw, "outputCompression") === null) {
+    throw new ToolInputError("openai.outputCompression must be between 0 and 100");
+  }
+  const outputCompression = readNonNegativeIntegerParam(raw, "outputCompression", {
+    message: "openai.outputCompression must be between 0 and 100",
+  });
   const user = readStringParam(raw, "user");
   if (outputCompression !== undefined && (outputCompression < 0 || outputCompression > 100)) {
     throw new ToolInputError("openai.outputCompression must be between 0 and 100");
@@ -355,8 +404,13 @@ function normalizeOpenAIOptions(args: Record<string, unknown>): ImageGenerationO
 function normalizeProviderOptions(
   args: Record<string, unknown>,
 ): ImageGenerationProviderOptions | undefined {
+  const falRaw = readRecordParam(args, "fal");
+  const falCreativity = normalizeFalCreativity(readStringParam(falRaw, "creativity"));
   const openai = normalizeOpenAIOptions(args);
-  return Object.keys(openai).length > 0 ? { openai } : undefined;
+  const fal = falCreativity ? { creativity: falCreativity } : undefined;
+  return fal || Object.keys(openai).length > 0
+    ? { ...(fal ? { fal } : {}), ...(Object.keys(openai).length > 0 ? { openai } : {}) }
+    : undefined;
 }
 
 function normalizeReferenceImages(args: Record<string, unknown>): string[] {
@@ -380,6 +434,35 @@ function resolveSelectedImageGenerationProvider(params: {
     modelOverride: params.modelOverride,
     parseModelRef: parseImageGenerationModelRef,
   });
+}
+
+function resolveSelectedImageGenerationModelId(params: {
+  selectedProvider: ImageGenerationProvider | undefined;
+  imageGenerationModelConfig: ToolModelConfig;
+  modelOverride?: string;
+  explicitModelRef: { provider: string; model: string } | null;
+  primaryModelRef: { provider: string; model: string } | null;
+}): string | undefined {
+  const selectedProviderId = params.selectedProvider?.id;
+  const explicitModelRef = params.explicitModelRef;
+  const primaryModelRef = params.primaryModelRef;
+  if (params.modelOverride !== undefined) {
+    if (explicitModelRef && explicitModelRef.provider === selectedProviderId) {
+      return explicitModelRef.model;
+    }
+    if (params.selectedProvider?.models?.includes(params.modelOverride)) {
+      return params.modelOverride;
+    }
+    return explicitModelRef?.model ?? params.modelOverride;
+  }
+  if (primaryModelRef && primaryModelRef.provider === selectedProviderId) {
+    return primaryModelRef.model;
+  }
+  return params.imageGenerationModelConfig.primary ?? params.selectedProvider?.defaultModel;
+}
+
+function isFalKreaImageModel(provider: ImageGenerationProvider | undefined, modelId?: string) {
+  return provider?.id === "fal" && modelId?.startsWith("krea/v2/") === true;
 }
 
 function formatIgnoredImageGenerationOverride(override: ImageGenerationIgnoredOverride): string {
@@ -541,6 +624,7 @@ async function loadReferenceImages(params: {
             maxBytes: params.maxBytes,
             localRoots,
             ssrfPolicy: params.ssrfPolicy,
+            ...(isHttpUrl ? { readIdleTimeoutMs: REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS } : {}),
           });
     if (media.kind !== "image") {
       throw new ToolInputError(`Unsupported media type: ${media.kind}`);
@@ -800,7 +884,7 @@ export function createImageGenerateTool(options?: {
     label: "Image Generation",
     name: "image_generate",
     description:
-      'Create/edit images. Session chats: background task; do not call image_generate again for same request; wait completion, then send attachments via message tool. Transparent: outputFormat="png" or "webp" + background="transparent"; OpenAI also supports openai.background and routes default model to gpt-image-1.5. Use action="list" for providers/models/readiness/auth, "status" for active task.',
+      'Create/edit images. Session chats: background task; do not call image_generate again for same request; wait completion, then report through the current visible-reply contract with generated media attached using structured media fields. Transparent: outputFormat="png" or "webp" + background="transparent"; OpenAI also supports openai.background and routes default model to gpt-image-1.5. Use action="list" for providers/models/readiness/auth, "status" for active task.',
     parameters: ImageGenerateToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -817,12 +901,17 @@ export function createImageGenerateTool(options?: {
         return createImageGenerateStatusActionResult(options?.agentSessionKey);
       }
 
-      const imageGenerationModelConfig = resolveImageGenerationModelConfigForTool({
-        cfg,
-        workspaceDir: options?.workspaceDir,
-        agentDir: options?.agentDir,
-        authStore: options?.authProfileStore,
-      });
+      const model = readStringParam(params, "model");
+      const configuredImageGenerationModelConfig = coerceToolModelConfig(
+        cfg.agents?.defaults?.imageGenerationModel,
+      );
+      const imageGenerationModelConfig =
+        resolveImageGenerationModelConfigForTool({
+          cfg,
+          workspaceDir: options?.workspaceDir,
+          agentDir: options?.agentDir,
+          authStore: options?.authProfileStore,
+        }) ?? (model ? { ...configuredImageGenerationModelConfig, primary: model } : null);
       if (!imageGenerationModelConfig) {
         throw new ToolInputError("No image-generation model configured.");
       }
@@ -841,7 +930,6 @@ export function createImageGenerateTool(options?: {
       }
 
       const imageInputs = normalizeReferenceImages(params);
-      const model = readStringParam(params, "model");
       const filename = readStringParam(params, "filename");
       const size = readStringParam(params, "size");
       const aspectRatio = normalizeAspectRatio(readStringParam(params, "aspectRatio"));
@@ -858,6 +946,13 @@ export function createImageGenerateTool(options?: {
       });
       const explicitModelRef = parseImageGenerationModelRef(model);
       const primaryModelRef = parseImageGenerationModelRef(imageGenerationModelConfig.primary);
+      const selectedModelId = resolveSelectedImageGenerationModelId({
+        selectedProvider,
+        imageGenerationModelConfig,
+        modelOverride: model,
+        explicitModelRef,
+        primaryModelRef,
+      });
       const count = resolveRequestedCount(params);
       const requestKey = buildMediaGenerationRequestKey({
         tool: "image_generate",
@@ -887,6 +982,15 @@ export function createImageGenerateTool(options?: {
       if (duplicateGuardResult) {
         return duplicateGuardResult;
       }
+      validateImageGenerationCapabilities({
+        provider: selectedProvider,
+        count,
+        inputImageCount: imageInputs.length,
+        size,
+        aspectRatio,
+        resolution: explicitResolution,
+        explicitResolution: Boolean(explicitResolution),
+      });
       const configuredMediaMaxBytes = resolveConfiguredMediaMaxBytes(effectiveCfg);
       const loadedReferenceImages = await loadReferenceImages({
         imageInputs,
@@ -900,9 +1004,13 @@ export function createImageGenerateTool(options?: {
         inputImages.length > 0
           ? selectedProvider?.capabilities.edit
           : selectedProvider?.capabilities.generate;
+      const suppressInferredResolution =
+        inputImages.length > 0 &&
+        !explicitResolution &&
+        isFalKreaImageModel(selectedProvider, selectedModelId);
       const resolution =
         explicitResolution ??
-        (size || modeCaps?.supportsResolution === false
+        (size || suppressInferredResolution || modeCaps?.supportsResolution === false
           ? undefined
           : inputImages.length > 0
             ? await inferResolutionFromInputImages(inputImages)
@@ -922,7 +1030,9 @@ export function createImageGenerateTool(options?: {
         prompt,
         providerId: selectedProvider?.id,
       });
-      const shouldDetach = Boolean(taskHandle && options?.agentSessionKey?.trim());
+      const shouldDetach = Boolean(
+        taskHandle && shouldDetachMediaGenerationTask(options?.agentSessionKey),
+      );
 
       if (shouldDetach && taskHandle) {
         recordRecentMediaGenerationTaskStartForSession({

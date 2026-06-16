@@ -1,13 +1,30 @@
+/**
+ * Ensures runtime plugins required by selected native harnesses are installed.
+ */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withActivatedPluginIds } from "../../plugins/activation-context.js";
+import { resolveEffectivePluginActivationState } from "../../plugins/config-state.js";
+import { isPluginEnabledByDefaultForPlatform } from "../../plugins/default-enablement.js";
+import {
+  loadPluginRegistrySnapshot,
+  normalizePluginsConfigWithRegistry,
+} from "../../plugins/plugin-registry.js";
 import {
   resolveActivatableProviderOwnerPluginIds,
   resolveBundledProviderCompatPluginIds,
   resolveOwningPluginIdsForProviderRef,
 } from "../../plugins/providers.js";
-import { isDefaultAgentRuntimeId } from "../agent-runtime-id.js";
+import { isDefaultAgentRuntimeId, OPENCLAW_AGENT_RUNTIME_ID } from "../agent-runtime-id.js";
 import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import { resolveAgentHarnessPolicy } from "./policy.js";
+
+/**
+ * Lazy-loads plugin-backed harness runtimes before selection.
+ *
+ * Only cold-loadable runtimes live here; always-loaded core/openclaw runtimes should not trigger
+ * plugin registry scans on every embedded-agent turn.
+ */
+const COLD_LOADABLE_HARNESS_PLUGIN_IDS = new Set(["codex", "copilot"]);
 
 function dedupePluginIds(values: readonly string[]): string[] {
   const seen = new Set<string>();
@@ -28,12 +45,49 @@ function restrictiveAllowlistOmitsPlugin(config: OpenClawConfig | undefined, plu
   return allow.length > 0 && !allow.includes(pluginId);
 }
 
-function resolveCodexHarnessPluginIds(params: {
+function resolveSelectedMemoryPluginIds(params: {
+  config: OpenClawConfig | undefined;
+  workspaceDir: string;
+}): string[] {
+  const registry = loadPluginRegistrySnapshot({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+  });
+  const plugins = normalizePluginsConfigWithRegistry(params.config?.plugins, registry);
+  const memorySlot = plugins.slots.memory;
+  if (
+    typeof memorySlot !== "string" ||
+    memorySlot.trim().length === 0 ||
+    restrictiveAllowlistOmitsPlugin(params.config, memorySlot)
+  ) {
+    return [];
+  }
+  const plugin = registry.plugins.find((entry) => entry.pluginId === memorySlot);
+  if (!plugin?.startup.memory) {
+    return [];
+  }
+  const activationState = resolveEffectivePluginActivationState({
+    id: plugin.pluginId,
+    origin: plugin.origin,
+    config: plugins,
+    rootConfig: params.config,
+    enabledByDefault: isPluginEnabledByDefaultForPlatform(plugin),
+  });
+  return activationState.activated ? [plugin.pluginId] : [];
+}
+
+function resolveHarnessPluginIds(params: {
+  runtime: string;
   provider: string;
   config?: OpenClawConfig;
   workspaceDir: string;
 }): string[] {
+  if (params.runtime !== "codex") {
+    return [params.runtime];
+  }
   if (restrictiveAllowlistOmitsPlugin(params.config, "codex")) {
+    // Respect a restrictive allowlist even when Codex would normally pull in provider owner
+    // plugins. Operators who set an allowlist expect no implicit plugin expansion.
     return ["codex"];
   }
   const providerOwnerPluginIds = dedupePluginIds(
@@ -87,6 +141,7 @@ function withRuntimePluginIdsAllowed(params: {
   };
 }
 
+/** Ensures the plugin that owns the selected harness runtime is loaded before harness selection. */
 export async function ensureSelectedAgentHarnessPlugin(params: {
   provider: string;
   modelId: string;
@@ -106,26 +161,36 @@ export async function ensureSelectedAgentHarnessPlugin(params: {
   });
   const runtime =
     runtimeOverride && !isDefaultAgentRuntimeId(runtimeOverride) ? runtimeOverride : policy.runtime;
-  if (runtime !== "codex") {
+  if (
+    isDefaultAgentRuntimeId(runtime) ||
+    runtime === OPENCLAW_AGENT_RUNTIME_ID ||
+    !COLD_LOADABLE_HARNESS_PLUGIN_IDS.has(runtime)
+  ) {
     return;
   }
 
   const { ensurePluginRegistryLoaded } =
     await import("../../plugins/runtime/runtime-registry-loader.js");
-  const pluginIds = resolveCodexHarnessPluginIds({
+  const pluginIds = resolveHarnessPluginIds({
+    runtime,
     provider: params.provider,
     config: params.config,
     workspaceDir: params.workspaceDir,
   });
+  const memoryPluginIds = resolveSelectedMemoryPluginIds({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+  });
+  const scopedPluginIds = dedupePluginIds([...pluginIds, ...memoryPluginIds]);
   const configWithAllowedRuntimePlugins = withRuntimePluginIdsAllowed({
     config: params.config,
-    requiredPluginId: "codex",
-    pluginIds,
+    requiredPluginId: runtime,
+    pluginIds: scopedPluginIds,
   });
   const activatedConfig =
     withActivatedPluginIds({
       config: configWithAllowedRuntimePlugins,
-      pluginIds,
+      pluginIds: scopedPluginIds,
     }) ?? configWithAllowedRuntimePlugins;
   ensurePluginRegistryLoaded({
     scope: "all",
@@ -136,6 +201,6 @@ export async function ensureSelectedAgentHarnessPlugin(params: {
         }
       : {}),
     workspaceDir: params.workspaceDir,
-    onlyPluginIds: pluginIds,
+    onlyPluginIds: scopedPluginIds,
   });
 }

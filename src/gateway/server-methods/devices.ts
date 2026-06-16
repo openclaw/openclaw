@@ -1,3 +1,15 @@
+// Gateway RPC handlers for device pairing and device-token lifecycle operations.
+import {
+  ErrorCodes,
+  errorShape,
+  formatValidationErrors,
+  validateDevicePairApproveParams,
+  validateDevicePairListParams,
+  validateDevicePairRemoveParams,
+  validateDevicePairRejectParams,
+  validateDeviceTokenRevokeParams,
+  validateDeviceTokenRotateParams,
+} from "../../../packages/gateway-protocol/src/index.js";
 import {
   approveDevicePairing,
   formatDevicePairingForbiddenMessage,
@@ -13,17 +25,6 @@ import {
   rotateDeviceToken,
   summarizeDeviceTokens,
 } from "../../infra/device-pairing.js";
-import {
-  ErrorCodes,
-  errorShape,
-  formatValidationErrors,
-  validateDevicePairApproveParams,
-  validateDevicePairListParams,
-  validateDevicePairRemoveParams,
-  validateDevicePairRejectParams,
-  validateDeviceTokenRevokeParams,
-  validateDeviceTokenRotateParams,
-} from "../protocol/index.js";
 import type { GatewayClient, GatewayRequestHandlers } from "./types.js";
 
 const DEVICE_TOKEN_ROTATION_DENIED_MESSAGE = "device token rotation denied";
@@ -45,6 +46,8 @@ const DEVICE_PAIR_REJECTION_DENIED_MESSAGE = "device pairing rejection denied";
 function redactPairedDevice(
   device: { tokens?: Record<string, DeviceAuthToken> } & Record<string, unknown>,
 ) {
+  // Pairing lists are visible to operators; expose token lifecycle metadata
+  // without returning raw token material or the internal approved-scope set.
   const { tokens, approvedScopes: _approvedScopes, ...rest } = device;
   return {
     ...rest,
@@ -99,6 +102,8 @@ function resolveDeviceSessionAuthz(client: GatewayClient | null): DeviceSessionA
   const callerScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
   const rawCallerDeviceId = client?.connect?.device?.id;
   const callerDeviceId =
+    // Plain shared-auth connections may report device metadata, but only
+    // device-token auth proves ownership for self-service pairing actions.
     client?.isDeviceTokenAuth && typeof rawCallerDeviceId === "string" && rawCallerDeviceId.trim()
       ? rawCallerDeviceId.trim()
       : null;
@@ -118,6 +123,8 @@ function deniesCrossDeviceManagement(authz: DeviceManagementAuthz): boolean {
 }
 
 function shouldReturnRotatedDeviceToken(authz: DeviceManagementAuthz): boolean {
+  // Admins can rotate any token, but only a device rotating itself receives
+  // the new token in-band; other rotations are notification/invalidations.
   return Boolean(authz.callerDeviceId && authz.callerDeviceId === authz.normalizedTargetDeviceId);
 }
 
@@ -171,6 +178,7 @@ function pairedDeviceHasNonOperatorRole(device: {
   return hasNonOperatorDeviceRole(device) || hasNonOperatorDeviceTokenRole(device.tokens);
 }
 
+/** Gateway request handlers for device pair approval, removal, token rotation, and revocation. */
 export const deviceHandlers: GatewayRequestHandlers = {
   "device.pair.list": async ({ params, respond, client }) => {
     if (!validateDevicePairListParams(params)) {

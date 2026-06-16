@@ -3,25 +3,33 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { type Static, Type } from "typebox";
 import { Compile } from "typebox/compile";
 import type { TLocalizedValidationError } from "typebox/error";
 import { registerApiProvider } from "../../llm/api-registry.js";
 import { resetApiProviders } from "../../llm/providers/register-builtins.js";
-import {
-  type AnthropicMessagesCompat,
-  type Api,
-  type AssistantMessageEventStreamContract,
-  type Context,
-  type Model,
-  type OpenAICompletionsCompat,
-  type OpenAIResponsesCompat,
-  type SimpleStreamOptions,
+import type {
+  AnthropicMessagesCompat,
+  Api,
+  AssistantMessageEventStreamContract,
+  Context,
+  Model,
+  OpenAICompletionsCompat,
+  OpenAIResponsesCompat,
+  SimpleStreamOptions,
 } from "../../llm/types.js";
 import { registerOAuthProvider, resetOAuthProviders } from "../../llm/utils/oauth/index.js";
 import type { OAuthProviderInterface } from "../../llm/utils/oauth/types.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getAgentDir } from "../config.js";
+import { resolveModelPluginMetadataSnapshot } from "../model-discovery-context.js";
+import {
+  filterGeneratedPluginModelCatalogProviders,
+  isGeneratedPluginModelCatalog,
+  listPluginModelCatalogFiles,
+  type PluginModelCatalogMetadataSnapshot,
+} from "../plugin-model-catalog.js";
 import type { AuthStatus, AuthStorage } from "./auth-storage.js";
 import { BUILT_IN_PROVIDER_DISPLAY_NAMES } from "./provider-display-names.js";
 import {
@@ -30,6 +38,8 @@ import {
   resolveConfigValueUncached,
   resolveHeadersOrThrow,
 } from "./resolve-config-value.js";
+
+const log = createSubsystemLogger("agents/model-registry");
 
 // Schema for OpenRouter routing preferences
 const PercentileCutoffsSchema = Type.Object({
@@ -86,6 +96,7 @@ const ThinkingLevelMapSchema = Type.Object({
   medium: Type.Optional(ThinkingLevelMapValueSchema),
   high: Type.Optional(ThinkingLevelMapValueSchema),
   xhigh: Type.Optional(ThinkingLevelMapValueSchema),
+  max: Type.Optional(ThinkingLevelMapValueSchema),
 });
 
 const OpenAICompletionsCompatSchema = Type.Object({
@@ -162,6 +173,7 @@ const ModelDefinitionSchema = Type.Object({
   ),
   contextWindow: Type.Optional(Type.Number()),
   maxTokens: Type.Optional(Type.Number()),
+  params: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
   headers: Type.Optional(Type.Record(Type.String(), Type.String())),
   compat: Type.Optional(ProviderCompatSchema),
 });
@@ -179,6 +191,7 @@ const ProviderConfigSchema = Type.Object({
 });
 
 const ModelsConfigSchema = Type.Object({
+  generatedBy: Type.Optional(Type.String()),
   providers: Type.Record(Type.String(), ProviderConfigSchema),
 });
 
@@ -239,6 +252,11 @@ function emptyCustomModelsResult(error?: string): CustomModelsResult {
   return { models: [], error };
 }
 
+type ModelRegistryOptions = {
+  pluginMetadataSnapshot?: PluginModelCatalogMetadataSnapshot;
+  workspaceDir?: string;
+};
+
 function mergeCompat(
   baseCompat: Model["compat"],
   overrideCompat: Model["compat"],
@@ -289,18 +307,32 @@ export class ModelRegistry {
   private loadError: string | undefined = undefined;
   readonly authStorage: AuthStorage;
   private modelsJsonPath: string | undefined;
+  private pluginMetadataSnapshot: PluginModelCatalogMetadataSnapshot | undefined;
 
-  private constructor(authStorage: AuthStorage, modelsJsonPath: string | undefined) {
+  private constructor(
+    authStorage: AuthStorage,
+    modelsJsonPath: string | undefined,
+    options: ModelRegistryOptions = {},
+  ) {
     this.authStorage = authStorage;
     this.modelsJsonPath = modelsJsonPath;
+    this.pluginMetadataSnapshot = resolveModelPluginMetadataSnapshot({
+      ...(options.pluginMetadataSnapshot
+        ? { pluginMetadataSnapshot: options.pluginMetadataSnapshot }
+        : {}),
+      ...(options.workspaceDir ? { workspaceDir: options.workspaceDir } : {}),
+      allowWorkspaceScopedCurrent: true,
+      useRuntimeConfig: true,
+    });
     this.loadModels();
   }
 
   static create(
     authStorage: AuthStorage,
     modelsJsonPath: string = join(getAgentDir(), "models.json"),
+    options: ModelRegistryOptions = {},
   ): ModelRegistry {
-    return new ModelRegistry(authStorage, modelsJsonPath);
+    return new ModelRegistry(authStorage, modelsJsonPath, options);
   }
 
   static inMemory(authStorage: AuthStorage): ModelRegistry {
@@ -326,22 +358,22 @@ export class ModelRegistry {
     }
   }
 
-  /**
-   * Get any error from loading models.json (undefined if no error).
-   */
+  /** Get any root or generated plugin catalog load error. */
   getError(): string | undefined {
     return this.loadError;
   }
 
   private loadModels(): void {
-    // Load configured models and request settings from models.json
+    // Load configured models and request settings from models.json plus
+    // generated plugin-owned catalog shards under the agent plugin state.
     const { models: customModels, error } = this.modelsJsonPath
       ? this.loadCustomModels(this.modelsJsonPath)
       : emptyCustomModelsResult();
 
     if (error) {
       this.loadError = error;
-      // Keep the prior empty/default registry shape when models.json failed to load.
+      log.warn(`model catalog load issue: ${error}`);
+      // Plugin catalog failures can return salvaged models; root failures return empty.
     }
 
     let combined = customModels;
@@ -357,7 +389,16 @@ export class ModelRegistry {
     this.models = combined;
   }
 
-  private loadCustomModels(modelsJsonPath: string): CustomModelsResult {
+  private loadCustomModels(
+    modelsJsonPath: string,
+    options: {
+      catalogPluginId?: string;
+      includePluginCatalogs?: boolean;
+      requireGeneratedCatalog?: boolean;
+    } = {
+      includePluginCatalogs: true,
+    },
+  ): CustomModelsResult {
     if (!existsSync(modelsJsonPath)) {
       return emptyCustomModelsResult();
     }
@@ -365,6 +406,9 @@ export class ModelRegistry {
     try {
       const content = readFileSync(modelsJsonPath, "utf-8");
       const parsed = JSON.parse(stripJsonComments(content)) as unknown;
+      if (options.requireGeneratedCatalog === true && !isGeneratedPluginModelCatalog(parsed)) {
+        return emptyCustomModelsResult();
+      }
 
       if (!validateModelsConfig.Check(parsed)) {
         const errors =
@@ -378,19 +422,52 @@ export class ModelRegistry {
       }
 
       const config = parsed;
+      const providers =
+        options.requireGeneratedCatalog === true
+          ? filterGeneratedPluginModelCatalogProviders({
+              catalogPluginId: options.catalogPluginId,
+              parsedCatalog: parsed,
+              pluginMetadataSnapshot: this.pluginMetadataSnapshot,
+              providers: config.providers,
+            })
+          : config.providers;
+      const configForUse = { ...config, providers };
+      if (options.requireGeneratedCatalog === true && Object.keys(providers).length === 0) {
+        return emptyCustomModelsResult();
+      }
 
       // Additional validation
-      this.validateConfig(config);
+      this.validateConfig(configForUse);
 
-      for (const [providerName, providerConfig] of Object.entries(config.providers)) {
+      for (const [providerName, providerConfig] of Object.entries(configForUse.providers)) {
         if ((providerConfig.models ?? []).length > 0) {
           this.storeProviderRequestConfig(providerName, providerConfig);
         }
       }
 
-      return { models: this.parseModels(config), error: undefined };
+      const models = this.parseModels(configForUse);
+      const pluginCatalogErrors: string[] = [];
+      if (options.includePluginCatalogs !== false) {
+        for (const pluginCatalog of listPluginModelCatalogFiles(dirname(modelsJsonPath))) {
+          const pluginResult = this.loadCustomModels(pluginCatalog.path, {
+            catalogPluginId: pluginCatalog.pluginId,
+            includePluginCatalogs: false,
+            requireGeneratedCatalog: true,
+          });
+          if (pluginResult.error) {
+            pluginCatalogErrors.push(pluginResult.error);
+            continue;
+          }
+          models.push(...pluginResult.models);
+        }
+      }
+
+      return { models, error: pluginCatalogErrors.join("\n\n") || undefined };
     } catch (error) {
       if (error instanceof SyntaxError) {
+        if (options.requireGeneratedCatalog === true) {
+          return emptyCustomModelsResult();
+        }
         return emptyCustomModelsResult(
           `Failed to parse models.json: ${error.message}\n\nFile: ${modelsJsonPath}`,
         );
@@ -403,7 +480,7 @@ export class ModelRegistry {
 
   private validateConfig(config: ModelsConfig): void {
     for (const [providerName, providerConfig] of Object.entries(config.providers)) {
-      const hasProviderApi = !!providerConfig.api;
+      const hasProviderApi = Boolean(providerConfig.api);
       const models = providerConfig.models ?? [];
 
       if (models.length === 0) {
@@ -423,7 +500,7 @@ export class ModelRegistry {
       }
 
       for (const modelDef of models) {
-        const hasModelApi = !!modelDef.api;
+        const hasModelApi = Boolean(modelDef.api);
 
         if (!hasProviderApi && !hasModelApi) {
           throw new Error(
@@ -481,6 +558,7 @@ export class ModelRegistry {
           cost: modelDef.cost ?? defaultCost,
           contextWindow: modelDef.contextWindow ?? 128000,
           maxTokens: modelDef.maxTokens ?? 16384,
+          params: modelDef.params,
           headers: undefined,
           compat,
         } as Model);
@@ -806,6 +884,7 @@ export class ModelRegistry {
           cost: modelDef.cost,
           contextWindow: modelDef.contextWindow,
           maxTokens: modelDef.maxTokens,
+          params: modelDef.params,
           headers: undefined,
           compat: modelDef.compat,
         } as Model);
@@ -851,6 +930,7 @@ export interface ProviderConfigInput {
     cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
     contextWindow: number;
     maxTokens: number;
+    params?: Record<string, unknown>;
     headers?: Record<string, string>;
     compat?: Model["compat"];
   }>;

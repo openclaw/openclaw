@@ -1,3 +1,4 @@
+// Covers agent default schema parsing and compatibility behavior.
 import { describe, expect, it } from "vitest";
 import { validateConfigObject } from "./validation.js";
 import { AgentDefaultsSchema } from "./zod-schema.agent-defaults.js";
@@ -68,6 +69,17 @@ describe("agent defaults schema", () => {
         videoGenerationModel: {
           primary: "qwen/wan2.6-t2v",
           fallbacks: ["minimax/video-01"],
+        },
+      }),
+    );
+  });
+
+  it("accepts voiceModel", () => {
+    expectSchemaSuccess(
+      AgentDefaultsSchema.safeParse({
+        voiceModel: {
+          primary: "openai/gpt-4o-mini-tts",
+          fallbacks: ["elevenlabs/eleven_multilingual_v2"],
         },
       }),
     );

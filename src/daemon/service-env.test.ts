@@ -1,3 +1,4 @@
+// Daemon service env tests cover environment variable assembly for services.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -683,6 +684,33 @@ describe("buildServiceEnvironment", () => {
     if (process.platform === "darwin") {
       expect(env.OPENCLAW_LAUNCHD_LABEL).toBe("ai.openclaw.work");
     }
+  });
+
+  it("preserves explicit systemd unit overrides", () => {
+    const env = buildServiceEnvironment({
+      env: {
+        HOME: "/home/user",
+        OPENCLAW_PROFILE: "work",
+        OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-maintenance",
+      },
+      port: 18789,
+      platform: "linux",
+    });
+
+    expect(env.OPENCLAW_SYSTEMD_UNIT).toBe("openclaw-gateway-maintenance.service");
+  });
+
+  it("preserves explicit systemd unit overrides with service suffix", () => {
+    const env = buildServiceEnvironment({
+      env: {
+        HOME: "/home/user",
+        OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-maintenance.service",
+      },
+      port: 18789,
+      platform: "linux",
+    });
+
+    expect(env.OPENCLAW_SYSTEMD_UNIT).toBe("openclaw-gateway-maintenance.service");
   });
 
   it("sets a profile-specific launchd marker for macOS gateway services", () => {

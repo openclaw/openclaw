@@ -1,6 +1,8 @@
+// Test helper for asserting bundled plugin public surface files.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   loadBundledPluginPublicSurfaceModule,
   loadBundledPluginPublicSurfaceModuleSync,
@@ -16,7 +18,6 @@ import {
 } from "../plugins/plugin-module-loader-cache.js";
 import { normalizeBundledPluginArtifactSubpath } from "../plugins/public-surface-runtime.js";
 import { resolveLoaderPackageRoot } from "../plugins/sdk-alias.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
 
 const OPENCLAW_PACKAGE_ROOT =
   resolveLoaderPackageRoot({

@@ -18,16 +18,19 @@ report drift through `doctor --lint`. The final conformance signal is a clean
 instead of creating a separate health gate.
 
 Policy currently manages configured channels, MCP servers, model providers,
-network SSRF posture, Gateway exposure posture, agent workspace posture,
-OpenClaw config secret provider/auth profile posture, and governed tool
+network SSRF posture, ingress/channel access posture, Gateway exposure posture, agent workspace posture,
+data-handling posture, OpenClaw config secret provider/auth profile posture, and governed tool
 declarations. For example, IT or a workspace operator can record that Telegram
 is not an approved channel provider, restrict MCP servers and model refs to
 approved entries, require private-network fetch/browser access to remain
-disabled, require Gateway bind/auth/HTTP exposure to stay within reviewed
+disabled, require direct-message session isolation and channel ingress posture
+to stay within reviewed bounds, require Gateway bind/auth/HTTP exposure to stay within reviewed
 bounds, require agent workspace access and tool denies to stay in a reviewed
 posture, require OpenClaw config SecretRefs to use managed providers, require
 config auth profiles to carry provider/mode metadata, require governed tools to
-carry risk and sensitivity metadata, then use `doctor --lint` as the shared
+carry risk and sensitivity metadata, require sensitive logging redaction, deny
+telemetry content capture, require session retention maintenance, deny session
+transcript memory indexing, then use `doctor --lint` as the shared
 conformance gate.
 
 Use policy when a workspace needs a durable statement such as "these channels
@@ -49,9 +52,10 @@ arbitrary plugins. The plugin remains enabled if `policy.jsonc` is missing, so
 doctor can report the missing artifact.
 
 Policy is authored, not generated from the user's current settings. A minimal
-policy for channels, MCP servers, model providers, network posture, Gateway
-exposure, agent workspace posture, OpenClaw config secret provider/auth profile
-posture, and tool metadata looks like this:
+policy for channels, MCP servers, model providers, network posture, ingress/channel access, Gateway
+exposure, agent workspace posture, configured sandbox runtime posture, OpenClaw
+data-handling posture, config secret provider/auth profile posture, exec approval
+file posture, and tool metadata looks like this:
 
 ```jsonc
 {
@@ -81,6 +85,16 @@ posture, and tool metadata looks like this:
       "allow": false,
     },
   },
+  "ingress": {
+    "session": {
+      "requireDmScope": "per-channel-peer",
+    },
+    "channels": {
+      "allowDmPolicies": ["pairing", "allowlist", "disabled"],
+      "denyOpenGroups": true,
+      "requireMentionInGroups": true,
+    },
+  },
   "gateway": {
     "exposure": {
       "allowNonLoopbackBind": false,
@@ -107,6 +121,20 @@ posture, and tool metadata looks like this:
       "denyTools": ["exec", "process", "write", "edit", "apply_patch"],
     },
   },
+  "dataHandling": {
+    "sensitiveLogging": {
+      "requireRedaction": true,
+    },
+    "telemetry": {
+      "denyContentCapture": true,
+    },
+    "retention": {
+      "requireSessionMaintenance": true,
+    },
+    "memory": {
+      "denySessionTranscriptIndexing": true,
+    },
+  },
   "secrets": {
     "requireManagedProviders": true,
     "denySources": ["exec"],
@@ -116,6 +144,15 @@ posture, and tool metadata looks like this:
     "profiles": {
       "requireMetadata": ["provider", "mode"],
       "allowModes": ["api_key", "token"],
+    },
+  },
+  "execApprovals": {
+    "requireFile": true,
+    "defaults": { "allowSecurity": ["deny"] },
+    "agents": {
+      "allowSecurity": ["deny", "allowlist"],
+      "allowAutoAllowSkills": false,
+      "allowlist": { "expected": ["deploy", "status"] },
     },
   },
   "tools": {
@@ -142,8 +179,10 @@ posture, and tool metadata looks like this:
 The rules are the authority. A category block is only a namespace; checks run
 when a concrete rule is present. OpenClaw reads current `channels.*` settings
 `mcp.servers.*`, `models.providers.*`, selected agent model refs, network SSRF
-settings, Gateway bind/auth/Control UI/Tailscale/remote/HTTP posture, OpenClaw
-config agent sandbox workspace access and tool deny posture, config secret
+settings, direct-message session scope, channel DM policy, channel group policy,
+channel/group mention gates, Gateway bind/auth/Control UI/Tailscale/remote/HTTP
+posture, OpenClaw config agent sandbox workspace access and tool deny posture,
+data-handling config posture, config secret
 provider and SecretRef provenance, config auth profile metadata, configured
 global/per-agent tool posture, and `TOOLS.md` declarations as evidence, then
 reports observed state that does not conform. If a policy denies non-loopback
@@ -158,12 +197,19 @@ and `group:runtime` covers shell/process tools. Tool posture policy observes
 `tools.profile`, `tools.allow`, `tools.alsoAllow`, `tools.deny`,
 `tools.fs.workspaceOnly`, `tools.exec.security`, `tools.exec.ask`,
 `tools.exec.host`, `tools.elevated.enabled`, and the same per-agent
-`agents.list[].tools.*` overrides. It does not read runtime/operator approval
-state such as exec-approvals.json, and it does not enforce tool calls at
-runtime. Secret evidence records
+`agents.list[].tools.*` overrides. Exec approval policy reads the named
+`exec-approvals.json` product artifact only when an `execApprovals` rule is
+present; evidence records defaults, per-agent posture, and allowlist patterns
+without socket tokens or last-used command text. Policy does not enforce tool
+calls at runtime. Secret evidence records
 provider/source posture and SecretRef metadata, never raw secret values. Policy
 does not read or attest per-agent credential stores such as `auth-profiles.json`;
 those stores remain owned by the existing auth and credential flows.
+Data-handling evidence is config-level posture only: it checks configured
+redaction mode, telemetry content-capture toggles, session maintenance mode, and
+session-transcript memory indexing settings. It does not inspect raw logs,
+telemetry exports, transcript contents, memory files, or prove that no personal
+data or secrets exist.
 
 ### Policy rule reference
 
@@ -171,22 +217,111 @@ Each policy field below is optional. A check runs only when the matching rule is
 present in `policy.jsonc`. The observed state is existing OpenClaw config or
 workspace metadata; policy reports drift but does not rewrite runtime behavior
 unless a repair path is explicitly available and enabled.
+Policy files are strict: unsupported sections or rule keys are reported as
+`policy/policy-jsonc-invalid` instead of being ignored.
 
-Agent-specific policy overlays keep broad `tools.*` and `agents.workspace`
-posture global, then let named scope blocks add stricter normal policy sections
-for explicit `agentIds` under `scopes.<scopeName>`. The initial scoped
-sections are `tools` and `agents.workspace`; sandbox and ingress can use the
-same container once their evidence is attributable to an agent. Scoped fields
-carry strictness metadata such as allowlist subset, denylist superset, required
-boolean, and exact-list semantics so future policy-file conformance can reuse
-the same rule inventory instead of guessing. The overlay is additive: global
-claims still run, and a scoped claim can emit its own finding against the same
-observed config. See [Agent-scoped policy overlays](/plan/policy-agent-scoped-overlays).
-Every scope present in `policy.jsonc` must be valid and enforceable. Scopes
-currently require `agentIds`, and that selector supports only `tools.*` and
-`agents.workspace.*`. If an `agentIds` entry is not present in `agents.list[]`,
-the scoped rule is evaluated against the inherited global/default posture for
-that runtime agent id instead of being skipped.
+Policy overlays keep broad top-level rules global, then let named scope blocks
+add stricter normal policy sections for explicit selectors. A scope name is a
+descriptive bucket only; matching uses the selector values inside the scope.
+The overlay is additive: global claims still run, and a scoped claim can emit
+its own finding against the same observed config.
+
+#### Scoped overlays
+
+Use `scopes.<scopeName>` when one set of agents or channels needs stricter
+policy than the top-level baseline. Agent-scoped sections use `agentIds`, which
+supports `tools.*`, `agents.workspace.*`, `sandbox.*`, `dataHandling.memory.*`,
+and `execApprovals.*`. Channel-scoped
+ingress uses `channelIds`, which supports `ingress.channels.*`. Unsupported
+sections are rejected instead of being ignored. If an `agentIds` entry is not
+present in `agents.list[]`, OpenClaw evaluates the scoped rule against inherited
+global/default posture for that runtime agent id.
+
+```jsonc
+{
+  "tools": {
+    "exec": {
+      "allowHosts": ["sandbox", "node"],
+    },
+  },
+  "sandbox": {
+    "requireMode": ["all", "non-main"],
+  },
+  "scopes": {
+    "release-workspace": {
+      "agentIds": ["release-agent", "review-agent"],
+      "agents": {
+        "workspace": {
+          "allowedAccess": ["none", "ro"],
+        },
+      },
+    },
+    "release-lockdown": {
+      "agentIds": ["release-agent"],
+      "tools": {
+        "exec": {
+          "allowHosts": ["sandbox"],
+          "allowSecurity": ["deny", "allowlist"],
+          "requireAsk": ["always"],
+        },
+        "denyTools": ["exec", "process", "write", "edit", "apply_patch"],
+      },
+      "sandbox": {
+        "requireMode": ["all"],
+        "allowBackends": ["docker"],
+      },
+      "dataHandling": {
+        "memory": {
+          "denySessionTranscriptIndexing": true,
+        },
+      },
+    },
+    "shell-sandbox": {
+      "agentIds": ["shell-agent"],
+      "sandbox": {
+        "allowBackends": ["openshell"],
+        "containers": {
+          "requireReadOnlyMounts": false,
+        },
+      },
+    },
+    "telegram-ingress": {
+      "channelIds": ["telegram"],
+      "ingress": {
+        "channels": {
+          "allowDmPolicies": ["pairing"],
+          "denyOpenGroups": true,
+          "requireMentionInGroups": true,
+        },
+      },
+    },
+  },
+}
+```
+
+The same agent can appear in multiple scopes when each scope governs different
+fields, as shown above. A repeated scoped field for the same agent must be
+equally or more restrictive according to policy metadata; weaker duplicate
+claims are rejected. Strictness metadata treats allow-lists as subsets,
+deny-lists as supersets, and required booleans as fixed requirements.
+
+Container posture policy is evaluated only against evidence OpenClaw can
+observe for the matched agent. If an enabled `sandbox.containers.*` rule applies
+to an agent whose sandbox backend cannot expose that field, policy reports
+`policy/sandbox-container-posture-unobservable` instead of treating the claim as
+passing. Use separate `agentIds` scopes for agent groups that use different
+sandbox backends, and leave unsupported container rules unset or false for the
+groups where those fields cannot be observed.
+
+Top-level `ingress.session.requireDmScope` remains global because
+`session.dmScope` is not channel-attributable evidence.
+
+| Selector     | Supported sections                                                                 | Use when                                          |
+| ------------ | ---------------------------------------------------------------------------------- | ------------------------------------------------- |
+| `agentIds`   | `tools`, `agents.workspace`, `sandbox`, `dataHandling.memory`, and `execApprovals` | One or more runtime agents need stricter rules.   |
+| `channelIds` | `ingress.channels`                                                                 | One or more channels need stricter ingress rules. |
+
+Every scope present in `policy.jsonc` must be valid and enforceable.
 
 #### Channels
 
@@ -215,6 +350,15 @@ that runtime agent id instead of being skipped.
 | ------------------------------ | ----------------------------------- | ------------------------------------------------------------------ |
 | `network.privateNetwork.allow` | Private-network SSRF escape hatches | Set to `false` to require private-network access to stay disabled. |
 
+#### Ingress and channel access
+
+| Policy field                              | Observed state                                                 | Use when                                                           |
+| ----------------------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `ingress.session.requireDmScope`          | `session.dmScope`                                              | Require a reviewed direct-message isolation scope.                 |
+| `ingress.channels.allowDmPolicies`        | `channels.*.dmPolicy` and legacy channel DM policy fields      | Allow only reviewed direct-message channel policies.               |
+| `ingress.channels.denyOpenGroups`         | Channel, account, and group ingress policy                     | Deny open group ingress for configured channels and accounts.      |
+| `ingress.channels.requireMentionInGroups` | Channel, account, group, guild, and nested mention gate config | Require mention gates when group ingress is open or mention-gated. |
+
 #### Gateway
 
 | Policy field                            | Observed state                                 | Use when                                                     |
@@ -235,6 +379,32 @@ that runtime agent id instead of being skipped.
 | `agents.workspace.allowedAccess` | `agents.defaults.sandbox.workspaceAccess` and `agents.list[].sandbox.workspaceAccess` | Allow only sandbox workspace access values such as `none` or `ro`.                                                  |
 | `agents.workspace.denyTools`     | Global and per-agent tool deny config                                                 | Require workspace/runtime mutation tools such as `exec`, `process`, `write`, `edit`, or `apply_patch` to be denied. |
 
+#### Sandbox posture
+
+| Policy field                                          | Observed state                                          | Use when                                                       |
+| ----------------------------------------------------- | ------------------------------------------------------- | -------------------------------------------------------------- |
+| `sandbox.requireMode`                                 | `agents.defaults.sandbox.mode` and per-agent mode       | Allow only reviewed sandbox modes such as `all` or `non-main`. |
+| `sandbox.allowBackends`                               | `agents.defaults.sandbox.backend` and per-agent backend | Allow only reviewed sandbox backends such as `docker`.         |
+| `sandbox.containers.denyHostNetwork`                  | Container-backed sandbox/browser network mode           | Deny host network mode.                                        |
+| `sandbox.containers.denyContainerNamespaceJoin`       | Container-backed sandbox/browser network mode           | Deny joining another container network namespace.              |
+| `sandbox.containers.requireReadOnlyMounts`            | Container-backed sandbox/browser mount mode             | Require mounts to be read-only.                                |
+| `sandbox.containers.denyContainerRuntimeSocketMounts` | Container-backed sandbox/browser mount targets          | Deny container runtime socket mounts.                          |
+| `sandbox.containers.denyUnconfinedProfiles`           | Container security profile posture                      | Deny unconfined container security profiles.                   |
+| `sandbox.browser.requireCdpSourceRange`               | Sandbox browser CDP source range                        | Require browser CDP exposure to declare a source range.        |
+
+Policy treats missing `sandbox.mode` as the implicit default `off`, so
+`sandbox.requireMode` reports a fresh or unconfigured sandbox as outside an
+allowlist such as `["all"]`.
+
+#### Data Handling
+
+| Policy field                                        | Observed state                                                                       | Use when                                                               |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------- |
+| `dataHandling.sensitiveLogging.requireRedaction`    | `logging.redactSensitive`                                                            | Set to `true` to reject `logging.redactSensitive: "off"`.              |
+| `dataHandling.telemetry.denyContentCapture`         | `diagnostics.otel.captureContent`                                                    | Set to `true` to reject telemetry content capture.                     |
+| `dataHandling.retention.requireSessionMaintenance`  | `session.maintenance.mode`                                                           | Set to `true` to require effective session maintenance mode `enforce`. |
+| `dataHandling.memory.denySessionTranscriptIndexing` | `memory.qmd.sessions.enabled` and `agents.*.memorySearch.experimental.sessionMemory` | Set to `true` to reject session transcript indexing into memory.       |
+
 #### Secrets
 
 | Policy field                      | Observed state                                           | Use when                                                                |
@@ -242,6 +412,69 @@ that runtime agent id instead of being skipped.
 | `secrets.requireManagedProviders` | Config SecretRefs and `secrets.providers.*` declarations | Set to `true` to require SecretRefs to point at declared providers.     |
 | `secrets.denySources`             | Secret provider sources and SecretRef sources            | Deny sources such as `exec`, `file`, or another configured source name. |
 | `secrets.allowInsecureProviders`  | Insecure secret-provider posture flags                   | Set to `false` to reject providers that opt into insecure posture.      |
+
+#### Exec approvals
+
+Exec approvals policy observes the active runtime `exec-approvals.json`
+artifact. By default this is `~/.openclaw/exec-approvals.json`; when
+`OPENCLAW_STATE_DIR` is set, Policy reads
+`$OPENCLAW_STATE_DIR/exec-approvals.json`. Actual posture rules such as
+`execApprovals.defaults.*` or `execApprovals.agents.*` require readable artifact
+evidence; a missing or invalid artifact is reported as unobservable evidence
+instead of becoming a best-effort pass against synthetic runtime defaults. Once
+the artifact is readable, omitted approval fields inherit runtime defaults: missing
+`defaults.security` is `full`, and missing agent security inherits that
+default. Evidence includes `defaults`, `agents.*`, and
+`agents.*.allowlist[].pattern` plus optional `argPattern`, effective
+`autoAllowSkills` posture, and entry source. It does not include socket
+path/token, `commandText`, `lastUsedCommand`, resolved paths, or timestamps.
+
+| Policy field                                | Observed state                                                                         | Use when                                                                                |
+| ------------------------------------------- | -------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `execApprovals.requireFile`                 | Active runtime `exec-approvals.json` path                                              | Set to `true` to require the approvals artifact to exist and parse.                     |
+| `execApprovals.defaults.allowSecurity`      | `defaults.security`, defaulting to `full`                                              | Allow only approved default approval security modes.                                    |
+| `execApprovals.agents.allowSecurity`        | `agents.*.security`, inheriting defaults                                               | Allow only approved per-agent effective approval security modes.                        |
+| `execApprovals.agents.allowAutoAllowSkills` | `defaults.autoAllowSkills` and `agents.*.autoAllowSkills`, inheriting runtime defaults | Set to `false` to require strict manual allowlists without implicit skill CLI approval. |
+| `execApprovals.agents.allowlist.expected`   | Aggregate `agents.*.allowlist[]` pattern and optional argPattern entries               | Require the approvals allowlist to match the reviewed pattern set.                      |
+
+For example, require the approvals artifact, deny permissive defaults, and
+allow only reviewed exec approval posture for selected agents:
+
+```jsonc
+{
+  "execApprovals": {
+    "requireFile": true,
+    "defaults": {
+      // Security modes: "deny", "allowlist", or "full".
+      // This default permits only the locked-down deny posture.
+      "allowSecurity": ["deny"],
+    },
+  },
+  "scopes": {
+    "restricted-shell": {
+      "agentIds": ["family-agent", "groups-agent"],
+      "execApprovals": {
+        "agents": {
+          // Selected agents may use reviewed allowlist posture, but not "full".
+          "allowSecurity": ["allowlist"],
+          // false means skill CLIs must appear in the reviewed allowlist instead of
+          // being implicitly approved by autoAllowSkills.
+          "allowAutoAllowSkills": false,
+          "allowlist": {
+            "expected": [
+              // Simple entry: exact reviewed executable pattern with no argPattern.
+              "travel-hub",
+              // Constrained entry: pattern plus reviewed argument regex.
+              { "pattern": "calendar-cli", "argPattern": "^sync\\b" },
+              "/bin/date",
+            ],
+          },
+        },
+      },
+    },
+  },
+}
+```
 
 #### Auth profiles
 
@@ -281,8 +514,41 @@ openclaw policy check --severity-min error
 attestation hashes. The same findings also appear in `openclaw doctor --lint`
 when the Policy plugin is enabled.
 
-Example clean JSON output includes stable hashes that can be recorded by an
-operator or supervisor:
+Compare an operator policy file to an authored baseline policy file:
+
+```bash
+openclaw policy compare --baseline official.policy.jsonc
+openclaw policy compare --baseline official.policy.jsonc --policy policy.jsonc --json
+```
+
+`policy compare` compares policy file syntax to policy file syntax. It does not
+inspect OpenClaw runtime state, evidence, credentials, or secrets. The command
+uses the same policy rule metadata that governs scoped overlays: allowlists must
+stay equal or narrower, denylists must stay equal or broader, required booleans
+must keep their required value, ordered strings must move only toward the more
+restrictive end of the configured order, and exact lists must match.
+
+The baseline file can be an organization-authored policy. The checked policy can
+use stricter values or add extra policy rules. A top-level checked rule can also
+satisfy a scoped baseline rule when it is equally or more restrictive because
+top-level policy applies broadly. Scope names do not need to match; scoped
+comparison is keyed by selector value such as `agentIds` or `channelIds` and by
+the policy field being checked.
+
+Example clean compare JSON output reports only policy-file comparison state:
+
+```json
+{
+  "ok": true,
+  "baselinePath": "official.policy.jsonc",
+  "policyPath": "policy.jsonc",
+  "rulesChecked": 3,
+  "findings": []
+}
+```
+
+Example clean `policy check --json` output includes stable hashes that can be
+recorded by an operator or supervisor:
 
 ```json
 {
@@ -522,47 +788,74 @@ choose a different interval.
 
 Policy currently verifies:
 
-| Check id                                     | Finding                                                                          |
-| -------------------------------------------- | -------------------------------------------------------------------------------- |
-| `policy/policy-jsonc-missing`                | Policy is enabled but `policy.jsonc` is missing.                                 |
-| `policy/policy-jsonc-invalid`                | Policy cannot be parsed or contains malformed rule entries.                      |
-| `policy/policy-hash-mismatch`                | Policy does not match configured `expectedHash`.                                 |
-| `policy/attestation-hash-mismatch`           | Current policy evidence no longer matches the accepted attestation.              |
-| `policy/channels-denied-provider`            | An enabled channel matches a channel deny rule.                                  |
-| `policy/mcp-denied-server`                   | A configured MCP server is denied by policy.                                     |
-| `policy/mcp-unapproved-server`               | A configured MCP server is outside the allowlist.                                |
-| `policy/models-denied-provider`              | A configured model provider or model ref uses a denied provider.                 |
-| `policy/models-unapproved-provider`          | A configured model provider or model ref is outside the allowlist.               |
-| `policy/network-private-access-enabled`      | A private-network SSRF escape hatch is enabled when policy denies it.            |
-| `policy/gateway-non-loopback-bind`           | Gateway bind posture permits non-loopback exposure when policy denies it.        |
-| `policy/gateway-auth-disabled`               | Gateway authentication is disabled when policy requires auth.                    |
-| `policy/gateway-rate-limit-missing`          | Gateway auth rate-limit posture is not explicit when policy requires it.         |
-| `policy/gateway-control-ui-insecure`         | Gateway Control UI insecure exposure toggles are enabled.                        |
-| `policy/gateway-tailscale-funnel`            | Gateway Tailscale Funnel exposure is enabled when policy denies it.              |
-| `policy/gateway-remote-enabled`              | Gateway remote mode is active when policy denies it.                             |
-| `policy/gateway-http-endpoint-enabled`       | A Gateway HTTP API endpoint is enabled while denied by policy.                   |
-| `policy/gateway-http-url-fetch-unrestricted` | Gateway HTTP URL-fetch input lacks a required URL allowlist.                     |
-| `policy/agents-workspace-access-denied`      | Agent sandbox mode or workspace access is outside the policy allowlist.          |
-| `policy/agents-tool-not-denied`              | An agent or default config does not deny a tool required by policy.              |
-| `policy/tools-profile-unapproved`            | A configured global or per-agent tool profile is outside the allowlist.          |
-| `policy/tools-fs-workspace-only-required`    | Filesystem tools are not configured with workspace-only path posture.            |
-| `policy/tools-exec-security-unapproved`      | Exec security mode is outside the policy allowlist.                              |
-| `policy/tools-exec-ask-unapproved`           | Exec ask mode is outside the policy allowlist.                                   |
-| `policy/tools-exec-host-unapproved`          | Exec host routing is outside the policy allowlist.                               |
-| `policy/tools-elevated-enabled`              | Elevated tool mode is enabled when policy denies it.                             |
-| `policy/tools-also-allow-missing`            | A configured `alsoAllow` list is missing an entry required by policy.            |
-| `policy/tools-also-allow-unexpected`         | A configured `alsoAllow` list includes an entry not expected by policy.          |
-| `policy/tools-required-deny-missing`         | A global or per-agent tool deny list does not include a required denied tool.    |
-| `policy/secrets-unmanaged-provider`          | A config SecretRef references a provider not declared under `secrets.providers`. |
-| `policy/secrets-denied-provider-source`      | A config secret provider or SecretRef uses a source denied by policy.            |
-| `policy/secrets-insecure-provider`           | A secret provider opts into insecure posture when policy denies it.              |
-| `policy/auth-profile-invalid-metadata`       | A config auth profile is missing valid provider or mode metadata.                |
-| `policy/auth-profile-unapproved-mode`        | A config auth profile mode is outside the policy allowlist.                      |
-| `policy/tools-missing-risk-level`            | A governed tool declaration is missing risk metadata.                            |
-| `policy/tools-unknown-risk-level`            | A governed tool declaration uses an unknown risk value.                          |
-| `policy/tools-missing-sensitivity-token`     | A governed tool declaration is missing sensitivity metadata.                     |
-| `policy/tools-missing-owner`                 | A governed tool declaration is missing owner metadata.                           |
-| `policy/tools-unknown-sensitivity-token`     | A governed tool declaration uses an unknown sensitivity value.                   |
+| Check id                                                 | Finding                                                                           |
+| -------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `policy/policy-jsonc-missing`                            | Policy is enabled but `policy.jsonc` is missing.                                  |
+| `policy/policy-jsonc-invalid`                            | Policy cannot be parsed or contains malformed rule entries.                       |
+| `policy/policy-hash-mismatch`                            | Policy does not match configured `expectedHash`.                                  |
+| `policy/attestation-hash-mismatch`                       | Current policy evidence no longer matches the accepted attestation.               |
+| `policy/policy-conformance-invalid`                      | A baseline or checked policy file has invalid comparison syntax.                  |
+| `policy/policy-conformance-missing`                      | A checked policy file is missing a rule required by the baseline policy file.     |
+| `policy/policy-conformance-weaker`                       | A checked policy file has a weaker value than the baseline policy file.           |
+| `policy/channels-denied-provider`                        | An enabled channel matches a channel deny rule.                                   |
+| `policy/mcp-denied-server`                               | A configured MCP server is denied by policy.                                      |
+| `policy/mcp-unapproved-server`                           | A configured MCP server is outside the allowlist.                                 |
+| `policy/models-denied-provider`                          | A configured model provider or model ref uses a denied provider.                  |
+| `policy/models-unapproved-provider`                      | A configured model provider or model ref is outside the allowlist.                |
+| `policy/network-private-access-enabled`                  | A private-network SSRF escape hatch is enabled when policy denies it.             |
+| `policy/ingress-dm-policy-unapproved`                    | A channel DM policy is outside the policy allowlist.                              |
+| `policy/ingress-dm-scope-unapproved`                     | `session.dmScope` does not match the policy-required DM isolation scope.          |
+| `policy/ingress-open-groups-denied`                      | A channel group policy is `open` while policy denies open group ingress.          |
+| `policy/ingress-group-mention-required`                  | A channel or group entry disables mention gates while policy requires them.       |
+| `policy/gateway-non-loopback-bind`                       | Gateway bind posture permits non-loopback exposure when policy denies it.         |
+| `policy/gateway-auth-disabled`                           | Gateway authentication is disabled when policy requires auth.                     |
+| `policy/gateway-rate-limit-missing`                      | Gateway auth rate-limit posture is not explicit when policy requires it.          |
+| `policy/gateway-control-ui-insecure`                     | Gateway Control UI insecure exposure toggles are enabled.                         |
+| `policy/gateway-tailscale-funnel`                        | Gateway Tailscale Funnel exposure is enabled when policy denies it.               |
+| `policy/gateway-remote-enabled`                          | Gateway remote mode is active when policy denies it.                              |
+| `policy/gateway-http-endpoint-enabled`                   | A Gateway HTTP API endpoint is enabled while denied by policy.                    |
+| `policy/gateway-http-url-fetch-unrestricted`             | Gateway HTTP URL-fetch input lacks a required URL allowlist.                      |
+| `policy/agents-workspace-access-denied`                  | Agent sandbox mode or workspace access is outside the policy allowlist.           |
+| `policy/agents-tool-not-denied`                          | An agent or default config does not deny a tool required by policy.               |
+| `policy/tools-profile-unapproved`                        | A configured global or per-agent tool profile is outside the allowlist.           |
+| `policy/tools-fs-workspace-only-required`                | Filesystem tools are not configured with workspace-only path posture.             |
+| `policy/tools-exec-security-unapproved`                  | Exec security mode is outside the policy allowlist.                               |
+| `policy/tools-exec-ask-unapproved`                       | Exec ask mode is outside the policy allowlist.                                    |
+| `policy/tools-exec-host-unapproved`                      | Exec host routing is outside the policy allowlist.                                |
+| `policy/tools-elevated-enabled`                          | Elevated tool mode is enabled when policy denies it.                              |
+| `policy/tools-also-allow-missing`                        | A configured `alsoAllow` list is missing an entry required by policy.             |
+| `policy/tools-also-allow-unexpected`                     | A configured `alsoAllow` list includes an entry not expected by policy.           |
+| `policy/tools-required-deny-missing`                     | A global or per-agent tool deny list does not include a required denied tool.     |
+| `policy/sandbox-mode-unapproved`                         | Sandbox mode is outside the policy allowlist.                                     |
+| `policy/sandbox-backend-unapproved`                      | Sandbox backend is outside the policy allowlist.                                  |
+| `policy/sandbox-container-posture-unobservable`          | A container posture rule is enabled for a backend that cannot observe it.         |
+| `policy/sandbox-container-host-network-denied`           | A container-backed sandbox or browser uses host network mode.                     |
+| `policy/sandbox-container-namespace-join-denied`         | A container-backed sandbox or browser joins another container namespace.          |
+| `policy/sandbox-container-mount-mode-required`           | A container-backed sandbox or browser mount is not read-only.                     |
+| `policy/sandbox-container-runtime-socket-mount`          | A container-backed sandbox or browser mount exposes the container runtime socket. |
+| `policy/sandbox-container-unconfined-profile`            | Container sandbox profile is unconfined when policy denies it.                    |
+| `policy/sandbox-browser-cdp-source-range-missing`        | Sandbox browser CDP source range is missing when policy requires one.             |
+| `policy/data-handling-redaction-disabled`                | Sensitive logging redaction is disabled when policy requires it.                  |
+| `policy/data-handling-telemetry-content-capture`         | Telemetry content capture is enabled when policy denies it.                       |
+| `policy/data-handling-session-retention-not-enforced`    | Session retention maintenance is not enforced when policy requires it.            |
+| `policy/data-handling-session-transcript-memory-enabled` | Session transcript memory indexing is enabled when policy denies it.              |
+| `policy/secrets-unmanaged-provider`                      | A config SecretRef references a provider not declared under `secrets.providers`.  |
+| `policy/secrets-denied-provider-source`                  | A config secret provider or SecretRef uses a source denied by policy.             |
+| `policy/secrets-insecure-provider`                       | A secret provider opts into insecure posture when policy denies it.               |
+| `policy/auth-profile-invalid-metadata`                   | A config auth profile is missing valid provider or mode metadata.                 |
+| `policy/auth-profile-unapproved-mode`                    | A config auth profile mode is outside the policy allowlist.                       |
+| `policy/exec-approvals-missing`                          | Policy requires `exec-approvals.json`, but the artifact is missing.               |
+| `policy/exec-approvals-invalid`                          | The configured exec approvals artifact cannot be parsed.                          |
+| `policy/exec-approvals-default-security-unapproved`      | Exec approval defaults use a security mode outside the policy allowlist.          |
+| `policy/exec-approvals-agent-security-unapproved`        | A per-agent effective exec approval security mode is outside the allowlist.       |
+| `policy/exec-approvals-auto-allow-skills-enabled`        | An exec approval agent implicitly auto-allows skill CLIs when policy denies it.   |
+| `policy/exec-approvals-allowlist-missing`                | The approvals allowlist is missing a pattern required by policy.                  |
+| `policy/exec-approvals-allowlist-unexpected`             | The approvals allowlist includes a pattern not expected by policy.                |
+| `policy/tools-missing-risk-level`                        | A governed tool declaration is missing risk metadata.                             |
+| `policy/tools-unknown-risk-level`                        | A governed tool declaration uses an unknown risk value.                           |
+| `policy/tools-missing-sensitivity-token`                 | A governed tool declaration is missing sensitivity metadata.                      |
+| `policy/tools-missing-owner`                             | A governed tool declaration is missing owner metadata.                            |
+| `policy/tools-unknown-sensitivity-token`                 | A governed tool declaration uses an unknown sensitivity value.                    |
 
 Policy findings can include both `target` and `requirement`. `target` is the
 observed workspace thing that does not conform. `requirement` is the authored
@@ -706,10 +999,11 @@ configured channel:
 
 ## Exit codes
 
-| Command        | `0`                                       | `1`                                              | `2`                          |
-| -------------- | ----------------------------------------- | ------------------------------------------------ | ---------------------------- |
-| `policy check` | No findings at the threshold.             | One or more findings met the threshold.          | Argument or runtime failure. |
-| `policy watch` | No findings and accepted hash is current. | Findings exist or accepted attestation is stale. | Argument or runtime failure. |
+| Command          | `0`                                                    | `1`                                                                 | `2`                          |
+| ---------------- | ------------------------------------------------------ | ------------------------------------------------------------------- | ---------------------------- |
+| `policy check`   | No findings at the threshold.                          | One or more findings met the threshold.                             | Argument or runtime failure. |
+| `policy compare` | The policy file is at least as strict as the baseline. | The policy file is invalid, missing, or weaker than baseline rules. | Argument or runtime failure. |
+| `policy watch`   | No findings and accepted hash is current.              | Findings exist or accepted attestation is stale.                    | Argument or runtime failure. |
 
 ## Related
 

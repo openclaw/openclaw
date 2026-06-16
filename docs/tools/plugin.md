@@ -136,6 +136,28 @@ bundled copy. Use `clawhub:`, `npm:`, `git:`, or `npm-pack:` when you need
 deterministic source selection. See [`openclaw plugins`](/cli/plugins#install)
 for the full command contract.
 
+For npm installs, unpinned package specs and `@latest` choose the newest stable
+package that advertises compatibility with this OpenClaw build. If npm's
+current latest release declares a newer `openclaw.compat.pluginApi` or
+`openclaw.install.minHostVersion`, OpenClaw scans older stable package versions
+and installs the newest one that fits. Exact versions and explicit channel tags
+such as `@beta` stay pinned to the selected package and fail when incompatible.
+
+### Operator install policy
+
+Configure `security.installPolicy` to run a trusted local policy command before
+plugin install or update proceeds. The policy receives metadata plus the staged
+source path and can allow or block the install. It covers CLI and Gateway-backed
+plugin install/update paths. Plugin `before_install` hooks run later only in
+OpenClaw processes where plugin hooks are loaded, so use `security.installPolicy`
+for operator-owned install decisions. The deprecated
+`--dangerously-force-unsafe-install` flag is accepted for compatibility but does
+not bypass install policy or OpenClaw's built-in plugin dependency denylist.
+
+See [Skills config](/tools/skills-config#operator-install-policy-securityinstallpolicy)
+for the shared `security.installPolicy` exec schema used by both skills and
+plugins.
+
 ### Configure plugin policy
 
 The common plugin config shape is:
@@ -165,7 +187,9 @@ Key policy rules:
   allowlist stay unavailable, even when `tools.allow` includes `"*"`.
 - `plugins.entries.<id>.enabled: false` disables one plugin while preserving its
   config.
-- `plugins.load.paths` adds explicit local plugin files or directories.
+- `plugins.load.paths` adds explicit local plugin files or directories. Managed
+  `plugins install` local paths must be plugin directories or archives; use
+  `plugins.load.paths` for standalone plugin files.
 - Workspace-origin plugins are disabled by default; explicitly enable or
   allowlist them before using local workspace code.
 - Bundled plugins follow their built-in default-on/default-off metadata unless
@@ -179,7 +203,7 @@ Key policy rules:
   surfaces, such as a provider/model ref, channel config, CLI backend, or agent
   harness runtime.
 - OpenAI-family Codex routing keeps provider and runtime plugin boundaries
-  separate: `openai-codex/*` is legacy OpenAI-provider config, while the bundled
+  separate: legacy Codex model refs are legacy config repaired by doctor, while the bundled
   `codex` plugin owns Codex app-server runtime for canonical `openai/*` agent
   refs, explicit `agentRuntime.id: "codex"`, and legacy `codex/*` refs.
 

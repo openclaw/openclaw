@@ -1,3 +1,4 @@
+// Matrix API module exposes the plugin public contract.
 export {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
@@ -7,6 +8,7 @@ export {
   createActionGate,
   jsonResult,
   readNumberParam,
+  readPositiveIntegerParam,
   readReactionParams,
   readStringArrayParam,
   readStringParam,

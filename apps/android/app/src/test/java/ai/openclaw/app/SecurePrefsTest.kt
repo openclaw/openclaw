@@ -63,6 +63,46 @@ class SecurePrefsTest {
   }
 
   @Test
+  fun installedAppsSharing_defaultsOffAndPersistsOptIn() {
+    val context = RuntimeEnvironment.getApplication()
+    val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
+    plainPrefs.edit().clear().commit()
+    val prefs = SecurePrefs(context)
+
+    assertFalse(prefs.installedAppsSharingEnabled.value)
+
+    prefs.setInstalledAppsSharingEnabled(true)
+
+    assertTrue(prefs.installedAppsSharingEnabled.value)
+    assertTrue(plainPrefs.getBoolean("device.apps.sharing.enabled", false))
+  }
+
+  @Test
+  fun appearanceThemeMode_defaultsDarkForExistingInstalls() {
+    val context = RuntimeEnvironment.getApplication()
+    val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
+    plainPrefs.edit().clear().commit()
+    val prefs = SecurePrefs(context)
+
+    assertEquals(AppearanceThemeMode.Dark, prefs.appearanceThemeMode.value)
+    assertFalse(plainPrefs.contains("appearance.themeMode"))
+  }
+
+  @Test
+  fun setAppearanceThemeMode_persistsSelectedMode() {
+    val context = RuntimeEnvironment.getApplication()
+    val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
+    plainPrefs.edit().clear().commit()
+    val prefs = SecurePrefs(context)
+
+    prefs.setAppearanceThemeMode(AppearanceThemeMode.Light)
+
+    assertEquals(AppearanceThemeMode.Light, prefs.appearanceThemeMode.value)
+    assertEquals("light", plainPrefs.getString("appearance.themeMode", null))
+    assertEquals(AppearanceThemeMode.Light, SecurePrefs(context).appearanceThemeMode.value)
+  }
+
+  @Test
   fun saveGatewayBootstrapToken_persistsSeparatelyFromSharedToken() {
     val context = RuntimeEnvironment.getApplication()
     val securePrefs = context.getSharedPreferences("openclaw.node.secure.test", Context.MODE_PRIVATE)

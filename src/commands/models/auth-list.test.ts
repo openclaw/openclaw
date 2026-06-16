@@ -1,3 +1,4 @@
+// Model auth-list tests cover provider auth listing and output formatting.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -21,7 +22,7 @@ vi.mock("../../agents/auth-profiles.js", () => ({
   ensureAuthProfileStore: mocks.ensureAuthProfileStore,
   externalCliDiscoveryForProviderAuth: mocks.externalCliDiscoveryForProviderAuth,
   resolveAuthProfileDisplayLabel: mocks.resolveAuthProfileDisplayLabel,
-  resolveAuthStatePathForDisplay: (agentDir: string) => `${agentDir}/auth-state.json`,
+  resolveAuthStatePathForDisplay: (agentDir: string) => `${agentDir}/openclaw-agent.sqlite`,
 }));
 
 vi.mock("./load-config.js", () => ({
@@ -65,9 +66,9 @@ describe("modelsAuthListCommand", () => {
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
-        "openai-codex:user@example.com": {
+        "openai:user@example.com": {
           type: "oauth",
-          provider: "openai-codex",
+          provider: "openai",
           access: "access-secret",
           refresh: "refresh-secret",
           expires: 1_800_000_000_000,
@@ -80,7 +81,7 @@ describe("modelsAuthListCommand", () => {
         },
       },
       usageStats: {
-        "openai-codex:user@example.com": {
+        "openai:user@example.com": {
           cooldownUntil: 1_800_000_010_000,
         },
       },
@@ -88,41 +89,41 @@ describe("modelsAuthListCommand", () => {
     mocks.ensureAuthProfileStore.mockReturnValue(store);
     const runtime = createRuntime();
 
-    await modelsAuthListCommand({ provider: "OpenAI-Codex", agent: "coder", json: true }, runtime);
+    await modelsAuthListCommand({ provider: "OpenAI", agent: "coder", json: true }, runtime);
 
     expect(mocks.externalCliDiscoveryForProviderAuth).toHaveBeenCalledWith({
       cfg: {},
-      provider: "openai-codex",
+      provider: "openai",
     });
     expect(runtime.jsonPayloads).toStrictEqual([
       {
         agentDir: "/tmp/openclaw/agents/coder",
         agentId: "coder",
-        authStatePath: "/tmp/openclaw/agents/coder/auth-state.json",
+        authStatePath: "/tmp/openclaw/agents/coder/openclaw-agent.sqlite",
         profiles: [
           {
             cooldownUntil: "2027-01-15T08:00:10.000Z",
             email: "user@example.com",
             expiresAt: "2027-01-15T08:00:00.000Z",
-            id: "openai-codex:user@example.com",
-            label: "openai-codex:user@example.com",
-            provider: "openai-codex",
+            id: "openai:user@example.com",
+            label: "openai:user@example.com",
+            provider: "openai",
             type: "oauth",
           },
         ],
-        provider: "openai-codex",
+        provider: "openai",
       },
     ]);
     expect(JSON.stringify(runtime.jsonPayloads[0])).not.toContain("secret");
   });
 
-  it("treats the OpenAI filter as the friendly view over API-key and Codex subscription profiles", async () => {
+  it("treats the OpenAI filter as the friendly view over API-key and OAuth profiles", async () => {
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
-        "openai-codex:user@example.com": {
+        "openai:user@example.com": {
           type: "oauth",
-          provider: "openai-codex",
+          provider: "openai",
           access: "access-secret",
           refresh: "refresh-secret",
           expires: 1_800_000_000_000,
@@ -147,13 +148,13 @@ describe("modelsAuthListCommand", () => {
 
     expect(mocks.externalCliDiscoveryForProviderAuth).toHaveBeenCalledWith({
       cfg: {},
-      provider: "openai-codex",
+      provider: "openai",
     });
     expect(runtime.jsonPayloads).toStrictEqual([
       {
         agentDir: "/tmp/openclaw/agents/main",
         agentId: "main",
-        authStatePath: "/tmp/openclaw/agents/main/auth-state.json",
+        authStatePath: "/tmp/openclaw/agents/main/openclaw-agent.sqlite",
         profiles: [
           {
             id: "openai:api-key-backup",
@@ -164,9 +165,9 @@ describe("modelsAuthListCommand", () => {
           {
             email: "user@example.com",
             expiresAt: "2027-01-15T08:00:00.000Z",
-            id: "openai-codex:user@example.com",
-            label: "openai-codex:user@example.com",
-            provider: "openai-codex",
+            id: "openai:user@example.com",
+            label: "openai:user@example.com",
+            provider: "openai",
             type: "oauth",
           },
         ],
@@ -184,8 +185,51 @@ describe("modelsAuthListCommand", () => {
 
     expect(runtime.logs).toEqual([
       "Agent: main",
-      "Auth state file: /tmp/openclaw/agents/main/auth-state.json",
+      "Auth state store: /tmp/openclaw/agents/main/openclaw-agent.sqlite",
       "Profiles: (none)",
+    ]);
+  });
+
+  it("omits Date-invalid auth timestamps without failing", async () => {
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:user@example.com": {
+          type: "oauth",
+          provider: "openai",
+          access: "access-secret",
+          refresh: "refresh-secret",
+          expires: 8_700_000_000_000_000,
+          email: "user@example.com",
+        },
+      },
+      usageStats: {
+        "openai:user@example.com": {
+          cooldownUntil: 8_700_000_000_000_000,
+        },
+      },
+    };
+    mocks.ensureAuthProfileStore.mockReturnValue(store);
+    const runtime = createRuntime();
+
+    await modelsAuthListCommand({ provider: "openai", json: true }, runtime);
+
+    expect(runtime.jsonPayloads).toStrictEqual([
+      {
+        agentDir: "/tmp/openclaw/agents/main",
+        agentId: "main",
+        authStatePath: "/tmp/openclaw/agents/main/openclaw-agent.sqlite",
+        profiles: [
+          {
+            email: "user@example.com",
+            id: "openai:user@example.com",
+            label: "openai:user@example.com",
+            provider: "openai",
+            type: "oauth",
+          },
+        ],
+        provider: "openai",
+      },
     ]);
   });
 });

@@ -1,3 +1,4 @@
+// Runtime contracts for approval handlers used by execution requests.
 import type {
   ChannelApprovalCapability,
   ChannelApprovalNativeAdapter,
@@ -176,12 +177,13 @@ async function applyApprovalFinalAction(params: {
         entry: params.wrapped.entry,
         phase: params.phase,
       });
-      return;
+
+    // `clear-actions` updates interaction controls but leaves the delivered content in place.
     case "leave":
-      return;
   }
 }
 
+/** Adapts a strongly typed channel native approval spec into the erased runtime contract. */
 export function createChannelApprovalNativeRuntimeAdapter<
   TPendingPayload,
   TPreparedTarget,
@@ -359,6 +361,7 @@ type ChannelApprovalHandlerLifecycleSpec<
   onStopped?: () => Promise<void> | void;
 };
 
+/** Adapter contract used by core to run a channel's native approval delivery lifecycle. */
 export type ChannelApprovalHandlerAdapter<
   TPendingEntry,
   TPreparedTarget,
@@ -383,6 +386,7 @@ export type ChannelApprovalHandlerAdapter<
   >;
 };
 
+/** Creates the shared approval handler runtime from channel-specific content and transport hooks. */
 export function createChannelApprovalHandler<
   TPendingEntry,
   TPreparedTarget,
@@ -430,6 +434,7 @@ export function createChannelApprovalHandler<
   });
 }
 
+/** Builds a shared approval handler from a plugin approval capability, or null when unsupported. */
 export async function createChannelApprovalHandlerFromCapability(params: {
   capability?: Pick<ChannelApprovalCapability, "native" | "nativeRuntime"> | null;
   label: string;

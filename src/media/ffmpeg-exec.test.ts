@@ -1,3 +1,4 @@
+// FFmpeg exec tests cover command execution wrappers and error mapping.
 import type { ChildProcess, ExecFileOptions } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
@@ -94,6 +95,38 @@ describe("parseFfprobeCodecAndSampleRate", () => {
     {
       name: "keeps codec when the sample rate is not numeric",
       input: "opus,not-a-number",
+      expected: {
+        codec: "opus",
+        sampleRateHz: null,
+      },
+    },
+    {
+      name: "rejects partially numeric sample rates",
+      input: "opus,48000hz",
+      expected: {
+        codec: "opus",
+        sampleRateHz: null,
+      },
+    },
+    {
+      name: "rejects missing sample rates",
+      input: "opus,",
+      expected: {
+        codec: "opus",
+        sampleRateHz: null,
+      },
+    },
+    {
+      name: "rejects zero sample rates",
+      input: "opus,0",
+      expected: {
+        codec: "opus",
+        sampleRateHz: null,
+      },
+    },
+    {
+      name: "rejects signed sample rates",
+      input: "opus,-48000",
       expected: {
         codec: "opus",
         sampleRateHz: null,

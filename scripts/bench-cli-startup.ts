@@ -1,3 +1,4 @@
+// Bench Cli Startup script supports OpenClaw repository automation.
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -22,6 +23,7 @@ type Sample = {
   maxRssMb: number | null;
   exitCode: number | null;
   signal: string | null;
+  timedOut?: boolean;
   stdoutTail?: string;
   stderrTail?: string;
 };
@@ -429,6 +431,26 @@ function parseNonNegativeInt(raw: string | undefined, fallback: number, label = 
   return parseStrictIntegerOption({ fallback, label, min: 0, raw });
 }
 
+function parseGatewayPortEnv(raw: string | undefined): number {
+  const value = raw?.trim();
+  if (!value) {
+    return 32123;
+  }
+  const bracketHostMatch = /^\[[^\]]+\]:(\d+)$/u.exec(value);
+  if (bracketHostMatch) {
+    return parsePositiveInt(bracketHostMatch[1], 32123, "OPENCLAW_GATEWAY_PORT");
+  }
+  if (value.startsWith("[") && value.endsWith("]")) {
+    return 32123;
+  }
+  const colonCount = value.split(":").length - 1;
+  if (colonCount > 1) {
+    return 32123;
+  }
+  const portRaw = colonCount === 1 ? value.split(":")[1] : value;
+  return parsePositiveInt(portRaw, 32123, "OPENCLAW_GATEWAY_PORT");
+}
+
 function parsePresets(raw: string | undefined): string[] {
   if (!raw) {
     return ["startup"];
@@ -531,6 +553,26 @@ function collectExitSummary(samples: Sample[]): string {
   return [...buckets.entries()].map(([key, count]) => `${key}x${count}`).join(", ");
 }
 
+function buildConfigFixture(commandCase: CommandCase): Record<string, unknown> | null {
+  if (
+    commandCase.id !== "configGetGatewayPort" &&
+    commandCase.id !== "gatewayHealthJson" &&
+    commandCase.id !== "health" &&
+    commandCase.id !== "healthJson"
+  ) {
+    return null;
+  }
+  const port = parseGatewayPortEnv(process.env.OPENCLAW_GATEWAY_PORT);
+  return {
+    gateway: {
+      auth: { mode: "none" },
+      bind: "loopback",
+      mode: "local",
+      port,
+    },
+  };
+}
+
 function buildRssHook(tmpDir: string): string {
   const rssHookPath = path.join(tmpDir, "measure-rss.mjs");
   writeFileSync(
@@ -583,6 +625,11 @@ async function runSample(params: {
   const runRoot = mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-bench-home-"));
   const stateDir = path.join(runRoot, ".openclaw");
   const configPath = path.join(stateDir, "openclaw.json");
+  const configFixture = buildConfigFixture(params.commandCase);
+  if (configFixture) {
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(configPath, `${JSON.stringify(configFixture, null, 2)}\n`, "utf8");
+  }
   const nodeArgs = [
     "--import",
     params.rssHookPath,
@@ -598,6 +645,7 @@ async function runSample(params: {
   let stdout = "";
   let stderr = "";
   let settled = false;
+  let timedOut = false;
   const maxOutputLength = 32 * 1024 * 1024;
 
   try {
@@ -628,6 +676,7 @@ async function runSample(params: {
           ms,
           firstOutputMs,
           maxRssMb: parseMaxRssMb(stderr),
+          ...(timedOut ? { timedOut } : {}),
           ...sample,
         });
       };
@@ -639,6 +688,7 @@ async function runSample(params: {
       };
 
       const timeout = setTimeout(() => {
+        timedOut = true;
         try {
           proc.kill("SIGTERM");
         } catch {
@@ -782,10 +832,14 @@ export function collectFailedSamples(result: SuiteResult): string[] {
     for (const [sampleIndex, sample] of commandCase.samples.entries()) {
       const label = `${result.entry} ${commandCase.id} sample ${sampleIndex + 1}`;
       const expectedExitCodes = new Set(commandCase.expectedExitCodes ?? [0]);
-      if (sample.signal !== null) {
+      if (sample.timedOut === true) {
+        failures.push(`${label}: timed out`);
+      } else if (sample.signal !== null) {
         failures.push(`${label}: exited via signal ${sample.signal}`);
       } else if (!expectedExitCodes.has(sample.exitCode ?? -1)) {
         failures.push(`${label}: exited with code ${String(sample.exitCode)}`);
+      } else if (sample.maxRssMb === null) {
+        failures.push(`${label}: did not report max RSS`);
       } else if (sample.exitCode !== 0) {
         const output = `${sample.stdoutTail ?? ""}\n${sample.stderrTail ?? ""}`;
         const missing = (commandCase.expectedNonzeroOutputIncludes ?? []).filter(
@@ -981,7 +1035,9 @@ async function main(): Promise<void> {
 }
 
 export const testing = {
+  buildConfigFixture,
   collectFailedSamples,
+  parseGatewayPortEnv,
   parseNonNegativeInt,
   parsePositiveInt,
 };

@@ -1,3 +1,4 @@
+// Doctor gateway daemon flow tests cover managed service inspection, duplicate services, and repair prompts.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { ExtraGatewayService } from "../daemon/inspect.js";
@@ -32,6 +33,8 @@ const readGatewayRestartHandoffSync = vi.hoisted(() =>
 const findSystemGatewayServices = vi.hoisted(() =>
   vi.fn<() => Promise<ExtraGatewayService[]>>(async () => []),
 );
+const buildGatewayRuntimeHints = vi.hoisted(() => vi.fn((): string[] => []));
+const formatGatewayRuntimeSummary = vi.hoisted(() => vi.fn((): string | null => null));
 
 vi.mock("../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
@@ -109,7 +112,7 @@ vi.mock("../infra/wsl.js", () => ({
   isWSL: vi.fn(async () => false),
 }));
 
-vi.mock("../terminal/note.js", () => ({
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note,
 }));
 
@@ -127,8 +130,8 @@ vi.mock("./daemon-install-helpers.js", () => ({
 }));
 
 vi.mock("./doctor-format.js", () => ({
-  buildGatewayRuntimeHints: vi.fn(() => []),
-  formatGatewayRuntimeSummary: vi.fn(() => null),
+  buildGatewayRuntimeHints,
+  formatGatewayRuntimeSummary,
 }));
 
 vi.mock("./gateway-install-token.js", () => ({
@@ -171,6 +174,14 @@ describe("maybeRepairGatewayDaemon", () => {
       connections: [],
     });
     isExpectedGatewayListeners.mockReturnValue(false);
+    vi.mocked(launchd.isLaunchAgentLoaded).mockResolvedValue(false);
+    vi.mocked(launchd.launchAgentPlistExists).mockResolvedValue(false);
+    vi.mocked(launchd.repairLaunchAgentBootstrap).mockResolvedValue({
+      ok: true,
+      status: "repaired",
+    });
+    buildGatewayRuntimeHints.mockReturnValue([]);
+    formatGatewayRuntimeSummary.mockReturnValue(null);
   });
 
   afterEach(() => {
@@ -331,6 +342,67 @@ describe("maybeRepairGatewayDaemon", () => {
 
     expect(readGatewayRestartHandoffSync).toHaveBeenCalled();
     expect(inspectPortConnections).not.toHaveBeenCalled();
+  });
+
+  it("still audits missing service when gateway health was skipped", async () => {
+    setPlatform("linux");
+    service.isLoaded.mockResolvedValueOnce(false);
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    await maybeRepairGatewayDaemon({
+      cfg: { gateway: {} },
+      runtime,
+      prompter: createDoctorPrompter({
+        runtime,
+        options: { nonInteractive: true },
+      }),
+      options: { deep: false, nonInteractive: true },
+      gatewayDetailsMessage: "details",
+      healthOk: false,
+      healthSkipped: true,
+    });
+
+    expect(note).toHaveBeenCalledWith("Gateway service not installed.", "Gateway");
+  });
+
+  it("does not audit local services when skipped gateway health is remote", async () => {
+    setPlatform("linux");
+
+    await maybeRepairGatewayDaemon({
+      cfg: { gateway: { mode: "remote" } },
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      prompter: createDoctorPrompter({
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        options: { nonInteractive: true },
+      }),
+      options: { deep: false, nonInteractive: true },
+      gatewayDetailsMessage: "details",
+      healthOk: false,
+      healthSkipped: true,
+    });
+
+    expect(service.isLoaded).not.toHaveBeenCalled();
+    expect(note).not.toHaveBeenCalledWith("Gateway service not installed.", "Gateway");
+  });
+
+  it("does not start loaded services with unknown runtime when health was skipped", async () => {
+    setPlatform("linux");
+    service.readRuntime.mockResolvedValueOnce({ status: "unknown" });
+
+    await maybeRepairGatewayDaemon({
+      cfg: { gateway: {} },
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      prompter: createDoctorPrompter({
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        options: { repair: true, nonInteractive: true },
+      }),
+      options: { deep: false, repair: true, nonInteractive: true },
+      gatewayDetailsMessage: "details",
+      healthOk: false,
+      healthSkipped: true,
+    });
+
+    expect(service.restart).not.toHaveBeenCalled();
   });
 
   it("reports established gateway clients during deep doctor", async () => {
@@ -550,6 +622,79 @@ describe("maybeRepairGatewayDaemon", () => {
     expect(launchd.repairLaunchAgentBootstrap).not.toHaveBeenCalled();
     expect(service.install).not.toHaveBeenCalled();
     expect(note).toHaveBeenCalledWith(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway LaunchAgent");
+  });
+
+  it("reports macOS GUI-session runtime instead of install guidance for a not-loaded LaunchAgent", async () => {
+    setPlatform("darwin");
+    service.isLoaded.mockResolvedValue(false);
+    service.readRuntime.mockResolvedValue({
+      status: "unknown",
+      detail: "Bootstrap failed: 125: Domain does not support specified action",
+      missingSupervision: true,
+      missingGuiSession: true,
+    });
+    buildGatewayRuntimeHints.mockReturnValue([
+      "LaunchAgent requires a logged-in macOS GUI session; SSH/headless/sudo shells cannot bootstrap gui/$UID.",
+    ]);
+
+    await runAutoRepair();
+
+    expect(launchd.repairLaunchAgentBootstrap).not.toHaveBeenCalled();
+    expect(service.install).not.toHaveBeenCalled();
+    expect(buildGatewayRuntimeHints).toHaveBeenCalledWith(
+      {
+        status: "unknown",
+        detail: "Bootstrap failed: 125: Domain does not support specified action",
+        missingSupervision: true,
+        missingGuiSession: true,
+      },
+      { platform: "darwin", env: process.env },
+    );
+    expect(note).toHaveBeenCalledWith(
+      "LaunchAgent requires a logged-in macOS GUI session; SSH/headless/sudo shells cannot bootstrap gui/$UID.",
+      "Gateway",
+    );
+    expect(note).not.toHaveBeenCalledWith("Gateway service not installed.", "Gateway");
+  });
+
+  it("routes GUI-session bootstrap failures through the doctor runtime hint", async () => {
+    setPlatform("darwin");
+    service.isLoaded.mockResolvedValue(false);
+    service.readRuntime.mockResolvedValue({
+      status: "unknown",
+      missingSupervision: true,
+    });
+    vi.mocked(launchd.isLaunchAgentLoaded).mockResolvedValue(false);
+    vi.mocked(launchd.launchAgentPlistExists).mockResolvedValueOnce(true).mockResolvedValue(false);
+    vi.mocked(launchd.repairLaunchAgentBootstrap).mockResolvedValueOnce({
+      ok: false,
+      status: "gui-session-unavailable",
+      detail: "Bootstrap failed: 125: Domain does not support specified action",
+      domain: "gui/501",
+    });
+    buildGatewayRuntimeHints.mockReturnValue([
+      "LaunchAgent requires a logged-in macOS GUI session; SSH/headless/sudo shells cannot bootstrap gui/$UID.",
+    ]);
+
+    const runtime = await runAutoRepair();
+
+    expect(runtime.error).not.toHaveBeenCalledWith(
+      expect.stringContaining("LaunchAgent bootstrap failed"),
+    );
+    expect(service.install).not.toHaveBeenCalled();
+    expect(buildGatewayRuntimeHints).toHaveBeenCalledWith(
+      {
+        status: "unknown",
+        detail: "Bootstrap failed: 125: Domain does not support specified action",
+        missingSupervision: true,
+        missingGuiSession: true,
+      },
+      { platform: "darwin", env: process.env },
+    );
+    expect(note).toHaveBeenCalledWith(
+      "LaunchAgent requires a logged-in macOS GUI session; SSH/headless/sudo shells cannot bootstrap gui/$UID.",
+      "Gateway",
+    );
   });
 
   it("skips restart prompt when gateway is healthy after recent restart handoff in normal doctor flow", async () => {

@@ -1,3 +1,4 @@
+// Config writer for OpenAI chat tools E2E scenarios.
 import fs from "node:fs";
 import path from "node:path";
 
@@ -9,15 +10,25 @@ function requireEnv(name) {
   return value;
 }
 
+function readPositiveIntEnv(name, fallback) {
+  const text = String(process.env[name] ?? fallback).trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`invalid ${name}: ${text}`);
+  }
+  const value = Number(text);
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`invalid ${name}: ${text}`);
+  }
+  return value;
+}
+
 const configPath = requireEnv("OPENCLAW_CONFIG_PATH");
 const stateDir = requireEnv("OPENCLAW_STATE_DIR");
 const workspaceDir = requireEnv("OPENCLAW_TEST_WORKSPACE_DIR");
 const modelRef = requireEnv("OPENCLAW_OPENAI_CHAT_TOOLS_MODEL");
 const token = requireEnv("OPENCLAW_GATEWAY_TOKEN");
-const timeoutSeconds = Number.parseInt(
-  process.env.OPENCLAW_OPENAI_CHAT_TOOLS_TIMEOUT_SECONDS ?? "180",
-  10,
-);
+const timeoutSeconds = readPositiveIntEnv("OPENCLAW_OPENAI_CHAT_TOOLS_TIMEOUT_SECONDS", 180);
+const gatewayPort = readPositiveIntEnv("PORT", 18789);
 const [providerId, modelId] = modelRef.split("/");
 if (providerId !== "openai" || !modelId) {
   throw new Error(`OPENCLAW_OPENAI_CHAT_TOOLS_MODEL must be openai/*, got ${modelRef}`);
@@ -25,7 +36,7 @@ if (providerId !== "openai" || !modelId) {
 
 const config = {
   gateway: {
-    port: Number.parseInt(process.env.PORT ?? "18789", 10),
+    port: gatewayPort,
     bind: "loopback",
     auth: { mode: "token", token },
     controlUi: { enabled: false },

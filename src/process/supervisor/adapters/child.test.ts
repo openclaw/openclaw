@@ -1,3 +1,4 @@
+// Child adapter tests cover adapting child processes to supervisor runs.
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
@@ -316,11 +317,11 @@ describe("createChildAdapter", () => {
         child: stub.child,
         usedFallback: false,
       });
-      const adapter = await createChildAdapter({
+      const adapterValue = await createChildAdapter({
         argv: ["node", "-e", "setTimeout(() => {}, 1000)"],
         stdinMode: "pipe-open",
       });
-      return { ...stub, adapter };
+      return { ...stub, adapter: adapterValue };
     })();
 
     await expectRealExitWinsOverSigkillFallback({
@@ -346,11 +347,11 @@ describe("createChildAdapter", () => {
         child: stub.child,
         usedFallback: false,
       });
-      const adapter = await createChildAdapter({
+      const adapterLocal = await createChildAdapter({
         argv: ["openclaw", "version"],
         stdinMode: "pipe-closed",
       });
-      return { ...stub, adapter };
+      return { ...stub, adapter: adapterLocal };
     })();
 
     const settled = vi.fn();

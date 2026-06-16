@@ -1,8 +1,11 @@
+/**
+ * Truncates oversized tool-result content in messages and transcripts.
+ */
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { TextContent } from "../../llm/types.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { resolveAgentContextLimits } from "../agent-scope.js";
 import type { AgentMessage } from "../runtime/index.js";
 import {
@@ -22,6 +25,10 @@ import {
   rewriteTranscriptEntriesInSessionManager,
   rewriteTranscriptEntriesInState,
 } from "./transcript-rewrite.js";
+import {
+  resolveRuntimeTranscriptReadTarget,
+  type RuntimeTranscriptScope,
+} from "./transcript-runtime-state.js";
 
 /**
  * Maximum share of the context window a single tool result should occupy.
@@ -60,7 +67,6 @@ const DEFAULT_SUFFIX = (truncatedChars: number) =>
   formatContextLimitTruncationNotice(truncatedChars);
 const COMPACT_RECOVERY_SUFFIX = (truncatedChars: number) =>
   `[... ${Math.max(1, Math.floor(truncatedChars))} chars truncated; narrow args]`;
-export const MIN_TRUNCATED_TEXT_CHARS = MIN_KEEP_CHARS + DEFAULT_SUFFIX(1).length;
 
 function resolveSuffixFactory(
   suffix: ToolResultTruncationOptions["suffix"],
@@ -336,33 +342,51 @@ export function truncateOversizedToolResultsInMessages(
   messages: AgentMessage[],
   contextWindowTokens: number,
   maxCharsOverride?: number,
+  aggregateMaxCharsOverride?: number,
 ): { messages: AgentMessage[]; truncatedCount: number } {
   const maxChars = Math.max(
     1,
     maxCharsOverride ?? calculateMaxToolResultChars(contextWindowTokens),
   );
-  let truncatedCount = 0;
-
-  const result = messages.map((msg) => {
-    if ((msg as { role?: string }).role !== "toolResult") {
-      return msg;
-    }
-    const textLength = getToolResultTextLength(msg);
-    if (textLength <= maxChars) {
-      return msg;
-    }
-    truncatedCount++;
-    return truncateToolResultMessage(msg, maxChars);
+  const aggregateBudgetChars = calculateRecoveryAggregateToolResultChars(
+    contextWindowTokens,
+    maxChars,
+    aggregateMaxCharsOverride,
+  );
+  const branch = messages.map((message, index) => ({
+    id: `message-${index}`,
+    type: "message",
+    message,
+  }));
+  const plan = buildToolResultReplacementPlan({
+    branch,
+    maxChars,
+    aggregateBudgetChars,
+    minKeepChars: RECOVERY_MIN_KEEP_CHARS,
   });
+  if (plan.replacements.length === 0) {
+    return { messages, truncatedCount: 0 };
+  }
 
-  return { messages: result, truncatedCount };
+  const replacementIds = new Set(plan.replacements.map((replacement) => replacement.entryId));
+  const replacedBranch = applyToolResultReplacementsToBranch(branch, plan.replacements);
+  return {
+    messages: replacedBranch.map((entry) => entry.message as AgentMessage),
+    truncatedCount: replacementIds.size,
+  };
 }
 
 function calculateRecoveryAggregateToolResultChars(
   contextWindowTokens: number,
   maxCharsOverride?: number,
+  aggregateMaxCharsOverride?: number,
 ): number {
-  return Math.max(1, maxCharsOverride ?? calculateMaxToolResultChars(contextWindowTokens));
+  return Math.max(
+    1,
+    aggregateMaxCharsOverride ??
+      maxCharsOverride ??
+      calculateMaxToolResultChars(contextWindowTokens),
+  );
 }
 
 export type ToolResultReductionPotential = {
@@ -433,9 +457,10 @@ function buildAggregateToolResultReplacements(params: {
   let remainingReduction = totalChars - params.aggregateBudgetChars;
   const replacements: Array<{ entryId: string; message: AgentMessage }> = [];
 
+  // Spend aggregate reduction on older entries first so fresh tool output stays intact.
   for (const candidate of candidates.toSorted((a, b) => {
     if (a.index !== b.index) {
-      return b.index - a.index;
+      return a.index - b.index;
     }
     return b.textLength - a.textLength;
   })) {
@@ -590,6 +615,7 @@ export function estimateToolResultReductionPotential(params: {
   messages: AgentMessage[];
   contextWindowTokens: number;
   maxCharsOverride?: number;
+  aggregateMaxCharsOverride?: number;
 }): ToolResultReductionPotential {
   const { messages, contextWindowTokens } = params;
   const maxChars = Math.max(
@@ -599,6 +625,7 @@ export function estimateToolResultReductionPotential(params: {
   const aggregateBudgetChars = calculateRecoveryAggregateToolResultChars(
     contextWindowTokens,
     maxChars,
+    params.aggregateMaxCharsOverride,
   );
   const branch = messages.map((message, index) => ({
     id: `message-${index}`,
@@ -643,9 +670,11 @@ function truncateOversizedToolResultsInExistingSessionManager(params: {
   sessionManager: SessionManager;
   contextWindowTokens: number;
   maxCharsOverride?: number;
+  aggregateMaxCharsOverride?: number;
   sessionFile?: string;
   sessionId?: string;
   sessionKey?: string;
+  agentId?: string;
 }): { truncated: boolean; truncatedCount: number; reason?: string } {
   const { sessionManager, contextWindowTokens } = params;
   const maxChars = Math.max(
@@ -655,6 +684,7 @@ function truncateOversizedToolResultsInExistingSessionManager(params: {
   const aggregateBudgetChars = calculateRecoveryAggregateToolResultChars(
     contextWindowTokens,
     maxChars,
+    params.aggregateMaxCharsOverride,
   );
   const branch = sessionManager.getBranch() as ToolResultBranchEntry[];
 
@@ -683,6 +713,7 @@ function truncateOversizedToolResultsInExistingSessionManager(params: {
     emitSessionTranscriptUpdate({
       sessionFile: params.sessionFile,
       sessionKey: params.sessionKey,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
     });
   }
 
@@ -705,8 +736,10 @@ async function truncateOversizedToolResultsInTranscriptState(params: {
   sessionFile: string;
   contextWindowTokens: number;
   maxCharsOverride?: number;
+  aggregateMaxCharsOverride?: number;
   sessionId?: string;
   sessionKey?: string;
+  agentId?: string;
   config?: SessionWriteLockAcquireTimeoutConfig;
 }): Promise<{ truncated: boolean; truncatedCount: number; reason?: string }> {
   const { state, contextWindowTokens } = params;
@@ -717,6 +750,7 @@ async function truncateOversizedToolResultsInTranscriptState(params: {
   const aggregateBudgetChars = calculateRecoveryAggregateToolResultChars(
     contextWindowTokens,
     maxChars,
+    params.aggregateMaxCharsOverride,
   );
   const branch = state.getBranch() as ToolResultBranchEntry[];
 
@@ -750,6 +784,7 @@ async function truncateOversizedToolResultsInTranscriptState(params: {
     emitSessionTranscriptUpdate({
       sessionFile: params.sessionFile,
       sessionKey: params.sessionKey,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
     });
   }
 
@@ -771,9 +806,11 @@ export function truncateOversizedToolResultsInSessionManager(params: {
   sessionManager: SessionManager;
   contextWindowTokens: number;
   maxCharsOverride?: number;
+  aggregateMaxCharsOverride?: number;
   sessionFile?: string;
   sessionId?: string;
   sessionKey?: string;
+  agentId?: string;
 }): { truncated: boolean; truncatedCount: number; reason?: string } {
   try {
     return truncateOversizedToolResultsInExistingSessionManager(params);
@@ -784,12 +821,57 @@ export function truncateOversizedToolResultsInSessionManager(params: {
   }
 }
 
+/**
+ * Truncates oversized tool results for a runtime transcript scope.
+ */
+export async function truncateOversizedToolResultsInRuntimeTranscript(params: {
+  scope: RuntimeTranscriptScope;
+  contextWindowTokens: number;
+  maxCharsOverride?: number;
+  aggregateMaxCharsOverride?: number;
+  config?: SessionWriteLockAcquireTimeoutConfig;
+}): Promise<{ truncated: boolean; truncatedCount: number; reason?: string }> {
+  let sessionLock: Awaited<ReturnType<typeof acquireSessionWriteLock>> | undefined;
+
+  try {
+    const target = await resolveRuntimeTranscriptReadTarget(params.scope);
+    sessionLock = await acquireSessionWriteLock({
+      sessionFile: target.sessionFile,
+      ...resolveSessionWriteLockOptions(params.config),
+    });
+    const state = await readTranscriptFileState(target.sessionFile);
+    return await truncateOversizedToolResultsInTranscriptState({
+      state,
+      contextWindowTokens: params.contextWindowTokens,
+      maxCharsOverride: params.maxCharsOverride,
+      aggregateMaxCharsOverride: params.aggregateMaxCharsOverride,
+      sessionFile: target.sessionFile,
+      sessionId: target.sessionId,
+      sessionKey: target.sessionKey,
+      agentId: target.agentId,
+      config: params.config,
+    });
+  } catch (err) {
+    const errMsg = formatErrorMessage(err);
+    log.warn(`[tool-result-truncation] Failed to truncate: ${errMsg}`);
+    return { truncated: false, truncatedCount: 0, reason: errMsg };
+  } finally {
+    await sessionLock?.release();
+  }
+}
+
+/**
+ * Truncates a named transcript file artifact. Runtime callers should prefer
+ * truncateOversizedToolResultsInRuntimeTranscript with agent/session scope.
+ */
 export async function truncateOversizedToolResultsInSession(params: {
   sessionFile: string;
   contextWindowTokens: number;
   maxCharsOverride?: number;
+  aggregateMaxCharsOverride?: number;
   sessionId?: string;
   sessionKey?: string;
+  agentId?: string;
   config?: SessionWriteLockAcquireTimeoutConfig;
 }): Promise<{ truncated: boolean; truncatedCount: number; reason?: string }> {
   const { sessionFile, contextWindowTokens } = params;
@@ -805,6 +887,7 @@ export async function truncateOversizedToolResultsInSession(params: {
       state,
       contextWindowTokens,
       maxCharsOverride: params.maxCharsOverride,
+      aggregateMaxCharsOverride: params.aggregateMaxCharsOverride,
       sessionFile,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,

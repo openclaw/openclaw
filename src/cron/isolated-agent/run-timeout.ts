@@ -1,5 +1,7 @@
+/** Converts cron payload timeout overrides into embedded-runner timeout signals. */
+import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
+
+/** Converts explicit cron payload timeoutSeconds into a timer-safe millisecond override signal. */
 export function resolveCronRunTimeoutOverrideMs(timeoutSeconds: unknown): number | undefined {
-  return typeof timeoutSeconds === "number" && Number.isFinite(timeoutSeconds) && timeoutSeconds > 0
-    ? timeoutSeconds * 1000
-    : undefined;
+  return finiteSecondsToTimerSafeMilliseconds(timeoutSeconds);
 }

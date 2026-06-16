@@ -1,6 +1,11 @@
+// Binds plugin conversations to stable channel and agent identifiers.
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import {
   createConversationBindingRecord,
@@ -11,13 +16,9 @@ import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.
 import { formatErrorMessage } from "../infra/errors.js";
 import { expandHomePrefix } from "../infra/home-dir.js";
 import { writeJson } from "../infra/json-files.js";
-import { type ConversationRef } from "../infra/outbound/session-binding-service.js";
+import type { ConversationRef } from "../infra/outbound/session-binding-service.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalMap, resolveGlobalSingleton } from "../shared/global-singleton.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
 import type {
   PluginConversationBinding,
   PluginConversationBindingResolvedEvent,
@@ -123,6 +124,7 @@ type PluginBindingGlobalState = {
   fallbackNoticeBindingIds: Set<string>;
   approvalsCache: PluginBindingApprovalsFile | null;
   approvalsLoaded: boolean;
+  approvalsSaveChain: Promise<void>;
 };
 
 type PluginConversationBindingState = {
@@ -148,6 +150,7 @@ const pluginBindingGlobalState = resolveGlobalSingleton<PluginBindingGlobalState
     fallbackNoticeBindingIds: new Set<string>(),
     approvalsCache: null,
     approvalsLoaded: false,
+    approvalsSaveChain: Promise.resolve(),
   }),
 );
 
@@ -379,10 +382,16 @@ async function saveApprovals(file: PluginBindingApprovalsFile): Promise<void> {
   const state = getPluginBindingGlobalState();
   state.approvalsCache = file;
   state.approvalsLoaded = true;
-  await writeJson(filePath, file, {
-    mode: 0o600,
-    trailingNewline: true,
-  });
+  const writeApprovals = state.approvalsSaveChain
+    .catch(() => undefined)
+    .then(async () => {
+      await writeJson(filePath, file, {
+        mode: 0o600,
+        trailingNewline: true,
+      });
+    });
+  state.approvalsSaveChain = writeApprovals.catch(() => undefined);
+  await writeApprovals;
 }
 
 function getApprovals(): PluginBindingApprovalsFile {
@@ -946,7 +955,7 @@ function dispatchPluginConversationBindingResolved(params: {
 }): void {
   // Keep platform interaction acks fast even if the plugin does slow post-bind work.
   queueMicrotask(() => {
-    void notifyPluginConversationBindingResolved(params).catch((error) => {
+    void notifyPluginConversationBindingResolved(params).catch((error: unknown) => {
       log.warn(`plugin binding resolved dispatch failed: ${String(error)}`);
     });
   });
@@ -1009,6 +1018,7 @@ export const testing = {
     const state = getPluginBindingGlobalState();
     state.approvalsCache = null;
     state.approvalsLoaded = false;
+    state.approvalsSaveChain = Promise.resolve();
     state.fallbackNoticeBindingIds.clear();
   },
 };

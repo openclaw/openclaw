@@ -1,3 +1,4 @@
+// Browser tests cover browser cli inspect plugin behavior.
 import { Command } from "commander";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createCliRuntimeCapture } from "../../test-support.js";
@@ -157,6 +158,32 @@ describe("browser cli snapshot defaults", () => {
     const params = await runSnapshot(["--urls"]);
     expect(params?.query?.format).toBe("ai");
     expect(params?.query?.urls).toBe(true);
+  });
+
+  it("rejects non-integer snapshot numeric options before dispatch", async () => {
+    await expect(runSnapshot(["--limit", "1e3"])).rejects.toThrow("__exit__:1");
+    expect(runtime.error.mock.calls.at(-1)?.[0]).toContain(
+      "Invalid --limit: must be an integer >= 1",
+    );
+
+    resetRuntimeCapture();
+    await expect(runSnapshot(["--depth", "-1"])).rejects.toThrow("__exit__:1");
+    expect(runtime.error.mock.calls.at(-1)?.[0]).toContain(
+      "Invalid --depth: must be an integer >= 0",
+    );
+
+    expect(sharedMocks.callBrowserRequest).not.toHaveBeenCalled();
+  });
+
+  it("passes zero snapshot depth because root depth is valid", async () => {
+    const params = await runSnapshot(["--depth", "0"]);
+    expect(params?.query?.depth).toBe(0);
+  });
+
+  it("accepts signed decimal snapshot numeric options", async () => {
+    const params = await runSnapshot(["--limit", "+10", "--depth", "+0"]);
+    expect(params?.query?.limit).toBe(10);
+    expect(params?.query?.depth).toBe(0);
   });
 
   it("sends screenshot request with trimmed target id and jpeg type", async () => {

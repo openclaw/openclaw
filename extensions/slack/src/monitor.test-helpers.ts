@@ -1,3 +1,4 @@
+// Slack helper module supports monitor helpers behavior.
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import { vi } from "vitest";
 import type { Mock } from "vitest";
@@ -117,7 +118,10 @@ function ensureSlackTestRuntime(): {
   };
 }
 
-export const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+export const flush = () =>
+  new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
 
 async function waitForSlackEvent(name: string) {
   for (let i = 0; i < 10; i += 1) {

@@ -1,3 +1,4 @@
+// Doctor bootstrap-size tests cover prompt-context budget warnings and note rendering.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 
@@ -8,7 +9,7 @@ const resolveBootstrapContextForRun = vi.hoisted(() => vi.fn());
 const resolveBootstrapMaxChars = vi.hoisted(() => vi.fn(() => 20_000));
 const resolveBootstrapTotalMaxChars = vi.hoisted(() => vi.fn(() => 150_000));
 
-vi.mock("../terminal/note.js", () => ({
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note,
 }));
 

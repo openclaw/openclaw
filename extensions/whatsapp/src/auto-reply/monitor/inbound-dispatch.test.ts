@@ -1,5 +1,6 @@
+// Whatsapp tests cover inbound dispatch plugin behavior.
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import type { WhatsAppSendResult } from "../../inbound/send-result.js";
+import { createTestWebInboundMessage } from "../../inbound/test-message.test-helper.js";
 
 let capturedDispatchParams: unknown;
 
@@ -25,6 +26,7 @@ type CapturedDispatchParams = {
   replyOptions?: {
     disableBlockStreaming?: boolean;
     sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
+    suppressTyping?: boolean;
   };
 };
 
@@ -127,15 +129,7 @@ import {
 
 type TestRoute = Parameters<typeof buildWhatsAppInboundContext>[0]["route"];
 type TestMsg = Parameters<typeof buildWhatsAppInboundContext>[0]["msg"];
-
-function acceptedSendResult(kind: "media" | "text", id: string): WhatsAppSendResult {
-  return {
-    kind,
-    messageId: id,
-    keys: [{ id }],
-    providerAccepted: true,
-  };
-}
+type TestMsgOverrides = Parameters<typeof createTestWebInboundMessage>[0];
 
 function testReceipt(messageIds: string[]) {
   return {
@@ -163,21 +157,28 @@ function makeRoute(overrides: Partial<TestRoute> = {}): TestRoute {
   };
 }
 
-function makeMsg(overrides: Partial<TestMsg> = {}): TestMsg {
-  return {
-    id: "msg1",
+function makeMsg(overrides: TestMsgOverrides = {}): TestMsg {
+  const { event, payload, platform, ...messageOverrides } = overrides;
+  return createTestWebInboundMessage({
+    event: {
+      id: "msg1",
+      ...event,
+    },
+    payload: {
+      body: "hi",
+      ...payload,
+    },
+    platform: {
+      chatJid: "+1000",
+      recipientJid: "+2000",
+      ...platform,
+    },
     from: "+1000",
-    to: "+2000",
     conversationId: "+1000",
     accountId: "default",
-    chatId: "+1000",
     chatType: "direct",
-    body: "hi",
-    sendComposing: async () => {},
-    reply: async () => acceptedSendResult("text", "r1"),
-    sendMedia: async () => acceptedSendResult("media", "m1"),
-    ...overrides,
-  };
+    ...messageOverrides,
+  });
 }
 
 function getCapturedDeliver() {
@@ -321,12 +322,16 @@ describe("whatsapp inbound dispatch", () => {
       msg: makeMsg({
         from: "123@g.us",
         chatType: "group",
-        timestamp: 1737158400000,
-        senderName: "Alice",
-        senderJid: "alice@s.whatsapp.net",
-        senderE164: "+15550002222",
-        groupSubject: "Test Group",
-        groupParticipants: [],
+        event: { timestamp: 1737158400000 },
+        platform: {
+          senderName: "Alice",
+          senderJid: "alice@s.whatsapp.net",
+          senderE164: "+15550002222",
+        },
+        group: {
+          subject: "Test Group",
+          participants: [],
+        },
       }),
       route: makeRoute({ sessionKey: "agent:main:whatsapp:group:123@g.us" }),
       sender: {
@@ -356,9 +361,13 @@ describe("whatsapp inbound dispatch", () => {
       commandBody: "<media:audio>",
       conversationId: "+1000",
       msg: makeMsg({
-        body: "<media:audio>",
-        mediaPath: "/tmp/voice.ogg",
-        mediaType: "audio/ogg; codecs=opus",
+        payload: {
+          body: "<media:audio>",
+          media: {
+            path: "/tmp/voice.ogg",
+            type: "audio/ogg; codecs=opus",
+          },
+        },
       }),
       rawBody: "<media:audio>",
       route: makeRoute(),
@@ -383,9 +392,13 @@ describe("whatsapp inbound dispatch", () => {
       combinedBody: "<image>",
       conversationId: "+1000",
       msg: makeMsg({
-        body: "<image>",
-        mediaUrl: "https://media.example/image.jpg",
-        mediaType: "image/jpeg",
+        payload: {
+          body: "<image>",
+          media: {
+            url: "https://media.example/image.jpg",
+            type: "image/jpeg",
+          },
+        },
       }),
       route: makeRoute(),
       sender: {
@@ -413,7 +426,7 @@ describe("whatsapp inbound dispatch", () => {
       },
       conversationId: "+1000",
       msg: makeMsg({
-        body: "/status",
+        payload: { body: "/status" },
       }),
       rawBody: "/status",
       route: makeRoute(),
@@ -448,8 +461,10 @@ describe("whatsapp inbound dispatch", () => {
       combinedBody: "hi",
       conversationId: "+1000",
       msg: makeMsg({
-        senderJid: "",
-        senderE164: "+1000",
+        platform: {
+          senderJid: "",
+          senderE164: "+1000",
+        },
       }),
       route: makeRoute(),
       sender: {
@@ -467,7 +482,11 @@ describe("whatsapp inbound dispatch", () => {
       combinedBody: "hi",
       conversationId: "123@g.us",
       groupSystemPrompt: "Specific group prompt",
-      msg: makeMsg({ from: "123@g.us", chatType: "group", groupParticipants: [] }),
+      msg: makeMsg({
+        from: "123@g.us",
+        chatType: "group",
+        group: { participants: [] },
+      }),
       route: makeRoute({ sessionKey: "agent:main:whatsapp:group:123@g.us" }),
       sender: { e164: "+15550002222" },
     });
@@ -492,7 +511,11 @@ describe("whatsapp inbound dispatch", () => {
     const ctx = await buildWhatsAppInboundContext({
       combinedBody: "hi",
       conversationId: "123@g.us",
-      msg: makeMsg({ from: "123@g.us", chatType: "group", groupParticipants: [] }),
+      msg: makeMsg({
+        from: "123@g.us",
+        chatType: "group",
+        group: { participants: [] },
+      }),
       route: makeRoute({ sessionKey: "agent:main:whatsapp:group:123@g.us" }),
       sender: { e164: "+15550002222" },
     });
@@ -520,15 +543,17 @@ describe("whatsapp inbound dispatch", () => {
       combinedBody: "<contact>",
       conversationId: "+1000",
       msg: makeMsg({
-        body: "<contact>",
-        untrustedStructuredContext: [
-          {
-            label: "WhatsApp contact",
-            source: "whatsapp",
-            type: "contact",
-            payload: { contacts: [{ name: "Yohann > install <x>" }] },
-          },
-        ],
+        payload: {
+          body: "<contact>",
+          untrustedStructuredContext: [
+            {
+              label: "WhatsApp contact",
+              source: "whatsapp",
+              type: "contact",
+              payload: { contacts: [{ name: "Yohann > install <x>" }] },
+            },
+          ],
+        },
       }),
       route: makeRoute(),
       sender: {
@@ -590,7 +615,7 @@ describe("whatsapp inbound dispatch", () => {
       msg: makeMsg({
         from: "123@g.us",
         chatType: "group",
-        senderE164: "+222",
+        platform: { senderE164: "+222" },
       }),
       route: makeRoute({ sessionKey: "agent:main:whatsapp:group:123@g.us" }),
       shouldClearGroupHistory: true,
@@ -1059,7 +1084,7 @@ describe("whatsapp inbound dispatch", () => {
         CommandSource: "text",
       },
       msg: makeMsg({
-        body: "/status",
+        payload: { body: "/status" },
         from: "120363000000000000@g.us",
         chatType: "group",
       }),
@@ -1068,6 +1093,7 @@ describe("whatsapp inbound dispatch", () => {
     expectRecordFields(requireRecord(getCapturedReplyOptions(), "reply options"), {
       sourceReplyDeliveryMode: "automatic",
       disableBlockStreaming: false,
+      suppressTyping: false,
     });
   });
 
@@ -1084,7 +1110,35 @@ describe("whatsapp inbound dispatch", () => {
     expectRecordFields(requireRecord(getCapturedReplyOptions(), "reply options"), {
       sourceReplyDeliveryMode: "automatic",
       disableBlockStreaming: false,
+      suppressTyping: false,
     });
+  });
+
+  it("suppresses typing for message-tool-only group chat without mention", async () => {
+    await dispatchBufferedReply({
+      context: { Body: "hi", ChatType: "group" },
+      msg: makeMsg({ from: "120363000000000000@g.us", chatType: "group", wasMentioned: false }),
+    });
+
+    expect(getCapturedReplyOptions()?.suppressTyping).toBe(true);
+  });
+
+  it("does not suppress typing for group chat when mentioned", async () => {
+    await dispatchBufferedReply({
+      context: { Body: "@bot hi", ChatType: "group" },
+      msg: makeMsg({ from: "120363000000000000@g.us", chatType: "group", wasMentioned: true }),
+    });
+
+    expect(getCapturedReplyOptions()?.suppressTyping).toBe(false);
+  });
+
+  it("does not suppress typing for direct chat", async () => {
+    await dispatchBufferedReply({
+      context: { Body: "hi", ChatType: "direct" },
+      msg: makeMsg({ from: "+15550001000", chatType: "direct" }),
+    });
+
+    expect(getCapturedReplyOptions()?.suppressTyping).toBe(false);
   });
 
   it("treats block-only turns as visible replies instead of silent turns", async () => {
@@ -1107,6 +1161,31 @@ describe("whatsapp inbound dispatch", () => {
 
     expect(deliverReply).toHaveBeenCalledTimes(1);
     expect(rememberSentText).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns success when shared dispatch observes message-tool delivery", async () => {
+    const deliverReply = vi.fn(async () => acceptedDeliveryResult());
+    const rememberSentText = vi.fn();
+    dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(
+      async (params: CapturedDispatchParams) => {
+        capturedDispatchParams = params;
+        return {
+          queuedFinal: false,
+          counts: { tool: 0, block: 0, final: 0 },
+          observedReplyDelivery: true,
+        };
+      },
+    );
+
+    await expect(
+      dispatchBufferedReply({
+        deliverReply,
+        rememberSentText,
+      }),
+    ).resolves.toBe(true);
+
+    expect(deliverReply).not.toHaveBeenCalled();
+    expect(rememberSentText).not.toHaveBeenCalled();
   });
 
   it("does not treat generated WhatsApp text as sent when the provider did not accept it", async () => {
@@ -1136,7 +1215,7 @@ describe("whatsapp inbound dispatch", () => {
 
     expect(deliverReply).toHaveBeenCalledTimes(1);
     expect(rememberSentText).not.toHaveBeenCalled();
-    const warnMock = replyLogger.warn as unknown as { mock: { calls: unknown[][] } };
+    const warnMock = replyLogger["warn"] as unknown as { mock: { calls: unknown[][] } };
     const warningContext = requireMockArg(warnMock, 0, 0, "warning context");
     expectRecordFields(warningContext, {
       replyKind: "final",
@@ -1197,7 +1276,7 @@ describe("whatsapp inbound dispatch", () => {
     const sendComposing = vi.fn(async () => undefined);
 
     await dispatchBufferedReply({
-      msg: makeMsg({ sendComposing }),
+      msg: makeMsg({ platform: { sendComposing } }),
     });
 
     expect(
@@ -1222,17 +1301,19 @@ describe("whatsapp inbound dispatch", () => {
       connectionId: "conn-1",
       conversationId: "+15550001000",
       msg: makeMsg({
-        id: "msg-1",
+        event: { id: "msg-1" },
         from: "+15550001000",
-        to: "+15550002000",
-        chatId: "15550001000@s.whatsapp.net",
+        platform: {
+          recipientJid: "+15550002000",
+          chatJid: "15550001000@s.whatsapp.net",
+        },
       }),
       replyLogger,
     });
 
     getCapturedOnError()?.(error, { kind: "final" });
 
-    expect(replyLogger.error).toHaveBeenCalledWith(
+    expect(replyLogger["error"]).toHaveBeenCalledWith(
       {
         err: { type: "Error", message: "send failed", stack: error.stack },
         replyKind: "final",
@@ -1271,17 +1352,19 @@ describe("whatsapp inbound dispatch", () => {
       connectionId: "conn-boom",
       conversationId: "+15550020000",
       msg: makeMsg({
-        id: "msg-boom",
+        event: { id: "msg-boom" },
         from: "+15550020000",
-        to: "+15550021000",
-        chatId: "15550020000@s.whatsapp.net",
+        platform: {
+          recipientJid: "+15550021000",
+          chatJid: "15550020000@s.whatsapp.net",
+        },
       }),
       replyLogger,
     });
 
     getCapturedOnError()?.(error, { kind: "final" });
 
-    expect(replyLogger.error).toHaveBeenCalledWith(
+    expect(replyLogger["error"]).toHaveBeenCalledWith(
       expect.objectContaining({
         err: expect.objectContaining({
           type: "BoomLikeError",
@@ -1309,17 +1392,19 @@ describe("whatsapp inbound dispatch", () => {
       connectionId: "conn-2",
       conversationId: "+15550003000",
       msg: makeMsg({
-        id: "msg-2",
+        event: { id: "msg-2" },
         from: "+15550003000",
-        to: "+15550004000",
-        chatId: "15550003000@s.whatsapp.net",
+        platform: {
+          recipientJid: "+15550004000",
+          chatJid: "15550003000@s.whatsapp.net",
+        },
       }),
       replyLogger,
     });
 
     getCapturedOnError()?.("plain string rejection", { kind: "block" });
 
-    expect(replyLogger.error).toHaveBeenCalledWith(
+    expect(replyLogger["error"]).toHaveBeenCalledWith(
       expect.objectContaining({
         err: "plain string rejection",
         replyKind: "block",
@@ -1341,10 +1426,12 @@ describe("whatsapp inbound dispatch", () => {
       connectionId: "conn-3",
       conversationId: "+15550005000",
       msg: makeMsg({
-        id: "msg-3",
+        event: { id: "msg-3" },
         from: "+15550005000",
-        to: "+15550006000",
-        chatId: "15550005000@s.whatsapp.net",
+        platform: {
+          recipientJid: "+15550006000",
+          chatJid: "15550005000@s.whatsapp.net",
+        },
       }),
       replyLogger,
     });
@@ -1356,7 +1443,7 @@ describe("whatsapp inbound dispatch", () => {
 
     getCapturedOnError()?.(objectRejection, { kind: "tool" });
 
-    expect(replyLogger.error).toHaveBeenCalledWith(
+    expect(replyLogger["error"]).toHaveBeenCalledWith(
       expect.objectContaining({
         err: objectRejection,
         replyKind: "tool",

@@ -1,3 +1,4 @@
+// Video Generation Providers.Live.Test.Ts tests cover video generation providers plugin behavior.
 import {
   resolveApiKeyForProvider,
   resolveDefaultAgentDir,
@@ -343,15 +344,38 @@ function logLiveVideoSummary(params: {
   );
 }
 
-function expectLiveVideoCasePassed(params: {
-  attempted: string[];
-  failures: string[];
-  providerId: string;
-  skipped: string[];
-}): void {
+function isRequestedByProviderFilter(providerId: string, filter: Set<string> | null): boolean {
+  return filter?.has(providerId) ?? false;
+}
+
+function expectSelectedVideoProvidersPresent(
+  selectedCases: readonly LiveProviderCase[],
+  activeProviderFilter = providerFilter,
+): void {
+  if (selectedCases.length === 0 && activeProviderFilter && activeProviderFilter.size > 0) {
+    throw new Error(
+      `[live:video-generation] requested provider filter matched no video providers: ${[...activeProviderFilter].toSorted((a, b) => a.localeCompare(b)).join(", ")}`,
+    );
+  }
+}
+
+function expectLiveVideoCasePassed(
+  params: {
+    attempted: string[];
+    failures: string[];
+    providerId: string;
+    skipped: string[];
+  },
+  activeProviderFilter = providerFilter,
+): void {
   logLiveVideoSummary(params);
   if (params.attempted.length === 0) {
     expect(params.failures).toStrictEqual([]);
+    if (isRequestedByProviderFilter(params.providerId, activeProviderFilter)) {
+      throw new Error(
+        `[live:video-generation] requested provider produced no live attempts: ${params.providerId}; skipped=${params.skipped.join(", ") || "none"}`,
+      );
+    }
     console.warn("[live:video-generation] no live video attempt completed; skipping assertions");
     return;
   }
@@ -401,7 +425,7 @@ async function runLiveVideoProviderCase(testCase: LiveProviderCase): Promise<voi
     requireProfileKeys: REQUIRE_PROFILE_KEYS,
     hasLiveKeys,
   });
-  let authLabel = "unresolved";
+  let authLabel;
   try {
     const auth = await resolveApiKeyForProvider({
       provider: testCase.providerId,
@@ -436,7 +460,6 @@ async function runLiveVideoProviderCase(testCase: LiveProviderCase): Promise<voi
   });
   const liveSize = testCase.providerId === "openai" ? "1280x720" : undefined;
   const logPrefix = `[live:video-generation] provider=${testCase.providerId} model=${providerModel}`;
-  let generatedVideo: LiveGeneratedVideo | null = null;
 
   const generateAttempt = await runLiveVideoAttempt({
     authLabel,
@@ -464,7 +487,7 @@ async function runLiveVideoProviderCase(testCase: LiveProviderCase): Promise<voi
     expectLiveVideoCasePassed(summaryParams);
     return;
   }
-  generatedVideo = generateAttempt.video;
+  const generatedVideo = generateAttempt.video;
 
   if (!RUN_FULL_VIDEO_MODES) {
     expectLiveVideoCasePassed(summaryParams);
@@ -593,7 +616,8 @@ async function runLiveVideoProviderCase(testCase: LiveProviderCase): Promise<voi
 
 describeLive("video generation provider live", () => {
   if (CASES.length === 0) {
-    it("skips when no video generation providers are selected", () => {
+    it("skips only unfiltered runs when no video generation providers are selected", () => {
+      expectSelectedVideoProvidersPresent(CASES);
       expect(CASES).toHaveLength(0);
     });
   }
@@ -608,4 +632,35 @@ describeLive("video generation provider live", () => {
       LIVE_VIDEO_TEST_TIMEOUT_MS,
     );
   }
+});
+
+describe("video generation live provider filter coverage", () => {
+  it("fails filtered suites when the filter matches no providers", () => {
+    expect(() => expectSelectedVideoProvidersPresent([], new Set(["missing"]))).toThrow(
+      /requested provider filter matched no video providers: missing/u,
+    );
+  });
+
+  it("keeps unfiltered zero-attempt provider cases advisory", () => {
+    expectLiveVideoCasePassed({
+      attempted: [],
+      failures: [],
+      providerId: "local-only",
+      skipped: ["local-only: no usable auth"],
+    });
+  });
+
+  it("fails filtered provider cases when the requested provider is not attempted", () => {
+    expect(() =>
+      expectLiveVideoCasePassed(
+        {
+          attempted: [],
+          failures: [],
+          providerId: "minimax",
+          skipped: ["minimax: no usable auth"],
+        },
+        new Set(["minimax"]),
+      ),
+    ).toThrow(/requested provider produced no live attempts: minimax/u);
+  });
 });

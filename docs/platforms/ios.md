@@ -7,7 +7,7 @@ read_when:
 title: "iOS app"
 ---
 
-Availability: internal preview. The iOS app is not publicly distributed yet.
+Availability: iPhone app builds are distributed through Apple channels when enabled for a release. Local development builds can also run from source.
 
 ## What it does
 
@@ -75,7 +75,9 @@ openclaw gateway call node.list --params "{}"
 Official distributed iOS builds use the external push relay instead of publishing the raw APNs
 token to the gateway.
 
-Gateway-side requirement:
+By default, official/TestFlight builds and gateways use the hosted relay at `https://ios-push-relay.openclaw.ai`.
+
+Custom relay deployments can override the gateway relay URL:
 
 ```json5
 {
@@ -98,7 +100,7 @@ How the flow works:
 - The iOS app fetches the paired gateway identity and includes it in relay registration, so the relay-backed registration is delegated to that specific gateway.
 - The app forwards that relay-backed registration to the paired gateway with `push.apns.register`.
 - The gateway uses that stored relay handle for `push.test`, background wakes, and wake nudges.
-- The gateway relay base URL must match the relay URL baked into the official/TestFlight iOS build.
+- Custom gateway relay URLs must match the relay URL baked into the official/TestFlight iOS build.
 - If the app later connects to a different gateway or a build with a different relay base URL, it refreshes the relay registration instead of reusing the old binding.
 
 What the gateway does **not** need for this path:
@@ -109,7 +111,7 @@ What the gateway does **not** need for this path:
 Expected operator flow:
 
 1. Install the official/TestFlight iOS build.
-2. Set `gateway.push.apns.relay.baseUrl` on the gateway.
+2. Optional: set `gateway.push.apns.relay.baseUrl` on the gateway only when using a custom relay deployment.
 3. Pair the app to the gateway and let it finish connecting.
 4. The app publishes `push.apns.register` automatically after it has an APNs token, the operator session is connected, and relay registration succeeds.
 5. After that, `push.test`, reconnect wakes, and wake nudges can use the stored relay-backed registration.
@@ -128,6 +130,7 @@ compatible but does not count as a durable last-seen update.
 Compatibility note:
 
 - `OPENCLAW_APNS_RELAY_BASE_URL` still works as a temporary env override for the gateway.
+- `OPENCLAW_PUSH_RELAY_BASE_URL` still works as a temporary env override for official/TestFlight iOS builds.
 
 ## Authentication and trust flow
 
@@ -235,7 +238,8 @@ Notes:
 
 - The Gateway canvas host serves `/__openclaw__/canvas/` and `/__openclaw__/a2ui/`.
 - It is served from the Gateway HTTP server (same port as `gateway.port`, default `18789`).
-- The iOS node auto-navigates to A2UI on connect when a canvas host URL is advertised.
+- The iOS node keeps the built-in scaffold as the connected default view. `canvas.a2ui.push` and `canvas.a2ui.reset` use the bundled app-owned A2UI page.
+- Remote Gateway A2UI pages are render-only on iOS; native A2UI button actions are accepted only from bundled app-owned pages.
 - Return to the built-in scaffold with `canvas.navigate` and `{"url":""}`.
 
 ## Computer Use relationship
@@ -272,7 +276,7 @@ openclaw nodes invoke --node "iOS Node" --command canvas.snapshot --params '{"ma
 ## Common errors
 
 - `NODE_BACKGROUND_UNAVAILABLE`: bring the iOS app to the foreground (canvas/camera/screen commands require it).
-- `A2UI_HOST_NOT_CONFIGURED`: the Gateway did not advertise the Canvas plugin surface URL; check `plugins.entries.canvas.config.host` in [Gateway configuration](/gateway/configuration).
+- `A2UI_HOST_UNAVAILABLE`: the bundled A2UI page was not reachable in the app WebView; keep the app foregrounded on the Screen tab and retry.
 - Pairing prompt never appears: run `openclaw devices list` and approve manually.
 - Reconnect fails after reinstall: the Keychain pairing token was cleared; re-pair the node.
 

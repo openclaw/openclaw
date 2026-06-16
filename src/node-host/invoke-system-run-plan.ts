@@ -1,6 +1,11 @@
+/** Builds and revalidates system.run approval plans for cwd and mutable executable operands. */
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeNullableString,
+} from "@openclaw/normalization-core/string-coerce";
 import type {
   SystemRunApprovalFileOperand,
   SystemRunApprovalPlan,
@@ -15,18 +20,16 @@ import {
   unwrapKnownShellMultiplexerInvocation,
 } from "../infra/exec-wrapper-resolution.js";
 import { sameFileIdentity } from "../infra/fs-safe-advanced.js";
+import { parseInlineOptionToken } from "../infra/inline-option-token.js";
 import {
   advancePosixInlineOptionScan,
   POSIX_INLINE_COMMAND_FLAGS,
   resolveInlineCommandMatch,
 } from "../infra/shell-inline-command.js";
 import { formatExecCommand, resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeNullableString,
-} from "../shared/string-coerce.js";
 import { splitShellArgs } from "../utils/shell-argv.js";
 
+/** File identity snapshot for the approved working directory. */
 export type ApprovedCwdSnapshot = {
   cwd: string;
   stat: fs.Stats;
@@ -146,7 +149,7 @@ const RUBY_UNSAFE_APPROVAL_FLAGS = new Set(["-I", "-r", "--require"]);
 const PERL_UNSAFE_APPROVAL_FLAGS = new Set(["-I", "-M", "-m"]);
 
 function normalizeOptionFlag(token: string): string {
-  return normalizeLowercaseStringOrEmpty(token.split("=", 1)[0]);
+  return normalizeLowercaseStringOrEmpty(parseInlineOptionToken(token).name);
 }
 
 function readTrimmedArgToken(argv: readonly string[], index: number): string {
@@ -725,7 +728,9 @@ function collectExistingFileOperandIndexes(params: {
       return { hits: [], sawOptionValueFile: false };
     }
     if (token.startsWith("-")) {
-      const [flag, inlineValue] = token.split("=", 2);
+      const option = parseInlineOptionToken(token);
+      const flag = option.name;
+      const inlineValue = option.hasInlineValue ? option.inlineValue : undefined;
       if (params.optionsWithFileValue?.has(normalizeLowercaseStringOrEmpty(flag))) {
         if (inlineValue && resolvesToExistingFileSync(inlineValue, params.cwd)) {
           hits.push(i);
@@ -1058,6 +1063,7 @@ function pnpmDlxTailMayNeedStableBinding(argv: string[], cwd: string | undefined
   return snapshot.ok && snapshot.snapshot !== null;
 }
 
+/** Captures file identity for a mutable script operand that approval is bound to. */
 export function resolveMutableFileOperandSnapshotSync(params: {
   argv: string[];
   cwd: string | undefined;
@@ -1173,6 +1179,7 @@ function resolveCanonicalApprovalCwdSync(cwd: string):
   };
 }
 
+/** Rechecks that the approved cwd still points at the same directory identity. */
 export function revalidateApprovedCwdSnapshot(params: { snapshot: ApprovedCwdSnapshot }): boolean {
   const current = resolveCanonicalApprovalCwdSync(params.snapshot.cwd);
   if (!current.ok) {

@@ -1,23 +1,22 @@
+// Client helpers for Codex media-path E2E fixtures.
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
-import { WebSocket } from "ws";
 import { PROTOCOL_VERSION } from "../../../../dist/gateway/protocol/index.js";
 import { renderBitmapTextPngBase64 } from "../../../../test/helpers/live-image-probe.ts";
+import { createGatewayWsClient } from "../../../lib/gateway-ws-client.ts";
+import { resolveGatewaySuccessPayload } from "../gateway-frame-payload.mjs";
 import { createJsonlRequestTailer } from "./jsonl-request-tail.mjs";
-import { waitForWebSocketOpen } from "./open-websocket.mjs";
+import { readPositiveIntEnv } from "./limits.mjs";
 
 const port = process.env.PORT;
 const token = process.env.OPENCLAW_GATEWAY_TOKEN;
 const appServerLog =
   process.env.OPENCLAW_CODEX_MEDIA_PATH_APP_SERVER_LOG ??
   "/tmp/openclaw-codex-media-path-app-server.jsonl";
-const timeoutSeconds = Number.parseInt(
-  process.env.OPENCLAW_CODEX_MEDIA_PATH_TIMEOUT_SECONDS ?? "180",
-  10,
-);
-const logTailMaxBytes = Number.parseInt(
-  process.env.OPENCLAW_CODEX_MEDIA_PATH_LOG_TAIL_MAX_BYTES ?? `${2 * 1024 * 1024}`,
-  10,
+const timeoutSeconds = readPositiveIntEnv("OPENCLAW_CODEX_MEDIA_PATH_TIMEOUT_SECONDS", 180);
+const logTailMaxBytes = readPositiveIntEnv(
+  "OPENCLAW_CODEX_MEDIA_PATH_LOG_TAIL_MAX_BYTES",
+  2 * 1024 * 1024,
 );
 
 if (!port || !token) {
@@ -35,10 +34,7 @@ function sha256Base64(data) {
 }
 
 const loggedRequests = createJsonlRequestTailer(appServerLog, {
-  maxReadBytes:
-    Number.isSafeInteger(logTailMaxBytes) && logTailMaxBytes > 0
-      ? logTailMaxBytes
-      : 2 * 1024 * 1024,
+  maxReadBytes: logTailMaxBytes,
 });
 
 async function waitFor(label, predicate, timeoutMs) {
@@ -53,82 +49,26 @@ async function waitFor(label, predicate, timeoutMs) {
   throw new Error(`timeout waiting for ${label}`);
 }
 
-function wsDataToString(data) {
-  if (typeof data === "string") {
-    return data;
-  }
-  if (Buffer.isBuffer(data)) {
-    return data.toString("utf8");
-  }
-  if (Array.isArray(data)) {
-    return Buffer.concat(data).toString("utf8");
-  }
-  return Buffer.from(data).toString("utf8");
-}
-
 async function connectGateway() {
-  const ws = new WebSocket(`ws://127.0.0.1:${port}`);
-  await waitForWebSocketOpen(ws, 45_000, "gateway ws open timeout");
-
-  const events = [];
-  const pending = new Map();
-  ws.on("message", (data) => {
-    let frame;
-    try {
-      frame = JSON.parse(wsDataToString(data));
-    } catch {
-      return;
-    }
-    if (frame?.type === "event" && typeof frame.event === "string") {
-      events.push({
-        event: frame.event,
-        payload: frame.payload && typeof frame.payload === "object" ? frame.payload : {},
-      });
-      return;
-    }
-    if (frame?.type !== "res" || typeof frame.id !== "string") {
-      return;
-    }
-    const match = pending.get(frame.id);
-    if (!match) {
-      return;
-    }
-    pending.delete(frame.id);
-    if (frame.ok === true) {
-      match.resolve(frame.payload ?? frame.result);
-      return;
-    }
-    match.reject(new Error(frame.error?.message ?? "gateway request failed"));
+  const gatewayClient = createGatewayWsClient({
+    handshakeTimeoutMs: 45_000,
+    openTimeoutMs: 45_000,
+    openTimeoutMessage: "gateway ws open timeout",
+    url: `ws://127.0.0.1:${port}`,
   });
-  ws.once("close", (code, reason) => {
-    const error = new Error(`gateway closed (${code}): ${wsDataToString(reason)}`);
-    for (const entry of pending.values()) {
-      entry.reject(error);
-    }
-    pending.clear();
-  });
+  await gatewayClient.waitOpen();
 
-  function request(method, params, opts = {}) {
-    const id = randomUUID();
+  async function request(method, params, opts = {}) {
     const timeoutMs = opts.timeoutMs ?? 60_000;
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        pending.delete(id);
-        reject(new Error(`gateway request timeout: ${method}`));
-      }, timeoutMs);
-      timer.unref?.();
-      pending.set(id, {
-        resolve: (value) => {
-          clearTimeout(timer);
-          resolve(value);
-        },
-        reject: (error) => {
-          clearTimeout(timer);
-          reject(error);
-        },
-      });
-      ws.send(JSON.stringify({ type: "req", id, method, params: params ?? {} }));
-    });
+    const response = await gatewayClient.request(method, params ?? {}, timeoutMs);
+    if (response.ok) {
+      return resolveGatewaySuccessPayload(response);
+    }
+    throw new Error(
+      response.error && typeof response.error === "object" && "message" in response.error
+        ? String(response.error.message)
+        : "gateway request failed",
+    );
   }
 
   await request(
@@ -153,21 +93,9 @@ async function connectGateway() {
   await request("sessions.subscribe", {}, { timeoutMs: 60_000 });
 
   return {
-    events,
     request,
     async close() {
-      if (ws.readyState === WebSocket.CLOSED) {
-        return;
-      }
-      await new Promise((resolve) => {
-        const timer = setTimeout(resolve, 2_000);
-        timer.unref?.();
-        ws.once("close", () => {
-          clearTimeout(timer);
-          resolve();
-        });
-        ws.close();
-      });
+      gatewayClient.close();
     },
   };
 }

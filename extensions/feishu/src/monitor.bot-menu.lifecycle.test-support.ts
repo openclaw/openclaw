@@ -1,3 +1,4 @@
+// Feishu plugin module implements monitor.bot menu.lifecycle support behavior.
 import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./lifecycle.test-support.js";
@@ -31,8 +32,6 @@ const {
   touchBindingMock,
   withReplyDispatcherMock,
 } = getFeishuLifecycleTestMocks();
-
-let handlers: Record<string, (data: unknown) => Promise<void>> = {};
 let lastRuntime = createRuntimeEnv();
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 const lifecycleConfig = createFeishuLifecycleConfig({
@@ -77,9 +76,7 @@ async function setupLifecycleMonitor() {
   lastRuntime = createRuntimeEnv();
   return setupFeishuLifecycleHandler({
     createEventDispatcherMock,
-    onRegister: (registered) => {
-      handlers = registered;
-    },
+    onRegister: () => {},
     runtime: lastRuntime,
     cfg: lifecycleConfig,
     account: lifecycleAccount,
@@ -92,7 +89,6 @@ describe("Feishu bot-menu lifecycle", () => {
   beforeEach(() => {
     vi.useRealTimers();
     resetFeishuLifecycleTestMocks();
-    handlers = {};
     lastRuntime = createRuntimeEnv();
     setFeishuLifecycleStateDir("openclaw-feishu-bot-menu");
 

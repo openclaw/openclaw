@@ -1,3 +1,4 @@
+// Video live test helper tests cover live provider test configuration helpers.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import {
@@ -139,5 +140,17 @@ describe("video-generation live-test helpers", () => {
         modelRef: "vydra/veo3",
       }),
     ).toBe(false);
+    expect(
+      canRunBufferBackedImageToVideoLiveLane({
+        providerId: "together",
+        modelRef: "together/Wan-AI/Wan2.2-T2V-A14B",
+      }),
+    ).toBe(false);
+    expect(
+      canRunBufferBackedImageToVideoLiveLane({
+        providerId: "together",
+        modelRef: "together/Wan-AI/Wan2.2-I2V-A14B",
+      }),
+    ).toBe(true);
   });
 });

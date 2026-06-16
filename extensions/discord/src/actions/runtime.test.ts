@@ -1,3 +1,4 @@
+// Discord tests cover runtime plugin behavior.
 import { ChannelType, PermissionFlagsBits } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { DiscordActionConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -100,6 +101,7 @@ const {
   kickMemberDiscord,
   listGuildChannelsDiscord,
   listPinsDiscord,
+  listThreadsDiscord,
   moveChannelDiscord,
   reactMessageDiscord,
   readMessagesDiscord,
@@ -270,6 +272,138 @@ describe("handleDiscordMessagingAction", () => {
     ]);
   });
 
+  it("surfaces incomplete archived thread pages at the action boundary", async () => {
+    listThreadsDiscord.mockResolvedValueOnce({
+      threads: [
+        {
+          id: "thread-1",
+          name: "Old project",
+          thread_metadata: {
+            archive_timestamp: "2026-05-25T17:00:00.000Z",
+          },
+        },
+      ],
+      members: [],
+      has_more: true,
+    });
+
+    const result = await handleMessagingAction(
+      "threadList",
+      {
+        guildId: "G1",
+        channelId: "C1",
+        includeArchived: true,
+        before: "2026-05-26T17:00:00.000Z",
+        limit: 1,
+      },
+      enableAllActions,
+    );
+
+    expect(mockCall(listThreadsDiscord, "listThreadsDiscord")).toEqual([
+      {
+        guildId: "G1",
+        channelId: "C1",
+        includeArchived: true,
+        before: "2026-05-26T17:00:00.000Z",
+        limit: 1,
+      },
+      { cfg: DISCORD_TEST_CFG },
+    ]);
+    expect(result.details).toMatchObject({
+      ok: true,
+      complete: false,
+      hasMore: true,
+      returnedCount: 1,
+      source: "discord.threadList.archived",
+      nextBefore: "2026-05-25T17:00:00.000Z",
+      query: {
+        guildId: "G1",
+        channelId: "C1",
+        includeArchived: true,
+        before: "2026-05-26T17:00:00.000Z",
+        limit: 1,
+      },
+    });
+    expect((result.details as { threads?: unknown }).threads).toEqual({
+      threads: [
+        {
+          id: "thread-1",
+          name: "Old project",
+          thread_metadata: {
+            archive_timestamp: "2026-05-25T17:00:00.000Z",
+          },
+        },
+      ],
+      members: [],
+      has_more: true,
+    });
+  });
+
+  it("omits archived thread pagination cursors when Discord omits archive timestamps", async () => {
+    listThreadsDiscord.mockResolvedValueOnce({
+      threads: [
+        {
+          id: "thread-without-archive-timestamp",
+          name: "Legacy project",
+        },
+      ],
+      members: [],
+      has_more: true,
+    });
+
+    const result = await handleMessagingAction(
+      "threadList",
+      {
+        guildId: "G1",
+        channelId: "C1",
+        includeArchived: true,
+        limit: 1,
+      },
+      enableAllActions,
+    );
+
+    expect(result.details).toMatchObject({
+      ok: true,
+      complete: false,
+      hasMore: true,
+      returnedCount: 1,
+      source: "discord.threadList.archived",
+    });
+    expect(result.details).not.toHaveProperty("nextBefore");
+  });
+
+  it("marks active thread results complete when Discord returns no pagination state", async () => {
+    listThreadsDiscord.mockResolvedValueOnce({
+      threads: [{ id: "thread-active", name: "Current project" }],
+      members: [{ id: "member-1" }],
+    });
+
+    const result = await handleMessagingAction(
+      "threadList",
+      {
+        guildId: "G1",
+      },
+      enableAllActions,
+    );
+
+    expect(result.details).toMatchObject({
+      ok: true,
+      complete: true,
+      hasMore: false,
+      returnedCount: 1,
+      source: "discord.threadList.active",
+      query: {
+        guildId: "G1",
+        includeArchived: false,
+      },
+    });
+    expect((result.details as { threads?: unknown }).threads).toEqual({
+      threads: [{ id: "thread-active", name: "Current project" }],
+      members: [{ id: "member-1" }],
+    });
+    expect(result.details).not.toHaveProperty("nextBefore");
+  });
+
   it("resolves Discord DM targets for reaction adds", async () => {
     const resolveReactionTarget = vi.fn(async () => "DM1");
     discordMessagingActionRuntime.resolveDiscordReactionTargetChannelId = resolveReactionTarget;
@@ -318,6 +452,21 @@ describe("handleDiscordMessagingAction", () => {
       accountId: "default",
       limit: undefined,
     });
+  });
+
+  it("rejects fractional Discord reaction limits before fetching reactions", async () => {
+    await expect(
+      handleMessagingAction(
+        "reactions",
+        {
+          channelId: "C1",
+          messageId: "M1",
+          limit: 2.5,
+        },
+        enableAllActions,
+      ),
+    ).rejects.toThrow("limit must be a positive integer");
+    expect(fetchReactionsDiscord).not.toHaveBeenCalled();
   });
 
   it("rejects Discord reaction reads for non-allowlisted target channels", async () => {
@@ -499,6 +648,20 @@ describe("handleDiscordMessagingAction", () => {
       { limit: undefined, before: undefined, after: undefined, around: undefined },
       { cfg },
     );
+  });
+
+  it("rejects fractional Discord read limits before reading messages", async () => {
+    await expect(
+      handleMessagingAction(
+        "readMessages",
+        {
+          channelId: "C1",
+          limit: "3.5",
+        },
+        enableAllActions,
+      ),
+    ).rejects.toThrow("limit must be a positive integer");
+    expect(readMessagesDiscord).not.toHaveBeenCalled();
   });
 
   it("reads from allowlisted Discord target channels", async () => {
@@ -974,6 +1137,72 @@ describe("handleDiscordMessagingAction", () => {
       },
       { cfg },
     );
+  });
+
+  it("resolves guildId from channel info when guildId is omitted in searchMessages", async () => {
+    fetchChannelInfoDiscord.mockResolvedValueOnce({
+      id: "C1",
+      type: 0,
+      guild_id: "resolved-guild",
+    });
+    searchMessagesDiscord.mockResolvedValueOnce({ total_results: 0, messages: [] });
+
+    await handleMessagingAction(
+      "searchMessages",
+      { channelId: "C1", content: "hello" },
+      enableAllActions,
+    );
+
+    expect(fetchChannelInfoDiscord).toHaveBeenCalledWith("C1", expect.anything());
+    expect(searchMessagesDiscord).toHaveBeenCalledWith(
+      expect.objectContaining({ guildId: "resolved-guild", content: "hello" }),
+      expect.anything(),
+    );
+  });
+
+  it("normalizes channel: prefixed channelId before resolving guildId in searchMessages", async () => {
+    fetchChannelInfoDiscord.mockResolvedValueOnce({
+      id: "C1",
+      type: 0,
+      guild_id: "resolved-guild",
+    });
+    searchMessagesDiscord.mockResolvedValueOnce({ total_results: 0, messages: [] });
+
+    await handleMessagingAction(
+      "searchMessages",
+      { channelId: "channel:C1", content: "hello" },
+      enableAllActions,
+    );
+
+    expect(fetchChannelInfoDiscord).toHaveBeenCalledWith("C1", expect.anything());
+    expect(searchMessagesDiscord).toHaveBeenCalledWith(
+      expect.objectContaining({ guildId: "resolved-guild", content: "hello", channelIds: ["C1"] }),
+      expect.anything(),
+    );
+  });
+
+  it("accepts query as alias for content in searchMessages", async () => {
+    searchMessagesDiscord.mockResolvedValueOnce({ total_results: 0, messages: [] });
+
+    await handleMessagingAction(
+      "searchMessages",
+      { guildId: "G1", query: "find this" },
+      enableAllActions,
+    );
+
+    expect(searchMessagesDiscord).toHaveBeenCalledWith(
+      expect.objectContaining({ guildId: "G1", content: "find this" }),
+      expect.anything(),
+    );
+  });
+
+  it("throws descriptive error when guildId cannot be resolved in searchMessages", async () => {
+    await expect(
+      handleMessagingAction("searchMessages", { content: "hello" }, enableAllActions),
+    ).rejects.toThrow(
+      "Discord search requires guildId. Provide guildId explicitly, or provide channelId so the guild can be resolved from the channel.",
+    );
+    expect(searchMessagesDiscord).not.toHaveBeenCalled();
   });
 
   it("sends voice messages from a local file path", async () => {
@@ -1758,6 +1987,20 @@ describe("handleDiscordGuildAction - channel management", () => {
     );
   });
 
+  it("rejects fractional Discord channel edit integers before editing channels", async () => {
+    await expect(
+      handleGuildAction(
+        "channelEdit",
+        {
+          channelId: "C1",
+          position: 1.5,
+        },
+        channelsEnabled,
+      ),
+    ).rejects.toThrow("position must be a non-negative integer");
+    expect(editChannelDiscord).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["parentId is null", { parentId: null }],
     ["clearParent is true", { clearParent: true }],
@@ -1812,6 +2055,21 @@ describe("handleDiscordGuildAction - channel management", () => {
       },
       { cfg: DISCORD_TEST_CFG },
     );
+  });
+
+  it("rejects fractional Discord channel move positions before moving channels", async () => {
+    await expect(
+      handleGuildAction(
+        "channelMove",
+        {
+          guildId: "G1",
+          channelId: "C1",
+          position: "5.5",
+        },
+        channelsEnabled,
+      ),
+    ).rejects.toThrow("position must be a non-negative integer");
+    expect(moveChannelDiscord).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -2007,6 +2265,36 @@ describe("handleDiscordModerationAction", () => {
       cfg: DISCORD_TEST_CFG,
       accountId: "ops",
     });
+  });
+
+  it("rejects fractional Discord moderation durations before timing out members", async () => {
+    await expect(
+      handleModerationAction(
+        "timeout",
+        {
+          guildId: "G1",
+          userId: "U1",
+          durationMinutes: 5.5,
+        },
+        moderationEnabled,
+      ),
+    ).rejects.toThrow("durationMinutes must be a non-negative integer");
+    expect(timeoutMemberDiscord).not.toHaveBeenCalled();
+  });
+
+  it("preserves zero-minute Discord timeouts for clearing existing timeouts", async () => {
+    await handleModerationAction(
+      "timeout",
+      {
+        guildId: "G1",
+        userId: "U1",
+        durationMinutes: 0,
+      },
+      moderationEnabled,
+    );
+    expect(timeoutMemberDiscord).toHaveBeenCalledTimes(1);
+    const params = mockObjectArg(timeoutMemberDiscord, "timeoutMemberDiscord", 0, 0);
+    expect(params.durationMinutes).toBe(0);
   });
 });
 

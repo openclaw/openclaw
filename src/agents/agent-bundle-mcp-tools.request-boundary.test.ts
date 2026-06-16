@@ -1,3 +1,4 @@
+/** Tests configured MCP tools survive policy/splitting to the outbound request boundary. */
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -44,6 +45,18 @@ function makeConfiguredRuntime(
     lastUsedAt: 0,
     markUsed: () => {},
     getCatalog: async () => ({
+      version: 1,
+      generatedAt: 0,
+      servers: {
+        [serverName]: {
+          serverName,
+          launchSummary: serverName,
+          toolCount: tools.length,
+        },
+      },
+      tools,
+    }),
+    peekCatalog: () => ({
       version: 1,
       generatedAt: 0,
       servers: {

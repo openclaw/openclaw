@@ -1,3 +1,4 @@
+// Slack API module exposes the plugin public contract.
 export {
   buildComputedAccountStatusSnapshot,
   PAIRING_APPROVED_MESSAGE,
@@ -26,6 +27,7 @@ export {
   imageResultFromFile,
   jsonResult,
   readNumberParam,
+  readPositiveIntegerParam,
   readReactionParams,
   readStringParam,
   withNormalizedTimestamp,

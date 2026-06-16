@@ -15,7 +15,7 @@ OpenClaw CI runs on every push to `main` and every pull request. The `preflight`
 | Job                                | Purpose                                                                                                   | When it runs                       |
 | ---------------------------------- | --------------------------------------------------------------------------------------------------------- | ---------------------------------- |
 | `preflight`                        | Detect docs-only changes, changed scopes, changed extensions, and build the CI manifest                   | Always on non-draft pushes and PRs |
-| `security-fast`                    | Private key detection, workflow audit via `zizmor`, and production lockfile audit                         | Always on non-draft pushes and PRs |
+| `security-fast`                    | Private key detection, changed-workflow audit via `zizmor`, and production lockfile audit                 | Always on non-draft pushes and PRs |
 | `check-dependencies`               | Production Knip dependency-only pass plus the unused-file allowlist guard                                 | Node-relevant changes              |
 | `build-artifacts`                  | Build `dist/`, Control UI, built-CLI smoke checks, embedded built-artifact checks, and reusable artifacts | Node-relevant changes              |
 | `checks-fast-core`                 | Fast Linux correctness lanes such as bundled, protocol, and CI-routing checks                             | Node-relevant changes              |
@@ -43,7 +43,9 @@ OpenClaw CI runs on every push to `main` and every pull request. The `preflight`
 
 GitHub may mark superseded jobs as `cancelled` when a newer push lands on the same PR or `main` ref. Treat that as CI noise unless the newest run for the same ref is also failing. Matrix jobs use `fail-fast: false`, and `build-artifacts` reports embedded channel, core-support-boundary, and gateway-watch failures directly instead of queuing tiny verifier jobs. The automatic CI concurrency key is versioned (`CI-v7-*`) so a GitHub-side zombie in an old queue group cannot indefinitely block newer main runs. Manual full-suite runs use `CI-manual-v1-*` and do not cancel in-progress runs.
 
-The `ci-timings-summary` job uploads a compact `ci-timings-summary` artifact for each non-draft CI run. It records wall time, queue time, slowest jobs, and failed jobs for the current run, so CI health checks do not need to scrape the full Actions payload repeatedly. The `build-artifacts` job also runs the blocking startup-memory smoke and uploads a `startup-memory` artifact with per-command RSS values for `--help`, `status --json`, and `gateway status`.
+Use `pnpm ci:timings`, `pnpm ci:timings:recent`, or `node scripts/ci-run-timings.mjs <run-id>` to summarize wall time, queue time, slowest jobs, failures, and the `pnpm-store-warmup` fanout barrier from GitHub Actions. CI also uploads the same run summary as a `ci-timings-summary` artifact. For build timing, check the `build-artifacts` job's `Build dist` step: `pnpm build:ci-artifacts` prints `[build-all] phase timings:` and includes `ui:build`; the job also uploads the `startup-memory` artifact.
+
+For pull request runs, the terminal timing-summary job runs the helper from the trusted base revision before passing `GH_TOKEN` to `gh run view`. That keeps the tokened query out of branch-controlled code while still summarizing the pull request's current CI run.
 
 ## Real behavior proof
 
@@ -78,6 +80,7 @@ apply to that PR.
 Scope logic lives in `scripts/ci-changed-scope.mjs` and is covered by unit tests in `src/scripts/ci-changed-scope.test.ts`. Manual dispatch skips changed-scope detection and makes the preflight manifest act as if every scoped area changed.
 
 - **CI workflow edits** validate the Node CI graph plus workflow linting, but do not force Windows, Android, or macOS native builds by themselves; those platform lanes stay scoped to platform source changes.
+- **Workflow Sanity** runs `actionlint`, `zizmor` over all workflow YAML files, the composite-action interpolation guard, and the conflict-marker guard. The PR-scoped `security-fast` job also runs `zizmor` over changed workflow files so workflow security findings fail early in the main CI graph.
 - **Docs on `main` pushes** are checked by the standalone `Docs` workflow with the same ClawHub docs mirror used by CI, so mixed code+docs pushes do not also queue the CI `check-docs` shard. Pull requests and manual CI still run `check-docs` from CI when docs changed.
 - **TUI PTY** is a focused workflow for TUI changes. It runs `node scripts/run-vitest.mjs run --config test/vitest/vitest.tui-pty.config.ts` on Linux Node 24 for `src/tui/**`, the watch harness, package script, lockfile, and workflow edits. The required lane uses a deterministic `TuiBackend` fixture; the slower `tui --local` smoke is opt-in with `OPENCLAW_TUI_PTY_INCLUDE_LOCAL=1` and mocks only the external model endpoint.
 - **CI routing-only edits, selected cheap core-test fixture edits, and narrow plugin contract helper/test-routing edits** use a fast Node-only manifest path: `preflight`, security, and a single `checks-fast-core` task. That path skips build artifacts, Node 22 compatibility, channel contracts, full core shards, bundled-plugin shards, and additional guard matrices when the change is limited to the routing or helper surfaces the fast task exercises directly.
@@ -113,24 +116,24 @@ Manual CI dispatches run the same job graph as normal CI but force every non-And
 Manual runs use a unique concurrency group so a release-candidate full suite is not cancelled by another push or PR run on the same ref. The optional `target_ref` input lets a trusted caller run that graph against a branch, tag, or full commit SHA while using the workflow file from the selected dispatch ref.
 
 ```bash
-gh workflow run ci.yml --ref release/YYYY.M.D
+gh workflow run ci.yml --ref release/YYYY.M.PATCH
 gh workflow run ci.yml --ref main -f target_ref=<branch-or-sha> -f include_android=true
 gh workflow run full-release-validation.yml --ref main -f ref=<branch-or-sha>
 ```
 
 ## Runners
 
-| Runner                           | Jobs                                                                                                                                                                                                                   |
-| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ubuntu-24.04`                   | `preflight`, docs checks, Python skills, workflow-sanity, labeler, auto-response; install-smoke preflight also uses GitHub-hosted Ubuntu so the Blacksmith matrix can queue earlier                                    |
-| `blacksmith-4vcpu-ubuntu-2404`   | `CodeQL Critical Quality`, `security-fast`, lower-weight extension shards, `checks-fast-core`, plugin/channel contract shards, `checks-node-compat-node22`, `check-guards`, `check-prod-types`, and `check-test-types` |
-| `blacksmith-8vcpu-ubuntu-2404`   | Linux Node test shards, bundled plugin test shards, `check-additional-*` shards, `android`                                                                                                                             |
-| `blacksmith-16vcpu-ubuntu-2404`  | `build-artifacts`, `check-lint` (CPU-sensitive enough that 8 vCPU cost more than they saved); install-smoke Docker builds (32-vCPU queue time cost more than it saved)                                                 |
-| `blacksmith-16vcpu-windows-2025` | `checks-windows`                                                                                                                                                                                                       |
-| `blacksmith-6vcpu-macos-latest`  | `macos-node` on `openclaw/openclaw`; forks fall back to `macos-latest`                                                                                                                                                 |
-| `blacksmith-12vcpu-macos-latest` | `macos-swift` on `openclaw/openclaw`; forks fall back to `macos-latest`                                                                                                                                                |
+| Runner                           | Jobs                                                                                                                                                                                                                                |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ubuntu-24.04`                   | Manual CI dispatch and non-canonical repository fallbacks, workflow-sanity, labeler, auto-response, docs workflows outside CI, and install-smoke preflight so the Blacksmith matrix can queue earlier                               |
+| `blacksmith-4vcpu-ubuntu-2404`   | `CodeQL Critical Quality`, `preflight`, `security-fast`, lower-weight extension shards, `checks-fast-core`, plugin/channel contract shards, `checks-node-compat-node22`, `check-guards`, `check-prod-types`, and `check-test-types` |
+| `blacksmith-8vcpu-ubuntu-2404`   | Linux Node test shards, bundled plugin test shards, `check-additional-*` shards, `check-dependencies`, and `android`                                                                                                                |
+| `blacksmith-16vcpu-ubuntu-2404`  | `build-artifacts`, `check-lint` (CPU-sensitive enough that 8 vCPU cost more than they saved); install-smoke Docker builds (32-vCPU queue time cost more than it saved)                                                              |
+| `blacksmith-16vcpu-windows-2025` | `checks-windows`                                                                                                                                                                                                                    |
+| `blacksmith-6vcpu-macos-15`      | `macos-node` on `openclaw/openclaw`; forks fall back to `macos-15`                                                                                                                                                                  |
+| `blacksmith-12vcpu-macos-26`     | `macos-swift` on `openclaw/openclaw`; forks fall back to `macos-26`                                                                                                                                                                 |
 
-Canonical-repo CI keeps Blacksmith as the default runner path. During `preflight`, `scripts/ci-runner-labels.mjs` checks recent queued and in-progress Actions runs for queued Blacksmith jobs. If a specific Blacksmith label already has queued jobs, downstream jobs that would use that exact label fall back to the matching GitHub-hosted runner (`ubuntu-24.04`, `windows-2025`, or `macos-latest`) for that run only. Other Blacksmith sizes in the same OS family stay on their primary labels. If the API probe fails, no fallback is applied.
+Canonical-repo CI keeps Blacksmith as the default runner path for normal push and pull-request runs. `workflow_dispatch` and non-canonical repository runs use GitHub-hosted runners, but normal canonical runs do not currently probe Blacksmith queue health or automatically fall back to GitHub-hosted labels when Blacksmith is unavailable.
 
 ## Local equivalents
 
@@ -180,7 +183,7 @@ The workflow installs OCM from a pinned release and Kova from `openclaw/Kova` at
 - `mock-deep-profile`: CPU/heap/trace profiling for startup, gateway, and agent-turn hotspots.
 - `live-openai-candidate`: a real OpenAI `openai/gpt-5.5` agent turn, skipped when `OPENAI_API_KEY` is unavailable.
 
-The mock-provider lane also runs OpenClaw-native source probes after the Kova pass: gateway boot timing and memory across default, hook, and 50-plugin startup cases; bundled plugin import RSS, repeated mock-OpenAI `channel-chat-baseline` hello loops, and CLI startup commands against the booted gateway. When the previous published mock-provider source report is available for the tested ref, the source summary compares current RSS and heap values against that baseline and marks large RSS increases as `watch`. The source probe Markdown summary lives at `source/index.md` in the report bundle, with raw JSON beside it.
+The mock-provider lane also runs OpenClaw-native source probes after the Kova pass: gateway boot timing and memory across default, hook, and 50-plugin startup cases; bundled plugin import RSS, repeated mock-OpenAI `channel-chat-baseline` hello loops, CLI startup commands against the booted gateway, and the SQLite state smoke performance probe. When the previous published mock-provider source report is available for the tested ref, the source summary compares current RSS and heap values against that baseline and marks large RSS increases as `watch`. The source probe Markdown summary lives at `source/index.md` in the report bundle, with raw JSON beside it.
 
 Every lane uploads GitHub artifacts. When `CLAWGRIT_REPORTS_TOKEN` is configured, the workflow also commits `report.json`, `report.md`, bundles, `index.md`, and source-probe artifacts into `openclaw/clawgrit-reports` under `openclaw-performance/<tested-ref>/<run-id>-<attempt>/<lane>/`. The current tested-ref pointer is written as `openclaw-performance/<tested-ref>/latest-<lane>.json`.
 
@@ -193,17 +196,23 @@ stage matrix, exact workflow job names, profile differences, artifacts, and
 focused rerun handles.
 
 `OpenClaw Release Publish` is the manual mutating release workflow. Dispatch it
-from `release/YYYY.M.D` or `main` after the release tag exists and after the
+from `release/YYYY.M.PATCH` or `main` after the release tag exists and after the
 OpenClaw npm preflight has succeeded. It verifies `pnpm plugins:sync:check`,
 dispatches `Plugin NPM Release` for all publishable plugin packages, dispatches
 `Plugin ClawHub Release` for the same release SHA, and only then dispatches
-`OpenClaw NPM Release` with the saved `preflight_run_id`.
+`OpenClaw NPM Release` with the saved `preflight_run_id`. Stable publish also
+requires an exact `windows_node_tag`; the workflow verifies the Windows source
+release and compares its x64/ARM64 installers with the candidate-approved
+`windows_node_installer_digests` input before any publish child, then promotes
+and verifies those same pinned installer digests plus the exact companion asset
+and checksum contract before publishing the GitHub release draft.
 
 ```bash
 gh workflow run openclaw-release-publish.yml \
-  --ref release/YYYY.M.D \
-  -f tag=vYYYY.M.D-beta.N \
+  --ref release/YYYY.M.PATCH \
+  -f tag=vYYYY.M.PATCH-beta.N \
   -f preflight_run_id=<successful-openclaw-npm-preflight-run-id> \
+  -f full_release_validation_run_id=<successful-full-release-validation-run-id> \
   -f npm_dist_tag=beta
 ```
 
@@ -331,7 +340,7 @@ gh workflow run package-acceptance.yml \
   --ref main \
   -f workflow_ref=main \
   -f source=ref \
-  -f package_ref=release/YYYY.M.D \
+  -f package_ref=release/YYYY.M.PATCH \
   -f suite_profile=package \
   -f telegram_mode=mock-openai
 
@@ -394,7 +403,7 @@ Docker lane definitions live in `scripts/lib/docker-e2e-scenarios.mjs`, planner 
 | `OPENCLAW_DOCKER_ALL_PARALLELISM`      | 10      | Main-pool slot count for normal lanes.                                                        |
 | `OPENCLAW_DOCKER_ALL_TAIL_PARALLELISM` | 10      | Provider-sensitive tail-pool slot count.                                                      |
 | `OPENCLAW_DOCKER_ALL_LIVE_LIMIT`       | 9       | Concurrent live lane cap so providers do not throttle.                                        |
-| `OPENCLAW_DOCKER_ALL_NPM_LIMIT`        | 10      | Concurrent npm install lane cap.                                                              |
+| `OPENCLAW_DOCKER_ALL_NPM_LIMIT`        | 5       | Concurrent npm install lane cap.                                                              |
 | `OPENCLAW_DOCKER_ALL_SERVICE_LIMIT`    | 7       | Concurrent multi-service lane cap.                                                            |
 | `OPENCLAW_DOCKER_ALL_START_STAGGER_MS` | 2000    | Stagger between lane starts to avoid Docker daemon create storms; set `0` for no stagger.     |
 | `OPENCLAW_DOCKER_ALL_LANE_TIMEOUT_MS`  | 7200000 | Per-lane fallback timeout (120 minutes); selected live/tail lanes use tighter caps.           |
@@ -562,6 +571,13 @@ The repo wrapper refuses a stale Crabbox binary that does not advertise `blacksm
 
 ```bash
 node scripts/crabbox-wrapper.mjs run --provider blacksmith-testbox --timing-json --shell -- "pnpm test <path-or-filter>"
+```
+
+Blacksmith-backed runs require Crabbox 0.22.0 or newer so the wrapper gets the current Testbox sync, queue, and cleanup behavior. When using the sibling checkout, rebuild the ignored local binary before timing or proof work:
+
+```bash
+version="$(git -C ../crabbox describe --tags --always --dirty | sed 's/^v//')" \
+  && go build -C ../crabbox -trimpath -ldflags "-s -w -X github.com/openclaw/crabbox/internal/cli.version=${version}" -o bin/crabbox ./cmd/crabbox
 ```
 
 Changed gate:

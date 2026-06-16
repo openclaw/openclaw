@@ -1,3 +1,5 @@
+// Xiaomi tests cover speech provider plugin behavior.
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const transcodeAudioBufferToOpusMock = vi.hoisted(() => vi.fn());
@@ -17,6 +19,7 @@ describe("buildXiaomiSpeechProvider", () => {
       expect(provider.aliases).toContain("mimo");
       expect(provider.models).toContain("mimo-v2.5-tts");
       expect(provider.models).toContain("mimo-v2-tts");
+      expect(provider.models).toContain("mimo-v2.5-tts-voicedesign");
       expect(provider.voices).toContain("mimo_default");
     });
   });
@@ -79,6 +82,24 @@ describe("buildXiaomiSpeechProvider", () => {
         timeoutMs: 30000,
       });
       expect(config.voice).toBe("default_zh");
+    });
+
+    it("accepts generic model and speaker voice aliases", () => {
+      const config = provider.resolveConfig!({
+        rawConfig: {
+          providers: {
+            xiaomi: {
+              modelId: "mimo-v2.5-tts-voicedesign",
+              speakerVoice: "Chloe",
+            },
+          },
+        },
+        cfg: {} as never,
+        timeoutMs: 30000,
+      });
+
+      expect(config.model).toBe("mimo-v2.5-tts-voicedesign");
+      expect(config.voice).toBe("Chloe");
     });
   });
 
@@ -178,6 +199,80 @@ describe("buildXiaomiSpeechProvider", () => {
       expect(transcodeAudioBufferToOpusMock).not.toHaveBeenCalled();
     });
 
+    it("omits voice and uses configured style for Xiaomi voice design models", async () => {
+      const audio = Buffer.from("fake-wav-audio").toString("base64");
+      const mockFetch = vi.mocked(globalThis.fetch);
+      mockFetch.mockResolvedValueOnce(
+        new Response(JSON.stringify({ choices: [{ message: { audio: { data: audio } } }] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+
+      const result = await provider.synthesize({
+        text: "Hello from OpenClaw.",
+        cfg: {} as never,
+        providerConfig: {
+          apiKey: "sk-test",
+          modelId: "mimo-v2.5-tts-voicedesign",
+          speakerVoice: "Chloe",
+          format: "wav",
+          style: "Warm, bright, natural voice.",
+        },
+        target: "audio-file",
+        timeoutMs: 30000,
+      });
+
+      expect(result.outputFormat).toBe("wav");
+      expect(result.fileExtension).toBe(".wav");
+      expect(result.voiceCompatible).toBe(false);
+      expect(result.audioBuffer.toString()).toBe("fake-wav-audio");
+
+      expect(mockFetch).toHaveBeenCalledOnce();
+      const [, init] = mockFetch.mock.calls[0] ?? [];
+      const body = JSON.parse(init!.body as string);
+      expect(body.model).toBe("mimo-v2.5-tts-voicedesign");
+      expect(body.messages).toEqual([
+        { role: "user", content: "Warm, bright, natural voice." },
+        { role: "assistant", content: "Hello from OpenClaw." },
+      ]);
+      expect(body.audio).toEqual({ format: "wav" });
+    });
+
+    it("uses a default style for Xiaomi voice design models", async () => {
+      const audio = Buffer.from("fake-mp3-audio").toString("base64");
+      const mockFetch = vi.mocked(globalThis.fetch);
+      mockFetch.mockResolvedValueOnce(
+        new Response(JSON.stringify({ choices: [{ message: { audio: { data: audio } } }] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+
+      await provider.synthesize({
+        text: "Hello from OpenClaw.",
+        cfg: {} as never,
+        providerConfig: {
+          apiKey: "sk-test",
+          model: "mimo-v2.5-tts-voicedesign",
+        },
+        target: "audio-file",
+        timeoutMs: 30000,
+      });
+
+      expect(mockFetch).toHaveBeenCalledOnce();
+      const [, init] = mockFetch.mock.calls[0] ?? [];
+      const body = JSON.parse(init!.body as string);
+      expect(body.messages).toHaveLength(2);
+      expect(body.messages[0]?.role).toBe("user");
+      expect(body.messages[0]?.content).toContain("natural");
+      expect(body.messages[1]).toEqual({
+        role: "assistant",
+        content: "Hello from OpenClaw.",
+      });
+      expect(body.audio).toEqual({ format: "mp3" });
+    });
+
     it("transcodes Xiaomi output to Opus for voice-note targets", async () => {
       const audio = Buffer.from("fake-mp3-audio").toString("base64");
       vi.mocked(globalThis.fetch).mockResolvedValueOnce(
@@ -206,6 +301,74 @@ describe("buildXiaomiSpeechProvider", () => {
         tempPrefix: "tts-xiaomi-",
         timeoutMs: 30000,
       });
+    });
+
+    it("transcodes Xiaomi voice design output to Opus for voice-note targets", async () => {
+      const audio = Buffer.from("fake-wav-audio").toString("base64");
+      vi.mocked(globalThis.fetch).mockResolvedValueOnce(
+        new Response(JSON.stringify({ choices: [{ message: { audio: { data: audio } } }] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+      transcodeAudioBufferToOpusMock.mockResolvedValueOnce(Buffer.from("fake-opus-audio"));
+
+      const result = await provider.synthesize({
+        text: "Hello from OpenClaw.",
+        cfg: {} as never,
+        providerConfig: {
+          apiKey: "sk-test",
+          model: "mimo-v2.5-tts-voicedesign",
+          format: "wav",
+        },
+        target: "voice-note",
+        timeoutMs: 30000,
+      });
+
+      expect(result.outputFormat).toBe("opus");
+      expect(result.fileExtension).toBe(".opus");
+      expect(result.voiceCompatible).toBe(true);
+      expect(result.audioBuffer.toString()).toBe("fake-opus-audio");
+      expect(transcodeAudioBufferToOpusMock).toHaveBeenCalledWith({
+        audioBuffer: Buffer.from("fake-wav-audio"),
+        inputExtension: "wav",
+        tempPrefix: "tts-xiaomi-",
+        timeoutMs: 30000,
+      });
+      const [, init] = vi.mocked(globalThis.fetch).mock.calls[0] ?? [];
+      const body = JSON.parse(init!.body as string);
+      expect(body.audio).toEqual({ format: "wav" });
+    });
+
+    it("caps oversized TTS request timeouts before scheduling or fetching", async () => {
+      const audio = Buffer.from("fake-mp3-audio").toString("base64");
+      const timeoutSpy = vi
+        .spyOn(globalThis, "setTimeout")
+        .mockReturnValue(1 as unknown as ReturnType<typeof setTimeout>);
+      const clearTimeoutSpy = vi
+        .spyOn(globalThis, "clearTimeout")
+        .mockImplementation(() => undefined);
+      vi.mocked(globalThis.fetch).mockResolvedValueOnce(
+        new Response(JSON.stringify({ choices: [{ message: { audio: { data: audio } } }] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+
+      try {
+        await provider.synthesize({
+          text: "Hello from OpenClaw.",
+          cfg: {} as never,
+          providerConfig: { apiKey: "sk-test" },
+          target: "audio-file",
+          timeoutMs: MAX_TIMER_TIMEOUT_MS + 1_000_000,
+        });
+
+        expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+      } finally {
+        timeoutSpy.mockRestore();
+        clearTimeoutSpy.mockRestore();
+      }
     });
 
     it("throws when API key is missing", async () => {

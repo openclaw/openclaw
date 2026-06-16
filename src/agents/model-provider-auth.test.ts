@@ -1,3 +1,4 @@
+// Verifies warmed provider-auth state and scoped auth-cache behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -21,6 +22,7 @@ const modelAuthMocks = vi.hoisted(() => ({
     syntheticAuthProviderRefs: [],
     syntheticAuthProviderRefsComplete: true,
   })),
+  hasAvailableAuthForProvider: vi.fn(() => true),
   hasRuntimeAvailableProviderAuth:
     vi.fn<
       (params: {
@@ -49,6 +51,7 @@ vi.mock("./model-catalog.js", () => ({
 
 vi.mock("./model-auth.js", () => ({
   createRuntimeProviderAuthLookup: modelAuthMocks.createRuntimeProviderAuthLookup,
+  hasAvailableAuthForProvider: modelAuthMocks.hasAvailableAuthForProvider,
   hasRuntimeAvailableProviderAuth: modelAuthMocks.hasRuntimeAvailableProviderAuth,
 }));
 
@@ -90,6 +93,8 @@ describe("prepared provider auth state", () => {
   });
 
   it("reuses prepared runtime auth lookup data while warming providers", async () => {
+    // Warming should build one runtime lookup and carry it across provider
+    // checks instead of rediscovering auth for every catalog entry.
     const cfg = {} as OpenClawConfig;
     modelCatalogMocks.loadModelCatalog.mockResolvedValue([
       { id: "gpt", name: "gpt", provider: "openai" },
@@ -216,9 +221,8 @@ describe("prepared provider auth state", () => {
     expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(1);
 
     // Flip the underlying compute to false. A narrow-scope caller must NOT
-    // pick up the warmed broad answer — gateway models.list with
-    // runtimeAuthDiscovery: false maps to both flags false, and the answer
-    // must reflect that narrower scope, not the prepared broad answer.
+    // pick up the warmed broad answer; gateway models.list can disable runtime
+    // auth discovery and needs that narrower answer.
     modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(false);
     await expect(
       hasAuthForModelProvider({
@@ -228,6 +232,19 @@ describe("prepared provider auth state", () => {
         allowPluginSyntheticAuth: false,
       }),
     ).resolves.toBe(false);
+    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(2);
+
+    // Bounded browse callers may explicitly consume the prepared broad answer
+    // while keeping slow fallback discovery disabled.
+    await expect(
+      hasAuthForModelProvider({
+        provider: "openai",
+        cfg,
+        discoverExternalCliAuth: false,
+        allowPluginSyntheticAuth: false,
+        allowPreparedRuntimeAuth: true,
+      }),
+    ).resolves.toBe(true);
     expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(2);
 
     // Broad-scope caller (default flags) still hits the prepared map.
@@ -257,6 +274,28 @@ describe("prepared provider auth state", () => {
       modelAuthMocks.hasRuntimeAvailableProviderAuth.mock.calls[0]?.[0].runtimeLookup;
     expect(runtimeLookup).toBe(
       modelAuthMocks.createRuntimeProviderAuthLookup.mock.results[0]?.value,
+    );
+  });
+
+  it("uses an explicit agent auth store directory for provider auth checks", async () => {
+    const cfg = {} as OpenClawConfig;
+    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(false);
+    authProfilesMocks.listProfilesForProvider.mockReturnValueOnce([{} as never]);
+
+    const hasAuth = createProviderAuthChecker({
+      cfg,
+      agentDir: "/state/agents/worker/agent",
+      discoverExternalCliAuth: false,
+    });
+
+    await expect(hasAuth("nvidia")).resolves.toBe(true);
+    expect(authProfilesMocks.ensureAuthProfileStoreWithoutExternalProfiles).toHaveBeenCalledWith(
+      "/state/agents/worker/agent",
+      { allowKeychainPrompt: false },
+    );
+    expect(authProfilesMocks.listProfilesForProvider).toHaveBeenCalledWith(
+      expect.anything(),
+      "nvidia",
     );
   });
 
@@ -554,7 +593,9 @@ describe("prepared provider auth state", () => {
       await Promise.resolve();
       cancelled = true;
       await warmPromise;
-      await new Promise((resolve) => setTimeout(resolve, 250));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 250);
+      });
 
       await expect(fs.access(markerPath)).rejects.toMatchObject({ code: "ENOENT" });
     } finally {

@@ -1,3 +1,8 @@
+/**
+ * Channel inbound event context builder.
+ *
+ * Converts route, sender, command, media, and supplemental facts into finalized message context.
+ */
 import {
   commandTurnKindToSource,
   createCommandTurnContext,
@@ -498,6 +503,11 @@ export function buildChannelInboundEventContext(
     Provider: params.provider ?? params.channel,
     Surface: params.surface ?? params.provider ?? params.channel,
     WasMentioned: params.access?.mentions?.wasMentioned,
+    ExplicitlyMentionedBot: params.access?.mentions?.explicitlyMentionedBot,
+    MentionedUserIds: params.access?.mentions?.mentionedUserIds,
+    MentionedSubteamIds: params.access?.mentions?.mentionedSubteamIds,
+    ImplicitMentionKinds: params.access?.mentions?.implicitMentionKinds,
+    MentionSource: params.access?.mentions?.mentionSource,
     CommandAuthorized: resolveAccessFactsCommandAuthorized(params.access) === true,
     CommandTurn: commandTurn,
     MessageThreadId: params.reply.messageThreadId ?? params.conversation.threadId,

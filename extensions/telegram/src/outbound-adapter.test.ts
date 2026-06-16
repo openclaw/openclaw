@@ -1,3 +1,4 @@
+// Telegram tests cover outbound adapter plugin behavior.
 import { verifyDurableFinalCapabilityProofs } from "openclaw/plugin-sdk/channel-outbound";
 import { adaptMessagePresentationForChannel } from "openclaw/plugin-sdk/interactive-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -504,11 +505,12 @@ describe("telegramOutbound", () => {
         cfg: {} as never,
         to: "12345",
         text: "hello",
-        formatting: { parseMode: "HTML" },
+        formatting: { parseMode: "HTML", tableMode: "bullets" },
         deps: { sendTelegram: sendMessageTelegramMock },
       });
       const options = lastCallOptions(sendMessageTelegramMock, "12345", "hello");
       expect(options.textMode).toBe("html");
+      expect(options.tableMode).toBe("bullets");
     };
     const proveMedia = async () => {
       sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-media", chatId: "12345" });

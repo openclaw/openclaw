@@ -1,3 +1,5 @@
+// Tool policy pipeline tests cover profile/allowlist filtering, diagnostics,
+// warning dedupe, and plugin-aware policy application.
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import {
   applyToolPolicyPipeline,
@@ -6,12 +8,14 @@ import {
 } from "./tool-policy-pipeline.js";
 import { resolveToolProfilePolicy } from "./tool-policy.js";
 
-const { toolPolicyAuditInfo } = vi.hoisted(() => ({
+const { toolPolicyAuditDebug, toolPolicyAuditInfo } = vi.hoisted(() => ({
+  toolPolicyAuditDebug: vi.fn(),
   toolPolicyAuditInfo: vi.fn(),
 }));
 
 vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({
+    debug: toolPolicyAuditDebug,
     info: toolPolicyAuditInfo,
   }),
 }));
@@ -49,6 +53,7 @@ function runAllowlistWarningStep(params: {
 describe("tool-policy-pipeline", () => {
   beforeEach(() => {
     resetToolPolicyWarningCacheForTest();
+    toolPolicyAuditDebug.mockClear();
     toolPolicyAuditInfo.mockClear();
   });
 
@@ -172,6 +177,8 @@ describe("tool-policy-pipeline", () => {
   });
 
   test("bounds the warning dedupe cache so new warnings still surface", () => {
+    // Warning dedupe is bounded so long-running agents do not grow unbounded
+    // memory while still surfacing new unknown allowlist entries.
     const warnings: string[] = [];
     const tools = [{ name: "exec" }] as unknown as DummyTool[];
 
@@ -318,6 +325,36 @@ describe("tool-policy-pipeline", () => {
         removedToolsTruncated: false,
       },
     );
+    expect(toolPolicyAuditDebug).not.toHaveBeenCalled();
+  });
+
+  test("can lower removal audits for diagnostic-only policy probes", () => {
+    const tools = [{ name: "exec" }, { name: "browser" }] as unknown as DummyTool[];
+
+    applyToolPolicyPipeline({
+      tools: tools as any,
+      toolMeta: () => undefined,
+      warn: () => {},
+      auditLogLevel: "debug",
+      steps: [
+        {
+          policy: { allow: ["exec"] },
+          label: "doctor tools.profile (coding)",
+        },
+      ],
+    });
+
+    expect(toolPolicyAuditDebug).toHaveBeenCalledWith(
+      "tool policy removed 1 tool(s) via doctor tools.profile (coding): browser",
+      {
+        rule: "doctor tools.profile (coding)",
+        ruleKind: "allow",
+        removedToolCount: 1,
+        removedTools: ["browser"],
+        removedToolsTruncated: false,
+      },
+    );
+    expect(toolPolicyAuditInfo).not.toHaveBeenCalled();
   });
 
   test("audits deny removals with the deny config key", () => {
@@ -346,6 +383,7 @@ describe("tool-policy-pipeline", () => {
         removedToolsTruncated: false,
       },
     );
+    expect(toolPolicyAuditDebug).not.toHaveBeenCalled();
   });
 
   test("splits mixed allow and deny policy audit entries by cause", () => {
@@ -388,6 +426,7 @@ describe("tool-policy-pipeline", () => {
         removedToolsTruncated: false,
       },
     );
+    expect(toolPolicyAuditDebug).not.toHaveBeenCalled();
   });
 
   test("does not audit policy steps that leave the tool surface unchanged", () => {
@@ -405,6 +444,7 @@ describe("tool-policy-pipeline", () => {
       ],
     });
 
+    expect(toolPolicyAuditDebug).not.toHaveBeenCalled();
     expect(toolPolicyAuditInfo).not.toHaveBeenCalled();
   });
 
@@ -433,5 +473,6 @@ describe("tool-policy-pipeline", () => {
         removedToolsTruncated: false,
       },
     );
+    expect(toolPolicyAuditDebug).not.toHaveBeenCalled();
   });
 });

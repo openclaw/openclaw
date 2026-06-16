@@ -1,3 +1,7 @@
+/**
+ * Claude CLI setup migration helpers. They rewrite legacy Claude CLI model refs
+ * to Anthropic refs while preserving runtime allowlist entries for CLI execution.
+ */
 import {
   CLAUDE_CLI_PROFILE_ID,
   type OpenClawConfig,
@@ -168,6 +172,7 @@ function modelEntryWithClaudeCliRuntime(entry: unknown): Record<string, unknown>
   return base;
 }
 
+/** Return whether Claude CLI credentials are available for setup migration. */
 export function hasClaudeCliAuth(options?: { allowKeychainPrompt?: boolean }): boolean {
   return Boolean(
     options?.allowKeychainPrompt === false
@@ -209,6 +214,7 @@ function buildClaudeCliAuthProfiles(
   ];
 }
 
+/** Build the config migration result for adopting Claude CLI-backed Anthropic defaults. */
 export function buildAnthropicCliMigrationResult(
   config: OpenClawConfig,
   credential?: ClaudeCliCredential | null,
@@ -224,7 +230,7 @@ export function buildAnthropicCliMigrationResult(
     ...rewrittenModels.runtimeRefs,
     ...rewrittenModels.migrated,
   ]);
-  const defaultModel = rewrittenModel.primary ?? "anthropic/claude-opus-4-7";
+  const defaultModel = rewrittenModel.primary ?? "anthropic/claude-opus-4-8";
 
   return {
     profiles: buildClaudeCliAuthProfiles(credential),

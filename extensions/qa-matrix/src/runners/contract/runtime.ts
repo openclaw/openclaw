@@ -1,9 +1,14 @@
+// Qa Matrix plugin module implements runtime behavior.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  parseStrictPositiveInteger,
+  resolveTimerTimeoutMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { loadQaRuntimeModule } from "openclaw/plugin-sdk/qa-runner-runtime";
 import {
   appendQaLiveLaneIssue as appendLiveLaneIssue,
@@ -195,11 +200,7 @@ function parsePositiveMatrixQaEnvMs(name: string, fallback: number) {
   if (raw === undefined) {
     return fallback;
   }
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed < 1) {
-    return fallback;
-  }
-  return Math.floor(parsed);
+  return resolveTimerTimeoutMs(parseStrictPositiveInteger(raw), fallback);
 }
 
 function createMatrixQaRunDeadline() {
@@ -545,6 +546,7 @@ async function waitForMatrixChannelReady(
 async function patchMatrixQaGatewayConfig(params: {
   gateway: MatrixQaGatewayChild;
   patch: Record<string, unknown>;
+  replacePaths?: string[];
   restartDelayMs?: number;
 }) {
   for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -560,6 +562,7 @@ async function patchMatrixQaGatewayConfig(params: {
         {
           raw: JSON.stringify(params.patch, null, 2),
           baseHash: snapshot.hash,
+          ...(params.replacePaths?.length ? { replacePaths: params.replacePaths } : {}),
           restartDelayMs: params.restartDelayMs ?? 0,
         },
         { timeoutMs: 60_000 },
@@ -704,7 +707,7 @@ export async function runMatrixQaLive(params: {
   const syncState: { driver?: string; observer?: string } = {};
   const syncStreams: MatrixQaSyncStreams = {};
   let canaryMs: number | undefined;
-  let initialGatewayBootMs = 0;
+  let initialGatewayBootMs;
   let scenarioGatewayBootMs = 0;
   let scenarioRestartGatewayMs = 0;
   let scenarioTransportInterruptMs = 0;
@@ -887,8 +890,8 @@ export async function runMatrixQaLive(params: {
                 gatewayRuntimeEnv: scenarioGateway.harness.gateway.runtimeEnv,
                 gatewayStateDir: scenarioGateway.harness.gateway.runtimeEnv?.OPENCLAW_STATE_DIR,
                 gatewayWorkspaceDir: scenarioGateway.harness.gateway.workspaceDir,
-                gatewayCall: async (method, params, opts) =>
-                  await scenarioGateway.harness.gateway.call(method, params ?? {}, opts),
+                gatewayCall: async (method, paramsLocal, opts) =>
+                  await scenarioGateway.harness.gateway.call(method, paramsLocal ?? {}, opts),
                 outputDir,
                 registrationToken: harness.registrationToken,
                 restartGateway: async () => {
@@ -972,6 +975,7 @@ export async function runMatrixQaLive(params: {
                   await patchMatrixQaGatewayConfig({
                     gateway: scenarioGateway.harness.gateway,
                     patch,
+                    replacePaths: opts?.replacePaths,
                     restartDelayMs: opts?.restartDelayMs,
                   });
                 },

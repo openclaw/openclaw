@@ -1,3 +1,4 @@
+// Verifies text-to-speech schema parsing and defaults.
 import { describe, expect, it } from "vitest";
 import { TtsConfigSchema } from "./zod-schema.core.js";
 
@@ -36,7 +37,7 @@ describe("TtsConfigSchema openai speed and instructions", () => {
     const result = TtsConfigSchema.safeParse({
       providers: {
         openai: {
-          speed: 5.0,
+          speed: 5,
         },
       },
     });

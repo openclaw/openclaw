@@ -1,5 +1,8 @@
+/**
+ * Resolves fallback thinking levels for providers that require reasoning.
+ */
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { normalizeThinkLevel, type ThinkLevel } from "../../auto-reply/thinking.js";
-import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { isReasoningConstraintErrorMessage } from "./errors.js";
 
 function extractSupportedValues(raw: string): string[] {
@@ -20,6 +23,7 @@ function extractSupportedValues(raw: string): string[] {
   );
 }
 
+/** Pick a configured or provider-safe reasoning level for fallback attempts. */
 export function pickFallbackThinkingLevel(params: {
   message?: string;
   attempted: Set<ThinkLevel>;

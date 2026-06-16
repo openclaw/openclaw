@@ -1,3 +1,7 @@
+/**
+ * Runs native harness tool-result middleware around tool execution results.
+ */
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type {
   AgentToolResultMiddleware,
@@ -6,7 +10,6 @@ import type {
   OpenClawAgentToolResult,
 } from "../../plugins/agent-tool-result-middleware-types.js";
 import { createLazyPromiseLoader } from "../../shared/lazy-promise.js";
-import { isRecord } from "../../shared/record-coerce.js";
 import { truncateUtf16Safe } from "../../utils.js";
 
 const log = createSubsystemLogger("agents/harness");

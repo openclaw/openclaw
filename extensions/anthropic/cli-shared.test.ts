@@ -1,3 +1,4 @@
+// Anthropic tests cover cli shared plugin behavior.
 import { describe, expect, it } from "vitest";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
 import {
@@ -76,6 +77,20 @@ describe("normalizeClaudeSettingSourcesArgs", () => {
   });
 });
 
+describe("Claude CLI model aliases", () => {
+  it("keeps pinned Claude CLI model refs on exact selectors", () => {
+    const aliases = buildAnthropicCliBackend().config.modelAliases;
+
+    expect(aliases?.["opus"]).toBe("opus");
+    expect(aliases?.["opus-4.8"]).toBe("claude-opus-4-8");
+    expect(aliases?.["opus-4.7"]).toBe("claude-opus-4-7");
+    expect(aliases?.["opus-4.6"]).toBe("claude-opus-4-6");
+    expect(aliases?.["claude-opus-4-8"]).toBe("claude-opus-4-8");
+    expect(aliases?.["claude-opus-4-7"]).toBe("claude-opus-4-7");
+    expect(aliases?.["claude-opus-4-6"]).toBe("claude-opus-4-6");
+  });
+});
+
 describe("resolveClaudeCliExecutionArgs", () => {
   it("omits effort args when thinking is off", () => {
     expect(
@@ -134,6 +149,61 @@ describe("resolveClaudeCliExecutionArgs", () => {
         baseArgs: ["-p", "--effort", "low", "--effort=high"],
       }),
     ).toEqual(["-p", "--effort", "max"]);
+  });
+
+  it("forces isolated no-tool one-shot args for side-question execution", () => {
+    expect(
+      resolveClaudeCliExecutionArgs({
+        workspaceDir: "/tmp",
+        provider: "claude-cli",
+        modelId: "claude-opus-4-7",
+        thinkingLevel: "max",
+        useResume: true,
+        executionMode: "side-question",
+        baseArgs: [
+          "-p",
+          "--output-format",
+          "stream-json",
+          "--allowedTools=mcp__openclaw__*",
+          "--allowedTools",
+          "Read",
+          "Grep",
+          "--permission-mode",
+          "bypassPermissions",
+          "--session-id=abc",
+          "--resume",
+          "old-session",
+          "--resume-session-at",
+          "old-message",
+          "--resume-session-at=old-message-equals",
+          "--mcp-config",
+          "/tmp/side-question-mcp.json",
+          "--bare",
+          "--safe-mode",
+          "--strict-mcp-config",
+          "--no-session-persistence",
+          "--max-turns",
+          "4",
+          "--effort",
+          "high",
+        ],
+      }),
+    ).toEqual([
+      "-p",
+      "--output-format",
+      "stream-json",
+      "--safe-mode",
+      "--tools",
+      "",
+      "--disallowedTools",
+      "mcp__*",
+      "--strict-mcp-config",
+      "--no-session-persistence",
+      "--max-turns",
+      "1",
+      "--permission-mode",
+      "default",
+    ]);
   });
 });
 
@@ -271,8 +341,8 @@ describe("normalizeClaudeBackendConfig", () => {
   });
 
   it("passes system prompt on every turn (issue #80374 — systemPromptWhen must be 'always')", () => {
-    // Before fix this was hardcoded to "first", which silently dropped
-    // systemPromptOverride on every resumed / compacted claude-cli session.
+    // Before fix this was hardcoded to "first", which silently dropped updated
+    // OpenClaw system prompt context on resumed / compacted claude-cli sessions.
     const backend = buildAnthropicCliBackend();
     expect(backend.config.systemPromptWhen).toBe("always");
   });

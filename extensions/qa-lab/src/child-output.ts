@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements child output behavior.
 export const QA_CHILD_STDOUT_MAX_BYTES = 1024 * 1024;
 export const QA_CHILD_STDERR_TAIL_BYTES = 64 * 1024;
 
@@ -78,7 +79,5 @@ export function formatQaChildOutputTail(tail: QaChildOutputTail, label: string) 
   if (!text) {
     return "";
   }
-  return tail.truncated
-    ? `[${label} truncated to last ${tail.maxBytes} bytes]\n${text}`
-    : text;
+  return tail.truncated ? `[${label} truncated to last ${tail.maxBytes} bytes]\n${text}` : text;
 }

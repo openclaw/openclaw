@@ -1,3 +1,4 @@
+// Slack tests cover prepare thread context plugin behavior.
 import type { App } from "@slack/bolt";
 import { resolveEnvelopeFormatOptions } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -291,6 +292,29 @@ describe("resolveSlackThreadContextData", () => {
     expect(result.threadHistoryBody).toContain("Bot (B2) (assistant)");
     expect(result.threadHistoryBody).toContain("allowed follow-up");
     expect(result.threadHistoryBody).not.toContain("Unknown (user)");
+  });
+
+  it("does not coerce malformed thread history timestamps into event times", async () => {
+    const { result } = await resolveAllowlistedThreadContext({
+      repliesMessages: [
+        { text: "starter from Alice", user: "U1", ts: "100.000" },
+        { text: "malformed timestamp follow-up", user: "U1", ts: "0x65" },
+        { text: "current message", user: "U1", ts: "101.000" },
+      ],
+      threadStarter: {
+        text: "starter from Alice",
+        userId: "U1",
+        ts: "100.000",
+      },
+      allowFromLower: ["u1"],
+      allowNameMatching: false,
+    });
+
+    const malformedHistoryEntry = result.threadHistoryBody
+      ?.split("\n\n")
+      .find((entry) => entry.includes("malformed timestamp follow-up"));
+    expect(malformedHistoryEntry).toContain("[slack message id: 0x65 channel: C123]");
+    expect(malformedHistoryEntry).not.toContain("1970-01-01");
   });
 
   it("includes self-authored starter (identified by bot user id) for a new thread session (default)", async () => {
