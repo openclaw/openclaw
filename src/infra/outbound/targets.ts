@@ -157,11 +157,12 @@ export function resolveHeartbeatDeliveryTarget(params: {
 
   const resolvedTarget =
     preparedExplicitPlugin && preparedExplicitTo
-      ? {
-          channel: target,
-          to: preparedExplicitTo,
-          mode: "heartbeat" as const,
-        }
+      ? resolveSessionDeliveryTarget({
+          entry,
+          requestedChannel: target,
+          explicitTo: preparedExplicitTo,
+          mode: "heartbeat",
+        })
       : resolveSessionDeliveryTarget({
           entry,
           requestedChannel: target === "last" ? "last" : target,

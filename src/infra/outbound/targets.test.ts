@@ -918,6 +918,13 @@ describe("resolveSessionDeliveryTarget", () => {
 
     const resolved = resolveHeartbeatDeliveryTarget({
       cfg: {},
+      entry: {
+        sessionId: "sess-external-account",
+        updatedAt: 1,
+        lastChannel: "external-channel",
+        lastTo: "room:previous",
+        lastAccountId: "account-2",
+      },
       heartbeat: {
         target: "external-channel",
         to: "room:ops",
@@ -926,6 +933,7 @@ describe("resolveSessionDeliveryTarget", () => {
 
     expect(resolved.channel).toBe("external-channel");
     expect(resolved.to).toBe("room:ops");
+    expect(resolved.accountId).toBe("account-2");
     expect(mocks.resolveOutboundChannelPlugin).toHaveBeenCalledWith({
       channel: "external-channel",
       cfg: {},
