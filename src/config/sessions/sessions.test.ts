@@ -183,8 +183,6 @@ describe("resolveSessionResetPolicy", () => {
       fresh: true,
       dailyResetAt: undefined,
       idleExpiresAt: undefined,
-      staleDaily: false,
-      staleIdle: false,
     });
   });
 
@@ -202,8 +200,6 @@ describe("resolveSessionResetPolicy", () => {
 
     expect(freshness).toMatchObject({
       fresh: false,
-      staleDaily: true,
-      staleIdle: false,
       staleReason: "daily",
     });
   });
@@ -223,8 +219,6 @@ describe("resolveSessionResetPolicy", () => {
 
     expect(freshness).toMatchObject({
       fresh: false,
-      staleDaily: false,
-      staleIdle: true,
       idleExpiresAt: 5 * 60_000,
       staleReason: "idle",
     });
@@ -245,8 +239,6 @@ describe("resolveSessionResetPolicy", () => {
 
     expect(freshness).toMatchObject({
       fresh: false,
-      staleDaily: false,
-      staleIdle: true,
       idleExpiresAt: 5 * 60_000,
       staleReason: "idle",
     });
@@ -283,8 +275,7 @@ describe("resolveSessionResetPolicy", () => {
 
     expect(freshness).toMatchObject({
       fresh: false,
-      staleDaily: true,
-      staleIdle: false,
+      staleReason: "daily",
     });
   });
 
@@ -302,9 +293,8 @@ describe("resolveSessionResetPolicy", () => {
 
     expect(freshness).toMatchObject({
       fresh: false,
-      staleDaily: false,
-      staleIdle: true,
       idleExpiresAt: 5 * 60_000,
+      staleReason: "idle",
     });
   });
 
@@ -325,11 +315,10 @@ describe("resolveSessionResetPolicy", () => {
 
     expect(freshness).toMatchObject({
       fresh: true,
-      staleDaily: true,
-      staleIdle: false,
       dailyResetAt: new Date(2026, 0, 18, 4, 0, 0).getTime(),
       idleExpiresAt: new Date(2026, 0, 18, 4, 30, 0).getTime(),
     });
+    expect(freshness.staleReason).toBeUndefined();
   });
 
   it("keeps adaptive sessions fresh when only idle is stale", () => {
@@ -349,11 +338,10 @@ describe("resolveSessionResetPolicy", () => {
 
     expect(freshness).toMatchObject({
       fresh: true,
-      staleDaily: false,
-      staleIdle: true,
       dailyResetAt: new Date(2026, 0, 17, 4, 0, 0).getTime(),
       idleExpiresAt: new Date(2026, 0, 18, 1, 0, 0).getTime(),
     });
+    expect(freshness.staleReason).toBeUndefined();
   });
 
   it("expires adaptive sessions once both daily and idle conditions are stale", () => {
@@ -373,8 +361,7 @@ describe("resolveSessionResetPolicy", () => {
 
     expect(freshness).toMatchObject({
       fresh: false,
-      staleDaily: true,
-      staleIdle: true,
+      staleReason: "adaptive",
       dailyResetAt: new Date(2026, 0, 18, 4, 0, 0).getTime(),
       idleExpiresAt: new Date(2026, 0, 18, 4, 30, 0).getTime(),
     });
