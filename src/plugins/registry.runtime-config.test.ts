@@ -127,4 +127,5 @@ describe("plugin registry runtime config scope", () => {
       pluginSource: "/plugins/legacy-plugin/index.js",
     });
   });
+
 });

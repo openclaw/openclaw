@@ -175,6 +175,36 @@ guidance remain available to non-Codex prompt surfaces for compatibility.
 | `api.registerMemoryPromptSupplement(builder)`  | Additive memory-adjacent prompt section |
 | `api.registerMemoryCorpusSupplement(adapter)`  | Additive memory search/read corpus      |
 
+### Channel mirror dispatcher
+
+The pin-from-here **mirror dispatcher** and **echo-admission** registries are
+exported from `openclaw/plugin-sdk/channel-outbound`:
+
+```ts
+import {
+  registerChannelMirrorDispatcher,
+  unregisterChannelMirrorDispatcher,
+  type MirrorDispatcher,
+  registerChannelEchoAdmission,
+  unregisterChannelEchoAdmission,
+  type ChannelEchoAdmission,
+} from "openclaw/plugin-sdk/channel-outbound";
+```
+
+A channel registers **per account** (last-wins, `unregister*` on stop, fail
+closed). `registerChannelMirrorDispatcher` hands the channel a bus-sourced
+`replyResolver` so a pinned target's turn renders + persists through that
+channel's own dispatch under its own config; `registerChannelEchoAdmission`
+gates the channel-agnostic prompt/post-hoc echo path on the destination's live
+enablement, so a revoked group/topic/DM stops receiving **both** the native
+mirror and the echo fallback.
+
+> **Maintainer note (open):** these are global, caller-keyed registries with no
+> per-plugin ownership enforcement — a caller could replace or unregister
+> another channel's handler. A maintainer decision is owed on whether to keep
+> them as a public seam, hand them out through an owner-scoped registrar, or keep
+> them internal. Only the bundled telegram channel uses them today.
+
 ### Host hooks for workflow plugins
 
 Host hooks are the SDK seams for plugins that need to participate in the host

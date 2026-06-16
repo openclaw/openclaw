@@ -47,7 +47,7 @@ import {
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
-import type { BlockReplyContext } from "openclaw/plugin-sdk/reply-runtime";
+import type { BlockReplyContext, GetReplyFromConfig } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
   createSubsystemLogger,
@@ -233,6 +233,13 @@ type DispatchTelegramMessageParams = {
   telegramCfg: TelegramAccountConfig;
   telegramDeps?: TelegramBotDeps;
   opts: Pick<TelegramBotOptions, "token" | "mediaMaxMb">;
+  /**
+   * Replaces the model-backed reply for this turn. The channel-agnostic mirror
+   * dispatch passes a bus-sourced resolver here so a pinned-target turn renders
+   * through this channel's own pipeline (streaming honored per its config)
+   * without calling the agent again.
+   */
+  replyResolver?: GetReplyFromConfig;
   retryDispatchErrors?: boolean;
   suppressFailureFallback?: boolean;
 };
@@ -784,6 +791,7 @@ export const dispatchTelegramMessage = async ({
   telegramCfg,
   telegramDeps: injectedTelegramDeps,
   opts,
+  replyResolver,
   retryDispatchErrors = false,
   suppressFailureFallback = false,
 }: DispatchTelegramMessageParams): Promise<TelegramDispatchResult> => {
@@ -1514,7 +1522,12 @@ export const dispatchTelegramMessage = async ({
   const deliveryBaseOptions = {
     chatId: String(chatId),
     accountId: route.accountId,
-    sessionKeyForInternalHooks: ctxPayload.SessionKey,
+    // A pin-from-here mirror turn (driven by a bus-sourced replyResolver) is a
+    // render of an already-mirrored turn, not an origin turn. Suppress its
+    // `message:sent` internal hook so it does NOT re-enter the post-hoc echo
+    // (echo-hook.ts) and re-deliver to the OTHER pinned threads — which would
+    // duplicate their native mirror. Same suppression fireEchoDeliveries uses.
+    sessionKeyForInternalHooks: replyResolver ? undefined : ctxPayload.SessionKey,
     mirrorIsGroup: isGroup,
     mirrorGroupId: isGroup ? String(chatId) : undefined,
     token: opts.token,
@@ -1962,6 +1975,7 @@ export const dispatchTelegramMessage = async ({
               return telegramDeps.dispatchReplyWithBufferedBlockDispatcher({
                 ctx: ctxPayload,
                 cfg,
+                replyResolver,
                 dispatcherOptions: {
                   ...replyPipeline,
                   beforeDeliver: async (payload) => payload,

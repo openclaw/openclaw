@@ -154,6 +154,8 @@ export const buildTelegramMessageContext = async ({
   const msg = primaryCtx.message;
   const chatId = msg.chat.id;
   const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
+  // Pin-from-here mirror: skip per-message admission (the pin authorized this).
+  const isMirror = options?.mirror === true;
   const senderId = msg.from?.id ? String(msg.from.id) : "";
   const messageThreadId = (msg as { message_thread_id?: number }).message_thread_id;
   const reactionApi =
@@ -268,7 +270,7 @@ export const buildTelegramMessageContext = async ({
     candidate.matchedBy === "default";
   const isNamedAccountFallback = requiresExplicitAccountBinding(route);
   const hasExplicitTopicRoute = isGroup && Boolean(topicConfig?.agentId?.trim());
-  if (isNamedAccountFallback && isGroup && !hasExplicitTopicRoute) {
+  if (!isMirror && isNamedAccountFallback && isGroup && !hasExplicitTopicRoute) {
     logInboundDrop({
       log: logVerbose,
       channel: "telegram",
@@ -308,28 +310,45 @@ export const buildTelegramMessageContext = async ({
     requireSenderForAllowOverride: false,
   });
   if (!baseAccess.allowed) {
+    // Destination-enablement gates are re-checked for mirrors too: a persisted
+    // pin must stop delivering once the destination group/topic is disabled
+    // (revocation). Only the sender allowFrom gate is skipped for a mirror — its
+    // inbound is synthetic and the /pin was the authorization, not the sender.
     if (baseAccess.reason === "group-disabled") {
       logVerbose(`Blocked telegram group ${chatId} (group disabled)`);
+      if (isMirror) {
+        options?.onMirrorAdmissionBlocked?.();
+      }
       return null;
     }
     if (baseAccess.reason === "topic-disabled") {
       logVerbose(
         `Blocked telegram topic ${chatId} (${resolvedThreadId ?? "unknown"}) (topic disabled)`,
       );
+      if (isMirror) {
+        options?.onMirrorAdmissionBlocked?.();
+      }
       return null;
     }
-    logVerbose(
-      isGroup
-        ? `Blocked telegram group sender ${senderId || "unknown"} (group allowFrom override)`
-        : `Blocked telegram DM sender ${senderId || "unknown"} (DM allowFrom override)`,
-    );
-    return null;
+    if (!isMirror) {
+      logVerbose(
+        isGroup
+          ? `Blocked telegram group sender ${senderId || "unknown"} (group allowFrom override)`
+          : `Blocked telegram DM sender ${senderId || "unknown"} (DM allowFrom override)`,
+      );
+      return null;
+    }
   }
 
   const requireTopic = directConfig?.requireTopic;
   const topicRequiredButMissing = !isGroup && requireTopic === true && dmThreadId == null;
+  // Enforced for mirrors too: a destination that now requires a topic must not
+  // receive a topic-less mirror (revocation of the topic requirement).
   if (topicRequiredButMissing) {
     logVerbose(`Blocked telegram DM ${chatId}: requireTopic=true but no topic present`);
+    if (isMirror) {
+      options?.onMirrorAdmissionBlocked?.();
+    }
     return null;
   }
 
@@ -374,6 +393,15 @@ export const buildTelegramMessageContext = async ({
       upsertPairingRequest,
     }))
   ) {
+    // Enforced for mirrors too: a DM whose access is later denied (DM policy
+    // disabled, pairing required, allowlist) must stop receiving mirrored turns
+    // — this is destination revocation, not a transient failure. Signal it so
+    // dispatchMirror keeps the handled mark (post-hoc echo suppressed) instead of
+    // un-marking and falling through to the raw echo.
+    if (isMirror) {
+      logVerbose(`Blocked telegram DM ${chatId} (access denied)`);
+      options?.onMirrorAdmissionBlocked?.();
+    }
     return null;
   }
   let initialTypingCueSent = false;
