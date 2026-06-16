@@ -190,9 +190,12 @@ export const uk: TranslationMap = {
     goal: "Мета",
     goalNote: "Примітка до мети",
     thinking: "Обмірковування",
+    thinkingTooltip:
+      "Maps to provider reasoning_effort. Only effective when the model supports it (compat.supportsReasoningEffort).",
     fast: "Швидко",
     verbose: "Докладно",
     reasoning: "Міркування",
+    reasoningTooltip: "How reasoning output is shown in chat (display/transport).",
     actions: "Дії",
     addToWorkboard: "Додати до Workboard",
     openWorkboardCard: "Відкрити картку Workboard",

@@ -32,6 +32,8 @@
     "chat.workspaceFiles.workspace",
     "cron.jobDetail.command",
     "cron.jobDetail.cwd",
+    "sessionsView.reasoningTooltip",
+    "sessionsView.thinkingTooltip",
     "skillWorkshop.header.useCurrentChat",
     "skillWorkshop.header.useCurrentChatAria",
     "skillWorkshop.header.useCurrentChatTooltip",
@@ -64,12 +66,12 @@
     "workboard.unknownStatus",
     "workboard.viewDetails"
   ],
-  "generatedAt": "2026-06-14T04:03:17.740Z",
+  "generatedAt": "2026-06-15T21:56:10.890Z",
   "locale": "zh-CN",
   "model": "claude-opus-4-8",
   "provider": "anthropic",
-  "sourceHash": "cea79b090b14fca4ad1e3e07dc5dcd7f964b1f199fd028938e41054dc5167457",
-  "totalKeys": 1377,
+  "sourceHash": "2ebdb97fa564d65658c9bdc8d74c2ffc5a5765edc2dab4288b87e61939934c13",
+  "totalKeys": 1379,
   "translatedKeys": 1314,
   "workflow": 1
 }
