@@ -143,6 +143,16 @@ describe("shouldDropEmptyMattermostBody", () => {
     ).toBe(true);
   });
 
+  it("drops a bot mention with only a Unicode control residual", () => {
+    expect(
+      shouldDropEmptyMattermostBody({
+        bodyText: "\u0085",
+        rawText: "@openclaw\u0085",
+        botUsername: "openclaw",
+      }),
+    ).toBe(true);
+  });
+
   it.each([
     "@openclaw @openclaw",
     "@openclaw\n@openclaw",
