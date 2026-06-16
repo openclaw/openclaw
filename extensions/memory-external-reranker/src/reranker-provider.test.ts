@@ -24,7 +24,16 @@ beforeEach(() => {
 });
 
 /** Build a minimal mock OpenClawConfig for tests. */
-function makeTestConfig(providers: Record<string, { baseUrl: string; apiKey?: unknown }>) {
+function makeTestConfig(
+  providers: Record<
+    string,
+    {
+      baseUrl: string;
+      apiKey?: unknown;
+      request?: { allowPrivateNetwork?: boolean };
+    }
+  >,
+) {
   return { models: { providers } } as never;
 }
 
@@ -271,8 +280,13 @@ describe("ExternalMmrReranker", () => {
       const mock = mockOkGuard([{ index: 0, relevance_score: 0.9 }]);
 
       const reranker = new ExternalMmrReranker(
-        { provider: "local", model: "qwen3-reranker", allowPrivateNetwork: true },
-        makeTestConfig({ local: { baseUrl: "http://127.0.0.1:8082" } }),
+        { provider: "local", model: "qwen3-reranker" },
+        makeTestConfig({
+          local: {
+            baseUrl: "http://127.0.0.1:8082",
+            request: { allowPrivateNetwork: true },
+          },
+        }),
       );
 
       const docs: RerankDocument[] = [{ id: "doc-1", content: "hello", score: 0.5 }];
@@ -292,7 +306,7 @@ describe("ExternalMmrReranker", () => {
 
       const docs: RerankDocument[] = [{ id: "doc-1", content: "hello", score: 0.5 }];
       await expect(reranker.rerank({ query: "test", documents: docs, limit: 5 })).rejects.toThrow(
-        /allowPrivateNetwork=true/,
+        /models\.providers\.local\.request\.allowPrivateNetwork=true/,
       );
       expect(mockFn).not.toHaveBeenCalled();
     });

@@ -20,7 +20,8 @@ Install route: npm; ClawHub (`@openclaw/memory-external-reranker`).
   This plugin sends the user query and candidate memory snippets to the configured provider
   endpoint, and may attach the provider API key from `models.providers.<id>.apiKey`. Treat the
   endpoint as operator-approved egress: review redaction, logging, retention, SSRF/private-network
-  policy, and credential handling before enabling it.
+  policy, and credential handling before enabling it. Private-network opt-in is controlled on the
+  model provider via `models.providers.<id>.request.allowPrivateNetwork`.
 </Warning>
 
 <CardGroup cols={2}>
@@ -250,6 +251,9 @@ Endpoint URLs go in `models.providers` in your `openclaw.json`. The key you choo
     providers: {
       "llamacpp-local": {
         baseUrl: "http://localhost:8080",
+        request: {
+          allowPrivateNetwork: true,
+        },
         // No API key needed for a local server
         models: [{ id: "my-reranker-model", name: "My Reranker Model", input: ["text"] }],
       },
@@ -262,7 +266,6 @@ Endpoint URLs go in `models.providers` in your `openclaw.json`. The key you choo
         config: {
           provider: "llamacpp-local",
           model: "my-reranker-model",
-          allowPrivateNetwork: true,
         },
       },
     },
@@ -278,6 +281,9 @@ Endpoint URLs go in `models.providers` in your `openclaw.json`. The key you choo
     providers: {
       "vllm-local": {
         baseUrl: "http://localhost:8000",
+        request: {
+          allowPrivateNetwork: true,
+        },
         // No API key needed for a local server
         models: [{ id: "my-reranker-model", name: "My Reranker Model", input: ["text"] }],
       },
@@ -290,7 +296,6 @@ Endpoint URLs go in `models.providers` in your `openclaw.json`. The key you choo
         config: {
           provider: "vllm-local",
           model: "my-reranker-model",
-          allowPrivateNetwork: true,
         },
       },
     },
@@ -545,7 +550,7 @@ If you see connection errors to the reranking endpoint:
 2. Check that the endpoint supports the `/v1/rerank` path (or matches your `endpointPath`)
 3. Ensure `plugins.entries.memory-external-reranker.config.provider` matches your key in `models.providers`
 4. Ensure `plugins.entries.memory-external-reranker.config.model` is the provider model ID (without a `provider/` prefix)
-5. For localhost/private provider hosts, set `plugins.entries.memory-external-reranker.config.allowPrivateNetwork: true`
+5. For localhost/private provider hosts, set `models.providers.<providerId>.request.allowPrivateNetwork: true`
 6. Ensure any required API keys are configured in `models.providers.<providerId>.apiKey`
 7. Test the endpoint directly with `curl`:
 

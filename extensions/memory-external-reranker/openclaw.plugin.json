@@ -46,11 +46,6 @@
       "label": "Additional Body Params",
       "advanced": true,
       "help": "Extra key/value pairs merged into the rerank request body (e.g. max_chunks_per_doc, truncation)"
-    },
-    "allowPrivateNetwork": {
-      "label": "Allow Private Network",
-      "advanced": true,
-      "help": "Set to true when the reranker endpoint is on a private or loopback host (e.g. localhost, 192.168.x.x). Restricts outbound access to the configured baseUrl hostname only."
     }
   },
   "configSchema": {
@@ -65,8 +60,7 @@
       },
       "endpointPath": { "type": "string" },
       "topN": { "type": "integer", "minimum": 1 },
-      "additionalBodyParams": { "type": "object" },
-      "allowPrivateNetwork": { "type": "boolean" }
+      "additionalBodyParams": { "type": "object" }
     }
   }
 }
