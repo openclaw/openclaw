@@ -13,6 +13,7 @@ import {
   listMemoryFiles,
   normalizeExtraMemoryPaths,
   remapChunkLines,
+  scanMemoryFiles,
 } from "./internal.js";
 import {
   DEFAULT_MEMORY_MULTIMODAL_MAX_FILE_BYTES,
@@ -137,6 +138,96 @@ describe("memory host SDK package internals", () => {
       path.join("extra", "diagram.png"),
       path.join("extra", "note.md"),
     ]);
+  });
+
+  it("treats missing memory roots as an authoritative empty scan", async () => {
+    const tmpDir = getTmpDir();
+
+    const scan = await scanMemoryFiles(tmpDir, [path.join(tmpDir, "missing-extra")]);
+
+    // No memory dir, no root memory file, missing extra path: nothing exists,
+    // so destructive callers may safely prune orphaned rows.
+    expect(scan).toEqual({ ok: true, files: [] });
+  });
+
+  it("flags the scan when the workspace root cannot be read", async () => {
+    const tmpDir = getTmpDir();
+    const realReaddir = fs.readdir;
+    vi.spyOn(fs, "readdir").mockImplementation(async (...args: Parameters<typeof realReaddir>) => {
+      const [target] = args;
+      if (typeof target === "string" && path.resolve(target) === tmpDir) {
+        throw Object.assign(new Error("nfs blip"), { code: "EIO" });
+      }
+      return await realReaddir(...args);
+    });
+
+    const scan = await scanMemoryFiles(tmpDir);
+
+    // The root MEMORY.md lookup is part of the authoritative listing; a root
+    // read failure must not look like the file was deleted.
+    expect(scan).toEqual({ ok: false, files: [] });
+  });
+
+  it("flags the scan when the memory dir cannot be read", async () => {
+    const tmpDir = getTmpDir();
+    const memoryDir = path.join(tmpDir, "memory");
+    fsSync.mkdirSync(memoryDir, { recursive: true });
+    fsSync.writeFileSync(path.join(memoryDir, "note.md"), "# Note");
+    const realLstat = fs.lstat;
+    vi.spyOn(fs, "lstat").mockImplementation(async (...args: Parameters<typeof realLstat>) => {
+      const [target] = args;
+      if (typeof target === "string" && path.resolve(target) === memoryDir) {
+        throw Object.assign(new Error("nfs blip"), { code: "EIO" });
+      }
+      return await realLstat(...args);
+    });
+
+    const scan = await scanMemoryFiles(tmpDir);
+
+    // The listing is incomplete, not empty: destructive callers must not prune.
+    expect(scan.ok).toBe(false);
+    expect(scan.files).toEqual([]);
+  });
+
+  it("flags the scan when the memory dir readdir fails after a successful lstat", async () => {
+    // fs-safe walkDirectory swallows readdir errors and returns an empty walk,
+    // so the scan must probe the root read itself or a permission/NFS blip on
+    // readdir would masquerade as an authoritatively empty dir.
+    const tmpDir = getTmpDir();
+    const memoryDir = path.join(tmpDir, "memory");
+    fsSync.mkdirSync(memoryDir, { recursive: true });
+    fsSync.writeFileSync(path.join(memoryDir, "note.md"), "# Note");
+    const realReaddir = fs.readdir;
+    vi.spyOn(fs, "readdir").mockImplementation(async (...args: Parameters<typeof realReaddir>) => {
+      const [target] = args;
+      if (typeof target === "string" && path.resolve(target) === memoryDir) {
+        throw Object.assign(new Error("nfs blip"), { code: "EIO" });
+      }
+      return await realReaddir(...args);
+    });
+
+    const scan = await scanMemoryFiles(tmpDir);
+
+    expect(scan.ok).toBe(false);
+    expect(scan.files).toEqual([]);
+  });
+
+  it("flags the scan when an extra path cannot be read", async () => {
+    const tmpDir = getTmpDir();
+    const extraDir = path.join(tmpDir, "extra");
+    fsSync.mkdirSync(extraDir, { recursive: true });
+    const realLstat = fs.lstat;
+    vi.spyOn(fs, "lstat").mockImplementation(async (...args: Parameters<typeof realLstat>) => {
+      const [target] = args;
+      if (typeof target === "string" && path.resolve(target) === extraDir) {
+        throw Object.assign(new Error("nfs blip"), { code: "EACCES" });
+      }
+      return await realLstat(...args);
+    });
+
+    const scan = await scanMemoryFiles(tmpDir, [extraDir]);
+
+    expect(scan.ok).toBe(false);
   });
 
   it("allows top-level dreams path casing variants", () => {

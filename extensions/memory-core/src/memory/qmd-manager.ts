@@ -24,10 +24,10 @@ import {
   deriveQmdScopeChannel,
   deriveQmdScopeChatType,
   isQmdScopeAllowed,
-  listSessionFilesForAgent,
   parseQmdQueryJson,
   resolveCliSpawnInvocation,
   runCliCommand,
+  scanSessionFilesForAgent,
   type QmdQueryResult,
   type SessionFileEntry,
 } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
@@ -2511,7 +2511,8 @@ export class QmdMemoryManager implements MemorySearchManager {
     const exportDir = this.sessionExporter.dir;
     await fs.mkdir(exportDir, { recursive: true });
     const exportRoot = await root(exportDir);
-    const files = await listSessionFilesForAgent(this.agentId);
+    const scan = await scanSessionFilesForAgent(this.agentId);
+    const files = scan.files;
     const keep = new Set<string>();
     const tracked = new Set<string>();
     const cutoff = this.sessionExporter.retentionMs
@@ -2540,6 +2541,12 @@ export class QmdMemoryManager implements MemorySearchManager {
         target,
       });
       keep.add(target);
+    }
+    if (!scan.ok) {
+      // A failed listing is non-authoritative: reconciling against it would
+      // delete the whole exported corpus and force a full re-export on the
+      // next pass. Abort so runUpdate keeps dirty state and retries later.
+      throw new Error("QMD session export aborted: session enumeration failed");
     }
     const exported = await exportRoot.list(".").catch(() => []);
     for (const name of exported) {

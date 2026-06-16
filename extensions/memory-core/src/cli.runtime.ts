@@ -520,7 +520,7 @@ async function checkReadableFile(pathname: string): Promise<{ exists: boolean; i
   }
 }
 
-async function scanSessionFiles(agentId: string): Promise<SourceScan> {
+async function diagnoseSessionFiles(agentId: string): Promise<SourceScan> {
   const issues: string[] = [];
   const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId);
   try {
@@ -542,7 +542,7 @@ async function scanSessionFiles(agentId: string): Promise<SourceScan> {
   }
 }
 
-async function scanMemoryFiles(
+async function diagnoseMemoryFiles(
   workspaceDir: string,
   extraPaths: string[] = [],
 ): Promise<SourceScan> {
@@ -668,10 +668,10 @@ async function scanMemorySources(params: {
   const extraPaths = params.extraPaths ?? [];
   for (const source of params.sources) {
     if (source === "memory") {
-      scans.push(await scanMemoryFiles(params.workspaceDir, extraPaths));
+      scans.push(await diagnoseMemoryFiles(params.workspaceDir, extraPaths));
     }
     if (source === "sessions") {
-      scans.push(await scanSessionFiles(params.agentId));
+      scans.push(await diagnoseSessionFiles(params.agentId));
     }
   }
   const issues = scans.flatMap((scan) => scan.issues);

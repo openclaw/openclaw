@@ -5237,6 +5237,53 @@ describe("QmdMemoryManager", () => {
     }
   });
 
+  it("does not mark qmd clean when session export enumeration fails", async () => {
+    const sessionsDir = path.join(stateDir, "agents", agentId, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    await fs.writeFile(
+      path.join(sessionsDir, "session-1.jsonl"),
+      '{"type":"message","message":{"role":"user","content":"hello"}}\n',
+      "utf-8",
+    );
+
+    const currentMemory = cfg.memory;
+    cfg = {
+      ...cfg,
+      memory: {
+        ...currentMemory,
+        qmd: {
+          ...currentMemory?.qmd,
+          sessions: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+
+    const { manager } = await createManager();
+    const updateCallsBefore = spawnMock.mock.calls.filter(
+      (call: unknown[]) => (call[1] as string[])[0] === "update",
+    ).length;
+    const realReaddir = fs.readdir;
+    vi.spyOn(fs, "readdir").mockImplementation(async (...args: Parameters<typeof realReaddir>) => {
+      const [target] = args;
+      if (typeof target === "string" && path.resolve(target) === sessionsDir) {
+        throw Object.assign(new Error("nfs blip"), { code: "EIO" });
+      }
+      return await realReaddir(...args);
+    });
+
+    try {
+      await expect(manager.sync({ reason: "manual", force: true })).rejects.toThrow(
+        "QMD session export aborted: session enumeration failed",
+      );
+      const updateCallsAfter = spawnMock.mock.calls.filter(
+        (call: unknown[]) => (call[1] as string[])[0] === "update",
+      ).length;
+      expect(updateCallsAfter).toBe(updateCallsBefore);
+    } finally {
+      await manager.close();
+    }
+  });
+
   it("fails closed when sqlite index is busy during doc lookup or search", async () => {
     const cases = [
       {

@@ -146,7 +146,7 @@ describe("memory manager reindex recovery", () => {
         pendingBytes: 100,
         pendingMessages: 2,
       };
-      const emptySyncPlan = { indexItems: [], finalize: () => undefined };
+      const emptySyncPlan = { indexItems: [], finalize: () => undefined, scanOk: true };
 
       harness.dirty = true;
       harness.sessionsDirty = true;
@@ -190,7 +190,7 @@ describe("memory manager reindex recovery", () => {
         }),
       );
       const harness = memoryManager as unknown as ReindexHarness;
-      const emptySyncPlan = { indexItems: [], finalize: () => undefined };
+      const emptySyncPlan = { indexItems: [], finalize: () => undefined, scanOk: true };
 
       harness.syncMemoryFiles = async () => emptySyncPlan;
       harness.syncSessionFiles = async () => emptySyncPlan;
@@ -221,7 +221,7 @@ describe("memory manager reindex recovery", () => {
     await memoryManager.sync({ reason: "test", force: true });
 
     const harness = memoryManager as unknown as ReindexHarness;
-    const emptySyncPlan = { indexItems: [], finalize: () => undefined };
+    const emptySyncPlan = { indexItems: [], finalize: () => undefined, scanOk: true };
     const sessionSyncCalls: SyncSessionParams[] = [];
 
     harness.sessionsDirty = true;
@@ -350,7 +350,7 @@ describe("memory manager reindex recovery", () => {
     await memoryManager.sync({ reason: "test", force: true });
 
     const harness = memoryManager as unknown as ReindexHarness;
-    const emptySyncPlan = { indexItems: [], finalize: () => undefined };
+    const emptySyncPlan = { indexItems: [], finalize: () => undefined, scanOk: true };
     const memorySyncCalls: Array<{ needsFullReindex: boolean }> = [];
 
     harness.dirty = true;

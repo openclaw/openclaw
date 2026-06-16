@@ -7,9 +7,11 @@ export {
   loadDreamingNarrativeTranscriptPathSetForAgent,
   loadSessionTranscriptClassificationForAgent,
   normalizeSessionTranscriptPathForComparison,
+  scanSessionFilesForAgent,
   sessionPathForFile,
   type BuildSessionEntryOptions,
   type SessionFileEntry,
+  type SessionFilesScanResult,
   type SessionTranscriptClassification,
 } from "./host/session-files.js";
 export {
