@@ -17,12 +17,28 @@ export function isRecoverableManagerAcpxExitError(message: string): boolean {
   return /^acpx exited with (code \d+|signal [a-z0-9]+)/i.test(message.trim());
 }
 
-function isRecoverableMissingManagerPersistentSessionError(message: string): boolean {
-  const normalized = message.trim();
-  return (
-    /persistent acp session .* could not be resumed/i.test(normalized) &&
-    /(resource not found|no matching session)/i.test(normalized)
-  );
+/** acpx detail code for a persistent session that can no longer be resumed and must be re-created. */
+const SESSION_RESUME_REQUIRED_DETAIL_CODE = "SESSION_RESUME_REQUIRED";
+
+/**
+ * Detects a "persistent session can no longer be resumed" failure by acpx's
+ * structured detail code, on the error itself or anywhere in its cause chain.
+ * Keying on the structured code rather than the human reason text is what makes
+ * recovery independent of the backend's wording — Claude reports "Resource not
+ * found", Kiro reports "Internal error" (RequestError -32603), but both wrap a
+ * SessionResumeRequiredError; matching the reason text missed Kiro and left the
+ * thread permanently stuck (#87830).
+ */
+function isRecoverableMissingManagerPersistentSessionError(error: AcpRuntimeError): boolean {
+  let current: unknown = error;
+  // Depth-capped to defend against self-referential cause cycles.
+  for (let depth = 0; current && depth < 8; depth += 1) {
+    if ((current as { detailCode?: unknown }).detailCode === SESSION_RESUME_REQUIRED_DETAIL_CODE) {
+      return true;
+    }
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
 }
 
 /** Prepares a one-time fresh-handle retry for recoverable pre-output runtime failures. */
@@ -51,7 +67,7 @@ export async function prepareFreshManagerRuntimeHandleRetry(params: {
     !params.runtime ||
     !params.meta ||
     params.meta.mode !== "persistent" ||
-    !isRecoverableMissingManagerPersistentSessionError(params.error.message)
+    !isRecoverableMissingManagerPersistentSessionError(params.error)
   ) {
     return false;
   }
