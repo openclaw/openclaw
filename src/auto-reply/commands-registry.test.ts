@@ -223,6 +223,14 @@ describe("commands registry", () => {
     ]);
   });
 
+  it("does not advertise display-name args for shared /new commands", () => {
+    const command = requireChatCommand("new");
+    const native = requireNativeSpec(listNativeCommandSpecs(), "new");
+
+    expect(command.args).toBeUndefined();
+    expect(native.args).toBeUndefined();
+  });
+
   it("exposes /side as a BTW text and native alias", () => {
     const btw = requireChatCommand("btw");
     expect(btw.nativeName).toBe("btw");

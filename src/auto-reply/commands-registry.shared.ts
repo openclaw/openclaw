@@ -740,14 +740,6 @@ export function buildBuiltinChatCommands(
       acceptsArgs: true,
       category: "session",
       tier: "essential",
-      args: [
-        {
-          name: "name",
-          description: "Optional session display name",
-          type: "string",
-          captureRemaining: true,
-        },
-      ],
     }),
     defineChatCommand({
       key: "name",
