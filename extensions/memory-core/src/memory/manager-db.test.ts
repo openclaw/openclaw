@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { ensureMemoryIndexSchema } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  ensureMemoryIndexSchema,
+  loadSqliteVecExtension,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   cleanupAgedMemoryReindexTempFiles,
@@ -37,7 +40,7 @@ describe("memory manager database publication", () => {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
-  it("removes a stale vector table when the shadow index has no vectors", () => {
+  it("removes a stale vector table when the shadow index has no vectors", async () => {
     const targetPath = path.join(fixtureRoot, "target.sqlite");
     const sourcePath = path.join(fixtureRoot, "source.sqlite");
     const targetDb = new DatabaseSync(targetPath);
@@ -49,7 +52,7 @@ describe("memory manager database publication", () => {
       targetDb.prepare("INSERT INTO chunks_vec (id, embedding) VALUES (?, ?)").run("stale", "[]");
       sourceDb.close();
 
-      publishMemoryDatabaseTables({
+      await publishMemoryDatabaseTables({
         targetDb,
         sourcePath,
         metaKey: "memory_index_meta",
@@ -69,7 +72,47 @@ describe("memory manager database publication", () => {
     }
   });
 
-  it("rejects a stale shadow publish after a concurrent live memory update", () => {
+  it("loads sqlite-vec on the target before publishing a shadow vector table", async () => {
+    const targetPath = path.join(fixtureRoot, "target.sqlite");
+    const sourcePath = path.join(fixtureRoot, "source.sqlite");
+    const targetDb = new DatabaseSync(targetPath, { allowExtension: true });
+    const sourceDb = new DatabaseSync(sourcePath, { allowExtension: true });
+    try {
+      ensureTestMemorySchema(targetDb);
+      ensureTestMemorySchema(sourceDb);
+      const sourceVector = await loadSqliteVecExtension({ db: sourceDb });
+      if (!sourceVector.ok) {
+        return;
+      }
+      sourceDb.exec(`
+        CREATE VIRTUAL TABLE chunks_vec USING vec0(
+          id TEXT PRIMARY KEY,
+          embedding FLOAT[3]
+        )
+      `);
+      sourceDb
+        .prepare("INSERT INTO chunks_vec (id, embedding) VALUES (?, ?)")
+        .run("vector", JSON.stringify([0, 1, 0]));
+      sourceDb.close();
+
+      await publishMemoryDatabaseTables({
+        targetDb,
+        sourcePath,
+        metaKey: "memory_index_meta",
+        expectedRevision: readMemoryDatabaseRevision(targetDb),
+        vectorExtensionPath: sourceVector.extensionPath,
+      });
+
+      expect(targetDb.prepare("SELECT id FROM chunks_vec").all()).toEqual([{ id: "vector" }]);
+    } finally {
+      try {
+        sourceDb.close();
+      } catch {}
+      targetDb.close();
+    }
+  });
+
+  it("rejects a stale shadow publish after a concurrent live memory update", async () => {
     const targetPath = path.join(fixtureRoot, "target.sqlite");
     const sourcePath = path.join(fixtureRoot, "source.sqlite");
     const targetDb = new DatabaseSync(targetPath);
@@ -92,14 +135,14 @@ describe("memory manager database publication", () => {
       concurrentDb.close();
       concurrentDb = undefined;
 
-      expect(() =>
+      await expect(
         publishMemoryDatabaseTables({
           targetDb,
           sourcePath,
           metaKey: "memory_index_meta",
           expectedRevision,
         }),
-      ).toThrow(/changed while full reindex was building/);
+      ).rejects.toThrow(/changed while full reindex was building/);
       expect(
         targetDb.prepare("SELECT hash FROM files WHERE path = ?").get("memory.md"),
       ).toEqual({ hash: "newer" });

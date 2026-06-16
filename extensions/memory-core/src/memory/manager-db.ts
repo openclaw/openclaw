@@ -6,6 +6,7 @@ import {
   closeMemorySqliteWalMaintenance,
   configureMemorySqliteWalMaintenance,
   ensureDir,
+  loadSqliteVecExtension,
   requireNodeSqlite,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
@@ -67,6 +68,17 @@ function readTableSql(db: DatabaseSync, schema: string, tableName: string): stri
   return typeof row?.sql === "string" && row.sql.trim() ? row.sql : null;
 }
 
+function hasSqliteVecExtension(db: DatabaseSync): boolean {
+  try {
+    const row = db.prepare("SELECT vec_version() AS version").get() as
+      | { version?: unknown }
+      | undefined;
+    return typeof row?.version === "string" && row.version.trim().length > 0;
+  } catch {
+    return false;
+  }
+}
+
 export function readMemoryDatabaseRevision(db: DatabaseSync): number {
   const row = db
     .prepare("SELECT revision FROM memory_index_state WHERE id = ?")
@@ -104,14 +116,30 @@ function replaceVirtualTable(params: {
 }
 
 /** Publish a completed shadow memory index without replacing the shared agent database file. */
-export function publishMemoryDatabaseTables(params: {
+export async function publishMemoryDatabaseTables(params: {
   targetDb: DatabaseSync;
   sourcePath: string;
   metaKey: string;
   expectedRevision: number;
-}): void {
+  vectorExtensionPath?: string;
+}): Promise<void> {
   params.targetDb.prepare(`ATTACH DATABASE ? AS ${MEMORY_REINDEX_SCHEMA}`).run(params.sourcePath);
   try {
+    if (
+      tableExists(params.targetDb, MEMORY_REINDEX_SCHEMA, "chunks_vec") &&
+      !hasSqliteVecExtension(params.targetDb)
+    ) {
+      const loaded = await loadSqliteVecExtension({
+        db: params.targetDb,
+        extensionPath: params.vectorExtensionPath,
+      });
+      if (!loaded.ok) {
+        throw new Error(
+          `Failed to load sqlite-vec before publishing the full memory reindex: ` +
+            `${loaded.error ?? "unknown sqlite-vec load error"}`,
+        );
+      }
+    }
     runSqliteImmediateTransactionSync(params.targetDb, () => {
       const liveRevision = readMemoryDatabaseRevision(params.targetDb);
       if (liveRevision !== params.expectedRevision) {

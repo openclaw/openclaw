@@ -2530,11 +2530,12 @@ export abstract class MemoryManagerSyncOps {
 
       closeMemoryDatabase(tempDb);
       tempDbClosed = true;
-      publishMemoryDatabaseTables({
+      await publishMemoryDatabaseTables({
         targetDb: originalDb,
         sourcePath: tempDbPath,
         metaKey: META_KEY,
         expectedRevision: originalRevision,
+        vectorExtensionPath: this.vector.extensionPath,
       });
 
       this.db = originalDb;
