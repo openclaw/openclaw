@@ -71,11 +71,9 @@ function normalizeZaloMessagingTarget(raw: string): string | undefined {
   return trimmed.replace(/^(zalo|zl):/i, "").trim();
 }
 
-const zaloChatIdPattern = /^(?:\d{3,}|(?=[a-f0-9]{12,}$)(?=.*[a-f])[a-f0-9]+)$/i;
-
 function looksLikeZaloChatId(raw: string, normalized?: string): boolean {
   const target = normalizeZaloMessagingTarget(normalized ?? raw);
-  return target ? zaloChatIdPattern.test(target) : false;
+  return Boolean(target);
 }
 
 const loadZaloChannelRuntime = createLazyRuntimeModule(() => import("./channel.runtime.js"));
