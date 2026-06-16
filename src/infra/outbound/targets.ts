@@ -335,6 +335,7 @@ export async function resolveHeartbeatDeliveryTargetWithSessionRoute(params: {
   const plugin = resolveOutboundChannelPlugin({
     channel: delivery.channel,
     cfg: params.cfg,
+    allowBootstrap: true,
   });
   const resolveSessionRoute = plugin?.messaging?.resolveOutboundSessionRoute;
   if (!resolveSessionRoute && !plugin?.messaging?.targetResolver) {

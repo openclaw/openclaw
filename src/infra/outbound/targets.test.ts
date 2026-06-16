@@ -1045,7 +1045,7 @@ describe("resolveSessionDeliveryTarget", () => {
     expect(resolved.chatType).toBe("group");
   });
 
-  it("uses a prepared external plugin when canonicalizing heartbeat routes", async () => {
+  it("uses an activation-aware external plugin when canonicalizing heartbeat routes", async () => {
     const external = createTestChannelPlugin({
       id: "external-channel",
       label: "External",
@@ -1077,18 +1077,17 @@ describe("resolveSessionDeliveryTarget", () => {
         },
       },
     });
-    setActivePluginRegistry(createTargetsTestRegistry([]));
+    const setupExternal = { ...external, messaging: undefined };
+    setActivePluginRegistry(createTargetsTestRegistry([setupExternal]));
     mocks.resolveOutboundChannelPlugin.mockImplementation(
       ({ channel, allowBootstrap }: { channel: string; allowBootstrap?: boolean }) => {
         if (channel !== "external-channel") {
           return undefined;
         }
         if (allowBootstrap === true) {
-          setActivePluginRegistry(createTargetsTestRegistry([external]));
           return external;
         }
-        return getActivePluginRegistry()?.channels.find((entry) => entry?.plugin?.id === channel)
-          ?.plugin;
+        return setupExternal;
       },
     );
 
