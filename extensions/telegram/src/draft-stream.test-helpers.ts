@@ -1,9 +1,10 @@
 // Telegram helper module supports draft stream helpers behavior.
 import { vi } from "vitest";
+import type { TelegramDraftPreview } from "./draft-stream.js";
 
 type TestDraftStream = {
   update: ReturnType<typeof vi.fn<(text: string) => void>>;
-  updatePreview: ReturnType<typeof vi.fn<(preview: { text: string }) => void>>;
+  updatePreview: ReturnType<typeof vi.fn<(preview: TelegramDraftPreview) => void>>;
   flush: ReturnType<typeof vi.fn<() => Promise<void>>>;
   messageId: ReturnType<typeof vi.fn<() => number | undefined>>;
   visibleSinceMs: ReturnType<typeof vi.fn<() => number | undefined>>;
@@ -41,7 +42,7 @@ export function createTestDraftStream(params?: {
       lastDeliveredText = text.trimEnd();
       params?.onUpdate?.(text);
     }),
-    updatePreview: vi.fn().mockImplementation((preview: { text: string }) => {
+    updatePreview: vi.fn().mockImplementation((preview: TelegramDraftPreview) => {
       if (stopped) {
         return;
       }
@@ -95,7 +96,7 @@ export function createSequencedTestDraftStream(startMessageId = 1001): TestDraft
       previewRevision += 1;
       lastDeliveredText = text.trimEnd();
     }),
-    updatePreview: vi.fn().mockImplementation((preview: { text: string }) => {
+    updatePreview: vi.fn().mockImplementation((preview: TelegramDraftPreview) => {
       if (activeMessageId == null) {
         activeMessageId = nextMessageId++;
         visibleSinceMs = Date.now();
