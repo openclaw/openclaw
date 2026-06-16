@@ -60,7 +60,7 @@ export function shouldDropEmptyMattermostBody(params: {
   rawText: string;
   botUsername?: string | null;
 }): boolean {
-  if (/[^\p{White_Space}\p{Cc}\p{Cf}]/u.test(params.bodyText)) {
+  if (/[^\p{White_Space}\p{Cc}\p{Cf}\p{M}]/u.test(params.bodyText)) {
     return false;
   }
   const botUsername = normalizeLowercaseStringOrEmpty(params.botUsername ?? "");

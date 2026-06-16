@@ -153,6 +153,16 @@ describe("shouldDropEmptyMattermostBody", () => {
     ).toBe(true);
   });
 
+  it("drops a bot mention with only a combining-mark residual", () => {
+    expect(
+      shouldDropEmptyMattermostBody({
+        bodyText: "\ufe0f",
+        rawText: "@openclaw\ufe0f",
+        botUsername: "openclaw",
+      }),
+    ).toBe(true);
+  });
+
   it.each([
     "@openclaw @openclaw",
     "@openclaw\n@openclaw",
