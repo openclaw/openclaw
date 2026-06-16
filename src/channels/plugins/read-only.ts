@@ -35,6 +35,7 @@ import {
   type PluginModuleLoaderCache,
 } from "../../plugins/plugin-module-loader-cache.js";
 import { getActivePluginChannelRegistryVersion } from "../../plugins/runtime.js";
+import { resolveNormalizedAccountEntry } from "../../routing/account-lookup.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { getBundledChannelSetupPlugin } from "./bundled.js";
 import {
@@ -372,9 +373,10 @@ function resolveManifestChannelAccountConfig(params: {
   const resolvedAccountId = normalizeAccountId(params.accountId);
   const accounts = channelConfig.accounts;
   if (accounts && typeof accounts === "object" && !Array.isArray(accounts)) {
-    const accountConfig = readOwnRecordValue(
+    const accountConfig = resolveNormalizedAccountEntry(
       accounts as Record<string, unknown>,
       resolvedAccountId,
+      normalizeAccountId,
     );
     if (accountConfig && typeof accountConfig === "object" && !Array.isArray(accountConfig)) {
       return accountConfig as Record<string, unknown>;
