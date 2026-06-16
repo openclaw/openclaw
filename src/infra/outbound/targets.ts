@@ -347,6 +347,7 @@ export async function resolveHeartbeatDeliveryTargetWithSessionRoute(params: {
         input: deliveryTo,
         accountId: delivery.accountId,
         unknownTargetMode: "normalized",
+        plugin,
       });
     } catch {
       // Target normalization failure should not suppress an otherwise deliverable heartbeat.

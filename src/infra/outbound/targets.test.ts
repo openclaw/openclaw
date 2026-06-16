@@ -1037,6 +1037,67 @@ describe("resolveSessionDeliveryTarget", () => {
     expect(resolved.chatType).toBe("group");
   });
 
+  it("uses a prepared external plugin when canonicalizing heartbeat routes", async () => {
+    const external = createTestChannelPlugin({
+      id: "external-channel",
+      label: "External",
+      outbound: {
+        deliveryMode: "direct",
+        resolveTarget: ({ to }) =>
+          to
+            ? { ok: true as const, to: to.trim() }
+            : { ok: false as const, error: new Error("target required") },
+      },
+      messaging: {
+        targetResolver: {
+          resolveTarget: async ({ normalized }) => ({
+            to: normalized,
+            kind: "user",
+            source: "directory",
+          }),
+        },
+        resolveOutboundSessionRoute: ({ target, resolvedTarget }) => {
+          const isDirect = resolvedTarget?.kind === "user";
+          return {
+            sessionKey: `main:external-channel:${isDirect ? "user" : "group"}:${target}`,
+            baseSessionKey: `main:external-channel:${isDirect ? "user" : "group"}:${target}`,
+            peer: { kind: isDirect ? "direct" : "group", id: target },
+            chatType: isDirect ? "direct" : "group",
+            from: `external-channel:${target}`,
+            to: target,
+          };
+        },
+      },
+    });
+    setActivePluginRegistry(createTargetsTestRegistry([]));
+    mocks.resolveOutboundChannelPlugin.mockImplementation(
+      ({ channel, allowBootstrap }: { channel: string; allowBootstrap?: boolean }) => {
+        if (channel !== "external-channel") {
+          return undefined;
+        }
+        if (allowBootstrap === true) {
+          setActivePluginRegistry(createTargetsTestRegistry([external]));
+          return external;
+        }
+        return getActivePluginRegistry()?.channels.find((entry) => entry?.plugin?.id === channel)
+          ?.plugin;
+      },
+    );
+
+    const resolved = await resolveHeartbeatDeliveryTargetWithSessionRoute({
+      cfg: {},
+      agentId: "main",
+      heartbeat: {
+        target: "external-channel",
+        to: "person-123",
+        directPolicy: "block",
+      },
+    });
+
+    expect(resolved.channel).toBe("none");
+    expect(resolved.reason).toBe("dm-blocked");
+  });
+
   it("keeps heartbeat route canonicalization best-effort when target resolution fails", async () => {
     setActivePluginRegistry(
       createTargetsTestRegistry([
