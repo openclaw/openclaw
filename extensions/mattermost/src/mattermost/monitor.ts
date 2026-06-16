@@ -1922,6 +1922,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                         dispatcher,
                         replyOptions: {
                           ...replyOptions,
+                          allowProgressCallbacksWhenSourceDeliverySuppressed:
+                            draftToolProgressEnabled ? true : undefined,
+                          onObservedReplyDelivery: draftToolProgressEnabled
+                            ? () => draftStream.clear()
+                            : undefined,
                           disableBlockStreaming: true,
                           ...(suppressDefaultToolProgressMessages
                             ? { suppressDefaultToolProgressMessages: true }

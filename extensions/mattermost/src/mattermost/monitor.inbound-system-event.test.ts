@@ -445,13 +445,14 @@ describe("mattermost inbound user posts", () => {
     expect(ctx?.Provider).toBe("mattermost");
   });
 
-  it("merges Mattermost progress preview updates by line identity", async () => {
+  it("merges Mattermost progress preview updates and clears after message-tool delivery", async () => {
     const socket = new FakeWebSocket();
     const abortController = new AbortController();
     mockState.abortController = abortController;
     const draftStream = {
       update: vi.fn(),
       flush: vi.fn(async () => {}),
+      clear: vi.fn(async () => {}),
       stop: vi.fn(async () => {}),
     };
     mockState.createMattermostDraftStream.mockReturnValue(draftStream);
@@ -505,6 +506,7 @@ describe("mattermost inbound user posts", () => {
         status: "completed",
         progressText: "done",
       });
+      await params.replyOptions?.onObservedReplyDelivery?.();
       abortController.abort();
     });
 
@@ -543,6 +545,9 @@ describe("mattermost inbound user posts", () => {
     socket.emitClose(1000);
     await monitor;
 
+    const replyOptions = mockState.dispatchReplyFromConfig.mock.calls.at(0)?.[0].replyOptions;
+    expect(replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed).toBe(true);
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
     const updates = draftStream.update.mock.calls.map((call) => String(call[0]));
     expect(updates.at(-1)).toContain("Read");
     expect(updates.at(-1)).toContain("Exec");

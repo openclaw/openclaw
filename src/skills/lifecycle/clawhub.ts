@@ -273,12 +273,29 @@ function normalizeOptionalStringValue(raw: unknown): string | undefined {
   return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
 }
 
-function readSkillDetailSourceUrl(detail: ClawHubSkillDetail | undefined): string | undefined {
-  const skill = detail?.skill;
-  if (!skill || typeof skill !== "object") {
+function asRecord(raw: unknown): Record<string, unknown> | undefined {
+  return raw && typeof raw === "object" && !Array.isArray(raw)
+    ? (raw as Record<string, unknown>)
+    : undefined;
+}
+
+function readVerifiedProvenanceSourceUrl(raw: unknown): string | undefined {
+  const provenance = asRecord(raw);
+  // Only this ClawHub variant is server-resolved; other provenance metadata
+  // must not become a trusted source link.
+  if (provenance?.source !== "server-resolved-github-import") {
     return undefined;
   }
-  return normalizeOptionalStringValue((skill as { sourceUrl?: unknown }).sourceUrl);
+  return normalizeOptionalStringValue(provenance.url);
+}
+
+function readInstallResolutionSourceUrl(
+  resolution: Extract<ClawHubSkillInstallResolutionResponse, { ok: true }> | undefined,
+): string | undefined {
+  if (resolution?.installKind !== "github") {
+    return undefined;
+  }
+  return normalizeOptionalStringValue(resolution.github.sourceUrl);
 }
 
 function buildDownloadedArtifactLock(
@@ -1106,10 +1123,6 @@ async function performClawHubSkillInstall(
 
       const installedAt = Date.now();
       const artifact = buildDownloadedArtifactLock(archive);
-      const sourceUrl =
-        latestResolution?.installKind === "github"
-          ? normalizeOptionalStringValue(latestResolution.github.sourceUrl)
-          : readSkillDetailSourceUrl(detail);
       const verificationVersion =
         latestResolution?.installKind === "github" && !params.version ? undefined : version;
       const [skillFile, verification] = await Promise.all([
@@ -1120,6 +1133,9 @@ async function performClawHubSkillInstall(
           baseUrl: params.baseUrl,
         }),
       ]);
+      const sourceUrl =
+        readInstallResolutionSourceUrl(latestResolution) ??
+        readVerifiedProvenanceSourceUrl(verification?.provenance);
       await writeClawHubSkillOrigin(install.targetDir, {
         version: 1,
         registry: resolveClawHubBaseUrl(params.baseUrl),
