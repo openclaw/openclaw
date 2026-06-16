@@ -1315,6 +1315,8 @@ describe("Codex app-server dynamic tool build", () => {
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
     params.disableTools = false;
     params.disableMessageTool = true;
+    params.sourceReplyDeliveryMode = "message_tool_only";
+    params.toolsAllow = [];
     params.runtimePlan = createCodexRuntimePlanFixture();
     setOpenClawCodingToolsFactoryForTests((options) =>
       options?.disableMessageTool ? [] : [createRuntimeDynamicTool("message")],
