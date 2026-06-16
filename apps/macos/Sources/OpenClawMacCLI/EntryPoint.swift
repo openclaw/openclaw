@@ -21,15 +21,15 @@ struct OpenClawMacCLI {
         switch resolveRootCommandAction(args) {
         case .usage:
             printUsage()
-        case .connect(let commandArgs):
+        case let .connect(commandArgs):
             await runConnect(commandArgs)
-        case .configureRemote(let commandArgs):
+        case let .configureRemote(commandArgs):
             runConfigureRemote(commandArgs)
-        case .discover(let commandArgs):
+        case let .discover(commandArgs):
             await runDiscover(commandArgs)
-        case .wizard(let commandArgs):
+        case let .wizard(commandArgs):
             await runWizardCommand(commandArgs)
-        case .unknown(let exitCode):
+        case let .unknown(exitCode):
             fputs("openclaw-mac: unknown command\n", stderr)
             printUsage()
             exit(exitCode)

@@ -23,8 +23,7 @@ struct RootCommandParserTests {
         #expect(resolveRootCommandAction(["connect", "--json"]) == .connect(["--json"]))
         #expect(
             resolveRootCommandAction(["configure-remote", "--ssh-target", "alice@example.com"])
-                == .configureRemote(["--ssh-target", "alice@example.com"]),
-        )
+                == .configureRemote(["--ssh-target", "alice@example.com"]))
         #expect(resolveRootCommandAction(["discover", "--include-local"]) == .discover(["--include-local"]))
         #expect(resolveRootCommandAction(["wizard", "--mode", "local"]) == .wizard(["--mode", "local"]))
     }
