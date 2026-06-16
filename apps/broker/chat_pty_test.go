@@ -23,7 +23,7 @@ import (
 // turn), an `assistant` text frame echoing the prompt, and a `result`
 // frame. This lets us exercise the pool's lifecycle, mutex, and
 // terminator detection without depending on the real claude binary.
-func stubSpawn(t *testing.T) func(ctx context.Context, sessionID, binary, cwd string) (*ptySession, error) {
+func stubSpawn(t *testing.T) func(ctx context.Context, sessionID, binary, cwd string, resume bool) (*ptySession, error) {
 	t.Helper()
 	// Use a bash one-liner instead of writing a file so the test stays
 	// self-contained. The "init" frame is only emitted on the first line
@@ -43,7 +43,7 @@ func stubSpawn(t *testing.T) func(ctx context.Context, sessionID, binary, cwd st
 		fflush();
 	}'`
 
-	return func(ctx context.Context, sessionID, binary, cwd string) (*ptySession, error) {
+	return func(ctx context.Context, sessionID, binary, cwd string, resume bool) (*ptySession, error) {
 		s := strings.ReplaceAll(script, "SID", sessionID)
 		cmd := exec.Command("bash", "-c", s)
 		stdin, err := cmd.StdinPipe()
@@ -69,6 +69,7 @@ func stubSpawn(t *testing.T) func(ctx context.Context, sessionID, binary, cwd st
 			stderrBuf: stderr,
 			lastSeen:  time.Now(),
 			done:      make(chan struct{}),
+			resumed:   resume,
 		}
 		go func() {
 			scanner := bufio.NewScanner(stdout)
@@ -126,11 +127,11 @@ func TestIsResultFrame(t *testing.T) {
 }
 
 func TestSessionPoolReuseAndRespawn(t *testing.T) {
-	p := &sessionPool{sessions: make(map[string]*ptySession), spawnFn: stubSpawn(t)}
+	p := &sessionPool{sessions: make(map[string]*ptySession), known: make(map[string]struct{}), spawnFn: stubSpawn(t)}
 	defer p.shutdown()
 
 	ctx := context.Background()
-	sess1, err := p.get(ctx, "sid-A", "claude", "/tmp")
+	sess1, err := p.get(ctx, "sid-A", "claude", "/tmp", true)
 	if err != nil {
 		t.Fatalf("first get: %v", err)
 	}
@@ -139,7 +140,7 @@ func TestSessionPoolReuseAndRespawn(t *testing.T) {
 	}
 
 	// Asking for the same id should return the same session (no respawn).
-	sess2, err := p.get(ctx, "sid-A", "claude", "/tmp")
+	sess2, err := p.get(ctx, "sid-A", "claude", "/tmp", true)
 	if err != nil {
 		t.Fatalf("second get: %v", err)
 	}
@@ -148,7 +149,7 @@ func TestSessionPoolReuseAndRespawn(t *testing.T) {
 	}
 
 	// Asking for a different id should spawn a separate process.
-	sess3, err := p.get(ctx, "sid-B", "claude", "/tmp")
+	sess3, err := p.get(ctx, "sid-B", "claude", "/tmp", true)
 	if err != nil {
 		t.Fatalf("third get: %v", err)
 	}
@@ -168,7 +169,7 @@ func TestSessionPoolReuseAndRespawn(t *testing.T) {
 		t.Fatalf("expected sess1 to be dead after kill()")
 	}
 
-	sess4, err := p.get(ctx, "sid-A", "claude", "/tmp")
+	sess4, err := p.get(ctx, "sid-A", "claude", "/tmp", true)
 	if err != nil {
 		t.Fatalf("fourth get (after kill): %v", err)
 	}
@@ -181,11 +182,11 @@ func TestSessionPoolReuseAndRespawn(t *testing.T) {
 }
 
 func TestSessionPoolReapsIdle(t *testing.T) {
-	p := &sessionPool{sessions: make(map[string]*ptySession), spawnFn: stubSpawn(t)}
+	p := &sessionPool{sessions: make(map[string]*ptySession), known: make(map[string]struct{}), spawnFn: stubSpawn(t)}
 	defer p.shutdown()
 	ctx := context.Background()
 
-	sess, err := p.get(ctx, "sid-X", "claude", "/tmp")
+	sess, err := p.get(ctx, "sid-X", "claude", "/tmp", true)
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -208,10 +209,10 @@ func TestSessionPoolReapsIdle(t *testing.T) {
 }
 
 func TestSessionPoolShutdownKillsAll(t *testing.T) {
-	p := &sessionPool{sessions: make(map[string]*ptySession), spawnFn: stubSpawn(t)}
+	p := &sessionPool{sessions: make(map[string]*ptySession), known: make(map[string]struct{}), spawnFn: stubSpawn(t)}
 	ctx := context.Background()
 	for _, id := range []string{"a", "b", "c"} {
-		if _, err := p.get(ctx, id, "claude", "/tmp"); err != nil {
+		if _, err := p.get(ctx, id, "claude", "/tmp", true); err != nil {
 			t.Fatalf("get %s: %v", id, err)
 		}
 	}
@@ -456,17 +457,63 @@ func TestBoundedBufferCaps(t *testing.T) {
 // can correlate stream-json frames back to the WS turn.
 func TestClaudePTYArgsHasAutoExecuteAndSessionID(t *testing.T) {
 	sid := "11111111-2222-4333-8444-555555555555"
-	args := claudePTYArgs(sid)
+	args := claudePTYArgs(sid, false)
 	joined := strings.Join(args, " ")
 	if !strings.Contains(joined, "--dangerously-skip-permissions") {
 		t.Fatalf("expected --dangerously-skip-permissions in args, got %q", joined)
 	}
-	// Sanity: session id flows through and stream-json is on.
+	// Create mode: --session-id <id> (and NOT --resume).
 	if !strings.Contains(joined, "--session-id "+sid) {
-		t.Fatalf("expected --session-id %s in args, got %q", sid, joined)
+		t.Fatalf("expected --session-id %s in create-mode args, got %q", sid, joined)
+	}
+	if strings.Contains(joined, "--resume") {
+		t.Fatalf("create-mode args must not contain --resume, got %q", joined)
 	}
 	if !strings.Contains(joined, "--output-format stream-json") {
 		t.Fatalf("expected stream-json output, got %q", joined)
+	}
+}
+
+// Resume mode must bind the id via --resume, NOT --session-id. Re-creating
+// an existing session id makes the CLI exit with "Session ID already in
+// use" and zero stdout — the chat-pty hang this fix closes. Proven against
+// claude 2.1.170 and 2.1.178.
+func TestClaudePTYArgsResumeUsesResumeFlag(t *testing.T) {
+	sid := "11111111-2222-4333-8444-555555555555"
+	args := claudePTYArgs(sid, true)
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "--resume "+sid) {
+		t.Fatalf("expected --resume %s in resume-mode args, got %q", sid, joined)
+	}
+	if strings.Contains(joined, "--session-id") {
+		t.Fatalf("resume-mode args must not contain --session-id (would re-create + collide), got %q", joined)
+	}
+	if !strings.Contains(joined, "--dangerously-skip-permissions") {
+		t.Fatalf("expected --dangerously-skip-permissions in resume args, got %q", joined)
+	}
+}
+
+// TestIsResumeMissResult covers the "No conversation found" signature: a
+// result frame with is_error=true and num_turns=0. A normal turn's result
+// (num_turns>=1) or a successful result must NOT be classed as a miss.
+func TestIsResumeMissResult(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{"resume miss", `{"type":"result","subtype":"error_during_execution","is_error":true,"num_turns":0}`, true},
+		{"normal success", `{"type":"result","is_error":false,"num_turns":1}`, false},
+		{"error mid-turn", `{"type":"result","is_error":true,"num_turns":2}`, false},
+		{"not a result", `{"type":"assistant","is_error":true,"num_turns":0}`, false},
+		{"garbage", `nope`, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isResumeMissResult([]byte(tc.in)); got != tc.want {
+				t.Fatalf("isResumeMissResult(%q) = %v, want %v", tc.in, got, tc.want)
+			}
+		})
 	}
 }
 
@@ -550,11 +597,150 @@ done
 
 // Sanity: spawnSession surfaces an error for unsupported binaries.
 func TestSpawnSessionRejectsCodex(t *testing.T) {
-	_, err := spawnSession(context.Background(), newSessionID(), "codex", os.TempDir())
+	_, err := spawnSession(context.Background(), newSessionID(), "codex", os.TempDir(), false)
 	if err == nil {
 		t.Fatalf("expected error for codex; got nil")
 	}
 	if !strings.Contains(err.Error(), "claude") {
 		t.Fatalf("expected error to mention claude-only support, got %v", err)
 	}
+}
+
+// TestChatPTYRealCLIRespawnEmitsResult is the PROVEN-EXECUTION smoke test
+// (#139): it drives the ACTUAL installed `claude` binary through the real
+// chatPTYHandler — NOT the stub — and asserts a `result` frame arrives on
+// the respawn path that produced the subscription_claude prod hang.
+//
+// The bug: the broker spawned every session with `--session-id <id>`. The
+// CLI errors "Session ID <id> is already in use" (zero stdout, immediate
+// exit) when <id> already exists on disk, which is exactly what happens on
+// a respawn (idle-reaped / crashed warm process, or a client-threaded id
+// after a broker restart). Result: `lines=0 result=false` → upstream 60s
+// backend_timeout → "Rockie's response was interrupted." The stub test can
+// never catch this because the stub does not enforce the CLI's session-id
+// contract. This test does.
+//
+// Guarded: skips unless `claude` is on PATH AND a non-empty
+// $HOME/.claude/.credentials.json exists (the broker's own auth gate). In
+// CI without a subscription it skips; an operator (or the dogfood box)
+// runs it with real auth. Run locally with:
+//
+//	ROCKIE_REAL_CLI_SMOKE=1 HOME=/path/with/.claude go test -run RealCLIRespawn -v
+func TestChatPTYRealCLIRespawnEmitsResult(t *testing.T) {
+	if os.Getenv("ROCKIE_REAL_CLI_SMOKE") == "" {
+		t.Skip("set ROCKIE_REAL_CLI_SMOKE=1 to run the real-claude-CLI chat-pty smoke test")
+	}
+	if _, err := exec.LookPath("claude"); err != nil {
+		t.Skip("claude binary not on PATH; skipping real-CLI smoke test")
+	}
+	if !authFileExists("claude") {
+		t.Skipf("no non-empty %s; skipping real-CLI smoke test", authFilePath("claude"))
+	}
+
+	setBrokerTestEnv(t, "tt")
+
+	// Use the REAL spawnSession (default globalPool.spawnFn) — do NOT stub.
+	prevSpawn := globalPool.spawnFn
+	defer func() {
+		globalPool.shutdown()
+		globalPool.spawnFn = prevSpawn
+	}()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/chat-pty", chatPTYHandler)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	send := func(t *testing.T, sessionID, prompt string) string {
+		t.Helper()
+		u := srv.URL + "/chat-pty?token=tt&binary=claude"
+		if sessionID != "" {
+			u += "&session_id=" + sessionID
+		}
+		body := strings.NewReader(fmt.Sprintf(`{"prompt":%q}`, prompt))
+		req, _ := http.NewRequest(http.MethodPost, u, body)
+		client := &http.Client{Timeout: 90 * time.Second}
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("request: %v", err)
+		}
+		defer resp.Body.Close()
+		bs, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status %d body=%s", resp.StatusCode, bs)
+		}
+		return string(bs)
+	}
+
+	assertRealResult := func(t *testing.T, label, body string) {
+		t.Helper()
+		var resultOK bool
+		for _, line := range strings.Split(body, "\n") {
+			if strings.TrimSpace(line) == "" {
+				continue
+			}
+			if isResultFrame([]byte(line)) {
+				var probe struct {
+					IsError bool `json:"is_error"`
+				}
+				_ = json.Unmarshal([]byte(line), &probe)
+				if probe.IsError {
+					t.Fatalf("%s: result frame is_error=true: %s", label, line)
+				}
+				resultOK = true
+			}
+		}
+		if strings.Contains(body, "already in use") {
+			t.Fatalf("%s: hit the session-id-collision bug: %s", label, body)
+		}
+		if !resultOK {
+			t.Fatalf("%s: no successful result frame (the prod hang signature): %s", label, body)
+		}
+	}
+
+	// Turn 1: fresh session (broker mints id, --session-id CREATE).
+	body1 := send(t, "", "Reply with exactly: PONG1")
+	assertRealResult(t, "turn1-fresh", body1)
+
+	// Capture the minted session_id from the init frame.
+	var sid string
+	for _, line := range strings.Split(body1, "\n") {
+		var p struct {
+			Type      string `json:"type"`
+			Subtype   string `json:"subtype"`
+			SessionID string `json:"session_id"`
+		}
+		if json.Unmarshal([]byte(line), &p) == nil && p.Type == "system" && p.Subtype == "init" {
+			sid = p.SessionID
+			break
+		}
+	}
+	if sid == "" {
+		t.Fatalf("no session_id in turn1 init frame: %s", body1)
+	}
+
+	// Force the broken path: kill the warm process so the NEXT turn on the
+	// same id must respawn. Pre-fix that respawn used --session-id on an
+	// existing id → "already in use" → lines=0. Post-fix it uses --resume.
+	globalPool.mu.Lock()
+	if s, ok := globalPool.sessions[sid]; ok {
+		s.kill()
+	}
+	globalPool.mu.Unlock()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		globalPool.mu.Lock()
+		s, ok := globalPool.sessions[sid]
+		alive := ok && s.alive()
+		globalPool.mu.Unlock()
+		if !alive || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	// Turn 2: same id, warm process dead → respawn-via-resume. This is the
+	// turn that hung in prod. It must now emit a real result.
+	body2 := send(t, sid, "Reply with exactly: PONG2")
+	assertRealResult(t, "turn2-respawn-resume", body2)
 }
