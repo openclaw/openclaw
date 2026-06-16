@@ -1847,6 +1847,10 @@ describe("capability cli", () => {
       "--size",
       "--aspect-ratio",
       "--resolution",
+      "--output-format",
+      "--background",
+      "--openai-background",
+      "--timeout-ms",
       "--output",
       "--json",
     ]);
