@@ -393,12 +393,12 @@ function listOpenInboundPolicies(cfg: OpenClawConfig): string[] {
     if (section.groupPolicy === "open") {
       out.push(`${basePath}.groupPolicy`);
     }
-    if (section.dmPolicy === "open") {
-      out.push(`${basePath}.dmPolicy`);
-    }
     const dm = section.dm;
-    if (dm && typeof dm === "object" && (dm as Record<string, unknown>).policy === "open") {
-      out.push(`${basePath}.dm.policy`);
+    const legacyDmPolicy =
+      dm && typeof dm === "object" ? (dm as Record<string, unknown>).policy : undefined;
+    const dmPolicy = section.dmPolicy ?? legacyDmPolicy;
+    if (dmPolicy === "open") {
+      out.push(`${basePath}.${section.dmPolicy == null ? "dm.policy" : "dmPolicy"}`);
     }
   };
 
@@ -407,6 +407,8 @@ function listOpenInboundPolicies(cfg: OpenClawConfig): string[] {
       continue;
     }
     const section = value as Record<string, unknown>;
+    // Root policy can govern an implicit/default env-backed account. Named account overrides
+    // do not prove this scope is inactive, so audit it independently.
     inspectSection(section, `channels.${channelId}`);
     const accounts = section.accounts;
     if (accounts && typeof accounts === "object") {
@@ -1183,9 +1185,10 @@ export function collectExposureMatrixFindings(cfg: OpenClawConfig): SecurityAudi
       severity: "critical",
       title: "Open group/DM policy with elevated tools enabled",
       detail:
-        `Found groupPolicy/dmPolicy="open" at:\n${openInboundPolicies.map((p) => `- ${p}`).join("\n")}\n` +
+        `Found inbound policy="open" at:\n${openInboundPolicies.map((p) => `- ${p}`).join("\n")}\n` +
         "With tools.elevated enabled, a prompt injection in those conversations can become a high-impact incident.",
-      remediation: `Set groupPolicy/dmPolicy="allowlist" and keep elevated allowlists extremely tight.`,
+      remediation:
+        'Set each listed group/DM policy to "allowlist" and keep elevated allowlists extremely tight.',
     });
   }
 
@@ -1197,7 +1200,7 @@ export function collectExposureMatrixFindings(cfg: OpenClawConfig): SecurityAudi
       severity: hasRuntimeRisk ? "critical" : "warn",
       title: "Open group/DM policy with runtime/filesystem tools exposed",
       detail:
-        `Found groupPolicy/dmPolicy="open" at:\n${openInboundPolicies.map((p) => `- ${p}`).join("\n")}\n` +
+        `Found inbound policy="open" at:\n${openInboundPolicies.map((p) => `- ${p}`).join("\n")}\n` +
         `Risky tool exposure contexts:\n${riskyContexts.map((line) => `- ${line}`).join("\n")}\n` +
         "Prompt injection in open conversations can trigger command/file actions in these contexts.",
       remediation:
