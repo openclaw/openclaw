@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
@@ -52,6 +52,14 @@ import {
   upsertSqliteSessionEntry,
 } from "./session-accessor.sqlite.js";
 import type { SessionEntry } from "./types.js";
+
+// Keep accessor conformance independent of any real openclaw.json on the machine.
+vi.mock("../config.js", async () => ({
+  ...(await vi.importActual<typeof import("../config.js")>("../config.js")),
+  getRuntimeConfig: vi.fn().mockReturnValue({}),
+}));
+
+import { getRuntimeConfig } from "../config.js";
 
 type AccessorAdapter = {
   name: string;
@@ -176,6 +184,14 @@ const sqliteAdapter: AccessorAdapter = {
   appendTranscriptMessage: appendSqliteTranscriptMessage,
   publishTranscriptUpdate: publishSqliteTranscriptUpdate,
 };
+
+beforeEach(() => {
+  vi.mocked(getRuntimeConfig).mockReturnValue({});
+});
+
+afterEach(() => {
+  vi.mocked(getRuntimeConfig).mockReset();
+});
 
 describe.each([fileBackedAdapter, sqliteAdapter])(
   "session accessor conformance: $name",
@@ -939,6 +955,128 @@ describe("sqlite session normalization", () => {
         .where("session_key", "=", "agent:main:main"),
     );
     expect(route).toEqual({ session_id: "current-session" });
+  });
+
+  it("applies SQLite session-entry maintenance inside entry write transactions", async () => {
+    vi.mocked(getRuntimeConfig).mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "1d",
+          maxEntries: 2,
+        },
+      },
+    });
+    const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
+    const scopeFor = (sessionKey: string) => ({
+      agentId: "main",
+      env,
+      sessionKey,
+      storePath: paths.sqlitePath,
+    });
+    const oldUpdatedAt = Date.now() - 2 * 24 * 60 * 60 * 1000;
+
+    await patchSqliteSessionEntry(
+      scopeFor("agent:main:stale"),
+      () => ({ sessionId: "stale-session", updatedAt: oldUpdatedAt }),
+      {
+        fallbackEntry: { sessionId: "stale-session", updatedAt: oldUpdatedAt },
+        replaceEntry: true,
+        skipMaintenance: true,
+      },
+    );
+    await patchSqliteSessionEntry(
+      scopeFor("agent:main:older"),
+      () => ({ sessionId: "older-session", updatedAt: oldUpdatedAt + 1 }),
+      {
+        fallbackEntry: { sessionId: "older-session", updatedAt: oldUpdatedAt + 1 },
+        replaceEntry: true,
+        skipMaintenance: true,
+      },
+    );
+    await patchSqliteSessionEntry(
+      scopeFor("agent:main:active"),
+      () => ({ sessionId: "active-session", updatedAt: Date.now() }),
+      {
+        fallbackEntry: { sessionId: "active-session", updatedAt: Date.now() },
+        replaceEntry: true,
+        skipMaintenance: true,
+      },
+    );
+    const staleTranscriptEvent = {
+      id: "stale-event",
+      timestamp: new Date(oldUpdatedAt).toISOString(),
+      type: "metadata",
+    };
+    await appendSqliteTranscriptEvent(
+      { ...scopeFor("agent:main:stale"), sessionId: "stale-session" },
+      staleTranscriptEvent,
+    );
+
+    await updateSqliteSessionEntry(scopeFor("agent:main:active"), () => ({ model: "gpt-5.5" }), {
+      skipMaintenance: true,
+    });
+    await expect(
+      loadSqliteTranscriptEvents({
+        agentId: "main",
+        env,
+        sessionId: "stale-session",
+        storePath: paths.sqlitePath,
+      }),
+    ).resolves.toEqual([staleTranscriptEvent]);
+    expect(
+      listSqliteSessionEntries({
+        agentId: "main",
+        env,
+        storePath: paths.sqlitePath,
+      }).map((summary) => summary.sessionKey),
+    ).toEqual(["agent:main:active", "agent:main:older", "agent:main:stale"]);
+
+    await updateSqliteSessionEntry(scopeFor("agent:main:active"), () => ({
+      providerOverride: "openai",
+    }));
+
+    expect(
+      listSqliteSessionEntries({
+        agentId: "main",
+        env,
+        storePath: paths.sqlitePath,
+      }).map((summary) => summary.sessionKey),
+    ).toEqual(["agent:main:active"]);
+    await expect(
+      loadSqliteTranscriptEvents({
+        agentId: "main",
+        env,
+        sessionId: "stale-session",
+        storePath: paths.sqlitePath,
+      }),
+    ).resolves.toEqual([]);
+
+    await patchSqliteSessionEntry(
+      scopeFor("agent:main:newer"),
+      () => ({ sessionId: "newer-session", updatedAt: Date.now() + 1 }),
+      {
+        fallbackEntry: { sessionId: "newer-session", updatedAt: Date.now() + 1 },
+        replaceEntry: true,
+        skipMaintenance: true,
+      },
+    );
+    await patchSqliteSessionEntry(
+      scopeFor("agent:main:newest"),
+      () => ({ sessionId: "newest-session", updatedAt: Date.now() + 2 }),
+      {
+        fallbackEntry: { sessionId: "newest-session", updatedAt: Date.now() + 2 },
+        replaceEntry: true,
+      },
+    );
+
+    expect(
+      listSqliteSessionEntries({
+        agentId: "main",
+        env,
+        storePath: paths.sqlitePath,
+      }).map((summary) => summary.sessionKey),
+    ).toEqual(["agent:main:newer", "agent:main:newest"]);
   });
 
   it("resolves confirmed lowercased legacy SQLite session aliases", async () => {
