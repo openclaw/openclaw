@@ -106,7 +106,9 @@ export function scanEmptyAllowlistPolicyWarnings(
     const runtimeAccountIds = listDoctorChannelAccountIds(channelName, cfg);
     const hasImplicitActiveAccount =
       runtimeAccountIds === undefined ||
-      runtimeAccountIds.some((accountId) => !configuredAccountIds.has(accountId));
+      runtimeAccountIds.some(
+        (accountId) => !configuredAccountIds.has(normalizeAccountId(accountId)),
+      );
     const suppressParentGroupAllowlistWarning =
       activeAccounts.length > 0 &&
       !hasImplicitActiveAccount &&

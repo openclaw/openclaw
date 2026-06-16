@@ -14,8 +14,12 @@ vi.mock("../channel-capabilities.js", () => ({
     cfg: { channels?: Record<string, { accounts?: Record<string, unknown>; baseUrl?: string }> },
   ) => {
     const channel = cfg.channels?.[channelName];
-    const ids = Object.keys(channel?.accounts ?? {}).map((accountId) => accountId.toLowerCase());
-    return channelName === "qa-channel" && channel?.baseUrl ? ["default", ...ids] : ids;
+    const ids = Object.keys(channel?.accounts ?? {});
+    const runtimeIds =
+      channelName === "matrix" ? ids.map((accountId) => accountId.toLowerCase()) : ids;
+    return channelName === "qa-channel" && channel?.baseUrl
+      ? ["default", ...runtimeIds]
+      : runtimeIds;
   },
 }));
 
@@ -118,6 +122,25 @@ describe("doctor empty allowlist policy scan", () => {
             groupAllowFrom: [],
             accounts: {
               Work: { groupAllowFrom: ["matrix:group:work"] },
+            },
+          },
+        },
+      },
+      { doctorFixCommand: "openclaw doctor --fix" },
+    );
+
+    expect(warnings).toEqual([]);
+  });
+
+  it("matches raw runtime account ids to canonical config keys", () => {
+    const warnings = scanEmptyAllowlistPolicyWarnings(
+      {
+        channels: {
+          signal: {
+            groupPolicy: "allowlist",
+            groupAllowFrom: [],
+            accounts: {
+              Work: { groupAllowFrom: ["signal:group:work"] },
             },
           },
         },
