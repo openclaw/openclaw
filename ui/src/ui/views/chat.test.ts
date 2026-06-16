@@ -1613,23 +1613,23 @@ describe("chat voice controls", () => {
   });
 
   it("lets users dismiss Talk start errors", () => {
-    const onDismissError = vi.fn();
+    const onDismissRealtimeTalkError = vi.fn();
     const container = renderChatView({
-      error: 'Realtime voice provider "openai" is not configured',
       realtimeTalkStatus: "error",
       realtimeTalkDetail: 'Realtime voice provider "openai" is not configured',
-      onDismissError,
+      onDismissRealtimeTalkError,
     });
 
-    expect(container.querySelector('[role="alert"] .callout__content')?.textContent).toBe(
+    const talkAlert = container.querySelector('[role="alert"].agent-chat__talk-status');
+    expect(talkAlert?.querySelector(".agent-chat__talk-status-text")?.textContent?.trim()).toBe(
       'Realtime voice provider "openai" is not configured',
     );
 
-    const dismiss = container.querySelector<HTMLButtonElement>('[aria-label="Dismiss error"]');
+    const dismiss = container.querySelector<HTMLButtonElement>('[aria-label="Dismiss Talk error"]');
     expect(dismiss).toBeInstanceOf(HTMLButtonElement);
     dismiss!.click();
 
-    expect(onDismissError).toHaveBeenCalledTimes(1);
+    expect(onDismissRealtimeTalkError).toHaveBeenCalledTimes(1);
   });
 });
 

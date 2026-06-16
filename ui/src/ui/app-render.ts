@@ -23,6 +23,7 @@ import {
   renderTopbarThemeModeToggle,
   createChatSession,
   dismissChatError,
+  dismissRealtimeTalkError,
   switchChatSession,
   switchChatSessionAndWait,
 } from "./app-render.helpers.ts";
@@ -3781,6 +3782,7 @@ export function renderApp(state: AppViewState) {
                   error: chatViewError,
                   runStatus: state.chatRunStatus,
                   onDismissError: () => dismissChatError(state),
+                  onDismissRealtimeTalkError: () => dismissRealtimeTalkError(state),
                   sessions: state.sessionsResult,
                   composerControls: renderGuardedChatControls(state),
                   sessionWorkspace: {
