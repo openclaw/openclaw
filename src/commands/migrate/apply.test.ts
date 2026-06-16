@@ -10,6 +10,7 @@ import { runMigrationApply } from "./apply.js";
 const stateDir = mkdtempSync(path.join(tmpdir(), "openclaw-migrate-apply-"));
 
 vi.mock("../../config/paths.js", () => ({
+  resolveGatewayPort: () => 18789,
   resolveStateDir: () => stateDir,
 }));
 
