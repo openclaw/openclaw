@@ -8,7 +8,7 @@ import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
-import { getRuntimeConfig } from "../../config/config.js";
+import { getRuntimeConfigSnapshot } from "../../config/config.js";
 import { resolveStorePath } from "../../config/sessions.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
@@ -531,7 +531,12 @@ function buildHandledReplyPayloads(reply?: ReplyPayload) {
 export function runEmbeddedAgent(
   paramsInput: RunEmbeddedAgentParams,
 ): Promise<EmbeddedAgentRunResult> {
-  const config = paramsInput.config ?? getRuntimeConfig();
+  const requestedProvider = normalizeOptionalString(paramsInput.provider);
+  const requestedModel = normalizeOptionalString(paramsInput.model);
+  const needsConfiguredDefault = !paramsInput.config && !requestedProvider && !requestedModel;
+  const config =
+    paramsInput.config ??
+    (needsConfiguredDefault ? (getRuntimeConfigSnapshot() ?? undefined) : undefined);
   const lifecycleGeneration =
     paramsInput.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(paramsInput.runId);
   return withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
@@ -2021,11 +2026,14 @@ async function runEmbeddedAgentInternal(
           if (attempt.contextBudgetStatus) {
             lastContextBudgetStatus = attempt.contextBudgetStatus;
           }
+          // Runtime aliases and provider remaps can differ from the requested
+          // ref. Match the transcript against the model that actually ran so a
+          // stale assistant error cannot be attributed to the current attempt.
           const sessionAssistantForCandidate =
             !currentAttemptAssistant &&
             !isAssistantForModelRef(sessionLastAssistant, {
-              provider,
-              model: modelId,
+              provider: effectiveModel.provider,
+              model: effectiveModel.id,
             })
               ? undefined
               : sessionLastAssistant;
