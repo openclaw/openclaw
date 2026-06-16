@@ -209,6 +209,11 @@ function startGatewayServiceBestEffort() {
         "gui/" + recovery.uid,
         recovery.plistPath,
       ]);
+      if (status !== 0) {
+        // Bootstrap can fail when the label is already loaded. Retry start-only
+        // so recovery does not bounce a gateway that is already running.
+        status = runServiceCommand("launchctl", ["kickstart", serviceTarget]);
+      }
     }
   } else if (recovery.kind === "schtasks") {
     target = recovery.taskName;

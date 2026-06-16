@@ -202,6 +202,34 @@ async function writeFakeSystemctl(): Promise<{ binDir: string; recordPath: strin
   return { binDir, recordPath };
 }
 
+async function writeFakeLaunchctl(): Promise<{ binDir: string; recordPath: string }> {
+  const binDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-launchctl-bin-"));
+  tempDirs.add(binDir);
+  const recordPath = path.join(binDir, "launchctl-calls.log");
+  const countPath = path.join(binDir, "launchctl-kickstart-count");
+  await fs.writeFile(
+    path.join(binDir, "launchctl"),
+    `#!/bin/sh
+echo "$@" >> '${recordPath}'
+if [ "$1" = "kickstart" ]; then
+  count=0
+  if [ -f '${countPath}' ]; then
+    count=$(cat '${countPath}')
+  fi
+  count=$((count + 1))
+  echo "$count" > '${countPath}'
+  [ "$count" -gt 1 ]
+  exit $?
+fi
+[ "$1" = "enable" ] && exit 0
+[ "$1" = "bootstrap" ] && exit 1
+exit 1
+`,
+    { mode: 0o755 },
+  );
+  return { binDir, recordPath };
+}
+
 describe("managed service update handoff", () => {
   it("strips process supervisor hints while preserving service identity for the CLI handoff", async () => {
     const { startManagedServiceUpdateHandoff, stripSupervisorHintEnv } =
@@ -379,6 +407,31 @@ describe("managed service update handoff", () => {
 
     expect(result.code).toBe(0);
     await expect(pathExists(recordPath)).resolves.toBe(false);
+  });
+
+  it("retries launchd start when bootstrap reports an already-loaded label", async () => {
+    const { binDir, recordPath } = await writeFakeLaunchctl();
+    const result = await runHelperWithCommand({
+      commandArgv: [process.execPath, "-e", "process.exit(7)"],
+      serviceRecovery: {
+        kind: "launchd",
+        uid: 501,
+        label: "com.example.openclaw",
+        plistPath: "/Users/test/Library/LaunchAgents/com.example.openclaw.plist",
+      },
+      pathPrepend: binDir,
+    });
+
+    expect(result.code).toBe(7);
+    await expect(fs.readFile(recordPath, "utf-8")).resolves.toBe(
+      [
+        "kickstart gui/501/com.example.openclaw",
+        "enable gui/501/com.example.openclaw",
+        "bootstrap gui/501 /Users/test/Library/LaunchAgents/com.example.openclaw.plist",
+        "kickstart gui/501/com.example.openclaw",
+        "",
+      ].join("\n"),
+    );
   });
 
   it("passes a gateway service recovery descriptor for each supervisor", async () => {
