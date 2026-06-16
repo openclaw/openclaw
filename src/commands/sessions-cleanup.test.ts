@@ -514,11 +514,11 @@ describe("sessionsCleanupCommand", () => {
             storePath: "/resolved/sessions.json",
             mode: "warn",
             dryRun: true,
-            beforeCount: 4,
-            afterCount: 2,
+            beforeCount: 6,
+            afterCount: 3,
             missing: 0,
             dmScopeRetired: 0,
-            pruned: 1,
+            pruned: 2,
             capped: 1,
             unreferencedArtifacts: {
               scannedFiles: 0,
@@ -552,9 +552,21 @@ describe("sessionsCleanupCommand", () => {
               updatedAt: 1,
               model: "test:opus",
             },
+            literalUnlabeled: {
+              sessionId: "literal-unlabeled",
+              updatedAt: 1,
+              model: "test:opus",
+              label: "Unlabeled",
+            },
+            unsafePruned: {
+              sessionId: "unsafe-pruned",
+              updatedAt: 1,
+              model: "test:opus",
+              label: "\u001b[31mAlert\nInjected",
+            },
           },
           missingKeys: new Set<string>(),
-          staleKeys: new Set(["cronPruned"]),
+          staleKeys: new Set(["cronPruned", "unsafePruned"]),
           cappedKeys: new Set(["directCapped"]),
           budgetEvictedKeys: new Set<string>(),
           dmScopeRetiredKeys: new Set<string>(),
@@ -572,9 +584,15 @@ describe("sessionsCleanupCommand", () => {
     );
 
     expectLogsToInclude(logs, "Summary by Label:");
+    const summaryLogs = logs.slice(logs.indexOf("Summary by Label:") + 1);
     expectLogsToInclude(logs, "Cron: daily-commit  1 kept, 1 pruned");
-    expectLogsToInclude(logs, "Unlabeled           1 kept, 1 pruned");
-    expectLogsToInclude(logs, "Total: 2 kept, 2 pruned");
+    expect(summaryLogs.find((line) => line.includes("(unlabeled)"))).toContain("1 kept, 1 pruned");
+    expect(summaryLogs.find((line) => line.includes("Unlabeled"))).toContain("1 kept, 0 pruned");
+    expect(summaryLogs.find((line) => line.includes("Alert\\nInjected"))).toContain(
+      "0 kept, 1 pruned",
+    );
+    expect(logs.join("\n")).not.toContain("\u001b[31m");
+    expectLogsToInclude(logs, "Total: 3 kept, 3 pruned");
   });
 
   it("returns grouped JSON for --all-agents dry-runs", async () => {

@@ -4,6 +4,7 @@
  * It can delegate cleanup to a live gateway or run local store maintenance,
  * with dry-run tables that explain every planned pruning action.
  */
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { getRuntimeConfig } from "../config/config.js";
 import {
@@ -35,6 +36,7 @@ const ACTION_PAD = 16;
 
 type SessionCleanupActionRow = ReturnType<typeof toSessionDisplayRows>[number] & {
   action: ReturnType<typeof resolveSessionCleanupAction>;
+  label?: string;
 };
 
 type SessionCleanupLabelSummary = {
@@ -81,6 +83,7 @@ function buildActionRows(params: {
   // action labels as the cleanup engine without mutating the preview store.
   return toSessionDisplayRows(params.beforeStore).map((row) =>
     Object.assign({}, row, {
+      label: params.beforeStore[row.key]?.label,
       action: resolveSessionCleanupAction({
         key: row.key,
         missingKeys: params.missingKeys,
@@ -96,7 +99,7 @@ function buildActionRows(params: {
 function buildLabelSummaries(actionRows: SessionCleanupActionRow[]): SessionCleanupLabelSummary[] {
   const summaryByLabel = new Map<string, SessionCleanupLabelSummary>();
   for (const actionRow of actionRows) {
-    const label = actionRow.label?.trim() || "Unlabeled";
+    const label = sanitizeTerminalText(actionRow.label?.trim() || "") || "(unlabeled)";
     let summary = summaryByLabel.get(label);
     if (!summary) {
       summary = { label, kept: 0, pruned: 0 };
