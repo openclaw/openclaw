@@ -279,8 +279,12 @@ export function resolveIncompleteTurnPayloadText(params: {
   // Pre-tool text alone (payloadCount > 0) must not suppress the incomplete-
   // turn check in that case — the final post-tool response was never
   // produced. (#76477)
-  const toolUseTerminal = params.attempt.lastAssistant?.stopReason === "toolUse";
+  // Use currentAttemptAssistant as the authoritative source for the toolUse
+  // check — lastAssistant can be stale when the final post-tool stopReason=stop
+  // turn is present in the session but not yet reflected in the snapshot field
+  // that run.ts reads as lastAssistant. (#80918)
   const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
+  const toolUseTerminal = assistant?.stopReason === "toolUse";
   // Unsigned thinking payloads count toward payloadCount but carry no user-visible
   // content; bypass the visible-text guard when unsigned thinking was the only output
   // so that incomplete-turn stall detection fires below. (#89787)
@@ -317,10 +321,10 @@ export function resolveIncompleteTurnPayloadText(params: {
     return null;
   }
 
-  const stopReason = params.attempt.lastAssistant?.stopReason;
+  const stopReason = assistant?.stopReason;
   const incompleteTerminalAssistant = isIncompleteTerminalAssistantTurn({
     hasAssistantVisibleText: params.payloadCount > 0,
-    lastAssistant: params.attempt.lastAssistant,
+    lastAssistant: assistant,
   });
   const reasoningOnlyAssistant = isReasoningOnlyAssistantTurn(assistant);
   const emptyResponseAssistant = isEmptyResponseAssistantTurn({

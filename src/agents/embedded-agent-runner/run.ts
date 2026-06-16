@@ -3507,8 +3507,16 @@ export async function runEmbeddedAgent(
               });
             }
 
+            // Include any collected assistant texts even when the turn is
+            // classified as incomplete. The user's real output should not be
+            // silently discarded — if the classification is wrong, the user
+            // still receives their content alongside the warning. (#80918)
+            const assistantPayloads = (attempt.assistantTexts ?? [])
+              .filter((t): t is string => typeof t === "string" && t.trim().length > 0)
+              .map((text) => ({ text, isError: false as const }));
             return {
               payloads: [
+                ...assistantPayloads,
                 {
                   text: incompleteTurnText,
                   isError: true,

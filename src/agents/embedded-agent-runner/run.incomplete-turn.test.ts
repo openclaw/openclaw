@@ -1611,8 +1611,11 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
-    expect(result.payloads?.[0]?.isError).toBe(true);
-    expect(result.payloads?.[0]?.text).toContain("couldn't generate a response");
+    // Assistant texts are preserved before the error payload (#80918)
+    expect(result.payloads?.[0]?.isError).toBe(false);
+    expect(result.payloads?.[0]?.text).toBe("Initial analysis of the issue...");
+    expect(result.payloads?.[1]?.isError).toBe(true);
+    expect(result.payloads?.[1]?.text).toContain("couldn't generate a response");
     expectWarnMessageWith("incomplete turn detected");
   });
 
