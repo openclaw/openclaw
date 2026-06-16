@@ -1580,6 +1580,130 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
   });
 
+  it("renders configured footer status and elapsed on streaming card close", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: true,
+        footer: {
+          status: true,
+          elapsed: true,
+        },
+      },
+    });
+
+    try {
+      const { options } = createDispatcherHarness({
+        runtime: createRuntimeLogger(),
+      });
+      await options.onReplyStart?.();
+      vi.setSystemTime(13_300);
+      await options.deliver({ text: "final answer" }, { kind: "final" });
+      await options.onIdle?.();
+
+      expect(streamingInstances[0].close).toHaveBeenCalledWith("final answer", {
+        note: "已完成 | 耗时 12.3s | Agent: agent",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("renders configured stopped footer on abort replies", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: true,
+        footer: {
+          status: true,
+        },
+      },
+    });
+
+    const { options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+    await options.onReplyStart?.();
+    await options.deliver({ text: "⚙️ Agent was aborted." }, { kind: "final" });
+    await options.onIdle?.();
+
+    expect(streamingInstances[0].close).toHaveBeenCalledWith("⚙️ Agent was aborted.", {
+      note: "已停止 | Agent: agent",
+    });
+  });
+
+  it("renders configured error footer on final error cards", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(5_000);
+
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: false,
+        footer: {
+          status: true,
+          elapsed: true,
+        },
+      },
+    });
+
+    try {
+      const { options } = createDispatcherHarness({
+        runtime: createRuntimeLogger(),
+      });
+      await options.onReplyStart?.();
+      vi.setSystemTime(7_500);
+      await options.deliver({ text: "Something broke", isError: true }, { kind: "final" });
+
+      expectLastMockArgFields(sendStructuredCardFeishuMock, "structured card params", {
+        note: "出错 | 耗时 2.5s | Agent: agent",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps non-final static cards on the base footer note", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: false,
+        footer: {
+          status: true,
+          elapsed: true,
+        },
+      },
+    });
+
+    const { options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+    await options.deliver({ text: "tool summary" }, { kind: "tool" });
+
+    expectLastMockArgFields(sendStructuredCardFeishuMock, "structured card params", {
+      note: "Agent: agent",
+    });
+  });
+
   it("shows raw command detail in streaming card tool status", async () => {
     resolveFeishuAccountMock.mockReturnValue({
       accountId: "main",

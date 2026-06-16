@@ -191,6 +191,27 @@ openclaw pairing list feishu
 Feishu/Lark does not support native slash-command menus, so send these as plain text messages.
 </Note>
 
+## Reply card footer
+
+Enable `channels.feishu.footer` to append runtime state to the final footer note on Feishu cards, including streaming-card completions:
+
+```json5
+{
+  channels: {
+    feishu: {
+      footer: {
+        status: true,
+        elapsed: true,
+      },
+    },
+  },
+}
+```
+
+- `status: true` adds `已完成`, `出错`, or `已停止`
+- `elapsed: true` adds `耗时 X.Xs`
+- Built-in agent/model/provider footer text is preserved after the runtime segments
+
 ---
 
 ## Troubleshooting

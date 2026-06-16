@@ -41,6 +41,7 @@ const MS_EPOCH_MIN = 1_000_000_000_000;
 const STREAMING_START_FAILURE_BACKOFF_MS = 60_000;
 const NO_VISIBLE_REPLY_FALLBACK_TEXT =
   "⚠️ This reply completed without visible content. The turn may have been interrupted; please retry or ask me to recover from recent context.";
+const ABORT_REPLY_TEXT_PREFIX = "⚙️ Agent was aborted.";
 const streamingStartBackoffUntilByAccount = new Map<string, number>();
 
 function isStreamingStartBackedOff(accountId: string, now = Date.now()): boolean {
@@ -65,6 +66,10 @@ function formatMediaFallbackText(text: string | undefined, mediaUrl: string): st
   const trimmedText = text?.trim() ?? "";
   const attachmentText = `📎 ${mediaUrl}`;
   return trimmedText ? `${trimmedText}\n\n${attachmentText}` : attachmentText;
+}
+
+function formatFooterElapsed(durationMs: number): string {
+  return `${(durationMs / 1000).toFixed(1)}s`;
 }
 
 export function clearFeishuStreamingStartBackoffForTests() {
@@ -112,6 +117,19 @@ function resolveCardNote(
     parts.push(`Provider: ${prefixCtx.provider}`);
   }
   return parts.join(" | ");
+}
+
+function resolveFooterStatusText(
+  payload: ReplyPayload | undefined,
+  text: string | undefined,
+): string {
+  if (payload?.isError === true) {
+    return "出错";
+  }
+  if ((text ?? "").startsWith(ABORT_REPLY_TEXT_PREFIX)) {
+    return "已停止";
+  }
+  return "已完成";
 }
 
 type CreateFeishuReplyDispatcherParams = {
@@ -258,6 +276,13 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let skippedFinalReason: string | null = null;
   let idleSideEffectsPromise: Promise<void> = Promise.resolve();
   let replyLifecycleStateInitialized = false;
+  let replyStartedAtMs: number | undefined;
+  let finalNoteContext:
+    | {
+        payload?: ReplyPayload;
+        text?: string;
+      }
+    | undefined;
   type StreamTextUpdateMode = "snapshot" | "delta";
 
   const markVisibleReplySent = () => {
@@ -371,7 +396,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       );
       try {
         const cardHeader = resolveCardHeader(agentId, identity);
-        const cardNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
+        const cardNote = resolveResolvedCardNote();
         await streaming.start(chatId, resolveReceiveIdType(chatId), {
           replyToMessageId,
           replyInThread: effectiveReplyInThread,
@@ -403,6 +428,46 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     statusLine = "";
     snapshotBaseText = "";
     lastSnapshotTextLength = 0;
+    finalNoteContext = undefined;
+  };
+
+  const initializeReplyLifecycleState = () => {
+    if (!replyLifecycleStateInitialized) {
+      replyLifecycleStateInitialized = true;
+      deliveredFinalTexts.clear();
+      streamingClosedForReply = false;
+      streamingCloseErroredForReply = false;
+      visibleReplySent = false;
+      skippedFinalReason = null;
+      replyStartedAtMs = Date.now();
+      finalNoteContext = undefined;
+      return;
+    }
+    replyStartedAtMs ??= Date.now();
+  };
+
+  const resolveResolvedCardNote = (noteContext?: {
+    payload?: ReplyPayload;
+    text?: string;
+  }): string => {
+    const baseNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
+    if (!noteContext) {
+      return baseNote;
+    }
+    const footer = account.config?.footer;
+    if (!footer?.status && !footer?.elapsed) {
+      return baseNote;
+    }
+
+    const segments: string[] = [];
+    if (footer.status) {
+      segments.push(resolveFooterStatusText(noteContext?.payload, noteContext?.text));
+    }
+    if (footer.elapsed && replyStartedAtMs !== undefined) {
+      segments.push(`耗时 ${formatFooterElapsed(Math.max(0, Date.now() - replyStartedAtMs))}`);
+    }
+    segments.push(baseNote);
+    return segments.join(" | ");
   };
 
   const closeStreaming = async (options?: { markClosedForReply?: boolean }) => {
@@ -414,7 +479,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       if (streaming?.isActive()) {
         statusLine = "";
         const text = buildCombinedStreamText(reasoningText, streamText);
-        const finalNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
+        const finalNote = resolveResolvedCardNote(finalNoteContext);
         const contentVisible = await streaming.close(text, { note: finalNote });
         // Track the raw streamed text so the duplicate-final check in deliver()
         // can skip the redundant text delivery that arrives after onIdle closes
@@ -608,22 +673,20 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         }
       },
       onReplyStart: async () => {
-        if (!replyLifecycleStateInitialized) {
-          replyLifecycleStateInitialized = true;
-          deliveredFinalTexts.clear();
-          streamingClosedForReply = false;
-          streamingCloseErroredForReply = false;
-          visibleReplySent = false;
-          skippedFinalReason = null;
-        }
+        initializeReplyLifecycleState();
         if (streamingEnabled && renderMode === "card") {
           startStreaming();
         }
         await Promise.resolve(typingCallbacks?.onReplyStart?.());
       },
       deliver: async (payload: ReplyPayload, info) => {
+        initializeReplyLifecycleState();
         if (info?.kind === "final") {
           skippedFinalReason = null;
+          finalNoteContext = {
+            payload,
+            text: payload.text,
+          };
         }
         const payloadText =
           payload.isReasoning && payload.text ? formatReasoningMessage(payload.text) : payload.text;
@@ -722,7 +785,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
 
           if (useCard) {
             const cardHeader = resolveCardHeader(agentId, identity);
-            const cardNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
+            const cardNote = resolveResolvedCardNote(
+              info?.kind === "final" ? { payload, text } : undefined,
+            );
             await sendChunkedTextReply({
               text,
               useCard: true,

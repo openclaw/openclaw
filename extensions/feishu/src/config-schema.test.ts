@@ -299,6 +299,40 @@ describe("FeishuConfigSchema actions", () => {
   });
 });
 
+describe("FeishuConfigSchema footer", () => {
+  it("accepts top-level footer runtime flags", () => {
+    const result = FeishuConfigSchema.parse({
+      footer: {
+        status: true,
+        elapsed: true,
+      },
+    });
+
+    expect(result.footer).toEqual({
+      status: true,
+      elapsed: true,
+    });
+  });
+
+  it("accepts account-level footer runtime flags", () => {
+    const result = FeishuConfigSchema.parse({
+      accounts: {
+        main: {
+          footer: {
+            status: true,
+            elapsed: false,
+          },
+        },
+      },
+    });
+
+    expect(result.accounts?.main?.footer).toEqual({
+      status: true,
+      elapsed: false,
+    });
+  });
+});
+
 describe("FeishuConfigSchema defaultAccount", () => {
   it("accepts defaultAccount when it matches an account key", () => {
     const result = FeishuConfigSchema.safeParse({
