@@ -6144,6 +6144,40 @@ describe("runAgentTurnWithFallback", () => {
     },
   );
 
+  it("surfaces returned Codex app-server timeout payloads instead of completing silently", async () => {
+    const { replyOperation, failMock } = createMockReplyOperation();
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [
+        {
+          text: "codex app-server turn idle timed out waiting for completion",
+          isError: true,
+        },
+      ],
+      meta: {
+        durationMs: 300000,
+      },
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams(),
+      replyOperation,
+    });
+
+    expect(result.kind).toBe("success");
+    if (result.kind !== "success") {
+      throw new Error("expected success path with injected failure payload");
+    }
+    expect(result.runResult.payloads).toEqual([
+      expect.objectContaining({
+        text: expect.stringContaining("Codex app-server"),
+        isError: true,
+      }),
+    ]);
+    expect(result.runResult.payloads?.[0]?.text).toContain("did not replay the turn automatically");
+    expect(failMock).toHaveBeenCalledWith("run_failed", expect.any(Error));
+  });
+
   it("forwards sanitized generic errors on external chat channels when verbose is on", async () => {
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
       new Error("INVALID_ARGUMENT: some other failure"),
