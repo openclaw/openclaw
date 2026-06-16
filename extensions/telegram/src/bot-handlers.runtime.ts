@@ -1365,8 +1365,7 @@ export const registerTelegramHandlers = ({
         params.msg.message_thread_id,
       );
       const scopedAllowFrom = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
-      const configuredGroupAllowFrom =
-        scopedAllowFrom ?? runtimeTelegramCfg.groupAllowFrom ?? runtimeTelegramCfg.allowFrom;
+      const configuredGroupAllowFrom = scopedAllowFrom ?? groupAllowFrom;
       const contextVisibilityMode = resolveChannelContextVisibilityMode({
         cfg: runtimeCfg,
         channel: "telegram",

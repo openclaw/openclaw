@@ -2486,7 +2486,7 @@ describe("createTelegramBot", () => {
     expect(mediaFetch).not.toHaveBeenCalled();
   });
 
-  it("hydrates group reply media for a reply sender allowed through an access group", async () => {
+  it("hydrates group reply media allowed through an option-level access group", async () => {
     onSpy.mockClear();
     replySpy.mockClear();
     getFileSpy.mockClear();
@@ -2502,7 +2502,6 @@ describe("createTelegramBot", () => {
           groupPolicy: "open",
           contextVisibility: "allowlist",
           includeGroupHistoryContext: "recent",
-          allowFrom: ["1", "accessGroup:operators"],
           groups: {
             "-1008": {
               requireMention: false,
@@ -2536,6 +2535,7 @@ describe("createTelegramBot", () => {
       createTelegramBot({
         token: "tok",
         config: startupConfig,
+        groupAllowFrom: ["1", "accessGroup:operators"],
         runtime: { error: runtimeError },
         telegramTransport: {
           fetch: mediaFetch as typeof fetch,
