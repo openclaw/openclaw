@@ -902,7 +902,11 @@ export async function runGatewayCommand(opts: GatewayRunOpts, hooks: GatewayRunR
     return;
   }
   if (resolvedAuthMode === "none") {
-    gatewayLog.warn(
+    // On loopback-only deployments, auth=none is expected and classified as
+    // "trusted-local only" by the security audit tool. Demote to debug so the
+    // message does not drown out legitimate warnings during normal operation.
+    const logFn = bind === "loopback" ? gatewayLog.debug : gatewayLog.warn;
+    logFn(
       "Gateway auth mode=none explicitly configured; all gateway connections are unauthenticated.",
     );
   }
