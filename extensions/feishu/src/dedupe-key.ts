@@ -1,5 +1,6 @@
 // Feishu plugin module implements dedupe key behavior.
 import { createHash } from "node:crypto";
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { asNullableRecord as readRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { FeishuMessageEvent } from "./event-types.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
@@ -79,7 +80,12 @@ function resolveTextRetryDedupeKey(event: FeishuMessageDedupeInput): string | un
   const createTime = event.message.create_time?.trim();
   const chatId = event.message.chat_id?.trim();
   const senderId = resolveSenderIdentity(event);
-  if (!createTime || !chatId || !senderId) {
+  if (
+    !createTime ||
+    parseStrictNonNegativeInteger(createTime) === undefined ||
+    !chatId ||
+    !senderId
+  ) {
     return undefined;
   }
   const contentHash = createHash("sha256")

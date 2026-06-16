@@ -64,6 +64,13 @@ describe("resolveFeishuMessageDedupeKey", () => {
     expect(key).toBe("om_no_time");
   });
 
+  it("falls back to message_id for malformed create_time", () => {
+    const key = resolveFeishuMessageDedupeKey(
+      textEvent({ messageId: "om_bad_time", createTime: "1710000000000ms" }),
+    );
+    expect(key).toBe("om_bad_time");
+  });
+
   it("keeps media keyed by message_id plus media key", () => {
     const event: FeishuMessageEvent = {
       sender: { sender_id: { open_id: "ou-user" } },
