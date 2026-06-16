@@ -1555,18 +1555,58 @@ describe("chat voice controls", () => {
     ]);
   });
 
-  it("renders catalog providers and limits transports to the selected provider", () => {
+  it("renders compatible catalog providers and limits transports to the selected provider", () => {
+    const onRealtimeTalkOptionsChange = vi.fn();
     const container = renderChatView({
       realtimeTalkOptionsOpen: true,
       realtimeTalkCatalogProviders: [
         { id: "openai", label: "OpenAI", transports: ["webrtc", "provider-websocket"] },
         { id: "plugin-realtime", label: "Plugin realtime", transports: ["gateway-relay"] },
+        {
+          id: "plugin-websocket",
+          label: "Unsupported plugin WebSocket",
+          transports: ["provider-websocket"],
+        },
       ],
       realtimeTalkOptions: {
-        provider: "plugin-realtime",
+        provider: "openai",
         model: "",
         voice: "",
-        transport: "gateway-relay",
+        transport: "webrtc",
+        vadThreshold: "",
+        silenceDurationMs: "",
+        prefixPaddingMs: "",
+        reasoningEffort: "",
+      },
+      onRealtimeTalkOptionsChange,
+    });
+
+    expect(getTalkSelectOptionValues(container, "provider")).toEqual([
+      "",
+      "openai",
+      "plugin-realtime",
+    ]);
+    expect(getTalkSelectOptionValues(container, "transport")).toEqual(["", "webrtc"]);
+
+    clickTalkSelectOption(container, "provider", "plugin-realtime");
+
+    expect(onRealtimeTalkOptionsChange).toHaveBeenCalledWith({
+      provider: "plugin-realtime",
+      transport: "",
+    });
+  });
+
+  it("keeps the Google provider WebSocket transport available", () => {
+    const container = renderChatView({
+      realtimeTalkOptionsOpen: true,
+      realtimeTalkCatalogProviders: [
+        { id: "google", label: "Google", transports: ["provider-websocket", "gateway-relay"] },
+      ],
+      realtimeTalkOptions: {
+        provider: "google",
+        model: "",
+        voice: "",
+        transport: "provider-websocket",
         vadThreshold: "",
         silenceDurationMs: "",
         prefixPaddingMs: "",
@@ -1575,12 +1615,11 @@ describe("chat voice controls", () => {
       onRealtimeTalkOptionsChange: () => undefined,
     });
 
-    expect(getTalkSelectOptionValues(container, "provider")).toEqual([
+    expect(getTalkSelectOptionValues(container, "transport")).toEqual([
       "",
-      "openai",
-      "plugin-realtime",
+      "gateway-relay",
+      "provider-websocket",
     ]);
-    expect(getTalkSelectOptionValues(container, "transport")).toEqual(["", "gateway-relay"]);
   });
 
   it("renders composer and Talk labels from the active locale", async () => {

@@ -245,6 +245,8 @@ const TALK_TRANSPORT_OPTIONS: TalkSelectOption[] = [
   { label: "Gateway relay", value: "gateway-relay" },
   { label: "Provider WebSocket", value: "provider-websocket" },
 ];
+const TALK_CONTROL_UI_TRANSPORTS = new Set(["webrtc", "gateway-relay"]);
+const TALK_CONTROL_UI_PROVIDER_WEBSOCKET_IDS = new Set(["google"]);
 const TALK_REASONING_OPTIONS: TalkSelectOption[] = [
   { label: "Default", value: "" },
   { label: "Minimal", value: "minimal" },
@@ -317,19 +319,32 @@ function renderRealtimeTalkOptions(props: ChatProps) {
   if (!props.realtimeTalkOptionsOpen || !options || !onChange) {
     return nothing;
   }
+  const catalogProviders = props.realtimeTalkCatalogProviders ?? [];
+  const providerTransports = (provider: (typeof catalogProviders)[number]) =>
+    (provider.transports ?? []).filter(
+      (transport) =>
+        TALK_CONTROL_UI_TRANSPORTS.has(transport) ||
+        (transport === "provider-websocket" &&
+          TALK_CONTROL_UI_PROVIDER_WEBSOCKET_IDS.has(provider.id)),
+    );
+  const selectableProviders = catalogProviders.filter(
+    (provider) => providerTransports(provider).length > 0,
+  );
   const providerOptions: TalkSelectOption[] = [
     TALK_PROVIDER_AUTO_OPTION,
-    ...(props.realtimeTalkCatalogProviders ?? []).map((p) => ({ label: p.label, value: p.id })),
+    ...selectableProviders.map((provider) => ({ label: provider.label, value: provider.id })),
   ];
   const selectedCatalogProvider = options.provider
-    ? (props.realtimeTalkCatalogProviders ?? []).find((p) => p.id === options.provider)
+    ? selectableProviders.find((provider) => provider.id === options.provider)
     : null;
-  const providerTransports = selectedCatalogProvider?.transports;
-  const transportOptions: TalkSelectOption[] = providerTransports
+  const selectedProviderTransports = selectedCatalogProvider
+    ? providerTransports(selectedCatalogProvider)
+    : undefined;
+  const transportOptions: TalkSelectOption[] = selectedProviderTransports
     ? [
         { label: "Auto", value: "" },
         ...TALK_TRANSPORT_OPTIONS.filter(
-          (opt) => opt.value !== "" && providerTransports.includes(opt.value),
+          (opt) => opt.value !== "" && selectedProviderTransports.includes(opt.value),
         ),
       ]
     : TALK_TRANSPORT_OPTIONS;
@@ -388,7 +403,16 @@ function renderRealtimeTalkOptions(props: ChatProps) {
             label: "Provider",
             value: options.provider,
             options: providerOptions,
-            onSelect: (provider) => onChange({ provider }),
+            onSelect: (provider) => {
+              const selectedProvider = selectableProviders.find((entry) => entry.id === provider);
+              const transports = selectedProvider ? providerTransports(selectedProvider) : null;
+              const transport = options.transport;
+              onChange(
+                transports && transport && !transports.includes(transport)
+                  ? { provider, transport: "" }
+                  : { provider },
+              );
+            },
           })}
           ${renderNativeTalkSelect({
             label: "Transport",
