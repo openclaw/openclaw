@@ -191,6 +191,7 @@ private struct GatewayQuickSetupCandidatePanel: View {
         .padding(.horizontal, 16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .textSelection(.enabled)
-        .background(Color(uiColor: .secondarySystemGroupedBackground))
+        .background(.thinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 14))
     }
 }
