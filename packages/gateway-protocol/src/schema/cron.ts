@@ -410,7 +410,6 @@ const CronJobStatePatchSchema = Type.Object(
     nextRunAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
     runningAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
     lastRunAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
-    scheduleActivatedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
     lastRunStatus: Type.Optional(CronRunStatusSchema),
     lastStatus: Type.Optional(DeprecatedCronRunStatusSchema),
     lastError: Type.Optional(Type.String()),

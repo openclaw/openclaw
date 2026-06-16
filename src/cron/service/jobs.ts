@@ -24,6 +24,7 @@ import type {
   CronJob,
   CronJobCreate,
   CronJobPatch,
+  CronJobState,
   CronPayload,
   CronPayloadPatch,
 } from "../types.js";
@@ -794,6 +795,7 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
     failureAlert: input.failureAlert,
     state: {
       ...input.state,
+      scheduleActivatedAtMs: now,
     },
   };
   assertSupportedJobSpec(job);
@@ -802,11 +804,6 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
   assertFailureDestinationSupport(job);
   assertCronExpressionSatisfiable(job, now);
   job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);
-  // Creation activates the schedule; absent an explicit caller value, anchor
-  // catch-up's "predates the schedule" boundary at creation time (#91944).
-  if (!isFiniteTimestamp(job.state.scheduleActivatedAtMs)) {
-    job.state.scheduleActivatedAtMs = now;
-  }
   return job;
 }
 
@@ -882,7 +879,11 @@ export function applyJobPatch(
         : undefined;
   }
   if (patch.state) {
-    job.state = { ...job.state, ...patch.state };
+    const statePatch = { ...patch.state } as Partial<CronJobState>;
+    // The scheduler owns this boundary; public state patches must not move it
+    // backward or forward and change restart catch-up behavior (#91944).
+    delete statePatch.scheduleActivatedAtMs;
+    job.state = { ...job.state, ...statePatch };
   }
   if ("agentId" in patch) {
     job.agentId = normalizeOptionalAgentId((patch as { agentId?: unknown }).agentId);

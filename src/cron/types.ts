@@ -343,9 +343,11 @@ export type CronStoreFile = {
   jobs: CronJob[];
 };
 
+type CronJobCallerState = Omit<CronJobState, "scheduleActivatedAtMs">;
+
 /** Create input accepted by cron APIs before id/timestamps/state are assigned. */
 export type CronJobCreate = Omit<CronJob, "id" | "createdAtMs" | "updatedAtMs" | "state"> & {
-  state?: Partial<CronJobState>;
+  state?: Partial<CronJobCallerState>;
 };
 
 /** Patch input accepted by cron APIs without allowing immutable identity fields. */
@@ -354,5 +356,5 @@ export type CronJobPatch = Partial<
 > & {
   payload?: CronPayloadPatch;
   delivery?: CronDeliveryPatch;
-  state?: Partial<CronJobState>;
+  state?: Partial<CronJobCallerState>;
 };

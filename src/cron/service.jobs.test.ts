@@ -8,7 +8,7 @@ import {
   recomputeNextRunsForMaintenance,
 } from "./service/jobs.js";
 import type { CronServiceState } from "./service/state.js";
-import type { CronJob, CronJobPatch } from "./types.js";
+import type { CronJob, CronJobCreate, CronJobPatch } from "./types.js";
 
 const DEFAULT_TOP_OF_HOUR_STAGGER_MS = 5 * 60 * 1000;
 
@@ -65,6 +65,19 @@ describe("applyJobPatch", () => {
     expect(job.sessionTarget).toBe("main");
     expect(job.payload.kind).toBe("systemEvent");
     expect(job.delivery).toBeUndefined();
+  });
+
+  it("ignores caller-supplied schedule activation state", () => {
+    const job = createIsolatedAgentTurnJob("job-activation-owner", undefined, {
+      state: { scheduleActivatedAtMs: 456 },
+    });
+    const patch = {
+      state: { scheduleActivatedAtMs: 123 },
+    } as unknown as CronJobPatch;
+
+    applyJobPatch(job, patch);
+
+    expect(job.state.scheduleActivatedAtMs).toBe(456);
   });
 
   it("keeps webhook delivery when switching to main session", () => {
@@ -596,6 +609,26 @@ function createMockState(now: number, opts?: { defaultAgentId?: string }): CronS
     },
   } as unknown as CronServiceState;
 }
+
+describe("createJob schedule activation ownership", () => {
+  it("uses the service clock instead of caller-supplied state", () => {
+    const now = Date.parse("2026-06-16T06:00:00.000Z");
+    const state = createMockState(now);
+    const input = {
+      name: "activation-owned",
+      enabled: true,
+      schedule: { kind: "cron" as const, expr: "0 * * * *", tz: "UTC" },
+      sessionTarget: "main" as const,
+      wakeMode: "now" as const,
+      payload: { kind: "systemEvent" as const, text: "tick" },
+      state: { scheduleActivatedAtMs: now - 60_000 },
+    } as unknown as CronJobCreate;
+
+    const job = createJob(state, input);
+
+    expect(job.state.scheduleActivatedAtMs).toBe(now);
+  });
+});
 
 describe("createJob rejects sessionTarget main for non-default agents", () => {
   const now = Date.parse("2026-02-28T12:00:00.000Z");
