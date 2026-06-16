@@ -1,10 +1,8 @@
 // Verifies request-scoped plugin workspace pins under concurrent registry mutation.
 import { afterEach, describe, expect, it } from "vitest";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
-import {
-  getActivePluginRegistryWorkspaceDirFromState,
-  withPinnedActivePluginRegistryWorkspaceDir,
-} from "./runtime-workspace-state.js";
+import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-state.js";
+import { withPinnedActivePluginRegistryWorkspaceDir } from "./runtime-workspace-state.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
 
 function setActiveWorkspace(workspaceDir: string): void {
