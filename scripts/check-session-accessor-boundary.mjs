@@ -68,6 +68,7 @@ export const migratedSessionAccessorFiles = new Set([
   "src/commands/sessions.ts",
   "src/commands/status.agent-local.ts",
   "src/commands/status.summary.ts",
+  "src/commands/tasks.ts",
   "src/config/sessions/combined-store-gateway.ts",
   "src/cron/isolated-agent/delivery-target.ts",
   "src/cron/service/timer.ts",
@@ -108,9 +109,10 @@ export const migratedSessionAccessorWriteFiles = new Set([
   "src/auto-reply/reply/session-reset-model.ts",
   "src/auto-reply/reply/session-updates.ts",
   "src/auto-reply/reply/session-usage.ts",
-  "src/tui/embedded-backend.ts",
+  "src/commands/tasks.ts",
   "src/config/sessions/cleanup-service.ts",
   "src/plugins/host-hook-cleanup.ts",
+  "src/tui/embedded-backend.ts",
 ]);
 
 export const migratedTranscriptWriterFiles = new Set([
@@ -336,6 +338,7 @@ export async function main() {
   const writeSourceRoots = resolveSourceRoots(repoRoot, [
     "src/agents",
     "src/auto-reply",
+    "src/commands",
     "src/config/sessions",
     "src/plugins",
     "src/tui",

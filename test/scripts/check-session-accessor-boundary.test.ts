@@ -35,6 +35,7 @@ describe("session accessor boundary guard", () => {
         "src/commands/sessions.ts",
         "src/commands/status.agent-local.ts",
         "src/commands/status.summary.ts",
+        "src/commands/tasks.ts",
         "src/config/sessions/combined-store-gateway.ts",
         "src/cron/isolated-agent/delivery-target.ts",
         "src/cron/service/timer.ts",
@@ -83,9 +84,10 @@ describe("session accessor boundary guard", () => {
         "src/auto-reply/reply/session-reset-model.ts",
         "src/auto-reply/reply/session-updates.ts",
         "src/auto-reply/reply/session-usage.ts",
+        "src/commands/tasks.ts",
+        "src/config/sessions/cleanup-service.ts",
         "src/plugins/host-hook-cleanup.ts",
         "src/tui/embedded-backend.ts",
-        "src/config/sessions/cleanup-service.ts",
       ]),
     );
   });
