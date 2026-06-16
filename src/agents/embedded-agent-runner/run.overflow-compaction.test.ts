@@ -47,6 +47,7 @@ import {
   mockedRunEmbeddedAttempt,
   mockedSessionLikelyHasOversizedToolResults,
   mockedTruncateOversizedToolResultsInSession,
+  mockedWaitForDeferredTurnMaintenanceForSession,
   overflowBaseRunParams,
   resetRunOverflowCompactionHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
@@ -284,6 +285,25 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       authProfileId: "test-profile",
       authProfileIdSource: "auto",
     });
+  });
+
+  it("waits for same-session deferred maintenance before the attempt reads session state", async () => {
+    const events: string[] = [];
+    mockedWaitForDeferredTurnMaintenanceForSession.mockImplementationOnce(async (sessionKey) => {
+      events.push(`wait:${sessionKey}`);
+    });
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async () => {
+      events.push("attempt");
+      return makeAttemptResult({ promptError: null });
+    });
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      runId: "run-wait-deferred-maintenance",
+      sessionKey: "agent:main:session-wait-deferred-maintenance",
+    });
+
+    expect(events).toEqual(["wait:agent:main:session-wait-deferred-maintenance", "attempt"]);
   });
 
   it("uses the lightweight auth profile store during reply startup", async () => {

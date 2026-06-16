@@ -146,6 +146,9 @@ export const mockedBuildEmbeddedRunPayloads = vi.fn<
   ) => ReturnType<typeof buildEmbeddedRunPayloads>
 >(() => []);
 export const mockedRunContextEngineMaintenance = vi.fn(async () => undefined);
+export const mockedWaitForDeferredTurnMaintenanceForSession = vi.fn(
+  async (_sessionKey?: string) => undefined,
+);
 export const mockedSessionLikelyHasOversizedToolResults = vi.fn(() => false);
 export const mockedResolveLiveToolResultMaxChars = vi.fn(() => 32_000);
 type MockTruncateOversizedToolResultsResult = {
@@ -357,6 +360,8 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   mockedBuildEmbeddedRunPayloads.mockReturnValue([]);
   mockedRunContextEngineMaintenance.mockReset();
   mockedRunContextEngineMaintenance.mockResolvedValue(undefined);
+  mockedWaitForDeferredTurnMaintenanceForSession.mockReset();
+  mockedWaitForDeferredTurnMaintenanceForSession.mockResolvedValue(undefined);
   mockedSessionLikelyHasOversizedToolResults.mockReset();
   mockedSessionLikelyHasOversizedToolResults.mockReturnValue(false);
   mockedResolveLiveToolResultMaxChars.mockReset();
@@ -670,6 +675,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
 
   vi.doMock("./context-engine-maintenance.js", () => ({
     runContextEngineMaintenance: mockedRunContextEngineMaintenance,
+    waitForDeferredTurnMaintenanceForSession: mockedWaitForDeferredTurnMaintenanceForSession,
   }));
 
   vi.doMock("./model.js", () => ({

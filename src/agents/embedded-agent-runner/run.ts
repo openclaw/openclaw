@@ -130,7 +130,10 @@ import {
   resolveCompactionTimeoutMs,
 } from "./compaction-safety-timeout.js";
 import { resolveContextEngineCapabilities } from "./context-engine-capabilities.js";
-import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
+import {
+  runContextEngineMaintenance,
+  waitForDeferredTurnMaintenanceForSession,
+} from "./context-engine-maintenance.js";
 import {
   hasMessagingToolDeliveryEvidence,
   hasOutboundDeliveryEvidence,
@@ -738,6 +741,11 @@ async function runEmbeddedAgentInternal(
   return enqueueSession(() => {
     throwIfAborted();
     return enqueueGlobal(async () => {
+      throwIfAborted();
+      // Same-session reads below must see any prior deferred transcript rewrite.
+      // The maintenance lane is separate from the session lane, so foreground
+      // turns checkpoint here before bootstrap or attempt setup reads history.
+      await waitForDeferredTurnMaintenanceForSession(params.sessionKey);
       throwIfAborted();
       const started = Date.now();
       const startupStages = createEmbeddedRunStageTracker();
