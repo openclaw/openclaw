@@ -1,6 +1,7 @@
 // Control UI tests cover skills behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
+  installFromClawHub,
   installSkill,
   loadSkills,
   loadSkillCard,
@@ -8,6 +9,7 @@ import {
   saveSkillApiKey,
   searchClawHub,
   setClawHubSearchQuery,
+  setSkillsAgentId,
   updateSkillEnabled,
   type SkillsState,
 } from "./skills.ts";
@@ -21,12 +23,15 @@ function createState(): { state: SkillsState; request: ReturnType<typeof vi.fn<T
       request,
     } as unknown as SkillsState["client"],
     connected: true,
+    skillsAgentId: null,
     skillsLoading: false,
     skillsReport: null,
     skillsError: null,
     skillsBusyKey: null,
     skillEdits: {},
     skillMessages: {},
+    skillsDetailKey: null,
+    skillsDetailTab: "overview",
     clawhubSearchQuery: "github",
     clawhubSearchResults: [
       {
@@ -164,6 +169,98 @@ describe("loadSkills", () => {
     expect(state.clawhubVerdictsError).toBeNull();
   });
 
+  it("loads selected agent skills and verdicts with the agent id", async () => {
+    const { state, request } = createState();
+    state.skillsAgentId = "research";
+    request.mockImplementation(async (method: string) => {
+      if (method === "skills.status") {
+        return {
+          workspaceDir: "/tmp/research",
+          managedSkillsDir: "/tmp/skills",
+          skills: [
+            {
+              name: "AgentReceipt",
+              skillKey: "agentreceipt",
+              source: "workspace",
+              clawhub: {
+                status: "linked",
+                valid: true,
+                registry: "https://clawhub.ai",
+                slug: "agentreceipt",
+                installedVersion: "1.2.3",
+                installedAt: 123,
+              },
+            },
+          ],
+        };
+      }
+      if (method === "skills.securityVerdicts") {
+        return {
+          schema: "openclaw.skills.security-verdicts.v1",
+          items: [],
+        };
+      }
+      return {};
+    });
+
+    await loadSkills(state);
+
+    expect(request).toHaveBeenNthCalledWith(1, "skills.status", { agentId: "research" });
+    expect(request).toHaveBeenNthCalledWith(2, "skills.securityVerdicts", {
+      agentId: "research",
+    });
+    expect(state.skillsReport?.workspaceDir).toBe("/tmp/research");
+  });
+
+  it("ignores stale skill reports after switching agents mid-request", async () => {
+    const { state, request } = createState();
+    const pendingRequests: Array<{
+      method: string;
+      payload: unknown;
+      resolve: (value: unknown) => void;
+    }> = [];
+    request.mockImplementation(
+      (method, payload) =>
+        new Promise((resolve) => {
+          pendingRequests.push({ method, payload, resolve });
+        }),
+    );
+
+    state.skillsAgentId = "alpha";
+    state.skillEdits = { shared: "stale-secret" };
+    const firstLoad = loadSkills(state);
+    await Promise.resolve();
+
+    setSkillsAgentId(state, "beta");
+    expect(state.skillEdits).toEqual({});
+    const secondLoad = loadSkills(state);
+    await Promise.resolve();
+
+    expect(pendingRequests.map(({ method, payload }) => [method, payload])).toEqual([
+      ["skills.status", { agentId: "alpha" }],
+      ["skills.status", { agentId: "beta" }],
+    ]);
+
+    pendingRequests[1].resolve({
+      workspaceDir: "/tmp/beta",
+      managedSkillsDir: "/tmp/skills",
+      skills: [{ name: "Beta", skillKey: "beta", source: "workspace" }],
+    });
+    await secondLoad;
+
+    pendingRequests[0].resolve({
+      workspaceDir: "/tmp/alpha",
+      managedSkillsDir: "/tmp/skills",
+      skills: [{ name: "Alpha", skillKey: "alpha", source: "workspace" }],
+    });
+    await firstLoad;
+
+    expect(state.skillsAgentId).toBe("beta");
+    expect(state.skillsReport?.workspaceDir).toBe("/tmp/beta");
+    expect(state.skillsReport?.skills.map((skill) => skill.name)).toEqual(["Beta"]);
+    expect(state.skillsLoading).toBe(false);
+  });
+
   it("does not keep skills loading while the optional verdict refresh is pending", async () => {
     const { state, request } = createState();
     let resolveVerdicts: (value: unknown) => void = () => {
@@ -253,6 +350,7 @@ describe("loadSkills", () => {
 describe("loadSkillCard", () => {
   it("loads local Skill Card content on demand", async () => {
     const { state, request } = createState();
+    state.skillsAgentId = "research";
     request.mockResolvedValueOnce({
       schema: "openclaw.skills.skill-card.v1",
       skillKey: "agentreceipt",
@@ -290,7 +388,10 @@ describe("loadSkillCard", () => {
 
     await loadSkillCard(state, "agentreceipt");
 
-    expect(request).toHaveBeenCalledWith("skills.skillCard", { skillKey: "agentreceipt" });
+    expect(request).toHaveBeenCalledWith("skills.skillCard", {
+      agentId: "research",
+      skillKey: "agentreceipt",
+    });
     expect(state.skillCardContents.agentreceipt).toBe("# AgentReceipt\n\nLocal trust card.\n");
     expect(state.skillCardContentKeys.agentreceipt).toBe(
       "/tmp/workspace/skills/agentreceipt/skill-card.md\u000034\u0000",
@@ -546,5 +647,39 @@ describe("skill mutations", () => {
       message: "skills update failed",
     });
     expect(state.skillsBusyKey).toBeNull();
+  });
+
+  it("routes selected agent installs through the selected workspace", async () => {
+    const { state, request } = createState();
+    state.skillsAgentId = "research";
+    mockSkillMutationRequests(request, "Installed from registry");
+
+    await installSkill(state, "github", "GitHub", "install-123", true);
+
+    expect(request).toHaveBeenCalledWith("skills.install", {
+      agentId: "research",
+      name: "GitHub",
+      installId: "install-123",
+      dangerouslyForceUnsafeInstall: true,
+      timeoutMs: 120000,
+    });
+  });
+
+  it("routes selected agent ClawHub installs through the selected workspace", async () => {
+    const { state, request } = createState();
+    state.skillsAgentId = "research";
+    request.mockResolvedValue({});
+
+    await installFromClawHub(state, "github");
+
+    expect(request).toHaveBeenCalledWith("skills.install", {
+      agentId: "research",
+      source: "clawhub",
+      slug: "github",
+    });
+    expect(state.clawhubInstallMessage).toEqual({
+      kind: "success",
+      text: "Installed github",
+    });
   });
 });

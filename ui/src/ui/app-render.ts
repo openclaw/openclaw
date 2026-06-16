@@ -146,6 +146,7 @@ import {
   saveSkillApiKey,
   searchClawHub,
   setClawHubSearchQuery,
+  setSkillsAgentId,
   updateSkillEdit,
   updateSkillEnabled,
 } from "./controllers/skills.ts";
@@ -3479,6 +3480,8 @@ export function renderApp(state: AppViewState) {
                 connected: state.connected,
                 loading: state.skillsLoading,
                 report: state.skillsReport,
+                agentsList: state.agentsList,
+                selectedAgentId: state.skillsAgentId ?? state.agentsList?.defaultId ?? null,
                 error: state.skillsError,
                 filter: state.skillsFilter,
                 statusFilter: state.skillsStatusFilter,
@@ -3503,9 +3506,16 @@ export function renderApp(state: AppViewState) {
                 clawhubDetailError: state.clawhubDetailError,
                 clawhubInstallSlug: state.clawhubInstallSlug,
                 clawhubInstallMessage: state.clawhubInstallMessage,
+                onAgentChange: (agentId) => {
+                  setSkillsAgentId(state, agentId);
+                  void loadSkills(state, { clearMessages: true });
+                },
                 onFilterChange: (next) => (state.skillsFilter = next),
                 onStatusFilterChange: (next) => (state.skillsStatusFilter = next),
-                onRefresh: () => void loadSkills(state, { clearMessages: true }),
+                onRefresh: () => {
+                  void loadAgents(state);
+                  void loadSkills(state, { clearMessages: true });
+                },
                 onToggle: (key, enabled) => void updateSkillEnabled(state, key, enabled),
                 onEdit: (key, value) => updateSkillEdit(state, key, value),
                 onSaveKey: (key) => void saveSkillApiKey(state, key),

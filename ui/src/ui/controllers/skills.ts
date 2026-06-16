@@ -63,12 +63,15 @@ export type ClawHubSkillSecurityVerdict = {
 export type SkillsState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
+  skillsAgentId: string | null;
   skillsLoading: boolean;
   skillsReport: SkillStatusReport | null;
   skillsError: string | null;
   skillsBusyKey: string | null;
   skillEdits: Record<string, string>;
   skillMessages: SkillMessageMap;
+  skillsDetailKey: string | null;
+  skillsDetailTab: "overview" | "card";
   clawhubSearchQuery: string;
   clawhubSearchResults: ClawHubSearchResult[] | null;
   clawhubSearchLoading: boolean;
@@ -136,6 +139,11 @@ function currentSkillCardCacheKey(state: SkillsState, skillKey: string): string 
   return skill ? skillCardCacheKey(skill) : undefined;
 }
 
+function skillsAgentParams(state: Pick<SkillsState, "skillsAgentId">): { agentId?: string } {
+  const agentId = state.skillsAgentId?.trim();
+  return agentId ? { agentId } : {};
+}
+
 async function runStaleAwareRequest<T>(
   isCurrent: () => boolean,
   request: () => Promise<T>,
@@ -166,6 +174,30 @@ export function setClawHubSearchQuery(state: SkillsState, query: string) {
   state.clawhubSearchLoading = false;
 }
 
+export function setSkillsAgentId(state: SkillsState, agentId: string | null) {
+  const nextAgentId = agentId?.trim() || null;
+  if (state.skillsAgentId === nextAgentId) {
+    return;
+  }
+  state.skillsAgentId = nextAgentId;
+  state.skillsLoading = false;
+  state.skillsReport = null;
+  state.skillsError = null;
+  state.skillsBusyKey = null;
+  state.skillEdits = {};
+  state.skillMessages = {};
+  state.skillsDetailKey = null;
+  state.skillsDetailTab = "overview";
+  state.clawhubInstallMessage = null;
+  state.clawhubVerdicts = {};
+  state.clawhubVerdictsLoading = false;
+  state.clawhubVerdictsError = null;
+  state.skillCardContents = {};
+  state.skillCardContentKeys = {};
+  state.skillCardLoadingKey = null;
+  state.skillCardErrors = {};
+}
+
 export async function loadSkills(state: SkillsState, options?: { clearMessages?: boolean }) {
   if (options?.clearMessages && Object.keys(state.skillMessages).length > 0) {
     state.skillMessages = {};
@@ -173,19 +205,32 @@ export async function loadSkills(state: SkillsState, options?: { clearMessages?:
   if (!state.client || !state.connected || state.skillsLoading) {
     return;
   }
+  const requestedAgentId = state.skillsAgentId;
+  const requestParams = skillsAgentParams(state);
   state.skillsLoading = true;
   state.skillsError = null;
   try {
-    const res = await state.client.request<SkillStatusReport | undefined>("skills.status", {});
+    const res = await state.client.request<SkillStatusReport | undefined>(
+      "skills.status",
+      requestParams,
+    );
+    if (state.skillsAgentId !== requestedAgentId) {
+      return;
+    }
     if (res && Array.isArray(res.skills)) {
       state.skillsReport = res;
       pruneSkillCardState(state, res);
       void loadClawHubSecurityVerdicts(state, res);
     }
   } catch (err) {
+    if (state.skillsAgentId !== requestedAgentId) {
+      return;
+    }
     state.skillsError = getErrorMessage(err);
   } finally {
-    state.skillsLoading = false;
+    if (state.skillsAgentId === requestedAgentId) {
+      state.skillsLoading = false;
+    }
   }
 }
 
@@ -227,6 +272,8 @@ export async function loadSkillCard(state: SkillsState, skillKey: string) {
   if (!cacheKey) {
     return;
   }
+  const requestedAgentId = state.skillsAgentId;
+  const requestParams = { ...skillsAgentParams(state), skillKey };
   state.skillCardLoadingKey = skillKey;
   const { [skillKey]: _previousError, ...nextErrors } = state.skillCardErrors;
   state.skillCardErrors = nextErrors;
@@ -237,8 +284,9 @@ export async function loadSkillCard(state: SkillsState, skillKey: string) {
       path: string;
       sizeBytes: number;
       content: string;
-    }>("skills.skillCard", { skillKey });
+    }>("skills.skillCard", requestParams);
     if (
+      state.skillsAgentId === requestedAgentId &&
       response?.skillKey === skillKey &&
       typeof response.content === "string" &&
       currentSkillCardCacheKey(state, skillKey) === cacheKey
@@ -247,9 +295,11 @@ export async function loadSkillCard(state: SkillsState, skillKey: string) {
       state.skillCardContentKeys = { ...state.skillCardContentKeys, [skillKey]: cacheKey };
     }
   } catch (err) {
-    state.skillCardErrors = { ...state.skillCardErrors, [skillKey]: getErrorMessage(err) };
+    if (state.skillsAgentId === requestedAgentId) {
+      state.skillCardErrors = { ...state.skillCardErrors, [skillKey]: getErrorMessage(err) };
+    }
   } finally {
-    if (state.skillCardLoadingKey === skillKey) {
+    if (state.skillsAgentId === requestedAgentId && state.skillCardLoadingKey === skillKey) {
       state.skillCardLoadingKey = null;
     }
   }
@@ -257,6 +307,7 @@ export async function loadSkillCard(state: SkillsState, skillKey: string) {
 
 async function loadClawHubSecurityVerdicts(state: SkillsState, report: SkillStatusReport) {
   const client = state.client;
+  const requestedAgentId = state.skillsAgentId;
   if (!client || !state.connected || !reportHasLinkedClawHubSkills(report)) {
     state.clawhubVerdicts = {};
     state.clawhubVerdictsLoading = false;
@@ -269,7 +320,10 @@ async function loadClawHubSecurityVerdicts(state: SkillsState, report: SkillStat
     const response = await client.request<{
       schema: "openclaw.skills.security-verdicts.v1";
       items: ClawHubSkillSecurityVerdict[];
-    }>("skills.securityVerdicts", {});
+    }>("skills.securityVerdicts", skillsAgentParams(state));
+    if (state.skillsAgentId !== requestedAgentId) {
+      return;
+    }
     state.clawhubVerdicts = Object.fromEntries(
       (response?.items ?? []).map((item) => [
         clawhubVerdictKey({
@@ -281,10 +335,15 @@ async function loadClawHubSecurityVerdicts(state: SkillsState, report: SkillStat
       ]),
     );
   } catch (err) {
+    if (state.skillsAgentId !== requestedAgentId) {
+      return;
+    }
     state.clawhubVerdicts = {};
     state.clawhubVerdictsError = getErrorMessage(err);
   } finally {
-    state.clawhubVerdictsLoading = false;
+    if (state.skillsAgentId === requestedAgentId) {
+      state.clawhubVerdictsLoading = false;
+    }
   }
 }
 
@@ -349,6 +408,7 @@ export async function installSkill(
 ) {
   await runSkillMutation(state, skillKey, async (client) => {
     const result = await client.request<{ message?: string }>("skills.install", {
+      ...skillsAgentParams(state),
       name,
       installId,
       dangerouslyForceUnsafeInstall,
@@ -434,7 +494,11 @@ export async function installFromClawHub(state: SkillsState, slug: string) {
   state.clawhubInstallSlug = slug;
   state.clawhubInstallMessage = null;
   try {
-    await state.client.request("skills.install", { source: "clawhub", slug });
+    await state.client.request("skills.install", {
+      ...skillsAgentParams(state),
+      source: "clawhub",
+      slug,
+    });
     await loadSkills(state);
     state.clawhubInstallMessage = { kind: "success", text: `Installed ${slug}` };
   } catch (err) {

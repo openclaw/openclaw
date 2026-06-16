@@ -2,7 +2,7 @@
 
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { SkillStatusEntry, SkillStatusReport } from "../types.ts";
+import type { AgentsListResult, SkillStatusEntry, SkillStatusReport } from "../types.ts";
 import { renderSkills, type SkillsProps } from "./skills.ts";
 
 const dialogRestores: Array<() => void> = [];
@@ -51,11 +51,22 @@ function createProps(overrides: Partial<SkillsProps> = {}): SkillsProps {
     managedSkillsDir: "/tmp/skills",
     skills: [createSkill()],
   };
+  const agentsList: AgentsListResult = {
+    defaultId: "main",
+    mainKey: "main",
+    scope: "project",
+    agents: [
+      { id: "main", name: "Main" },
+      { id: "research", identity: { name: "Research", avatar: "R" } },
+    ],
+  };
 
   return {
     connected: true,
     loading: false,
     report,
+    agentsList,
+    selectedAgentId: "main",
     error: null,
     filter: "",
     statusFilter: "all",
@@ -80,6 +91,7 @@ function createProps(overrides: Partial<SkillsProps> = {}): SkillsProps {
     clawhubDetailError: null,
     clawhubInstallSlug: null,
     clawhubInstallMessage: null,
+    onAgentChange: () => undefined,
     onFilterChange: () => undefined,
     onStatusFilterChange: () => undefined,
     onRefresh: () => undefined,
@@ -104,6 +116,37 @@ describe("renderSkills", () => {
     while (dialogRestores.length > 0) {
       dialogRestores.pop()?.();
     }
+  });
+
+  it("renders the agent selector and routes agent changes", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    dialogRestores.push(() => container.remove());
+    const onAgentChange = vi.fn();
+
+    render(
+      renderSkills(
+        createProps({
+          selectedAgentId: "research",
+          onAgentChange,
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const selector = container.querySelector<HTMLSelectElement>('select[name="skills-agent"]');
+    expect(selector).toBeInstanceOf(HTMLSelectElement);
+    expect(selector?.value).toBe("research");
+    expect(Array.from(selector!.options).map((option) => option.textContent?.trim())).toEqual([
+      "Main (default)",
+      "Research",
+    ]);
+
+    selector!.value = "main";
+    selector!.dispatchEvent(new Event("change", { bubbles: true }));
+
+    expect(onAgentChange).toHaveBeenCalledWith("main");
   });
 
   it("does not transfer toggle state when a skill leaves the disabled tab", async () => {

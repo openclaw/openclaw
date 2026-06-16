@@ -15,7 +15,7 @@ import { clampText } from "../format.ts";
 import { toSanitizedMarkdownHtml } from "../markdown.ts";
 import { resolveSafeExternalUrl } from "../open-external-url.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
-import type { SkillStatusEntry, SkillStatusReport } from "../types.ts";
+import type { AgentsListResult, SkillStatusEntry, SkillStatusReport } from "../types.ts";
 import { groupSkills } from "./skills-grouping.ts";
 import {
   computeSkillMissing,
@@ -52,6 +52,8 @@ export type SkillsProps = {
   connected: boolean;
   loading: boolean;
   report: SkillStatusReport | null;
+  agentsList: AgentsListResult | null;
+  selectedAgentId: string | null;
   error: string | null;
   filter: string;
   statusFilter: SkillsStatusFilter;
@@ -77,6 +79,7 @@ export type SkillsProps = {
   clawhubInstallSlug: string | null;
   clawhubInstallMessage: { kind: "success" | "error"; text: string } | null;
   onFilterChange: (next: string) => void;
+  onAgentChange: (agentId: string) => void;
   onStatusFilterChange: (next: SkillsStatusFilter) => void;
   onRefresh: () => void;
   onToggle: (skillKey: string, enabled: boolean) => void;
@@ -169,8 +172,18 @@ function verdictChipClass(verdict: ClawHubSkillSecurityVerdict | null | undefine
   return status === "pending" || status === "not-run" ? "chip" : "chip-warn";
 }
 
+type SkillsAgentOption = AgentsListResult["agents"][number];
+
+function agentOptionLabel(agent: SkillsAgentOption, defaultId: string | undefined): string {
+  const baseName = agent.identity?.name?.trim() || agent.name?.trim() || agent.id;
+  return agent.id === defaultId ? `${baseName} (default)` : baseName;
+}
+
 export function renderSkills(props: SkillsProps) {
   const skills = props.report?.skills ?? [];
+  const agents = props.agentsList?.agents ?? [];
+  const selectedAgentId =
+    props.selectedAgentId ?? props.agentsList?.defaultId ?? agents[0]?.id ?? "";
 
   const statusCounts: Record<SkillsStatusFilter, number> = {
     all: skills.length,
@@ -240,6 +253,28 @@ export function renderSkills(props: SkillsProps) {
         class="filters"
         style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 12px;"
       >
+        ${agents.length > 0
+          ? html`
+              <label class="field" style="min-width: 180px;">
+                <span>Agent</span>
+                <select
+                  name="skills-agent"
+                  .value=${selectedAgentId}
+                  ?disabled=${props.loading || !props.connected || agents.length < 2}
+                  @change=${(e: Event) =>
+                    props.onAgentChange((e.target as HTMLSelectElement).value)}
+                >
+                  ${agents.map(
+                    (agent) => html`
+                      <option value=${agent.id}>
+                        ${agentOptionLabel(agent, props.agentsList?.defaultId)}
+                      </option>
+                    `,
+                  )}
+                </select>
+              </label>
+            `
+          : nothing}
         <label class="field" style="flex: 1; min-width: 180px;">
           <input
             .value=${props.filter}

@@ -469,7 +469,7 @@ export async function refreshActiveTab(host: SettingsHost, opts?: { chatStartup?
         await loadCron(host);
         break;
       case "skills":
-        await loadSkills(app);
+        await Promise.all([loadAgents(app), loadSkills(app)]);
         break;
       case "skillWorkshop":
         await loadSkillWorkshopProposals(app, { force: true });

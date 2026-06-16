@@ -359,6 +359,16 @@ describe("refreshActiveTab", () => {
     });
   });
 
+  it("loads agents before rendering the Skills tab agent selector", async () => {
+    const host = createHost();
+    host.tab = "skills";
+
+    await refreshActiveTab(host as never);
+
+    expect(mocks.loadAgentsMock).toHaveBeenCalledWith(host);
+    expect(mocks.loadSkillsMock).toHaveBeenCalledWith(host);
+  });
+
   it("starts node polling on Nodes tab entry and clears pending session reloads on tab changes", () => {
     vi.useFakeTimers();
     const host = createHost();
