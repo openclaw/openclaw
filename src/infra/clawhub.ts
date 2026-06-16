@@ -273,19 +273,6 @@ export type ClawHubPackageSearchResult = {
   package: ClawHubPackageListItem;
 };
 
-export type ClawHubSkillSourceProvenance = {
-  source?: string | null;
-  sourceUrl?: string | null;
-  url?: string | null;
-  sourceRepo?: string | null;
-  repo?: string | null;
-  sourceCommit?: string | null;
-  commit?: string | null;
-  sourcePath?: string | null;
-  path?: string | null;
-  reason?: string | null;
-};
-
 export type ClawHubSkillSearchResult = {
   score: number;
   slug: string;
@@ -293,8 +280,6 @@ export type ClawHubSkillSearchResult = {
   summary?: string;
   version?: string;
   updatedAt?: number;
-  sourceUrl?: string | null;
-  provenance?: ClawHubSkillSourceProvenance | null;
 };
 
 export type ClawHubSkillDetail = {
@@ -305,15 +290,11 @@ export type ClawHubSkillDetail = {
     tags?: Record<string, string>;
     createdAt: number;
     updatedAt: number;
-    sourceUrl?: string | null;
-    provenance?: ClawHubSkillSourceProvenance | null;
   } | null;
   latestVersion?: {
     version: string;
     createdAt: number;
     changelog?: string;
-    sourceUrl?: string | null;
-    provenance?: ClawHubSkillSourceProvenance | null;
   } | null;
   metadata?: {
     os?: string[] | null;
@@ -331,28 +312,21 @@ export type ClawHubSkillInstallResolutionResponse =
       ok: true;
       slug: string;
       installKind: "archive";
-      sourceUrl?: string | null;
-      provenance?: ClawHubSkillSourceProvenance | null;
       archive: {
         version: string;
         downloadUrl: string;
-        sourceUrl?: string | null;
-        provenance?: ClawHubSkillSourceProvenance | null;
       };
     }
   | {
       ok: true;
       slug: string;
       installKind: "github";
-      sourceUrl?: string | null;
-      provenance?: ClawHubSkillSourceProvenance | null;
       github: {
         repo: string;
         path: string;
         commit: string;
         contentHash: string;
         sourceUrl: string;
-        provenance?: ClawHubSkillSourceProvenance | null;
       };
     }
   | {
@@ -375,8 +349,7 @@ export type ClawHubSkillVerificationResponse = {
   version: unknown;
   card: unknown;
   artifact: unknown;
-  sourceUrl?: string | null;
-  provenance: ClawHubSkillSourceProvenance | null;
+  provenance: unknown;
   security: unknown;
   signature: unknown;
 };
@@ -423,15 +396,11 @@ export type ClawHubSkillListResponse = {
       version: string;
       createdAt: number;
       changelog?: string;
-      sourceUrl?: string | null;
-      provenance?: ClawHubSkillSourceProvenance | null;
     } | null;
     metadata?: {
       os?: string[] | null;
       systems?: string[] | null;
     } | null;
-    sourceUrl?: string | null;
-    provenance?: ClawHubSkillSourceProvenance | null;
     createdAt: number;
     updatedAt: number;
   }>;

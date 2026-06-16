@@ -19,7 +19,6 @@ import {
   type ClawHubSkillDetail,
   type ClawHubSkillInstallResolutionResponse,
   type ClawHubSkillSearchResult,
-  type ClawHubSkillSourceProvenance,
   type ClawHubSkillVerificationResponse,
 } from "../../infra/clawhub.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -56,10 +55,9 @@ type ClawHubSkillVerificationLock = {
   ok: boolean;
   decision: ClawHubSkillVerificationResponse["decision"];
   reasons: string[];
-  sourceUrl?: string;
   card?: unknown;
   artifact?: unknown;
-  provenance?: ClawHubSkillSourceProvenance | null;
+  provenance?: unknown;
   security?: unknown;
   signature?: unknown;
 };
@@ -281,49 +279,23 @@ function asRecord(raw: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
-function readSourceUrlFromSourceMetadata(raw: unknown): string | undefined {
-  const record = asRecord(raw);
-  if (!record) {
+function readVerifiedProvenanceSourceUrl(raw: unknown): string | undefined {
+  const provenance = asRecord(raw);
+  // Only this ClawHub variant is server-resolved; other provenance metadata
+  // must not become a trusted source link.
+  if (provenance?.source !== "server-resolved-github-import") {
     return undefined;
   }
-  return (
-    normalizeOptionalStringValue(record.sourceUrl) ??
-    normalizeOptionalStringValue(record.url) ??
-    readSourceUrlFromSourceMetadata(record.provenance)
-  );
-}
-
-function readSkillDetailSourceUrl(
-  detail: ClawHubSkillDetail | undefined,
-  installedVersion: string,
-): string | undefined {
-  if (detail?.latestVersion?.version !== installedVersion) {
-    return undefined;
-  }
-  return (
-    readSourceUrlFromSourceMetadata(detail.latestVersion) ??
-    readSourceUrlFromSourceMetadata(detail.skill)
-  );
+  return normalizeOptionalStringValue(provenance.url);
 }
 
 function readInstallResolutionSourceUrl(
   resolution: Extract<ClawHubSkillInstallResolutionResponse, { ok: true }> | undefined,
 ): string | undefined {
-  if (!resolution) {
+  if (resolution?.installKind !== "github") {
     return undefined;
   }
-  return (
-    readSourceUrlFromSourceMetadata(resolution) ??
-    (resolution.installKind === "github"
-      ? readSourceUrlFromSourceMetadata(resolution.github)
-      : readSourceUrlFromSourceMetadata(resolution.archive))
-  );
-}
-
-function readVerificationSourceUrl(
-  verification: ClawHubSkillVerificationLock | undefined,
-): string | undefined {
-  return readSourceUrlFromSourceMetadata(verification);
+  return normalizeOptionalStringValue(resolution.github.sourceUrl);
 }
 
 function buildDownloadedArtifactLock(
@@ -354,13 +326,11 @@ function buildInstallTelemetrySkills(
 function snapshotClawHubSkillVerification(
   verification: ClawHubSkillVerificationResponse,
 ): ClawHubSkillVerificationLock {
-  const sourceUrl = readSourceUrlFromSourceMetadata(verification);
   return {
     schema: verification.schema,
     ok: verification.ok,
     decision: verification.decision,
     reasons: [...verification.reasons],
-    ...(sourceUrl ? { sourceUrl } : {}),
     ...(verification.card !== undefined ? { card: verification.card } : {}),
     ...(verification.artifact !== undefined ? { artifact: verification.artifact } : {}),
     ...(verification.provenance !== undefined ? { provenance: verification.provenance } : {}),
@@ -1165,8 +1135,7 @@ async function performClawHubSkillInstall(
       ]);
       const sourceUrl =
         readInstallResolutionSourceUrl(latestResolution) ??
-        readVerificationSourceUrl(verification) ??
-        readSkillDetailSourceUrl(detail, version);
+        readVerifiedProvenanceSourceUrl(verification?.provenance);
       await writeClawHubSkillOrigin(install.targetDir, {
         version: 1,
         registry: resolveClawHubBaseUrl(params.baseUrl),
