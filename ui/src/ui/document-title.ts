@@ -51,10 +51,10 @@ function isGeneratedConversationDisplayNameRow(
   row: SessionsListResult["sessions"][number],
 ): boolean {
   return (
-    /^agent:[^:]+:[^:]+:(?:direct|group|channel):/.test(row.key) ||
-    /^(?:direct|group|channel):[^:]+:/.test(row.key) ||
+    row.key.includes(":direct:") ||
     row.key.includes(":group:") ||
-    row.key.includes(":channel:")
+    row.key.includes(":channel:") ||
+    /^(?:direct|group|channel):/.test(row.key)
   );
 }
 

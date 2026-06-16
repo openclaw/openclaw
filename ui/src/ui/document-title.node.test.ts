@@ -180,6 +180,21 @@ describe("resolveControlUiDocumentTitle", () => {
     ).toBe(CONTROL_UI_DOCUMENT_TITLE);
   });
 
+  it("does not use generated account-scoped direct display names as titles", () => {
+    expect(
+      resolveControlUiDocumentTitle({
+        sessionKey: "agent:main:telegram:atlas:direct:814912386",
+        sessionsResult: sessionsResult([
+          sessionRow({
+            key: "agent:main:telegram:atlas:direct:814912386",
+            kind: "direct",
+            displayName: "Atlas Contact",
+          }),
+        ]),
+      }),
+    ).toBe(CONTROL_UI_DOCUMENT_TITLE);
+  });
+
   it("does not use generated group session display names as titles", () => {
     expect(
       resolveControlUiDocumentTitle({

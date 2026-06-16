@@ -26,6 +26,7 @@ import { startControlUiResponsivenessObserver } from "./control-ui-performance.t
 import { loadControlUiBootstrapConfig } from "./controllers/control-ui-bootstrap.ts";
 import { syncControlUiDocumentTitle } from "./document-title.ts";
 import type { Tab } from "./navigation.ts";
+import { areUiSessionKeysEquivalent } from "./session-key.ts";
 import type { SessionsListResult } from "./types.ts";
 import type { ChatQueueItem } from "./ui-types.ts";
 
@@ -98,6 +99,22 @@ type LifecycleHost = {
   popStateHandler: () => void;
   topbarObserver: ResizeObserver | null;
 };
+
+function findActiveSessionRow(host: LifecycleHost): SessionsListResult["sessions"][number] | null {
+  const sessions = host.sessionsResult?.sessions;
+  return (
+    sessions?.find((row) => row.key === host.sessionKey) ??
+    sessions?.find((row) => areUiSessionKeysEquivalent(row.key, host.sessionKey)) ??
+    null
+  );
+}
+
+function syncActiveSessionTitleRowFromSessionsResult(host: LifecycleHost): void {
+  const activeRow = findActiveSessionRow(host);
+  if (activeRow) {
+    host.activeSessionTitleRow = activeRow;
+  }
+}
 
 export function handleConnected(host: LifecycleHost) {
   const connectGeneration = ++host.connectGeneration;
@@ -241,6 +258,9 @@ export function handleUpdated(host: LifecycleHost, changed: Map<PropertyKey, unk
     changed.has("activeSessionTitleRow") ||
     changed.has("chatSessionPickerResult")
   ) {
+    if (changed.has("sessionKey") || changed.has("sessionsResult")) {
+      syncActiveSessionTitleRowFromSessionsResult(host);
+    }
     syncControlUiDocumentTitle(host);
   }
   if (changed.has("chatQueue")) {
