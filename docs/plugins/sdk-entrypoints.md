@@ -82,16 +82,8 @@ export default defineToolPlugin({
 
 - `configSchema` is optional. When omitted, OpenClaw uses a strict empty object
   schema and the generated manifest still includes `configSchema`.
-- `execute` returns a plain string, JSON-serializable value, or full OpenClaw
-  tool result. Full tool results can include advanced fields such as a public
-  `terminalSummary` for forced terminal replies when the model fails to produce
-  its own final answer.
-- `terminalResultFallback` is optional tool metadata for cases where raw tool
-  output has a known safe terminal presentation. Omitted metadata does not
-  expose raw tool output; explicitly set `mode: "safe_text"` or structured
-  summary metadata only when the tool owns that safety contract.
-- Use `terminalResultFallback: { mode: "none" }` to explicitly opt out of
-  terminal result presentation.
+- `execute` returns a plain string or JSON-serializable value. The helper wraps
+  it as a text tool result with `details`.
 - Tool names are static. `openclaw plugins build` derives `contracts.tools`
   from the declared tools, so authors do not duplicate names by hand.
 - Runtime loading stays strict. Installed plugins still need

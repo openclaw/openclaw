@@ -610,26 +610,24 @@ describe("runCodexAppServerSideQuestion", () => {
     });
   });
 
-  it("disables native and managed side-question tools when core denies all tools", async () => {
-    const { forkConfig, toolResponse } = await runSideQuestionWithManagedWebSearchCall(
-      sideParams({
-        messageChannel: "telegram",
-        messageProvider: "telegram",
-        senderId: "restricted-sender",
-        toolsAllow: [],
-      }),
+  it.each([
+    { name: "deny all", toolsAllow: [] },
+    { name: "narrow allowlist", toolsAllow: ["message"] },
+  ])("rejects /btw before forking when effective toolsAllow is $name", async ({ toolsAllow }) => {
+    await expect(
+      runCodexAppServerSideQuestion(
+        sideParams({
+          messageChannel: "telegram",
+          messageProvider: "telegram",
+          senderId: "restricted-sender",
+          toolsAllow,
+        }),
+      ),
+    ).rejects.toThrow(
+      "Codex-native /btw side-question mode is unavailable because the effective tool policy restricts Codex native tools for this session.",
     );
 
-    expect(forkConfig).toMatchObject({
-      "features.code_mode": false,
-      "features.standalone_web_search": false,
-      web_search: "disabled",
-    });
-    expect(toolResponse).toEqual({
-      success: false,
-      contentItems: [{ type: "inputText", text: "Unknown OpenClaw tool: web_search" }],
-    });
-    expect(toolExecuteMock).not.toHaveBeenCalled();
+    expect(getSharedCodexAppServerClientMock).not.toHaveBeenCalled();
     expect(resolveCodexProviderWebSearchSupportForClientMock).not.toHaveBeenCalled();
   });
 
@@ -700,7 +698,7 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(toolExecuteMock).not.toHaveBeenCalled();
   });
 
-  it("keeps managed search for side forks when the configured provider lacks hosted search", async () => {
+  it("disables search for side forks when the configured provider lacks hosted search", async () => {
     resolveCodexProviderWebSearchSupportForClientMock.mockResolvedValue("unsupported");
 
     const { forkConfig, result, toolResponse } = await runSideQuestionWithManagedWebSearchCall();
@@ -711,10 +709,38 @@ describe("runCodexAppServerSideQuestion", () => {
       web_search: "disabled",
     });
     expect(toolResponse).toEqual({
-      success: true,
-      contentItems: [{ type: "inputText", text: "tool output" }],
+      success: false,
+      contentItems: [{ type: "inputText", text: "Unknown OpenClaw tool: web_search" }],
     });
-    expect(toolExecuteMock).toHaveBeenCalledOnce();
+    expect(toolExecuteMock).not.toHaveBeenCalled();
+  });
+
+  it("disables search for side forks when a managed provider is selected", async () => {
+    const { forkConfig, result, toolResponse } = await runSideQuestionWithManagedWebSearchCall(
+      sideParams({
+        cfg: {
+          tools: {
+            web: {
+              search: {
+                provider: "brave",
+              },
+            },
+          },
+        } as never,
+      }),
+    );
+
+    expect(result).toEqual({ text: "Search answer." });
+    expect(forkConfig).toMatchObject({
+      "features.standalone_web_search": false,
+      web_search: "disabled",
+    });
+    expect(toolResponse).toEqual({
+      success: false,
+      contentItems: [{ type: "inputText", text: "Unknown OpenClaw tool: web_search" }],
+    });
+    expect(toolExecuteMock).not.toHaveBeenCalled();
+    expect(resolveCodexProviderWebSearchSupportForClientMock).not.toHaveBeenCalled();
   });
 
   it("disables both search surfaces for side forks when web search is disabled", async () => {

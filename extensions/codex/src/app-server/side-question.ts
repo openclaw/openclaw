@@ -216,6 +216,11 @@ export async function runCodexAppServerSideQuestion(
     throw new Error(nativeExecutionBlock);
   }
   const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(sideRunParams);
+  if (!nativeToolSurfaceEnabled) {
+    throw new Error(
+      "Codex-native /btw side-question mode is unavailable because the effective tool policy restricts Codex native tools for this session.",
+    );
+  }
   const client = await getLeasedSharedCodexAppServerClient({
     startOptions: appServer.start,
     timeoutMs: appServer.requestTimeoutMs,
@@ -276,7 +281,6 @@ export async function runCodexAppServerSideQuestion(
         : "unsupported";
     const { toolBridge, webSearchPlan } = await createCodexSideToolBridge({
       params,
-      attemptParams: sideRunParams,
       cwd,
       pluginConfig,
       sessionAgentId,
@@ -629,7 +633,6 @@ function buildSideRunAttemptParams(
 
 async function createCodexSideToolBridge(input: {
   params: AgentHarnessSideQuestionParams;
-  attemptParams: EmbeddedRunAttemptParams;
   cwd: string;
   pluginConfig: ReturnType<typeof readCodexPluginConfig>;
   sessionAgentId: string;
@@ -729,19 +732,23 @@ async function createCodexSideToolBridge(input: {
       modelHasVision: runtimeModel.input?.includes("image") ?? false,
       hasInboundImages: false,
     });
-    if (input.attemptParams.toolsAllow?.length === 0) {
-      tools = [];
-    }
   }
-  const webSearchPlan = resolveCodexWebSearchPlan({
+  const requestedWebSearchPlan = resolveCodexWebSearchPlan({
     config: input.params.cfg,
     nativeToolSurfaceEnabled: input.nativeToolSurfaceEnabled,
     nativeProviderWebSearchSupport: input.nativeProviderWebSearchSupport,
     webSearchAllowed: tools.some((tool) => tool.name === "web_search"),
   });
-  const exposedTools = webSearchPlan.suppressManagedWebSearch
-    ? tools.filter((tool) => tool.name !== "web_search")
-    : tools;
+  // Codex forks do not accept dynamicTools, so managed web_search cannot be
+  // registered on a side thread. Keep it only as the native-search policy signal.
+  const webSearchPlan =
+    requestedWebSearchPlan.kind === "managed"
+      ? resolveCodexWebSearchPlan({
+          config: input.params.cfg,
+          webSearchAllowed: false,
+        })
+      : requestedWebSearchPlan;
+  const exposedTools = tools.filter((tool) => tool.name !== "web_search");
   const hookChannelFields = buildAgentHookContextChannelFields({
     sessionKey: input.params.sessionKey,
     messageChannel: input.params.messageChannel,
