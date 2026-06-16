@@ -959,12 +959,11 @@ async function finalizeCronRun(params: {
   const { prepared, execution } = params;
   const finalRunResult = execution.runResult;
   const payloads = finalRunResult.payloads ?? [];
-  // Late aborted results may still contain billable usage, but their session,
-  // model, and CLI binding metadata must not replace the active run identity.
-  const abortedBeforeFinalize = params.isAborted();
   let telemetry: CronRunTelemetry | undefined;
 
-  if (!abortedBeforeFinalize) {
+  // Late aborted results may still contain billable usage. Recheck before each
+  // metadata mutation because lazy runtime loads below can yield to the timeout.
+  if (!params.isAborted()) {
     if (finalRunResult.meta?.systemPromptReport) {
       prepared.cronSession.sessionEntry.systemPromptReport = finalRunResult.meta.systemPromptReport;
     }
@@ -993,7 +992,7 @@ async function finalizeCronRun(params: {
     resolvePositiveContextTokens(prepared.cronSession.sessionEntry.contextTokens) ??
     DEFAULT_CONTEXT_TOKENS;
 
-  if (!abortedBeforeFinalize) {
+  if (!params.isAborted()) {
     setSessionRuntimeModel(prepared.cronSession.sessionEntry, {
       provider: providerUsed,
       model: modelUsed,
