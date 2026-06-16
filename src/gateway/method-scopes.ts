@@ -1,7 +1,6 @@
 // Gateway method authorization scope resolver.
 // Maps static and plugin-defined gateway methods to operator scopes.
 import { normalizeOptionalString as normalizeSessionActionParam } from "@openclaw/normalization-core/string-coerce";
-import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import { resolveReservedGatewayMethodScope } from "../shared/gateway-method-policy.js";
 import {
   isCoreGatewayMethodClassified,
@@ -40,6 +39,32 @@ export const CLI_DEFAULT_OPERATOR_SCOPES: OperatorScope[] = [
   TALK_SECRETS_SCOPE,
 ];
 
+const PLUGIN_REGISTRY_STATE = Symbol.for("openclaw.pluginRegistryState");
+
+type MethodScopeRegistryState = {
+  activeRegistry?: {
+    gatewayMethodDescriptors?: readonly {
+      name: string;
+      scope?: OperatorScope | "node" | "dynamic";
+    }[];
+    sessionActions?: readonly {
+      pluginId: string;
+      action: {
+        id: string;
+        requiredScopes?: readonly OperatorScope[];
+      };
+    }[];
+  } | null;
+};
+
+type MethodScopeGlobalState = typeof globalThis & {
+  [PLUGIN_REGISTRY_STATE]?: MethodScopeRegistryState;
+};
+
+function getMethodScopePluginRegistryState(): MethodScopeRegistryState | undefined {
+  return (globalThis as MethodScopeGlobalState)[PLUGIN_REGISTRY_STATE];
+}
+
 function resolveScopedMethod(method: string): OperatorScope | undefined {
   // Core descriptors are authoritative, then reserved namespace policy, then active plugin
   // descriptors. Node/dynamic sentinels are intentionally excluded from operator scopes.
@@ -51,9 +76,10 @@ function resolveScopedMethod(method: string): OperatorScope | undefined {
   if (reservedScope) {
     return reservedScope;
   }
-  const pluginDescriptor = getPluginRegistryState()?.activeRegistry?.gatewayMethodDescriptors?.find(
-    (descriptor) => descriptor.name === method,
-  );
+  const pluginDescriptor =
+    getMethodScopePluginRegistryState()?.activeRegistry?.gatewayMethodDescriptors?.find(
+      (descriptor) => descriptor.name === method,
+    );
   const pluginScope = pluginDescriptor?.scope;
   return pluginScope === "node" || pluginScope === "dynamic" ? undefined : pluginScope;
 }
@@ -102,7 +128,7 @@ function resolveSessionActionRegisteredScopes(params: unknown): OperatorScope[] 
   if (!pluginId || !actionId) {
     return undefined;
   }
-  const registration = getPluginRegistryState()?.activeRegistry?.sessionActions?.find(
+  const registration = getMethodScopePluginRegistryState()?.activeRegistry?.sessionActions?.find(
     (entry) => entry.pluginId === pluginId && entry.action.id === actionId,
   );
   if (!registration) {

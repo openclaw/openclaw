@@ -117,8 +117,8 @@ function createDynamicToolSandboxContext(
   return {
     ...base,
     ...overrides,
-    docker: { ...base.docker, ...(overrides.docker ?? {}) },
-    tools: { ...base.tools, ...(overrides.tools ?? {}) },
+    docker: { ...base.docker, ...overrides.docker },
+    tools: { ...base.tools, ...overrides.tools },
   };
 }
 
