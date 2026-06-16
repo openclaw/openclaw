@@ -40,7 +40,7 @@ const mocks = vi.hoisted(() => ({
   noteMacLaunchAgentOverrides: vi.fn(),
   noteMacLaunchctlGatewayEnvOverrides: vi.fn(),
   noteMacStaleOpenClawUpdateLaunchdJobs: vi.fn(),
-  gatewaySecretInputPathCanWin: vi.fn((_: { path: string }) => false),
+  gatewaySecretInputPathCanWin: vi.fn(),
   readGatewaySecretInputValue: vi.fn((..._args: unknown[]) => undefined as string | undefined),
   checkGatewayHealth: vi.fn(async () => ({
     authenticated: true,
@@ -151,13 +151,29 @@ vi.mock("../commands/doctor-platform-notes.js", () => ({
   noteMacStaleOpenClawUpdateLaunchdJobs: mocks.noteMacStaleOpenClawUpdateLaunchdJobs,
 }));
 
-vi.mock("../gateway/credentials-secret-inputs.js", () => ({
-  gatewaySecretInputPathCanWin: mocks.gatewaySecretInputPathCanWin,
-}));
+vi.mock("../gateway/credentials-secret-inputs.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../gateway/credentials-secret-inputs.js")>();
+  return {
+    ...actual,
+    gatewaySecretInputPathCanWin: (
+      ...args: Parameters<typeof actual.gatewaySecretInputPathCanWin>
+    ) =>
+      mocks.gatewaySecretInputPathCanWin.getMockImplementation()
+        ? mocks.gatewaySecretInputPathCanWin(...args)
+        : actual.gatewaySecretInputPathCanWin(...args),
+  };
+});
 
-vi.mock("../gateway/secret-input-paths.js", () => ({
-  readGatewaySecretInputValue: mocks.readGatewaySecretInputValue,
-}));
+vi.mock("../gateway/secret-input-paths.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../gateway/secret-input-paths.js")>();
+  return {
+    ...actual,
+    readGatewaySecretInputValue: (...args: Parameters<typeof actual.readGatewaySecretInputValue>) =>
+      mocks.readGatewaySecretInputValue.getMockImplementation()
+        ? mocks.readGatewaySecretInputValue(...args)
+        : actual.readGatewaySecretInputValue(...args),
+  };
+});
 
 vi.mock("../commands/doctor-gateway-health.js", () => ({
   checkGatewayHealth: mocks.checkGatewayHealth,
@@ -326,9 +342,9 @@ describe("doctor health contributions", () => {
     mocks.noteMacLaunchctlGatewayEnvOverrides.mockClear();
     mocks.noteMacStaleOpenClawUpdateLaunchdJobs.mockClear();
     mocks.gatewaySecretInputPathCanWin.mockClear();
-    mocks.gatewaySecretInputPathCanWin.mockReturnValue(false);
+    mocks.gatewaySecretInputPathCanWin.mockReset();
     mocks.readGatewaySecretInputValue.mockClear();
-    mocks.readGatewaySecretInputValue.mockReturnValue(undefined);
+    mocks.readGatewaySecretInputValue.mockReset();
     mocks.checkGatewayHealth.mockClear();
     mocks.checkGatewayHealth.mockResolvedValue({
       authenticated: true,
@@ -448,6 +464,10 @@ describe("doctor health contributions", () => {
       authenticated: false,
       healthOk: true,
     });
+    mocks.gatewaySecretInputPathCanWin.mockImplementation(
+      ({ path }: { path: string }) => path === "gateway.auth.token",
+    );
+    mocks.readGatewaySecretInputValue.mockReturnValue("exec-token");
     const contribution = requireDoctorContribution(DOCTOR_GATEWAY_HEALTH_ID);
     const cfg = {
       gateway: {
@@ -490,6 +510,10 @@ describe("doctor health contributions", () => {
   });
 
   it("skips local gateway health probes for remote fallback exec SecretRefs", async () => {
+    mocks.gatewaySecretInputPathCanWin.mockImplementation(
+      ({ path }: { path: string }) => path === "gateway.remote.token",
+    );
+    mocks.readGatewaySecretInputValue.mockReturnValue("exec-token");
     const contribution = requireDoctorContribution(DOCTOR_GATEWAY_HEALTH_ID);
     const cfg = {
       gateway: {
