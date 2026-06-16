@@ -463,6 +463,7 @@ describe("doctor health contributions", () => {
     mocks.checkGatewayHealth.mockResolvedValue({
       authenticated: false,
       healthOk: true,
+      status: { ok: true },
     });
     mocks.gatewaySecretInputPathCanWin.mockImplementation(
       ({ path }: { path: string }) => path === "gateway.auth.token",
