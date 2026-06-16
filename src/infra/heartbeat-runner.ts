@@ -45,6 +45,10 @@ import {
 import { replaceGenericExternalRunFailureText } from "../auto-reply/reply/agent-runner-failure-copy.js";
 import { resolveDefaultModel } from "../auto-reply/reply/directive-handling.defaults.js";
 import {
+  REPLY_OPERATION_RUN_STATE,
+  type ReplyOperationRunState,
+} from "../auto-reply/reply/reply-operation-run-state.js";
+import {
   listActiveReplyRunSessionKeys,
   replyRunRegistry,
 } from "../auto-reply/reply/reply-run-registry.js";
@@ -1797,8 +1801,10 @@ export async function runHeartbeatOnce(opts: {
     const timeoutOverrideSeconds = resolveHeartbeatTimeoutOverrideSeconds(cfg, heartbeat);
     const bootstrapContextMode: "lightweight" | undefined =
       heartbeat?.lightContext === true ? "lightweight" : undefined;
+    const replyOperationRunState: ReplyOperationRunState = {};
     const replyOpts = {
       isHeartbeat: true,
+      [REPLY_OPERATION_RUN_STATE]: replyOperationRunState,
       ...(heartbeatModelOverride ? { heartbeatModelOverride } : {}),
       suppressToolErrorWarnings,
       ...(usesHeartbeatResponseTool ? { enableHeartbeatTool: true, forceHeartbeatTool: true } : {}),
@@ -1819,8 +1825,8 @@ export async function runHeartbeatOnce(opts: {
     if (
       !heartbeatToolResponse &&
       (!replyPayload || !hasOutboundReplyContent(replyPayload)) &&
-      (isReplyRunActive(runSessionKey) ||
-        hasActiveRunForSession(runSessionKey, listActiveEmbeddedRuns))
+      replyOperationRunState.admission?.status === "skipped" &&
+      replyOperationRunState.admission.reason === "active-run"
     ) {
       emitHeartbeatEvent({
         status: "skipped",
