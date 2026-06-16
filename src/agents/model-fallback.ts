@@ -1437,6 +1437,11 @@ export async function runWithModelFallback<T>(
             reason: decision.reason,
           });
 
+          // Only lock the lane when no remaining candidates can serve as
+          // fallbacks. Healthy providers in the same lane should still be
+          // reachable; per-provider cooldown state (auth profiles) already
+          // prevents re-attempting the failed provider on subsequent turns.
+          const hasRemainingCandidates = i + 1 < candidates.length;
           if (params.sessionId) {
             emitFailoverEvent({
               sessionId: params.sessionId,
@@ -1444,13 +1449,13 @@ export async function runWithModelFallback<T>(
               fromProvider: candidate.provider,
               fromModel: candidate.model,
               reason: decision.reason,
-              suspended: true,
+              suspended: !hasRemainingCandidates,
             });
             void suspendSession({
               cfg: params.cfg,
               agentDir: params.agentDir,
               sessionId: params.sessionId,
-              laneId: params.lane,
+              laneId: hasRemainingCandidates ? undefined : params.lane,
               reason: resolveSessionSuspensionReason(decision.reason),
               failedProvider: candidate.provider,
               failedModel: candidate.model,

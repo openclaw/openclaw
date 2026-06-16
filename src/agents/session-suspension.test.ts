@@ -120,6 +120,21 @@ describe("session suspension", () => {
     expect(patch.quotaSuspension?.expectedResumeBy).toBe(1_000 + MAX_TIMER_TIMEOUT_MS);
   });
 
+  it("does not lock lane when laneId is omitted (per-provider suspension)", async () => {
+    const { suspendSession } = await import("./session-suspension.js");
+    await suspendSession({
+      cfg: {} as OpenClawConfig,
+      sessionId: "session-1",
+      laneId: undefined,
+      reason: "quota_exhausted",
+      failedProvider: "minimax",
+      failedModel: "MiniMax-M3",
+    });
+
+    expect(sessionStoreMocks.applySessionStoreEntryPatch).toHaveBeenCalledOnce();
+    expect(commandQueueMocks.setCommandLaneConcurrency).not.toHaveBeenCalled();
+  });
+
   it("maps failover reasons to persisted suspension reasons", async () => {
     const { testing } = await import("./session-suspension.js");
 

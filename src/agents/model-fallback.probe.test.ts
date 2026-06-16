@@ -29,6 +29,16 @@ vi.mock("./provider-model-normalization.runtime.js", () => ({
   normalizeProviderModelIdWithRuntime: () => undefined,
 }));
 
+const sessionSuspensionMocks = vi.hoisted(() => ({
+  suspendSession: vi.fn().mockResolvedValue(undefined),
+  resolveSessionSuspensionReason: vi.fn((reason: string) => {
+    if (reason === "billing") return "manual";
+    if (reason === "rate_limit") return "quota_exhausted";
+    return "circuit_open";
+  }),
+}));
+vi.mock("./session-suspension.js", () => sessionSuspensionMocks);
+
 const emptyPluginMetadataSnapshot = vi.hoisted(() => ({
   policyHash: "model-fallback-probe-test-empty-plugin-policy",
   configFingerprint: "model-fallback-probe-test-empty-plugin-metadata",
@@ -341,6 +351,7 @@ describe("runWithModelFallback – probe logic", () => {
     cleanupLogCapture = undefined;
     setLoggerOverride(null);
     resetLogger();
+    sessionSuspensionMocks.suspendSession.mockClear();
     vi.restoreAllMocks();
   });
 
@@ -792,5 +803,103 @@ describe("runWithModelFallback – probe logic", () => {
       }),
       "billing",
     );
+  });
+
+  it("does not lock lane when fallback candidates remain after suspend_lanes decision", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+            fallbacks: ["anthropic/claude-haiku-3-5"],
+          },
+        },
+      },
+    } as Partial<OpenClawConfig>);
+
+    // Primary (openai) is in cooldown; fallback (anthropic) is healthy.
+    // Make the cooldown fresh enough that no probe slot opens, forcing
+    // resolveCooldownDecision → suspend_lanes for the primary.
+    mockedIsProfileInCooldown.mockImplementation((_store: AuthProfileStore, profileId: string) =>
+      profileId.startsWith("openai"),
+    );
+    mockedGetSoonestCooldownExpiry.mockReturnValue(NOW + 30 * 1000);
+    mockedResolveProfilesUnavailableReason.mockReturnValue("rate_limit");
+    probeThrottleInternals.lastProbeAttempt.set(
+      probeThrottleInternals.resolveProbeThrottleKey("openai", undefined),
+      NOW - 10_000,
+    );
+
+    const run = vi.fn().mockResolvedValue("fallback-ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      sessionId: "test-session",
+      lane: "main",
+      run,
+    });
+
+    expect(result.result).toBe("fallback-ok");
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run).toHaveBeenCalledWith("anthropic", "claude-haiku-3-5");
+
+    // suspendSession was called for the failed primary, but WITHOUT laneId
+    // because a healthy fallback candidate was still available.
+    expect(sessionSuspensionMocks.suspendSession).toHaveBeenCalledOnce();
+    expect(sessionSuspensionMocks.suspendSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        laneId: undefined,
+        failedProvider: "openai",
+        failedModel: "gpt-4.1-mini",
+      }),
+    );
+  });
+
+  it("locks lane only when the last candidate triggers suspend_lanes", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+          },
+        },
+      },
+    } as Partial<OpenClawConfig>);
+
+    // Single candidate, in cooldown, no fallbacks.
+    mockedIsProfileInCooldown.mockImplementation(() => true);
+    mockedGetSoonestCooldownExpiry.mockReturnValue(NOW + 30 * 1000);
+    mockedResolveProfilesUnavailableReason.mockReturnValue("rate_limit");
+    probeThrottleInternals.lastProbeAttempt.set(
+      probeThrottleInternals.resolveProbeThrottleKey("openai", undefined),
+      NOW - 10_000,
+    );
+
+    const run = vi.fn();
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        sessionId: "test-session",
+        lane: "main",
+        fallbacksOverride: [],
+        run,
+      }),
+    ).rejects.toThrow("All models failed");
+
+    expect(run).not.toHaveBeenCalled();
+
+    // Single candidate → suspendSession IS called with laneId since no
+    // fallback remained when the decision fired.
+    expect(sessionSuspensionMocks.suspendSession).toHaveBeenCalled();
+    const lastCall = sessionSuspensionMocks.suspendSession.mock.calls.at(-1)?.[0] as
+      | Record<string, unknown>
+      | undefined;
+    expect(lastCall?.laneId).toBe("main");
+    expect(lastCall?.failedProvider).toBe("openai");
   });
 });
