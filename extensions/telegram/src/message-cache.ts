@@ -7,7 +7,10 @@ import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveTelegramPrimaryMedia } from "./bot/body-helpers.js";
+import {
+  resolveTelegramPrimaryMedia,
+  resolveTelegramRichMessagePlaceholder,
+} from "./bot/body-helpers.js";
 import {
   buildSenderName,
   extractTelegramLocation,
@@ -151,7 +154,9 @@ function resolveMessageBody(msg: Message): string | undefined {
   if (location) {
     return formatLocationText(location);
   }
-  return resolveTelegramPrimaryMedia(msg)?.placeholder;
+  return (
+    resolveTelegramRichMessagePlaceholder(msg) ?? resolveTelegramPrimaryMedia(msg)?.placeholder
+  );
 }
 
 function resolveMediaType(placeholder?: string): string | undefined {
