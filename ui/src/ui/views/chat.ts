@@ -1989,13 +1989,28 @@ export function renderChat(props: ChatProps) {
       return;
     }
     const code = (btn as HTMLElement).dataset.code ?? "";
-    navigator.clipboard.writeText(code).then(
-      () => {
-        btn.classList.add("copied");
-        setTimeout(() => btn.classList.remove("copied"), 1500);
-      },
-      () => {},
-    );
+    const markCopied = () => {
+      btn.classList.add("copied");
+      setTimeout(() => btn.classList.remove("copied"), 1500);
+    };
+    // Try Clipboard API first (requires secure context — HTTPS or localhost).
+    // Falls back to execCommand for plain HTTP deployments (e.g., LAN access).
+    navigator.clipboard.writeText(code).then(markCopied, () => {
+      // Clipboard API unavailable — fall back to legacy execCommand
+      const textarea = document.createElement("textarea");
+      textarea.value = code;
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.select();
+      try {
+        document.execCommand("copy");
+        markCopied();
+      } catch {
+        // Both methods failed — silently ignore
+      }
+      document.body.removeChild(textarea);
+    });
   };
   const handleChatThreadScroll = (event: Event) => {
     maybeExpandChatHistoryRenderWindow(event, requestUpdate);
