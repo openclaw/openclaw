@@ -1,0 +1,88 @@
+// ClawRouter plugin entrypoint registers credential-scoped model routing.
+import { definePluginEntry, type ProviderAuthMethod } from "openclaw/plugin-sdk/plugin-entry";
+import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
+import { PASSTHROUGH_GEMINI_REPLAY_HOOKS } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  buildClawRouterProviderConfig,
+  normalizeClawRouterApiBaseUrl,
+  normalizeClawRouterResolvedModel,
+  resolveDiscoveredClawRouterModel,
+} from "./provider-catalog.js";
+
+const PROVIDER_ID = "clawrouter";
+const ENV_VAR = "CLAWROUTER_API_KEY";
+
+function buildApiKeyAuth(): ProviderAuthMethod {
+  return createProviderApiKeyAuthMethod({
+    providerId: PROVIDER_ID,
+    methodId: "api-key",
+    label: "ClawRouter proxy key",
+    hint: "Credential-scoped access to approved providers",
+    optionKey: "clawrouterApiKey",
+    flagName: "--clawrouter-api-key",
+    envVar: ENV_VAR,
+    promptMessage: "Enter ClawRouter proxy key",
+    noteTitle: "ClawRouter",
+    noteMessage: [
+      "Use the proxy key issued by your ClawRouter administrator.",
+      "OpenClaw discovers only the models granted to that key.",
+    ].join("\n"),
+    wizard: {
+      choiceId: "clawrouter-api-key",
+      choiceLabel: "ClawRouter proxy key",
+      choiceHint: "Approved providers through one managed key",
+      groupId: PROVIDER_ID,
+      groupLabel: "ClawRouter",
+      groupHint: "Managed provider access",
+    },
+  });
+}
+
+export default definePluginEntry({
+  id: PROVIDER_ID,
+  name: "ClawRouter Provider",
+  description: "Bundled ClawRouter provider plugin",
+  register(api) {
+    api.registerProvider({
+      id: PROVIDER_ID,
+      label: "ClawRouter",
+      docsPath: "/providers/clawrouter",
+      envVars: [ENV_VAR],
+      auth: [buildApiKeyAuth()],
+      catalog: {
+        order: "simple",
+        run: async (ctx) => {
+          const auth = ctx.resolveProviderApiKey(PROVIDER_ID);
+          const apiKey = auth.apiKey ?? auth.discoveryApiKey;
+          if (!apiKey) {
+            return null;
+          }
+          const configuredBaseUrl = ctx.config.models?.providers?.[PROVIDER_ID]?.baseUrl;
+          try {
+            return {
+              provider: await buildClawRouterProviderConfig({
+                apiKey,
+                discoveryApiKey: auth.discoveryApiKey,
+                baseUrl: configuredBaseUrl,
+              }),
+            };
+          } catch {
+            return null;
+          }
+        },
+      },
+      normalizeConfig: ({ providerConfig }) => {
+        const baseUrl = normalizeClawRouterApiBaseUrl(providerConfig.baseUrl);
+        return baseUrl !== providerConfig.baseUrl ? { ...providerConfig, baseUrl } : undefined;
+      },
+      resolveDynamicModel: ({ modelId, providerConfig }) =>
+        resolveDiscoveredClawRouterModel({
+          baseUrl: providerConfig?.baseUrl,
+          modelId,
+        }),
+      normalizeResolvedModel: ({ model }) => normalizeClawRouterResolvedModel(model),
+      ...PASSTHROUGH_GEMINI_REPLAY_HOOKS,
+      isModernModelRef: () => true,
+    });
+  },
+});
