@@ -3,13 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  clearSessionStoreCacheForTest,
-  deleteSessionEntryLifecycle,
-  loadSessionStore,
-  resetSessionEntryLifecycle,
-  saveSessionStore,
-} from "./store.js";
+import { deleteSessionEntryLifecycle, resetSessionEntryLifecycle } from "./session-accessor.js";
+import { clearSessionStoreCacheForTest, loadSessionStore, saveSessionStore } from "./store.js";
 import type { SessionEntry } from "./types.js";
 
 describe("session store lifecycle mutations", () => {

@@ -2,16 +2,17 @@
 export {
   applySessionStoreEntryPatch,
   cleanupSessionLifecycleArtifacts,
-  deleteSessionEntryLifecycle,
-  resetSessionEntryLifecycle,
   updateSessionStore,
   updateSessionStoreEntry,
+} from "./store.js";
+export { deleteSessionEntryLifecycle, resetSessionEntryLifecycle } from "./session-accessor.js";
+export type {
+  SessionLifecycleArtifactCleanupParams,
+  SessionLifecycleArtifactCleanupResult,
 } from "./store.js";
 export type {
   DeleteSessionEntryLifecycleResult,
   ResetSessionEntryLifecycleResult,
   SessionLifecycleArchivedTranscript,
-  SessionLifecycleArtifactCleanupParams,
-  SessionLifecycleArtifactCleanupResult,
   SessionLifecycleStoreTarget,
-} from "./store.js";
+} from "./session-accessor.js";

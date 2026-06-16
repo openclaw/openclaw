@@ -23,21 +23,28 @@ import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import {
   getSessionEntry,
   cleanupSessionLifecycleArtifacts as cleanupFileSessionLifecycleArtifacts,
+  deleteSessionEntryLifecycle as deleteFileSessionEntryLifecycle,
   listSessionEntries as listFileSessionEntries,
   loadSessionStore,
   applySessionEntryPatchProjection as applyFileSessionEntryPatchProjection,
   patchSessionEntry as patchFileSessionEntry,
   readSessionUpdatedAt as readFileSessionUpdatedAt,
   resolveSessionStoreEntry,
+  resetSessionEntryLifecycle as resetFileSessionEntryLifecycle,
   updateSessionStore,
   updateSessionStoreEntry as updateFileSessionStoreEntry,
+  type DeleteSessionEntryLifecycleResult,
+  type ResetSessionEntryLifecycleMutation,
+  type ResetSessionEntryLifecycleResult,
   type SessionEntryPatchProjectionContext,
   type SessionEntryPatchProjectionFailure,
   type SessionEntryPatchProjectionResult,
   type SessionEntryPatchProjectionSnapshot,
   type SessionEntryPatchProjectionTarget,
+  type SessionLifecycleArchivedTranscript,
   type SessionLifecycleArtifactCleanupParams,
   type SessionLifecycleArtifactCleanupResult,
+  type SessionLifecycleStoreTarget,
 } from "./store.js";
 import { parseSessionThreadInfo } from "./thread-info.js";
 import {
@@ -280,7 +287,41 @@ export type SessionPatchProjectionResult<TFailure extends SessionPatchProjection
 export type SessionPatchProjectionSnapshot = SessionEntryPatchProjectionSnapshot;
 export type SessionPatchProjectionTarget = SessionEntryPatchProjectionTarget;
 
-export type { SessionLifecycleArtifactCleanupParams, SessionLifecycleArtifactCleanupResult };
+export type {
+  DeleteSessionEntryLifecycleResult,
+  ResetSessionEntryLifecycleResult,
+  SessionLifecycleArchivedTranscript,
+  SessionLifecycleArtifactCleanupParams,
+  SessionLifecycleArtifactCleanupResult,
+  SessionLifecycleStoreTarget,
+};
+
+export type ResetSessionEntryLifecycleParams = {
+  /** Runs after the persisted entry rotates and before transcript artifacts move. */
+  afterEntryMutation?: (mutation: ResetSessionEntryLifecycleMutation) => Promise<void> | void;
+  /** Agent owner used to resolve backend transcript artifacts. */
+  agentId?: string;
+  /** Builds the persisted replacement entry from the current backend row. */
+  buildNextEntry: (context: {
+    currentEntry?: SessionEntry;
+    primaryKey: string;
+  }) => Promise<SessionEntry> | SessionEntry;
+  /** Explicit store target for file-backed stores and SQLite migration adapters. */
+  storePath: string;
+  /** Canonical key plus aliases that identify the logical entry. */
+  target: SessionLifecycleStoreTarget;
+};
+
+export type DeleteSessionEntryLifecycleParams = {
+  /** Agent owner used to resolve backend transcript artifacts. */
+  agentId?: string;
+  /** Whether transcript artifacts should be archived/deleted with the entry. */
+  archiveTranscript: boolean;
+  /** Explicit store target for file-backed stores and SQLite migration adapters. */
+  storePath: string;
+  /** Canonical key plus aliases that identify the logical entry. */
+  target: SessionLifecycleStoreTarget;
+};
 
 /** Returns the entry for a canonical or alias session key, if one exists. */
 export function loadSessionEntry(scope: SessionAccessScope): SessionEntry | undefined {
@@ -519,6 +560,20 @@ export async function cleanupSessionLifecycleArtifacts(
   params: SessionLifecycleArtifactCleanupParams,
 ): Promise<SessionLifecycleArtifactCleanupResult> {
   return await cleanupFileSessionLifecycleArtifacts(params);
+}
+
+/** Resets one persisted session entry and transitions its transcript state. */
+export async function resetSessionEntryLifecycle(
+  params: ResetSessionEntryLifecycleParams,
+): Promise<ResetSessionEntryLifecycleResult> {
+  return await resetFileSessionEntryLifecycle(params);
+}
+
+/** Deletes one persisted session entry and transitions its transcript state. */
+export async function deleteSessionEntryLifecycle(
+  params: DeleteSessionEntryLifecycleParams,
+): Promise<DeleteSessionEntryLifecycleResult> {
+  return await deleteFileSessionEntryLifecycle(params);
 }
 
 /** Reads parsed transcript records from an explicit or derived transcript target. */
