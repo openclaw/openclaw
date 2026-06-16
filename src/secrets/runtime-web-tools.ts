@@ -779,6 +779,13 @@ export async function resolveRuntimeWebTools(params: {
           config,
           fetch: toolConfig,
         }),
+      // Keep keyless web_fetch providers (e.g. firecrawl-free) opt-in only, the
+      // same policy web_search uses: they never count toward the configured
+      // surface, and a missing surface yields no providers so they cannot be
+      // auto-selected for no-key installs.
+      ignoreKeylessProvidersForConfiguredSurface: true,
+      emptyProvidersWhenSurfaceMissing: true,
+      normalizeConfiguredProviderAgainstActiveProviders: true,
     });
 
     await resolveRuntimeWebProviderSelection({
@@ -793,7 +800,7 @@ export async function resolveRuntimeWebTools(params: {
       resolvedConfig: params.resolvedConfig,
       context: params.context,
       defaults,
-      deferKeylessFallback: false,
+      deferKeylessFallback: true,
       fallbackUsedCode: "WEB_FETCH_PROVIDER_KEY_UNRESOLVED_FALLBACK_USED",
       noFallbackCode: "WEB_FETCH_PROVIDER_KEY_UNRESOLVED_NO_FALLBACK",
       autoDetectSelectedCode: "WEB_FETCH_AUTODETECT_SELECTED",

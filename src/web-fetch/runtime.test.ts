@@ -274,6 +274,46 @@ describe("web fetch runtime", () => {
     expect(requireResolvedWebFetch(resolved).provider.id).toBe("firecrawl");
   });
 
+  it("does not auto-detect a keyless web_fetch provider for no-key installs", () => {
+    const keyless = createWebFetchTestProvider({
+      pluginId: "firecrawl",
+      id: "firecrawl-free",
+      credentialPath: "",
+      requiresCredential: false,
+      autoDetectOrder: 115,
+    });
+    resolvePluginWebFetchProvidersMock.mockReturnValue([keyless]);
+
+    withEnv({ FIRECRAWL_API_KEY: "" }, () => {
+      expect(resolveWebFetchDefinition({ config: {} })).toBeNull();
+    });
+  });
+
+  it("selects a keyless web_fetch provider only when explicitly configured", () => {
+    const keyless = createWebFetchTestProvider({
+      pluginId: "firecrawl",
+      id: "firecrawl-free",
+      credentialPath: "",
+      requiresCredential: false,
+      autoDetectOrder: 115,
+    });
+    resolvePluginWebFetchProvidersMock.mockReturnValue([keyless]);
+
+    const resolved = resolveWebFetchDefinition({
+      config: {
+        tools: {
+          web: {
+            fetch: {
+              provider: "firecrawl-free",
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(requireResolvedWebFetch(resolved).provider.id).toBe("firecrawl-free");
+  });
+
   it("keeps sandboxed web fetch on bundled providers even when runtime providers are preferred", () => {
     const bundled = createFirecrawlProvider({
       getConfiguredCredentialValue: () => "bundled-key",

@@ -137,10 +137,11 @@ export function resolveWebFetchProviderId(params: {
 
   for (const provider of providers) {
     if (!providerRequiresCredential(provider)) {
-      logVerbose(
-        `web_fetch: ${raw ? `invalid configured provider "${raw}", ` : ""}auto-detected keyless provider "${provider.id}"`,
-      );
-      return provider.id;
+      // Keyless web_fetch providers are opt-in only: they must be selected
+      // explicitly via tools.web.fetch.provider (handled above) and are never
+      // chosen during credential-based auto-detect. This keeps no-key installs
+      // from silently routing fetched URLs through a keyless third party.
+      continue;
     }
     if (!hasEntryCredential(provider, params.config, params.fetch)) {
       continue;

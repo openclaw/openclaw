@@ -83,6 +83,7 @@ Notes:
 Notes:
 
 - Firecrawl fallback attempts run only when an API key is available (`plugins.entries.firecrawl.config.webFetch.apiKey` or `FIRECRAWL_API_KEY`).
+- The keyless `firecrawl-free` web_fetch provider is opt-in only. It is never auto-detected for no-key installs and is used solely when explicitly selected via `tools.web.fetch.provider: firecrawl-free`, mirroring the key-free web_search opt-in policy.
 - `maxAgeMs` controls how old cached results can be (ms). Default is 2 days.
 - Legacy `tools.web.fetch.firecrawl.*` config is auto-migrated by `openclaw doctor --fix`.
 - Firecrawl scrape/base URL overrides follow the same hosted/private rule as search: public hosted traffic uses `https://api.firecrawl.dev`; self-hosted overrides must resolve to private/internal endpoints.
