@@ -540,7 +540,7 @@ export async function runSubagentAnnounceFlow(params: {
     let directOrigin = targetRequesterOrigin;
     if (!requesterIsSubagent) {
       const { entry } = loadRequesterSessionEntry(targetRequesterSessionKey);
-      directOrigin = resolveAnnounceOrigin(entry, targetRequesterOrigin);
+      directOrigin = resolveAnnounceOrigin(entry, targetRequesterOrigin, targetRequesterSessionKey);
     }
     const completionDirectOrigin =
       expectsCompletionMessage && !requesterIsSubagent

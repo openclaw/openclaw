@@ -191,7 +191,7 @@ export async function deliverAgentHarnessTaskCompletion(params: {
   let directOrigin = scope.requesterOrigin;
   if (!requesterIsSubagent) {
     const { entry } = loadRequesterSessionEntry(requesterSessionKey);
-    directOrigin = resolveAnnounceOrigin(entry, scope.requesterOrigin);
+    directOrigin = resolveAnnounceOrigin(entry, scope.requesterOrigin, requesterSessionKey);
   }
   const completionDirectOrigin =
     requesterIsSubagent || !directOrigin

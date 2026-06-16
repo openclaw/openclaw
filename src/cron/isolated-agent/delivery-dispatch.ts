@@ -22,6 +22,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { isSuppressedControlReplyText } from "../../gateway/control-reply-text.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
+import { retireDeliveryLease } from "../../infra/delivery-lease-store.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type {
   NormalizedOutboundPayload,
@@ -808,6 +809,8 @@ export async function dispatchCronDelivery(
   const finishSilentReplyDelivery = async (): Promise<RunCronAgentTurnResult> => {
     deliveryAttempted = true;
     await cleanupDirectCronSessionIfNeeded();
+    // Retire the delivery lease after final delivery settles.
+    retireDeliveryLease(params.runSessionKey);
     return params.withRunSession({
       status: "ok",
       summary,
@@ -1100,6 +1103,10 @@ export async function dispatchCronDelivery(
       return await deliverViaDirect(delivery, options);
     } finally {
       await cleanupDirectCronSessionIfNeeded();
+      // Retire the delivery lease after final delivery settles. This prevents
+      // the lease from lingering until TTL expiration and ensures the route
+      // is cleaned up as part of the completion lifecycle.
+      retireDeliveryLease(params.runSessionKey);
     }
   };
 

@@ -8,6 +8,7 @@ import type {
   ChannelOutboundContext,
 } from "../channels/plugins/types.adapters.js";
 import { callGateway } from "../gateway/call.js";
+import { resetDeliveryLeasesForTests } from "../infra/delivery-lease-store.js";
 import { resolveOutboundSendDep } from "../infra/outbound/send-deps.js";
 import { buildChannelOutboundSessionRoute } from "../plugin-sdk/core.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -159,6 +160,7 @@ export function setupIsolatedAgentTurnMocks(params?: { fast?: boolean }): void {
   vi.mocked(loadModelCatalog).mockResolvedValue([]);
   vi.mocked(runSubagentAnnounceFlow).mockReset().mockResolvedValue(true);
   vi.mocked(callGateway).mockReset().mockResolvedValue({ ok: true, deleted: true });
+  resetDeliveryLeasesForTests();
   setActivePluginRegistry(
     createTestRegistry([
       {

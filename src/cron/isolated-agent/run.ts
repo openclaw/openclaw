@@ -23,6 +23,7 @@ import {
   getAgentRunContext,
   releaseAgentRunContext,
 } from "../../infra/agent-events.js";
+import { registerDeliveryLease, retireDeliveryLease } from "../../infra/delivery-lease-store.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import {
   createChildDiagnosticTraceContext,
@@ -799,6 +800,27 @@ async function prepareCronRunContext(params: {
       agentId,
     });
 
+  // Register a delivery route lease so subagent announce and sessions_send
+  // paths can find the resolved delivery target for isolated cron sessions.
+  // The lease is in-memory with TTL-based cleanup — intentionally separate
+  // from the session entry to avoid the lifecycle leak described in PR #92580.
+  // Keyed by runSessionKey to match the requester key used by completion
+  // callers (subagent announce, harness task runtime).
+  // TTL is 52 hours — covers the maximum agent run window (48h default) plus
+  // a safety buffer for suspended completion delivery windows (2h–6h).
+  if (resolvedDelivery.ok && input.job.sessionTarget === "isolated") {
+    registerDeliveryLease(
+      runSessionKey,
+      {
+        channel: resolvedDelivery.channel,
+        to: resolvedDelivery.to,
+        accountId: resolvedDelivery.accountId,
+        threadId: resolvedDelivery.threadId,
+      },
+      52 * 60 * 60 * 1000,
+    );
+  }
+
   const { formattedTime, timeLine } = resolveCronStyleNow(input.cfg, now);
   const message = resolveCronAgentTurnMessage(input);
   const base = `[cron:${input.job.id} ${input.job.name}] ${message}`.trim();
@@ -1278,6 +1300,7 @@ async function finalizeCronRun(params: {
       !sourceDeliveryOutcome.satisfiesSourceDelivery,
     delivered: deliveryResult.delivered,
   });
+
   if (deliveryResult.result) {
     const resultWithDeliveryMeta: RunCronAgentTurnResult = {
       ...deliveryResult.result,
