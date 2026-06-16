@@ -381,6 +381,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/anthropic/**"
+"extensions: clawrouter":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/clawrouter/**"
+          - "docs/providers/clawrouter.md"
 "extensions: cloudflare-ai-gateway":
   - changed-files:
       - any-glob-to-any-file:

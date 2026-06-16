@@ -109,6 +109,7 @@ function humanizeId(value) {
     ["byteplus", "BytePlus"],
     ["codex", "Codex"],
     ["cli", "CLI"],
+    ["clawrouter", "ClawRouter"],
     ["comfy", "ComfyUI"],
     ["dashscope", "DashScope"],
     ["deepgram", "Deepgram"],
