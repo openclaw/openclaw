@@ -1368,7 +1368,7 @@ describe("resolveGatewayStartupPluginIds", () => {
       ...registry,
       plugins: registry.plugins.map((plugin) =>
         plugin.id === "external-env-channel-plugin"
-          ? { ...plugin, channels: ["External-Env-Channel"] }
+          ? Object.assign({}, plugin, { channels: ["External-Env-Channel"] })
           : plugin,
       ),
     });

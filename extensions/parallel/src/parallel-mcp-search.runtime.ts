@@ -3,8 +3,8 @@ import { createRequire } from "node:module";
 import { readPluginPackageVersion } from "openclaw/plugin-sdk/extension-shared";
 import { withTrustedWebSearchEndpoint } from "openclaw/plugin-sdk/provider-web-search";
 
-// Free hosted Search MCP — anonymous-friendly, used when no PARALLEL_API_KEY is
-// configured. This is the zero-config default web_search transport. Docs:
+// Free hosted Search MCP. This keyless transport is used only after the user
+// explicitly selects the `parallel-free` web_search provider. Docs:
 // https://docs.parallel.ai/integrations/mcp/search-mcp
 export const PARALLEL_MCP_SEARCH_URL = "https://search.parallel.ai/mcp";
 // Initial protocol version we advertise on `initialize`; we then echo whatever

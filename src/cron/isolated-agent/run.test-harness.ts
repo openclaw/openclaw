@@ -457,9 +457,20 @@ function resetRunConfigMocks(): void {
   resolveAgentTimeoutMsMock.mockReturnValue(60_000);
   deriveSessionTotalTokensMock.mockReturnValue(30);
   hasNonzeroUsageMock.mockImplementation(
-    (usage: { input?: unknown; output?: unknown } | undefined) =>
-      (typeof usage?.input === "number" && usage.input > 0) ||
-      (typeof usage?.output === "number" && usage.output > 0),
+    (
+      usage:
+        | {
+            input?: unknown;
+            output?: unknown;
+            cacheRead?: unknown;
+            cacheWrite?: unknown;
+            total?: unknown;
+          }
+        | undefined,
+    ) =>
+      [usage?.input, usage?.output, usage?.cacheRead, usage?.cacheWrite, usage?.total].some(
+        (value) => typeof value === "number" && Number.isFinite(value) && value > 0,
+      ),
   );
   ensureAgentWorkspaceMock.mockResolvedValue({ dir: "/tmp/workspace" });
   normalizeThinkLevelMock.mockImplementation((value: unknown) => value);

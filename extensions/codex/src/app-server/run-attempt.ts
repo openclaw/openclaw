@@ -149,7 +149,6 @@ import {
   filterCodexDynamicToolsForAllowlist,
   formatCodexDynamicToolBuildStageSummary,
   includeForcedCodexDynamicToolAllow,
-  isCodexNativeExecutionBlockedByNodeExecHost,
   resolveCodexAppServerHookChannelId,
   resolveCodexMessageToolProvider,
   resolveOpenClawCodingToolsSessionKeys,
@@ -632,18 +631,12 @@ export async function runCodexAppServerAttempt(
         startOptions: appServer.start,
       });
   preDynamicStartupStages.mark("auth-cache");
-  const nodeExecBlocksNativeExecution = isCodexNativeExecutionBlockedByNodeExecHost(params, {
-    agentId: sessionAgentId,
-    runtimeSessionKey: sandboxSessionKey,
-    sandbox,
-  });
-  preDynamicStartupStages.mark("native-exec-policy");
   const bundleMcpThreadConfig = await loadCodexBundleMcpThreadConfig({
     workspaceDir: effectiveWorkspace,
     cfg: params.config,
     toolsEnabled: supportsModelTools(params.model),
     disableTools: params.disableTools,
-    toolsAllow: nodeExecBlocksNativeExecution ? [] : params.toolsAllow,
+    toolsAllow: params.toolsAllow,
   });
   preDynamicStartupStages.mark("bundle-mcp");
   const sandboxExecServerEnabled = isCodexSandboxExecServerEnabled(pluginConfig);

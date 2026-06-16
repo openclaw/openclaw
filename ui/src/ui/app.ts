@@ -1267,10 +1267,6 @@ export class OpenClawApp extends LitElement {
           if (status === "idle" || status === "error") {
             this.realtimeTalkActive = status !== "idle";
           }
-          if (status === "error" && this.realtimeTalkDetail) {
-            this.lastError = this.realtimeTalkDetail;
-            this.chatError = this.realtimeTalkDetail;
-          }
         },
         onTranscript: (entry) => {
           this.realtimeTalkTranscript = `${entry.role === "user" ? "You" : "OpenClaw"}: ${entry.text}`;
@@ -1294,8 +1290,6 @@ export class OpenClawApp extends LitElement {
       this.realtimeTalkActive = false;
       this.realtimeTalkStatus = "error";
       this.realtimeTalkDetail = error instanceof Error ? error.message : String(error);
-      this.lastError = this.realtimeTalkDetail;
-      this.chatError = this.realtimeTalkDetail;
     }
   }
 

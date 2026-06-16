@@ -100,7 +100,11 @@ import {
   resolveAuthProfileOrder,
   shouldPreferExplicitConfigApiKeyAuth,
 } from "../model-auth.js";
-import { resolveDefaultModelForAgent } from "../model-selection.js";
+import {
+  buildModelAliasIndex,
+  resolveDefaultModelForAgent,
+  resolveModelRefFromString,
+} from "../model-selection.js";
 import { resolveThinkingDefault } from "../model-thinking-default.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import {
@@ -528,6 +532,49 @@ function buildHandledReplyPayloads(reply?: ReplyPayload) {
   ];
 }
 
+function resolveInitialEmbeddedRunModel(params: {
+  config: RunEmbeddedAgentParams["config"];
+  agentId?: string;
+  provider?: string;
+  model?: string;
+}): { provider: string; modelId: string } {
+  const cfg = params.config ?? {};
+  const configuredDefault = resolveDefaultModelForAgent({
+    cfg,
+    agentId: params.agentId,
+  });
+  const explicitProvider = normalizeOptionalString(params.provider);
+  const explicitModel = normalizeOptionalString(params.model);
+  const defaultProvider = configuredDefault.provider || DEFAULT_PROVIDER;
+
+  if (explicitProvider && explicitModel) {
+    return { provider: explicitProvider, modelId: explicitModel };
+  }
+
+  if (explicitModel) {
+    const provider = explicitProvider ?? defaultProvider;
+    const aliasIndex = buildModelAliasIndex({
+      cfg,
+      defaultProvider: provider,
+    });
+    const resolved = resolveModelRefFromString({
+      cfg,
+      raw: explicitModel,
+      defaultProvider: provider,
+      aliasIndex,
+    });
+    return {
+      provider: explicitProvider ?? resolved?.ref.provider ?? provider,
+      modelId: resolved?.ref.model ?? explicitModel,
+    };
+  }
+
+  return {
+    provider: explicitProvider ?? defaultProvider,
+    modelId: configuredDefault.model || DEFAULT_MODEL,
+  };
+}
+
 export function runEmbeddedAgent(
   paramsInput: RunEmbeddedAgentParams,
 ): Promise<EmbeddedAgentRunResult> {
@@ -758,17 +805,12 @@ async function runEmbeddedAgentInternal(
       startupStages.mark("runtime-plugins");
       notifyExecutionPhase("runtime_plugins");
 
-      const requestedProvider = normalizeOptionalString(params.provider);
-      const requestedModel = normalizeOptionalString(params.model);
-      const configuredDefault =
-        !requestedProvider && !requestedModel
-          ? resolveDefaultModelForAgent({
-              cfg: params.config ?? {},
-              agentId: workspaceResolution.agentId,
-            })
-          : undefined;
-      let provider = requestedProvider ?? configuredDefault?.provider ?? DEFAULT_PROVIDER;
-      let modelId = requestedModel ?? configuredDefault?.model ?? DEFAULT_MODEL;
+      let { provider, modelId } = resolveInitialEmbeddedRunModel({
+        config: params.config,
+        agentId: workspaceResolution.agentId,
+        provider: params.provider,
+        model: params.model,
+      });
       const agentDir =
         params.agentDir ?? resolveAgentDir(params.config ?? {}, workspaceResolution.agentId);
       const normalizedSessionKey = params.sessionKey?.trim();

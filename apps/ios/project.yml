@@ -289,6 +289,7 @@ targets:
     deploymentTarget: "11.0"
     sources:
       - path: WatchExtension/Sources
+      - path: WatchExtension/Assets.xcassets
     dependencies:
       - sdk: AppIntents.framework
       - sdk: WatchConnectivity.framework

@@ -1383,6 +1383,7 @@ export const nl: TranslationMap = {
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
+      dismissTalkError: "Dismiss Talk error",
       startTalk: "Start Talk",
       stillListening: "Luistert nog",
       talkTranscript: "Gesprekstranscript",

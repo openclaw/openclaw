@@ -1797,6 +1797,96 @@ export async function loadSessionCostSummaryFromCache(params: {
   };
 }
 
+export async function loadSessionCostSummariesFromCache(params: {
+  sessions: Array<{ sessionId?: string; sessionFile: string }>;
+  config?: OpenClawConfig;
+  agentId?: string;
+  startMs?: number;
+  endMs?: number;
+  requestRefresh?: boolean;
+}): Promise<{ summaries: Array<SessionCostSummary | null>; cacheStatus: UsageCacheStatus }> {
+  const cachePath = resolveUsageCostCachePath(params.agentId);
+  const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config);
+  const statTasks = params.sessions.map(
+    (session) => async () => await fs.promises.stat(session.sessionFile).catch(() => null),
+  );
+  const statsPromise = runTasksWithConcurrency({
+    tasks: statTasks,
+    limit: USAGE_COST_TRANSCRIPT_STAT_CONCURRENCY,
+  }).then(({ results }) => results);
+  const [cache, stats, refreshRunning] = await Promise.all([
+    readUsageCostCache(cachePath),
+    statsPromise,
+    isUsageCostCacheRefreshRunning(cachePath),
+  ]);
+  const staleFiles = new Set<string>();
+  let cachedFiles = 0;
+  const summaries = params.sessions.map((session, index) => {
+    const stat = stats[index];
+    const file = stat
+      ? { filePath: session.sessionFile, size: stat.size, mtimeMs: stat.mtimeMs }
+      : undefined;
+    const entry = cache.files[session.sessionFile];
+    const stale =
+      !file ||
+      !isUsageCostCacheEntryFresh({
+        entry,
+        file,
+        pricingFingerprint,
+        requireSessionSummary: true,
+      });
+    if (stale) {
+      staleFiles.add(session.sessionFile);
+      return null;
+    }
+    cachedFiles += 1;
+    const summary = entry?.sessionSummary ?? null;
+    if (
+      summary &&
+      params.startMs !== undefined &&
+      params.endMs !== undefined &&
+      !isSessionSummaryContainedInRange(summary, params.startMs, params.endMs)
+    ) {
+      return entry
+        ? buildSessionCostSummaryFromCacheEntry({
+            entry,
+            sessionId: session.sessionId,
+            sessionFile: session.sessionFile,
+            startMs: params.startMs,
+            endMs: params.endMs,
+          })
+        : null;
+    }
+    return summary;
+  });
+  const refreshRequested = params.requestRefresh !== false && staleFiles.size > 0;
+  if (refreshRequested) {
+    requestCostUsageCacheRefresh({
+      config: params.config,
+      agentId: params.agentId,
+      sessionFiles: [...staleFiles],
+    });
+  }
+  const staleFileCount = staleFiles.size;
+  return {
+    summaries,
+    cacheStatus: {
+      status:
+        staleFileCount === 0
+          ? "fresh"
+          : refreshRunning || refreshRequested
+            ? "refreshing"
+            : cachedFiles > 0
+              ? "partial"
+              : "stale",
+      cachedFiles,
+      pendingFiles: staleFileCount,
+      staleFiles: staleFileCount,
+      refreshedAt: cache.updatedAt || undefined,
+    },
+  };
+}
+
 export function requestCostUsageCacheRefresh(params?: {
   config?: OpenClawConfig;
   agentId?: string;

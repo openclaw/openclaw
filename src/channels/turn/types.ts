@@ -385,6 +385,7 @@ export type AssembledChannelTurn = {
   storePath: string;
   ctxPayload: FinalizedMsgContext;
   recordInboundSession: RecordInboundSession;
+  afterRecord?: () => void | Promise<void>;
   dispatchReplyWithBufferedBlockDispatcher: DispatchReplyWithBufferedBlockDispatcher;
   delivery: ChannelEventDeliveryAdapter;
   replyPipeline?: ChannelTurnReplyPipelineOptions;
@@ -408,6 +409,7 @@ export type PreparedChannelTurn<TDispatchResult = DispatchFromConfigResult> = {
   storePath: string;
   ctxPayload: FinalizedMsgContext;
   recordInboundSession: RecordInboundSession;
+  afterRecord?: () => void | Promise<void>;
   record?: ChannelTurnRecordOptions;
   history?: ChannelTurnHistoryFinalizeOptions;
   onPreDispatchFailure?: (err: unknown) => void | Promise<void>;
