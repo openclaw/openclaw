@@ -164,7 +164,22 @@ describe("enablePluginInConfig", () => {
 });
 
 describe("enableExplicitlySelectedPluginInConfig", () => {
-  it("appends ClickClack to a restrictive allowlist before enabling it", () => {
+  it("appends an explicitly selected plugin to a restrictive allowlist before enabling it", () => {
+    const result = enableExplicitlySelectedPluginInConfig(
+      {
+        plugins: {
+          allow: ["memory-core"],
+        },
+      } as OpenClawConfig,
+      "openclaw-weixin",
+    );
+
+    expect(result.enabled).toBe(true);
+    expect(result.config.plugins?.allow).toEqual(["memory-core", "openclaw-weixin"]);
+    expect(result.config.plugins?.entries?.["openclaw-weixin"]?.enabled).toBe(true);
+  });
+
+  it("appends ClickClack to a restrictive allowlist before enabling it (bundled channel)", () => {
     const result = enableExplicitlySelectedPluginInConfig(
       {
         plugins: {
@@ -180,37 +195,34 @@ describe("enableExplicitlySelectedPluginInConfig", () => {
     expect(result.config.channels?.clickclack?.enabled).toBe(true);
   });
 
-  it("keeps unrelated explicit plugin enables blocked by a restrictive allowlist", () => {
-    const cfg = {
-      plugins: {
-        allow: ["memory-core"],
-      },
-    } as OpenClawConfig;
+  it("enables a plugin already in the allowlist without duplicating the entry", () => {
+    const result = enableExplicitlySelectedPluginInConfig(
+      {
+        plugins: {
+          allow: ["memory-core", "openclaw-weixin"],
+        },
+      } as OpenClawConfig,
+      "openclaw-weixin",
+    );
 
-    const result = enableExplicitlySelectedPluginInConfig(cfg, "google");
-
-    expect(result).toEqual({
-      config: cfg,
-      enabled: false,
-      pluginId: "google",
-      reason: "blocked by allowlist",
-    });
+    expect(result.enabled).toBe(true);
+    expect(result.config.plugins?.allow).toEqual(["memory-core", "openclaw-weixin"]);
   });
 
-  it("keeps ClickClack blocked by the denylist without changing the allowlist", () => {
+  it("keeps a denylisted plugin blocked without changing the allowlist", () => {
     const cfg = {
       plugins: {
         allow: ["memory-core"],
-        deny: ["clickclack"],
+        deny: ["openclaw-weixin"],
       },
     } as OpenClawConfig;
 
-    const result = enableExplicitlySelectedPluginInConfig(cfg, "clickclack");
+    const result = enableExplicitlySelectedPluginInConfig(cfg, "openclaw-weixin");
 
     expect(result).toEqual({
       config: cfg,
       enabled: false,
-      pluginId: "clickclack",
+      pluginId: "openclaw-weixin",
       reason: "blocked by denylist",
     });
   });
