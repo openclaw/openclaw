@@ -1,16 +1,19 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import {
   acquireSessionWriteLock,
   resolveSessionWriteLockOptions,
 } from "../../agents/session-write-lock.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import type { SessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { getRuntimeConfig } from "../io.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
+import { formatSessionArchiveTimestamp } from "./artifacts.js";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
@@ -57,6 +60,7 @@ import {
 } from "./transcript-append.js";
 import { resolveSessionTranscriptFile } from "./transcript-file-resolve.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
+import { writeJsonlLines } from "./transcript-jsonl.js";
 import { streamSessionTranscriptLines } from "./transcript-stream.js";
 import {
   type OwnedSessionTranscriptPublishedEntry,
@@ -236,6 +240,21 @@ export type SessionTranscriptRuntimeTarget = {
   sessionId: string;
   sessionKey: string;
 };
+
+export type SessionTranscriptManualTrimResult =
+  | {
+      compacted: false;
+      reason: "no transcript";
+    }
+  | {
+      compacted: false;
+      kept: number;
+    }
+  | {
+      archived: string;
+      compacted: true;
+      kept: number;
+    };
 
 export type SessionEntryUpdateOptions = {
   /** Skip prune/cap/rotation maintenance for specialized internal updates. */
@@ -664,6 +683,219 @@ export async function publishTranscriptUpdate(
     ...update,
     sessionFile: transcript.sessionFile,
   });
+}
+
+/**
+ * Trims a transcript for manual sessions.compact and clears stale token metadata.
+ * This is one storage-sized mutation: future stores can trim transcript rows and
+ * update entry metadata inside the same backend transaction.
+ */
+export async function trimSessionTranscriptForManualCompact(
+  scope: SessionTranscriptRuntimeScope,
+  params: { maxLines: number; nowMs?: number; sessionFile?: string },
+): Promise<SessionTranscriptManualTrimResult> {
+  const transcript = await resolveManualCompactTranscriptTarget(scope, params.sessionFile);
+  if (!transcript) {
+    return { compacted: false, reason: "no transcript" };
+  }
+
+  const maxLines = Math.max(1, Math.floor(params.maxLines));
+  const lines: string[] = [];
+  let totalLines = 0;
+  try {
+    for await (const line of streamSessionTranscriptLines(transcript.sessionFile)) {
+      totalLines += 1;
+      lines.push(line);
+      if (lines.length > maxLines) {
+        lines.shift();
+      }
+    }
+  } catch {
+    return { compacted: false, kept: 0 };
+  }
+  if (totalLines <= maxLines) {
+    return { compacted: false, kept: totalLines };
+  }
+
+  const archived = await archiveTranscriptFileForManualCompact(transcript.sessionFile);
+  await writeJsonlLines(transcript.sessionFile, lines);
+  await patchSessionEntry(
+    {
+      ...scope,
+      sessionKey: transcript.sessionKey,
+      storePath: scope.storePath,
+    },
+    (entry) => {
+      delete entry.contextBudgetStatus;
+      delete entry.inputTokens;
+      delete entry.outputTokens;
+      delete entry.totalTokens;
+      delete entry.totalTokensFresh;
+      entry.updatedAt = params.nowMs ?? Date.now();
+      return entry;
+    },
+    { replaceEntry: true },
+  );
+
+  return { archived, compacted: true, kept: lines.length };
+}
+
+async function archiveTranscriptFileForManualCompact(filePath: string): Promise<string> {
+  const archived = `${filePath}.bak.${formatSessionArchiveTimestamp()}`;
+  await fs.promises.rename(filePath, archived);
+  emitSessionTranscriptUpdate({ sessionFile: archived });
+  return archived;
+}
+
+async function resolveManualCompactTranscriptTarget(
+  scope: SessionTranscriptRuntimeScope,
+  sessionFile?: string,
+): Promise<SessionTranscriptRuntimeTarget | null> {
+  const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey);
+  if (!agentId) {
+    throw new Error(`Cannot resolve transcript scope without an agent id: ${scope.sessionKey}`);
+  }
+  const candidates = resolveManualCompactTranscriptCandidates({
+    agentId,
+    sessionFile,
+    sessionId: scope.sessionId,
+    storePath: scope.storePath,
+  });
+  for (const candidate of candidates) {
+    const stat = await fs.promises.stat(candidate).catch(() => null);
+    if (stat?.isFile()) {
+      return {
+        agentId,
+        sessionFile: candidate,
+        sessionId: scope.sessionId,
+        sessionKey: scope.sessionKey,
+      };
+    }
+  }
+  return null;
+}
+
+function resolveManualCompactTranscriptCandidates(params: {
+  agentId?: string;
+  sessionFile?: string;
+  sessionId: string;
+  storePath?: string;
+}): string[] {
+  const candidates: string[] = [];
+  const sessionFileState = classifyGeneratedTranscriptCandidate(
+    params.sessionId,
+    params.sessionFile,
+  );
+  const pushCandidate = (resolve: () => string): void => {
+    try {
+      const candidate = resolve();
+      if (!candidates.includes(candidate)) {
+        candidates.push(candidate);
+      }
+    } catch {
+      // Keep scanning the remaining file-backed candidates.
+    }
+  };
+
+  if (params.storePath) {
+    const sessionsDir = path.dirname(params.storePath);
+    if (params.sessionFile && sessionFileState !== "stale") {
+      pushCandidate(() =>
+        resolveSessionFilePath(
+          params.sessionId,
+          { sessionFile: params.sessionFile },
+          { sessionsDir, agentId: params.agentId },
+        ),
+      );
+    }
+    pushCandidate(() => resolveSessionTranscriptPathInDir(params.sessionId, sessionsDir));
+    if (params.sessionFile && sessionFileState === "stale") {
+      pushCandidate(() =>
+        resolveSessionFilePath(
+          params.sessionId,
+          { sessionFile: params.sessionFile },
+          { sessionsDir, agentId: params.agentId },
+        ),
+      );
+    }
+  } else if (params.sessionFile) {
+    if (params.agentId) {
+      if (sessionFileState !== "stale") {
+        pushCandidate(() =>
+          resolveSessionFilePath(
+            params.sessionId,
+            { sessionFile: params.sessionFile },
+            { agentId: params.agentId },
+          ),
+        );
+      }
+    } else {
+      const trimmed = params.sessionFile.trim();
+      if (trimmed) {
+        candidates.push(path.resolve(trimmed));
+      }
+    }
+  }
+
+  if (params.agentId) {
+    pushCandidate(() => resolveSessionTranscriptPath(params.sessionId, params.agentId));
+    if (params.sessionFile && sessionFileState === "stale") {
+      pushCandidate(() =>
+        resolveSessionFilePath(
+          params.sessionId,
+          { sessionFile: params.sessionFile },
+          { agentId: params.agentId },
+        ),
+      );
+    }
+  }
+
+  const legacyDir = path.join(
+    resolveRequiredHomeDir(process.env, os.homedir),
+    ".openclaw",
+    "sessions",
+  );
+  pushCandidate(() => resolveSessionTranscriptPathInDir(params.sessionId, legacyDir));
+  return candidates;
+}
+
+function classifyGeneratedTranscriptCandidate(
+  sessionId: string,
+  sessionFile?: string,
+): "current" | "stale" | "custom" {
+  const transcriptSessionId = extractGeneratedTranscriptSessionId(sessionFile);
+  if (!transcriptSessionId) {
+    return "custom";
+  }
+  return transcriptSessionId === sessionId ? "current" : "stale";
+}
+
+function extractGeneratedTranscriptSessionId(sessionFile?: string): string | undefined {
+  const trimmed = sessionFile?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const base = path.basename(trimmed);
+  if (!base.endsWith(".jsonl")) {
+    return undefined;
+  }
+  const withoutExt = base.slice(0, -".jsonl".length);
+  const topicIndex = withoutExt.indexOf("-topic-");
+  if (topicIndex > 0) {
+    const topicSessionId = withoutExt.slice(0, topicIndex);
+    return looksLikeGeneratedSessionId(topicSessionId) ? topicSessionId : undefined;
+  }
+  const forkMatch = withoutExt.match(
+    /^(\d{4}-\d{2}-\d{2}T[\w-]+(?:Z|[+-]\d{2}(?:-\d{2})?)?)_(.+)$/,
+  );
+  if (forkMatch?.[2]) {
+    return looksLikeGeneratedSessionId(forkMatch[2]) ? forkMatch[2] : undefined;
+  }
+  return looksLikeGeneratedSessionId(withoutExt) ? withoutExt : undefined;
+}
+
+function looksLikeGeneratedSessionId(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
 /**
