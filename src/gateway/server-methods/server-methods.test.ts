@@ -940,6 +940,22 @@ describe("projectRecentChatDisplayMessages", () => {
     ]);
   });
 
+  it("projects thinking-only assistant errors as a generic safe failure", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "private upstream details" }],
+        stopReason: "error",
+        errorMessage: "Connection error.",
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result[0]?.content).toEqual([
+      { type: "text", text: "The agent run failed before producing a reply." },
+    ]);
+  });
+
   it("leaves tool-bearing assistant errors unchanged", () => {
     const toolCall = {
       type: "toolCall",

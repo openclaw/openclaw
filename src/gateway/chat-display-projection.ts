@@ -1602,20 +1602,23 @@ function projectEmptyAssistantErrorMessages(
 ): Array<Record<string, unknown>> {
   let changed = false;
   const projected = messages.map((message) => {
-    const hasNonTextContent =
+    const hasDisplayableNonTextContent =
       Array.isArray(message.content) &&
       message.content.some((block) => {
         if (!block || typeof block !== "object" || Array.isArray(block)) {
-          return true;
+          return false;
         }
-        return (block as { type?: unknown }).type !== "text";
+        const type = (block as { type?: unknown }).type;
+        return (
+          isToolHistoryBlockType(type) || type === "image" || type === "audio" || type === "canvas"
+        );
       });
     if (
       message.role !== "assistant" ||
       message.stopReason !== "error" ||
       typeof message.errorMessage !== "string" ||
       !message.errorMessage.trim() ||
-      hasNonTextContent ||
+      hasDisplayableNonTextContent ||
       extractProjectedText(message.content ?? message.text).trim()
     ) {
       return message;
