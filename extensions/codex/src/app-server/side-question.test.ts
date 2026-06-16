@@ -610,19 +610,13 @@ describe("runCodexAppServerSideQuestion", () => {
     });
   });
 
-  it("disables native and managed side-question tools for deny-all sender policy", async () => {
+  it("disables native and managed side-question tools when core denies all tools", async () => {
     const { forkConfig, toolResponse } = await runSideQuestionWithManagedWebSearchCall(
       sideParams({
-        cfg: {
-          tools: {
-            toolsBySender: {
-              "id:restricted-sender": { deny: ["*"] },
-            },
-          },
-        } as never,
         messageChannel: "telegram",
         messageProvider: "telegram",
         senderId: "restricted-sender",
+        toolsAllow: [],
       }),
     );
 

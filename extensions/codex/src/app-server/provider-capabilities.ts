@@ -17,7 +17,7 @@ async function readConfiguredProviderWebSearchSupport(params: {
       signal: params.signal,
     },
   );
-  return response.webSearch === true;
+  return response.webSearch;
 }
 
 export async function resolveCodexProviderWebSearchSupportForClient(params: {

@@ -11,18 +11,6 @@ export type AgentHarnessSupport =
   | { supported: true; priority?: number; reason?: string }
   | { supported: false; reason?: string };
 
-export type AgentHarnessReadinessContext = {
-  config: import("../../config/types.openclaw.js").OpenClawConfig;
-  agentId: string;
-  agentDir: string;
-  workspaceDir: string;
-  provider: string;
-  modelId: string;
-  modelApi?: string;
-};
-
-export type AgentHarnessReadiness = { ready: true } | { ready: false; reason?: string };
-
 export type AgentHarnessAttemptParams =
   import("../embedded-agent-runner/run/types.js").EmbeddedRunAttemptParams;
 export type AgentHarnessAttemptResult =
@@ -65,6 +53,7 @@ export type AgentHarnessSideQuestionParams = {
   senderE164?: string | null;
   senderIsOwner?: boolean;
   currentChannelId?: string;
+  toolsAllow?: string[];
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
 };
@@ -113,12 +102,6 @@ export type AgentHarnessSideQuestionCapability = {
   runSideQuestion?(params: AgentHarnessSideQuestionParams): Promise<AgentHarnessSideQuestionResult>;
 };
 
-export type AgentHarnessReadinessCapability = {
-  checkReadiness?(
-    ctx: AgentHarnessReadinessContext,
-  ): Promise<AgentHarnessReadiness> | AgentHarnessReadiness;
-};
-
 export type AgentHarnessClassificationCapability = {
   classify?(
     result: AgentHarnessAttemptResult,
@@ -136,7 +119,6 @@ export type AgentHarnessSessionLifecycleCapability = {
 };
 
 export type AgentHarness = AgentHarnessRunCapability &
-  AgentHarnessReadinessCapability &
   AgentHarnessSideQuestionCapability &
   AgentHarnessClassificationCapability &
   AgentHarnessCompactionCapability &

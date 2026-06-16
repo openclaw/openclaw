@@ -1,6 +1,5 @@
 // Codex plugin module implements side question behavior.
 import {
-  applyPluginHarnessDenyAllToolPolicy,
   buildAgentHookContextChannelFields,
   embeddedAgentLog,
   formatErrorMessage,
@@ -202,9 +201,7 @@ export async function runCodexAppServerSideQuestion(
     agentDir: params.agentDir,
   });
   const cwd = binding.cwd || params.workspaceDir || process.cwd();
-  const sideRunParams = applyPluginHarnessDenyAllToolPolicy(
-    buildSideRunAttemptParams(params, { cwd, authProfileId }),
-  );
+  const sideRunParams = buildSideRunAttemptParams(params, { cwd, authProfileId });
   const nativeExecutionBlock = resolveCodexNativeExecutionBlock({
     config: sideRunParams.config,
     sessionKey: sideRunParams.sandboxSessionKey?.trim() || sideRunParams.sessionKey,
@@ -604,6 +601,7 @@ function buildSideRunAttemptParams(
     ...(params.senderE164 !== undefined ? { senderE164: params.senderE164 } : {}),
     ...(params.senderIsOwner !== undefined ? { senderIsOwner: params.senderIsOwner } : {}),
     ...(params.currentChannelId ? { currentChannelId: params.currentChannelId } : {}),
+    ...(params.toolsAllow ? { toolsAllow: params.toolsAllow } : {}),
     workspaceDir: options.cwd,
     authProfileId: options.authProfileId,
     authProfileIdSource: params.authProfileIdSource,

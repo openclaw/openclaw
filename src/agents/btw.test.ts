@@ -644,6 +644,7 @@ describe("runBtwSideQuestion", () => {
           senderName?: string;
           senderUsername?: string;
           senderE164?: string;
+          toolsAllow?: string[];
         },
       ]
     >;
@@ -671,6 +672,47 @@ describe("runBtwSideQuestion", () => {
     ).toContain("session-1.jsonl");
     expect(streamSimpleMock).not.toHaveBeenCalled();
     expect(registerProviderStreamForModelMock).not.toHaveBeenCalled();
+  });
+
+  it("prepares deny-all sender policy before calling a plugin side-question hook", async () => {
+    const codexSideQuestionMock = vi.fn().mockResolvedValue({ text: "Policy answer." });
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex test harness",
+      supports: () => ({ supported: true, priority: 100 }),
+      runAttempt: vi.fn(),
+      runSideQuestion: codexSideQuestionMock,
+    });
+    resolveModelWithRegistryMock.mockReturnValue({
+      provider: "openai",
+      id: "gpt-5.5",
+      api: "openai-responses",
+    });
+
+    await runSideQuestion({
+      cfg: {
+        channels: {
+          telegram: {
+            groups: {
+              "deny-room": {
+                toolsBySender: {
+                  "id:restricted-sender": { deny: ["*"] },
+                },
+              },
+            },
+          },
+        },
+      } as never,
+      provider: "openai",
+      model: "gpt-5.5",
+      sessionKey: "agent:main:telegram:group:deny-room",
+      messageProvider: "telegram",
+      groupId: "deny-room",
+      senderId: "restricted-sender",
+    });
+
+    expect(codexSideQuestionMock).toHaveBeenCalledOnce();
+    expect(mockArg(codexSideQuestionMock, 0, 0)).toMatchObject({ toolsAllow: [] });
   });
 
   it("does not fall back to the direct provider call when Codex lacks BTW support", async () => {

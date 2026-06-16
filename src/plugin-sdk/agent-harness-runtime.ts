@@ -35,8 +35,6 @@ export type {
   AgentHarnessCompactParams,
   AgentHarnessCompactResult,
   AgentHarnessDeliveryDefaults,
-  AgentHarnessReadiness,
-  AgentHarnessReadinessContext,
   AgentHarnessResultClassification,
   AgentHarnessSideQuestionParams,
   AgentHarnessSideQuestionResult,
@@ -145,7 +143,6 @@ export {
   resolveDefaultAgentDir,
   resolveSessionAgentIds,
 } from "../agents/agent-scope.js";
-export { applyPluginHarnessDenyAllToolPolicy } from "../agents/harness/selection.js";
 export { resolveModelAuthMode } from "../agents/model-auth.js";
 export { supportsModelTools } from "../agents/model-tool-support.js";
 export { isAgentToolReplaySafe } from "../agents/tool-replay-safety.js";

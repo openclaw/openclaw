@@ -78,6 +78,27 @@ type AgentHarnessSelectionDecision = {
   candidates: AgentHarnessSelectionCandidate[];
 };
 
+type PluginHarnessToolPolicyContext = Pick<
+  EmbeddedRunAttemptParams,
+  | "config"
+  | "sessionKey"
+  | "sandboxSessionKey"
+  | "agentId"
+  | "provider"
+  | "modelId"
+  | "messageProvider"
+  | "messageChannel"
+  | "spawnedBy"
+  | "groupId"
+  | "groupChannel"
+  | "groupSpace"
+  | "agentAccountId"
+  | "senderId"
+  | "senderName"
+  | "senderUsername"
+  | "senderE164"
+>;
+
 function listPluginAgentHarnesses(): AgentHarness[] {
   return listRegisteredAgentHarnesses().map((entry) => entry.harness);
 }
@@ -305,7 +326,7 @@ export async function runAgentHarnessAttempt(
   }
 }
 
-export function applyPluginHarnessDenyAllToolPolicy(
+function applyPluginHarnessDenyAllToolPolicy(
   params: EmbeddedRunAttemptParams,
 ): EmbeddedRunAttemptParams {
   const prompt = resolvePluginHarnessDenyAllToolPolicyPrompt(params);
@@ -319,8 +340,14 @@ export function applyPluginHarnessDenyAllToolPolicy(
   };
 }
 
+export function resolvePluginHarnessPolicyToolsAllow(
+  params: PluginHarnessToolPolicyContext,
+): [] | undefined {
+  return resolvePluginHarnessDenyAllToolPolicyPrompt(params) ? [] : undefined;
+}
+
 function resolvePluginHarnessDenyAllToolPolicyPrompt(
-  params: EmbeddedRunAttemptParams,
+  params: PluginHarnessToolPolicyContext,
 ): string | undefined {
   const { globalPolicy, globalProviderPolicy, agentPolicy, agentProviderPolicy } =
     resolveEffectiveToolPolicy({
@@ -402,7 +429,7 @@ function resolvePluginHarnessDenyAllToolPolicyPrompt(
 }
 
 function resolveSenderScopedGroupToolPolicy(
-  params: EmbeddedRunAttemptParams,
+  params: PluginHarnessToolPolicyContext,
   groupPolicyParams: Parameters<typeof resolveGroupToolPolicy>[0],
   groupPolicy: { deny?: string[] } | undefined,
 ): { deny?: string[] } | undefined {
@@ -419,7 +446,7 @@ function resolveSenderScopedGroupToolPolicy(
   return policyDeniesAllTools(groupPolicyWithoutSender) ? undefined : groupPolicy;
 }
 
-function hasSenderIdentity(params: EmbeddedRunAttemptParams): boolean {
+function hasSenderIdentity(params: PluginHarnessToolPolicyContext): boolean {
   return Boolean(
     params.senderId?.trim() ||
     params.senderName?.trim() ||
