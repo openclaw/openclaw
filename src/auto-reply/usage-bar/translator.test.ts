@@ -110,6 +110,38 @@ describe("usage-bar segment forms", () => {
   });
 });
 
+describe("buildUsageContract edge cases", () => {
+  it("fresh session with no usage returns 0 for context.used_tokens", () => {
+    const contract = buildUsageContract(
+      {
+        provider: "openai",
+        model: "gpt-4o",
+        contextTokenBudget: 1000000,
+        // No contextUsedTokens set — simulates fresh session
+        usage: {},
+      },
+      "discord",
+    );
+    expect(contract.context.used_tokens).toBe(0);
+    expect(contract.context.pct_used).toBe(0);
+  });
+
+  it("contextUsedTokens of 0 is treated as valid", () => {
+    const contract = buildUsageContract(
+      {
+        provider: "openai",
+        model: "gpt-4o",
+        contextTokenBudget: 1000000,
+        contextUsedTokens: 0,
+        usage: {},
+      },
+      "discord",
+    );
+    expect(contract.context.used_tokens).toBe(0);
+    expect(contract.context.pct_used).toBe(0);
+  });
+});
+
 describe("usage-bar end-to-end with buildUsageContract", () => {
   it("renders a full footer from a reply usage snapshot", () => {
     const contract = buildUsageContract(
