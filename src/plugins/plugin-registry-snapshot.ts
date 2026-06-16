@@ -468,13 +468,13 @@ function hasStalePersistedPluginDiagnostics(index: InstalledPluginIndex): boolea
     if (hasPluginId && sourceMissing) {
       return true;
     }
-    // Diagnostics without a pluginId (e.g. "plugin path not found" from
-    // discoverFromPath) are orphan diagnostics that can't be associated with
-    // any plugin. When no pluginId is set, the diagnostic is always stale
-    // because it can't be verified against an active plugin record, and it
-    // would otherwise persist indefinitely in the SQLite diagnostics_json
-    // column even after the referenced path has been removed.
-    if (!hasPluginId) {
+    // Diagnostics tagged with the orphan-source-path code (set by
+    // discoverFromPath when a configured load path does not exist or is
+    // not a supported file) are always stale. Without this, removing a
+    // plugin and its files would leave a "plugin path not found" diagnostic
+    // that persists forever in SQLite diagnostics_json, blocking Gateway
+    // startup with an ok:false config validation error.
+    if (diag.code === "orphan-source-path") {
       return true;
     }
     return false;
