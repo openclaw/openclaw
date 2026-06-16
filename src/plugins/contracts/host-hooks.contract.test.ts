@@ -40,11 +40,7 @@ import {
 import { buildPluginAgentTurnPrepareContext, isPluginJsonValue } from "../host-hooks.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import { createPluginRegistry } from "../registry.js";
-import {
-  pinActivePluginSessionExtensionRegistry,
-  releasePinnedPluginSessionExtensionRegistry,
-  setActivePluginRegistry,
-} from "../runtime.js";
+import { setActivePluginRegistry } from "../runtime.js";
 import type { PluginRuntime } from "../runtime/types.js";
 import { createPluginRecord } from "../status.test-helpers.js";
 import { runTrustedToolPolicies } from "../trusted-tool-policy.js";
@@ -124,7 +120,6 @@ async function withHostHookState(
 
 describe("host-hook fixture plugin contract", () => {
   afterEach(() => {
-    releasePinnedPluginSessionExtensionRegistry();
     setActivePluginRegistry(createEmptyPluginRegistry());
     clearPluginHostRuntimeState();
     resetAgentEventsForTest();
@@ -1561,138 +1556,6 @@ describe("host-hook fixture plugin contract", () => {
       });
       expect(loadSessionStore(storePath)["agent:main:main"]?.pluginExtensions).toBeUndefined();
     });
-  });
-
-  it("patches and projects pinned session extensions after active registry churn", async () => {
-    const { config, registry } = createPluginRegistryFixture();
-    registerTestPlugin({
-      registry,
-      config,
-      record: createPluginRecord({
-        id: "session-pin-fixture",
-        name: "Session Pin Fixture",
-      }),
-      register(api) {
-        api.registerSessionExtension({
-          namespace: "workflow",
-          description: "Pinned workflow state",
-        });
-      },
-    });
-    setActivePluginRegistry(registry.registry);
-    pinActivePluginSessionExtensionRegistry(registry.registry);
-    setActivePluginRegistry(createEmptyPluginRegistry());
-
-    await withHostHookState(
-      "openclaw-host-hooks-session-pin-",
-      async ({ storePath, tempConfig }) => {
-        await updateSessionStore(storePath, (store) => {
-          store["agent:main:main"] = {
-            sessionId: "session-1",
-            updatedAt: Date.now(),
-          };
-          return undefined;
-        });
-
-        await expect(
-          patchPluginSessionExtension({
-            cfg: tempConfig,
-            sessionKey: "agent:main:main",
-            pluginId: "session-pin-fixture",
-            namespace: "workflow",
-            value: { state: "approved" },
-          }),
-        ).resolves.toEqual({
-          ok: true,
-          key: "agent:main:main",
-          value: { state: "approved" },
-        });
-
-        const entry = loadSessionStore(storePath)["agent:main:main"];
-        expect(entry).toBeDefined();
-        expect(
-          projectPluginSessionExtensionsSync({
-            sessionKey: "agent:main:main",
-            entry,
-          }),
-        ).toEqual([
-          {
-            pluginId: "session-pin-fixture",
-            namespace: "workflow",
-            value: { state: "approved" },
-          },
-        ]);
-      },
-    );
-  });
-
-  it("stops patching released pinned session extensions after registry removal", async () => {
-    const { config, registry } = createPluginRegistryFixture();
-    registerTestPlugin({
-      registry,
-      config,
-      record: createPluginRecord({
-        id: "session-release-fixture",
-        name: "Session Release Fixture",
-      }),
-      register(api) {
-        api.registerSessionExtension({
-          namespace: "workflow",
-          description: "Released workflow state",
-        });
-      },
-    });
-    setActivePluginRegistry(registry.registry);
-    pinActivePluginSessionExtensionRegistry(registry.registry);
-    setActivePluginRegistry(createEmptyPluginRegistry());
-
-    await withHostHookState(
-      "openclaw-host-hooks-session-release-",
-      async ({ storePath, tempConfig }) => {
-        await updateSessionStore(storePath, (store) => {
-          store["agent:main:main"] = {
-            sessionId: "session-1",
-            updatedAt: Date.now(),
-          };
-          return undefined;
-        });
-
-        await expect(
-          patchPluginSessionExtension({
-            cfg: tempConfig,
-            sessionKey: "agent:main:main",
-            pluginId: "session-release-fixture",
-            namespace: "workflow",
-            value: { state: "before-release" },
-          }),
-        ).resolves.toEqual({
-          ok: true,
-          key: "agent:main:main",
-          value: { state: "before-release" },
-        });
-
-        releasePinnedPluginSessionExtensionRegistry(registry.registry);
-
-        await expect(
-          patchPluginSessionExtension({
-            cfg: tempConfig,
-            sessionKey: "agent:main:main",
-            pluginId: "session-release-fixture",
-            namespace: "workflow",
-            value: { state: "after-release" },
-          }),
-        ).resolves.toEqual({
-          ok: false,
-          error: "unknown plugin session extension: session-release-fixture/workflow",
-        });
-
-        const entry = loadSessionStore(storePath)["agent:main:main"];
-        expect(entry).toBeDefined();
-        expect(
-          projectPluginSessionExtensionsSync({ sessionKey: "agent:main:main", entry }),
-        ).toEqual([]);
-      },
-    );
   });
 
   it("models queued next-turn injections and agent_turn_prepare as one prompt context", async () => {

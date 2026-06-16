@@ -9,7 +9,6 @@ import {
   getActivePluginRegistryVersion,
   getActivePluginRegistry,
   getActivePluginSessionExtensionRegistry,
-  getActivePluginSessionExtensionRegistryVersion,
   listImportedRuntimePluginIds,
   pinActivePluginChannelRegistry,
   pinActivePluginHttpRouteRegistry,
@@ -173,14 +172,16 @@ describe("plugin runtime route registry", () => {
 
   it("keeps pinned session extension registries across active registry churn", () => {
     const startupRegistry = createRegistryWithSessionExtension("startup", "presence");
-    const laterRegistry = createEmptyPluginRegistry();
+    const laterRegistry = createRegistryWithSessionExtension("later", "presence");
 
     setActivePluginRegistry(startupRegistry);
     pinActivePluginSessionExtensionRegistry(startupRegistry);
     setActivePluginRegistry(laterRegistry);
 
     expect(getActivePluginSessionExtensionRegistry()).toBe(startupRegistry);
-    expect(getActivePluginSessionExtensionRegistry()?.sessionExtensions).toHaveLength(1);
+    expect(
+      getActivePluginSessionExtensionRegistry()?.sessionExtensions?.map((entry) => entry.pluginId),
+    ).toEqual(["startup"]);
     expect(isPluginRegistryRetired(startupRegistry)).toBe(false);
   });
 
@@ -204,28 +205,10 @@ describe("plugin runtime route registry", () => {
 
     setActivePluginRegistry(startupRegistry);
     pinActivePluginSessionExtensionRegistry(startupRegistry);
-    const sessionExtensionVersionBeforeSwap = getActivePluginSessionExtensionRegistryVersion();
     setActivePluginRegistry(laterRegistry);
 
     expect(getActivePluginSessionExtensionRegistry()).toBe(startupRegistry);
     expect(getActivePluginSessionExtensionRegistry()?.sessionExtensions).toHaveLength(0);
-    expect(getActivePluginSessionExtensionRegistryVersion()).toBe(
-      sessionExtensionVersionBeforeSwap,
-    );
-  });
-
-  it("keeps non-empty pinned session extension registries authoritative over active extensions", () => {
-    const startupRegistry = createRegistryWithSessionExtension("startup", "presence");
-    const laterRegistry = createRegistryWithSessionExtension("later", "presence");
-
-    setActivePluginRegistry(startupRegistry);
-    pinActivePluginSessionExtensionRegistry(startupRegistry);
-    setActivePluginRegistry(laterRegistry);
-
-    expect(getActivePluginSessionExtensionRegistry()).toBe(startupRegistry);
-    expect(
-      getActivePluginSessionExtensionRegistry()?.sessionExtensions?.map((entry) => entry.pluginId),
-    ).toEqual(["startup"]);
   });
 
   it("resolves the gateway command registry from pinned startup surfaces before active churn", () => {

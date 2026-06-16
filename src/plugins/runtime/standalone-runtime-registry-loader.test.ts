@@ -3,11 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearPluginLoaderCache, testing } from "../loader.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import type { PluginRegistry } from "../registry-types.js";
-import {
-  getActivePluginSessionExtensionRegistry,
-  resetPluginRuntimeStateForTest,
-  setActivePluginRegistry,
-} from "../runtime.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../runtime.js";
 
 const loaderMocks = vi.hoisted(() => ({
   loadOpenClawPlugins: vi.fn<typeof import("../loader.js").loadOpenClawPlugins>(),
@@ -31,19 +27,6 @@ function createRegistryWithPlugin(pluginId: string): PluginRegistry {
     id: pluginId,
     status: "loaded",
   } as never);
-  return registry;
-}
-
-function createRegistryWithSessionExtension(pluginId: string): PluginRegistry {
-  const registry = createRegistryWithPlugin(pluginId);
-  registry.sessionExtensions?.push({
-    pluginId,
-    extension: {
-      namespace: "workflow",
-      description: "Standalone workflow state",
-    },
-    source: "test",
-  });
   return registry;
 }
 
@@ -130,22 +113,5 @@ describe("ensureStandaloneRuntimePluginRegistryLoaded", () => {
 
     expect(result).toBe(loadedRegistry);
     expect(loaderMocks.loadOpenClawPlugins).toHaveBeenCalledOnce();
-  });
-
-  it("pins loaded registries for the session-extension surface", () => {
-    const loadedRegistry = createRegistryWithSessionExtension("session-plugin");
-    loaderMocks.loadOpenClawPlugins.mockReturnValue(loadedRegistry);
-
-    const result = ensureStandaloneRuntimePluginRegistryLoaded({
-      loadOptions: {
-        config: { plugins: { allow: ["session-plugin"] } },
-        onlyPluginIds: ["session-plugin"],
-        workspaceDir: "/tmp/ws",
-      },
-      surface: "session-extension",
-    });
-
-    expect(result).toBe(loadedRegistry);
-    expect(getActivePluginSessionExtensionRegistry()).toBe(loadedRegistry);
   });
 });

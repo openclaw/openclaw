@@ -343,8 +343,8 @@ export async function createGatewayRuntimeState(params: {
 
     return {
       releasePluginRouteRegistry: () => {
-        // Release unconditionally: plugin startup/reload can re-pin these surfaces to a
-        // registry that differs from the original runtime-state bootstrap registry.
+        // Releases pinned HTTP-route, session-extension, and channel registries.
+        // Startup/reload can re-pin them to a registry that differs from bootstrap.
         releasePinnedPluginHttpRouteRegistry();
         releasePinnedPluginSessionExtensionRegistry();
         // Release unconditionally (no registry arg): the channel pin may have

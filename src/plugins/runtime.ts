@@ -379,23 +379,6 @@ export function getActivePluginSessionExtensionRegistry(): PluginRegistry | null
   return asPluginRegistry(state.sessionExtension.registry ?? state.activeRegistry);
 }
 
-export function getActivePluginSessionExtensionRegistryVersion(): number {
-  const registry = getActivePluginSessionExtensionRegistry();
-  return registry === state.sessionExtension.registry
-    ? state.sessionExtension.version
-    : state.activeVersion;
-}
-
-export function requireActivePluginSessionExtensionRegistry(): PluginRegistry {
-  const existing = getActivePluginSessionExtensionRegistry();
-  if (existing) {
-    return existing;
-  }
-  const created = requireActivePluginRegistry();
-  installSurfaceRegistry(state.sessionExtension, created, false);
-  return created;
-}
-
 export function getActivePluginRegistryKey(): string | null {
   return state.key;
 }

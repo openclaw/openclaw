@@ -31,21 +31,6 @@ function createRegistryWithRoute(path: string) {
   return registry;
 }
 
-function addSessionExtension(
-  registry: ReturnType<typeof createEmptyPluginRegistry>,
-  pluginId: string,
-) {
-  registry.sessionExtensions?.push({
-    pluginId,
-    extension: {
-      namespace: "presence",
-      description: "Demo session extension",
-    },
-    source: "test",
-  });
-  return registry;
-}
-
 describe("createGatewayRuntimeState", () => {
   afterEach(() => {
     releasePinnedPluginHttpRouteRegistry();
@@ -55,8 +40,8 @@ describe("createGatewayRuntimeState", () => {
   });
 
   it("releases post-bootstrap repinned plugin registries on cleanup", async () => {
-    const startupRegistry = addSessionExtension(createRegistryWithRoute("/startup"), "startup");
-    const loadedRegistry = addSessionExtension(createRegistryWithRoute("/loaded"), "loaded");
+    const startupRegistry = createRegistryWithRoute("/startup");
+    const loadedRegistry = createRegistryWithRoute("/loaded");
     const fallbackRegistry = createRegistryWithRoute("/fallback");
 
     setActivePluginRegistry(startupRegistry);
