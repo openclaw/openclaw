@@ -18,6 +18,7 @@ import {
 } from "./manager-reindex-lock.js";
 
 const MEMORY_REINDEX_SCHEMA = "memory_reindex";
+const MEMORY_INDEX_STATE_ID = 1;
 const MEMORY_DATABASE_FILE_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
 const MEMORY_REINDEX_ENTRY_SUFFIXES = ["-wal", "-shm", "-journal", ""] as const;
 const MEMORY_REINDEX_UUID_PATTERN =
@@ -66,6 +67,16 @@ function readTableSql(db: DatabaseSync, schema: string, tableName: string): stri
   return typeof row?.sql === "string" && row.sql.trim() ? row.sql : null;
 }
 
+export function readMemoryDatabaseRevision(db: DatabaseSync): number {
+  const row = db
+    .prepare("SELECT revision FROM memory_index_state WHERE id = ?")
+    .get(MEMORY_INDEX_STATE_ID) as { revision?: unknown } | undefined;
+  if (typeof row?.revision !== "number" || !Number.isSafeInteger(row.revision)) {
+    throw new Error("Memory index revision is missing or invalid");
+  }
+  return row.revision;
+}
+
 function replaceVirtualTable(params: {
   db: DatabaseSync;
   tableName: "chunks_fts" | "chunks_vec";
@@ -97,10 +108,18 @@ export function publishMemoryDatabaseTables(params: {
   targetDb: DatabaseSync;
   sourcePath: string;
   metaKey: string;
+  expectedRevision: number;
 }): void {
   params.targetDb.prepare(`ATTACH DATABASE ? AS ${MEMORY_REINDEX_SCHEMA}`).run(params.sourcePath);
   try {
     runSqliteImmediateTransactionSync(params.targetDb, () => {
+      const liveRevision = readMemoryDatabaseRevision(params.targetDb);
+      if (liveRevision !== params.expectedRevision) {
+        throw new Error(
+          `Memory index changed while full reindex was building ` +
+            `(expected revision ${params.expectedRevision}, found ${liveRevision}); retry the full reindex.`,
+        );
+      }
       params.targetDb.prepare("DELETE FROM main.meta WHERE key = ?").run(params.metaKey);
       params.targetDb
         .prepare(
