@@ -277,6 +277,25 @@ function mockSingleBrowserProxyNode() {
   ]);
 }
 
+function mockTwoBrowserProxyNodes() {
+  nodesUtilsMocks.listNodes.mockResolvedValue([
+    {
+      nodeId: "node-1",
+      displayName: "Browser Node 1",
+      connected: true,
+      caps: ["browser"],
+      commands: ["browser.proxy"],
+    },
+    {
+      nodeId: "node-2",
+      displayName: "Browser Node 2",
+      connected: true,
+      caps: ["browser"],
+      commands: ["browser.proxy"],
+    },
+  ]);
+}
+
 function resetBrowserToolMocks() {
   vi.clearAllMocks();
   configMocks.loadConfig.mockReturnValue({ browser: {} });
@@ -861,6 +880,27 @@ describe("browser tool snapshot maxChars", () => {
     expect(request.command).toBe("browser.proxy");
     expect(request.params?.timeoutMs).toBe(20_000);
     expect(browserClientMocks.browserStatus).not.toHaveBeenCalled();
+  });
+
+  it("pins the browser proxy to the turn's hosting node (resolves multi-node ambiguity)", async () => {
+    mockTwoBrowserProxyNodes();
+    // Two connected browser nodes: without a hosting node, target=node is ambiguous
+    // and throws. The run-scoped hostingNodeId pins to its own node.
+    const tool = createBrowserTool({ hostingNodeId: "node-2" });
+    await tool.execute?.("call-1", { action: "status", target: "node" });
+
+    const { request } = lastNodeInvokeCall();
+    expect(request.nodeId).toBe("node-2");
+    expect(request.command).toBe("browser.proxy");
+  });
+
+  it("lets an explicit node= override the hosting node", async () => {
+    mockTwoBrowserProxyNodes();
+    const tool = createBrowserTool({ hostingNodeId: "node-2" });
+    await tool.execute?.("call-1", { action: "status", target: "node", node: "node-1" });
+
+    const { request } = lastNodeInvokeCall();
+    expect(request.nodeId).toBe("node-1");
   });
 
   it("fails node proxy calls cleanly when payloadJSON is malformed", async () => {
