@@ -166,6 +166,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
     const plugin = resolveOutboundChannelPlugin({
       channel: resolvedTarget.channel,
       cfg,
+      allowBootstrap: true,
     });
     const listAccountIds = plugin?.config.listAccountIds;
     const accountIds = listAccountIds ? listAccountIds(cfg) : [];
@@ -201,6 +202,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
     cfg,
     accountId: effectiveAccountId,
     mode: "heartbeat",
+    allowBootstrap: true,
   });
   if (!resolved.ok) {
     return buildNoHeartbeatDeliveryTarget({

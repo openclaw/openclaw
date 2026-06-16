@@ -766,6 +766,94 @@ describe("resolveSessionDeliveryTarget", () => {
     expect(resolved.threadId).toBeUndefined();
   });
 
+  it("bootstraps plugin-channel heartbeat routes when the plugin registry is unavailable", () => {
+    const forum = createForumTargetTestPlugin();
+    setActivePluginRegistry(createTargetsTestRegistry([]));
+    mocks.resolveOutboundChannelPlugin.mockImplementation(
+      ({ channel, allowBootstrap }: { channel: string; allowBootstrap?: boolean }) =>
+        channel === "forum" && allowBootstrap === true ? forum : undefined,
+    );
+
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg: {},
+      entry: {
+        sessionId: "sess-heartbeat-no-registry",
+        updatedAt: 1,
+        lastChannel: "forum",
+        lastTo: "room:ops",
+      },
+      heartbeat: {
+        target: "last",
+      },
+    });
+
+    expect(resolved.channel).toBe("forum");
+    expect(resolved.to).toBe("room:ops");
+    expect(mocks.resolveOutboundChannelPlugin).toHaveBeenCalledWith({
+      channel: "forum",
+      cfg: {},
+      allowBootstrap: true,
+    });
+  });
+
+  it("does not bypass target policy when bootstrapping plugin-channel heartbeat routes", () => {
+    const forum = createForumTargetTestPlugin();
+    setActivePluginRegistry(createTargetsTestRegistry([]));
+    mocks.resolveOutboundChannelPlugin.mockImplementation(
+      ({ channel, allowBootstrap }: { channel: string; allowBootstrap?: boolean }) =>
+        channel === "forum" && allowBootstrap === true ? forum : undefined,
+    );
+
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg: {},
+      entry: {
+        sessionId: "sess-heartbeat-no-registry-invalid-target",
+        updatedAt: 1,
+        lastChannel: "forum",
+        lastTo: "invalid",
+      },
+      heartbeat: {
+        target: "last",
+      },
+    });
+
+    expect(resolved.channel).toBe("none");
+    expect(resolved.reason).toBe("no-target");
+  });
+
+  it("does not bypass account validation when bootstrapping plugin-channel heartbeat routes", () => {
+    const forum = createForumTargetTestPlugin();
+    const forumWithAccounts = {
+      ...forum,
+      config: {
+        ...forum.config,
+        listAccountIds: () => ["valid-account"],
+      },
+    };
+    setActivePluginRegistry(createTargetsTestRegistry([]));
+    mocks.resolveOutboundChannelPlugin.mockImplementation(
+      ({ channel, allowBootstrap }: { channel: string; allowBootstrap?: boolean }) =>
+        channel === "forum" && allowBootstrap === true ? forumWithAccounts : undefined,
+    );
+
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg: {},
+      entry: {
+        sessionId: "sess-heartbeat-no-registry-invalid-account",
+        updatedAt: 1,
+        lastChannel: "forum",
+        lastTo: "room:ops",
+      },
+      heartbeat: {
+        target: "last",
+        accountId: "missing-account",
+      },
+    });
+
+    expect(resolved.channel).toBe("none");
+    expect(resolved.reason).toBe("unknown-account");
+  });
+
   it("resolves explicit heartbeat plugin targets through the outbound session route", async () => {
     const cfg: OpenClawConfig = {};
     const resolved = await resolveHeartbeatDeliveryTargetWithSessionRoute({
