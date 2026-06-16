@@ -257,6 +257,15 @@ describe("bundled plugin install/uninstall probe", () => {
     );
   });
 
+  it("rejects loose bundled plugin runtime index args", () => {
+    const root = makePackageRoot();
+
+    const result = runRuntimeSmoke(root, ["tts-openai-live", "", "", "", "1e3"]);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("invalid bundled plugin runtime index: 1e3");
+  });
+
   it("caps noisy runtime gateway logs", async () => {
     const runtimeSmoke = await importRuntimeSmokeWithEnv({
       OPENCLAW_BUNDLED_PLUGIN_RUNTIME_GATEWAY_LOG_BYTES: "64",

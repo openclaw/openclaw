@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   extractChangelogSection,
   normalizeGatewayVersionToPinnedIosVersion,
+  normalizePinnedIosVersion,
   renderIosReleaseNotes,
   renderIosVersionXcconfig,
   resolveGatewayVersionForIosRelease,
@@ -53,6 +54,15 @@ describe("resolveIosVersion", () => {
       "Expected pinned release version like 2026.6.5",
     );
   });
+
+  it("rejects impossible pinned release versions", () => {
+    expect(() => normalizePinnedIosVersion("2026.13.6")).toThrow(
+      "Expected pinned release version like 2026.6.5",
+    );
+    expect(() => normalizePinnedIosVersion("2026.4.9007199254740993")).toThrow(
+      "Expected pinned release version like 2026.6.5",
+    );
+  });
 });
 
 describe("gateway version normalization", () => {
@@ -70,6 +80,15 @@ describe("gateway version normalization", () => {
 
   it("strips fallback correction suffixes when pinning from gateway version", () => {
     expect(normalizeGatewayVersionToPinnedIosVersion("2026.4.6-3")).toBe("2026.4.6");
+  });
+
+  it("rejects impossible gateway release versions", () => {
+    expect(() => normalizeGatewayVersionToPinnedIosVersion("2026.13.6-alpha.1")).toThrow(
+      "Expected YYYY.M.PATCH",
+    );
+    expect(() =>
+      normalizeGatewayVersionToPinnedIosVersion("2026.4.6-alpha.9007199254740993"),
+    ).toThrow("Expected YYYY.M.PATCH");
   });
 
   it("reads and normalizes the root package version for iOS releases", () => {

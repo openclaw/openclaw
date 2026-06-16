@@ -39,6 +39,18 @@ function usage(): string {
   ].join("\n");
 }
 
+function parseExplicitVersionCode(raw: string): number {
+  const text = raw.trim();
+  if (!/^[1-9]\d*$/u.test(text)) {
+    throw new Error(`Invalid value for --version-code: ${raw}. Expected a positive integer.`);
+  }
+  const value = Number(text);
+  if (!Number.isSafeInteger(value)) {
+    throw new Error(`Invalid value for --version-code: ${raw}. Expected a safe integer.`);
+  }
+  return value;
+}
+
 export function parseArgs(argv: string[]): CliOptions {
   let explicitVersion: string | null = null;
   let explicitVersionCode: number | null = null;
@@ -63,7 +75,7 @@ export function parseArgs(argv: string[]): CliOptions {
         if (!value) {
           throw new Error("Missing value for --version-code.");
         }
-        explicitVersionCode = Number.parseInt(value, 10);
+        explicitVersionCode = parseExplicitVersionCode(value);
         index += 1;
         break;
       }

@@ -122,8 +122,12 @@ function isTruthyEnvValue(value) {
 }
 
 function parsePositiveInt(value) {
-  const parsed = Number.parseInt(value ?? "", 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  const text = value?.trim();
+  if (!text || !/^\d+$/u.test(text)) {
+    return null;
+  }
+  const parsed = Number(text);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
 /**

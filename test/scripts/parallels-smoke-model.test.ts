@@ -602,6 +602,7 @@ set -euo pipefail
 if [[ "$1" == "list" ]]; then
   cat <<'JSON'
 [
+  {"name": "Ubuntu 9007199254740993.04"},
   {"name": "Ubuntu 26.04"},
   {"name": "Ubuntu 25.10"},
   {"name": "Ubuntu 23.10"},
@@ -619,6 +620,7 @@ const isPrlctl = [process.argv0, process.execPath].some((value) =>
 if (isPrlctl) {
   if (process.argv.some((arg) => arg.includes("list"))) {
     console.log(JSON.stringify([
+      { name: "Ubuntu 9007199254740993.04" },
       { name: "Ubuntu 26.04" },
       { name: "Ubuntu 25.10" },
       { name: "Ubuntu 23.10" },
@@ -635,6 +637,49 @@ if (isPrlctl) {
       const output = withEnv(fakePrlctlEnv(tempDir), () => resolveUbuntuVmName("Ubuntu missing"));
 
       expect(output).toBe("Ubuntu 26.04");
+    } finally {
+      rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
+  it("skips unsafe Ubuntu version names in fallback resolver", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "openclaw-parallels-vm-helper-"));
+    writeFakePrlctl(
+      tempDir,
+      `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$1" == "list" ]]; then
+  cat <<'JSON'
+[
+  {"name": "Ubuntu 9007199254740993.04"},
+  {"name": "Ubuntu 23.10"}
+]
+JSON
+  exit 0
+fi
+exit 1
+`,
+      `import { basename } from "node:path";
+const isPrlctl = [process.argv0, process.execPath].some((value) =>
+  basename(value).toLowerCase() === "prlctl.exe",
+);
+if (isPrlctl) {
+  if (process.argv.some((arg) => arg.includes("list"))) {
+    console.log(JSON.stringify([
+      { name: "Ubuntu 9007199254740993.04" },
+      { name: "Ubuntu 23.10" },
+    ]));
+    process.exit(0);
+  }
+  process.exit(1);
+}
+`,
+    );
+
+    try {
+      const output = withEnv(fakePrlctlEnv(tempDir), () => resolveUbuntuVmName("Ubuntu missing"));
+
+      expect(output).toBe("Ubuntu 23.10");
     } finally {
       rmSync(tempDir, { force: true, recursive: true });
     }

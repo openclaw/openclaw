@@ -2625,10 +2625,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
 
     const lastUpdate = answerDraftStream.updatePreview.mock.calls.at(-1)?.[0];
-    expect(lastUpdate?.text).toContain("completed");
     expect(lastUpdate?.text).toContain("install dependencies");
+    expect(lastUpdate?.text).not.toContain("completed");
     expect(lastUpdate?.richMessage).toEqual({
-      html: "<b>Shelling</b><br><b>🛠️ Exec</b> <code>install dependencies</code> <i>completed</i>",
+      html: "<b>Shelling</b><br><b>🛠️ Exec</b> <code>install dependencies</code>",
       skip_entity_detection: true,
     });
   });

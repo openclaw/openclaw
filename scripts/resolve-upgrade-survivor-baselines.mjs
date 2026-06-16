@@ -3,6 +3,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { normalizeUpgradeSurvivorBaselineSpec } from "./lib/docker-e2e-plan.mjs";
+import { compareReleaseVersions, parseReleaseVersion } from "./lib/npm-publish-plan.mjs";
 
 function parseArgs(argv) {
   const args = new Map();
@@ -33,6 +34,18 @@ function dedupeSpecs(specs) {
   return [...new Set(specs.map(normalizeUpgradeSurvivorBaselineSpec).filter(Boolean))];
 }
 
+function parsePositiveInteger(value, label) {
+  const text = String(value ?? "").trim();
+  if (!/^[1-9]\d*$/u.test(text)) {
+    throw new Error(`${label} must be a positive integer`);
+  }
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error(`${label} must be a positive integer`);
+  }
+  return parsed;
+}
+
 function readPublishedVersions(file) {
   if (!file) {
     return undefined;
@@ -46,33 +59,23 @@ function readPublishedVersions(file) {
 
 function stableVersionFromTag(tagName) {
   const version = String(tagName ?? "").replace(/^v/u, "");
-  if (!/^[0-9]{4}\.[0-9]+\.[0-9]+(?:-[0-9]+)?$/u.test(version)) {
-    return undefined;
-  }
-  return version;
+  return parseStableVersion(version) ? version : undefined;
 }
 
 function parseStableVersion(version) {
-  const match = /^([0-9]{4})\.([0-9]+)\.([0-9]+)(?:-([0-9]+))?$/u.exec(String(version ?? ""));
-  if (!match) {
-    return undefined;
-  }
-  return match.slice(1).map((part) => Number.parseInt(part ?? "0", 10));
+  const parsed = parseReleaseVersion(String(version ?? ""));
+  return parsed?.channel === "stable" ? parsed : undefined;
 }
 
 function compareStableVersions(left, right) {
-  const leftParts = parseStableVersion(left);
-  const rightParts = parseStableVersion(right);
-  if (!leftParts || !rightParts) {
+  if (!parseStableVersion(left) || !parseStableVersion(right)) {
     throw new Error(`cannot compare release versions: ${left} ${right}`);
   }
-  for (let index = 0; index < Math.max(leftParts.length, rightParts.length); index += 1) {
-    const delta = (leftParts[index] ?? 0) - (rightParts[index] ?? 0);
-    if (delta !== 0) {
-      return delta;
-    }
+  const comparison = compareReleaseVersions(left, right);
+  if (comparison === null) {
+    throw new Error(`cannot compare release versions: ${left} ${right}`);
   }
-  return 0;
+  return comparison;
 }
 
 function npmPublishedVersion(version, publishedVersions) {
@@ -111,10 +114,7 @@ export function resolveReleaseHistory(args) {
   if (!releasesJson) {
     throw new Error("--releases-json is required when requested baselines include release-history");
   }
-  const historyCount = Number.parseInt(args.get("history-count") ?? "6", 10);
-  if (!Number.isInteger(historyCount) || historyCount < 1) {
-    throw new Error("--history-count must be a positive integer");
-  }
+  const historyCount = parsePositiveInteger(args.get("history-count") ?? "6", "--history-count");
   const includeVersion = args.get("include-version") ?? "2026.4.23";
   const preDate = args.get("pre-date") ?? "2026-03-15T00:00:00Z";
   const publishedVersions = readPublishedVersions(args.get("npm-versions-json"));
@@ -181,7 +181,10 @@ export function resolveBaselines(args) {
     if (token === "release-history") {
       resolved.push(...resolveReleaseHistory(args));
     } else if (token.startsWith("last-stable-")) {
-      const count = Number.parseInt(token.slice("last-stable-".length), 10);
+      const count = parsePositiveInteger(
+        token.slice("last-stable-".length),
+        "last-stable baseline count",
+      );
       resolved.push(...resolveLastStable(args, count));
     } else if (token.startsWith("all-since-")) {
       const minimumVersion = token.slice("all-since-".length);

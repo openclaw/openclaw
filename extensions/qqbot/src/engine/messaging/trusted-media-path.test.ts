@@ -1,4 +1,5 @@
 // Qqbot tests cover trusted outbound media-path root resolution.
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -13,7 +14,7 @@ afterEach(() => {
   while (cleanupPaths.length > 0) {
     const target = cleanupPaths.pop();
     if (target) {
-      fs.rmSync(target, { recursive: true, force: true });
+      fs.rmSync(target, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
     }
   }
 });
@@ -22,11 +23,17 @@ function makeTtsStyleVoiceFile(): string {
   // Mirrors cron auto-TTS: speech-core writes the voice file under the preferred
   // OpenClaw temp root, which is outside the QQ Bot media storage tree.
   const tmpRoot = resolvePreferredOpenClawTmpDir();
-  const ttsDir = fs.mkdtempSync(path.join(tmpRoot, "tts-"));
-  cleanupPaths.push(ttsDir);
+  const ttsDir = makeTrackedDir(tmpRoot, "tts-");
   const voicePath = path.join(ttsDir, "voice-123.mp3");
   fs.writeFileSync(voicePath, "audio");
   return voicePath;
+}
+
+function makeTrackedDir(parentDir: string, prefix: string): string {
+  const dir = path.join(parentDir, `${prefix}${randomUUID()}`);
+  fs.mkdirSync(dir);
+  cleanupPaths.push(dir);
+  return dir;
 }
 
 describe("resolveTrustedOutboundMediaPath", () => {
@@ -36,8 +43,7 @@ describe("resolveTrustedOutboundMediaPath", () => {
   });
 
   it("rejects local media outside every trusted root", () => {
-    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), "qq-out-of-root-"));
-    cleanupPaths.push(outsideDir);
+    const outsideDir = makeTrackedDir(os.tmpdir(), "qq-out-of-root-");
     const strayPath = path.join(outsideDir, "stray.mp3");
     fs.writeFileSync(strayPath, "audio");
 
@@ -46,8 +52,7 @@ describe("resolveTrustedOutboundMediaPath", () => {
 
   it("accepts a not-yet-flushed temp file only when allowMissing is set", () => {
     const tmpRoot = resolvePreferredOpenClawTmpDir();
-    const ttsDir = fs.mkdtempSync(path.join(tmpRoot, "tts-pending-"));
-    cleanupPaths.push(ttsDir);
+    const ttsDir = makeTrackedDir(tmpRoot, "tts-pending-");
     const pendingPath = path.join(ttsDir, "voice-pending.mp3");
 
     expect(resolveTrustedOutboundMediaPath(pendingPath)).toBeNull();
