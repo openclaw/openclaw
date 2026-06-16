@@ -2546,7 +2546,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     });
 
     mockedRunEmbeddedAttempt.mockResolvedValue(makeAttemptResult({ promptError }));
-    mockedEnsureAuthProfileStore.mockReturnValue({
+    mockedEnsureAuthProfileStoreWithoutExternalProfiles.mockReturnValue({
       profiles: {
         "test-profile": {
           provider: "anthropic",
