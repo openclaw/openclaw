@@ -1326,7 +1326,7 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
     requiresToolResultName: false,
     requiresAssistantAfterToolResult: false,
     requiresThinkingAsText: false,
-    requiresReasoningContentOnAssistantMessages: isDeepSeek || isXiaomi,
+    requiresReasoningContentOnAssistantMessages: isDeepSeek || isXiaomi || provider === "openrouter" || baseUrl.includes("openrouter.ai"),
     thinkingFormat: isDeepSeek
       ? "deepseek"
       : isXiaomi
