@@ -109,7 +109,11 @@ export function runGroupGateStage(input: GroupGateStageInput): GroupGateStageRes
   };
 
   const commandVisibility = classifyCoreCommandForGroup(userContent, settings.config.commandLevel);
-  if (commandAuthorized && commandVisibility.visibility === "private") {
+  if (
+    commandAuthorized &&
+    commandVisibility.visibility === "private" &&
+    gate.action !== "drop_other_mention"
+  ) {
     return { kind: "skip", groupInfo, skipReason: "private_command_only" };
   }
 

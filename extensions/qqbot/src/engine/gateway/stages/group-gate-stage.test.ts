@@ -99,6 +99,40 @@ describe("runGroupGateStage", () => {
     }
   });
 
+  it("does not reply to private commands that only mention someone else", () => {
+    const deps = buildDeps();
+    (
+      deps.cfg as { channels: { qqbot: { groups: { G1: { ignoreOtherMentions: boolean } } } } }
+    ).channels.qqbot.groups.G1.ignoreOtherMentions = true;
+    vi.mocked(deps.adapters.mentionGate.resolveInboundMentionDecision).mockReturnValue({
+      effectiveWasMentioned: false,
+      shouldSkip: false,
+      shouldBypassMention: false,
+      implicitMention: false,
+    });
+    const event = buildGroupEvent("/config @someone");
+    event.mentions = [
+      {
+        member_openid: "SOMEONE_OPENID",
+        username: "Someone",
+      },
+    ];
+
+    const result = runGroupGateStage({
+      event,
+      deps,
+      accountId: "default",
+      sessionKey: "qqbot:group:G1",
+      userContent: "/config @Someone",
+      access: buildAccess(),
+    });
+
+    expect(result.kind).toBe("skip");
+    if (result.kind === "skip") {
+      expect(result.skipReason).toBe("drop_other_mention");
+    }
+  });
+
   it("does not reject urgent stop in strict groups", () => {
     const deps = buildDeps();
     (
