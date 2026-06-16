@@ -51,7 +51,10 @@ const { resolveReusableWorkspaceSkillSnapshot, resetResolvedSkillsCacheForTests 
 
 describe("resolveReusableWorkspaceSkillSnapshot", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    buildWorkspaceSkillSnapshotMock.mockReset();
+    ensureSkillsWatcherMock.mockReset();
+    getSkillsSnapshotVersionMock.mockReset();
+    shouldRefreshSnapshotForVersionMock.mockReset();
     resetResolvedSkillsCacheForTests();
     buildWorkspaceSkillSnapshotMock.mockReturnValue({ prompt: "", skills: [], resolvedSkills: [] });
     ensureSkillsWatcherMock.mockImplementation(() => undefined);
