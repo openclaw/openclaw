@@ -1644,14 +1644,10 @@ function projectEmptyAssistantErrorMessages(
       visibleTexts.push(sanitized.text);
     }
     const nonEmptyVisibleTexts = visibleTexts.map((text) => text.trim()).filter(Boolean);
-    const hasOnlyStreamErrorFallback =
-      nonEmptyVisibleTexts.length > 0 &&
-      nonEmptyVisibleTexts.every((text) => text === STREAM_ERROR_FALLBACK_TEXT);
-    if (
-      !shouldDropAssistantHistoryMessage(sanitized) &&
-      nonEmptyVisibleTexts.length > 0 &&
-      !hasOnlyStreamErrorFallback
-    ) {
+    const hasVisibleReplyText = nonEmptyVisibleTexts.some(
+      (text) => text !== STREAM_ERROR_FALLBACK_TEXT && !isSuppressedControlReplyText(text),
+    );
+    if (!shouldDropAssistantHistoryMessage(sanitized) && hasVisibleReplyText) {
       return message;
     }
     changed = true;

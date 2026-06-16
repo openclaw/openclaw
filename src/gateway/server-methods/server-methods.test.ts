@@ -1055,6 +1055,32 @@ describe("projectRecentChatDisplayMessages", () => {
     },
   );
 
+  it("projects suppressed error text accompanied by hidden reasoning", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "private upstream details" },
+          { type: "text", text: "NO_REPLY" },
+        ],
+        stopReason: "error",
+        errorMessage: "private upstream at secret.internal.example failed",
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "The agent run failed before producing a reply." }],
+        stopReason: "error",
+        timestamp: 1,
+      },
+    ]);
+    expect(JSON.stringify(result)).not.toContain("secret.internal.example");
+    expect(JSON.stringify(result)).not.toContain("private upstream details");
+  });
+
   it.each([undefined, ""])(
     "projects repaired stream errors with errorMessage %j as a generic safe failure",
     (errorMessage) => {
