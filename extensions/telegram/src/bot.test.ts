@@ -7,10 +7,17 @@ import {
 } from "openclaw/plugin-sdk/plugin-runtime";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { loadSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  createPluginStateKeyedStoreForTests,
+  createPluginStateSyncKeyedStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TelegramInteractiveHandlerContext } from "./interactive-dispatch.js";
 import { buildTelegramOpaqueCallbackData } from "./native-command-callback-data.js";
+import { clearTelegramRuntime, setTelegramRuntime } from "./runtime.js";
+import type { TelegramRuntime } from "./runtime.types.js";
 const {
   answerCallbackQuerySpy,
   commandSpy,
@@ -2395,7 +2402,7 @@ describe("createTelegramBot", () => {
     expect(mediaFetch).toHaveBeenCalledTimes(1);
   });
 
-  it("does not expose hydrated group reply media hidden by context visibility", async () => {
+  it("does not hydrate reply media denied by General forum topic visibility", async () => {
     onSpy.mockClear();
     replySpy.mockClear();
     getFileSpy.mockClear();
@@ -2408,7 +2415,10 @@ describe("createTelegramBot", () => {
           groups: {
             "-1007": {
               requireMention: false,
-              allowFrom: ["1"],
+              allowFrom: ["1", "2"],
+              topics: {
+                "1": { allowFrom: ["1"], requireMention: false },
+              },
             },
           },
         },
@@ -2423,8 +2433,24 @@ describe("createTelegramBot", () => {
         }),
     );
     const ssrfMock = mockPinnedHostnameResolution();
+    setTelegramRuntime({
+      state: {
+        openKeyedStore: ((options) =>
+          createPluginStateKeyedStoreForTests(
+            "telegram",
+            options,
+          )) as TelegramRuntime["state"]["openKeyedStore"],
+        openSyncKeyedStore: ((options) =>
+          createPluginStateSyncKeyedStoreForTests(
+            "telegram",
+            options,
+          )) as TelegramRuntime["state"]["openSyncKeyedStore"],
+      },
+      channel: {},
+    } as TelegramRuntime);
 
     try {
+      const replyDelivered = waitForReplyCalls(1);
       createTelegramBot({
         token: "tok",
         telegramTransport: {
@@ -2434,7 +2460,7 @@ describe("createTelegramBot", () => {
         },
       });
       const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
-      const chat = { id: -1007, type: "group", title: "Ops" };
+      const chat = { id: -1007, type: "supergroup", title: "Ops", is_forum: true };
 
       await handler({
         me: { id: 999, username: "openclaw_bot" },
@@ -2455,8 +2481,11 @@ describe("createTelegramBot", () => {
           },
         },
       });
+      await replyDelivered;
     } finally {
       ssrfMock.mockRestore();
+      clearTelegramRuntime();
+      resetPluginStateStoreForTests();
     }
 
     expect(replySpy).toHaveBeenCalledTimes(1);

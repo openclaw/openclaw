@@ -1359,10 +1359,17 @@ export const registerTelegramHandlers = ({
         params.msg.chat.type === "group" || params.msg.chat.type === "supergroup";
       const runtimeCfg = telegramDeps.getRuntimeConfig();
       const runtimeTelegramCfg = resolveTelegramAccount({ cfg: runtimeCfg, accountId }).config;
+      const isForum =
+        params.msg.chat.type === "supergroup" &&
+        Boolean(params.msg.chat.is_forum || params.msg.is_topic_message);
+      const scopedThreadId = resolveTelegramForumThreadId({
+        isForum,
+        messageThreadId: params.msg.message_thread_id,
+      });
       const { groupConfig, topicConfig } = resolveTelegramScopedGroupConfig(
         runtimeTelegramCfg,
         params.msg.chat.id,
-        params.msg.message_thread_id,
+        scopedThreadId,
       );
       const scopedAllowFrom = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
       const configuredGroupAllowFrom = scopedAllowFrom ?? groupAllowFrom;
