@@ -22,7 +22,7 @@ export function createSseChunkBuffer(
   const maxChars =
     config?.maxChars !== undefined
       ? Math.max(minChars, Math.floor(config.maxChars))
-      : minChars;
+      : Math.max(minChars, 800);
   const idleMs = Math.max(0, Math.floor(config?.idleMs ?? DEFAULT_STREAMING_IDLE_MS));
 
   const bufferingEnabled = maxChars > minChars;
@@ -37,7 +37,7 @@ export function createSseChunkBuffer(
       clearTimeout(idleTimer);
     }
     idleTimer = setTimeout(() => {
-      if (!destroyed && buffered.length >= minChars) {
+      if (!destroyed && buffered.length > 0) {
         const snap = buffered;
         buffered = "";
         flush(snap);

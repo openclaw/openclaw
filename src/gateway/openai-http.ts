@@ -1345,6 +1345,11 @@ export async function handleOpenAiHttpRequest(
         return;
       }
 
+      // Flush any remaining chunker-buffered content before the fallback
+      // direct-write below, so the sawAssistantDelta check is accurate and
+      // maybeFinalize's streamChunker.flush() doesn't double-emit.
+      streamChunker.flush();
+
       if (!sawAssistantDelta) {
         if (!wroteRole) {
           wroteRole = true;

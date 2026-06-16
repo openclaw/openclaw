@@ -1131,6 +1131,7 @@ export async function handleOpenResponsesHttpRequest(
         closed = true;
         stopWatchingDisconnect();
         unsubscribe();
+        streamChunker.destroy();
         rememberResponseSession();
         writeSseEvent(res, { type: "response.failed", response: failed });
         writeDone(res);
@@ -1239,6 +1240,7 @@ export async function handleOpenResponsesHttpRequest(
         closed = true;
         stopWatchingDisconnect();
         unsubscribe();
+        streamChunker.destroy();
         rememberResponseSession();
         writeSseEvent(res, { type: "response.completed", response: incompleteResponse });
         writeDone(res);
