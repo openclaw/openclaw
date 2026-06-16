@@ -1,8 +1,10 @@
 // Coverage for before_agent_finalize revision handling in embedded runs.
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
+  mockedBuildEmbeddedRunPayloads,
   mockedGlobalHookRunner,
   mockedRunEmbeddedAttempt,
   overflowBaseRunParams,
@@ -101,6 +103,65 @@ describe("runEmbeddedAgent before_agent_finalize", () => {
     expect(attemptCall(1).prompt).toContain("Mention the validated behavior.");
     expect(attemptCall(1).prompt).not.toContain("hello");
     expect(attemptCall(1).suppressNextUserMessagePersistence).toBe(true);
+  });
+
+  // The production payload builder strips a NO_REPLY-only reply to an empty
+  // array, so model these tests on that contract rather than a payload that
+  // still carries the silent token (which the runner never sees).
+  function buildPayloadsStrippingSilentTokens(params: { assistantTexts: string[] }) {
+    return params.assistantTexts
+      .filter((text) => !isSilentReplyText(text, SILENT_REPLY_TOKEN))
+      .map((text) => ({ text }));
+  }
+
+  it("restores the suppressed answer when a group-chat revision pass ends silently", async () => {
+    // Real #93166 path: the model sees its own first answer in the transcript and
+    // ends the revision turn with NO_REPLY; the builder strips it to nothing, so
+    // the group-chat silent reply restores the suppressed answer (#93166).
+    mockedBuildEmbeddedRunPayloads.mockImplementation(buildPayloadsStrippingSilentTokens);
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        finalAnswerAttempt("First answer.", {
+          beforeAgentFinalizeRevisionReason: "Tighten the final wording.",
+        }),
+      )
+      .mockResolvedValueOnce(finalAnswerAttempt("NO_REPLY"));
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-before-finalize-silent-revision",
+      allowEmptyAssistantReplyAsSilent: true,
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.payloads).toEqual([{ text: "First answer." }]);
+    expect(result.meta?.finalAssistantVisibleText).toBe("First answer.");
+  });
+
+  it("delivers the revised answer when the revision pass produces new text", async () => {
+    // A genuine revision replaces the original answer; the restore guard must
+    // not fire when the revision pass returns real text.
+    mockedBuildEmbeddedRunPayloads.mockImplementation(buildPayloadsStrippingSilentTokens);
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        finalAnswerAttempt("First answer.", {
+          beforeAgentFinalizeRevisionReason: "Tighten the final wording.",
+        }),
+      )
+      .mockResolvedValueOnce(finalAnswerAttempt("Revised answer."));
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-before-finalize-revised-delivery",
+      allowEmptyAssistantReplyAsSilent: true,
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.payloads).toEqual([{ text: "Revised answer." }]);
   });
 
   it("keeps finalizing when the attempt accepted a side-effecting revise decision", async () => {

@@ -1343,6 +1343,14 @@ async function runEmbeddedAgentInternal(
       let emptyResponseRetryAttempts = 0;
       let compactionContinuationRetryAttempts = 0;
       let beforeAgentFinalizeRevisionAttempts = 0;
+      // before_agent_finalize suppresses the original answer's delivery to ask for
+      // a revision; retain it so a revision pass that returns no deliverable reply
+      // (silent token or empty) restores it instead of dropping the turn (#93166).
+      let suppressedBeforeFinalizeRevisionReply: {
+        payloads: NonNullable<EmbeddedAgentRunResult["payloads"]>;
+        visibleText: string | undefined;
+        rawText: string | undefined;
+      } | null = null;
       let sameModelIdleTimeoutRetries = 0;
       // Cost-runaway breaker for #76293. State lives at the run-loop level
       // on purpose so it survives across attempt boundaries and across
@@ -3665,6 +3673,13 @@ async function runEmbeddedAgentInternal(
             !emptyAssistantReplyIsSilent;
           if (beforeAgentFinalizeRevisionReason && shouldHonorBeforeAgentFinalizeRevision) {
             beforeAgentFinalizeRevisionAttempts += 1;
+            if (payloadsForTerminalPath?.length) {
+              suppressedBeforeFinalizeRevisionReply = {
+                payloads: payloadsForTerminalPath,
+                visibleText: finalAssistantVisibleText,
+                rawText: finalAssistantRawText,
+              };
+            }
             nextAttemptPromptOverride = buildBeforeAgentFinalizeRetryPrompt(
               beforeAgentFinalizeRevisionReason,
             );
@@ -3710,9 +3725,25 @@ async function runEmbeddedAgentInternal(
             : attempt.yieldDetected
               ? "end_turn"
               : (sessionLastAssistant?.stopReason as string | undefined);
-          const terminalPayloads = emptyAssistantReplyIsSilent
-            ? [{ text: SILENT_REPLY_TOKEN }]
-            : payloadsForTerminalPath;
+          // A before_agent_finalize revision that produces no new deliverable
+          // reply collapses to a silent turn (the payload builder strips the
+          // model's NO_REPLY-only answer to nothing); restore the suppressed
+          // original rather than dropping the turn entirely (#93166).
+          const restoredRevisionReply =
+            suppressedBeforeFinalizeRevisionReply && emptyAssistantReplyIsSilent
+              ? suppressedBeforeFinalizeRevisionReply
+              : null;
+          const terminalPayloads = restoredRevisionReply
+            ? restoredRevisionReply.payloads
+            : emptyAssistantReplyIsSilent
+              ? [{ text: SILENT_REPLY_TOKEN }]
+              : payloadsForTerminalPath;
+          const terminalVisibleText = restoredRevisionReply
+            ? restoredRevisionReply.visibleText
+            : finalAssistantVisibleText;
+          const terminalRawText = restoredRevisionReply
+            ? restoredRevisionReply.rawText
+            : finalAssistantRawText;
           setTerminalLifecycleMeta({
             replayInvalid,
             livenessState,
@@ -3730,13 +3761,13 @@ async function runEmbeddedAgentInternal(
               aborted,
               systemPromptReport: attempt.systemPromptReport,
               finalPromptText: attempt.finalPromptText,
-              finalAssistantVisibleText,
-              finalAssistantRawText,
+              finalAssistantVisibleText: terminalVisibleText,
+              finalAssistantRawText: terminalRawText,
               replayInvalid,
               livenessState,
               agentHarnessResultClassification: attempt.agentHarnessResultClassification,
               ...(attempt.yieldDetected ? { yielded: true } : {}),
-              ...(emptyAssistantReplyIsSilent
+              ...(emptyAssistantReplyIsSilent && !restoredRevisionReply
                 ? { terminalReplyKind: "silent-empty" as const }
                 : {}),
               // Handle client tool calls (OpenResponses hosted tools)
