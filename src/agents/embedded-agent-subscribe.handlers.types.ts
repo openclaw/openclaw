@@ -130,6 +130,11 @@ export type EmbeddedAgentSubscribeState = {
   deferredAssistantEvents: AssistantStreamDelivery[];
   toolExecutionSinceLastBlockReply: boolean;
   reasoningStreamOpen: boolean;
+  // True once the text-lane boundary has closed a native reasoning segment that
+  // never emitted a discrete thinking_end (deepseek). A late end-of-stream
+  // thinking_end for that segment is then absorbed instead of firing
+  // onReasoningEnd twice. Cleared when genuinely new reasoning opens.
+  reasoningSealedByTextBoundary: boolean;
   assistantMessageIndex: number;
   lastAssistantStreamItemId?: string;
   lastAssistantTextMessageIndex: number;

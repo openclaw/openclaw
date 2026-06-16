@@ -200,6 +200,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     deferredAssistantEvents: [],
     toolExecutionSinceLastBlockReply: false,
     reasoningStreamOpen: false,
+    reasoningSealedByTextBoundary: false,
     assistantMessageIndex: 0,
     lastAssistantStreamItemId: undefined,
     lastAssistantTextMessageIndex: -1,
@@ -425,6 +426,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.lastStreamedReasoning = undefined;
     state.lastReasoningSent = undefined;
     state.reasoningStreamOpen = false;
+    state.reasoningSealedByTextBoundary = false;
     state.suppressBlockChunks = false;
     state.pendingAssistantUsage = undefined;
     state.assistantUsageCommitted = false;

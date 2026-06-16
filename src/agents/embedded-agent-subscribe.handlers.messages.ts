@@ -612,6 +612,9 @@ export function handleMessageUpdate(
       (evtType === "thinking_start" || evtType === "thinking_delta")
     ) {
       openReasoningStream(ctx);
+      // Genuinely new reasoning: clear any prior text-boundary seal so this
+      // segment's own thinking_end is handled normally.
+      ctx.state.reasoningSealedByTextBoundary = false;
     }
     const thinkingDelta = typeof assistantRecord?.delta === "string" ? assistantRecord.delta : "";
     const thinkingContent =
@@ -631,16 +634,41 @@ export function handleMessageUpdate(
       ctx.emitReasoningStream(partialThinking || thinkingContent || thinkingDelta);
     }
     if (!suppressMessageToolOnlySourceReplyOutput && evtType === "thinking_end") {
-      if (!ctx.state.reasoningStreamOpen) {
-        openReasoningStream(ctx);
+      // deepseek/openai-compatible providers finalize all blocks at end of
+      // stream, so a late thinking_end can arrive for a segment the text-lane
+      // boundary already sealed. Absorb it (stays absorbed until new reasoning
+      // opens) instead of reopening + firing onReasoningEnd a second time.
+      const alreadySealedByTextBoundary =
+        ctx.state.reasoningSealedByTextBoundary && !ctx.state.reasoningStreamOpen;
+      if (!alreadySealedByTextBoundary) {
+        if (!ctx.state.reasoningStreamOpen) {
+          openReasoningStream(ctx);
+        }
+        emitReasoningEnd(ctx);
       }
-      emitReasoningEnd(ctx);
     }
     return;
   }
 
   if (evtType !== "text_delta" && evtType !== "text_start" && evtType !== "text_end") {
     return;
+  }
+
+  // Native-thinking providers (e.g. deepseek) stream reasoning via thinking_*
+  // events but may switch to the answer without a discrete thinking_end; the
+  // text lane opening is itself the reasoning boundary. Close the stream here so
+  // the channel seals the thought before the final instead of merging the answer
+  // into the last 🧠 block. Tag-based <think> reasoning lives inside text deltas
+  // (partialBlockState.thinking), so skip it there — its end is detected below.
+  if (
+    !suppressMessageToolOnlySourceReplyOutput &&
+    ctx.state.reasoningStreamOpen &&
+    !ctx.state.partialBlockState.thinking
+  ) {
+    emitReasoningEnd(ctx);
+    // Mark the segment sealed so a later end-of-stream thinking_end for it is
+    // absorbed rather than reopening the stream (see thinking_end handling).
+    ctx.state.reasoningSealedByTextBoundary = true;
   }
 
   const delta = typeof assistantRecord?.delta === "string" ? assistantRecord.delta : "";
@@ -977,6 +1005,7 @@ export function handleMessageEnd(
     ctx.state.lastStreamedAssistant = undefined;
     ctx.state.lastStreamedAssistantCleaned = undefined;
     ctx.state.reasoningStreamOpen = false;
+    ctx.state.reasoningSealedByTextBoundary = false;
   };
 
   const previousStreamedText = ctx.state.lastStreamedAssistantCleaned ?? "";

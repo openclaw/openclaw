@@ -23,6 +23,7 @@ function createMessageUpdateContext(
   params: {
     onAgentEvent?: ReturnType<typeof vi.fn>;
     onPartialReply?: ReturnType<typeof vi.fn>;
+    onReasoningEnd?: ReturnType<typeof vi.fn>;
     flushBlockReplyBuffer?: ReturnType<typeof vi.fn>;
     resetAssistantMessageState?: ReturnType<typeof vi.fn>;
     debug?: ReturnType<typeof vi.fn>;
@@ -43,11 +44,13 @@ function createMessageUpdateContext(
       session: { id: "session-1" },
       ...(params.onAgentEvent ? { onAgentEvent: params.onAgentEvent } : {}),
       ...(params.onPartialReply ? { onPartialReply: params.onPartialReply } : {}),
+      ...(params.onReasoningEnd ? { onReasoningEnd: params.onReasoningEnd } : {}),
     },
     state: {
       deterministicApprovalPromptPending: false,
       deterministicApprovalPromptSent: false,
       reasoningStreamOpen: false,
+      reasoningSealedByTextBoundary: false,
       streamReasoning: false,
       deltaBuffer: "",
       blockBuffer: "",
@@ -251,6 +254,125 @@ describe("pending assistant reply directives", () => {
       isReasoning: true,
     });
     expect(state.pendingAssistantReplyDirectives?.mediaUrls).toEqual(["/tmp/reply.png"]);
+  });
+});
+
+describe("handleMessageUpdate native reasoning boundary", () => {
+  const createThinkingEvent = (content: string) =>
+    ({
+      type: "message_update",
+      message: { role: "assistant", content: [] },
+      assistantMessageEvent: { type: "thinking_delta", delta: content, content },
+    }) as never;
+  const createTextEvent = (text: string, delta: string) =>
+    ({
+      type: "message_update",
+      message: { role: "assistant", content: [] },
+      assistantMessageEvent: {
+        type: "text_delta",
+        delta,
+        partial: {
+          role: "assistant",
+          content: [{ type: "text", text }],
+          stopReason: "stop",
+          provider: "test",
+          model: "local",
+          usage: {},
+          timestamp: 0,
+        },
+      },
+    }) as never;
+
+  it("closes the reasoning stream when text begins without a thinking_end (deepseek)", () => {
+    // deepseek streams reasoning via thinking_* events but switches to the answer
+    // without a discrete thinking_end. The text lane opening must close the
+    // thought so the channel does not merge the answer into the last 🧠 block.
+    const onReasoningEnd = vi.fn();
+    const context = createMessageUpdateContext({ onReasoningEnd });
+
+    handleMessageUpdate(context, createThinkingEvent("Planning the answer"));
+    expect(onReasoningEnd).not.toHaveBeenCalled();
+    expect(context.state.reasoningStreamOpen).toBe(true);
+
+    handleMessageUpdate(context, createTextEvent("Done.", "Done."));
+
+    expect(onReasoningEnd).toHaveBeenCalledTimes(1);
+    expect(context.state.reasoningStreamOpen).toBe(false);
+  });
+
+  it("does not re-fire the boundary when a thinking_end already closed it", () => {
+    // Providers with a clean thinking_end close on that event; the text lane must
+    // not double-fire the boundary.
+    const onReasoningEnd = vi.fn();
+    const context = createMessageUpdateContext({ onReasoningEnd });
+
+    handleMessageUpdate(context, createThinkingEvent("Planning the answer"));
+    handleMessageUpdate(context, {
+      type: "message_update",
+      message: { role: "assistant", content: [] },
+      assistantMessageEvent: { type: "thinking_end", content: "Planning the answer" },
+    } as never);
+    expect(onReasoningEnd).toHaveBeenCalledTimes(1);
+
+    handleMessageUpdate(context, createTextEvent("Done.", "Done."));
+
+    expect(onReasoningEnd).toHaveBeenCalledTimes(1);
+    expect(context.state.reasoningStreamOpen).toBe(false);
+  });
+
+  it("absorbs a late end-of-stream thinking_end after the text boundary sealed it (deepseek)", () => {
+    // deepseek/openai-compatible providers finalize blocks at end of stream, so a
+    // thinking_end arrives for the segment AFTER the answer text already closed it
+    // via the text-lane boundary. It must not reopen the stream and fire a second
+    // onReasoningEnd.
+    const onReasoningEnd = vi.fn();
+    const context = createMessageUpdateContext({ onReasoningEnd });
+
+    handleMessageUpdate(context, createThinkingEvent("Planning the answer"));
+    handleMessageUpdate(context, createTextEvent("Done.", "Done."));
+    expect(onReasoningEnd).toHaveBeenCalledTimes(1);
+    expect(context.state.reasoningStreamOpen).toBe(false);
+
+    handleMessageUpdate(context, {
+      type: "message_update",
+      message: { role: "assistant", content: [] },
+      assistantMessageEvent: { type: "thinking_end", content: "Planning the answer" },
+    } as never);
+
+    expect(onReasoningEnd).toHaveBeenCalledTimes(1);
+    expect(context.state.reasoningStreamOpen).toBe(false);
+  });
+
+  it("fires once per segment across multiple text-sealed segments, absorbing trailing late ends", () => {
+    // thinking -> text -> thinking -> text: each text boundary seals its own
+    // segment; the seal flag resets when the second reasoning opens, so the
+    // second segment fires its own onReasoningEnd, and trailing end-of-stream
+    // thinking_end events for both blocks are absorbed (total = 2, not 4).
+    const thinkingEndEvent = {
+      type: "message_update",
+      message: { role: "assistant", content: [] },
+      assistantMessageEvent: { type: "thinking_end", content: "" },
+    } as never;
+    const onReasoningEnd = vi.fn();
+    const context = createMessageUpdateContext({ onReasoningEnd });
+
+    handleMessageUpdate(context, createThinkingEvent("Segment one"));
+    expect(context.state.reasoningSealedByTextBoundary).toBe(false);
+    handleMessageUpdate(context, createTextEvent("Answer one. ", "Answer one. "));
+    expect(onReasoningEnd).toHaveBeenCalledTimes(1);
+    expect(context.state.reasoningSealedByTextBoundary).toBe(true);
+
+    handleMessageUpdate(context, createThinkingEvent("Segment two"));
+    expect(context.state.reasoningSealedByTextBoundary).toBe(false);
+    expect(context.state.reasoningStreamOpen).toBe(true);
+    handleMessageUpdate(context, createTextEvent("Answer one. Answer two.", "Answer two."));
+    expect(onReasoningEnd).toHaveBeenCalledTimes(2);
+
+    // Late end-of-stream finalization for both thinking blocks: absorbed.
+    handleMessageUpdate(context, thinkingEndEvent);
+    handleMessageUpdate(context, thinkingEndEvent);
+    expect(onReasoningEnd).toHaveBeenCalledTimes(2);
+    expect(context.state.reasoningStreamOpen).toBe(false);
   });
 });
 
