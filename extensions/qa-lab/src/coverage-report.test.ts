@@ -35,12 +35,14 @@ function testMaturityTaxonomy(params?: {
         id: "smoke-ci",
         description: "Test smoke profile.",
         includeAllCategories: false,
+        channelDriver: "qa-channel" as const,
         categoryIds: [],
       },
       {
         id: "release",
         description: "Test release profile.",
         includeAllCategories: params?.includeAllCategories ?? false,
+        channelDriver: "qa-channel" as const,
         categoryIds: [
           ...(params?.includeAllCategories ? [] : (params?.profileCategoryIds ?? [categoryId])),
         ],
@@ -128,6 +130,19 @@ describe("qa coverage report", () => {
       "whatsapp",
     ]);
     expect(inventory.scorecardTaxonomy.profileCount).toBe(2);
+    expect(
+      inventory.scorecardTaxonomy.profiles.find((profile) => profile.id === "smoke-ci"),
+    ).toMatchObject({
+      channel: "telegram",
+      channelDriver: "crabline",
+      evidenceMode: "slim",
+    });
+    expect(
+      inventory.scorecardTaxonomy.profiles.find((profile) => profile.id === "release"),
+    ).toMatchObject({
+      channel: null,
+      channelDriver: "live",
+    });
     expect(inventory.scorecardTaxonomy.categoryCount).toBeGreaterThan(200);
     expect(inventory.scorecardTaxonomy.requiredCategoryCount).toBeGreaterThan(0);
     expect(inventory.scorecardTaxonomy.requiredCategoryCount).toBeLessThanOrEqual(

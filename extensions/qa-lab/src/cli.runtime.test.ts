@@ -446,6 +446,12 @@ describe("qa cli runtime", () => {
         fastMode: true,
         concurrency: 2,
       });
+      expect(suiteArgs.channelDriverSelection).toEqual({
+        capabilityMatrixPath: "crabline-channel-capability-matrix.json",
+        channel: "telegram",
+        channelDriver: "crabline",
+        smokeArtifactPath: "crabline-channel-smoke.json",
+      });
       expect(suiteArgs.scenarioIds).toEqual(expect.arrayContaining(["dm-chat-baseline"]));
       expect(suiteArgs.scenarioIds).not.toContain("thinking-slash-model-remap");
       expect(process.env.OPENCLAW_QA_PROFILE).toBe("release");
@@ -491,6 +497,19 @@ describe("qa cli runtime", () => {
         process.env.OPENCLAW_QA_PROFILE = previousProfile;
       }
     }
+  });
+
+  it("keeps non-Crabline profile channel drivers out of SDK driver selection", async () => {
+    await runQaProfileCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      profile: "release",
+      surface: "agent-runtime-and-provider-execution",
+      category: "agent-runtime-and-provider-execution.agent-turn-execution",
+      providerMode: "mock-openai",
+    });
+
+    const suiteArgs = mockFirstObjectArg(runQaSuite);
+    expect(suiteArgs.channelDriverSelection).toBeUndefined();
   });
 
   it("rejects qa profile runs that do not match taxonomy categories", async () => {
