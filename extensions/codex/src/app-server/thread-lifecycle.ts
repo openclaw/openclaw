@@ -1316,6 +1316,7 @@ export function buildTurnStartParams(
     skillsCollaborationInstructions?: string;
     memoryCollaborationInstructions?: string;
     heartbeatCollaborationInstructions?: string;
+    runtimeContextCollaborationInstructions?: string;
   },
 ): CodexTurnStartParams {
   const modelSelection = resolveCodexAppServerRequestModelSelection({
@@ -1345,6 +1346,7 @@ export function buildTurnStartParams(
       skillsCollaborationInstructions: options.skillsCollaborationInstructions,
       memoryCollaborationInstructions: options.memoryCollaborationInstructions,
       heartbeatCollaborationInstructions: options.heartbeatCollaborationInstructions,
+      runtimeContextCollaborationInstructions: options.runtimeContextCollaborationInstructions,
     }),
   };
 }
@@ -1372,6 +1374,7 @@ export function buildTurnCollaborationMode(
     skillsCollaborationInstructions?: string;
     memoryCollaborationInstructions?: string;
     heartbeatCollaborationInstructions?: string;
+    runtimeContextCollaborationInstructions?: string;
   } = {},
 ): CodexTurnCollaborationMode {
   const model = options.model ?? params.modelId;
@@ -1392,12 +1395,18 @@ function buildTurnScopedCollaborationInstructions(
     skillsCollaborationInstructions?: string;
     memoryCollaborationInstructions?: string;
     heartbeatCollaborationInstructions?: string;
+    runtimeContextCollaborationInstructions?: string;
   } = {},
 ): string | null {
   const contextInstructions = joinPresentSections(
     options.turnScopedDeveloperInstructions,
     options.memoryCollaborationInstructions,
     options.skillsCollaborationInstructions,
+    // OpenClaw runtime workspace context is turn-scoped supporting reference, so it
+    // rides Codex collaboration-mode developer_instructions instead of the user
+    // prompt. Routing it here keeps it out of native conversation history, which
+    // Codex would otherwise replay as role=user input on every subsequent turn.
+    options.runtimeContextCollaborationInstructions,
   );
   if (params.trigger === "cron") {
     return joinPresentSections(buildCronCollaborationInstructions(), contextInstructions);

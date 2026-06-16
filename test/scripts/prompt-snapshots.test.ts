@@ -159,7 +159,6 @@ describe("happy path prompt snapshots", () => {
     );
     expect(telegram).toContain("### User: Codex Config Instructions");
     expect(telegram).toContain("### User: Turn Input Text");
-    expect(telegram).toContain("OpenClaw runtime context for this turn:");
     expect(telegram).toContain("<SOUL.md contents will be here>");
     expect(telegram).toContain("<IDENTITY.md contents will be here>");
     expect(telegram).toContain("<TOOLS.md contents will be here>");
@@ -168,6 +167,27 @@ describe("happy path prompt snapshots", () => {
     expect(telegram).not.toContain("<HEARTBEAT.md contents will be here>");
     expect(telegram).toContain("Codex loads AGENTS.md natively");
     expect(telegram).toContain("### Tools: Dynamic Tool Catalog");
+
+    // #84662: the OpenClaw runtime context rides turn-scoped collaboration-mode
+    // developer instructions, NOT the user turn input. Turn input stays the bare
+    // user request so Codex does not replay the context as role=user history.
+    const collaborationModeInstructions = renderedPromptSection(
+      telegram,
+      "### Developer: Codex Collaboration Mode Instructions",
+      "### User: Turn Input Text",
+    );
+    const turnInputText = renderedPromptSection(
+      telegram,
+      "### User: Turn Input Text",
+      "### Tools: Dynamic Tool Catalog",
+    );
+    expect(collaborationModeInstructions).toContain("OpenClaw runtime context for this turn:");
+    expect(collaborationModeInstructions).toContain(
+      "Treat this OpenClaw-provided context as supporting project/user reference for the current request.",
+    );
+    expect(collaborationModeInstructions).toContain("<MEMORY.md contents will be here>");
+    expect(turnInputText).not.toContain("OpenClaw runtime context for this turn:");
+    expect(turnInputText).not.toContain("<MEMORY.md contents will be here>");
   });
 
   it("keeps heartbeat guidance in heartbeat collaboration mode only", async () => {

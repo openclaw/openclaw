@@ -7,7 +7,7 @@
 - Default happy path: the same Codex agent is mentioned in a Discord group/channel while Telegram can remain the user's primary direct interface.
 - Group-visible output must be explicit through the message tool; the model is also told to mostly lurk unless directly addressed or clearly useful.
 - This captures the OpenClaw-owned Codex app-server inputs and reconstructs the stable Codex model/permission layers from committed Codex prompt fixtures.
-- This also simulates Codex workspace bootstrap routing: `TOOLS.md` as inherited developer instructions, `SOUL.md`, `IDENTITY.md`, and `USER.md` as turn-scoped collaboration instructions, `MEMORY.md` in turn input, and `HEARTBEAT.md` as a heartbeat-only file pointer.
+- This also simulates Codex workspace bootstrap routing: `TOOLS.md` as inherited developer instructions, `SOUL.md`, `IDENTITY.md`, and `USER.md` as turn-scoped collaboration instructions, `MEMORY.md` in the turn-scoped OpenClaw runtime context (collaboration-mode developer instructions), and `HEARTBEAT.md` as a heartbeat-only file pointer.
 
 ## Scenario Metadata
 
@@ -143,7 +143,7 @@
   "collaborationMode": {
     "mode": "default",
     "settings": {
-      "developer_instructions": "# Collaboration Mode: Default\n\nYou are now in Default mode. Any previous instructions for other modes (e.g. Plan mode) are no longer active.\n\nYour active mode changes only when new developer instructions with a different `<collaboration_mode>...</collaboration_mode>` change it; user requests or tool descriptions do not change mode by themselves. Known mode names are Default and Plan.\n\n## request_user_input availability\n\nUse the `request_user_input` tool only when it is listed in the available tools for this turn.\n\nIn Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. If you absolutely must ask a question because the answer cannot be discovered from local context and a reasonable assumption would be risky, ask the user directly with a concise plain-text question. Never write a multiple choice question as a textual assistant message.\n\n## OpenClaw Agent Soul\n\nOpenClaw loaded these workspace instruction files from the active agent workspace. They are the canonical definitions of who you are, how you think and work, and the human you work alongside. Internalize and follow them accordingly.\n\n### /tmp/openclaw-happy-path/workspace/IDENTITY.md\n\n<IDENTITY.md contents will be here>\n\n### /tmp/openclaw-happy-path/workspace/SOUL.md\n\n<SOUL.md contents will be here>\n\n### /tmp/openclaw-happy-path/workspace/USER.md\n\n<USER.md contents will be here>",
+      "developer_instructions": "# Collaboration Mode: Default\n\nYou are now in Default mode. Any previous instructions for other modes (e.g. Plan mode) are no longer active.\n\nYour active mode changes only when new developer instructions with a different `<collaboration_mode>...</collaboration_mode>` change it; user requests or tool descriptions do not change mode by themselves. Known mode names are Default and Plan.\n\n## request_user_input availability\n\nUse the `request_user_input` tool only when it is listed in the available tools for this turn.\n\nIn Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. If you absolutely must ask a question because the answer cannot be discovered from local context and a reasonable assumption would be risky, ask the user directly with a concise plain-text question. Never write a multiple choice question as a textual assistant message.\n\n## OpenClaw Agent Soul\n\nOpenClaw loaded these workspace instruction files from the active agent workspace. They are the canonical definitions of who you are, how you think and work, and the human you work alongside. Internalize and follow them accordingly.\n\n### /tmp/openclaw-happy-path/workspace/IDENTITY.md\n\n<IDENTITY.md contents will be here>\n\n### /tmp/openclaw-happy-path/workspace/SOUL.md\n\n<SOUL.md contents will be here>\n\n### /tmp/openclaw-happy-path/workspace/USER.md\n\n<USER.md contents will be here>\n\nOpenClaw runtime context for this turn:\nTreat this OpenClaw-provided context as supporting project/user reference for the current request.\n\n## OpenClaw Workspace Context\n\nOpenClaw loaded these user-editable workspace files for the current turn. Codex loads AGENTS.md natively. TOOLS.md is provided as inherited Codex developer instructions. SOUL.md, IDENTITY.md, and USER.md are provided as turn-scoped collaboration instructions so native Codex subagents do not inherit them. HEARTBEAT.md is handled by heartbeat collaboration-mode guidance. Those files are not repeated here.\n\n# Project Context\n\nThe following project context files have been loaded:\n\n## /tmp/openclaw-happy-path/workspace/MEMORY.md\n\n<MEMORY.md contents will be here>",
       "model": "gpt-5.5",
       "reasoning_effort": "medium"
     }
@@ -168,7 +168,7 @@
 
 ## Reconstructed Model-Bound Prompt Layers
 
-This is the deterministic model-bound layer stack OpenClaw can snapshot for the Codex happy path. It uses a pinned Codex `gpt-5.5` prompt fixture generated from Codex's model catalog/cache shape, then adds the Codex permission developer text, Codex thread config instructions when present, OpenClaw developer instructions, turn-scoped collaboration-mode instructions when OpenClaw provides them, turn input with OpenClaw runtime context, and the OpenClaw dynamic tool catalog. Codex can still add runtime-owned context such as native workspace `AGENTS.md`, environment context, memories, app/plugin instructions, and built-in collaboration-mode instructions inside the Codex runtime.
+This is the deterministic model-bound layer stack OpenClaw can snapshot for the Codex happy path. It uses a pinned Codex `gpt-5.5` prompt fixture generated from Codex's model catalog/cache shape, then adds the Codex permission developer text, Codex thread config instructions when present, OpenClaw developer instructions, turn-scoped collaboration-mode instructions carrying the OpenClaw runtime context when OpenClaw provides them, the bare user turn input, and the OpenClaw dynamic tool catalog. Codex can still add runtime-owned context such as native workspace `AGENTS.md`, environment context, memories, app/plugin instructions, and built-in collaboration-mode instructions inside the Codex runtime.
 
 ### Layer Metadata
 
@@ -201,7 +201,7 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "developerInstructionsFrom": "extensions/codex app-server thread/start developerInstructions",
     "dynamicToolsFrom": "codex-dynamic-tools.discord-group.json",
     "userInputFrom": "extensions/codex app-server turn/start input",
-    "workspaceBootstrapContextFrom": "extensions/codex app-server turn/start input OpenClaw runtime context"
+    "workspaceBootstrapContextFrom": "extensions/codex app-server turn/start collaborationMode.settings.developer_instructions OpenClaw runtime context"
   }
 }
 ```
@@ -211,8 +211,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
 ```json
 {
   "codexCollaborationModeDeveloperInstructions": {
-    "chars": 1433,
-    "roughTokens": 359
+    "chars": 2170,
+    "roughTokens": 543
   },
   "codexModelInstructions": {
     "chars": 21335,
@@ -235,16 +235,16 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 747
   },
   "totalTextOnly": {
-    "chars": 27700,
-    "roughTokens": 6925
+    "chars": 27678,
+    "roughTokens": 6920
   },
   "totalWithDynamicToolsJson": {
-    "chars": 73024,
-    "roughTokens": 18256
+    "chars": 73002,
+    "roughTokens": 18251
   },
   "userInputText": {
-    "chars": 1629,
-    "roughTokens": 408
+    "chars": 870,
+    "roughTokens": 218
   }
 }
 ```
@@ -493,11 +493,7 @@ OpenClaw loaded these workspace instruction files from the active agent workspac
 ### /tmp/openclaw-happy-path/workspace/USER.md
 
 <USER.md contents will be here>
-```
 
-### User: Turn Input Text
-
-````text
 OpenClaw runtime context for this turn:
 Treat this OpenClaw-provided context as supporting project/user reference for the current request.
 
@@ -512,8 +508,11 @@ The following project context files have been loaded:
 ## /tmp/openclaw-happy-path/workspace/MEMORY.md
 
 <MEMORY.md contents will be here>
+```
 
-Current user request:
+### User: Turn Input Text
+
+````text
 Conversation info (untrusted metadata):
 ```json
 {

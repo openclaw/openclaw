@@ -667,7 +667,7 @@ function renderModelBoundPromptLayers(params: {
   return [
     "## Reconstructed Model-Bound Prompt Layers",
     "",
-    "This is the deterministic model-bound layer stack OpenClaw can snapshot for the Codex happy path. It uses a pinned Codex `gpt-5.5` prompt fixture generated from Codex's model catalog/cache shape, then adds the Codex permission developer text, Codex thread config instructions when present, OpenClaw developer instructions, turn-scoped collaboration-mode instructions when OpenClaw provides them, turn input with OpenClaw runtime context, and the OpenClaw dynamic tool catalog. Codex can still add runtime-owned context such as native workspace `AGENTS.md`, environment context, memories, app/plugin instructions, and built-in collaboration-mode instructions inside the Codex runtime.",
+    "This is the deterministic model-bound layer stack OpenClaw can snapshot for the Codex happy path. It uses a pinned Codex `gpt-5.5` prompt fixture generated from Codex's model catalog/cache shape, then adds the Codex permission developer text, Codex thread config instructions when present, OpenClaw developer instructions, turn-scoped collaboration-mode instructions carrying the OpenClaw runtime context when OpenClaw provides them, the bare user turn input, and the OpenClaw dynamic tool catalog. Codex can still add runtime-owned context such as native workspace `AGENTS.md`, environment context, memories, app/plugin instructions, and built-in collaboration-mode instructions inside the Codex runtime.",
     "",
     "### Layer Metadata",
     "",
@@ -686,7 +686,7 @@ function renderModelBoundPromptLayers(params: {
         openClawRuntime: {
           configInstructionsFrom: "extensions/codex app-server thread/start config.instructions",
           workspaceBootstrapContextFrom:
-            "extensions/codex app-server turn/start input OpenClaw runtime context",
+            "extensions/codex app-server turn/start collaborationMode.settings.developer_instructions OpenClaw runtime context",
           developerInstructionsFrom:
             "extensions/codex app-server thread/start developerInstructions",
           collaborationModeDeveloperInstructionsFrom:
@@ -776,10 +776,6 @@ function buildCodexOpenClawRuntimeContext(): string {
   ].join("\n");
 }
 
-function prependCodexOpenClawRuntimeContext(prompt: string): string {
-  return [buildCodexOpenClawRuntimeContext(), "", "Current user request:", prompt].join("\n");
-}
-
 function renderScenarioSnapshot(
   codexApi: CodexPromptSnapshotApi,
   scenario: PromptScenario,
@@ -789,7 +785,9 @@ function renderScenarioSnapshot(
     sessionKey: scenario.ctx.SessionKey ?? `agent:main:${scenario.id}`,
   });
   const appServer = codexApi.resolveCodexPromptSnapshotAppServerOptions();
-  const codexTurnPromptText = prependCodexOpenClawRuntimeContext(scenario.prompt);
+  // #84662: OpenClaw runtime context rides turn-scoped collaboration-mode developer
+  // instructions, not the user turn input, so Codex does not replay it as native
+  // role=user history every turn. The user turn input stays the bare user request.
   const codexSnapshot = codexApi.buildCodexHarnessPromptSnapshot({
     attempt,
     cwd: WORKSPACE_DIR,
@@ -797,9 +795,10 @@ function renderScenarioSnapshot(
     dynamicTools: scenario.dynamicTools,
     appServer,
     config: CODEX_PROMPT_SNAPSHOT_THREAD_CONFIG,
-    promptText: codexTurnPromptText,
+    promptText: scenario.prompt,
     developerInstructionAdditions: CODEX_WORKSPACE_THREAD_DEVELOPER_INSTRUCTIONS,
     turnScopedDeveloperInstructions: CODEX_WORKSPACE_TURN_SCOPED_DEVELOPER_INSTRUCTIONS,
+    runtimeContextCollaborationInstructions: buildCodexOpenClawRuntimeContext(),
     heartbeatCollaborationInstructions:
       scenario.trigger === "heartbeat" ? CODEX_HEARTBEAT_COLLABORATION_INSTRUCTIONS : undefined,
   });
@@ -816,7 +815,7 @@ function renderScenarioSnapshot(
     "",
     ...scenario.notes.map((note) => `- ${note}`),
     "- This captures the OpenClaw-owned Codex app-server inputs and reconstructs the stable Codex model/permission layers from committed Codex prompt fixtures.",
-    "- This also simulates Codex workspace bootstrap routing: `TOOLS.md` as inherited developer instructions, `SOUL.md`, `IDENTITY.md`, and `USER.md` as turn-scoped collaboration instructions, `MEMORY.md` in turn input, and `HEARTBEAT.md` as a heartbeat-only file pointer.",
+    "- This also simulates Codex workspace bootstrap routing: `TOOLS.md` as inherited developer instructions, `SOUL.md`, `IDENTITY.md`, and `USER.md` as turn-scoped collaboration instructions, `MEMORY.md` in the turn-scoped OpenClaw runtime context (collaboration-mode developer instructions), and `HEARTBEAT.md` as a heartbeat-only file pointer.",
     "",
     "## Scenario Metadata",
     "",
@@ -884,9 +883,9 @@ function renderReadme(scenarios: PromptScenario[]): string {
     "- Codex harness default coverage for tool-only visible source replies.",
     "- Telegram direct chat, Discord group chat, and a heartbeat turn with `heartbeat_respond` available through searchable dynamic tools.",
     "",
-    "The Markdown files show selected app-server thread/turn params plus a reconstructed model-bound prompt layer stack: Codex `gpt-5.5` model instructions from a pinned Codex model catalog fixture, Codex permission developer instructions for the happy-path yolo profile, OpenClaw developer instructions, turn input with simulated OpenClaw workspace bootstrap runtime context, heartbeat collaboration-mode guidance when applicable, and references to the complete dynamic tool catalog.",
+    "The Markdown files show selected app-server thread/turn params plus a reconstructed model-bound prompt layer stack: Codex `gpt-5.5` model instructions from a pinned Codex model catalog fixture, Codex permission developer instructions for the happy-path yolo profile, OpenClaw developer instructions, turn-scoped collaboration-mode instructions carrying the simulated OpenClaw workspace bootstrap runtime context, the bare user turn input, heartbeat collaboration-mode guidance when applicable, and references to the complete dynamic tool catalog.",
     "",
-    "The workspace bootstrap simulation includes dummy workspace contents so prompt reviewers can see how OpenClaw routes stable profile files into Codex developer instructions, keeps `MEMORY.md` in turn input, and points heartbeat turns at `HEARTBEAT.md` without inlining it. `AGENTS.md` is intentionally not repeated here because Codex loads it natively.",
+    "The workspace bootstrap simulation includes dummy workspace contents so prompt reviewers can see how OpenClaw routes stable profile files into Codex developer instructions, keeps `MEMORY.md` in the turn-scoped OpenClaw runtime context (collaboration-mode developer instructions, not native conversation history), and points heartbeat turns at `HEARTBEAT.md` without inlining it. `AGENTS.md` is intentionally not repeated here because Codex loads it natively.",
     "",
     "The tool catalog is pinned to the canonical happy-path OpenClaw tools so optional locally installed plugin tools do not create fixture churn.",
     "",

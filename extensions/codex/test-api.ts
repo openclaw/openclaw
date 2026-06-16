@@ -51,6 +51,7 @@ export function buildCodexHarnessPromptSnapshot(params: {
   developerInstructionAdditions?: string;
   turnScopedDeveloperInstructions?: string;
   heartbeatCollaborationInstructions?: string;
+  runtimeContextCollaborationInstructions?: string;
 }): CodexHarnessPromptSnapshot {
   const developerInstructions = joinPresentSections(
     buildDeveloperInstructions(params.attempt, {
@@ -80,6 +81,7 @@ export function buildCodexHarnessPromptSnapshot(params: {
       promptText: params.promptText,
       turnScopedDeveloperInstructions: params.turnScopedDeveloperInstructions,
       heartbeatCollaborationInstructions: params.heartbeatCollaborationInstructions,
+      runtimeContextCollaborationInstructions: params.runtimeContextCollaborationInstructions,
     }),
   };
 }

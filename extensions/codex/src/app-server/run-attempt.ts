@@ -998,7 +998,12 @@ export async function runCodexAppServerAttempt(
     });
   let promptBuild = await buildPromptFromCurrentInputs();
   const decorateCodexTurnPromptText = (prompt: string) =>
-    prependCodexOpenClawPromptContext(prompt, openClawPromptContext, {
+    // OpenClaw runtime workspace context now rides turn-scoped collaboration-mode
+    // developer_instructions (see openClawPromptContext below), not the user prompt,
+    // so Codex no longer replays it as role=user native history every turn. Keep
+    // calling this helper with no context to preserve the delivery-hint split that
+    // separates runtime routing metadata from the user's request.
+    prependCodexOpenClawPromptContext(prompt, undefined, {
       preservePromptWithoutContext:
         params.bootstrapContextMode === "lightweight" && params.bootstrapContextRunKind === "cron",
     });
@@ -1010,6 +1015,7 @@ export async function runCodexAppServerAttempt(
       memoryCollaborationInstructions: workspaceBootstrapContext.memoryCollaborationInstructions,
       heartbeatCollaborationInstructions:
         workspaceBootstrapContext.heartbeatCollaborationInstructions,
+      runtimeContextCollaborationInstructions: openClawPromptContext,
     }).settings.developer_instructions ?? undefined;
   const buildRenderedCodexDeveloperInstructions = () =>
     joinPresentSections(
@@ -2193,6 +2199,7 @@ export async function runCodexAppServerAttempt(
       memoryCollaborationInstructions: workspaceBootstrapContext.memoryCollaborationInstructions,
       heartbeatCollaborationInstructions:
         workspaceBootstrapContext.heartbeatCollaborationInstructions,
+      runtimeContextCollaborationInstructions: openClawPromptContext,
     });
     codexModelCallDiagnostics.setRequestPayloadBytes(utf8JsonByteLength(turnStartParams));
     const startedTurn = assertCodexTurnStartResponse(

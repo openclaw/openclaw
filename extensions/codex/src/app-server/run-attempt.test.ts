@@ -2497,6 +2497,56 @@ describe("runCodexAppServerAttempt", () => {
     });
   });
 
+  it("routes OpenClaw runtime workspace context through turn-scoped developer instructions, not user input", () => {
+    // Regression for #84662: prepending the per-turn OpenClaw runtime context onto
+    // the user prompt made Codex replay it as role=user native history every turn
+    // (~96% input-token waste over a multi-turn session). The context must ride
+    // turn-scoped collaborationMode developer_instructions instead, which Codex does
+    // not persist as conversation history.
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.prompt = "ship the release notes";
+    const workspacePromptContext = "Repo TODO: finish the changelog before tagging v2.";
+    const openClawPromptContext = buildCodexOpenClawPromptContext({
+      params,
+      workspacePromptContext,
+    });
+    // The runtime context block must exist and carry the verbatim authority-boundary
+    // header so its semantic authority (supporting reference, not developer/system
+    // policy) is unchanged — only its transport moves.
+    expect(openClawPromptContext).toContain("OpenClaw runtime context for this turn:");
+    expect(openClawPromptContext).toContain(
+      "Treat this OpenClaw-provided context as supporting project/user reference for the current request.",
+    );
+    expect(openClawPromptContext).toContain(workspacePromptContext);
+
+    const codexTurnPromptText = prependCodexOpenClawPromptContext(params.prompt, undefined);
+    const turnStartParams = buildTurnStartParams(params, {
+      threadId: "thread-1",
+      cwd: workspaceDir,
+      appServer: resolveCodexAppServerRuntimeOptions({}),
+      promptText: codexTurnPromptText,
+      runtimeContextCollaborationInstructions: openClawPromptContext,
+    });
+    const inputText = turnStartParams.input?.find((item) => item.type === "text")?.text ?? "";
+    const collaborationInstructions =
+      turnStartParams.collaborationMode?.settings?.developer_instructions ?? "";
+
+    // User turn input stays byte-for-byte the user's request — no runtime context leak.
+    expect(inputText).toBe("ship the release notes");
+    expect(inputText).not.toContain("OpenClaw runtime context for this turn:");
+    expect(inputText).not.toContain(workspacePromptContext);
+
+    // Runtime context now lives in turn-scoped developer instructions, with its
+    // authority-boundary header preserved verbatim.
+    expect(collaborationInstructions).toContain("OpenClaw runtime context for this turn:");
+    expect(collaborationInstructions).toContain(
+      "Treat this OpenClaw-provided context as supporting project/user reference for the current request.",
+    );
+    expect(collaborationInstructions).toContain(workspacePromptContext);
+  });
+
   it("adds memory recall guidance when dated memory notes exist without root MEMORY.md", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
