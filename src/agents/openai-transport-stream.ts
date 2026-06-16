@@ -2703,6 +2703,69 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
   };
 }
 
+/**
+ * Wraps an OpenAI completions stream with a stall guard.
+ * After seeing finish_reason on a chunk, if no further chunk arrives within
+ * STALL_TIMEOUT_MS the iteration ends cleanly. This handles providers that
+ * deliver all streaming tokens but then fail to send the final [DONE] or
+ * stream-close signal (e.g. opencode-go deepseek-v4 endpoint).
+ */
+const STALL_TIMEOUT_MS = 15_000;
+
+function chunkHasFinishReason(raw: unknown): boolean {
+  if (!raw || typeof raw !== "object") return false;
+  const choices = (raw as Record<string, unknown>).choices;
+  const choice = Array.isArray(choices) ? (choices[0] as Record<string, unknown>) : undefined;
+  return Boolean(choice?.finish_reason);
+}
+
+async function* withStreamCompletionGuard(source: AsyncIterable<unknown>): AsyncIterable<unknown> {
+  const it = source[Symbol.asyncIterator]();
+  let guardAcquired = false;
+
+  // Cleanly end the underlying async iterator and return a done sentinel.
+  const endIteration = (): IteratorResult<unknown> => {
+    guardAcquired = false;
+    void it.return?.().catch(() => {});
+    return { done: true, value: undefined };
+  };
+
+  try {
+    for (;;) {
+      let result: IteratorResult<unknown>;
+
+      if (guardAcquired) {
+        // Race the next chunk against the stall timeout
+        result = await Promise.race([
+          it.next(),
+          new Promise<IteratorResult<unknown>>((resolve) => {
+            setTimeout(() => resolve(endIteration()), STALL_TIMEOUT_MS);
+          }),
+        ]);
+        guardAcquired = false;
+      } else {
+        result = await it.next();
+      }
+
+      if (result.done) {
+        return;
+      }
+
+      yield result.value;
+
+      // Arm the guard for the NEXT iteration if this chunk carries a
+      // finish_reason — the model signalled completion so no more data
+      // should arrive. If the provider keeps the connection open, the
+      // guard will end the iteration cleanly after the timeout.
+      if (chunkHasFinishReason(result.value)) {
+        guardAcquired = true;
+      }
+    }
+  } finally {
+    void it.return?.().catch(() => {});
+  }
+}
+
 async function processOpenAICompletionsStream(
   responseStream: AsyncIterable<ChatCompletionChunk>,
   output: MutableAssistantOutput,
@@ -2963,7 +3026,8 @@ async function processOpenAICompletionsStream(
     }
   };
   const cooperativeScheduler = createModelStreamCooperativeScheduler(options?.signal);
-  for await (const rawChunk of responseStream as AsyncIterable<unknown>) {
+  const guardedStream = withStreamCompletionGuard(responseStream as AsyncIterable<unknown>);
+  for await (const rawChunk of guardedStream) {
     throwIfModelStreamAborted(options?.signal);
     chunkPushedEvent = false;
     if (!rawChunk || typeof rawChunk !== "object") {
@@ -4419,5 +4483,7 @@ export const testing = {
   summarizeResponsesPayload,
   summarizeResponsesTools,
   withResponsesFirstEventTimeout,
+  withStreamCompletionGuard,
+  chunkHasFinishReason,
 };
 export { testing as __testing };

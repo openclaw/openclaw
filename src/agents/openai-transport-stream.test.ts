@@ -7609,6 +7609,38 @@ describe("openai transport stream", () => {
     expect(params).not.toHaveProperty("tools");
   });
 
+  describe("withStreamCompletionGuard", () => {
+    it("passes through chunks unchanged for a normal stream", async () => {
+      const chunks = [
+        { choices: [{ delta: { content: "hello" } }] },
+        { choices: [{ delta: { content: " world" }, finish_reason: "stop" }] },
+      ];
+      async function* testStream() {
+        for (const c of chunks) yield c;
+      }
+      const collected: unknown[] = [];
+      for await (const c of testing.withStreamCompletionGuard(testStream())) {
+        collected.push(c);
+      }
+      expect(collected).toStrictEqual(chunks);
+    });
+
+    it("detects finish_reason correctly via chunkHasFinishReason", () => {
+      const { chunkHasFinishReason } = testing as unknown as {
+        chunkHasFinishReason: (raw: unknown) => boolean;
+      };
+      expect(chunkHasFinishReason({ choices: [{ delta: { content: "a" } }] })).toBe(false);
+      expect(
+        chunkHasFinishReason({ choices: [{ delta: { content: "b" }, finish_reason: "stop" }] }),
+      ).toBe(true);
+      expect(chunkHasFinishReason({ choices: [{ delta: {}, finish_reason: "length" }] })).toBe(
+        true,
+      );
+      expect(chunkHasFinishReason(null)).toBe(false);
+      expect(chunkHasFinishReason("text")).toBe(false);
+    });
+  });
+
   describe("Gemini thought_signature round-trip on OpenAI-compatible completions", () => {
     const geminiModel = {
       id: "gemini-3-flash-preview",
