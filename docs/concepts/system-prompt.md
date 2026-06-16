@@ -234,8 +234,8 @@ Workspace [capability descriptors](/concepts/workspace-capabilities) under
 `capabilities/*.md` are not part of the fixed bootstrap set by default. To make these
 descriptors discoverable without bloating the context window, follow the **Discovery Convention**:
 keep a concise `capabilities/index.md` that lists available local procedures and link
-it from `TOOLS.md` or `AGENTS.md`. Agents are instructed to check this index before
-assuming a local task is unsupported.
+it from `TOOLS.md` or `AGENTS.md`. When the index is linked from a bootstrap-visible
+file, agents can check it before assuming a local task is unsupported.
 
 If you want to make the agent sound less generic, start with
 [SOUL.md Personality Guide](/concepts/soul).
