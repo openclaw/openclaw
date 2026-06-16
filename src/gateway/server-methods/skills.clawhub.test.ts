@@ -4,9 +4,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { callGatewayHandler } from "./skills.test-helpers.js";
 
 const loadConfigMock = vi.fn(() => ({}));
-const listAgentIdsMock = vi.fn(() => ["main"]);
+const listAgentIdsMock = vi.fn<(_cfg: unknown) => string[]>(() => ["main"]);
 const resolveDefaultAgentIdMock = vi.fn(() => "main");
-const resolveAgentWorkspaceDirMock = vi.fn(() => "/tmp/workspace");
+const resolveAgentWorkspaceDirMock = vi.fn<(_cfg: unknown, _agentId: string) => string>(
+  () => "/tmp/workspace",
+);
 const buildWorkspaceSkillStatusMock = vi.fn();
 const readLocalSkillCardContentSyncMock = vi.fn();
 const fetchClawHubSkillSecurityVerdictsMock = vi.fn();
@@ -20,10 +22,11 @@ vi.mock("../../config/config.js", () => ({
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({
-  listAgentIds: (...args: unknown[]) => listAgentIdsMock(...args),
+  listAgentIds: (cfg: unknown) => listAgentIdsMock(cfg),
   resolveAgentConfig: vi.fn(() => undefined),
-  resolveDefaultAgentId: (...args: unknown[]) => resolveDefaultAgentIdMock(...args),
-  resolveAgentWorkspaceDir: (...args: unknown[]) => resolveAgentWorkspaceDirMock(...args),
+  resolveDefaultAgentId: () => resolveDefaultAgentIdMock(),
+  resolveAgentWorkspaceDir: (cfg: unknown, agentId: string) =>
+    resolveAgentWorkspaceDirMock(cfg, agentId),
   resolveSessionAgentId: vi.fn(() => undefined),
 }));
 

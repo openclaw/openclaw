@@ -266,7 +266,7 @@ export function renderSkills(props: SkillsProps) {
                 >
                   ${agents.map(
                     (agent) => html`
-                      <option value=${agent.id}>
+                      <option value=${agent.id} ?selected=${agent.id === selectedAgentId}>
                         ${agentOptionLabel(agent, props.agentsList?.defaultId)}
                       </option>
                     `,
