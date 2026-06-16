@@ -8,13 +8,13 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import type { ChannelAccessPolicy } from "./setup-group-access.js";
-import type { ChannelConfigAdapter, ChannelSetupAdapter } from "./types.adapters.js";
 import type {
   ChannelCapabilities,
   ChannelId,
   ChannelMeta,
   ChannelSetupInput,
 } from "./types.core.js";
+import type { ChannelConfigAdapter, ChannelSetupAdapter } from "./types.setup-config.js";
 
 export type ChannelSetupPlugin = {
   id: ChannelId;
