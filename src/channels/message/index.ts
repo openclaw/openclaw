@@ -1,5 +1,13 @@
+// Public barrel for channel message delivery, live preview, receipt, receive, and recovery
+// contracts used by channel plugins and core delivery code.
 export { deriveDurableFinalDeliveryRequirements } from "./capabilities.js";
+export { defineChannelMessageAdapter } from "./adapter.js";
 export { createChannelMessageAdapterFromOutbound } from "./outbound-bridge.js";
+export {
+  createDurableInboundReceiveJournal,
+  createDurableInboundReceiveJournalFromQueue,
+} from "./durable-receive.js";
+export { createChannelIngressQueue } from "./ingress-queue.js";
 export {
   listDeclaredChannelMessageLiveCapabilities,
   listDeclaredDurableFinalCapabilities,
@@ -38,6 +46,28 @@ export {
   resolveChannelSourceReplyDeliveryMode,
 } from "./reply-pipeline.js";
 export { classifyDurableSendRecoveryState, createDurableMessageStateRecord } from "./state.js";
+export type {
+  DurableInboundReceiveAcceptOptions,
+  DurableInboundReceiveAcceptResult,
+  DurableInboundReceiveCompletedRecord,
+  DurableInboundReceiveCompleteOptions,
+  DurableInboundReceiveJournal,
+  DurableInboundReceiveJournalOptions,
+  DurableInboundReceivePendingRecord,
+  DurableInboundReceiveQueueJournalOptions,
+  DurableInboundReceiveReleaseOptions,
+} from "./durable-receive.js";
+export type {
+  ChannelIngressQueue,
+  ChannelIngressQueueClaim,
+  ChannelIngressQueueClaimRef,
+  ChannelIngressQueueCompletedRecord,
+  ChannelIngressQueueEnqueueResult,
+  ChannelIngressQueueFailedRecord,
+  ChannelIngressQueuePruneOptions,
+  ChannelIngressQueueRecord,
+  CreateChannelIngressQueueOptions,
+} from "./ingress-queue.js";
 export type {
   ChannelMessageOutboundBridgeAdapter,
   ChannelMessageOutboundBridgeResult,
@@ -97,6 +127,7 @@ export type {
   ChannelMessageSendLifecycleAdapter,
   ChannelMessageSendMediaContext,
   ChannelMessageSendPayloadContext,
+  ChannelMessageSendPollContext,
   ChannelMessageSendResult,
   ChannelMessageSendSuccessContext,
   ChannelMessageSendTextContext,

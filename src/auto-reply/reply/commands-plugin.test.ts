@@ -1,3 +1,4 @@
+// Tests plugin command dispatch and plugin-scoped command aliases.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { handlePluginCommand } from "./commands-plugin.js";
@@ -100,6 +101,7 @@ describe("handlePluginCommand", () => {
       [params.sessionKey]: {
         sessionId: "target-session",
         sessionFile: "/tmp/target-session.jsonl",
+        authProfileOverride: "openai:owner@example.com",
         updatedAt: Date.now(),
       },
     };
@@ -108,10 +110,11 @@ describe("handlePluginCommand", () => {
 
     expect(executePluginCommandMock).toHaveBeenCalledTimes(1);
     const [[commandParams]] = executePluginCommandMock.mock.calls as unknown as Array<
-      [{ sessionId?: string; sessionFile?: string }]
+      [{ authProfileId?: string; sessionId?: string; sessionFile?: string }]
     >;
     expect(commandParams.sessionId).toBe("target-session");
     expect(commandParams.sessionFile).toBe("/tmp/target-session.jsonl");
+    expect(commandParams.authProfileId).toBe("openai:owner@example.com");
   });
 
   it("continues the agent without leaking continueAgent into the reply payload", async () => {

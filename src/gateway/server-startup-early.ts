@@ -1,6 +1,8 @@
+// Gateway early-startup runtime helpers.
+// Starts discovery, remote skills, task maintenance, and delayed maintenance setup.
 import type { GatewayTailscaleMode } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveCronStorePath } from "../cron/store.js";
+import { resolveCronJobsStorePath } from "../cron/store.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 
 type Awaitable<T> = T | Promise<T>;
@@ -13,6 +15,9 @@ type StartGatewayMaintenanceTimers =
   typeof import("./server-maintenance.js").startGatewayMaintenanceTimers;
 type GatewayMaintenanceParams = Parameters<StartGatewayMaintenanceTimers>[0];
 
+const loadRemoteSkillsRuntimeModule = async () => await import("../skills/runtime/remote.js");
+
+/** Measure an early-startup step when tracing is enabled, otherwise run it directly. */
 async function measureStartup<T>(
   startupTrace: GatewayStartupTrace | undefined,
   name: string,
@@ -21,6 +26,7 @@ async function measureStartup<T>(
   return startupTrace ? startupTrace.measure(name, run) : await run();
 }
 
+/** Start plugin discovery and return the Bonjour shutdown callback when discovery is active. */
 export async function startGatewayPluginDiscovery(params: {
   minimalTestGateway: boolean;
   cfgAtStart: OpenClawConfig;
@@ -63,6 +69,7 @@ export async function startGatewayPluginDiscovery(params: {
   });
 }
 
+/** Start early Gateway side runtimes before the main server is fully ready. */
 export async function startGatewayEarlyRuntime(params: {
   minimalTestGateway: boolean;
   cfgAtStart: OpenClawConfig;
@@ -78,7 +85,7 @@ export async function startGatewayEarlyRuntime(params: {
     info: (msg: string) => void;
     warn: (msg: string) => void;
   };
-  nodeRegistry: Parameters<typeof import("../infra/skills-remote.js").setSkillsRemoteRegistry>[0];
+  nodeRegistry: Parameters<typeof import("../skills/runtime/remote.js").setSkillsRemoteRegistry>[0];
   pluginRegistry?: PluginRegistry;
   broadcast: GatewayMaintenanceParams["broadcast"];
   nodeSendToAllSubscribed: Parameters<StartGatewayMaintenanceTimers>[0]["nodeSendToAllSubscribed"];
@@ -88,6 +95,7 @@ export async function startGatewayEarlyRuntime(params: {
   logHealth: GatewayMaintenanceParams["logHealth"];
   dedupe: GatewayMaintenanceParams["dedupe"];
   chatAbortControllers: GatewayMaintenanceParams["chatAbortControllers"];
+  restartRecoveryCandidates: GatewayMaintenanceParams["restartRecoveryCandidates"];
   chatRunState: GatewayMaintenanceParams["chatRunState"];
   chatRunBuffers: GatewayMaintenanceParams["chatRunBuffers"];
   chatDeltaSentAt: GatewayMaintenanceParams["chatDeltaSentAt"];
@@ -111,15 +119,17 @@ export async function startGatewayEarlyRuntime(params: {
     const [{ primeRemoteSkillsCache, setSkillsRemoteRegistry }, taskRegistryMaintenance] =
       await measureStartup(params.startupTrace, "runtime.early.lazy-runtime-imports", () =>
         Promise.all([
-          import("../infra/skills-remote.js"),
+          loadRemoteSkillsRuntimeModule(),
           import("../tasks/task-registry.maintenance.js"),
         ]),
       );
     setSkillsRemoteRegistry(params.nodeRegistry);
     void primeRemoteSkillsCache();
+    // Task registry maintenance is authoritative in the Gateway process so
+    // restart-blocker counts reflect the same cron store as runtime execution.
     taskRegistryMaintenance.configureTaskRegistryMaintenance({
-      cronStorePath: resolveCronStorePath(params.cfgAtStart.cron?.store),
-      cronRuntimeAuthoritative: true,
+      cronStorePath: resolveCronJobsStorePath(params.cfgAtStart.cron?.store),
+      runtimeAuthoritative: true,
     });
     taskRegistryMaintenance.startTaskRegistryMaintenance();
     getActiveTaskCount = () =>
@@ -131,13 +141,15 @@ export async function startGatewayEarlyRuntime(params: {
     : await measureStartup(params.startupTrace, "runtime.early.skills-listener", async () => {
         const [{ registerSkillsChangeListener }, { refreshRemoteBinsForConnectedNodes }] =
           await Promise.all([
-            import("../agents/skills/refresh.js"),
-            import("../infra/skills-remote.js"),
+            import("../skills/runtime/refresh.js"),
+            loadRemoteSkillsRuntimeModule(),
           ]);
         return registerSkillsChangeListener((event) => {
           if (event.reason === "remote-node") {
             return;
           }
+          // Coalesce local skill changes before refreshing connected remote
+          // nodes so bulk plugin/skill updates do not stampede node refreshes.
           const existingTimer = params.getSkillsRefreshTimer();
           if (existingTimer) {
             clearTimeout(existingTimer);
@@ -151,6 +163,8 @@ export async function startGatewayEarlyRuntime(params: {
       });
 
   const startMaintenance = async () => {
+    // Defer periodic maintenance until the caller has finished ready-state
+    // wiring, but keep the lazy import owned by this early-runtime bundle.
     if (params.minimalTestGateway) {
       return null;
     }
@@ -165,6 +179,7 @@ export async function startGatewayEarlyRuntime(params: {
         logHealth: params.logHealth,
         dedupe: params.dedupe,
         chatAbortControllers: params.chatAbortControllers,
+        restartRecoveryCandidates: params.restartRecoveryCandidates,
         chatRunState: params.chatRunState,
         chatRunBuffers: params.chatRunBuffers,
         chatDeltaSentAt: params.chatDeltaSentAt,

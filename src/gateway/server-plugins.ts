@@ -1,5 +1,14 @@
+// Gateway plugin runtime adapter.
+// Loads plugin registries and builds fallback request context for non-WS paths.
 import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import {
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../packages/gateway-protocol/src/client-info.js";
+import type { ErrorShape } from "../../packages/gateway-protocol/src/index.js";
+import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
 import { normalizeModelRef, parseModelRef } from "../agents/model-selection.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -17,20 +26,11 @@ import type { PluginLogger } from "../plugins/types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
-import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
-import type { ErrorShape } from "./protocol/index.js";
-import { PROTOCOL_VERSION } from "./protocol/version.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandler,
   GatewayRequestOptions,
 } from "./server-methods/types.js";
-
-// ── Fallback gateway context for non-WS paths (Telegram, WhatsApp, etc.) ──
-// The WS path sets a per-request scope via AsyncLocalStorage, but channel
-// adapters (Telegram polling, etc.) invoke the agent directly without going
-// through handleGatewayRequest. We store the gateway context at startup so
-// dispatchGatewayMethod can use it as a fallback.
 
 const FALLBACK_GATEWAY_CONTEXT_STATE_KEY: unique symbol = Symbol.for(
   "openclaw.fallbackGatewayContextState",
@@ -47,6 +47,7 @@ const getFallbackGatewayContextState = () =>
     resolveContext: undefined,
   }));
 
+/** Set the process fallback gateway context for channel adapters outside WS requests. */
 export function setFallbackGatewayContext(ctx: GatewayRequestContext): () => void {
   const fallbackGatewayContextState = getFallbackGatewayContextState();
   fallbackGatewayContextState.context = ctx;
@@ -77,6 +78,7 @@ export function setFallbackGatewayContextResolver(
   };
 }
 
+/** Clear the fallback gateway context installed for non-WS dispatch paths. */
 export function clearFallbackGatewayContext(): void {
   const fallbackGatewayContextState = getFallbackGatewayContextState();
   fallbackGatewayContextState.context = undefined;
@@ -87,6 +89,10 @@ function getFallbackGatewayContext(): GatewayRequestContext | undefined {
   const fallbackGatewayContextState = getFallbackGatewayContextState();
   const resolved = fallbackGatewayContextState.resolveContext?.();
   return resolved ?? fallbackGatewayContextState.context;
+}
+
+export function hasInProcessGatewayContext(): boolean {
+  return Boolean(getPluginRuntimeGatewayRequestScope()?.context ?? getFallbackGatewayContext());
 }
 
 type PluginSubagentOverridePolicy = {
@@ -188,7 +194,7 @@ function authorizeFallbackModelOverride(params: {
       allowed: false,
       reason:
         `plugin "${pluginId}" is not trusted for fallback provider/model override requests. ` +
-        "See https://docs.openclaw.ai/tools/plugin#runtime-helpers and search for: " +
+        "See https://docs.openclaw.ai/plugins/sdk-runtime#api-runtime-subagent and search for: " +
         "plugins.entries.<id>.subagent.allowModelOverride",
     };
   }
@@ -244,6 +250,7 @@ function resolveRequestedFallbackModelRef(params: {
 
 function createSyntheticOperatorClient(params?: {
   allowModelOverride?: boolean;
+  agentRunTracking?: "plugin_subagent";
   pluginRuntimeOwnerId?: string;
   scopes?: string[];
 }): GatewayRequestOptions["client"] {
@@ -266,6 +273,7 @@ function createSyntheticOperatorClient(params?: {
     },
     internal: {
       allowModelOverride: params?.allowModelOverride === true,
+      ...(params?.agentRunTracking ? { agentRunTracking: params.agentRunTracking } : {}),
       ...(params?.scopes?.includes(APPROVALS_SCOPE) ? { approvalRuntime: true } : {}),
       ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
     },
@@ -299,6 +307,7 @@ function mergeGatewayClientInternal(
 
 type DispatchGatewayMethodInProcessOptions = {
   allowSyntheticModelOverride?: boolean;
+  agentRunTracking?: "plugin_subagent";
   disableSyntheticClient?: boolean;
   expectFinal?: boolean;
   forceSyntheticClient?: boolean;
@@ -325,6 +334,49 @@ function unwrapGatewayMethodDispatchResponse(
   return response.payload;
 }
 
+function resolveInProcessDispatchTimeoutMs(timeoutMs?: number): number | undefined {
+  return typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
+    ? resolveSafeTimeoutDelayMs(timeoutMs)
+    : undefined;
+}
+
+function resolveInProcessDispatchDeadlineMs(timeoutMs?: number): number | undefined {
+  const safeTimeoutMs = resolveInProcessDispatchTimeoutMs(timeoutMs);
+  return safeTimeoutMs === undefined ? undefined : Date.now() + safeTimeoutMs;
+}
+
+function resolveRemainingInProcessDispatchTimeoutMs(deadlineMs?: number): number | undefined {
+  return deadlineMs === undefined
+    ? undefined
+    : resolveSafeTimeoutDelayMs(deadlineMs - Date.now(), { minMs: 0 });
+}
+
+async function waitForInProcessDispatch<T>(
+  method: string,
+  promise: Promise<T>,
+  deadlineMs?: number,
+): Promise<T> {
+  const remainingTimeoutMs = resolveRemainingInProcessDispatchTimeoutMs(deadlineMs);
+  if (remainingTimeoutMs === undefined) {
+    return await promise;
+  }
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => {
+          reject(new Error(`gateway request timeout for ${method}`));
+        }, remainingTimeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
 export async function dispatchGatewayMethodInProcessRaw(
   method: string,
   params: unknown,
@@ -346,7 +398,16 @@ export async function dispatchGatewayMethodInProcessRaw(
 
   let firstResponse: GatewayMethodDispatchResponse | undefined;
   let finalResponse: GatewayMethodDispatchResponse | undefined;
+  let resolveFirstResponse: ((response: GatewayMethodDispatchResponse) => void) | undefined;
+  let rejectFirstResponse: ((err: Error) => void) | undefined;
   let resolveFinalResponse: ((response: GatewayMethodDispatchResponse) => void) | undefined;
+  let rejectFinalResponse: ((err: Error) => void) | undefined;
+  let postFirstResponseError: Error | undefined;
+  const firstResponsePromise = new Promise<GatewayMethodDispatchResponse>((resolve, reject) => {
+    resolveFirstResponse = resolve;
+    rejectFirstResponse = reject;
+  });
+  const deadlineMs = resolveInProcessDispatchDeadlineMs(options?.timeoutMs);
   const { handleGatewayRequest } = await import("./server-methods.js");
   const pluginRuntimeOwnerId =
     typeof options?.pluginRuntimeOwnerId === "string" && options.pluginRuntimeOwnerId.trim()
@@ -354,17 +415,23 @@ export async function dispatchGatewayMethodInProcessRaw(
       : undefined;
   const syntheticClient = createSyntheticOperatorClient({
     allowModelOverride: options?.allowSyntheticModelOverride === true,
+    agentRunTracking: options?.agentRunTracking,
     ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
     scopes: options?.syntheticScopes,
   });
   const scopedClient = mergeGatewayClientInternal(
     scope?.client,
-    pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : undefined,
+    pluginRuntimeOwnerId || options?.agentRunTracking
+      ? {
+          ...(options?.agentRunTracking ? { agentRunTracking: options.agentRunTracking } : {}),
+          ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
+        }
+      : undefined,
   );
   if (options?.disableSyntheticClient === true && !scopedClient) {
     throw new Error(`In-process gateway dispatch requires a scoped client (method: ${method}).`);
   }
-  await handleGatewayRequest({
+  void handleGatewayRequest({
     req: {
       type: "req",
       id: `plugin-subagent-${randomUUID()}`,
@@ -380,6 +447,7 @@ export async function dispatchGatewayMethodInProcessRaw(
       const response = { ok, payload, error, ...(meta ? { meta } : {}) };
       if (!firstResponse) {
         firstResponse = response;
+        resolveFirstResponse?.(response);
         return;
       }
       if (!finalResponse) {
@@ -388,40 +456,63 @@ export async function dispatchGatewayMethodInProcessRaw(
       }
     },
     context,
-  });
+  })
+    .then(() => {
+      if (!firstResponse) {
+        rejectFirstResponse?.(
+          new Error(`Gateway method "${method}" completed without a response.`),
+        );
+      }
+    })
+    .catch((err: unknown) => {
+      const error = err instanceof Error ? err : new Error(String(err));
+      if (!firstResponse) {
+        rejectFirstResponse?.(error);
+        return;
+      }
+      postFirstResponseError = error;
+      rejectFinalResponse?.(error);
+    });
 
-  if (!firstResponse) {
-    throw new Error(`Gateway method "${method}" completed without a response.`);
-  }
+  firstResponse = await waitForInProcessDispatch(method, firstResponsePromise, deadlineMs);
   const firstPayload = firstResponse.payload as { status?: unknown } | undefined;
   if (options?.expectFinal !== true || firstPayload?.status !== "accepted") {
     return firstResponse;
+  }
+  if (postFirstResponseError) {
+    throw postFirstResponseError;
   }
   const final =
     finalResponse ??
     (await new Promise<GatewayMethodDispatchResponse>((resolve, reject) => {
       resolveFinalResponse = resolve;
-      const timeoutMs =
-        typeof options.timeoutMs === "number" && Number.isFinite(options.timeoutMs)
-          ? resolveSafeTimeoutDelayMs(options.timeoutMs)
-          : undefined;
+      const timeoutMs = resolveRemainingInProcessDispatchTimeoutMs(deadlineMs);
       const timeout =
         timeoutMs === undefined
           ? undefined
           : setTimeout(() => {
               reject(new Error(`gateway request timeout for ${method}`));
             }, timeoutMs);
-      if (finalResponse) {
+      const clearFinalTimeout = () => {
         if (timeout) {
           clearTimeout(timeout);
         }
+      };
+      rejectFinalResponse = (err) => {
+        clearFinalTimeout();
+        reject(err);
+      };
+      if (postFirstResponseError) {
+        rejectFinalResponse(postFirstResponseError);
+        return;
+      }
+      if (finalResponse) {
+        clearFinalTimeout();
         resolve(finalResponse);
         return;
       }
       resolveFinalResponse = (response) => {
-        if (timeout) {
-          clearTimeout(timeout);
-        }
+        clearFinalTimeout();
         resolve(response);
       };
     }));
@@ -499,6 +590,7 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
         },
         {
           allowSyntheticModelOverride,
+          agentRunTracking: "plugin_subagent",
           ...(pluginId ? { pluginRuntimeOwnerId: pluginId } : {}),
         },
       );
@@ -636,6 +728,7 @@ export function loadGatewayPlugins(params: {
           ...(params.pluginLookUpTable?.manifestRegistry
             ? { manifestRegistry: params.pluginLookUpTable.manifestRegistry }
             : {}),
+          discovery: params.pluginLookUpTable?.discovery,
         })
       : undefined;
   const autoEnableMs = performance.now() - started;
@@ -659,6 +752,7 @@ export function loadGatewayPlugins(params: {
             ...(params.pluginLookUpTable?.manifestRegistry
               ? { manifestRegistry: params.pluginLookUpTable.manifestRegistry }
               : {}),
+            discovery: params.pluginLookUpTable?.discovery,
           });
   const resolvedConfigMs = performance.now() - started;
   const resolvedConfig = autoEnabled.config;
@@ -727,7 +821,7 @@ export function loadGatewayPlugins(params: {
   const loadMs = performance.now() - beforeLoad;
   const loaderStatsAfter = getPluginModuleLoaderStats();
   const pluginMethods = Object.keys(pluginRegistry.gatewayHandlers);
-  const gatewayMethods = Array.from(new Set([...params.baseMethods, ...pluginMethods]));
+  const gatewayMethods = uniqueStrings([...params.baseMethods, ...pluginMethods]);
   params.startupTrace?.detail("plugins.gateway-load", [
     ["autoEnableMs", autoEnableMs],
     ["resolvedConfigMs", resolvedConfigMs],

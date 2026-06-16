@@ -1,3 +1,8 @@
+/**
+ * Shared mocks for auth profile OAuth tests.
+ * Provides hoisted provider-runtime, CLI credential, doctor, and external CLI
+ * sync mocks so OAuth tests can stay focused on store behavior.
+ */
 import { vi } from "vitest";
 import type { OAuthCredential } from "./types.js";
 
@@ -8,6 +13,7 @@ const oauthProviderRuntimeMocks = vi.hoisted(() => ({
   formatProviderAuthProfileApiKeyWithPluginMock: vi.fn(() => undefined),
 }));
 
+/** Return hoisted provider-runtime OAuth mocks for per-test setup. */
 export function getOAuthProviderRuntimeMocks() {
   return oauthProviderRuntimeMocks;
 }

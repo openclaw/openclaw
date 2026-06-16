@@ -19,9 +19,9 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as v8 from "node:v8";
-import { abortable as productionAbortable } from "../src/agents/pi-embedded-runner/run/abortable.js";
 
 type Mode = "production" | "closure-extracted" | "closure-inline" | "synthetic-leak";
+type Abortable = <T>(signal: AbortSignal, promise: Promise<T>) => Promise<T>;
 
 type Options = {
   iters: number;
@@ -50,11 +50,11 @@ function parseArgs(argv: string[]): Options {
     const next = argv[i + 1];
     switch (arg) {
       case "--iters":
-        opts.iters = Number.parseInt(next ?? "", 10);
+        opts.iters = parsePositiveInt(next, arg);
         i += 1;
         break;
       case "--batches":
-        opts.batches = Number.parseInt(next ?? "", 10);
+        opts.batches = parsePositiveInt(next, arg);
         i += 1;
         break;
       case "--snap-dir":
@@ -77,15 +77,15 @@ function parseArgs(argv: string[]): Options {
         i += 1;
         break;
       case "--max-rss-growth-mb":
-        opts.maxRssGrowthMb = Number.parseInt(next ?? "", 10);
+        opts.maxRssGrowthMb = parseNonNegativeInt(next, arg);
         i += 1;
         break;
       case "--max-tracked-retention":
-        opts.maxTrackedRetention = Number.parseInt(next ?? "", 10);
+        opts.maxTrackedRetention = parseNonNegativeInt(next, arg);
         i += 1;
         break;
       case "--scope-bytes":
-        opts.scopeBytes = Number.parseInt(next ?? "", 10);
+        opts.scopeBytes = parsePositiveInt(next, arg);
         i += 1;
         break;
       case "--quiet":
@@ -107,6 +107,38 @@ function parseArgs(argv: string[]): Options {
     fail("--batches must be > 0");
   }
   return opts;
+}
+
+function parsePositiveInt(raw: string | undefined, flag: string): number {
+  const value = parseStrictInt(raw, flag, "positive");
+  if (value <= 0) {
+    fail(`${flag} must be a positive integer`);
+  }
+  return value;
+}
+
+function parseNonNegativeInt(raw: string | undefined, flag: string): number {
+  const value = parseStrictInt(raw, flag, "non-negative");
+  if (value < 0) {
+    fail(`${flag} must be a non-negative integer`);
+  }
+  return value;
+}
+
+function parseStrictInt(
+  raw: string | undefined,
+  flag: string,
+  label: "positive" | "non-negative",
+): number {
+  const text = (raw ?? "").trim();
+  if (!/^\d+$/u.test(text)) {
+    fail(`${flag} must be a ${label} integer`);
+  }
+  const value = Number(text);
+  if (!Number.isSafeInteger(value)) {
+    fail(`${flag} must be a ${label} integer`);
+  }
+  return value;
 }
 
 function printUsage(): void {
@@ -137,6 +169,14 @@ const FINALIZED = { count: 0 };
 const finalizer = new FinalizationRegistry<number>(() => {
   FINALIZED.count += 1;
 });
+let productionAbortable: Abortable | null = null;
+
+async function loadProductionAbortable(): Promise<void> {
+  const module = (await import("../src/agents/embedded-agent-runner/run/abortable.js")) as {
+    abortable: Abortable;
+  };
+  productionAbortable = module.abortable;
+}
 
 function abortableExtracted<T>(signal: AbortSignal, promise: Promise<T>): Promise<T> {
   if (signal.aborted) {
@@ -153,9 +193,9 @@ function abortableExtracted<T>(signal: AbortSignal, promise: Promise<T>): Promis
         signal.removeEventListener("abort", onAbort);
         resolve(value);
       },
-      (err) => {
+      (err: unknown) => {
         signal.removeEventListener("abort", onAbort);
-        reject(err);
+        reject(toLintErrorObject(err, "Non-Error rejection"));
       },
     );
   });
@@ -179,6 +219,9 @@ function runOnce(mode: Mode, scopeBytes: number, iter: number): void {
   KEEP_ALIVE.push(neverSettling);
 
   if (mode === "production") {
+    if (!productionAbortable) {
+      throw new Error("production abortable is not loaded");
+    }
     void productionAbortable(ac.signal, neverSettling).catch(() => {});
   } else if (mode === "closure-extracted") {
     void abortableExtracted(ac.signal, neverSettling).catch(() => {});
@@ -193,11 +236,11 @@ function runOnce(mode: Mode, scopeBytes: number, iter: number): void {
           void subscription;
           resolve(v);
         },
-        (e) => {
+        (e: unknown) => {
           void transcript;
           void toolMetas;
           void subscription;
-          reject(e);
+          reject(toLintErrorObject(e, "Non-Error rejection"));
         },
       );
     });
@@ -214,10 +257,14 @@ function runOnce(mode: Mode, scopeBytes: number, iter: number): void {
 
 async function settleAndGc(): Promise<void> {
   for (let i = 0; i < 4; i += 1) {
-    await new Promise<void>((r) => setImmediate(r));
+    await new Promise<void>((r) => {
+      setImmediate(r);
+    });
     globalThis.gc?.();
   }
-  await new Promise<void>((r) => setTimeout(r, 100));
+  await new Promise<void>((r) => {
+    setTimeout(r, 100);
+  });
   globalThis.gc?.();
 }
 
@@ -243,6 +290,9 @@ function fmtBytes(bytes: number): string {
 
 async function main(): Promise<void> {
   const opts = parseArgs(process.argv.slice(2));
+  if (opts.mode === "production") {
+    await loadProductionAbortable();
+  }
   if (typeof globalThis.gc !== "function") {
     fail("--expose-gc is required (run with: node --expose-gc ...)");
   }
@@ -332,7 +382,21 @@ async function main(): Promise<void> {
   process.exit(verdict === "PASS" ? 0 : 1);
 }
 
-main().catch((err) => {
+main().catch((err: unknown) => {
   process.stderr.write(`harness crashed: ${String(err)}\n${(err as Error)?.stack ?? ""}\n`);
   process.exit(2);
 });
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

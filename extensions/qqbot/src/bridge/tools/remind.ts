@@ -1,3 +1,4 @@
+// Qqbot plugin module implements remind behavior.
 import { callGatewayTool } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type {
   AnyAgentTool,
@@ -49,7 +50,6 @@ export function createRemindTool(
   return {
     name: "qqbot_remind",
     label: "QQBot Reminder",
-    ownerOnly: true,
     description:
       "Create, list, and remove QQ reminders. " +
       "This tool schedules Gateway cron jobs directly; do not call the cron tool after it succeeds.\n" +
@@ -60,19 +60,6 @@ export function createRemindTool(
       'Time examples: "5m", "1h", "0 8 * * *"',
     parameters: RemindSchema,
     async execute(_toolCallId, params) {
-      if (toolContext.senderIsOwner !== true) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify({
-                error: "QQ reminders require an owner-authorized sender.",
-              }),
-            },
-          ],
-          details: { error: "QQ reminders require an owner-authorized sender." },
-        };
-      }
       const ctx = getRequestContext();
       return await executeScheduledRemind(
         params as RemindParams,

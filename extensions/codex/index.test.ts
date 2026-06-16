@@ -1,3 +1,4 @@
+// Codex tests cover index plugin behavior.
 import fs from "node:fs";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it, vi } from "vitest";
@@ -31,12 +32,13 @@ describe("codex plugin", () => {
     expect(manifest.enabledByDefault).toBeUndefined();
   });
 
-  it("registers the codex provider and agent harness", () => {
+  it("registers the codex provider, agent harness, and hosted web search", () => {
     const registerAgentHarness = vi.fn();
     const registerCommand = vi.fn();
     const registerMediaUnderstandingProvider = vi.fn();
     const registerMigrationProvider = vi.fn();
     const registerProvider = vi.fn();
+    const registerWebSearchProvider = vi.fn();
     const on = vi.fn();
     const onConversationBindingResolved = vi.fn();
 
@@ -53,6 +55,7 @@ describe("codex plugin", () => {
         registerMediaUnderstandingProvider,
         registerMigrationProvider,
         registerProvider,
+        registerWebSearchProvider,
         on,
         onConversationBindingResolved,
       }),
@@ -81,6 +84,13 @@ describe("codex plugin", () => {
     expect(mediaProviderRegistration?.defaultModels).toEqual({ image: "gpt-5.5" });
     expect(typeof mediaProviderRegistration?.describeImage).toBe("function");
     expect(typeof mediaProviderRegistration?.describeImages).toBe("function");
+    const webSearchRegistration = mockCallArg(registerWebSearchProvider) as
+      | Record<string, unknown>
+      | undefined;
+    expect(webSearchRegistration?.id).toBe("codex");
+    expect(webSearchRegistration?.label).toBe("Codex Hosted Search");
+    expect(webSearchRegistration?.requiresCredential).toBe(false);
+    expect(typeof webSearchRegistration?.createTool).toBe("function");
     const commandRegistration = mockCallArg(registerCommand) as Record<string, unknown> | undefined;
     expect(commandRegistration?.name).toBe("codex");
     expect(commandRegistration?.description).toBe(
@@ -118,7 +128,7 @@ describe("codex plugin", () => {
     expect((mockCallArg(registerProvider) as { id?: string } | undefined)?.id).toBe("codex");
   });
 
-  it("only claims the codex provider by default", () => {
+  it("claims the Codex routing providers by default", () => {
     const harness = createCodexAppServerAgentHarness();
 
     expect(harness.deliveryDefaults?.sourceVisibleReplies).toBe("message_tool");
@@ -126,8 +136,14 @@ describe("codex plugin", () => {
       harness.supports({ provider: "codex", modelId: "gpt-5.4", requestedRuntime: "auto" })
         .supported,
     ).toBe(true);
+    const openAiCodex = harness.supports({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      requestedRuntime: "auto",
+    });
+    expect(openAiCodex.supported).toBe(true);
     const unsupported = harness.supports({
-      provider: "openai-codex",
+      provider: "9router",
       modelId: "gpt-5.4",
       requestedRuntime: "auto",
     });
@@ -210,7 +226,7 @@ describe("codex plugin", () => {
 
   it("enables the native hook relay for public Codex side questions", async () => {
     const harness = createCodexAppServerAgentHarness({ pluginConfig: { appServer: {} } });
-    const runSideQuestion = harness.runSideQuestion;
+    const runSideQuestion = harness["runSideQuestion"];
     const result = { text: "ok" };
     runCodexAppServerSideQuestionMock.mockResolvedValueOnce(result);
 

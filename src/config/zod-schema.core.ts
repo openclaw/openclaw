@@ -1,13 +1,14 @@
+// Defines core Zod schema fragments for canonical config parsing.
 import path from "node:path";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { z } from "zod";
-import { normalizeProviderId } from "../agents/provider-id.js";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
 import {
   formatExecSecretRefIdValidationMessage,
   isValidExecSecretRefId,
   isValidFileSecretRefId,
 } from "../secrets/ref-contract.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
 import type { ModelCompatConfig } from "./types.models.js";
 import { MODEL_APIS, MODEL_THINKING_FORMATS } from "./types.models.js";
 import type { MediaToolsConfig } from "./types.tools.js";
@@ -20,6 +21,8 @@ const WINDOWS_ABS_PATH_PATTERN = /^[A-Za-z]:[\\/]/;
 const WINDOWS_UNC_PATH_PATTERN = /^\\\\[^\\]+\\[^\\]+/;
 
 function isAbsolutePath(value: string): boolean {
+  // `path.isAbsolute` follows the host OS, but config files can be authored for Windows from
+  // macOS/Linux. Accept Windows forms explicitly so cross-platform config validation stays stable.
   return (
     path.isAbsolute(value) ||
     WINDOWS_ABS_PATH_PATTERN.test(value) ||
@@ -76,12 +79,14 @@ const ExecSecretRefSchema = z
   })
   .strict();
 
+/** Config-level secret reference schema shared by model/provider/plugin credential fields. */
 export const SecretRefSchema = z.discriminatedUnion("source", [
   EnvSecretRefSchema,
   FileSecretRefSchema,
   ExecSecretRefSchema,
 ]);
 
+/** Accepts either legacy inline secret strings or structured secret references. */
 export const SecretInputSchema = z.union([z.string(), SecretRefSchema]);
 
 const SecretsEnvProviderSchema = z
@@ -107,7 +112,7 @@ const SecretsFileProviderSchema = z
   })
   .strict();
 
-const SecretsExecProviderSchema = z
+const SecretsManualExecProviderSchema = z
   .object({
     source: z.literal("exec"),
     command: z
@@ -144,17 +149,36 @@ const SecretsExecProviderSchema = z
   })
   .strict();
 
-export const SecretProviderSchema = z.discriminatedUnion("source", [
+const SecretsPluginIntegrationExecProviderSchema = z
+  .object({
+    source: z.literal("exec"),
+    pluginIntegration: z
+      .object({
+        pluginId: z.string().min(1).max(128),
+        integrationId: z.string().min(1).max(128),
+      })
+      .strict(),
+  })
+  .strict();
+
+const SecretsExecProviderSchema = z.union([
+  SecretsManualExecProviderSchema,
+  SecretsPluginIntegrationExecProviderSchema,
+]);
+
+/** Schema for one configured env/file/exec secret provider entry. */
+export const SecretProviderSchema = z.union([
   SecretsEnvProviderSchema,
   SecretsFileProviderSchema,
   SecretsExecProviderSchema,
 ]);
 
+/** Schema for the top-level `secrets` config block. */
 export const SecretsConfigSchema = z
   .object({
     providers: z
       .object({
-        // Keep this as a record so users can define multiple providers per source.
+        // Keep this as a record so users can define multiple named providers per source.
       })
       .catchall(SecretProviderSchema)
       .optional(),
@@ -206,6 +230,7 @@ const ModelCompatSchema = z
     requiresToolResultName: z.boolean().optional(),
     requiresAssistantAfterToolResult: z.boolean().optional(),
     requiresThinkingAsText: z.boolean().optional(),
+    requiresReasoningContentOnAssistantMessages: z.boolean().optional(),
     toolSchemaProfile: z.string().optional(),
     unsupportedToolSchemaKeywords: z.array(z.string().min(1)).optional(),
     nativeWebSearchTool: z.boolean().optional(),
@@ -307,6 +332,37 @@ const ModelAgentRuntimePolicySchema = z
   .strict()
   .optional();
 
+const ModelImageInputSchema = z
+  .object({
+    maxBytes: z.number().int().positive().optional(),
+    maxPixels: z.number().int().positive().optional(),
+    maxSidePx: z.number().int().positive().optional(),
+    preferredSidePx: z.number().int().positive().optional(),
+    tokenMode: z.union([z.literal("tile"), z.literal("detail"), z.literal("provider")]).optional(),
+  })
+  .strict();
+
+const ModelMediaInputSchema = z
+  .object({
+    image: ModelImageInputSchema.optional(),
+  })
+  .strict();
+
+// Mirrors the runtime ThinkingLevelMap contract (model-registry TypeBox schema). Persisted model
+// entries carry thinkingLevelMap, so the strict config schema must accept it or updateConfig rolls back.
+const ThinkingLevelMapValueSchema = z.string().nullable();
+const ThinkingLevelMapSchema = z
+  .object({
+    off: ThinkingLevelMapValueSchema.optional(),
+    minimal: ThinkingLevelMapValueSchema.optional(),
+    low: ThinkingLevelMapValueSchema.optional(),
+    medium: ThinkingLevelMapValueSchema.optional(),
+    high: ThinkingLevelMapValueSchema.optional(),
+    xhigh: ThinkingLevelMapValueSchema.optional(),
+    max: ThinkingLevelMapValueSchema.optional(),
+  })
+  .strict();
+
 const ModelDefinitionSchema = z
   .object({
     id: z.string().min(1),
@@ -344,10 +400,12 @@ const ModelDefinitionSchema = z
     contextWindow: z.number().positive().optional(),
     contextTokens: z.number().int().positive().optional(),
     maxTokens: z.number().positive().optional(),
+    thinkingLevelMap: ThinkingLevelMapSchema.optional(),
     params: z.record(z.string(), z.unknown()).optional(),
     agentRuntime: ModelAgentRuntimePolicySchema,
     headers: z.record(z.string(), z.string()).optional(),
     compat: ModelCompatSchema,
+    mediaInput: ModelMediaInputSchema.optional(),
     metadataSource: z.literal("models-add").optional(),
   })
   .strict();
@@ -405,7 +463,7 @@ const BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS = new Set([
   "nvidia",
   "ollama",
   "openai",
-  "openai-codex",
+  "openai",
   "opencode",
   "opencode-go",
   "openrouter",
@@ -426,6 +484,7 @@ const BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS = new Set([
   "vydra",
   "xai",
   "xiaomi",
+  "xiaomi-token-plan",
   "zai",
 ]);
 
@@ -445,6 +504,7 @@ const ModelProviderSchema = z
     contextTokens: z.number().int().positive().optional(),
     maxTokens: z.number().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
+    region: z.string().min(1).optional(),
     injectNumCtxForOpenAICompat: z.boolean().optional(),
     params: z.record(z.string(), z.unknown()).optional(),
     agentRuntime: ModelAgentRuntimePolicySchema,
@@ -512,6 +572,16 @@ export const VisibleRepliesSchema = z
     }
     return value;
   });
+
+export const MentionPatternsModeSchema = z.union([z.literal("allow"), z.literal("deny")]);
+
+export const MentionPatternsPolicySchema = z
+  .object({
+    mode: MentionPatternsModeSchema.optional(),
+    allowIn: z.array(z.string()).optional(),
+    denyIn: z.array(z.string()).optional(),
+  })
+  .strict();
 
 export const GroupChatSchema = z
   .object({

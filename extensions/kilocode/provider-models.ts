@@ -1,3 +1,4 @@
+// Kilocode provider module implements model/runtime integration.
 import { readProviderJsonArrayFieldResponse } from "openclaw/plugin-sdk/provider-http";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
@@ -5,7 +6,10 @@ import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asPositiveSafeInteger,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const log = createSubsystemLogger("kilocode-models");
 
@@ -113,8 +117,10 @@ function toModelDefinition(entry: GatewayModelEntry): ModelDefinitionConfig {
       cacheRead: toPricePerMillion(entry.pricing.input_cache_read),
       cacheWrite: toPricePerMillion(entry.pricing.input_cache_write),
     },
-    contextWindow: entry.context_length || KILOCODE_DEFAULT_CONTEXT_WINDOW,
-    maxTokens: entry.top_provider?.max_completion_tokens ?? KILOCODE_DEFAULT_MAX_TOKENS,
+    contextWindow: asPositiveSafeInteger(entry.context_length) ?? KILOCODE_DEFAULT_CONTEXT_WINDOW,
+    maxTokens:
+      asPositiveSafeInteger(entry.top_provider?.max_completion_tokens) ??
+      KILOCODE_DEFAULT_MAX_TOKENS,
   };
 }
 

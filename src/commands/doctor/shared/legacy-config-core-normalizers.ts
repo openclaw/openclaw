@@ -1,23 +1,25 @@
+// Core legacy config normalizers for shipped keys retired outside the rule table.
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
-  legacyRuntimeModelAliasRequiresRuntimePolicy,
-  listLegacyRuntimeModelProviderAliases,
-  migrateLegacyRuntimeModelRef,
-} from "../../../agents/model-runtime-aliases.js";
-import { normalizeProviderId } from "../../../agents/provider-id.js";
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import { resolveSingleAccountKeysToMove } from "../../../channels/plugins/setup-promotion-helpers.js";
 import { resolveNormalizedProviderModelMaxTokens } from "../../../config/defaults.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { DEFAULT_GOOGLE_API_BASE_URL } from "../../../infra/google-api-base-url.js";
 import { DEFAULT_ACCOUNT_ID } from "../../../routing/session-key.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../../shared/string-coerce.js";
-import { sanitizeForLog } from "../../../terminal/ansi.js";
 import { hasOwnKey, isRecord } from "./legacy-config-record-shared.js";
 import { isLegacyModelsAddCodexMetadataModel } from "./legacy-models-add-metadata.js";
+import {
+  legacyRuntimeModelAliasRequiresRuntimePolicy,
+  listLegacyRuntimeModelProviderAliases,
+  migrateLegacyRuntimeModelRef,
+} from "./legacy-runtime-model-providers.js";
 export { normalizeLegacyTalkConfig } from "./legacy-talk-config-normalizer.js";
 
+/** Remove deprecated command config keys that no runtime reads anymore. */
 export function normalizeLegacyCommandsConfig(
   cfg: OpenClawConfig,
   changes: string[],
@@ -37,6 +39,7 @@ export function normalizeLegacyCommandsConfig(
   };
 }
 
+/** Migrate legacy browser/Chrome relay config to current browser profile settings. */
 export function normalizeLegacyBrowserConfig(
   cfg: OpenClawConfig,
   changes: string[],
@@ -122,6 +125,7 @@ export function normalizeLegacyBrowserConfig(
   };
 }
 
+/** Move single-account channel fields into accounts.default when account maps exist. */
 export function seedMissingDefaultAccountsFromSingleAccountBase(
   cfg: OpenClawConfig,
   changes: string[],
@@ -217,7 +221,7 @@ function resolveLegacyWholeAgentRuntimePolicy(raw: unknown):
     return undefined;
   }
   const runtime = normalizeOptionalLowercaseString(raw.id);
-  if (!runtime || runtime === "auto" || runtime === "pi") {
+  if (!runtime || runtime === "auto" || runtime === "openclaw") {
     return undefined;
   }
   const alias = listLegacyRuntimeModelProviderAliases().find(
@@ -647,6 +651,7 @@ function normalizeLegacyCodexCliProviderRuntimePins(
     : { config: cfg, changed: false };
 }
 
+/** Move legacy runtime-tagged model/provider refs onto current agentRuntime policy fields. */
 export function normalizeLegacyRuntimeModelRefs(
   cfg: OpenClawConfig,
   changes: string[],
@@ -700,6 +705,7 @@ export function normalizeLegacyRuntimeModelRefs(
   return nextCfg;
 }
 
+/** Add missing metadata source markers to legacy OpenAI Codex model catalog entries. */
 export function normalizeLegacyOpenAICodexModelsAddMetadata(
   cfg: OpenClawConfig,
   changes: string[],
@@ -766,6 +772,7 @@ export function normalizeLegacyOpenAICodexModelsAddMetadata(
   };
 }
 
+/** Rename legacy OpenAI API identifiers to the current completion/chat API ids. */
 export function normalizeLegacyOpenAIModelProviderApi(
   cfg: OpenClawConfig,
   changes: string[],
@@ -837,6 +844,7 @@ export function normalizeLegacyOpenAIModelProviderApi(
   };
 }
 
+/** Remove retired bundled nano-banana skill config after migrating image generation models. */
 export function normalizeLegacyNanoBananaSkill(
   cfg: OpenClawConfig,
   changes: string[],
@@ -973,6 +981,7 @@ export function normalizeLegacyNanoBananaSkill(
   };
 }
 
+/** Move legacy cross-context send boolean into explicit message crossContext policy. */
 export function normalizeLegacyCrossContextMessageConfig(
   cfg: OpenClawConfig,
   changes: string[],
@@ -1067,6 +1076,7 @@ function migrateLegacyDeepgramCompat(params: {
   return true;
 }
 
+/** Move legacy media provider option aliases into providerOptions maps. */
 export function normalizeLegacyMediaProviderOptions(
   cfg: OpenClawConfig,
   changes: string[],
@@ -1254,6 +1264,7 @@ function applyLegacyOllamaProviderNumCtxParams(params: {
   };
 }
 
+/** Seed native Ollama num_ctx params from legacy context-token budgets. */
 export function normalizeLegacyOllamaNativeNumCtxParams(
   cfg: OpenClawConfig,
   changes: string[],
@@ -1356,7 +1367,48 @@ export function normalizeLegacyOllamaNativeNumCtxParams(
   };
 }
 
-export function normalizeLegacyMistralModelMaxTokens(
+const MISTRAL_MODEL_CACHE_READ_COST_BY_ID: Record<string, number> = {
+  "codestral-latest": 0.03,
+  "devstral-medium-latest": 0.04,
+  "magistral-small": 0.05,
+  "mistral-large-latest": 0.05,
+  "mistral-medium-2508": 0.04,
+  "mistral-medium-3-5": 0.15,
+  "mistral-small-latest": 0.01,
+  "pixtral-large-latest": 0.2,
+};
+
+function normalizeLegacyMistralModelCost<T extends Record<string, unknown>>(params: {
+  providerId: string;
+  model: T;
+  modelId: string;
+  index: number;
+  changes: string[];
+}): { model: T; changed: boolean } {
+  const cost = params.model.cost;
+  if (!isRecord(cost) || cost.cacheRead !== 0) {
+    return { model: params.model, changed: false };
+  }
+
+  const normalizedCacheRead = MISTRAL_MODEL_CACHE_READ_COST_BY_ID[params.modelId.toLowerCase()];
+  if (normalizedCacheRead === undefined) {
+    return { model: params.model, changed: false };
+  }
+
+  params.changes.push(
+    `Normalized models.providers.${sanitizeForLog(params.providerId)}.models[${params.index}].cost.cacheRead (0 → ${normalizedCacheRead}) for Mistral prompt-cache billing.`,
+  );
+  return {
+    model: {
+      ...params.model,
+      cost: { ...cost, cacheRead: normalizedCacheRead },
+    },
+    changed: true,
+  };
+}
+
+/** Normalize stale Mistral model defaults such as prompt-cache read cost. */
+export function normalizeLegacyMistralModelDefaults(
   cfg: OpenClawConfig,
   changes: string[],
 ): OpenClawConfig {
@@ -1382,6 +1434,12 @@ export function normalizeLegacyMistralModelMaxTokens(
         return model;
       }
       const modelId = normalizeOptionalString(model.id) ?? "";
+      if (!modelId) {
+        return model;
+      }
+
+      let nextModel = model;
+      let modelChanged = false;
       const contextWindow =
         typeof model.contextWindow === "number" && Number.isFinite(model.contextWindow)
           ? model.contextWindow
@@ -1390,25 +1448,39 @@ export function normalizeLegacyMistralModelMaxTokens(
         typeof model.maxTokens === "number" && Number.isFinite(model.maxTokens)
           ? model.maxTokens
           : null;
-      if (!modelId || contextWindow === null || maxTokens === null) {
-        return model;
+
+      if (contextWindow !== null && maxTokens !== null) {
+        const normalizedMaxTokens = resolveNormalizedProviderModelMaxTokens({
+          providerId,
+          modelId,
+          contextWindow,
+          rawMaxTokens: maxTokens,
+        });
+        if (normalizedMaxTokens !== maxTokens) {
+          nextModel = Object.assign({}, nextModel, { maxTokens: normalizedMaxTokens });
+          modelChanged = true;
+          changes.push(
+            `Normalized models.providers.${providerId}.models[${index}].maxTokens (${maxTokens} → ${normalizedMaxTokens}) to avoid Mistral context-window rejects.`,
+          );
+        }
       }
 
-      const normalizedMaxTokens = resolveNormalizedProviderModelMaxTokens({
+      const costNormalization = normalizeLegacyMistralModelCost({
         providerId,
+        model: nextModel,
         modelId,
-        contextWindow,
-        rawMaxTokens: maxTokens,
+        index,
+        changes,
       });
-      if (normalizedMaxTokens === maxTokens) {
-        return model;
+      if (costNormalization.changed) {
+        nextModel = costNormalization.model;
+        modelChanged = true;
       }
 
-      modelsChanged = true;
-      changes.push(
-        `Normalized models.providers.${providerId}.models[${index}].maxTokens (${maxTokens} → ${normalizedMaxTokens}) to avoid Mistral context-window rejects.`,
-      );
-      return Object.assign({}, model, { maxTokens: normalizedMaxTokens });
+      if (modelChanged) {
+        modelsChanged = true;
+      }
+      return modelChanged ? nextModel : model;
     });
 
     if (!modelsChanged) {

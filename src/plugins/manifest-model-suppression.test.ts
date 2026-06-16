@@ -1,11 +1,14 @@
+// Verifies manifest-driven model suppression behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   loadPluginMetadataSnapshot: vi.fn(),
+  resolvePluginMetadataSnapshot: vi.fn(),
 }));
 
 vi.mock("./plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: mocks.loadPluginMetadataSnapshot,
+  resolvePluginMetadataSnapshot: mocks.resolvePluginMetadataSnapshot,
 }));
 
 import {
@@ -49,6 +52,10 @@ describe("manifest model suppression", () => {
           },
         },
       ]),
+    );
+    mocks.resolvePluginMetadataSnapshot.mockImplementation(
+      (params?: Parameters<typeof mocks.loadPluginMetadataSnapshot>[0]) =>
+        mocks.loadPluginMetadataSnapshot(params),
     );
   });
 
@@ -181,6 +188,13 @@ describe("manifest model suppression", () => {
         provider: "qwen",
         id: "qwen3.6-plus",
         baseUrl: " https://coding-intl.dashscope.aliyuncs.com./v1 ",
+        env: process.env,
+      })?.suppress,
+    ).toBe(true);
+    expect(
+      resolveManifestBuiltInModelSuppression({
+        provider: "qwen",
+        id: "qwen3.6-plus",
         env: process.env,
       })?.suppress,
     ).toBe(true);

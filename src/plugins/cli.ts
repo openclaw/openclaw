@@ -1,3 +1,4 @@
+// Registers plugin-related CLI commands.
 import type { Command } from "commander";
 import { getRuntimeConfig, readConfigFileSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -8,7 +9,7 @@ import {
   type PluginCliLoaderOptions,
 } from "./cli-registry-loader.js";
 import { registerPluginCliCommandGroups } from "./register-plugin-cli-command-groups.js";
-import type { OpenClawPluginCliCommandDescriptor } from "./types.js";
+import type { OpenClawPluginCliCommandDescriptor, PluginLogger } from "./types.js";
 
 type PluginCliRegistrationMode = "eager" | "lazy";
 
@@ -34,6 +35,13 @@ interface ProgramWithEntriesCache {
 const logger = createPluginCliLogger();
 const loaderOptionIds = new WeakMap<object, number>();
 let nextLoaderOptionId = 1;
+
+const quietDescriptorLogger = {
+  info: () => {},
+  warn: () => {},
+  error: () => {},
+  debug: () => {},
+} satisfies PluginLogger;
 
 function stableJsonKey(value: unknown): string {
   if (value === undefined) {
@@ -81,7 +89,7 @@ export async function getPluginCliCommandDescriptors(
   env?: NodeJS.ProcessEnv,
   loaderOptions?: PluginCliLoaderOptions,
 ): Promise<OpenClawPluginCliCommandDescriptor[]> {
-  return loadPluginCliDescriptors({ cfg, env, loaderOptions });
+  return loadPluginCliDescriptors({ cfg, env, loaderOptions, logger: quietDescriptorLogger });
 }
 
 export async function registerPluginCliCommands(

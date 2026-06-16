@@ -1,3 +1,4 @@
+// Control UI controller manages form coerce gateway state.
 import { schemaType, type JsonSchema } from "../../views/config-form.shared.ts";
 
 function coerceNumberString(value: string, integer: boolean): number | undefined | string {
@@ -111,6 +112,15 @@ export function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
       if (typeof coerced === "boolean") {
         return coerced;
       }
+    }
+    return value;
+  }
+
+  if (type === "string") {
+    // Empty string with minLength constraint should be treated as unset
+    // This handles cases like baseUrl where schema is z.string().min(1)
+    if (typeof value === "string" && value.length === 0 && schema.minLength) {
+      return undefined;
     }
     return value;
   }

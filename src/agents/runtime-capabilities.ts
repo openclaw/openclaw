@@ -1,10 +1,17 @@
+/**
+ * Runtime channel capability collector.
+ *
+ * Agent startup uses this to merge configured channel capabilities with prompt
+ * tools and thread-bound spawn features that depend on channel policy.
+ */
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntriesLower } from "@openclaw/normalization-core/string-normalization";
 import {
   resolveThreadBindingSpawnPolicy,
   supportsAutomaticThreadBindingSpawn,
 } from "../channels/thread-bindings-policy.js";
 import { resolveChannelCapabilities } from "../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { resolveChannelPromptCapabilities } from "./channel-tools.js";
 
 const THREAD_BOUND_SUBAGENT_SPAWN_CAPABILITY = "threadbound-subagent-spawn";
@@ -15,9 +22,7 @@ function mergeRuntimeCapabilities(
   additions: readonly string[] = [],
 ): string[] | undefined {
   const merged = [...(base ?? [])];
-  const seen = new Set(
-    merged.map((capability) => normalizeOptionalLowercaseString(capability)).filter(Boolean),
-  );
+  const seen = new Set(normalizeStringEntriesLower(merged));
 
   for (const capability of additions) {
     const normalizedCapability = normalizeOptionalLowercaseString(capability);
@@ -31,6 +36,7 @@ function mergeRuntimeCapabilities(
   return merged.length > 0 ? merged : undefined;
 }
 
+/** Collects the effective runtime capabilities for a channel/account pair. */
 export function collectRuntimeChannelCapabilities(params: {
   cfg?: OpenClawConfig;
   channel?: string | null;
@@ -52,6 +58,7 @@ export function collectRuntimeChannelCapabilities(params: {
         kind,
       });
       if (policy.enabled && policy.spawnEnabled) {
+        // Thread-bound spawn is only advertised when both policy gates are enabled.
         threadSpawnCapabilities.push(capability);
       }
     }

@@ -70,14 +70,6 @@ enum TalkSpeechLocale {
         return (recognizer, recognizer?.locale.identifier)
     }
 
-    static func normalizedExplicitLocaleID(_ raw: String?) -> String? {
-        TalkConfigParsing.normalizedExplicitSpeechLocaleID(raw, automaticID: self.automaticID)
-    }
-
-    private static func normalizedLocaleID(_ raw: String?) -> String? {
-        TalkConfigParsing.normalizedSpeechLocaleID(raw)
-    }
-
     private static func canonicalID(_ raw: String) -> String {
         raw.replacingOccurrences(of: "_", with: "-")
     }

@@ -1,3 +1,4 @@
+// Applies parsed directives to session state, config overrides, and run options.
 import type { SessionEntry, SessionScope } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
@@ -242,6 +243,7 @@ export async function applyInlineDirectiveOverrides(params: {
     defaultModel,
     aliasIndex,
     allowedModelKeys: modelState.allowedModelKeys,
+    modelCatalog: modelState.allowedModelCatalog,
     thinkingCatalog: modelState.allowedModelCatalog,
     initialModelLabel,
     formatModelSwitchEvent,
@@ -249,6 +251,7 @@ export async function applyInlineDirectiveOverrides(params: {
     messageProvider: ctx.Provider,
     surface: ctx.Surface,
     gatewayClientScopes: ctx.GatewayClientScopes,
+    commandAuthorized: command.isAuthorizedSender,
     senderIsOwner: command.senderIsOwner,
   };
 
@@ -342,6 +345,7 @@ export async function applyInlineDirectiveOverrides(params: {
       messageProvider: ctx.Provider,
       surface: ctx.Surface,
       gatewayClientScopes: ctx.GatewayClientScopes,
+      commandAuthorized: command.isAuthorizedSender,
       senderIsOwner: command.senderIsOwner,
       workspaceDir,
     });

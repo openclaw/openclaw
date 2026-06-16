@@ -1,13 +1,14 @@
+// Issue 78851 Model Resolution script supports OpenClaw repository automation.
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import * as inspector from "node:inspector";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
+import { resolveModelAsync } from "../../src/agents/embedded-agent-runner/model.js";
 import {
   ensureOpenClawModelsJson,
   resetModelsJsonReadyCacheForTest,
 } from "../../src/agents/models-config.js";
-import { resolveModelAsync } from "../../src/agents/pi-embedded-runner/model.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 
 type Options = {
@@ -268,9 +269,9 @@ async function startCpuProfile(params: { dir?: string; output?: string }): Promi
   await mkdir(cpuProfDir, { recursive: true });
   const session = new inspector.Session();
   session.connect();
-  const post = <T>(method: string, params?: Record<string, unknown>) =>
+  const post = <T>(method: string, paramsLocal?: Record<string, unknown>) =>
     new Promise<T>((resolve, reject) => {
-      session.post(method, params ?? {}, (error, result) => {
+      session.post(method, paramsLocal ?? {}, (error, result) => {
         if (error) {
           reject(error);
         } else {

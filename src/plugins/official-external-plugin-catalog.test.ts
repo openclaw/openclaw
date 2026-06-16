@@ -42,6 +42,17 @@ describe("official external plugin catalog", () => {
     expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("line"))?.npmSpec).toBe(
       "@openclaw/line",
     );
+    expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("diffs-language-pack"))).toEqual(
+      {
+        npmSpec: "@openclaw/diffs-language-pack",
+        clawhubSpec: "clawhub:@openclaw/diffs-language-pack",
+        defaultChoice: "npm",
+        minHostVersion: ">=2026.5.27",
+      },
+    );
+    expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("llama-cpp"))?.npmSpec).toBe(
+      "@openclaw/llama-cpp-provider",
+    );
   });
 
   it("allows invalid-config recovery for externalized stock plugins", () => {

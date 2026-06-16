@@ -1,3 +1,4 @@
+// Codex plugin module implements command rpc behavior.
 import type { resolveCodexAppServerAuthProfileIdForAgent } from "./app-server/auth-bridge.js";
 import {
   CODEX_CONTROL_METHODS,
@@ -24,6 +25,8 @@ export type CodexControlRequestOptions = {
   config?: AuthProfileOrderConfig;
   authProfileId?: string;
   agentDir?: string;
+  sessionKey?: string;
+  sessionId?: string;
   isolated?: boolean;
 };
 
@@ -68,6 +71,8 @@ export async function codexControlRequest(
     timeoutMs: runtime.requestTimeoutMs,
     startOptions: runtime.start,
     config: options.config,
+    sessionKey: options.sessionKey,
+    sessionId: options.sessionId,
     authProfileId: options.authProfileId,
     agentDir: options.agentDir,
     isolated: options.isolated,

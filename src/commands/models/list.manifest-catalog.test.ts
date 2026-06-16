@@ -1,3 +1,4 @@
+// Model manifest catalog tests cover loading model catalog entries from plugin manifests.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -15,6 +16,7 @@ vi.mock("../../plugins/plugin-registry.js", () => ({
 
 vi.mock("../../plugins/plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: mocks.loadPluginMetadataSnapshot,
+  resolvePluginMetadataSnapshot: mocks.loadPluginMetadataSnapshot,
 }));
 
 const moonshotPlugin = {
@@ -71,6 +73,7 @@ describe("loadStaticManifestCatalogRowsForList", () => {
       }).map((row) => row.ref),
     ).toEqual(["moonshot/kimi-k2.6"]);
     expect(mocks.loadPluginMetadataSnapshot).toHaveBeenCalledWith({
+      allowWorkspaceScopedCurrent: true,
       config: {},
       env: process.env,
     });

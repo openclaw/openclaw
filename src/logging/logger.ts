@@ -1,9 +1,13 @@
+// Logger implementation writes structured log output with redaction and transports.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Logger as TsLogger } from "tslog";
 import type { OpenClawConfig } from "../config/types.js";
-import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
+import {
+  emitDiagnosticEvent,
+  emitDiagnosticEventWithTrustedTraceContext,
+} from "../infra/diagnostic-events.js";
 import {
   getActiveDiagnosticTraceContext,
   isValidDiagnosticSpanId,
@@ -72,6 +76,7 @@ type ResolvedSettings = {
 export type LoggerResolvedSettings = ResolvedSettings;
 type TsLogRecord = Record<string, unknown>;
 type LoggerConfigLoader = () => OpenClawConfig["logging"] | undefined;
+type HostnameResolver = () => string;
 
 type DiagnosticLogCode = {
   line?: number;
@@ -95,7 +100,9 @@ const MAX_DIAGNOSTIC_LOG_NAME_CHARS = 120;
 const MAX_FILE_LOG_MESSAGE_CHARS = 4 * 1024;
 const MAX_FILE_LOG_CONTEXT_VALUE_CHARS = 512;
 const DIAGNOSTIC_LOG_ATTRIBUTE_KEY_RE = /^[A-Za-z0-9_.:-]{1,64}$/u;
-const HOSTNAME = os.hostname() || "unknown";
+const defaultHostnameResolver: HostnameResolver = () => os.hostname();
+let hostnameResolver: HostnameResolver = defaultHostnameResolver;
+let cachedHostname: string | null = null;
 
 type DiagnosticLogAttributes = Record<string, string | number | boolean>;
 
@@ -295,6 +302,25 @@ function buildFileLogMessage(numericArgs: readonly unknown[]): string | undefine
   return clampFileLogText(parts.join(" "), MAX_FILE_LOG_MESSAGE_CHARS);
 }
 
+function resolveLogHostname(): string {
+  if (cachedHostname) {
+    return cachedHostname;
+  }
+  const hostname = hostnameResolver().trim();
+  if (!hostname) {
+    return "unknown";
+  }
+  cachedHostname = hostname;
+  return hostname;
+}
+
+function withResolvedLogMetaHostname(meta: unknown, hostname: string): unknown {
+  if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
+    return meta;
+  }
+  return { ...(meta as Record<string, unknown>), hostname };
+}
+
 function extractLogBindingPrefix(numericArgs: unknown[]): {
   bindings?: Record<string, unknown>;
   args: unknown[];
@@ -336,9 +362,23 @@ function findLogTraceContext(
   return undefined;
 }
 
+function resolveLogTraceContext(
+  bindings: Record<string, unknown> | undefined,
+  numericArgs: readonly unknown[],
+): { trace?: DiagnosticTraceContext; trustedTraceContext: boolean } {
+  const explicitTrace = findLogTraceContext(bindings, numericArgs);
+  if (explicitTrace) {
+    return { trace: explicitTrace, trustedTraceContext: false };
+  }
+  const activeTrace = getActiveDiagnosticTraceContext();
+  return activeTrace
+    ? { trace: activeTrace, trustedTraceContext: true }
+    : { trustedTraceContext: false };
+}
+
 function buildTraceFileLogFields(logObj: TsLogRecord): Record<string, string> | undefined {
   const { bindings, args } = extractLogBindingPrefix(getSortedNumericLogArgs(logObj));
-  const trace = findLogTraceContext(bindings, args) ?? getActiveDiagnosticTraceContext();
+  const { trace } = resolveLogTraceContext(bindings, args);
   if (!trace) {
     return undefined;
   }
@@ -361,7 +401,7 @@ function buildStructuredFileLogFields(logObj: TsLogRecord): Record<string, strin
   const sessionId = readFirstContextString(sources, ["session_id", "sessionId", "sessionKey"]);
   const channel = readFirstContextString(sources, ["channel", "messageProvider"]);
   return {
-    hostname: HOSTNAME,
+    hostname: resolveLogHostname(),
     ...(message ? { message } : {}),
     ...(agentId ? { agent_id: agentId } : {}),
     ...(sessionId ? { session_id: sessionId } : {}),
@@ -387,7 +427,7 @@ function buildDiagnosticLogRecord(logObj: TsLogRecord) {
     | undefined;
   const { bindings, args: numericArgs } = extractLogBindingPrefix(getSortedNumericLogArgs(logObj));
 
-  const trace = findLogTraceContext(bindings, numericArgs) ?? getActiveDiagnosticTraceContext();
+  const { trace, trustedTraceContext } = resolveLogTraceContext(bindings, numericArgs);
   const structuredArg = numericArgs[0];
   const structuredBindings = isPlainLogRecordObject(structuredArg) ? structuredArg : undefined;
   if (structuredBindings) {
@@ -433,14 +473,17 @@ function buildDiagnosticLogRecord(logObj: TsLogRecord) {
     .filter((name): name is string => Boolean(name));
 
   return {
-    type: "log.record" as const,
-    level: meta?.logLevelName ?? "INFO",
-    message,
-    ...(loggerName ? { loggerName } : {}),
-    ...(loggerParents?.length ? { loggerParents } : {}),
-    ...(Object.keys(attributes).length > 0 ? { attributes } : {}),
-    ...(Object.keys(code).length > 0 ? { code } : {}),
-    ...(trace ? { trace } : {}),
+    event: {
+      type: "log.record" as const,
+      level: meta?.logLevelName ?? "INFO",
+      message,
+      ...(loggerName ? { loggerName } : {}),
+      ...(loggerParents?.length ? { loggerParents } : {}),
+      ...(Object.keys(attributes).length > 0 ? { attributes } : {}),
+      ...(Object.keys(code).length > 0 ? { code } : {}),
+      ...(trace ? { trace } : {}),
+    },
+    trustedTraceContext,
   };
 }
 
@@ -455,9 +498,11 @@ function redactLogRecordForTransport<T extends LogObj>(record: T): T {
 function attachDiagnosticEventTransport(logger: TsLogger<LogObj>): void {
   logger.attachTransport((logObj: LogObj) => {
     try {
-      emitDiagnosticEvent(
-        buildDiagnosticLogRecord(redactLogRecordForTransport(logObj) as TsLogRecord),
-      );
+      const record = buildDiagnosticLogRecord(redactLogRecordForTransport(logObj) as TsLogRecord);
+      const emit = record.trustedTraceContext
+        ? emitDiagnosticEventWithTrustedTraceContext
+        : emitDiagnosticEvent;
+      emit(record.event);
     } catch {
       // never block on logging failures
     }
@@ -471,6 +516,18 @@ function canUseSilentVitestFileLogFastPath(envLevel: LogLevel | undefined): bool
     !envLevel &&
     !loggingState.overrideSettings
   );
+}
+
+function resolveDefaultActiveLogFile(): string {
+  if (process.env.VITEST === "true" && process.env.OPENCLAW_TEST_FILE_LOG === "1") {
+    return path.join(
+      process.cwd(),
+      ".artifacts",
+      "test-logs",
+      `${LOG_PREFIX}-vitest-${process.pid}-${formatLocalDate(new Date())}${LOG_SUFFIX}`,
+    );
+  }
+  return defaultRollingPathForToday();
 }
 
 function resolveSettings(): ResolvedSettings {
@@ -499,7 +556,7 @@ function resolveSettings(): ResolvedSettings {
     process.env.VITEST === "true" && process.env.OPENCLAW_TEST_FILE_LOG !== "1" ? "silent" : "info";
   const fromConfig = normalizeLogLevel(cfg?.level, defaultLevel);
   const level = envLevel ?? fromConfig;
-  const file = cfg?.file ?? defaultRollingPathForToday();
+  const file = cfg?.file ?? resolveDefaultActiveLogFile();
   const maxFileBytes = resolveMaxLogFileBytes(cfg?.maxFileBytes);
   return { level, file, maxFileBytes };
 }
@@ -564,7 +621,13 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
       const time = formatTimestamp(logObj.date ?? new Date(), { style: "long" });
       const traceFields = buildTraceFileLogFields(logObj as TsLogRecord);
       const structuredFields = buildStructuredFileLogFields(logObj as TsLogRecord);
-      const record = { ...logObj, time, ...structuredFields, ...traceFields };
+      const record = {
+        ...logObj,
+        _meta: withResolvedLogMetaHostname(logObj["_meta"], structuredFields.hostname),
+        time,
+        ...structuredFields,
+        ...traceFields,
+      };
       const line = redactSensitiveText(JSON.stringify(redactLogRecordForTransport(record)));
       const payload = `${line}\n`;
       const payloadBytes = Buffer.byteLength(payload, "utf8");
@@ -693,10 +756,16 @@ export function resetLogger() {
   loggingState.cachedConsoleSettings = null;
   loggingState.overrideSettings = null;
   loadLoggerConfig = loadLoggerConfigDefault;
+  hostnameResolver = defaultHostnameResolver;
+  cachedHostname = null;
 }
 
 export const testApi = {
   resolveActiveLogFile,
+  setHostnameResolverForTests: (resolver?: HostnameResolver) => {
+    hostnameResolver = resolver ?? defaultHostnameResolver;
+    cachedHostname = null;
+  },
   shouldSkipMutatingLoggingConfigRead,
 };
 export { testApi as __test__ };

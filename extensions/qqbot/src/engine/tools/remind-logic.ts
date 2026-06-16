@@ -1,3 +1,6 @@
+// Qqbot plugin module implements remind logic behavior.
+import { resolveExpiresAtMsFromDurationMs } from "openclaw/plugin-sdk/number-runtime";
+
 /**
  * QQBot reminder tool core logic.
  * QQBot 提醒工具核心逻辑。
@@ -117,17 +120,22 @@ export const RemindSchema = {
  * @returns Milliseconds or null if unparseable.
  */
 export function parseRelativeTime(timeStr: string): number | null {
-  const s = timeStr.toLowerCase();
+  const s = timeStr.trim().toLowerCase();
   if (/^\d+$/.test(s)) {
     return Number.parseInt(s, 10) * 60_000;
   }
 
   let totalMs = 0;
   let matched = false;
-  const regex = /(\d+(?:\.\d+)?)\s*(d|h|m|s)/g;
+  let consumed = 0;
+  const regex = /(\d+(?:\.\d+)?)\s*(d|h|m|s)\s*/g;
   let match: RegExpExecArray | null;
   while ((match = regex.exec(s)) !== null) {
+    if (match.index !== consumed) {
+      return null;
+    }
     matched = true;
+    consumed = regex.lastIndex;
     const value = Number.parseFloat(match[1]);
     const unit = match[2];
     switch (unit) {
@@ -145,7 +153,7 @@ export function parseRelativeTime(timeStr: string): number | null {
         break;
     }
   }
-  return matched ? Math.round(totalMs) : null;
+  return matched && consumed === s.length ? Math.round(totalMs) : null;
 }
 
 /**
@@ -181,8 +189,7 @@ export function buildReminderPrompt(content: string): string {
 }
 
 /** Build cron job params for a one-shot delayed reminder. */
-function buildOnceJob(params: RemindParams, delayMs: number, to: string, accountId: string) {
-  const atMs = Date.now() + delayMs;
+function buildOnceJob(params: RemindParams, atMs: number, to: string, accountId: string) {
   const content = params.content!;
   const name = params.name || generateJobName(content);
   return {
@@ -317,11 +324,15 @@ export function prepareRemindCronAction(
   if (delayMs < 30_000) {
     return { ok: false, error: "Reminder delay must be at least 30 seconds" };
   }
+  const atMs = resolveExpiresAtMsFromDurationMs(delayMs);
+  if (atMs === undefined) {
+    return { ok: false, error: "Reminder time is outside the supported Date range" };
+  }
 
   return {
     ok: true,
     action: "add",
-    cronAction: buildOnceJob(params, delayMs, resolvedTo, resolvedAccountId),
+    cronAction: buildOnceJob(params, atMs, resolvedTo, resolvedAccountId),
     summary: `⏰ Reminder in ${formatDelay(delayMs)}: "${params.content}"`,
   };
 }

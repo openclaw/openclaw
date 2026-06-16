@@ -1,3 +1,4 @@
+// Msteams tests cover errors plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   classifyMSTeamsSendError,
@@ -39,6 +40,65 @@ describe("msteams errors", () => {
     expect(result.kind).toBe("throttled");
     expect(result.statusCode).toBe(429);
     expect(result.retryAfterMs).toBe(1500);
+  });
+
+  it("does not parse partial retry-after values", () => {
+    expect(
+      classifyMSTeamsSendError({ statusCode: 429, retryAfter: "1.5s" }).retryAfterMs,
+    ).toBeUndefined();
+    expect(
+      classifyMSTeamsSendError({
+        statusCode: 429,
+        response: { headers: { "retry-after": "2 seconds" } },
+      }).retryAfterMs,
+    ).toBeUndefined();
+    expect(
+      classifyMSTeamsSendError({
+        statusCode: 429,
+        response: { headers: new Headers({ "retry-after": "3 seconds" }) },
+      }).retryAfterMs,
+    ).toBeUndefined();
+  });
+
+  it("ignores unsafe retry-after magnitudes", () => {
+    expect(
+      classifyMSTeamsSendError({
+        statusCode: 429,
+        retryAfterMs: Number.MAX_SAFE_INTEGER + 1,
+      }).retryAfterMs,
+    ).toBeUndefined();
+    expect(
+      classifyMSTeamsSendError({
+        statusCode: 429,
+        retryAfter: Number.MAX_SAFE_INTEGER,
+      }).retryAfterMs,
+    ).toBeUndefined();
+    expect(
+      classifyMSTeamsSendError({
+        statusCode: 429,
+        retryAfter: "9007199254741",
+      }).retryAfterMs,
+    ).toBeUndefined();
+    expect(
+      classifyMSTeamsSendError({
+        statusCode: 429,
+        response: { headers: { "retry-after": "9007199254741" } },
+      }).retryAfterMs,
+    ).toBeUndefined();
+    expect(
+      classifyMSTeamsSendError({
+        statusCode: 429,
+        response: { headers: new Headers({ "retry-after": "9007199254741" }) },
+      }).retryAfterMs,
+    ).toBeUndefined();
+  });
+
+  it("does not parse partial or fractional status codes", () => {
+    expect(classifyMSTeamsSendError({ statusCode: "429oops" }).kind).toBe("unknown");
+    expect(classifyMSTeamsSendError({ statusCode: 429.5 }).kind).toBe("unknown");
+    expect(
+      classifyMSTeamsSendError({ response: { status: "503 temporarily unavailable" } }).kind,
+    ).toBe("unknown");
   });
 
   it("classifies transient errors", () => {

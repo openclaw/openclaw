@@ -1,3 +1,4 @@
+// Diffs type declarations define plugin contracts.
 import type { FileContents, FileDiffMetadata, SupportedLanguages } from "@pierre/diffs";
 
 export const DIFF_LAYOUTS = ["unified", "split"] as const;
@@ -67,6 +68,7 @@ export type DiffRenderOptions = {
     maxPixels: number;
   };
   expandUnchanged: boolean;
+  languagePackAvailable?: boolean;
 };
 
 export type DiffViewerOptions = {
@@ -99,6 +101,7 @@ export type RenderedDiffDocument = {
   title: string;
   fileCount: number;
   inputKind: DiffInput["kind"];
+  viewerRuntime: "base" | "language-pack";
 };
 
 export type DiffArtifactContext = {

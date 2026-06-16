@@ -1,8 +1,10 @@
+// Duration parser shared by CLI flags, command directives, and config-backed timing values.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
 
+/** Options for choosing the unit used by bare numeric duration values. */
 export type DurationMsParseOptions = {
   defaultUnit?: "ms" | "s" | "m" | "h" | "d";
 };
@@ -21,6 +23,15 @@ function invalidDuration(raw: string, reason?: string): Error {
   return new Error(`${prefix} Use values like 500ms, 30s, 5m, 2h, or 1h30m.`);
 }
 
+function roundSafeDurationMs(raw: string, value: number): number {
+  const ms = Math.round(value);
+  if (!Number.isSafeInteger(ms)) {
+    throw invalidDuration(raw);
+  }
+  return ms;
+}
+
+/** Parse a non-negative duration into milliseconds, supporting single and composite units. */
 export function parseDurationMs(raw: string, opts?: DurationMsParseOptions): number {
   const trimmed = normalizeLowercaseStringOrEmpty(normalizeOptionalString(raw) ?? "");
   if (!trimmed) {
@@ -35,11 +46,7 @@ export function parseDurationMs(raw: string, opts?: DurationMsParseOptions): num
       throw invalidDuration(raw);
     }
     const unit = (single[2] ?? opts?.defaultUnit ?? "ms") as "ms" | "s" | "m" | "h" | "d";
-    const ms = Math.round(value * DURATION_MULTIPLIERS[unit]);
-    if (!Number.isFinite(ms)) {
-      throw invalidDuration(raw);
-    }
-    return ms;
+    return roundSafeDurationMs(raw, value * DURATION_MULTIPLIERS[unit]);
   }
 
   // Composite form (e.g. "1h30m", "2m500ms"); each token must include a unit.
@@ -71,9 +78,5 @@ export function parseDurationMs(raw: string, opts?: DurationMsParseOptions): num
     throw invalidDuration(raw);
   }
 
-  const ms = Math.round(totalMs);
-  if (!Number.isFinite(ms)) {
-    throw invalidDuration(raw);
-  }
-  return ms;
+  return roundSafeDurationMs(raw, totalMs);
 }

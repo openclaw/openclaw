@@ -1,3 +1,4 @@
+// Command queue serializes and limits process execution for shared command lanes.
 import {
   diagnosticLogger as diag,
   logLaneDequeue,
@@ -309,7 +310,7 @@ async function runQueueEntryTask(lane: string, entry: QueueEntry): Promise<unkno
     return await Promise.race([taskPromise, timeoutPromise]);
   } catch (err) {
     if (timedOut) {
-      void taskPromise.catch((lateErr) => {
+      void taskPromise.catch((lateErr: unknown) => {
         diag.warn(
           `lane task rejected after timeout: lane=${lane} timeoutMs=${taskTimeoutMs} error="${String(lateErr)}"`,
         );
@@ -404,6 +405,10 @@ export function markGatewayDraining(): void {
   getQueueState().gatewayDraining = true;
 }
 
+export function isGatewayDraining(): boolean {
+  return getQueueState().gatewayDraining;
+}
+
 export function setCommandLaneConcurrency(lane: string, maxConcurrent: number) {
   const cleaned = normalizeLane(lane);
   const state = getLaneState(cleaned);
@@ -477,6 +482,15 @@ export function getCommandLaneSnapshot(lane: string = CommandLane.Main): Command
     };
   }
   return createCommandLaneSnapshot(state);
+}
+
+/**
+ * Active task ids for a lane. Ids are process-monotonic, so recovery can
+ * detect a turn that started after a point in time it captured earlier.
+ */
+export function getCommandLaneActiveTaskIds(lane: string = CommandLane.Main): number[] {
+  const state = getQueueState().lanes.get(normalizeLane(lane));
+  return state ? [...state.activeTaskIds] : [];
 }
 
 export function getCommandLaneSnapshots(): CommandLaneSnapshot[] {

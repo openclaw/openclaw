@@ -1,19 +1,29 @@
 #!/usr/bin/env node
+// Coordinates release-candidate validation runs and emits the publish command
+// only after required local, CI, npm, plugin, and E2E evidence is green.
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mjs";
 
 const DEFAULT_REPO = "openclaw/openclaw";
 const DEFAULT_PROVIDER = "openai";
 const DEFAULT_MODE = "both";
-const DEFAULT_RELEASE_PROFILE = "beta";
 const DEFAULT_NPM_DIST_TAG = "beta";
 const DEFAULT_PLUGIN_SCOPE = "all-publishable";
 const DEFAULT_TELEGRAM_PROVIDER_MODE = "mock-openai";
+const DEFAULT_GITHUB_API_TIMEOUT_MS = 30_000;
+const WINDOWS_NODE_TAG_PATTERN = /^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$/u;
+const WINDOWS_NODE_REPO = "openclaw/openclaw-windows-node";
+const WINDOWS_NODE_REQUIRED_ASSETS = [
+  "OpenClawCompanion-Setup-x64.exe",
+  "OpenClawCompanion-Setup-arm64.exe",
+];
+const SHA256_DIGEST_PATTERN = /^sha256:[a-f0-9]{64}$/u;
 
 function usage() {
-  return `Usage: pnpm release:candidate -- --tag vYYYY.M.D-beta.N [options]
+  return `Usage: pnpm release:candidate -- --tag vYYYY.M.PATCH-beta.N [options]
 
 Dispatches or consumes release validation runs, validates the prepared npm tarball,
 builds plugin publish plans, writes a green evidence bundle, then prints the exact
@@ -25,14 +35,15 @@ Options:
   --repo <owner/repo>                 GitHub repo. Default: ${DEFAULT_REPO}
   --full-release-run <id>             Reuse successful Full Release Validation run.
   --npm-preflight-run <id>            Reuse successful OpenClaw NPM Release preflight run.
+  --windows-node-tag <tag>            Exact Windows Node release tag. Required for stable.
   --skip-dispatch                     Require both run ids; do not dispatch workflows.
   --skip-local-generated-check        Do not run local generated release baseline checks before dispatch.
-  --skip-parallels                   Do not run local Parallels fresh/update beta smoke.
+  --skip-parallels                   Do not run local Parallels fresh/update candidate smoke.
   --skip-telegram                    Do not run NPM Telegram E2E against the prepared tarball.
   --telegram-provider-mode <mode>     mock-openai|live-frontier. Default: ${DEFAULT_TELEGRAM_PROVIDER_MODE}
   --provider <provider>               Full validation provider. Default: ${DEFAULT_PROVIDER}
   --mode <fresh|upgrade|both>         Full validation cross-OS mode. Default: ${DEFAULT_MODE}
-  --release-profile <beta|stable|full> Default: ${DEFAULT_RELEASE_PROFILE}
+  --release-profile <beta|stable|full> Default: beta for prereleases; stable otherwise.
   --npm-dist-tag <alpha|beta|latest>  Default: ${DEFAULT_NPM_DIST_TAG}
   --plugin-publish-scope <scope>      selected|all-publishable. Default: ${DEFAULT_PLUGIN_SCOPE}
   --plugins <names>                   Required when plugin scope is selected.
@@ -48,12 +59,16 @@ function requireValue(argv, index, flag) {
   return value;
 }
 
+/**
+ * Parses release-candidate validation options and enforces publish-scope policy.
+ */
 export function parseArgs(argv) {
+  const args = stripLeadingPackageManagerSeparator(argv);
   const options = {
     repo: DEFAULT_REPO,
     provider: DEFAULT_PROVIDER,
     mode: DEFAULT_MODE,
-    releaseProfile: DEFAULT_RELEASE_PROFILE,
+    releaseProfile: "",
     npmDistTag: DEFAULT_NPM_DIST_TAG,
     pluginPublishScope: DEFAULT_PLUGIN_SCOPE,
     plugins: "",
@@ -66,27 +81,32 @@ export function parseArgs(argv) {
     workflowRef: "",
     fullReleaseRunId: "",
     npmPreflightRunId: "",
+    windowsNodeTag: "",
+    windowsNodeInstallerDigests: "",
     outputDir: "",
   };
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
+  parseArgv: for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
     switch (arg) {
       case "--":
-        break;
+        break parseArgv;
       case "--tag":
-        options.tag = requireValue(argv, ++index, arg);
+        options.tag = requireValue(args, ++index, arg);
         break;
       case "--workflow-ref":
-        options.workflowRef = requireValue(argv, ++index, arg);
+        options.workflowRef = requireValue(args, ++index, arg);
         break;
       case "--repo":
-        options.repo = requireValue(argv, ++index, arg);
+        options.repo = requireValue(args, ++index, arg);
         break;
       case "--full-release-run":
-        options.fullReleaseRunId = requireValue(argv, ++index, arg);
+        options.fullReleaseRunId = requireValue(args, ++index, arg);
         break;
       case "--npm-preflight-run":
-        options.npmPreflightRunId = requireValue(argv, ++index, arg);
+        options.npmPreflightRunId = requireValue(args, ++index, arg);
+        break;
+      case "--windows-node-tag":
+        options.windowsNodeTag = requireValue(args, ++index, arg);
         break;
       case "--skip-dispatch":
         options.skipDispatch = true;
@@ -101,28 +121,28 @@ export function parseArgs(argv) {
         options.skipTelegram = true;
         break;
       case "--telegram-provider-mode":
-        options.telegramProviderMode = requireValue(argv, ++index, arg);
+        options.telegramProviderMode = requireValue(args, ++index, arg);
         break;
       case "--provider":
-        options.provider = requireValue(argv, ++index, arg);
+        options.provider = requireValue(args, ++index, arg);
         break;
       case "--mode":
-        options.mode = requireValue(argv, ++index, arg);
+        options.mode = requireValue(args, ++index, arg);
         break;
       case "--release-profile":
-        options.releaseProfile = requireValue(argv, ++index, arg);
+        options.releaseProfile = requireValue(args, ++index, arg);
         break;
       case "--npm-dist-tag":
-        options.npmDistTag = requireValue(argv, ++index, arg);
+        options.npmDistTag = requireValue(args, ++index, arg);
         break;
       case "--plugin-publish-scope":
-        options.pluginPublishScope = requireValue(argv, ++index, arg);
+        options.pluginPublishScope = requireValue(args, ++index, arg);
         break;
       case "--plugins":
-        options.plugins = requireValue(argv, ++index, arg);
+        options.plugins = requireValue(args, ++index, arg);
         break;
       case "--output-dir":
-        options.outputDir = requireValue(argv, ++index, arg);
+        options.outputDir = requireValue(args, ++index, arg);
         break;
       case "-h":
       case "--help":
@@ -135,14 +155,34 @@ export function parseArgs(argv) {
   if (!options.tag) {
     throw new Error("--tag is required");
   }
+  options.releaseProfile ||=
+    options.tag.includes("-alpha.") || options.tag.includes("-beta.") ? "beta" : "stable";
+  if (!["beta", "stable", "full"].includes(options.releaseProfile)) {
+    throw new Error("--release-profile must be beta, stable, or full");
+  }
   if (options.skipDispatch && (!options.fullReleaseRunId || !options.npmPreflightRunId)) {
     throw new Error("--skip-dispatch requires --full-release-run and --npm-preflight-run");
   }
   if (options.pluginPublishScope === "selected" && !options.plugins.trim()) {
     throw new Error("--plugin-publish-scope selected requires --plugins");
   }
+  if (options.pluginPublishScope === "selected") {
+    throw new Error(
+      "--plugin-publish-scope selected is only for plugin-only repair publishes; release candidates publish OpenClaw with --plugin-publish-scope all-publishable",
+    );
+  }
   if (options.pluginPublishScope === "all-publishable" && options.plugins.trim()) {
     throw new Error("--plugins is only valid with --plugin-publish-scope selected");
+  }
+  if (options.windowsNodeTag && !WINDOWS_NODE_TAG_PATTERN.test(options.windowsNodeTag)) {
+    throw new Error("--windows-node-tag must be an explicit version tag, not latest");
+  }
+  if (
+    !options.tag.includes("-alpha.") &&
+    !options.tag.includes("-beta.") &&
+    !options.windowsNodeTag
+  ) {
+    throw new Error("stable release candidates require --windows-node-tag");
   }
   if (!["mock-openai", "live-frontier"].includes(options.telegramProviderMode)) {
     throw new Error("--telegram-provider-mode must be mock-openai or live-frontier");
@@ -175,6 +215,92 @@ function readJson(path, label) {
   }
 }
 
+function githubApiTimeoutMs() {
+  const raw = process.env.OPENCLAW_RELEASE_CANDIDATE_GITHUB_API_TIMEOUT_MS;
+  if (!raw) {
+    return DEFAULT_GITHUB_API_TIMEOUT_MS;
+  }
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error("OPENCLAW_RELEASE_CANDIDATE_GITHUB_API_TIMEOUT_MS must be a positive number");
+  }
+  return Math.trunc(value);
+}
+
+function githubApiTimedOut(error) {
+  return (
+    error instanceof DOMException && (error.name === "AbortError" || error.name === "TimeoutError")
+  );
+}
+
+/**
+ * Calls the GitHub REST API with the gh-auth token and a bounded timeout.
+ */
+export async function githubApi(path, options = {}) {
+  const token = options.token ?? run("gh", ["auth", "token"], { capture: true }).trim();
+  const timeoutMs = options.timeoutMs ?? githubApiTimeoutMs();
+  let response;
+  try {
+    response = await (options.fetchImpl ?? fetch)(`https://api.github.com/${path}`, {
+      signal: AbortSignal.timeout(timeoutMs),
+      headers: {
+        Accept: "application/vnd.github+json",
+        Authorization: `Bearer ${token}`,
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+    });
+  } catch (error) {
+    if (githubApiTimedOut(error)) {
+      throw new Error(`GitHub API ${path} timed out after ${timeoutMs}ms`, { cause: error });
+    }
+    throw error;
+  }
+  if (!response.ok) {
+    throw new Error(`GitHub API ${path} failed with ${response.status}: ${await response.text()}`);
+  }
+  return response.json();
+}
+
+/**
+ * Validates the immutable Windows source release contract for a stable candidate.
+ */
+export async function validateWindowsSourceRelease(tag, options = {}) {
+  const release = await githubApi(
+    `repos/${WINDOWS_NODE_REPO}/releases/tags/${encodeURIComponent(tag)}`,
+    options,
+  );
+  if (release.tag_name !== tag) {
+    throw new Error(
+      `Windows source release tag mismatch: expected ${tag}, got ${release.tag_name}`,
+    );
+  }
+  if (release.draft) {
+    throw new Error(`Windows source release ${tag} must be published`);
+  }
+  if (release.prerelease) {
+    throw new Error(`Windows source release ${tag} must not be a prerelease`);
+  }
+
+  const assets = WINDOWS_NODE_REQUIRED_ASSETS.map((name) => {
+    const matches = (release.assets ?? []).filter((entry) => entry.name === name);
+    if (matches.length !== 1) {
+      throw new Error(
+        `Windows source release ${tag} must contain exactly one required asset ${name}; found ${matches.length}`,
+      );
+    }
+    const [asset] = matches;
+    if (!SHA256_DIGEST_PATTERN.test(asset.digest ?? "")) {
+      throw new Error(`Windows source release ${tag} asset ${name} is missing its SHA-256 digest`);
+    }
+    return { name, digest: asset.digest };
+  });
+  return {
+    tag,
+    url: release.html_url,
+    assets,
+  };
+}
+
 function currentBranch() {
   return run("git", ["branch", "--show-current"], { capture: true }).trim();
 }
@@ -183,36 +309,29 @@ function gitRevParse(ref) {
   return run("git", ["rev-parse", ref], { capture: true }).trim();
 }
 
-function workflowRuns(repo, workflowFile) {
-  return JSON.parse(
-    run(
-      "gh",
-      [
-        "api",
-        `repos/${repo}/actions/workflows/${workflowFile}/runs?event=workflow_dispatch&per_page=100`,
-        "--jq",
-        ".workflow_runs | map({databaseId:.id, workflowName:.name, event:.event, createdAt:.created_at})",
-      ],
-      { capture: true },
-    ),
+async function workflowRuns(repo, workflowFile) {
+  const data = await githubApi(
+    `repos/${repo}/actions/workflows/${workflowFile}/runs?event=workflow_dispatch&per_page=100`,
   );
+  return (data.workflow_runs ?? []).map((runEntry) => ({
+    databaseId: runEntry.id,
+    workflowName: runEntry.name,
+    event: runEntry.event,
+    createdAt: runEntry.created_at,
+  }));
 }
 
-function runArtifacts(repo, runId) {
-  return JSON.parse(
-    run(
-      "gh",
-      [
-        "api",
-        `repos/${repo}/actions/runs/${runId}/artifacts?per_page=100`,
-        "--jq",
-        ".artifacts | map({name:.name, expired:.expired})",
-      ],
-      { capture: true },
-    ),
-  );
+async function runArtifacts(repo, runId) {
+  const data = await githubApi(`repos/${repo}/actions/runs/${runId}/artifacts?per_page=100`);
+  return (data.artifacts ?? []).map((artifact) => ({
+    name: artifact.name,
+    expired: artifact.expired,
+  }));
 }
 
+/**
+ * Chooses the expected artifact name, allowing one same-prefix fallback per run.
+ */
 export function resolveArtifactName(artifacts, preferredName, prefix) {
   const available = artifacts
     .filter((artifact) => artifact.expired !== true)
@@ -232,12 +351,14 @@ export function resolveArtifactName(artifacts, preferredName, prefix) {
   );
 }
 
-function resolveRunArtifactName(repo, runId, preferredName, prefix) {
-  return resolveArtifactName(runArtifacts(repo, runId), preferredName, prefix);
+async function resolveRunArtifactName(repo, runId, preferredName, prefix) {
+  return resolveArtifactName(await runArtifacts(repo, runId), preferredName, prefix);
 }
 
-function beforeRunIds(repo, workflowFile) {
-  return new Set(workflowRuns(repo, workflowFile).map((run) => String(run.databaseId)));
+async function beforeRunIds(repo, workflowFile) {
+  return new Set(
+    (await workflowRuns(repo, workflowFile)).map((runResult) => String(runResult.databaseId)),
+  );
 }
 
 function runAndEcho(command, args) {
@@ -269,22 +390,27 @@ function runLocalGeneratedCheckIfNeeded(options) {
   return { status: "passed", command: "pnpm release:generated:check" };
 }
 
+/**
+ * Extracts a GitHub Actions run id from gh workflow dispatch output.
+ */
 export function parseRunIdFromDispatchOutput(output) {
   return output.match(/actions\/runs\/([0-9]+)/u)?.[1] ?? "";
 }
 
 async function wait(ms) {
-  await new Promise((resolve) => setTimeout(resolve, ms));
+  await new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 async function findNewRunId(repo, workflowFile, workflowName, beforeIds) {
   for (let attempt = 0; attempt < 60; attempt += 1) {
-    const match = workflowRuns(repo, workflowFile)
+    const match = (await workflowRuns(repo, workflowFile))
       .filter(
-        (run) =>
-          run.workflowName === workflowName &&
-          run.event === "workflow_dispatch" &&
-          !beforeIds.has(String(run.databaseId)),
+        (runValue) =>
+          runValue.workflowName === workflowName &&
+          runValue.event === "workflow_dispatch" &&
+          !beforeIds.has(String(runValue.databaseId)),
       )
       .toSorted((a, b) => String(b.createdAt ?? "").localeCompare(String(a.createdAt ?? "")))[0];
     if (match?.databaseId) {
@@ -303,31 +429,32 @@ function dispatchWorkflow(repo, workflowFile, workflowRef, fields) {
   return parseRunIdFromDispatchOutput(runAndEcho("gh", args));
 }
 
-function runInfo(repo, runId) {
-  return JSON.parse(
-    run(
-      "gh",
-      [
-        "run",
-        "view",
-        runId,
-        "--repo",
-        repo,
-        "--json",
-        "databaseId,workflowName,headBranch,headSha,event,status,conclusion,url,jobs",
-      ],
-      { capture: true },
-    ),
-  );
+async function runInfo(repo, runId) {
+  const [runData, jobsData] = await Promise.all([
+    githubApi(`repos/${repo}/actions/runs/${runId}`),
+    githubApi(`repos/${repo}/actions/runs/${runId}/jobs?per_page=100`),
+  ]);
+  return {
+    databaseId: runData.id,
+    workflowName: runData.name,
+    headBranch: runData.head_branch,
+    headSha: runData.head_sha,
+    event: runData.event,
+    status: runData.status,
+    conclusion: runData.conclusion,
+    url: runData.html_url,
+    jobs: (jobsData.jobs ?? []).map((job) => ({
+      name: job.name,
+      status: job.status,
+      conclusion: job.conclusion,
+      url: job.html_url,
+    })),
+  };
 }
 
-function pendingDeployments(repo, runId) {
+async function pendingDeployments(repo, runId) {
   try {
-    return JSON.parse(
-      run("gh", ["api", "-X", "GET", `repos/${repo}/actions/runs/${runId}/pending_deployments`], {
-        capture: true,
-      }),
-    );
+    return await githubApi(`repos/${repo}/actions/runs/${runId}/pending_deployments`);
   } catch {
     return [];
   }
@@ -361,13 +488,17 @@ function summarizeFailedRun(info) {
 async function waitForSuccessfulRun(repo, runId, expected) {
   let lastState = "";
   for (;;) {
-    const info = runInfo(repo, runId);
+    const info = await runInfo(repo, runId);
     const state = `${info.status}:${info.conclusion ?? ""}`;
     if (state !== lastState) {
       console.log(
         `${info.workflowName} ${runId}: ${info.status}${info.conclusion ? `/${info.conclusion}` : ""} ${info.url}`,
       );
-      const pending = summarizePendingDeployments(repo, runId, pendingDeployments(repo, runId));
+      const pending = summarizePendingDeployments(
+        repo,
+        runId,
+        await pendingDeployments(repo, runId),
+      );
       if (pending) {
         console.log(pending);
       }
@@ -399,8 +530,8 @@ function downloadArtifact(repo, runId, name, dir) {
   run("gh", ["run", "download", runId, "--repo", repo, "--name", name, "--dir", dir]);
 }
 
-function downloadResolvedArtifact(repo, runId, preferredName, prefix, dir) {
-  const name = resolveRunArtifactName(repo, runId, preferredName, prefix);
+async function downloadResolvedArtifact(repo, runId, preferredName, prefix, dir) {
+  const name = await resolveRunArtifactName(repo, runId, preferredName, prefix);
   downloadArtifact(repo, runId, name, dir);
   return name;
 }
@@ -448,6 +579,9 @@ function shellQuote(value) {
   return `'${String(value).replace(/'/gu, "'\\''")}'`;
 }
 
+/**
+ * Builds the final release publish workflow command once validation evidence is ready.
+ */
 export function buildPublishCommand(options) {
   const fields = [
     ["tag", options.tag],
@@ -456,11 +590,17 @@ export function buildPublishCommand(options) {
     ["npm_dist_tag", options.npmDistTag],
     ["plugin_publish_scope", options.pluginPublishScope],
     ["publish_openclaw_npm", "true"],
-    ["release_profile", options.releaseProfile],
+    ["release_profile", "from-validation"],
     ["wait_for_clawhub", "false"],
   ];
   if (options.npmTelegramRunId) {
     fields.push(["npm_telegram_run_id", options.npmTelegramRunId]);
+  }
+  if (options.windowsNodeTag) {
+    fields.push(["windows_node_tag", options.windowsNodeTag]);
+  }
+  if (options.windowsNodeInstallerDigests) {
+    fields.push(["windows_node_installer_digests", options.windowsNodeInstallerDigests]);
   }
   if (options.plugins.trim()) {
     fields.push(["plugins", options.plugins]);
@@ -520,23 +660,34 @@ function validateFullManifest(manifest, params) {
   }
 }
 
-async function runParallelsIfNeeded(options) {
+export function candidateParallelsArgs(tarballPath) {
+  return ["test:parallels:npm-update", "--", "--target-tarball", tarballPath, "--json"];
+}
+
+export function candidateParallelsShellCommand(tarballPath, timeoutBin) {
+  return [
+    'set -a; source "$HOME/.profile" >/dev/null 2>&1 || true; set +a;',
+    "exec",
+    shellQuote(timeoutBin),
+    "--foreground",
+    "150m",
+    "pnpm",
+    ...candidateParallelsArgs(tarballPath).map(shellQuote),
+  ].join(" ");
+}
+
+async function runParallelsIfNeeded(options, tarballPath) {
   if (options.skipParallels) {
     return { status: "skipped", reason: "operator skipped --skip-parallels" };
   }
-  const version = options.tag.replace(/^v/u, "");
-  run("pnpm", [
-    "release:beta-smoke",
-    "--",
-    "--beta",
-    version,
-    "--ref",
-    options.workflowRef,
-    "--skip-telegram",
-  ]);
+  const timeoutBin = run("bash", ["-lc", "command -v gtimeout || command -v timeout"], {
+    capture: true,
+  }).trim();
+  const command = candidateParallelsShellCommand(tarballPath, timeoutBin);
+  run("bash", ["-lc", command]);
   return {
     status: "passed",
-    command: `pnpm release:beta-smoke -- --beta ${version} --ref ${options.workflowRef} --skip-telegram`,
+    command,
   };
 }
 
@@ -545,7 +696,7 @@ async function runTelegramIfNeeded(options, artifactName) {
     return { status: "skipped" };
   }
   const workflowFile = "npm-telegram-beta-e2e.yml";
-  const before = beforeRunIds(options.repo, workflowFile);
+  const before = await beforeRunIds(options.repo, workflowFile);
   const dispatchedRunId = dispatchWorkflow(options.repo, workflowFile, options.workflowRef, {
     package_spec: `openclaw@${options.tag.replace(/^v/u, "")}`,
     package_label: options.tag,
@@ -557,14 +708,14 @@ async function runTelegramIfNeeded(options, artifactName) {
   const runId =
     dispatchedRunId ||
     (await findNewRunId(options.repo, workflowFile, "NPM Telegram Beta E2E", before));
-  const run = await waitForSuccessfulRun(options.repo, runId, {
+  const runLocal = await waitForSuccessfulRun(options.repo, runId, {
     workflowName: "NPM Telegram Beta E2E",
     workflowRef: options.workflowRef,
   });
   return {
     status: "passed",
     runId,
-    url: run.url,
+    url: runLocal.url,
     artifactName,
     providerMode: options.telegramProviderMode,
   };
@@ -575,11 +726,21 @@ async function main() {
   options.workflowRef ||= currentBranch();
   options.outputDir ||= join(".artifacts", "release-candidate", options.tag);
   const targetSha = gitRevParse(`${options.tag}^{}`);
+  const windowsNodeSourceRelease = options.windowsNodeTag
+    ? await validateWindowsSourceRelease(options.windowsNodeTag)
+    : undefined;
+  options.windowsNodeInstallerDigests = windowsNodeSourceRelease
+    ? JSON.stringify(
+        Object.fromEntries(
+          windowsNodeSourceRelease.assets.map((asset) => [asset.name, asset.digest]),
+        ),
+      )
+    : "";
   const localGeneratedCheck = runLocalGeneratedCheckIfNeeded(options);
 
   if (!options.fullReleaseRunId && !options.skipDispatch) {
     const workflowFile = "full-release-validation.yml";
-    const before = beforeRunIds(options.repo, workflowFile);
+    const before = await beforeRunIds(options.repo, workflowFile);
     const dispatchedRunId = dispatchWorkflow(options.repo, workflowFile, options.workflowRef, {
       ref: options.tag,
       provider: options.provider,
@@ -595,7 +756,7 @@ async function main() {
 
   if (!options.npmPreflightRunId && !options.skipDispatch) {
     const workflowFile = "openclaw-npm-release.yml";
-    const before = beforeRunIds(options.repo, workflowFile);
+    const before = await beforeRunIds(options.repo, workflowFile);
     const dispatchedRunId = dispatchWorkflow(options.repo, workflowFile, options.workflowRef, {
       tag: options.tag,
       preflight_only: "true",
@@ -622,14 +783,14 @@ async function main() {
 
   const npmDir = join(options.outputDir, "npm-preflight");
   const fullDir = join(options.outputDir, "full-release-validation");
-  const npmArtifactName = downloadResolvedArtifact(
+  const npmArtifactName = await downloadResolvedArtifact(
     options.repo,
     options.npmPreflightRunId,
     `openclaw-npm-preflight-${options.tag}`,
     "openclaw-npm-preflight-",
     npmDir,
   );
-  const fullArtifactName = downloadResolvedArtifact(
+  const fullArtifactName = await downloadResolvedArtifact(
     options.repo,
     options.fullReleaseRunId,
     `full-release-validation-${options.fullReleaseRunId}`,
@@ -662,7 +823,7 @@ async function main() {
     );
   }
 
-  const parallels = await runParallelsIfNeeded(options);
+  const parallels = await runParallelsIfNeeded(options, tarballPath);
   const npmTelegram = await runTelegramIfNeeded(options, npmArtifactName);
   options.npmTelegramRunId = npmTelegram.runId ?? "";
   const pluginNpmPlan = await collectPluginPlanWithRetry(
@@ -682,6 +843,8 @@ async function main() {
     npmDistTag: options.npmDistTag,
     fullReleaseValidationRunId: options.fullReleaseRunId,
     npmPreflightRunId: options.npmPreflightRunId,
+    windowsNodeTag: options.windowsNodeTag || undefined,
+    windowsNodeSourceRelease,
     fullReleaseValidationUrl: fullRun.url,
     npmPreflightUrl: npmRun.url,
     artifacts: {
@@ -712,6 +875,14 @@ async function main() {
       `- target SHA: ${targetSha}`,
       `- full release validation: ${options.fullReleaseRunId} ${fullRun.url}`,
       `- npm preflight: ${options.npmPreflightRunId} ${npmRun.url}`,
+      ...(windowsNodeSourceRelease
+        ? [
+            `- Windows Node source release: ${windowsNodeSourceRelease.tag} ${windowsNodeSourceRelease.url}`,
+            ...windowsNodeSourceRelease.assets.map(
+              (asset) => `- Windows Node source asset: ${asset.name} ${asset.digest}`,
+            ),
+          ]
+        : []),
       `- npm preflight artifact: ${npmArtifactName}`,
       `- full release artifact: ${fullArtifactName}`,
       `- local generated release checks: ${localGeneratedCheck.status}${
@@ -743,8 +914,10 @@ async function main() {
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  await main().catch((error) => {
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exit(1);
-  });
+  await main().catch(
+    /** @param {unknown} error */ (error) => {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exit(1);
+    },
+  );
 }

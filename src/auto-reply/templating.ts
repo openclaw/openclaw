@@ -1,3 +1,4 @@
+/** Shared inbound message context types used by prompt templating and reply dispatch. */
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type {
   MediaUnderstandingDecision,
@@ -39,6 +40,38 @@ type UntrustedStructuredContextEntry = {
   payload: unknown;
 };
 
+/** Structured supplemental facts projected into prompt context by inbound finalization. */
+export type SupplementalContextFacts = {
+  quote?: {
+    id?: string;
+    fullId?: string;
+    body?: string;
+    sender?: string;
+    senderAllowed?: boolean;
+    isExternal?: boolean;
+    isQuote?: boolean;
+  };
+  forwarded?: {
+    from?: string;
+    fromType?: string;
+    fromId?: string;
+    date?: number;
+    senderAllowed?: boolean;
+  };
+  thread?: {
+    id?: string;
+    starterBody?: string;
+    historyBody?: string;
+    label?: string;
+    parentSessionKey?: string;
+    modelParentSessionKey?: string;
+    senderAllowed?: boolean;
+  };
+  untrustedContext?: Array<{ label: string; source?: string; type?: string; payload: unknown }>;
+  groupSystemPrompt?: string;
+};
+
+/** Raw inbound message context accepted from channels before finalization. */
 export type MsgContext = {
   Body?: string;
   InboundEventKind?: InboundEventKind;
@@ -72,6 +105,11 @@ export type MsgContext = {
   From?: string;
   To?: string;
   SessionKey?: string;
+  /**
+   * Resolved agent scope for canonical session keys that do not encode the agent
+   * id, such as selected-agent global sessions.
+   */
+  AgentId?: string;
   /**
    * Session-like key used for runtime policy (sandbox/tool policy) when the
    * conversation key intentionally remains broader, such as a main-session DM.
@@ -163,8 +201,10 @@ export type MsgContext = {
   MediaStaged?: boolean;
   /** Telegram sticker metadata (emoji, set name, file IDs, cached description). */
   Sticker?: StickerContextMetadata;
-  /** True when current-turn sticker media is present in MediaPaths (false for cached-description path). */
+  /** True when current-turn sticker media is present in MediaPaths. */
   StickerMediaIncluded?: boolean;
+  /** Skip automatic understanding for the current sticker because its cached description is used. */
+  SkipStickerMediaUnderstanding?: boolean;
   OutputDir?: string;
   OutputBase?: string;
   /** Remote host for SCP when media lives on a different machine (e.g., openclaw@192.168.64.3). */
@@ -186,6 +226,11 @@ export type MsgContext = {
   MemberRoleIds?: string[];
   GroupMembers?: string;
   GroupSystemPrompt?: string;
+  /**
+   * Canonical inbound supplemental facts for new channel code. `finalizeInboundContext`
+   * projects these to the existing flat reply/forward/thread/group prompt fields.
+   */
+  SupplementalContext?: SupplementalContextFacts;
   /** Untrusted metadata that must not be treated as system instructions. */
   UntrustedContext?: string[];
   /** Structured untrusted metadata rendered by prompt assembly as fenced JSON. */
@@ -236,8 +281,6 @@ export type MsgContext = {
   AcpDispatchTailAfterReset?: boolean;
   /** Gateway client scopes when the message originates from the gateway. */
   GatewayClientScopes?: string[];
-  /** System-event authority override for contexts that must never inherit owner semantics. */
-  ForceSenderIsOwnerFalse?: boolean;
   /** Thread identifier (Telegram topic id or Matrix thread event id). */
   MessageThreadId?: string | number;
   /** Provider-native thread target for reply delivery without making the session thread-scoped. */
@@ -268,6 +311,11 @@ export type MsgContext = {
    * OriginatingChannel/OriginatingTo, rather than inheriting stale session route metadata.
    */
   ExplicitDeliverRoute?: boolean;
+  /**
+   * Internal flag for channels that emit message_received through a channel-specific
+   * privacy gate before entering the shared reply dispatcher.
+   */
+  SuppressMessageReceivedHooks?: boolean;
   /**
    * Provider-specific parent conversation id for threaded contexts.
    * For Discord threads, this is the parent channel id.

@@ -1,3 +1,4 @@
+// Control UI module implements thinking labels behavior.
 import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 import { normalizeThinkLevel } from "./thinking.ts";
 
@@ -7,9 +8,6 @@ export function normalizeThinkingOptionValue(raw: string): string {
 
 export function formatInheritedThinkingLabel(effectiveLevel: string | null | undefined): string {
   const normalized = effectiveLevel ? normalizeThinkingOptionValue(effectiveLevel) : "off";
-  if (!normalized || normalized === "off") {
-    return "Off";
-  }
   return `Inherited: ${formatThinkingLevelDisplayLabel(normalized)}`;
 }
 

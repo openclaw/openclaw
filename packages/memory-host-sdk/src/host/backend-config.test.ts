@@ -1,3 +1,4 @@
+// Memory Host SDK tests cover backend config behavior.
 import syncFs from "node:fs";
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
@@ -194,6 +195,32 @@ describe("resolveMemoryBackendConfig", () => {
     expect(custom.path).toBe(path.resolve("/workspace/root", "notes"));
   });
 
+  it("normalizes direct file qmd paths to escaped exact-file patterns", async () => {
+    const workspaceDir = await createFixtureDir("direct-file-path");
+    const notesPath = path.join(workspaceDir, "notes{a,b}[1].md");
+    await fs.writeFile(notesPath, "# Notes\n", "utf8");
+
+    const cfg = {
+      agents: {
+        defaults: { workspace: workspaceDir },
+        list: [{ id: "main", workspace: workspaceDir }],
+      },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          paths: [{ path: "notes{a,b}[1].md", name: "direct-note", pattern: "**/*.md" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
+    const custom = resolved.qmd?.collections.find((c) => c.name.startsWith("direct-note"));
+    expect(custom).toMatchObject({
+      path: workspaceDir,
+      pattern: String.raw`notes\{a,b\}\[1\].md`,
+    });
+  });
+
   it("scopes qmd collection names per agent", () => {
     const cfg = {
       agents: {
@@ -367,6 +394,86 @@ describe("resolveMemoryBackendConfig", () => {
     expect(update.embedTimeoutMs).toBe(360_000);
   });
 
+  it("keeps sub-unit positive qmd numeric overrides usable", () => {
+    const cfg = {
+      agents: { defaults: { workspace: "/tmp/memory-test" } },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          sessions: {
+            enabled: true,
+            retentionDays: 0.5,
+          },
+          update: {
+            commandTimeoutMs: 0.5,
+            updateTimeoutMs: 0.5,
+            embedTimeoutMs: 0.5,
+          },
+          limits: {
+            maxResults: 0.5,
+            maxSnippetChars: 0.5,
+            maxInjectedChars: 0.5,
+            timeoutMs: 0.5,
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
+    const qmd = requireQmdConfig(resolved);
+
+    expect(qmd.sessions.retentionDays).toBe(1);
+    expect(qmd.update.commandTimeoutMs).toBe(1);
+    expect(qmd.update.updateTimeoutMs).toBe(1);
+    expect(qmd.update.embedTimeoutMs).toBe(1);
+    expect(qmd.limits).toMatchObject({
+      maxResults: 1,
+      maxSnippetChars: 1,
+      maxInjectedChars: 1,
+      timeoutMs: 1,
+    });
+  });
+
+  it("falls back for non-finite qmd numeric overrides", () => {
+    const cfg = {
+      agents: { defaults: { workspace: "/tmp/memory-test" } },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          sessions: {
+            enabled: true,
+            retentionDays: Number.NaN,
+          },
+          update: {
+            commandTimeoutMs: Number.POSITIVE_INFINITY,
+            updateTimeoutMs: Number.NaN,
+            embedTimeoutMs: Number.NEGATIVE_INFINITY,
+          },
+          limits: {
+            maxResults: Number.NaN,
+            maxSnippetChars: Number.POSITIVE_INFINITY,
+            maxInjectedChars: Number.NEGATIVE_INFINITY,
+            timeoutMs: Number.NaN,
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
+    const qmd = requireQmdConfig(resolved);
+
+    expect(qmd.sessions.retentionDays).toBeUndefined();
+    expect(qmd.update.commandTimeoutMs).toBe(30_000);
+    expect(qmd.update.updateTimeoutMs).toBe(120_000);
+    expect(qmd.update.embedTimeoutMs).toBe(120_000);
+    expect(qmd.limits).toMatchObject({
+      maxResults: 4,
+      maxSnippetChars: 450,
+      maxInjectedChars: 2_200,
+      timeoutMs: 4_000,
+    });
+  });
+
   it("resolves qmd startup refresh overrides", () => {
     const cfg = {
       agents: { defaults: { workspace: "/tmp/memory-test" } },
@@ -399,6 +506,23 @@ describe("resolveMemoryBackendConfig", () => {
     } as OpenClawConfig;
     const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
     expect(requireQmdConfig(resolved).searchMode).toBe("vsearch");
+  });
+
+  it("resolves qmd rerank override", () => {
+    const cfg = {
+      agents: { defaults: { workspace: "/tmp/memory-test" } },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          searchMode: "query",
+          rerank: false,
+        },
+      },
+    } as OpenClawConfig;
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
+    const qmd = requireQmdConfig(resolved);
+    expect(qmd.searchMode).toBe("query");
+    expect(qmd.rerank).toBe(false);
   });
 
   it("resolves qmd mcporter search tool override", () => {

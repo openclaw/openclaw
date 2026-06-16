@@ -1,3 +1,4 @@
+// Openclaw Cross Os Release Workflow tests cover openclaw cross os release workflow script behavior.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
@@ -13,6 +14,12 @@ describe("cross-OS release checks workflow", () => {
     expect(workflow).toContain("suite_filter:");
     expect(workflow).toContain('--suite-filter "${INPUT_SUITE_FILTER}"');
     expect(workflow).not.toContain('pnpm dlx "tsx@${TSX_VERSION}"');
+  });
+
+  it("bounds npm baseline packing during prepare", () => {
+    const workflow = readFileSync(WORKFLOW_PATH, "utf8");
+
+    expect(workflow).toContain("timeout --preserve-status 300s npm pack --ignore-scripts");
   });
 
   it("uses Windows-safe npm resolution for the TypeScript loader bootstrap", () => {

@@ -1,3 +1,4 @@
+// Zalo plugin module implements runtime support behavior.
 export type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 export type { OpenClawConfig, GroupPolicy } from "openclaw/plugin-sdk/config-contracts";
 export type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
@@ -56,7 +57,7 @@ export {
   resolveDefaultGroupPolicy,
 } from "openclaw/plugin-sdk/runtime-group-policy";
 export { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
-export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-message";
+export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 export { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 export {
   deliverTextOrMediaReply,

@@ -1,10 +1,13 @@
+// Covers core TUI state transitions and backend event rendering.
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
+import { withEnv } from "../test-utils/env.js";
 import { getSlashCommands, parseCommand } from "./commands.js";
 import {
   createBackspaceDeduper,
+  canSubmitTuiChatMessage,
   createDeferredTuiFinish,
   drainAndStopTuiSafely,
   installTuiTerminalLossExitHandler,
@@ -15,10 +18,14 @@ import {
   resolveFinalAssistantText,
   resolveGatewayDisconnectState,
   resolveInitialTuiAgentId,
+  resolveTuiToolsToggleActivityStatus,
+  isTuiBusyActivityStatus,
   resolveLocalAuthCliInvocation,
   resolveLocalAuthSpawnCwd,
   resolveLocalAuthSpawnOptions,
   resolveTuiCtrlCAction,
+  resolveTuiFooterHostLabel,
+  resolveTuiShutdownHardExitMs,
   resolveTuiSessionKey,
   scheduleProcessExitAfterTuiReturn,
   stopTuiSafely,
@@ -59,6 +66,40 @@ describe("resolveFinalAssistantText", () => {
   });
 });
 
+describe("resolveTuiFooterHostLabel", () => {
+  it("hides connection host by default", () => {
+    expect(
+      resolveTuiFooterHostLabel({
+        config: {},
+        connectionUrl: "wss://gateway.example.com/ws",
+      }),
+    ).toBeNull();
+  });
+
+  it("renders only remote hosts when explicitly enabled", () => {
+    const config = { tui: { footer: { showRemoteHost: true } } } satisfies OpenClawConfig;
+
+    expect(
+      resolveTuiFooterHostLabel({
+        config,
+        connectionUrl: "wss://user:secret@gateway.example.com/ws?token=hidden",
+      }),
+    ).toBe("host gateway.example.com");
+    expect(
+      resolveTuiFooterHostLabel({
+        config,
+        connectionUrl: "ws://127.0.0.1:18789",
+      }),
+    ).toBeNull();
+    expect(
+      resolveTuiFooterHostLabel({
+        config,
+        connectionUrl: "local embedded",
+      }),
+    ).toBeNull();
+  });
+});
+
 describe("tui slash commands", () => {
   it("treats /elev as an alias for /elevated", () => {
     expect(parseCommand("/elev on")).toEqual({ name: "elevated", args: "on" });
@@ -81,6 +122,120 @@ describe("tui slash commands", () => {
   it("includes /auth in local embedded mode", () => {
     const commands = getSlashCommands({ local: true });
     expect(commands.map((command) => command.name)).toContain("auth");
+  });
+});
+
+describe("canSubmitTuiChatMessage", () => {
+  it("allows submit when no run registration is pending", () => {
+    expect(canSubmitTuiChatMessage({})).toBe(true);
+  });
+
+  it("allows local submit while a run is active", () => {
+    expect(
+      canSubmitTuiChatMessage({
+        local: true,
+        activeChatRunId: "run-active",
+      }),
+    ).toBe(true);
+  });
+
+  it("blocks gateway submit while a run is active", () => {
+    expect(
+      canSubmitTuiChatMessage({
+        local: false,
+        activeChatRunId: "run-active",
+      }),
+    ).toBe(false);
+  });
+
+  it("allows gateway stop text while a run is active", () => {
+    expect(
+      canSubmitTuiChatMessage({
+        local: false,
+        activeChatRunId: "run-active",
+        message: "please stop",
+      }),
+    ).toBe(true);
+  });
+
+  it("allows local stop text while a queued run is pending", () => {
+    expect(
+      canSubmitTuiChatMessage({
+        local: true,
+        activeChatRunId: "run-active",
+        pendingChatRunId: "run-queued",
+        message: "please stop",
+      }),
+    ).toBe(true);
+  });
+
+  it("blocks submits with pending optimistic state", () => {
+    expect(
+      canSubmitTuiChatMessage({
+        pendingOptimisticUserMessage: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("blocks submits with a pending chat run id", () => {
+    expect(
+      canSubmitTuiChatMessage({
+        pendingChatRunId: "run-pending",
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("isTuiBusyActivityStatus", () => {
+  it("treats finishing context as a visible busy status", () => {
+    expect(isTuiBusyActivityStatus("finishing context")).toBe(true);
+  });
+});
+
+describe("resolveTuiToolsToggleActivityStatus", () => {
+  it("preserves busy status while an active run exists", () => {
+    expect(
+      resolveTuiToolsToggleActivityStatus({
+        currentStatus: "streaming",
+        toolsExpanded: true,
+      }),
+    ).toBe("streaming");
+  });
+
+  it("preserves finishing context after the active run id clears", () => {
+    expect(
+      resolveTuiToolsToggleActivityStatus({
+        currentStatus: "finishing context",
+        toolsExpanded: false,
+      }),
+    ).toBe("finishing context");
+  });
+
+  it("uses the tool toggle status when activity is idle", () => {
+    expect(
+      resolveTuiToolsToggleActivityStatus({
+        currentStatus: "idle",
+        toolsExpanded: false,
+      }),
+    ).toBe("tools collapsed");
+  });
+});
+
+describe("resolveTuiShutdownHardExitMs", () => {
+  it("keeps gateway shutdown bounded by the hard-exit timer", () => {
+    expect(resolveTuiShutdownHardExitMs({ localMode: false })).toBe(2000);
+  });
+
+  it("adds local run shutdown grace before forcing embedded shutdown", () => {
+    withEnv({ OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS: "3456" }, () => {
+      expect(resolveTuiShutdownHardExitMs({ localMode: true })).toBe(5456);
+    });
+  });
+
+  it("ignores partial local run shutdown grace values", () => {
+    withEnv({ OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS: "3456abc" }, () => {
+      expect(resolveTuiShutdownHardExitMs({ localMode: true })).toBe(122000);
+    });
   });
 });
 

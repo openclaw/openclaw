@@ -1,3 +1,5 @@
+// Gateway plugin tests cover plugin loading, auto-enable, runtime registry setup,
+// request-scope injection, diagnostics, and handler dispatch integration.
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type { PluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import type { PluginRegistry } from "../plugins/registry.js";
@@ -88,10 +90,12 @@ const createRegistry = (diagnostics: PluginDiagnostic[]): PluginRegistry => ({
   commands: [],
   providers: [],
   modelCatalogProviders: [],
+  embeddingProviders: [],
   speechProviders: [],
   realtimeTranscriptionProviders: [],
   realtimeVoiceProviders: [],
   mediaUnderstandingProviders: [],
+  transcriptSourceProviders: [],
   imageGenerationProviders: [],
   musicGenerationProviders: [],
   videoGenerationProviders: [],
@@ -118,7 +122,6 @@ function createLookUpTableForTest(params: {
   pluginIds?: readonly string[];
 }): PluginLookUpTable {
   return {
-    key: "test",
     policyHash: "test",
     index: {
       version: 1,
@@ -770,6 +773,97 @@ describe("loadGatewayPlugins", () => {
     });
   });
 
+  test("times out while waiting for the first in-process gateway response", async () => {
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("initial-response-timeout"));
+    handleGatewayRequest.mockImplementationOnce(async () => {
+      await new Promise(() => {});
+    });
+
+    await expect(
+      serverPluginsModule.dispatchGatewayMethodInProcess(
+        "sessions.delete",
+        { key: "stuck-session" },
+        { timeoutMs: 5 },
+      ),
+    ).rejects.toThrow("gateway request timeout for sessions.delete");
+  });
+
+  test("returns an accepted in-process response without waiting for handler completion", async () => {
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("accepted-before-complete"));
+    handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+      opts.respond(true, { status: "accepted", runId: "run-accepted" });
+      await new Promise(() => {});
+    });
+
+    await expect(
+      serverPluginsModule.dispatchGatewayMethodInProcess(
+        "agent",
+        { sessionKey: "s-accepted" },
+        { timeoutMs: 5 },
+      ),
+    ).resolves.toEqual({ status: "accepted", runId: "run-accepted" });
+  });
+
+  test("uses one timeout budget across accepted and final in-process responses", async () => {
+    vi.useFakeTimers();
+    try {
+      serverPluginsModule.setFallbackGatewayContext(createTestContext("single-final-deadline"));
+      handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+        setTimeout(() => {
+          opts.respond(true, { status: "accepted", runId: "run-deadline" });
+        }, 7);
+        setTimeout(() => {
+          opts.respond(true, { status: "ok", runId: "run-deadline" });
+        }, 13);
+        await new Promise((resolve) => {
+          setTimeout(resolve, 13);
+        });
+      });
+
+      const result = expect(
+        serverPluginsModule.dispatchGatewayMethodInProcess(
+          "agent",
+          { sessionKey: "s-deadline" },
+          { expectFinal: true, timeoutMs: 10 },
+        ),
+      ).rejects.toThrow("gateway request timeout for agent");
+
+      await vi.advanceTimersByTimeAsync(10);
+      await result;
+      await vi.advanceTimersByTimeAsync(10);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("clears final-response timeout when handler rejects after accepted response", async () => {
+    vi.useFakeTimers();
+    try {
+      serverPluginsModule.setFallbackGatewayContext(createTestContext("accepted-then-error"));
+      handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+        opts.respond(true, { status: "accepted", runId: "run-error-after-accepted" });
+        await new Promise((resolve) => {
+          setTimeout(resolve, 5);
+        });
+        throw new Error("handler failed after accepted");
+      });
+
+      const result = expect(
+        serverPluginsModule.dispatchGatewayMethodInProcess(
+          "agent",
+          { sessionKey: "s-error-after-accepted" },
+          { expectFinal: true, timeoutMs: 1_000 },
+        ),
+      ).rejects.toThrow("handler failed after accepted");
+
+      await vi.advanceTimersByTimeAsync(5);
+      await result;
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test("filters connected plugin nodes locally without sending unsupported node.list params", async () => {
     loadOpenClawPlugins.mockReturnValue(createRegistry([]));
     loadGatewayStartupPluginsForTest();
@@ -967,7 +1061,7 @@ describe("loadGatewayPlugins", () => {
         }),
       ),
     ).rejects.toThrow(
-      'plugin "voice-call" is not trusted for fallback provider/model override requests. See https://docs.openclaw.ai/tools/plugin#runtime-helpers and search for: plugins.entries.<id>.subagent.allowModelOverride',
+      'plugin "voice-call" is not trusted for fallback provider/model override requests. See https://docs.openclaw.ai/plugins/sdk-runtime#api-runtime-subagent and search for: plugins.entries.<id>.subagent.allowModelOverride',
     );
   });
 
@@ -1385,11 +1479,14 @@ describe("loadGatewayPlugins", () => {
     const runtime = await createSubagentRuntime(serverPlugins);
     let currentContext = createTestContext("before-resolver-update");
 
+    expect(serverPlugins.hasInProcessGatewayContext()).toBe(false);
     serverPlugins.setFallbackGatewayContextResolver(() => currentContext);
+    expect(serverPlugins.hasInProcessGatewayContext()).toBe(true);
     await runtime.run({ sessionKey: "s-4", message: "before resolver update" });
     expect(getLastDispatchedContext()).toBe(currentContext);
 
     currentContext = createTestContext("after-resolver-update");
+    expect(serverPlugins.hasInProcessGatewayContext()).toBe(true);
     await runtime.run({ sessionKey: "s-4", message: "after resolver update" });
     expect(getLastDispatchedContext()).toBe(currentContext);
   });
@@ -1431,6 +1528,7 @@ describe("loadGatewayPlugins", () => {
 
     serverPlugins.clearFallbackGatewayContext();
 
+    expect(serverPlugins.hasInProcessGatewayContext()).toBe(false);
     await expect(runtime.run({ sessionKey: "s-7", message: "after clear" })).rejects.toThrow(
       "No scope set and no fallback context available",
     );

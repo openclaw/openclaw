@@ -1,10 +1,14 @@
+/**
+ * Shared web-search provider helpers.
+ *
+ * Handles provider config, credential normalization, guarded endpoint calls, caching, and filters.
+ */
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import {
-  CacheEntry,
   DEFAULT_CACHE_TTL_MINUTES,
   DEFAULT_TIMEOUT_SECONDS,
   normalizeCacheKey,
@@ -14,6 +18,7 @@ import {
   resolveTimeoutSeconds,
   writeCache,
 } from "./web-shared.js";
+import type { CacheEntry } from "./web-shared.js";
 
 type WebGuardedFetchModule = Pick<
   typeof import("./web-guarded-fetch.js"),
@@ -189,6 +194,11 @@ const BRAVE_FRESHNESS_SHORTCUTS = new Set(["pd", "pw", "pm", "py"]);
 const BRAVE_FRESHNESS_RANGE = /^(\d{4}-\d{2}-\d{2})to(\d{4}-\d{2}-\d{2})$/;
 const PERPLEXITY_RECENCY_VALUES = new Set(["day", "week", "month", "year"]);
 
+export type WebSearchFreshnessProvider = "brave" | "perplexity";
+export type WebSearchRecencyFreshness = "day" | "week" | "month" | "year";
+export type ParsedWebSearchFreshness<Provider extends WebSearchFreshnessProvider> =
+  Provider extends "perplexity" ? WebSearchRecencyFreshness : string;
+
 export const FRESHNESS_TO_RECENCY: Record<string, string> = {
   pd: "day",
   pw: "week",
@@ -229,6 +239,7 @@ export function isoToPerplexityDate(iso: string): string | undefined {
   return `${Number.parseInt(month, 10)}/${Number.parseInt(day, 10)}/${year}`;
 }
 
+/** Accepts ISO dates plus Perplexity `M/D/YYYY` dates and returns canonical ISO dates. */
 export function normalizeToIsoDate(value: string): string | undefined {
   const trimmed = value.trim();
   if (ISO_DATE_PATTERN.test(trimmed)) {
@@ -243,6 +254,7 @@ export function normalizeToIsoDate(value: string): string | undefined {
   return undefined;
 }
 
+/** Parses optional date range filters and returns provider-facing validation errors. */
 export function parseIsoDateRange(params: {
   rawDateAfter?: string;
   rawDateBefore?: string;
@@ -287,9 +299,10 @@ export function parseIsoDateRange(params: {
   return { dateAfter, dateBefore };
 }
 
+/** Converts shared freshness names into provider-specific Brave or Perplexity values. */
 export function normalizeFreshness(
   value: string | undefined,
-  provider: "brave" | "perplexity",
+  provider: WebSearchFreshnessProvider,
 ): string | undefined {
   if (!value) {
     return undefined;
@@ -310,6 +323,7 @@ export function normalizeFreshness(
     const match = trimmed.match(BRAVE_FRESHNESS_RANGE);
     if (match) {
       const [, start, end] = match;
+      // Brave accepts explicit ISO ranges; Perplexity only supports recency buckets here.
       if (isValidIsoDate(start) && isValidIsoDate(end) && start <= end) {
         return `${start}to${end}`;
       }
@@ -319,17 +333,89 @@ export function normalizeFreshness(
   return undefined;
 }
 
+/** Parses freshness/date filters while rejecting combinations providers cannot express safely. */
+export function parseWebSearchTimeFilters<Provider extends WebSearchFreshnessProvider>(params: {
+  rawFreshness?: string;
+  rawDateAfter?: string;
+  rawDateBefore?: string;
+  freshnessProvider: Provider;
+  invalidFreshnessMessage: string;
+  invalidDateAfterMessage: string;
+  invalidDateBeforeMessage: string;
+  invalidDateRangeMessage: string;
+  conflictingTimeFiltersMessage?: string;
+  docs?: string;
+}):
+  | {
+      freshness?: ParsedWebSearchFreshness<Provider>;
+      dateAfter?: string;
+      dateBefore?: string;
+    }
+  | {
+      error:
+        | "invalid_freshness"
+        | "invalid_date"
+        | "invalid_date_range"
+        | "conflicting_time_filters";
+      message: string;
+      docs: string;
+    } {
+  const docs = params.docs ?? "https://docs.openclaw.ai/tools/web";
+  const freshness = params.rawFreshness
+    ? normalizeFreshness(params.rawFreshness, params.freshnessProvider)
+    : undefined;
+  if (params.rawFreshness && !freshness) {
+    return {
+      error: "invalid_freshness",
+      message: params.invalidFreshnessMessage,
+      docs,
+    };
+  }
+
+  if (params.rawFreshness && (params.rawDateAfter || params.rawDateBefore)) {
+    return {
+      error: "conflicting_time_filters",
+      message:
+        params.conflictingTimeFiltersMessage ??
+        "freshness and date_after/date_before cannot be used together. Use either freshness (day/week/month/year) or a date range (date_after/date_before), not both.",
+      docs,
+    };
+  }
+
+  const parsedDateRange = parseIsoDateRange({
+    rawDateAfter: params.rawDateAfter,
+    rawDateBefore: params.rawDateBefore,
+    invalidDateAfterMessage: params.invalidDateAfterMessage,
+    invalidDateBeforeMessage: params.invalidDateBeforeMessage,
+    invalidDateRangeMessage: params.invalidDateRangeMessage,
+    docs,
+  });
+  if ("error" in parsedDateRange) {
+    return parsedDateRange;
+  }
+
+  return freshness
+    ? {
+        freshness: freshness as ParsedWebSearchFreshness<Provider>,
+        ...parsedDateRange,
+      }
+    : parsedDateRange;
+}
+
+/** Reads a search cache payload and marks it so provider responses can disclose cache hits. */
 export function readCachedSearchPayload(cacheKey: string): Record<string, unknown> | undefined {
   const cached = readCache(SEARCH_CACHE, cacheKey);
   return cached ? { ...cached.value, cached: true } : undefined;
 }
 
+/** Builds a normalized cache key from provider-specific search dimensions. */
 export function buildSearchCacheKey(parts: Array<string | number | boolean | undefined>): string {
   return normalizeCacheKey(
     parts.map((part) => (part === undefined ? "default" : String(part))).join(":"),
   );
 }
 
+/** Stores one provider search payload with its provider-selected TTL. */
 export function writeCachedSearchPayload(
   cacheKey: string,
   payload: Record<string, unknown>,

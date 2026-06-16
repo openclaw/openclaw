@@ -76,7 +76,9 @@ In JSON mode, the CLI emits `type`-tagged objects:
 If the implicit local loopback Gateway asks for pairing, closes during connect,
 or times out before `logs.tail` answers, `openclaw logs` falls back to the
 configured Gateway file log automatically. Explicit `--url` targets do not use
-this fallback.
+this fallback. `openclaw logs --follow` is stricter: on Linux it uses the active
+user-systemd Gateway journal by PID when available, and otherwise keeps retrying
+the live Gateway instead of following a potentially stale side-by-side file.
 
 If the Gateway is unreachable, the CLI prints a short hint to run:
 
@@ -231,7 +233,9 @@ Model-call diagnostics record bounded request/response measurements without
 capturing raw prompt or response content:
 
 - `requestPayloadBytes`: UTF-8 byte size of the final model request payload
-- `responseStreamBytes`: UTF-8 byte size of streamed model response events
+- `responseStreamBytes`: UTF-8 byte size of streamed model response chunk
+  payloads. High-frequency text, thinking, and tool-call delta events count
+  only the incremental `delta` bytes instead of full `partial` snapshots.
 - `timeToFirstByteMs`: elapsed time before the first streamed response event
 - `durationMs`: total model-call duration
 

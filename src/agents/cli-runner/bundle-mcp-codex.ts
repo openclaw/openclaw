@@ -1,3 +1,6 @@
+/**
+ * Codex CLI and app-server bundle MCP projection helpers.
+ */
 import { normalizeConfiguredMcpServers } from "../../config/mcp-config-normalize.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { BundleMcpConfig, BundleMcpServerConfig } from "../../plugins/bundle-mcp.js";
@@ -54,6 +57,7 @@ function isCodexMcpServerAllowedForAgent(
   return agentIds.includes(normalizeAgentId(options.agentId));
 }
 
+/** Returns Codex CLI args with TOML MCP server overrides injected. */
 export function injectCodexMcpConfigArgs(
   args: string[] | undefined,
   config: BundleMcpConfig,
@@ -85,6 +89,9 @@ export function buildCodexUserMcpServersThreadConfigPatch(
   }
   const mcp_servers: CodexThreadConfigObject = {};
   for (const [name, server] of entries) {
+    if (server.enabled === false) {
+      continue;
+    }
     if (!isCodexMcpServerAllowedForAgent(server as BundleMcpServerConfig, options)) {
       continue;
     }

@@ -1,3 +1,4 @@
+// Msteams plugin module implements reaction handler behavior.
 import { normalizeMSTeamsConversationId } from "../inbound.js";
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.types.js";
 import { getMSTeamsRuntime } from "../runtime.js";
@@ -116,8 +117,6 @@ export function createMSTeamsReactionHandler(deps: MSTeamsMessageHandlerDeps) {
       core.system.enqueueSystemEvent(label, {
         sessionKey: route.sessionKey,
         contextKey: `msteams:reaction:${conversationId}:${targetMessageId}:${senderId}:${reactionType}:${direction}`,
-        forceSenderIsOwnerFalse: true,
-        trusted: false,
       });
     }
   };

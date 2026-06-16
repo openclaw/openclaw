@@ -1,5 +1,7 @@
+// Memory Host SDK module implements embeddings behavior.
 import { DEFAULT_LOCAL_MODEL } from "./embedding-defaults.js";
 import { sanitizeAndNormalizeEmbedding } from "./embedding-vectors.js";
+import { createLocalEmbeddingWorkerProvider } from "./embeddings-worker.js";
 import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.types.js";
 import {
   importNodeLlamaCpp,
@@ -24,6 +26,11 @@ export type {
 
 export { DEFAULT_LOCAL_MODEL } from "./embedding-defaults.js";
 
+export type LocalEmbeddingProviderRuntimeOptions = {
+  workerScriptPath?: string;
+  nodeLlamaCppImportUrl?: string;
+};
+
 async function disposeResources(
   resources: Array<DisposableResource | null | undefined>,
 ): Promise<void> {
@@ -36,19 +43,31 @@ async function disposeResources(
     }
   }
   if (firstError) {
-    throw firstError;
+    throw toLintErrorObject(firstError, "Non-Error thrown");
   }
 }
 
 export async function createLocalEmbeddingProvider(
   options: EmbeddingProviderOptions,
+  runtimeOptions?: LocalEmbeddingProviderRuntimeOptions,
+): Promise<EmbeddingProvider> {
+  return await createLocalEmbeddingWorkerProvider(options, runtimeOptions);
+}
+
+export async function createLocalEmbeddingProviderInProcess(
+  options: EmbeddingProviderOptions,
 ): Promise<EmbeddingProvider> {
   const modelPath = normalizeOptionalString(options.local?.modelPath) || DEFAULT_LOCAL_MODEL;
   const modelCacheDir = normalizeOptionalString(options.local?.modelCacheDir);
+  const nodeLlamaCppImportUrl = normalizeOptionalString(
+    (options.local as EmbeddingProviderOptions["local"] & { nodeLlamaCppImportUrl?: string })
+      ?.nodeLlamaCppImportUrl,
+  );
   const contextSize: number | "auto" = options.local?.contextSize ?? 4096;
 
   // Lazy-load node-llama-cpp to keep startup light unless local is enabled.
-  const { getLlama, resolveModelFile, LlamaLogLevel } = await importNodeLlamaCpp();
+  const { getLlama, resolveModelFile, LlamaLogLevel } =
+    await importNodeLlamaCpp(nodeLlamaCppImportUrl);
 
   let llama: Llama | null = null;
   let embeddingModel: LlamaModel | null = null;
@@ -85,7 +104,9 @@ export async function createLocalEmbeddingProvider(
       initAbortController = abortController;
       try {
         if (!llama) {
-          const nextLlama = await getLlama({ logLevel: LlamaLogLevel.error });
+          const nextLlama = await getLlama({
+            logLevel: LlamaLogLevel.error,
+          });
           llama = await disposeAndThrowIfClosed(nextLlama);
         }
         if (!embeddingModel) {
@@ -123,29 +144,28 @@ export async function createLocalEmbeddingProvider(
   return {
     id: "local",
     model: modelPath,
-    embedQuery: async (text, options) => {
+    embedQuery: async (text, optionsValue) => {
       throwIfClosed();
-      options?.signal?.throwIfAborted();
+      optionsValue?.signal?.throwIfAborted();
       const ctx = await ensureContext();
       throwIfClosed();
-      options?.signal?.throwIfAborted();
+      optionsValue?.signal?.throwIfAborted();
       const embedding = await ctx.getEmbeddingFor(text);
       return sanitizeAndNormalizeEmbedding(Array.from(embedding.vector));
     },
-    embedBatch: async (texts, options) => {
+    embedBatch: async (texts, optionsLocal) => {
       throwIfClosed();
-      options?.signal?.throwIfAborted();
+      optionsLocal?.signal?.throwIfAborted();
       const ctx = await ensureContext();
       throwIfClosed();
-      options?.signal?.throwIfAborted();
-      const embeddings = await Promise.all(
-        texts.map(async (text) => {
-          throwIfClosed();
-          options?.signal?.throwIfAborted();
-          const embedding = await ctx.getEmbeddingFor(text);
-          return sanitizeAndNormalizeEmbedding(Array.from(embedding.vector));
-        }),
-      );
+      optionsLocal?.signal?.throwIfAborted();
+      const embeddings: number[][] = [];
+      for (const text of texts) {
+        throwIfClosed();
+        optionsLocal?.signal?.throwIfAborted();
+        const embedding = await ctx.getEmbeddingFor(text);
+        embeddings.push(sanitizeAndNormalizeEmbedding(Array.from(embedding.vector)));
+      }
       return embeddings;
     },
     close: async () => {
@@ -168,4 +188,18 @@ export async function createLocalEmbeddingProvider(
       return closePromise;
     },
   };
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

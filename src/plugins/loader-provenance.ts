@@ -1,6 +1,8 @@
+// Tracks plugin loader provenance for diagnostics and policy checks.
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveUserPath } from "../utils.js";
+import { isBundledPluginInsideDevSourceRoot } from "./dev-source-root.js";
 import type { PluginCandidate } from "./discovery.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
@@ -18,6 +20,7 @@ type InstallTrackingRule = {
   matcher: PathMatcher;
 };
 
+/** Provenance lookup for trusted plugin load paths and install records. */
 export type PluginProvenanceIndex = {
   loadPathMatcher: PathMatcher;
   installRules: Map<string, InstallTrackingRule>;
@@ -64,6 +67,7 @@ function matchesPathMatcher(matcher: PathMatcher, sourcePath: string): boolean {
   return matcher.dirs.some((dirPath) => isPathInside(dirPath, sourcePath));
 }
 
+/** Builds provenance matchers from configured load paths and install records. */
 export function buildProvenanceIndex(params: {
   normalizedLoadPaths: string[];
   env: NodeJS.ProcessEnv;
@@ -75,18 +79,14 @@ export function buildProvenanceIndex(params: {
   }
 
   const installRules = new Map<string, InstallTrackingRule>();
-  const installs = {
-    ...loadInstalledPluginIndexInstallRecordsSync({ env: params.env }),
-    ...params.installRecords,
-  };
+  const installs =
+    params.installRecords ?? loadInstalledPluginIndexInstallRecordsSync({ env: params.env });
   for (const [pluginId, install] of Object.entries(installs)) {
     const rule: InstallTrackingRule = {
       trackedWithoutPaths: false,
       matcher: createPathMatcher(),
     };
-    const trackedPaths = [install.installPath, install.sourcePath]
-      .map((entry) => normalizeOptionalString(entry))
-      .filter((entry): entry is string => Boolean(entry));
+    const trackedPaths = normalizeTrimmedStringList([install.installPath, install.sourcePath]);
     if (trackedPaths.length === 0) {
       rule.trackedWithoutPaths = true;
     } else {
@@ -156,19 +156,29 @@ function resolveCandidateDuplicateRank(params: {
   if (params.candidate.origin === "config") {
     return 0;
   }
-  if (params.candidate.origin === "global" && isExplicitInstall) {
+  if (
+    params.candidate.origin === "bundled" &&
+    isBundledPluginInsideDevSourceRoot({
+      rootDir: params.candidate.rootDir,
+      env: params.env,
+    })
+  ) {
     return 1;
+  }
+  if (params.candidate.origin === "global" && isExplicitInstall) {
+    return 2;
   }
   if (params.candidate.origin === "bundled") {
     // Bundled plugin ids stay reserved unless the operator configured an override.
-    return 2;
-  }
-  if (params.candidate.origin === "workspace") {
     return 3;
   }
-  return 4;
+  if (params.candidate.origin === "workspace") {
+    return 4;
+  }
+  return 5;
 }
 
+/** Orders duplicate plugin candidates by configured, installed, bundled, then workspace trust. */
 export function compareDuplicateCandidateOrder(params: {
   left: PluginCandidate;
   right: PluginCandidate;
@@ -197,6 +207,7 @@ export function compareDuplicateCandidateOrder(params: {
   );
 }
 
+/** Warns when an open plugin allowlist may auto-load non-bundled plugins. */
 export function warnWhenAllowlistIsOpen(params: {
   emitWarning: boolean;
   logger: PluginLogger;
@@ -235,6 +246,7 @@ export function warnWhenAllowlistIsOpen(params: {
   );
 }
 
+/** Adds diagnostics for loaded plugins without install or load-path provenance. */
 export function warnAboutUntrackedLoadedPlugins(params: {
   registry: PluginRegistry;
   provenance: PluginProvenanceIndex;

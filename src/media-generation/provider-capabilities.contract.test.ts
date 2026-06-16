@@ -1,3 +1,4 @@
+// Verifies provider capability contracts for media-generation runtimes.
 import { describe, expect, it } from "vitest";
 import { BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS } from "../plugins/contracts/inventory/bundled-capability-metadata.js";
 
@@ -11,6 +12,7 @@ const EXPECTED_BUNDLED_VIDEO_PROVIDER_PLUGIN_IDS = [
   "minimax",
   "openai",
   "openrouter",
+  "pixverse",
   "qwen",
   "runway",
   "together",

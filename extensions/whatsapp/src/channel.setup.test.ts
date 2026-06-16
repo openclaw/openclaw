@@ -1,3 +1,4 @@
+// Whatsapp tests cover channel.setup plugin behavior.
 import { createQueuedWizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
@@ -25,7 +26,7 @@ import {
 
 const hoisted = vi.hoisted(() => ({
   loginWeb: vi.fn(async () => {}),
-  pathExists: vi.fn(async () => false),
+  hasWebCredsSync: vi.fn(() => false),
   readWebAuthState: vi.fn(async (): Promise<"linked" | "not-linked" | "unstable"> => "not-linked"),
   readWebAuthExistsForDecision: vi.fn(
     async (): Promise<{ outcome: "stable"; exists: boolean } | { outcome: "unstable" }> => ({
@@ -80,7 +81,6 @@ vi.mock("openclaw/plugin-sdk/setup", async () => {
       return [...normalized];
     },
     normalizeE164,
-    pathExists: hoisted.pathExists,
     splitSetupEntries: splitSetupEntriesForMock,
     setSetupChannelEnabled: (cfg: OpenClawConfig, channel: string, enabled: boolean) => ({
       ...cfg,
@@ -92,6 +92,14 @@ vi.mock("openclaw/plugin-sdk/setup", async () => {
         },
       },
     }),
+  };
+});
+
+vi.mock("./creds-files.js", async () => {
+  const actual = await vi.importActual<typeof import("./creds-files.js")>("./creds-files.js");
+  return {
+    ...actual,
+    hasWebCredsSync: hoisted.hasWebCredsSync,
   };
 });
 
@@ -146,7 +154,7 @@ function createSeparatePhoneHarness(params: { selectValues: string[]; textValues
 }
 
 async function runSeparatePhoneFlow(params: { selectValues: string[]; textValues?: string[] }) {
-  hoisted.pathExists.mockResolvedValue(true);
+  hoisted.hasWebCredsSync.mockReturnValue(true);
   const harness = createSeparatePhoneHarness({
     selectValues: params.selectValues,
     textValues: params.textValues,
@@ -160,8 +168,8 @@ async function runSeparatePhoneFlow(params: { selectValues: string[]; textValues
 describe("whatsapp setup wizard", () => {
   beforeEach(() => {
     hoisted.loginWeb.mockReset();
-    hoisted.pathExists.mockReset();
-    hoisted.pathExists.mockResolvedValue(false);
+    hoisted.hasWebCredsSync.mockReset();
+    hoisted.hasWebCredsSync.mockReturnValue(false);
     hoisted.readWebAuthState.mockReset();
     hoisted.readWebAuthState.mockResolvedValue("not-linked");
     hoisted.readWebAuthExistsForDecision.mockReset();
@@ -233,7 +241,7 @@ describe("whatsapp setup wizard", () => {
   });
 
   it("enables allowlist self-chat mode for personal-phone setup", async () => {
-    hoisted.pathExists.mockResolvedValue(true);
+    hoisted.hasWebCredsSync.mockReturnValue(true);
     const harness = createWhatsAppPersonalPhoneHarness(createQueuedWizardPrompter);
 
     const result = await runConfigureWithHarness({
@@ -244,7 +252,7 @@ describe("whatsapp setup wizard", () => {
   });
 
   it("throws a user-facing error instead of crashing when personal-phone input is undefined", async () => {
-    hoisted.pathExists.mockResolvedValue(true);
+    hoisted.hasWebCredsSync.mockReturnValue(true);
     const harness = createWhatsAppPersonalPhoneHarness(createQueuedWizardPrompter);
     harness.text.mockResolvedValueOnce(undefined as never);
 
@@ -256,7 +264,7 @@ describe("whatsapp setup wizard", () => {
   });
 
   it("forces wildcard allowFrom for open policy without allowFrom follow-up prompts", async () => {
-    hoisted.pathExists.mockResolvedValue(true);
+    hoisted.hasWebCredsSync.mockReturnValue(true);
     const harness = createSeparatePhoneHarness({
       selectValues: ["separate", "open"],
     });
@@ -334,7 +342,7 @@ describe("whatsapp setup wizard", () => {
   });
 
   it("writes default-account DM config into accounts.default for multi-account setups", async () => {
-    hoisted.pathExists.mockResolvedValue(true);
+    hoisted.hasWebCredsSync.mockReturnValue(true);
     const harness = createSeparatePhoneHarness({
       selectValues: ["separate", "open"],
     });
@@ -362,7 +370,7 @@ describe("whatsapp setup wizard", () => {
   });
 
   it("updates an existing mixed-case default-account key during setup", async () => {
-    hoisted.pathExists.mockResolvedValue(true);
+    hoisted.hasWebCredsSync.mockReturnValue(true);
     const harness = createSeparatePhoneHarness({
       selectValues: ["separate", "open"],
     });
@@ -392,7 +400,7 @@ describe("whatsapp setup wizard", () => {
   });
 
   it("runs WhatsApp login when not linked and user confirms linking", async () => {
-    hoisted.pathExists.mockResolvedValue(false);
+    hoisted.hasWebCredsSync.mockReturnValue(false);
     const harness = createWhatsAppLinkingHarness(createQueuedWizardPrompter);
     const runtime = createRuntime();
 
@@ -405,7 +413,7 @@ describe("whatsapp setup wizard", () => {
   });
 
   it("skips relink note when already linked and relink is declined", async () => {
-    hoisted.pathExists.mockResolvedValue(true);
+    hoisted.hasWebCredsSync.mockReturnValue(true);
     const harness = createSeparatePhoneHarness({
       selectValues: ["separate", "disabled"],
     });
@@ -419,7 +427,7 @@ describe("whatsapp setup wizard", () => {
   });
 
   it("shows follow-up login command note when not linked and linking is skipped", async () => {
-    hoisted.pathExists.mockResolvedValue(false);
+    hoisted.hasWebCredsSync.mockReturnValue(false);
     const harness = createSeparatePhoneHarness({
       selectValues: ["separate", "disabled"],
     });

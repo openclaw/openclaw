@@ -1,3 +1,4 @@
+// Openrouter provider module implements model/runtime integration.
 import path from "node:path";
 import {
   describeImageWithModel,
@@ -12,6 +13,7 @@ import {
   requireTranscriptionText,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
+import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { OPENROUTER_BASE_URL } from "./provider-catalog.js";
 
 const DEFAULT_OPENROUTER_AUDIO_TRANSCRIPTION_MODEL = "openai/whisper-large-v3-turbo";
@@ -123,6 +125,7 @@ export async function transcribeOpenRouterAudio(
       capability: "audio",
       transport: "media-understanding",
     });
+  const temperature = asFiniteNumber(params.query?.temperature);
 
   const { response, release } = await postJsonRequest({
     url: `${baseUrl}/audio/transcriptions`,
@@ -134,9 +137,7 @@ export async function transcribeOpenRouterAudio(
         format,
       },
       ...(params.language?.trim() ? { language: params.language.trim() } : {}),
-      ...(typeof params.query?.temperature === "number"
-        ? { temperature: params.query.temperature }
-        : {}),
+      ...(temperature !== undefined ? { temperature } : {}),
     },
     timeoutMs: params.timeoutMs,
     fetchFn,

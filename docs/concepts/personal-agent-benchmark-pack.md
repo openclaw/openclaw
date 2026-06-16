@@ -3,7 +3,7 @@ summary: "Local qa-channel scenarios for privacy-preserving personal assistant w
 read_when:
   - Running local personal agent reliability checks
   - Extending the repo-backed QA scenario catalog
-  - Verifying reminder, reply, memory, redaction, safe tool followthrough, task status, share-safe diagnostics, and proof-backed completion claims
+  - Verifying reminder, reply, memory, redaction, safe tool followthrough, task status, share-safe diagnostics, proof-backed completion claims, and failure recovery
 title: "Personal agent benchmark pack"
 ---
 
@@ -11,7 +11,7 @@ The Personal Agent Benchmark Pack is a small repo-backed QA scenario pack for
 local personal assistant workflows. It is not a generic model benchmark and it
 does not require a new runner. The pack reuses the private QA stack described in
 [QA overview](/concepts/qa-e2e-automation), the synthetic
-[QA channel](/channels/qa-channel), and the existing `qa/scenarios` markdown
+[QA channel](/channels/qa-channel), and the existing `qa/scenarios` YAML
 catalog.
 
 The first pack is intentionally narrow:
@@ -25,6 +25,7 @@ The first pack is intentionally narrow:
 - proof-backed task status reporting that keeps pending, blocked, and done separate
 - share-safe diagnostics artifacts that keep useful status while omitting raw personal content
 - proof-backed completion claims that avoid fake progress before local evidence exists
+- failure recovery that reports partial status and keeps retry boundaries clear
 
 ## Scenarios
 
@@ -60,9 +61,9 @@ to inspect and file in issues.
 
 ## Extending The Pack
 
-Add new cases under `qa/scenarios/personal/`, then add the scenario id to
-`QA_PERSONAL_AGENT_SCENARIO_IDS`. Keep each case small, local, deterministic in
-`mock-openai`, and focused on one personal assistant behavior.
+Add new `.yaml` cases under `qa/scenarios/personal/`, then add the scenario id
+to `QA_PERSONAL_AGENT_SCENARIO_IDS`. Keep each case small, local, deterministic
+in `mock-openai`, and focused on one personal assistant behavior.
 
 Good follow-up candidates:
 
