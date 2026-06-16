@@ -18,11 +18,29 @@ async function copyTextToClipboard(text: string): Promise<boolean> {
     return false;
   }
 
+  // Primary: Async Clipboard API (requires secure context — HTTPS/localhost).
   try {
     await navigator.clipboard.writeText(text);
     return true;
   } catch {
+    // Fallback: execCommand for HTTP and older browsers.
+    return fallbackCopyText(text);
+  }
+}
+
+function fallbackCopyText(text: string): boolean {
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  try {
+    return document.execCommand("copy");
+  } catch {
     return false;
+  } finally {
+    document.body.removeChild(textarea);
   }
 }
 
