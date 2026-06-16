@@ -936,10 +936,12 @@ if (isPrlctl) {
     expect(guestTransports.match(/umask 022/g)).toHaveLength(2);
   });
 
-  it("clears restored macOS npm content cache before install lanes", () => {
+  it("hardens restored macOS install lanes", () => {
     const macos = readFileSync(TS_PATHS.macos, "utf8");
 
     expect(macos).toContain('rm -rf "$HOME/.npm/_cacache"');
+    expect(macos.match(/\.onboard-ref", 420/g)).toHaveLength(2);
+    expect(macos).toContain('echo "npm install attempt $attempt failed; retrying in 5s"');
   });
 
   it("provisions portable Git before Windows dev update lanes", () => {

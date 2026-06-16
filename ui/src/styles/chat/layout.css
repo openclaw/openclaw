@@ -1418,6 +1418,12 @@
     min-width: 0;
   }
 
+  /* Desktop restores the quota pill in the composer flex row (#93041); the mobile composer is a
+     fixed 2-col grid (model | settings), so the pill would push the settings chip to a new row. */
+  .agent-chat__composer-controls .chat-controls__quota {
+    display: none;
+  }
+
   .chat-settings-popover-wrapper {
     width: 44px;
     margin-left: 0;
