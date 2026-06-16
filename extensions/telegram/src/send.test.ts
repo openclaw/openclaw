@@ -52,6 +52,7 @@ const {
   buildInlineKeyboard,
   createForumTopicTelegram,
   deleteMessageTelegram,
+  detectTelegramRichContent,
   editForumTopicTelegram,
   editMessageTelegram,
   pinMessageTelegram,
@@ -936,6 +937,69 @@ describe("sendMessageTelegram", () => {
   });
 
   it("sends native rich tables when explicitly enabled", async () => {
+    it.each([
+      {
+        name: "html table",
+        text: "<table><tr><th>A</th><th>B</th></tr><tr><td>1</td><td>2</td></tr></table>",
+        expectRich: true,
+      },
+      {
+        name: "html details",
+        text: "<details><summary>Risks</summary><p>QA may slip.</p></details>",
+        expectRich: true,
+      },
+      {
+        name: "html checklist",
+        text: "<checklist><li has_checkbox is_checked>Review PR</li></checklist>",
+        expectRich: true,
+      },
+      {
+        name: "html math",
+        text: "<math>E = mc^2</math>",
+        expectRich: true,
+      },
+      {
+        name: "markdown pipe table",
+        text: "| A | B |\n|---|---|\n| 1 | 2 |",
+        expectRich: true,
+      },
+      {
+        name: "plain text without rich elements",
+        text: "Just a regular reply with no tables or tags.",
+        expectRich: false,
+      },
+      {
+        name: "empty text",
+        text: "",
+        expectRich: false,
+      },
+    ])("auto-detects rich content in $name (expectRich=$expectRich)", async (testCase) => {
+      botApi.sendMessage.mockResolvedValue({ message_id: 45, chat: { id: "123" } });
+
+      await sendMessageTelegram("123", testCase.text, {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
+      });
+
+      if (testCase.expectRich) {
+        expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
+        expect(botApi.sendMessage).not.toHaveBeenCalled();
+      } else {
+        expect(botRawApi.sendRichMessage).not.toHaveBeenCalled();
+        expect(botApi.sendMessage).toHaveBeenCalledTimes(1);
+      }
+    });
+
+    it("detects pipe-table markdown across newlines", () => {
+      const text = "Heading\n\n| Name | Score |\n| --- | --- |\n| Alice | 9 |";
+      expect(detectTelegramRichContent(text)).toBe(true);
+    });
+
+    it("does not detect rich content in prose containing table-like text", () => {
+      const text = 'He said: "use a | b" was wrong.';
+      expect(detectTelegramRichContent(text)).toBe(false);
+    });
+
     botApi.sendMessage.mockResolvedValue({ message_id: 45, chat: { id: "123" } });
     const markdown = markdownTable(3);
 
