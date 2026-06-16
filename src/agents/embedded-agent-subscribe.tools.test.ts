@@ -407,10 +407,25 @@ describe("sanitizeToolResult", () => {
     expect((sanitized[0] as { output: string }).output).toContain("Authorization: Bearer");
   });
 
-  it("applies configured redact patterns to Control UI tool payloads", () => {
+  it("respects redactSensitive: off by skipping all tool payload redaction", () => {
     vi.spyOn(loggingConfigModule, "readLoggingConfig").mockReturnValue({
       redactSensitive: "off",
+    });
+
+    // When redactSensitive is off, sanitizeToolArgs should return args unchanged
+    const args = {
+      headers: { Authorization: "Bearer abcdef0123456789QWERTY=" },
+      command: "OPENAI_API_KEY=sk-abc123 ./run.sh",
+    };
+    const sanitized = sanitizeToolArgs(args) as typeof args;
+    expect(sanitized.headers.Authorization).toBe("Bearer abcdef0123456789QWERTY=");
+    expect(sanitized.command).toBe("OPENAI_API_KEY=sk-abc123 ./run.sh");
+  });
+
+  it("applies configured redact patterns to Control UI tool payloads", () => {
+    vi.spyOn(loggingConfigModule, "readLoggingConfig").mockReturnValue({
       redactPatterns: [String.raw`\bcustom-secret-[A-Za-z0-9]+\b`],
+      redactSensitive: "tools",
     });
 
     const result = {

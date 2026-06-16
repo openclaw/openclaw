@@ -1070,10 +1070,14 @@ export function redactToolDetail(detail: string): string {
 function resolveToolPayloadRedaction(
   loggingConfig: LoggingConfig | undefined = readLoggingConfig(),
 ): RedactOptions {
-  const userPatterns = loggingConfig?.redactPatterns;
   const mode = normalizeMode(loggingConfig?.redactSensitive);
+  const userPatterns = loggingConfig?.redactPatterns;
   if (mode === "off") {
-    return { mode: "off", patterns: [] };
+    // When log redaction is off, still apply user-configured redactPatterns
+    // (if any) but skip the built-in defaults so Bearer tokens etc. survive.
+    const patterns =
+      userPatterns && userPatterns.length > 0 ? [...userPatterns] : undefined;
+    return { mode, patterns };
   }
   const patterns =
     userPatterns && userPatterns.length > 0
@@ -1082,11 +1086,9 @@ function resolveToolPayloadRedaction(
   return { mode, patterns };
 }
 
-// Resolves tool payload redaction, respecting `logging.redactSensitive` when
-// set, and merges user `logging.redactPatterns` with the built-in defaults
-// so both apply. When `redactSensitive` is "off", all tool payload redaction
-// is disabled, matching the user's intent to disable sensitive-value masking
-// (including in tool event args such as `Authorization: Bearer` headers).
+// Respects `logging.redactSensitive` so "off" disables all redaction (previously
+// forced tools-mode, making `redactSensitive: off` ineffective for tool args).
+// Merges user `logging.redactPatterns` with the built-in defaults when enabled.
 export function redactToolPayloadText(text: string): string {
   return redactToolPayloadTextWithConfig(text, readLoggingConfig());
 }
