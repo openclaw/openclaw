@@ -461,6 +461,22 @@ function resolveInboundChannel(ctx: TemplateContext): string | undefined {
   return channelValue;
 }
 
+function resolveInboundMessageType(ctx: TemplateContext): string | undefined {
+  const mediaType = normalizePromptMetadataString(ctx.MediaType);
+  if (mediaType) {
+    const slash = mediaType.indexOf("/");
+    return slash > 0 ? mediaType.slice(0, slash) : mediaType;
+  }
+  const firstMediaType = Array.isArray(ctx.MediaTypes)
+    ? ctx.MediaTypes.find((t): t is string => typeof t === "string" && t.length > 0)
+    : undefined;
+  if (firstMediaType) {
+    const slash = firstMediaType.indexOf("/");
+    return slash > 0 ? firstMediaType.slice(0, slash) : firstMediaType;
+  }
+  return undefined;
+}
+
 function resolveInboundFormattingHints(ctx: TemplateContext):
   | {
       text_markup: string;
@@ -505,6 +521,7 @@ export function buildInboundMetaSystemPrompt(
     provider: normalizePromptMetadataString(ctx.Provider),
     surface: normalizePromptMetadataString(ctx.Surface),
     chat_type: chatType ?? (isDirect ? "direct" : undefined),
+    message_type: resolveInboundMessageType(ctx),
     response_format:
       options?.includeFormattingHints === false ? undefined : resolveInboundFormattingHints(ctx),
   };

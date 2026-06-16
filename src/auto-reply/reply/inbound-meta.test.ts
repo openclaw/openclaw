@@ -248,6 +248,44 @@ describe("buildInboundMetaSystemPrompt", () => {
     const payload = parseInboundMetaPayload(prompt);
     expect(payload["response_format"]).toBeUndefined();
   });
+
+  it("includes message_type derived from MediaType", () => {
+    const prompt = buildInboundMetaSystemPrompt({
+      OriginatingChannel: "telegram",
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "direct",
+      MediaType: "audio/ogg",
+    } as TemplateContext);
+
+    const payload = parseInboundMetaPayload(prompt);
+    expect(payload["message_type"]).toBe("audio");
+  });
+
+  it("includes message_type derived from MediaTypes when MediaType is absent", () => {
+    const prompt = buildInboundMetaSystemPrompt({
+      OriginatingChannel: "discord",
+      Provider: "discord",
+      Surface: "discord",
+      ChatType: "direct",
+      MediaTypes: ["video/mp4", "image/png"],
+    } as TemplateContext);
+
+    const payload = parseInboundMetaPayload(prompt);
+    expect(payload["message_type"]).toBe("video");
+  });
+
+  it("omits message_type for plain text messages", () => {
+    const prompt = buildInboundMetaSystemPrompt({
+      OriginatingChannel: "telegram",
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "direct",
+    } as TemplateContext);
+
+    const payload = parseInboundMetaPayload(prompt);
+    expect(payload["message_type"]).toBeUndefined();
+  });
 });
 
 describe("buildInboundUserContextPrefix", () => {
