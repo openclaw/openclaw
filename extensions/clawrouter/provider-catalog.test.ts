@@ -6,9 +6,7 @@ import {
 import { beforeEach, describe, expect, it, vi, type MockedFunction } from "vitest";
 import {
   buildClawRouterProviderConfig,
-  clearClawRouterCatalogForTests,
   normalizeClawRouterResolvedModel,
-  resolveDiscoveredClawRouterModel,
 } from "./provider-catalog.js";
 
 const CATALOG = {
@@ -101,12 +99,12 @@ const CATALOG = {
   ],
 };
 
-function buildFetchGuard(): {
+function buildFetchGuard(catalog: unknown = CATALOG): {
   fetchGuard: LiveModelCatalogFetchGuard;
   fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard>;
 } {
   const fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard> = vi.fn(async () => ({
-    response: new Response(JSON.stringify(CATALOG)),
+    response: new Response(JSON.stringify(catalog)),
     finalUrl: "https://clawrouter.example/v1/catalog",
     release: async () => undefined,
   }));
@@ -116,7 +114,6 @@ function buildFetchGuard(): {
 describe("clawrouter provider catalog", () => {
   beforeEach(() => {
     clearLiveCatalogCacheForTests();
-    clearClawRouterCatalogForTests();
   });
 
   it("maps credential-scoped catalog rows to their real provider transports", async () => {
@@ -131,7 +128,6 @@ describe("clawrouter provider catalog", () => {
     expect(provider).toMatchObject({
       api: "openai-responses",
       apiKey: "clawrouter-test-key",
-      authHeader: true,
       baseUrl: "https://clawrouter.example/v1",
     });
     expect(provider.models.map((model) => model.id)).toEqual([
@@ -163,20 +159,9 @@ describe("clawrouter provider catalog", () => {
       id: "claude-sonnet-4-5-20250929",
       api: "anthropic-messages",
       baseUrl: "https://clawrouter.example/v1/native/anthropic",
-      headers: {
-        Authorization: "Bearer clawrouter-test-key",
-      },
     });
-
-    const dynamic = resolveDiscoveredClawRouterModel({
-      baseUrl: provider.baseUrl,
-      modelId: "google/gemini-default",
-    });
-    expect(dynamic).toMatchObject({
-      id: "google/gemini-default",
-      provider: "clawrouter",
-      api: "google-generative-ai",
-    });
+    expect(normalized?.params).toBeUndefined();
+    expect(JSON.stringify(provider.models)).not.toContain("clawrouter-test-key");
   });
 
   it("caches the auth-scoped catalog for the discovery TTL", async () => {
@@ -196,40 +181,40 @@ describe("clawrouter provider catalog", () => {
     expect((headers as Headers).get("authorization")).toBe("Bearer clawrouter-test-key");
   });
 
-  it("replaces stale discovery state when the active catalog changes", async () => {
-    const first = buildFetchGuard();
-    const provider = await buildClawRouterProviderConfig({
+  it("keeps credential-scoped route metadata isolated on each catalog result", async () => {
+    const firstCatalog = structuredClone(CATALOG);
+    firstCatalog.providers[1].models[0].upstream = "first-upstream";
+    const first = buildFetchGuard(firstCatalog);
+    const firstProvider = await buildClawRouterProviderConfig({
       apiKey: "first-key",
-      baseUrl: "https://first.example",
+      baseUrl: "https://clawrouter.example",
       fetchGuard: first.fetchGuard,
     });
-    const anthropic = provider.models.find((model) => model.id === "anthropic/default");
+    const firstAnthropic = firstProvider.models.find((model) => model.id === "anthropic/default");
 
-    const second = buildFetchGuard();
-    await buildClawRouterProviderConfig({
+    const secondCatalog = structuredClone(CATALOG);
+    secondCatalog.providers[1].models[0].upstream = "second-upstream";
+    const second = buildFetchGuard(secondCatalog);
+    const secondProvider = await buildClawRouterProviderConfig({
       apiKey: "second-key",
-      baseUrl: "https://second.example",
+      baseUrl: "https://clawrouter.example",
       fetchGuard: second.fetchGuard,
     });
+    const secondAnthropic = secondProvider.models.find((model) => model.id === "anthropic/default");
 
     expect(
-      resolveDiscoveredClawRouterModel({
-        baseUrl: "https://first.example/v1",
-        modelId: "openai/gpt-5.5-mini",
-      }),
-    ).toBeUndefined();
-    expect(
-      resolveDiscoveredClawRouterModel({
-        baseUrl: "https://second.example/v1",
-        modelId: "openai/gpt-5.5-mini",
-      }),
-    ).toBeDefined();
+      normalizeClawRouterResolvedModel({
+        ...firstAnthropic,
+        baseUrl: firstProvider.baseUrl,
+        provider: "clawrouter",
+      } as ProviderRuntimeModel)?.id,
+    ).toBe("first-upstream");
     expect(
       normalizeClawRouterResolvedModel({
-        ...anthropic,
-        baseUrl: provider.baseUrl,
+        ...secondAnthropic,
+        baseUrl: secondProvider.baseUrl,
         provider: "clawrouter",
-      } as ProviderRuntimeModel),
-    ).toBeUndefined();
+      } as ProviderRuntimeModel)?.id,
+    ).toBe("second-upstream");
   });
 });

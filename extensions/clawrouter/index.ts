@@ -12,8 +12,8 @@ import {
   buildClawRouterProviderConfig,
   normalizeClawRouterApiBaseUrl,
   normalizeClawRouterResolvedModel,
-  resolveDiscoveredClawRouterModel,
 } from "./provider-catalog.js";
+import { wrapClawRouterProviderStream } from "./stream.js";
 
 const PROVIDER_ID = "clawrouter";
 const ENV_VAR = "CLAWROUTER_API_KEY";
@@ -81,12 +81,8 @@ export default definePluginEntry({
         const baseUrl = normalizeClawRouterApiBaseUrl(providerConfig.baseUrl);
         return baseUrl !== providerConfig.baseUrl ? { ...providerConfig, baseUrl } : undefined;
       },
-      resolveDynamicModel: ({ modelId, providerConfig }) =>
-        resolveDiscoveredClawRouterModel({
-          baseUrl: providerConfig?.baseUrl,
-          modelId,
-        }),
       normalizeResolvedModel: ({ model }) => normalizeClawRouterResolvedModel(model),
+      wrapStreamFn: wrapClawRouterProviderStream,
       buildReplayPolicy: ({ modelApi, modelId }) => {
         if (modelApi === "anthropic-messages") {
           return buildNativeAnthropicReplayPolicyForModel(modelId);

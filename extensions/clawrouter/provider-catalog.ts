@@ -13,6 +13,7 @@ export const CLAWROUTER_DEFAULT_BASE_URL = "https://clawrouter.openclaw.ai";
 
 const PROVIDER_ID = "clawrouter";
 const CATALOG_CACHE_TTL_MS = 60_000;
+const ROUTE_METADATA_KEY = "clawrouterRoute";
 const DEFAULT_CONTEXT_WINDOW = 200_000;
 const DEFAULT_MAX_TOKENS = 32_768;
 const DEFAULT_COST = {
@@ -45,17 +46,13 @@ type CatalogProvider = {
 
 type RoutedModel = {
   definition: ModelDefinitionConfig;
+};
+
+type RouteMetadata = {
+  api: NonNullable<ModelDefinitionConfig["api"]>;
+  baseUrl: string;
   upstreamModel?: string;
 };
-
-type CatalogSnapshot = {
-  apiBaseUrl: string;
-  authorizationHeader: string;
-  modelsByRoute: Map<string, ModelDefinitionConfig>;
-  nativeModelIds: Map<string, string>;
-};
-
-let catalogSnapshot: CatalogSnapshot | undefined;
 
 function readRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -143,10 +140,6 @@ export function normalizeClawRouterApiBaseUrl(baseUrl: string | undefined): stri
   return `${normalizeClawRouterRootUrl(baseUrl)}/v1`;
 }
 
-function routeKey(baseUrl: string, modelId: string): string {
-  return `${trimTrailingSlashes(baseUrl)}\0${modelId}`;
-}
-
 function supportsCapability(model: CatalogModel, ...capabilities: string[]): boolean {
   return capabilities.some((capability) => model.capabilities.includes(capability));
 }
@@ -173,7 +166,7 @@ function buildRoutedModel(
   provider: CatalogProvider,
   model: CatalogModel,
 ): RoutedModel | undefined {
-  let api: ModelDefinitionConfig["api"];
+  let api: NonNullable<ModelDefinitionConfig["api"]>;
   let baseUrl: string;
   let upstreamModel: string | undefined;
 
@@ -216,19 +209,22 @@ function buildRoutedModel(
       cost: DEFAULT_COST,
       contextWindow: DEFAULT_CONTEXT_WINDOW,
       maxTokens: DEFAULT_MAX_TOKENS,
+      params: {
+        [ROUTE_METADATA_KEY]: {
+          api,
+          baseUrl,
+          ...(upstreamModel ? { upstreamModel } : {}),
+        } satisfies RouteMetadata,
+      },
     },
-    upstreamModel,
   };
 }
 
-function updateDiscoveredModels(
+function buildDiscoveredModels(
   rootUrl: string,
   providers: CatalogProvider[],
-  apiKey: string,
 ): ModelDefinitionConfig[] {
   const models = new Map<string, ModelDefinitionConfig>();
-  const modelsByRoute = new Map<string, ModelDefinitionConfig>();
-  const nativeModelIds = new Map<string, string>();
   for (const provider of providers) {
     for (const model of provider.models) {
       const routed = buildRoutedModel(rootUrl, provider, model);
@@ -236,22 +232,8 @@ function updateDiscoveredModels(
         continue;
       }
       models.set(routed.definition.id, routed.definition);
-      const key = routeKey(routed.definition.baseUrl ?? `${rootUrl}/v1`, routed.definition.id);
-      modelsByRoute.set(key, routed.definition);
-      modelsByRoute.set(routeKey(`${rootUrl}/v1`, routed.definition.id), routed.definition);
-      if (routed.upstreamModel) {
-        nativeModelIds.set(key, routed.upstreamModel);
-      }
     }
   }
-  // Discovery owns one active provider config, so replace the whole snapshot.
-  // Keeping older credential-scoped catalogs would leak stale grants and grow forever.
-  catalogSnapshot = {
-    apiBaseUrl: `${rootUrl}/v1`,
-    authorizationHeader: `Bearer ${apiKey}`,
-    modelsByRoute,
-    nativeModelIds,
-  };
   return [...models.values()].sort((left, right) => left.id.localeCompare(right.id));
 }
 
@@ -280,44 +262,52 @@ export async function buildClawRouterProviderConfig(params: {
     baseUrl: `${rootUrl}/v1`,
     api: "openai-responses",
     apiKey: params.apiKey,
-    authHeader: true,
-    models: updateDiscoveredModels(rootUrl, providers, params.apiKey),
+    models: buildDiscoveredModels(rootUrl, providers),
   };
 }
 
-export function resolveDiscoveredClawRouterModel(params: {
-  baseUrl?: string;
-  modelId: string;
-}): ProviderRuntimeModel | undefined {
-  const apiBaseUrl = normalizeClawRouterApiBaseUrl(params.baseUrl);
-  if (catalogSnapshot?.apiBaseUrl !== apiBaseUrl) {
+function readRouteMetadata(params: ProviderRuntimeModel["params"]): RouteMetadata | undefined {
+  const row = readRecord(params?.[ROUTE_METADATA_KEY]);
+  const baseUrl = readString(row?.baseUrl);
+  const api = readString(row?.api);
+  if (
+    !baseUrl ||
+    (api !== "openai-responses" &&
+      api !== "openai-completions" &&
+      api !== "anthropic-messages" &&
+      api !== "google-generative-ai")
+  ) {
     return undefined;
   }
-  const model = catalogSnapshot.modelsByRoute.get(routeKey(apiBaseUrl, params.modelId));
-  return model ? { ...model, provider: PROVIDER_ID } : undefined;
+  return {
+    api,
+    baseUrl,
+    ...(readString(row?.upstreamModel) ? { upstreamModel: readString(row?.upstreamModel) } : {}),
+  };
+}
+
+function stripRouteMetadata(
+  params: ProviderRuntimeModel["params"],
+): ProviderRuntimeModel["params"] {
+  if (!params || !(ROUTE_METADATA_KEY in params)) {
+    return params;
+  }
+  const { [ROUTE_METADATA_KEY]: _routeMetadata, ...remaining } = params;
+  return Object.keys(remaining).length > 0 ? remaining : undefined;
 }
 
 export function normalizeClawRouterResolvedModel(
   model: ProviderRuntimeModel,
 ): ProviderRuntimeModel | undefined {
-  const discovered = catalogSnapshot?.modelsByRoute.get(routeKey(model.baseUrl, model.id));
-  if (!catalogSnapshot || !discovered) {
+  const route = readRouteMetadata(model.params);
+  if (!route) {
     return undefined;
   }
-  const discoveredBaseUrl = discovered.baseUrl ?? catalogSnapshot.apiBaseUrl;
-  const upstreamModel = catalogSnapshot.nativeModelIds.get(routeKey(discoveredBaseUrl, model.id));
   return {
     ...model,
-    api: discovered.api ?? model.api,
-    baseUrl: discoveredBaseUrl,
-    headers: {
-      ...model.headers,
-      Authorization: catalogSnapshot.authorizationHeader,
-    },
-    ...(upstreamModel && upstreamModel !== model.id ? { id: upstreamModel } : {}),
+    api: route.api,
+    baseUrl: route.baseUrl,
+    params: stripRouteMetadata(model.params),
+    ...(route.upstreamModel && route.upstreamModel !== model.id ? { id: route.upstreamModel } : {}),
   };
-}
-
-export function clearClawRouterCatalogForTests(): void {
-  catalogSnapshot = undefined;
 }
