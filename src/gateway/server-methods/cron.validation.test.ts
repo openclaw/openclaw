@@ -613,6 +613,20 @@ describe("cron method validation", () => {
     expectCronSuccess(respond);
   });
 
+  it("validates a provider-prefixed target when clearing its explicit channel", async () => {
+    setRuntimeConfig(slackConfig());
+
+    const { context, respond } = await invokeCronUpdateDelivery(
+      { channel: null },
+      createCronJob({
+        delivery: { mode: "announce", channel: "telegram", to: "telegram:123" },
+      }),
+    );
+
+    expect(context.cron.update).not.toHaveBeenCalled();
+    expectResponseError(respond, { messageIncludes: "delivery.channel must be one of: slack" });
+  });
+
   it("accepts completion webhook delivery patches and nullable clears", async () => {
     const currentJob = createCronJob({
       delivery: { mode: "announce" },
