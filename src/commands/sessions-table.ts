@@ -14,6 +14,7 @@ export type SessionDisplayRow = {
   updatedAt: number | null;
   ageMs: number | null;
   sessionId?: string;
+  displayName?: string;
   systemSent?: boolean;
   abortedLastRun?: boolean;
   thinkingLevel?: string;
@@ -47,6 +48,7 @@ export function toSessionDisplayRow(key: string, entry: SessionEntry): SessionDi
     updatedAt,
     ageMs: updatedAt ? Date.now() - updatedAt : null,
     sessionId: entry?.sessionId,
+    displayName: entry?.displayName,
     systemSent: entry?.systemSent,
     abortedLastRun: entry?.abortedLastRun,
     thinkingLevel: entry?.thinkingLevel,
