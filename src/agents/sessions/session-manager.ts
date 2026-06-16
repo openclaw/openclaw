@@ -1606,7 +1606,11 @@ export class SessionManager {
       if (!isIndexedSessionEntry(entry)) {
         continue;
       }
-      if (entry.parentId === this.appendParentId && this.leafId !== this.appendParentId) {
+      const hasSerializedParent = Object.hasOwn(entry, "parentId");
+      if (
+        !hasSerializedParent ||
+        (entry.parentId === this.appendParentId && this.leafId !== this.appendParentId)
+      ) {
         this.logicalParentsById.set(entry.id, this.leafId);
       }
       this.byId.set(entry.id, entry);

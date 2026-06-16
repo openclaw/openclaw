@@ -512,7 +512,11 @@ function readableSessionState(fileEntries: FileEntry[]): ReadableSessionState {
     if (acceptedIds.has(entry.id)) {
       continue;
     }
-    if (entry.parentId === effectiveAppendParentId && effectiveLeafId !== effectiveAppendParentId) {
+    const hasSerializedParent = Object.hasOwn(rawRecord, "parentId");
+    if (
+      !hasSerializedParent ||
+      (entry.parentId === effectiveAppendParentId && effectiveLeafId !== effectiveAppendParentId)
+    ) {
       logicalParentsById.set(entry.id, effectiveLeafId);
     }
     const repaired = repairEntryLinks(entry);

@@ -1132,6 +1132,63 @@ describe("readTranscriptFileState", () => {
     ]);
   });
 
+  it("keeps parentless canonical ancestry through rewrite replay", async () => {
+    const root = await makeRoot("openclaw-transcript-state-parentless-leaf-");
+    const sessionFile = path.join(root, "session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      [
+        {
+          type: "session",
+          version: 3,
+          id: "session-1",
+          timestamp: "2026-06-15T00:00:00.000Z",
+          cwd: root,
+        },
+        {
+          type: "message",
+          id: "user-1",
+          timestamp: "2026-06-15T00:00:01.000Z",
+          message: { role: "user", content: "question", timestamp: 1 },
+        },
+        {
+          type: "message",
+          id: "assistant-1",
+          timestamp: "2026-06-15T00:00:02.000Z",
+          message: { role: "assistant", content: "answer", timestamp: 2 },
+        },
+        {
+          type: "leaf",
+          id: "active-leaf",
+          parentId: "assistant-1",
+          timestamp: "2026-06-15T00:00:03.000Z",
+          targetId: "assistant-1",
+        },
+      ]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n") + "\n",
+      "utf8",
+    );
+
+    const state = await readTranscriptFileState(sessionFile);
+    expect(state.getBranch().map((entry) => entry.id)).toEqual(["user-1", "assistant-1"]);
+
+    rewriteTranscriptEntriesInState({
+      state,
+      replacements: [
+        {
+          entryId: "user-1",
+          message: { role: "user", content: "rewritten question", timestamp: 3 },
+        },
+      ],
+    });
+
+    expect(state.buildSessionContext().messages).toMatchObject([
+      { role: "user", content: "rewritten question" },
+      { role: "assistant", content: "answer" },
+    ]);
+  });
+
   it("keeps a terminal leaf control's opaque append parent", async () => {
     const root = await makeRoot("openclaw-transcript-state-opaque-append-parent-");
     const sessionFile = path.join(root, "session.jsonl");
