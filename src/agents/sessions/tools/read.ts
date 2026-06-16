@@ -8,7 +8,7 @@ import { access as fsAccess, readFile as fsReadFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { decodeWindowsTextFileBuffer } from "../../../infra/windows-encoding.js";
+import { decodeTextFileBuffer } from "../../../infra/windows-encoding.js";
 import type { ImageContent, Model, TextContent } from "../../../llm/types.js";
 import {
   classifyMediaReferenceSource,
@@ -40,6 +40,12 @@ const readSchema = Type.Object({
     Type.Number({ description: "Line number to start reading from (1-indexed)" }),
   ),
   limit: Type.Optional(Type.Number({ description: "Maximum number of lines to read" })),
+  encoding: Type.Optional(
+    Type.String({
+      description:
+        "File text encoding (e.g. 'gbk', 'big5', 'shift_jis'). Defaults to UTF-8 with platform-specific fallback.",
+    }),
+  ),
 });
 export type { ReadToolDetails, ReadToolInput } from "./tool-contracts.js";
 
@@ -58,7 +64,7 @@ export interface ReadOperations {
   /** Resolve a user-supplied path for this read backend. */
   resolvePath?: (filePath: string, cwd: string) => string | Promise<string>;
   /** Decode text bytes for this backend. Custom backends default to UTF-8. */
-  decodeText?: (params: { buffer: Buffer; absolutePath: string }) => string;
+  decodeText?: (params: { buffer: Buffer; absolutePath: string; encoding?: string }) => string;
   /** Read file contents as a Buffer */
   readFile: (absolutePath: string) => Promise<Buffer>;
   /** Check if file is readable (throw if not) */
@@ -69,7 +75,7 @@ export interface ReadOperations {
 
 const defaultReadOperations: ReadOperations = {
   resolvePath: resolveLocalReadPath,
-  decodeText: ({ buffer }) => decodeWindowsTextFileBuffer({ buffer }),
+  decodeText: ({ buffer, encoding }) => decodeTextFileBuffer({ buffer, encoding }),
   readFile: (path) => fsReadFile(path),
   access: (path) => fsAccess(path, constants.R_OK),
   detectImageMimeType: detectSupportedImageMimeTypeFromFile,
@@ -261,13 +267,13 @@ export function createReadToolDefinition(
   return {
     name: "read",
     label: "read",
-    description: `Read the contents of a file. Supports text files and images (jpg, png, gif, webp). Images are sent as attachments. For text files, output is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete.`,
+    description: `Read the contents of a file. Supports text files and images (jpg, png, gif, webp). Images are sent as attachments. For text files, output is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete. Use encoding for non-UTF-8 text files (e.g. 'gbk' for GBK-encoded files on Chinese Windows).`,
     promptSnippet: "Read file contents",
     promptGuidelines: ["Use read to examine files instead of cat or sed."],
     parameters: readSchema,
     async execute(
       toolCallId,
-      { path, offset, limit }: { path: string; offset?: number; limit?: number },
+      { path, offset, limit, encoding }: { path: string; offset?: number; limit?: number; encoding?: string },
       signal?: AbortSignal,
       onUpdate?,
       ctx?,
@@ -344,7 +350,7 @@ export function createReadToolDefinition(
               // Read text content.
               const buffer = await ops.readFile(absolutePath);
               const textContent =
-                ops.decodeText?.({ buffer, absolutePath }) ?? buffer.toString("utf8");
+                ops.decodeText?.({ buffer, absolutePath, encoding }) ?? buffer.toString("utf8");
               const allLines = textContent.split("\n");
               const totalFileLines = allLines.length;
               // Apply offset if specified. Convert from 1-indexed input to 0-indexed array access.

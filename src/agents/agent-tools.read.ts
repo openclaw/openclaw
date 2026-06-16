@@ -15,7 +15,7 @@ import {
 } from "../infra/fs-safe.js";
 import { expandHomePrefix, resolveOsHomeDir } from "../infra/home-dir.js";
 import { hasEncodedFileUrlSeparator, trySafeFileURLToPath } from "../infra/local-file-access.js";
-import { decodeWindowsTextFileBuffer } from "../infra/windows-encoding.js";
+import { decodeTextFileBuffer } from "../infra/windows-encoding.js";
 import {
   classifyMediaReferenceSource,
   normalizeMediaReferenceSource,
@@ -918,10 +918,12 @@ function createSandboxReadOperations(params: SandboxToolParams) {
       }
       return resolveContainerPathCandidate(filePath) ?? filePath;
     },
-    decodeText: ({ buffer, absolutePath }: { buffer: Buffer; absolutePath: string }) =>
-      params.bridge.resolvePath({ filePath: absolutePath, cwd: params.root }).hostPath
-        ? decodeWindowsTextFileBuffer({ buffer })
-        : buffer.toString("utf8"),
+    decodeText: ({ buffer, absolutePath, encoding }: { buffer: Buffer; absolutePath: string; encoding?: string }) =>
+      encoding
+        ? decodeTextFileBuffer({ buffer, encoding })
+        : params.bridge.resolvePath({ filePath: absolutePath, cwd: params.root }).hostPath
+          ? decodeTextFileBuffer({ buffer })
+          : buffer.toString("utf8"),
     readFile: (absolutePath: string) =>
       params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),
     access: (absolutePath: string) => assertSandboxFileExists(params, absolutePath),

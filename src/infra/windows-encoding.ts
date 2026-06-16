@@ -110,10 +110,46 @@ export function decodeWindowsTextFileBuffer(params: {
   platform?: NodeJS.Platform;
   windowsEncoding?: string | null;
 }): string {
+  return decodeTextFileBuffer({ ...params });
+}
+
+/** Decodes a text file buffer with optional explicit encoding, working on all platforms.
+ *
+ * When `encoding` is provided, it is tried first on any platform (not just Windows).
+ * When no explicit encoding is given, the existing platform-specific logic applies:
+ * strict UTF-8 first, then Windows system encoding fallback on win32, plain UTF-8
+ * on other platforms. */
+export function decodeTextFileBuffer(params: {
+  buffer: Buffer;
+  platform?: NodeJS.Platform;
+  encoding?: string;
+  windowsEncoding?: string | null;
+}): string {
+  const { buffer, platform, encoding, windowsEncoding } = params;
+  if (encoding) {
+    return decodeBufferWithExplicitEncoding(buffer, encoding);
+  }
   return decodeWindowsBufferWithFallback({
-    ...params,
-    resolveFallbackEncoding: () => params.windowsEncoding ?? resolveWindowsSystemEncoding(),
+    buffer,
+    platform,
+    resolveFallbackEncoding: () => windowsEncoding ?? resolveWindowsSystemEncoding(),
   });
+}
+
+function decodeBufferWithExplicitEncoding(buffer: Buffer, encoding: string): string {
+  const normalized = normalizeLowercaseStringOrEmpty(encoding);
+  if (normalized === "utf-8" || normalized === "utf8") {
+    return buffer.toString("utf8");
+  }
+  const strictUtf8 = decodeStrictUtf8(buffer);
+  if (strictUtf8 !== null) {
+    return strictUtf8;
+  }
+  try {
+    return new TextDecoder(encoding).decode(buffer);
+  } catch {
+    return buffer.toString("utf8");
+  }
 }
 
 function decodeWindowsBufferWithFallback(params: {

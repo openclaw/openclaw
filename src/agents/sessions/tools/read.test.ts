@@ -9,10 +9,10 @@ import { withEnvAsync } from "../../../test-utils/env.js";
 import { createReadToolDefinition } from "./read.js";
 import { DEFAULT_MAX_BYTES } from "./truncate.js";
 
-const decodeWindowsTextFileBufferMock = vi.hoisted(() => vi.fn(() => ""));
+const decodeTextFileBufferMock = vi.hoisted(() => vi.fn(() => ""));
 
 vi.mock("../../../infra/windows-encoding.js", () => ({
-  decodeWindowsTextFileBuffer: decodeWindowsTextFileBufferMock,
+  decodeTextFileBuffer: decodeTextFileBufferMock,
 }));
 
 const ONE_PIXEL_PNG_BASE64 =
@@ -27,7 +27,7 @@ function textContent(
 
 describe("read tool", () => {
   beforeEach(() => {
-    decodeWindowsTextFileBufferMock.mockReset();
+    decodeTextFileBufferMock.mockReset();
   });
 
   it("reads managed inbound media refs as image files", async () => {
@@ -115,7 +115,7 @@ describe("read tool", () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-read-encoding-"));
     const filePath = path.join(tempDir, "legacy.txt");
     const legacyBytes = Buffer.from([0xc4, 0xe3, 0xba, 0xc3]);
-    decodeWindowsTextFileBufferMock.mockReturnValueOnce("decoded legacy text");
+    decodeTextFileBufferMock.mockReturnValueOnce("decoded legacy text");
 
     try {
       await fs.writeFile(filePath, legacyBytes);
@@ -128,7 +128,7 @@ describe("read tool", () => {
         {} as never,
       );
 
-      expect(decodeWindowsTextFileBufferMock).toHaveBeenCalledWith({ buffer: legacyBytes });
+      expect(decodeTextFileBufferMock).toHaveBeenCalledWith({ buffer: legacyBytes });
       expect(textContent(result)).toBe("decoded legacy text");
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
@@ -152,7 +152,7 @@ describe("read tool", () => {
       {} as never,
     );
 
-    expect(decodeWindowsTextFileBufferMock).not.toHaveBeenCalled();
+    expect(decodeTextFileBufferMock).not.toHaveBeenCalled();
     expect(textContent(result)).toBe(bytes.toString("utf8"));
   });
 
@@ -160,7 +160,7 @@ describe("read tool", () => {
     const bytes = Buffer.from([0xc4, 0xe3, 0xba, 0xc3]);
     const tool = createReadToolDefinition("/workspace", {
       operations: {
-        decodeText: ({ buffer, absolutePath }) => `${absolutePath}:${buffer.toString("hex")}`,
+        decodeText: ({ buffer, absolutePath, encoding }) => `${absolutePath}:${buffer.toString("hex")}:${encoding ?? "none"}`,
         access: async () => {},
         detectImageMimeType: async () => null,
         readFile: async () => bytes,
@@ -174,7 +174,53 @@ describe("read tool", () => {
       {} as never,
     );
 
-    expect(decodeWindowsTextFileBufferMock).not.toHaveBeenCalled();
-    expect(textContent(result)).toBe("/workspace/legacy.txt:c4e3bac3");
+    expect(decodeTextFileBufferMock).not.toHaveBeenCalled();
+    expect(textContent(result)).toBe("/workspace/legacy.txt:c4e3bac3:none");
+  });
+
+  it("passes explicit encoding to decodeText for non-UTF-8 files", async () => {
+    const gbkBytes = Buffer.from([0xc4, 0xe3, 0xba, 0xc3]);
+    decodeTextFileBufferMock.mockReturnValueOnce("你好");
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-read-encoding-param-"));
+    const filePath = path.join(tempDir, "gbk.txt");
+    try {
+      await fs.writeFile(filePath, gbkBytes);
+      const tool = createReadToolDefinition(tempDir);
+      const result = await tool.execute(
+        "call-1",
+        { path: "gbk.txt", encoding: "gbk" },
+        undefined,
+        undefined,
+        {} as never,
+      );
+
+      expect(decodeTextFileBufferMock).toHaveBeenCalledWith({ buffer: gbkBytes, encoding: "gbk" });
+      expect(textContent(result)).toBe("你好");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("passes encoding through injected decodeText when provided", async () => {
+    const gbkBytes = Buffer.from([0xc4, 0xe3, 0xba, 0xc3]);
+    const tool = createReadToolDefinition("/workspace", {
+      operations: {
+        decodeText: ({ buffer, absolutePath, encoding }) =>
+          encoding ? `${encoding}:${buffer.toString("hex")}` : buffer.toString("utf8"),
+        access: async () => {},
+        detectImageMimeType: async () => null,
+        readFile: async () => gbkBytes,
+      },
+    });
+    const result = await tool.execute(
+      "call-1",
+      { path: "gbk.txt", encoding: "gbk" },
+      undefined,
+      undefined,
+      {} as never,
+    );
+
+    expect(decodeTextFileBufferMock).not.toHaveBeenCalled();
+    expect(textContent(result)).toBe("gbk:c4e3bac3");
   });
 });
