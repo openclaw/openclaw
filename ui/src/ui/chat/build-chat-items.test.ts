@@ -274,6 +274,34 @@ describe("buildChatItems", () => {
     ]);
   });
 
+  it("keeps formatting-only assistant updates separate for the same source message", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          __openclaw: { id: "reply-formatted" },
+          role: "assistant",
+          content: [{ type: "text", text: "Parzival first\n\nsecond" }],
+          senderLabel: "Parzival",
+          timestamp: 1,
+        },
+        {
+          __openclaw: { id: "reply-formatted" },
+          role: "assistant",
+          content: [{ type: "text", text: "first second" }],
+          timestamp: 2,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(2);
+    expect(messageRecord(groups[0]).content).toStrictEqual([
+      { type: "text", text: "Parzival first\n\nsecond" },
+    ]);
+    expect(messageRecord(groups[1]).content).toStrictEqual([
+      { type: "text", text: "first second" },
+    ]);
+  });
+
   it("keeps relay-labeled assistant updates separate when source message id repeats with new text", () => {
     const groups = messageGroups({
       messages: [

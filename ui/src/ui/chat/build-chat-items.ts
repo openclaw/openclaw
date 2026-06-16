@@ -278,23 +278,16 @@ function prefersNativeChatSurface(message: unknown): boolean {
   return (role === "user" || role === "assistant") && !(normalized.senderLabel ?? "").trim();
 }
 
-function normalizeDuplicateText(text: string): string {
-  return text.trim().replace(/\s+/g, " ");
-}
-
 function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function stripSenderLabelPrefix(text: string, senderLabel: string): string {
-  const normalizedText = normalizeDuplicateText(text);
-  const label = normalizeDuplicateText(senderLabel);
+  const label = senderLabel.trim();
   if (!label) {
-    return normalizedText;
+    return text;
   }
-  return normalizedText
-    .replace(new RegExp(`^${escapeRegExp(label)}(?::|：|-|—)?\\s+`, "i"), "")
-    .trim();
+  return text.replace(new RegExp(`^${escapeRegExp(label)}(?::|：|-|—)?[ \\t]+`, "i"), "");
 }
 
 function sourceDuplicateDisplayParts(message: unknown): {
@@ -317,8 +310,8 @@ function sourceDuplicateDisplayParts(message: unknown): {
     }
     textParts.push(block.text);
   }
-  const text = normalizeDuplicateText(textParts.join("\n"));
-  if (!text) {
+  const text = textParts.join("\n");
+  if (!text.trim()) {
     return null;
   }
   return {
