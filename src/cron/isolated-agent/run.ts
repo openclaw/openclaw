@@ -1081,6 +1081,13 @@ async function finalizeCronRun(params: {
   if (finalRunResult.meta?.aborted === true && !cronPayloadOutcome.hasFatalErrorPayload) {
     const metaErrorMessage = normalizeOptionalString(finalRunResult.meta.error?.message);
     const error = metaErrorMessage ?? "cron isolated agent run aborted";
+    const { cleanupDirectCronSession } = await loadCronDeliveryRuntime();
+    await cleanupDirectCronSession({
+      job: prepared.input.job,
+      agentSessionKey: prepared.agentSessionKey,
+      sessionId: prepared.currentRunSessionId(),
+      retireReason: "cron-delete-after-run-aborted",
+    });
     return prepared.withRunSession({
       status: "error",
       error,
