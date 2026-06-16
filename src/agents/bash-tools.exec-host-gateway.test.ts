@@ -4,6 +4,11 @@
  * follow-ups, and gateway approval result routing.
  */
 import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import {
+  onInternalDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  type DiagnosticSecurityEvent,
+} from "../infra/diagnostic-events.js";
 import type { ExecApprovalFollowupTarget } from "./bash-tools.exec-host-shared.js";
 import type { ExecApprovalFollowupFactory } from "./bash-tools.exec-types.js";
 
@@ -223,12 +228,26 @@ function requireApprovalFollowupInput(
   return call[0];
 }
 
+function captureSecurityEvents(): {
+  events: DiagnosticSecurityEvent[];
+  stop: () => void;
+} {
+  const events: DiagnosticSecurityEvent[] = [];
+  const stop = onInternalDiagnosticEvent((event, metadata) => {
+    if (metadata.trusted && event.type === "security.event") {
+      events.push(event);
+    }
+  });
+  return { events, stop };
+}
+
 describe("processGatewayAllowlist", () => {
   beforeAll(async () => {
     ({ processGatewayAllowlist } = await import("./bash-tools.exec-host-gateway.js"));
   });
 
   beforeEach(() => {
+    resetDiagnosticEventsForTest();
     buildExecApprovalPendingToolResultMock.mockReset();
     buildExecApprovalFollowupTargetMock.mockReset();
     buildExecApprovalFollowupTargetMock.mockReturnValue(null);
@@ -372,6 +391,62 @@ describe("processGatewayAllowlist", () => {
 
     expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
     expect(result.pendingResult?.details.status).toBe("approval-pending");
+  });
+
+  it("emits security events for gateway exec approval requests and denials", async () => {
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("deny");
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: false },
+      approvedByAsk: false,
+      deniedReason: "user-denied",
+    });
+    const captured = captureSecurityEvents();
+
+    let result: Awaited<ReturnType<typeof runGatewayAllowlist>>;
+    try {
+      result = await runGatewayAllowlist({
+        command: "deploy --token raw-secret-value",
+        turnSourceChannel: "webchat",
+        agentId: "agent-1",
+      });
+    } finally {
+      captured.stop();
+    }
+
+    expect(result!.deniedResult?.details.status).toBe("failed");
+    expect(captured.events).toHaveLength(2);
+    expect(captured.events[0]).toMatchObject({
+      action: "exec.approval.requested",
+      outcome: "success",
+      severity: "low",
+      category: "approval",
+      actor: { kind: "agent" },
+      target: { kind: "tool", name: "system.exec", owner: "gateway" },
+      policy: { id: "exec.approval", decision: "ask" },
+      control: { id: "exec.approval", family: "approval" },
+      attributes: {
+        host: "gateway",
+        security: "allowlist",
+        ask: "off",
+        segment_count: 1,
+        has_agent_id: true,
+      },
+    });
+    expect(captured.events[1]).toMatchObject({
+      action: "exec.approval.denied",
+      outcome: "denied",
+      severity: "medium",
+      reason: "user-denied",
+      policy: { id: "exec.approval", decision: "deny", reason: "user-denied" },
+      attributes: {
+        decision: "deny",
+        has_agent_id: true,
+      },
+    });
+    const serialized = JSON.stringify(captured.events);
+    expect(serialized).not.toContain("deploy");
+    expect(serialized).not.toContain("raw-secret-value");
+    expect(serialized).not.toContain("agent-1");
   });
 
   it("auto-reviews simple read-only approval misses without prompting", async () => {
