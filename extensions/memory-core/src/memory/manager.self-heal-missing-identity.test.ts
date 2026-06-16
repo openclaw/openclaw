@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js";
 import type { MemoryIndexManager } from "./manager.js";
@@ -48,7 +49,8 @@ describe("memory manager self-heal missing identity with FTS-only chunks", () =>
     workspaceDir = path.join(fixtureRoot, `case-${caseId++}`);
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Alpha topic\n\nKeep this note.");
-    indexPath = path.join(workspaceDir, "index.sqlite");
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, "state"));
+    indexPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
   });
 
   afterEach(async () => {
@@ -57,6 +59,7 @@ describe("memory manager self-heal missing identity with FTS-only chunks", () =>
       manager = null;
     }
     await closeAllMemorySearchManagers();
+    vi.unstubAllEnvs();
   });
 
   afterAll(async () => {
@@ -71,8 +74,8 @@ describe("memory manager self-heal missing identity with FTS-only chunks", () =>
   ): Promise<MemoryIndexManager> {
     const store =
       params.vectorEnabled === undefined
-        ? { path: indexPath }
-        : { path: indexPath, vector: { enabled: params.vectorEnabled } };
+        ? undefined
+        : { vector: { enabled: params.vectorEnabled } };
     const cfg = {
       memory: { backend: "builtin" },
       agents: {
@@ -98,6 +101,7 @@ describe("memory manager self-heal missing identity with FTS-only chunks", () =>
   }
 
   async function seedChunksWithNoMeta(model = "fts-only"): Promise<void> {
+    await fs.mkdir(path.dirname(indexPath), { recursive: true });
     const db = new DatabaseSync(indexPath);
     db.exec(`
       CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);

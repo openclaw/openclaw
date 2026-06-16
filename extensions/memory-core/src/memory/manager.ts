@@ -1146,7 +1146,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       chunks: aggregateState.chunks,
       dirty: this.dirty || this.sessionsDirty || this.indexIdentityDirty,
       workspaceDir: this.workspaceDir,
-      dbPath: this.settings.store.path,
+      dbPath: this.settings.store.databasePath,
       provider: providerInfo.provider,
       model: providerInfo.model,
       requestedProvider: this.requestedProvider,

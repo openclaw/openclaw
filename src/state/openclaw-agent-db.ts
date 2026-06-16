@@ -182,6 +182,22 @@ function ensureAgentSchema(db: DatabaseSync, agentId: string, pathname: string):
   );
 }
 
+/** Initialize agent schema/ownership metadata on an independently managed connection. */
+export function ensureOpenClawAgentDatabaseSchema(
+  db: DatabaseSync,
+  options: OpenClawAgentDatabaseOptions & { register?: boolean },
+): void {
+  const agentId = normalizeAgentId(options.agentId);
+  const databaseOptions = { ...options, agentId };
+  const pathname = resolveOpenClawAgentSqlitePath(databaseOptions);
+  ensureOpenClawAgentDatabasePermissions(pathname, databaseOptions);
+  ensureAgentSchema(db, agentId, pathname);
+  ensureOpenClawAgentDatabasePermissions(pathname, databaseOptions);
+  if (options.register === true) {
+    registerAgentDatabase({ agentId, path: pathname, env: options.env });
+  }
+}
+
 function registerAgentDatabase(params: {
   agentId: string;
   path: string;

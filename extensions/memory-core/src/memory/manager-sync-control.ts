@@ -167,10 +167,7 @@ export function enqueueMemoryTargetedSessionSync(
   return state.getQueuedSessionSync() ?? Promise.resolve();
 }
 
-export function createMemorySyncControlConfigForTests(
-  workspaceDir: string,
-  indexPath: string,
-): OpenClawConfig {
+export function createMemorySyncControlConfigForTests(workspaceDir: string): OpenClawConfig {
   return {
     agents: {
       defaults: {
@@ -178,7 +175,7 @@ export function createMemorySyncControlConfigForTests(
         memorySearch: {
           provider: "openai",
           model: "mock-embed",
-          store: { path: indexPath, vector: { enabled: false } },
+          store: { vector: { enabled: false } },
           cache: { enabled: false },
           query: { minScore: 0, hybrid: { enabled: false } },
           sync: { watch: false, onSessionStart: false, onSearch: false },

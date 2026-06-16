@@ -311,9 +311,12 @@ export async function resolveSharedMemoryStatusSnapshot(params: {
   cfg: OpenClawConfig;
   agentStatus: { defaultId?: string | null };
   memoryPlugin: MemoryPluginStatus;
-  resolveMemoryConfig: (cfg: OpenClawConfig, agentId: string) => { store: { path: string } } | null;
+  resolveMemoryConfig: (
+    cfg: OpenClawConfig,
+    agentId: string,
+  ) => { store: { databasePath: string } } | null;
   getMemorySearchManager: StatusMemorySearchManagerResolver;
-  requireDefaultStore?: (agentId: string) => string | null;
+  requireDefaultDatabasePath?: (agentId: string) => string | null;
 }): Promise<MemoryStatusSnapshot | null> {
   const { cfg, agentStatus, memoryPlugin } = params;
   if (!memoryPlugin.enabled || !memoryPlugin.slot) {
@@ -326,11 +329,11 @@ export async function resolveSharedMemoryStatusSnapshot(params: {
     return await resolveMemoryManagerStatusSnapshot(params, agentId);
   }
 
-  const defaultStorePath = params.requireDefaultStore?.(agentId);
+  const defaultDatabasePath = params.requireDefaultDatabasePath?.(agentId);
   if (
-    defaultStorePath &&
+    defaultDatabasePath &&
     !hasExplicitMemorySearchConfig(cfg, agentId) &&
-    !existsSync(defaultStorePath)
+    !existsSync(defaultDatabasePath)
   ) {
     // Avoid instantiating built-in memory for users who never created the default store.
     return null;
@@ -340,7 +343,7 @@ export async function resolveSharedMemoryStatusSnapshot(params: {
     return null;
   }
   const shouldInspectStore =
-    hasExplicitMemorySearchConfig(cfg, agentId) || existsSync(resolvedMemory.store.path);
+    hasExplicitMemorySearchConfig(cfg, agentId) || existsSync(resolvedMemory.store.databasePath);
   if (!shouldInspectStore) {
     return null;
   }
