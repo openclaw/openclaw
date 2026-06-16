@@ -402,6 +402,13 @@ function resolveHeartbeatForWake(params: {
     : heartbeat;
 }
 
+function isFollowupQueueRestoreWake(params: {
+  source?: HeartbeatWakeSource;
+  reason?: string;
+}): boolean {
+  return params.source === "followup-queue-restore" || params.reason === "restored-followup-queue";
+}
+
 function resolveHeartbeatAgents(cfg: OpenClawConfig): HeartbeatAgent[] {
   const list = cfg.agents?.list ?? [];
   if (hasExplicitHeartbeatAgents(cfg)) {
@@ -956,7 +963,11 @@ function resolveHeartbeatWakePayloadFlags(params: {
   return {
     isExecEventWake: source === "exec-event",
     isCronWake: source === "cron",
-    isWakePayload: source === "hook" || source === "acp-spawn" || reason === "wake",
+    isWakePayload:
+      source === "hook" ||
+      source === "acp-spawn" ||
+      source === "followup-queue-restore" ||
+      reason === "wake",
   };
 }
 
@@ -1319,7 +1330,10 @@ export async function runHeartbeatOnce(opts: {
   if (!areHeartbeatsEnabled()) {
     return { status: "skipped", reason: "disabled" };
   }
-  if (!isHeartbeatEnabledForAgent(cfg, agentId)) {
+  if (
+    !isFollowupQueueRestoreWake({ source: opts.source, reason: opts.reason }) &&
+    !isHeartbeatEnabledForAgent(cfg, agentId)
+  ) {
     return { status: "skipped", reason: "disabled" };
   }
   if (!resolveHeartbeatIntervalMs(cfg, undefined, heartbeat)) {
@@ -2365,18 +2379,12 @@ export function startHeartbeatRunner(opts: {
         reason: "disabled",
       } satisfies HeartbeatRunResult;
     }
-    if (state.agents.size === 0) {
-      return {
-        status: "skipped",
-        reason: "disabled",
-      } satisfies HeartbeatRunResult;
-    }
-
     const reason = params?.reason;
     const intent = params.intent;
     const requestedAgentId = params?.agentId ? normalizeAgentId(params.agentId) : undefined;
     const requestedSessionKey = normalizeOptionalString(params?.sessionKey);
     const requestedHeartbeat = params?.heartbeat;
+    const isRecoveryWake = isFollowupQueueRestoreWake({ source: params?.source, reason });
     const isInterval = reason === "interval";
     const startedAt = Date.now();
     const now = startedAt;
@@ -2388,7 +2396,32 @@ export function startHeartbeatRunner(opts: {
     try {
       if (requestedSessionKey || requestedAgentId) {
         const targetAgentId = requestedAgentId ?? resolveAgentIdFromSessionKey(requestedSessionKey);
-        const targetAgent = state.agents.get(targetAgentId);
+        const transientHeartbeat =
+          targetAgentId && isRecoveryWake
+            ? resolveHeartbeatForWake({
+                cfg: state.cfg,
+                agentId: targetAgentId,
+                requestedHeartbeat,
+                source: params.source,
+                mergeRequestedHeartbeat: true,
+              })
+            : undefined;
+        const targetAgent =
+          state.agents.get(targetAgentId) ??
+          (targetAgentId &&
+          isRecoveryWake &&
+          resolveHeartbeatIntervalMs(state.cfg, undefined, transientHeartbeat)
+            ? {
+                agentId: targetAgentId,
+                heartbeat: transientHeartbeat,
+                activeHoursSchedule: resolveActiveHoursSchedule(state.cfg, transientHeartbeat),
+                intervalMs: resolveHeartbeatIntervalMs(state.cfg, undefined, transientHeartbeat)!,
+                phaseMs: 0,
+                nextDueMs: now,
+                recentRunStarts: [],
+                floodLoggedSinceLastRun: false,
+              }
+            : undefined);
         if (!targetAgent) {
           return { status: "skipped", reason: "disabled" };
         }
@@ -2441,6 +2474,13 @@ export function startHeartbeatRunner(opts: {
           advanceAgentSchedule(targetAgent, now, reason);
           return { status: "failed", reason: errMsg };
         }
+      }
+
+      if (state.agents.size === 0) {
+        return {
+          status: "skipped",
+          reason: "disabled",
+        } satisfies HeartbeatRunResult;
       }
 
       // Run each agent's wake concurrently. Heartbeat work is per-agent —
