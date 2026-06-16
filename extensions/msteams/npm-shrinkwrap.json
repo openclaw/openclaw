@@ -761,16 +761,15 @@
       }
     },
     "node_modules/form-data": {
-      "version": "2.5.4",
-      "resolved": "https://registry.npmjs.org/form-data/-/form-data-2.5.4.tgz",
-      "integrity": "sha512-Y/3MmRiR8Nd+0CUtrbvcKtKzLWiUfpQ7DFVggH8PwmGt/0r7RSy32GuP4hpCJlQNEBusisSx1DLtD8uD386HJQ==",
-      "deprecated": "This version has an incorrect dependency; please use v2.5.5",
+      "version": "2.5.6",
+      "resolved": "https://registry.npmjs.org/form-data/-/form-data-2.5.6.tgz",
+      "integrity": "sha512-Ogz/E85h9tlfJzpI6TuFpGcHZFhLrb9Gw8wq9v40CxSCPnv7ahKr6Xgtkn0KYCDQJ8DNn5VoMO8EXr9V5PadyA==",
       "license": "MIT",
       "dependencies": {
         "asynckit": "^0.4.0",
         "combined-stream": "^1.0.8",
         "es-set-tostringtag": "^2.1.0",
-        "has-own": "^1.0.1",
+        "hasown": "^2.0.4",
         "mime-types": "^2.1.35",
         "safe-buffer": "^5.2.1"
       },
@@ -874,13 +873,6 @@
       "funding": {
         "url": "https://github.com/sponsors/ljharb"
       }
-    },
-    "node_modules/has-own": {
-      "version": "1.0.1",
-      "resolved": "https://registry.npmjs.org/has-own/-/has-own-1.0.1.tgz",
-      "integrity": "sha512-RDKhzgQTQfMaLvIFhjahU+2gGnRBK6dYOd5Gd9BzkmnBneOCRYjRC003RIMrdAbH52+l+CnMS4bBCXGer8tEhg==",
-      "deprecated": "This project is not maintained. Use Object.hasOwn() instead.",
-      "license": "MIT"
     },
     "node_modules/has-symbols": {
       "version": "1.1.0",
