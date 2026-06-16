@@ -1,4 +1,8 @@
 // Creates channel-native approval runtimes and delivery flows.
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../packages/gateway-protocol/src/client-info.js";
 import type { ChannelApprovalNativeAdapter } from "../channels/plugins/approval-native.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -204,6 +208,19 @@ export function createChannelNativeApprovalRuntime<
     channelLabel: adapter.channelLabel,
     accountId: adapter.accountId,
     requestGateway: async <T>(method: string, params: Record<string, unknown>): Promise<T> => {
+      if (method === "send") {
+        // send requires operator.write scope, but the approvals runtime client only has
+        // operator.approvals. Dispatch through a fresh least-privilege gateway connection.
+        const { callGatewayLeastPrivilege } = await import("../gateway/call.js");
+        return await callGatewayLeastPrivilege<T>({
+          url: adapter.gatewayUrl,
+          method: "send",
+          params,
+          clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+          clientDisplayName: adapter.clientDisplayName,
+          mode: GATEWAY_CLIENT_MODES.BACKEND,
+        });
+      }
       if (!runtimeRequest) {
         throw new Error(`${adapter.label}: gateway client not connected`);
       }
