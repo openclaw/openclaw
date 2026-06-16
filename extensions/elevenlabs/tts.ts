@@ -128,12 +128,22 @@ function prepareElevenLabsTtsRequest(params: ElevenLabsTtsRequestParams & { stre
   };
 }
 
-export async function elevenLabsTTS(params: ElevenLabsTtsRequestParams): Promise<Buffer> {
+export async function elevenLabsTTS(params: ElevenLabsTtsRequestParams): Promise<{
+  audioBuffer: Buffer;
+  wordTimestamps?: {
+    characters: string[];
+    characterStartTimesSeconds: number[];
+    characterEndTimesSeconds: number[];
+  };
+}> {
   const { apiKey, timeoutMs } = params;
   const { url, normalizedBaseUrl, acceptHeader, body } = prepareElevenLabsTtsRequest({
     ...params,
     stream: false,
   });
+
+  // Use timestamps endpoint for word-level timing data
+  url.pathname = url.pathname.replace("/text-to-speech/", "/text-to-speech/with-timestamps");
 
   const { response, release } = await fetchWithSsrFGuard({
     url: url.toString(),
@@ -153,7 +163,31 @@ export async function elevenLabsTTS(params: ElevenLabsTtsRequestParams): Promise
   try {
     await assertOkOrThrowProviderError(response, "ElevenLabs API error");
 
-    return Buffer.from(await readProviderBinaryResponse(response, "ElevenLabs API error", "audio"));
+    const contentType = response.headers.get("content-type");
+    if (contentType?.includes("application/json")) {
+      const json: {
+        audio_base64: string;
+        alignment?: {
+          characters: string[];
+          character_start_times_seconds: number[];
+          character_end_times_seconds: number[];
+        };
+      } = await response.json();
+      return {
+        audioBuffer: Buffer.from(json.audio_base64, "base64"),
+        wordTimestamps: json.alignment
+          ? {
+              characters: json.alignment.characters,
+              characterStartTimesSeconds: json.alignment.character_start_times_seconds,
+              characterEndTimesSeconds: json.alignment.character_end_times_seconds,
+            }
+          : undefined,
+      };
+    }
+    const audioBuffer = Buffer.from(
+      await readProviderBinaryResponse(response, "ElevenLabs API error", "audio"),
+    );
+    return { audioBuffer };
   } finally {
     await release();
   }

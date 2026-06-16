@@ -66,6 +66,11 @@ export type SpeechSynthesisResult = {
   outputFormat: string;
   fileExtension: string;
   voiceCompatible: boolean;
+  wordTimestamps?: {
+    characters: string[];
+    characterStartTimesSeconds: number[];
+    characterEndTimesSeconds: number[];
+  };
 };
 
 export type SpeechSynthesisStreamRequest = SpeechSynthesisRequest;

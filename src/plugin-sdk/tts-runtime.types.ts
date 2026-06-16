@@ -180,6 +180,11 @@ export type TtsSynthesisResult = {
   voiceCompatible?: boolean;
   fileExtension?: string;
   target?: TtsSpeechTarget;
+  wordTimestamps?: {
+    characters: string[];
+    characterStartTimesSeconds: number[];
+    characterEndTimesSeconds: number[];
+  };
 };
 
 /** Stream-backed synthesis result with optional release hook for provider resources. */

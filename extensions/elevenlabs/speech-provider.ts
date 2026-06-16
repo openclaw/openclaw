@@ -522,7 +522,7 @@ export function buildElevenLabsSpeechProvider(): SpeechProviderPlugin {
         trimToUndefined(overrides.outputFormat) ??
         (req.target === "voice-note" ? "opus_48000_64" : "mp3_44100_128");
       const latencyTier = normalizeElevenLabsLatencyTier(overrides.latencyTier);
-      const audioBuffer = await elevenLabsTTS({
+      const synthesis = await elevenLabsTTS({
         text: req.text,
         apiKey,
         baseUrl: config.baseUrl,
@@ -543,10 +543,17 @@ export function buildElevenLabsSpeechProvider(): SpeechProviderPlugin {
         timeoutMs: req.timeoutMs,
       });
       return {
-        audioBuffer,
+        audioBuffer: synthesis.audioBuffer,
         outputFormat,
         fileExtension: req.target === "voice-note" ? ".opus" : ".mp3",
         voiceCompatible: req.target === "voice-note",
+        wordTimestamps: synthesis.wordTimestamps
+          ? {
+              characters: synthesis.wordTimestamps.characters,
+              characterStartTimesSeconds: synthesis.wordTimestamps.characterStartTimesSeconds,
+              characterEndTimesSeconds: synthesis.wordTimestamps.characterEndTimesSeconds,
+            }
+          : undefined,
       };
     },
     streamSynthesize: async (req) => {
@@ -599,7 +606,7 @@ export function buildElevenLabsSpeechProvider(): SpeechProviderPlugin {
       }
       const outputFormat = "pcm_22050";
       const sampleRate = 22_050;
-      const audioBuffer = await elevenLabsTTS({
+      const synthesis = await elevenLabsTTS({
         text: req.text,
         apiKey,
         baseUrl: config.baseUrl,
@@ -618,7 +625,7 @@ export function buildElevenLabsSpeechProvider(): SpeechProviderPlugin {
         voiceSettings: resolveVoiceSettingsOverride(config.voiceSettings, overrides.voiceSettings),
         timeoutMs: req.timeoutMs,
       });
-      return { audioBuffer, outputFormat, sampleRate };
+      return { audioBuffer: synthesis.audioBuffer, outputFormat, sampleRate };
     },
   };
 }
