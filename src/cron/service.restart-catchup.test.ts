@@ -342,6 +342,7 @@ describe("CronService restart catch-up", () => {
             nextRunAtMs: Date.parse("2025-12-13T04:11:00.000Z"),
             lastRunAtMs: Date.parse("2025-12-13T03:51:00.000Z"),
             lastStatus: "ok",
+            scheduleActivatedAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
           },
         },
       ],
@@ -356,7 +357,7 @@ describe("CronService restart catch-up", () => {
     );
   });
 
-  it("does not replay a pre-update slot after a schedule update moved nextRunAtMs forward", async () => {
+  it("does not infer missed-slot replay when the canonical activation boundary is absent", async () => {
     vi.setSystemTime(new Date("2025-12-13T04:02:00.000Z"));
     await withRestartedCron(
       [
@@ -365,9 +366,9 @@ describe("CronService restart catch-up", () => {
           name: "updated schedule keeps future slot",
           enabled: true,
           createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
-          // cron.update ran at 04:01:30: it bumps updatedAtMs and recomputes
-          // nextRunAtMs together, deliberately scheduling past the 04:01 slot.
-          // Replaying that slot as "missed" re-fires the old schedule (#91944).
+          // Direct runtime consumers do not run doctor preflight. Missing
+          // canonical state must suppress inferred replay instead of guessing
+          // from updatedAtMs and firing an outbound job at the wrong time.
           updatedAtMs: Date.parse("2025-12-13T04:01:30.000Z"),
           schedule: { kind: "cron", expr: "1,11,21,31,41,51 4-20 * * *", tz: "UTC" },
           sessionTarget: "main",
@@ -487,6 +488,7 @@ describe("CronService restart catch-up", () => {
           nextRunAtMs: Date.parse("2025-12-13T04:11:00.000Z"),
           lastRunAtMs: Date.parse("2025-12-13T03:51:00.000Z"),
           lastStatus: "ok",
+          scheduleActivatedAtMs: Date.parse("2025-12-13T04:01:30.000Z"),
         },
       },
     ]);
@@ -538,6 +540,7 @@ describe("CronService restart catch-up", () => {
             lastDurationMs: 0,
             lastRunStatus: "error",
             consecutiveErrors: 4,
+            scheduleActivatedAtMs: Date.parse("2025-12-13T04:01:30.000Z"),
           },
         },
       ],
@@ -788,6 +791,7 @@ describe("CronService restart catch-up", () => {
             lastRunAtMs: Date.parse("2025-12-13T03:51:00.000Z"),
             lastStatus: "error",
             consecutiveErrors: 1,
+            scheduleActivatedAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
           },
         },
       ],

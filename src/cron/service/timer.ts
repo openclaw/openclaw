@@ -1503,12 +1503,10 @@ function isRunnableJob(params: {
 // slots were deliberately scheduled away and must not re-fire (#91944).
 // scheduleActivatedAtMs is the exact activation moment (set only on
 // schedule/enabled changes), so a later metadata-only edit no longer suppresses
-// a legitimate catch-up. Jobs predating the field fall back to updatedAtMs:
-// their misfire happens at the upgrade restart, before any doctor migration
-// could backfill the field, and updatedAtMs is the only activation proxy then
-// available (it over-approximates activation, so the fallback only ever
-// over-suppresses in the safe direction — skipping a late send, never firing
-// at the wrong time).
+// a legitimate catch-up. Doctor preflight re-activates older rows at migration
+// time before startup; if that migration was skipped, fail closed instead of
+// guessing from unrelated timestamps and firing an outbound job at the wrong
+// time.
 function hasReplayableMissedCronSlot(job: CronJob, nowMs: number): boolean {
   let previousRunAtMs: number | undefined;
   try {
@@ -1525,11 +1523,10 @@ function hasReplayableMissedCronSlot(job: CronJob, nowMs: number): boolean {
     return false;
   }
   const activatedAtMs = job.state.scheduleActivatedAtMs;
-  const scheduleActivatedAtMs =
-    typeof activatedAtMs === "number" && Number.isFinite(activatedAtMs)
-      ? activatedAtMs
-      : job.updatedAtMs;
-  if (Number.isFinite(scheduleActivatedAtMs) && previousRunAtMs <= scheduleActivatedAtMs) {
+  if (typeof activatedAtMs !== "number" || !Number.isFinite(activatedAtMs)) {
+    return false;
+  }
+  if (previousRunAtMs <= activatedAtMs) {
     return false;
   }
   return previousRunAtMs > lastRunAtMs;

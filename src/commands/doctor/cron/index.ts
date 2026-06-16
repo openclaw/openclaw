@@ -36,6 +36,7 @@ import {
   mergeRuntimeEntryIntoConfigJob,
   needsSqliteProjectionBackfill,
 } from "./repair-plan.js";
+import { migrateCronScheduleActivationTimestamps } from "./schedule-activation-migration.js";
 import { normalizeStoredCronJobs } from "./store-migration.js";
 import { noteCronModelOverrides } from "./warnings.js";
 
@@ -237,6 +238,32 @@ export async function repairLegacyCronStoreWithoutPrompt(params: {
     return { changes: [], warnings: [] };
   }
   return await applyLegacyCronStoreRepair({ cfg: params.cfg, state });
+}
+
+/** Re-activate legacy cron schedules at a canonical pre-startup boundary. */
+export async function repairCronScheduleActivationWithoutPrompt(params: {
+  cfg: OpenClawConfig;
+}): Promise<LegacyCronRepairResult> {
+  const storePath = resolveCronJobsStorePath(normalizeOptionalString(params.cfg.cron?.store));
+  try {
+    const migrated = migrateCronScheduleActivationTimestamps(storePath);
+    return {
+      changes:
+        migrated > 0
+          ? [
+              `Re-activated ${pluralize(migrated, "legacy cron schedule")} at ${shortenHomePath(storePath)}.`,
+            ]
+          : [],
+      warnings: [],
+    };
+  } catch (err) {
+    return {
+      changes: [],
+      warnings: [
+        `Failed backfilling cron schedule activation timestamps at ${shortenHomePath(storePath)}: ${errorMessage(err)}`,
+      ],
+    };
+  }
 }
 
 function noteLegacyCronRepairResult(result: LegacyCronRepairResult): void {
