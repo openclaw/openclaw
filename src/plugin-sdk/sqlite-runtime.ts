@@ -10,3 +10,4 @@ export {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+export { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";

@@ -8,6 +8,7 @@ import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runti
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetEmbeddingMocks } from "./embedding.test-mocks.js";
 import type { MemoryIndexManager } from "./index.js";
+import { acquireMemoryReindexLock } from "./manager-reindex-lock.js";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
 
 type SessionDeltaState = { lastSize: number; pendingBytes: number; pendingMessages: number };
@@ -95,7 +96,7 @@ describe("memory manager reindex recovery", () => {
     return manager;
   }
 
-  it("restores retry state after an in-place full reindex fails late", async () => {
+  it("restores retry state after a shadow full reindex fails late", async () => {
     const memoryManager = await openManager(
       createCfg({
         provider: "none",
@@ -140,7 +141,7 @@ describe("memory manager reindex recovery", () => {
     expect(harness.sessionDeltas.get(dirtySessionFile)).toEqual(originalDelta);
   });
 
-  it("marks clean full reindex work dirty after an in-place full reindex fails late", async () => {
+  it("marks clean full reindex work dirty after a shadow full reindex fails late", async () => {
     const memoryManager = await openManager(
       createCfg({
         provider: "none",
@@ -164,6 +165,50 @@ describe("memory manager reindex recovery", () => {
     expect(harness.sessionsDirty).toBe(true);
     expect(harness.sessionsFullRetryDirty).toBe(true);
     expect(harness.sessionsDirtyFiles.size).toBe(0);
+  });
+
+  it("keeps the published memory index when a shadow full reindex fails late", async () => {
+    await fs.writeFile(path.join(memoryDir, "alpha.md"), "published alpha", "utf8");
+    const memoryManager = await openManager(
+      createCfg({
+        provider: "none",
+        sources: ["memory"],
+      }),
+    );
+    await memoryManager.sync({ reason: "test", force: true });
+
+    const harness = memoryManager as unknown as ReindexHarness;
+    const publishedRows = harness.db
+      .prepare("SELECT path, text FROM chunks ORDER BY path, start_line")
+      .all();
+    expect(publishedRows.length).toBeGreaterThan(0);
+
+    await fs.writeFile(path.join(memoryDir, "alpha.md"), "replacement beta", "utf8");
+    harness.writeMeta = () => {
+      throw new Error("late shadow failure");
+    };
+
+    await expect(harness.runInPlaceReindex({ reason: "test", force: true })).rejects.toThrow(
+      "late shadow failure",
+    );
+    expect(
+      harness.db.prepare("SELECT path, text FROM chunks ORDER BY path, start_line").all(),
+    ).toEqual(publishedRows);
+  });
+
+  it("rejects a full reindex while another process owns the build lock", async () => {
+    const memoryManager = await openManager(createCfg({ provider: "none", sources: ["memory"] }));
+    const harness = memoryManager as unknown as ReindexHarness;
+    const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+    const lock = acquireMemoryReindexLock(databasePath);
+
+    try {
+      await expect(harness.runInPlaceReindex({ reason: "test", force: true })).rejects.toThrow(
+        /another reindex is active/,
+      );
+    } finally {
+      lock.release();
+    }
   });
 
   it("forces source-wide session sync when retrying a failed full reindex", async () => {

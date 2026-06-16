@@ -304,6 +304,11 @@ describe("matrix client storage paths", () => {
     ).register("current", value);
   }
 
+  function seedLegacyStorageMeta(rootDir: string, value: Record<string, unknown>): void {
+    fs.mkdirSync(rootDir, { recursive: true });
+    writeJson(rootDir, "storage-meta.json", value);
+  }
+
   it("records a learned deviceId in SQLite storage metadata", () => {
     const stateDir = setupStateDir();
     const storagePaths = resolveMatrixStoragePaths({
@@ -678,6 +683,32 @@ describe("matrix client storage paths", () => {
     expect(rotatedStoragePaths.rootDir).toBe(oldStoragePaths.rootDir);
     expect(rotatedStoragePaths.tokenHash).toBe(oldStoragePaths.tokenHash);
     expect(rotatedStoragePaths.storagePath).toBe(oldStoragePaths.storagePath);
+  });
+
+  it("reads legacy storage metadata until doctor migrates it to SQLite", () => {
+    setupStateDir();
+    const oldStoragePaths = resolveDefaultStoragePaths({
+      accessToken: "secret-token-old",
+      deviceId: "DEVICE123",
+    });
+    seedLegacyStorageMeta(oldStoragePaths.rootDir, {
+      homeserver: defaultStorageAuth.homeserver,
+      userId: defaultStorageAuth.userId,
+      accountId: "default",
+      accessTokenHash: oldStoragePaths.tokenHash,
+      deviceId: "DEVICE123",
+      currentTokenStateClaimed: true,
+    });
+
+    const rotatedStoragePaths = resolveDefaultStoragePaths({
+      accessToken: "secret-token-new",
+      deviceId: "DEVICE123",
+    });
+
+    expect(rotatedStoragePaths.rootDir).toBe(oldStoragePaths.rootDir);
+    expect(fs.existsSync(path.join(oldStoragePaths.rootDir, "state", "openclaw.sqlite"))).toBe(
+      false,
+    );
   });
 
   it("prefers claimed current-token state over an empty new-token metadata root", () => {
