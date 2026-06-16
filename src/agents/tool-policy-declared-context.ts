@@ -25,32 +25,27 @@ function denylistBlocksName(name: string, denylist: ToolDenylist): boolean {
   return normalized ? matchesAnyGlobPattern(normalized, denylist) : false;
 }
 
-function denylistContainsMcpServerEntry(params: {
+function denylistBlocksMcpServerNamespace(params: {
   safeServerName: string;
-  rawDenylist?: string[];
+  denylist: ToolDenylist;
 }): boolean {
   const serverPrefix = normalizeToolName(params.safeServerName + TOOL_NAME_SEPARATOR);
   if (!serverPrefix) {
     return false;
   }
-  const serverWideEntry = serverPrefix + "*";
-  return (params.rawDenylist ?? []).some((entry) => {
-    const normalized = normalizeToolName(entry);
-    return normalized === serverWideEntry;
-  });
+  return matchesAnyGlobPattern(serverPrefix, params.denylist);
 }
 
 function denylistBlocksMcpServer(params: {
   safeServerName: string;
-  rawDenylist?: string[];
   denylist: ToolDenylist;
 }): boolean {
   return (
     denylistBlocksName("bundle-mcp", params.denylist) ||
     matchesAnyGlobPattern("group:plugins", params.denylist) ||
-    denylistContainsMcpServerEntry({
+    denylistBlocksMcpServerNamespace({
       safeServerName: params.safeServerName,
-      rawDenylist: params.rawDenylist,
+      denylist: params.denylist,
     })
   );
 }
@@ -89,7 +84,6 @@ function collectConfiguredMcpServerNames(params: {
     if (
       denylistBlocksMcpServer({
         safeServerName,
-        rawDenylist: params.toolDenylist,
         denylist,
       })
     ) {
