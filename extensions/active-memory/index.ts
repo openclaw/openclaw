@@ -1155,7 +1155,10 @@ function isEligibleInteractiveSession(ctx: {
   if (ctx.trigger !== "user") {
     return false;
   }
-  if (ctx.sessionKey?.toLowerCase().includes("dreaming-narrative")) {
+  // Exclude only canonical dreaming-narrative session keys (bare or agent-prefixed).
+  // Broad substring match would also exclude real chat session ids that happen to
+  // contain the phrase (e.g. telegram:group:dreaming-narrative-room).
+  if (/(?:^|:)dreaming-narrative-(?:light|rem|deep)-/i.test(ctx.sessionKey ?? "")) {
     return false;
   }
   if (!ctx.sessionKey && !ctx.sessionId) {

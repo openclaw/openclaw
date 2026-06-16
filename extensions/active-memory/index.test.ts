@@ -859,6 +859,25 @@ describe("active-memory plugin", () => {
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
+  it("allows non-canonical session keys that merely contain the dreaming-narrative substring", async () => {
+    const result = await hooks.before_prompt_build(
+      { prompt: "what wings should i order?", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:webchat:dreaming-narrative-room",
+        messageProvider: "webchat",
+      },
+    );
+
+    // Real session keys that happen to contain "dreaming-narrative" in a
+    // non-canonical way (not {light|rem|deep} phase suffix) must remain eligible.
+    // The session key "agent:main:webchat:dreaming-narrative-room" is a real chat
+    // whose topic happens to contain the string — not a dreaming cron key.
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
+    expect(result).not.toBeUndefined();
+  });
+
   it("defaults to direct-style sessions only", async () => {
     const result = await hooks.before_prompt_build(
       { prompt: "what wings should we order?", messages: [] },
