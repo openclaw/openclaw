@@ -2466,8 +2466,8 @@ export function renderChat(props: ChatProps) {
                       class="callout__dismiss"
                       type="button"
                       @click=${props.onDismissRealtimeTalkError}
-                      aria-label="Dismiss Talk error"
-                      title="Dismiss Talk error"
+                      aria-label=${t("chat.composer.dismissTalkError")}
+                      title=${t("chat.composer.dismissTalkError")}
                     >
                       ${icons.x}
                     </button>

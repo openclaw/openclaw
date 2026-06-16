@@ -2079,6 +2079,37 @@ describe("initSessionState reset policy", () => {
     });
   });
 
+  it("keeps multiline slash skill payloads on the current session", async () => {
+    const root = await makeCaseDir("openclaw-skill-multiline-session-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:whatsapp:dm:skill-multiline";
+    const existingSessionId = "skill-multiline-session-id";
+    const body = "/skill demo_skill first line\nsecond line";
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: Date.now(),
+      },
+    });
+
+    const result = await initSessionState({
+      ctx: {
+        Body: body,
+        RawBody: body,
+        CommandBody: body,
+        SessionKey: sessionKey,
+      },
+      cfg: { session: { store: storePath } } as OpenClawConfig,
+      commandAuthorized: true,
+    });
+
+    expect(result.resetTriggered).toBe(false);
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionId).toBe(existingSessionId);
+    expect(result.triggerBodyNormalized).toBe(body);
+  });
+
   it("does not preserve a stale session for unauthorized /reset soft", async () => {
     vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
     const root = await makeCaseDir("openclaw-reset-soft-stale-unauthorized-");

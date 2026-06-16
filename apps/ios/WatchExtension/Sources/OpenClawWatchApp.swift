@@ -142,28 +142,42 @@ struct OpenClawWatchApp: App {
 @MainActor
 extension WatchInboxStore {
     fileprivate func configureScreenshotFixture() {
+        let sentAtMs = Int(Date().timeIntervalSince1970 * 1000)
+        self.greetingTextOverride = "Good morning"
         self.consume(
             execApprovalSnapshot: WatchExecApprovalSnapshotMessage(
                 approvals: [],
-                sentAtMs: Int(Date().timeIntervalSince1970 * 1000),
+                sentAtMs: sentAtMs,
                 snapshotId: nil),
             transport: "screenshot")
         self.consume(
-            message: WatchNotifyMessage(
-                id: "watch-screenshot-quick-reply",
-                title: "Molty request",
-                body: "Molty Gateway checklist ready.",
-                sentAtMs: Int(Date().timeIntervalSince1970 * 1000),
-                promptId: "watch-screenshot-prompt",
+            appSnapshot: WatchAppSnapshotMessage(
+                gatewayStatusText: "Connected",
+                gatewayConnected: true,
+                agentName: "Molty",
+                agentAvatarURL: nil,
+                agentAvatarText: "M",
                 sessionKey: "watch-screenshot-session",
-                kind: "release-checklist",
-                details: nil,
-                expiresAtMs: nil,
-                risk: "medium",
-                actions: [
-                    WatchPromptAction(id: "approve", label: "Approve", style: nil),
-                    WatchPromptAction(id: "later", label: "Later", style: "cancel"),
-                ]),
-            transport: "screenshot")
+                gatewayStableID: "watch-screenshot-gateway",
+                talkStatusText: "Ready",
+                talkEnabled: true,
+                talkListening: false,
+                talkSpeaking: false,
+                pendingApprovalCount: 0,
+                chatItems: [
+                    WatchChatItem(
+                        id: "watch-screenshot-user-chat",
+                        role: "user",
+                        text: "What's on deck?",
+                        timestampMs: sentAtMs - 90000),
+                    WatchChatItem(
+                        id: "watch-screenshot-molty-chat",
+                        role: "assistant",
+                        text: "Gateway is online and ready.",
+                        timestampMs: sentAtMs - 30000),
+                ],
+                chatStatusText: "Live gateway conversation",
+                sentAtMs: sentAtMs,
+                snapshotId: "watch-screenshot-now-face"))
     }
 }

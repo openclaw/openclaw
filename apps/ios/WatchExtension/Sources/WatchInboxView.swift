@@ -440,6 +440,9 @@ private struct WatchControlSurfaceView: View {
     }
 
     private var greetingText: String {
+        if let greetingTextOverride = self.store.greetingTextOverride {
+            return greetingTextOverride
+        }
         let hour = Calendar.current.component(.hour, from: Date())
         if hour < 12 { return "Good morning" }
         if hour < 18 { return "Good afternoon" }

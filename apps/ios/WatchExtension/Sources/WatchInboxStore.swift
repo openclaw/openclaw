@@ -222,6 +222,7 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
     var appSnapshotUpdatedAt: Date?
     var appSnapshotStatusText: String?
     var appCommandStatusText: String?
+    var greetingTextOverride: String?
     var isExecApprovalReviewLoading = false
     var execApprovalReviewStatusText: String?
     var execApprovalReviewStatusAt: Date?
