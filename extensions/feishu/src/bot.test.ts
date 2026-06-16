@@ -422,6 +422,7 @@ async function dispatchMessage(params: {
   cfg: ClawdbotConfig;
   currentCfg?: ClawdbotConfig;
   event: FeishuMessageEvent;
+  channelRuntime?: ReturnType<typeof createFeishuBotRuntime>["channel"];
 }) {
   const runtime = createRuntimeEnv();
   const feishuConfig = params.cfg.channels?.feishu;
@@ -443,6 +444,7 @@ async function dispatchMessage(params: {
     cfg,
     event: params.event,
     runtime,
+    ...(params.channelRuntime ? { channelRuntime: params.channelRuntime } : {}),
   });
   return runtime;
 }
@@ -959,6 +961,33 @@ describe("handleFeishuMessage ACP routing", () => {
       0,
     );
     expect(dispatcherOptions.allowReasoningPreview).toBe(true);
+  });
+
+  it("falls back to full runtime channel when partial channelRuntime lacks inbound", async () => {
+    const partialChannelRuntime = {
+      runtimeContexts: {} as PluginRuntime["channel"]["runtimeContexts"],
+    } as PluginRuntime["channel"];
+
+    await dispatchMessage({
+      cfg: {
+        session: { mainKey: "main", scope: "per-sender" },
+        channels: { feishu: { enabled: true, allowFrom: ["ou_sender_1"], dmPolicy: "open" } },
+      },
+      event: {
+        sender: { sender_id: { open_id: "ou_sender_1" } },
+        message: {
+          message_id: "msg-partial-runtime",
+          chat_id: "oc_dm",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "hello" }),
+        },
+      },
+      channelRuntime: partialChannelRuntime,
+    });
+
+    expect(mockFinalizeInboundContext).toHaveBeenCalledTimes(1);
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
   });
 });
 
