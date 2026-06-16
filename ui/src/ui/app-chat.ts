@@ -1869,7 +1869,7 @@ export async function handleSendChat(
 }
 
 function shouldQueueLocalSlashCommand(name: string): boolean {
-  return !["stop", "export-session", "steer", "redirect", "new"].includes(name);
+  return !["stop", "export-session", "steer", "redirect", "new", "label"].includes(name);
 }
 
 // ── Slash Command Dispatch ──

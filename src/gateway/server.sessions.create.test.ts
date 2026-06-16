@@ -188,6 +188,39 @@ test("sessions.create accepts an explicit key for persistent dashboard sessions"
   );
 });
 
+test("sessions.create preserves an existing display name when omitted", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const key = "agent:ops-agent:dashboard:direct:subagent-orchestrator";
+  await writeSessionStore({
+    entries: {
+      [key]: sessionStoreEntry("sess-existing", {
+        displayName: "Research Plan",
+      }),
+    },
+  });
+
+  const created = await directSessionReq<{
+    key?: string;
+    entry?: {
+      displayName?: string;
+    };
+  }>("sessions.create", {
+    key,
+    label: "Dashboard Orchestrator",
+  });
+
+  expect(created.ok).toBe(true);
+  expect(created.payload?.entry?.displayName).toBe("Research Plan");
+
+  const rawStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    {
+      displayName?: string;
+    }
+  >;
+  expect(rawStore[key]?.displayName).toBe("Research Plan");
+});
+
 test("sessions.create scopes the main alias to the requested agent", async () => {
   const { storePath } = await createSessionStoreDir();
 
