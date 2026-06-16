@@ -97,7 +97,9 @@ describe("avatar storage per agent ID — real code proof (#90890)", () => {
     const keys: string[] = [];
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
-      if (k && k.startsWith("openclaw.control.assistant.v1")) keys.push(k);
+      if (k && k.startsWith("openclaw.control.assistant.v1")) {
+        keys.push(k);
+      }
     }
     keys.sort();
 
