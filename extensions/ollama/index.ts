@@ -104,7 +104,7 @@ function toDynamicOllamaModel(params: {
     id: params.model.id,
     name: params.model.name ?? params.model.id,
     provider: params.provider,
-    api: "ollama",
+    api: params.providerConfig.api ?? "ollama",
     baseUrl: readProviderBaseUrl(params.providerConfig) ?? "",
     reasoning: params.model.reasoning ?? false,
     input: input.length > 0 ? input : ["text"],
@@ -658,17 +658,21 @@ export default definePluginEntry({
         }
         const baseUrl = readProviderBaseUrl(providerConfig);
         const provider = await buildOllamaProvider(baseUrl, { quiet: true });
-        const dynamicModels = (provider.models ?? []).map((model) =>
+        const dynamicProvider = {
+          ...provider,
+          api: providerConfig?.api ?? provider.api,
+        };
+        const dynamicModels = (dynamicProvider.models ?? []).map((model) =>
           toDynamicOllamaModel({
             provider: ctx.provider,
-            providerConfig: provider,
+            providerConfig: dynamicProvider,
             model,
           }),
         );
         if (!dynamicModels.some((model) => model.id === ctx.modelId)) {
           const requestedModel = await resolveRequestedDynamicOllamaModel({
             provider: ctx.provider,
-            providerConfig: provider,
+            providerConfig: dynamicProvider,
             modelId: ctx.modelId,
           });
           if (requestedModel) {

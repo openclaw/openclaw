@@ -150,7 +150,7 @@ describe("Ollama provider", () => {
     });
   });
 
-  it("should preserve explicit ollama baseUrl on implicit provider injection", async () => {
+  it("should preserve explicit ollama baseUrl and api on implicit provider injection", async () => {
     const fetchMock = stubTagsFetch();
 
     await withOllamaApiKey(async () => {
@@ -173,6 +173,7 @@ describe("Ollama provider", () => {
 
       // Native API strips /v1 suffix via resolveOllamaApiBase()
       expect(provider?.baseUrl).toBe("http://192.168.20.14:11434");
+      expect(provider?.api).toBe("openai-completions");
     });
   });
 

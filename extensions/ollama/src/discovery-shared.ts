@@ -310,6 +310,7 @@ export async function resolveOllamaDiscoveryResult(params: {
   return {
     provider: {
       ...provider,
+      api: explicit?.api ?? provider.api,
       ...(apiKey ? { apiKey } : {}),
     },
   };

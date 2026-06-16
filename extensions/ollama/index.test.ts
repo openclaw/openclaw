@@ -467,6 +467,67 @@ describe("ollama plugin", () => {
     }
   });
 
+  it("preserves explicit api for configured dynamic Ollama models", async () => {
+    const provider = registerProvider();
+    const previous = process.env.OLLAMA_API_KEY;
+    process.env.OLLAMA_API_KEY = "ollama-live";
+    buildOllamaProviderMock.mockResolvedValueOnce({
+      baseUrl: "https://ollama.example.com",
+      api: "ollama",
+      models: [
+        {
+          id: "qwen3-coder:cloud",
+          name: "qwen3-coder:cloud",
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 8192,
+          maxTokens: 2048,
+        },
+      ],
+    });
+
+    try {
+      const config = {
+        models: {
+          providers: {
+            ollama: {
+              baseUrl: "https://ollama.example.com/v1",
+              api: "openai-completions",
+              models: [],
+            },
+          },
+        },
+      };
+
+      await provider.prepareDynamicModel?.({
+        config,
+        provider: "ollama",
+        modelId: "qwen3-coder:cloud",
+        modelRegistry: { find: vi.fn(() => null) },
+      } as never);
+
+      const resolved = provider.resolveDynamicModel?.({
+        config,
+        provider: "ollama",
+        modelId: "qwen3-coder:cloud",
+        modelRegistry: { find: vi.fn(() => null) },
+      } as never);
+      expect(resolved?.provider).toBe("ollama");
+      expect(resolved?.id).toBe("qwen3-coder:cloud");
+      expect(resolved?.api).toBe("openai-completions");
+      expect(buildOllamaProviderMock).toHaveBeenCalledWith("https://ollama.example.com/v1", {
+        quiet: true,
+      });
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OLLAMA_API_KEY;
+      } else {
+        process.env.OLLAMA_API_KEY = previous;
+      }
+    }
+  });
+
   it("resolves requested Ollama cloud models that are omitted from tags but confirmed by show", async () => {
     const provider = registerProvider();
     const previous = process.env.OLLAMA_API_KEY;
