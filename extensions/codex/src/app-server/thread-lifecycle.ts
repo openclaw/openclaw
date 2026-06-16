@@ -355,24 +355,16 @@ export async function startOrResumeThread(params: {
       config: params.params.config,
     }),
   );
-  let startModelProvider: string | undefined;
-  if (binding?.threadId) {
-    const authProfileId = params.params.authProfileId ?? binding.authProfileId;
-    startModelProvider =
-      resolveCodexAppServerModelProvider({
-        provider: params.params.provider,
-        authProfileId,
-        authProfileStore: params.params.authProfileStore,
-        agentDir: params.params.agentDir,
-        config: params.params.config,
-      }) ??
-      resolveCodexBindingModelProviderFallback({
-        provider: params.params.provider,
-        currentModel: params.params.modelId,
-        bindingModel: binding.model,
-        bindingModelProvider: binding.modelProvider,
-      });
-  }
+  const startModelSelection = resolveCodexAppServerThreadModelSelection({
+    provider: params.params.provider,
+    model: params.params.modelId,
+    binding,
+    authProfileId: params.params.authProfileId,
+    authProfileStore: params.params.authProfileStore,
+    agentDir: params.params.agentDir,
+    config: params.params.config,
+  });
+  const startModelProvider = startModelSelection.modelProvider;
   let preserveExistingBinding = false;
   let rotatedContextEngineBinding = false;
   let prebuiltPluginThreadConfig: CodexPluginThreadConfig | undefined;
@@ -610,6 +602,7 @@ export async function startOrResumeThread(params: {
           buildThreadResumeParams(params.params, {
             threadId: binding.threadId,
             authProfileId,
+            model: startModelSelection.model,
             modelProvider: startModelProvider,
             appServer: params.appServer,
             dynamicTools: params.dynamicTools,
@@ -752,6 +745,7 @@ export async function startOrResumeThread(params: {
       nativeCodeModeOnlyEnabled: params.nativeCodeModeOnlyEnabled,
       webSearchAllowed: params.webSearchAllowed,
       environmentSelection: params.environmentSelection,
+      model: startModelSelection.model,
       modelProvider: startModelProvider,
     }),
   );
@@ -1022,6 +1016,7 @@ export function buildThreadStartParams(
     nativeCodeModeOnlyEnabled?: boolean;
     webSearchAllowed?: boolean;
     environmentSelection?: CodexTurnEnvironmentParams[];
+    model?: string | null;
     modelProvider?: string | null;
   },
 ): CodexThreadStartParams {
@@ -1033,7 +1028,7 @@ export function buildThreadStartParams(
     config: params.config,
   });
   const modelSelection = resolveCodexAppServerRequestModelSelection({
-    model: params.modelId,
+    model: options.model ?? params.modelId,
     modelProvider: options.modelProvider ?? resolvedModelProvider,
     authProfileId: params.authProfileId,
     authProfileStore: params.authProfileStore,
@@ -1080,6 +1075,7 @@ export function buildThreadResumeParams(
     nativeProviderWebSearchSupported?: boolean;
     nativeCodeModeOnlyEnabled?: boolean;
     webSearchAllowed?: boolean;
+    model?: string | null;
   },
 ): CodexThreadResumeParams {
   const resolvedModelProvider = resolveCodexAppServerModelProvider({
@@ -1090,7 +1086,7 @@ export function buildThreadResumeParams(
     config: params.config,
   });
   const modelSelection = resolveCodexAppServerRequestModelSelection({
-    model: params.modelId,
+    model: options.model ?? params.modelId,
     modelProvider: options.modelProvider ?? resolvedModelProvider,
     authProfileId: options.authProfileId ?? params.authProfileId,
     authProfileStore: params.authProfileStore,
@@ -1140,6 +1136,44 @@ export function resolveCodexBindingModelProviderFallback(params: {
     return params.bindingModelProvider;
   }
   return hasProviderQualifiedModelRef(currentModel) ? undefined : params.bindingModelProvider;
+}
+
+export function resolveCodexAppServerThreadModelSelection(params: {
+  provider: string;
+  model: string;
+  binding?: Pick<
+    CodexAppServerThreadBinding,
+    "threadId" | "authProfileId" | "model" | "modelProvider"
+  >;
+  authProfileId?: string;
+  authProfileStore?: CodexAppServerAuthProfileLookup["authProfileStore"];
+  agentDir?: string;
+  config?: CodexAppServerAuthProfileLookup["config"];
+}): { model: string; modelProvider?: string } {
+  const authProfileId = params.authProfileId ?? params.binding?.authProfileId;
+  const explicitModelProvider = resolveCodexAppServerModelProvider({
+    provider: params.provider,
+    authProfileId,
+    authProfileStore: params.authProfileStore,
+    agentDir: params.agentDir,
+    config: params.config,
+  });
+  const bindingModelProvider = params.binding?.threadId
+    ? resolveCodexBindingModelProviderFallback({
+        provider: params.provider,
+        currentModel: params.model,
+        bindingModel: params.binding.model,
+        bindingModelProvider: params.binding.modelProvider,
+      })
+    : undefined;
+  return resolveCodexAppServerRequestModelSelection({
+    model: params.model,
+    modelProvider: explicitModelProvider ?? bindingModelProvider,
+    authProfileId,
+    authProfileStore: params.authProfileStore,
+    agentDir: params.agentDir,
+    config: params.config,
+  });
 }
 
 export function resolveCodexAppServerRequestModelSelection(params: {

@@ -14,6 +14,7 @@ import {
   buildThreadStartParams,
   codexDynamicToolsFingerprint,
   formatCodexThreadLifecycleTimingSummary,
+  resolveCodexAppServerThreadModelSelection,
   resolveReasoningEffort,
   shouldWarnCodexThreadLifecycleTimingSummary,
   startOrResumeThread,
@@ -907,6 +908,52 @@ describe("Codex app-server model provider selection", () => {
 
     expect(request.model).toBe("local-model");
     expect(request.modelProvider).toBe("lmstudio");
+  });
+
+  it("uses provider-qualified model refs for thread capability selection", () => {
+    expect(
+      resolveCodexAppServerThreadModelSelection({
+        provider: "codex",
+        model: "amazon-bedrock/local-model",
+      }),
+    ).toEqual({
+      model: "local-model",
+      modelProvider: "amazon-bedrock",
+    });
+  });
+
+  it("uses a matching bound provider for thread capability selection", () => {
+    expect(
+      resolveCodexAppServerThreadModelSelection({
+        provider: "codex",
+        model: "local-model",
+        binding: {
+          threadId: "thread-1",
+          model: "local-model",
+          modelProvider: "amazon-bedrock",
+        },
+      }),
+    ).toEqual({
+      model: "local-model",
+      modelProvider: "amazon-bedrock",
+    });
+  });
+
+  it("prefers provider-qualified models over bound providers for thread capability selection", () => {
+    expect(
+      resolveCodexAppServerThreadModelSelection({
+        provider: "codex",
+        model: "openai/gpt-5.5",
+        binding: {
+          threadId: "thread-1",
+          model: "local-model",
+          modelProvider: "amazon-bedrock",
+        },
+      }),
+    ).toEqual({
+      model: "gpt-5.5",
+      modelProvider: "openai",
+    });
   });
 
   it("normalizes provider-qualified model refs for turn/start metadata", () => {

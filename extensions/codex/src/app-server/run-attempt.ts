@@ -235,7 +235,7 @@ import {
   buildTurnCollaborationMode,
   buildTurnStartParams,
   codexDynamicToolsFingerprint,
-  resolveCodexAppServerModelProvider,
+  resolveCodexAppServerThreadModelSelection,
   type CodexAppServerThreadLifecycleBinding,
   type CodexContextEngineThreadBootstrapProjection,
 } from "./thread-lifecycle.js";
@@ -665,13 +665,15 @@ export async function runCodexAppServerAttempt(
           authProfileId: startupAuthProfileId,
           agentDir,
           config: params.config,
-          modelProviderOverride: resolveCodexAppServerModelProvider({
+          modelProviderOverride: resolveCodexAppServerThreadModelSelection({
             provider: params.provider,
+            model: params.modelId,
+            binding: startupBinding,
             authProfileId: startupAuthProfileId,
             authProfileStore: params.authProfileStore,
             agentDir,
             config: params.config,
-          }),
+          }).modelProvider,
           signal: runAbortController.signal,
         })
       : false;
