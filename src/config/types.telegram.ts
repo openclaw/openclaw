@@ -100,7 +100,7 @@ export type TelegramCustomCommand = {
   description: string;
 };
 
-export type TelegramAllowFromGroup =
+type TelegramAllowFromGroup =
   | "trusted"
   | "partner"
   | "friends"
@@ -108,12 +108,12 @@ export type TelegramAllowFromGroup =
   | "work"
   | "restricted";
 
-export type TelegramGroupedAllowFromEntry = {
+type TelegramGroupedAllowFromEntry = {
   number: string | number;
   group: TelegramAllowFromGroup;
 };
 
-export type TelegramAllowFromEntry = string | number | TelegramGroupedAllowFromEntry;
+type TelegramAllowFromEntry = string | number | TelegramGroupedAllowFromEntry;
 
 export type TelegramAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */

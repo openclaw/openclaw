@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { listOpenFileDescriptorsForPath } from "../infra/open-file-descriptors.test-support.js";
 import {
   acquireDebugProxyCaptureStore,
   closeDebugProxyCaptureStore,
@@ -31,6 +32,18 @@ function makeStore() {
 }
 
 describe("DebugProxyCaptureStore", () => {
+  it.runIf(process.platform === "linux")("closes the database when initialization fails", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-proxy-capture-failed-open-"));
+    cleanupDirs.push(root);
+    const dbPath = path.join(root, "capture.sqlite");
+    fs.writeFileSync(dbPath, "not a sqlite database");
+
+    expect(() => new DebugProxyCaptureStore(dbPath, path.join(root, "blobs"))).toThrow(
+      "file is not a database",
+    );
+    expect(listOpenFileDescriptorsForPath(dbPath)).toEqual([]);
+  });
+
   it("keeps the cached store open until the last lease releases", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-proxy-capture-lease-"));
     cleanupDirs.push(root);

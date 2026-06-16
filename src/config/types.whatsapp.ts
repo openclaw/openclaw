@@ -15,7 +15,7 @@ import type {
 import type { DmConfig, MentionPatternsPolicyConfig } from "./types.messages.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
-export type WhatsAppAllowFromGroup =
+type WhatsAppAllowFromGroup =
   | "trusted"
   | "partner"
   | "friends"
@@ -23,12 +23,12 @@ export type WhatsAppAllowFromGroup =
   | "work"
   | "restricted";
 
-export type WhatsAppGroupedAllowFromEntry = {
+type WhatsAppGroupedAllowFromEntry = {
   number: string;
   group: WhatsAppAllowFromGroup;
 };
 
-export type WhatsAppAllowFromEntry = string | WhatsAppGroupedAllowFromEntry;
+type WhatsAppAllowFromEntry = string | WhatsAppGroupedAllowFromEntry;
 
 export type WhatsAppActionConfig = {
   reactions?: boolean;

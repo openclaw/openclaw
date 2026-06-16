@@ -17,6 +17,8 @@ profiles:
       - security-auth-pairing-and-secrets.approval-policy-and-tool-safeguards
       - telemetry-diagnostics-and-observability.telemetry-export
       - channel-framework.conversation-routing-and-delivery
+      - channel-framework.outbound-delivery-and-reply-pipeline
+      - channel-framework.group-thread-and-ambient-room-behavior
       - session-memory-and-context-engine.memory
       - session-memory-and-context-engine.diagnostics-maintenance-and-recovery
       - automation-cron-hooks-tasks-polling.cron-jobs
@@ -29,21 +31,7 @@ profiles:
     description: Stable/LTS proof selector for live providers, live channels, package artifacts,
       upgrade paths, and platform proof where the claim depends on real upstreams or release
       artifacts.
-    categoryIds:
-      - agent-runtime-and-provider-execution.agent-turn-execution
-      - session-memory-and-context-engine.token-management
-      - browser-automation-and-exec-sandbox-tools.tool-invocation-and-execution
-      - security-auth-pairing-and-secrets.approval-policy-and-tool-safeguards
-      - telemetry-diagnostics-and-observability.telemetry-export
-      - openai-codex-provider-path.responses-and-tool-compatibility
-      - session-memory-and-context-engine.memory
-      - session-memory-and-context-engine.diagnostics-maintenance-and-recovery
-      - automation-cron-hooks-tasks-polling.cron-jobs
-      - plugin-sdk-and-bundled-plugin-architecture.installing-and-running-plugins
-      - media-understanding-and-media-generation.media-understanding
-      - media-understanding-and-media-generation.media-generation
-      - browser-control-ui-and-webchat.browser-ui
-      - security-auth-pairing-and-secrets.credential-and-secret-hygiene
+    includeAllCategories: true
 levels:
   - id: planned
     code: M0
