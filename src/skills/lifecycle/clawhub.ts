@@ -695,10 +695,23 @@ export function resolveClawHubSkillStatusLinkSync(params: {
   const originRegistry = normalizeStoredRegistry(originRead.origin.registry);
   const lockedRegistry =
     locked.registry === undefined ? originRegistry : normalizeStoredRegistry(locked.registry);
+  const lockedSourceUrl = normalizeOptionalStringValue(locked.sourceUrl);
+  const lockedArtifact = normalizeDownloadedArtifactLock(locked.artifact);
+  const lockedSkillFile = normalizeSkillFileLock(locked.skillFile);
+  const provenanceMatches =
+    originRead.origin.sourceUrl === lockedSourceUrl &&
+    originRead.origin.artifact?.kind === lockedArtifact?.kind &&
+    originRead.origin.artifact?.sha256 === lockedArtifact?.sha256 &&
+    originRead.origin.artifact?.integrity === lockedArtifact?.integrity &&
+    originRead.origin.skillFile?.path === lockedSkillFile?.path &&
+    originRead.origin.skillFile?.sha256 === lockedSkillFile?.sha256;
+  // A linked status is a trust signal. Only expose provenance when both
+  // install records agree, so a one-sided origin edit cannot become trusted.
   if (
     locked.version !== originRead.origin.installedVersion ||
     locked.installedAt !== originRead.origin.installedAt ||
-    lockedRegistry !== originRegistry
+    lockedRegistry !== originRegistry ||
+    !provenanceMatches
   ) {
     return {
       status: "invalid",
@@ -721,9 +734,9 @@ export function resolveClawHubSkillStatusLinkSync(params: {
     installedAt: locked.installedAt,
     originPath: originRead.path,
     lockPath: lockRead.path,
-    ...(originRead.origin.sourceUrl ? { sourceUrl: originRead.origin.sourceUrl } : {}),
-    ...(originRead.origin.artifact ? { artifact: originRead.origin.artifact } : {}),
-    ...(originRead.origin.skillFile ? { skillFile: originRead.origin.skillFile } : {}),
+    ...(lockedSourceUrl ? { sourceUrl: lockedSourceUrl } : {}),
+    ...(lockedArtifact ? { artifact: lockedArtifact } : {}),
+    ...(lockedSkillFile ? { skillFile: lockedSkillFile } : {}),
   };
 }
 

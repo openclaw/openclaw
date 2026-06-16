@@ -1401,7 +1401,7 @@ describe("ClawHub origin provenance readback", () => {
     return skillDir;
   }
 
-  it("restores artifact, skillFile, and sourceUrl persisted to origin.json", async () => {
+  it("restores matching provenance and rejects one-sided origin edits", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-origin-prov-"));
     try {
       const artifact = {
@@ -1411,15 +1411,24 @@ describe("ClawHub origin provenance readback", () => {
       };
       const skillFile = { path: "SKILL.md", sha256: "b".repeat(64) };
       const sourceUrl = "https://github.com/acme/skills/tree/abc/agentreceipt";
+      const origin = {
+        version: 1,
+        registry: "https://clawhub.ai",
+        slug: "agentreceipt",
+        installedVersion: "1.0.0",
+        installedAt: 123,
+        sourceUrl,
+        artifact,
+        skillFile,
+      };
       const skillDir = await writeOriginWithProvenance({
         workspaceDir,
         slug: "agentreceipt",
-        origin: {
-          version: 1,
-          registry: "https://clawhub.ai",
-          slug: "agentreceipt",
-          installedVersion: "1.0.0",
+        origin,
+        lockSkill: {
+          version: "1.0.0",
           installedAt: 123,
+          registry: "https://clawhub.ai",
           sourceUrl,
           artifact,
           skillFile,
@@ -1440,6 +1449,36 @@ describe("ClawHub origin provenance readback", () => {
       expect(link.artifact).toEqual(artifact);
       expect(link.skillFile).toEqual(skillFile);
       expect(link.sourceUrl).toBe(sourceUrl);
+
+      const originPath = path.join(skillDir, ".clawhub", "origin.json");
+      for (const override of [
+        { sourceUrl: "https://github.com/acme/skills/tree/tampered/agentreceipt" },
+        {
+          artifact: {
+            kind: "clawpack",
+            sha256: "c".repeat(64),
+            integrity: "sha256-tampered",
+          },
+        },
+        { skillFile: { path: "SKILL.md", sha256: "d".repeat(64) } },
+      ]) {
+        await fs.writeFile(
+          originPath,
+          `${JSON.stringify({ ...origin, ...override }, null, 2)}\n`,
+          "utf8",
+        );
+        expect(
+          resolveClawHubSkillStatusLinkSync({
+            workspaceDir,
+            skillDir,
+            skillKey: "agentreceipt",
+          }),
+        ).toMatchObject({
+          status: "invalid",
+          valid: false,
+          reason: expect.stringContaining("does not match the workspace ClawHub lockfile"),
+        });
+      }
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
