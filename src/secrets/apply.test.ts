@@ -1085,4 +1085,109 @@ describe("secrets apply", () => {
       mode: "json",
     });
   });
+
+  it("enables plugin owners for plugin-managed exec provider upserts", async () => {
+    await writeJsonFile(fixture.configPath, {
+      plugins: {
+        entries: {
+          vault: {
+            hooks: {
+              allowConversationAccess: false,
+            },
+          },
+        },
+      },
+    });
+
+    const plan = createPlan({
+      providerUpserts: {
+        vault: {
+          source: "exec",
+          pluginIntegration: {
+            pluginId: "vault",
+            integrationId: "vault",
+          },
+        },
+      },
+      targets: [],
+    });
+
+    const nextConfig = await applyTesting.projectConfigForTest({
+      plan,
+      env: fixture.env,
+    });
+    expect(nextConfig.plugins?.entries?.vault).toEqual({
+      hooks: {
+        allowConversationAccess: false,
+      },
+      enabled: true,
+    });
+  });
+
+  it("does not re-enable explicitly disabled plugin owners for plugin-managed exec provider upserts", async () => {
+    await writeJsonFile(fixture.configPath, {
+      plugins: {
+        entries: {
+          vault: {
+            enabled: false,
+          },
+        },
+      },
+    });
+
+    const plan = createPlan({
+      providerUpserts: {
+        vault: {
+          source: "exec",
+          pluginIntegration: {
+            pluginId: "vault",
+            integrationId: "vault",
+          },
+        },
+      },
+      targets: [],
+    });
+
+    await expect(
+      applyTesting.projectConfigForTest({
+        plan,
+        env: fixture.env,
+      }),
+    ).rejects.toThrow(
+      'Cannot apply plugin-managed SecretRef provider "vault" because plugins.entries.vault.enabled is false.',
+    );
+  });
+
+  it("adds plugin-managed exec provider owners to restrictive plugin allowlists", async () => {
+    await writeJsonFile(fixture.configPath, {
+      plugins: {
+        allow: ["openai"],
+      },
+    });
+
+    const plan = createPlan({
+      providerUpserts: {
+        vault: {
+          source: "exec",
+          pluginIntegration: {
+            pluginId: "vault",
+            integrationId: "vault",
+          },
+        },
+      },
+      targets: [],
+    });
+
+    const nextConfig = (await applyTesting.projectConfigForTest({
+      plan,
+      env: fixture.env,
+    })) as {
+      plugins?: {
+        allow?: string[];
+        entries?: Record<string, unknown>;
+      };
+    };
+    expect(nextConfig.plugins?.allow).toEqual(["openai", "vault"]);
+    expect(nextConfig.plugins?.entries?.vault).toEqual({ enabled: true });
+  });
 });
