@@ -780,6 +780,9 @@ function hasOwnProperty(value: object, key: string): boolean {
 }
 
 function hasAssistantToolCallArguments(message: Extract<Message, { role: "assistant" }>): boolean {
+  if (!Array.isArray(message.content)) {
+    return false;
+  }
   return message.content.some(
     (part) => part.type === "toolCall" && hasOwnProperty(part, "arguments"),
   );
