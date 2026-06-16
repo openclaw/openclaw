@@ -2026,9 +2026,8 @@ async function runEmbeddedAgentInternal(
           if (attempt.contextBudgetStatus) {
             lastContextBudgetStatus = attempt.contextBudgetStatus;
           }
-          // Runtime aliases and provider remaps can differ from the requested
-          // ref. Match the transcript against the model that actually ran so a
-          // stale assistant error cannot be attributed to the current attempt.
+          // Transcript fallback can outlive a provider or alias transition.
+          // Reuse it only when it reports the effective model for this attempt.
           const sessionAssistantForCandidate =
             !currentAttemptAssistant &&
             !isAssistantForModelRef(sessionLastAssistant, {
