@@ -2824,6 +2824,10 @@ export class QmdMemoryManager implements MemorySearchManager {
 
   private async resolveConfiguredMcporterServer(): Promise<ConfiguredMcporterServer | null> {
     const serverName = this.qmd.mcporter.serverName;
+    const explicitMcporterConfig = this.mcporterEnv.MCPORTER_CONFIG;
+    const canUseGeneratedFallback =
+      serverName === "qmd" &&
+      (typeof explicitMcporterConfig !== "string" || explicitMcporterConfig.trim().length === 0);
     let result: { stdout: string; stderr: string };
     try {
       result = await this.runMcporterCommand(["config", "get", serverName, "--json"], {
@@ -2832,7 +2836,7 @@ export class QmdMemoryManager implements MemorySearchManager {
         timeoutMs: 5_000,
       });
     } catch (err) {
-      if (serverName === "qmd") {
+      if (canUseGeneratedFallback) {
         return null;
       }
       throw new Error(
@@ -2847,14 +2851,14 @@ export class QmdMemoryManager implements MemorySearchManager {
     try {
       parsed = parseMcporterResponseJson(result.stdout);
     } catch (err) {
-      if (serverName === "qmd") {
+      if (canUseGeneratedFallback) {
         return null;
       }
       throw new Error(`mcporter server "${serverName}" returned invalid JSON`, { cause: err });
     }
     const serialized = asRecord(parsed);
     if (!serialized) {
-      if (serverName === "qmd") {
+      if (canUseGeneratedFallback) {
         return null;
       }
       throw new Error(`mcporter server "${serverName}" returned an invalid JSON definition`);
@@ -2869,7 +2873,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     this.externalMcporterConfigPath = extractMcporterSourcePath(serialized) ?? null;
     const server = this.toMcporterRawServerEntry(serialized, rawEntry);
     if (!server) {
-      if (serverName === "qmd") {
+      if (canUseGeneratedFallback) {
         return null;
       }
       throw new Error(`mcporter server "${serverName}" returned an unsupported definition`);
@@ -2967,13 +2971,6 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (mode === "generated") {
       delete env.XDG_CONFIG_HOME;
       delete env.MCPORTER_CONFIG;
-    }
-    if (mode === "discovery") {
-      // The OpenClaw runtime scopes XDG_CONFIG_HOME to its own state dir. For
-      // mcporter config discovery we need default/user layers instead, so drop
-      // XDG_CONFIG_HOME. Keep an explicit MCPORTER_CONFIG because that is a
-      // direct user intent.
-      delete env.XDG_CONFIG_HOME;
     }
     if (mode === "external" && this.externalMcporterConfigPath) {
       // Point mcporter at the exact user/project config that defined the
