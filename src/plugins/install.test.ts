@@ -4,6 +4,11 @@ import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  onInternalDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  type DiagnosticSecurityEvent,
+} from "../infra/diagnostic-events.js";
 import { safePathSegmentHashed } from "../infra/install-safe-path.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -164,6 +169,19 @@ function expectPluginFiles(result: { targetDir: string }, stateDir: string, plug
   );
   expect(fs.existsSync(path.join(result.targetDir, "package.json"))).toBe(true);
   expect(fs.existsSync(path.join(result.targetDir, "dist", "index.js"))).toBe(true);
+}
+
+function captureSecurityEvents(): {
+  events: DiagnosticSecurityEvent[];
+  stop: () => void;
+} {
+  const events: DiagnosticSecurityEvent[] = [];
+  const stop = onInternalDiagnosticEvent((event, metadata) => {
+    if (metadata.trusted && event.type === "security.event") {
+      events.push(event);
+    }
+  });
+  return { events, stop };
 }
 
 function expectSuccessfulArchiveInstall(params: {
@@ -911,6 +929,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  resetDiagnosticEventsForTest();
   resetGlobalHookRunner();
   vi.clearAllMocks();
   const run = vi.mocked(runCommandWithTimeout);
@@ -2581,6 +2600,44 @@ describe("installPluginFromDir", () => {
     expect(vi.mocked(runCommandWithTimeout)).not.toHaveBeenCalled();
   });
 
+  it("emits a redacted security event after installing a plugin directory", async () => {
+    const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture();
+    const captured = captureSecurityEvents();
+
+    let res: Awaited<ReturnType<typeof installPluginFromDir>>;
+    try {
+      res = await installPluginFromDir({
+        dirPath: pluginDir,
+        extensionsDir,
+      });
+    } finally {
+      captured.stop();
+    }
+
+    expect(res!.ok).toBe(true);
+    expect(captured.events).toHaveLength(1);
+    expect(captured.events[0]).toMatchObject({
+      category: "plugin",
+      action: "plugin.installed",
+      outcome: "success",
+      severity: "medium",
+      actor: { kind: "operator" },
+      target: { kind: "plugin", name: "@openclaw/test-plugin" },
+      policy: { id: "plugin.install", decision: "allow" },
+      control: { id: "plugin.install", family: "supply_chain" },
+      attributes: {
+        source_family: "directory",
+        mode: "install",
+        extension_count: 1,
+        has_version: true,
+        trusted_official_source: false,
+      },
+    });
+    const serialized = JSON.stringify(captured.events);
+    expect(serialized).not.toContain(pluginDir);
+    expect(serialized).not.toContain(extensionsDir);
+  });
+
   it("copies optional-only local package dependencies without installing them", async () => {
     const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture({
       omitDependencies: true,
@@ -2642,10 +2699,16 @@ describe("installPluginFromDir", () => {
       "utf-8",
     );
 
-    const result = await installPluginFromDir({
-      dirPath: pluginDir,
-      extensionsDir,
-    });
+    const captured = captureSecurityEvents();
+    let result: Awaited<ReturnType<typeof installPluginFromDir>>;
+    try {
+      result = await installPluginFromDir({
+        dirPath: pluginDir,
+        extensionsDir,
+      });
+    } finally {
+      captured.stop();
+    }
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -2653,6 +2716,30 @@ describe("installPluginFromDir", () => {
       expect(result.error).toContain('blocked dependencies "plain-crypto-js" as package name');
       expect(result.error).toContain("node_modules/plain-crypto-js/package.json");
     }
+    expect(captured.events).toHaveLength(1);
+    expect(captured.events[0]).toMatchObject({
+      category: "plugin",
+      action: "plugin.audit.failed",
+      outcome: "denied",
+      severity: "medium",
+      reason: "security_scan_blocked",
+      target: { kind: "plugin", name: "@openclaw/test-plugin" },
+      policy: {
+        id: "plugin.install",
+        decision: "deny",
+        reason: "security_scan_blocked",
+      },
+      control: { id: "plugin.install.audit", family: "supply_chain" },
+      attributes: {
+        source_family: "directory",
+        mode: "install",
+      },
+    });
+    const serialized = JSON.stringify(captured.events);
+    expect(serialized).not.toContain(pluginDir);
+    expect(serialized).not.toContain(extensionsDir);
+    expect(serialized).not.toContain("plain-crypto-js");
+    expect(serialized).not.toContain("package.json");
     expect(vi.mocked(runCommandWithTimeout)).not.toHaveBeenCalled();
   });
 

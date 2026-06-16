@@ -75,6 +75,11 @@ import {
   linkOpenClawPeerDependencies,
   relinkOpenClawPeerDependenciesInManagedNpmRoot,
 } from "./plugin-peer-link.js";
+import {
+  emitPluginAuditSecurityEvent,
+  emitPluginInstallSecurityEvent,
+  type PluginSecuritySourceFamily,
+} from "./security-events.js";
 
 export { resolvePluginInstallDir } from "./install-paths.js";
 
@@ -548,6 +553,28 @@ function buildDirectoryInstallResult(params: {
     version: params.version,
     extensions: params.extensions,
   };
+}
+
+function emitSuccessfulPluginInstallSecurityEvent(
+  result: InstallPluginResult,
+  params: {
+    dryRun?: boolean;
+    mode: "install" | "update";
+    sourceFamily: PluginSecuritySourceFamily;
+    trustedSourceLinkedOfficialInstall?: boolean;
+  },
+) {
+  if (params.dryRun || !result.ok) {
+    return;
+  }
+  emitPluginInstallSecurityEvent({
+    pluginId: result.pluginId,
+    mode: params.mode,
+    sourceFamily: params.sourceFamily,
+    extensionCount: result.extensions.length,
+    hasVersion: Boolean(result.version),
+    trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
+  });
 }
 
 function hasPackageRuntimeDependencies(manifest: PackageManifest): boolean {
@@ -1829,15 +1856,35 @@ async function resolvePreparedDirectoryInstallTarget(params: {
 
 async function runInstallSourceScan(params: {
   subject: string;
+  pluginId?: string;
+  mode?: "install" | "update";
+  sourceFamily?: PluginSecuritySourceFamily;
   scan: () => Promise<InstallSecurityScanResult | undefined>;
 }): Promise<Extract<InstallPluginResult, { ok: false }> | null> {
   try {
     const scanResult = await params.scan();
     if (scanResult?.blocked) {
+      emitPluginAuditSecurityEvent({
+        outcome: "denied",
+        reason:
+          scanResult.blocked.code === "security_scan_failed"
+            ? "security_scan_failed"
+            : "security_scan_blocked",
+        pluginId: params.pluginId,
+        mode: params.mode,
+        sourceFamily: params.sourceFamily,
+      });
       return buildBlockedInstallResult({ blocked: scanResult.blocked });
     }
     return null;
   } catch (err) {
+    emitPluginAuditSecurityEvent({
+      outcome: "error",
+      reason: "security_scan_failed",
+      pluginId: params.pluginId,
+      mode: params.mode,
+      sourceFamily: params.sourceFamily,
+    });
     return {
       ok: false,
       error: `${params.subject} installation blocked: code safety scan failed (${String(err)}). Run "openclaw security audit --deep" for details.`,
@@ -2037,6 +2084,9 @@ async function installBundleFromSourceDir(
 
   const scanResult = await runInstallSourceScan({
     subject: `Bundle "${pluginId}"`,
+    pluginId,
+    mode: targetResult.target.effectiveMode,
+    sourceFamily: "archive",
     scan: async () =>
       await runtime.scanBundleInstallSource({
         dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
@@ -2237,6 +2287,18 @@ async function validatePackagePluginInstallSource(params: {
     : params.mode;
   const scanResult = await runInstallSourceScan({
     subject: `Plugin "${pluginId}"`,
+    pluginId,
+    mode: scanMode,
+    sourceFamily:
+      params.installPolicyRequest?.kind === "plugin-npm"
+        ? "npm"
+        : params.installPolicyRequest?.kind === "plugin-archive"
+          ? "archive"
+          : params.installPolicyRequest?.kind === "plugin-dir"
+            ? "directory"
+            : params.installPolicyRequest?.kind === "plugin-file"
+              ? "file"
+              : "installed-package",
     scan: async () =>
       await params.runtime.scanPackageInstallSource({
         dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
@@ -2376,13 +2438,20 @@ export async function installPluginFromInstalledPackageDir(
   if (postInstallError) {
     return postInstallError;
   }
-  return buildDirectoryInstallResult({
+  const result = buildDirectoryInstallResult({
     pluginId: validated.plugin.pluginId,
     targetDir: params.packageDir,
     manifestName: validated.plugin.manifestName,
     version: validated.plugin.version,
     extensions: validated.plugin.extensions,
   });
+  emitSuccessfulPluginInstallSecurityEvent(result, {
+    dryRun: params.dryRun,
+    mode: params.mode ?? "install",
+    sourceFamily: "installed-package",
+    trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
+  });
+  return result;
 }
 
 export async function preflightPluginPackageInstallSource(
@@ -2522,7 +2591,7 @@ export async function installPluginFromArchive(
   }
   const archivePath = archivePathResult.path;
 
-  return await runtime.withExtractedArchiveRoot({
+  const result = await runtime.withExtractedArchiveRoot({
     archivePath,
     tempDirPrefix: "openclaw-plugin-",
     timeoutMs,
@@ -2546,6 +2615,13 @@ export async function installPluginFromArchive(
         }),
       }),
   });
+  emitSuccessfulPluginInstallSecurityEvent(result, {
+    dryRun: params.dryRun,
+    mode,
+    sourceFamily: "archive",
+    trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
+  });
+  return result;
 }
 
 export async function installPluginFromDir(
@@ -2568,13 +2644,20 @@ export async function installPluginFromDir(
     return { ok: false, error: `not a directory: ${dirPath}` };
   }
 
-  return await installPluginFromSourceDir({
+  const result = await installPluginFromSourceDir({
     sourceDir: dirPath,
     ...pickPackageInstallCommonParams({
       ...params,
       installPolicyRequest,
     }),
   });
+  emitSuccessfulPluginInstallSecurityEvent(result, {
+    dryRun: params.dryRun,
+    mode: params.mode ?? "install",
+    sourceFamily: "directory",
+    trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
+  });
+  return result;
 }
 
 export async function installPluginFromFile(params: {
@@ -2635,6 +2718,9 @@ export async function installPluginFromFile(params: {
 
   const scanResult = await runInstallSourceScan({
     subject: `Plugin file "${pluginId}"`,
+    pluginId,
+    mode: preparedTarget.effectiveMode,
+    sourceFamily: "file",
     scan: async () =>
       await runtime.scanFileInstallSource({
         config: params.config,
@@ -2662,7 +2748,13 @@ export async function installPluginFromFile(params: {
     return { ok: false, error: String(err) };
   }
 
-  return buildFileInstallResult(pluginId, preparedTarget.targetPath);
+  const result = buildFileInstallResult(pluginId, preparedTarget.targetPath);
+  emitSuccessfulPluginInstallSecurityEvent(result, {
+    dryRun,
+    mode: preparedTarget.effectiveMode,
+    sourceFamily: "file",
+  });
+  return result;
 }
 
 export async function installPluginFromNpmSpec(
@@ -2840,7 +2932,7 @@ export async function installPluginFromNpmSpec(
     await fs.rm(policyTempDir, { recursive: true, force: true });
   }
 
-  return await installPluginFromManagedNpmRoot({
+  const result = await installPluginFromManagedNpmRoot({
     dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
     trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
     config: params.config,
@@ -2866,6 +2958,13 @@ export async function installPluginFromNpmSpec(
     npmResolution,
     ...(driftResult.integrityDrift ? { integrityDrift: driftResult.integrityDrift } : {}),
   });
+  emitSuccessfulPluginInstallSecurityEvent(result, {
+    dryRun,
+    mode,
+    sourceFamily: "npm",
+    trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
+  });
+  return result;
 }
 
 export async function installPluginFromNpmPackArchive(
@@ -2958,6 +3057,12 @@ export async function installPluginFromNpmPackArchive(
     expectedPluginId: params.expectedPluginId,
     npmResolution,
     ...(driftResult.integrityDrift ? { integrityDrift: driftResult.integrityDrift } : {}),
+  });
+  emitSuccessfulPluginInstallSecurityEvent(result, {
+    dryRun,
+    mode,
+    sourceFamily: "npm",
+    trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
   });
   return {
     ...result,
