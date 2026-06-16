@@ -1,10 +1,9 @@
 // Doctor scanner for empty allowlist policies across configured channels and accounts.
 import type { ChannelDoctorEmptyAllowlistAccountContext } from "../../../channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { normalizeAccountId } from "../../../routing/account-id.js";
 import {
   getDoctorChannelCapabilities,
-  listDoctorChannelAccountIds,
+  resolveDoctorChannelAccountIds,
 } from "../channel-capabilities.js";
 import type { DoctorAccountRecord, DoctorAllowFromList } from "../types.js";
 import { hasAllowFromEntries } from "./allowlist.js";
@@ -102,13 +101,15 @@ export function scanEmptyAllowlistPolicyWarnings(
           Boolean(account && typeof account === "object" && !isDisabledRecord(account)),
         )
       : [];
-    const configuredAccountIds = new Set(Object.keys(accounts ?? {}).map(normalizeAccountId));
-    const runtimeAccountIds = listDoctorChannelAccountIds(channelName, cfg);
+    const accountIds = resolveDoctorChannelAccountIds(
+      channelName,
+      cfg,
+      Object.keys(accounts ?? {}),
+    );
+    const configuredAccountIds = new Set(accountIds?.configured);
     const hasImplicitActiveAccount =
-      runtimeAccountIds === undefined ||
-      runtimeAccountIds.some(
-        (accountId) => !configuredAccountIds.has(normalizeAccountId(accountId)),
-      );
+      accountIds === undefined ||
+      accountIds.runtime.some((accountId) => !configuredAccountIds.has(accountId));
     const suppressParentGroupAllowlistWarning =
       activeAccounts.length > 0 &&
       !hasImplicitActiveAccount &&

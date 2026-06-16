@@ -9,17 +9,29 @@ vi.mock("../channel-capabilities.js", () => ({
     groupAllowFromFallbackToAllowFrom: channelName !== "imessage",
     warnOnEmptyGroupSenderAllowlist: channelName !== "discord",
   }),
-  listDoctorChannelAccountIds: (
+  resolveDoctorChannelAccountIds: (
     channelName: string,
-    cfg: { channels?: Record<string, { accounts?: Record<string, unknown>; baseUrl?: string }> },
+    cfg: {
+      channels?: Record<
+        string,
+        { accounts?: Record<string, unknown>; appId?: string; baseUrl?: string }
+      >;
+    },
+    configuredAccountIds: string[],
   ) => {
     const channel = cfg.channels?.[channelName];
     const ids = Object.keys(channel?.accounts ?? {});
-    const runtimeIds =
-      channelName === "matrix" ? ids.map((accountId) => accountId.toLowerCase()) : ids;
-    return channelName === "qa-channel" && channel?.baseUrl
-      ? ["default", ...runtimeIds]
-      : runtimeIds;
+    const resolveAccountId = (accountId: string) =>
+      channelName === "matrix" || channelName === "signal" ? accountId.toLowerCase() : accountId;
+    const runtimeIds = [
+      ...(channelName === "qa-channel" && channel?.baseUrl ? ["default"] : []),
+      ...(channelName === "qqbot" && channel?.appId ? ["default"] : []),
+      ...ids,
+    ];
+    return {
+      configured: configuredAccountIds.map(resolveAccountId),
+      runtime: runtimeIds.map(resolveAccountId),
+    };
   },
 }));
 
@@ -149,6 +161,28 @@ describe("doctor empty allowlist policy scan", () => {
     );
 
     expect(warnings).toEqual([]);
+  });
+
+  it("keeps parent warning for a distinct case-sensitive implicit default account", () => {
+    const warnings = scanEmptyAllowlistPolicyWarnings(
+      {
+        channels: {
+          qqbot: {
+            appId: "top-level-app",
+            groupPolicy: "allowlist",
+            groupAllowFrom: [],
+            accounts: {
+              Default: { groupAllowFrom: ["qqbot:group:named"] },
+            },
+          },
+        },
+      },
+      { doctorFixCommand: "openclaw doctor --fix" },
+    );
+
+    expect(warnings).toContain(
+      '- channels.qqbot.groupPolicy is "allowlist" but groupAllowFrom (and allowFrom) is empty — all group messages will be silently dropped. Add sender IDs to channels.qqbot.groupAllowFrom or channels.qqbot.allowFrom, or set groupPolicy to "open".',
+    );
   });
 
   it("allows provider-specific extra warnings without importing providers", () => {

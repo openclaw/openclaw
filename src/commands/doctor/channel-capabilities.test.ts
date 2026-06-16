@@ -2,7 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getDoctorChannelCapabilities,
-  listDoctorChannelAccountIds,
+  resolveDoctorChannelAccountIds,
 } from "./channel-capabilities.js";
 
 const channelPluginMocks = vi.hoisted(() => ({
@@ -74,6 +74,22 @@ describe("doctor channel capabilities", () => {
       throw new Error("missing generated bundled module");
     });
 
-    expect(listDoctorChannelAccountIds("telegram", {})).toBeUndefined();
+    expect(resolveDoctorChannelAccountIds("telegram", {}, [])).toBeUndefined();
+  });
+
+  it("resolves configured and runtime account ids through plugin semantics", () => {
+    channelPluginMocks.getChannelPlugin.mockReturnValue({
+      config: {
+        listAccountIds: () => ["default", "Work"],
+        resolveAccount: (_cfg: unknown, accountId?: string | null) => ({
+          accountId: accountId === "Work" ? "work" : accountId,
+        }),
+      },
+    } as never);
+
+    expect(resolveDoctorChannelAccountIds("signal", {}, ["Work"])).toEqual({
+      configured: ["work"],
+      runtime: ["default", "work"],
+    });
   });
 });
