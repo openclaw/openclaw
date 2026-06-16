@@ -582,6 +582,18 @@ export const FIELD_HELP: Record<string, string> = {
     "Max HTTP redirects allowed when fetching `image_url` URLs (default: 3).",
   "gateway.http.endpoints.chatCompletions.images.timeoutMs":
     "Timeout in milliseconds for `image_url` URL fetches (default: 10000).",
+  "gateway.http.endpoints.chatCompletions.streaming":
+    "Streaming output controls for `/v1/chat/completions` SSE delta buffering.",
+  "gateway.http.endpoints.chatCompletions.streaming.minChars":
+    "Minimum buffered characters before flushing an SSE `content` delta (default: 1 — flush every delta immediately). Increase to batch deltas and reduce event volume.",
+  "gateway.http.endpoints.chatCompletions.streaming.maxChars":
+    "Maximum characters per SSE `content` delta chunk; the buffer flushes at this threshold even when more content is pending (default: no limit).",
+  "gateway.http.endpoints.responses.streaming":
+    "Streaming output controls for `/v1/responses` SSE delta buffering.",
+  "gateway.http.endpoints.responses.streaming.minChars":
+    "Minimum buffered characters before flushing an SSE `output_text.delta` (default: 1 — flush every delta immediately). Increase to batch deltas and reduce event volume.",
+  "gateway.http.endpoints.responses.streaming.maxChars":
+    "Maximum characters per SSE `output_text.delta` chunk; the buffer flushes at this threshold even when more content is pending (default: no limit).",
   "gateway.reload.mode":
     'Controls how config edits are applied: "off" ignores live edits, "restart" always restarts, "hot" applies in-process, and "hybrid" tries hot then restarts if required. Keep "hybrid" for safest routine updates.',
   "gateway.reload.debounceMs": "Debounce window (ms) before applying config changes.",

@@ -1180,13 +1180,34 @@ export async function handleOpenAiHttpRequest(
   let wroteRole = false;
   let wroteStopChunk = false;
   let sawAssistantDelta = false;
+  const streamingCfg = opts.config?.streaming;
+  const minStreamChars = streamingCfg?.minChars ?? 1;
+  const maxStreamChars = streamingCfg?.maxChars;
   let bufferedAssistantContent = "";
+  let pendingStreamContent = "";
   let finalUsage: OpenAiChatCompletionsUsage | undefined;
   let finalizeRequested = false;
   let finalizeFinishReason: "stop" | "tool_calls" = "stop";
   let resultResolved = false;
   let closed = false;
   let stopWatchingDisconnect = () => {};
+
+  const flushStreamBuffer = () => {
+    if (pendingStreamContent) {
+      if (!wroteRole) {
+        wroteRole = true;
+        writeAssistantRoleChunk(res, { runId, model });
+      }
+      sawAssistantDelta = true;
+      writeAssistantContentChunk(res, {
+        runId,
+        model,
+        content: pendingStreamContent,
+        finishReason: null,
+      });
+      pendingStreamContent = "";
+    }
+  };
 
   const maybeFinalize = () => {
     if (closed || !finalizeRequested) {
@@ -1201,6 +1222,7 @@ export async function handleOpenAiHttpRequest(
     closed = true;
     stopWatchingDisconnect();
     unsubscribe();
+    flushStreamBuffer();
     if (!wroteStopChunk) {
       writeAssistantFinishChunk(res, { runId, model, finishReason: finalizeFinishReason });
       wroteStopChunk = true;
@@ -1246,12 +1268,19 @@ export async function handleOpenAiHttpRequest(
       }
 
       sawAssistantDelta = true;
-      writeAssistantContentChunk(res, {
-        runId,
-        model,
-        content,
-        finishReason: null,
-      });
+      pendingStreamContent += content;
+      if (
+        (maxStreamChars && pendingStreamContent.length >= maxStreamChars) ||
+        pendingStreamContent.length >= minStreamChars
+      ) {
+        writeAssistantContentChunk(res, {
+          runId,
+          model,
+          content: pendingStreamContent,
+          finishReason: null,
+        });
+        pendingStreamContent = "";
+      }
       return;
     }
 

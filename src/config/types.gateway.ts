@@ -274,6 +274,20 @@ export type GatewayReloadConfig = {
   deferralTimeoutMs?: number;
 };
 
+export type GatewayHttpStreamingConfig = {
+  /**
+   * Minimum buffered characters before flushing content as an SSE event
+   * (default: 1, which streams every delta immediately). Set higher to
+   * batch SSE deltas and reduce event volume.
+   */
+  minChars?: number;
+  /**
+   * Maximum characters per SSE event chunk (default: unlimited).
+   * Flushes at this threshold even if more content is pending.
+   */
+  maxChars?: number;
+};
+
 export type GatewayHttpChatCompletionsConfig = {
   /**
    * If false, the Gateway will not serve `POST /v1/chat/completions`.
@@ -297,6 +311,8 @@ export type GatewayHttpChatCompletionsConfig = {
   maxTotalImageBytes?: number;
   /** Image input controls for `image_url` parts. */
   images?: GatewayHttpChatCompletionsImagesConfig;
+  /** Streaming output controls for SSE delta buffering. */
+  streaming?: GatewayHttpStreamingConfig;
 };
 
 export type GatewayHttpChatCompletionsImagesConfig = {
@@ -337,6 +353,8 @@ export type GatewayHttpResponsesConfig = {
   files?: GatewayHttpResponsesFilesConfig;
   /** Image inputs (input_image). */
   images?: GatewayHttpResponsesImagesConfig;
+  /** Streaming output controls for SSE delta buffering. */
+  streaming?: GatewayHttpStreamingConfig;
 };
 
 export type GatewayHttpResponsesFilesConfig = {

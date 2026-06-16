@@ -1126,6 +1126,13 @@ export const OpenClawSchema = z
                       })
                       .strict()
                       .optional(),
+                    streaming: z
+                      .object({
+                        minChars: z.number().int().positive().optional(),
+                        maxChars: z.number().int().positive().optional(),
+                      })
+                      .strict()
+                      .optional(),
                   })
                   .strict()
                   .optional(),
@@ -1152,6 +1159,13 @@ export const OpenClawSchema = z
                     images: z
                       .object({
                         ...ResponsesEndpointUrlFetchShape,
+                      })
+                      .strict()
+                      .optional(),
+                    streaming: z
+                      .object({
+                        minChars: z.number().int().positive().optional(),
+                        maxChars: z.number().int().positive().optional(),
                       })
                       .strict()
                       .optional(),

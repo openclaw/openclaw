@@ -918,6 +918,25 @@ export async function handleOpenResponsesHttpRequest(
   let stopWatchingDisconnect = () => {};
   let finalUsage: Usage | undefined;
   let finalizeRequested: { status: ResponseResource["status"]; text: string } | null = null;
+  let pendingStreamContent = "";
+  const streamingCfg = opts.config?.streaming;
+  const minStreamChars = streamingCfg?.minChars ?? 1;
+  const maxStreamChars = streamingCfg?.maxChars;
+
+  const flushStreamBuffer = () => {
+    if (pendingStreamContent) {
+      sawAssistantDelta = true;
+      accumulatedText += pendingStreamContent;
+      writeSseEvent(res, {
+        type: "response.output_text.delta",
+        item_id: outputItemId,
+        output_index: 0,
+        content_index: 0,
+        delta: pendingStreamContent,
+      });
+      pendingStreamContent = "";
+    }
+  };
 
   const maybeFinalize = () => {
     if (closed) {
@@ -934,6 +953,8 @@ export async function handleOpenResponsesHttpRequest(
     closed = true;
     stopWatchingDisconnect();
     unsubscribe();
+    flushStreamBuffer();
+    finalizeRequested = { ...finalizeRequested, text: accumulatedText };
 
     writeSseEvent(res, {
       type: "response.output_text.done",
@@ -1049,15 +1070,21 @@ export async function handleOpenResponsesHttpRequest(
       }
 
       sawAssistantDelta = true;
-      accumulatedText += content;
-
-      writeSseEvent(res, {
-        type: "response.output_text.delta",
-        item_id: outputItemId,
-        output_index: 0,
-        content_index: 0,
-        delta: content,
-      });
+      pendingStreamContent += content;
+      if (
+        (maxStreamChars && pendingStreamContent.length >= maxStreamChars) ||
+        pendingStreamContent.length >= minStreamChars
+      ) {
+        accumulatedText += pendingStreamContent;
+        writeSseEvent(res, {
+          type: "response.output_text.delta",
+          item_id: outputItemId,
+          output_index: 0,
+          content_index: 0,
+          delta: pendingStreamContent,
+        });
+        pendingStreamContent = "";
+      }
       return;
     }
 
@@ -1135,6 +1162,7 @@ export async function handleOpenResponsesHttpRequest(
         pendingToolCalls &&
         pendingToolCalls.length > 0
       ) {
+        flushStreamBuffer();
         const usage = finalUsage ?? createEmptyUsage();
         const finalText =
           accumulatedText ||
