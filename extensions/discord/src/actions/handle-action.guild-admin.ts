@@ -9,6 +9,7 @@ import {
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { handleDiscordAction } from "../../action-runtime-api.js";
+import { isTrustedRequesterGuildAdminAction } from "../trusted-requester-actions.js";
 import {
   isDiscordModerationAction,
   readDiscordModerationCommand,
@@ -26,15 +27,24 @@ type Ctx = Pick<
   | "cfg"
   | "accountId"
   | "requesterSenderId"
+  | "senderIsOwner"
   | "toolContext"
   | "mediaLocalRoots"
   | "mediaReadFile"
 >;
 
 function readDiscordRequesterSenderId(ctx: Ctx): string | undefined {
-  return ctx.toolContext?.currentChannelProvider?.trim().toLowerCase() === "discord"
-    ? normalizeOptionalString(ctx.requesterSenderId)
-    : undefined;
+  const currentProvider = normalizeOptionalString(ctx.toolContext?.currentChannelProvider);
+  if (currentProvider?.toLowerCase() === "discord") {
+    return normalizeOptionalString(ctx.requesterSenderId);
+  }
+  if (
+    isTrustedRequesterGuildAdminAction(ctx.action) &&
+    (currentProvider || ctx.senderIsOwner !== true)
+  ) {
+    throw new Error("Discord guild admin actions require a trusted Discord sender identity.");
+  }
+  return undefined;
 }
 
 function senderParam(senderUserId: string | undefined) {
@@ -356,7 +366,6 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         message: "deleteDays must be an integer from 0 to 7",
       }),
     });
-    const senderUserIdLocal = normalizeOptionalString(ctx.requesterSenderId);
     return await handleDiscordAction(
       {
         action: moderation.action,
@@ -367,7 +376,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         until: moderation.until,
         reason: moderation.reason,
         deleteMessageDays: moderation.deleteMessageDays,
-        senderUserId: senderUserIdLocal,
+        senderUserId,
       },
       cfg,
     );

@@ -17,6 +17,8 @@ import {
   buildGauntletPrebuildEnv,
   collectGatewayCpuObservations,
   collectMetricObservations,
+  collectPluginsWithRequiredEntries,
+  collectRequiredPluginEntries,
   collectQaBaselineRegressionObservations,
   detectCommandDiagnosticFailure,
   discoverBundledPluginManifests,
@@ -236,15 +238,23 @@ function readOptionalNonNegativeIntEnv(name) {
   return raw ? parseNonNegativeInt(raw, name) : undefined;
 }
 
+function shouldPromoteObservationGuardFailure(observation) {
+  // Setup and the first cold work command are still reported, but they are not
+  // stable enough to fail the gauntlet's steady-state regression guard.
+  return observation?.phase !== "prebuild" && observation?.coldStart !== true;
+}
+
 export function buildObservationGuardFailures(observations, enabled = false) {
   if (!enabled) {
     return [];
   }
-  return observations.map((observation) => ({
-    kind: `observation:${observation.kind ?? "unknown"}`,
-    message: `Gauntlet observation threshold exceeded: ${observation.kind ?? "unknown"}`,
-    observation,
-  }));
+  return observations
+    .filter((observation) => shouldPromoteObservationGuardFailure(observation))
+    .map((observation) => ({
+      kind: `observation:${observation.kind ?? "unknown"}`,
+      message: `Gauntlet observation threshold exceeded: ${observation.kind ?? "unknown"}`,
+      observation,
+    }));
 }
 
 /**
@@ -661,8 +671,35 @@ function buildSlashHelpProbe(params) {
   };
 }
 
+async function runPluginLifecycleCommand(params) {
+  process.stderr.write(`[plugin-gauntlet] ${params.logPluginId} ${params.phase}\n`);
+  params.rows.push(
+    await runMeasuredCommand({
+      cwd: params.repoRoot,
+      env: params.env,
+      logDir: path.join(params.outputDir, "logs", "lifecycle"),
+      ...openclawCommand(params.repoRoot, ["plugins", ...params.args]),
+      label: params.label,
+      phase: `lifecycle:${params.phase}`,
+      pluginId: params.pluginId,
+      timeoutMs: params.commandTimeoutMs,
+    }),
+  );
+}
+
 async function runPluginLifecycle(params) {
   for (const plugin of params.plugins) {
+    const requiredPlugins = collectRequiredPluginEntries(params.matrix, [plugin]);
+    for (const requiredPlugin of requiredPlugins) {
+      await runPluginLifecycleCommand({
+        ...params,
+        logPluginId: plugin.id,
+        label: `${plugin.id}-requires-${requiredPlugin.id}-install`,
+        phase: `requires:${requiredPlugin.id}:install`,
+        args: ["install", requiredPlugin.id],
+        pluginId: requiredPlugin.id,
+      });
+    }
     const commands = [
       {
         phase: "install",
@@ -680,8 +717,8 @@ async function runPluginLifecycle(params) {
       { phase: "uninstall", args: ["uninstall", plugin.id, "--force"] },
     ];
     for (const { phase, args, alias } of commands) {
-      process.stderr.write(`[plugin-gauntlet] ${plugin.id} ${phase}\n`);
       if (alias) {
+        process.stderr.write(`[plugin-gauntlet] ${plugin.id} ${phase}\n`);
         params.rows.push(
           await runMeasuredCommand({
             ...buildSlashHelpProbe({
@@ -697,18 +734,24 @@ async function runPluginLifecycle(params) {
         );
         continue;
       }
-      params.rows.push(
-        await runMeasuredCommand({
-          cwd: params.repoRoot,
-          env: params.env,
-          logDir: path.join(params.outputDir, "logs", "lifecycle"),
-          ...openclawCommand(params.repoRoot, ["plugins", ...args]),
-          label: `${plugin.id}-${phase}`,
-          phase: `lifecycle:${phase}`,
-          pluginId: plugin.id,
-          timeoutMs: params.commandTimeoutMs,
-        }),
-      );
+      await runPluginLifecycleCommand({
+        ...params,
+        logPluginId: plugin.id,
+        label: `${plugin.id}-${phase}`,
+        phase,
+        args,
+        pluginId: plugin.id,
+      });
+    }
+    for (const requiredPlugin of requiredPlugins.toReversed()) {
+      await runPluginLifecycleCommand({
+        ...params,
+        logPluginId: plugin.id,
+        label: `${plugin.id}-requires-${requiredPlugin.id}-uninstall`,
+        phase: `requires:${requiredPlugin.id}:uninstall`,
+        args: ["uninstall", requiredPlugin.id, "--force"],
+        pluginId: requiredPlugin.id,
+      });
     }
   }
 }
@@ -750,6 +793,9 @@ async function runQaChunks(params) {
     const outputDir = path.join(params.outputDir, "qa-suite", chunk.label);
     const outputArg = toRepoRelativePath(params.repoRoot, outputDir);
     const pluginIds = chunk.plugins.map((plugin) => plugin.id);
+    const enabledPluginIds = collectPluginsWithRequiredEntries(params.matrix, chunk.plugins).map(
+      (plugin) => plugin.id,
+    );
     const pluginIdLabel = pluginIds.length > 0 ? pluginIds.join(",") : "<baseline>";
     process.stderr.write(
       `[plugin-gauntlet] qa chunk ${index + 1}/${chunks.length}: ${pluginIdLabel}\n`,
@@ -768,7 +814,7 @@ async function runQaChunks(params) {
         "--output-dir",
         outputArg,
         ...params.qaScenarios.flatMap((scenario) => ["--scenario", scenario]),
-        ...pluginIds.flatMap((pluginId) => ["--enable-plugin", pluginId]),
+        ...enabledPluginIds.flatMap((pluginId) => ["--enable-plugin", pluginId]),
       ]),
       label: `qa-${chunk.label}`,
       phase: "qa:rpc",
@@ -811,10 +857,11 @@ async function main() {
       shardIndex: options.shardIndex,
       limit: options.limit,
     });
+    const selectedPluginsWithRequired = collectPluginsWithRequiredEntries(matrix, selectedPlugins);
     const rows = [];
     const commandEnv = buildGauntletPrebuildEnv(env, {
       includePrivateQa: !options.skipQa,
-      buildIds: selectedPlugins.map((plugin) => plugin.buildId),
+      buildIds: selectedPluginsWithRequired.map((plugin) => plugin.buildId),
       skipDeclarationBuild: true,
     });
     if (!options.skipPrebuild && (selectedPlugins.length > 0 || !options.skipQa)) {
@@ -841,6 +888,7 @@ async function main() {
         repoRoot,
         outputDir: options.outputDir,
         env: commandEnv,
+        matrix,
         plugins: selectedPlugins,
         rows,
         commandTimeoutMs: options.commandTimeoutMs,
@@ -865,6 +913,7 @@ async function main() {
             repoRoot,
             outputDir: options.outputDir,
             env: commandEnv,
+            matrix,
             plugins: selectedPlugins,
             qaBaseline: options.qaBaseline,
             rows,

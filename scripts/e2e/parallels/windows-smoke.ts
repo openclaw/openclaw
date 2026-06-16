@@ -33,7 +33,10 @@ import { runWindowsBackgroundPowerShell, WindowsGuest } from "./guest-transports
 import { startHostServer } from "./host-server.ts";
 import { ensureVmRunning } from "./parallels-vm.ts";
 import { PhaseRunner } from "./phase-runner.ts";
-import { windowsProviderOnlyPluginIsolationScript } from "./plugin-isolation.ts";
+import {
+  windowsCodexPlatformPackageRepairFunction,
+  windowsProviderOnlyPluginIsolationScript,
+} from "./plugin-isolation.ts";
 import {
   psSingleQuote,
   windowsAgentTurnConfigPatchScript,
@@ -725,6 +728,7 @@ $PSNativeCommandUseErrorActionPreference = $false
 ${windowsPortableGitPathScript}
 ${windowsAgentTurnConfigPatchScript(this.auth.modelId)}
 ${windowsAgentWorkspaceScript("Parallels Windows smoke test assistant.")}
+${windowsCodexPlatformPackageRepairFunction()}
 Set-Item -Path ('Env:' + ${psSingleQuote(this.auth.apiKeyEnv)}) -Value ${psSingleQuote(this.auth.apiKeyValue)}
 $agentOk = $false
 for ($attempt = 1; $attempt -le 2; $attempt++) {
@@ -753,6 +757,10 @@ for ($attempt = 1; $attempt -le 2; $attempt++) {
   if ($agentExitCode -eq 0 -and ($output | Out-String) -match '"finalAssistant(Raw|Visible)Text":\\s*"OK"') {
     $agentOk = $true
     break
+  }
+  if ($agentExitCode -ne 0 -and $attempt -lt 2 -and (Repair-MissingCodexPlatformPackage -Output $output)) {
+    Write-Host "agent turn attempt $attempt hit a missing Codex platform package; retrying"
+    continue
   }
   if ($attempt -lt 2) {
     Write-Host "agent turn attempt $attempt failed or finished without OK response; retrying"

@@ -2737,10 +2737,12 @@ export async function dispatchReplyFromConfig(
     const allowSuppressedSourceProgressCallbacks =
       params.replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed === true;
     const shouldAllowQuietChannelOwnedProgressCallbacks = (options?: {
+      allowWhenToolSummariesHidden?: boolean;
       requiresToolSummaryVisibility?: boolean;
     }) =>
       options?.requiresToolSummaryVisibility === true &&
-      params.replyOptions?.suppressDefaultToolProgressMessages === true;
+      (params.replyOptions?.suppressDefaultToolProgressMessages === true ||
+        options.allowWhenToolSummariesHidden === true);
     let hasPendingDirectBlockReplyDelivery = false;
     const waitForPendingDirectBlockReplyDelivery = async (abortSignal?: AbortSignal) => {
       if (!hasPendingDirectBlockReplyDelivery) {
@@ -2753,6 +2755,7 @@ export async function dispatchReplyFromConfig(
       await waitForReplyDispatcherIdle(dispatcher, abortSignal);
     };
     const shouldForwardProgressCallback = (options?: {
+      allowWhenToolSummariesHidden?: boolean;
       forwardWhenSourceDeliverySuppressed?: boolean;
       requiresToolSummaryVisibility?: boolean;
     }) => {
@@ -2773,6 +2776,7 @@ export async function dispatchReplyFromConfig(
     const wrapProgressCallback = <Args extends unknown[]>(
       callback: ((...args: Args) => Promise<void> | void) | undefined,
       options?: {
+        allowWhenToolSummariesHidden?: boolean;
         forwardWhenSourceDeliverySuppressed?: boolean;
         requiresToolSummaryVisibility?: boolean;
         onForward?: (...args: Args) => Promise<void> | void;
@@ -2885,6 +2889,8 @@ export async function dispatchReplyFromConfig(
             ),
             onBlockReplyQueued: wrapProgressCallback(params.replyOptions?.onBlockReplyQueued),
             onToolStart: wrapProgressCallback(params.replyOptions?.onToolStart, {
+              allowWhenToolSummariesHidden:
+                params.replyOptions?.allowToolLifecycleWhenProgressHidden === true,
               forwardWhenSourceDeliverySuppressed: true,
               requiresToolSummaryVisibility: true,
               waitForDirectBlockReplyDelivery: true,

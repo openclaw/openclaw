@@ -465,7 +465,9 @@ openclaw cron edit <jobId> --clear-agent
 
 `openclaw cron run <jobId>` returns after enqueueing the manual run. Use `--wait` for shutdown hooks, maintenance scripts, or other automation that must block until the queued run finishes. Wait mode polls the exact returned `runId`; it exits `0` for status `ok` and non-zero for `error`, `skipped`, or a wait timeout.
 
-`openclaw cron create` is an alias for `openclaw cron add`, and new jobs can use a positional schedule (`"0 9 * * 1"`, `"every 1h"`, `"20m"`, or an ISO timestamp) followed by a positional agent prompt. Use `--webhook <url>` on `cron add|create` or `cron edit` to POST the finished run payload to an HTTP endpoint. Webhook delivery cannot be combined with chat delivery flags such as `--announce`, `--channel`, `--to`, `--thread-id`, or `--account`.
+The agent `cron` tool returns compact job summaries (`id`, `name`, `enabled`, `nextRunAtMs`, `scheduleKind`, `lastRunStatus`) from `cron(action: "list")`; use `cron(action: "get", jobId: "...")` for one full job definition. Direct Gateway callers can pass `compact: true` to `cron.list`; omitting it preserves the existing full response with delivery previews.
+
+`openclaw cron create` is an alias for `openclaw cron add`, and new jobs can use a positional schedule (`"0 9 * * 1"`, `"every 1h"`, `"20m"`, or an ISO timestamp) followed by a positional agent prompt. Use `--webhook <url>` on `cron add|create` or `cron edit` to POST the finished run payload to an HTTP endpoint. Webhook delivery cannot be combined with chat delivery flags such as `--announce`, `--channel`, `--to`, `--thread-id`, or `--account`. On `cron edit`, `--clear-channel`, `--clear-to`, `--clear-thread-id`, and `--clear-account` unset those routing fields individually (each rejected alongside its matching set flag), which is distinct from `--no-deliver` disabling runner fallback delivery.
 
 <Note>
 Model override note:

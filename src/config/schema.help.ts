@@ -911,7 +911,7 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.web.search.openaiCodex.enabled":
     "Enable native Codex web search for Codex-capable models.",
   "tools.web.search.openaiCodex.mode":
-    'Native Codex web search mode: "cached" (default) or "live".',
+    'Native Codex web search preference: "cached" (default; unrestricted Codex turns resolve it to live) or "live".',
   "tools.web.search.openaiCodex.allowedDomains":
     "Optional domain allowlist passed to the native Codex web_search tool.",
   "tools.web.search.openaiCodex.contextSize":
@@ -1158,7 +1158,7 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.envelopeTimezone":
     'Timezone for message envelopes ("utc", "local", "user", or an IANA timezone string).',
   "agents.defaults.envelopeTimestamp":
-    'Include absolute timestamps in message envelopes ("on" or "off").',
+    'Include absolute timestamps in message envelopes, direct agent prompt prefixes, and embedded model-input prefixes ("on" or "off").',
   "agents.defaults.envelopeElapsed": 'Include elapsed time in message envelopes ("on" or "off").',
   "agents.defaults.models":
     "Configured model catalog and allowlist (keys are full provider/model IDs or literal provider/* entries for dynamic provider catalogs).",

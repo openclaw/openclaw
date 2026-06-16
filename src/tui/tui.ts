@@ -1291,6 +1291,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     handleChatEvent,
     handleAgentEvent,
     handleBtwEvent,
+    handleSessionsChangedEvent,
     pauseStreamingWatchdog,
     reconnectStreamingWatchdog,
     consumeCompletedRunForPendingSend,
@@ -1525,6 +1526,9 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     if (evt.event === "agent") {
       handleAgentEvent(evt.payload);
     }
+    if (evt.event === "sessions.changed") {
+      handleSessionsChangedEvent(evt.payload);
+    }
   };
 
   client.onConnected = () => {
@@ -1537,6 +1541,11 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     }
     setConnectionStatus(isLocalMode ? "local ready" : "connected");
     void (async () => {
+      try {
+        await client.subscribeSessionEvents?.();
+      } catch (err) {
+        chatLog.addSystem(`session event subscribe failed: ${String(err)}`);
+      }
       await refreshAgents();
       await restoreRememberedSession();
       updateHeader();

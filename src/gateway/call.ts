@@ -33,6 +33,7 @@ import { startGatewayClientWhenEventLoopReady } from "./client-start-readiness.j
 import {
   GatewayClient,
   isGatewayConnectAssemblyError,
+  type GatewayClientCloseInfo,
   type GatewayClientOptions,
   type GatewayClientRequestOptions,
 } from "./client.js";
@@ -917,6 +918,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
     let ignoreClose = false;
     const startAbort = new AbortController();
     let primaryRequestStarted = false;
+    let suppressedPreHelloCleanCloses = 0;
     const cleanup = () => {
       startAbort.abort();
       if (abortHandler) {
@@ -1019,8 +1021,16 @@ async function executeGatewayRequestWithScopes<T>(params: {
           }
         })();
       },
-      onClose: (code, reason) => {
+      onClose: (code, reason, info?: GatewayClientCloseInfo) => {
         if (settled || ignoreClose) {
+          return;
+        }
+        if (
+          !primaryRequestStarted &&
+          info?.transientPreHelloCleanClose === true &&
+          suppressedPreHelloCleanCloses < 1
+        ) {
+          suppressedPreHelloCleanCloses += 1;
           return;
         }
         ignoreClose = true;

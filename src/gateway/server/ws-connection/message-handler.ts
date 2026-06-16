@@ -3,7 +3,10 @@ import fs from "node:fs";
 import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import {
+  normalizeSortedUniqueTrimmedStringList,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
 import type { RawData, WebSocket } from "ws";
 import {
   GATEWAY_CLIENT_IDS,
@@ -254,6 +257,17 @@ export type WsOriginCheckMetrics = {
 
 function firstHeaderValue(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
+}
+
+function resolvePairedAccessScopes(
+  device: { approvedScopes?: unknown; scopes?: unknown } | null | undefined,
+): string[] {
+  const scopes = Array.isArray(device?.approvedScopes)
+    ? device.approvedScopes
+    : Array.isArray(device?.scopes)
+      ? device.scopes
+      : [];
+  return normalizeSortedUniqueTrimmedStringList(scopes);
 }
 
 function resolveTrustedProxyControlUiScopes(params: {
@@ -1171,20 +1185,8 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         let hasServerApprovedDeviceTokenBaseline = false;
         if (device && devicePublicKey) {
           const formatAuditList = (items: string[] | undefined): string => {
-            if (!items || items.length === 0) {
-              return "<none>";
-            }
-            const out = new Set<string>();
-            for (const item of items) {
-              const trimmed = item.trim();
-              if (trimmed) {
-                out.add(trimmed);
-              }
-            }
-            if (out.size === 0) {
-              return "<none>";
-            }
-            return [...out].toSorted().join(",");
+            const normalized = normalizeSortedUniqueTrimmedStringList(items);
+            return normalized.length > 0 ? normalized.join(",") : "<none>";
           };
           const logUpgradeAudit = (
             reason: "role-upgrade" | "scope-upgrade",
@@ -1227,11 +1229,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
               if (scopes.length === 0) {
                 return true;
               }
-              const pairedScopes = Array.isArray(pairedCandidate.approvedScopes)
-                ? pairedCandidate.approvedScopes
-                : Array.isArray(pairedCandidate.scopes)
-                  ? pairedCandidate.scopes
-                  : [];
+              const pairedScopes = resolvePairedAccessScopes(pairedCandidate);
               if (pairedScopes.length === 0) {
                 return false;
               }
@@ -1397,11 +1395,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                 ? listApprovedPairedDeviceRoles(existingPairedDevice)
                 : [];
               const approvedScopes = exposeApprovedAccess
-                ? Array.isArray(existingPairedDevice.approvedScopes)
-                  ? existingPairedDevice.approvedScopes
-                  : Array.isArray(existingPairedDevice.scopes)
-                    ? existingPairedDevice.scopes
-                    : []
+                ? resolvePairedAccessScopes(existingPairedDevice)
                 : [];
               const retryAfterBootstrapPairingApproval =
                 authMethod === "bootstrap-token" &&
@@ -1511,11 +1505,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
               }
             }
             const pairedRoles = listEffectivePairedDeviceRoles(paired);
-            const pairedScopes = Array.isArray(paired.approvedScopes)
-              ? paired.approvedScopes
-              : Array.isArray(paired.scopes)
-                ? paired.scopes
-                : [];
+            const pairedScopes = resolvePairedAccessScopes(paired);
             const allowedRoles = new Set(pairedRoles);
             if (allowedRoles.size === 0) {
               logUpgradeAudit("role-upgrade", pairedRoles, pairedScopes);
