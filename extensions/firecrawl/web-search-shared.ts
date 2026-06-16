@@ -58,7 +58,7 @@ export function buildFirecrawlFreeWebSearchProviderBase(): Omit<
     placeholder: "(no key needed)",
     signupUrl: "https://www.firecrawl.dev/",
     docsUrl: "https://docs.openclaw.ai/tools/firecrawl",
-    autoDetectOrder: 115,
+    autoDetectOrder: 76,
     credentialPath: "",
     ...createWebSearchProviderContractFields({
       credentialPath: "",

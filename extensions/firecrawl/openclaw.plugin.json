@@ -34,7 +34,7 @@
     }
   },
   "contracts": {
-    "webFetchProviders": ["firecrawl"],
+    "webFetchProviders": ["firecrawl", "firecrawl-free"],
     "webSearchProviders": ["firecrawl", "firecrawl-free"],
     "tools": ["firecrawl_search", "firecrawl_scrape"]
   },

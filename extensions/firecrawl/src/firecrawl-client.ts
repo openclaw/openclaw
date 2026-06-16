@@ -100,6 +100,7 @@ export type FirecrawlScrapeParams = {
   proxy?: "auto" | "basic" | "stealth";
   storeInCache?: boolean;
   timeoutSeconds?: number;
+  keyless?: boolean;
 };
 
 export function assertFirecrawlScrapeTargetAllowed(url: string): void {
@@ -532,8 +533,9 @@ export async function runFirecrawlScrape(
 ): Promise<Record<string, unknown>> {
   assertFirecrawlScrapeTargetAllowed(params.url);
 
-  const apiKey = resolveFirecrawlApiKey(params.cfg);
-  if (!apiKey) {
+  const keyless = params.keyless === true;
+  const apiKey = keyless ? undefined : resolveFirecrawlApiKey(params.cfg);
+  if (!keyless && !apiKey) {
     throw new Error(
       "firecrawl_scrape needs a Firecrawl API key. Set FIRECRAWL_API_KEY in the Gateway environment, or configure plugins.entries.firecrawl.config.webFetch.apiKey.",
     );
@@ -559,6 +561,7 @@ export async function runFirecrawlScrape(
       proxy,
       storeInCache,
       maxChars,
+      keyless,
     }),
   );
   const cached = readCache(SCRAPE_CACHE, cacheKey);
