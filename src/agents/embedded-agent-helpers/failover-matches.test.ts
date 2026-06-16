@@ -100,6 +100,19 @@ describe("Z.ai vendor error codes (#48988)", () => {
     it("auth still classified correctly", () => {
       expect(isAuthErrorMessage("invalid api key provided")).toBe(true);
     });
+
+    it("Codex/OpenAI auth payloads are classified as auth", () => {
+      expect(
+        isAuthErrorMessage(
+          'OpenAI API error (503): 503 auth_unavailable: no auth available (providers=codex, model=gpt-5.5).',
+        ),
+      ).toBe(true);
+      expect(
+        isAuthErrorMessage(
+          '401 {"type":"error","error":{"type":"authentication_error","message":"Your authentication token has been invalidated. Please try signing in again."}}',
+        ),
+      ).toBe(true);
+    });
   });
 });
 

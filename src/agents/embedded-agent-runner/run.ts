@@ -2968,8 +2968,24 @@ async function runEmbeddedAgentInternal(
           }
 
           const assistantForFailover = currentAttemptAssistant ?? sessionAssistantForCandidate;
+          const assistantFailoverRawErrorText = assistantForFailover?.errorMessage?.trim();
+          const formattedAssistantFailoverErrorText =
+            assistantForFailover && !assistantFailoverRawErrorText
+              ? formatAssistantErrorText(assistantForFailover, {
+                  cfg: params.config,
+                  sessionKey: resolvedSessionKey ?? params.sessionId,
+                  provider: activeErrorContext.provider,
+                  model: activeErrorContext.model,
+                })?.trim()
+              : undefined;
+          const assistantFailoverErrorText =
+            assistantFailoverRawErrorText || formattedAssistantFailoverErrorText || "";
+          const assistantForFailoverSignal =
+            assistantForFailover && assistantFailoverErrorText && !assistantFailoverRawErrorText
+              ? { ...assistantForFailover, errorMessage: assistantFailoverErrorText }
+              : assistantForFailover;
           const fallbackThinking = pickFallbackThinkingLevel({
-            message: assistantForFailover?.errorMessage,
+            message: assistantFailoverErrorText,
             attempted: attemptedThinking,
           });
           if (fallbackThinking && !aborted) {
@@ -2980,11 +2996,13 @@ async function runEmbeddedAgentInternal(
             continue;
           }
 
-          const authFailure = isAuthAssistantError(assistantForFailover);
-          const rateLimitFailure = isRateLimitAssistantError(assistantForFailover);
-          const billingFailure = isBillingAssistantError(assistantForFailover);
-          const failoverFailure = isFailoverAssistantError(assistantForFailover);
-          const assistantFailoverReason = classifyAssistantFailoverReason(assistantForFailover);
+          const authFailure = isAuthAssistantError(assistantForFailoverSignal);
+          const rateLimitFailure = isRateLimitAssistantError(assistantForFailoverSignal);
+          const billingFailure = isBillingAssistantError(assistantForFailoverSignal);
+          const failoverFailure = isFailoverAssistantError(assistantForFailoverSignal);
+          const assistantFailoverReason = classifyAssistantFailoverReason(
+            assistantForFailoverSignal,
+          );
           const assistantProviderStarted =
             Boolean(currentAttemptAssistant?.provider) ||
             idleTimedOut ||
@@ -2998,18 +3016,16 @@ async function runEmbeddedAgentInternal(
               providerStarted: assistantProviderStarted,
               transientRateLimit:
                 assistantProfileFailoverReason === "rate_limit" &&
-                isShortWindowRateLimitMessage(assistantForFailover?.errorMessage),
+                isShortWindowRateLimitMessage(assistantFailoverErrorText),
             },
           );
           const cloudCodeAssistFormatError = attempt.cloudCodeAssistFormatError;
-          const imageDimensionError = parseImageDimensionError(
-            assistantForFailover?.errorMessage ?? "",
-          );
+          const imageDimensionError = parseImageDimensionError(assistantFailoverErrorText);
           // The shared runtime wraps interrupted streams as a timeout. Retry that
           // wrapper only for reasoning-only output so ordinary timeouts keep failover.
           const genericUnknownReasoningError =
             assistantFailoverReason === "timeout" &&
-            isGenericUnknownStreamErrorMessage(assistantForFailover?.errorMessage ?? "") &&
+            isGenericUnknownStreamErrorMessage(assistantFailoverErrorText) &&
             Boolean(assistantForFailover && hasOnlyAssistantReasoningContent(assistantForFailover));
           const silentErrorRetryReason =
             assistantFailoverReason === null ||
@@ -3047,7 +3063,7 @@ async function runEmbeddedAgentInternal(
           const logAssistantFailoverDecision = createFailoverDecisionLogger({
             stage: "assistant",
             runId: params.runId,
-            rawError: assistantForFailover?.errorMessage?.trim(),
+            rawError: assistantFailoverErrorText || undefined,
             failoverReason: assistantFailoverReason,
             profileFailureReason: assistantProfileFailureReason,
             provider: activeErrorContext.provider,
@@ -3063,7 +3079,7 @@ async function runEmbeddedAgentInternal(
           if (
             authFailure &&
             (await maybeRefreshRuntimeAuthForAuthError(
-              assistantForFailover?.errorMessage ?? "",
+              assistantFailoverErrorText,
               runtimeAuthRetry,
             ))
           ) {
@@ -3129,6 +3145,7 @@ async function runEmbeddedAgentInternal(
             provider,
             activeErrorContext,
             lastAssistant: assistantForFailover,
+            assistantFailoverRawErrorText: assistantFailoverErrorText || undefined,
             config: params.config,
             sessionKey: params.sessionKey ?? params.sessionId,
             authFailure,

@@ -114,6 +114,24 @@ export function isShortWindowRateLimitMessage(message: string | undefined): bool
   return resolveShortWindowRateLimitRetry(message) !== null;
 }
 
+function resolveAssistantFailoverRawErrorText(params: {
+  lastAssistant: AssistantMessage | undefined;
+  assistantFailoverRawErrorText?: string;
+  config: OpenClawConfig | undefined;
+  sessionKey?: string;
+  activeErrorContext: { provider: string; model: string };
+}): string | undefined {
+  const derivedError = params.assistantFailoverRawErrorText?.trim();
+  if (derivedError) {
+    return derivedError;
+  }
+  const rawError = params.lastAssistant?.errorMessage?.trim();
+  if (rawError) {
+    return rawError;
+  }
+  return undefined;
+}
+
 /**
  * Applies an assistant-stage failover decision and returns the next run action.
  * It owns auth-profile rotation, overload/rate-limit escalation, same-model
@@ -138,6 +156,7 @@ export async function handleAssistantFailover(params: {
   provider: string;
   activeErrorContext: { provider: string; model: string };
   lastAssistant: AssistantMessage | undefined;
+  assistantFailoverRawErrorText?: string;
   config: OpenClawConfig | undefined;
   sessionKey?: string;
   authFailure: boolean;
@@ -169,6 +188,7 @@ export async function handleAssistantFailover(params: {
 }): Promise<AssistantFailoverOutcome> {
   let overloadProfileRotations = params.overloadProfileRotations;
   let decision = params.initialDecision;
+  const assistantFailoverRawErrorText = resolveAssistantFailoverRawErrorText(params);
   const sameModelIdleTimeoutRetry = (): AssistantFailoverOutcome => {
     params.warn(
       `[llm-idle-timeout] ${sanitizeForLog(params.provider)}/${sanitizeForLog(params.modelId)} produced no reply before the idle watchdog; retrying same model`,
@@ -237,7 +257,7 @@ export async function handleAssistantFailover(params: {
               model: params.activeErrorContext.model,
               profileId: params.lastProfileId,
               status,
-              rawError: params.lastAssistant?.errorMessage?.trim(),
+              rawError: assistantFailoverRawErrorText,
             },
           ),
         };
@@ -248,7 +268,7 @@ export async function handleAssistantFailover(params: {
       // Minute-scale RPM windows can clear without spending a profile rotation
       // or model fallback. Keep the retry bounded; once exhausted, continue
       // through the existing rate-limit escalation path.
-      const shortWindowRetry = resolveShortWindowRateLimitRetry(params.lastAssistant?.errorMessage);
+      const shortWindowRetry = resolveShortWindowRateLimitRetry(assistantFailoverRawErrorText);
       if (
         params.allowSameModelRateLimitRetry &&
         shortWindowRetry &&
@@ -315,7 +335,7 @@ export async function handleAssistantFailover(params: {
     // Backoff runs before throwing so the outer fallback model starts after the
     // provider-specific overload delay.
     await params.maybeBackoffBeforeOverloadFailover(params.failoverReason);
-    const message = resolveAssistantFailoverErrorMessage(params);
+    const message = resolveAssistantFailoverErrorMessage(params, assistantFailoverRawErrorText);
     const status =
       resolveFailoverStatus(decision.reason) ?? (isTimeoutErrorMessage(message) ? 408 : undefined);
     params.logAssistantFailoverDecision("fallback_model", { status });
@@ -332,7 +352,7 @@ export async function handleAssistantFailover(params: {
         model: params.activeErrorContext.model,
         profileId: params.lastProfileId,
         status,
-        rawError: params.lastAssistant?.errorMessage?.trim(),
+        rawError: assistantFailoverRawErrorText ?? message,
         suspend: shouldSuspend,
       }),
     };
@@ -347,7 +367,7 @@ export async function handleAssistantFailover(params: {
     // payload synthesis, and stale classified text without failoverFailure
     // keep the normal payload path.
     if (!params.externalAbort && !params.timedOut && params.failoverFailure) {
-      const message = resolveAssistantFailoverErrorMessage(params);
+      const message = resolveAssistantFailoverErrorMessage(params, assistantFailoverRawErrorText);
       const reason = resolveSurfaceErrorReason(decision.reason, params);
       const status =
         resolveFailoverStatus(reason) ?? (isTimeoutErrorMessage(message) ? 408 : undefined);
@@ -363,7 +383,7 @@ export async function handleAssistantFailover(params: {
           model: params.activeErrorContext.model,
           profileId: params.lastProfileId,
           status,
-          rawError: params.lastAssistant?.errorMessage?.trim(),
+          rawError: assistantFailoverRawErrorText ?? message,
           suspend: shouldSuspend,
         }),
       };
@@ -376,17 +396,21 @@ export async function handleAssistantFailover(params: {
   };
 }
 
-function resolveAssistantFailoverErrorMessage(params: {
-  lastAssistant: AssistantMessage | undefined;
-  config: OpenClawConfig | undefined;
-  sessionKey?: string;
-  activeErrorContext: { provider: string; model: string };
-  timedOut: boolean;
-  idleTimedOut: boolean;
-  rateLimitFailure: boolean;
-  billingFailure: boolean;
-  authFailure: boolean;
-}): string {
+function resolveAssistantFailoverErrorMessage(
+  params: {
+    lastAssistant: AssistantMessage | undefined;
+    assistantFailoverRawErrorText?: string;
+    config: OpenClawConfig | undefined;
+    sessionKey?: string;
+    activeErrorContext: { provider: string; model: string };
+    timedOut: boolean;
+    idleTimedOut: boolean;
+    rateLimitFailure: boolean;
+    billingFailure: boolean;
+    authFailure: boolean;
+  },
+  assistantRawErrorText?: string,
+): string {
   const timeoutFailure = params.timedOut || params.idleTimedOut;
   return (
     (params.lastAssistant
@@ -397,7 +421,7 @@ function resolveAssistantFailoverErrorMessage(params: {
           model: params.activeErrorContext.model,
         })
       : undefined) ||
-    params.lastAssistant?.errorMessage?.trim() ||
+    assistantRawErrorText ||
     (timeoutFailure
       ? "LLM request timed out."
       : params.rateLimitFailure

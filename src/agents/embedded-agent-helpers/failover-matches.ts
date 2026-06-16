@@ -24,8 +24,12 @@ const AMBIGUOUS_AUTH_ERROR_PATTERNS = [
 ] as const satisfies readonly ErrorPattern[];
 
 const COMMON_AUTH_ERROR_PATTERNS = [
+  "auth_unavailable",
+  "authentication_error",
   "incorrect api key",
   "invalid token",
+  "token invalidated",
+  "token has been invalidated",
   "authentication",
   "re-authenticate",
   "oauth token refresh failed",
