@@ -156,9 +156,17 @@ describe("clawrouter provider catalog", () => {
     const anthropic = provider.models.find((model) => model.id === "anthropic/default");
     const normalized = normalizeClawRouterResolvedModel({
       ...anthropic,
+      baseUrl: provider.baseUrl,
       provider: "clawrouter",
     } as ProviderRuntimeModel);
-    expect(normalized?.id).toBe("claude-sonnet-4-5-20250929");
+    expect(normalized).toMatchObject({
+      id: "claude-sonnet-4-5-20250929",
+      api: "anthropic-messages",
+      baseUrl: "https://clawrouter.example/v1/native/anthropic",
+      headers: {
+        Authorization: "Bearer clawrouter-test-key",
+      },
+    });
 
     const dynamic = resolveDiscoveredClawRouterModel({
       baseUrl: provider.baseUrl,
@@ -219,6 +227,7 @@ describe("clawrouter provider catalog", () => {
     expect(
       normalizeClawRouterResolvedModel({
         ...anthropic,
+        baseUrl: provider.baseUrl,
         provider: "clawrouter",
       } as ProviderRuntimeModel),
     ).toBeUndefined();

@@ -50,6 +50,7 @@ type RoutedModel = {
 
 type CatalogSnapshot = {
   apiBaseUrl: string;
+  authorizationHeader: string;
   modelsByRoute: Map<string, ModelDefinitionConfig>;
   nativeModelIds: Map<string, string>;
 };
@@ -223,6 +224,7 @@ function buildRoutedModel(
 function updateDiscoveredModels(
   rootUrl: string,
   providers: CatalogProvider[],
+  apiKey: string,
 ): ModelDefinitionConfig[] {
   const models = new Map<string, ModelDefinitionConfig>();
   const modelsByRoute = new Map<string, ModelDefinitionConfig>();
@@ -246,6 +248,7 @@ function updateDiscoveredModels(
   // Keeping older credential-scoped catalogs would leak stale grants and grow forever.
   catalogSnapshot = {
     apiBaseUrl: `${rootUrl}/v1`,
+    authorizationHeader: `Bearer ${apiKey}`,
     modelsByRoute,
     nativeModelIds,
   };
@@ -278,7 +281,7 @@ export async function buildClawRouterProviderConfig(params: {
     api: "openai-responses",
     apiKey: params.apiKey,
     authHeader: true,
-    models: updateDiscoveredModels(rootUrl, providers),
+    models: updateDiscoveredModels(rootUrl, providers, params.apiKey),
   };
 }
 
@@ -297,8 +300,22 @@ export function resolveDiscoveredClawRouterModel(params: {
 export function normalizeClawRouterResolvedModel(
   model: ProviderRuntimeModel,
 ): ProviderRuntimeModel | undefined {
-  const upstreamModel = catalogSnapshot?.nativeModelIds.get(routeKey(model.baseUrl, model.id));
-  return upstreamModel && upstreamModel !== model.id ? { ...model, id: upstreamModel } : undefined;
+  const discovered = catalogSnapshot?.modelsByRoute.get(routeKey(model.baseUrl, model.id));
+  if (!catalogSnapshot || !discovered) {
+    return undefined;
+  }
+  const discoveredBaseUrl = discovered.baseUrl ?? catalogSnapshot.apiBaseUrl;
+  const upstreamModel = catalogSnapshot.nativeModelIds.get(routeKey(discoveredBaseUrl, model.id));
+  return {
+    ...model,
+    api: discovered.api ?? model.api,
+    baseUrl: discoveredBaseUrl,
+    headers: {
+      ...model.headers,
+      Authorization: catalogSnapshot.authorizationHeader,
+    },
+    ...(upstreamModel && upstreamModel !== model.id ? { id: upstreamModel } : {}),
+  };
 }
 
 export function clearClawRouterCatalogForTests(): void {
