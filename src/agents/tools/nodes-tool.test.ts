@@ -309,6 +309,9 @@ describe("createNodesTool screen_record duration guardrails", () => {
         screenIndex: 0,
         width: 1920,
         height: 1080,
+        media: {
+          mediaUrl: "/tmp/screen-snapshot.png",
+        },
       },
     });
   });

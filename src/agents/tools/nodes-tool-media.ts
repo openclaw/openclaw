@@ -433,6 +433,9 @@ async function executeScreenSnapshot({
       screenIndex: payload.screenIndex,
       width: payload.width,
       height: payload.height,
+      media: {
+        mediaUrl: written.path,
+      },
     },
   };
 }
