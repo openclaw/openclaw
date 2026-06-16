@@ -115,6 +115,28 @@ function parseParentlessCanonicalEntry(
   return id ? { id, parentId, leafId: id, appendParentId: id } : undefined;
 }
 
+function resolveCanonicalParentId<T>(
+  parentId: string | null,
+  byId: ReadonlyMap<string, SessionTranscriptTreeNode<T>>,
+): string | null {
+  const seen = new Set<string>();
+  let currentId = parentId;
+  while (currentId !== null) {
+    if (seen.has(currentId)) {
+      return currentId;
+    }
+    seen.add(currentId);
+    const parent = byId.get(currentId);
+    if (!parent || !isSessionTranscriptLeafControl(parent.entry)) {
+      return currentId;
+    }
+    // Leaf controls are omitted from selected paths, so descendants must point
+    // through the marker to its normalized visible parent.
+    currentId = parent.parentId;
+  }
+  return null;
+}
+
 /**
  * Resolve transcript navigation state in file order.
  *
@@ -162,17 +184,18 @@ export function scanSessionTranscriptTree<T>(entries: readonly T[]): SessionTran
     }
     let treeEntry: SessionTranscriptTreeEntry | undefined =
       explicitTreeEntry ?? parseParentlessCanonicalEntry(entry, leafId);
-    if (
-      treeEntry &&
-      explicitTreeEntry &&
-      isCanonicalSessionTranscriptEntry(entry) &&
-      treeEntry.parentId === appendParentId &&
-      leafId !== appendParentId
-    ) {
-      // The raw cursor can belong to plugin metadata or an inactive branch.
-      // Preserve that physical append link while keeping visible ancestry on
-      // the leaf selected when the canonical row was written.
-      treeEntry = { ...treeEntry, parentId: leafId };
+    if (treeEntry && isCanonicalSessionTranscriptEntry(entry)) {
+      const logicalParentId =
+        explicitTreeEntry && treeEntry.parentId === appendParentId && leafId !== appendParentId
+          ? leafId
+          : treeEntry.parentId;
+      const normalizedParentId = resolveCanonicalParentId(logicalParentId, byId);
+      if (normalizedParentId !== treeEntry.parentId) {
+        // The raw cursor can belong to plugin metadata, an inactive branch, or
+        // an omitted leaf marker. Keep physical append state separate from the
+        // visible ancestry consumed by context builders.
+        treeEntry = { ...treeEntry, parentId: normalizedParentId };
+      }
     }
     if (!treeEntry) {
       continue;

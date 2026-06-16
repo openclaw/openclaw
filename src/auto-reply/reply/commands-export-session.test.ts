@@ -359,7 +359,7 @@ describe("buildExportSessionReply", () => {
             rawEntries[0],
             rawEntries[1],
             { ...rawEntries[2], parentId: "active-tail" },
-            rawEntries[3],
+            { ...rawEntries[3], parentId: "active-tail" },
           ],
           leafId: "replacement",
           hasLeafControl: true,

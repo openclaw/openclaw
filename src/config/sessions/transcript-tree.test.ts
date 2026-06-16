@@ -152,6 +152,53 @@ describe("session transcript tree helpers", () => {
     ).toEqual([activeRoot, activeTail]);
   });
 
+  it("normalizes continuations parented to an omitted leaf marker", () => {
+    const activeRoot = { type: "message", id: "active-root", parentId: null };
+    const sideEntry = { type: "message", id: "side-entry", parentId: "active-root" };
+    const leafControl = {
+      type: "leaf",
+      id: "active-leaf",
+      parentId: "side-entry",
+      targetId: "active-root",
+    };
+    const activeTail = { type: "message", id: "active-tail", parentId: "active-leaf" };
+    const entries = [activeRoot, sideEntry, leafControl, activeTail];
+
+    const tree = scanSessionTranscriptTree(entries);
+
+    expect(tree.byId.get("active-tail")?.parentId).toBe("active-root");
+    expect(selectSessionTranscriptLeafControlledPath(entries)).toEqual([
+      activeRoot,
+      { ...activeTail, parentId: "active-root" },
+    ]);
+  });
+
+  it("normalizes parentless continuations after chained leaf markers", () => {
+    const activeRoot = { type: "message", id: "active-root", parentId: null };
+    const firstLeaf = {
+      type: "leaf",
+      id: "first-leaf",
+      parentId: "active-root",
+      targetId: "active-root",
+    };
+    const secondLeaf = {
+      type: "leaf",
+      id: "second-leaf",
+      parentId: "first-leaf",
+      targetId: "first-leaf",
+    };
+    const activeTail = { type: "message", id: "active-tail" };
+    const entries = [activeRoot, firstLeaf, secondLeaf, activeTail];
+
+    const tree = scanSessionTranscriptTree(entries);
+
+    expect(tree.byId.get("active-tail")?.parentId).toBe("active-root");
+    expect(selectSessionTranscriptLeafControlledPath(entries)).toEqual([
+      activeRoot,
+      { ...activeTail, parentId: "active-root" },
+    ]);
+  });
+
   it("keeps the reachable active suffix when an older parent is missing", () => {
     const activeTail = { type: "message", id: "active-tail", parentId: "missing-parent" };
     const leafControl = {
@@ -293,6 +340,7 @@ describe("session transcript tree helpers", () => {
     expect(tree.appendParentId).toBe("child");
     expect(tree.hasLeafControl).toBe(false);
     expect(tree.byId.get("missing-target")?.parentId).toBe("root");
+    expect(tree.byId.get("child")?.parentId).toBe("root");
     expect(selectSessionTranscriptTreePathNodes(tree, tree.leafId).map((node) => node.id)).toEqual([
       "root",
       "child",

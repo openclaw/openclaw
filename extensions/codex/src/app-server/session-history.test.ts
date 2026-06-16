@@ -130,4 +130,33 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
       { role: "assistant", content: "continued answer" },
     ]);
   });
+
+  it("keeps visible history when a continuation references the leaf marker", async () => {
+    const sessionFile = await writeSession([
+      messageEntry({ id: "visible", parentId: null, role: "user", content: "visible prompt" }),
+      messageEntry({
+        id: "inactive",
+        parentId: "visible",
+        role: "assistant",
+        content: "inactive answer",
+      }),
+      {
+        type: "leaf",
+        id: "active-leaf",
+        parentId: "inactive",
+        targetId: "visible",
+      },
+      messageEntry({
+        id: "continued",
+        parentId: "active-leaf",
+        role: "assistant",
+        content: "continued answer",
+      }),
+    ]);
+
+    await expect(readCodexMirroredSessionHistoryMessages(sessionFile)).resolves.toMatchObject([
+      { role: "user", content: "visible prompt" },
+      { role: "assistant", content: "continued answer" },
+    ]);
+  });
 });
