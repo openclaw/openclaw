@@ -1909,8 +1909,10 @@ describe("browser tool download actions", () => {
     );
     expect(opts.ref).toBe("e12");
     expect(opts.path).toBe("/tmp/downloads/file.pdf");
-    expect(result?.content[0]?.type).toBe("text");
-    const { download } = JSON.parse(result?.content[0]?.text ?? "{}");
+    const firstContent = result?.content[0];
+    expect(firstContent?.type).toBe("text");
+    if (firstContent?.type !== "text") throw new Error("Expected text content");
+    const { download } = JSON.parse(firstContent.text);
     expect(download?.path).toBe("/tmp/downloads/file.pdf");
   });
 

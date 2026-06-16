@@ -74,6 +74,7 @@ export async function browserDownload(
   },
 ): Promise<BrowserDownloadResult> {
   const q = buildProfileQuery(opts.profile);
+  const transportTimeout = opts.timeoutMs != null ? opts.timeoutMs + 5_000 : 120_000;
   return await fetchBrowserJson<BrowserDownloadResult>(withBaseUrl(baseUrl, `/download${q}`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -83,7 +84,7 @@ export async function browserDownload(
       path: opts.path,
       timeoutMs: opts.timeoutMs,
     }),
-    timeoutMs: 60000,
+    timeoutMs: transportTimeout,
   });
 }
 
@@ -98,6 +99,7 @@ export async function browserWaitForDownload(
   } = {},
 ): Promise<BrowserDownloadResult> {
   const q = buildProfileQuery(opts.profile);
+  const transportTimeout = opts.timeoutMs != null ? opts.timeoutMs + 5_000 : 120_000;
   return await fetchBrowserJson<BrowserDownloadResult>(withBaseUrl(baseUrl, `/wait/download${q}`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -106,6 +108,6 @@ export async function browserWaitForDownload(
       path: opts.path,
       timeoutMs: opts.timeoutMs,
     }),
-    timeoutMs: 60000,
+    timeoutMs: transportTimeout,
   });
 }

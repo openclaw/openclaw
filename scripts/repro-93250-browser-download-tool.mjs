@@ -65,15 +65,15 @@ async function main() {
 
   // 3) Action routing: verify "download" action requires ref and path via error
   console.log("--- Download action validation ---");
-  let result;
   try {
-    result = await tool.execute?.("call-1", { action: "download" });
+    await tool.execute?.("call-1", { action: "download" });
     console.log("  ✗ download without ref should have thrown");
   } catch (err) {
-    if (err.message.includes("ref")) {
-      console.log(`  ✓ download without ref throws: "${err.message}"`);
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes("ref")) {
+      console.log(`  ✓ download without ref throws: "${msg}"`);
     } else {
-      console.log(`  ? Unexpected error: ${err.message}`);
+      console.log(`  ? Unexpected error: ${msg}`);
     }
   }
   console.log();
@@ -81,10 +81,11 @@ async function main() {
   // 4) wait-for-download accepts optional path
   console.log("--- wait-for-download action ---");
   try {
-    result = await tool.execute?.("call-1", { action: "wait-for-download" });
+    await tool.execute?.("call-1", { action: "wait-for-download" });
     console.log("  ✓ wait-for-download without path succeeds (optional)");
   } catch (err) {
-    console.log(`  ? wait-for-download: ${err.message}`);
+    const msg = err instanceof Error ? err.message : String(err);
+    console.log(`  ? wait-for-download: ${msg}`);
   }
   console.log();
 
