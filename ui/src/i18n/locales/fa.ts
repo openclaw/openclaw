@@ -194,6 +194,7 @@ export const fa: TranslationMap = {
     verbose: "پرگویی",
     reasoning: "استدلال",
     actions: "اقدامات",
+    rename: "Rename session",
     addToWorkboard: "افزودن به Workboard",
     openWorkboardCard: "باز کردن کارت Workboard",
     noSessions: "هیچ نشستی پیدا نشد.",

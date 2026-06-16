@@ -1,6 +1,7 @@
 // Control UI module implements app render behavior.
 import { html, nothing } from "lit";
 import { guard } from "lit/directives/guard.js";
+import { ref } from "lit/directives/ref.js";
 import { styleMap } from "lit/directives/style-map.js";
 import { i18n, t } from "../i18n/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
@@ -622,47 +623,143 @@ function renderSidebarSessions(state: AppViewState) {
   `;
 }
 
+// Match the server-side session label cap so the inline editor cannot submit a
+// label the gateway would reject.
+const SIDEBAR_RENAME_MAX_LABEL_CHARS = 120;
+
+// Inline rename is transient view state, not persisted data: which row is being
+// edited and the in-progress draft. The committed label lives server-side
+// (sessions.patch), so this WeakMap only drives the editing affordance.
+type SidebarRenameState = { key: string; draft: string } | null;
+const sidebarSessionRenameStates = new WeakMap<AppViewState, SidebarRenameState>();
+
+function setSidebarRenameState(state: AppViewState, value: SidebarRenameState): void {
+  if (value === null) {
+    sidebarSessionRenameStates.delete(state);
+  } else {
+    sidebarSessionRenameStates.set(state, value);
+  }
+  pendingUpdate?.();
+}
+
+function renderSidebarSessionRenameInput(state: AppViewState, row: GatewaySessionRow) {
+  // Escape and blur race: clearing the edit state on Escape removes the input,
+  // which fires blur. Without this guard the blur handler would re-commit the
+  // draft the user just canceled, so a canceled rename must skip the commit.
+  let canceled = false;
+  const commit = (rawValue: string): void => {
+    if (canceled) {
+      return;
+    }
+    setSidebarRenameState(state, null);
+    const next = rawValue.trim().slice(0, SIDEBAR_RENAME_MAX_LABEL_CHARS);
+    // Empty clears the custom label (null); the sessions refresh inside
+    // patchSession re-renders the row from the server label, the single source.
+    void patchSession(state, row.key, { label: next.length > 0 ? next : null });
+  };
+  const cancel = (): void => {
+    canceled = true;
+    setSidebarRenameState(state, null);
+  };
+  const draft = sidebarSessionRenameStates.get(state)?.draft ?? "";
+  return html`
+    <input
+      class="sidebar-recent-session__rename-input"
+      type="text"
+      aria-label=${t("sessionsView.rename")}
+      maxlength=${SIDEBAR_RENAME_MAX_LABEL_CHARS}
+      .value=${draft}
+      @input=${(event: Event) =>
+        sidebarSessionRenameStates.set(state, {
+          key: row.key,
+          draft: (event.target as HTMLInputElement).value,
+        })}
+      @keydown=${(event: KeyboardEvent) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          commit((event.target as HTMLInputElement).value);
+        } else if (event.key === "Escape") {
+          event.preventDefault();
+          cancel();
+        }
+      }}
+      @blur=${(event: FocusEvent) => commit((event.target as HTMLInputElement).value)}
+      ${ref((node?: Element) => {
+        if (node instanceof HTMLInputElement && document.activeElement !== node) {
+          node.focus();
+          node.select();
+        }
+      })}
+    />
+  `;
+}
+
 function renderSidebarRecentSession(state: AppViewState, row: GatewaySessionRow) {
   const active = row.key === state.sessionKey;
   const label = resolveSessionDisplayName(row.key, row);
   const meta = row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : "n/a";
   const href = `${pathForTab("chat", state.basePath)}?session=${encodeURIComponent(row.key)}`;
+  const isRenaming = sidebarSessionRenameStates.get(state)?.key === row.key;
+  // The rename button is a sibling of the link, not a child: a <button> nested
+  // inside an <a> is invalid and produces ambiguous keyboard/AT behavior.
   return html`
-    <a
-      href=${href}
-      class="sidebar-recent-session ${active ? "sidebar-recent-session--active" : ""}"
-      data-session-key=${row.key}
-      title=${`${label} · ${row.key}`}
-      @click=${(event: MouseEvent) => {
-        if (
-          event.defaultPrevented ||
-          event.button !== 0 ||
-          event.metaKey ||
-          event.ctrlKey ||
-          event.shiftKey ||
-          event.altKey
-        ) {
-          return;
-        }
-        event.preventDefault();
-        if (row.key !== state.sessionKey) {
-          switchChatSession(state, row.key);
-        }
-        state.setTab("chat" as import("./navigation.ts").Tab);
-      }}
-    >
-      <span class="sidebar-recent-session__dot" aria-hidden="true"></span>
-      <span class="sidebar-recent-session__body">
-        <span class="sidebar-recent-session__name">${label}</span>
-        <span class="sidebar-recent-session__meta">${meta}</span>
-      </span>
-      ${row.hasActiveRun
-        ? html`<span
-            class="sidebar-recent-session__live"
-            aria-label=${t("sessions.sessionDetails.activeRun")}
-          ></span>`
-        : nothing}
-    </a>
+    <div class="sidebar-recent-session-row" data-session-key=${row.key}>
+      ${isRenaming
+        ? html`
+            <span class="sidebar-recent-session__dot" aria-hidden="true"></span>
+            ${renderSidebarSessionRenameInput(state, row)}
+          `
+        : html`
+            <a
+              href=${href}
+              class="sidebar-recent-session ${active ? "sidebar-recent-session--active" : ""}"
+              title=${`${label} · ${row.key}`}
+              @click=${(event: MouseEvent) => {
+                if (
+                  event.defaultPrevented ||
+                  event.button !== 0 ||
+                  event.metaKey ||
+                  event.ctrlKey ||
+                  event.shiftKey ||
+                  event.altKey
+                ) {
+                  return;
+                }
+                event.preventDefault();
+                if (row.key !== state.sessionKey) {
+                  switchChatSession(state, row.key);
+                }
+                state.setTab("chat" as import("./navigation.ts").Tab);
+              }}
+            >
+              <span class="sidebar-recent-session__dot" aria-hidden="true"></span>
+              <span class="sidebar-recent-session__body">
+                <span class="sidebar-recent-session__name">${label}</span>
+                <span class="sidebar-recent-session__meta">${meta}</span>
+              </span>
+              ${row.hasActiveRun
+                ? html`<span
+                    class="sidebar-recent-session__live"
+                    aria-label=${t("sessions.sessionDetails.activeRun")}
+                  ></span>`
+                : nothing}
+            </a>
+            <button
+              type="button"
+              class="sidebar-recent-session__rename"
+              aria-label=${t("sessionsView.rename")}
+              title=${t("sessionsView.rename")}
+              @click=${(event: MouseEvent) => {
+                event.preventDefault();
+                event.stopPropagation();
+                const current = row.label && row.label !== row.key ? row.label : "";
+                setSidebarRenameState(state, { key: row.key, draft: current });
+              }}
+            >
+              ${icons.edit}
+            </button>
+          `}
+    </div>
   `;
 }
 

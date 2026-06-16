@@ -632,4 +632,83 @@ describe("renderApp assistant avatar routing", () => {
     );
     expect(labels).toEqual(["Main old", "Work new"]);
   });
+
+  function createSidebarRenameState(request: ReturnType<typeof vi.fn>): AppViewState {
+    return createState({
+      tab: "chat",
+      sessionKey: "agent:work:main",
+      assistantAgentId: "work",
+      connected: true,
+      client: { request } as unknown as AppViewState["client"],
+      agentsList: {
+        defaultId: "main",
+        agents: [
+          { id: "main", name: "Main" },
+          { id: "work", name: "Work" },
+        ],
+      } as AppViewState["agentsList"],
+      sessionsResult: {
+        ts: 0,
+        path: "",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          { key: "agent:work:dashboard:new", kind: "direct", label: "Work new", updatedAt: 20 },
+        ],
+      } as AppViewState["sessionsResult"],
+    });
+  }
+
+  it("renames a sidebar session through the server label patch (#90655)", () => {
+    const container = document.createElement("div");
+    const request = vi.fn(async () => ({}));
+    const state = createSidebarRenameState(request);
+
+    render(renderApp(state), container);
+
+    const renameButton = container.querySelector<HTMLButtonElement>(
+      ".sidebar-recent-session__rename",
+    );
+    expect(renameButton).toBeInstanceOf(HTMLButtonElement);
+    // The rename control must be a sibling of the link, never nested inside it.
+    expect(renameButton?.closest("a")).toBeNull();
+
+    renameButton?.click();
+    render(renderApp(state), container);
+
+    const input = container.querySelector<HTMLInputElement>(
+      ".sidebar-recent-session__rename-input",
+    );
+    expect(input).toBeInstanceOf(HTMLInputElement);
+    input!.value = "Renamed";
+    input!.dispatchEvent(new Event("input", { bubbles: true }));
+    input!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+
+    expect(request).toHaveBeenCalledWith(
+      "sessions.patch",
+      expect.objectContaining({ key: "agent:work:dashboard:new", label: "Renamed" }),
+    );
+  });
+
+  it("cancels a sidebar rename on Escape without patching, even if blur follows (#90655)", () => {
+    const container = document.createElement("div");
+    const request = vi.fn(async () => ({}));
+    const state = createSidebarRenameState(request);
+
+    render(renderApp(state), container);
+    container.querySelector<HTMLButtonElement>(".sidebar-recent-session__rename")?.click();
+    render(renderApp(state), container);
+
+    const input = container.querySelector<HTMLInputElement>(
+      ".sidebar-recent-session__rename-input",
+    );
+    expect(input).toBeInstanceOf(HTMLInputElement);
+    input!.value = "Discarded";
+    input!.dispatchEvent(new Event("input", { bubbles: true }));
+    input!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    // Escape removes the editor; the trailing blur must not re-commit the draft.
+    input!.dispatchEvent(new FocusEvent("blur", { bubbles: false }));
+
+    expect(request).not.toHaveBeenCalled();
+  });
 });

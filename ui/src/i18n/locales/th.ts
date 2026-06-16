@@ -191,6 +191,7 @@ export const th: TranslationMap = {
     verbose: "ละเอียด",
     reasoning: "การให้เหตุผล",
     actions: "การดำเนินการ",
+    rename: "Rename session",
     addToWorkboard: "เพิ่มไปยัง Workboard",
     openWorkboardCard: "เปิดการ์ด Workboard",
     noSessions: "ไม่พบเซสชัน",

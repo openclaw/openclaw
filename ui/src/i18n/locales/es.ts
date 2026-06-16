@@ -193,6 +193,7 @@ export const es: TranslationMap = {
     verbose: "Detallado",
     reasoning: "Razonamiento",
     actions: "Acciones",
+    rename: "Rename session",
     addToWorkboard: "Agregar al Workboard",
     openWorkboardCard: "Abrir tarjeta de Workboard",
     noSessions: "No se encontraron sesiones.",

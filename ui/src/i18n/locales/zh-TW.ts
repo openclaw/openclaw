@@ -191,6 +191,7 @@ export const zh_TW: TranslationMap = {
     verbose: "詳細",
     reasoning: "推理",
     actions: "動作",
+    rename: "Rename session",
     addToWorkboard: "新增至 Workboard",
     openWorkboardCard: "開啟 Workboard 卡片",
     noSessions: "找不到工作階段。",

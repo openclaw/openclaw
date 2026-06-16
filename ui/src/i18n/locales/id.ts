@@ -193,6 +193,7 @@ export const id: TranslationMap = {
     verbose: "Verbose",
     reasoning: "Penalaran",
     actions: "Tindakan",
+    rename: "Rename session",
     addToWorkboard: "Tambahkan ke Workboard",
     openWorkboardCard: "Buka kartu Workboard",
     noSessions: "Tidak ada sesi yang ditemukan.",

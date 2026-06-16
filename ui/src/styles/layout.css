@@ -877,6 +877,84 @@
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--ok) 12%, transparent);
 }
 
+/* Row wraps the session link and its rename affordance as siblings (the button
+   must not nest inside the <a>). The button is absolutely positioned so it
+   overlays the row's right edge without disturbing the link's grid. */
+.sidebar-recent-session-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.sidebar-recent-session-row > .sidebar-recent-session {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.sidebar-recent-session-row > .sidebar-recent-session__dot {
+  margin-left: 9px;
+}
+
+.sidebar-recent-session__rename {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg-elevated) 90%, transparent);
+  color: var(--muted);
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    opacity var(--duration-fast) ease,
+    color var(--duration-fast) ease,
+    background var(--duration-fast) ease;
+}
+
+/* Reveal on hover or keyboard focus so the control is reachable without
+   crowding the session name at rest. */
+.sidebar-recent-session-row:hover .sidebar-recent-session__rename,
+.sidebar-recent-session__rename:focus-visible {
+  opacity: 1;
+}
+
+.sidebar-recent-session__rename:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+  border-color: color-mix(in srgb, var(--border) 70%, transparent);
+}
+
+.sidebar-recent-session__rename svg {
+  width: 14px;
+  height: 14px;
+}
+
+.sidebar-recent-session__rename-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 40px;
+  margin: 0 9px;
+  padding: 6px 8px;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.sidebar-recent-session__rename-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
 .sidebar-nav::-webkit-scrollbar {
   display: none;
 }
@@ -1484,7 +1562,8 @@
 }
 
 .dreaming-header-controls__mode:hover:not(:disabled) .dreaming-header-controls__mode-detail,
-.dreaming-header-controls__mode:focus-visible:not(:disabled) .dreaming-header-controls__mode-detail {
+.dreaming-header-controls__mode:focus-visible:not(:disabled)
+  .dreaming-header-controls__mode-detail {
   max-width: 220px;
   margin-left: 6px;
   opacity: 0.95;
