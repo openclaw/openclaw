@@ -510,6 +510,7 @@ export function resolveGatewayClientConnectChallengeTimeoutMs(
 
 const FORCE_STOP_TERMINATE_GRACE_MS = 250;
 const STOP_AND_WAIT_TIMEOUT_MS = 1_000;
+const MAX_SUPPRESSED_TRANSIENT_PRE_HELLO_CLEAN_CLOSES = 1;
 
 type PendingStop = {
   ws: WebSocket;
@@ -545,6 +546,7 @@ export class GatewayClient {
   private pendingStop: PendingStop | null = null;
   private socketOpened = false;
   private helloOkReceived = false;
+  private suppressedTransientPreHelloCleanCloses = 0;
 
   constructor(opts: GatewayClientOptions) {
     this.deps = {
@@ -703,7 +705,12 @@ export class GatewayClient {
         this.scheduleReconnect();
         return;
       }
-      if (closeInfo.transientPreHelloCleanClose) {
+      if (
+        closeInfo.transientPreHelloCleanClose &&
+        this.suppressedTransientPreHelloCleanCloses <
+          MAX_SUPPRESSED_TRANSIENT_PRE_HELLO_CLEAN_CLOSES
+      ) {
+        this.suppressedTransientPreHelloCleanCloses += 1;
         this.flushPendingErrors(new GatewayClientTransientPreHelloCloseError());
         this.scheduleReconnect();
         this.opts.onClose?.(code, reasonText, closeInfo);
@@ -890,6 +897,7 @@ export class GatewayClient {
         this.pendingStartupReconnectDelayMs = null;
         this.pendingConnectErrorDetailCode = null;
         this.pendingConnectErrorDetails = null;
+        this.suppressedTransientPreHelloCleanCloses = 0;
         const authInfo = helloOk?.auth;
         if (authInfo?.deviceToken && this.opts.deviceIdentity) {
           this.deps.storeDeviceAuthToken({
