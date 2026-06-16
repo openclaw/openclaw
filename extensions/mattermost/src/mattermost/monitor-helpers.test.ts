@@ -152,6 +152,8 @@ describe("shouldDropEmptyMattermostBody", () => {
     "@openclaw\u2028",
     "@openclaw\u2029",
     "\v@openclaw\f",
+    "@openclaw\u00a0",
+    "\u2003@openclaw",
   ])("drops an invalid empty-body candidate: %j", (rawText) => {
     expect(
       shouldDropEmptyMattermostBody({

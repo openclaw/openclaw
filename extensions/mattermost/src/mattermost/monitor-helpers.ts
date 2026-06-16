@@ -64,6 +64,6 @@ export function shouldDropEmptyMattermostBody(params: {
     return false;
   }
   const botUsername = normalizeLowercaseStringOrEmpty(params.botUsername ?? "");
-  const bareMention = params.rawText.match(/^[ \t]*(@[^ \t\r\n\v\f\u2028\u2029]+)[ \t]*$/u)?.[1];
+  const bareMention = params.rawText.match(/^[ \t]*(@\S+)[ \t]*$/u)?.[1];
   return !botUsername || normalizeLowercaseStringOrEmpty(bareMention ?? "") !== `@${botUsername}`;
 }
