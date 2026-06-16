@@ -502,6 +502,36 @@ describe("runSetupWizard", () => {
     vi.clearAllMocks();
   });
 
+  it("emits JSON instead of handing off to the local agent when requested", async () => {
+    hasRunnableLocalAgent.mockResolvedValueOnce(true);
+    finishAgentAssistedSetup.mockClear();
+    const runtime = createRuntime();
+
+    await runSetupWizard(
+      { acceptRisk: true, json: true, skipUi: true },
+      runtime,
+      buildWizardPrompter({}),
+    );
+
+    expect(finishAgentAssistedSetup).not.toHaveBeenCalled();
+    const output = vi.mocked(runtime.log).mock.lastCall?.[0];
+    expect(JSON.parse(String(output))).toEqual({
+      ok: true,
+      mode: "local",
+      workspace: "/tmp/openclaw-workspace",
+      gateway: {
+        port: 18789,
+        bind: "loopback",
+        authMode: "token",
+        tailscaleMode: "off",
+      },
+      installDaemon: false,
+      skipSkills: false,
+      skipHealth: false,
+    });
+    vi.clearAllMocks();
+  });
+
   it("promotes implicit explicit Gateway intent to the advanced flow", async () => {
     configureGatewayForSetup.mockClear();
 

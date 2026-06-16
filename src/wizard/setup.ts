@@ -998,6 +998,26 @@ export async function runSetupWizard(
       skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
       ...(opts.agentId ? { agentId: opts.agentId } : {}),
     });
+    if (opts.json) {
+      const { logNonInteractiveOnboardingJson } =
+        await import("../commands/onboard-non-interactive/local/output.js");
+      logNonInteractiveOnboardingJson({
+        opts,
+        runtime,
+        mode: assistedMode,
+        workspaceDir,
+        authChoice,
+        gateway: {
+          port: gateway.settings.port,
+          bind: gateway.settings.bind,
+          authMode: gateway.settings.authMode,
+          tailscaleMode: gateway.settings.tailscaleMode,
+        },
+        skipSkills: Boolean(opts.skipSkills),
+        skipHealth: Boolean(opts.skipHealth),
+      });
+      return;
+    }
     await finishAgentAssistedSetup({
       config: nextConfig,
       settings: gateway.settings,
