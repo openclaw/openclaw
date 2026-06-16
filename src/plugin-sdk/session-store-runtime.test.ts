@@ -14,6 +14,8 @@ import {
   upsertSessionEntry,
 } from "./session-store-runtime.js";
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
 describe("session-store-runtime compatibility surface", () => {
   let tempDir: string;
   let storePath: string;
@@ -115,6 +117,50 @@ describe("session-store-runtime compatibility surface", () => {
       providerOverride: "openai",
       sessionId: "session-1",
     });
+  });
+
+  it("preserves resolved maintenance settings through entry patches", async () => {
+    const staleSessionKey = "agent:main:stale";
+    const activeSessionKey = "agent:main:active";
+    await saveSessionStore(
+      storePath,
+      {
+        [staleSessionKey]: {
+          sessionId: "session-stale",
+          updatedAt: 10,
+        },
+        [activeSessionKey]: {
+          sessionId: "session-active",
+          updatedAt: 20,
+        },
+      },
+      { skipMaintenance: true },
+    );
+
+    await expect(
+      patchSessionEntry({
+        sessionKey: activeSessionKey,
+        storePath,
+        maintenanceConfig: {
+          mode: "enforce",
+          pruneAfterMs: 7 * DAY_MS,
+          maxEntries: 1,
+          resetArchiveRetentionMs: 7 * DAY_MS,
+          maxDiskBytes: null,
+          highWaterBytes: null,
+        },
+        update: () => ({ model: "gpt-5.5" }),
+      }),
+    ).resolves.toMatchObject({
+      model: "gpt-5.5",
+      sessionId: "session-active",
+    });
+
+    expect(getSessionEntry({ sessionKey: activeSessionKey, storePath })).toMatchObject({
+      model: "gpt-5.5",
+      sessionId: "session-active",
+    });
+    expect(getSessionEntry({ sessionKey: staleSessionKey, storePath })).toBeUndefined();
   });
 
   it("keeps deprecated whole-store mutations grouped as one compatibility operation", async () => {

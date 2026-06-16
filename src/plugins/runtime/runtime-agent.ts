@@ -23,6 +23,7 @@ import {
   loadSessionStore,
   saveSessionStore,
   updateSessionStore,
+  type ResolvedSessionMaintenanceConfig,
 } from "../../config/sessions/store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
@@ -57,6 +58,7 @@ type RuntimeSessionStoreEntryUpdateParams = {
 
 type RuntimeSessionStoreEntryPatchParams = RuntimeSessionStoreReadParams & {
   fallbackEntry?: SessionEntry;
+  maintenanceConfig?: ResolvedSessionMaintenanceConfig;
   preserveActivity?: boolean;
   replaceEntry?: boolean;
   update: (
@@ -119,6 +121,7 @@ async function patchSessionEntry(
 ): Promise<SessionEntry | null> {
   return await patchAccessorSessionEntry(toSessionAccessScope(params), params.update, {
     fallbackEntry: params.fallbackEntry,
+    maintenanceConfig: params.maintenanceConfig,
     preserveActivity: params.preserveActivity,
     replaceEntry: params.replaceEntry,
   });

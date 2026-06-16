@@ -74,6 +74,7 @@ type RuntimeSessionStoreEntrySummary = {
 };
 type RuntimeSessionStoreEntryPatchParams = RuntimeSessionStoreReadParams & {
   fallbackEntry?: RuntimeSessionEntry;
+  maintenanceConfig?: import("../../config/sessions/store.js").ResolvedSessionMaintenanceConfig;
   preserveActivity?: boolean;
   replaceEntry?: boolean;
   update: (
