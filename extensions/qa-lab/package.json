@@ -20,9 +20,13 @@
     "openclaw": "2026.5.28"
   },
   "peerDependencies": {
+    "crabline": "*",
     "openclaw": ">=2026.6.9"
   },
   "peerDependenciesMeta": {
+    "crabline": {
+      "optional": true
+    },
     "openclaw": {
       "optional": true
     }
