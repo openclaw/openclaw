@@ -12,11 +12,14 @@
     "zod": "4.4.3"
   },
   "devDependencies": {
+    "@chat-adapter/state-memory": "^4.30.0",
+    "@chat-adapter/telegram": "^4.30.0",
     "@openclaw/discord": "workspace:*",
     "@openclaw/plugin-sdk": "workspace:*",
     "@openclaw/slack": "workspace:*",
     "@openclaw/whatsapp": "workspace:*",
-    "crabline": "github:openclaw/crabline#5e8031a660f9f8c40746c79830c7caf780080ee7",
+    "chat": "^4.30.0",
+    "crabline": "github:openclaw/crabline#1ee8aa3a7e83af8f9bc6579e43688a646c899769",
     "openclaw": "2026.5.28"
   },
   "peerDependencies": {

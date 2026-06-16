@@ -859,7 +859,9 @@ async function writeQaSuiteArtifacts(params: {
   const summaryPath = path.join(params.outputDir, "qa-suite-summary.json");
   const evidencePath = path.join(params.outputDir, QA_EVIDENCE_FILENAME);
   const channelDriverSmoke = params.channelDriverSelection
-    ? await runQaCrablineChannelDriverSmoke(params.channelDriverSelection)
+    ? await runQaCrablineChannelDriverSmoke(params.channelDriverSelection, {
+        outputDir: params.outputDir,
+      })
     : undefined;
   const report = renderQaMarkdownReport({
     title: "OpenClaw QA Scenario Suite",
@@ -913,8 +915,8 @@ async function writeQaSuiteArtifacts(params: {
           source: "openclaw/crabline",
           channelDriver: params.channelDriverSelection.channelDriver,
           selectedChannel: params.channelDriverSelection.channel,
-          driver: channelDriverSmoke.driver,
-          matrix: channelDriverSmoke.matrix,
+          manifestPath: channelDriverSmoke.manifestPath,
+          report: channelDriverSmoke.capabilityReport,
         },
         null,
         2,
@@ -923,7 +925,18 @@ async function writeQaSuiteArtifacts(params: {
     );
     await fs.writeFile(
       path.join(params.outputDir, params.channelDriverSelection.smokeArtifactPath),
-      `${JSON.stringify(channelDriverSmoke, null, 2)}\n`,
+      `${JSON.stringify(
+        {
+          version: 1,
+          source: "openclaw/crabline",
+          channelDriver: params.channelDriverSelection.channelDriver,
+          selectedChannel: params.channelDriverSelection.channel,
+          manifestPath: channelDriverSmoke.manifestPath,
+          smoke: channelDriverSmoke.smoke,
+        },
+        null,
+        2,
+      )}\n`,
       "utf8",
     );
   }

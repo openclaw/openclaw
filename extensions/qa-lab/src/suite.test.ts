@@ -274,6 +274,8 @@ describe("qa suite", () => {
 
   it("writes Crabline channel-driver smoke artifacts when selected", async () => {
     const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "qa-suite-crabline-"));
+    const originalTelegramBotToken = process.env.TELEGRAM_BOT_TOKEN;
+    process.env.TELEGRAM_BOT_TOKEN = "telegram-token";
     try {
       const artifacts = await qaSuiteProgressTesting.writeQaSuiteArtifacts({
         outputDir,
@@ -309,14 +311,16 @@ describe("qa suite", () => {
 
       const matrix = JSON.parse(
         await fs.readFile(path.join(outputDir, "crabline-channel-capability-matrix.json"), "utf8"),
-      ) as { matrix?: Array<{ capabilityId?: string }> };
-      expect(matrix.matrix).toEqual(
-        expect.arrayContaining([expect.objectContaining({ capabilityId: "telegram.dm.text" })]),
-      );
+      ) as {
+        report?: { result?: { configured?: Array<{ adapter?: string; platform?: string }> } };
+      };
+      expect(matrix.report?.result?.configured).toEqual([
+        expect.objectContaining({ adapter: "telegram", platform: "telegram" }),
+      ]);
       const smoke = JSON.parse(
         await fs.readFile(path.join(outputDir, "crabline-channel-smoke.json"), "utf8"),
-      ) as { result?: { ok?: boolean } };
-      expect(smoke.result?.ok).toBe(true);
+      ) as { smoke?: { result?: { findings?: string[]; ok?: boolean } } };
+      expect(smoke.smoke?.result).toMatchObject({ findings: [], ok: true });
       const evidence = JSON.parse(await fs.readFile(artifacts.evidencePath, "utf8")) as {
         entries?: Array<{ execution?: { channel?: { driver?: string; id?: string } } }>;
       };
@@ -325,6 +329,11 @@ describe("qa suite", () => {
         id: "telegram",
       });
     } finally {
+      if (originalTelegramBotToken === undefined) {
+        delete process.env.TELEGRAM_BOT_TOKEN;
+      } else {
+        process.env.TELEGRAM_BOT_TOKEN = originalTelegramBotToken;
+      }
       await fs.rm(outputDir, { recursive: true, force: true });
     }
   });

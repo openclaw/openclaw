@@ -1345,6 +1345,12 @@ importers:
         specifier: 4.4.3
         version: 4.4.3
     devDependencies:
+      '@chat-adapter/state-memory':
+        specifier: ^4.30.0
+        version: 4.30.0(zod@4.4.3)
+      '@chat-adapter/telegram':
+        specifier: ^4.30.0
+        version: 4.30.0(zod@4.4.3)
       '@openclaw/discord':
         specifier: workspace:*
         version: link:../discord
@@ -1357,9 +1363,12 @@ importers:
       '@openclaw/whatsapp':
         specifier: workspace:*
         version: link:../whatsapp
+      chat:
+        specifier: ^4.30.0
+        version: 4.30.0(zod@4.4.3)
       crabline:
-        specifier: github:openclaw/crabline#5e8031a660f9f8c40746c79830c7caf780080ee7
-        version: https://codeload.github.com/openclaw/crabline/tar.gz/5e8031a660f9f8c40746c79830c7caf780080ee7
+        specifier: github:openclaw/crabline#1ee8aa3a7e83af8f9bc6579e43688a646c899769
+        version: https://codeload.github.com/openclaw/crabline/tar.gz/1ee8aa3a7e83af8f9bc6579e43688a646c899769(@chat-adapter/state-memory@4.30.0(zod@4.4.3))(@chat-adapter/telegram@4.30.0(zod@4.4.3))(chat@4.30.0(zod@4.4.3))
       openclaw:
         specifier: 2026.5.28
         version: 2026.5.28
@@ -2358,6 +2367,18 @@ packages:
 
   '@cacheable/utils@2.4.1':
     resolution: {integrity: sha512-eiFgzCbIneyMlLOmNG4g9xzF7Hv3Mga4LjxjcSC/ues6VYq2+gUbQI8JqNuw/ZM8tJIeIaBGpswAsqV2V7ApgA==}
+
+  '@chat-adapter/shared@4.30.0':
+    resolution: {integrity: sha512-IuYtbn/p1FBXvp7JYGEMLCt07GHOMlyjx7OlZXPJwLTravcyJuP7Q6N31r6c1yubMhM8PLb8eT8l/YnjwYjs9Q==}
+    engines: {node: '>=20'}
+
+  '@chat-adapter/state-memory@4.30.0':
+    resolution: {integrity: sha512-huYnGBKBiY6s/GaYgtAmr0zM6ihvGl8/NOEV9oqY89jr6Zdnm/ZXdpXvDKdXoaxmDXCiZr2U54DbSDzpvGQ6fA==}
+    engines: {node: '>=20'}
+
+  '@chat-adapter/telegram@4.30.0':
+    resolution: {integrity: sha512-OX98fYMorz3gRvNoCVidYKOnb89Rf9UZQaUDQMhtk5IsgHX0k2qiUpEb2VOquMHyH8Pb7xkqrG52NFLnzGpspQ==}
+    engines: {node: '>=20'}
 
   '@clack/core@1.3.1':
     resolution: {integrity: sha512-fT1qHVGAag4IEkrupZ6lRRbNCs1vS9P01KB/sG8zKgvUztbYtFBtQpjSITNwooDZ83tpsPzP0mRNs1/KVszCRA==}
@@ -4485,6 +4506,9 @@ packages:
   '@wasm-audio-decoders/opus-ml@0.0.2':
     resolution: {integrity: sha512-58rWEqDGg+CKCyEeKm2KoxxSwTWtHh/NLTW9ObR4K8CGF6VwuuGudEI1CtniS/oSRmL1nJq/eh8MKARiluw4DQ==}
 
+  '@workflow/serde@4.1.0-beta.2':
+    resolution: {integrity: sha512-8kkeoQKLDaKXefjV5dbhBj2aErfKp1Mc4pb6tj8144cF+Em5SPbyMbyLCHp+BVrFfFVCBluCtMx+jjvaFVZGww==}
+
   '@zed-industries/codex-acp-darwin-arm64@0.15.0':
     resolution: {integrity: sha512-9/tnj1fXeXIONgr+5FGwr3bkqd4jaORdr3X9/k++rzHW+UIzvgIeXrJKv43403gtuKp0BoxdzsFxe2qsAQhhkw==}
     cpu: [arm64]
@@ -4855,6 +4879,18 @@ packages:
   character-reference-invalid@2.0.1:
     resolution: {integrity: sha512-iBZ4F4wRbyORVsu0jPV7gXkOsGYjGHPmAyv+HiHG8gi5PtC9KI2j1+v8/tlibRvjoWX027ypmG/n0HtO5t7unw==}
 
+  chat@4.30.0:
+    resolution: {integrity: sha512-8LXrauKckMmR83FcYC/R8nNEda5VJDDdIhZwUUu+hzaSbk4lqsro0IWm7rB1GGYXONRrUOG2XJlkNr4C15vgMA==}
+    engines: {node: '>=20'}
+    peerDependencies:
+      ai: ^6.0.182
+      zod: ^3.0.0 || ^4.0.0
+    peerDependenciesMeta:
+      ai:
+        optional: true
+      zod:
+        optional: true
+
   chmodrp@1.0.2:
     resolution: {integrity: sha512-TdngOlFV1FLTzU0o1w8MB6/BFywhtLC0SzRTGJU7T9lmdjlCWeMRt1iVo0Ki+ldwNk0BqNiKoc8xpLZEQ8mY1w==}
 
@@ -4992,8 +5028,8 @@ packages:
     resolution: {integrity: sha512-tJtZBBHA6vjIAaF6EnIaq6laBBP9aq/Y3ouVJjEfoHbRBcHBAHYcMh/w8LDrk2PvIMMq8gmopa5D4V8RmbrxGw==}
     engines: {node: '>= 0.10'}
 
-  crabline@https://codeload.github.com/openclaw/crabline/tar.gz/5e8031a660f9f8c40746c79830c7caf780080ee7:
-    resolution: {gitHosted: true, integrity: sha512-1lwm5SoLeQkoSa3HIxlgV5g+8rmYjwwTCxpB/lVcX7fzmuH/OyQsRQ6EUhhoszIE0UekbctU0IqmFusv4QUhng==, tarball: https://codeload.github.com/openclaw/crabline/tar.gz/5e8031a660f9f8c40746c79830c7caf780080ee7}
+  crabline@https://codeload.github.com/openclaw/crabline/tar.gz/1ee8aa3a7e83af8f9bc6579e43688a646c899769:
+    resolution: {gitHosted: true, integrity: sha512-BDmfhzMtDee8T3x/6/4ViI6Oe1lao/q6exuvu0xqolpr/oloZpVOFQ7QxiGk8yBhh92VG5wNmMk/gkYOPATz5Q==, tarball: https://codeload.github.com/openclaw/crabline/tar.gz/1ee8aa3a7e83af8f9bc6579e43688a646c899769}
     version: 0.1.0
     engines: {node: '>=22'}
     hasBin: true
@@ -5002,6 +5038,8 @@ packages:
       '@chat-adapter/discord': ^4.30.0
       '@chat-adapter/slack': ^4.30.0
       '@chat-adapter/state-memory': ^4.30.0
+      '@chat-adapter/telegram': ^4.30.0
+      '@chat-adapter/whatsapp': ^4.30.0
       chat: ^4.30.0
       chat-adapter-imessage: ^0.1.1
     peerDependenciesMeta:
@@ -5012,6 +5050,10 @@ packages:
       '@chat-adapter/slack':
         optional: true
       '@chat-adapter/state-memory':
+        optional: true
+      '@chat-adapter/telegram':
+        optional: true
+      '@chat-adapter/whatsapp':
         optional: true
       chat:
         optional: true
@@ -5239,6 +5281,10 @@ packages:
 
   escape-html@1.0.3:
     resolution: {integrity: sha512-NiSupZ4OeuGwr68lGIeym/ksIZMJodUGOSCZ/FSnTxcrekbvqrgdUxlJOMpijaKZVjAJrWrGs/6Jy8OMuyj9ow==}
+
+  escape-string-regexp@5.0.0:
+    resolution: {integrity: sha512-/veY75JbMK4j1yjvuUxuVsiS/hr/4iHs9FTT6cgTexxdE0Ly/glccBAkloH/DofkjRbZU3bnoj38mOmhkZ0lHw==}
+    engines: {node: '>=12'}
 
   estree-util-attach-comments@3.0.0:
     resolution: {integrity: sha512-cKUwm/HUcTDsYh/9FgnuFqpfquUbwIqwKM26BVCGDPVgvaCl/nDCCjUfiLlx6lsEZ3Z4RFxNbOQ60pkaEwFxGw==}
@@ -6096,6 +6142,9 @@ packages:
   markdown-table@2.0.0:
     resolution: {integrity: sha512-Ezda85ToJUBhM6WGaG6veasyym+Tbs3cMAw/ZhOPqXiYsr0jgocBV3j3nx+4lk47plLlIqjwuTm/ywVI+zjJ/A==}
 
+  markdown-table@3.0.4:
+    resolution: {integrity: sha512-wiYz4+JrLyb/DqW2hkFJxP7Vd7JuTDm77fvbM8VfEQdmSMqcImWeeRbHwZjBjIFki/VaMK2BhFi7oUUZeM5bqw==}
+
   marked@15.0.12:
     resolution: {integrity: sha512-8dD6FusOQSrpv9Z1rdNMdlSgQOIP880DHqnohobOmYLElGEqAL/JvxvuxZO16r4HtjTlfPRDC1hbvxC9dPN2nA==}
     engines: {node: '>= 18'}
@@ -6120,8 +6169,29 @@ packages:
   matrix-widget-api@1.17.0:
     resolution: {integrity: sha512-5FHoo3iEP3Bdlv5jsYPWOqj+pGdFQNLWnJLiB0V7Ygne7bb+Gsj3ibyFyHWC6BVw+Z+tSW4ljHpO17I9TwStwQ==}
 
+  mdast-util-find-and-replace@3.0.2:
+    resolution: {integrity: sha512-Tmd1Vg/m3Xz43afeNxDIhWRtFZgM2VLyaf4vSTYwudTyeuTneoL3qtWMA5jeLyz/O1vDJmmV4QuScFCA2tBPwg==}
+
   mdast-util-from-markdown@2.0.3:
     resolution: {integrity: sha512-W4mAWTvSlKvf8L6J+VN9yLSqQ9AOAAvHuoDAmPkz4dHf553m5gVj2ejadHJhoJmcmxEnOv6Pa8XJhpxE93kb8Q==}
+
+  mdast-util-gfm-autolink-literal@2.0.1:
+    resolution: {integrity: sha512-5HVP2MKaP6L+G6YaxPNjuL0BPrq9orG3TsrZ9YXbA3vDw/ACI4MEsnoDpn6ZNm7GnZgtAcONJyPhOP8tNJQavQ==}
+
+  mdast-util-gfm-footnote@2.1.0:
+    resolution: {integrity: sha512-sqpDWlsHn7Ac9GNZQMeUzPQSMzR6Wv0WKRNvQRg0KqHh02fpTz69Qc1QSseNX29bhz1ROIyNyxExfawVKTm1GQ==}
+
+  mdast-util-gfm-strikethrough@2.0.0:
+    resolution: {integrity: sha512-mKKb915TF+OC5ptj5bJ7WFRPdYtuHv0yTRxK2tJvi+BDqbkiG7h7u/9SI89nRAYcmap2xHQL9D+QG/6wSrTtXg==}
+
+  mdast-util-gfm-table@2.0.0:
+    resolution: {integrity: sha512-78UEvebzz/rJIxLvE7ZtDd/vIQ0RHv+3Mh5DR96p7cS7HsBhYIICDBCu8csTNWNO6tBWfqXPWekRuj2FNOGOZg==}
+
+  mdast-util-gfm-task-list-item@2.0.0:
+    resolution: {integrity: sha512-IrtvNvjxC1o06taBAVJznEnkiHxLFTzgonUdy8hzFVeDun0uTjxxrRGVaNFqkU1wJR3RBPEfsxmU6jDWPofrTQ==}
+
+  mdast-util-gfm@3.1.0:
+    resolution: {integrity: sha512-0ulfdQOM3ysHhCJ1p06l0b0VKlhU0wuQs3thxZQagjcjPrlFRqY215uZGHHJan9GEAXd9MbfPjFJz+qMkVR6zQ==}
 
   mdast-util-mdx-expression@2.0.1:
     resolution: {integrity: sha512-J6f+9hUp+ldTZqKRSg7Vw5V6MqjATc+3E4gf3CFNcuZNWD8XdyI6zQ8GqH7f8169MM6P7hMBRDVGnn7oHB9kXQ==}
@@ -6170,6 +6240,27 @@ packages:
 
   micromark-core-commonmark@2.0.3:
     resolution: {integrity: sha512-RDBrHEMSxVFLg6xvnXmb1Ayr2WzLAWjeSATAoxwKYJV94TeNavgoIdA0a9ytzDSVzBy2YKFK+emCPOEibLeCrg==}
+
+  micromark-extension-gfm-autolink-literal@2.1.0:
+    resolution: {integrity: sha512-oOg7knzhicgQ3t4QCjCWgTmfNhvQbDDnJeVu9v81r7NltNCVmhPy1fJRX27pISafdjL+SVc4d3l48Gb6pbRypw==}
+
+  micromark-extension-gfm-footnote@2.1.0:
+    resolution: {integrity: sha512-/yPhxI1ntnDNsiHtzLKYnE3vf9JZ6cAisqVDauhp4CEHxlb4uoOTxOCJ+9s51bIB8U1N1FJ1RXOKTIlD5B/gqw==}
+
+  micromark-extension-gfm-strikethrough@2.1.0:
+    resolution: {integrity: sha512-ADVjpOOkjz1hhkZLlBiYA9cR2Anf8F4HqZUO6e5eDcPQd0Txw5fxLzzxnEkSkfnD0wziSGiv7sYhk/ktvbf1uw==}
+
+  micromark-extension-gfm-table@2.1.1:
+    resolution: {integrity: sha512-t2OU/dXXioARrC6yWfJ4hqB7rct14e8f7m0cbI5hUmDyyIlwv5vEtooptH8INkbLzOatzKuVbQmAYcbWoyz6Dg==}
+
+  micromark-extension-gfm-tagfilter@2.0.0:
+    resolution: {integrity: sha512-xHlTOmuCSotIA8TW1mDIM6X2O1SiX5P9IuDtqGonFhEK0qgRI4yeC6vMxEV2dgyr2TiD+2PQ10o+cOhdVAcwfg==}
+
+  micromark-extension-gfm-task-list-item@2.1.0:
+    resolution: {integrity: sha512-qIBZhqxqI6fjLDYFTBIa4eivDMnP+OZqsNwmQ3xNLE4Cxwc+zfQEfbs6tzAo2Hjq+bh6q5F+Z8/cksrLFYWQQw==}
+
+  micromark-extension-gfm@3.0.0:
+    resolution: {integrity: sha512-vsKArQsicm7t0z2GugkCKtZehqUm31oeGBV/KVSorWSy8ZlNAv7ytjFhvaryUiCUJYqs+NoE6AFhpQvBTM6Q4w==}
 
   micromark-extension-mdx-expression@3.0.1:
     resolution: {integrity: sha512-dD/ADLJ1AeMvSAKBwO22zG22N4ybhe7kFIZ3LsDI0GlsNr2A3KYxb0LdC1u5rj4Nw+CHKY0RVdnHX8vj8ejm4Q==}
@@ -6861,6 +6952,9 @@ packages:
   rehype-recma@1.0.0:
     resolution: {integrity: sha512-lqA4rGUf1JmacCNWWZx0Wv1dHqMwxzsDWYMTowuplHF3xH0N/MmrZ/G3BDZnzAkRmxDadujCjaKM2hqYdCBOGw==}
 
+  remark-gfm@4.0.1:
+    resolution: {integrity: sha512-1quofZ2RQ9EWdeN34S79+KExV1764+wCUGop5CPL1WGdD0ocPpu91lzPGbwWMECpEpd42kJGQwzRfyov9j4yNg==}
+
   remark-mdx@3.1.1:
     resolution: {integrity: sha512-Pjj2IYlUY3+D8x00UJsIOg5BEvfMyeI+2uLPn9VO9Wg4MEtN/VTIq2NEJQfde9PnX15KgtHyl9S0BcTnWrIuWg==}
 
@@ -6869,6 +6963,12 @@ packages:
 
   remark-rehype@11.1.2:
     resolution: {integrity: sha512-Dh7l57ianaEoIpzbp0PC9UKAdCSVklD8E5Rpw7ETfbTl3FqcOOgq5q2LVDhgGCkaBv7p24JXikPdvhhmHvKMsw==}
+
+  remark-stringify@11.0.0:
+    resolution: {integrity: sha512-1OSmLd3awB/t8qdoEOMazZkNsfVTeY4fTsgzcQFdXNq8ToTN4ZGwrMnlda4K6smTFKD+GRV6O48i6Z4iKgPPpw==}
+
+  remend@1.3.0:
+    resolution: {integrity: sha512-iIhggPkhW3hFImKtB10w0dz4EZbs28mV/dmbcYVonWEJ6UGHHpP+bFZnTh6GNWJONg5m+U56JrL+8IxZRdgWjw==}
 
   repeat-string@1.6.1:
     resolution: {integrity: sha512-PV0dzCYDNfRi1jCDbJzpW7jNNDRuCOG/jI5ctQcGKt/clZD+YcPS3yIlWuTJMmESC8aevCFmWJy5wjAFgNqN6w==}
@@ -8521,6 +8621,31 @@ snapshots:
     dependencies:
       hashery: 1.5.1
       keyv: 5.6.0
+
+  '@chat-adapter/shared@4.30.0(zod@4.4.3)':
+    dependencies:
+      chat: 4.30.0(zod@4.4.3)
+    transitivePeerDependencies:
+      - ai
+      - supports-color
+      - zod
+
+  '@chat-adapter/state-memory@4.30.0(zod@4.4.3)':
+    dependencies:
+      chat: 4.30.0(zod@4.4.3)
+    transitivePeerDependencies:
+      - ai
+      - supports-color
+      - zod
+
+  '@chat-adapter/telegram@4.30.0(zod@4.4.3)':
+    dependencies:
+      '@chat-adapter/shared': 4.30.0(zod@4.4.3)
+      chat: 4.30.0(zod@4.4.3)
+    transitivePeerDependencies:
+      - ai
+      - supports-color
+      - zod
 
   '@clack/core@1.3.1':
     dependencies:
@@ -10547,6 +10672,8 @@ snapshots:
     dependencies:
       '@wasm-audio-decoders/common': 9.0.7
 
+  '@workflow/serde@4.1.0-beta.2': {}
+
   '@zed-industries/codex-acp-darwin-arm64@0.15.0':
     optional: true
 
@@ -10890,6 +11017,20 @@ snapshots:
 
   character-reference-invalid@2.0.1: {}
 
+  chat@4.30.0(zod@4.4.3):
+    dependencies:
+      '@workflow/serde': 4.1.0-beta.2
+      mdast-util-to-string: 4.0.0
+      remark-gfm: 4.0.1
+      remark-parse: 11.0.0
+      remark-stringify: 11.0.0
+      remend: 1.3.0
+      unified: 11.0.5
+    optionalDependencies:
+      zod: 4.4.3
+    transitivePeerDependencies:
+      - supports-color
+
   chmodrp@1.0.2: {}
 
   chokidar@5.0.0:
@@ -11008,12 +11149,16 @@ snapshots:
       object-assign: 4.1.1
       vary: 1.1.2
 
-  crabline@https://codeload.github.com/openclaw/crabline/tar.gz/5e8031a660f9f8c40746c79830c7caf780080ee7:
+  crabline@https://codeload.github.com/openclaw/crabline/tar.gz/1ee8aa3a7e83af8f9bc6579e43688a646c899769(@chat-adapter/state-memory@4.30.0(zod@4.4.3))(@chat-adapter/telegram@4.30.0(zod@4.4.3))(chat@4.30.0(zod@4.4.3)):
     dependencies:
       commander: 14.0.3
       picocolors: 1.1.1
       yaml: 2.9.0
       zod: 4.4.3
+    optionalDependencies:
+      '@chat-adapter/state-memory': 4.30.0(zod@4.4.3)
+      '@chat-adapter/telegram': 4.30.0(zod@4.4.3)
+      chat: 4.30.0(zod@4.4.3)
 
   croner@10.0.1: {}
 
@@ -11223,6 +11368,8 @@ snapshots:
   escalade@3.2.0: {}
 
   escape-html@1.0.3: {}
+
+  escape-string-regexp@5.0.0: {}
 
   estree-util-attach-comments@3.0.0:
     dependencies:
@@ -12216,6 +12363,8 @@ snapshots:
     dependencies:
       repeat-string: 1.6.1
 
+  markdown-table@3.0.4: {}
+
   marked@15.0.12: {}
 
   marked@18.0.4: {}
@@ -12245,6 +12394,13 @@ snapshots:
       '@types/events': 3.0.3
       events: 3.3.0
 
+  mdast-util-find-and-replace@3.0.2:
+    dependencies:
+      '@types/mdast': 4.0.4
+      escape-string-regexp: 5.0.0
+      unist-util-is: 6.0.1
+      unist-util-visit-parents: 6.0.2
+
   mdast-util-from-markdown@2.0.3:
     dependencies:
       '@types/mdast': 4.0.4
@@ -12259,6 +12415,63 @@ snapshots:
       micromark-util-symbol: 2.0.1
       micromark-util-types: 2.0.2
       unist-util-stringify-position: 4.0.0
+    transitivePeerDependencies:
+      - supports-color
+
+  mdast-util-gfm-autolink-literal@2.0.1:
+    dependencies:
+      '@types/mdast': 4.0.4
+      ccount: 2.0.1
+      devlop: 1.1.0
+      mdast-util-find-and-replace: 3.0.2
+      micromark-util-character: 2.1.1
+
+  mdast-util-gfm-footnote@2.1.0:
+    dependencies:
+      '@types/mdast': 4.0.4
+      devlop: 1.1.0
+      mdast-util-from-markdown: 2.0.3
+      mdast-util-to-markdown: 2.1.2
+      micromark-util-normalize-identifier: 2.0.1
+    transitivePeerDependencies:
+      - supports-color
+
+  mdast-util-gfm-strikethrough@2.0.0:
+    dependencies:
+      '@types/mdast': 4.0.4
+      mdast-util-from-markdown: 2.0.3
+      mdast-util-to-markdown: 2.1.2
+    transitivePeerDependencies:
+      - supports-color
+
+  mdast-util-gfm-table@2.0.0:
+    dependencies:
+      '@types/mdast': 4.0.4
+      devlop: 1.1.0
+      markdown-table: 3.0.4
+      mdast-util-from-markdown: 2.0.3
+      mdast-util-to-markdown: 2.1.2
+    transitivePeerDependencies:
+      - supports-color
+
+  mdast-util-gfm-task-list-item@2.0.0:
+    dependencies:
+      '@types/mdast': 4.0.4
+      devlop: 1.1.0
+      mdast-util-from-markdown: 2.0.3
+      mdast-util-to-markdown: 2.1.2
+    transitivePeerDependencies:
+      - supports-color
+
+  mdast-util-gfm@3.1.0:
+    dependencies:
+      mdast-util-from-markdown: 2.0.3
+      mdast-util-gfm-autolink-literal: 2.0.1
+      mdast-util-gfm-footnote: 2.1.0
+      mdast-util-gfm-strikethrough: 2.0.0
+      mdast-util-gfm-table: 2.0.0
+      mdast-util-gfm-task-list-item: 2.0.0
+      mdast-util-to-markdown: 2.1.2
     transitivePeerDependencies:
       - supports-color
 
@@ -12373,6 +12586,64 @@ snapshots:
       micromark-util-resolve-all: 2.0.1
       micromark-util-subtokenize: 2.1.0
       micromark-util-symbol: 2.0.1
+      micromark-util-types: 2.0.2
+
+  micromark-extension-gfm-autolink-literal@2.1.0:
+    dependencies:
+      micromark-util-character: 2.1.1
+      micromark-util-sanitize-uri: 2.0.1
+      micromark-util-symbol: 2.0.1
+      micromark-util-types: 2.0.2
+
+  micromark-extension-gfm-footnote@2.1.0:
+    dependencies:
+      devlop: 1.1.0
+      micromark-core-commonmark: 2.0.3
+      micromark-factory-space: 2.0.1
+      micromark-util-character: 2.1.1
+      micromark-util-normalize-identifier: 2.0.1
+      micromark-util-sanitize-uri: 2.0.1
+      micromark-util-symbol: 2.0.1
+      micromark-util-types: 2.0.2
+
+  micromark-extension-gfm-strikethrough@2.1.0:
+    dependencies:
+      devlop: 1.1.0
+      micromark-util-chunked: 2.0.1
+      micromark-util-classify-character: 2.0.1
+      micromark-util-resolve-all: 2.0.1
+      micromark-util-symbol: 2.0.1
+      micromark-util-types: 2.0.2
+
+  micromark-extension-gfm-table@2.1.1:
+    dependencies:
+      devlop: 1.1.0
+      micromark-factory-space: 2.0.1
+      micromark-util-character: 2.1.1
+      micromark-util-symbol: 2.0.1
+      micromark-util-types: 2.0.2
+
+  micromark-extension-gfm-tagfilter@2.0.0:
+    dependencies:
+      micromark-util-types: 2.0.2
+
+  micromark-extension-gfm-task-list-item@2.1.0:
+    dependencies:
+      devlop: 1.1.0
+      micromark-factory-space: 2.0.1
+      micromark-util-character: 2.1.1
+      micromark-util-symbol: 2.0.1
+      micromark-util-types: 2.0.2
+
+  micromark-extension-gfm@3.0.0:
+    dependencies:
+      micromark-extension-gfm-autolink-literal: 2.1.0
+      micromark-extension-gfm-footnote: 2.1.0
+      micromark-extension-gfm-strikethrough: 2.1.0
+      micromark-extension-gfm-table: 2.1.1
+      micromark-extension-gfm-tagfilter: 2.0.0
+      micromark-extension-gfm-task-list-item: 2.1.0
+      micromark-util-combine-extensions: 2.0.1
       micromark-util-types: 2.0.2
 
   micromark-extension-mdx-expression@3.0.1:
@@ -13315,6 +13586,17 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
+  remark-gfm@4.0.1:
+    dependencies:
+      '@types/mdast': 4.0.4
+      mdast-util-gfm: 3.1.0
+      micromark-extension-gfm: 3.0.0
+      remark-parse: 11.0.0
+      remark-stringify: 11.0.0
+      unified: 11.0.5
+    transitivePeerDependencies:
+      - supports-color
+
   remark-mdx@3.1.1:
     dependencies:
       mdast-util-mdx: 3.0.0
@@ -13338,6 +13620,14 @@ snapshots:
       mdast-util-to-hast: 13.2.1
       unified: 11.0.5
       vfile: 6.0.3
+
+  remark-stringify@11.0.0:
+    dependencies:
+      '@types/mdast': 4.0.4
+      mdast-util-to-markdown: 2.1.2
+      unified: 11.0.5
+
+  remend@1.3.0: {}
 
   repeat-string@1.6.1: {}
 

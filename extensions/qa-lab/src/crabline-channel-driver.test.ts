@@ -1,4 +1,7 @@
 // Qa Lab tests cover Crabline channel-driver metadata behavior.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   runQaCrablineChannelDriverSmoke,
@@ -24,24 +27,63 @@ describe("crabline channel driver metadata", () => {
     });
   });
 
-  it("runs Crabline's imported deterministic local driver smoke", async () => {
-    await expect(
-      runQaCrablineChannelDriverSmoke({
-        capabilityMatrixPath: "crabline-channel-capability-matrix.json",
-        channel: "telegram",
-        channelDriver: "crabline",
-        smokeArtifactPath: "crabline-channel-smoke.json",
-      }),
-    ).resolves.toMatchObject({
-      driver: {
-        channel: "telegram",
-        driverId: "telegram-local-v1",
-      },
-      result: {
-        ok: true,
-        providerId: "telegram-local",
-      },
-    });
+  it("runs Crabline's Chat SDK provider doctor through the package CLI", async () => {
+    const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "qa-crabline-driver-"));
+    try {
+      const result = await runQaCrablineChannelDriverSmoke(
+        {
+          capabilityMatrixPath: "crabline-channel-capability-matrix.json",
+          channel: "telegram",
+          channelDriver: "crabline",
+          smokeArtifactPath: "crabline-channel-smoke.json",
+        },
+        {
+          env: {
+            ...process.env,
+            TELEGRAM_BOT_TOKEN: "telegram-token",
+          },
+          outputDir,
+        },
+      );
+      expect(result.capabilityReport).toMatchObject({
+        result: {
+          configured: [expect.objectContaining({ adapter: "telegram", platform: "telegram" })],
+        },
+      });
+      expect(result.smoke).toMatchObject({
+        result: {
+          findings: [],
+          ok: true,
+        },
+      });
+    } finally {
+      await fs.rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails Crabline's Chat SDK provider doctor when required env is unavailable", async () => {
+    const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "qa-crabline-driver-"));
+    try {
+      await expect(
+        runQaCrablineChannelDriverSmoke(
+          {
+            capabilityMatrixPath: "crabline-channel-capability-matrix.json",
+            channel: "telegram",
+            channelDriver: "crabline",
+            smokeArtifactPath: "crabline-channel-smoke.json",
+          },
+          {
+            env: {
+              ...process.env,
+              TELEGRAM_BOT_TOKEN: "",
+            },
+            outputDir,
+          },
+        ),
+      ).rejects.toThrow("provider telegram missing env TELEGRAM_BOT_TOKEN");
+    } finally {
+      await fs.rm(outputDir, { recursive: true, force: true });
+    }
   });
 
   it("defaults to Telegram and rejects unsupported channels when the driver is selected", () => {
