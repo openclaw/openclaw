@@ -4,22 +4,29 @@ import type {
   OpenClawPluginApi,
   OpenClawPluginToolContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { Type, type Static } from "typebox";
 
-const AdvisorToolSchema = Type.Object({
-  question: Type.String({
-    description:
-      "The question, problem, or decision to get expert review on. Include all relevant context inline — the advisor only sees what you pass here, not the surrounding conversation.",
-  }),
-  context: Type.Optional(
-    Type.String({
+const AdvisorToolSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["question"],
+  properties: {
+    question: {
+      type: "string",
+      description:
+        "The question, problem, or decision to get expert review on. Include all relevant context inline — the advisor only sees what you pass here, not the surrounding conversation.",
+    },
+    context: {
+      type: "string",
       description:
         "Additional background context, code snippets, relevant constraints, or prior conclusions that the advisor needs to give a useful answer.",
-    }),
-  ),
-});
+    },
+  },
+} as const;
 
-type AdvisorParams = Static<typeof AdvisorToolSchema>;
+type AdvisorParams = {
+  question: string;
+  context?: string;
+};
 
 const ADVISOR_SYSTEM_PROMPT = `You are a senior expert advisor providing a second opinion during an AI agent session.
 
@@ -33,7 +40,7 @@ Your role:
 Respond in plain text. No pleasantries — focus on substance.`;
 
 export function createAdvisorTool(
-  ctx: OpenClawPluginToolContext,
+  _ctx: OpenClawPluginToolContext,
   api: OpenClawPluginApi,
 ): AnyAgentTool {
   const configuredModelRef =

@@ -7,12 +7,6 @@
     "url": "https://github.com/openclaw/openclaw"
   },
   "type": "module",
-  "devDependencies": {
-    "@openclaw/plugin-sdk": "workspace:*"
-  },
-  "dependencies": {
-    "typebox": "1.1.39"
-  },
   "openclaw": {
     "extensions": [
       "./index.ts"
