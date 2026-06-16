@@ -1258,6 +1258,7 @@ export async function runEmbeddedAttempt(
                 : undefined,
             sessionId: params.sessionId,
             runId: params.runId,
+            hostingNodeId: params.hostingNodeId,
             oneShotCliRun: params.oneShotCliRun,
             toolSearchCatalogRef,
             agentDir,

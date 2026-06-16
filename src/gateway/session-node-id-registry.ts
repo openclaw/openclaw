@@ -67,27 +67,25 @@ export function getSessionHostingNodeId(sessionKey: string): string | undefined 
 }
 
 /**
- * Resolve the per-node tool restriction (`gateway.tools.byNode`) for the
- * authenticated node hosting `sessionKey`, if any.
+ * Resolve the per-node tool restriction (`gateway.tools.byNode`) for an
+ * explicit, RUN-SCOPED authenticated `hostingNodeId`.
  *
+ * The hostingNodeId is threaded through the run (set for a node-originated
+ * `agent.request` turn), NOT looked up from a session-global map — so a node's
+ * policy can never bleed onto a later or concurrent turn for the same session.
  * Restriction-only: the returned `nodeAllow`/`nodeDeny` can narrow a toolset but
- * never escalate it. Both tool-resolution paths call this so they enforce the
- * node policy identically — the gateway scoped resolver
- * (`resolveGatewayScopedTools`, for MCP/HTTP callers) AND the in-process agent
- * tool builder (`createOpenClawCodingTools`, which a node-originated
- * `agent.request` turn actually runs through). An absent `allow` means "no allow
- * restriction"; an explicitly-present (even empty) `allow` is fail-closed.
+ * never escalate it. An absent `allow` means "no allow restriction"; an
+ * explicitly-present (even empty) `allow` is fail-closed.
  */
 export function resolveNodeScopedToolPolicy(
-  sessionKey: string | undefined,
+  hostingNodeId: string | undefined,
   cfg: OpenClawConfig | undefined,
 ): { nodeAllow?: string[]; nodeDeny: string[] } {
-  const key = sessionKey?.trim();
-  if (!key) {
+  const nodeId = hostingNodeId?.trim();
+  if (!nodeId) {
     return { nodeDeny: [] };
   }
-  const hostingNodeId = getSessionHostingNodeId(key);
-  const nodePolicy = hostingNodeId ? cfg?.gateway?.tools?.byNode?.[hostingNodeId] : undefined;
+  const nodePolicy = cfg?.gateway?.tools?.byNode?.[nodeId];
   const nodeAllow = nodePolicy?.allow ? Array.from(nodePolicy.allow) : undefined;
   const nodeDeny =
     nodePolicy?.deny && nodePolicy.deny.length > 0 ? Array.from(nodePolicy.deny) : [];

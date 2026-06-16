@@ -114,12 +114,11 @@ export function resolveGatewayScopedTools(params: {
   const excludedToolNames = params.excludeToolNames ? Array.from(params.excludeToolNames) : [];
   const surface = params.surface ?? "http";
   const gatewayToolsCfg = params.cfg.gateway?.tools;
-  // Per-node tool restriction (gateway.tools.byNode), keyed off the AUTHENTICATED
-  // node hosting this turn (recorded at node-originated agent.request dispatch).
-  // The nodeId comes from the node's authenticated connection, so a client cannot
-  // forge it; the policy can only narrow the toolset, never escalate. The same
-  // helper is applied in the embedded agent tool builder so both paths match.
-  const { nodeAllow, nodeDeny } = resolveNodeScopedToolPolicy(params.sessionKey, params.cfg);
+  // gateway.tools.byNode is a RUN-SCOPED restriction for node-originated turns,
+  // enforced in the embedded agent tool builder where the authenticated hosting
+  // node id is threaded through the run. This scoped resolver serves MCP/HTTP
+  // tool callers (not node-originated), so it carries no hosting node → no-op.
+  const { nodeAllow, nodeDeny } = resolveNodeScopedToolPolicy(undefined, params.cfg);
   const defaultGatewayDeny =
     surface === "http"
       ? DEFAULT_GATEWAY_HTTP_TOOL_DENY.filter((name) => !gatewayToolsCfg?.allow?.includes(name))
