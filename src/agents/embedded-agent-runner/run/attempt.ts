@@ -21,6 +21,7 @@ import { resolveQuotaSuspensionEntryMaintenance } from "../../../config/sessions
 import {
   bindOwnedSessionTranscriptWrites,
   type OwnedSessionTranscriptCacheSnapshot,
+  type OwnedSessionTranscriptWriteOptions,
   withOwnedSessionTranscriptWrites,
 } from "../../../config/sessions/transcript-write-context.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
@@ -66,6 +67,7 @@ import {
 import { getPluginToolMeta } from "../../../plugins/tools.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../../sessions/input-provenance.js";
+import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../shared/transcript-only-openclaw-assistant.js";
 import { resolveSkillsPromptForRun } from "../../../skills/loading/workspace.js";
 import { resolveEmbeddedRunSkillEntries } from "../../../skills/runtime/embedded-run-entries.js";
 import {
@@ -699,42 +701,27 @@ function removeTrailingMidTurnPrecheckAssistantError(params: {
   sessionManager: ReturnType<typeof guardSessionManager>;
 }): void {
   const messages = params.activeSession.agent.state.messages;
-  if (isMidTurnPrecheckAssistantError(messages.at(-1))) {
+  const removedActiveError = isMidTurnPrecheckAssistantError(messages.at(-1));
+  if (removedActiveError) {
     params.activeSession.agent.state.messages = messages.slice(0, -1);
   }
 
-  const mutableSessionManager = params.sessionManager as unknown as {
-    fileEntries?: Array<{
-      type?: string;
-      id?: string;
-      parentId?: string | null;
-      message?: AgentMessage;
-    }>;
-    byId?: Map<string, unknown>;
-    leafId?: string | null;
-    rewriteFile?: () => void;
-  };
-  const lastEntry = mutableSessionManager.fileEntries?.at(-1);
-  if (lastEntry?.type !== "message" || !isMidTurnPrecheckAssistantError(lastEntry.message)) {
-    if (isMidTurnPrecheckAssistantError(params.activeSession.agent.state.messages.at(-1))) {
-      log.warn(
-        "[context-overflow-midturn-precheck] removed synthetic assistant error from active session but could not locate matching persisted SessionManager entry",
-      );
-    }
-    return;
-  }
-  if (typeof mutableSessionManager.rewriteFile !== "function") {
+  const removedPersistedError =
+    params.sessionManager.removeTrailingEntries(
+      (entry) => entry.type === "message" && isMidTurnPrecheckAssistantError(entry.message),
+      {
+        preserveTrailing: (entry) =>
+          entry.type === "custom" ||
+          entry.type === "label" ||
+          entry.type === "session_info" ||
+          (entry.type === "message" && isTranscriptOnlyOpenClawAssistantMessage(entry.message)),
+      },
+    ) > 0;
+  if (removedActiveError && !removedPersistedError) {
     log.warn(
-      "[context-overflow-midturn-precheck] removed synthetic assistant error from active session but SessionManager rewrite hook is unavailable",
+      "[context-overflow-midturn-precheck] removed synthetic assistant error from active session but could not locate matching persisted SessionManager entry",
     );
-    return;
   }
-  mutableSessionManager.fileEntries?.pop();
-  if (lastEntry.id) {
-    mutableSessionManager.byId?.delete(lastEntry.id);
-  }
-  mutableSessionManager.leafId = lastEntry.parentId ?? null;
-  mutableSessionManager.rewriteFile();
 }
 
 function collectAttemptExplicitToolAllowlistSources(params: {
@@ -2115,11 +2102,24 @@ export async function runEmbeddedAttempt(
       timeoutMs: sessionWriteLockOptions.maxHoldMs,
       signal: params.abortSignal,
     });
+    let sessionManager: ReturnType<typeof guardSessionManager> | undefined;
     const sessionLockController = await createEmbeddedAttemptSessionLockController({
       acquireSessionWriteLock,
       lockOptions: {
         sessionFile: params.sessionFile,
         ...sessionWriteLockOptions,
+      },
+      mergePromptReleasedSessionEntries: (entries) => {
+        if (!sessionManager) {
+          throw new Error("session manager unavailable during prompt-released entry merge");
+        }
+        return sessionManager.mergePromptReleasedSessionEntries(entries, { persistLeaf: true });
+      },
+      reloadPromptReleasedSessionFile: () => {
+        if (!sessionManager) {
+          throw new Error("session manager unavailable during prompt-released file reload");
+        }
+        sessionManager.setSessionFile(params.sessionFile);
       },
     });
     releaseRetainedSessionLock = () => sessionLockController.dispose();
@@ -2132,7 +2132,7 @@ export async function runEmbeddedAttempt(
         sessionLockController.publishOwnedSessionFileSnapshot(snapshot),
       withSessionWriteLock: <T>(
         operation: () => Promise<T> | T,
-        options?: { publishOwnedWrite?: boolean },
+        options?: OwnedSessionTranscriptWriteOptions<T>,
       ) => sessionLockController.withSessionWriteLock(operation, options),
     };
     const withOwnedSessionWriteLock = <T>(operation: () => Promise<T> | T): Promise<T> =>
@@ -2141,7 +2141,6 @@ export async function runEmbeddedAttempt(
       );
     armExternalAbortSignal();
 
-    let sessionManager: ReturnType<typeof guardSessionManager> | undefined;
     let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
     let removeToolResultContextGuard: (() => void) | undefined;
     let trajectoryRecorder: ReturnType<typeof createTrajectoryRuntimeRecorder> | null = null;

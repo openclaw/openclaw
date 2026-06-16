@@ -1,5 +1,4 @@
 // Session transcript facade resolves transcript files, appends mirror messages, and reads tails.
-import fs from "node:fs";
 import path from "node:path";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import type { SessionManager } from "../../agents/sessions/session-manager.js";
@@ -19,28 +18,10 @@ import { resolveAndPersistSessionFile } from "./session-file.js";
 import { loadSessionStore, resolveSessionStoreEntry, updateSessionStoreEntry } from "./store.js";
 import { parseSessionThreadInfo } from "./thread-info.js";
 import { appendSessionTranscriptMessage } from "./transcript-append.js";
-import { createSessionTranscriptHeader } from "./transcript-header.js";
-import { writeJsonlEntry } from "./transcript-jsonl.js";
 import { resolveMirroredTranscriptText } from "./transcript-mirror.js";
 import { streamSessionTranscriptLinesReverse } from "./transcript-stream.js";
-import {
-  runWithOwnedSessionTranscriptWriteLock,
-  runWithOwnedSessionTranscriptWritePublication,
-} from "./transcript-write-context.js";
+import { runWithOwnedSessionTranscriptWriteLock } from "./transcript-write-context.js";
 import type { SessionEntry } from "./types.js";
-
-async function ensureSessionHeader(params: {
-  sessionFile: string;
-  sessionId: string;
-  cwd?: string;
-}): Promise<void> {
-  if (fs.existsSync(params.sessionFile)) {
-    return;
-  }
-  await fs.promises.mkdir(path.dirname(params.sessionFile), { recursive: true });
-  const header = createSessionTranscriptHeader({ sessionId: params.sessionId, cwd: params.cwd });
-  await writeJsonlEntry(params.sessionFile, header, { mode: 0o600 });
-}
 
 export type SessionTranscriptAppendResult =
   | { ok: true; sessionFile: string; messageId: string }
@@ -378,36 +359,28 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
         if (latestEquivalentAssistantId) {
           return { ok: true, sessionFile, messageId: latestEquivalentAssistantId };
         }
-        const appendedResult = await runWithOwnedSessionTranscriptWritePublication(
-          { sessionFile, sessionKey: resolved.normalizedKey },
-          async () => {
-            await ensureSessionHeader({
-              sessionFile,
-              sessionId: currentEntry.sessionId,
-              cwd: currentEntry.spawnedCwd,
-            });
-            return await appendSessionTranscriptMessage({
-              transcriptPath: sessionFile,
-              message: preparedUnkeyedMessage,
-              ...(explicitIdempotencyKey ? { idempotencyLookup: "scan" } : {}),
-              ...(explicitIdempotencyKey && params.beforeMessageWrite
-                ? {
-                    prepareMessageAfterIdempotencyCheck: (
-                      candidate: Parameters<SessionManager["appendMessage"]>[0],
-                    ) =>
-                      applyBeforeMessageWriteToAssistant({
-                        message: candidate,
-                        beforeMessageWrite: params.beforeMessageWrite,
-                        explicitIdempotencyKey,
-                        agentId: params.agentId,
-                        sessionKey: resolved.normalizedKey,
-                      }),
-                  }
-                : {}),
-              config: params.config,
-            });
-          },
-        );
+        const appendedResult = await appendSessionTranscriptMessage({
+          transcriptPath: sessionFile,
+          sessionId: currentEntry.sessionId,
+          cwd: currentEntry.spawnedCwd,
+          message: preparedUnkeyedMessage,
+          ...(explicitIdempotencyKey ? { idempotencyLookup: "scan" } : {}),
+          ...(explicitIdempotencyKey && params.beforeMessageWrite
+            ? {
+                prepareMessageAfterIdempotencyCheck: (
+                  candidate: Parameters<SessionManager["appendMessage"]>[0],
+                ) =>
+                  applyBeforeMessageWriteToAssistant({
+                    message: candidate,
+                    beforeMessageWrite: params.beforeMessageWrite,
+                    explicitIdempotencyKey,
+                    agentId: params.agentId,
+                    sessionKey: resolved.normalizedKey,
+                  }),
+              }
+            : {}),
+          config: params.config,
+        });
         if (!appendedResult) {
           return {
             ok: false,

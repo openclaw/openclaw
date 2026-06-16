@@ -397,6 +397,185 @@ describe("rewriteTranscriptEntriesInSessionFile", () => {
     }
   });
 
+  it("rewrites a guarded side branch and restores the active navigation state", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-rewrite-side-"));
+    const sessionFile = path.join(dir, "session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      [
+        {
+          type: "session",
+          version: 3,
+          id: "session-side-rewrite",
+          timestamp: "2026-06-15T00:00:00.000Z",
+          cwd: dir,
+        },
+        {
+          type: "message",
+          id: "active-root",
+          parentId: null,
+          timestamp: "2026-06-15T00:00:01.000Z",
+          message: { role: "user", content: "active root", timestamp: 1 },
+        },
+        {
+          type: "message",
+          id: "side-mirror",
+          parentId: "active-root",
+          timestamp: "2026-06-15T00:00:02.000Z",
+          message: {
+            role: "assistant",
+            content: createTextContent("source reply before rewrite"),
+            timestamp: 2,
+          },
+        },
+        {
+          type: "leaf",
+          id: "active-leaf",
+          parentId: "side-mirror",
+          timestamp: "2026-06-15T00:00:03.000Z",
+          targetId: "active-root",
+          appendParentId: "side-mirror",
+          appendMode: "side",
+        },
+      ]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n") + "\n",
+      "utf-8",
+    );
+
+    const result = await rewriteTranscriptEntriesInSessionFile({
+      sessionFile,
+      sessionKey: "agent:main:test",
+      request: {
+        allowedRewriteSuffixEntryIds: ["side-mirror"],
+        replacements: [
+          {
+            entryId: "side-mirror",
+            message: asAppendMessage({
+              role: "assistant",
+              content: createTextContent("source reply after rewrite"),
+              timestamp: 2,
+            }) as AgentMessage,
+          },
+        ],
+      },
+    });
+
+    expect(result).toMatchObject({ changed: true, rewrittenEntries: 1 });
+    const records = (await fs.readFile(sessionFile, "utf-8"))
+      .trim()
+      .split("\n")
+      .map(
+        (line) =>
+          JSON.parse(line) as {
+            type?: string;
+            id?: string;
+            parentId?: string | null;
+            targetId?: string | null;
+            appendParentId?: string | null;
+            appendMode?: "side";
+            message?: AgentMessage;
+          },
+      );
+    const rewrittenSideEntry = records.findLast(
+      (entry) =>
+        entry.type === "message" &&
+        JSON.stringify(entry.message).includes("source reply after rewrite"),
+    );
+    expect(rewrittenSideEntry).toMatchObject({ parentId: "active-root" });
+    expect(records.at(-1)).toMatchObject({
+      type: "leaf",
+      parentId: rewrittenSideEntry?.id,
+      targetId: "active-root",
+      appendParentId: "side-mirror",
+      appendMode: "side",
+    });
+
+    const reopened = SessionManager.open(sessionFile, dir, dir);
+    expect(getBranchMessages(reopened).map(getMessageContent)).toEqual(["active root"]);
+    const nextId = reopened.appendMessage(
+      asAppendMessage({ role: "user", content: "active continuation", timestamp: 3 }),
+    );
+    expect(reopened.getEntry(nextId)).toMatchObject({ parentId: "active-root" });
+    expect(reopened.getEntry(nextId)).not.toHaveProperty("appendMode");
+  });
+
+  it("rejects a rewrite batch split across active and side branches", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-rewrite-mixed-"));
+    const sessionFile = path.join(dir, "session.jsonl");
+    const records = [
+      {
+        type: "session",
+        version: 3,
+        id: "session-mixed-rewrite",
+        timestamp: "2026-06-15T00:00:00.000Z",
+        cwd: dir,
+      },
+      {
+        type: "message",
+        id: "root",
+        parentId: null,
+        timestamp: "2026-06-15T00:00:01.000Z",
+        message: { role: "user", content: "root", timestamp: 1 },
+      },
+      {
+        type: "message",
+        id: "active-mirror",
+        parentId: "root",
+        timestamp: "2026-06-15T00:00:02.000Z",
+        message: { role: "assistant", content: createTextContent("active"), timestamp: 2 },
+      },
+      {
+        type: "message",
+        id: "side-mirror",
+        parentId: "root",
+        timestamp: "2026-06-15T00:00:03.000Z",
+        message: { role: "assistant", content: createTextContent("side"), timestamp: 3 },
+      },
+      {
+        type: "leaf",
+        id: "active-leaf",
+        parentId: "side-mirror",
+        timestamp: "2026-06-15T00:00:04.000Z",
+        targetId: "active-mirror",
+      },
+    ];
+    const original = records.map((entry) => JSON.stringify(entry)).join("\n") + "\n";
+    await fs.writeFile(sessionFile, original, "utf-8");
+
+    const result = await rewriteTranscriptEntriesInSessionFile({
+      sessionFile,
+      sessionKey: "agent:main:test",
+      request: {
+        allowedRewriteSuffixEntryIds: ["active-mirror", "side-mirror"],
+        replacements: [
+          {
+            entryId: "active-mirror",
+            message: asAppendMessage({
+              role: "assistant",
+              content: createTextContent("active rewritten"),
+              timestamp: 2,
+            }) as AgentMessage,
+          },
+          {
+            entryId: "side-mirror",
+            message: asAppendMessage({
+              role: "assistant",
+              content: createTextContent("side rewritten"),
+              timestamp: 3,
+            }) as AgentMessage,
+          },
+        ],
+      },
+    });
+
+    expect(result).toMatchObject({
+      changed: false,
+      reason: "rewrite targets span multiple branches",
+    });
+    expect(await fs.readFile(sessionFile, "utf-8")).toBe(original);
+  });
+
   it("emits transcript updates when the active branch changes without opening a manager", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-rewrite-"));
     const sessionManager = SessionManager.create(dir, dir);
