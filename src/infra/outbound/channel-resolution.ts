@@ -338,7 +338,8 @@ export function resolveOutboundChannelPlugin(params: {
   const resolveLoaded = () => getLoadedChannelPlugin(normalized);
   const resolve = () => getChannelPlugin(normalized);
   const current = resolveLoaded();
-  const runtimeCurrent = didBootstrap
+  const requireActivatedRuntime = params.allowBootstrap === true;
+  const runtimeCurrent = requireActivatedRuntime
     ? resolveActivatedOutboundPluginFromRuntimeRegistries(normalized)
     : resolveRuntimeOutboundPluginFromRuntimeRegistries(normalized);
   const setupFallback = resolveDirectFromRuntimeRegistries(normalized);
@@ -349,7 +350,7 @@ export function resolveOutboundChannelPlugin(params: {
     setupFallback,
     bundled: bundledCurrent,
     allowSetupShell: params.allowBootstrap !== true,
-    requireActivatedRuntime: didBootstrap,
+    requireActivatedRuntime,
   });
   if (candidate) {
     return candidate;
