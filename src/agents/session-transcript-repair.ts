@@ -457,21 +457,19 @@ function repairToolCallInputs(
               messageChanged = true;
             }
             nextContent.push(sanitized as typeof block);
-          } else {
-            if (typeof (workBlock as { name?: unknown }).name === "string") {
-              const rawName = (workBlock as { name: string }).name;
-              const trimmedName = rawName.trim();
-              if (rawName !== trimmedName && trimmedName) {
-                const renamed = { ...(workBlock as object), name: trimmedName } as typeof block;
-                nextContent.push(renamed);
-                changed = true;
-                messageChanged = true;
-              } else {
-                nextContent.push(workBlock);
-              }
+          } else if (typeof (workBlock as { name?: unknown }).name === "string") {
+            const rawName = (workBlock as { name: string }).name;
+            const trimmedName = rawName.trim();
+            if (rawName !== trimmedName && trimmedName) {
+              const renamed = { ...(workBlock as object), name: trimmedName } as typeof block;
+              nextContent.push(renamed);
+              changed = true;
+              messageChanged = true;
             } else {
               nextContent.push(workBlock);
             }
+          } else {
+            nextContent.push(workBlock);
           }
           continue;
         }
