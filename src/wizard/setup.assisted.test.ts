@@ -780,6 +780,7 @@ describe("agent-assisted setup handoff", () => {
 
   it("bounds selected plugin harness readiness and aborts the probe", async () => {
     vi.useFakeTimers();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
       let readinessSignal: AbortSignal | undefined;
       const checkReadiness = vi.fn(
@@ -791,11 +792,15 @@ describe("agent-assisted setup handoff", () => {
       selectAgentHarness.mockReturnValueOnce({ id: "custom-harness", checkReadiness });
 
       const readiness = hasRunnableLocalAgent({});
+      await vi.advanceTimersByTimeAsync(0);
+      const readinessTimeout = setTimeoutSpy.mock.results.at(-1)?.value as NodeJS.Timeout;
+      expect(readinessTimeout.hasRef()).toBe(true);
       await vi.advanceTimersByTimeAsync(10_000);
 
       await expect(readiness).resolves.toBe(false);
       expect(readinessSignal?.aborted).toBe(true);
     } finally {
+      setTimeoutSpy.mockRestore();
       vi.useRealTimers();
     }
   });

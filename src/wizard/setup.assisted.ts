@@ -173,7 +173,6 @@ async function hasRunnableModelCandidate(params: {
     () => readinessAbort.abort(timeoutError),
     AGENT_HARNESS_READINESS_TIMEOUT_MS,
   );
-  timeout.unref?.();
   let onAbort: (() => void) | undefined;
   const abortPromise = new Promise<never>((_, reject) => {
     onAbort = () => reject(timeoutError);
