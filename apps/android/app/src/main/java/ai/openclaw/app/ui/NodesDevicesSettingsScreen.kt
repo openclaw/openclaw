@@ -220,67 +220,77 @@ internal fun GatewayNodesDevicesSummary.pendingApprovalCount(): Int = pendingDev
 internal fun GatewayNodesDevicesSummary.nodeCapabilityAttentionCount(): Int = nodes.count { it.needsCapabilityAttention() }
 
 internal fun GatewayNodeSummary.hasPendingCapabilityApproval(): Boolean =
-  paired &&
-    when (approvalState) {
-      GatewayNodeApprovalState.PendingApproval,
-      GatewayNodeApprovalState.PendingReapproval,
-      -> true
-      GatewayNodeApprovalState.Approved,
-      GatewayNodeApprovalState.Unapproved,
-      GatewayNodeApprovalState.Unknown,
-      -> false
-    }
+  when (approvalState) {
+    GatewayNodeApprovalState.PendingApproval,
+    GatewayNodeApprovalState.PendingReapproval,
+    -> true
+    GatewayNodeApprovalState.Approved,
+    GatewayNodeApprovalState.Unapproved,
+    GatewayNodeApprovalState.Unknown,
+    -> false
+  }
 
 internal fun GatewayNodeSummary.needsCapabilityAttention(): Boolean =
-  paired &&
-    when (approvalState) {
-      GatewayNodeApprovalState.PendingApproval,
-      GatewayNodeApprovalState.PendingReapproval,
-      GatewayNodeApprovalState.Unapproved,
-      -> true
-      GatewayNodeApprovalState.Approved,
-      GatewayNodeApprovalState.Unknown,
-      -> false
-    }
+  when (approvalState) {
+    GatewayNodeApprovalState.PendingApproval,
+    GatewayNodeApprovalState.PendingReapproval,
+    -> true
+    GatewayNodeApprovalState.Unapproved -> paired
+    GatewayNodeApprovalState.Approved,
+    GatewayNodeApprovalState.Unknown,
+    -> false
+  }
 
 internal fun nodeStatusText(node: GatewayNodeSummary): String =
-  if (node.paired) {
-    when (node.approvalState) {
-      GatewayNodeApprovalState.Approved -> "Ready"
-      GatewayNodeApprovalState.PendingApproval -> "Approval Pending"
-      GatewayNodeApprovalState.PendingReapproval -> "Reapproval Pending"
-      GatewayNodeApprovalState.Unapproved -> "Unavailable"
-      GatewayNodeApprovalState.Unknown -> if (node.connected) "Online" else "Offline"
-    }
-  } else {
-    if (node.connected) "Online" else "Offline"
+  when (node.approvalState) {
+    GatewayNodeApprovalState.PendingApproval -> "Approval Pending"
+    GatewayNodeApprovalState.PendingReapproval -> "Reapproval Pending"
+    GatewayNodeApprovalState.Approved ->
+      if (node.paired) {
+        "Ready"
+      } else {
+        onlineOfflineText(node)
+      }
+    GatewayNodeApprovalState.Unapproved ->
+      if (node.paired) {
+        "Unavailable"
+      } else {
+        onlineOfflineText(node)
+      }
+    GatewayNodeApprovalState.Unknown -> if (node.connected) "Online" else "Offline"
   }
 
 internal fun nodeStatus(node: GatewayNodeSummary): ClawStatus =
-  if (node.paired) {
-    when (node.approvalState) {
-      GatewayNodeApprovalState.Approved -> ClawStatus.Success
-      GatewayNodeApprovalState.PendingApproval,
-      GatewayNodeApprovalState.PendingReapproval,
-      GatewayNodeApprovalState.Unapproved,
-      -> ClawStatus.Warning
-      GatewayNodeApprovalState.Unknown -> if (node.connected) ClawStatus.Success else ClawStatus.Warning
-    }
-  } else {
-    if (node.connected) ClawStatus.Success else ClawStatus.Warning
+  when (node.approvalState) {
+    GatewayNodeApprovalState.Approved ->
+      if (node.paired || node.connected) {
+        ClawStatus.Success
+      } else {
+        ClawStatus.Warning
+      }
+    GatewayNodeApprovalState.PendingApproval,
+    GatewayNodeApprovalState.PendingReapproval,
+    -> ClawStatus.Warning
+    GatewayNodeApprovalState.Unapproved ->
+      if (node.paired) {
+        ClawStatus.Warning
+      } else {
+        onlineOfflineStatus(node)
+      }
+    GatewayNodeApprovalState.Unknown -> if (node.connected) ClawStatus.Success else ClawStatus.Warning
   }
 
+private fun onlineOfflineText(node: GatewayNodeSummary): String = if (node.connected) "Online" else "Offline"
+
+private fun onlineOfflineStatus(node: GatewayNodeSummary): ClawStatus = if (node.connected) ClawStatus.Success else ClawStatus.Warning
+
 private fun nodeCapabilityText(node: GatewayNodeSummary): String? =
-  if (!node.paired) {
-    null
-  } else {
-    when (node.approvalState) {
-      GatewayNodeApprovalState.Approved -> "Ready"
-      GatewayNodeApprovalState.PendingApproval -> approvalCommandText(node.pendingRequestId, "Approval pending")
-      GatewayNodeApprovalState.PendingReapproval -> approvalCommandText(node.pendingRequestId, "Reapproval pending")
-      GatewayNodeApprovalState.Unapproved -> "Capabilities unavailable"
-      GatewayNodeApprovalState.Unknown -> null
-    }
+  when (node.approvalState) {
+    GatewayNodeApprovalState.Approved -> if (node.paired) "Ready" else null
+    GatewayNodeApprovalState.PendingApproval -> approvalCommandText(node.pendingRequestId, "Approval pending")
+    GatewayNodeApprovalState.PendingReapproval -> approvalCommandText(node.pendingRequestId, "Reapproval pending")
+    GatewayNodeApprovalState.Unapproved -> if (node.paired) "Capabilities unavailable" else null
+    GatewayNodeApprovalState.Unknown -> null
   }
 
 private fun approvalCommandText(

@@ -157,6 +157,35 @@ class ShellScreenLogicTest {
   }
 
   @Test
+  fun homeAttentionRowsSurfacePendingNodeCapabilityWithoutTransportPairing() {
+    val pendingNode =
+      androidNode(
+        paired = false,
+        approvalState = GatewayNodeApprovalState.PendingApproval,
+        pendingRequestId = "node-request-1",
+      )
+
+    val rows =
+      homeAttentionRows(
+        isConnected = true,
+        pendingApprovals = 0,
+        channelsSummary = emptyChannels(),
+        nodesDevicesSummary =
+          GatewayNodesDevicesSummary(
+            nodes = listOf(pendingNode),
+            pendingDevices = emptyList(),
+            pairedDevices = emptyList(),
+          ),
+        readyProviderCount = 1,
+      )
+
+    assertEquals("Approval Pending", nodeStatusText(pendingNode))
+    assertTrue(nodeSubtitle(pendingNode).contains("openclaw nodes approve node-request-1"))
+    assertEquals(listOf("Nodes & Devices"), rows.map { it.title })
+    assertEquals("1 pending", rows.single().subtitle)
+  }
+
+  @Test
   fun homeAttentionRowsSurfaceUnavailableNodeCapabilitiesSeparatelyFromPendingRequests() {
     val rows =
       homeAttentionRows(
@@ -183,6 +212,7 @@ class ShellScreenLogicTest {
   private fun androidNode(
     approvalState: GatewayNodeApprovalState,
     pendingRequestId: String? = null,
+    paired: Boolean = true,
     connected: Boolean = true,
     commands: List<String> = emptyList(),
   ): GatewayNodeSummary =
@@ -192,7 +222,7 @@ class ShellScreenLogicTest {
       remoteIp = null,
       version = null,
       deviceFamily = "Android",
-      paired = true,
+      paired = paired,
       connected = connected,
       approvalState = approvalState,
       pendingRequestId = pendingRequestId,
