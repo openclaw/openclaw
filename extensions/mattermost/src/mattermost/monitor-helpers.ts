@@ -63,9 +63,7 @@ export function shouldDropEmptyMattermostBody(params: {
   if (params.bodyText) {
     return false;
   }
-  if (/[\r\n\u2028\u2029]/u.test(params.rawText)) {
-    return true;
-  }
   const botUsername = normalizeLowercaseStringOrEmpty(params.botUsername ?? "");
-  return !botUsername || normalizeLowercaseStringOrEmpty(params.rawText) !== `@${botUsername}`;
+  const bareMention = params.rawText.match(/^[ \t]*(@[^ \t\r\n\v\f\u2028\u2029]+)[ \t]*$/u)?.[1];
+  return !botUsername || normalizeLowercaseStringOrEmpty(bareMention ?? "") !== `@${botUsername}`;
 }

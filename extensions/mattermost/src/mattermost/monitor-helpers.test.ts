@@ -151,7 +151,8 @@ describe("shouldDropEmptyMattermostBody", () => {
     "@openclaw\r\n",
     "@openclaw\u2028",
     "@openclaw\u2029",
-  ])("drops a repeated mention-only post: %j", (rawText) => {
+    "\v@openclaw\f",
+  ])("drops an invalid empty-body candidate: %j", (rawText) => {
     expect(
       shouldDropEmptyMattermostBody({
         bodyText: "",
