@@ -3882,6 +3882,97 @@ describe("embedded attempt session lock lifecycle", () => {
     expect(releases).toEqual(["release", "release", "release"]);
   });
 
+  it("releases a retained post-prompt lock after takeover so the next inbound can acquire it", async () => {
+    const sessionFile = await createTempSessionFile();
+    const options = { ...lockOptions, sessionFile, timeoutMs: 250 };
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: options,
+    });
+
+    await controller.releaseForPrompt();
+    await controller.reacquireAfterPrompt();
+    await fs.appendFile(sessionFile, '{"type":"message","id":"external"}\n', "utf8");
+
+    await expect(
+      controller.withSessionWriteLock(async () => {
+        await fs.appendFile(sessionFile, '{"type":"message","id":"late"}\n', "utf8");
+      }),
+    ).rejects.toBeInstanceOf(EmbeddedAttemptSessionTakeoverError);
+    expect(controller.hasSessionTakeover()).toBe(true);
+
+    const nextController = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: options,
+    });
+    await nextController.withSessionWriteLock(async () => {
+      await fs.appendFile(sessionFile, '{"type":"message","id":"next-inbound"}\n', "utf8");
+    });
+    await nextController.dispose();
+    await controller.dispose();
+
+    const transcript = await fs.readFile(sessionFile, "utf8");
+    expect(transcript).toContain('"id":"next-inbound"');
+    expect(transcript).not.toContain('"id":"late"');
+  });
+
+  it("waits for active retained writers before releasing a takeover lock", async () => {
+    const sessionFile = await createTempSessionFile();
+    const events: string[] = [];
+    let releaseActiveWrite!: () => void;
+    const activeWriteStarted = new Promise<void>((resolve) => {
+      releaseActiveWrite = () => {
+        events.push("active-finish");
+        resolve();
+      };
+    });
+    const releasePrep = vi.fn(async () => events.push("prep-release"));
+    const releaseRetained = vi.fn(async () => events.push("retained-release"));
+    const acquireSessionWriteLockLocal = vi
+      .fn()
+      .mockResolvedValueOnce({ release: releasePrep })
+      .mockResolvedValueOnce({ release: releaseRetained });
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockLocal,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controller.releaseForPrompt();
+    await controller.reacquireAfterPrompt();
+    const activeWrite = controller.withSessionWriteLock(async () => {
+      events.push("active-start");
+      await activeWriteStarted;
+    });
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    await fs.appendFile(sessionFile, '{"type":"message","id":"external"}\n', "utf8");
+
+    let takeoverSettled = false;
+    const takeoverWrite = controller
+      .withSessionWriteLock(async () => {
+        events.push("late-write");
+      })
+      .catch((error: unknown) => error)
+      .finally(() => {
+        takeoverSettled = true;
+      });
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    expect(takeoverSettled).toBe(false);
+    expect(releaseRetained).not.toHaveBeenCalled();
+
+    releaseActiveWrite();
+    await expect(activeWrite).resolves.toBeUndefined();
+    await expect(takeoverWrite).resolves.toBeInstanceOf(EmbeddedAttemptSessionTakeoverError);
+
+    expect(releaseRetained).toHaveBeenCalledTimes(1);
+    expect(events).toEqual(["prep-release", "active-start", "active-finish", "retained-release"]);
+    expect(acquireSessionWriteLockLocal).toHaveBeenCalledTimes(2);
+  });
+
   it("returns a no-op cleanup lock after prompt lock reacquisition times out", async () => {
     const releases: string[] = [];
     const acquireSessionWriteLockResult = vi
