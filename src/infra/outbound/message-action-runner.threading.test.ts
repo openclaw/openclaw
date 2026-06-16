@@ -119,7 +119,7 @@ describe("message action threading helpers", () => {
       agentId: "main",
       resolveAutoThreadId: () => "root-42",
       resolveReplyTransport: ({ threadId }) => ({
-        replyToId: threadId,
+        replyToId: threadId == null ? threadId : String(threadId),
         threadId: threadId ?? null,
       }),
       resolveOutboundSessionRoute,
@@ -234,7 +234,7 @@ describe("message action threading helpers", () => {
       toolContext: defaultForumToolContext,
       replyToIsExplicit: false,
       resolveReplyTransport: ({ threadId, replyToId, replyToIsExplicit }) => ({
-        replyToId: replyToIsExplicit ? replyToId : threadId,
+        replyToId: replyToIsExplicit || threadId == null ? replyToId : String(threadId),
         threadId: threadId ?? null,
       }),
     });
@@ -303,7 +303,7 @@ describe("message action threading helpers", () => {
       toolContext: defaultForumToolContext,
       resolveAutoThreadId: () => "root-42",
       resolveReplyTransport: ({ threadId }) => ({
-        replyToId: threadId,
+        replyToId: threadId == null ? threadId : String(threadId),
         threadId: threadId ?? null,
       }),
     });
