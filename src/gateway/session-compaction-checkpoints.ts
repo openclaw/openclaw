@@ -38,6 +38,23 @@ export type CapturedCompactionCheckpointSnapshot = {
   entryId?: string;
 };
 
+type SessionLeafState = {
+  leafId: string | null;
+  entryId: string;
+};
+
+export function resolveCompactionCheckpointTranscriptPosition(params: {
+  preferredLeafId?: string | null;
+  transcriptState?: SessionLeafState | null;
+}): { leafId?: string; entryId?: string } {
+  const leafId = params.preferredLeafId ?? params.transcriptState?.leafId ?? undefined;
+  const entryId = params.transcriptState?.entryId ?? leafId;
+  return {
+    ...(leafId ? { leafId } : {}),
+    ...(entryId ? { entryId } : {}),
+  };
+}
+
 type ForkedCompactionCheckpointTranscript = {
   sessionId: string;
   sessionFile: string;
@@ -449,14 +466,18 @@ export async function captureCompactionCheckpointSnapshotAsync(params: {
   const maxBytes = params.maxBytes ?? MAX_COMPACTION_CHECKPOINT_LEAF_SCAN_BYTES;
   const sessionId = await readSessionIdFromTranscriptHeaderAsync(sessionFile);
   const transcriptState = await readSessionLeafStateFromTranscriptAsync(sessionFile, maxBytes);
-  const leafId = liveLeafId ?? transcriptState?.leafId;
+  const position = resolveCompactionCheckpointTranscriptPosition({
+    preferredLeafId: liveLeafId,
+    transcriptState,
+  });
+  const leafId = position.leafId;
   if (!sessionId || !leafId) {
     return null;
   }
   return {
     sessionId,
     leafId,
-    ...(transcriptState?.leafId === leafId ? { entryId: transcriptState.entryId } : {}),
+    ...(position.entryId ? { entryId: position.entryId } : {}),
   };
 }
 

@@ -20,6 +20,7 @@ import {
   readRuntimeSessionLeafIdFromTranscriptAsync,
   readSessionLeafIdFromTranscriptAsync,
   readSessionLeafStateFromTranscriptAsync,
+  resolveCompactionCheckpointTranscriptPosition,
 } from "./session-compaction-checkpoints.js";
 
 const tempDirs: string[] = [];
@@ -164,6 +165,21 @@ afterEach(async () => {
 });
 
 describe("session-compaction-checkpoints", () => {
+  test("keeps logical leaves separate from physical truncation cursors", () => {
+    expect(
+      resolveCompactionCheckpointTranscriptPosition({
+        preferredLeafId: "active-root",
+        transcriptState: {
+          leafId: "raw-tail",
+          entryId: "raw-tail",
+        },
+      }),
+    ).toEqual({
+      leafId: "active-root",
+      entryId: "raw-tail",
+    });
+  });
+
   test("runtime checkpoint probes do not create session metadata for missing transcripts", async () => {
     const { storePath, sessionKey } = await makeTempSessionStore(
       "openclaw-checkpoint-runtime-probe-",
@@ -505,13 +521,16 @@ describe("session-compaction-checkpoints", () => {
       leafId: "active-leaf",
     });
     const snapshot = await captureCompactionCheckpointSnapshotAsync({
+      sessionManager: {
+        getLeafId: () => "active-root",
+      },
       sessionFile,
       maxBytes: 1024,
     });
     expect(snapshot).toMatchObject({
       sessionId: "session-bounded-leaf",
       entryId: "active-leaf",
-      leafId: "active-leaf",
+      leafId: "active-root",
     });
 
     const forked = await forkCompactionCheckpointTranscriptAsync({
