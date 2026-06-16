@@ -110,12 +110,14 @@ describe("gateway usage helpers", () => {
     // Explicitly provided invalid dates (bad format or impossible calendar date) are reported.
     expect(testApi.findInvalidExplicitDate({ startDate: "2026-02-30" })).toBe("startDate");
     expect(testApi.findInvalidExplicitDate({ endDate: "2026-2-5" })).toBe("endDate");
+    expect(testApi.findInvalidExplicitDate({ startDate: 0 })).toBe("startDate");
+    expect(testApi.findInvalidExplicitDate({ endDate: [] })).toBe("endDate");
     expect(
       testApi.findInvalidExplicitDate({ startDate: "2026-02-01", endDate: "2026-13-01" }),
     ).toBe("endDate");
     // Absent or valid dates are not flagged, so they still fall through to the default range.
     expect(testApi.findInvalidExplicitDate({})).toBeUndefined();
-    expect(testApi.findInvalidExplicitDate({ startDate: "", endDate: undefined })).toBeUndefined();
+    expect(testApi.findInvalidExplicitDate({ startDate: "", endDate: null })).toBeUndefined();
     expect(
       testApi.findInvalidExplicitDate({ startDate: "2026-02-01", endDate: "2026-02-02" }),
     ).toBeUndefined();
@@ -125,7 +127,7 @@ describe("gateway usage helpers", () => {
     const respond = vi.fn();
     await usageHandlers["usage.cost"]({
       respond,
-      params: { startDate: "2026-02-30" },
+      params: { startDate: 0 },
       context: { getRuntimeConfig: () => ({}) },
     } as unknown as Parameters<(typeof usageHandlers)["usage.cost"]>[0]);
     expect(respond).toHaveBeenCalledTimes(1);

@@ -205,7 +205,10 @@ const findInvalidExplicitDate = (params: {
 }): "startDate" | "endDate" | undefined => {
   for (const field of ["startDate", "endDate"] as const) {
     const raw = params[field];
-    if (typeof raw === "string" && raw.trim() !== "" && parseDateParts(raw) === undefined) {
+    if (raw === undefined || raw === null || (typeof raw === "string" && raw.trim() === "")) {
+      continue;
+    }
+    if (parseDateParts(raw) === undefined) {
       return field;
     }
   }
