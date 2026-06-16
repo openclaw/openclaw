@@ -986,7 +986,7 @@ describe("redactSensitiveText", () => {
     );
   });
 
-  it("forces redaction for tool details even when log redaction is disabled", () => {
+  it("respects redactSensitive off for tool details (no longer forces redaction)", () => {
     writeConfig(`{
       logging: {
         redactSensitive: "off",
@@ -994,7 +994,7 @@ describe("redactSensitiveText", () => {
     }`);
 
     expect(redactToolDetail("OPENAI_API_KEY=sk-1234567890abcdef")).toBe(
-      "OPENAI_API_KEY=sk-123…cdef",
+      "OPENAI_API_KEY=sk-1234567890abcdef",
     );
   });
 
@@ -1061,6 +1061,28 @@ describe("redactSensitiveText", () => {
 
   it("redacts standalone bearer tokens after the default prefilter", () => {
     expect(redactSensitiveText("Bearer abcdef1234567890ghij")).toBe("Bearer abcdef…ghij");
+  });
+
+  it("respects redactSensitive off for tool payload text", () => {
+    writeConfig(`{
+      logging: {
+        redactSensitive: "off",
+      },
+    }`);
+
+    expect(redactToolDetail("Authorization: Bearer sk-test123")).toBe(
+      "Authorization: Bearer sk-test123",
+    );
+  });
+
+  it("redacts tool payload text by default when redactSensitive is not configured", () => {
+    writeConfig(`{
+      logging: {},
+    }`);
+
+    expect(redactToolDetail("Authorization: Bearer sk-test123")).not.toBe(
+      "Authorization: Bearer sk-test123",
+    );
   });
 });
 

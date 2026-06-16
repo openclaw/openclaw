@@ -1003,12 +1003,16 @@ function resolveToolPayloadRedaction(
     userPatterns && userPatterns.length > 0
       ? [...userPatterns, ...DEFAULT_REDACT_PATTERNS]
       : undefined;
-  return { mode: "tools", patterns };
+  const mode =
+    loggingConfig?.redactSensitive === "off"
+      ? "off"
+      : DEFAULT_REDACT_MODE;
+  return { mode, patterns };
 }
 
-// Forces tools-mode regardless of `logging.redactSensitive` (which governs log
-// output, not UI surfaces), and merges user `logging.redactPatterns` with the
-// built-in defaults so both apply.
+// Applies tool-payload redaction to UI/tool payload strings (tool args in
+// event streams, tool results displayed to users, transcript entries).
+// Respects `logging.redactSensitive` when set to "off".
 export function redactToolPayloadText(text: string): string {
   return redactToolPayloadTextWithConfig(text, readLoggingConfig());
 }
