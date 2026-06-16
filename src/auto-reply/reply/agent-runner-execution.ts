@@ -814,7 +814,7 @@ const CLI_BACKEND_ROUTING_REF_BEFORE_ERROR_RE = /\b([\w.-]+\/[A-Za-z][\w.-]*)\s*
 const CODEX_APP_SERVER_CLIENT_CLOSED_BEFORE_REPLY_RE =
   /\bcodex app-server client closed before turn completed\b/iu;
 const CODEX_APP_SERVER_TURN_COMPLETION_IDLE_TIMEOUT_RE =
-  /\bcodex app-server turn idle timed out waiting for (?:turn\/completed|completion)\b/iu;
+  /\bcodex app-server turn idle timed out waiting for turn\/completed\b/iu;
 
 function buildCodexAppServerFailureText(message: string): string | null {
   const normalizedMessage = collapseRepeatedFailureDetail(message);
@@ -3290,20 +3290,10 @@ export async function runAgentTurnWithFallback(params: {
           (p) => p.isError && hasNonEmptyString(p.text) && !p.text.startsWith("⚠️"),
         )?.text ?? "";
       const errorCandidate = metaErrorMsg || rawErrorPayloadText;
-      const codexAppServerFailureText = errorCandidate
-        ? buildCodexAppServerFailureText(errorCandidate)
-        : null;
       const formattedErrorCandidate = errorCandidate
-        ? (codexAppServerFailureText ?? formatRateLimitOrOverloadedErrorCopy(errorCandidate))
+        ? formatRateLimitOrOverloadedErrorCopy(errorCandidate)
         : undefined;
       if (formattedErrorCandidate) {
-        if (codexAppServerFailureText) {
-          params.replyOperation?.retainFailureUntilComplete();
-          params.replyOperation?.fail(
-            "run_failed",
-            finalEmbeddedError ?? new Error(errorCandidate),
-          );
-        }
         runResult.payloads = [
           markAgentRunFailureReplyPayload({
             text: resolveExternalRunFailureTextForConversation({

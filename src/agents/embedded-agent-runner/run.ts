@@ -3377,6 +3377,17 @@ async function runEmbeddedAgentInternal(
                 livenessState,
                 timeoutPhase,
                 providerStarted,
+                // Completion-idle recovery is exhausted here. Keep this terminal so
+                // model fallback cannot replay a potentially still-active Codex turn.
+                ...(shouldSurfaceCodexCompletionTimeout
+                  ? {
+                      error: {
+                        kind: "incomplete_turn" as const,
+                        message: timeoutText,
+                        fallbackSafe: false,
+                      },
+                    }
+                  : {}),
                 toolSummary: attemptToolSummary,
                 ...(failureSignal ? { failureSignal } : {}),
                 agentHarnessResultClassification: attempt.agentHarnessResultClassification,
