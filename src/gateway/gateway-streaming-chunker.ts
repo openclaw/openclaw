@@ -3,8 +3,6 @@
 // to reduce SSE overhead.
 import type { GatewayHttpStreamingConfig } from "../config/types.gateway.js";
 
-const DEFAULT_STREAMING_MIN_CHARS = 200;
-const DEFAULT_STREAMING_MAX_CHARS = 800;
 const DEFAULT_STREAMING_IDLE_MS = 500;
 
 export type SseChunkBufferFlush = (text: string) => void;
@@ -20,7 +18,7 @@ export function createSseChunkBuffer(
   flush: SseChunkBufferFlush,
   config: GatewayHttpStreamingConfig | undefined,
 ): SseChunkBuffer {
-  const minChars = Math.max(1, Math.floor(config?.minChars ?? DEFAULT_STREAMING_MIN_CHARS));
+  const minChars = Math.max(1, Math.floor(config?.minChars ?? 200));
   const maxChars =
     config?.maxChars !== undefined
       ? Math.max(minChars, Math.floor(config.maxChars))
@@ -30,12 +28,14 @@ export function createSseChunkBuffer(
   const bufferingEnabled = maxChars > minChars;
 
   let buffered = "";
-  let idleTimer: ReturnType<typeof setTimeout> | null = null;
+  let idleTimer: ReturnType<typeof setTimeout> | undefined;
   let destroyed = false;
 
   const scheduleIdleFlush = () => {
-    if (destroyed || idleMs <= 0) return;
-    clearTimeout(idleTimer);
+    if (destroyed || idleMs <= 0) { return; }
+    if (idleTimer !== undefined) {
+      clearTimeout(idleTimer);
+    }
     idleTimer = setTimeout(() => {
       if (!destroyed && buffered.length >= minChars) {
         const snap = buffered;
@@ -58,7 +58,7 @@ export function createSseChunkBuffer(
       return buffered.length;
     },
     push(delta) {
-      if (!delta) return;
+      if (!delta) { return; }
       if (bufferingEnabled) {
         buffered += delta;
         maybeFlush();
@@ -68,8 +68,10 @@ export function createSseChunkBuffer(
       }
     },
     flush(): boolean {
-      if (!buffered.length) return false;
-      clearTimeout(idleTimer);
+      if (!buffered.length) { return false; }
+      if (idleTimer !== undefined) {
+        clearTimeout(idleTimer);
+      }
       const snap = buffered;
       buffered = "";
       flush(snap);
@@ -77,7 +79,9 @@ export function createSseChunkBuffer(
     },
     destroy() {
       destroyed = true;
-      clearTimeout(idleTimer);
+      if (idleTimer !== undefined) {
+        clearTimeout(idleTimer);
+      }
     },
   };
 }

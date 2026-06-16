@@ -487,10 +487,8 @@ export function createGatewayHttpServer(opts: {
   controlUiRoot?: ControlUiRootState;
   openAiChatCompletionsEnabled: boolean;
   openAiChatCompletionsConfig?: import("../config/types.gateway.js").GatewayHttpChatCompletionsConfig;
-  openAiStreamingConfig?: import("../config/types.gateway.js").GatewayHttpStreamingConfig;
   openResponsesEnabled: boolean;
   openResponsesConfig?: import("../config/types.gateway.js").GatewayHttpResponsesConfig;
-  openResponsesStreamingConfig?: import("../config/types.gateway.js").GatewayHttpStreamingConfig;
   strictTransportSecurityHeader?: string;
   handleHooksRequest: HooksRequestHandler;
   handlePluginRequest?: PluginHttpRequestHandler;
@@ -512,10 +510,8 @@ export function createGatewayHttpServer(opts: {
     controlUiRoot,
     openAiChatCompletionsEnabled,
     openAiChatCompletionsConfig,
-    openAiStreamingConfig,
     openResponsesEnabled,
     openResponsesConfig,
-    openResponsesStreamingConfig,
     strictTransportSecurityHeader,
     handleHooksRequest,
     handlePluginRequest,
