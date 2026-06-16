@@ -86,6 +86,15 @@ vi.mock("../../infra/session-cost-usage.js", async () => {
         staleFiles: 0,
       },
     })),
+    loadSessionCostSummariesFromCache: vi.fn(async (params: { sessions: unknown[] }) => ({
+      summaries: params.sessions.map(() => null),
+      cacheStatus: {
+        status: "fresh",
+        cachedFiles: params.sessions.length,
+        pendingFiles: 0,
+        staleFiles: 0,
+      },
+    })),
     loadSessionUsageTimeSeries: vi.fn(async () => ({
       sessionId: "s-opus",
       points: [],
@@ -97,6 +106,7 @@ vi.mock("../../infra/session-cost-usage.js", async () => {
 import {
   discoverAllSessions,
   loadSessionCostSummaryFromCache,
+  loadSessionCostSummariesFromCache,
   loadSessionLogs,
   loadSessionUsageTimeSeries,
 } from "../../infra/session-cost-usage.js";
@@ -737,24 +747,36 @@ describe("sessions.usage", () => {
       ])
       .mockResolvedValueOnce([]); // second agent (opus) — no extra sessions
 
-    vi.mocked(loadSessionCostSummaryFromCache).mockImplementation(async ({ sessionId }) => {
+    const buildUsage = (sessionId?: string) => {
       const cost = sessionId === "s-a" ? 0.08 : sessionId === "s-b" ? 0.04 : 0.02;
       const tokens = sessionId === "s-a" ? 15 : sessionId === "s-b" ? 10 : 5;
       return {
-        summary: {
-          input: tokens,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: tokens,
-          totalCost: cost,
-          inputCost: 0,
-          outputCost: 0,
-          cacheReadCost: 0,
-          cacheWriteCost: 0,
-          missingCostEntries: 0,
+        input: tokens,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: tokens,
+        totalCost: cost,
+        inputCost: 0,
+        outputCost: 0,
+        cacheReadCost: 0,
+        cacheWriteCost: 0,
+        missingCostEntries: 0,
+      };
+    };
+    vi.mocked(loadSessionCostSummaryFromCache).mockImplementation(async ({ sessionId }) => ({
+      summary: buildUsage(sessionId),
+      cacheStatus: { status: "fresh", cachedFiles: 1, pendingFiles: 0, staleFiles: 0 },
+    }));
+    vi.mocked(loadSessionCostSummariesFromCache).mockImplementation(async ({ sessions }) => {
+      return {
+        summaries: sessions.map((session) => buildUsage(session.sessionId)),
+        cacheStatus: {
+          status: "fresh",
+          cachedFiles: sessions.length,
+          pendingFiles: 0,
+          staleFiles: 0,
         },
-        cacheStatus: { status: "fresh", cachedFiles: 1, pendingFiles: 0, staleFiles: 0 },
       };
     });
 
@@ -774,6 +796,8 @@ describe("sessions.usage", () => {
     // Only the most-recent session (s-a, mtime=300) appears in the page
     expect(result.sessions).toHaveLength(1);
     expect(result.sessions[0].key).toContain("s-a");
+    expect(vi.mocked(loadSessionCostSummaryFromCache)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(loadSessionCostSummariesFromCache)).toHaveBeenCalledTimes(1);
 
     // But aggregate totals must include all 3 sessions (0.08 + 0.04 + 0.02 = 0.14)
     expect(result.totals.totalCost).toBeCloseTo(0.14);

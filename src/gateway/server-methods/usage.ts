@@ -28,6 +28,7 @@ import {
   loadCostUsageSummaryFromCache,
   loadSessionLogs,
   loadSessionCostSummaryFromCache,
+  loadSessionCostSummariesFromCache,
   loadSessionUsageTimeSeries,
   discoverAllSessions,
   resolveExistingUsageSessionFile,
@@ -1145,9 +1146,7 @@ export const usageHandlers: GatewayRequestHandlers = {
     // Sort by most recent first
     mergedEntries.sort((a, b) => b.updatedAt - a.updatedAt);
 
-    // Build a fast-lookup set of session keys for the page window so the aggregate
-    // loop can iterate all entries while only pushing per-session rows for the page.
-    const limitedKeys = new Set(mergedEntries.slice(0, limit).map((e) => e.key));
+    const limitedEntries = mergedEntries.slice(0, limit);
 
     // Load usage for each session
     const sessions: SessionUsageEntry[] = [];
@@ -1244,7 +1243,7 @@ export const usageHandlers: GatewayRequestHandlers = {
       }>
     > = [];
 
-    for (const [entryIndex, merged] of mergedEntries.entries()) {
+    for (const [entryIndex, merged] of limitedEntries.entries()) {
       const includedSessionIds = merged.includedSessionIds ?? [merged.sessionId];
       for (const includedSessionId of includedSessionIds) {
         const isCurrentSession = includedSessionId === merged.sessionId;
@@ -1296,6 +1295,52 @@ export const usageHandlers: GatewayRequestHandlers = {
       usage.sessionFile = merged.sessionFile;
       mergeSessionUsageInto(usage, loaded.summary);
       usageByEntryIndex[loaded.entryIndex] = usage;
+    }
+
+    const hiddenSessionsByAgent = new Map<
+      string | undefined,
+      Array<{ entryIndex: number; sessionId: string; sessionFile: string }>
+    >();
+    for (const [entryIndex, merged] of mergedEntries.entries()) {
+      if (entryIndex < limitedEntries.length) {
+        continue;
+      }
+      const hiddenSessions = hiddenSessionsByAgent.get(merged.agentId) ?? [];
+      for (const includedSessionId of merged.includedSessionIds ?? [merged.sessionId]) {
+        const sessionFile =
+          includedSessionId === merged.sessionId
+            ? merged.sessionFile
+            : resolveExistingUsageSessionFile({
+                sessionId: includedSessionId,
+                agentId: merged.agentId,
+              });
+        if (sessionFile) {
+          hiddenSessions.push({ entryIndex, sessionId: includedSessionId, sessionFile });
+        }
+      }
+      hiddenSessionsByAgent.set(merged.agentId, hiddenSessions);
+    }
+    for (const [agentId, hiddenSessions] of hiddenSessionsByAgent) {
+      const hiddenUsage = await loadSessionCostSummariesFromCache({
+        sessions: hiddenSessions,
+        config,
+        agentId,
+        startMs,
+        endMs,
+      });
+      cacheStatus = mergeUsageCacheStatus(cacheStatus, hiddenUsage.cacheStatus);
+      for (const [hiddenIndex, summary] of hiddenUsage.summaries.entries()) {
+        if (!summary) {
+          continue;
+        }
+        const hiddenSession = hiddenSessions[hiddenIndex];
+        const merged = mergedEntries[hiddenSession.entryIndex];
+        const usage = usageByEntryIndex[hiddenSession.entryIndex] ?? createEmptySessionCostSummary();
+        usage.sessionId = merged.sessionId;
+        usage.sessionFile = merged.sessionFile;
+        mergeSessionUsageInto(usage, summary);
+        usageByEntryIndex[hiddenSession.entryIndex] = usage;
+      }
     }
 
     for (const [entryIndex, merged] of mergedEntries.entries()) {
@@ -1434,7 +1479,7 @@ export const usageHandlers: GatewayRequestHandlers = {
         }
       }
 
-      if (limitedKeys.has(merged.key)) {
+      if (entryIndex < limit) {
         sessions.push({
           key: merged.key,
           label: merged.label,
