@@ -22,11 +22,52 @@ import { jsonResult, readStringParam, ToolInputError } from "./common.js";
  */
 
 /** Sections the agent may write via this tool. Mirrors the reader allowlist. */
-export const WRITABLE_SECTIONS: readonly string[] = ["User_D_Prompt", "app_note"];
+export const WRITABLE_SECTIONS: readonly string[] = ["User_D_Prompt", "app_note", "app_profile"];
+
+/**
+ * Per-section byte cap for agent-written content. `app_profile` is injected
+ * into the prompt every turn, so it is capped tightly; other sections get a
+ * generous default. Enforced (not advisory) per the per-user-profile plan and
+ * codex review 4508313642 §5.
+ */
+export const SECTION_CONTENT_BYTE_CAPS: Readonly<Record<string, number>> = {
+  app_profile: 2 * 1024,
+};
+export const DEFAULT_SECTION_CONTENT_BYTE_CAP = 16 * 1024;
+
+/** Byte cap for a section’s content (`app_profile` is stricter). */
+export function sectionContentCap(section: string): number {
+  return SECTION_CONTENT_BYTE_CAPS[section] ?? DEFAULT_SECTION_CONTENT_BYTE_CAP;
+}
+
+/**
+ * Guard agent-supplied section content before it is written. Throws
+ * `ToolInputError` when the content:
+ *  - contains a nested app marker (`<!-- app:`) — it would create duplicate
+ *    markers and make the file fail closed on the section reader (codex §3); or
+ *  - exceeds the section’s byte cap (codex §5).
+ * Pure + exported so it is unit-tested and reused by callers.
+ *
+ * CROSS-REPO CONTRACT: the marker rule (`content.includes("<!-- app:")`) must
+ * stay equivalent to `containsAppMarker` in openclaw-dashboard
+ * (`lib/user-file-core.ts`); change both sides together.
+ */
+export function assertSectionContentWritable(section: string, content: string): void {
+  if (content.includes("<!-- app:")) {
+    throw new ToolInputError(`section content may not contain an app marker ("<!-- app:")`);
+  }
+  const cap = sectionContentCap(section);
+  const bytes = Buffer.byteLength(content, "utf8");
+  if (bytes > cap) {
+    throw new ToolInputError(
+      `section "${section}" content is ${bytes} bytes, over the ${cap}-byte cap`,
+    );
+  }
+}
 
 const SaveUserSectionSchema = Type.Object({
   section: Type.String({
-    description: "Allowlisted section name, e.g. User_D_Prompt or app_note.",
+    description: "Allowlisted section name: User_D_Prompt, app_note, or app_profile.",
   }),
   content: Type.String({
     description: "The section's text. Replaces the section if it already exists.",
@@ -85,7 +126,7 @@ export function createSaveUserSectionTool(options: {
     label: "Save User Section",
     name: "save_user_section",
     description:
-      "Persist a per-user app field (allowlisted sections: User_D_Prompt, app_note) into this user's per-user file so the connected app can display it. The user is resolved automatically from the session — do not pass a user id. Replaces the section if it already exists.",
+      "Persist a per-user app field (allowlisted sections: User_D_Prompt, app_note, app_profile) into this user's per-user file so the connected app can display it. The user is resolved automatically from the session — do not pass a user id. Replaces the section if it already exists.",
     parameters: SaveUserSectionSchema,
     execute: async (_toolCallId, params) => {
       const section = readStringParam(params, "section", { required: true });
@@ -125,6 +166,7 @@ export function createSaveUserSectionTool(options: {
 
       let next: string;
       try {
+        assertSectionContentWritable(section, content);
         next = upsertSection(existing, section, content);
       } catch (err) {
         return jsonResult({ ok: false, error: err instanceof Error ? err.message : String(err) });

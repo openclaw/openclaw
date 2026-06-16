@@ -40,10 +40,11 @@ dashboard route `GET /api/public/chat/{agent}/user-file` (repo
 Only these section names are writable (`WRITABLE_SECTIONS` in
 `src/agents/tools/save-user-section.ts`); any other name is rejected:
 
-| Section | Meaning |
-|---|---|
-| `User_D_Prompt` | up to ~5 short suggested prompts (one per line) shown as clickable starters on the app home page |
-| `app_note` | one short per-user note/focus shown on the home page |
+| Section         | Meaning                                                                                                                                                                                  |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `User_D_Prompt` | up to ~5 short suggested prompts (one per line) shown as clickable starters on the app home page                                                                                         |
+| `app_note`      | one short per-user note/focus shown on the home page                                                                                                                                     |
+| `app_profile`   | per-user profile card — name + a short running summary the agent maintains; seeded from the app account and injected into the agent’s context every turn (see the per-user-profile plan) |
 
 This list is intentionally narrow so the tool can never overwrite `SOUL.md`,
 `MEMORY.md`, or arbitrary workspace files.
@@ -75,21 +76,27 @@ resolves, so writer and reader agree on identity by construction.
   in `src/agents/tools/save-user-section.ts`; registered in
   `src/agents/openclaw-tools.ts` (added to the tools array only when it resolves
   an `appUserId`).
-- Pure core: `upsertSection(fileContent, section, content)` and
+- Pure core: `upsertSection(fileContent, section, content)`,
+  `assertSectionContentWritable(section, content)`, and
   `resolveAppUserId(agentSessionKey)` are pure/unit-tested
   (`src/agents/tools/save-user-section.test.ts`).
 
 ## Agent guidance (workspace `AGENTS.md`)
 
-The owning agent's `workspace/AGENTS.md` tells it *when* to call the tool — after
+The owning agent's `workspace/AGENTS.md` tells it _when_ to call the tool — after
 it has learned enough about the user to suggest useful prompts — and that the
 write is an upsert (keep it current, don't append duplicates). For the `life`
 agent this lives under the **App Profile Sections (Havaya web app)** section.
 
 ## Security notes
 
-- Allowlist + containment: only the two sections above, only under
+- Allowlist + containment: only the sections above, only under
   `workspace/users/`.
+- **Content guard** (`assertSectionContentWritable`): section content may not
+  contain a nested app marker (`<!-- app:`) — that would create duplicate
+  markers and make the file fail closed on the reader — and is byte-capped per
+  section (`app_profile` 2 KB; others 16 KB), since `app_profile` is injected
+  into the prompt every turn. Enforced in the tool, not just instructed.
 - Fail-closed on ambiguous markers (never silently overwrite).
 - Identity is server-resolved from the persisted session, never taken from the
   model's arguments.

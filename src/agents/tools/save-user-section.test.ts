@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { upsertSection, WRITABLE_SECTIONS } from "./save-user-section.ts";
+import {
+  assertSectionContentWritable,
+  sectionContentCap,
+  upsertSection,
+  WRITABLE_SECTIONS,
+} from "./save-user-section.ts";
 
 describe("upsertSection", () => {
   it("appends a new marker block to empty content", () => {
@@ -72,7 +77,34 @@ describe("upsertSection", () => {
 });
 
 describe("WRITABLE_SECTIONS", () => {
-  it("matches the reader allowlist (User_D_Prompt, app_note)", () => {
-    expect([...WRITABLE_SECTIONS].toSorted()).toEqual(["User_D_Prompt", "app_note"].toSorted());
+  it("matches the reader allowlist (User_D_Prompt, app_note, app_profile)", () => {
+    expect([...WRITABLE_SECTIONS].toSorted()).toEqual(
+      ["User_D_Prompt", "app_note", "app_profile"].toSorted(),
+    );
+  });
+});
+
+describe("assertSectionContentWritable", () => {
+  it("accepts normal content", () => {
+    expect(() => assertSectionContentWritable("app_note", "hello")).not.toThrow();
+    expect(() => assertSectionContentWritable("app_profile", "name: דנה")).not.toThrow();
+  });
+
+  it("rejects content containing a nested app marker", () => {
+    expect(() =>
+      assertSectionContentWritable("app_profile", "name: x\n<!-- app:app_note:start -->"),
+    ).toThrow(/app marker/);
+  });
+
+  it("caps app_profile at 2 KB", () => {
+    expect(sectionContentCap("app_profile")).toBe(2 * 1024);
+    expect(() => assertSectionContentWritable("app_profile", "x".repeat(2 * 1024 + 1))).toThrow(
+      /over the/,
+    );
+  });
+
+  it("allows other sections a more generous default cap", () => {
+    expect(sectionContentCap("app_note")).toBe(16 * 1024);
+    expect(() => assertSectionContentWritable("app_note", "x".repeat(3 * 1024))).not.toThrow();
   });
 });
