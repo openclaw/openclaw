@@ -287,7 +287,7 @@ function stripSenderLabelPrefix(text: string, senderLabel: string): string {
   if (!label) {
     return text;
   }
-  return text.replace(new RegExp(`^${escapeRegExp(label)}(?::|：|-|—)?[ \\t]+`, "i"), "");
+  return text.replace(new RegExp(`^${escapeRegExp(label)}(?::|：|-|—)?[ \\t]+`), "");
 }
 
 function sourceDuplicateDisplayParts(message: unknown): {

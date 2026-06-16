@@ -302,6 +302,32 @@ describe("buildChatItems", () => {
     ]);
   });
 
+  it("keeps differently cased sender text separate for the same source message", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          __openclaw: { id: "reply-case-change" },
+          role: "assistant",
+          content: [{ type: "text", text: "PARZIVAL answer" }],
+          senderLabel: "Parzival",
+          timestamp: 1,
+        },
+        {
+          __openclaw: { id: "reply-case-change" },
+          role: "assistant",
+          content: [{ type: "text", text: "answer" }],
+          timestamp: 2,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(2);
+    expect(messageRecord(groups[0]).content).toStrictEqual([
+      { type: "text", text: "PARZIVAL answer" },
+    ]);
+    expect(messageRecord(groups[1]).content).toStrictEqual([{ type: "text", text: "answer" }]);
+  });
+
   it("keeps relay-labeled assistant updates separate when source message id repeats with new text", () => {
     const groups = messageGroups({
       messages: [
