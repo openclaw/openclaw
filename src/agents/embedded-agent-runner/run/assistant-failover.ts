@@ -116,10 +116,15 @@ export function isShortWindowRateLimitMessage(message: string | undefined): bool
 
 function resolveAssistantFailoverRawErrorText(params: {
   lastAssistant: AssistantMessage | undefined;
+  assistantFailoverRawErrorText?: string;
   config: OpenClawConfig | undefined;
   sessionKey?: string;
   activeErrorContext: { provider: string; model: string };
 }): string | undefined {
+  const derivedError = params.assistantFailoverRawErrorText?.trim();
+  if (derivedError) {
+    return derivedError;
+  }
   const rawError = params.lastAssistant?.errorMessage?.trim();
   if (rawError) {
     return rawError;
@@ -158,6 +163,7 @@ export async function handleAssistantFailover(params: {
   provider: string;
   activeErrorContext: { provider: string; model: string };
   lastAssistant: AssistantMessage | undefined;
+  assistantFailoverRawErrorText?: string;
   config: OpenClawConfig | undefined;
   sessionKey?: string;
   authFailure: boolean;
@@ -399,6 +405,7 @@ export async function handleAssistantFailover(params: {
 
 function resolveAssistantFailoverErrorMessage(params: {
   lastAssistant: AssistantMessage | undefined;
+  assistantFailoverRawErrorText?: string;
   config: OpenClawConfig | undefined;
   sessionKey?: string;
   activeErrorContext: { provider: string; model: string };
@@ -411,14 +418,6 @@ function resolveAssistantFailoverErrorMessage(params: {
   const timeoutFailure = params.timedOut || params.idleTimedOut;
   const assistantRawErrorText = resolveAssistantFailoverRawErrorText(params);
   return (
-    (params.lastAssistant
-      ? formatAssistantErrorText(params.lastAssistant, {
-          cfg: params.config,
-          sessionKey: params.sessionKey,
-          provider: params.activeErrorContext.provider,
-          model: params.activeErrorContext.model,
-        })
-      : undefined) ||
     assistantRawErrorText ||
     (timeoutFailure
       ? "LLM request timed out."
