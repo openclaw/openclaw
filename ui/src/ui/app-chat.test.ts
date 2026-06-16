@@ -1334,6 +1334,25 @@ describe("handleSendChat", () => {
     expect(host.chatMessage).toBe("");
   });
 
+  it("passes a typed /new display name to the fresh-session action", async () => {
+    const request = vi.fn(async (method: string) => {
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const onSlashAction = vi.fn();
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "/new Research Plan",
+      sessionKey: "agent:main",
+      onSlashAction,
+    });
+
+    await handleSendChat(host);
+
+    expect(request).not.toHaveBeenCalled();
+    expect(onSlashAction).toHaveBeenCalledWith("new-session", { displayName: "Research Plan" });
+    expect(host.chatMessage).toBe("");
+  });
+
   it("does not queue typed /new behind an active run", async () => {
     const onSlashAction = vi.fn();
     const host = makeHost({
@@ -2165,6 +2184,53 @@ describe("handleSendChat", () => {
       value: "openai/gpt-5-mini",
     });
     expect(onSlashAction).toHaveBeenCalledWith("refresh-tools-effective");
+  });
+
+  it("patches the current session display name for /label", async () => {
+    const request = vi.fn(async (method: string, params: unknown) => {
+      if (method === "sessions.patch") {
+        expect(params).toStrictEqual({
+          key: "agent:main",
+          displayName: "Research Plan",
+        });
+        return { ok: true };
+      }
+      if (method === "sessions.list") {
+        return createSessionsResult([row("agent:main", { displayName: "Research Plan" })]);
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "/label Research Plan",
+      sessionKey: "agent:main",
+    });
+
+    await handleSendChat(host);
+
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "agent:main",
+      displayName: "Research Plan",
+    });
+    expect(host.chatMessage).toBe("");
+    expect(host.sessionsError).toBeNull();
+  });
+
+  it("shows an error when /label has no display name", async () => {
+    const request = vi.fn(async (method: string) => {
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "/label   ",
+      sessionKey: "agent:main",
+    });
+
+    await handleSendChat(host);
+
+    expect(request).not.toHaveBeenCalled();
+    expect(host.lastError).toBe("Usage: /label <name>");
+    expect(host.chatMessage).toBe("");
   });
 
   it("shows local slash-command feedback when the gateway client is unavailable", async () => {

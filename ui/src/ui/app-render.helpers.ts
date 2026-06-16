@@ -725,7 +725,7 @@ export function dismissChatError(state: AppViewState) {
   state.chatError = null;
 }
 
-export type CreateChatSessionIntent = { source: "user" };
+export type CreateChatSessionIntent = { source: "user"; displayName?: string };
 
 export async function createChatSession(
   state: AppViewState,
@@ -752,6 +752,7 @@ export async function createChatSession(
   state.chatError = null;
   const previousSessionKey = state.sessionKey;
   const normalizedPreviousSessionKey = normalizeOptionalString(previousSessionKey);
+  const displayName = normalizeOptionalString(intent.displayName);
   const parentSessionKey =
     normalizeLowercaseStringOrEmpty(normalizedPreviousSessionKey) === "unknown"
       ? undefined
@@ -763,6 +764,7 @@ export async function createChatSession(
         scopedAgentParamsForSession(state, previousSessionKey).agentId ??
         resolveAgentIdFromSessionKey(previousSessionKey),
       parentSessionKey,
+      ...(displayName ? { displayName } : {}),
       emitCommandHooks: parentSessionKey !== undefined ? true : undefined,
     },
     {

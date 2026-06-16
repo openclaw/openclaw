@@ -740,6 +740,32 @@ export function buildBuiltinChatCommands(
       acceptsArgs: true,
       category: "session",
       tier: "essential",
+      args: [
+        {
+          name: "name",
+          description: "Optional session display name",
+          type: "string",
+          captureRemaining: true,
+        },
+      ],
+    }),
+    defineChatCommand({
+      key: "label",
+      nativeName: "label",
+      description: "Name the current session.",
+      textAlias: "/label",
+      acceptsArgs: true,
+      category: "session",
+      tier: "standard",
+      args: [
+        {
+          name: "name",
+          description: "Session display name",
+          type: "string",
+          required: true,
+          captureRemaining: true,
+        },
+      ],
     }),
     defineChatCommand({
       key: "name",
