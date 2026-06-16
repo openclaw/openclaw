@@ -740,6 +740,9 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (!isSameSessionKey(evt.sessionKey, state.currentSessionKey)) {
       return;
     }
+    if (!isMatchingGlobalAgentEvent(evt.sessionKey, evt.agentId)) {
+      return;
+    }
     if (evt.reason !== "new" && evt.reason !== "reset") {
       return;
     }

@@ -49,6 +49,7 @@ export type BtwEvent = {
 
 export type SessionChangedEvent = {
   sessionKey?: string;
+  agentId?: string;
   reason?: string;
   phase?: string;
   runId?: string;

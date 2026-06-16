@@ -971,6 +971,33 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(setActivityStatus).not.toHaveBeenCalledWith("idle");
   });
 
+  it("ignores selected-global sessions.changed reset events from other agents", () => {
+    const { state, loadHistory, setActivityStatus, handleSessionsChangedEvent } =
+      createHandlersHarness({
+        state: {
+          agentDefaultId: "main",
+          currentAgentId: "work",
+          currentSessionKey: "global",
+          activeChatRunId: "run-current",
+          activityStatus: "streaming",
+        },
+      });
+
+    handleSessionsChangedEvent({
+      sessionKey: "global",
+      agentId: "main",
+      reason: "reset",
+      sessionId: "session-other-agent",
+      updatedAt: 300,
+    } satisfies SessionChangedEvent);
+
+    expect(state.activeChatRunId).toBe("run-current");
+    expect(state.activityStatus).toBe("streaming");
+    expect(state.currentSessionId).not.toBe("session-other-agent");
+    expect(loadHistory).not.toHaveBeenCalled();
+    expect(setActivityStatus).not.toHaveBeenCalledWith("idle");
+  });
+
   it("accepts tool events after chat final for the same run", () => {
     const { state, chatLog, tui, handleChatEvent, handleAgentEvent } = createHandlersHarness({
       state: { activeChatRunId: null },
