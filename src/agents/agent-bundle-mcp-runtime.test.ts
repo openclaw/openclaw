@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createBundleMcpJsonSchemaValidator } from "./agent-bundle-mcp-runtime.js";
 import { cleanupBundleMcpHarness } from "./agent-bundle-mcp-test-harness.js";
@@ -39,7 +40,14 @@ async function writeListToolsMcpServer(params: {
   delayMs?: number;
   hang?: boolean;
   inputSchema?: unknown;
-  tools?: Array<{ name: string; description?: string; inputSchema?: unknown }>;
+  tools?: Array<{
+    name: string;
+    description?: string;
+    inputSchema?: unknown;
+    outputSchema?: unknown;
+  }>;
+  /** Serve a different tool list per tools/list request; the last entry repeats. */
+  toolsByRequest?: Array<Array<{ name: string; inputSchema?: unknown; outputSchema?: unknown }>>;
   capabilities?: Record<string, unknown>;
   listToolsMethodNotFound?: boolean;
   callToolIsError?: boolean;
@@ -65,9 +73,11 @@ const tools = ${JSON.stringify(
         },
       ],
     )};
+const toolsByRequest = ${JSON.stringify(params.toolsByRequest ?? null)};
 const callToolIsError = ${params.callToolIsError === true};
 const callToolJsonRpcError = ${params.callToolJsonRpcError === true};
 const resourceListJsonRpcError = ${params.resourceListJsonRpcError === true};
+let listToolsRequestCount = 0;
 
 let buffer = "";
 let pendingTimer;
@@ -113,13 +123,17 @@ function handle(message) {
       keepAlive = setInterval(() => {}, 1000);
       return;
     }
+    const requestTools = toolsByRequest
+      ? toolsByRequest[Math.min(listToolsRequestCount, toolsByRequest.length - 1)]
+      : tools;
+    listToolsRequestCount += 1;
     log("delay tools/list " + delayMs);
     pendingTimer = setTimeout(() => {
       send({
         jsonrpc: "2.0",
         id: message.id,
         result: {
-          tools,
+          tools: requestTools,
         },
       });
     }, delayMs);
@@ -621,6 +635,164 @@ describe("session MCP runtime", () => {
     ]);
   });
 
+  it("backfills type: 'object' only when inputSchema omits the type field", () => {
+    const { normalizeInputSchema } = testing;
+
+    // Schema without type should get type: "object" backfilled
+    expect(normalizeInputSchema({ properties: { foo: { type: "string" } } })).toEqual({
+      type: "object",
+      properties: { foo: { type: "string" } },
+    });
+
+    // Schema with explicit type: "object" should be returned as-is
+    expect(
+      normalizeInputSchema({ type: "object", properties: { bar: { type: "number" } } }),
+    ).toEqual({
+      type: "object",
+      properties: { bar: { type: "number" } },
+    });
+
+    // Schema with explicit non-object type should NOT be overwritten
+    expect(normalizeInputSchema({ type: "string" })).toEqual({
+      type: "string",
+    });
+
+    // Empty schema (no type, no properties) should still get type: "object"
+    expect(normalizeInputSchema({})).toEqual({
+      type: "object",
+    });
+  });
+
+  it("parses a tools/list response whose inputSchema omits type (issue #63602)", () => {
+    // Regression for #63602: the SDK's strict ToolSchema requires
+    // inputSchema.type === "object" via z.literal, so servers that omit type
+    // would crash listTools() before this fix.
+    const { RelaxedListToolsResultSchema } = testing;
+
+    const payload = {
+      tools: [
+        {
+          name: "typeless_tool",
+          description: "Tool emitted with no inputSchema.type",
+          inputSchema: {
+            properties: { query: { type: "string" } },
+            required: ["query"],
+          },
+        },
+        {
+          name: "empty_schema_tool",
+          inputSchema: {},
+        },
+        {
+          name: "valid_object_tool",
+          inputSchema: { type: "object", properties: {} },
+        },
+      ],
+    };
+
+    const parsed = RelaxedListToolsResultSchema.parse(payload);
+    expect(parsed.tools).toHaveLength(3);
+    expect(parsed.tools[0]?.inputSchema).toEqual({
+      properties: { query: { type: "string" } },
+      required: ["query"],
+    });
+    expect(parsed.tools[1]?.inputSchema).toEqual({});
+    expect(parsed.tools[2]?.inputSchema).toEqual({ type: "object", properties: {} });
+  });
+
+  it("relaxes only the root inputSchema.type relative to the SDK ToolSchema", () => {
+    // The relaxed schema is derived from the pinned SDK ToolSchema; every
+    // field other than the root inputSchema.type keeps the strict contract,
+    // so malformed outputSchema or task metadata still rejects the page.
+    const { RelaxedListToolsResultSchema } = testing;
+
+    expect(
+      RelaxedListToolsResultSchema.safeParse({
+        tools: [
+          {
+            name: "bad_output_tool",
+            inputSchema: { type: "object", properties: {} },
+            outputSchema: { type: "string" },
+          },
+        ],
+      }).success,
+    ).toBe(false);
+
+    expect(
+      RelaxedListToolsResultSchema.safeParse({
+        tools: [
+          {
+            name: "bad_execution_tool",
+            inputSchema: { type: "object", properties: {} },
+            execution: { taskSupport: "banana" },
+          },
+        ],
+      }).success,
+    ).toBe(false);
+
+    // Missing inputSchema entirely stays rejected, matching the SDK.
+    expect(
+      RelaxedListToolsResultSchema.safeParse({
+        tools: [{ name: "schemaless_tool" }],
+      }).success,
+    ).toBe(false);
+
+    // Pagination keeps the SDK contract.
+    expect(RelaxedListToolsResultSchema.safeParse({ tools: [], nextCursor: "x" }).success).toBe(
+      true,
+    );
+  });
+
+  it("rejects tools whose root inputSchema declares an explicit non-object type", () => {
+    const { isValidRootInputSchema, normalizeInputSchema } = testing;
+
+    // A type-less schema is valid once normalized.
+    expect(isValidRootInputSchema(normalizeInputSchema({ properties: {} }))).toBe(true);
+
+    // An explicit object schema is valid.
+    expect(isValidRootInputSchema({ type: "object", properties: {} })).toBe(true);
+
+    // Explicit non-object root types are rejected; the catalog loop skips
+    // these tools to avoid breaking provider requests that require object
+    // tool parameters (e.g. OpenAI function calls).
+    expect(isValidRootInputSchema({ type: "string" })).toBe(false);
+    expect(isValidRootInputSchema({ type: "array", items: {} })).toBe(false);
+    expect(isValidRootInputSchema({ type: "number" })).toBe(false);
+  });
+
+  it("counts only accepted tools after catalog schema filtering", () => {
+    const { collectValidCatalogTools } = testing;
+
+    const catalogTools = collectValidCatalogTools({
+      serverName: "bundleProbe",
+      safeServerName: "bundleProbe",
+      launchSummary: "node probe.mjs",
+      listedTools: [
+        {
+          name: " typeless_tool ",
+          description: "Tool without inputSchema.type",
+          inputSchema: { properties: { query: { type: "string" } } },
+        },
+        {
+          name: "bad_root_schema",
+          inputSchema: { type: "string" },
+        },
+        {
+          name: "   ",
+          inputSchema: { type: "object", properties: {} },
+        },
+      ],
+    });
+
+    expect(catalogTools).toHaveLength(1);
+    expect(catalogTools[0]).toMatchObject({
+      serverName: "bundleProbe",
+      safeServerName: "bundleProbe",
+      toolName: "typeless_tool",
+      inputSchema: { type: "object", properties: { query: { type: "string" } } },
+    });
+  });
+
   it("holds a runtime lease until the materialized tool runtime is disposed", async () => {
     let activeLeases = 0;
     const runtime = {
@@ -757,14 +929,25 @@ describe("session MCP runtime", () => {
     }
   });
 
-  it("records diagnostics when tools/list returns an invalid tool schema", async () => {
+  it("skips tools whose root inputSchema declares a non-object type without failing the server", async () => {
+    // Regression for #63602: a single tool with an explicit non-object root
+    // inputSchema must be dropped, not crash the whole tools/list response.
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-invalid-schema-"));
     const serverPath = path.join(tempDir, "invalid-schema.mjs");
     const logPath = path.join(tempDir, "server.log");
     await writeListToolsMcpServer({
       filePath: serverPath,
       logPath,
-      inputSchema: { type: "array", items: { type: "number" } },
+      tools: [
+        {
+          name: "array_root_tool",
+          inputSchema: { type: "array", items: { type: "number" } },
+        },
+        {
+          name: "ok_tool",
+          inputSchema: { type: "object", properties: {} },
+        },
+      ],
     });
 
     const runtime = await getOrCreateSessionMcpRuntime({
@@ -786,11 +969,234 @@ describe("session MCP runtime", () => {
     try {
       const catalog = await runtime.getCatalog();
 
-      expect(catalog.servers).toEqual({});
+      expect(catalog.tools.map((tool) => tool.toolName)).toEqual(["ok_tool"]);
+      expect(catalog.servers.fuzzplugin?.toolCount).toBe(1);
+      expect(catalog.diagnostics).toBeUndefined();
+    } finally {
+      await runtime.dispose();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("pins the SDK Client metadata-cache seam used after each tools/list page", () => {
+    // listAllTools calls the TypeScript-private Client.cacheToolMetadata()
+    // after every relaxed page parse to keep output-schema validators and
+    // task-support guards at parity with the SDK's own listTools() flow.
+    // The invocation is optional so an SDK change cannot crash the catalog,
+    // but the guards would silently disappear with it — this pin makes an
+    // SDK upgrade that drops or renames the method fail loudly instead.
+    const clientPrototype = Client.prototype as unknown as Record<string, unknown>;
+    expect(typeof clientPrototype.cacheToolMetadata).toBe("function");
+  });
+
+  it("keeps rejecting servers whose strict failure is not the root inputSchema.type check", async () => {
+    // The relaxed schema only loosens the root inputSchema.type: a tool with
+    // a malformed outputSchema still fails the page parse, so the server
+    // stays rejected instead of having the invalid field laundered through.
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-invalid-output-schema-"));
+    const serverPath = path.join(tempDir, "invalid-output-schema.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      tools: [
+        {
+          name: "bad_output_tool",
+          inputSchema: { type: "object", properties: {} },
+          outputSchema: { type: "string" },
+        },
+      ],
+    });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-invalid-output-schema",
+      sessionKey: "agent:test:session-invalid-output-schema",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            badOutput: {
+              command: process.execPath,
+              args: [serverPath],
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      const catalog = await runtime.getCatalog();
+
       expect(catalog.tools).toEqual([]);
-      expect(catalog.diagnostics?.[0]?.serverName).toBe("fuzzplugin");
-      expect(catalog.diagnostics?.[0]?.message).toContain("Invalid input: expected");
-      expect(catalog.diagnostics?.[0]?.message).toContain("object");
+      expect(catalog.servers).toEqual({});
+      expect(catalog.diagnostics?.[0]?.serverName).toBe("badOutput");
+      expect(catalog.diagnostics?.[0]?.message).toContain("outputSchema");
+    } finally {
+      await runtime.dispose();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps rejecting servers that mix repairable and unrelated strict failures", async () => {
+    // One tool is the repairable #63602 shape, the sibling has a malformed
+    // outputSchema; the relaxed parse rejects the page on the sibling, so
+    // the server stays rejected until the unrelated failure is fixed
+    // server-side.
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-mixed-invalid-schema-"));
+    const serverPath = path.join(tempDir, "mixed-invalid-schema.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      tools: [
+        {
+          name: "typeless_tool",
+          inputSchema: { properties: { query: { type: "string" } } },
+        },
+        {
+          name: "bad_output_tool",
+          inputSchema: { type: "object", properties: {} },
+          outputSchema: { type: "string" },
+        },
+      ],
+    });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-mixed-invalid-schema",
+      sessionKey: "agent:test:session-mixed-invalid-schema",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            mixedInvalid: {
+              command: process.execPath,
+              args: [serverPath],
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      const catalog = await runtime.getCatalog();
+
+      expect(catalog.tools).toEqual([]);
+      expect(catalog.servers).toEqual({});
+      expect(catalog.diagnostics?.[0]?.serverName).toBe("mixedInvalid");
+    } finally {
+      await runtime.dispose();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("validates and catalogs the same tools/list response without a second request", async () => {
+    // Regression for the validation-to-use gap in the earlier strict-then-
+    // relist design: a stateful or hostile server could pass the strict
+    // failure gate with one response and then serve different, unvalidated
+    // metadata to the re-list. The catalog must be built from the single
+    // response that was validated — the server is served exactly one
+    // tools/list request, so its second (malicious) payload is never seen.
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-single-request-"));
+    const serverPath = path.join(tempDir, "stateful-server.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      toolsByRequest: [
+        [
+          {
+            name: "benign_typeless_tool",
+            inputSchema: { properties: { query: { type: "string" } } },
+          },
+        ],
+        [
+          {
+            name: "drifted_tool",
+            inputSchema: { properties: {} },
+            outputSchema: { type: "string" },
+          },
+        ],
+      ],
+    });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-single-request",
+      sessionKey: "agent:test:session-single-request",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            stateful: {
+              command: process.execPath,
+              args: [serverPath],
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      const catalog = await runtime.getCatalog();
+
+      expect(catalog.tools.map((tool) => tool.toolName)).toEqual(["benign_typeless_tool"]);
+      expect(catalog.servers.stateful?.toolCount).toBe(1);
+
+      const serverLog = await fs.readFile(logPath, "utf8");
+      const listRequests = serverLog.match(/recv tools\/list/g) ?? [];
+      expect(listRequests).toHaveLength(1);
+    } finally {
+      await runtime.dispose();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("caches output-schema validators for typeless tools accepted by the relaxed parse", async () => {
+    // The SDK's listTools() caches output-schema validators that callTool()
+    // enforces later. The relaxed listing must preserve that side effect: a
+    // typeless tool with an outputSchema that returns no structuredContent
+    // must fail validation, not slip through unchecked.
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-fallback-output-cache-"));
+    const serverPath = path.join(tempDir, "fallback-output-cache.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      tools: [
+        {
+          name: "typeless_tool",
+          inputSchema: { properties: {} },
+          outputSchema: {
+            type: "object",
+            properties: { ok: { type: "boolean" } },
+            required: ["ok"],
+          },
+        },
+      ],
+    });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-fallback-output-cache",
+      sessionKey: "agent:test:session-fallback-output-cache",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            legacy: {
+              command: process.execPath,
+              args: [serverPath],
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      const catalog = await runtime.getCatalog();
+
+      expect(catalog.tools.map((tool) => tool.toolName)).toEqual(["typeless_tool"]);
+      await expect(runtime.callTool("legacy", "typeless_tool", {})).rejects.toThrow(
+        /did not return structured content/,
+      );
     } finally {
       await runtime.dispose();
       await fs.rm(tempDir, { recursive: true, force: true });
