@@ -169,4 +169,14 @@ describe("xiaomi compat detection", () => {
       }).requiresReasoningContentOnAssistantMessages,
     ).toBe(false);
   });
+
+  it("sets requiresReasoningContentOnAssistantMessages for openrouter provider", () => {
+    expect(
+      resolveOpenAICompletionsCompatDefaults({
+        provider: "openrouter",
+        endpointClass: "openrouter",
+        knownProviderFamily: "openrouter",
+      }).requiresReasoningContentOnAssistantMessages,
+    ).toBe(true);
+  });
 });
