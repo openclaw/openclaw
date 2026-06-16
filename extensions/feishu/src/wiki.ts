@@ -12,6 +12,44 @@ import { FeishuWikiSchema, type FeishuWikiParams } from "./wiki-schema.js";
 
 type ObjType = "doc" | "sheet" | "mindnote" | "bitable" | "file" | "docx" | "slides";
 
+// Feishu wiki list endpoints are paginated (max 50 per page). Without following
+// `page_token` the tool silently truncates to the first page and drops the rest
+// (#37626). Cap the page count so a malformed `has_more` response cannot loop
+// forever.
+const WIKI_PAGE_SIZE = 50;
+const WIKI_MAX_PAGES = 100;
+
+// Drain a Feishu paginated list endpoint. Feishu may return `has_more: true`
+// with an empty page, so we loop on `has_more` rather than item count, and stop
+// if a continuation is promised without a `page_token` (otherwise we would spin
+// on the same page).
+async function collectPaged<T>(
+  fetchPage: (pageToken: string | undefined) => Promise<{
+    code: number;
+    msg?: string;
+    items?: T[];
+    pageToken?: string;
+    hasMore?: boolean;
+  }>,
+): Promise<T[]> {
+  const all: T[] = [];
+  let pageToken: string | undefined;
+  for (let page = 0; page < WIKI_MAX_PAGES; page++) {
+    const res = await fetchPage(pageToken);
+    if (res.code !== 0) {
+      throw new Error(res.msg);
+    }
+    if (res.items) {
+      all.push(...res.items);
+    }
+    if (!res.hasMore || !res.pageToken) {
+      break;
+    }
+    pageToken = res.pageToken;
+  }
+  return all;
+}
+
 // ============ Actions ============
 
 const WIKI_ACCESS_HINT =
@@ -41,18 +79,25 @@ function optionalWikiSpaceId(value: unknown, fieldName: string): string | undefi
 }
 
 async function listSpaces(client: Lark.Client) {
-  const res = await client.wiki.space.list({});
-  if (res.code !== 0) {
-    throw new Error(res.msg);
-  }
+  const items = await collectPaged(async (pageToken) => {
+    const res = await client.wiki.space.list({
+      params: { page_size: WIKI_PAGE_SIZE, page_token: pageToken },
+    });
+    return {
+      code: res.code,
+      msg: res.msg,
+      items: res.data?.items,
+      pageToken: res.data?.page_token,
+      hasMore: res.data?.has_more,
+    };
+  });
 
-  const spaces =
-    res.data?.items?.map((s) => ({
-      space_id: s.space_id,
-      name: s.name,
-      description: s.description,
-      visibility: s.visibility,
-    })) ?? [];
+  const spaces = items.map((s) => ({
+    space_id: s.space_id,
+    name: s.name,
+    description: s.description,
+    visibility: s.visibility,
+  }));
 
   return {
     spaces,
@@ -61,23 +106,32 @@ async function listSpaces(client: Lark.Client) {
 }
 
 async function listNodes(client: Lark.Client, spaceId: string, parentNodeToken?: string) {
-  const res = await client.wiki.spaceNode.list({
-    path: { space_id: spaceId },
-    params: { parent_node_token: parentNodeToken },
+  const items = await collectPaged(async (pageToken) => {
+    const res = await client.wiki.spaceNode.list({
+      path: { space_id: spaceId },
+      params: {
+        parent_node_token: parentNodeToken,
+        page_size: WIKI_PAGE_SIZE,
+        page_token: pageToken,
+      },
+    });
+    return {
+      code: res.code,
+      msg: res.msg,
+      items: res.data?.items,
+      pageToken: res.data?.page_token,
+      hasMore: res.data?.has_more,
+    };
   });
-  if (res.code !== 0) {
-    throw new Error(res.msg);
-  }
 
   return {
-    nodes:
-      res.data?.items?.map((n) => ({
-        node_token: n.node_token,
-        obj_token: n.obj_token,
-        obj_type: n.obj_type,
-        title: n.title,
-        has_child: n.has_child,
-      })) ?? [],
+    nodes: items.map((n) => ({
+      node_token: n.node_token,
+      obj_token: n.obj_token,
+      obj_type: n.obj_type,
+      title: n.title,
+      has_child: n.has_child,
+    })),
   };
 }
 
