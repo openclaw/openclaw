@@ -907,6 +907,7 @@ export async function runSetupWizard(
       prompter,
       runtime,
       setDefaultModel: !opts.agentId,
+      preserveExistingDefaultModel: true,
       ...(opts.agentId ? { agentId: opts.agentId } : {}),
       opts: {
         ...opts,
