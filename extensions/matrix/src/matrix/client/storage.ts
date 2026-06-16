@@ -35,6 +35,7 @@ import type { MatrixStoragePaths } from "./types.js";
 
 const DEFAULT_ACCOUNT_KEY = "default";
 const STORAGE_META_FILENAME = "storage-meta.json";
+const THREAD_BINDINGS_FILENAME = "thread-bindings.json";
 const STORAGE_META_NAMESPACE = "storage-meta";
 const STORAGE_META_STATE_KEY = "current";
 const STORAGE_META_MAX_ENTRIES = 10;
@@ -113,6 +114,18 @@ function scoreStorageRoot(rootDir: string): number {
   }
   if (fs.existsSync(path.join(rootDir, "crypto"))) {
     score += 8;
+  }
+  if (fs.existsSync(path.join(rootDir, THREAD_BINDINGS_FILENAME))) {
+    score += 4;
+  }
+  if (fs.existsSync(path.join(rootDir, MATRIX_LEGACY_CRYPTO_MIGRATION_FILENAME))) {
+    score += 3;
+  }
+  if (fs.existsSync(path.join(rootDir, MATRIX_RECOVERY_KEY_FILENAME))) {
+    score += 2;
+  }
+  if (fs.existsSync(path.join(rootDir, MATRIX_IDB_SNAPSHOT_FILENAME))) {
+    score += 2;
   }
   score += scoreMatrixCryptoStateInStore(rootDir);
   return score;
