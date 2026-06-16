@@ -321,6 +321,9 @@ describe("createNodesTool screen_record duration guardrails", () => {
     screenMocks.parseScreenSnapshotPayload.mockReturnValueOnce({
       base64: "ZmFrZQ==",
       format: "webp",
+      screenIndex: 0,
+      width: 1920,
+      height: 1080,
     });
     const tool = createNodesTool();
 
