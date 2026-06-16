@@ -5,19 +5,6 @@
   },
   "enabledByDefault": true,
   "providers": ["aigateway"],
-  "providerEndpoints": [
-    {
-      "endpointClass": "aigateway-native",
-      "hosts": ["api.aigateway.sh"]
-    }
-  ],
-  "providerRequest": {
-    "providers": {
-      "aigateway": {
-        "family": "aigateway"
-      }
-    }
-  },
   "setup": {
     "providers": [
       {
