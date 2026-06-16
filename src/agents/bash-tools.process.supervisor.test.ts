@@ -143,7 +143,7 @@ describe("process tool supervisor cancellation", () => {
       sessionId: "sess-fallback",
     });
 
-    expect(killProcessTreeMock).toHaveBeenCalledWith(4242);
+    expect(killProcessTreeMock).toHaveBeenCalledWith(4242, { detached: process.platform !== "win32" });
     expect(getSession("sess-fallback")).toBeUndefined();
     expectFinishedSessionState("sess-fallback", { status: "failed", exitSignal: "SIGKILL" });
     expectTextContent(result.content[0], "Killed session sess-fallback.");
