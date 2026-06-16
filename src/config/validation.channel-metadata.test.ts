@@ -124,6 +124,37 @@ function createExternalFeishuSchemaWithCloserMetadataRegistry(): PluginManifestR
   };
 }
 
+function createExternalFeishuSchemaWithRootOnlyShadowRegistry(): PluginManifestRegistry {
+  const firstSchema = createExternalFeishuSchemaRegistry().plugins[0];
+  return {
+    diagnostics: [],
+    plugins: [
+      firstSchema,
+      createPluginManifestRecord({
+        id: "workspace-channel-labels",
+        origin: "workspace",
+        channels: ["feishu"],
+      }),
+      createPluginManifestRecord({
+        id: "other-global-feishu",
+        origin: "global",
+        channels: ["feishu"],
+        channelConfigs: {
+          feishu: {
+            schema: {
+              type: "object",
+              properties: {
+                otherField: { type: "string" },
+              },
+              additionalProperties: false,
+            },
+          },
+        },
+      }),
+    ],
+  };
+}
+
 function createCompatPluginConfigSchemaRegistry(): PluginManifestRegistry {
   return {
     diagnostics: [],
@@ -348,6 +379,67 @@ describe("validateConfigObjectRawWithPlugins channel metadata", () => {
       );
       expect(result.issues.map((issue) => issue.message)).not.toContain(
         'invalid config for plugin workspace-channel-labels: must not have additional properties: "unsupportedField"',
+      );
+    }
+  });
+
+  it("keeps schema ownership coupled when closer root metadata preserves a schema", () => {
+    mockLoadPluginManifestRegistry.mockReturnValue(
+      createExternalFeishuSchemaWithRootOnlyShadowRegistry(),
+    );
+
+    const result = validateConfigObjectRawWithPlugins({
+      channels: {
+        feishu: {
+          appId: "app-id",
+          appSecret: "secret",
+          unsupportedField: true,
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues).toContainEqual(
+        expect.objectContaining({
+          path: "channels.feishu",
+          message:
+            'invalid config for plugin openclaw-lark: must not have additional properties: "unsupportedField"',
+        }),
+      );
+      expect(result.issues.map((issue) => issue.message)).not.toContain(
+        'invalid config for plugin other-global-feishu: must not have additional properties: "unsupportedField"',
+      );
+    }
+  });
+
+  it("sanitizes the schema owner in validation diagnostics", () => {
+    const unsafeId = `openclaw${String.fromCharCode(10)}${String.fromCharCode(27)}[31m-lark`;
+    const registry = createExternalFeishuSchemaRegistry();
+    registry.plugins[0] = {
+      ...registry.plugins[0],
+      id: unsafeId,
+    };
+    mockLoadPluginManifestRegistry.mockReturnValue(registry);
+
+    const result = validateConfigObjectRawWithPlugins({
+      channels: {
+        feishu: {
+          appId: "app-id",
+          appSecret: "secret",
+          unsupportedField: true,
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues).toContainEqual(
+        expect.objectContaining({
+          path: "channels.feishu",
+          message:
+            'invalid config for plugin openclaw-lark: must not have additional properties: "unsupportedField"',
+        }),
       );
     }
   });

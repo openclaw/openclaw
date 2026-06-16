@@ -3,6 +3,7 @@ import path from "node:path";
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { planManifestModelCatalogSuppressions } from "../model-catalog/index.js";
@@ -42,7 +43,7 @@ import { isRecord, resolveUserPath } from "../utils.js";
 import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-dirs.js";
 import { appendAllowedValuesHint, summarizeAllowedValues } from "./allowed-values.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
-import { collectChannelSchemaMetadata } from "./channel-config-metadata.js";
+import { collectChannelSchemaMetadataWithOwnership } from "./channel-config-metadata.js";
 import { shouldSuppressMissingCodexPluginDiagnostics } from "./codex-plugin-diagnostics.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
@@ -1073,8 +1074,9 @@ function validateConfigObjectWithPluginsBase(
   };
 
   const formatChannelConfigIssueMessage = (message: string, pluginId?: string): string => {
-    if (pluginId) {
-      return `invalid config for plugin ${pluginId}: ${message}`;
+    const safePluginId = pluginId ? sanitizeForLog(pluginId).trim() : "";
+    if (safePluginId) {
+      return `invalid config for plugin ${safePluginId}: ${message}`;
     }
     return formatRawChannelConfigIssueMessage(message);
   };
@@ -1229,34 +1231,12 @@ function validateConfigObjectWithPluginsBase(
           (entry) => [entry.channelId, { schema: entry.schema }] as const,
         ),
       );
-      const ownerByChannelId = new Map<
-        string,
-        { pluginId: string; origin: string; originRank: number }
-      >();
-      const originRank: Record<string, number> = { config: 0, workspace: 1, global: 2, bundled: 3 };
-      for (const record of info.registry.plugins) {
-        const rank = originRank[record.origin] ?? Number.MAX_SAFE_INTEGER;
-        for (const [channelId, channelConfig] of Object.entries(record.channelConfigs ?? {})) {
-          if (channelConfig.schema === undefined) {
-            continue;
-          }
-          const current = ownerByChannelId.get(channelId);
-          if (!current || rank <= current.originRank) {
-            ownerByChannelId.set(channelId, {
-              pluginId: record.id,
-              origin: record.origin,
-              originRank: rank,
-            });
-          }
-        }
-      }
-      for (const entry of collectChannelSchemaMetadata(info.registry)) {
+      for (const entry of collectChannelSchemaMetadataWithOwnership(info.registry)) {
         const current = info.channelSchemas.get(entry.id);
         if (entry.configSchema) {
-          const owner = ownerByChannelId.get(entry.id);
           info.channelSchemas.set(entry.id, {
             schema: entry.configSchema,
-            pluginId: owner?.origin === "bundled" ? undefined : owner?.pluginId,
+            pluginId: entry.schemaPluginOrigin === "bundled" ? undefined : entry.schemaPluginId,
           });
           continue;
         }
