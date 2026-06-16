@@ -321,6 +321,7 @@ describe("whatsapp inbound dispatch", () => {
       groupMemberRoster: new Map(),
       msg: makeMsg({
         from: "123@g.us",
+        conversationId: "123@g.us",
         chatType: "group",
         event: { timestamp: 1737158400000 },
         platform: {
@@ -1303,6 +1304,7 @@ describe("whatsapp inbound dispatch", () => {
       msg: makeMsg({
         event: { id: "msg-1" },
         from: "+15550001000",
+        conversationId: "+15550001000",
         platform: {
           recipientJid: "+15550002000",
           chatJid: "15550001000@s.whatsapp.net",
@@ -1533,7 +1535,10 @@ describe("whatsapp inbound dispatch", () => {
   it("resolves DM route targets from the sender first and the chat JID second", async () => {
     expect(
       resolveWhatsAppDmRouteTarget({
-        msg: makeMsg({ from: "15550003333@s.whatsapp.net" }),
+        msg: makeMsg({
+          from: "15550003333@s.whatsapp.net",
+          conversationId: "15550003333@s.whatsapp.net",
+        }),
         senderE164: "+15550002222",
         normalizeE164: (value) => value,
       }),
@@ -1541,7 +1546,10 @@ describe("whatsapp inbound dispatch", () => {
 
     expect(
       resolveWhatsAppDmRouteTarget({
-        msg: makeMsg({ from: "15550003333@s.whatsapp.net" }),
+        msg: makeMsg({
+          from: "15550003333@s.whatsapp.net",
+          conversationId: "15550003333@s.whatsapp.net",
+        }),
         normalizeE164: () => null,
       }),
     ).toBe("+15550003333");
