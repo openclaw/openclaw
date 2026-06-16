@@ -25,18 +25,16 @@ function isRetiredOllamaCloudBaseUrl(value: unknown): value is string {
   }
 }
 
-function findRetiredOllamaCloudBaseUrl(
-  provider: unknown,
-): { key: "baseUrl" | "baseURL"; value: string } | null {
+function findRetiredOllamaCloudBaseUrl(provider: unknown): { key: "baseUrl" | "baseURL" } | null {
   const record = asRecord(provider);
   if (!record) {
     return null;
   }
   if (isRetiredOllamaCloudBaseUrl(record.baseUrl)) {
-    return { key: "baseUrl", value: record.baseUrl };
+    return { key: "baseUrl" };
   }
   if (isRetiredOllamaCloudBaseUrl(record.baseURL)) {
-    return { key: "baseURL", value: record.baseURL };
+    return { key: "baseURL" };
   }
   return null;
 }
@@ -79,7 +77,7 @@ export function migrateOllamaCloudRetiredBaseUrl(config: OpenClawConfig): {
     return {
       config: nextConfig,
       changes: [
-        `Removed retired models.providers.ollama-cloud.baseURL ${retired.value} while preserving models.providers.ollama-cloud.baseUrl.`,
+        "Removed retired models.providers.ollama-cloud.baseURL while preserving models.providers.ollama-cloud.baseUrl.",
       ],
     };
   }
@@ -92,7 +90,7 @@ export function migrateOllamaCloudRetiredBaseUrl(config: OpenClawConfig): {
   return {
     config: nextConfig,
     changes: [
-      `Updated models.providers.ollama-cloud.${retired.key} from retired ${retired.value} to ${OLLAMA_CLOUD_BASE_URL}.`,
+      `Updated models.providers.ollama-cloud.${retired.key} from the retired Ollama Cloud endpoint to ${OLLAMA_CLOUD_BASE_URL}.`,
     ],
   };
 }

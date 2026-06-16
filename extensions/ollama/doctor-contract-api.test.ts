@@ -53,7 +53,7 @@ describe("ollama doctor contract", () => {
     const result = normalizeCompatibilityConfig({ cfg: config });
 
     expect(result.changes).toEqual([
-      "Updated models.providers.ollama-cloud.baseUrl from retired https://ai.ollama.com to https://ollama.com.",
+      "Updated models.providers.ollama-cloud.baseUrl from the retired Ollama Cloud endpoint to https://ollama.com.",
     ]);
     expect(readOllamaCloudProvider(result.config)).toEqual({
       baseUrl: "https://ollama.com",
@@ -80,7 +80,7 @@ describe("ollama doctor contract", () => {
     const result = normalizeCompatibilityConfig({ cfg: config });
 
     expect(result.changes).toEqual([
-      "Removed retired models.providers.ollama-cloud.baseURL https://ai.ollama.com/ while preserving models.providers.ollama-cloud.baseUrl.",
+      "Removed retired models.providers.ollama-cloud.baseURL while preserving models.providers.ollama-cloud.baseUrl.",
     ]);
     expect(readOllamaCloudProvider(result.config)).toEqual({
       baseUrl: "https://ollama.com",
@@ -112,7 +112,7 @@ describe("ollama doctor contract", () => {
     const result = normalizeCompatibilityConfig({ cfg: config });
 
     expect(result.changes).toEqual([
-      "Updated models.providers.ollama-cloud.baseURL from retired https://ai.ollama.com/ to https://ollama.com.",
+      "Updated models.providers.ollama-cloud.baseURL from the retired Ollama Cloud endpoint to https://ollama.com.",
     ]);
     expect(readOllamaCloudProvider(result.config)).toEqual({
       baseUrl: "https://ollama.com",
@@ -144,7 +144,7 @@ describe("ollama doctor contract", () => {
     const result = normalizeCompatibilityConfig({ cfg: config });
 
     expect(result.changes).toEqual([
-      "Removed retired models.providers.ollama-cloud.baseURL https://ai.ollama.com/ while preserving models.providers.ollama-cloud.baseUrl.",
+      "Removed retired models.providers.ollama-cloud.baseURL while preserving models.providers.ollama-cloud.baseUrl.",
     ]);
     expect(readOllamaCloudProvider(result.config)).toEqual({
       baseUrl: "https://custom-ollama-cloud.example.test",
@@ -157,5 +157,26 @@ describe("ollama doctor contract", () => {
       api: "ollama",
       models: [],
     });
+  });
+
+  it("does not expose credentials or query parameters from the retired URL", () => {
+    const config = {
+      models: {
+        providers: {
+          "ollama-cloud": {
+            baseUrl: "https://user:password@ai.ollama.com/?token=secret",
+            api: "ollama",
+            models: [],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = normalizeCompatibilityConfig({ cfg: config });
+
+    expect(result.changes.join("\n")).not.toContain("user");
+    expect(result.changes.join("\n")).not.toContain("password");
+    expect(result.changes.join("\n")).not.toContain("secret");
+    expect(readOllamaCloudProvider(result.config)?.baseUrl).toBe("https://ollama.com");
   });
 });
