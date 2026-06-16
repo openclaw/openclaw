@@ -15,6 +15,7 @@ import {
 import {
   emitTrustedDiagnosticEvent,
   emitTrustedDiagnosticEventWithPrivateData,
+  emitTrustedSecurityEvent,
   type DiagnosticEventPrivateData,
   type DiagnosticToolParamsSummary,
   type DiagnosticToolSource,
@@ -563,6 +564,45 @@ function emitSkillUsedDiagnostic(params: {
     activation: params.match.activation,
     toolName: params.toolName,
     ...(params.toolCallId && { toolCallId: params.toolCallId }),
+  });
+}
+
+function emitToolBlockedSecurityEvent(params: {
+  ctx?: HookContext;
+  deniedReason: string;
+  toolIdentity: ToolDiagnosticIdentity;
+  toolName: string;
+  trace?: DiagnosticTraceContext;
+  paramsSummary?: DiagnosticToolParamsSummary;
+}): void {
+  emitTrustedSecurityEvent({
+    category: "tool",
+    action: "tool.execution.blocked",
+    outcome: "denied",
+    severity: "medium",
+    reason: params.deniedReason,
+    ...(params.trace ? { trace: params.trace } : {}),
+    actor: {
+      kind: "agent",
+    },
+    target: {
+      kind: "tool",
+      name: params.toolName,
+      ...(params.toolIdentity.toolOwner ? { owner: params.toolIdentity.toolOwner } : {}),
+    },
+    policy: {
+      id: "plugin-before-tool-call",
+      decision: "deny",
+      reason: params.deniedReason,
+    },
+    control: {
+      id: "before-tool-call",
+      family: "approval",
+    },
+    attributes: {
+      tool_source: params.toolIdentity.toolSource,
+      ...(params.paramsSummary ? { params_kind: params.paramsSummary.kind } : {}),
+    },
   });
 }
 
@@ -1352,6 +1392,14 @@ export function wrapToolWithBeforeToolCallHook(
             ...eventBase,
             reason: outcome.reason,
             deniedReason: outcome.deniedReason ?? "plugin-before-tool-call",
+          });
+          emitToolBlockedSecurityEvent({
+            ctx,
+            deniedReason: outcome.deniedReason ?? "plugin-before-tool-call",
+            toolIdentity: diagnosticIdentity,
+            toolName: normalizedToolName,
+            trace,
+            paramsSummary: eventBase.paramsSummary,
           });
         }
         const blockedResult = buildBlockedToolResult({
