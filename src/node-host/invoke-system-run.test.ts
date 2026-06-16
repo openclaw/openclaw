@@ -294,11 +294,11 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   }
 
   function resolveProductionExecSecurity(value?: string): "deny" | "allowlist" | "full" {
-    return value === "deny" || value === "allowlist" || value === "full" ? value : "allowlist";
+    return value === "deny" || value === "allowlist" || value === "full" ? value : "full";
   }
 
   function resolveProductionExecAsk(value?: string): "off" | "on-miss" | "always" {
-    return value === "off" || value === "on-miss" || value === "always" ? value : "on-miss";
+    return value === "off" || value === "on-miss" || value === "always" ? value : "off";
   }
 
   function createInvokeSpies(params?: { runCommand?: MockedRunCommand }): {
