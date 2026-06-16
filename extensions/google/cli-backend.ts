@@ -478,9 +478,19 @@ export function buildGoogleGeminiCliBackend(): CliBackendPlugin {
       ),
     config: {
       command: "gemini",
-      args: ["--skip-trust", "--output-format", "stream-json", "--prompt", "{prompt}"],
+      args: [
+        "--skip-trust",
+        "--approval-mode",
+        "auto_edit",
+        "--output-format",
+        "stream-json",
+        "--prompt",
+        "{prompt}",
+      ],
       resumeArgs: [
         "--skip-trust",
+        "--approval-mode",
+        "auto_edit",
         "--resume",
         "{sessionId}",
         "--output-format",

@@ -382,9 +382,19 @@ beforeEach(() => {
       normalizeConfig: normalizeTestGeminiBackendConfig,
       config: {
         command: "gemini",
-        args: ["--skip-trust", "--output-format", "stream-json", "--prompt", "{prompt}"],
+        args: [
+          "--skip-trust",
+          "--approval-mode",
+          "auto_edit",
+          "--output-format",
+          "stream-json",
+          "--prompt",
+          "{prompt}",
+        ],
         resumeArgs: [
           "--skip-trust",
+          "--approval-mode",
+          "auto_edit",
           "--resume",
           "{sessionId}",
           "--output-format",
@@ -983,6 +993,8 @@ describe("resolveCliBackendConfig google-gemini-cli defaults", () => {
     expect(resolved?.prepareExecution).toBeTypeOf("function");
     expect(resolved?.config.args).toEqual([
       "--skip-trust",
+      "--approval-mode",
+      "auto_edit",
       "--output-format",
       "stream-json",
       "--prompt",
@@ -990,6 +1002,8 @@ describe("resolveCliBackendConfig google-gemini-cli defaults", () => {
     ]);
     expect(resolved?.config.resumeArgs).toEqual([
       "--skip-trust",
+      "--approval-mode",
+      "auto_edit",
       "--resume",
       "{sessionId}",
       "--output-format",

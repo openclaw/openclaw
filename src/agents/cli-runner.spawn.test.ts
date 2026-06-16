@@ -124,7 +124,15 @@ function buildPreparedCliRunContext(params: {
     if (params.provider === "google-gemini-cli") {
       return {
         command: "gemini",
-        args: ["--skip-trust", "--output-format", "stream-json", "--prompt", "{prompt}"],
+        args: [
+          "--skip-trust",
+          "--approval-mode",
+          "auto_edit",
+          "--output-format",
+          "stream-json",
+          "--prompt",
+          "{prompt}",
+        ],
         output: "jsonl" as const,
         jsonlDialect: "gemini-stream-json" as const,
         input: "arg" as const,
