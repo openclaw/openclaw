@@ -1598,11 +1598,44 @@ function projectSessionsSendInterSessionMessages(
 
 const GATEWAY_ASSISTANT_ERROR_FALLBACK_TEXT = "The agent run failed before producing a reply.";
 
+function sanitizeStructuredAssistantErrorMessage(
+  message: Record<string, unknown>,
+): Record<string, unknown> {
+  const { content, ...envelope } = message;
+  const next = sanitizeChatHistoryMessage(envelope, Number.MAX_SAFE_INTEGER).message as Record<
+    string,
+    unknown
+  >;
+  next.content = Array.isArray(content)
+    ? content
+        .map(
+          (block) =>
+            sanitizeChatHistoryContentBlock(block, { maxChars: Number.MAX_SAFE_INTEGER }).block,
+        )
+        .filter((block) => {
+          if (!block || typeof block !== "object" || Array.isArray(block)) {
+            return true;
+          }
+          const type = (block as { type?: unknown }).type;
+          return type !== "thinking" && type !== "reasoning" && type !== "redacted_thinking";
+        })
+    : content;
+  delete next.diagnostics;
+  delete next.errorBody;
+  delete next.errorCode;
+  delete next.errorMessage;
+  delete next.errorType;
+  return next;
+}
+
 function projectEmptyAssistantErrorMessages(
   messages: Array<Record<string, unknown>>,
 ): Array<Record<string, unknown>> {
   let changed = false;
   const projected = messages.map((message) => {
+    if (message.role !== "assistant" || message.stopReason !== "error") {
+      return message;
+    }
     const hasDisplayableStructuredContent =
       Array.isArray(message.content) &&
       message.content.some((block) => {
@@ -1617,12 +1650,9 @@ function projectEmptyAssistantErrorMessages(
           type !== "redacted_thinking"
         );
       });
-    if (
-      message.role !== "assistant" ||
-      message.stopReason !== "error" ||
-      hasDisplayableStructuredContent
-    ) {
-      return message;
+    if (hasDisplayableStructuredContent) {
+      changed = true;
+      return sanitizeStructuredAssistantErrorMessage(message);
     }
     const sanitized = sanitizeChatHistoryMessage(message, Number.MAX_SAFE_INTEGER)
       .message as Record<string, unknown>;

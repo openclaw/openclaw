@@ -1150,7 +1150,7 @@ describe("projectRecentChatDisplayMessages", () => {
     expect(JSON.stringify(result)).not.toContain("private_error");
   });
 
-  it("leaves attachment-only assistant errors unchanged", () => {
+  it("preserves attachment-only assistant errors without private diagnostics", () => {
     const attachment = {
       type: "attachment",
       name: "report.txt",
@@ -1161,15 +1161,18 @@ describe("projectRecentChatDisplayMessages", () => {
         role: "assistant",
         content: [attachment],
         stopReason: "error",
-        errorMessage: "Connection error.",
+        errorMessage: "private upstream at secret.internal.example failed",
+        diagnostics: { provider: "private-provider" },
         timestamp: 1,
       },
     ]);
 
     expect(result[0]?.content).toEqual([attachment]);
+    expect(result[0]).not.toHaveProperty("diagnostics");
+    expect(result[0]).not.toHaveProperty("errorMessage");
   });
 
-  it("leaves tool-bearing assistant errors unchanged", () => {
+  it("preserves tool-bearing assistant errors without hidden reasoning or diagnostics", () => {
     const toolCall = {
       type: "toolCall",
       id: "call-1",
@@ -1179,14 +1182,24 @@ describe("projectRecentChatDisplayMessages", () => {
     const result = projectRecentChatDisplayMessages([
       {
         role: "assistant",
-        content: [toolCall],
+        content: [
+          { type: "thinking", thinking: "private upstream reasoning" },
+          { type: "text", text: "I read the requested file before the run failed." },
+          toolCall,
+        ],
         stopReason: "error",
-        errorMessage: "Connection error.",
+        errorMessage: "private upstream at secret.internal.example failed",
+        errorBody: "private response body",
         timestamp: 1,
       },
     ]);
 
-    expect(result[0]?.content).toEqual([toolCall]);
+    expect(result[0]?.content).toEqual([
+      { type: "text", text: "I read the requested file before the run failed." },
+    ]);
+    expect(result[0]).not.toHaveProperty("errorBody");
+    expect(result[0]).not.toHaveProperty("errorMessage");
+    expect(JSON.stringify(result)).not.toContain("private upstream");
   });
 
   it("projects sessions_send inter-session turns as forwarded assistant-side display messages", () => {
