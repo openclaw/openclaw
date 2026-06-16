@@ -184,6 +184,7 @@ type DispatchInboundParams = {
     onPartialReply?: (payload: { text?: string }) => Promise<void> | void;
     onAssistantMessageStart?: () => Promise<void> | void;
     allowProgressCallbacksWhenSourceDeliverySuppressed?: boolean;
+    allowToolLifecycleWhenProgressHidden?: boolean;
     onTypingCleanup?: () => Promise<void> | void;
   };
 };

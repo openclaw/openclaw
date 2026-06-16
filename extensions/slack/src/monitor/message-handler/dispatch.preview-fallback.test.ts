@@ -45,6 +45,8 @@ let capturedReplyOptions:
   | {
       disableBlockStreaming?: boolean;
       suppressDefaultToolProgressMessages?: boolean;
+      allowProgressCallbacksWhenSourceDeliverySuppressed?: boolean;
+      allowToolLifecycleWhenProgressHidden?: boolean;
       onAssistantMessageStart?: () => Promise<void> | void;
       onReasoningEnd?: () => Promise<void> | void;
       onReasoningStream?: (payload?: {
