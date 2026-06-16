@@ -29,7 +29,12 @@ import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
 } from "../subagent-capabilities.js";
-import { expandToolGroups, normalizeToolName } from "../tool-policy.js";
+import {
+  expandToolGroups,
+  mergeAlsoAllowPolicy,
+  normalizeToolName,
+  resolveToolProfilePolicy,
+} from "../tool-policy.js";
 import { createOpenClawAgentHarness } from "./builtin-openclaw.js";
 import { MissingAgentHarnessError } from "./errors.js";
 import { runAgentHarnessLifecycleAttempt } from "./lifecycle.js";
@@ -98,6 +103,15 @@ type PluginHarnessToolPolicyContext = Pick<
   | "senderUsername"
   | "senderE164"
 >;
+
+type PluginHarnessToolPolicy = { allow?: string[]; deny?: string[] };
+
+type ResolvedPluginHarnessToolPolicies = {
+  senderPolicy?: PluginHarnessToolPolicy;
+  senderScopedGroupPolicy?: PluginHarnessToolPolicy;
+  groupPolicy?: PluginHarnessToolPolicy;
+  runtimePolicies: Array<PluginHarnessToolPolicy | undefined>;
+};
 
 function listPluginAgentHarnesses(): AgentHarness[] {
   return listRegisteredAgentHarnesses().map((entry) => entry.harness);
@@ -343,20 +357,51 @@ function applyPluginHarnessDenyAllToolPolicy(
 export function resolvePluginHarnessPolicyToolsAllow(
   params: PluginHarnessToolPolicyContext,
 ): [] | undefined {
-  return resolvePluginHarnessDenyAllToolPolicyPrompt(params) ? [] : undefined;
+  const policies = resolvePluginHarnessToolPolicies(params);
+  return [policies.senderPolicy, policies.groupPolicy, ...policies.runtimePolicies].some(
+    policyRestrictsNativeTools,
+  )
+    ? []
+    : undefined;
 }
 
 function resolvePluginHarnessDenyAllToolPolicyPrompt(
   params: PluginHarnessToolPolicyContext,
 ): string | undefined {
-  const { globalPolicy, globalProviderPolicy, agentPolicy, agentProviderPolicy } =
-    resolveEffectiveToolPolicy({
-      config: params.config,
-      sessionKey: params.sessionKey,
-      agentId: params.agentId,
-      modelProvider: params.provider,
-      modelId: params.modelId,
-    });
+  const policies = resolvePluginHarnessToolPolicies(params);
+  if (
+    policyDeniesAllTools(policies.senderPolicy) ||
+    policyDeniesAllTools(policies.senderScopedGroupPolicy)
+  ) {
+    return PLUGIN_HARNESS_SENDER_DENY_ALL_PROMPT;
+  }
+  if (policyDeniesAllTools(policies.groupPolicy)) {
+    return PLUGIN_HARNESS_GROUP_DENY_ALL_PROMPT;
+  }
+  return policies.runtimePolicies.some(policyDeniesAllTools)
+    ? PLUGIN_HARNESS_RUNTIME_DENY_ALL_PROMPT
+    : undefined;
+}
+
+function resolvePluginHarnessToolPolicies(
+  params: PluginHarnessToolPolicyContext,
+): ResolvedPluginHarnessToolPolicies {
+  const {
+    globalPolicy,
+    globalProviderPolicy,
+    agentPolicy,
+    agentProviderPolicy,
+    profile,
+    providerProfile,
+    profileAlsoAllow,
+    providerProfileAlsoAllow,
+  } = resolveEffectiveToolPolicy({
+    config: params.config,
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+    modelProvider: params.provider,
+    modelId: params.modelId,
+  });
   const messageProvider = params.messageProvider ?? params.messageChannel;
   const groupPolicyParams = {
     config: params.config,
@@ -382,15 +427,6 @@ function resolvePluginHarnessDenyAllToolPolicyPrompt(
     senderUsername: params.senderUsername,
     senderE164: params.senderE164,
   });
-  if (
-    policyDeniesAllTools(senderPolicy) ||
-    policyDeniesAllTools(resolveSenderScopedGroupToolPolicy(params, groupPolicyParams, groupPolicy))
-  ) {
-    return PLUGIN_HARNESS_SENDER_DENY_ALL_PROMPT;
-  }
-  if (policyDeniesAllTools(groupPolicy)) {
-    return PLUGIN_HARNESS_GROUP_DENY_ALL_PROMPT;
-  }
   const sandboxSessionKey = params.sandboxSessionKey ?? params.sessionKey;
   const sandboxRuntime = resolveSandboxRuntimeStatus({
     cfg: params.config,
@@ -415,17 +451,26 @@ function resolvePluginHarnessDenyAllToolPolicyPrompt(
       store: subagentStore,
     },
   );
-  return [
-    globalPolicy,
-    globalProviderPolicy,
-    agentPolicy,
-    agentProviderPolicy,
-    sandboxPolicy,
-    subagentPolicy,
-    inheritedToolPolicy,
-  ].some(policyDeniesAllTools)
-    ? PLUGIN_HARNESS_RUNTIME_DENY_ALL_PROMPT
-    : undefined;
+  return {
+    senderPolicy,
+    senderScopedGroupPolicy: resolveSenderScopedGroupToolPolicy(
+      params,
+      groupPolicyParams,
+      groupPolicy,
+    ),
+    groupPolicy,
+    runtimePolicies: [
+      mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), profileAlsoAllow),
+      mergeAlsoAllowPolicy(resolveToolProfilePolicy(providerProfile), providerProfileAlsoAllow),
+      globalPolicy,
+      globalProviderPolicy,
+      agentPolicy,
+      agentProviderPolicy,
+      sandboxPolicy,
+      subagentPolicy,
+      inheritedToolPolicy,
+    ],
+  };
 }
 
 function resolveSenderScopedGroupToolPolicy(
@@ -465,6 +510,23 @@ function appendPluginHarnessToolPolicyPrompt(existing: string | undefined, promp
 
 function policyDeniesAllTools(policy?: { deny?: string[] }): boolean {
   return expandToolGroups(policy?.deny ?? []).some((entry) => normalizeToolName(entry) === "*");
+}
+
+function policyRestrictsNativeTools(policy?: PluginHarnessToolPolicy): boolean {
+  if (!policy) {
+    return false;
+  }
+  const deniesAnyTool = expandToolGroups(policy.deny ?? []).some((entry) =>
+    Boolean(normalizeToolName(entry)),
+  );
+  if (deniesAnyTool) {
+    return true;
+  }
+  return (
+    Array.isArray(policy.allow) &&
+    policy.allow.length > 0 &&
+    !expandToolGroups(policy.allow).some((entry) => normalizeToolName(entry) === "*")
+  );
 }
 
 function listHarnessCandidates(harnesses: AgentHarness[]): AgentHarnessSelectionCandidate[] {

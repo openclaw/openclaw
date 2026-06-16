@@ -717,6 +717,32 @@ describe("runBtwSideQuestion", () => {
     expect(mockArg(codexSideQuestionMock, 0, 0)).toMatchObject({ toolsAllow: [] });
   });
 
+  it("prepares a narrow global policy before calling a plugin side-question hook", async () => {
+    const codexSideQuestionMock = vi.fn().mockResolvedValue({ text: "Policy answer." });
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex test harness",
+      supports: () => ({ supported: true, priority: 100 }),
+      runAttempt: vi.fn(),
+      runSideQuestion: codexSideQuestionMock,
+    });
+    resolveModelWithRegistryMock.mockReturnValue({
+      provider: "openai",
+      id: "gpt-5.5",
+      api: "openai-responses",
+    });
+
+    await runSideQuestion({
+      cfg: { tools: { allow: ["message"] } } as never,
+      provider: "openai",
+      model: "gpt-5.5",
+      sessionKey: DEFAULT_SESSION_KEY,
+    });
+
+    expect(codexSideQuestionMock).toHaveBeenCalledOnce();
+    expect(mockArg(codexSideQuestionMock, 0, 0)).toMatchObject({ toolsAllow: [] });
+  });
+
   it("does not fall back to the direct provider call when Codex lacks BTW support", async () => {
     registerAgentHarness({
       id: "codex",

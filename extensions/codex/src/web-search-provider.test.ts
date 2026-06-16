@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it, vi } from "vitest";
 import { createCodexWebSearchProvider as createContractCodexWebSearchProvider } from "../web-search-contract-api.js";
 import type { CodexAppServerClient } from "./app-server/client.js";
+import type { CodexAppServerStartOptions } from "./app-server/config.js";
 import type { CodexServerNotification, JsonValue } from "./app-server/protocol.js";
 import { createCodexWebSearchProvider } from "./web-search-provider.js";
 
@@ -226,10 +227,22 @@ describe("codex web search provider", () => {
 
   it("runs an isolated grounded Codex search with configured restrictions", async () => {
     const { client, requests } = createFakeClient();
-    let isolatedCodexHome: string | undefined;
+    let isolatedStartOptions: CodexAppServerStartOptions | undefined;
     const provider = createCodexWebSearchProvider({
+      resolvePluginConfig: () => ({
+        appServer: {
+          args: [
+            "app-server",
+            "--listen",
+            "stdio://",
+            "-c",
+            "mcp_servers.external.command='unsafe'",
+          ],
+          clearEnv: ["CODEX_HOME", "KEEP_CLEARED"],
+        },
+      }),
       clientFactory: async (startOptions) => {
-        isolatedCodexHome = startOptions?.env?.CODEX_HOME;
+        isolatedStartOptions = startOptions;
         return client;
       },
     });
@@ -277,7 +290,9 @@ describe("codex web search provider", () => {
       config: {
         "features.code_mode": false,
         "features.code_mode_only": false,
+        "features.hooks": false,
         "features.standalone_web_search": false,
+        notify: [],
         web_search: "live",
         "tools.web_search.allowed_domains": ["example.com"],
         "tools.web_search.context_size": "high",
@@ -288,7 +303,13 @@ describe("codex web search provider", () => {
       },
     });
     const threadStartCwd = (requests[1]?.params as { cwd?: string } | undefined)?.cwd;
+    const isolatedCodexHome = isolatedStartOptions?.env?.CODEX_HOME;
     expect(threadStartCwd).not.toBe("/tmp/openclaw-agent");
+    expect(isolatedStartOptions?.args).toEqual(["app-server", "--listen", "stdio://"]);
+    expect(isolatedStartOptions?.clearEnv).toEqual([
+      "KEEP_CLEARED",
+      "OPENCLAW_CODEX_APP_SERVER_ARGS",
+    ]);
     expect(isolatedCodexHome).toEqual(expect.any(String));
     if (!threadStartCwd || !isolatedCodexHome) {
       throw new Error("expected isolated Codex home and workspace");

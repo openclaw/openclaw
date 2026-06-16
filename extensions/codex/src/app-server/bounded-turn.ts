@@ -29,6 +29,8 @@ import {
 } from "./protocol.js";
 import { buildCodexRuntimeThreadConfig } from "./thread-lifecycle.js";
 
+const CODEX_PRIVATE_STDIO_ARGS = ["app-server", "--listen", "stdio://"];
+const OPENCLAW_CODEX_APP_SERVER_ARGS_ENV_VAR = "OPENCLAW_CODEX_APP_SERVER_ARGS";
 const CODEX_BOUNDED_THREAD_CONFIG: JsonObject = {
   "features.multi_agent": false,
   "features.apps": false,
@@ -36,6 +38,10 @@ const CODEX_BOUNDED_THREAD_CONFIG: JsonObject = {
   "features.image_generation": false,
   "features.standalone_web_search": false,
   web_search: "disabled",
+};
+const CODEX_PRIVATE_BOUNDED_THREAD_CONFIG: JsonObject = {
+  "features.hooks": false,
+  notify: [],
 };
 
 export type CodexBoundedTurnOptions = {
@@ -110,16 +116,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
   // cannot escape the bounded turn. Media calls retain configured transport
   // compatibility while still using an isolated ephemeral thread.
   const startOptions = workspace.codexHome
-    ? {
-        ...appServer.start,
-        env: {
-          ...appServer.start.env,
-          CODEX_HOME: workspace.codexHome,
-        },
-        clearEnv: appServer.start.clearEnv?.filter(
-          (name) => name.trim().toUpperCase() !== "CODEX_HOME",
-        ),
-      }
+    ? buildPrivateCodexAppServerStartOptions(appServer.start, workspace.codexHome)
     : appServer.start;
   const ownsClient = !params.options.clientFactory;
   const client = params.options.clientFactory
@@ -165,10 +162,9 @@ async function runBoundedCodexAppServerTurnInWorkspace(
           sandbox: "read-only",
           serviceName: "OpenClaw",
           developerInstructions: params.developerInstructions,
-          config: buildCodexRuntimeThreadConfig(
-            mergeCodexThreadConfigs(CODEX_BOUNDED_THREAD_CONFIG, params.threadConfig),
-            { nativeCodeModeEnabled: false },
-          ),
+          config: buildCodexRuntimeThreadConfig(resolveBoundedThreadConfig(params, workspace), {
+            nativeCodeModeEnabled: false,
+          }),
           environments: [],
           dynamicTools: [],
           experimentalRawEvents: true,
@@ -216,6 +212,40 @@ async function runBoundedCodexAppServerTurnInWorkspace(
       client.close();
     }
   }
+}
+
+function resolveBoundedThreadConfig(
+  params: CodexBoundedTurnParams,
+  workspace: { codexHome?: string },
+): JsonObject {
+  const boundedConfig = mergeCodexThreadConfigs(CODEX_BOUNDED_THREAD_CONFIG, params.threadConfig);
+  return workspace.codexHome
+    ? mergeCodexThreadConfigs(boundedConfig, CODEX_PRIVATE_BOUNDED_THREAD_CONFIG)
+    : boundedConfig;
+}
+
+function buildPrivateCodexAppServerStartOptions(
+  start: ReturnType<typeof resolveCodexAppServerRuntimeOptions>["start"],
+  codexHome: string,
+): ReturnType<typeof resolveCodexAppServerRuntimeOptions>["start"] {
+  const privateEnv = Object.fromEntries(
+    Object.entries(start.env ?? {}).filter(
+      ([name]) => name.trim().toUpperCase() !== OPENCLAW_CODEX_APP_SERVER_ARGS_ENV_VAR,
+    ),
+  );
+  const clearEnv = (start.clearEnv ?? []).filter((name) => {
+    const normalized = name.trim().toUpperCase();
+    return normalized !== "CODEX_HOME" && normalized !== OPENCLAW_CODEX_APP_SERVER_ARGS_ENV_VAR;
+  });
+  return {
+    ...start,
+    args: [...CODEX_PRIVATE_STDIO_ARGS],
+    env: {
+      ...privateEnv,
+      CODEX_HOME: codexHome,
+    },
+    clearEnv: [...clearEnv, OPENCLAW_CODEX_APP_SERVER_ARGS_ENV_VAR],
+  };
 }
 
 function createCodexBoundedApprovalHandler(taskLabel: string) {
