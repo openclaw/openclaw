@@ -136,7 +136,7 @@ export async function publishMemoryDatabaseTables(params: {
       if (!loaded.ok) {
         throw new Error(
           `Failed to load sqlite-vec before publishing the full memory reindex: ` +
-            `${loaded.error ?? "unknown sqlite-vec load error"}`,
+            (loaded.error ?? "unknown sqlite-vec load error"),
         );
       }
     }
