@@ -1,5 +1,5 @@
 // Verifies tool planner filtering, ordering, and unsupported-tool reporting.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ToolPlanContractError } from "./diagnostics.js";
 import { formatToolExecutorRef } from "./execution.js";
 import { buildToolPlan } from "./planner.js";
@@ -111,6 +111,60 @@ describe("buildToolPlan", () => {
         message: "Empty availability allOf group",
       },
     ]);
+  });
+
+  it("warns when empty allOf group hides a tool", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      buildToolPlan({
+        descriptors: [
+          descriptor("broken-rule", { availability: { allOf: [] } }),
+        ],
+      });
+
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      const message = warnSpy.mock.calls[0]?.[0];
+      expect(message).toContain('"broken-rule"');
+      expect(message).toContain("Empty availability allOf group");
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("warns when empty anyOf group hides a tool", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      buildToolPlan({
+        descriptors: [
+          descriptor("broken-any", { availability: { anyOf: [] } }),
+        ],
+      });
+
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      const message = warnSpy.mock.calls[0]?.[0];
+      expect(message).toContain('"broken-any"');
+      expect(message).toContain("Empty availability anyOf group");
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("does not warn for non-unsupported-signal diagnostics like env-missing", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      buildToolPlan({
+        descriptors: [
+          descriptor("config-gated", {
+            availability: { kind: "env", name: "MISSING_VAR" },
+          }),
+        ],
+        availability: { env: {} },
+      });
+
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it("keeps protocol conversion separate from executor refs and model normalization", () => {
