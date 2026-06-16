@@ -2874,6 +2874,107 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("aborts the in-flight mcporter search subprocess when the caller signal aborts", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "query",
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+          mcporter: { enabled: true, serverName: "qmd", startDaemon: false },
+        },
+      },
+    } as OpenClawConfig;
+
+    // The mcporter `call` child never closes on its own, so the only way the
+    // search can settle is the caller-owned abort signal reaching the mcporter
+    // subprocess via runMcporter -> runCliCommand and killing it.
+    let mcporterCallKill: ReturnType<typeof vi.fn> | undefined;
+    let mcporterCallChild: MockChild | undefined;
+    spawnMock.mockImplementation((cmd: string, args: string[]) => {
+      if (isMcporterCommand(cmd) && args[0] === "call") {
+        const child = createMockChild({ autoClose: false });
+        const kill = vi.fn(() => {
+          // Mirror a real child exiting after SIGKILL so the close handler runs.
+          queueMicrotask(() => child.emit("close", null));
+        });
+        Object.assign(child, { kill });
+        mcporterCallKill = kill;
+        mcporterCallChild = child;
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager();
+    const controller = new AbortController();
+
+    const searchPromise = manager.search("test", {
+      sessionKey: "agent:main:slack:dm:u123",
+      signal: controller.signal,
+    });
+    searchPromise.catch(() => undefined);
+
+    await waitUntil(() => mcporterCallKill !== undefined);
+    expect(mcporterCallChild).toBeDefined();
+
+    controller.abort(new Error("memory_search timed out after 15s"));
+
+    await expect(searchPromise).rejects.toThrow("memory_search timed out after 15s");
+    expect(mcporterCallKill).toHaveBeenCalledWith("SIGKILL");
+    await manager.close();
+  });
+
+  it("rejects the mcporter search before spawning a call subprocess when the caller signal is already aborted", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "query",
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+          mcporter: { enabled: true, serverName: "qmd", startDaemon: false },
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((cmd: string, args: string[]) => {
+      const child = createMockChild({ autoClose: false });
+      if (isMcporterCommand(cmd) && args[0] === "call") {
+        emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
+        return child;
+      }
+      emitAndClose(child, "stdout", "[]");
+      return child;
+    });
+
+    const { manager } = await createManager();
+    const controller = new AbortController();
+    controller.abort(new Error("memory_search timed out after 15s"));
+
+    const callsBefore = spawnMock.mock.calls.filter(
+      (call: unknown[]) => isMcporterCommand(call[0]) && (call[1] as string[])?.[0] === "call",
+    ).length;
+
+    await expect(
+      manager.search("test", {
+        sessionKey: "agent:main:slack:dm:u123",
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow("memory_search timed out after 15s");
+
+    const callsAfter = spawnMock.mock.calls.filter(
+      (call: unknown[]) => isMcporterCommand(call[0]) && (call[1] as string[])?.[0] === "call",
+    ).length;
+    expect(callsAfter).toBe(callsBefore);
+    await manager.close();
+  });
+
   it("does not pass --no-rerank to direct query fallback from search mode", async () => {
     cfg = {
       ...cfg,
