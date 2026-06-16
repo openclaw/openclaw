@@ -263,7 +263,9 @@ jobs:
           steps.gate.outputs.run_agent == 'true' &&
           steps.checks.outputs.has_failures == 'true' &&
           steps.pr.outputs.is_fork != 'true'
-        run: pnpm install --frozen-lockfile
+        # --ignore-scripts: prevent lifecycle script execution from untrusted PR code
+        # in this privileged workflow_run context (CodeQL actions/dangerous-triggers)
+        run: pnpm install --frozen-lockfile --ignore-scripts
         continue-on-error: true
 
       - name: Ensure CI fix agent key exists
