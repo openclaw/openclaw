@@ -19,6 +19,7 @@ import { buildChatItems, type BuildChatItemsProps } from "../chat/build-chat-ite
 import { renderChatQueue } from "../chat/chat-queue.ts";
 import { buildRawSidebarContent } from "../chat/chat-sidebar-raw.ts";
 import { renderWelcomeState, resolveAssistantDisplayAvatar } from "../chat/chat-welcome.ts";
+import { copyToClipboard } from "../chat/clipboard.ts";
 import { renderContextNotice } from "../chat/context-notice.ts";
 import { DeletedMessages } from "../chat/deleted-messages.ts";
 import { exportChatMarkdown } from "../chat/export.ts";
@@ -171,6 +172,7 @@ export type ChatProps = {
     next: Partial<NonNullable<ChatProps["realtimeTalkOptions"]>>,
   ) => void;
   onDismissError?: () => void;
+  onDismissRealtimeTalkError?: () => void;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
   onQueueRetry?: (id: string) => void;
@@ -473,6 +475,7 @@ interface ChatEphemeralState {
   searchOpen: boolean;
   searchQuery: string;
   pinnedExpanded: boolean;
+  composerComposing: boolean;
   historyRenderSessionKey: string | null;
   historyRenderMessagesRef: unknown[] | null;
   historyRenderMessageCount: number;
@@ -499,6 +502,7 @@ function createChatEphemeralState(): ChatEphemeralState {
     searchOpen: false,
     searchQuery: "",
     pinnedExpanded: false,
+    composerComposing: false,
     historyRenderSessionKey: null,
     historyRenderMessagesRef: null,
     historyRenderMessageCount: 0,
@@ -1986,13 +1990,13 @@ export function renderChat(props: ChatProps) {
       return;
     }
     const code = (btn as HTMLElement).dataset.code ?? "";
-    navigator.clipboard.writeText(code).then(
-      () => {
-        btn.classList.add("copied");
-        setTimeout(() => btn.classList.remove("copied"), 1500);
-      },
-      () => {},
-    );
+    void copyToClipboard(code).then((copied) => {
+      if (!copied) {
+        return;
+      }
+      btn.classList.add("copied");
+      setTimeout(() => btn.classList.remove("copied"), 1500);
+    });
   };
   const handleChatThreadScroll = (event: Event) => {
     maybeExpandChatHistoryRenderWindow(event, requestUpdate);
@@ -2229,6 +2233,12 @@ export function renderChat(props: ChatProps) {
   };
 
   const handleKeyDown = (e: KeyboardEvent) => {
+    // IME navigation keys belong to the browser; downstream handlers can
+    // prevent them or commit the in-progress composition as a host draft.
+    if (vs.composerComposing || e.isComposing || e.keyCode === 229) {
+      return;
+    }
+
     // Slash menu navigation — arg mode
     if (vs.slashMenuOpen && vs.slashMenuMode === "args" && vs.slashMenuArgItems.length > 0) {
       const len = vs.slashMenuArgItems.length;
@@ -2336,9 +2346,6 @@ export function renderChat(props: ChatProps) {
 
     // Send on Enter (without shift)
     if (e.key === "Enter" && !e.shiftKey) {
-      if (e.isComposing || e.keyCode === 229) {
-        return;
-      }
       if (!props.connected) {
         return;
       }
@@ -2352,15 +2359,35 @@ export function renderChat(props: ChatProps) {
     }
   };
 
-  const handleInput = (e: Event) => {
-    const target = e.target as HTMLTextAreaElement;
+  const syncComposerValue = (
+    target: HTMLTextAreaElement,
+    options: { forceCommit?: boolean } = {},
+  ) => {
     adjustTextareaHeight(target);
     draftMirror.value = target.value;
     const hostDraftNeeded = isBusy || showAbortableUi || props.queue.length > 0;
-    if (hostDraftNeeded || target.value.startsWith("/") || hasVisibleSlashMenuState()) {
+    if (
+      options.forceCommit ||
+      hostDraftNeeded ||
+      target.value.startsWith("/") ||
+      hasVisibleSlashMenuState()
+    ) {
       commitComposerDraft(props, target.value);
     }
     updateSlashMenu(target.value, requestUpdate, props, {}, () => target.value);
+  };
+  const handleInput = (e: InputEvent) => {
+    const target = e.target as HTMLTextAreaElement;
+    if (vs.composerComposing || e.isComposing) {
+      adjustTextareaHeight(target);
+      draftMirror.value = target.value;
+      return;
+    }
+    syncComposerValue(target);
+  };
+  const handleCompositionEnd = (e: CompositionEvent) => {
+    vs.composerComposing = false;
+    syncComposerValue(e.target as HTMLTextAreaElement, { forceCommit: true });
   };
   const handleBlur = (e: FocusEvent) => {
     const target = e.target as HTMLTextAreaElement;
@@ -2419,16 +2446,34 @@ export function renderChat(props: ChatProps) {
       ${renderRealtimeTalkOptions(props)}
       ${props.realtimeTalkActive || props.realtimeTalkDetail || props.realtimeTalkTranscript
         ? html`
-            <div class="agent-chat__stt-interim agent-chat__talk-status">
-              ${props.realtimeTalkDetail ??
-              ((props.realtimeTalkConversation?.length ?? 0) === 0
-                ? props.realtimeTalkTranscript
-                : null) ??
-              (props.realtimeTalkStatus === "thinking"
-                ? "Asking OpenClaw..."
-                : props.realtimeTalkStatus === "connecting"
-                  ? "Connecting Talk..."
-                  : "Talk live")}
+            <div
+              class="agent-chat__stt-interim agent-chat__talk-status"
+              role=${props.realtimeTalkStatus === "error" ? "alert" : nothing}
+            >
+              <span class="agent-chat__talk-status-text">
+                ${props.realtimeTalkDetail ??
+                ((props.realtimeTalkConversation?.length ?? 0) === 0
+                  ? props.realtimeTalkTranscript
+                  : null) ??
+                (props.realtimeTalkStatus === "thinking"
+                  ? "Asking OpenClaw..."
+                  : props.realtimeTalkStatus === "connecting"
+                    ? "Connecting Talk..."
+                    : "Talk live")}
+              </span>
+              ${props.realtimeTalkStatus === "error" && props.onDismissRealtimeTalkError
+                ? html`
+                    <button
+                      class="callout__dismiss"
+                      type="button"
+                      @click=${props.onDismissRealtimeTalkError}
+                      aria-label=${t("chat.composer.dismissTalkError")}
+                      title=${t("chat.composer.dismissTalkError")}
+                    >
+                      ${icons.x}
+                    </button>
+                  `
+                : nothing}
             </div>
           `
         : nothing}
@@ -2450,6 +2495,10 @@ export function renderChat(props: ChatProps) {
           aria-describedby=${SLASH_MENU_ACTIVE_ANNOUNCEMENT_ID}
           @keydown=${handleKeyDown}
           @input=${handleInput}
+          @compositionstart=${() => {
+            vs.composerComposing = true;
+          }}
+          @compositionend=${handleCompositionEnd}
           @blur=${handleBlur}
           @paste=${(e: ClipboardEvent) => handlePaste(e, props)}
           placeholder=${placeholder}

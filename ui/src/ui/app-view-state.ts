@@ -402,6 +402,8 @@ export type AppViewState = {
 > &
   Pick<CronModelSuggestionsState, "cronModelSuggestions"> & {
     skillsLoading: boolean;
+    skillsAgentId: string | null;
+    skillsAgentRevision: number;
     skillsReport: SkillStatusReport | null;
     skillsError: string | null;
     skillsFilter: string;

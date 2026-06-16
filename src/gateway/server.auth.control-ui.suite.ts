@@ -214,6 +214,18 @@ export function registerControlUiAndPairingSuite(): void {
     await writeJson(pairedPath, paired);
   };
 
+  const injectMalformedPairedAccessLists = async (deviceId: string) => {
+    const { resolvePairingPaths, tryReadJson } = await import("../infra/pairing-files.js");
+    const { writeJson } = await import("../infra/json-files.js");
+    const { pairedPath } = resolvePairingPaths(undefined, "devices");
+    const paired = (await tryReadJson<Record<string, Record<string, unknown>>>(pairedPath)) ?? {};
+    const metadata = getRequiredPairedMetadata(paired, deviceId);
+    metadata.roles = ["operator", null, 42, ""];
+    metadata.scopes = ["operator.read", null, 42, ""];
+    metadata.approvedScopes = ["operator.read", null, 42, ""];
+    await writeJson(pairedPath, paired);
+  };
+
   const seedApprovedOperatorReadPairing = async (params: {
     identityPrefix: string;
     clientId: string;
@@ -962,6 +974,45 @@ export function registerControlUiAndPairingSuite(): void {
     ws2.close();
     await server.close();
     restoreGatewayToken(prevToken);
+  });
+
+  test("returns pairing-required for malformed persisted access lists", async () => {
+    const { identity, identityPath } = await seedApprovedOperatorReadPairing({
+      identityPrefix: "openclaw-device-malformed-access-",
+      clientId: TEST_OPERATOR_CLIENT.id,
+      clientMode: TEST_OPERATOR_CLIENT.mode,
+      displayName: "malformed-access-upgrade",
+      platform: TEST_OPERATOR_CLIENT.platform,
+    });
+    await injectMalformedPairedAccessLists(identity.deviceId);
+
+    const { server, port, prevToken } = await startControlUiServer("secret");
+    let ws: WebSocket | undefined;
+    try {
+      ws = await openWs(port);
+      const nonce = await readConnectChallengeNonce(ws);
+      const result = await connectReq(ws, {
+        token: "secret",
+        scopes: ["operator.admin"],
+        client: { ...TEST_OPERATOR_CLIENT },
+        device: await buildSignedDeviceForIdentity({
+          identityPath,
+          client: TEST_OPERATOR_CLIENT,
+          scopes: ["operator.admin"],
+          nonce,
+        }),
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.error?.message ?? "").toContain("pairing required");
+      expect((result.error?.details as { reason?: string } | undefined)?.reason).toBe(
+        "scope-upgrade",
+      );
+    } finally {
+      ws?.close();
+      await server.close();
+      restoreGatewayToken(prevToken);
+    }
   });
 
   test("does not expose approved access when a paired device id reconnects with a different key", async () => {

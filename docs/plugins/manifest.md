@@ -1278,6 +1278,7 @@ Important examples:
 | `openclaw.compat.pluginApi`                                                                | Minimum OpenClaw plugin API range required by this package, using a semver floor like `>=2026.5.27`.                                                                                 |
 | `openclaw.install.expectedIntegrity`                                                       | Expected npm dist integrity string such as `sha512-...`; install and update flows verify the fetched artifact against it.                                                            |
 | `openclaw.install.allowInvalidConfigRecovery`                                              | Allows a narrow bundled-plugin reinstall recovery path when config is invalid.                                                                                                       |
+| `openclaw.install.requiredPlatformPackages`                                                | npm package aliases that must materialize when their lockfile platform constraints match the current host.                                                                           |
 | `openclaw.startup.deferConfiguredChannelFullLoadUntilAfterListen`                          | Lets setup-runtime channel surfaces load before listen, then defers the full configured channel plugin until post-listen activation.                                                 |
 
 Manifest metadata decides which provider/channel/setup choices appear in
@@ -1289,6 +1290,13 @@ choices. Do not move install hints into `openclaw.plugin.json`.
 registry loading for non-bundled plugin sources. Invalid values are rejected;
 newer-but-valid values skip external plugins on older hosts. Bundled source
 plugins are assumed to be co-versioned with the host checkout.
+
+`openclaw.install.requiredPlatformPackages` is for npm packages that expose
+required native binaries through optional, platform-specific aliases. List the
+bare npm package name for every supported platform alias. During npm install,
+OpenClaw verifies only the declared alias whose lockfile constraints match the
+current host. If npm reports success but omits that alias, OpenClaw retries once
+with a fresh cache and rolls back the install if the alias is still missing.
 
 `openclaw.compat.pluginApi` is enforced during package install for non-bundled
 plugin sources. Use it for the OpenClaw plugin SDK/runtime API floor that the

@@ -72,7 +72,9 @@ import { attachQaProfileScorecardEvidenceToFile } from "./scorecard-evidence.js"
 import {
   readQaScorecardTaxonomyReport,
   type QaScorecardCategoryCoverageReport,
+  type QaScorecardEvidenceMode,
 } from "./scorecard-taxonomy.js";
+import { isQaSelfCheckSuccessful } from "./self-check.js";
 import { runQaFlowSuiteFromRuntime, runQaSuite } from "./suite-launch.runtime.js";
 import { scenarioMatchesQaProviderLane } from "./suite-planning.js";
 import { readQaSuiteFailedOrSkippedScenarioCountFromFile } from "./suite-summary.js";
@@ -115,6 +117,7 @@ type QaScenarioProviderCommandOptions = {
 };
 
 type QaScenarioRunCommandOptions = QaScenarioProviderCommandOptions & {
+  evidenceMode?: QaScorecardEvidenceMode;
   repoRoot?: string;
   outputDir?: string;
   concurrency?: number;
@@ -615,6 +618,9 @@ export async function runQaLabSelfCheckCommand(opts: QaLabSelfCheckCommandOption
   try {
     const result = await server.runSelfCheck();
     process.stdout.write(`QA self-check report: ${result.outputPath}\n`);
+    if (!isQaSelfCheckSuccessful(result)) {
+      throw new Error(`QA self-check failed. See ${result.outputPath}.`);
+    }
   } finally {
     await server.stop();
   }
@@ -669,6 +675,7 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
     const suiteResult = await runQaSuiteCommand({
       repoRoot,
       outputDir: opts.outputDir,
+      evidenceMode: opts.evidenceMode,
       transportId: opts.transportId,
       providerMode,
       primaryModel: opts.primaryModel,
@@ -686,6 +693,7 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
   }
   await attachQaProfileScorecardEvidenceToFile({
     evidencePath,
+    evidenceMode: opts.evidenceMode,
     profile,
     filters: {
       surface: opts.surface,
@@ -849,6 +857,7 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
     runQaSuite({
       repoRoot,
       outputDir: resolveRepoRelativeOutputDir(repoRoot, opts.outputDir),
+      evidenceMode: opts.evidenceMode,
       transportId,
       ...(opts.providerMode !== undefined ? { providerMode } : {}),
       primaryModel,

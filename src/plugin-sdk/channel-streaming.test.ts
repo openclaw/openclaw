@@ -602,6 +602,8 @@ describe("channel-streaming", () => {
       id: "tool:call-1-output",
       kind: "command-output",
       status: "completed",
+      detail: "install dependencies",
+      text: "🛠️ completed; install dependencies",
     });
 
     const recoveredItemLine = buildChannelProgressDraftLine({
@@ -633,6 +635,8 @@ describe("channel-streaming", () => {
         id: "command-2",
         kind: "command-output",
         status: "completed",
+        detail: "install dependencies failed",
+        text: "🛠️ completed; install dependencies failed",
       },
     ]);
   });

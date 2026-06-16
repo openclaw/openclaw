@@ -649,6 +649,61 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
   });
 
+  it("renders default draft previews with standard Telegram HTML", async () => {
+    const draftStream = createDraftStream();
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "# Heading" });
+        await dispatcherOptions.deliver({ text: "# Heading" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext() });
+
+    const params = expectDraftStreamParams({});
+    const renderText = params.renderText as ((text: string) => Record<string, unknown>) | undefined;
+    expect(renderText?.("# Heading")).toEqual({
+      text: "Heading",
+      parseMode: "HTML",
+    });
+  });
+
+  it("renders rich draft previews only when enabled", async () => {
+    resolveMarkdownTableMode.mockReturnValueOnce("block");
+    const draftStream = createDraftStream();
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({
+          text: "| A | B |\n| --- | --- |\n| 1 | 2 |",
+        });
+        await dispatcherOptions.deliver(
+          { text: "| A | B |\n| --- | --- |\n| 1 | 2 |" },
+          { kind: "final" },
+        );
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext(),
+      telegramCfg: { richMessages: true },
+    });
+
+    const params = expectDraftStreamParams({ richMessages: true });
+    const renderText = params.renderText as ((text: string) => Record<string, unknown>) | undefined;
+    const preview = renderText?.("| A | B |\n| --- | --- |\n| 1 | 2 |");
+    expect(preview?.richMessage).toEqual(
+      expect.objectContaining({
+        html: expect.stringContaining("<table>"),
+      }),
+    );
+  });
+
   it("recovers forum thread context from a topic-scoped session key", async () => {
     const recordInboundSession = vi.fn(async () => undefined);
     const oldHistoryKey = "-1003774691294:topic:1";
@@ -1521,7 +1576,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       telegramCfg: { streaming: { mode: "partial" } },
     });
 
-    expectDraftStreamParams({ maxChars: 4096 });
+    expectDraftStreamParams({ maxChars: 4000 });
   });
 
   it("streams text-only finals into the answer message", async () => {
@@ -2031,6 +2086,25 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Second chunk.");
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(3, "First chunk. \nSecond chunk.");
     expect(answerDraftStream.forceNewMessage).not.toHaveBeenCalled();
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("does not leak inline reply directives into block draft previews", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        const payload = { text: "[[reply_to: 123]] Visible chunk." };
+        await replyOptions?.onBlockReplyQueued?.(payload, { assistantMessageIndex: 0 });
+        await dispatcherOptions.deliver(payload, { kind: "block", assistantMessageIndex: 0 });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(answerDraftStream.update).toHaveBeenCalledTimes(1);
+    expect(answerDraftStream.update).toHaveBeenCalledWith("Visible chunk.");
+    expect(answerDraftStream.update).not.toHaveBeenCalledWith("[[reply_to: 123]] Visible chunk.");
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
@@ -2552,7 +2626,11 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     const lastUpdate = answerDraftStream.updatePreview.mock.calls.at(-1)?.[0];
     expect(lastUpdate?.text).toContain("completed");
-    expect(lastUpdate?.text).not.toContain("install dependencies");
+    expect(lastUpdate?.text).toContain("install dependencies");
+    expect(lastUpdate?.richMessage).toEqual({
+      html: "<b>Shelling</b><br><b>🛠️ Exec</b> <code>install dependencies</code> <i>completed</i>",
+      skip_entity_detection: true,
+    });
   });
 
   it("sends trailing verbose status after a progress-mode final answer", async () => {
@@ -2788,6 +2866,23 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(answerDraftStream.update).toHaveBeenCalledWith("Photo");
     expectDeliverRepliesParams({ mediaMaxBytes });
     expectDeliveredReply(0, { text: undefined, mediaUrl: "https://example.com/a.png" });
+  });
+
+  it("sends standalone MEDIA directive final replies as media", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "MEDIA:/tmp/reply-image.png" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(answerDraftStream.update).not.toHaveBeenCalledWith("MEDIA:/tmp/reply-image.png");
+    expectDeliveredReply(0, {
+      text: "",
+      mediaUrl: "/tmp/reply-image.png",
+      mediaUrls: ["/tmp/reply-image.png"],
+    });
   });
 
   it("attaches interactive buttons to streamed text when late media arrives", async () => {

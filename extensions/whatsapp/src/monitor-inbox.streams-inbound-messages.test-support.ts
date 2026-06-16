@@ -2,6 +2,7 @@
 import fsSync from "node:fs";
 import path from "node:path";
 import "./monitor-inbox.test-harness.js";
+import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   registerWhatsAppConnectionController,
@@ -993,6 +994,58 @@ describe("web monitor inbox", () => {
     } finally {
       vi.useRealTimers();
       await listener.close();
+    }
+  });
+
+  it("bounds stalled read-receipt socket operations instead of hanging", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const logSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+      verbose: true,
+    });
+    vi.useFakeTimers();
+    try {
+      const messageId = nextMessageId("read-receipt-timeout");
+      // A WhatsApp socket whose read-receipt acknowledgement never resolves
+      // (e.g. a stalled Baileys privacy IQ query) would otherwise hang the
+      // inbound delivery pipeline forever.
+      sock.readMessages.mockImplementationOnce(() => new Promise(() => {}));
+
+      sock.ev.emit(
+        "messages.upsert",
+        buildNotifyMessageUpsert({
+          id: messageId,
+          remoteJid: "999@s.whatsapp.net",
+          text: "ping",
+          timestamp: 1_700_000_000,
+          pushName: "Tester",
+        }),
+      );
+      await waitForMessageCalls(onMessage, 1);
+
+      // The read receipt is attempted on the stalled socket...
+      await vi.waitFor(() => {
+        expect(sock.readMessages).toHaveBeenCalledWith([
+          { remoteJid: "999@s.whatsapp.net", id: messageId, participant: undefined, fromMe: false },
+        ]);
+      });
+
+      // ...and is bounded by the socket operation timeout rather than hanging.
+      await vi.advanceTimersByTimeAsync(DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs);
+      await vi.waitFor(() => {
+        const loggedTimeoutFailure = logSpy.mock.calls.some(
+          ([message]) =>
+            typeof message === "string" &&
+            message.includes(`Failed to mark message ${messageId} read`) &&
+            message.includes("readMessages timed out"),
+        );
+        expect(loggedTimeoutFailure).toBe(true);
+      });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+      await listener.close();
+      logSpy.mockRestore();
     }
   });
 

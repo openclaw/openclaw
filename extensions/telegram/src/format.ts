@@ -226,6 +226,35 @@ const TELEGRAM_ATTR_HTML_TAG_PATTERNS = new Map([
 const TELEGRAM_CODE_LANGUAGE_ATTR_PATTERN = /^\s+class="language-[^"]+"\s*$/;
 const TELEGRAM_RICH_TEXT_TABLE_COLUMN_LIMIT = 20;
 const TELEGRAM_VOID_HTML_TAGS = new Set(["br", "hr", "img", "input", "tg-map"]);
+const TELEGRAM_RICH_BLOCK_HTML_TAGS = new Set([
+  "aside",
+  "audio",
+  "blockquote",
+  "details",
+  "figure",
+  "footer",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "hr",
+  "img",
+  "li",
+  "ol",
+  "p",
+  "pre",
+  "table",
+  "tg-collage",
+  "tg-map",
+  "tg-math-block",
+  "tg-slideshow",
+  "tr",
+  "ul",
+  "video",
+]);
+const TELEGRAM_RICH_MEDIA_HTML_TAGS = new Set(["audio", "img", "video"]);
 const TELEGRAM_RICH_SIMPLE_HTML_TAGS = new Set([
   ...TELEGRAM_SIMPLE_HTML_TAGS,
   "a",
@@ -689,6 +718,49 @@ export function sanitizeTelegramRichHtml(html: string): string {
   );
 }
 
+export function limitTelegramRichHtmlNesting(html: string, maxDepth: number): string {
+  const normalizedMaxDepth = Math.max(1, Math.floor(maxDepth));
+  const stack: Array<{ name: string; kept: boolean }> = [];
+  let keptDepth = 0;
+  let output = "";
+  let lastIndex = 0;
+
+  HTML_TAG_PATTERN.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = HTML_TAG_PATTERN.exec(html)) !== null) {
+    output += html.slice(lastIndex, match.index);
+    const rawTag = match[0];
+    const isClosing = match[1] === "</";
+    const tagName = normalizeLowercaseStringOrEmpty(match[2]);
+    const isSelfClosing =
+      !isClosing && (TELEGRAM_VOID_HTML_TAGS.has(tagName) || rawTag.trimEnd().endsWith("/>"));
+
+    if (isClosing) {
+      const entryIndex = stack.findLastIndex((entry) => entry.name === tagName);
+      if (entryIndex >= 0) {
+        const [entry] = stack.splice(entryIndex, 1);
+        if (entry?.kept) {
+          keptDepth = Math.max(0, keptDepth - 1);
+          output += rawTag;
+        }
+      }
+    } else if (isSelfClosing) {
+      if (tagName === "br" || keptDepth < normalizedMaxDepth) {
+        output += rawTag;
+      }
+    } else {
+      const kept = keptDepth < normalizedMaxDepth;
+      stack.push({ name: tagName, kept });
+      if (kept) {
+        keptDepth += 1;
+        output += rawTag;
+      }
+    }
+    lastIndex = HTML_TAG_PATTERN.lastIndex;
+  }
+  return output + html.slice(lastIndex);
+}
+
 function normalizeTelegramRichMediaBlock(block: string): string {
   const normalized = block
     .trim()
@@ -925,6 +997,8 @@ type TelegramHtmlTag = {
   name: string;
   openTag: string;
   closeTag: string;
+  richBlock: boolean;
+  richMedia: boolean;
 };
 
 const TELEGRAM_SELF_CLOSING_HTML_TAGS = TELEGRAM_VOID_HTML_TAGS;
@@ -943,6 +1017,13 @@ function buildTelegramHtmlCloseSuffix(tags: TelegramHtmlTag[]): string {
 
 function buildTelegramHtmlCloseSuffixLength(tags: TelegramHtmlTag[]): number {
   return tags.reduce((total, tag) => total + tag.closeTag.length, 0);
+}
+
+function isTelegramRichBlockHtmlTag(rawTag: string, tagName: string): boolean {
+  return (
+    TELEGRAM_RICH_BLOCK_HTML_TAGS.has(tagName) ||
+    (tagName === "a" && /\sname="[^"]+"/i.test(rawTag))
+  );
 }
 
 function findTelegramHtmlEntityEnd(text: string, start: number): number {
@@ -1018,22 +1099,34 @@ function popTelegramHtmlTag(tags: TelegramHtmlTag[], name: string): void {
   }
 }
 
-export function splitTelegramHtmlChunks(html: string, limit: number): string[] {
+export function splitTelegramHtmlChunks(
+  html: string,
+  limit: number,
+  options: { blockLimit?: number; mediaLimit?: number } = {},
+): string[] {
   if (!html) {
     return [];
   }
   const normalizedLimit = Math.max(1, Math.floor(limit));
-  if (html.length <= normalizedLimit) {
+  const blockLimit =
+    options.blockLimit == null ? undefined : Math.max(1, Math.floor(options.blockLimit));
+  const mediaLimit =
+    options.mediaLimit == null ? undefined : Math.max(1, Math.floor(options.mediaLimit));
+  if (html.length <= normalizedLimit && blockLimit === undefined && mediaLimit === undefined) {
     return [html];
   }
 
   const chunks: string[] = [];
   const openTags: TelegramHtmlTag[] = [];
   let current = "";
+  let currentBlockCount = 0;
+  let currentMediaCount = 0;
   let chunkHasPayload = false;
 
   const resetCurrent = () => {
     current = buildTelegramHtmlOpenPrefix(openTags);
+    currentBlockCount = openTags.filter((tag) => tag.richBlock).length;
+    currentMediaCount = openTags.filter((tag) => tag.richMedia).length;
     chunkHasPayload = false;
   };
 
@@ -1096,16 +1189,24 @@ export function splitTelegramHtmlChunks(html: string, limit: number): string[] {
     const isSelfClosing =
       !isClosing &&
       (TELEGRAM_SELF_CLOSING_HTML_TAGS.has(tagName) || rawTag.trimEnd().endsWith("/>"));
+    const isRichBlock = !isClosing && isTelegramRichBlockHtmlTag(rawTag, tagName);
+    const isRichMedia =
+      !isClosing &&
+      (tagName === "figure" ||
+        (TELEGRAM_RICH_MEDIA_HTML_TAGS.has(tagName) &&
+          !openTags.some((tag) => tag.name === "figure")));
 
     if (!isClosing) {
       const nextCloseLength = isSelfClosing ? 0 : `</${tagName}>`.length;
       if (
         chunkHasPayload &&
-        current.length +
-          rawTag.length +
-          buildTelegramHtmlCloseSuffixLength(openTags) +
-          nextCloseLength >
-          normalizedLimit
+        ((blockLimit !== undefined && isRichBlock && currentBlockCount >= blockLimit) ||
+          (mediaLimit !== undefined && isRichMedia && currentMediaCount >= mediaLimit) ||
+          current.length +
+            rawTag.length +
+            buildTelegramHtmlCloseSuffixLength(openTags) +
+            nextCloseLength >
+            normalizedLimit)
       ) {
         flushCurrent();
       }
@@ -1115,6 +1216,12 @@ export function splitTelegramHtmlChunks(html: string, limit: number): string[] {
     if (isSelfClosing) {
       chunkHasPayload = true;
     }
+    if (isRichBlock) {
+      currentBlockCount += 1;
+    }
+    if (isRichMedia) {
+      currentMediaCount += 1;
+    }
     if (isClosing) {
       popTelegramHtmlTag(openTags, tagName);
     } else if (!isSelfClosing) {
@@ -1122,6 +1229,8 @@ export function splitTelegramHtmlChunks(html: string, limit: number): string[] {
         name: tagName,
         openTag: rawTag,
         closeTag: `</${tagName}>`,
+        richBlock: isRichBlock,
+        richMedia: isRichMedia,
       });
     }
     lastIndex = tagEnd;

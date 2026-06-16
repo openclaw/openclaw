@@ -8,6 +8,7 @@ import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
 import { parseMergeForwardContent } from "./bot-content.js";
 import type { FeishuMessageEvent } from "./bot.js";
 import { handleFeishuMessage } from "./bot.js";
+import { resolveFeishuMessageDedupeKey } from "./dedupe-key.js";
 import { createFeishuMessageReceiveHandler } from "./monitor.message-handler.js";
 import { setFeishuRuntime } from "./runtime.js";
 
@@ -236,7 +237,7 @@ const readSessionUpdatedAtMock: PluginRuntime["channel"]["session"]["readSession
 const resolveStorePathMock: PluginRuntime["channel"]["session"]["resolveStorePath"] = (params) =>
   mockResolveStorePath(params);
 const resolveEnvelopeFormatOptionsMock = () => ({});
-const finalizeInboundContextMock = (ctx: Record<string, unknown>) => ctx;
+const finalizeInboundContextMock = vi.fn((ctx: Record<string, unknown>) => ctx);
 const withReplyDispatcherMock = async ({
   run,
 }: Parameters<PluginRuntime["channel"]["reply"]["withReplyDispatcher"]>[0]) => await run();
@@ -422,6 +423,7 @@ async function dispatchMessage(params: {
   cfg: ClawdbotConfig;
   currentCfg?: ClawdbotConfig;
   event: FeishuMessageEvent;
+  channelRuntime?: PluginRuntime["channel"];
 }) {
   const runtime = createRuntimeEnv();
   const feishuConfig = params.cfg.channels?.feishu;
@@ -443,6 +445,7 @@ async function dispatchMessage(params: {
     cfg,
     event: params.event,
     runtime,
+    channelRuntime: params.channelRuntime,
   });
   return runtime;
 }
@@ -959,6 +962,32 @@ describe("handleFeishuMessage ACP routing", () => {
       0,
     );
     expect(dispatcherOptions.allowReasoningPreview).toBe(true);
+  });
+
+  it("falls back to full runtime channel when partial channelRuntime lacks inbound", async () => {
+    const partialChannelRuntime = {
+      runtimeContexts: {} as PluginRuntime["channel"]["runtimeContexts"],
+    } as PluginRuntime["channel"];
+
+    await dispatchMessage({
+      cfg: {
+        session: { mainKey: "main", scope: "per-sender" },
+        channels: { feishu: { enabled: true, allowFrom: ["ou_sender_1"], dmPolicy: "open" } },
+      },
+      event: {
+        sender: { sender_id: { open_id: "ou_sender_1" } },
+        message: {
+          message_id: "msg-partial-runtime",
+          chat_id: "oc_dm",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "hello" }),
+        },
+      },
+      channelRuntime: partialChannelRuntime,
+    });
+
+    expect(finalizeInboundContextMock).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -4138,6 +4167,70 @@ describe("handleFeishuMessage command authorization", () => {
 });
 
 describe("createFeishuMessageReceiveHandler media dedupe", () => {
+  it("preserves the original dispatch dedupe key when debounce merges text content", async () => {
+    const handleMessage = vi.fn(async () => undefined);
+    const core = {
+      channel: {
+        debounce: {
+          resolveInboundDebounceMs: vi.fn(() => 10),
+          createInboundDebouncer: vi.fn(
+            (options: { onFlush: (entries: FeishuMessageEvent[]) => Promise<void> | void }) => {
+              const entries: FeishuMessageEvent[] = [];
+              return {
+                enqueue: async (event: FeishuMessageEvent) => {
+                  entries.push(event);
+                  if (entries.length === 2) {
+                    await options.onFlush(entries);
+                  }
+                },
+              };
+            },
+          ),
+        },
+        commands: {
+          isControlCommandMessage: vi.fn(() => false),
+        },
+      },
+    } as unknown as PluginRuntime;
+    const createTextEvent = (messageId: string, createTime: string, text: string) =>
+      ({
+        sender: { sender_id: { open_id: "ou-text-debounce" } },
+        message: {
+          message_id: messageId,
+          chat_id: "oc-dm",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text }),
+          create_time: createTime,
+        },
+      }) satisfies FeishuMessageEvent;
+    const last = createTextEvent("msg-text-last", "1710000001000", "second");
+    const handler = createFeishuMessageReceiveHandler({
+      cfg: { channels: { feishu: { dmPolicy: "open" } } } as ClawdbotConfig,
+      channelRuntime: core.channel,
+      accountId: "receive-text-debounce",
+      chatHistories: new Map(),
+      handleMessage,
+      resolveDebounceText: ({ event }) =>
+        (JSON.parse(event.message.content) as { text: string }).text,
+      hasProcessedMessage: vi.fn(async () => false),
+      recordProcessedMessage: vi.fn(async () => true),
+    });
+
+    await handler(createTextEvent("msg-text-first", "1710000000000", "first"));
+    await handler(last);
+
+    const call = mockCallArg<{
+      event?: FeishuMessageEvent;
+      messageDedupeKey?: string;
+    }>(handleMessage, 0, 0);
+    expect(call.event?.message.content).toBe(JSON.stringify({ text: "first\nsecond" }));
+    expect(call.messageDedupeKey).toBe(resolveFeishuMessageDedupeKey(last));
+    expect(resolveFeishuMessageDedupeKey(call.event as FeishuMessageEvent)).not.toBe(
+      call.messageDedupeKey,
+    );
+  });
+
   it("keeps same-id media variants distinct at receive time", async () => {
     const handleMessage = vi.fn(async () => undefined);
     const core = {

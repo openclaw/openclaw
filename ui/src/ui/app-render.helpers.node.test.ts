@@ -73,6 +73,7 @@ vi.mock("./controllers/sessions.ts", () => ({
 import {
   createChatSession,
   dismissChatError,
+  dismissRealtimeTalkError,
   handleChatManualRefresh,
   isCronSessionKey,
   parseSessionKey,
@@ -1379,11 +1380,12 @@ describe("switchChatSession", () => {
 });
 
 describe("dismissChatError", () => {
-  it("clears persistent Talk error state", () => {
+  it("leaves persistent Talk error state for its dedicated dismiss action", () => {
     const stop = vi.fn();
     const state = {
-      lastError: 'Realtime voice provider "openai" is not configured',
+      lastError: "unrelated gateway error",
       lastErrorCode: "UNAVAILABLE",
+      chatError: "unrelated chat error",
       realtimeTalkActive: true,
       realtimeTalkSession: { stop },
       realtimeTalkStatus: "error",
@@ -1395,6 +1397,35 @@ describe("dismissChatError", () => {
 
     expect(state.lastError).toBeNull();
     expect(state.lastErrorCode).toBeNull();
+    expect(state.chatError).toBeNull();
+    expect(stop).not.toHaveBeenCalled();
+    expect(state.realtimeTalkSession).toEqual({ stop });
+    expect(state.realtimeTalkActive).toBe(true);
+    expect(state.realtimeTalkStatus).toBe("error");
+    expect(state.realtimeTalkDetail).toBe('Realtime voice provider "openai" is not configured');
+    expect(state.realtimeTalkTranscript).toBe("partial transcript");
+  });
+});
+
+describe("dismissRealtimeTalkError", () => {
+  it("clears only Talk-owned error state", () => {
+    const stop = vi.fn();
+    const state = {
+      lastError: "unrelated gateway error",
+      lastErrorCode: "UNAVAILABLE",
+      chatError: "unrelated chat error",
+      realtimeTalkActive: true,
+      realtimeTalkSession: { stop },
+      realtimeTalkStatus: "error",
+      realtimeTalkDetail: 'Realtime voice provider "openai" is not configured',
+      realtimeTalkTranscript: "partial transcript",
+    } as unknown as AppViewState & { realtimeTalkSession: { stop(): void } | null };
+
+    dismissRealtimeTalkError(state);
+
+    expect(state.lastError).toBe("unrelated gateway error");
+    expect(state.lastErrorCode).toBe("UNAVAILABLE");
+    expect(state.chatError).toBe("unrelated chat error");
     expect(stop).toHaveBeenCalledOnce();
     expect(state.realtimeTalkSession).toBeNull();
     expect(state.realtimeTalkActive).toBe(false);

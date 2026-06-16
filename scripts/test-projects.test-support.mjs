@@ -567,6 +567,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/docker-e2e-timings.mjs", ["test/scripts/docker-e2e-helper-cli.test.ts"]],
   ["scripts/generate-npm-shrinkwrap.mjs", ["test/scripts/generate-npm-shrinkwrap.test.ts"]],
   ["scripts/ios-run.sh", ["test/scripts/ios-run.test.ts"]],
+  ["scripts/create-dmg.sh", ["test/scripts/create-dmg.test.ts"]],
   ["scripts/kova-ci-summary.mjs", ["test/scripts/kova-ci-summary.test.ts"]],
   ["scripts/openclaw-npm-postpublish-verify.ts", ["test/openclaw-npm-postpublish-verify.test.ts"]],
   ["scripts/openclaw-npm-release-check.ts", ["test/openclaw-npm-release-check.test.ts"]],

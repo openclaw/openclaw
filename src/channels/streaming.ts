@@ -1111,11 +1111,13 @@ export function mergeChannelProgressDraftLine<TLine extends string | ChannelProg
       resolveProgressDraftLineMergeKeys(entry).some((entryKey) => lineKeys.includes(entryKey)),
     );
     if (existingIndex >= 0) {
-      if (normalizeChannelProgressDraftLineIdentity(lines[existingIndex]) === normalized) {
+      const replacement = mergeProgressDraftLineUpdate(lines[existingIndex], line);
+      const replacementIdentity = normalizeChannelProgressDraftLineIdentity(replacement);
+      if (normalizeChannelProgressDraftLineIdentity(lines[existingIndex]) === replacementIdentity) {
         return lines;
       }
       const next = [...lines];
-      next[existingIndex] = line;
+      next[existingIndex] = replacement;
       return next.slice(-maxLines);
     }
   }
@@ -1124,6 +1126,36 @@ export function mergeChannelProgressDraftLine<TLine extends string | ChannelProg
     return lines;
   }
   return [...lines, line].slice(-maxLines);
+}
+
+function mergeProgressDraftLineUpdate<TLine extends string | ChannelProgressDraftLine>(
+  previous: TLine,
+  line: TLine,
+): TLine {
+  if (typeof previous !== "object" || typeof line !== "object") {
+    return line;
+  }
+  if (
+    line.kind !== "command-output" ||
+    !line.status ||
+    (line.detail && line.detail !== line.status)
+  ) {
+    return line;
+  }
+  const previousDetail = previous.detail?.trim();
+  if (!previousDetail || previousDetail === previous.status) {
+    return line;
+  }
+  const replacement = {
+    ...line,
+    detail: previousDetail,
+  };
+  replacement.text = getProgressDraftLineText(replacement);
+  setProgressDraftLineCorrelationKey(
+    replacement,
+    progressDraftLineCorrelationKeys.get(line) ?? progressDraftLineCorrelationKeys.get(previous),
+  );
+  return replacement;
 }
 
 function resolveProgressDraftLineMergeKeys(line: string | ChannelProgressDraftLine): string[] {

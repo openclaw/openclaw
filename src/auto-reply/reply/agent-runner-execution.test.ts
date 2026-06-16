@@ -7,6 +7,8 @@ import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-erro
 import { MissingProviderAuthError } from "../../agents/model-auth.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
+import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
+import { loggingState } from "../../logging/state.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import {
   createUserTurnTranscriptRecorder,
@@ -5140,6 +5142,69 @@ describe("runAgentTurnWithFallback", () => {
     expect(onCompactionStart).toHaveBeenCalledTimes(1);
     expect(onCompactionEnd).toHaveBeenCalledTimes(1);
     expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("logs Codex app-server compaction completion while notices stay silent by default", async () => {
+    const onBlockReply = vi.fn();
+    const consoleLog = vi.fn();
+    setLoggerOverride({ level: "silent", consoleLevel: "info", consoleStyle: "compact" });
+    loggingState.rawConsole = {
+      log: consoleLog,
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+    try {
+      state.runWithModelFallbackMock.mockImplementationOnce(
+        async (params: FallbackRunnerParams) => ({
+          result: await params.run("openai", "gpt-5.5"),
+          provider: "openai",
+          model: "gpt-5.5",
+          attempts: [{ provider: "anthropic", model: "claude", error: "rate limit" }],
+        }),
+      );
+      state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+        await params.onAgentEvent?.({
+          stream: "compaction",
+          data: {
+            phase: "start",
+            backend: "codex-app-server",
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "compaction-1",
+          },
+        });
+        await params.onAgentEvent?.({
+          stream: "compaction",
+          data: {
+            phase: "end",
+            completed: true,
+            backend: "codex-app-server",
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "compaction-1",
+          },
+        });
+        return { payloads: [{ text: "final" }], meta: {} };
+      });
+
+      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+      const result = await runAgentTurnWithFallback({
+        ...createMinimalRunAgentTurnParams({
+          opts: { onBlockReply },
+        }),
+      });
+
+      expect(result.kind).toBe("success");
+      expect(onBlockReply).not.toHaveBeenCalled();
+      expect(consoleLog.mock.calls.map(([line]) => String(line)).join("\n")).toContain(
+        "codex app-server auto-compaction succeeded for openai/gpt-5.5; refreshed session context",
+      );
+    } finally {
+      loggingState.rawConsole = null;
+      setLoggerOverride(null);
+      resetLogger();
+    }
   });
 
   it("emits a compaction start notice when notifyUser is enabled", async () => {

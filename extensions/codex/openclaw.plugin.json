@@ -5,7 +5,8 @@
   "providers": ["codex"],
   "contracts": {
     "mediaUnderstandingProviders": ["codex"],
-    "migrationProviders": ["codex"]
+    "migrationProviders": ["codex"],
+    "webSearchProviders": ["codex"]
   },
   "mediaUnderstandingProviderMetadata": {
     "codex": {

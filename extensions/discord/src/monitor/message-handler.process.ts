@@ -415,14 +415,24 @@ async function processDiscordMessageInner(
     statusReactionsActive = true;
     void statusReactions.setQueued();
   };
-  queueInitialDiscordAckReaction({
-    enabled: statusReactionsEnabled,
-    shouldSendAckReaction,
-    ackReaction,
-    statusReactions,
-    reactionAdapter: discordAdapter,
-    target: `${messageChannelId}/${message.id}`,
-  });
+  let initialAckReactionQueued = false;
+  const queueInitialAckReactionAfterRecord = () => {
+    if (initialAckReactionQueued) {
+      return;
+    }
+    initialAckReactionQueued = true;
+    if (statusReactionsEnabled) {
+      statusReactionsActive = true;
+    }
+    queueInitialDiscordAckReaction({
+      enabled: statusReactionsEnabled,
+      shouldSendAckReaction,
+      ackReaction,
+      statusReactions,
+      reactionAdapter: discordAdapter,
+      target: `${messageChannelId}/${message.id}`,
+    });
+  };
   const processContext = await buildDiscordMessageProcessContext({
     ctx,
     text,
@@ -953,6 +963,7 @@ async function processDiscordMessageInner(
       storePath: turn.storePath,
       ctxPayload,
       recordInboundSession,
+      afterRecord: queueInitialAckReactionAfterRecord,
       dispatchReplyWithBufferedBlockDispatcher,
       dispatcherOptions: {
         ...replyPipeline,
@@ -981,9 +992,7 @@ async function processDiscordMessageInner(
         queuedDeliveryCorrelations: isRoomEvent ? [{ begin: beginDeliveryCorrelation }] : undefined,
         suppressTyping: isRoomEvent ? true : undefined,
         allowProgressCallbacksWhenSourceDeliverySuppressed:
-          sourceRepliesAreToolOnly && draftPreview.draftStream && draftPreview.isProgressMode
-            ? true
-            : undefined,
+          sourceRepliesAreToolOnly && statusReactionsExplicitlyEnabled ? true : undefined,
         disableBlockStreaming: sourceRepliesAreToolOnly
           ? true
           : (draftPreview.disableBlockStreamingForDraft ??
@@ -1001,9 +1010,12 @@ async function processDiscordMessageInner(
           ? () => draftPreview.handleAssistantMessageBoundary()
           : undefined,
         onModelSelected,
-        suppressDefaultToolProgressMessages: draftPreview.suppressDefaultToolProgressMessages
-          ? true
-          : undefined,
+        suppressDefaultToolProgressMessages:
+          (sourceRepliesAreToolOnly && statusReactionsExplicitlyEnabled) ||
+          draftPreview.suppressDefaultToolProgressMessages
+            ? true
+            : undefined,
+        allowToolLifecycleWhenProgressHidden: statusReactionsEnabled ? true : undefined,
         commentaryProgressEnabled: draftPreview.isProgressMode
           ? draftPreview.commentaryProgressEnabled
           : undefined,

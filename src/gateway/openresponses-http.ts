@@ -48,6 +48,7 @@ import {
   authorizeOpenAiCompatibleHttpModelOverride,
   getBearerToken,
   getHeader,
+  isGatewaySessionKeyOverrideError,
   isUnknownGatewayAgentError,
   resolveAgentIdForRequest,
   resolveGatewayRequestContext,
@@ -667,7 +668,7 @@ export async function handleOpenResponsesHttpRequest(
       useMessageChannelHeader: true,
     });
   } catch (err) {
-    if (isUnknownGatewayAgentError(err)) {
+    if (isUnknownGatewayAgentError(err) || isGatewaySessionKeyOverrideError(err)) {
       sendJson(res, 400, {
         error: { message: err.message, type: "invalid_request_error" },
       });

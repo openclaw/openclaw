@@ -13,15 +13,18 @@ import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/token
 import { getRuntimeConfig } from "../../../config/config.js";
 import { resolveStorePath } from "../../../config/sessions/paths.js";
 import {
-  loadSessionStore,
-  runQuotaSuspensionMaintenance,
-  updateSessionStoreEntry,
-} from "../../../config/sessions/store.js";
+  listSessionEntries,
+  loadSessionEntry,
+  updateSessionEntry,
+} from "../../../config/sessions/session-accessor.js";
+import { resolveQuotaSuspensionEntryMaintenance } from "../../../config/sessions/store-maintenance.js";
 import {
   bindOwnedSessionTranscriptWrites,
   type OwnedSessionTranscriptCacheSnapshot,
+  type OwnedSessionTranscriptWriteOptions,
   withOwnedSessionTranscriptWrites,
 } from "../../../config/sessions/transcript-write-context.js";
+import type { SessionEntry } from "../../../config/sessions/types.js";
 import {
   assertContextEngineHostSupport,
   OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
@@ -64,6 +67,7 @@ import {
 import { getPluginToolMeta } from "../../../plugins/tools.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../../sessions/input-provenance.js";
+import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../shared/transcript-only-openclaw-assistant.js";
 import { resolveSkillsPromptForRun } from "../../../skills/loading/workspace.js";
 import { resolveEmbeddedRunSkillEntries } from "../../../skills/runtime/embedded-run-entries.js";
 import {
@@ -697,42 +701,27 @@ function removeTrailingMidTurnPrecheckAssistantError(params: {
   sessionManager: ReturnType<typeof guardSessionManager>;
 }): void {
   const messages = params.activeSession.agent.state.messages;
-  if (isMidTurnPrecheckAssistantError(messages.at(-1))) {
+  const removedActiveError = isMidTurnPrecheckAssistantError(messages.at(-1));
+  if (removedActiveError) {
     params.activeSession.agent.state.messages = messages.slice(0, -1);
   }
 
-  const mutableSessionManager = params.sessionManager as unknown as {
-    fileEntries?: Array<{
-      type?: string;
-      id?: string;
-      parentId?: string | null;
-      message?: AgentMessage;
-    }>;
-    byId?: Map<string, unknown>;
-    leafId?: string | null;
-    rewriteFile?: () => void;
-  };
-  const lastEntry = mutableSessionManager.fileEntries?.at(-1);
-  if (lastEntry?.type !== "message" || !isMidTurnPrecheckAssistantError(lastEntry.message)) {
-    if (isMidTurnPrecheckAssistantError(params.activeSession.agent.state.messages.at(-1))) {
-      log.warn(
-        "[context-overflow-midturn-precheck] removed synthetic assistant error from active session but could not locate matching persisted SessionManager entry",
-      );
-    }
-    return;
-  }
-  if (typeof mutableSessionManager.rewriteFile !== "function") {
+  const removedPersistedError =
+    params.sessionManager.removeTrailingEntries(
+      (entry) => entry.type === "message" && isMidTurnPrecheckAssistantError(entry.message),
+      {
+        preserveTrailing: (entry) =>
+          entry.type === "custom" ||
+          entry.type === "label" ||
+          entry.type === "session_info" ||
+          (entry.type === "message" && isTranscriptOnlyOpenClawAssistantMessage(entry.message)),
+      },
+    ) > 0;
+  if (removedActiveError && !removedPersistedError) {
     log.warn(
-      "[context-overflow-midturn-precheck] removed synthetic assistant error from active session but SessionManager rewrite hook is unavailable",
+      "[context-overflow-midturn-precheck] removed synthetic assistant error from active session but could not locate matching persisted SessionManager entry",
     );
-    return;
   }
-  mutableSessionManager.fileEntries?.pop();
-  if (lastEntry.id) {
-    mutableSessionManager.byId?.delete(lastEntry.id);
-  }
-  mutableSessionManager.leafId = lastEntry.parentId ?? null;
-  mutableSessionManager.rewriteFile();
 }
 
 function collectAttemptExplicitToolAllowlistSources(params: {
@@ -814,6 +803,41 @@ function collectAttemptExplicitToolAllowlistSources(params: {
     { label: "inherited tools.allow", allow: inheritedToolPolicy?.allow },
     { label: "runtime toolsAllow", allow: params.toolsAllow, enforceWhenToolsDisabled: true },
   ]);
+}
+
+// Applies quota-resume TTL maintenance to only the active attempt session.
+async function loadAttemptSessionEntryAfterQuotaMaintenance(params: {
+  storePath: string;
+  sessionKey: string;
+}): Promise<SessionEntry | undefined> {
+  const entry = loadSessionEntry({
+    storePath: params.storePath,
+    sessionKey: params.sessionKey,
+  });
+  if (!entry?.quotaSuspension) {
+    return entry;
+  }
+  const now = Date.now();
+  const maintenance = resolveQuotaSuspensionEntryMaintenance({ entry, now });
+  if (!maintenance.patch) {
+    return entry;
+  }
+  const updated = await updateSessionEntry(
+    {
+      storePath: params.storePath,
+      sessionKey: params.sessionKey,
+    },
+    (currentEntry) =>
+      resolveQuotaSuspensionEntryMaintenance({
+        entry: currentEntry,
+        now,
+      }).patch,
+    {
+      skipMaintenance: true,
+      takeCacheOwnership: true,
+    },
+  );
+  return updated ?? entry;
 }
 
 export async function runEmbeddedAttempt(
@@ -2078,11 +2102,24 @@ export async function runEmbeddedAttempt(
       timeoutMs: sessionWriteLockOptions.maxHoldMs,
       signal: params.abortSignal,
     });
+    let sessionManager: ReturnType<typeof guardSessionManager> | undefined;
     const sessionLockController = await createEmbeddedAttemptSessionLockController({
       acquireSessionWriteLock,
       lockOptions: {
         sessionFile: params.sessionFile,
         ...sessionWriteLockOptions,
+      },
+      mergePromptReleasedSessionEntries: (entries) => {
+        if (!sessionManager) {
+          throw new Error("session manager unavailable during prompt-released entry merge");
+        }
+        return sessionManager.mergePromptReleasedSessionEntries(entries, { persistLeaf: true });
+      },
+      reloadPromptReleasedSessionFile: () => {
+        if (!sessionManager) {
+          throw new Error("session manager unavailable during prompt-released file reload");
+        }
+        sessionManager.setSessionFile(params.sessionFile);
       },
     });
     releaseRetainedSessionLock = () => sessionLockController.dispose();
@@ -2095,7 +2132,7 @@ export async function runEmbeddedAttempt(
         sessionLockController.publishOwnedSessionFileSnapshot(snapshot),
       withSessionWriteLock: <T>(
         operation: () => Promise<T> | T,
-        options?: { publishOwnedWrite?: boolean },
+        options?: OwnedSessionTranscriptWriteOptions<T>,
       ) => sessionLockController.withSessionWriteLock(operation, options),
     };
     const withOwnedSessionWriteLock = <T>(operation: () => Promise<T> | T): Promise<T> =>
@@ -2104,7 +2141,6 @@ export async function runEmbeddedAttempt(
       );
     armExternalAbortSignal();
 
-    let sessionManager: ReturnType<typeof guardSessionManager> | undefined;
     let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
     let removeToolResultContextGuard: (() => void) | undefined;
     let trajectoryRecorder: ReturnType<typeof createTrajectoryRuntimeRecorder> | null = null;
@@ -2509,6 +2545,8 @@ export async function runEmbeddedAttempt(
       const boundaryTimezone = isRawModelRun
         ? undefined
         : resolveUserTimezone(params.config?.agents?.defaults?.userTimezone);
+      const includeBoundaryTimestamp =
+        !isRawModelRun && params.config?.agents?.defaults?.envelopeTimestamp !== "off";
       let currentUserTimestampOverride:
         | { timestamp: number; text: string; alternateText?: string }
         | undefined;
@@ -2518,6 +2556,7 @@ export async function runEmbeddedAttempt(
         }
         return {
           ...(boundaryTimezone ? { timezone: boundaryTimezone } : {}),
+          ...(includeBoundaryTimestamp ? {} : { includeTimestamp: false }),
           ...(currentUserTimestampOverride ? { currentUserTimestampOverride } : {}),
         };
       };
@@ -3153,12 +3192,14 @@ export async function runEmbeddedAttempt(
             const storePath = resolveStorePath(params.config?.session?.store, {
               agentId: sessionAgentId,
             });
-            await runQuotaSuspensionMaintenance({ storePath });
-            const store = loadSessionStore(storePath, { skipCache: true });
-            const sessionEntry = store[params.sessionKey];
+            const sessionEntry = await loadAttemptSessionEntryAfterQuotaMaintenance({
+              storePath,
+              sessionKey: params.sessionKey,
+            });
             const suspension = sessionEntry?.quotaSuspension;
-            if (suspension?.state === "resuming") {
-              const subagents = Object.values(store)
+            if (sessionEntry && suspension?.state === "resuming") {
+              const subagents = listSessionEntries({ storePath, clone: false })
+                .map(({ entry }) => entry)
                 .filter((s) => s.spawnedBy === sessionEntry.sessionId)
                 .map((s) => ({
                   sessionId: s.sessionId,
@@ -3170,12 +3211,12 @@ export async function runEmbeddedAttempt(
                 activeSubagents: subagents,
               });
               validated.push(handoffMsg);
-              await updateSessionStoreEntry({
-                storePath,
-                sessionKey: params.sessionKey,
-                skipMaintenance: true,
-                takeCacheOwnership: true,
-                update: async (entry) => {
+              await updateSessionEntry(
+                {
+                  storePath,
+                  sessionKey: params.sessionKey,
+                },
+                async (entry) => {
                   if (entry.quotaSuspension?.state !== "resuming") {
                     return null;
                   }
@@ -3183,7 +3224,11 @@ export async function runEmbeddedAttempt(
                     quotaSuspension: { ...entry.quotaSuspension, state: "active" },
                   };
                 },
-              });
+                {
+                  skipMaintenance: true,
+                  takeCacheOwnership: true,
+                },
+              );
             }
           }
 
@@ -4158,6 +4203,7 @@ export async function runEmbeddedAttempt(
             messages: messagesForCurrentPrompt,
             prompt: promptForModel,
             ...(boundaryTimezone ? { timezone: boundaryTimezone } : {}),
+            ...(includeBoundaryTimestamp ? {} : { includeTimestamp: false }),
             ...(typeof preparedUserTurnMessage?.timestamp === "number"
               ? { currentUserTimestamp: preparedUserTurnMessage.timestamp }
               : {}),
@@ -4443,6 +4489,7 @@ export async function runEmbeddedAttempt(
           const llmBoundaryPromptForPrecheck = normalizeCurrentPromptTextForLlmBoundary({
             prompt: promptForModel,
             ...(boundaryTimezone ? { timezone: boundaryTimezone } : {}),
+            ...(includeBoundaryTimestamp ? {} : { includeTimestamp: false }),
             ...(typeof preparedUserTurnMessage?.timestamp === "number"
               ? { currentUserTimestamp: preparedUserTurnMessage.timestamp }
               : {}),
@@ -4478,9 +4525,13 @@ export async function runEmbeddedAttempt(
               });
           }
 
-          const llmBoundaryOptionsForPrecheck = boundaryTimezone
-            ? { timezone: boundaryTimezone }
-            : undefined;
+          const llmBoundaryOptionsForPrecheck =
+            boundaryTimezone || !includeBoundaryTimestamp
+              ? {
+                  ...(boundaryTimezone ? { timezone: boundaryTimezone } : {}),
+                  ...(includeBoundaryTimestamp ? {} : { includeTimestamp: false }),
+                }
+              : undefined;
           const unwindowedLlmBoundaryMessagesForPrecheck =
             contextEnginePromptAuthority === "preassembly_may_overflow" &&
             unwindowedContextEngineMessagesForPrecheck

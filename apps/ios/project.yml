@@ -45,6 +45,11 @@ schemes:
     test:
       targets:
         - OpenClawUITests
+  OpenClawWatchApp:
+    shared: true
+    build:
+      targets:
+        OpenClawWatchApp: all
 
 targets:
   OpenClaw:
@@ -284,6 +289,7 @@ targets:
     deploymentTarget: "11.0"
     sources:
       - path: WatchExtension/Sources
+      - path: WatchExtension/Assets.xcassets
     dependencies:
       - sdk: AppIntents.framework
       - sdk: WatchConnectivity.framework

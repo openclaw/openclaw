@@ -36,7 +36,12 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveTelegramAccount, type ResolvedTelegramAccount } from "./accounts.js";
+import {
+  mergeTelegramAccountConfig,
+  resolveDefaultTelegramAccountId,
+  resolveTelegramAccount,
+  type ResolvedTelegramAccount,
+} from "./accounts.js";
 import { resolveTelegramAutoThreadId } from "./action-threading.js";
 import { lookupTelegramChatId } from "./api-fetch.js";
 import { telegramApprovalCapability } from "./approval-native.js";
@@ -783,7 +788,12 @@ export const telegramPlugin = createChatChannelPlugin({
           cfg,
           accountId: accountId ?? undefined,
         });
-        return inlineButtonsScope === "off" ? ["richText"] : ["inlineButtons", "richText"];
+        const capabilities = inlineButtonsScope === "off" ? [] : ["inlineButtons"];
+        const selectedAccountId = accountId ?? resolveDefaultTelegramAccountId(cfg);
+        if (mergeTelegramAccountConfig(cfg, selectedAccountId).richMessages === true) {
+          capabilities.push("richText");
+        }
+        return capabilities;
       },
       reactionGuidance: ({ cfg, accountId }) => {
         const level = resolveTelegramReactionLevel({

@@ -17,6 +17,7 @@ import {
   loadCostUsageSummaryFromCache,
   loadSessionCostSummary,
   loadSessionCostSummaryFromCache,
+  loadSessionCostSummariesFromCache,
   loadSessionLogs,
   loadSessionUsageTimeSeries,
   requestCostUsageCacheRefresh,
@@ -343,6 +344,45 @@ describe("session cost usage", () => {
         requestRefresh: false,
       });
       expect(cached.cacheStatus.status).toBe("stale");
+    });
+  });
+
+  it("loads multiple session summaries from one durable cache snapshot", async () => {
+    const root = await makeSessionCostRoot("cost-cache-batch");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFiles = await Promise.all(
+      ["sess-a", "sess-b"].map(async (sessionId, index) => {
+        const sessionFile = path.join(sessionsDir, `${sessionId}.jsonl`);
+        await fs.writeFile(
+          sessionFile,
+          transcriptText(sessionId, {
+            type: "message",
+            timestamp: `2026-02-05T12:0${index}:00.000Z`,
+            message: {
+              role: "assistant",
+              provider: "openai",
+              model: "gpt-5.5",
+              usage: { input: index + 1, output: 0, totalTokens: index + 1 },
+            },
+          }),
+          "utf-8",
+        );
+        return { sessionId, sessionFile };
+      }),
+    );
+
+    await withStateDir(root, async () => {
+      await refreshCostUsageCache({ sessionFiles: sessionFiles.map((entry) => entry.sessionFile) });
+      const result = await loadSessionCostSummariesFromCache({
+        sessions: sessionFiles,
+        agentId: "main",
+        startMs: Date.UTC(2026, 1, 5),
+        endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
+      });
+
+      expect(result.cacheStatus.status).toBe("fresh");
+      expect(result.summaries.map((summary) => summary?.totalTokens)).toEqual([1, 2]);
     });
   });
 
