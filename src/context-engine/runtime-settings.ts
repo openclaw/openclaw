@@ -1,13 +1,13 @@
 import type { ContextEngineHostSupport } from "./host-compat.js";
-import {
-  type ContextEngineRuntimeReasonCode,
-  type ContextEngineSelectionSource,
-  type ContextEngineRuntimeMode,
-  type ContextEngineRuntimeSettings,
+import type {
+  ContextEngineRuntimeReasonCode,
+  ContextEngineSelectionSource,
+  ContextEngineRuntimeMode,
+  ContextEngineRuntimeSettings,
 } from "./types.js";
 
 type OptionalString = string | null | undefined;
-type OptionalReason = ContextEngineRuntimeReasonCode | string | null | undefined;
+type OptionalReason = string | null | undefined;
 
 const RUNTIME_REASON_CODES = new Set<ContextEngineRuntimeReasonCode>([
   "provider_timeout",
