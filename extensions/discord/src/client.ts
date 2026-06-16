@@ -23,6 +23,7 @@ export type DiscordClientOpts = {
   accountId?: string;
   rest?: RequestClient;
   retry?: RetryConfig;
+  signal?: AbortSignal;
   timeoutMs?: number;
   verbose?: boolean;
 };
@@ -78,6 +79,7 @@ function resolveRest(
   cfg: OpenClawConfig,
   rest?: RequestClient,
   proxyFetch?: typeof fetch,
+  signal?: AbortSignal,
   timeoutMs?: number,
 ) {
   if (rest) {
@@ -86,6 +88,7 @@ function resolveRest(
   const resolvedProxyFetch = proxyFetch ?? resolveDiscordProxyFetchForAccount(account, cfg);
   return createDiscordRequestClient(token, {
     ...(resolvedProxyFetch ? { fetch: resolvedProxyFetch } : {}),
+    ...(signal ? { signal } : {}),
     ...(timeoutMs !== undefined ? { timeout: timeoutMs } : {}),
   });
 }
@@ -129,6 +132,7 @@ export function createDiscordRestClient(opts: DiscordClientOpts) {
     resolvedCfg,
     opts.rest,
     proxyContext.proxyFetch,
+    opts.signal,
     opts.timeoutMs,
   );
   return { token, rest, account };
