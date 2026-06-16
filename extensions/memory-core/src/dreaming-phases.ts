@@ -416,6 +416,8 @@ type DailyIngestionFileState = {
   mtimeMs: number;
   size: number;
   lastDreamingDayIngested?: string;
+  /** Hash of content after stripping managed dreaming lines. */
+  strippedHash?: string;
 };
 
 function parseDailyMemoryFileName(fileName: string): DailyMemoryFile | null {
@@ -1222,6 +1224,7 @@ async function collectDailyIngestionBatches(params: {
       nextFiles[relativePath] = {
         ...fingerprint,
         lastDreamingDayIngested: previousDreamingDay,
+        strippedHash: previous?.strippedHash,
       };
       continue;
     }
@@ -1237,6 +1240,22 @@ async function collectDailyIngestionBatches(params: {
       continue;
     }
     const lines = stripManagedDailyDreamingLines(raw.split(/\r?\n/));
+    const strippedHash = createHash("sha1").update(lines.join("\n")).digest("hex").slice(0, 16);
+    // If only the managed dreaming block changed (e.g. light-phase wrote a
+    // new summary), the stripped content hash stays the same.  Skip
+    // re-ingestion so recordShortTermRecalls does not advance lastRecalledAt
+    // with a false "new recall" signal that defeats the freshness gate.
+    if (
+      previous?.strippedHash === strippedHash &&
+      previousDreamingDay === params.ingestionDreamingDay
+    ) {
+      nextFiles[relativePath] = {
+        ...fingerprint,
+        lastDreamingDayIngested: previousDreamingDay,
+        strippedHash,
+      };
+      continue;
+    }
     const chunks = buildDailySnippetChunks(lines, perFileCap);
     const results: MemorySearchResult[] = [];
     for (const chunk of chunks) {
@@ -1260,6 +1279,7 @@ async function collectDailyIngestionBatches(params: {
     nextFiles[relativePath] = {
       ...fingerprint,
       lastDreamingDayIngested: params.ingestionDreamingDay,
+      strippedHash,
     };
     if (total >= totalCap) {
       break;
