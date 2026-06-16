@@ -69,6 +69,13 @@ export const PROVIDER_SPECIFIC_PATTERNS: readonly ProviderErrorPattern[] = [
     reason: "overloaded",
   },
   // Groq does not currently ship a bundled provider hook.
+  // Zhipu (GLM) returns error code 1305 with "访问量过大" when the model is
+  // overloaded. Returned as HTTP 200 with error in body, so standard HTTP
+  // status-based overload detection doesn't catch it.
+  {
+    test: /\[1305\]|访问量过大/,
+    reason: "overloaded",
+  },
   {
     test: /model(?:_is)?_deactivated|model has been deactivated/i,
     reason: "model_not_found",
