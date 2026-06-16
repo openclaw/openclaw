@@ -45,13 +45,17 @@ import {
   listActiveEmbeddedRunSessionKeys,
 } from "./embedded-agent-runner/run-state.js";
 import { resolveAgentSessionDirs } from "./session-dirs.js";
-import type { SessionLockInspection } from "./session-write-lock.js";
+import {
+  releaseCurrentProcessSessionWriteLock,
+  type SessionLockInspection,
+} from "./session-write-lock.js";
 
 const log = createSubsystemLogger("main-session-restart-recovery");
 
 const DEFAULT_RECOVERY_DELAY_MS = 5_000;
 const MAX_RECOVERY_RETRIES = 3;
 const RETRY_BACKOFF_MULTIPLIER = 2;
+const TERMINAL_SESSION_LOCK_CLEANUP_REASON = "terminal-session";
 const UNRESUMABLE_SESSION_NOTICE =
   "I was interrupted by a gateway restart and couldn't safely resume the previous turn. " +
   "Please send that last request again and I'll pick it up cleanly.";
@@ -127,6 +131,84 @@ function resolveEntryTranscriptLockPaths(params: {
   );
   push(() => resolveSessionTranscriptPathInDir(params.entry.sessionId, params.sessionsDir));
   return [...paths];
+}
+
+function hasDoneTerminalLifecycle(entry: SessionEntry): boolean {
+  return entry.status === "done" && normalizeFiniteTimestamp(entry.endedAt) !== undefined;
+}
+
+function appendTerminalLockCleanupReason(reasons: string[]): string[] {
+  return reasons.includes(TERMINAL_SESSION_LOCK_CLEANUP_REASON)
+    ? reasons
+    : [...reasons, TERMINAL_SESSION_LOCK_CLEANUP_REASON];
+}
+
+export async function cleanupTerminalSessionLocks(params: {
+  sessionsDir: string;
+  locks: SessionLockInspection[];
+  releaseCurrentProcessLock?: typeof releaseCurrentProcessSessionWriteLock;
+  log?: {
+    warn?: (message: string) => void;
+  };
+}): Promise<{ cleaned: SessionLockInspection[] }> {
+  const sessionsDir = path.resolve(params.sessionsDir);
+  const storePath = path.join(sessionsDir, "sessions.json");
+  let store: Record<string, SessionEntry>;
+  try {
+    store = loadSessionStore(storePath);
+  } catch {
+    return { cleaned: [] };
+  }
+
+  const terminalLockPaths = new Set<string>();
+  const nonTerminalLockPaths = new Set<string>();
+  for (const entry of Object.values(store)) {
+    if (!entry) {
+      continue;
+    }
+    const targetPaths = hasDoneTerminalLifecycle(entry) ? terminalLockPaths : nonTerminalLockPaths;
+    for (const lockPath of resolveEntryTranscriptLockPaths({ entry, sessionsDir })) {
+      const normalized = normalizeTranscriptLockPath(lockPath);
+      if (normalized) {
+        targetPaths.add(normalized);
+      }
+    }
+  }
+  if (terminalLockPaths.size === 0) {
+    return { cleaned: [] };
+  }
+
+  const releaseCurrentProcessLock =
+    params.releaseCurrentProcessLock ?? releaseCurrentProcessSessionWriteLock;
+  const cleaned: SessionLockInspection[] = [];
+  for (const lock of params.locks) {
+    if (lock.removed || lock.pid !== process.pid || !lock.pidAlive) {
+      continue;
+    }
+    const normalizedLockPath = normalizeTranscriptLockPath(lock.lockPath);
+    if (
+      !normalizedLockPath ||
+      !terminalLockPaths.has(normalizedLockPath) ||
+      nonTerminalLockPaths.has(normalizedLockPath)
+    ) {
+      continue;
+    }
+
+    const sessionFile = normalizedLockPath.slice(0, -".lock".length);
+    await releaseCurrentProcessLock(sessionFile);
+    await fs.promises.rm(normalizedLockPath, { force: true });
+    const cleanedLock: SessionLockInspection = {
+      ...lock,
+      lockPath: normalizedLockPath,
+      stale: true,
+      staleReasons: appendTerminalLockCleanupReason(lock.staleReasons),
+      removed: true,
+    };
+    cleaned.push(cleanedLock);
+    params.log?.warn?.(`removed terminal session lock: ${normalizedLockPath}`);
+  }
+
+  return { cleaned };
 }
 
 export async function markRestartAbortedMainSessions(params: {

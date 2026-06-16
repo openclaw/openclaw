@@ -607,111 +607,79 @@ function createStartupConfig(params: {
   memorySlot?: string;
   contextEngine?: string;
 }) {
-  const slotsConfig = {
-    ...(params.memorySlot ? { memory: params.memorySlot } : {}),
-    ...(params.contextEngine ? { contextEngine: params.contextEngine } : {}),
-  };
+  const slotsConfig: Record<string, string> = {};
+  if (params.memorySlot) {
+    slotsConfig.memory = params.memorySlot;
+  }
+  if (params.contextEngine) {
+    slotsConfig.contextEngine = params.contextEngine;
+  }
   const hasSlots = Object.keys(slotsConfig).length > 0;
-  return {
-    ...(params.noConfiguredChannels
-      ? {
-          channels: {},
-        }
-      : params.channelIds?.length
-        ? {
-            channels: Object.fromEntries(
-              params.channelIds.map((channelId) => [channelId, { enabled: true }]),
-            ),
-          }
-        : {}),
-    ...(params.enabledPluginIds?.length
-      ? {
-          plugins: {
-            ...(params.allowPluginIds?.length ? { allow: params.allowPluginIds } : {}),
-            ...(hasSlots ? { slots: slotsConfig } : {}),
-            entries: Object.fromEntries(
-              params.enabledPluginIds.map((pluginId) => [pluginId, { enabled: true }]),
-            ),
+  const config = {} as Record<string, unknown>;
+
+  if (params.noConfiguredChannels) {
+    config.channels = {};
+  } else if (params.channelIds?.length) {
+    config.channels = Object.fromEntries(
+      params.channelIds.map((channelId) => [channelId, { enabled: true }]),
+    );
+  }
+
+  if (params.enabledPluginIds?.length || params.allowPluginIds?.length || hasSlots) {
+    const plugins = {} as Record<string, unknown>;
+    if (params.allowPluginIds?.length) {
+      plugins.allow = params.allowPluginIds;
+    }
+    if (hasSlots) {
+      plugins.slots = slotsConfig;
+    }
+    if (params.enabledPluginIds?.length) {
+      plugins.entries = Object.fromEntries(
+        params.enabledPluginIds.map((pluginId) => [pluginId, { enabled: true }]),
+      );
+    }
+    config.plugins = plugins;
+  }
+
+  if (params.providerIds?.length) {
+    config.models = {
+      providers: Object.fromEntries(
+        params.providerIds.map((providerId) => [
+          providerId,
+          {
+            baseUrl: "https://example.com",
+            models: [],
           },
-        }
-      : params.allowPluginIds?.length
-        ? {
-            plugins: {
-              allow: params.allowPluginIds,
-            },
-          }
-        : hasSlots
-          ? {
-              plugins: {
-                slots: slotsConfig,
-              },
-            }
-          : {}),
-    ...(params.providerIds?.length
-      ? {
-          models: {
-            providers: Object.fromEntries(
-              params.providerIds.map((providerId) => [
-                providerId,
-                {
-                  baseUrl: "https://example.com",
-                  models: [],
-                },
-              ]),
-            ),
-          },
-        }
-      : {}),
-    ...(params.modelId
-      ? {
-          agents: {
-            defaults: {
-              model: { primary: params.modelId },
-              ...(params.agentRuntimeId
-                ? {
-                    agentRuntime: {
-                      id: params.agentRuntimeId,
-                      fallback: "none",
-                    },
-                  }
-                : {}),
-              models: {
-                [params.modelId]: {},
-              },
-            },
-            ...(params.agentRuntimeIds?.length
-              ? {
-                  list: params.agentRuntimeIds.map((runtime, index) => ({
-                    id: `agent-${index + 1}`,
-                    agentRuntime: { id: runtime },
-                  })),
-                }
-              : {}),
-          },
-        }
-      : params.agentRuntimeId || params.agentRuntimeIds?.length
-        ? {
-            agents: {
-              defaults: params.agentRuntimeId
-                ? {
-                    agentRuntime: {
-                      id: params.agentRuntimeId,
-                      fallback: "none",
-                    },
-                  }
-                : {},
-              ...(params.agentRuntimeIds?.length
-                ? {
-                    list: params.agentRuntimeIds.map((runtime, index) => ({
-                      id: `agent-${index + 1}`,
-                      agentRuntime: { id: runtime },
-                    })),
-                  }
-                : {}),
-            },
-          }
-        : {}),
-  } as OpenClawConfig;
+        ]),
+      ),
+    };
+  }
+
+  if (params.modelId || params.agentRuntimeId || params.agentRuntimeIds?.length) {
+    const defaults = {} as Record<string, unknown>;
+    if (params.modelId) {
+      defaults.model = { primary: params.modelId };
+      defaults.models = {
+        [params.modelId]: {},
+      };
+    }
+    if (params.agentRuntimeId) {
+      defaults.agentRuntime = {
+        id: params.agentRuntimeId,
+        fallback: "none",
+      };
+    }
+    const agents = { defaults } as Record<string, unknown>;
+    if (params.agentRuntimeIds?.length) {
+      agents.list = params.agentRuntimeIds.map((runtime, index) => ({
+        id: `agent-${index + 1}`,
+        agentRuntime: { id: runtime },
+      }));
+    }
+    config.agents = agents;
+  }
+
+  return config as OpenClawConfig;
 }
 
 describe("resolveGatewayStartupPluginIds", () => {
@@ -1415,22 +1383,23 @@ describe("resolveGatewayStartupPluginIds", () => {
   });
 
   it("includes auto-enabled external web search providers at startup", () => {
+    const webSearchTools = {} as NonNullable<OpenClawConfig["tools"]>;
+    webSearchTools.web = {
+      search: {
+        enabled: true,
+        provider: "brave",
+      },
+    };
     const rawConfig = {
       channels: {},
-      tools: {
-        web: {
-          search: {
-            enabled: true,
-            provider: "brave",
-          },
-        },
-      },
+      tools: webSearchTools,
       plugins: {
         allow: ["browser"],
       },
     } as OpenClawConfig;
     const effectiveConfig = {
-      ...rawConfig,
+      channels: rawConfig.channels,
+      tools: rawConfig.tools,
       plugins: {
         allow: ["browser", "brave"],
         entries: {

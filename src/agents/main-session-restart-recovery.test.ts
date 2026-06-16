@@ -19,12 +19,14 @@ import {
   INTERNAL_RUNTIME_CONTEXT_END,
 } from "./internal-runtime-context.js";
 import {
+  cleanupTerminalSessionLocks,
   markRestartAbortedMainSessions,
   markRestartAbortedMainSessionsFromLocks,
   markStartupOrphanedMainSessionsForRecovery,
   recoverStartupOrphanedMainSessions,
   recoverRestartAbortedMainSessions,
 } from "./main-session-restart-recovery.js";
+import { cleanStaleLockFiles } from "./session-write-lock.js";
 import type { SessionLockInspection } from "./session-write-lock.js";
 
 vi.mock("../gateway/call.js", () => ({
@@ -716,6 +718,114 @@ describe("main-session-restart-recovery", () => {
     const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
     expect(result).toEqual({ marked: 1, skipped: 0 });
     expect(store["agent:main:main"]?.abortedLastRun).toBe(true);
+  });
+
+  it("cleans current-process locks for done sessions without reopening them", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const endedAt = Date.now() - 1_000;
+    await writeStore(sessionsDir, {
+      "agent:main:done": {
+        sessionId: "done-session",
+        updatedAt: endedAt,
+        status: "done",
+        endedAt,
+      },
+      "agent:main:running": {
+        sessionId: "running-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+      },
+    });
+
+    const doneLockPath = path.join(sessionsDir, "done-session.jsonl.lock");
+    const runningLockPath = path.join(sessionsDir, "running-session.jsonl.lock");
+    const payload = JSON.stringify({
+      pid: process.pid,
+      createdAt: new Date().toISOString(),
+    });
+    await fs.writeFile(doneLockPath, payload, "utf8");
+    await fs.writeFile(runningLockPath, payload, "utf8");
+
+    const inspected = await cleanStaleLockFiles({
+      sessionsDir,
+      removeStale: true,
+      readOwnerProcessArgs: () => ["node", "dist/index.js", "gateway"],
+    });
+    expect(inspected.cleaned).toEqual([]);
+    await expect(fs.access(doneLockPath)).resolves.toBeUndefined();
+
+    const cleanup = await cleanupTerminalSessionLocks({
+      sessionsDir,
+      locks: inspected.locks,
+    });
+    const normalizedDoneLockPath = path.join(
+      await fs.realpath(sessionsDir),
+      "done-session.jsonl.lock",
+    );
+
+    expect(cleanup.cleaned).toEqual([
+      expect.objectContaining({
+        lockPath: normalizedDoneLockPath,
+        pid: process.pid,
+        removed: true,
+        stale: true,
+        staleReasons: ["terminal-session"],
+      }),
+    ]);
+    await expect(fs.access(doneLockPath)).rejects.toThrow();
+    await expect(fs.access(runningLockPath)).resolves.toBeUndefined();
+
+    const marked = await markRestartAbortedMainSessionsFromLocks({
+      sessionsDir,
+      cleanedLocks: cleanup.cleaned,
+    });
+    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
+    expect(marked).toEqual({ marked: 0, skipped: 0 });
+    expect(store["agent:main:done"]?.abortedLastRun).toBeUndefined();
+    expect(store["agent:main:running"]?.abortedLastRun).toBeUndefined();
+  });
+
+  it("keeps terminal locks when a non-terminal row shares the transcript", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const endedAt = Date.now() - 1_000;
+    await writeStore(sessionsDir, {
+      "agent:main:done": {
+        sessionId: "done-session",
+        updatedAt: endedAt,
+        sessionFile: "shared.jsonl",
+        status: "done",
+        endedAt,
+      },
+      "agent:main:running": {
+        sessionId: "running-session",
+        updatedAt: Date.now() - 10_000,
+        sessionFile: "shared.jsonl",
+        status: "running",
+      },
+    });
+
+    const sharedLockPath = path.join(sessionsDir, "shared.jsonl.lock");
+    await fs.writeFile(
+      sharedLockPath,
+      JSON.stringify({
+        pid: process.pid,
+        createdAt: new Date().toISOString(),
+      }),
+      "utf8",
+    );
+
+    const inspected = await cleanStaleLockFiles({
+      sessionsDir,
+      removeStale: true,
+      readOwnerProcessArgs: () => ["node", "dist/index.js", "gateway"],
+    });
+    const cleanup = await cleanupTerminalSessionLocks({
+      sessionsDir,
+      locks: inspected.locks,
+    });
+
+    expect(cleanup.cleaned).toEqual([]);
+    await expect(fs.access(sharedLockPath)).resolves.toBeUndefined();
   });
 
   it("resumes marked sessions with a tool-result transcript tail", async () => {

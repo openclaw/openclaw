@@ -701,6 +701,18 @@ function sessionLockHeldByThisProcess(normalizedSessionFile: string): boolean {
   );
 }
 
+export async function releaseCurrentProcessSessionWriteLock(sessionFile: string): Promise<boolean> {
+  const normalizedSessionFile = await resolveNormalizedSessionFile(sessionFile);
+  let released = false;
+  for (const held of SESSION_LOCKS.heldEntries()) {
+    if (held.normalizedTargetPath !== normalizedSessionFile) {
+      continue;
+    }
+    released = (await held.forceRelease()) || released;
+  }
+  return released;
+}
+
 function shouldTreatAsOrphanSelfLock(params: {
   payload: LockFilePayload | null;
   heldByThisProcess: boolean;

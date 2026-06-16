@@ -423,6 +423,8 @@ function schedulePostReadySidecarTask(params: {
 }
 
 type CleanStaleLockFiles = typeof import("../agents/session-write-lock.js").cleanStaleLockFiles;
+type CleanupTerminalSessionLocks =
+  typeof import("../agents/main-session-restart-recovery.js").cleanupTerminalSessionLocks;
 type MarkRestartAbortedMainSessionsFromLocks =
   typeof import("../agents/main-session-restart-recovery.js").markRestartAbortedMainSessionsFromLocks;
 
@@ -432,6 +434,7 @@ async function cleanupStaleSessionLocks(params: {
   log: { warn: (msg: string) => void };
   isStopped: () => boolean;
   cleanStaleLockFiles: CleanStaleLockFiles;
+  cleanupTerminalSessionLocks?: CleanupTerminalSessionLocks;
   markRestartAbortedMainSessionsFromLocks?: MarkRestartAbortedMainSessionsFromLocks;
   concurrency?: number;
 }): Promise<void> {
@@ -445,10 +448,16 @@ async function cleanupStaleSessionLocks(params: {
   let nextIndex = 0;
   let markRestartAbortedMainSessionsFromLocks =
     params.markRestartAbortedMainSessionsFromLocks ?? null;
+  let cleanupTerminalSessionLocks = params.cleanupTerminalSessionLocks ?? null;
   const getMarker = async () => {
     markRestartAbortedMainSessionsFromLocks ??= (await loadMainSessionRestartRecoveryModule())
       .markRestartAbortedMainSessionsFromLocks;
     return markRestartAbortedMainSessionsFromLocks;
+  };
+  const getTerminalLockCleanup = async () => {
+    cleanupTerminalSessionLocks ??= (await loadMainSessionRestartRecoveryModule())
+      .cleanupTerminalSessionLocks;
+    return cleanupTerminalSessionLocks;
   };
   const worker = async () => {
     while (!params.isStopped()) {
@@ -463,13 +472,24 @@ async function cleanupStaleSessionLocks(params: {
         removeStale: true,
         log: { warn: (message) => params.log.warn(message) },
       });
-      if (result.cleaned.length === 0) {
+      const terminalCleanup =
+        result.locks.length === 0
+          ? { cleaned: [] }
+          : await (
+              await getTerminalLockCleanup()
+            )({
+              sessionsDir,
+              locks: result.locks,
+              log: { warn: (message) => params.log.warn(message) },
+            });
+      const cleanedLocks = [...result.cleaned, ...terminalCleanup.cleaned];
+      if (cleanedLocks.length === 0) {
         continue;
       }
       const markRestartAbortedMainSessionsFromLocksLocal = await getMarker();
       await markRestartAbortedMainSessionsFromLocksLocal({
         sessionsDir,
-        cleanedLocks: result.cleaned,
+        cleanedLocks,
       });
     }
   };

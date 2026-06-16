@@ -26,6 +26,7 @@ const hoisted = vi.hoisted(() => {
   const startGatewayTailscaleExposure = vi.fn(async () => null);
   const logGatewayStartup = vi.fn();
   const scheduleSubagentOrphanRecovery = vi.fn();
+  const cleanupTerminalSessionLocks = vi.fn(async () => ({ cleaned: [] }));
   const markRestartAbortedMainSessionsFromLocks = vi.fn(async () => {});
   const markStartupOrphanedMainSessionsForRecovery = vi.fn(async () => ({
     marked: 0,
@@ -87,6 +88,7 @@ const hoisted = vi.hoisted(() => {
     startGatewayTailscaleExposure,
     logGatewayStartup,
     scheduleSubagentOrphanRecovery,
+    cleanupTerminalSessionLocks,
     markRestartAbortedMainSessionsFromLocks,
     markStartupOrphanedMainSessionsForRecovery,
     recoverStartupOrphanedMainSessions,
@@ -124,6 +126,7 @@ vi.mock("../agents/subagent-registry.js", () => ({
 }));
 
 vi.mock("../agents/main-session-restart-recovery.js", () => ({
+  cleanupTerminalSessionLocks: hoisted.cleanupTerminalSessionLocks,
   markRestartAbortedMainSessionsFromLocks: hoisted.markRestartAbortedMainSessionsFromLocks,
   markStartupOrphanedMainSessionsForRecovery: hoisted.markStartupOrphanedMainSessionsForRecovery,
   recoverStartupOrphanedMainSessions: hoisted.recoverStartupOrphanedMainSessions,
@@ -313,6 +316,8 @@ describe("startGatewayPostAttachRuntime", () => {
     hoisted.startGatewayTailscaleExposure.mockClear();
     hoisted.logGatewayStartup.mockClear();
     hoisted.scheduleSubagentOrphanRecovery.mockClear();
+    hoisted.cleanupTerminalSessionLocks.mockReset();
+    hoisted.cleanupTerminalSessionLocks.mockResolvedValue({ cleaned: [] });
     hoisted.markRestartAbortedMainSessionsFromLocks.mockClear();
     hoisted.markStartupOrphanedMainSessionsForRecovery.mockReset();
     hoisted.markStartupOrphanedMainSessionsForRecovery.mockResolvedValue({
@@ -938,6 +943,53 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(markRestartAbortedMainSessionsFromLocks).toHaveBeenCalledWith({
       sessionsDir: "/sessions/a",
       cleanedLocks: [cleanedLock],
+    });
+  });
+
+  it("marks terminal session locks cleaned by startup lock cleanup", async () => {
+    const terminalLock = {
+      lockPath: "/tmp/openclaw-state/agents/main/sessions/terminal.jsonl.lock",
+      pid: process.pid,
+      pidAlive: true,
+      createdAt: new Date().toISOString(),
+      ageMs: 0,
+      stale: false,
+      staleReasons: [],
+      removed: false,
+    };
+    const cleanedTerminalLock = {
+      ...terminalLock,
+      stale: true,
+      staleReasons: ["terminal-session"],
+      removed: true,
+    };
+    const cleanStaleLockFiles = vi.fn(async () => ({
+      locks: [terminalLock],
+      cleaned: [],
+    }));
+    const cleanupTerminalSessionLocks = vi.fn(async () => ({
+      cleaned: [cleanedTerminalLock],
+    }));
+    const markRestartAbortedMainSessionsFromLocks = vi.fn(async () => {});
+
+    await testing.cleanupStaleSessionLocks({
+      sessionDirs: ["/sessions/a"],
+      cfg: {} as never,
+      log: { warn: vi.fn() },
+      isStopped: () => false,
+      cleanStaleLockFiles: cleanStaleLockFiles as never,
+      cleanupTerminalSessionLocks: cleanupTerminalSessionLocks as never,
+      markRestartAbortedMainSessionsFromLocks: markRestartAbortedMainSessionsFromLocks as never,
+    });
+
+    expect(cleanupTerminalSessionLocks).toHaveBeenCalledWith({
+      sessionsDir: "/sessions/a",
+      locks: [terminalLock],
+      log: { warn: expect.any(Function) },
+    });
+    expect(markRestartAbortedMainSessionsFromLocks).toHaveBeenCalledWith({
+      sessionsDir: "/sessions/a",
+      cleanedLocks: [cleanedTerminalLock],
     });
   });
 
