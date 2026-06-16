@@ -1704,6 +1704,7 @@ export async function executeActViaPlaywright(opts: {
   results?: Array<{ ok: boolean; error?: string }>;
   blockedByDialog?: boolean;
   browserState?: unknown;
+  download?: { url: string; suggestedFilename: string };
 }> {
   const page = await getPageForTargetId({
     cdpUrl: opts.cdpUrl,
@@ -1727,19 +1728,57 @@ export async function executeActViaPlaywright(opts: {
       });
       return { results: batch.results };
     }
-    const result = await executeSingleAction(
-      opts.action,
-      opts.cdpUrl,
-      opts.targetId,
-      opts.evaluateEnabled,
-      opts.ssrfPolicy,
-      0,
-      dialogAbort.signal,
-    );
-    if (opts.action.kind === "evaluate") {
-      return { result };
+
+    // Arm download detection before actions that can trigger downloads.
+    let detectedDownload: { url: string; suggestedFilename: string } | undefined;
+    let downloadHandler: ((download: unknown) => void) | undefined;
+
+    if (opts.action.kind === "click" || opts.action.kind === "clickCoords") {
+      downloadHandler = (download: unknown) => {
+        const pwD = download as {
+          url?: () => string;
+          suggestedFilename?: () => string;
+        };
+        detectedDownload = {
+          url: pwD.url?.() ?? "",
+          suggestedFilename: pwD.suggestedFilename?.() ?? "download.bin",
+        };
+      };
+      page.on("download", downloadHandler as never);
     }
-    return {};
+
+    try {
+      const result = await executeSingleAction(
+        opts.action,
+        opts.cdpUrl,
+        opts.targetId,
+        opts.evaluateEnabled,
+        opts.ssrfPolicy,
+        0,
+        dialogAbort.signal,
+      );
+
+      // After click/clickCoords, yield briefly to let download events fire.
+      if (downloadHandler) {
+        if (!detectedDownload) {
+          await new Promise<void>((resolve) => setTimeout(resolve, 200));
+        }
+        page.removeListener("download", downloadHandler as never);
+        downloadHandler = undefined;
+      }
+
+      if (opts.action.kind === "evaluate") {
+        return { result };
+      }
+      if (detectedDownload) {
+        return { download: detectedDownload };
+      }
+      return {};
+    } finally {
+      if (downloadHandler) {
+        page.removeListener("download", downloadHandler as never);
+      }
+    }
   } catch (err) {
     if (isBrowserObservedDialogBlockedError(err)) {
       return { blockedByDialog: true, browserState: err.browserState };

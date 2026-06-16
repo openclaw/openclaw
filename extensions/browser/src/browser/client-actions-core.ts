@@ -32,6 +32,7 @@ type BrowserActResponse = {
   results?: Array<{ ok: boolean; error?: string }>;
   blockedByDialog?: boolean;
   browserState?: unknown;
+  download?: { url: string; suggestedFilename: string };
 };
 
 const BROWSER_ACT_REQUEST_TIMEOUT_SLACK_MS = 5_000;
