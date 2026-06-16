@@ -118,9 +118,49 @@ const CLAUDE_LIVE_MAX_CONFIGURABLE_TURN_LINES = 100_000;
 const CLAUDE_LIVE_CLOSE_WAIT_TIMEOUT_MS = 5_000;
 const liveSessions = new Map<string, ClaudeLiveSession>();
 const liveSessionCreates = new Map<string, Promise<ClaudeLiveSession>>();
+// Serializes turns that share a live-session key. Without this, a second turn whose
+// argv fingerprint differs (e.g. a full-system-prompt turn vs a --resume turn) would
+// hit the fingerprint mismatch branch in runClaudeLiveSessionTurn and call
+// closeLiveSession(session, "restart") BEFORE the "already handling a turn" guard,
+// killing the in-flight turn's subprocess. That surfaces as an unparseable non-zero
+// exit ("Claude CLI failed.") with no fallback. Queuing same-key turns means a new
+// turn waits for the running one to finish, so the restart branch is never reached
+// while a turn is live.
+const liveSessionTurnChains = new Map<string, Promise<void>>();
 
 function sha256(value: string): string {
   return crypto.createHash("sha256").update(value).digest("hex");
+}
+
+/**
+ * Runs `fn` exclusively per `key`: concurrent calls with the same key are serialized
+ * in arrival order. A rejected prior run never blocks the next one, and the per-key
+ * entry is released in a `finally`, so a thrown `fn` cannot deadlock the chain.
+ */
+export async function runExclusiveByKey<T>(
+  chains: Map<string, Promise<void>>,
+  key: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const previous = chains.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const done = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const chained = previous.then(() => done);
+  chains.set(key, chained);
+  // Wait for the prior same-key turn to fully settle; swallow its error so a failed
+  // turn does not wedge the queue.
+  await previous.catch(() => undefined);
+  try {
+    return await fn();
+  } finally {
+    release();
+    // Drop the entry once this is the tail, so idle keys do not leak resolved promises.
+    if (chains.get(key) === chained) {
+      chains.delete(key);
+    }
+  }
 }
 
 /** Closes all live Claude CLI sessions and clears creation promises for tests. */
@@ -1222,7 +1262,7 @@ function ensureLiveSessionCapacity(key: string, context: PreparedCliRunContext):
 }
 
 /** Runs one prompt through a reusable Claude CLI live session. */
-export async function runClaudeLiveSessionTurn(params: {
+type RunClaudeLiveSessionTurnParams = {
   context: PreparedCliRunContext;
   args: string[];
   env: Record<string, string>;
@@ -1236,7 +1276,25 @@ export async function runClaudeLiveSessionTurn(params: {
   onCommentaryText?: (text: string) => void;
   onMcpCaptureReady?: (captureKey: string) => void;
   cleanup: () => Promise<void>;
-}): Promise<ClaudeLiveRunResult> {
+};
+
+/**
+ * Runs one prompt through a (reusable) Claude live session. Turns sharing a live-session
+ * key are serialized via {@link runExclusiveByKey} so a newer turn never restarts the
+ * process out from under an in-flight one. See {@link liveSessionTurnChains}.
+ */
+export async function runClaudeLiveSessionTurn(
+  params: RunClaudeLiveSessionTurnParams,
+): Promise<ClaudeLiveRunResult> {
+  const key = buildClaudeLiveKey(params.context);
+  return runExclusiveByKey(liveSessionTurnChains, key, () =>
+    runClaudeLiveSessionTurnLocked(params),
+  );
+}
+
+async function runClaudeLiveSessionTurnLocked(
+  params: RunClaudeLiveSessionTurnParams,
+): Promise<ClaudeLiveRunResult> {
   const key = buildClaudeLiveKey(params.context);
   const resumeCapable = Boolean(params.context.preparedBackend.backend.resumeArgs?.length);
   const execPermission = resolveClaudeLiveExecPermission(params.context);
