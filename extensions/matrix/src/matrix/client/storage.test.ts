@@ -711,6 +711,45 @@ describe("matrix client storage paths", () => {
     );
   });
 
+  it.each(["thread-bindings.json", "recovery-key.json", "crypto-idb-snapshot.json"])(
+    "keeps a legacy %s root selectable until its state migrates",
+    (legacyFilename) => {
+      const stateDir = setupStateDir();
+      const oldStoragePaths = resolveDefaultStoragePaths({
+        accessToken: "secret-token-old",
+        deviceId: "DEVICE123",
+      });
+      seedLegacyStorageMeta(oldStoragePaths.rootDir, {
+        homeserver: defaultStorageAuth.homeserver,
+        userId: defaultStorageAuth.userId,
+        accountId: "default",
+        accessTokenHash: oldStoragePaths.tokenHash,
+        deviceId: "DEVICE123",
+      });
+      writeJson(oldStoragePaths.rootDir, legacyFilename, { legacy: true });
+
+      seedCanonicalStorageRoot({
+        stateDir,
+        accessToken: "secret-token-new",
+        storageMeta: {
+          homeserver: defaultStorageAuth.homeserver,
+          userId: defaultStorageAuth.userId,
+          accountId: "default",
+          accessTokenHash: resolveDefaultStoragePaths({ accessToken: "secret-token-new" })
+            .tokenHash,
+          deviceId: "DEVICE123",
+        },
+      });
+
+      const rotatedStoragePaths = resolveDefaultStoragePaths({
+        accessToken: "secret-token-new",
+        deviceId: "DEVICE123",
+      });
+
+      expect(rotatedStoragePaths.rootDir).toBe(oldStoragePaths.rootDir);
+    },
+  );
+
   it("prefers claimed current-token state over an empty new-token metadata root", () => {
     const stateDir = setupStateDir();
     const oldStoragePaths = seedCanonicalStorageRoot({
