@@ -37,6 +37,7 @@ export function scanEmptyAllowlistPolicyWarnings(
     prefix: string,
     channelName: string,
     parent?: DoctorAccountRecord,
+    shouldSkipGroupWarning?: ScanEmptyAllowlistPolicyWarningsParams["shouldSkipDefaultEmptyGroupAllowlistWarning"],
   ) => {
     const accountDm = asObjectRecord(account.dm);
     const parentDm = asObjectRecord(parent?.dm);
@@ -62,7 +63,7 @@ export function scanEmptyAllowlistPolicyWarnings(
         parent,
         prefix,
         shouldSkipDefaultEmptyGroupAllowlistWarning:
-          params.shouldSkipDefaultEmptyGroupAllowlistWarning,
+          shouldSkipGroupWarning ?? params.shouldSkipDefaultEmptyGroupAllowlistWarning,
       }),
     );
     if (params.extraWarningsForAccount) {
@@ -88,9 +89,34 @@ export function scanEmptyAllowlistPolicyWarnings(
     if (isDisabledRecord(channelConfig)) {
       continue;
     }
-    checkAccount(channelConfig, `channels.${channelName}`, channelName);
-
     const accounts = asObjectRecord(channelConfig.accounts);
+    // When the top-level groupAllowFrom is empty but every real account
+    // has its own populated groupAllowFrom/allowFrom, the parent scope is
+    // never reached at runtime — suppress the false-positive warning
+    // (issue #92684).
+    const allAccountsHaveAllowlists =
+      accounts &&
+      Object.keys(accounts).length > 0 &&
+      Object.values(accounts).every((entry) => {
+        if (!entry || typeof entry !== "object" || isDisabledRecord(entry)) {
+          return true;
+        }
+        const rec = entry as DoctorAccountRecord;
+        return (
+          ((rec.groupAllowFrom as DoctorAllowFromList | undefined)?.length ?? 0) > 0 ||
+          ((rec.allowFrom as DoctorAllowFromList | undefined)?.length ?? 0) > 0
+        );
+      });
+    const skipForTopLevel =
+      allAccountsHaveAllowlists ? () => true : undefined;
+
+    checkAccount(
+      channelConfig,
+      `channels.${channelName}`,
+      channelName,
+      undefined,
+      skipForTopLevel,
+    );
     if (!accounts) {
       continue;
     }
