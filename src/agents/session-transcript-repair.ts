@@ -80,23 +80,37 @@ function hasPartialJson(
   return typeof block.partialJson === "string";
 }
 
-function isFinalizedOpenAIResponsesToolCall(block: RawToolCallBlock): boolean {
-  if (!hasPartialJson(block) || typeof block.id !== "string" || "input" in block) {
+function isCompleteJsonObject(value: string): boolean {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed);
+  } catch {
+    return false;
+  }
+}
+
+function isFinalizedOpenAIResponsesToolCall(
+  message: AgentMessage,
+  block: RawToolCallBlock,
+): boolean {
+  if (
+    message.role !== "assistant" ||
+    !("stopReason" in message) ||
+    message.stopReason !== "toolUse" ||
+    !hasPartialJson(block) ||
+    typeof block.id !== "string" ||
+    "input" in block ||
+    !block.arguments ||
+    typeof block.arguments !== "object" ||
+    Array.isArray(block.arguments) ||
+    (!isCompleteJsonObject(block.partialJson) &&
+      (block.partialJson.trim() !== "" || Object.keys(block.arguments).length > 0))
+  ) {
     return false;
   }
 
   const separator = block.id.indexOf("|");
-  if (separator <= 0 || separator === block.id.length - 1) {
-    return false;
-  }
-
-  return "arguments" in block && block.arguments !== undefined && block.arguments !== null;
-}
-function isInterruptedAssistantTurn(message: AgentMessage): boolean {
-  if (message.role !== "assistant" || !("stopReason" in message)) {
-    return false;
-  }
-  return message.stopReason === "aborted" || message.stopReason === "error";
+  return separator > 0 && separator < block.id.length - 1;
 }
 
 function sanitizeToolCallBlock(block: RawToolCallBlock): RawToolCallBlock {
@@ -143,6 +157,7 @@ function isReplaySafeThinkingAssistantTurn(
     const toolCallId = typeof block.id === "string" ? block.id.trim() : "";
     if (
       !hasToolCallInput(block) ||
+      hasPartialJson(block) ||
       !toolCallId ||
       seenToolCallIds.has(toolCallId) ||
       !isAllowedToolCallName(block.name, allowedToolNames)
@@ -425,7 +440,7 @@ function repairToolCallInputs(
       }
       let workBlock = block;
       if (isRawToolCallBlock(block) && hasPartialJson(block)) {
-        if (isInterruptedAssistantTurn(msg) || !isFinalizedOpenAIResponsesToolCall(block)) {
+        if (!isFinalizedOpenAIResponsesToolCall(msg, block)) {
           droppedToolCalls += 1;
           droppedInMessage += 1;
           changed = true;
@@ -433,9 +448,9 @@ function repairToolCallInputs(
           continue;
         }
 
-        // OpenAI Responses persists finalized function calls with both parsed
-        // arguments and the original partialJson bytes. Strip only the
-        // redundant partialJson field so replay keeps the finalized call.
+        // Legacy generic Responses transport persisted successful toolUse turns
+        // with the scratch buffer intact. Strip it only when terminal state and
+        // the provider-specific finalized shape both prove completion.
         const stripped = { ...block };
         delete (stripped as RawToolCallBlock & { partialJson?: unknown }).partialJson;
         workBlock = stripped;
