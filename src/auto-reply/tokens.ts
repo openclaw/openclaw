@@ -26,7 +26,17 @@ function getSilentExactRegex(token: string): RegExp {
     return cached;
   }
   const escaped = escapeRegExp(token);
-  const regex = new RegExp(`^\\s*${escaped}(?:\\s+${escaped})*\\s*$`, "i");
+  // Allow optional wrapping quotes and trailing terminal punctuation/whitespace
+  // around an otherwise token-only reply (e.g. `NO_REPLY.`, `"NO_REPLY"`, `NO_REPLY!`).
+  // Models occasionally append a period or wrap the token in quotes; the strict
+  // matcher used to let those leak through to the user verbatim.
+  // The `^` anchor + quote/whitespace-only lead still rejects substantive replies
+  // that merely END with the token (regression guard for #19537), since those have
+  // word content before it.
+  const regex = new RegExp(
+    `^[\\s"'\u00ab\u201c\u2018]*${escaped}(?:[\\s"'\u00bb\u201d\u2019]+${escaped})*[\\s"'\u00bb\u201d\u2019.!?\u2026]*$`,
+    "i",
+  );
   silentExactRegexByToken.set(token, regex);
   return regex;
 }
