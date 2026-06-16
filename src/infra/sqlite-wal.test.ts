@@ -204,6 +204,82 @@ describe("sqlite WAL maintenance", () => {
     }
   });
 
+  it("refuses fuse.sshfs mountinfo entries", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-sshfs-"));
+    try {
+      const db = createMockDb();
+      vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(0));
+      vi.spyOn(fs, "readFileSync").mockReturnValue(
+        `42 12 0:41 / ${tempDir} rw,relatime - fuse.sshfs user@host:/share rw\n`,
+      );
+
+      expect(() =>
+        configureSqliteWalMaintenance(db, {
+          checkpointIntervalMs: 0,
+          databaseLabel: "test-db",
+          databasePath: path.join(tempDir, "openclaw.sqlite"),
+        }),
+      ).toThrow(/test-db .*SSHFS.*refusing to open/);
+
+      expect(db["prepare"]).not.toHaveBeenCalled();
+      expect(db["exec"]).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses symlinked paths into fuse.sshfs mounts", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-sshfs-link-"));
+    const mountDir = path.join(tempDir, "mount");
+    const linkedDir = path.join(tempDir, "linked");
+    try {
+      fs.mkdirSync(mountDir);
+      fs.symlinkSync(mountDir, linkedDir);
+      vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(0));
+      vi.spyOn(fs, "readFileSync").mockReturnValue(
+        `42 12 0:41 / ${mountDir} rw,relatime - fuse.sshfs user@host:/share rw\n`,
+      );
+
+      expect(() =>
+        configureSqliteWalMaintenance(createMockDb(), {
+          checkpointIntervalMs: 0,
+          databasePath: path.join(linkedDir, "openclaw.sqlite"),
+        }),
+      ).toThrow(/SSHFS.*refusing to open/);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("matches raw mount paths when the existing path canonicalizes elsewhere", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-sshfs-prefix-"));
+    const canonicalMountDir = path.join(tempDir, "canonical-mount");
+    const rawMountDir = path.join(tempDir, "raw-mount");
+    try {
+      fs.mkdirSync(canonicalMountDir);
+      fs.symlinkSync(canonicalMountDir, rawMountDir);
+      vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(0));
+      vi.spyOn(fs, "readFileSync").mockReturnValue(
+        `42 12 0:41 / ${rawMountDir} rw,relatime - fuse.sshfs user@host:/share rw\n`,
+      );
+
+      expect(() =>
+        configureSqliteWalMaintenance(createMockDb(), {
+          checkpointIntervalMs: 0,
+          databasePath: path.join(rawMountDir, "openclaw.sqlite"),
+        }),
+      ).toThrow(/SSHFS.*refusing to open/);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("uses mount command filesystem names on platforms without proc mountinfo", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-nfs-"));
     try {
@@ -245,6 +321,60 @@ describe("sqlite WAL maintenance", () => {
       });
 
       expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA journal_mode = DELETE;");
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ["macfuse", "sshfs#user@host:/share"],
+    ["macfuse", "host:/share"],
+    ["macfuse", "user@host:"],
+    ["osxfuse", "user@host:/share"],
+    ["osxfuse", "sshfs@osxfuse0"],
+  ])("refuses SSHFS reported as %s by mount", (fsType, source) => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-sshfs-macfuse-"));
+    try {
+      const db = createMockDb();
+      vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(0));
+      vi.spyOn(fs, "readFileSync").mockImplementation(() => {
+        throw new Error("no proc mountinfo");
+      });
+      vi.spyOn(childProcess, "execFileSync").mockReturnValue(
+        Buffer.from(`${source} on ${tempDir} (${fsType}, nodev, nosuid)\n`),
+      );
+
+      expect(() =>
+        configureSqliteWalMaintenance(db, {
+          checkpointIntervalMs: 0,
+          databasePath: path.join(tempDir, "openclaw.sqlite"),
+        }),
+      ).toThrow(/refusing to open/);
+
+      expect(db["exec"]).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps WAL enabled for non-remote macFUSE mounts", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-macfuse-"));
+    try {
+      const db = createMockDb();
+      vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(0));
+      vi.spyOn(fs, "readFileSync").mockImplementation(() => {
+        throw new Error("no proc mountinfo");
+      });
+      vi.spyOn(childProcess, "execFileSync").mockReturnValue(
+        Buffer.from(`remote-volume on ${tempDir} (macfuse, nodev, nosuid)\n`),
+      );
+
+      configureSqliteWalMaintenance(db, {
+        checkpointIntervalMs: 0,
+        databasePath: path.join(tempDir, "openclaw.sqlite"),
+      });
+
+      expect(db["exec"]).toHaveBeenNthCalledWith(1, "PRAGMA journal_mode = WAL;");
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
