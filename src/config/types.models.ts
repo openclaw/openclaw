@@ -199,6 +199,12 @@ export type ModelDefinitionConfig = {
   agentRuntime?: AgentRuntimePolicyConfig;
   /** Static headers merged into requests for this model. */
   headers?: Record<string, string>;
+  /**
+   * Opt-in run-context key-to-header mapping for this model. Each key is a
+   * run-context field name (`runId`, `messageChannel`, `runKind`), and each
+   * value is the HTTP header name to use. Nothing sent unless configured.
+   */
+  requestContextHeaders?: Record<string, string>;
   /** Provider compatibility flags for payload shaping and feature gating. */
   compat?: ModelCompatConfig;
   /** Media input limits used by routing and preflight compression. */
