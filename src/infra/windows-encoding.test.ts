@@ -50,6 +50,23 @@ describe("windows output encoding", () => {
     ).toBe("你好");
   });
 
+  it("supports common Windows system codepage decoder labels", () => {
+    for (const encoding of [
+      "windows-874",
+      "windows-1250",
+      "windows-1251",
+      "windows-1252",
+      "windows-1253",
+      "windows-1254",
+      "windows-1255",
+      "windows-1256",
+      "windows-1257",
+      "windows-1258",
+    ]) {
+      expect(() => new TextDecoder(encoding)).not.toThrow();
+    }
+  });
+
   it("keeps multibyte Windows codepage characters intact across chunk boundaries", () => {
     const decoder = createWindowsOutputDecoder({
       platform: "win32",

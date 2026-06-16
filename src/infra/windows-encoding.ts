@@ -5,11 +5,20 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 const WINDOWS_CODEPAGE_ENCODING_MAP: Record<number, string> = {
   65001: "utf-8",
   54936: "gb18030",
+  874: "windows-874",
   936: "gbk",
   950: "big5",
   932: "shift_jis",
   949: "euc-kr",
+  1250: "windows-1250",
+  1251: "windows-1251",
   1252: "windows-1252",
+  1253: "windows-1253",
+  1254: "windows-1254",
+  1255: "windows-1255",
+  1256: "windows-1256",
+  1257: "windows-1257",
+  1258: "windows-1258",
 };
 
 let cachedWindowsConsoleEncoding: string | null | undefined;
