@@ -9,6 +9,7 @@ import {
   requireNodeSqlite,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
+  acquireMemoryReindexSwapReadLock,
   acquireMemoryReindexLock,
   tryAcquireMemoryReindexLock,
   type MemoryReindexLockHandle,
@@ -21,6 +22,7 @@ const reindexTempFileWithoutLockMinAgeMs = 24 * 60 * 60_000;
 const reindexTempUuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const memoryIndexFileSuffixes = ["", "-wal", "-shm", "-journal"] as const;
 const reindexTempEntrySuffixes = ["-wal", "-shm", "-journal", ""] as const;
+const liveDatabaseSwapLocks = new WeakMap<DatabaseSync, MemoryReindexLockHandle>();
 
 function resolveReindexTempBaseName(dbBaseName: string, entryName: string): string | undefined {
   for (const suffix of reindexTempEntrySuffixes) {
@@ -193,40 +195,50 @@ export function openMemoryDatabaseAtPath(
   const dir = path.dirname(dbPath);
   ensureDir(dir);
   cleanupAgedMemoryReindexTempFiles(dbPath);
-  const existing = tryOpenExistingMemoryDatabaseAtPath(dbPath, allowExtension);
-  if (existing.status === "opened") {
-    return existing.db;
-  }
-  if (!allowCreate) {
-    throw new Error(
-      `Memory database not found at ${dbPath}; refusing to auto-create an empty database during an index swap window.`,
-      { cause: existing.cause },
-    );
-  }
-
-  // A missing canonical path can be an initial create or the Windows swap
-  // window. Only the safe-reindex owner may create or publish during that gap.
-  const openLock = acquireMemoryReindexLock(dbPath);
-  let db: DatabaseSync;
+  const swapReadLock = acquireMemoryReindexSwapReadLock(dbPath);
   try {
-    const lockedExisting = tryOpenExistingMemoryDatabaseAtPath(dbPath, allowExtension);
-    db =
-      lockedExisting.status === "opened"
-        ? lockedExisting.db
-        : openConfiguredMemoryDatabaseAtPath(dbPath, allowExtension);
-  } catch (err) {
+    const existing = tryOpenExistingMemoryDatabaseAtPath(dbPath, allowExtension);
+    if (existing.status === "opened") {
+      liveDatabaseSwapLocks.set(existing.db, swapReadLock);
+      return existing.db;
+    }
+    if (!allowCreate) {
+      throw new Error(
+        `Memory database not found at ${dbPath}; refusing to auto-create an empty database during an index swap window.`,
+        { cause: existing.cause },
+      );
+    }
+
+    // A missing canonical path can be an initial create or the Windows swap
+    // window. Only the safe-reindex owner may create or publish during that gap.
+    const openLock = acquireMemoryReindexLock(dbPath);
+    let db: DatabaseSync;
+    try {
+      const lockedExisting = tryOpenExistingMemoryDatabaseAtPath(dbPath, allowExtension);
+      db =
+        lockedExisting.status === "opened"
+          ? lockedExisting.db
+          : openConfiguredMemoryDatabaseAtPath(dbPath, allowExtension);
+    } catch (err) {
+      try {
+        openLock.release();
+      } catch {}
+      throw err;
+    }
     try {
       openLock.release();
+    } catch (err) {
+      closeMemoryDatabase(db);
+      throw err;
+    }
+    liveDatabaseSwapLocks.set(db, swapReadLock);
+    return db;
+  } catch (err) {
+    try {
+      swapReadLock.release();
     } catch {}
     throw err;
   }
-  try {
-    openLock.release();
-  } catch (err) {
-    closeMemoryDatabase(db);
-    throw err;
-  }
-  return db;
 }
 
 export function openMemoryReindexTempDatabaseAtPath(
@@ -240,4 +252,19 @@ export function openMemoryReindexTempDatabaseAtPath(
 export function closeMemoryDatabase(db: DatabaseSync): void {
   closeMemorySqliteWalMaintenance(db);
   db.close();
+  releaseMemoryDatabaseSwapLock(db);
+}
+
+export function releaseMemoryDatabaseSwapLock(db: DatabaseSync): void {
+  const swapLock = liveDatabaseSwapLocks.get(db);
+  if (swapLock) {
+    liveDatabaseSwapLocks.delete(db);
+    swapLock.release();
+  }
+}
+
+export function restoreMemoryDatabaseSwapLock(db: DatabaseSync, dbPath: string): void {
+  if (!liveDatabaseSwapLocks.has(db)) {
+    liveDatabaseSwapLocks.set(db, acquireMemoryReindexSwapReadLock(dbPath));
+  }
 }

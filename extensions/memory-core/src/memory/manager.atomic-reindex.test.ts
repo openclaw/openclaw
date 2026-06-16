@@ -1,7 +1,9 @@
 // Memory Core tests cover manager.atomic reindex plugin behavior.
+import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createInterface } from "node:readline";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -9,6 +11,8 @@ import {
   removeMemoryIndexFiles,
   runMemoryAtomicReindex,
 } from "./manager-atomic-reindex.js";
+
+const managerDbModuleUrl = new URL("./manager-db.ts", import.meta.url).href;
 
 async function expectPathMissing(targetPath: string): Promise<void> {
   await expectRejectCode(fs.access(targetPath), "ENOENT");
@@ -31,6 +35,138 @@ function normalizeBackupName(filePath: string): string {
       /backup-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/,
       "backup-<uuid>",
     );
+}
+
+type PeerWriter = {
+  commit: () => Promise<void>;
+  close: () => Promise<void>;
+};
+
+async function attemptPeerCommit(dbPath: string): Promise<"blocked" | "committed"> {
+  const script = `
+    import {
+      closeMemoryDatabase,
+      openMemoryDatabaseAtPath,
+    } from ${JSON.stringify(managerDbModuleUrl)};
+    const [dbPath] = process.argv.slice(1);
+    let db;
+    try {
+      db = openMemoryDatabaseAtPath(dbPath, false);
+      db.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0");
+      db.exec("CREATE TABLE peer_commits (id TEXT PRIMARY KEY)");
+      db.prepare("INSERT INTO peer_commits (id) VALUES (?)").run("acknowledged");
+      process.stdout.write("committed\\n");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const code = err && typeof err === "object" && "code" in err ? String(err.code) : "";
+      if (/SQLITE_(?:BUSY|LOCKED)|database is locked/i.test(\`\${code} \${message}\`)) {
+        process.stdout.write("blocked\\n");
+      } else {
+        console.error(message);
+        process.exitCode = 1;
+      }
+    } finally {
+      if (db) closeMemoryDatabase(db);
+    }
+  `;
+  const child = spawn(
+    process.execPath,
+    ["--import", "tsx", "--input-type=module", "--eval", script, dbPath],
+    { stdio: ["ignore", "pipe", "pipe"] },
+  );
+  let stdout = "";
+  let stderr = "";
+  child.stdout.setEncoding("utf8");
+  child.stdout.on("data", (chunk: string) => {
+    stdout += chunk;
+  });
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk: string) => {
+    stderr += chunk;
+  });
+  await waitForChildExit(child, () => stderr);
+  const result = stdout.trim();
+  if (result !== "blocked" && result !== "committed") {
+    throw new Error(`unexpected peer commit result: ${result}`);
+  }
+  return result;
+}
+
+async function startPeerWriter(dbPath: string): Promise<PeerWriter> {
+  const script = `
+    import {
+      closeMemoryDatabase,
+      openMemoryDatabaseAtPath,
+    } from ${JSON.stringify(managerDbModuleUrl)};
+    const [dbPath] = process.argv.slice(1);
+    const db = openMemoryDatabaseAtPath(dbPath, false);
+    db.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0");
+    let input = "";
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", (chunk) => {
+      input += chunk;
+      for (;;) {
+        const newline = input.indexOf("\\n");
+        if (newline < 0) break;
+        const command = input.slice(0, newline);
+        input = input.slice(newline + 1);
+        if (command === "commit") {
+          db.exec("CREATE TABLE peer_commits (id TEXT PRIMARY KEY)");
+          db.prepare("INSERT INTO peer_commits (id) VALUES (?)").run("acknowledged");
+          process.stdout.write("committed\\n");
+        } else if (command === "close") {
+          closeMemoryDatabase(db);
+        }
+      }
+    });
+    process.stdout.write("ready\\n");
+  `;
+  const child = spawn(
+    process.execPath,
+    ["--import", "tsx", "--input-type=module", "--eval", script, dbPath],
+    { stdio: ["pipe", "pipe", "pipe"] },
+  );
+  const lines = createInterface({ input: child.stdout })[Symbol.asyncIterator]();
+  let stderr = "";
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk: string) => {
+    stderr += chunk;
+  });
+  const expectLine = async (expected: string): Promise<void> => {
+    const next = await lines.next();
+    if (next.done || next.value !== expected) {
+      throw new Error(`peer writer expected ${expected}, got ${String(next.value)}: ${stderr}`);
+    }
+  };
+  await expectLine("ready");
+  return {
+    commit: async () => {
+      child.stdin.write("commit\n");
+      await expectLine("committed");
+    },
+    close: async () => {
+      child.stdin.end("close\n");
+      await waitForChildExit(child, () => stderr);
+    },
+  };
+}
+
+async function waitForChildExit(child: ChildProcess, getStderr: () => string): Promise<void> {
+  if (child.exitCode !== null) {
+    expect(child.exitCode, getStderr()).toBe(0);
+    return;
+  }
+  await new Promise<void>((resolve, reject) => {
+    child.once("error", reject);
+    child.once("exit", (code) => {
+      try {
+        expect(code, getStderr()).toBe(0);
+        resolve();
+      } catch (err) {
+        reject(err instanceof Error ? err : new Error(String(err)));
+      }
+    });
+  });
 }
 
 describe("memory manager atomic reindex", () => {
@@ -84,6 +220,48 @@ describe("memory manager atomic reindex", () => {
 
     expect(readChunkMarker(indexPath)).toBe("after");
     await expectPathMissing(tempIndexPath);
+  });
+
+  it("refuses to publish while a peer owns an acknowledged live write", async () => {
+    writeChunkMarker(indexPath, "before");
+    writeChunkMarker(tempIndexPath, "after");
+    const peer = await startPeerWriter(indexPath);
+
+    try {
+      await peer.commit();
+      expect((await fs.stat(`${indexPath}-wal`)).size).toBeGreaterThan(0);
+      await expect(
+        runMemoryAtomicReindex({
+          targetPath: indexPath,
+          tempPath: tempIndexPath,
+          build: async () => undefined,
+        }),
+      ).rejects.toThrow(/another process is using the live database/);
+
+      expect(readChunkMarker(indexPath)).toBe("before");
+      expect(readPeerCommit(indexPath)).toBe("acknowledged");
+      expect(readIntegrityCheck(indexPath)).toBe("ok");
+      await expectPathMissing(tempIndexPath);
+    } finally {
+      await peer.close();
+    }
+  });
+
+  it("blocks peer commits beyond the final temp checkpoint", async () => {
+    writeChunkMarker(indexPath, "before");
+    writeChunkMarker(tempIndexPath, "after");
+    let peerCommit: "blocked" | "committed" | undefined;
+
+    await runMemoryAtomicReindex({
+      targetPath: indexPath,
+      tempPath: tempIndexPath,
+      build: async () => {
+        peerCommit = await attemptPeerCommit(indexPath);
+      },
+    });
+
+    expect(peerCommit).toBe("blocked");
+    expect(readChunkMarker(indexPath)).toBe("after");
   });
 
   it("retries transient rename failures during index swaps", async () => {
@@ -252,13 +430,14 @@ describe("memory manager atomic reindex", () => {
     const events: string[] = [];
     let tempClosed = false;
     const rm: typeof fs.rm = vi.fn(async (filePath) => {
-      events.push(tempClosed ? `rm:${String(filePath)}:closed` : `rm:${String(filePath)}:open`);
+      const entryName = path.basename(String(filePath));
+      events.push(tempClosed ? `rm:${entryName}:closed` : `rm:${entryName}:open`);
     });
 
     await expect(
       runMemoryAtomicReindex({
-        targetPath: "index.sqlite",
-        tempPath: "index.sqlite.tmp",
+        targetPath: indexPath,
+        tempPath: tempIndexPath,
         beforeTempCleanup: async () => {
           events.push("close-temp");
           tempClosed = true;
@@ -550,6 +729,29 @@ function readChunkMarker(dbPath: string): string | undefined {
         | { text: string }
         | undefined
     )?.text;
+  } finally {
+    db.close();
+  }
+}
+
+function readPeerCommit(dbPath: string): string | undefined {
+  const db = new DatabaseSync(dbPath);
+  try {
+    return (
+      db.prepare("SELECT id FROM peer_commits WHERE id = ?").get("acknowledged") as
+        | { id: string }
+        | undefined
+    )?.id;
+  } finally {
+    db.close();
+  }
+}
+
+function readIntegrityCheck(dbPath: string): string | undefined {
+  const db = new DatabaseSync(dbPath);
+  try {
+    return (db.prepare("PRAGMA integrity_check").get() as { integrity_check?: string } | undefined)
+      ?.integrity_check;
   } finally {
     db.close();
   }
