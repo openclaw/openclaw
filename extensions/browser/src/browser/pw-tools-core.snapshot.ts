@@ -451,6 +451,7 @@ export async function navigateViaPlaywright(opts: {
         });
       },
     });
+    void downloadCapture.promise.catch(() => {});
     try {
       const response = await navigate();
       downloadCapture.cancel();

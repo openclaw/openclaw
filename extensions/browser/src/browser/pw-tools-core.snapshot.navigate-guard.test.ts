@@ -154,6 +154,34 @@ describe("pw-tools-core.snapshot navigate guard", () => {
     expect(result).toEqual({ url: download.url, download });
   });
 
+  it("handles capture timeouts that win before ordinary navigation settles", async () => {
+    let rejectCapture!: (err: Error) => void;
+    const downloadCapture = {
+      armed: true,
+      promise: new Promise<never>((_, reject) => {
+        rejectCapture = reject;
+      }),
+      cancel: vi.fn(),
+    };
+    setPwToolsCoreDownloadCapture(downloadCapture);
+    setPwToolsCoreCurrentPage({
+      goto: vi.fn(async () => {
+        rejectCapture(new Error("Timeout waiting for navigation download"));
+        await Promise.resolve();
+      }),
+      url: vi.fn(() => "https://example.com/final"),
+    });
+
+    const result = await mod.navigateViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      url: "https://example.com/final",
+      ssrfPolicy: { allowPrivateNetwork: true },
+    });
+
+    expect(result).toEqual({ url: "https://example.com/final" });
+    expect(downloadCapture.cancel).toHaveBeenCalledTimes(1);
+  });
+
   it("closes the tab when captured navigation download resolves to a blocked URL", async () => {
     const download = {
       triggered: true as const,
