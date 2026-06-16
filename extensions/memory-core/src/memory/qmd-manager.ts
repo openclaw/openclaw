@@ -2545,8 +2545,8 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (!scan.ok) {
       // A failed listing is non-authoritative: reconciling against it would
       // delete the whole exported corpus and force a full re-export on the
-      // next pass. Keep existing exports and state until a real listing.
-      return;
+      // next pass. Abort so runUpdate keeps dirty state and retries later.
+      throw new Error("QMD session export aborted: session enumeration failed");
     }
     const exported = await exportRoot.list(".").catch(() => []);
     for (const name of exported) {
