@@ -93,8 +93,6 @@ type SessionTranscriptStoreEntry = {
   sessionId?: unknown;
   /** Parent session key that spawned this session, for cron-parentage chain walks. */
   spawnedBy?: unknown;
-  /** Explicit marker set at spawn time when the parent session is cron-descended. */
-  parentTrigger?: unknown;
 };
 
 function shouldSkipTranscriptFileForDreaming(absPath: string): boolean {
@@ -290,10 +288,6 @@ export function loadSessionTranscriptClassificationForSessionsDir(
   const cronCache = new Map<string, boolean>();
   function isCronSession(sessionKey: string, entry: SessionTranscriptStoreEntry): boolean {
     if (isCronRunSessionKey(sessionKey)) {
-      cronCache.set(sessionKey, true);
-      return true;
-    }
-    if (entry.parentTrigger === "cron") {
       cronCache.set(sessionKey, true);
       return true;
     }

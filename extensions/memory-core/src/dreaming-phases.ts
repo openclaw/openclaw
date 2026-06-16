@@ -862,10 +862,9 @@ async function collectSessionIngestionBatches(params: {
   }
 
   // Secondary defense: walk spawnedBy chain for sessions the primary
-  // classification may have missed, such as sessions spawned during an
-  // older runtime version before parentTrigger was persisted to the
-  // session store. This ensures dreaming phases never ingest content
-  // from cron-descended subagents regardless of how the store was written.
+  // classification may have missed. This ensures dreaming phases never
+  // ingest content from cron-descended subagents regardless of whether
+  // the store entry was written by an older runtime version.
   if (agentIds.length > 0) {
     const sessionStores = new Map<
       string,
