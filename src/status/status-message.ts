@@ -210,7 +210,7 @@ const formatTokens = (total: number | null | undefined, contextTokens: number | 
   const ctx = contextTokens ?? null;
   if (total == null) {
     const ctxLabel = ctx ? formatTokenCount(ctx) : "?";
-    return `?/${ctxLabel}`;
+    return `0/${ctxLabel}`;
   }
   const pct = ctx ? Math.min(999, Math.round((total / ctx) * 100)) : null;
   const totalLabel = formatTokenCount(total);
