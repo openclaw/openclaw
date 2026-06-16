@@ -163,6 +163,7 @@ function readTargetUrlParam(params: Record<string, unknown>) {
 }
 
 const LEGACY_BROWSER_ACT_REQUEST_KEYS = [
+  "kind",
   "targetId",
   "ref",
   "doubleClick",
@@ -193,7 +194,14 @@ const LEGACY_BROWSER_ACT_REQUEST_KEYS = [
 function readActRequestParam(params: Record<string, unknown>) {
   const requestParam = params.request;
   if (requestParam && typeof requestParam === "object") {
-    return requestParam as Parameters<typeof browserAct>[1];
+    const request = { ...(requestParam as Record<string, unknown>) };
+    for (const key of LEGACY_BROWSER_ACT_REQUEST_KEYS) {
+      if (Object.hasOwn(request, key) || !Object.hasOwn(params, key)) {
+        continue;
+      }
+      request[key] = params[key];
+    }
+    return request as Parameters<typeof browserAct>[1];
   }
 
   const kind = readStringParam(params, "kind");
@@ -201,7 +209,7 @@ function readActRequestParam(params: Record<string, unknown>) {
     return undefined;
   }
 
-  const request: Record<string, unknown> = { kind };
+  const request: Record<string, unknown> = {};
   for (const key of LEGACY_BROWSER_ACT_REQUEST_KEYS) {
     if (!Object.hasOwn(params, key)) {
       continue;
