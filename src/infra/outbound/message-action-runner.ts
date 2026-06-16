@@ -7,6 +7,7 @@ import {
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveResponsePrefix } from "../../agents/identity.js";
 import type { AgentToolResult } from "../../agents/runtime/index.js";
 import {
   readPositiveIntegerParam,
@@ -1049,6 +1050,24 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     accountId,
     agentId,
   });
+
+  // `message(action=send)` crosses into other conversations, so mirror the direct-reply
+  // egress and prepend messages.responsePrefix here too; otherwise the disambiguation
+  // prefix is silently dropped on tool sends while replies keep it. The startsWith guard
+  // matches normalize-reply.ts and keeps re-runs idempotent.
+  const responsePrefix = resolveResponsePrefix(cfg, agentId ?? "", {
+    channel,
+    accountId: accountId ?? undefined,
+  });
+  if (responsePrefix && sendPayload.message && !sendPayload.message.startsWith(responsePrefix)) {
+    const prefixedMessage = `${responsePrefix} ${sendPayload.message}`;
+    sendPayload = {
+      ...sendPayload,
+      message: prefixedMessage,
+      payload: { ...sendPayload.payload, text: prefixedMessage },
+    };
+    applySendPayloadPartsToActionParams(params, sendPayload);
+  }
 
   const replyToIsExplicit = Boolean(readStringParam(params, "replyTo"));
   resolveAndApplyOutboundReplyToId(params, {
