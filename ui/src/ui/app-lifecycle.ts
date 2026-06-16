@@ -24,6 +24,7 @@ import {
 import { persistChatComposerState, restoreChatComposerState } from "./chat/composer-persistence.ts";
 import { startControlUiResponsivenessObserver } from "./control-ui-performance.ts";
 import { loadControlUiBootstrapConfig } from "./controllers/control-ui-bootstrap.ts";
+import { installGatewaySsoPostMessageListener } from "./gateway-sso-postmessage.ts";
 import type { Tab } from "./navigation.ts";
 import type { ChatQueueItem } from "./ui-types.ts";
 
@@ -92,11 +93,19 @@ type LifecycleHost = {
   controlUiBootstrapReady?: Promise<void> | null;
   popStateHandler: () => void;
   topbarObserver: ResizeObserver | null;
+  gatewaySsoPostMessageCleanup?: (() => void) | null;
 };
 
 export function handleConnected(host: LifecycleHost) {
   const connectGeneration = ++host.connectGeneration;
   host.basePath = inferBasePath();
+  host.gatewaySsoPostMessageCleanup?.();
+  host.gatewaySsoPostMessageCleanup = installGatewaySsoPostMessageListener(
+    host as unknown as Parameters<typeof installGatewaySsoPostMessageListener>[0],
+    {
+      reconnect: () => connectGateway(host as unknown as Parameters<typeof connectGateway>[0]),
+    },
+  );
   applySettingsFromUrl(host as unknown as Parameters<typeof applySettingsFromUrl>[0]);
   host.controlUiBootstrapReady = loadControlUiBootstrapConfig(
     host as unknown as Parameters<typeof loadControlUiBootstrapConfig>[0],
@@ -195,6 +204,8 @@ function scheduleChatComposerDraftPersistence(host: LifecycleHost) {
 
 export function handleDisconnected(host: LifecycleHost) {
   host.connectGeneration += 1;
+  host.gatewaySsoPostMessageCleanup?.();
+  host.gatewaySsoPostMessageCleanup = null;
   host.controlUiTabPaintSeq = (host.controlUiTabPaintSeq ?? 0) + 1;
   flushPendingChatComposerPersistence(host);
   window.removeEventListener("popstate", host.popStateHandler);
