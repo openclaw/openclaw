@@ -43,7 +43,7 @@ export type CronListPageOptions = {
 };
 
 /** Offset-page result returned by cron listPage callers. */
-export type CronListPageResult<TJobs extends readonly CronJob[] = CronJob[]> = {
+export type CronListPageResult<TJobs extends readonly (CronJob | CronJobCompact)[] = CronJob[]> = {
   jobs: TJobs;
   total: number;
   offset: number;

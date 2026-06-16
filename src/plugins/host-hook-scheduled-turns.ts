@@ -187,7 +187,7 @@ async function listAllCronJobsForPluginTagCleanup(
       sortDir: "asc",
       ...(offset > 0 ? { offset } : {}),
     });
-    jobs.push(...listResult.jobs);
+    jobs.push(...(listResult.jobs as CronJob[]));
     if (!listResult.hasMore) {
       return jobs;
     }

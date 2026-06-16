@@ -1,0 +1,216 @@
+- generic [ref=e74]:
+  - button "折叠侧边栏"
+  - banner [ref=e75]:
+    - generic [ref=e76]:
+      - button "展开侧边栏" [ref=e77] [cursor=pointer]:
+        - img [ref=e79]
+      - generic [ref=e83]:
+        - link "OpenClaw" [ref=e84] [cursor=pointer]:
+          - /url: /overview
+        - generic [ref=e85]:
+          - generic [ref=e86]: ›
+          - generic "main" [ref=e87]
+        - generic [ref=e88]: ›
+        - generic [ref=e89]: 聊天
+      - generic [ref=e90]:
+        - button "打开命令面板" [ref=e91] [cursor=pointer]:
+          - generic [ref=e92]: 搜索
+          - generic [ref=e93]: ⌘K
+        - group "颜色模式" [ref=e95]:
+          - button "颜色模式：系统" [pressed] [ref=e96] [cursor=pointer]:
+            - img [ref=e97]
+            - text: 颜色模式：系统
+          - button "颜色模式：浅睡" [ref=e99] [cursor=pointer]:
+            - img [ref=e100]
+            - text: 颜色模式：浅睡
+          - button "颜色模式：深色" [ref=e106] [cursor=pointer]:
+            - img [ref=e107]
+            - text: 颜色模式：深色
+  - generic:
+    - complementary:
+      - generic:
+        - generic:
+          - generic:
+            - img "OpenClaw"
+            - generic:
+              - generic: 控制
+              - generic: OpenClaw
+        - generic:
+          - generic:
+            - button "新会话" [disabled]:
+              - generic:
+                - img
+              - generic: 新会话
+            - generic:
+              - generic:
+                - generic:
+                  - button "聊天会话":
+                    - generic: Main Session
+                    - generic:
+                      - img
+              - status
+            - generic "最近会话":
+              - button "最近" [expanded]:
+                - generic: 最近
+                - generic:
+                  - img
+              - generic:
+                - link "Main Session just now sessions.sessionDetails.activeRun":
+                  - /url: /chat?session=agent%3Amain%3Amain
+                  - generic:
+                    - generic: Main Session
+                    - generic: just now
+                  - generic "sessions.sessionDetails.activeRun"
+          - navigation:
+            - generic:
+              - button "聊天" [expanded]:
+                - generic: 聊天
+                - generic:
+                  - img
+              - generic:
+                - link "聊天":
+                  - /url: /chat
+                  - generic:
+                    - img
+                  - generic: 聊天
+            - generic:
+              - button "控制" [expanded]:
+                - generic: 控制
+                - generic:
+                  - img
+              - generic:
+                - link "概览":
+                  - /url: /overview
+                  - generic:
+                    - img
+                  - generic: 概览
+                - link "活动":
+                  - /url: /activity
+                  - generic:
+                    - img
+                  - generic: 活动
+                - link "工作板":
+                  - /url: /workboard
+                  - generic:
+                    - img
+                  - generic: 工作板
+                - link "实例":
+                  - /url: /instances
+                  - generic:
+                    - img
+                  - generic: 实例
+                - link "会话":
+                  - /url: /sessions
+                  - generic:
+                    - img
+                  - generic: 会话
+                - link "使用情况":
+                  - /url: /usage
+                  - generic:
+                    - img
+                  - generic: 使用情况
+                - link "定时任务":
+                  - /url: /cron
+                  - generic:
+                    - img
+                  - generic: 定时任务
+            - generic:
+              - button "代理" [expanded]:
+                - generic: 代理
+                - generic:
+                  - img
+              - generic:
+                - link "代理":
+                  - /url: /agents
+                  - generic:
+                    - img
+                  - generic: 代理
+                - link "技能":
+                  - /url: /skills
+                  - generic:
+                    - img
+                  - generic: 技能
+                - link "技能工坊":
+                  - /url: /skills/workshop
+                  - generic:
+                    - img
+                  - generic: 技能工坊
+                - link "节点":
+                  - /url: /nodes
+                  - generic:
+                    - img
+                  - generic: 节点
+                - link "梦境":
+                  - /url: /dreaming
+                  - generic:
+                    - img
+                  - generic: 梦境
+            - generic:
+              - button "设置" [expanded]:
+                - generic: 设置
+                - generic:
+                  - img
+              - generic:
+                - link "设置":
+                  - /url: /config
+                  - generic:
+                    - img
+                  - generic: 设置
+        - generic:
+          - generic:
+            - link "文档":
+              - /url: https://docs.openclaw.ai
+              - generic:
+                - img
+              - generic: 文档
+              - generic:
+                - img
+            - text: 颜色模式：系统 颜色模式：浅睡 颜色模式：深色
+            - generic "v2026.6.2":
+              - generic: 版本
+              - generic: v2026.6.2
+              - img "Gateway 状态：在线"
+  - main [ref=e109]:
+    - generic [ref=e112]:
+      - log [ref=e115]:
+        - generic [ref=e116]:
+          - generic [ref=e171]:
+            - img [ref=e173]
+            - generic [ref=e176]:
+              - paragraph [ref=e179]: 你好，请回复这句话：今天天气真好
+              - generic [ref=e180]:
+                - generic [ref=e181]: You
+                - time [ref=e182]: 2026年6月15日 20:18
+                - generic [ref=e183]:
+                  - button "Delete message":
+                    - img
+          - img "Assistant" [ref=e185]
+      - generic [ref=e130]:
+        - generic [ref=e132]:
+          - textbox "给 Assistant 发消息（Enter 发送）" [ref=e133]
+          - status [ref=e134]
+        - generic [ref=e135]:
+          - generic [ref=e136]:
+            - button "附加文件" [ref=e137] [cursor=pointer]:
+              - img [ref=e138]
+            - button "开始 Talk" [ref=e140] [cursor=pointer]:
+              - img [ref=e141]
+            - button "Talk settings" [ref=e144] [cursor=pointer]:
+              - img [ref=e145]
+            - 'status "Run status: In progress" [ref=e192]':
+              - img [ref=e193]
+              - generic [ref=e202]: In progress
+          - generic [ref=e148]:
+            - group [ref=e150]:
+              - 'generic "聊天模型, 聊天思考级别: gpt-5.5 · openai · Off" [ref=e151]':
+                - generic [ref=e152]: gpt-5.5 · openai · Off
+                - img [ref=e154]
+            - button "聊天设置" [ref=e157] [cursor=pointer]:
+              - img [ref=e159]
+              - generic [ref=e162]: 聊天设置
+              - img [ref=e164]
+          - generic [ref=e166]:
+            - button "将消息排队" [ref=e203] [cursor=pointer]:
+              - img [ref=e204]
+            - button "停止生成" [ref=e207] [cursor=pointer]:
+              - img [ref=e208]

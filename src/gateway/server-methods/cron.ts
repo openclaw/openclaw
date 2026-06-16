@@ -344,11 +344,13 @@ export const cronHandlers: GatewayRequestHandlers = {
       agentId: p.agentId,
       compact: p.compact,
     });
-    const deliveryPreviews = await resolveCronDeliveryPreviews({
-      cfg: context.getRuntimeConfig(),
-      defaultAgentId: context.cron.getDefaultAgentId(),
-      jobs: page.jobs,
-    });
+    const deliveryPreviews = p.compact
+      ? {}
+      : await resolveCronDeliveryPreviews({
+          cfg: context.getRuntimeConfig(),
+          defaultAgentId: context.cron.getDefaultAgentId(),
+          jobs: page.jobs as CronJob[],
+        });
     respond(true, { ...page, deliveryPreviews }, undefined);
   },
   "cron.status": async ({ params, respond, context }) => {

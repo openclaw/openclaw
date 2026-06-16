@@ -1,0 +1,59 @@
+- generic [ref=e4]:
+  - generic [ref=e5]:
+    - img "OpenClaw" [ref=e6]
+    - generic [ref=e7]: OpenClaw
+    - generic [ref=e8]: 网关仪表盘
+  - generic [ref=e9]:
+    - generic [ref=e10]:
+      - generic [ref=e11]: WebSocket URL
+      - textbox "WebSocket URL" [ref=e12]:
+        - /placeholder: ws://127.0.0.1:18789
+        - text: ws://127.0.0.1:18721
+    - generic [ref=e13]:
+      - generic [ref=e14]: 网关令牌
+      - generic [ref=e15]:
+        - textbox "网关令牌 切换令牌可见性" [ref=e16]:
+          - /placeholder: OPENCLAW_GATEWAY_TOKEN (可选)
+        - button "切换令牌可见性" [ref=e17] [cursor=pointer]:
+          - img [ref=e18]
+    - generic [ref=e23]:
+      - generic [ref=e24]: 密码 (不存储)
+      - generic [ref=e25]:
+        - textbox "密码 (不存储) 切换密码可见性" [ref=e26]:
+          - /placeholder: 可选
+        - button "切换密码可见性" [ref=e27] [cursor=pointer]:
+          - img [ref=e28]
+    - button "连接" [ref=e33] [cursor=pointer]
+  - alert [ref=e34]:
+    - generic [ref=e35]: 需要认证
+    - generic [ref=e36]: Gateway 可以访问，但此浏览器连接前需要匹配的令牌或密码。
+    - list [ref=e37]:
+      - listitem [ref=e38]: 粘贴 openclaw dashboard --no-open 提供的令牌，或输入已配置的密码。
+      - listitem [ref=e39]: 如果未配置令牌，请在 Gateway 主机上运行 openclaw doctor --generate-gateway-token。
+      - listitem [ref=e40]: 更新凭据后再次点击 Connect。
+    - group [ref=e41]:
+      - generic "原始错误" [ref=e42] [cursor=pointer]
+    - link "Control UI 认证文档" [ref=e43] [cursor=pointer]:
+      - /url: https://docs.openclaw.ai/web/dashboard
+  - generic [ref=e44]:
+    - generic [ref=e45]: 如何连接
+    - list [ref=e46]:
+      - listitem [ref=e47]:
+        - text: 在主机上启动网关：
+        - button "复制命令：openclaw gateway run" [ref=e48]:
+          - code [ref=e49]: openclaw gateway run
+          - button "复制命令" [ref=e50] [cursor=pointer]:
+            - generic [ref=e51]:
+              - img [ref=e53]
+              - img [ref=e57]
+      - listitem [ref=e59]:
+        - text: 获取带令牌的仪表盘 URL：
+        - button "复制命令：openclaw dashboard" [ref=e60]:
+          - code [ref=e61]: openclaw dashboard
+          - button "复制命令" [ref=e62] [cursor=pointer]:
+            - generic [ref=e63]:
+              - img [ref=e65]
+              - img [ref=e69]
+      - listitem [ref=e71]: 将 WebSocket URL 和令牌粘贴到上方，或直接打开带令牌的 URL。
+    - link "查看文档 →" [ref=e73] [cursor=pointer]:
+      - /url: https://docs.openclaw.ai/web/dashboard

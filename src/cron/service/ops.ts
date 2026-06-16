@@ -478,7 +478,7 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
       limit,
       hasMore: nextOffset < total,
       nextOffset: nextOffset < total ? nextOffset : null,
-    } satisfies CronListPageResult;
+    } as CronListPageResult;
   });
 }
 
