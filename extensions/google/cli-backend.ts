@@ -1,11 +1,11 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import type { CliBackendPlugin } from "openclaw/plugin-sdk/cli-backend";
 import {
   CLI_FRESH_WATCHDOG_DEFAULTS,
   CLI_RESUME_WATCHDOG_DEFAULTS,
 } from "openclaw/plugin-sdk/cli-backend";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import {
   GOOGLE_GEMINI_CLI_PROVIDER_ID,
   resolveGeminiCliProfileHome as resolveGeminiCliProfileHomePath,
@@ -286,14 +286,21 @@ async function prepareGeminiCliProfileHome(
   await fs.chmod(geminiDir, 0o700);
   const settings = buildGeminiCliAuthSettings(selectedType);
   const systemSettings = await buildGeminiCliSystemSettings(ctx, selectedType);
-  const systemSettingsDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gemini-cli-"));
+  const systemSettingsDir = await fs.mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-gemini-cli-"),
+  );
   await fs.chmod(systemSettingsDir, 0o700);
   const systemSettingsPath = path.join(systemSettingsDir, "settings.json");
-  await Promise.all([
-    writeGeminiCliJson(path.join(geminiDir, "settings.json"), settings),
-    writeGeminiCliJson(path.join(home, "settings.json"), settings),
-    writeGeminiCliJson(systemSettingsPath, systemSettings),
-  ]);
+  try {
+    await Promise.all([
+      writeGeminiCliJson(path.join(geminiDir, "settings.json"), settings),
+      writeGeminiCliJson(path.join(home, "settings.json"), settings),
+      writeGeminiCliJson(systemSettingsPath, systemSettings),
+    ]);
+  } catch (error) {
+    await fs.rm(systemSettingsDir, { recursive: true, force: true });
+    throw error;
+  }
   return {
     home,
     geminiDir,

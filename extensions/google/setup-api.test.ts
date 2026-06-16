@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { CliBackendPlugin } from "openclaw/plugin-sdk/cli-backend";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { describe, expect, it } from "vitest";
 import { buildGoogleGeminiCliBackend } from "./cli-backend.js";
 import setupEntry from "./setup-api.js";
@@ -170,6 +171,9 @@ describe("google gemini cli backend auth bridge", () => {
       expect(systemSettingsPath).toBeTruthy();
       expect(systemSettingsPath).not.toBe(inheritedSettingsPath);
       expect(path.dirname(systemSettingsPath ?? "")).not.toBe(home);
+      expect(
+        path.relative(resolvePreferredOpenClawTmpDir(), path.dirname(systemSettingsPath ?? "")),
+      ).toMatch(/^openclaw-gemini-cli-/);
       expect(prepared?.env?.GEMINI_FORCE_FILE_STORAGE).toBe("true");
       expect(prepared?.env?.GOOGLE_CLOUD_PROJECT).toBe("profile-project");
       expect(prepared?.env?.GOOGLE_CLOUD_PROJECT_ID).toBe("profile-project");
