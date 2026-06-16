@@ -2506,4 +2506,78 @@ describe("gateway send mirroring", () => {
       );
     });
   });
+
+  describe("gateway send reserved-target guard", () => {
+    beforeAll(async () => {
+      await loadSendHandlersForTest();
+    });
+
+    beforeEach(() => {
+      vi.clearAllMocks();
+      setActivePluginRegistry(createTestRegistry([]), "reserved-target-guard");
+      mocks.applyPluginAutoEnable.mockImplementation(({ config }) => ({
+        config,
+        changes: [],
+        autoEnabledReasons: {},
+      }));
+      mocks.getRuntimeConfigSnapshot.mockReturnValue(null);
+      mocks.getRuntimeConfigSourceSnapshot.mockReturnValue(null);
+      mocks.resolveOutboundTarget.mockReturnValue({ ok: true, to: "resolved" });
+      mocks.resolveMessageChannelSelection.mockResolvedValue({
+        channel: "slack",
+        configured: ["slack"],
+      });
+    });
+
+    it.each([
+      "current",
+      "Current",
+      "CURRENT",
+      "self",
+      "Self",
+      "SELF",
+      "this",
+      "This",
+      "THIS",
+      "me",
+      "Me",
+      "ME",
+    ])("rejects reserved send.to value %s with INVALID_REQUEST", async (reservedWord) => {
+      const { respond } = await runSend({
+        to: reservedWord,
+        message: "hello",
+        idempotencyKey: `idem-reserved-${reservedWord}`,
+      });
+      const call = firstRespondCall(respond);
+      expect(call[0]).toBe(false);
+      expect(call[2]?.code).toBe("INVALID_REQUEST");
+      expect(call[2]?.message).toMatch(/reserved/i);
+      expect(mocks.resolveOutboundTarget).not.toHaveBeenCalled();
+    });
+
+    it("allows a real target like telegram:C1234567890 to pass through to resolver", async () => {
+      mocks.resolveOutboundTarget.mockReturnValue({ ok: true, to: "C1234567890" });
+      mocks.resolveOutboundSessionRoute.mockResolvedValue({
+        sessionKey: "agent:main:telegram:channel:C1234567890",
+      });
+      mocks.deliverOutboundPayloads.mockResolvedValue([
+        { messageId: "msg-real-1", channel: "telegram" },
+      ]);
+      mocks.getChannelPlugin.mockReturnValue({
+        outbound: {},
+      });
+      mocks.resolveMessageChannelSelection.mockResolvedValue({
+        channel: "telegram",
+        configured: ["telegram"],
+      });
+
+      const { respond } = await runSend({
+        to: "telegram:C1234567890",
+        message: "hello from real target",
+        idempotencyKey: "idem-real-target-telegram",
+      });
+      // resolveOutboundTarget must have been called — guard did NOT short-circuit
+      expect(mocks.resolveOutboundTarget).toHaveBeenCalled();
+    });
+  });
 });

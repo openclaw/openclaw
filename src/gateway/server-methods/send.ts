@@ -651,6 +651,22 @@ export const sendHandlers: GatewayRequestHandlers = {
     const replyToId = normalizeOptionalString(request.replyToId);
     const threadId = normalizeOptionalString(request.threadId);
 
+    // Guard: reject reserved target keywords that historically routed to @current
+    // and caused 3 prod incidents (openclaw#91372). Cron and agent-config structs
+    // that carry {mode:"current"} flow through different resolvers and are unaffected.
+    const RESERVED_SEND_TARGETS = new Set(["current", "self", "this", "me"]);
+    if (RESERVED_SEND_TARGETS.has(to.toLowerCase())) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid send target: "${to}" is a reserved keyword and cannot be used as a message destination`,
+        ),
+      );
+      return;
+    }
+
     const work = (async (): Promise<InflightResult> => {
       const resolvedChannel = await resolveInternalDeliveryChannel(request.channel, context);
       if (resolvedChannel.kind !== "ready") {
