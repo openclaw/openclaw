@@ -37,7 +37,7 @@ type CatalogModel = {
 type CatalogProvider = {
   id: string;
   displayName: string;
-  openAiCompatible: boolean;
+  openaiCompatible: boolean;
   nativeBaseUrl: string;
   routes: CatalogRoute[];
   models: CatalogModel[];
@@ -118,7 +118,7 @@ function parseCatalogProvider(value: unknown): CatalogProvider | undefined {
   return {
     id,
     displayName: readString(row?.displayName) ?? id,
-    openAiCompatible: row?.openAiCompatible === true,
+    openaiCompatible: row?.openaiCompatible === true,
     nativeBaseUrl,
     routes: Array.isArray(row?.routes)
       ? row.routes.map(parseCatalogRoute).filter((route): route is CatalogRoute => Boolean(route))
@@ -176,10 +176,10 @@ function buildRoutedModel(
   let baseUrl: string;
   let upstreamModel: string | undefined;
 
-  if (provider.openAiCompatible && supportsCapability(model, "llm.responses")) {
+  if (provider.openaiCompatible && supportsCapability(model, "llm.responses")) {
     api = "openai-responses";
     baseUrl = `${rootUrl}/v1`;
-  } else if (provider.openAiCompatible && supportsCapability(model, "llm.chat")) {
+  } else if (provider.openaiCompatible && supportsCapability(model, "llm.chat")) {
     api = "openai-completions";
     baseUrl = `${rootUrl}/v1`;
   } else if (

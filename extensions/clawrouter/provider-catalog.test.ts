@@ -17,7 +17,7 @@ const CATALOG = {
     {
       id: "openai",
       displayName: "OpenAI",
-      openAiCompatible: true,
+      openaiCompatible: true,
       nativeBaseUrl: "/v1/native/openai",
       routes: [
         {
@@ -38,7 +38,7 @@ const CATALOG = {
     {
       id: "anthropic",
       displayName: "Anthropic",
-      openAiCompatible: false,
+      openaiCompatible: false,
       nativeBaseUrl: "/v1/native/anthropic",
       routes: [
         {
@@ -59,7 +59,7 @@ const CATALOG = {
     {
       id: "google-gemini",
       displayName: "Google Gemini",
-      openAiCompatible: false,
+      openaiCompatible: false,
       nativeBaseUrl: "/v1/native/google-gemini",
       routes: [
         {
@@ -80,7 +80,7 @@ const CATALOG = {
     {
       id: "cohere",
       displayName: "Cohere",
-      openAiCompatible: false,
+      openaiCompatible: false,
       nativeBaseUrl: "/v1/native/cohere",
       routes: [
         {
