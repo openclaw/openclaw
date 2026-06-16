@@ -4,6 +4,7 @@ import type { SkillWorkshopProposal } from "../views/skill-workshop.ts";
 import {
   loadSkillWorkshopProposalDetail,
   loadSkillWorkshopProposals,
+  requestSkillWorkshopRevision,
   runSkillWorkshopLifecycleAction,
   type SkillWorkshopState,
 } from "./skill-workshop.ts";
@@ -24,6 +25,7 @@ function createState(overrides: Partial<SkillWorkshopState> = {}): {
     agentsList: { defaultId: "main", mainKey: "main" },
     hello: null,
     sessionKey: "global",
+    skillWorkshopAgentId: null,
     skillWorkshopLoading: false,
     skillWorkshopLoaded: false,
     skillWorkshopError: null,
@@ -106,6 +108,17 @@ function proposal(overrides: Partial<SkillWorkshopProposal> = {}): SkillWorkshop
     isNew: false,
     ...overrides,
   };
+}
+
+function createDeferred<T>() {
+  let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  if (!resolve) {
+    throw new Error("Expected deferred promise callback to be initialized");
+  }
+  return { promise, resolve };
 }
 
 function clearNoticeTimer(state: SkillWorkshopState): void {
@@ -198,4 +211,120 @@ describe("Skill Workshop proposal RPCs", () => {
       });
     },
   );
+
+  it("reloads proposals when the selected session changes agent scope", async () => {
+    const { state, request } = createState({
+      sessionKey: "agent:ops:main",
+      skillWorkshopAgentId: "research",
+      skillWorkshopLoaded: true,
+      skillWorkshopProposals: [proposal()],
+    });
+    request.mockImplementation(async (method: string) => {
+      if (method === "skills.proposals.list") {
+        return manifest();
+      }
+      if (method === "skills.proposals.inspect") {
+        return inspectResult();
+      }
+      return {};
+    });
+
+    await loadSkillWorkshopProposals(state);
+
+    expect(state.skillWorkshopAgentId).toBe("ops");
+    expect(request).toHaveBeenNthCalledWith(1, "skills.proposals.list", { agentId: "ops" });
+    expect(request).toHaveBeenNthCalledWith(2, "skills.proposals.inspect", {
+      agentId: "ops",
+      proposalId: "proposal-1",
+    });
+  });
+
+  it("clears stale proposals when the agent changes during an in-flight reload", async () => {
+    const researchList = createDeferred<ReturnType<typeof manifest>>();
+    const { state, request } = createState({
+      assistantAgentId: "research",
+      skillWorkshopAgentId: "research",
+      skillWorkshopLoaded: true,
+      skillWorkshopProposals: [proposal()],
+    });
+    request.mockImplementation(async (method: string, payload?: unknown) => {
+      if (method !== "skills.proposals.list") {
+        return inspectResult();
+      }
+      return (payload as { agentId?: string }).agentId === "research"
+        ? researchList.promise
+        : manifest();
+    });
+
+    const researchReload = loadSkillWorkshopProposals(state, { force: true });
+    state.assistantAgentId = "ops";
+    await loadSkillWorkshopProposals(state);
+
+    expect(state.skillWorkshopAgentId).toBe("ops");
+    expect(state.skillWorkshopProposals).toEqual([]);
+
+    researchList.resolve(manifest());
+    await researchReload;
+    await vi.waitFor(() => {
+      expect(state.skillWorkshopLoaded).toBe(true);
+    });
+
+    expect(state.skillWorkshopAgentId).toBe("ops");
+    expect(request).toHaveBeenCalledWith("skills.proposals.list", { agentId: "ops" });
+  });
+
+  it("preserves the loaded proposal agent for originless revisions", async () => {
+    const { state } = createState({
+      assistantAgentId: "main",
+      skillWorkshopAgentId: "research",
+      skillWorkshopProposals: [proposal()],
+      skillWorkshopRevisionDraft: "Tighten the trigger.",
+    });
+    const sendRevisionRequest = vi.fn(async () => {});
+
+    await requestSkillWorkshopRevision(state, "proposal-1", sendRevisionRequest);
+
+    expect(sendRevisionRequest).toHaveBeenCalledWith(
+      "Tighten the trigger.",
+      expect.objectContaining({ key: "proposal-1" }),
+      "research",
+    );
+  });
+
+  it("discards proposal detail that resolves after the agent scope changes", async () => {
+    const detail = createDeferred<ReturnType<typeof inspectResult>>();
+    const { state, request } = createState({
+      skillWorkshopAgentId: "research",
+      skillWorkshopProposals: [proposal({ body: "" })],
+    });
+    request.mockReturnValueOnce(detail.promise);
+
+    const loading = loadSkillWorkshopProposalDetail(state, "proposal-1");
+    state.skillWorkshopAgentId = "ops";
+    state.skillWorkshopProposals = [proposal({ body: "Ops proposal." })];
+    state.skillWorkshopInspectingKey = "proposal-1";
+    detail.resolve(inspectResult());
+    await loading;
+
+    expect(state.skillWorkshopProposals[0]?.body).toBe("Ops proposal.");
+    expect(state.skillWorkshopInspectingKey).toBe("proposal-1");
+  });
+
+  it("does not send an originless revision after the agent scope changes", async () => {
+    const detail = createDeferred<ReturnType<typeof inspectResult>>();
+    const { state, request } = createState({
+      skillWorkshopAgentId: "research",
+      skillWorkshopProposals: [proposal({ body: "" })],
+      skillWorkshopRevisionDraft: "Tighten the trigger.",
+    });
+    request.mockReturnValueOnce(detail.promise);
+    const sendRevisionRequest = vi.fn(async () => {});
+
+    const revision = requestSkillWorkshopRevision(state, "proposal-1", sendRevisionRequest);
+    state.skillWorkshopAgentId = "ops";
+    detail.resolve(inspectResult());
+
+    await expect(revision).resolves.toBe(false);
+    expect(sendRevisionRequest).not.toHaveBeenCalled();
+  });
 });
