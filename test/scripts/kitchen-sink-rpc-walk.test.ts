@@ -42,6 +42,7 @@ import {
   listKitchenSinkAuthorizationRpcProbeNames,
   listKitchenSinkReadOnlyRpcProbeNames,
   makeEnv,
+  parseGatewayCliRequestFailure,
   readPositiveInt,
   readBoundedResponseText,
   runCommand,
@@ -638,6 +639,20 @@ setInterval(() => {}, 1000);
       code: "ENOENT",
     });
   });
+
+  it("preserves failed command output for structured consumers", async () => {
+    await expect(
+      runCommand(process.execPath, [
+        "-e",
+        'process.stdout.write("request failure"); process.stderr.write("diagnostic"); process.exit(7)',
+      ]),
+    ).rejects.toMatchObject({
+      status: 7,
+      signal: null,
+      stdout: "request failure",
+      stderr: "diagnostic",
+    });
+  });
 });
 
 describe("kitchen-sink RPC caller loading", () => {
@@ -844,10 +859,52 @@ describe("kitchen-sink RPC command catalog assertions", () => {
           "openclaw gateway call skills.bins failed with 1\nGateway call failed: unauthorized role: operator",
         );
       }),
-    ).resolves.toBeUndefined();
+    ).rejects.toThrow("Gateway call failed: unauthorized role: operator");
     await expect(
       assertOperatorRpcDenied({ method: "skills.bins", params: {} }, async () => ({})),
     ).rejects.toThrow("skills.bins unexpectedly allowed operator access");
+  });
+
+  it("reconstructs typed request failures from gateway CLI JSON", async () => {
+    const { formatGatewayClientRequestErrorJson } = await import("../../src/gateway/call.js");
+    const payload = formatGatewayClientRequestErrorJson(
+      Object.assign(new Error("unauthorized role: operator"), {
+        name: "GatewayClientRequestError",
+        gatewayCode: "INVALID_REQUEST",
+        details: { method: "skills.bins" },
+        retryable: false,
+        retryAfterMs: 250,
+      }),
+    );
+
+    expect(
+      parseGatewayCliRequestFailure({
+        stdout: JSON.stringify(payload),
+      }),
+    ).toMatchObject({
+      name: "GatewayClientRequestError",
+      message: "unauthorized role: operator",
+      gatewayCode: "INVALID_REQUEST",
+      details: { method: "skills.bins" },
+      retryable: false,
+      retryAfterMs: 250,
+    });
+    expect(parseGatewayCliRequestFailure(new Error("plain failure"))).toBeNull();
+    for (const invalidFields of [{ retryable: "no" }, { retryable: false, retryAfterMs: -1 }]) {
+      expect(
+        parseGatewayCliRequestFailure({
+          stdout: JSON.stringify({
+            ok: false,
+            error: {
+              type: "gateway_request_error",
+              code: "INVALID_REQUEST",
+              message: "unauthorized role: operator",
+              ...invalidFields,
+            },
+          }),
+        }),
+      ).toBeNull();
+    }
   });
 
   it("requires provenance for effective Kitchen Sink plugin tools too", () => {

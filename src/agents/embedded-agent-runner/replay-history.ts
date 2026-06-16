@@ -19,6 +19,7 @@ import {
   normalizeInputProvenance,
 } from "../../sessions/input-provenance.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../shared/transcript-only-openclaw-assistant.js";
+import { stripStaleAssistantUsageBeforeLatestCompaction } from "../compaction-usage.js";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
   downgradeOpenAIReasoningBlocks,
@@ -29,6 +30,7 @@ import {
   validateGeminiTurns,
 } from "../embedded-agent-helpers.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
+import { isReasoningOnlyLengthAssistantTurn } from "../replay-turn-classification.js";
 import type { AgentMessage } from "../runtime/index.js";
 import {
   sanitizeToolCallInputs,
@@ -171,71 +173,6 @@ function annotateInterSessionUserMessages(messages: AgentMessage[]): AgentMessag
   return touched ? out : messages;
 }
 
-function parseMessageTimestamp(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value === "string") {
-    const parsed = Date.parse(value);
-    if (Number.isFinite(parsed)) {
-      return parsed;
-    }
-  }
-  return null;
-}
-
-function stripStaleAssistantUsageBeforeLatestCompaction(messages: AgentMessage[]): AgentMessage[] {
-  let latestCompactionSummaryIndex = -1;
-  let latestCompactionTimestamp: number | null = null;
-  for (let i = 0; i < messages.length; i += 1) {
-    const entry = messages[i];
-    if (entry?.role !== "compactionSummary") {
-      continue;
-    }
-    latestCompactionSummaryIndex = i;
-    latestCompactionTimestamp = parseMessageTimestamp(
-      (entry as { timestamp?: unknown }).timestamp ?? null,
-    );
-  }
-  if (latestCompactionSummaryIndex === -1) {
-    return messages;
-  }
-
-  const out = [...messages];
-  let touched = false;
-  for (let i = 0; i < out.length; i += 1) {
-    const candidate = out[i] as
-      | (AgentMessage & { usage?: unknown; timestamp?: unknown })
-      | undefined;
-    if (!candidate || candidate.role !== "assistant") {
-      continue;
-    }
-    if (!candidate.usage || typeof candidate.usage !== "object") {
-      continue;
-    }
-
-    const messageTimestamp = parseMessageTimestamp(candidate.timestamp);
-    const staleByTimestamp =
-      latestCompactionTimestamp !== null &&
-      messageTimestamp !== null &&
-      messageTimestamp <= latestCompactionTimestamp;
-    const staleByLegacyOrdering = i < latestCompactionSummaryIndex;
-    if (!staleByTimestamp && !staleByLegacyOrdering) {
-      continue;
-    }
-
-    // session runtime expects assistant usage to always be present during context
-    // accounting. Keep stale snapshots structurally valid, but zeroed out.
-    const candidateRecord = candidate as unknown as Record<string, unknown>;
-    out[i] = {
-      ...candidateRecord,
-      usage: makeZeroUsageSnapshot(),
-    } as unknown as AgentMessage;
-    touched = true;
-  }
-  return touched ? out : messages;
-}
-
 function sanitizeUserReplayContent(message: AgentMessage): AgentMessage | null {
   if (!message || message.role !== "user") {
     return message;
@@ -361,12 +298,19 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
     if (Array.isArray(replayContent)) {
       const normalized = normalizeAssistantReplayBlockContent(assistantMessage, replayContent);
       if (normalized !== assistantMessage) {
-        if (normalized) {
-          out.push(normalized);
-        }
         touched = true;
-        continue;
+        if (!normalized) {
+          continue;
+        }
+        assistantMessage = normalized as AssistantReplayMessage;
+        replayContent = assistantMessage.content;
       }
+    }
+    if (isReasoningOnlyLengthAssistantTurn(assistantMessage)) {
+      // Token-limited thinking is incomplete provider state. Replaying it can
+      // resend a partial signature, while visible text or tool calls remain useful.
+      touched = true;
+      continue;
     }
     if (Array.isArray(replayContent) && replayContent.length === 0) {
       // An assistant turn can legitimately end with `content: []` — for
@@ -705,6 +649,7 @@ export async function sanitizeSessionHistory(params: {
       sanitizeToolCallIds:
         policy.sanitizeToolCallIds && !allowProviderOwnedThinkingReplay && !isOpenAIResponsesApi,
       toolCallIdMode: policy.toolCallIdMode,
+      duplicateToolCallIdStyle: policy.duplicateToolCallIdStyle,
       preserveNativeAnthropicToolUseIds: policy.preserveNativeAnthropicToolUseIds,
       preserveSignatures: policy.preserveSignatures,
       sanitizeThoughtSignatures: policy.sanitizeThoughtSignatures,
@@ -769,6 +714,7 @@ export async function sanitizeSessionHistory(params: {
     policy.sanitizeToolCallIds && policy.toolCallIdMode
       ? sanitizeToolCallIdsForCloudCodeAssist(openAISafeToolCalls, policy.toolCallIdMode, {
           preserveNativeAnthropicToolUseIds: policy.preserveNativeAnthropicToolUseIds,
+          duplicateToolCallIdStyle: policy.duplicateToolCallIdStyle,
           preserveReplaySafeThinkingToolCallIds: allowProviderOwnedThinkingReplay,
           allowedToolNames: params.allowedToolNames,
         })

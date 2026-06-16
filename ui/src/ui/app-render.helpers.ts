@@ -16,6 +16,7 @@ import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
 import {
   renderChatSessionSelect as renderChatSessionSelectBase,
   renderChatModelSelect,
+  renderChatQuotaPill,
   resetChatSessionPickerState,
   resolveSessionOptionGroups,
 } from "./chat/session-controls.ts";
@@ -392,6 +393,7 @@ export function renderChatControls(state: AppViewState) {
     >
       ${renderChatModelSelect(state)}
     </div>
+    ${renderChatQuotaPill(state)}
     <div class="chat-settings-popover-wrapper">
       <button
         class="chat-settings-chip ${settingsOpen ? "chat-settings-chip--open" : ""}"
@@ -731,11 +733,11 @@ export async function createChatSession(
   state.lastError = null;
   state.chatError = null;
   const previousSessionKey = state.sessionKey;
-  const parentSessionKey = state.sessionsResult?.sessions.some(
-    (row) => row.key === previousSessionKey,
-  )
-    ? previousSessionKey
-    : undefined;
+  const normalizedPreviousSessionKey = normalizeOptionalString(previousSessionKey);
+  const parentSessionKey =
+    normalizeLowercaseStringOrEmpty(normalizedPreviousSessionKey) === "unknown"
+      ? undefined
+      : normalizedPreviousSessionKey;
   const nextSessionKey = await createSessionAndRefresh(
     state as unknown as Parameters<typeof createSessionAndRefresh>[0],
     {

@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { testing as cliBackendsTesting } from "../../agents/cli-backends.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   clearMemoryPluginState,
@@ -51,10 +52,12 @@ function createReplyOperation(): TestReplyOperation {
     updateSessionId: vi.fn<ReplyOperation["updateSessionId"]>(),
     attachBackend: vi.fn(),
     detachBackend: vi.fn(),
+    retainFailureUntilComplete: vi.fn(),
     complete: vi.fn(),
     completeThen: vi.fn((afterClear: () => void) => {
       afterClear();
     }),
+    completeWithAfterClearBarrier: vi.fn(),
     fail: vi.fn(),
     abortByUser: vi.fn(),
     abortForRestart: vi.fn(),
@@ -226,6 +229,7 @@ describe("runMemoryFlushIfNeeded", () => {
 
   afterEach(async () => {
     setAgentRunnerMemoryTestDeps();
+    cliBackendsTesting.resetDepsForTest();
     clearMemoryPluginState();
     await fs.rm(rootDir, { recursive: true, force: true });
   });
@@ -912,6 +916,46 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
+  it("skips memory flush for compatible CLI session runtime pins", async () => {
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "claude-cli",
+          modelProvider: "anthropic",
+          pluginId: "anthropic",
+          config: { command: "claude" },
+        },
+      ],
+    });
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      compactionCount: 1,
+      agentRuntimeOverride: "claude-cli",
+    };
+
+    const entry = await runMemoryFlushIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun({
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+      }),
+      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(entry).toBe(sessionEntry);
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+  });
+
   it("uses runtime policy session key when checking memory-flush sandbox writability", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",
@@ -1317,6 +1361,79 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactCall.authProfileId).toBe("anthropic:claude@martian.engineering");
     expect(compactCall.contextTokenBudget).toBe(258_000);
   });
+  it("preflight compacts a fresh session when the current prompt estimate pushes the next request over budget", async () => {
+    registerMemoryFlushPlanResolverForTest(() => ({
+      softThresholdTokens: 0,
+      forceFlushTranscriptBytes: 1_000_000_000,
+      reserveTokensFloor: 10,
+      prompt: "Pre-compaction memory flush.\nNO_REPLY",
+      systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+      relativePath: "memory/2023-11-14.md",
+    }));
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 985,
+      totalTokensFresh: true,
+      compactionCount: 0,
+    };
+
+    await runPreflightCompactionIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun({
+        provider: "anthropic",
+        model: "claude",
+        sessionKey: "agent:main:main",
+      }),
+      promptForEstimate: "Please summarize the entire design discussion above. ".repeat(8),
+      defaultModel: "anthropic/claude",
+      agentCfgContextTokens: 1000,
+      sessionEntry,
+      sessionStore: { "agent:main:main": sessionEntry },
+      sessionKey: "agent:main:main",
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
+  });
+  it("does not preflight compact a fresh session when only accumulated output tokens are large and the latest output keeps the request under budget", async () => {
+    registerMemoryFlushPlanResolverForTest(() => ({
+      softThresholdTokens: 0,
+      forceFlushTranscriptBytes: 1_000_000_000,
+      reserveTokensFloor: 10,
+      prompt: "Pre-compaction memory flush.\nNO_REPLY",
+      systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+      relativePath: "memory/2023-11-14.md",
+    }));
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 985,
+      outputTokens: 50_000,
+      totalTokensFresh: true,
+      compactionCount: 0,
+    };
+
+    await runPreflightCompactionIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun({
+        provider: "anthropic",
+        model: "claude",
+        sessionKey: "agent:main:main",
+      }),
+      promptForEstimate: "",
+      defaultModel: "anthropic/claude",
+      agentCfgContextTokens: 1000,
+      sessionEntry,
+      sessionStore: { "agent:main:main": sessionEntry },
+      sessionKey: "agent:main:main",
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
+  });
   it("updates the active preflight run after transcript rotation", async () => {
     const sessionFile = path.join(rootDir, "session.jsonl");
     const successorFile = path.join(rootDir, "session-rotated.jsonl");
@@ -1607,6 +1724,61 @@ describe("runMemoryFlushIfNeeded", () => {
         sessionKey: "main",
       }),
       defaultModel: "gpt-5.5",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(entry).toBe(sessionEntry);
+    expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("skips preflight compaction for compatible CLI session runtime pins", async () => {
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "claude-cli",
+          modelProvider: "anthropic",
+          pluginId: "anthropic",
+          config: { command: "claude" },
+        },
+      ],
+    });
+    registerMemoryFlushPlanResolverForTest(() => ({
+      softThresholdTokens: 4_000,
+      forceFlushTranscriptBytes: 1_000_000_000,
+      reserveTokensFloor: 0,
+      prompt: "Pre-compaction memory flush.\nNO_REPLY",
+      systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+      relativePath: "memory/2023-11-14.md",
+    }));
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 347_000,
+      totalTokensFresh: true,
+      agentRuntimeOverride: "claude-cli",
+    };
+
+    const entry = await runPreflightCompactionIfNeeded({
+      cfg: {
+        models: {
+          providers: {
+            anthropic: { models: [{ id: "claude-opus-4-6", contextWindow: 350_000 }] },
+          },
+        },
+        agents: { defaults: { compaction: { memoryFlush: {} } } },
+      } as never,
+      followupRun: createTestFollowupRun({
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+        sessionId: "session",
+        sessionKey: "main",
+      }),
+      defaultModel: "anthropic/claude-opus-4-6",
       sessionEntry,
       sessionStore: { main: sessionEntry },
       sessionKey: "main",
@@ -2014,7 +2186,7 @@ describe("runMemoryFlushIfNeeded", () => {
     const compactCall = requireCompactEmbeddedAgentSessionCall();
     expect(compactCall.sessionId).toBe("session");
     expect(compactCall.trigger).toBe("budget");
-    expect(compactCall.currentTokenCount).toBe(10);
+    expect(compactCall.currentTokenCount).toBe(12);
     expect(compactCall.sessionFile).toContain("large-session.jsonl");
   });
 

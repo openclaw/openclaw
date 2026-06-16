@@ -13,8 +13,8 @@ import {
   type RuntimeEnv,
 } from "./monitor-transport-runtime-api.js";
 import {
-  botNames,
-  botOpenIds,
+  clearFeishuBotIdentityState,
+  closeTrackedFeishuHttpServer,
   FEISHU_WEBHOOK_BODY_TIMEOUT_MS,
   FEISHU_WEBHOOK_MAX_BODY_BYTES,
   feishuWebhookRateLimiter,
@@ -173,8 +173,7 @@ function cleanupFeishuWsClient(params: {
   }
   wsClients.delete(accountId);
   if (clearIdentity) {
-    botOpenIds.delete(accountId);
-    botNames.delete(accountId);
+    clearFeishuBotIdentityState(accountId);
   }
 }
 
@@ -416,23 +415,23 @@ export async function monitorWebhook({
 
   httpServers.set(accountId, server);
 
-  return new Promise((resolve, reject) => {
-    const cleanup = () => {
-      server.close();
-      httpServers.delete(accountId);
-      botOpenIds.delete(accountId);
-      botNames.delete(accountId);
+  return await new Promise<void>((resolve, reject) => {
+    let cleanupStarted = false;
+    const cleanup = async () => {
+      if (cleanupStarted) {
+        return;
+      }
+      cleanupStarted = true;
+      await closeTrackedFeishuHttpServer(accountId, server);
     };
 
     const handleAbort = () => {
       log(`feishu[${accountId}]: abort signal received, stopping Webhook server`);
-      cleanup();
-      resolve();
+      cleanup().then(resolve, reject);
     };
 
     if (abortSignal?.aborted) {
-      cleanup();
-      resolve();
+      cleanup().then(resolve, reject);
       return;
     }
 

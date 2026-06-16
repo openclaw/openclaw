@@ -53,6 +53,8 @@ export type MattermostSendOpts = {
   attachmentText?: string;
   /** Retry options for DM channel creation */
   dmRetryOptions?: CreateDmChannelRetryOptions;
+  /** Observe the bounded cache-miss DM channel resolution lifecycle. */
+  onDmChannelResolution?: (resolution: PromiseLike<unknown>) => void;
 };
 
 export type MattermostSendResult = {
@@ -271,6 +273,7 @@ type ResolveTargetChannelIdParams = {
   token: string;
   allowPrivateNetwork?: boolean;
   dmRetryOptions?: CreateDmChannelRetryOptions;
+  onDmChannelResolution?: (resolution: PromiseLike<unknown>) => void;
   logger?: { debug?: (msg: string) => void; warn?: (msg: string) => void };
 };
 
@@ -331,7 +334,7 @@ async function resolveTargetChannelId(params: ResolveTargetChannelIdParams): Pro
     allowPrivateNetwork: params.allowPrivateNetwork,
   });
 
-  const channel = await createMattermostDirectChannelWithRetry(client, [botUser.id, userId], {
+  const resolution = createMattermostDirectChannelWithRetry(client, [botUser.id, userId], {
     ...params.dmRetryOptions,
     onRetry: (attempt, delayMs, error) => {
       // Call user's onRetry if provided
@@ -344,6 +347,8 @@ async function resolveTargetChannelId(params: ResolveTargetChannelIdParams): Pro
       }
     },
   });
+  params.onDmChannelResolution?.(resolution);
+  const channel = await resolution;
   dmChannelCache.set(dmKey, channel.id);
   return channel.id;
 }
@@ -416,6 +421,7 @@ async function resolveMattermostSendContext(
     token,
     allowPrivateNetwork,
     dmRetryOptions,
+    onDmChannelResolution: opts.onDmChannelResolution,
     logger: core.logging.shouldLogVerbose() ? logger : undefined,
   });
 

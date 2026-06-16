@@ -332,6 +332,7 @@ export class AgentSession {
 
   // Branch summarization state
   private branchSummaryAbortController: AbortController | undefined = undefined;
+  private extensionModifiedToolResultIds = new Set<string>();
 
   // Retry state
   private retryAbortController: AbortController | undefined = undefined;
@@ -515,6 +516,7 @@ export class AgentSession {
       if (!hookResult) {
         return undefined;
       }
+      this.extensionModifiedToolResultIds.add(toolCall.id);
 
       return {
         content: hookResult.content,
@@ -579,7 +581,7 @@ export class AgentSession {
     }
 
     // Emit to extensions first
-    await this.emitExtensionEvent(event);
+    const messageChangedByExtension = await this.emitExtensionEvent(event);
 
     // Notify all listeners
     this.emit(
@@ -605,7 +607,13 @@ export class AgentSession {
         event.message.role === "toolResult"
       ) {
         // Regular LLM message - persist as SessionMessageEntry
-        this.sessionManager.appendMessage(event.message);
+        const toolResultChangedByExtension =
+          event.message.role === "toolResult" &&
+          this.extensionModifiedToolResultIds.delete(event.message.toolCallId);
+        this.sessionManager.appendMessage(event.message, {
+          invalidateSerializedPrefixCache:
+            messageChangedByExtension || toolResultChangedByExtension,
+        });
       }
       // Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere
 
@@ -689,7 +697,7 @@ export class AgentSession {
   }
 
   /** Emit extension events based on agent events */
-  private async emitExtensionEvent(event: AgentEvent): Promise<void> {
+  private async emitExtensionEvent(event: AgentEvent): Promise<boolean> {
     if (event.type === "agent_start") {
       this.turnIndex = 0;
       await this.currentExtensionRunner.emit({ type: "agent_start" });
@@ -732,6 +740,7 @@ export class AgentSession {
       const replacement = await this.currentExtensionRunner.emitMessageEnd(extensionEvent);
       if (replacement) {
         this.replaceMessageInPlace(event.message, replacement);
+        return true;
       }
     } else if (event.type === "tool_execution_start") {
       const extensionEvent: ToolExecutionStartEvent = {
@@ -760,6 +769,7 @@ export class AgentSession {
       };
       await this.currentExtensionRunner.emit(extensionEvent);
     }
+    return false;
   }
 
   /**

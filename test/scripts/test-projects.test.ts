@@ -581,6 +581,8 @@ describe("scripts/test-projects changed-target routing", () => {
         "scripts/package-openclaw-for-docker.mjs",
         ["test/scripts/package-openclaw-for-docker.test.ts"],
       ],
+      ["scripts/ios-run.sh", ["test/scripts/ios-run.test.ts"]],
+      ["scripts/create-dmg.sh", ["test/scripts/create-dmg.test.ts"]],
       ["scripts/package-mac-app.sh", ["test/scripts/package-mac-app.test.ts"]],
       ["scripts/package-mac-dist.sh", ["test/scripts/package-mac-dist.test.ts"]],
       ["scripts/package-changelog.mjs", ["test/scripts/package-changelog.test.ts"]],
@@ -1123,6 +1125,8 @@ describe("scripts/test-projects changed-target routing", () => {
     withTinyGitRepo(
       {
         "test/helpers/temp-dir.ts": "export const tempDir = 'x';\n",
+        "test/helpers/temp-dir.test.ts":
+          "import { tempDir } from './temp-dir.js';\nvoid tempDir;\n",
         "src/foo.test.ts":
           "import { tempDir } from '../test/helpers/temp-dir.js';\nvoid tempDir;\n",
       },
@@ -1131,7 +1135,7 @@ describe("scripts/test-projects changed-target routing", () => {
       },
     );
 
-    expect(targets).toEqual(["src/foo.test.ts"]);
+    expect(targets).toEqual(["test/helpers/temp-dir.test.ts", "src/foo.test.ts"]);
   });
 
   it("keeps the broad changed run available for shared test helpers", () => {
@@ -2143,29 +2147,25 @@ describe("scripts/test-projects full-suite sharding", () => {
     ).toThrow("OPENCLAW_TEST_WORKERS must be a positive integer; got: 1 worker");
   });
 
-  it("keeps serial untargeted runs on aggregate shards", () => {
+  it("keeps serial untargeted local runs on leaf project configs", () => {
     const previousParallel = process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
     const previousSerial = process.env.OPENCLAW_TEST_PROJECTS_SERIAL;
+    const previousCi = process.env.CI;
+    const previousActions = process.env.GITHUB_ACTIONS;
     delete process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
     delete process.env.OPENCLAW_TEST_SKIP_FULL_EXTENSIONS_SHARD;
     delete process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
+    delete process.env.CI;
+    delete process.env.GITHUB_ACTIONS;
     process.env.OPENCLAW_TEST_PROJECTS_SERIAL = "1";
     try {
-      expect(buildFullSuiteVitestRunPlans([], process.cwd()).map((plan) => plan.config)).toEqual([
-        "test/vitest/vitest.full-core-unit-fast.config.ts",
-        "test/vitest/vitest.full-core-unit-src.config.ts",
-        "test/vitest/vitest.full-core-unit-security.config.ts",
-        "test/vitest/vitest.full-core-unit-ui.config.ts",
-        "test/vitest/vitest.full-core-unit-support.config.ts",
-        "test/vitest/vitest.full-core-support-boundary.config.ts",
-        "test/vitest/vitest.full-core-tooling.config.ts",
-        "test/vitest/vitest.full-core-contracts.config.ts",
-        "test/vitest/vitest.full-core-bundled.config.ts",
-        "test/vitest/vitest.full-core-runtime.config.ts",
-        "test/vitest/vitest.full-agentic.config.ts",
-        "test/vitest/vitest.full-auto-reply.config.ts",
-        "test/vitest/vitest.full-extensions.config.ts",
-      ]);
+      const configs = buildFullSuiteVitestRunPlans([], process.cwd()).map((plan) => plan.config);
+
+      expect(configs).toContain("test/vitest/vitest.gateway-server.config.ts");
+      expect(configs).toContain("test/vitest/vitest.auto-reply-reply.config.ts");
+      expect(configs).toContain("test/vitest/vitest.extension-telegram.config.ts");
+      expect(configs).not.toContain("test/vitest/vitest.full-agentic.config.ts");
+      expect(configs).not.toContain("test/vitest/vitest.full-extensions.config.ts");
     } finally {
       if (previousParallel === undefined) {
         delete process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
@@ -2176,6 +2176,16 @@ describe("scripts/test-projects full-suite sharding", () => {
         delete process.env.OPENCLAW_TEST_PROJECTS_SERIAL;
       } else {
         process.env.OPENCLAW_TEST_PROJECTS_SERIAL = previousSerial;
+      }
+      if (previousCi === undefined) {
+        delete process.env.CI;
+      } else {
+        process.env.CI = previousCi;
+      }
+      if (previousActions === undefined) {
+        delete process.env.GITHUB_ACTIONS;
+      } else {
+        process.env.GITHUB_ACTIONS = previousActions;
       }
     }
   });
@@ -2241,12 +2251,74 @@ describe("scripts/test-projects full-suite sharding", () => {
     }
   });
 
+  it("expands conservative local worker runs to leaf project configs", () => {
+    const previousLeafShards = process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
+    const previousParallel = process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
+    const previousSerial = process.env.OPENCLAW_TEST_PROJECTS_SERIAL;
+    const previousCi = process.env.CI;
+    const previousActions = process.env.GITHUB_ACTIONS;
+    const previousVitestMaxWorkers = process.env.OPENCLAW_VITEST_MAX_WORKERS;
+    const previousTestWorkers = process.env.OPENCLAW_TEST_WORKERS;
+    delete process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
+    delete process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
+    delete process.env.OPENCLAW_TEST_PROJECTS_SERIAL;
+    delete process.env.CI;
+    delete process.env.GITHUB_ACTIONS;
+    process.env.OPENCLAW_VITEST_MAX_WORKERS = "1";
+    delete process.env.OPENCLAW_TEST_WORKERS;
+    try {
+      const configs = buildFullSuiteVitestRunPlans([], process.cwd()).map((plan) => plan.config);
+
+      expect(configs).toContain("test/vitest/vitest.gateway-server.config.ts");
+      expect(configs).toContain("test/vitest/vitest.auto-reply-reply.config.ts");
+      expect(configs).not.toContain("test/vitest/vitest.full-agentic.config.ts");
+    } finally {
+      if (previousLeafShards === undefined) {
+        delete process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
+      } else {
+        process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS = previousLeafShards;
+      }
+      if (previousParallel === undefined) {
+        delete process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
+      } else {
+        process.env.OPENCLAW_TEST_PROJECTS_PARALLEL = previousParallel;
+      }
+      if (previousSerial === undefined) {
+        delete process.env.OPENCLAW_TEST_PROJECTS_SERIAL;
+      } else {
+        process.env.OPENCLAW_TEST_PROJECTS_SERIAL = previousSerial;
+      }
+      if (previousCi === undefined) {
+        delete process.env.CI;
+      } else {
+        process.env.CI = previousCi;
+      }
+      if (previousActions === undefined) {
+        delete process.env.GITHUB_ACTIONS;
+      } else {
+        process.env.GITHUB_ACTIONS = previousActions;
+      }
+      if (previousVitestMaxWorkers === undefined) {
+        delete process.env.OPENCLAW_VITEST_MAX_WORKERS;
+      } else {
+        process.env.OPENCLAW_VITEST_MAX_WORKERS = previousVitestMaxWorkers;
+      }
+      if (previousTestWorkers === undefined) {
+        delete process.env.OPENCLAW_TEST_WORKERS;
+      } else {
+        process.env.OPENCLAW_TEST_WORKERS = previousTestWorkers;
+      }
+    }
+  });
+
   it("can skip the aggregate extension shard when CI runs dedicated extension shards", () => {
     const previous = process.env.OPENCLAW_TEST_SKIP_FULL_EXTENSIONS_SHARD;
     const previousParallel = process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
     const previousSerial = process.env.OPENCLAW_TEST_PROJECTS_SERIAL;
+    const previousCi = process.env.CI;
     delete process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
     process.env.OPENCLAW_TEST_PROJECTS_SERIAL = "1";
+    process.env.CI = "true";
     process.env.OPENCLAW_TEST_SKIP_FULL_EXTENSIONS_SHARD = "1";
     try {
       const configs = buildFullSuiteVitestRunPlans([], process.cwd()).map((plan) => plan.config);
@@ -2268,6 +2340,11 @@ describe("scripts/test-projects full-suite sharding", () => {
         delete process.env.OPENCLAW_TEST_PROJECTS_SERIAL;
       } else {
         process.env.OPENCLAW_TEST_PROJECTS_SERIAL = previousSerial;
+      }
+      if (previousCi === undefined) {
+        delete process.env.CI;
+      } else {
+        process.env.CI = previousCi;
       }
     }
   });
@@ -2640,6 +2717,53 @@ describe("scripts/test-projects Vitest stall watchdog", () => {
     );
     expect(spec?.env.OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS).toBe(
       DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_HEARTBEAT_MS,
+    );
+  });
+
+  it("extends the no-output watchdog for slow silent full-suite configs", () => {
+    const specs = applyDefaultVitestNoOutputTimeout(
+      [
+        {
+          config: "test/vitest/vitest.contracts-plugin.config.ts",
+          env: { PATH: "/usr/bin" },
+          includeFilePath: null,
+          includePatterns: null,
+          pnpmArgs: [],
+          watchMode: false,
+        },
+        {
+          config: "test/vitest/vitest.infra.config.ts",
+          env: { PATH: "/usr/bin" },
+          includeFilePath: null,
+          includePatterns: null,
+          pnpmArgs: [],
+          watchMode: false,
+        },
+        {
+          config: "test/vitest/vitest.gateway-core.config.ts",
+          env: { PATH: "/usr/bin" },
+          includeFilePath: null,
+          includePatterns: null,
+          pnpmArgs: [],
+          watchMode: false,
+        },
+        {
+          config: "test/vitest/vitest.extension-feishu.config.ts",
+          env: { PATH: "/usr/bin" },
+          includeFilePath: null,
+          includePatterns: null,
+          pnpmArgs: [],
+          watchMode: false,
+        },
+      ],
+      { env: { PATH: "/usr/bin" } },
+    );
+
+    expect(specs[0]?.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe("2400000");
+    expect(specs[1]?.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe("2400000");
+    expect(specs[2]?.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe("2400000");
+    expect(specs[3]?.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe(
+      DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS,
     );
   });
 

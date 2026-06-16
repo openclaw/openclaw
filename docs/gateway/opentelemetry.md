@@ -249,12 +249,18 @@ still be detected.
 OpenClaw classifies sessions by the work it can still observe:
 
 - `session.long_running`: active embedded work, model calls, or tool calls are
-  still making progress.
+  still making progress. Owned model calls that stay silent past
+  `diagnostics.stuckSessionWarnMs` also report as long-running before
+  `diagnostics.stuckSessionAbortMs` so slow or non-streaming model providers do
+  not look like stalled gateway sessions while they remain abort-observable.
 - `session.stalled`: active work exists, but the active run has not reported
-  recent progress. Stalled embedded runs stay observe-only at first, then
-  abort-drain after `diagnostics.stuckSessionAbortMs` with no progress so queued
-  turns behind the lane can resume. When unset, the abort threshold defaults to
-  the safer extended window of at least 5 minutes and 3x
+  recent progress. Owned model calls switch from `session.long_running` to
+  `session.stalled` at or after `diagnostics.stuckSessionAbortMs`; ownerless
+  stale model/tool activity is not treated as harmless long-running work.
+  Stalled embedded runs stay observe-only at first, then abort-drain after
+  `diagnostics.stuckSessionAbortMs` with no progress so queued turns behind the
+  lane can resume. When unset, the abort threshold defaults to the safer
+  extended window of at least 5 minutes and 3x
   `diagnostics.stuckSessionWarnMs`.
 - `session.stuck`: stale session bookkeeping with no active work, or an idle
   queued session with stale ownerless model/tool activity. This releases the

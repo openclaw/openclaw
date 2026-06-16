@@ -8,20 +8,30 @@ import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
-import { resolveStorePath, updateSessionStoreEntry } from "../../config/sessions.js";
+import { getRuntimeConfigSnapshot } from "../../config/config.js";
+import { resolveStorePath } from "../../config/sessions.js";
+import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import {
   resolveContextEngine,
   resolveContextEngineOwnerPluginId,
 } from "../../context-engine/registry.js";
-import { emitAgentPlanEvent, registerAgentRunContext } from "../../infra/agent-events.js";
+import {
+  assertAgentRunLifecycleGenerationCurrent,
+  captureAgentRunLifecycleGeneration,
+  claimAgentRunContext,
+  getAgentEventLifecycleGeneration,
+  getAgentRunContext,
+  registerAgentRunContext,
+  withAgentRunLifecycleGeneration,
+} from "../../infra/agent-events.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { freezeDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveProviderAuthProfileId } from "../../plugins/provider-runtime.js";
-import { enqueueCommandInLane } from "../../process/command-queue.js";
+import { enqueueCommandInLane, getCommandLaneSnapshot } from "../../process/command-queue.js";
 import type { CommandQueueEnqueueOptions } from "../../process/command-queue.types.js";
 import { createAgentHarnessTaskRuntimeScope } from "../../tasks/agent-harness-task-runtime-scope.js";
 import { resolveUserPath } from "../../utils.js";
@@ -31,11 +41,11 @@ import {
   retireSessionMcpRuntimeForSessionKey,
 } from "../agent-bundle-mcp-tools.js";
 import {
-  resolveAgentExecutionContract,
   resolveAgentDir,
   resolveSessionAgentIds,
   resolveAgentWorkspaceDir,
 } from "../agent-scope.js";
+import type { ToolOutcomeObservation } from "../agent-tools.before-tool-call.js";
 import { resolveProcessToolScopeKey } from "../agent-tools.js";
 import {
   type AuthProfileFailureReason,
@@ -53,6 +63,7 @@ import {
 } from "../command/session.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import {
+  classifyAssistantFailoverReason,
   classifyFailoverReason,
   extractObservedOverflowTokenCount,
   type FailoverReason,
@@ -62,6 +73,7 @@ import {
   isCompactionFailureError,
   isFailoverAssistantError,
   isFailoverErrorMessage,
+  isGenericUnknownStreamErrorMessage,
   isLikelyContextOverflowError,
   isRateLimitAssistantError,
   parseImageDimensionError,
@@ -88,6 +100,7 @@ import {
   resolveAuthProfileOrder,
   shouldPreferExplicitConfigApiKeyAuth,
 } from "../model-auth.js";
+import { resolveDefaultModelForAgent } from "../model-selection.js";
 import { resolveThinkingDefault } from "../model-thinking-default.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import {
@@ -97,6 +110,7 @@ import {
   resolveSelectedOpenAIRuntimeProvider,
 } from "../openai-routing.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
+import { hasOnlyAssistantReasoningContent } from "../replay-turn-classification.js";
 import { runAgentCleanupStep } from "../run-cleanup-timeout.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
@@ -124,10 +138,12 @@ import { resolveModelAsync } from "./model.js";
 import {
   createPostCompactionLoopGuard,
   PostCompactionLoopPersistedError,
-  type PostCompactionGuardObservation,
 } from "./post-compaction-loop-guard.js";
 import { createEmbeddedRunReplayState, observeReplayMetadata } from "./replay-state.js";
-import { handleAssistantFailover } from "./run/assistant-failover.js";
+import {
+  handleAssistantFailover,
+  isShortWindowRateLimitMessage,
+} from "./run/assistant-failover.js";
 import {
   createEmbeddedRunStageTracker,
   EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE,
@@ -169,19 +185,16 @@ import {
 import {
   DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT,
   DEFAULT_REASONING_ONLY_RETRY_LIMIT,
-  resolveAckExecutionFastPathInstruction,
+  hasAttemptTerminalState,
   resolveAttemptReplayMetadata,
-  extractPlanningOnlyPlanDetails,
   resolveEmptyResponseRetryInstruction,
   resolveIncompleteTurnPayloadText,
-  resolvePlanningOnlyRetryLimit,
-  resolvePlanningOnlyRetryInstruction,
   resolveReasoningOnlyRetryInstruction,
   resolveSilentToolResultReplyPayload,
-  STRICT_AGENTIC_BLOCKED_TEXT,
   resolveReplayInvalidFlag,
   resolveRunLivenessState,
   shouldRetryMissingAssistantTurn,
+  shouldRetrySilentErrorAssistantTurn,
   shouldTreatEmptyAssistantReplyAsSilent,
 } from "./run/incomplete-turn.js";
 import type { RunEmbeddedAgentParams } from "./run/params.js";
@@ -203,7 +216,6 @@ import type {
   EmbeddedAgentRunResult,
   TraceAttempt,
   ToolSummaryTrace,
-  EmbeddedRunLivenessState,
 } from "./types.js";
 import { createUsageAccumulator, mergeUsageIntoAccumulator } from "./usage-accumulator.js";
 
@@ -268,12 +280,12 @@ async function resetNoRealConversationTokenSnapshot(params: {
   }
   const storePath = resolveStorePath(params.config?.session?.store, { agentId: params.agentId });
   try {
-    await updateSessionStoreEntry({
-      storePath,
-      sessionKey: params.sessionKey,
-      skipMaintenance: true,
-      takeCacheOwnership: true,
-      update: async () => ({
+    await updateSessionEntry(
+      {
+        storePath,
+        sessionKey: params.sessionKey,
+      },
+      async () => ({
         totalTokens: 0,
         totalTokensFresh: true,
         inputTokens: undefined,
@@ -283,7 +295,11 @@ async function resetNoRealConversationTokenSnapshot(params: {
         contextBudgetStatus: undefined,
         updatedAt: Date.now(),
       }),
-    });
+      {
+        skipMaintenance: true,
+        takeCacheOwnership: true,
+      },
+    );
   } catch (err) {
     log.warn(
       `[context-overflow-precheck] failed to reset stale context snapshot for ` +
@@ -408,10 +424,26 @@ function createScopedAuthProfileStore(
       return credential ? [[profileId, credential] as const] : [];
     }),
   );
+  const scopedRuntimeExternalProfileIds = (store.runtimeExternalProfileIds ?? []).filter(
+    (profileId) => scopedProfiles[profileId],
+  );
+  const scopedRuntimePersistedProfileIds = (store.runtimePersistedProfileIds ?? []).filter(
+    (profileId) => scopedProfiles[profileId],
+  );
   return Object.keys(scopedProfiles).length > 0
     ? {
         version: store.version,
         profiles: scopedProfiles,
+        ...(scopedRuntimePersistedProfileIds.length > 0
+          ? { runtimePersistedProfileIds: scopedRuntimePersistedProfileIds }
+          : {}),
+        ...(scopedRuntimeExternalProfileIds.length > 0 ||
+        store.runtimeExternalProfileIdsAuthoritative === true
+          ? { runtimeExternalProfileIds: scopedRuntimeExternalProfileIds }
+          : {}),
+        ...(store.runtimeExternalProfileIdsAuthoritative === true
+          ? { runtimeExternalProfileIdsAuthoritative: true }
+          : {}),
       }
     : createEmptyAuthProfileStore();
 }
@@ -496,10 +528,32 @@ function buildHandledReplyPayloads(reply?: ReplyPayload) {
   ];
 }
 
-export async function runEmbeddedAgent(
+export function runEmbeddedAgent(
+  paramsInput: RunEmbeddedAgentParams,
+): Promise<EmbeddedAgentRunResult> {
+  const requestedProvider = normalizeOptionalString(paramsInput.provider);
+  const requestedModel = normalizeOptionalString(paramsInput.model);
+  const needsConfiguredDefault = !paramsInput.config && !requestedProvider && !requestedModel;
+  const config =
+    paramsInput.config ??
+    (needsConfiguredDefault ? (getRuntimeConfigSnapshot() ?? undefined) : undefined);
+  const lifecycleGeneration =
+    paramsInput.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(paramsInput.runId);
+  return withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
+    runEmbeddedAgentInternal({
+      ...paramsInput,
+      config,
+      lifecycleGeneration,
+    }),
+  );
+}
+
+async function runEmbeddedAgentInternal(
   paramsInput: RunEmbeddedAgentParams,
 ): Promise<EmbeddedAgentRunResult> {
   let params = paramsInput;
+  let lifecycleGeneration = params.lifecycleGeneration!;
+  const queuedLifecycleGeneration = getAgentEventLifecycleGeneration();
   // Resolve sessionKey early so all downstream consumers (hooks, LCM, compaction)
   // receive a non-null key even when callers omit it. See #60552.
   const effectiveSessionKey = backfillSessionKey({
@@ -519,39 +573,6 @@ export async function runEmbeddedAgent(
   const noteLaneTaskProgress = () => {
     laneTaskProgressAtMs = Date.now();
   };
-  const withLaneTimeout = (opts?: CommandQueueEnqueueOptions) =>
-    withEmbeddedRunLaneTimeout(
-      {
-        ...opts,
-        taskTimeoutProgressAtMs: () => laneTaskProgressAtMs,
-      },
-      laneTaskTimeoutMs,
-    );
-  const enqueueGlobal = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) => {
-    const globalOpts: CommandQueueEnqueueOptions = {
-      ...opts,
-      priority: sessionQueuePriority,
-    };
-    return params.enqueue
-      ? params.enqueue(task, withLaneTimeout(globalOpts))
-      : enqueueCommandInLane(globalLane, task, withLaneTimeout(globalOpts));
-  };
-  const enqueueSession = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) => {
-    const sessionOpts: CommandQueueEnqueueOptions = { ...opts, priority: sessionQueuePriority };
-    return params.enqueue
-      ? params.enqueue(task, sessionOpts)
-      : enqueueCommandInLane(sessionLane, task, sessionOpts);
-  };
-  const channelHint = params.messageChannel ?? params.messageProvider;
-  const resolvedToolResultFormat =
-    params.toolResultFormat ??
-    (channelHint
-      ? isMarkdownCapableMessageChannel(channelHint)
-        ? "markdown"
-        : "plain"
-      : "markdown");
-  const isProbeSession = params.sessionId?.startsWith("probe-") ?? false;
-
   const throwIfAborted = () => {
     if (!params.abortSignal?.aborted) {
       return;
@@ -567,6 +588,103 @@ export async function runEmbeddedAgent(
     abortErr.name = "AbortError";
     throw abortErr;
   };
+  const withLaneTimeout = (opts?: CommandQueueEnqueueOptions) =>
+    withEmbeddedRunLaneTimeout(
+      {
+        ...opts,
+        taskTimeoutProgressAtMs: () => laneTaskProgressAtMs,
+      },
+      laneTaskTimeoutMs,
+    );
+  const withRunLaneWait = (opts?: CommandQueueEnqueueOptions) => {
+    if (!opts?.onWait && !params.onLaneWait) {
+      return opts;
+    }
+    return {
+      ...opts,
+      onWait: (waitMs, queuedAhead) => {
+        opts?.onWait?.(waitMs, queuedAhead);
+        params.onLaneWait?.({ waitMs, queuedAhead, waiting: true });
+      },
+    } satisfies CommandQueueEnqueueOptions;
+  };
+  const noteLaneWaitIfBusy = (lane: string) => {
+    if (!params.onLaneWait) {
+      return;
+    }
+    const snapshot = getCommandLaneSnapshot(lane);
+    if (snapshot.queuedCount > 0 || snapshot.activeCount >= snapshot.maxConcurrent) {
+      params.onLaneWait({
+        waitMs: 0,
+        queuedAhead: snapshot.queuedCount + snapshot.activeCount,
+        waiting: true,
+      });
+    }
+  };
+  const enqueueGlobal = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) => {
+    const globalOpts: CommandQueueEnqueueOptions = {
+      ...opts,
+      priority: sessionQueuePriority,
+    };
+    const taskWithCurrentLifecycle = () => {
+      params.onLaneWait?.({ waitMs: 0, queuedAhead: 0, waiting: false });
+      throwIfAborted();
+      const currentLifecycleGeneration = getAgentEventLifecycleGeneration();
+      const existingContext = getAgentRunContext(params.runId);
+      if (lifecycleGeneration !== currentLifecycleGeneration) {
+        const wasQueuedBeforeRotation = queuedLifecycleGeneration === lifecycleGeneration;
+        const canResumeAcrossRotation = sessionQueuePriority === "foreground";
+        const newerSameIdExecutionOwnsContext =
+          existingContext?.lifecycleGeneration === currentLifecycleGeneration;
+        if (
+          !wasQueuedBeforeRotation ||
+          !canResumeAcrossRotation ||
+          newerSameIdExecutionOwnsContext
+        ) {
+          assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
+        }
+        lifecycleGeneration = currentLifecycleGeneration;
+        params = { ...params, lifecycleGeneration };
+      }
+      claimAgentRunContext(params.runId, {
+        ...existingContext,
+        sessionKey: params.sessionKey ?? existingContext?.sessionKey,
+        sessionId: params.sessionId ?? existingContext?.sessionId,
+        lifecycleGeneration,
+      });
+      return withAgentRunLifecycleGeneration(lifecycleGeneration, task);
+    };
+    if (params.enqueue) {
+      return params.enqueue(taskWithCurrentLifecycle, withLaneTimeout(withRunLaneWait(globalOpts)));
+    }
+    noteLaneWaitIfBusy(globalLane);
+    return enqueueCommandInLane(
+      globalLane,
+      taskWithCurrentLifecycle,
+      withLaneTimeout(withRunLaneWait(globalOpts)),
+    );
+  };
+  const enqueueSession = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) => {
+    const sessionOpts: CommandQueueEnqueueOptions = { ...opts, priority: sessionQueuePriority };
+    const taskWithLaneAdmission = () => {
+      params.onLaneWait?.({ waitMs: 0, queuedAhead: 0, waiting: false });
+      return task();
+    };
+    if (params.enqueue) {
+      return params.enqueue(taskWithLaneAdmission, withRunLaneWait(sessionOpts));
+    }
+    noteLaneWaitIfBusy(sessionLane);
+    return enqueueCommandInLane(sessionLane, taskWithLaneAdmission, withRunLaneWait(sessionOpts));
+  };
+  const channelHint = params.messageChannel ?? params.messageProvider;
+  const resolvedToolResultFormat =
+    params.toolResultFormat ??
+    (channelHint
+      ? isMarkdownCapableMessageChannel(channelHint)
+        ? "markdown"
+        : "plain"
+      : "markdown");
+  const isProbeSession = params.sessionId?.startsWith("probe-") ?? false;
 
   throwIfAborted();
 
@@ -609,7 +727,7 @@ export async function runEmbeddedAgent(
           log.trace(message);
         }
       };
-      params.onExecutionStarted?.();
+      params.onExecutionStarted?.({ lifecycleGeneration });
       notifyExecutionPhase("runner_entered");
       const workspaceResolution = resolveRunWorkspaceDir({
         workspaceDir: params.workspaceDir,
@@ -640,8 +758,17 @@ export async function runEmbeddedAgent(
       startupStages.mark("runtime-plugins");
       notifyExecutionPhase("runtime_plugins");
 
-      let provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
-      let modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
+      const requestedProvider = normalizeOptionalString(params.provider);
+      const requestedModel = normalizeOptionalString(params.model);
+      const configuredDefault =
+        !requestedProvider && !requestedModel
+          ? resolveDefaultModelForAgent({
+              cfg: params.config ?? {},
+              agentId: workspaceResolution.agentId,
+            })
+          : undefined;
+      let provider = requestedProvider ?? configuredDefault?.provider ?? DEFAULT_PROVIDER;
+      let modelId = requestedModel ?? configuredDefault?.model ?? DEFAULT_MODEL;
       const agentDir =
         params.agentDir ?? resolveAgentDir(params.config ?? {}, workspaceResolution.agentId);
       const normalizedSessionKey = params.sessionKey?.trim();
@@ -1181,10 +1308,6 @@ export async function runEmbeddedAgent(
         config: params.config,
         agentId: params.agentId,
       });
-      const configuredExecutionContract = resolveAgentExecutionContract(
-        params.config,
-        sessionAgentId,
-      );
       const strictAgenticActive = isStrictAgenticExecutionContractActive({
         config: params.config,
         sessionKey: params.sessionKey,
@@ -1193,8 +1316,6 @@ export async function runEmbeddedAgent(
         modelId,
       });
       const executionContract = strictAgenticActive ? "strict-agentic" : "default";
-      const configuredExecutionContractForLog = configuredExecutionContract ?? "unspecified";
-      const maxPlanningOnlyRetryAttempts = resolvePlanningOnlyRetryLimit(executionContract);
       const maxReasoningOnlyRetryAttempts = DEFAULT_REASONING_ONLY_RETRY_LIMIT;
       const maxEmptyResponseRetryAttempts = DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT;
 
@@ -1218,7 +1339,6 @@ export async function runEmbeddedAgent(
       let runLoopIterations = 0;
       let overloadProfileRotations = 0;
       let consecutiveSameModelRateLimitRetries = 0;
-      let planningOnlyRetryAttempts = 0;
       let reasoningOnlyRetryAttempts = 0;
       let emptyResponseRetryAttempts = 0;
       let compactionContinuationRetryAttempts = 0;
@@ -1244,9 +1364,24 @@ export async function runEmbeddedAgent(
       );
       let postCompactionAbortController: AbortController | undefined;
       let postCompactionAbortError: PostCompactionLoopPersistedError | undefined;
-      const observePostCompactionToolOutcome = (
-        observation: PostCompactionGuardObservation,
-      ): void => {
+      const attemptTerminalToolPresentation = {
+        ordinal: -1,
+        value: undefined as string | undefined,
+      };
+      let nextToolOutcomeOrdinal = 0;
+      const allocateToolOutcomeOrdinal = (): number => nextToolOutcomeOrdinal++;
+      const readAttemptTerminalToolPresentation = (): string | undefined =>
+        attemptTerminalToolPresentation.value;
+      const observeToolOutcome = (observation: ToolOutcomeObservation): void => {
+        const observationOrdinal =
+          observation.toolCallOrdinal ?? attemptTerminalToolPresentation.ordinal + 1;
+        if (observationOrdinal >= attemptTerminalToolPresentation.ordinal) {
+          attemptTerminalToolPresentation.ordinal = observationOrdinal;
+          attemptTerminalToolPresentation.value = observation.terminalPresentation;
+        }
+        if (observation.presentationOnly) {
+          return;
+        }
         const verdict = postCompactionGuard.observe(observation);
         if (verdict.shouldAbort) {
           postCompactionAbortError ??= PostCompactionLoopPersistedError.fromVerdict(verdict);
@@ -1254,16 +1389,10 @@ export async function runEmbeddedAgent(
         }
       };
       let lastRetryFailoverReason: FailoverReason | null = null;
-      let planningOnlyRetryInstruction: string | null = null;
       let reasoningOnlyRetryInstruction: string | null = null;
       let emptyResponseRetryInstruction: string | null = null;
       let compactionContinuationRetryInstruction: string | null = null;
       let nextAttemptPromptOverride: string | null = null;
-      const ackExecutionFastPathInstruction = resolveAckExecutionFastPathInstruction({
-        provider,
-        modelId,
-        prompt: params.prompt,
-      });
       let rateLimitProfileRotations = 0;
       let timeoutCompactionAttempts = 0;
       let codexAppServerRecoveryRetries = 0;
@@ -1281,6 +1410,20 @@ export async function runEmbeddedAgent(
       const rateLimitProfileRotationLimit = resolveRateLimitProfileRotationLimit(params.config);
       let activeSessionId = params.sessionId;
       let activeSessionFile = params.sessionFile;
+      const adoptActiveSessionId = (nextSessionId: string | undefined) => {
+        if (!nextSessionId || nextSessionId === activeSessionId) {
+          return;
+        }
+        activeSessionId = nextSessionId;
+        // Keep every active-run owner on the rotated identity. Restart recovery
+        // uses the reply registry while lifecycle persistence uses run context.
+        params.replyOperation?.updateSessionId(activeSessionId);
+        params.onSessionIdChanged?.(activeSessionId);
+        registerAgentRunContext(params.runId, {
+          sessionId: activeSessionId,
+          lifecycleGeneration,
+        });
+      };
       let suppressNextUserMessagePersistence = params.suppressNextUserMessagePersistence ?? false;
       // The embedded agent owns JSONL persistence; this marker lets the outer retry avoid
       // replaying the same inbound channel message after overflow compaction.
@@ -1353,11 +1496,12 @@ export async function runEmbeddedAgent(
       };
       const resolveRunAuthProfileFailureReason = (
         failoverReason: FailoverReason | null,
-        opts?: { providerStarted?: boolean },
+        opts?: { providerStarted?: boolean; transientRateLimit?: boolean },
       ) =>
         resolveAuthProfileFailureReason({
           failoverReason,
           providerStarted: opts?.providerStarted,
+          transientRateLimit: opts?.transientRateLimit,
           policy: params.authProfileFailurePolicy,
         });
       const maybeBackoffBeforeOverloadFailover = async (reason: FailoverReason | null) => {
@@ -1427,13 +1571,7 @@ export async function runEmbeddedAgent(
         ) => {
           const nextSessionId = compactResult.result?.sessionId;
           const nextSessionFile = compactResult.result?.sessionFile;
-          if (nextSessionId && nextSessionId !== activeSessionId) {
-            activeSessionId = nextSessionId;
-            // Keep the run context's sessionId tracking the live session so
-            // lifecycle persistence isn't treated as stale after a legitimate
-            // mid-run compaction rotation (#88538).
-            registerAgentRunContext(params.runId, { sessionId: activeSessionId });
-          }
+          adoptActiveSessionId(nextSessionId);
           if (nextSessionFile && nextSessionFile !== activeSessionFile) {
             activeSessionFile = nextSessionFile;
           }
@@ -1555,8 +1693,6 @@ export async function runEmbeddedAgent(
             (provider === "anthropic" ? scrubAnthropicRefusalMagic(params.prompt) : params.prompt);
           nextAttemptPromptOverride = null;
           const promptAdditions = [
-            ackExecutionFastPathInstruction,
-            planningOnlyRetryInstruction,
             reasoningOnlyRetryInstruction,
             emptyResponseRetryInstruction,
             compactionContinuationRetryInstruction,
@@ -1646,6 +1782,7 @@ export async function runEmbeddedAgent(
             senderUsername: params.senderUsername,
             senderE164: params.senderE164,
             currentChannelId: params.currentChannelId,
+            currentMessagingTarget: params.currentMessagingTarget,
             currentThreadTs: params.currentThreadTs,
             currentMessageId: params.currentMessageId,
             currentInboundAudio: params.currentInboundAudio,
@@ -1706,7 +1843,8 @@ export async function runEmbeddedAgent(
             agentId: workspaceResolution.agentId,
             beforeAgentStartResult,
             thinkLevel,
-            onToolOutcome: observePostCompactionToolOutcome,
+            onToolOutcome: observeToolOutcome,
+            allocateToolOutcomeOrdinal,
             onRunProgress: notifyRunProgress,
             fastMode: params.fastMode,
             verboseLevel: params.verboseLevel,
@@ -1718,6 +1856,7 @@ export async function runEmbeddedAgent(
             timeoutMs: params.timeoutMs,
             runTimeoutOverrideMs: params.runTimeoutOverrideMs,
             runId: params.runId,
+            lifecycleGeneration,
             abortSignal: attemptAbortController.signal,
             replyOperation: params.replyOperation,
             shouldEmitToolResult: params.shouldEmitToolResult,
@@ -1731,7 +1870,12 @@ export async function runEmbeddedAgent(
             onReasoningStream: params.onReasoningStream,
             onReasoningEnd: params.onReasoningEnd,
             onToolResult: params.onToolResult,
+            onAgentToolResult: params.onAgentToolResult,
             onAgentEvent: params.onAgentEvent,
+            deferTerminalLifecycle:
+              params.deferTerminalLifecycle ?? params.deferTerminalLifecycleEnd,
+            deferTerminalLifecycleEnd:
+              params.deferTerminalLifecycle ?? params.deferTerminalLifecycleEnd,
             onExecutionPhase: params.onExecutionPhase,
             extraSystemPrompt: params.extraSystemPrompt,
             sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
@@ -1746,6 +1890,7 @@ export async function runEmbeddedAgent(
             bootstrapContextRunKind: params.bootstrapContextRunKind,
             jobId: params.jobId,
             toolsAllow: params.toolsAllow,
+            cleanupBundleMcpOnRunEnd: params.cleanupBundleMcpOnRunEnd,
             disableMessageTool: params.disableMessageTool,
             forceMessageTool: params.forceMessageTool,
             enableHeartbeatTool: params.enableHeartbeatTool,
@@ -1798,11 +1943,7 @@ export async function runEmbeddedAgent(
             attempt.setTerminalLifecycleMeta?.({ ...meta, aborted });
           };
           const timedOutDuringToolExecution = attempt.timedOutDuringToolExecution ?? false;
-          if (sessionIdUsed && sessionIdUsed !== activeSessionId) {
-            activeSessionId = sessionIdUsed;
-            // Track the live session for lifecycle persistence identity (#88538).
-            registerAgentRunContext(params.runId, { sessionId: activeSessionId });
-          }
+          adoptActiveSessionId(sessionIdUsed);
           if (sessionFileUsed && sessionFileUsed !== activeSessionFile) {
             activeSessionFile = sessionFileUsed;
           }
@@ -1885,11 +2026,13 @@ export async function runEmbeddedAgent(
           if (attempt.contextBudgetStatus) {
             lastContextBudgetStatus = attempt.contextBudgetStatus;
           }
+          // Transcript fallback can outlive a provider or alias transition.
+          // Reuse it only when it reports the effective model for this attempt.
           const sessionAssistantForCandidate =
             !currentAttemptAssistant &&
             !isAssistantForModelRef(sessionLastAssistant, {
-              provider,
-              model: modelId,
+              provider: effectiveModel.provider,
+              model: effectiveModel.id,
             })
               ? undefined
               : sessionLastAssistant;
@@ -2639,6 +2782,8 @@ export async function runEmbeddedAgent(
               promptFailoverReason,
               {
                 providerStarted: promptErrorSource === "prompt",
+                transientRateLimit:
+                  promptFailoverReason === "rate_limit" && isShortWindowRateLimitMessage(errorText),
               },
             );
             const promptFailoverFailure =
@@ -2797,12 +2942,7 @@ export async function runEmbeddedAgent(
           const rateLimitFailure = isRateLimitAssistantError(assistantForFailover);
           const billingFailure = isBillingAssistantError(assistantForFailover);
           const failoverFailure = isFailoverAssistantError(assistantForFailover);
-          const assistantFailoverReason = classifyFailoverReason(
-            assistantForFailover?.errorMessage ?? "",
-            {
-              provider: assistantForFailover?.provider,
-            },
-          );
+          const assistantFailoverReason = classifyAssistantFailoverReason(assistantForFailover);
           const assistantProviderStarted =
             Boolean(currentAttemptAssistant?.provider) ||
             idleTimedOut ||
@@ -2814,12 +2954,52 @@ export async function runEmbeddedAgent(
             assistantProfileFailoverReason,
             {
               providerStarted: assistantProviderStarted,
+              transientRateLimit:
+                assistantProfileFailoverReason === "rate_limit" &&
+                isShortWindowRateLimitMessage(assistantForFailover?.errorMessage),
             },
           );
           const cloudCodeAssistFormatError = attempt.cloudCodeAssistFormatError;
           const imageDimensionError = parseImageDimensionError(
             assistantForFailover?.errorMessage ?? "",
           );
+          // The shared runtime wraps interrupted streams as a timeout. Retry that
+          // wrapper only for reasoning-only output so ordinary timeouts keep failover.
+          const genericUnknownReasoningError =
+            assistantFailoverReason === "timeout" &&
+            isGenericUnknownStreamErrorMessage(assistantForFailover?.errorMessage ?? "") &&
+            Boolean(assistantForFailover && hasOnlyAssistantReasoningContent(assistantForFailover));
+          const silentErrorRetryReason =
+            assistantFailoverReason === null ||
+            genericUnknownReasoningError ||
+            assistantFailoverReason === "no_error_details" ||
+            assistantFailoverReason === "unclassified" ||
+            assistantFailoverReason === "unknown";
+          // Retry replay-safe non-visible provider errors before assistant
+          // failover surfaces them as terminal provider failures.
+          if (
+            !authFailure &&
+            !rateLimitFailure &&
+            !billingFailure &&
+            !cloudCodeAssistFormatError &&
+            !imageDimensionError &&
+            !aborted &&
+            !promptError &&
+            !timedOut &&
+            silentErrorRetryReason &&
+            shouldRetrySilentErrorAssistantTurn({ attempt, assistant: assistantForFailover }) &&
+            emptyErrorRetries < MAX_EMPTY_ERROR_RETRIES
+          ) {
+            emptyErrorRetries += 1;
+            log.warn(
+              `[empty-error-retry] stopReason=error non-visible-output; resubmitting ` +
+                `attempt=${emptyErrorRetries}/${MAX_EMPTY_ERROR_RETRIES} ` +
+                `provider=${assistantForFailover?.provider ?? provider} ` +
+                `model=${assistantForFailover?.model ?? model.id} ` +
+                `sessionKey=${params.sessionKey ?? params.sessionId}`,
+            );
+            continue;
+          }
           // Capture the failing profile before auth-profile rotation mutates `lastProfileId`.
           const failedAssistantProfileId = lastProfileId;
           const logAssistantFailoverDecision = createFailoverDecisionLogger({
@@ -3034,6 +3214,8 @@ export async function runEmbeddedAgent(
             suppressToolErrorWarnings: params.suppressToolErrorWarnings,
             inlineToolResultsAllowed: false,
             didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+            didDeliverSourceReplyViaMessageTool:
+              attempt.didDeliverSourceReplyViaMessageTool === true,
             messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
             sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
             agentId: params.agentId,
@@ -3193,17 +3375,6 @@ export async function runEmbeddedAgent(
             timedOut,
             attempt,
           });
-          const nextPlanningOnlyRetryInstruction = emptyAssistantReplyIsSilent
-            ? null
-            : resolvePlanningOnlyRetryInstruction({
-                provider,
-                modelId,
-                executionContract,
-                prompt: params.prompt,
-                aborted,
-                timedOut,
-                attempt,
-              });
           const nextReasoningOnlyRetryInstruction = emptyAssistantReplyIsSilent
             ? null
             : resolveReasoningOnlyRetryInstruction({
@@ -3228,50 +3399,6 @@ export async function runEmbeddedAgent(
                 attempt,
               });
           if (
-            nextPlanningOnlyRetryInstruction &&
-            planningOnlyRetryAttempts < maxPlanningOnlyRetryAttempts
-          ) {
-            const planningOnlyText = (attempt.assistantTexts ?? []).join("\n\n").trim();
-            const planDetails = extractPlanningOnlyPlanDetails(planningOnlyText);
-            if (planDetails) {
-              emitAgentPlanEvent({
-                runId: params.runId,
-                ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-                data: {
-                  phase: "update",
-                  title: "Assistant proposed a plan",
-                  explanation: planDetails.explanation,
-                  steps: planDetails.steps,
-                  source: "planning_only_retry",
-                },
-              });
-              void params.onAgentEvent?.({
-                stream: "plan",
-                data: {
-                  phase: "update",
-                  title: "Assistant proposed a plan",
-                  explanation: planDetails.explanation,
-                  steps: planDetails.steps,
-                  source: "planning_only_retry",
-                },
-              });
-            }
-            planningOnlyRetryAttempts += 1;
-            planningOnlyRetryInstruction = nextPlanningOnlyRetryInstruction;
-            const planningOnlyRetryLogPrefix =
-              executionContract === "strict-agentic"
-                ? "strict-agentic execution contract triggered"
-                : "planning-only turn detected";
-            log.warn(
-              `${planningOnlyRetryLogPrefix}: runId=${params.runId} sessionId=${params.sessionId} ` +
-                `provider=${provider}/${modelId} harness=${sanitizeForLog(agentHarness.id)} ` +
-                `contract=${executionContract} configured=${configuredExecutionContractForLog} — retrying ` +
-                `${planningOnlyRetryAttempts}/${maxPlanningOnlyRetryAttempts} with act-now steer`,
-            );
-            continue;
-          }
-          if (
-            !nextPlanningOnlyRetryInstruction &&
             nextReasoningOnlyRetryInstruction &&
             reasoningOnlyRetryAttempts < maxReasoningOnlyRetryAttempts
           ) {
@@ -3285,7 +3412,6 @@ export async function runEmbeddedAgent(
             continue;
           }
           const reasoningOnlyRetriesExhausted =
-            !nextPlanningOnlyRetryInstruction &&
             nextReasoningOnlyRetryInstruction &&
             reasoningOnlyRetryAttempts >= maxReasoningOnlyRetryAttempts;
           if (
@@ -3307,7 +3433,6 @@ export async function runEmbeddedAgent(
             continue;
           }
           if (
-            !nextPlanningOnlyRetryInstruction &&
             !nextReasoningOnlyRetryInstruction &&
             nextEmptyResponseRetryInstruction &&
             emptyResponseRetryAttempts < maxEmptyResponseRetryAttempts
@@ -3330,6 +3455,18 @@ export async function runEmbeddedAgent(
                 timedOut,
                 attempt,
               });
+          const incompleteTurnFallbackSafe = Boolean(
+            incompleteTurnText &&
+            !aborted &&
+            !timedOut &&
+            !promptError &&
+            !attempt.lastToolError &&
+            !hasAttemptTerminalState(attempt) &&
+            !accumulatedReplayState.hadPotentialSideEffects,
+          );
+          const terminalToolPresentation = incompleteTurnFallbackSafe
+            ? readAttemptTerminalToolPresentation()
+            : undefined;
           if (
             !emptyAssistantReplyIsSilent &&
             attemptCompactionCount > 0 &&
@@ -3341,7 +3478,7 @@ export async function runEmbeddedAgent(
             !attempt.yieldDetected &&
             !attempt.didSendDeterministicApprovalPrompt &&
             !attempt.lastToolError &&
-            !resolveAttemptReplayMetadata(attempt).hadPotentialSideEffects &&
+            !accumulatedReplayState.hadPotentialSideEffects &&
             compactionContinuationRetryAttempts < 1
           ) {
             compactionContinuationRetryAttempts += 1;
@@ -3360,73 +3497,20 @@ export async function runEmbeddedAgent(
                 `provider=${activeErrorContext.provider}/${activeErrorContext.model} attempts=${reasoningOnlyRetryAttempts}/${maxReasoningOnlyRetryAttempts} — surfacing incomplete-turn error`,
             );
           }
-          if (!incompleteTurnText && nextPlanningOnlyRetryInstruction && strictAgenticActive) {
-            log.warn(
-              `strict-agentic run exhausted planning-only retries: runId=${params.runId} sessionId=${params.sessionId} ` +
-                `provider=${provider}/${modelId} configured=${configuredExecutionContractForLog} — surfacing blocked state`,
-            );
-            // Criterion 4 of the GPT-5.4 parity gate requires every terminal
-            // exit path to emit an explicit livenessState + replayInvalid so
-            // downstream observers never see "silent disappearance". Every
-            // other hard-error terminal branch in this file uses "blocked"
-            // for its livenessState (role ordering, image size, schema
-            // error, compaction timeout, aborted-with-no-payloads). Match
-            // that convention here so lifecycle consumers treat an
-            // isError:true strict-agentic-blocked payload the same way they
-            // treat any other error-terminal payload. Replay validity is
-            // delegated to the shared resolver because the plan-only
-            // transcript itself is replay-safe even though the run is
-            // terminal.
-            const replayInvalid = resolveReplayInvalidForAttempt(null);
-            const livenessState: EmbeddedRunLivenessState = "blocked";
-            setTerminalLifecycleMeta({
-              replayInvalid,
-              livenessState,
-            });
-            return {
-              payloads: [
-                {
-                  text: STRICT_AGENTIC_BLOCKED_TEXT,
-                  isError: true,
-                },
-              ],
-              meta: {
-                durationMs: Date.now() - started,
-                agentMeta,
-                aborted,
-                systemPromptReport: attempt.systemPromptReport,
-                finalPromptText: attempt.finalPromptText,
-                finalAssistantVisibleText,
-                finalAssistantRawText,
-                replayInvalid,
-                livenessState,
-                toolSummary: attemptToolSummary,
-                ...(failureSignal ? { failureSignal } : {}),
-                agentHarnessResultClassification: attempt.agentHarnessResultClassification,
-              },
-              didSendViaMessagingTool: attempt.didSendViaMessagingTool,
-              didDeliverSourceReplyViaMessageTool:
-                attempt.didDeliverSourceReplyViaMessageTool === true,
-              didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
-              messagingToolSentTexts: attempt.messagingToolSentTexts,
-              messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
-              messagingToolSentTargets: attempt.messagingToolSentTargets,
-              messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
-              heartbeatToolResponse: attempt.heartbeatToolResponse,
-              successfulCronAdds: attempt.successfulCronAdds,
-              acceptedSessionSpawns: attempt.acceptedSessionSpawns,
-            };
-          }
           if (reasoningOnlyRetriesExhausted && !finalAssistantVisibleText) {
-            const replayInvalid = resolveReplayInvalidForAttempt(
-              "⚠️ Agent couldn't generate a response. Please try again.",
-            );
+            const incompletePayloadText = terminalToolPresentation
+              ? terminalToolPresentation.concat(
+                  "\n\n",
+                  "⚠️ Agent couldn't generate a response. Please try again.",
+                )
+              : "⚠️ Agent couldn't generate a response. Please try again.";
+            const replayInvalid = resolveReplayInvalidForAttempt(incompletePayloadText);
             const livenessState = resolveRunLivenessState({
               payloadCount: 0,
               aborted,
               timedOut,
               attempt,
-              incompleteTurnText: "⚠️ Agent couldn't generate a response. Please try again.",
+              incompleteTurnText: incompletePayloadText,
             });
             setTerminalLifecycleMeta({
               replayInvalid,
@@ -3442,7 +3526,7 @@ export async function runEmbeddedAgent(
             return {
               payloads: [
                 {
-                  text: "⚠️ Agent couldn't generate a response. Please try again.",
+                  text: incompletePayloadText,
                   isError: true,
                 },
               ],
@@ -3456,6 +3540,12 @@ export async function runEmbeddedAgent(
                 finalAssistantRawText,
                 replayInvalid,
                 livenessState,
+                error: {
+                  kind: "incomplete_turn",
+                  message: "Agent couldn't generate a response.",
+                  fallbackSafe: incompleteTurnFallbackSafe,
+                  terminalPresentation: terminalToolPresentation !== undefined,
+                },
                 toolSummary: attemptToolSummary,
                 ...(failureSignal ? { failureSignal } : {}),
                 agentHarnessResultClassification: attempt.agentHarnessResultClassification,
@@ -3474,7 +3564,6 @@ export async function runEmbeddedAgent(
             };
           }
           if (
-            !nextPlanningOnlyRetryInstruction &&
             !nextReasoningOnlyRetryInstruction &&
             nextEmptyResponseRetryInstruction &&
             emptyResponseRetryAttempts >= maxEmptyResponseRetryAttempts
@@ -3483,47 +3572,6 @@ export async function runEmbeddedAgent(
               `empty response retries exhausted: runId=${params.runId} sessionId=${params.sessionId} ` +
                 `provider=${activeErrorContext.provider}/${activeErrorContext.model} attempts=${emptyResponseRetryAttempts}/${maxEmptyResponseRetryAttempts} — surfacing incomplete-turn error`,
             );
-          }
-          // ── silent-error retry ────────────────────────────────────────────
-          // Observed with ollama/glm-5.1: a turn can end with stopReason="error"
-          // and zero output tokens AND empty content after a successful
-          // tool-call sequence, producing no user-visible text at all. This
-          // path is narrower than the empty-response continuation retry:
-          // same prompt, same session transcript (tool results already
-          // captured), no instruction injection. Placed before the
-          // incompleteTurnText return so it actually gets a chance to fire.
-          //
-          // Content-empty guard: a reasoning-only error (content has thinking
-          // blocks) is a distinct failure mode handled elsewhere; only retry
-          // when the assistant truly produced nothing.
-          //
-          // Side-effect guard: if the failed attempt already recorded potential
-          // side effects (messaging tool sent, cron add, mutating tool
-          // call that wasn't round-tripped as replay-safe), resubmission can
-          // duplicate those actions. Mirror the gate the other retry resolvers
-          // use (resolveEmptyResponseRetryInstruction, reasoning-only, planning-
-          // only), which short-circuit on attempt.replayMetadata.hadPotentialSideEffects.
-          const silentErrorContent = sessionLastAssistant?.content as Array<unknown> | undefined;
-          if (
-            incompleteTurnText &&
-            !aborted &&
-            !promptError &&
-            !timedOut &&
-            sessionLastAssistant?.stopReason === "error" &&
-            ((sessionLastAssistant?.usage as { output?: number } | undefined)?.output ?? 0) === 0 &&
-            (silentErrorContent?.length ?? 0) === 0 &&
-            (attempt.replayMetadata ? !attempt.replayMetadata.hadPotentialSideEffects : false) &&
-            emptyErrorRetries < MAX_EMPTY_ERROR_RETRIES
-          ) {
-            emptyErrorRetries += 1;
-            log.warn(
-              `[empty-error-retry] stopReason=error output=0; resubmitting ` +
-                `attempt=${emptyErrorRetries}/${MAX_EMPTY_ERROR_RETRIES} ` +
-                `provider=${sessionLastAssistant?.provider ?? provider} ` +
-                `model=${sessionLastAssistant?.model ?? model.id} ` +
-                `sessionKey=${params.sessionKey ?? params.sessionId}`,
-            );
-            continue;
           }
           if (incompleteTurnText) {
             const replayInvalid = resolveReplayInvalidForAttempt(incompleteTurnText);
@@ -3546,10 +3594,12 @@ export async function runEmbeddedAgent(
                 `stopReason=${incompleteStopReason ?? "missing"} hasLastAssistant=${attempt.lastAssistant ? "yes" : "no"} ` +
                 `hasCurrentAttemptAssistant=${attempt.currentAttemptAssistant ? "yes" : "no"} payloads=${payloadCount} ` +
                 `tools=${attempt.toolMetas?.length ?? 0} replaySafe=${replayMetadata.replaySafe ? "yes" : "no"} ` +
-                `compactions=${attemptCompactionCount} planningRetries=${planningOnlyRetryAttempts}/${maxPlanningOnlyRetryAttempts} ` +
-                `reasoningRetries=${reasoningOnlyRetryAttempts}/${maxReasoningOnlyRetryAttempts} ` +
+                `compactions=${attemptCompactionCount} reasoningRetries=${reasoningOnlyRetryAttempts}/${maxReasoningOnlyRetryAttempts} ` +
                 `emptyRetries=${emptyResponseRetryAttempts}/${maxEmptyResponseRetryAttempts} ` +
-                `missingAssistantRetries=${missingAssistantRetryAttempts}/${MAX_MISSING_ASSISTANT_RETRIES} — surfacing error to user`,
+                `missingAssistantRetries=${missingAssistantRetryAttempts}/${MAX_MISSING_ASSISTANT_RETRIES} — ` +
+                (terminalToolPresentation
+                  ? "surfacing tool-authored terminal presentation"
+                  : "surfacing error to user"),
             );
 
             // Mark the failing profile for cooldown so multi-profile setups
@@ -3565,7 +3615,9 @@ export async function runEmbeddedAgent(
             return {
               payloads: [
                 {
-                  text: incompleteTurnText,
+                  text: terminalToolPresentation
+                    ? terminalToolPresentation.concat("\n\n", incompleteTurnText)
+                    : incompleteTurnText,
                   isError: true,
                 },
               ],
@@ -3579,6 +3631,12 @@ export async function runEmbeddedAgent(
                 finalAssistantRawText,
                 replayInvalid,
                 livenessState,
+                error: {
+                  kind: "incomplete_turn",
+                  message: "Agent couldn't generate a response.",
+                  fallbackSafe: incompleteTurnFallbackSafe,
+                  terminalPresentation: terminalToolPresentation !== undefined,
+                },
                 toolSummary: attemptToolSummary,
                 ...(failureSignal ? { failureSignal } : {}),
                 agentHarnessResultClassification: attempt.agentHarnessResultClassification,
@@ -3611,7 +3669,6 @@ export async function runEmbeddedAgent(
               beforeAgentFinalizeRevisionReason,
             );
             suppressNextUserMessagePersistence = true;
-            planningOnlyRetryInstruction = null;
             reasoningOnlyRetryInstruction = null;
             emptyResponseRetryInstruction = null;
             compactionContinuationRetryInstruction = null;

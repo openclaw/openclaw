@@ -18,10 +18,17 @@ import {
 } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { isProxy } from "node:util/types";
 import {
   appendJsonlEntrySync,
+  appendSerializedJsonlEntrySync,
+  serializeJsonlEntry,
   writeJsonlEntriesSync,
 } from "../../config/sessions/transcript-jsonl.js";
+import {
+  canAdvanceOwnedSessionEntryCache,
+  publishOwnedSessionFileSnapshot,
+} from "../../config/sessions/transcript-write-context.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import type { ImageContent, Message, TextContent } from "../../llm/types.js";
 import { getAgentDir as getDefaultAgentDir, getSessionsDir } from "../config.js";
@@ -31,6 +38,7 @@ import {
   type SessionTreeEntry as CoreSessionTreeEntry,
   uuidv7,
 } from "../runtime/index.js";
+import { invalidateSessionFileRepairCache } from "../session-file-repair.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 
 export { CURRENT_SESSION_VERSION };
@@ -156,6 +164,10 @@ export type SessionEntry =
 
 /** Raw file entry (includes header) */
 export type FileEntry = SessionHeader | SessionEntry;
+
+type AppendPersistenceOptions = {
+  invalidateSerializedPrefixCache?: boolean;
+};
 
 /** Tree node for getTree() - defensive copy of session structure */
 export interface SessionTreeNode {
@@ -393,19 +405,502 @@ export function loadEntriesFromFile(filePath: string): FileEntry[] {
     return [];
   }
 
-  const content = readFileSync(filePath, "utf8");
-  const entries = parseJsonlEntries(content);
+  const entries = parseJsonlEntries(readFileSync(filePath, "utf8"));
+  return hasReadableSessionHeader(entries) ? entries : [];
+}
 
-  // Validate session header
-  if (entries.length === 0) {
+function loadEntriesFromFileWithSnapshot(filePath: string): {
+  entries: FileEntry[];
+  snapshot: SessionFileSnapshot | undefined;
+} {
+  const resolvedPath = resolve(filePath);
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    let beforeReadSnapshot: SessionFileSnapshot;
+    try {
+      beforeReadSnapshot = readSessionFileSnapshot(resolvedPath);
+    } catch {
+      sessionEntriesCache.delete(resolvedPath);
+      return { entries: [], snapshot: undefined };
+    }
+
+    const cached = sessionEntriesCache.get(resolvedPath);
+    if (cached && isSameSessionFileSnapshot(cached.snapshot, beforeReadSnapshot)) {
+      const afterCacheSnapshot = readSessionFileSnapshotIfExists(resolvedPath);
+      if (afterCacheSnapshot && isSameSessionFileSnapshot(beforeReadSnapshot, afterCacheSnapshot)) {
+        return { entries: copyFileEntries(cached.entries), snapshot: afterCacheSnapshot };
+      }
+      continue;
+    }
+
+    const content = readFileSync(resolvedPath, "utf8");
+    const entries = parseJsonlEntries(content);
+    const afterParseSnapshot = readSessionFileSnapshotIfExists(resolvedPath);
+    if (afterParseSnapshot && isSameSessionFileSnapshot(beforeReadSnapshot, afterParseSnapshot)) {
+      return {
+        entries: rememberSessionEntries(
+          resolvedPath,
+          afterParseSnapshot,
+          entries,
+          content.endsWith("\n"),
+        ),
+        snapshot: afterParseSnapshot,
+      };
+    }
+  }
+
+  sessionEntriesCache.delete(resolvedPath);
+  throw new Error(`session file changed repeatedly while loading: ${resolvedPath}`);
+}
+
+interface SessionFileSnapshot {
+  dev: bigint;
+  ino: bigint;
+  size: bigint;
+  mtimeNs: bigint;
+  ctimeNs: bigint;
+}
+
+interface CachedSessionEntries {
+  snapshot: SessionFileSnapshot;
+  entries: FileEntry[];
+  endsWithNewline: boolean;
+}
+
+const MAX_CACHED_SESSION_FILES = 8;
+// Bound approximate retained payload bytes as well as file count; parsed JSON
+// has higher overhead than the transcript bytes used for this conservative cap.
+const MAX_CACHED_SESSION_BYTES = 32n * 1024n * 1024n;
+const sessionEntriesCache = new Map<string, CachedSessionEntries>();
+
+function readSessionFileSnapshot(filePath: string): SessionFileSnapshot {
+  const fileStat = statSync(filePath, { bigint: true });
+  return {
+    dev: fileStat.dev,
+    ino: fileStat.ino,
+    size: fileStat.size,
+    mtimeNs: fileStat.mtimeNs,
+    ctimeNs: fileStat.ctimeNs,
+  };
+}
+
+function isSameSessionFileSnapshot(left: SessionFileSnapshot, right: SessionFileSnapshot): boolean {
+  return (
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.size === right.size &&
+    left.mtimeNs === right.mtimeNs &&
+    left.ctimeNs === right.ctimeNs
+  );
+}
+
+function rememberSessionEntries(
+  filePath: string,
+  snapshot: SessionFileSnapshot,
+  entries: FileEntry[],
+  endsWithNewline: boolean,
+): FileEntry[] {
+  if (!hasReadableSessionHeader(entries)) {
+    sessionEntriesCache.delete(filePath);
+    return entries.length === 0 ? entries : [];
+  }
+  // Cache only current transcripts. Older versions still go through migration
+  // with fresh mutable entries so cache hits never share objects that migrate.
+  if (!hasCacheableSessionHeader(entries)) {
+    sessionEntriesCache.delete(filePath);
     return entries;
+  }
+  if (snapshot.size > MAX_CACHED_SESSION_BYTES) {
+    sessionEntriesCache.delete(filePath);
+    return copyFileEntries(entries.map(freezeFileEntry));
+  }
+
+  // Current-version session entries are append-only after load. Freeze the
+  // cached snapshot so warm hits cannot drift away from the file metadata that
+  // validated the cache key.
+  const cachedEntries = entries.map((entry) => {
+    if (Object.isFrozen(entry)) {
+      return entry;
+    }
+    return freezeFileEntry(entry);
+  });
+  const cached: CachedSessionEntries = {
+    snapshot,
+    entries: cachedEntries,
+    endsWithNewline,
+  };
+  sessionEntriesCache.delete(filePath);
+  sessionEntriesCache.set(filePath, cached);
+  trimSessionEntriesCache();
+  return copyFileEntries(cachedEntries);
+}
+
+function trimSessionEntriesCache(): void {
+  let cachedBytes = 0n;
+  for (const cached of sessionEntriesCache.values()) {
+    cachedBytes += cached.snapshot.size;
+  }
+  while (
+    sessionEntriesCache.size > MAX_CACHED_SESSION_FILES ||
+    cachedBytes > MAX_CACHED_SESSION_BYTES
+  ) {
+    const oldestKey = sessionEntriesCache.keys().next().value;
+    if (!oldestKey) {
+      break;
+    }
+    cachedBytes -= sessionEntriesCache.get(oldestKey)?.snapshot.size ?? 0n;
+    sessionEntriesCache.delete(oldestKey);
+  }
+}
+
+function hasCacheableSessionHeader(entries: FileEntry[]): boolean {
+  if (entries.length === 0) {
+    return true;
   }
   const header = entries[0];
   if (header.type !== "session" || typeof (header as { id?: unknown }).id !== "string") {
-    return [];
+    return false;
   }
 
-  return entries;
+  return header.version === CURRENT_SESSION_VERSION;
+}
+
+function rememberWrittenSessionEntries(
+  filePath: string,
+  expectedContent?: string,
+): { snapshot: SessionFileSnapshot | undefined; verifiedWrite: boolean; stableRead: boolean } {
+  const resolvedPath = resolve(filePath);
+  // Full rewrites break append continuity used by the pre-run repair cache,
+  // even when the filesystem preserves the inode and the rewritten file grows.
+  invalidateSessionFileRepairCache(resolvedPath);
+  let beforeReadSnapshot: SessionFileSnapshot;
+  try {
+    beforeReadSnapshot = readSessionFileSnapshot(resolvedPath);
+  } catch {
+    sessionEntriesCache.delete(resolvedPath);
+    return { snapshot: undefined, verifiedWrite: false, stableRead: false };
+  }
+  if (beforeReadSnapshot.size > MAX_CACHED_SESSION_BYTES) {
+    sessionEntriesCache.delete(resolvedPath);
+    return { snapshot: beforeReadSnapshot, verifiedWrite: false, stableRead: false };
+  }
+
+  let content: string;
+  let afterReadSnapshot: SessionFileSnapshot;
+  try {
+    content = readFileSync(resolvedPath, "utf8");
+    afterReadSnapshot = readSessionFileSnapshot(resolvedPath);
+  } catch {
+    sessionEntriesCache.delete(resolvedPath);
+    return { snapshot: undefined, verifiedWrite: false, stableRead: false };
+  }
+  if (
+    (expectedContent !== undefined && content !== expectedContent) ||
+    !isSameSessionFileSnapshot(beforeReadSnapshot, afterReadSnapshot)
+  ) {
+    sessionEntriesCache.delete(resolvedPath);
+    return { snapshot: afterReadSnapshot, verifiedWrite: false, stableRead: false };
+  }
+  rememberSessionEntries(
+    resolvedPath,
+    afterReadSnapshot,
+    parseJsonlEntries(content),
+    content.endsWith("\n"),
+  );
+  return {
+    snapshot: afterReadSnapshot,
+    verifiedWrite: expectedContent !== undefined,
+    stableRead: true,
+  };
+}
+
+function rememberAppendedSessionEntry(
+  filePath: string,
+  previousSnapshot: SessionFileSnapshot | undefined,
+  beforeAppendSnapshot: SessionFileSnapshot | undefined,
+  serializedAppend: string,
+  cacheOwnedAppend: boolean,
+  publishOwnedAppend: boolean,
+  invalidateSerializedPrefixCache: boolean,
+): {
+  snapshot: SessionFileSnapshot | undefined;
+  cacheAdvanced: boolean;
+  ownedAppendVerified: boolean;
+} {
+  const resolvedPath = resolve(filePath);
+  const appendedByteLength = BigInt(Buffer.byteLength(serializedAppend, "utf8"));
+  const isVerifiedOwnedAppend = (snapshot: SessionFileSnapshot | undefined) =>
+    Boolean(
+      publishOwnedAppend &&
+      beforeAppendSnapshot &&
+      snapshot &&
+      snapshot.dev === beforeAppendSnapshot.dev &&
+      snapshot.ino === beforeAppendSnapshot.ino &&
+      snapshot.size === beforeAppendSnapshot.size + appendedByteLength,
+    );
+  if (!cacheOwnedAppend) {
+    sessionEntriesCache.delete(resolvedPath);
+    invalidateSessionFileRepairCache(resolvedPath);
+    const snapshot = readSessionFileSnapshotIfExists(resolvedPath);
+    return {
+      snapshot,
+      cacheAdvanced: false,
+      ownedAppendVerified: isVerifiedOwnedAppend(snapshot),
+    };
+  }
+  if (
+    !previousSnapshot ||
+    !beforeAppendSnapshot ||
+    !isSameSessionFileSnapshot(previousSnapshot, beforeAppendSnapshot)
+  ) {
+    sessionEntriesCache.delete(resolvedPath);
+    invalidateSessionFileRepairCache(resolvedPath);
+    return {
+      snapshot: readSessionFileSnapshotIfExists(resolvedPath),
+      cacheAdvanced: false,
+      ownedAppendVerified: false,
+    };
+  }
+
+  const cached = sessionEntriesCache.get(resolvedPath);
+  const snapshot = readSessionFileSnapshotIfExists(resolvedPath);
+  // Owned transcript writes serialize appenders under the session lock. Plain
+  // appends can advance by stat identity/size; extension-owned message payloads
+  // may run JSON hooks that rewrite same-size prefix bytes, so they drop cache.
+  const expectedSize = beforeAppendSnapshot.size + appendedByteLength;
+  if (
+    !snapshot ||
+    !cached ||
+    cached.snapshot.dev !== previousSnapshot.dev ||
+    cached.snapshot.ino !== previousSnapshot.ino ||
+    snapshot.dev !== beforeAppendSnapshot.dev ||
+    snapshot.ino !== beforeAppendSnapshot.ino ||
+    snapshot.size !== expectedSize ||
+    !isSameSessionFileSnapshot(cached.snapshot, previousSnapshot)
+  ) {
+    sessionEntriesCache.delete(resolvedPath);
+    invalidateSessionFileRepairCache(resolvedPath);
+    return { snapshot, cacheAdvanced: false, ownedAppendVerified: false };
+  }
+  if (invalidateSerializedPrefixCache) {
+    sessionEntriesCache.delete(resolvedPath);
+    invalidateSessionFileRepairCache(resolvedPath);
+    return { snapshot, cacheAdvanced: false, ownedAppendVerified: true };
+  }
+  if (snapshot.size > MAX_CACHED_SESSION_BYTES) {
+    sessionEntriesCache.delete(resolvedPath);
+    return { snapshot, cacheAdvanced: false, ownedAppendVerified: true };
+  }
+
+  const persistedEntry = JSON.parse(
+    serializedAppend.startsWith("\n") ? serializedAppend.slice(1) : serializedAppend,
+  ) as FileEntry;
+  cached.entries.push(freezeFileEntry(persistedEntry));
+  cached.snapshot = snapshot;
+  cached.endsWithNewline = true;
+  sessionEntriesCache.delete(resolvedPath);
+  sessionEntriesCache.set(resolvedPath, cached);
+  trimSessionEntriesCache();
+  return { snapshot, cacheAdvanced: true, ownedAppendVerified: true };
+}
+
+function publishRememberedSessionFileSnapshot(
+  filePath: string,
+  snapshot: SessionFileSnapshot | undefined,
+): void {
+  if (!snapshot) {
+    return;
+  }
+  const published = publishOwnedSessionFileSnapshot({ sessionFile: filePath, snapshot });
+  if (published === false) {
+    sessionEntriesCache.delete(resolve(filePath));
+    invalidateSessionFileRepairCache(filePath);
+  }
+}
+
+function jsonSerializationCanRunUserCode(value: unknown, ancestors = new Set<object>()): boolean {
+  if (typeof value === "bigint") {
+    return Object.getOwnPropertyDescriptor(BigInt.prototype, "toJSON") !== undefined;
+  }
+  if ((typeof value !== "object" && typeof value !== "function") || value === null) {
+    return false;
+  }
+
+  try {
+    if (isProxy(value) || ancestors.has(value)) {
+      return true;
+    }
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== Array.prototype && prototype !== null) {
+      return true;
+    }
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    if (
+      descriptors.toJSON ||
+      (prototype !== null && Object.getOwnPropertyDescriptor(prototype, "toJSON")) ||
+      Object.values(descriptors).some(
+        (descriptor) => descriptor.get !== undefined || descriptor.set !== undefined,
+      )
+    ) {
+      return true;
+    }
+
+    ancestors.add(value);
+    try {
+      if (Array.isArray(value)) {
+        for (let index = 0; index < value.length; index += 1) {
+          const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+          if (
+            !descriptor ||
+            descriptor.get !== undefined ||
+            descriptor.set !== undefined ||
+            ("value" in descriptor && jsonSerializationCanRunUserCode(descriptor.value, ancestors))
+          ) {
+            return true;
+          }
+        }
+        return false;
+      }
+
+      return Object.values(descriptors).some(
+        (descriptor) =>
+          descriptor.enumerable &&
+          "value" in descriptor &&
+          jsonSerializationCanRunUserCode(descriptor.value, ancestors),
+      );
+    } finally {
+      ancestors.delete(value);
+    }
+  } catch {
+    return true;
+  }
+}
+
+function hasOwnProperty(value: object, key: string): boolean {
+  return Object.hasOwn(value, key);
+}
+
+function hasAssistantToolCallArguments(message: Extract<Message, { role: "assistant" }>): boolean {
+  if (!Array.isArray(message.content)) {
+    return false;
+  }
+  return message.content.some(
+    (part) => part.type === "toolCall" && hasOwnProperty(part, "arguments"),
+  );
+}
+
+function messageSerializesOwnedValues(
+  message: Message | CustomMessage | BashExecutionMessage,
+): boolean {
+  if (message.role === "toolResult") {
+    return hasOwnProperty(message, "details");
+  }
+  if (message.role === "assistant") {
+    return hasAssistantToolCallArguments(message);
+  }
+  if (message.role === "custom") {
+    return hasOwnProperty(message, "details");
+  }
+  return false;
+}
+
+function readSessionFileSnapshotIfExists(filePath: string): SessionFileSnapshot | undefined {
+  try {
+    return readSessionFileSnapshot(filePath);
+  } catch {
+    return undefined;
+  }
+}
+
+function sessionFileNeedsAppendSeparator(
+  filePath: string,
+  snapshot: SessionFileSnapshot | undefined,
+): boolean {
+  if (!snapshot || snapshot.size === 0n) {
+    return false;
+  }
+
+  const resolvedPath = resolve(filePath);
+  const cached = sessionEntriesCache.get(resolvedPath);
+  if (cached && isSameSessionFileSnapshot(cached.snapshot, snapshot)) {
+    return !cached.endsWithNewline;
+  }
+
+  const fileDescriptor = openSync(resolvedPath, "r");
+  try {
+    const lastByte = Buffer.allocUnsafe(1);
+    const bytesRead = readSync(fileDescriptor, lastByte, 0, 1, snapshot.size - 1n);
+    return bytesRead === 1 && lastByte[0] !== 0x0a;
+  } finally {
+    closeSync(fileDescriptor);
+  }
+}
+
+function revalidateLoadedSessionFile(
+  filePath: string,
+  loaded: {
+    entries: FileEntry[];
+    snapshot: SessionFileSnapshot | undefined;
+  },
+): {
+  entries: FileEntry[];
+  snapshot: SessionFileSnapshot | undefined;
+} {
+  const currentSnapshot = readSessionFileSnapshotIfExists(resolve(filePath));
+  if (
+    loaded.snapshot &&
+    currentSnapshot &&
+    isSameSessionFileSnapshot(loaded.snapshot, currentSnapshot)
+  ) {
+    return loaded;
+  }
+  if (!loaded.snapshot && !currentSnapshot) {
+    return loaded;
+  }
+  return loadEntriesFromFileWithSnapshot(filePath);
+}
+
+// Cached entries are deep-frozen so warm hits cannot drift from the file bytes
+// that validated the cache key. The session header (entries[0]) is the one entry
+// callers legitimately mutate in place — `prepareSessionManagerForRun` rewrites
+// its id/cwd before an embedded run. Return a mutable clone of just the header so
+// that mutation does not throw on a frozen object, while the append-only message
+// entries stay shared frozen (preserving cache performance and preventing caller
+// mutations from leaking back into the cache).
+function copyFileEntries(entries: readonly FileEntry[]): FileEntry[] {
+  const copy = entries.slice();
+  if (copy.length > 0 && copy[0].type === "session" && Object.isFrozen(copy[0])) {
+    copy[0] = cloneFileEntry(copy[0]);
+  }
+  return copy;
+}
+
+function cloneFileEntry(entry: FileEntry): FileEntry {
+  return structuredClone(entry);
+}
+
+function freezeFileEntry(entry: FileEntry): FileEntry {
+  freezeJsonLikeValue(entry);
+  return entry;
+}
+
+// The cache key proves only the file bytes at a specific stat snapshot. Freezing
+// cached JSONL objects prevents caller mutations from creating transcript state
+// that was never read from or written to disk.
+function freezeJsonLikeValue(value: unknown, seen = new WeakSet<object>()): void {
+  if (typeof value !== "object" || value === null || seen.has(value)) {
+    return;
+  }
+  seen.add(value);
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      freezeJsonLikeValue(item, seen);
+    }
+  } else {
+    for (const item of Object.values(value as Record<string, unknown>)) {
+      freezeJsonLikeValue(item, seen);
+    }
+  }
+  Object.freeze(value);
 }
 
 function parseJsonlEntries(content: string): FileEntry[] {
@@ -748,12 +1243,17 @@ export class SessionManager {
   private labelTimestampsById: Map<string, string> = new Map();
   private leafId: string | null = null;
   private recoveredCorruptHeader = false;
+  private sessionFileSnapshot: SessionFileSnapshot | undefined;
 
   private constructor(
     cwd: string,
     sessionDir: string,
     sessionFile: string | undefined,
     persist: boolean,
+    loadedSessionFile?: {
+      entries: FileEntry[];
+      snapshot: SessionFileSnapshot | undefined;
+    },
   ) {
     this.cwd = cwd;
     this.sessionDir = sessionDir;
@@ -763,7 +1263,10 @@ export class SessionManager {
     }
 
     if (sessionFile) {
-      this.setSessionFile(sessionFile);
+      this.setLoadedSessionFile(
+        sessionFile,
+        loadedSessionFile ?? loadEntriesFromFileWithSnapshot(sessionFile),
+      );
     } else {
       this.newSession();
     }
@@ -771,10 +1274,22 @@ export class SessionManager {
 
   /** Switch to a different session file (used for resume and branching) */
   setSessionFile(sessionFile: string): void {
+    this.setLoadedSessionFile(sessionFile, loadEntriesFromFileWithSnapshot(sessionFile));
+  }
+
+  private setLoadedSessionFile(
+    sessionFile: string,
+    loaded: {
+      entries: FileEntry[];
+      snapshot: SessionFileSnapshot | undefined;
+    },
+  ): void {
     this.sessionFile = resolve(sessionFile);
+    this.sessionFileSnapshot = undefined;
     this.recoveredCorruptHeader = false;
     if (existsSync(this.sessionFile)) {
-      this.fileEntries = loadEntriesFromFile(this.sessionFile);
+      this.fileEntries = loaded.entries;
+      this.sessionFileSnapshot = loaded.snapshot;
 
       // If file was empty or corrupted (no valid header), truncate and start fresh
       // to avoid appending messages without a session header (which breaks the session)
@@ -817,6 +1332,7 @@ export class SessionManager {
 
   newSession(options?: NewSessionOptions): string | undefined {
     this.recoveredCorruptHeader = false;
+    this.sessionFileSnapshot = undefined;
     this.sessionId = options?.id ?? createSessionId();
     const timestamp = new Date().toISOString();
     const header: SessionHeader = {
@@ -867,7 +1383,12 @@ export class SessionManager {
     if (!this.shouldPersist || !this.sessionFile) {
       return;
     }
-    writeJsonlEntriesSync(this.sessionFile, this.fileEntries);
+    const content = writeJsonlEntriesSync(this.sessionFile, this.fileEntries);
+    const rememberedWrite = rememberWrittenSessionEntries(this.sessionFile, content);
+    this.sessionFileSnapshot = rememberedWrite.snapshot;
+    if (rememberedWrite.verifiedWrite) {
+      publishRememberedSessionFileSnapshot(this.sessionFile, rememberedWrite.snapshot);
+    }
   }
 
   isPersisted(): boolean {
@@ -894,7 +1415,7 @@ export class SessionManager {
     return this.sessionFile;
   }
 
-  persist(entry: SessionEntry): void {
+  persist(entry: SessionEntry, options?: AppendPersistenceOptions): void {
     if (!this.shouldPersist || !this.sessionFile) {
       return;
     }
@@ -909,18 +1430,75 @@ export class SessionManager {
     }
 
     if (!this.flushed) {
-      writeJsonlEntriesSync(this.sessionFile, this.fileEntries);
+      const content = writeJsonlEntriesSync(this.sessionFile, this.fileEntries);
       this.flushed = true;
+      const rememberedWrite = rememberWrittenSessionEntries(this.sessionFile, content);
+      this.sessionFileSnapshot = rememberedWrite.snapshot;
+      if (rememberedWrite.verifiedWrite) {
+        publishRememberedSessionFileSnapshot(this.sessionFile, rememberedWrite.snapshot);
+      }
     } else {
-      appendJsonlEntrySync(this.sessionFile, entry);
+      // Serialization can execute extension/provider code through toJSON or
+      // getters. A same-size rewrite from that code can preserve the stat key,
+      // so only inert plain JSON entries may advance the metadata-keyed cache.
+      const serializationCanRunUserCode = jsonSerializationCanRunUserCode(entry);
+      const serializedEntry = serializeJsonlEntry(entry);
+      const beforeAppendSnapshot = readSessionFileSnapshotIfExists(this.sessionFile);
+      const invalidateSerializedPrefixCache =
+        options?.invalidateSerializedPrefixCache === true || serializationCanRunUserCode;
+      const canPublishOwnedAppend =
+        !serializationCanRunUserCode &&
+        Boolean(
+          beforeAppendSnapshot &&
+          canAdvanceOwnedSessionEntryCache({
+            sessionFile: this.sessionFile,
+            snapshot: beforeAppendSnapshot,
+          }),
+        );
+      const cacheOwnedAppend = canPublishOwnedAppend && !invalidateSerializedPrefixCache;
+      const serializedAppend = appendSerializedJsonlEntrySync(this.sessionFile, serializedEntry, {
+        prefixNewline: sessionFileNeedsAppendSeparator(this.sessionFile, beforeAppendSnapshot),
+      });
+      const rememberedAppend = rememberAppendedSessionEntry(
+        this.sessionFile,
+        this.sessionFileSnapshot,
+        beforeAppendSnapshot,
+        serializedAppend,
+        cacheOwnedAppend,
+        canPublishOwnedAppend,
+        invalidateSerializedPrefixCache,
+      );
+      this.sessionFileSnapshot = rememberedAppend.snapshot;
+      if (rememberedAppend.ownedAppendVerified) {
+        publishRememberedSessionFileSnapshot(this.sessionFile, rememberedAppend.snapshot);
+      }
     }
   }
 
-  private appendEntry(entry: SessionEntry): void {
+  /**
+   * Resync the in-memory snapshot/cache after the transcript file was rewritten
+   * out-of-band (for example the embedded-run header normalization in
+   * prepareSessionManagerForRun). Without this the cached sessionFileSnapshot
+   * still describes the pre-rewrite file, so the first append takes the
+   * snapshot-mismatch branch in rememberAppendedSessionEntry, drops the warm
+   * cache, and the next open reparses the whole transcript.
+   */
+  syncSnapshotAfterHeaderRewrite(expectedContent?: string): void {
+    if (!this.sessionFile) {
+      return;
+    }
+    const rememberedWrite = rememberWrittenSessionEntries(this.sessionFile, expectedContent);
+    this.sessionFileSnapshot = rememberedWrite.snapshot;
+    if (rememberedWrite.verifiedWrite) {
+      publishRememberedSessionFileSnapshot(this.sessionFile, rememberedWrite.snapshot);
+    }
+  }
+
+  private appendEntry(entry: SessionEntry, options?: AppendPersistenceOptions): void {
     this.fileEntries.push(entry);
     this.byId.set(entry.id, entry);
     this.leafId = entry.id;
-    this.persist(entry);
+    this.persist(entry, options);
   }
 
   /** Append a message as child of current leaf, then advance leaf. Returns entry id.
@@ -929,7 +1507,12 @@ export class SessionManager {
    * so it is easier to find them.
    * These need to be appended via appendCompaction() and appendBranchSummary() methods.
    */
-  appendMessage(message: Message | CustomMessage | BashExecutionMessage): string {
+  appendMessage(
+    message: Message | CustomMessage | BashExecutionMessage,
+    options?: AppendPersistenceOptions,
+  ): string {
+    const invalidateSerializedPrefixCache =
+      options?.invalidateSerializedPrefixCache === true || messageSerializesOwnedValues(message);
     const entry: SessionMessageEntry = {
       type: "message",
       id: generateId(this.byId),
@@ -937,7 +1520,10 @@ export class SessionManager {
       timestamp: new Date().toISOString(),
       message,
     };
-    this.appendEntry(entry);
+    this.appendEntry(entry, {
+      ...options,
+      invalidateSerializedPrefixCache,
+    });
     return entry.id;
   }
 
@@ -987,7 +1573,9 @@ export class SessionManager {
       details,
       fromHook,
     };
-    this.appendEntry(entry);
+    this.appendEntry(entry, {
+      invalidateSerializedPrefixCache: fromHook === true || details !== undefined,
+    });
     return entry.id;
   }
 
@@ -1001,7 +1589,7 @@ export class SessionManager {
       parentId: this.leafId,
       timestamp: new Date().toISOString(),
     };
-    this.appendEntry(entry);
+    this.appendEntry(entry, { invalidateSerializedPrefixCache: true });
     return entry.id;
   }
 
@@ -1056,7 +1644,7 @@ export class SessionManager {
       parentId: this.leafId,
       timestamp: new Date().toISOString(),
     };
-    this.appendEntry(entry);
+    this.appendEntry(entry, { invalidateSerializedPrefixCache: true });
     return entry.id;
   }
 
@@ -1263,7 +1851,9 @@ export class SessionManager {
       details,
       fromHook,
     };
-    this.appendEntry(entry);
+    this.appendEntry(entry, {
+      invalidateSerializedPrefixCache: fromHook === true || details !== undefined,
+    });
     return entry.id;
   }
 
@@ -1327,6 +1917,7 @@ export class SessionManager {
       this.fileEntries = [header, ...pathWithoutLabels, ...labelEntries];
       this.sessionId = newSessionId;
       this.sessionFile = newSessionFile;
+      this.sessionFileSnapshot = undefined;
       this.buildIndex();
 
       // Only write the file now if it contains an assistant message.
@@ -1385,13 +1976,15 @@ export class SessionManager {
    * @param cwdOverride Optional cwd override instead of the session header cwd.
    */
   static open(path: string, sessionDir?: string, cwdOverride?: string): SessionManager {
-    // Extract cwd from session header if possible, otherwise use process.cwd()
-    const entries = loadEntriesFromFile(path);
-    const header = entries.find((e) => e.type === "session");
+    // Re-stat before construction so the single parsed load cannot become
+    // stale while deriving cwd/session metadata. Stable warm opens pay only
+    // the extra stat; changed files retry through the normal loader.
+    const loaded = revalidateLoadedSessionFile(path, loadEntriesFromFileWithSnapshot(path));
+    const header = loaded.entries.find((e) => e.type === "session");
     const cwd = cwdOverride ?? header?.cwd ?? process.cwd();
     // If no sessionDir provided, derive from file's parent directory
     const dir = sessionDir ?? resolve(path, "..");
-    return new SessionManager(cwd, dir, path, true);
+    return new SessionManager(cwd, dir, path, true, loaded);
   }
 
   /**

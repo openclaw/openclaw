@@ -486,6 +486,19 @@ describe("sendMessage", () => {
     expect(mocks.resolveRuntimePluginRegistry).not.toHaveBeenCalled();
   });
 
+  it("preserves suppressed direct-send status", async () => {
+    mocks.deliverOutboundPayloads.mockResolvedValueOnce([]);
+
+    const result = await sendMessage({
+      cfg: {},
+      channel: "forum",
+      to: "123456",
+      content: "hidden",
+    });
+
+    expect(result.deliveryStatus).toBe("suppressed");
+  });
+
   it("does not throw best-effort direct send failures", async () => {
     mocks.deliverOutboundPayloads.mockImplementationOnce(async (params: unknown) => {
       (

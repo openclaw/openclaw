@@ -22,6 +22,7 @@ import type { GatewayBrowserClient } from "../gateway.ts";
 import type { GatewaySessionRow, ModelCatalogEntry, SessionsListResult } from "../types.ts";
 import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
 import { renderChat, resetChatViewState } from "./chat.ts";
+import { renderMarkdownSidebar } from "./markdown-sidebar.ts";
 
 const refreshVisibleToolsEffectiveForCurrentSessionMock = vi.hoisted(() =>
   vi.fn(async (state: AppViewState) => {
@@ -875,46 +876,134 @@ describe("chat goal status", () => {
 });
 
 describe("chat composer workbench", () => {
-  it("renders session controls in the composer and workspace files in the rail", () => {
+  it("renders session controls in the composer and workspace files in the expanded rail", () => {
+    const onToggleCollapsed = vi.fn();
     const onRefresh = vi.fn();
+    const onBrowsePath = vi.fn();
+    const onCopyPath = vi.fn();
     const onOpenFile = vi.fn();
+    const onSearch = vi.fn();
     const container = renderChatView({
       composerControls: html`<button class="test-composer-control">Model</button>`,
-      workspaceFiles: {
-        agentId: "main",
+      sessionWorkspace: {
+        collapsed: false,
+        sessionKey: "agent:main",
         list: {
-          agentId: "main",
-          workspace: "/workspace",
+          sessionKey: "agent:main",
+          root: "/workspace",
           files: [
             {
               name: "AGENTS.md",
               path: "/workspace/AGENTS.md",
+              kind: "modified",
               missing: false,
               size: 2048,
             },
           ],
+          browser: {
+            path: "",
+            entries: [
+              {
+                name: "ui",
+                path: "ui",
+                kind: "directory",
+                sessionKind: "modified",
+              },
+              {
+                name: "package.json",
+                path: "package.json",
+                kind: "file",
+                size: 4096,
+              },
+            ],
+          },
+          artifacts: [],
         },
         loading: false,
         error: null,
-        activeName: "AGENTS.md",
+        activeId: "file:/workspace/AGENTS.md",
+        onToggleCollapsed,
         onRefresh,
+        onBrowsePath,
+        onCopyPath,
         onOpenFile,
+        onSearch,
+        onOpenArtifact: () => undefined,
       },
     });
 
     expect(
       container.querySelector(".agent-chat__composer-controls .test-composer-control"),
     ).not.toBeNull();
+    const workbench = container.querySelector(".chat-workbench");
+    const main = container.querySelector(".chat-workbench__main");
+    const rail = container.querySelector(".chat-workspace-rail");
+    expect(main?.parentElement).toBe(workbench);
+    expect(rail?.parentElement).toBe(workbench);
+    expect(Array.from(workbench?.children ?? []).map((child) => child.className)).toEqual([
+      "chat-workspace-rail",
+      "chat-workbench__main",
+    ]);
     expect(container.querySelector(".chat-workspace-rail__path")?.textContent?.trim()).toBe(
       "/workspace",
     );
-    const file = container.querySelector<HTMLButtonElement>(".chat-workspace-rail__file");
+    const file = container.querySelector<HTMLDivElement>(".chat-workspace-rail__file");
     expect(file?.textContent).toContain("AGENTS.md");
     expect(file?.textContent).toContain("2 KB");
+    expect(container.querySelector(".chat-workspace-rail__summary")?.textContent).toContain(
+      "1 changed",
+    );
+    expect(container.querySelector(".chat-workspace-rail__browser")?.textContent).toContain(
+      "package.json",
+    );
 
-    file?.click();
+    file?.querySelector<HTMLButtonElement>(".chat-workspace-rail__file-open")?.click();
+    file?.querySelector<HTMLButtonElement>('button[aria-label="Copy path"]')?.click();
+    const browserDirectory = Array.from(
+      container.querySelectorAll<HTMLDivElement>(".chat-workspace-rail__file"),
+    ).find((row) => row.textContent?.includes("ui"));
+    browserDirectory?.querySelector<HTMLButtonElement>(".chat-workspace-rail__file-open")?.click();
+    container
+      .querySelector<HTMLButtonElement>('button[aria-label="Collapse session workspace"]')
+      ?.click();
 
-    expect(onOpenFile).toHaveBeenCalledWith("AGENTS.md");
+    expect(onOpenFile).toHaveBeenCalledWith("/workspace/AGENTS.md");
+    expect(onCopyPath).toHaveBeenCalledWith("/workspace/AGENTS.md");
+    expect(onBrowsePath).toHaveBeenCalledWith("ui");
+    expect(onToggleCollapsed).toHaveBeenCalledTimes(1);
+    expect(container.querySelector('button[aria-label="Session workspace"]')).toBeNull();
+  });
+
+  it("keeps the workspace files rail reachable from the collapsed strip", () => {
+    const onToggleCollapsed = vi.fn();
+    const container = renderChatView({
+      sessionWorkspace: {
+        collapsed: true,
+        sessionKey: "agent:main",
+        list: null,
+        loading: false,
+        error: null,
+        activeId: null,
+        onToggleCollapsed,
+        onRefresh: () => undefined,
+        onBrowsePath: () => undefined,
+        onCopyPath: () => undefined,
+        onOpenFile: () => undefined,
+        onSearch: () => undefined,
+        onOpenArtifact: () => undefined,
+      },
+    });
+
+    expect(container.querySelector(".chat-workspace-rail__list")).toBeNull();
+    expect(container.querySelector(".chat-workspace-rail__collapsed-icon")).not.toBeNull();
+    const toggle = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Expand session workspace"]',
+    );
+    expect(toggle?.getAttribute("aria-expanded")).toBe("false");
+
+    toggle?.click();
+
+    expect(onToggleCollapsed).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the secondary New session and Export controls suppressed in the composer", () => {
@@ -1544,6 +1633,109 @@ describe("chat voice controls", () => {
   });
 });
 
+describe("chat composer IME composition", () => {
+  it("defers draft sync while IME composition is active", () => {
+    const onDraftChange = vi.fn();
+    const onRequestUpdate = vi.fn();
+    const container = renderChatView({ onDraftChange, onRequestUpdate });
+    const textarea = requireElement(
+      container,
+      ".agent-chat__composer-combobox > textarea",
+      "composer textarea",
+    ) as HTMLTextAreaElement;
+
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    textarea.value = "dangqian";
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true, isComposing: true }));
+
+    expect(onDraftChange).not.toHaveBeenCalled();
+    expect(onRequestUpdate).not.toHaveBeenCalled();
+
+    textarea.value = "当前";
+    textarea.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+
+    expect(onDraftChange).toHaveBeenCalledTimes(1);
+    expect(onDraftChange).toHaveBeenLastCalledWith("当前");
+  });
+
+  it("preserves composing text across host rerenders with stale draft props", () => {
+    const onDraftChange = vi.fn();
+    const onRequestUpdate = vi.fn();
+    const container = document.createElement("div");
+    const props = createChatProps({ draft: "", onDraftChange, onRequestUpdate });
+
+    render(renderChat(props), container);
+    const textarea = requireElement(
+      container,
+      ".agent-chat__composer-combobox > textarea",
+      "composer textarea",
+    ) as HTMLTextAreaElement;
+
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    textarea.value = "dangqian";
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true, isComposing: true }));
+
+    expect(onDraftChange).not.toHaveBeenCalled();
+    expect(onRequestUpdate).not.toHaveBeenCalled();
+
+    render(renderChat({ ...props, draft: "" }), container);
+
+    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("dangqian");
+
+    const rerenderedTextarea = requireElement(
+      container,
+      ".agent-chat__composer-combobox > textarea",
+      "composer textarea",
+    ) as HTMLTextAreaElement;
+    rerenderedTextarea.value = "当前";
+    rerenderedTextarea.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+
+    expect(onDraftChange).toHaveBeenCalledTimes(1);
+    expect(onDraftChange).toHaveBeenLastCalledWith("当前");
+  });
+
+  it("leaves keyboard events to the browser while IME composition is active", () => {
+    const onHistoryKeydown = vi.fn(() => ({
+      handled: true,
+      preventDefault: true,
+      restoreCaret: null,
+      decision: "handled:history-up" as const,
+      historyNavigationActiveBefore: false,
+      historyNavigationActiveAfter: false,
+      selectionStart: 0,
+      selectionEnd: 0,
+      valueLength: 0,
+    }));
+    const onSend = vi.fn();
+    const container = renderChatView({ onHistoryKeydown, onSend });
+    const textarea = requireElement(
+      container,
+      ".agent-chat__composer-combobox > textarea",
+      "composer textarea",
+    ) as HTMLTextAreaElement;
+
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    textarea.value = "dangqian";
+    const enterEvent = new KeyboardEvent("keydown", {
+      key: "Enter",
+      bubbles: true,
+      cancelable: true,
+    });
+    const arrowEvent = new KeyboardEvent("keydown", {
+      key: "ArrowUp",
+      bubbles: true,
+      cancelable: true,
+    });
+    textarea.dispatchEvent(enterEvent);
+    textarea.dispatchEvent(arrowEvent);
+
+    expect(enterEvent.defaultPrevented).toBe(false);
+    expect(arrowEvent.defaultPrevented).toBe(false);
+    expect(onSend).not.toHaveBeenCalled();
+    expect(onHistoryKeydown).not.toHaveBeenCalled();
+  });
+});
+
 describe("chat slash menu accessibility", () => {
   function inputDraft(container: HTMLElement, value: string) {
     const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
@@ -2022,6 +2214,29 @@ describe("chat sidebar raw content", () => {
       content: "```\nRaw\n```",
       rawText: "Raw",
     });
+  });
+
+  it("renders image sidebar content as an image instead of markdown text", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderMarkdownSidebar({
+        content: {
+          kind: "image",
+          title: "artifact-preview.png",
+          src: "data:image/png;base64,aW1hZ2U=",
+          mimeType: "image/png",
+        },
+        error: null,
+        onClose: () => undefined,
+        onViewRawText: () => undefined,
+      }),
+      container,
+    );
+
+    const image = container.querySelector<HTMLImageElement>("img.chat-tool-card__preview-image");
+    expect(image?.getAttribute("src")).toBe("data:image/png;base64,aW1hZ2U=");
+    expect(container.textContent).not.toContain("data:image/png;base64");
   });
 });
 

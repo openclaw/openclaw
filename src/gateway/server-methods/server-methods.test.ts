@@ -735,6 +735,21 @@ describe("injectTimestamp", () => {
 
     expect(result).toMatch(/^\[Fri 2025-07-04 12:00 EDT\]/);
   });
+
+  it("leaves messages bare when config disables envelope timestamps", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          envelopeTimestamp: "off",
+          userTimezone: "America/New_York",
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(injectTimestamp("cache sensitive prompt", timestampOptsFromConfig(cfg))).toBe(
+      "cache sensitive prompt",
+    );
+  });
 });
 
 describe("sanitizeChatHistoryMessages", () => {
@@ -1897,6 +1912,23 @@ describe("timestampOptsFromConfig", () => {
     },
   ])("$name", ({ cfg, expected }) => {
     expect(timestampOptsFromConfig(cfg).timezone).toBe(expected);
+  });
+
+  it("keeps timestamp injection enabled for upgraded configs unless explicitly disabled", () => {
+    const upgradedConfigWithExistingDefaults = {
+      agents: { defaults: { userTimezone: "America/Chicago" } },
+    } as OpenClawConfig;
+
+    // Existing user configs do not store envelopeTimestamp; omission remains
+    // the shipped default even when other agent defaults are present, so no
+    // config migration is needed for this broadened use of the setting.
+    expect(timestampOptsFromConfig({} as OpenClawConfig).includeTimestamp).toBe(true);
+    expect(timestampOptsFromConfig(upgradedConfigWithExistingDefaults).includeTimestamp).toBe(true);
+    expect(
+      timestampOptsFromConfig({
+        agents: { defaults: { envelopeTimestamp: "off" } },
+      } as OpenClawConfig).includeTimestamp,
+    ).toBe(false);
   });
 });
 

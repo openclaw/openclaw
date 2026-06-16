@@ -17,7 +17,7 @@ export function resolveIsNixMode(env: NodeJS.ProcessEnv = process.env): boolean 
   return env.OPENCLAW_NIX_MODE === "1";
 }
 
-export const isNixMode = resolveIsNixMode();
+export let isNixMode = resolveIsNixMode();
 
 // Support the remaining legacy pre-rebrand state dir.
 const LEGACY_STATE_DIRNAMES = [".clawdbot"] as const;
@@ -146,7 +146,7 @@ export function resolveIncludeRoots(
   return roots;
 }
 
-export const STATE_DIR = resolveStateDir();
+export let STATE_DIR = resolveStateDir();
 
 /**
  * Config file path (JSON or JSON5).
@@ -229,7 +229,24 @@ export function resolveConfigPath(
   return path.join(stateDir, CONFIG_FILENAME);
 }
 
-export const CONFIG_PATH = resolveConfigPathCandidate();
+export let CONFIG_PATH = resolveConfigPathCandidate();
+
+/**
+ * Re-pins process-stable runtime paths after an early startup selector changes the environment.
+ *
+ * Gateway startup must call this before importing runtime modules that derive their own constants
+ * from these live bindings, otherwise one process can split reads and writes across two targets.
+ */
+export function pinRuntimePaths(env: NodeJS.ProcessEnv = process.env): {
+  configPath: string;
+  stateDir: string;
+} {
+  normalizeStateDirEnv(env);
+  isNixMode = resolveIsNixMode(env);
+  STATE_DIR = resolveStateDir(env);
+  CONFIG_PATH = resolveConfigPathCandidate(env);
+  return { configPath: CONFIG_PATH, stateDir: STATE_DIR };
+}
 
 /**
  * Resolve default config path candidates across default locations.

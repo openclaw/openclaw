@@ -11,6 +11,7 @@ import {
   describeFailoverError,
   FailoverError,
   isNonProviderRuntimeCoordinationError,
+  isSignalTimeoutReason,
   isTimeoutError,
   resolveFailoverReasonFromError,
   resolveFailoverStatus,
@@ -647,6 +648,40 @@ describe("failover-error", () => {
         message: "invalid model: openrouter/__invalid_test_model__",
       }),
     ).toBe("model_not_found");
+  });
+
+  it("uses structured OpenAI-compatible param detail for model-not-found 400s", () => {
+    const err = Object.assign(new Error("400 Param Incorrect"), {
+      status: 400,
+      code: "400",
+      param: "Not supported model some-model-id",
+      error: {
+        code: "400",
+        message: "Param Incorrect",
+        param: "Not supported model some-model-id",
+      },
+    });
+
+    expect(resolveFailoverReasonFromError(err)).toBe("model_not_found");
+    expect(describeFailoverError(err)).toMatchObject({
+      message: "400 Param Incorrect",
+      reason: "model_not_found",
+      status: 400,
+      code: "400",
+    });
+  });
+
+  it("keeps unsupported capability details classified as format", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        status: 400,
+        message: "400 Param Incorrect",
+        error: {
+          message: "Param Incorrect",
+          param: "This model is not supported for tool calling.",
+        },
+      }),
+    ).toBe("format");
   });
 
   it("treats HTTP 422 as format error", () => {
@@ -1313,5 +1348,36 @@ describe("buildFailoverRemediationHint", () => {
     expect(buildFailoverRemediationHint(new Error("oops"))).toBeUndefined();
     expect(buildFailoverRemediationHint(undefined)).toBeUndefined();
     expect(buildFailoverRemediationHint("just a string")).toBeUndefined();
+  });
+});
+
+describe("isSignalTimeoutReason", () => {
+  it("returns false for plain AbortController.abort() DOMException (client disconnect)", () => {
+    // watchClientDisconnect calls abort() with no args, producing AbortError.
+    // This must not be classified as a run timeout (#90764).
+    const err = new DOMException("This operation was aborted", "AbortError");
+    expect(isSignalTimeoutReason(err)).toBe(false);
+  });
+
+  it("returns false for AbortError whose message matches ABORT_TIMEOUT_RE", () => {
+    // Old isTimeoutError returned true here via ABORT_TIMEOUT_RE (/request.*aborted/i).
+    const err = Object.assign(new Error("request aborted"), { name: "AbortError" });
+    expect(isSignalTimeoutReason(err)).toBe(false);
+  });
+
+  it("returns true for AbortSignal.timeout() DOMException", () => {
+    const err = new DOMException("signal timed out", "TimeoutError");
+    expect(isSignalTimeoutReason(err)).toBe(true);
+  });
+
+  it("returns true for makeTimeoutAbortReason()-style Error", () => {
+    // makeTimeoutAbortReason() in attempt.ts: Error("request timed out", name="TimeoutError")
+    const err = Object.assign(new Error("request timed out"), { name: "TimeoutError" });
+    expect(isSignalTimeoutReason(err)).toBe(true);
+  });
+
+  it("returns false for null and undefined", () => {
+    expect(isSignalTimeoutReason(null)).toBe(false);
+    expect(isSignalTimeoutReason(undefined)).toBe(false);
   });
 });

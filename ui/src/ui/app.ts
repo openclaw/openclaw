@@ -607,6 +607,8 @@ export class OpenClawApp extends LitElement {
   @state() overviewLogCursor = 0;
 
   @state() skillsLoading = false;
+  @state() skillsAgentId: string | null = null;
+  skillsAgentRevision = 0;
   @state() skillsReport: SkillStatusReport | null = null;
   @state() skillsError: string | null = null;
   @state() skillsFilter = "";
@@ -697,6 +699,7 @@ export class OpenClawApp extends LitElement {
   chatLastScrollTop = 0;
   chatHasAutoScrolled = false;
   chatUserNearBottom = true;
+  chatFollowLocked = false;
   chatIsProgrammaticScroll = false;
   chatProgrammaticScrollTarget = 0;
   @state() chatNewMessagesBelow = false;

@@ -16,6 +16,7 @@ import {
   isRootVersionInvocation,
   normalizeGeneratedHelpCommandArgv,
   normalizeRootHelpTargetArgv,
+  normalizeRootNoColorArgv,
   shouldMigrateState,
   shouldMigrateStateFromPath,
 } from "./argv.js";
@@ -169,6 +170,61 @@ describe("argv helpers", () => {
     },
   ])("normalizes root help targets: $name", ({ argv, expected }) => {
     expect(normalizeRootHelpTargetArgv(argv)).toEqual(expected);
+  });
+
+  it.each([
+    {
+      name: "subcommand trailing no-color",
+      argv: ["node", "openclaw", "doctor", "--no-color", "--post-upgrade", "--json"],
+      expected: ["node", "openclaw", "--no-color", "doctor", "--post-upgrade", "--json"],
+    },
+    {
+      name: "keeps existing root options first",
+      argv: ["node", "openclaw", "--profile", "work", "doctor", "--no-color", "--lint", "--json"],
+      expected: [
+        "node",
+        "openclaw",
+        "--profile",
+        "work",
+        "--no-color",
+        "doctor",
+        "--lint",
+        "--json",
+      ],
+    },
+    {
+      name: "keeps no-color after possible command option value",
+      argv: ["node", "openclaw", "doctor", "--lint", "--json", "--no-color"],
+      expected: ["node", "openclaw", "doctor", "--lint", "--json", "--no-color"],
+    },
+    {
+      name: "flag terminator leaves no-color positional",
+      argv: ["node", "openclaw", "doctor", "--", "--no-color"],
+      expected: ["node", "openclaw", "doctor", "--", "--no-color"],
+    },
+    {
+      name: "command option value remains literal",
+      argv: ["node", "openclaw", "agent", "--message", "--no-color"],
+      expected: ["node", "openclaw", "agent", "--message", "--no-color"],
+    },
+    {
+      name: "assigned command option value does not block no-color",
+      argv: ["node", "openclaw", "agent", "--message=hello", "--no-color"],
+      expected: ["node", "openclaw", "--no-color", "agent", "--message=hello"],
+    },
+  ])("normalizes root --no-color before command parsing: $name", ({ argv, expected }) => {
+    expect(normalizeRootNoColorArgv(argv)).toEqual(expected);
+  });
+
+  it("allows final command metadata to lift no-color after boolean command flags", () => {
+    const argv = ["node", "openclaw", "doctor", "--lint", "--json", "--no-color"];
+
+    expect(
+      normalizeRootNoColorArgv(argv, {
+        shouldPreserveNoColor: ({ remainingArgs, noColorIndex }) =>
+          remainingArgs[noColorIndex - 1] === "--message",
+      }),
+    ).toEqual(["node", "openclaw", "--no-color", "doctor", "--lint", "--json"]);
   });
 
   it.each([

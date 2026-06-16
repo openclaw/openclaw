@@ -12,7 +12,12 @@ import { clampThinkingLevel } from "../../llm/model-utils.js";
 import { streamSimple } from "../../llm/stream.js";
 import type { Message, Model } from "../../llm/types.js";
 import { getAgentDir } from "../config.js";
-import { Agent, type AgentMessage, type ThinkingLevel } from "../runtime/index.js";
+import {
+  Agent,
+  type AgentMessage,
+  type AgentOptions,
+  type ThinkingLevel,
+} from "../runtime/index.js";
 import { AgentSession, type AgentSessionWriteLockRunner } from "./agent-session.js";
 import { formatNoModelsAvailableMessage } from "./auth-guidance.js";
 import { AuthStorage } from "./auth-storage.js";
@@ -103,6 +108,8 @@ export interface CreateAgentSessionOptions {
   tools?: string[];
   /** Custom tools to register (in addition to built-in tools). */
   customTools?: ToolDefinition[];
+  /** Hydrate an authorized tool deferred out of the current provider-visible tool set. */
+  resolveDeferredTool?: AgentOptions["resolveDeferredTool"];
 
   /** Resource loader. When omitted, DefaultResourceLoader is used. */
   resourceLoader?: ResourceLoader;
@@ -171,7 +178,9 @@ function getAttributionHeaders(
     return undefined;
   }
 
-  if (model.provider === "openrouter" || model.baseUrl.includes("openrouter.ai")) {
+  const baseUrl = (model as { baseUrl?: string }).baseUrl ?? "";
+
+  if (model.provider === "openrouter" || baseUrl.includes("openrouter.ai")) {
     return {
       "HTTP-Referer": "https://openclaw.ai",
       "X-OpenRouter-Title": "OpenClaw",
@@ -182,8 +191,8 @@ function getAttributionHeaders(
   if (
     model.provider === "cloudflare-workers-ai" ||
     model.provider === "cloudflare-ai-gateway" ||
-    model.baseUrl.includes("api.cloudflare.com") ||
-    model.baseUrl.includes("gateway.ai.cloudflare.com")
+    baseUrl.includes("api.cloudflare.com") ||
+    baseUrl.includes("gateway.ai.cloudflare.com")
   ) {
     return {
       "User-Agent": "openclaw",
@@ -454,6 +463,7 @@ export async function createAgentSession(
       }
       return runner.emitContext(messages);
     },
+    resolveDeferredTool: options.resolveDeferredTool,
     steeringMode: settingsManager.getSteeringMode(),
     followUpMode: settingsManager.getFollowUpMode(),
     transport: settingsManager.getTransport(),

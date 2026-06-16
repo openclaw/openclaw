@@ -2,12 +2,34 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { botApi, botCtorSpy } = vi.hoisted(() => ({
-  botApi: {
-    config: { use: vi.fn() },
-    sendMessage: vi.fn(),
-    setMessageReaction: vi.fn(),
-    deleteMessage: vi.fn(),
-  },
+  botApi: (() => {
+    const sendMessage = vi.fn();
+    type RichMessageParams = {
+      chat_id?: string | number;
+      rich_message?: {
+        markdown?: string;
+        html?: string;
+      };
+      [key: string]: unknown;
+    };
+    return {
+      config: { use: vi.fn() },
+      sendMessage,
+      setMessageReaction: vi.fn(),
+      deleteMessage: vi.fn(),
+      raw: {
+        sendRichMessage: vi.fn(async (params: RichMessageParams) =>
+          sendMessage(
+            params.chat_id,
+            params.rich_message?.markdown ?? params.rich_message?.html ?? "",
+            Object.fromEntries(
+              Object.entries(params).filter(([key]) => key !== "chat_id" && key !== "rich_message"),
+            ),
+          ),
+        ),
+      },
+    };
+  })(),
   botCtorSpy: vi.fn(),
 }));
 

@@ -199,6 +199,21 @@ function loadSessionToken(gatewayUrl: string): string {
   }
 }
 
+export function resolveGatewayTokenForUrlEdit(
+  currentGatewayUrl: string,
+  nextGatewayUrl: string,
+  currentToken: string,
+): string {
+  if (
+    normalizeGatewayTokenScope(currentGatewayUrl) === normalizeGatewayTokenScope(nextGatewayUrl)
+  ) {
+    return currentToken;
+  }
+  // Gateway tokens stay session-scoped across endpoint edits.
+  // Durable settings may contain scrubbed legacy tokens, but must not restore them here.
+  return loadSessionToken(nextGatewayUrl);
+}
+
 function persistSessionToken(gatewayUrl: string, token: string) {
   try {
     const storage = getSessionStorage();
