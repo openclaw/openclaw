@@ -13,8 +13,10 @@ describe("clawrouter provider plugin", () => {
       docsPath: "/providers/clawrouter",
       envVars: ["CLAWROUTER_API_KEY"],
       isModernModelRef: expect.any(Function),
+      buildReplayPolicy: expect.any(Function),
       normalizeResolvedModel: expect.any(Function),
       resolveDynamicModel: expect.any(Function),
+      sanitizeReplayHistory: expect.any(Function),
     });
     expect(provider?.auth[0]).toMatchObject({
       id: "api-key",
@@ -35,6 +37,42 @@ describe("clawrouter provider plugin", () => {
 
     expect(normalized).toMatchObject({
       baseUrl: "https://clawrouter.example/v1",
+    });
+  });
+
+  it("keeps replay handling aligned with each discovered transport", () => {
+    const provider = capturePluginRegistration(plugin).providers[0];
+    const buildReplayPolicy = provider?.buildReplayPolicy;
+
+    expect(
+      buildReplayPolicy?.({
+        provider: "clawrouter",
+        modelApi: "anthropic-messages",
+        modelId: "anthropic/default",
+      } as never),
+    ).toMatchObject({
+      preserveNativeAnthropicToolUseIds: true,
+      preserveSignatures: true,
+      validateAnthropicTurns: true,
+    });
+    expect(
+      buildReplayPolicy?.({
+        provider: "clawrouter",
+        modelApi: "google-generative-ai",
+        modelId: "google/gemini-default",
+      } as never),
+    ).toMatchObject({
+      validateGeminiTurns: true,
+    });
+    expect(
+      buildReplayPolicy?.({
+        provider: "clawrouter",
+        modelApi: "openai-responses",
+        modelId: "openai/gpt-5.5-mini",
+      } as never),
+    ).toMatchObject({
+      validateGeminiTurns: false,
+      validateAnthropicTurns: false,
     });
   });
 });

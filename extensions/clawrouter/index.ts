@@ -1,7 +1,13 @@
 // ClawRouter plugin entrypoint registers credential-scoped model routing.
 import { definePluginEntry, type ProviderAuthMethod } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
-import { PASSTHROUGH_GEMINI_REPLAY_HOOKS } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  buildGoogleGeminiReplayPolicy,
+  buildNativeAnthropicReplayPolicyForModel,
+  buildPassthroughGeminiSanitizingReplayPolicy,
+  resolveTaggedReasoningOutputMode,
+  sanitizeGoogleGeminiReplayHistory,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import {
   buildClawRouterProviderConfig,
   normalizeClawRouterApiBaseUrl,
@@ -81,7 +87,24 @@ export default definePluginEntry({
           modelId,
         }),
       normalizeResolvedModel: ({ model }) => normalizeClawRouterResolvedModel(model),
-      ...PASSTHROUGH_GEMINI_REPLAY_HOOKS,
+      buildReplayPolicy: ({ modelApi, modelId }) => {
+        if (modelApi === "anthropic-messages") {
+          return buildNativeAnthropicReplayPolicyForModel(modelId);
+        }
+        if (modelApi === "google-generative-ai") {
+          return buildGoogleGeminiReplayPolicy();
+        }
+        if (modelApi === "openai-completions" || modelApi === "openai-responses") {
+          return buildPassthroughGeminiSanitizingReplayPolicy(modelId);
+        }
+        return undefined;
+      },
+      sanitizeReplayHistory: (ctx) =>
+        ctx.modelApi === "google-generative-ai"
+          ? sanitizeGoogleGeminiReplayHistory(ctx)
+          : undefined,
+      resolveReasoningOutputMode: (ctx) =>
+        ctx.modelApi === "google-generative-ai" ? resolveTaggedReasoningOutputMode() : undefined,
       isModernModelRef: () => true,
     });
   },
