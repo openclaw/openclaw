@@ -149,13 +149,9 @@ export class CodexAppServerEventProjector {
   private readonly assistantItemOrder: string[] = [];
   private readonly assistantPhaseByItem = new Map<string, string>();
   private readonly lastCommentaryProgressTextByItem = new Map<string, string>();
-  // Codex surfaces each assistant note on two lanes: the typed agentMessage lane
-  // (real thread item id) and the raw rawResponseItem lane (the message item omits
-  // its id on the wire, so we synthesize `raw-assistant-*`). The per-item guard
-  // can't dedupe across lanes because the ids never match, so we record which lane
-  // first emitted each note text this turn and drop only the echo from the other
-  // lane; same-lane repeats (distinct notes that share text) still flow.
-  private readonly commentaryLaneByProgressText = new Map<string, "typed" | "raw">();
+  // Codex emits each typed item completion before its matching raw response item.
+  // Pair by protocol order because contributors may rewrite only the typed text.
+  private pendingRawCommentaryEchoes = 0;
   private readonly reasoningTextByGroup = new Map<string, ReasoningTextGroup>();
   private readonly reasoningItemOrder = new Map<string, number>();
   private readonly planTextByItem = new Map<string, string>();
@@ -523,7 +519,7 @@ export class CodexAppServerEventProjector {
     const text = `${this.assistantTextByItem.get(itemId) ?? ""}${delta}`;
     this.assistantTextByItem.set(itemId, text);
     if (this.isCommentaryAssistantItem(itemId)) {
-      this.emitCommentaryProgress({ itemId, text, lane: "typed" });
+      this.emitCommentaryProgress({ itemId, text });
     } else if (this.shouldStreamAssistantPartial(itemId)) {
       await this.params.onPartialReply?.({ text, delta });
     }
@@ -659,7 +655,8 @@ export class CodexAppServerEventProjector {
       this.rememberAssistantItem(item.id);
       this.assistantTextByItem.set(item.id, item.text);
       if (item.text && this.isCommentaryAssistantItem(item.id)) {
-        this.emitCommentaryProgress({ itemId: item.id, text: item.text, lane: "typed" });
+        this.emitCommentaryProgress({ itemId: item.id, text: item.text });
+        this.pendingRawCommentaryEchoes += 1;
       }
     }
     this.recordNativeGeneratedMedia(item);
@@ -921,19 +918,23 @@ export class CodexAppServerEventProjector {
     if (readString(item, "role") !== "assistant") {
       return;
     }
+    const phase = readString(item, "phase");
+    if (phase === "commentary" && this.pendingRawCommentaryEchoes > 0) {
+      this.pendingRawCommentaryEchoes -= 1;
+      return;
+    }
     const text = extractRawAssistantText(item);
     if (!text) {
       return;
     }
     const itemId = readString(item, "id") ?? `raw-assistant-${this.assistantItemOrder.length + 1}`;
-    const phase = readString(item, "phase");
     if (phase) {
       this.assistantPhaseByItem.set(itemId, phase);
     }
     this.rememberAssistantItem(itemId);
     this.assistantTextByItem.set(itemId, text);
     if (phase === "commentary") {
-      this.emitCommentaryProgress({ itemId, text, lane: "raw" });
+      this.emitCommentaryProgress({ itemId, text });
     }
   }
 
@@ -1064,11 +1065,7 @@ export class CodexAppServerEventProjector {
     return this.assistantPhaseByItem.get(itemId) === "final_answer";
   }
 
-  private emitCommentaryProgress(params: {
-    itemId: string;
-    text: string;
-    lane: "typed" | "raw";
-  }): void {
+  private emitCommentaryProgress(params: { itemId: string; text: string }): void {
     const progressText = params.text.replace(/\s+/g, " ").trim();
     if (
       !progressText ||
@@ -1077,15 +1074,6 @@ export class CodexAppServerEventProjector {
       return;
     }
     this.lastCommentaryProgressTextByItem.set(params.itemId, progressText);
-    const firstLane = this.commentaryLaneByProgressText.get(progressText);
-    if (firstLane !== undefined && firstLane !== params.lane) {
-      // The other lane already delivered this exact note; the downstream buffer
-      // keys on item id, so emitting again would post it twice. Drop the echo.
-      return;
-    }
-    if (firstLane === undefined) {
-      this.commentaryLaneByProgressText.set(progressText, params.lane);
-    }
     this.emitAgentEvent({
       stream: "item",
       data: {
