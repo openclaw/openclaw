@@ -168,6 +168,50 @@ describe("wrapStreamFnPromoteStandaloneTextToolCalls", () => {
     });
   });
 
+  it("promotes namespaced Harmony tool-call text without leaking raw browser scaffolding", async () => {
+    const rawToolText =
+      'commentary to=functions.browser code {"action":"open","url":"https://example.com"}';
+    const resultMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: rawToolText }],
+      stopReason: "stop",
+    };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [
+          { type: "text_delta", contentIndex: 0, delta: rawToolText },
+          { type: "done", reason: "stop", message: resultMessage },
+        ],
+        resultMessage,
+      }),
+    );
+    const wrapped = wrapStreamFnPromoteStandaloneTextToolCalls(
+      baseFn as never,
+      new Set(["browser"]),
+    );
+    const stream = (await Promise.resolve(
+      wrapped({} as never, {} as never, {} as never),
+    )) as FakeWrappedStream;
+
+    const events = await collectStreamEvents(stream);
+    const result = requireRecord(await stream.result(), "result message");
+
+    expect(events.map((event) => requireRecord(event, "event").type)).toEqual([
+      "toolcall_start",
+      "toolcall_delta",
+      "done",
+    ]);
+    expect(requireRecord(events.at(-1), "done").reason).toBe("toolUse");
+    expect(result.stopReason).toBe("toolUse");
+    expect(requireRecord((result.content as unknown[])[0], "tool call")).toMatchObject({
+      type: "toolCall",
+      name: "browser",
+      arguments: { action: "open", url: "https://example.com" },
+    });
+    expect(JSON.stringify(events)).not.toContain("functions.browser");
+    expect(JSON.stringify(result)).not.toContain("functions.browser");
+  });
+
   it("promotes deferred directory tool names from the live callable set", async () => {
     const rawToolText = [
       "[tool:hidden_catalog_tool]",

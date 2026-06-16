@@ -6,6 +6,7 @@ import {
   HARMONY_CALL_MARKER,
   HARMONY_CHANNEL_MARKER,
   HARMONY_MESSAGE_MARKER,
+  isHarmonyToolTargetChar,
   isPlainTextToolNameChar,
   skipHorizontalWhitespace,
   skipWhitespace,
@@ -99,7 +100,7 @@ function parseHarmonyOpening(text: string, start: number): PlainTextToolCallOpen
   }
   cursor += 3;
   const nameStart = cursor;
-  while (isPlainTextToolNameChar(text[cursor])) {
+  while (isHarmonyToolTargetChar(text[cursor])) {
     cursor += 1;
   }
   if (cursor === nameStart) {

@@ -273,6 +273,17 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText(input)).toBe("Before\nAfter");
   });
 
+  it("strips namespaced Harmony browser tool scaffolding before user-facing delivery", () => {
+    const input = [
+      "Before",
+      'commentary to=functions.browser code {"action":"open","url":"https://example.com"}',
+      'commentary to=functions.browser.commentary code {"action":"status"}',
+      "After",
+    ].join("\n");
+
+    expect(sanitizeUserFacingText(input)).toBe("Before\nAfter");
+  });
+
   it("strips MiniMax plain-text tool calls before user-facing delivery", () => {
     const input = [
       "Let me check that.",

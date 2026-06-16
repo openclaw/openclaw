@@ -83,6 +83,22 @@ describe("parseStandalonePlainTextToolCallBlocks", () => {
     ]);
   });
 
+  it("parses Harmony commentary tool calls with namespaced targets", () => {
+    const raw =
+      'commentary to=functions.browser code {"action":"open","url":"https://example.com"}';
+    const blocks = parseStandalonePlainTextToolCallBlocks(raw);
+
+    expect(blocks).toEqual([
+      {
+        name: "functions.browser",
+        arguments: { action: "open", url: "https://example.com" },
+        start: 0,
+        end: raw.length,
+        raw,
+      },
+    ]);
+  });
+
   it("parses Harmony marker-wrapped tool calls", () => {
     const raw = '<|channel|>commentary to=read code<|message|>{"path":"/tmp/file.txt"}<|call|>';
     const blocks = parseStandalonePlainTextToolCallBlocks(raw);
@@ -265,6 +281,14 @@ describe("stripPlainTextToolCallBlocks", () => {
     expect(
       stripPlainTextToolCallBlocks(
         'before\ncommentary to=read code {"path":"/tmp/file.txt"}\nafter',
+      ),
+    ).toBe("before\nafter");
+  });
+
+  it("strips standalone Harmony tool calls with namespaced targets", () => {
+    expect(
+      stripPlainTextToolCallBlocks(
+        'before\ncommentary to=functions.browser code {"action":"open","url":"https://example.com"}\nafter',
       ),
     ).toBe("before\nafter");
   });

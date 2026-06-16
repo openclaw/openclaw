@@ -144,6 +144,57 @@ function resolveStructuredAllowedToolName(
   return null;
 }
 
+function couldResolveStructuredAllowedToolNamePrefix(
+  rawPrefix: string,
+  allowedToolNames: Set<string>,
+): boolean {
+  const trimmed = rawPrefix.trim();
+  if (!trimmed) {
+    return false;
+  }
+  if (couldNormalizeToolNamePrefixToAllowedTool(trimmed, allowedToolNames)) {
+    return true;
+  }
+
+  const normalizedDelimiter = trimmed.replace(/\//g, ".");
+  if (
+    normalizedDelimiter !== trimmed &&
+    couldNormalizeToolNamePrefixToAllowedTool(normalizedDelimiter, allowedToolNames)
+  ) {
+    return true;
+  }
+
+  const folded = normalizeLowercaseStringOrEmpty(normalizedDelimiter);
+  const namespacePrefixes = ["function", "functions", "tool", "tools"];
+  if (namespacePrefixes.some((namespace) => namespace.startsWith(folded))) {
+    return allowedToolNames.size > 0;
+  }
+
+  for (const prefixPattern of [/^functions?[._-]?/i, /^tools?[._-]?/i]) {
+    const stripped = normalizedDelimiter.replace(prefixPattern, "");
+    if (stripped === normalizedDelimiter) {
+      continue;
+    }
+    if (!stripped) {
+      return allowedToolNames.size > 0;
+    }
+    if (couldNormalizeToolNamePrefixToAllowedTool(stripped, allowedToolNames)) {
+      return true;
+    }
+  }
+
+  const segments = normalizeStringEntries(normalizedDelimiter.split("."));
+  if (segments.length > 1) {
+    for (let index = 1; index < segments.length; index += 1) {
+      const suffix = segments.slice(index).join(".");
+      if (couldNormalizeToolNamePrefixToAllowedTool(suffix, allowedToolNames)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 function inferToolNameFromToolCallId(
   rawId: string | undefined,
   allowedToolNames?: Set<string>,
@@ -928,7 +979,7 @@ function promoteStandaloneTextToolCallMessage(
     isRetainableNonTextBlock: isRetainableNonVisibleBlock,
     message,
     requireAssistantRole: true,
-    resolveToolName: resolveExactAllowedToolName,
+    resolveToolName: resolveStructuredAllowedToolName,
   });
 }
 
@@ -957,8 +1008,9 @@ function createStandaloneToolCallNameMatcher(
   allowedToolNames: Set<string>,
 ): PlainTextToolCallNameMatcher {
   return {
-    hasExactName: (name) => Boolean(resolveExactAllowedToolName(name, allowedToolNames)),
-    hasNamePrefix: (prefix) => couldNormalizeToolNamePrefixToAllowedTool(prefix, allowedToolNames),
+    hasExactName: (name) => Boolean(resolveStructuredAllowedToolName(name, allowedToolNames)),
+    hasNamePrefix: (prefix) =>
+      couldResolveStructuredAllowedToolNamePrefix(prefix, allowedToolNames),
   };
 }
 

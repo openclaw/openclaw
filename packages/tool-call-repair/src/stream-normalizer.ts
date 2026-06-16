@@ -6,6 +6,7 @@ import {
   findHarmonyJsonPayloadStart,
   findJsonObjectEnd,
   findXmlishToolCallEnd,
+  isHarmonyToolTargetChar,
   isPlainTextToolNameChar,
   isXmlishNameChar,
   matchesLiteralPrefix,
@@ -228,7 +229,7 @@ function couldStillBeHarmonyStandaloneToolCall(
 
   cursor += toMarker.length;
   const nameStart = cursor;
-  while (isPlainTextToolNameChar(text[cursor])) {
+  while (isHarmonyToolTargetChar(text[cursor])) {
     cursor += 1;
   }
   const name = text.slice(nameStart, cursor);
@@ -287,7 +288,7 @@ function hasExactSerializedToolCallPrefix(
     return matcher.hasExactName(xmlish[1]);
   }
   const harmony =
-    /^(?:<\|channel\|>)?(?:commentary|analysis|final)\s+to=([A-Za-z0-9_-]+)\s+code\b/.exec(text);
+    /^(?:<\|channel\|>)?(?:commentary|analysis|final)\s+to=([A-Za-z0-9_.:-]+)\s+code\b/.exec(text);
   return Boolean(harmony?.[1] && matcher.hasExactName(harmony[1]));
 }
 

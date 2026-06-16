@@ -22,6 +22,10 @@ export function isXmlishNameChar(char: string | undefined): boolean {
   return Boolean(char && /[A-Za-z0-9_.:-]/.test(char));
 }
 
+export function isHarmonyToolTargetChar(char: string | undefined): boolean {
+  return isXmlishNameChar(char);
+}
+
 /** Skips spaces and tabs only, preserving line boundaries for grammar decisions. */
 export function skipHorizontalWhitespace(text: string, start: number): number {
   let index = start;
@@ -155,7 +159,7 @@ export function findHarmonyJsonPayloadStart(text: string): number | null {
   }
   cursor += "to=".length;
   const nameStart = cursor;
-  while (isPlainTextToolNameChar(text[cursor])) {
+  while (isHarmonyToolTargetChar(text[cursor])) {
     cursor += 1;
   }
   if (cursor === nameStart) {
