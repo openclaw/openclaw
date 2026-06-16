@@ -51,6 +51,11 @@ export type AgentEvent = {
   runId: string;
   stream: string;
   data?: Record<string, unknown>;
+  // Stamped by the gateway on every emitted payload (see infra/agent-events.ts).
+  // Lifecycle events always carry sessionKey, letting the TUI adopt
+  // system-injected runs that never went through the local submit path.
+  sessionKey?: string;
+  agentId?: string;
 };
 
 export type ResponseUsageMode = "on" | "off" | "tokens" | "full";

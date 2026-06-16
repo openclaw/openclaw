@@ -143,9 +143,11 @@ import {
   installSkill,
   loadClawHubDetail,
   loadSkills,
+  reconcileSkillsAgentId,
   saveSkillApiKey,
   searchClawHub,
   setClawHubSearchQuery,
+  setSkillsAgentId,
   updateSkillEdit,
   updateSkillEnabled,
 } from "./controllers/skills.ts";
@@ -169,7 +171,6 @@ import {
 } from "./navigation.ts";
 import { isPluginEnabledInConfigSnapshot } from "./plugin-activation.ts";
 import { isCronSessionKey, resolveSessionDisplayName } from "./session-display.ts";
-import "./components/dashboard-header.ts";
 import {
   buildAgentMainSessionKey,
   isSessionKeyTiedToAgent,
@@ -178,10 +179,17 @@ import {
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "./session-key.ts";
+import "./components/dashboard-header.ts";
+import type { SidebarContent } from "./sidebar-content.ts";
 import { loadLocalAssistantIdentity } from "./storage.ts";
 import { normalizeStringEntries } from "./string-coerce.ts";
 import { normalizeOptionalString } from "./string-coerce.ts";
-import type { AgentsFilesGetResult, AgentsFilesListResult, GatewaySessionRow } from "./types.ts";
+import type {
+  ArtifactDownloadResult,
+  GatewaySessionRow,
+  SessionWorkspaceGetResult,
+  SessionWorkspaceListResult,
+} from "./types.ts";
 import { isRenderableControlUiAvatarUrl } from "./views/agents-utils.ts";
 import { agentLogoUrl } from "./views/agents-utils.ts";
 import {
@@ -678,34 +686,48 @@ const lazyUsage = createLazyView(() => import("./views/usage.ts"), notifyLazyVie
 const lazyWorkboard = createLazyView(() => import("./views/workboard.ts"), notifyLazyViewChanged);
 
 type ChatWorkspaceFilesState = {
-  activeName: string | null;
+  activeId: string | null;
   agentId: string;
+  browserPath: string;
+  browserSearch: string;
+  browserSearchTimer: ReturnType<typeof globalThis.setTimeout> | null;
   collapsed: boolean;
   error: string | null;
-  list: AgentsFilesListResult | null;
+  list: SessionWorkspaceListResult | null;
   loading: boolean;
+  pendingReload: boolean;
   requestId: number;
+  sessionKey: string;
 };
 
 const chatWorkspaceFilesStates = new WeakMap<AppViewState, ChatWorkspaceFilesState>();
 const chatWorkspaceFileOpenRequests = new WeakMap<
   AppViewState,
-  { agentId: string; id: number; name: string; sessionKey: string }
+  { agentId: string; id: number; itemId: string; sessionKey: string }
 >();
 
-function getChatWorkspaceFilesState(state: AppViewState, agentId: string): ChatWorkspaceFilesState {
+function getChatWorkspaceFilesState(
+  state: AppViewState,
+  sessionKey: string,
+  agentId: string,
+): ChatWorkspaceFilesState {
   const current = chatWorkspaceFilesStates.get(state);
-  if (current?.agentId === agentId) {
+  if (current?.sessionKey === sessionKey && current.agentId === agentId) {
     return current;
   }
   const next = {
-    activeName: null,
+    activeId: null,
     agentId,
+    browserPath: "",
+    browserSearch: "",
+    browserSearchTimer: null,
     collapsed: true,
     error: null,
     list: null,
     loading: false,
+    pendingReload: false,
     requestId: 0,
+    sessionKey,
   };
   chatWorkspaceFilesStates.set(state, next);
   return next;
@@ -1001,6 +1023,9 @@ function renderGuardedChatControls(state: AppViewState) {
       state.chatModelSwitchPromises,
       state.chatModelsLoading,
       state.chatModelCatalog,
+      // Provider usage windows arrive async after auth status loads; without this the guarded
+      // composer controls never re-render and the quota pill stays absent/stale (#93041).
+      state.modelAuthStatusResult,
       state.settings.chatShowThinking,
       state.settings.chatShowToolCalls,
       state.settings.chatAutoScroll,
@@ -1279,12 +1304,76 @@ function renderCronQuickCreateForTab(
   });
 }
 
+function languageForWorkspaceFile(name: string): string {
+  const extension = name.match(/\.([a-z0-9_-]+)$/i)?.[1]?.toLowerCase() ?? "";
+  if (extension === "json") {
+    return "json";
+  }
+  if (extension === "mdx") {
+    return "mdx";
+  }
+  if (extension === "tsx" || extension === "jsx") {
+    return extension;
+  }
+  if (extension === "ts" || extension === "js" || extension === "css" || extension === "html") {
+    return extension;
+  }
+  if (extension === "yaml" || extension === "yml") {
+    return "yaml";
+  }
+  if (extension === "toml" || extension === "xml" || extension === "svg") {
+    return extension;
+  }
+  return extension;
+}
+
 function buildWorkspaceFileSidebarContent(name: string, content: string): string {
   if (/\.(?:md|markdown|mdx)$/i.test(name)) {
     return content;
   }
-  const language = name.match(/\.([a-z0-9_-]+)$/i)?.[1]?.toLowerCase() ?? "";
+  const language = languageForWorkspaceFile(name);
   return `# ${name}\n\n\`\`\`${language}\n${content}\n\`\`\``;
+}
+
+function buildArtifactSidebarContent(params: {
+  data?: string;
+  encoding?: string;
+  mimeType: string;
+  title: string;
+  url?: string;
+}): SidebarContent {
+  const { data, encoding, mimeType, title, url } = params;
+  if (encoding === "base64" && data && mimeType.startsWith("image/")) {
+    return {
+      kind: "image",
+      title,
+      src: `data:${mimeType};base64,${data}`,
+      mimeType,
+      rawText: url ?? null,
+    };
+  }
+  if (encoding === "base64" && data && mimeType === "application/json") {
+    const decoded = globalThis.atob(data);
+    return {
+      kind: "markdown",
+      content: `# ${title}\n\n\`\`\`json\n${decoded}\n\`\`\``,
+      rawText: decoded,
+    };
+  }
+  if (encoding === "base64" && data && mimeType.startsWith("text/")) {
+    const decoded = globalThis.atob(data);
+    return {
+      kind: "markdown",
+      content: `# ${title}\n\n\`\`\`\n${decoded}\n\`\`\``,
+      rawText: decoded,
+    };
+  }
+  if (url) {
+    const content = `# ${title}\n\n[Open artifact](${url})`;
+    return { kind: "markdown", content, rawText: content };
+  }
+  const content = `# ${title}\n\nArtifact download is not previewable in the sidebar.`;
+  return { kind: "markdown", content, rawText: content };
 }
 
 export function renderApp(state: AppViewState) {
@@ -1495,11 +1584,15 @@ export function renderApp(state: AppViewState) {
       ? (scopedChatAgentId ?? chatFallbackAgentId)
       : (activeSessionAgentId ?? scopedChatAgentId ?? chatFallbackAgentId);
   const toolsPanelUsesActiveSession = Boolean(resolvedAgentId && resolvedAgentId === chatAgentId);
-  const chatWorkspaceFiles = getChatWorkspaceFilesState(state, chatAgentId);
+  const chatWorkspaceAgentId = resolveChatWorkspaceAgentId();
+  const chatWorkspaceFiles = getChatWorkspaceFilesState(
+    state,
+    state.sessionKey,
+    chatWorkspaceAgentId,
+  );
   const currentChatWorkspaceFilesState = () =>
-    resolveChatWorkspaceAgentId() === chatAgentId
-      ? getChatWorkspaceFilesState(state, chatAgentId)
-      : null;
+    getChatWorkspaceFilesState(state, state.sessionKey, resolveChatWorkspaceAgentId());
+  const currentSessionWorkspaceKey = () => state.sessionKey;
   const getCurrentConfigValue = () =>
     state.configForm ?? (state.configSnapshot?.config as Record<string, unknown> | null);
   const findAgentIndex = (agentId: string) =>
@@ -2105,13 +2198,13 @@ export function renderApp(state: AppViewState) {
     state.agentsList &&
     !chatWorkspaceFiles.loading &&
     !chatWorkspaceFiles.error &&
-    chatWorkspaceFiles.list?.agentId !== chatAgentId
+    chatWorkspaceFiles.list?.sessionKey !== state.sessionKey
   ) {
     loadChatWorkspaceFiles();
   }
   const toggleChatWorkspaceFilesCollapsed = () => {
     chatWorkspaceFiles.collapsed = !chatWorkspaceFiles.collapsed;
-    if (!chatWorkspaceFiles.collapsed && chatWorkspaceFiles.list?.agentId !== chatAgentId) {
+    if (!chatWorkspaceFiles.collapsed && chatWorkspaceFiles.list?.sessionKey !== state.sessionKey) {
       loadChatWorkspaceFiles();
     }
     requestHostUpdate?.();
@@ -2119,8 +2212,36 @@ export function renderApp(state: AppViewState) {
   const refreshChatWorkspaceFiles = () => {
     loadChatWorkspaceFiles({ force: true });
   };
+  const browseChatWorkspacePath = (path: string) => {
+    if (chatWorkspaceFiles.browserSearchTimer) {
+      globalThis.clearTimeout(chatWorkspaceFiles.browserSearchTimer);
+      chatWorkspaceFiles.browserSearchTimer = null;
+    }
+    chatWorkspaceFiles.browserPath = path;
+    chatWorkspaceFiles.browserSearch = "";
+    loadChatWorkspaceFiles({ force: true });
+  };
+  const searchChatWorkspaceFiles = (search: string) => {
+    chatWorkspaceFiles.browserSearch = search;
+    if (chatWorkspaceFiles.browserSearchTimer) {
+      globalThis.clearTimeout(chatWorkspaceFiles.browserSearchTimer);
+    }
+    chatWorkspaceFiles.browserSearchTimer = globalThis.setTimeout(() => {
+      chatWorkspaceFiles.browserSearchTimer = null;
+      loadChatWorkspaceFiles({ force: true });
+    }, 160);
+  };
+  const copyChatWorkspacePath = (filePath: string) => {
+    void globalThis.navigator?.clipboard?.writeText?.(filePath);
+  };
   function loadChatWorkspaceFiles(opts?: { force?: boolean }) {
-    if (!state.client || !state.connected || chatWorkspaceFiles.loading) {
+    if (!state.client || !state.connected) {
+      return;
+    }
+    if (chatWorkspaceFiles.loading) {
+      if (opts?.force) {
+        chatWorkspaceFiles.pendingReload = true;
+      }
       return;
     }
     const requestId = chatWorkspaceFiles.requestId + 1;
@@ -2131,18 +2252,45 @@ export function renderApp(state: AppViewState) {
       chatWorkspaceFiles.list = null;
     }
     const requestState = chatWorkspaceFiles;
+    requestState.pendingReload = false;
+    const sessionKey = state.sessionKey;
+    const agentId = chatWorkspaceFiles.agentId;
     void (async () => {
       try {
-        const res = await state.client?.request<AgentsFilesListResult | null>("agents.files.list", {
-          agentId: chatAgentId,
+        const res = await state.client?.request<SessionWorkspaceListResult | null>(
+          "sessions.files.list",
+          {
+            sessionKey,
+            path: requestState.browserSearch ? "" : requestState.browserPath,
+            search: requestState.browserSearch,
+            ...(agentId ? { agentId } : {}),
+          },
+        );
+        const artifacts = await state.client?.request<{
+          artifacts?: SessionWorkspaceListResult["artifacts"];
+        } | null>("artifacts.list", {
+          sessionKey,
+          ...(agentId ? { agentId } : {}),
         });
         const current = currentChatWorkspaceFilesState();
         if (current !== requestState || current.requestId !== requestId) {
           return;
         }
-        current.list = res ?? null;
-        if (current.activeName && !res?.files.some((file) => file.name === current.activeName)) {
-          current.activeName = null;
+        const files = res?.files ?? [];
+        const artifactItems = artifacts?.artifacts ?? [];
+        current.list = {
+          sessionKey,
+          ...(res?.root ? { root: res.root } : {}),
+          files,
+          ...(res?.browser ? { browser: res.browser } : {}),
+          artifacts: artifactItems,
+        };
+        if (
+          current.activeId &&
+          !files.some((file) => `file:${file.path}` === current.activeId) &&
+          !artifactItems.some((artifact) => `artifact:${artifact.id}` === current.activeId)
+        ) {
+          current.activeId = null;
         }
       } catch (err) {
         const current = currentChatWorkspaceFilesState();
@@ -2153,19 +2301,25 @@ export function renderApp(state: AppViewState) {
         const current = currentChatWorkspaceFilesState();
         if (current === requestState && current.requestId === requestId) {
           current.loading = false;
+          const shouldReload = current.pendingReload;
+          current.pendingReload = false;
+          if (shouldReload) {
+            loadChatWorkspaceFiles({ force: true });
+          }
         }
         requestHostUpdate?.();
       }
     })();
   }
-  const openChatWorkspaceFile = (name: string) => {
-    chatWorkspaceFiles.activeName = name;
+  const openChatWorkspaceFile = (filePath: string) => {
+    const itemId = `file:${filePath}`;
+    chatWorkspaceFiles.activeId = itemId;
     const previousRequest = chatWorkspaceFileOpenRequests.get(state);
     const openRequest = {
-      agentId: chatAgentId,
+      agentId: chatWorkspaceFiles.agentId,
       id: (previousRequest?.id ?? 0) + 1,
-      name,
-      sessionKey: state.sessionKey,
+      itemId,
+      sessionKey: currentSessionWorkspaceKey(),
     };
     chatWorkspaceFileOpenRequests.set(state, openRequest);
     const isCurrentOpenRequest = () => {
@@ -2174,9 +2328,10 @@ export function renderApp(state: AppViewState) {
       return (
         currentRequest?.id === openRequest.id &&
         currentRequest.agentId === resolveChatWorkspaceAgentId() &&
-        currentRequest.name === name &&
-        currentRequest.sessionKey === state.sessionKey &&
-        currentFiles?.activeName === name
+        currentRequest.itemId === itemId &&
+        currentRequest.sessionKey === currentSessionWorkspaceKey() &&
+        currentFiles?.agentId === openRequest.agentId &&
+        currentFiles?.activeId === itemId
       );
     };
     void (async () => {
@@ -2185,14 +2340,82 @@ export function renderApp(state: AppViewState) {
       }
       chatWorkspaceFiles.error = null;
       try {
-        const res = await state.client.request<AgentsFilesGetResult | null>("agents.files.get", {
-          agentId: chatAgentId,
-          name,
-        });
-        const content = res?.file?.content;
-        if (typeof content !== "string") {
+        const agentId = openRequest.agentId;
+        const res = await state.client.request<SessionWorkspaceGetResult | null>(
+          "sessions.files.get",
+          {
+            sessionKey: openRequest.sessionKey,
+            path: filePath,
+            ...(agentId ? { agentId } : {}),
+          },
+        );
+        const file = res?.file;
+        if (!file || typeof file.content !== "string") {
           if (isCurrentOpenRequest()) {
-            chatWorkspaceFiles.error = `Failed to load ${name}`;
+            chatWorkspaceFiles.error = `Failed to load ${filePath}`;
+            requestHostUpdate?.();
+          }
+          return;
+        }
+        const content = file.content;
+        if (!isCurrentOpenRequest()) {
+          return;
+        }
+        state.handleOpenSidebar({
+          kind: "markdown",
+          content: buildWorkspaceFileSidebarContent(file.name || filePath, content),
+          rawText: content,
+        });
+      } catch (err) {
+        if (isCurrentOpenRequest()) {
+          chatWorkspaceFiles.error = String(err);
+        }
+      } finally {
+        requestHostUpdate?.();
+      }
+    })();
+  };
+  const openChatWorkspaceArtifact = (artifactId: string) => {
+    const itemId = `artifact:${artifactId}`;
+    chatWorkspaceFiles.activeId = itemId;
+    const previousRequest = chatWorkspaceFileOpenRequests.get(state);
+    const openRequest = {
+      agentId: chatWorkspaceFiles.agentId,
+      id: (previousRequest?.id ?? 0) + 1,
+      itemId,
+      sessionKey: currentSessionWorkspaceKey(),
+    };
+    chatWorkspaceFileOpenRequests.set(state, openRequest);
+    const isCurrentOpenRequest = () => {
+      const currentRequest = chatWorkspaceFileOpenRequests.get(state);
+      const currentFiles = currentChatWorkspaceFilesState();
+      return (
+        currentRequest?.id === openRequest.id &&
+        currentRequest.agentId === resolveChatWorkspaceAgentId() &&
+        currentRequest.itemId === itemId &&
+        currentRequest.sessionKey === currentSessionWorkspaceKey() &&
+        currentFiles?.agentId === openRequest.agentId &&
+        currentFiles?.activeId === itemId
+      );
+    };
+    void (async () => {
+      if (!state.client || !state.connected) {
+        return;
+      }
+      chatWorkspaceFiles.error = null;
+      try {
+        const agentId = openRequest.agentId;
+        const res = await state.client.request<ArtifactDownloadResult | null>(
+          "artifacts.download",
+          {
+            sessionKey: openRequest.sessionKey,
+            artifactId,
+            ...(agentId ? { agentId } : {}),
+          },
+        );
+        if (!res?.artifact) {
+          if (isCurrentOpenRequest()) {
+            chatWorkspaceFiles.error = `Failed to load artifact ${artifactId}`;
             requestHostUpdate?.();
           }
           return;
@@ -2200,11 +2423,16 @@ export function renderApp(state: AppViewState) {
         if (!isCurrentOpenRequest()) {
           return;
         }
-        state.handleOpenSidebar({
-          kind: "markdown",
-          content: buildWorkspaceFileSidebarContent(name, content),
-          rawText: content,
+        const title = res.artifact.title;
+        const mimeType = res.artifact.mimeType ?? "";
+        const preview = buildArtifactSidebarContent({
+          data: res.data,
+          encoding: res.encoding,
+          mimeType,
+          title,
+          url: res.url,
         });
+        state.handleOpenSidebar(preview);
       } catch (err) {
         if (isCurrentOpenRequest()) {
           chatWorkspaceFiles.error = String(err);
@@ -3256,6 +3484,8 @@ export function renderApp(state: AppViewState) {
                 connected: state.connected,
                 loading: state.skillsLoading,
                 report: state.skillsReport,
+                agentsList: state.agentsList,
+                selectedAgentId: state.skillsAgentId ?? state.agentsList?.defaultId ?? null,
                 error: state.skillsError,
                 filter: state.skillsFilter,
                 statusFilter: state.skillsStatusFilter,
@@ -3280,9 +3510,19 @@ export function renderApp(state: AppViewState) {
                 clawhubDetailError: state.clawhubDetailError,
                 clawhubInstallSlug: state.clawhubInstallSlug,
                 clawhubInstallMessage: state.clawhubInstallMessage,
+                onAgentChange: (agentId) => {
+                  setSkillsAgentId(state, agentId);
+                  void loadSkills(state, { clearMessages: true });
+                },
                 onFilterChange: (next) => (state.skillsFilter = next),
                 onStatusFilterChange: (next) => (state.skillsStatusFilter = next),
-                onRefresh: () => void loadSkills(state, { clearMessages: true }),
+                onRefresh: () => {
+                  void (async () => {
+                    await loadAgents(state);
+                    reconcileSkillsAgentId(state, state.agentsList);
+                    await loadSkills(state, { clearMessages: true });
+                  })();
+                },
                 onToggle: (key, enabled) => void updateSkillEnabled(state, key, enabled),
                 onEdit: (key, value) => updateSkillEdit(state, key, value),
                 onSaveKey: (key) => void saveSkillApiKey(state, key),
@@ -3543,19 +3783,23 @@ export function renderApp(state: AppViewState) {
                   onDismissError: () => dismissChatError(state),
                   sessions: state.sessionsResult,
                   composerControls: renderGuardedChatControls(state),
-                  workspaceFiles: {
+                  sessionWorkspace: {
                     collapsed: chatWorkspaceFiles.collapsed,
-                    agentId: chatAgentId,
+                    sessionKey: state.sessionKey,
                     list:
-                      chatWorkspaceFiles.list?.agentId === chatAgentId
+                      chatWorkspaceFiles.list?.sessionKey === state.sessionKey
                         ? chatWorkspaceFiles.list
                         : null,
                     loading: chatWorkspaceFiles.loading,
                     error: chatWorkspaceFiles.error,
-                    activeName: chatWorkspaceFiles.activeName,
+                    activeId: chatWorkspaceFiles.activeId,
                     onToggleCollapsed: toggleChatWorkspaceFilesCollapsed,
                     onRefresh: refreshChatWorkspaceFiles,
+                    onBrowsePath: browseChatWorkspacePath,
+                    onCopyPath: copyChatWorkspacePath,
                     onOpenFile: openChatWorkspaceFile,
+                    onSearch: searchChatWorkspaceFiles,
+                    onOpenArtifact: openChatWorkspaceArtifact,
                   },
                   autoExpandToolCalls: false,
                   onRefresh: () => {

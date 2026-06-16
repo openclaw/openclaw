@@ -12,6 +12,7 @@ export type {
   EmbeddingProviderCallOptions,
   EmbeddingProviderCreateOptions,
   EmbeddingProviderCreateResult,
+  EmbeddingProviderIndexIdentity,
   EmbeddingProviderRuntime,
   RegisteredEmbeddingProvider,
 } from "./embedding-provider-types.js";

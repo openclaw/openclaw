@@ -11,6 +11,7 @@ import {
   describeFailoverError,
   FailoverError,
   isNonProviderRuntimeCoordinationError,
+  isSignalTimeoutReason,
   isTimeoutError,
   resolveFailoverReasonFromError,
   resolveFailoverStatus,
@@ -1347,5 +1348,36 @@ describe("buildFailoverRemediationHint", () => {
     expect(buildFailoverRemediationHint(new Error("oops"))).toBeUndefined();
     expect(buildFailoverRemediationHint(undefined)).toBeUndefined();
     expect(buildFailoverRemediationHint("just a string")).toBeUndefined();
+  });
+});
+
+describe("isSignalTimeoutReason", () => {
+  it("returns false for plain AbortController.abort() DOMException (client disconnect)", () => {
+    // watchClientDisconnect calls abort() with no args, producing AbortError.
+    // This must not be classified as a run timeout (#90764).
+    const err = new DOMException("This operation was aborted", "AbortError");
+    expect(isSignalTimeoutReason(err)).toBe(false);
+  });
+
+  it("returns false for AbortError whose message matches ABORT_TIMEOUT_RE", () => {
+    // Old isTimeoutError returned true here via ABORT_TIMEOUT_RE (/request.*aborted/i).
+    const err = Object.assign(new Error("request aborted"), { name: "AbortError" });
+    expect(isSignalTimeoutReason(err)).toBe(false);
+  });
+
+  it("returns true for AbortSignal.timeout() DOMException", () => {
+    const err = new DOMException("signal timed out", "TimeoutError");
+    expect(isSignalTimeoutReason(err)).toBe(true);
+  });
+
+  it("returns true for makeTimeoutAbortReason()-style Error", () => {
+    // makeTimeoutAbortReason() in attempt.ts: Error("request timed out", name="TimeoutError")
+    const err = Object.assign(new Error("request timed out"), { name: "TimeoutError" });
+    expect(isSignalTimeoutReason(err)).toBe(true);
+  });
+
+  it("returns false for null and undefined", () => {
+    expect(isSignalTimeoutReason(null)).toBe(false);
+    expect(isSignalTimeoutReason(undefined)).toBe(false);
   });
 });

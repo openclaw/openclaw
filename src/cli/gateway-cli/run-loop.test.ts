@@ -54,6 +54,18 @@ const getInspectableActiveTaskRestartBlockers = vi.fn(
 const markGatewayDraining = vi.fn();
 const waitForActiveTasks = vi.fn(async (_timeoutMs?: number) => ({ drained: true }));
 const resetAllLanes = vi.fn();
+const advanceCronActiveJobGeneration = vi.fn();
+const resetCronActiveJobs = vi.fn();
+const abortActiveCronTaskRuns = vi.fn((_reason?: string) => 0);
+const retireActiveCronTaskRunTracking = vi.fn();
+const waitForActiveCronTaskRuns = vi.fn(async (_timeoutMs?: number) => ({
+  drained: true,
+  active: 0,
+}));
+const waitForActiveCronJobs = vi.fn(async (_timeoutMs?: number) => ({
+  drained: true,
+  active: 0,
+}));
 const reloadTaskRegistryFromStore = vi.fn();
 const rotateAgentEventLifecycleGeneration = vi.fn();
 const clearRuntimeConfigSnapshot = vi.fn();
@@ -149,6 +161,18 @@ vi.mock("../../process/command-queue.js", () => ({
   markGatewayDraining: () => markGatewayDraining(),
   waitForActiveTasks: (timeoutMs?: number) => waitForActiveTasks(timeoutMs),
   resetAllLanes: () => resetAllLanes(),
+}));
+
+vi.mock("../../cron/active-jobs.js", () => ({
+  advanceCronActiveJobGeneration: () => advanceCronActiveJobGeneration(),
+  resetCronActiveJobs: () => resetCronActiveJobs(),
+  waitForActiveCronJobs: (timeoutMs: number) => waitForActiveCronJobs(timeoutMs),
+}));
+
+vi.mock("../../tasks/cron-task-cancel.js", () => ({
+  abortActiveCronTaskRuns: (reason?: string) => abortActiveCronTaskRuns(reason),
+  retireActiveCronTaskRunTracking: () => retireActiveCronTaskRunTracking(),
+  waitForActiveCronTaskRuns: (timeoutMs: number) => waitForActiveCronTaskRuns(timeoutMs),
 }));
 
 vi.mock("../../tasks/runtime-internal.js", () => ({
@@ -876,7 +900,13 @@ describe("runGatewayLoop", () => {
       expect(gatewayLog.warn).toHaveBeenCalledWith(DRAIN_TIMEOUT_LOG);
       expectRestartCloseCall(closeFirst, 1_234);
       expect(markGatewaySigusr1RestartHandled).toHaveBeenCalledTimes(1);
+      expect(abortActiveCronTaskRuns).toHaveBeenCalledWith("Gateway restarting.");
+      expect(waitForActiveCronTaskRuns).toHaveBeenCalledWith(1_000);
+      expect(waitForActiveCronJobs).toHaveBeenCalledWith(1_000);
       expect(resetAllLanes).toHaveBeenCalledTimes(1);
+      expect(advanceCronActiveJobGeneration).toHaveBeenCalledTimes(1);
+      expect(retireActiveCronTaskRunTracking).toHaveBeenCalledTimes(1);
+      expect(resetCronActiveJobs).toHaveBeenCalledTimes(1);
       expect(clearRuntimeConfigSnapshot).toHaveBeenCalledTimes(1);
       expect(resetGatewayRestartStateForInProcessRestart).toHaveBeenCalledTimes(1);
       expect(rotateAgentEventLifecycleGeneration).toHaveBeenCalledTimes(1);
@@ -884,6 +914,18 @@ describe("runGatewayLoop", () => {
       expect(
         rotateAgentEventLifecycleGeneration.mock.invocationCallOrder[0] ?? Infinity,
       ).toBeLessThan(resetAllLanes.mock.invocationCallOrder[0] ?? Infinity);
+      expect(advanceCronActiveJobGeneration.mock.invocationCallOrder[0] ?? Infinity).toBeLessThan(
+        abortActiveCronTaskRuns.mock.invocationCallOrder[0] ?? Infinity,
+      );
+      expect(waitForActiveCronJobs.mock.invocationCallOrder[0] ?? Infinity).toBeLessThan(
+        retireActiveCronTaskRunTracking.mock.invocationCallOrder[0] ?? Infinity,
+      );
+      expect(retireActiveCronTaskRunTracking.mock.invocationCallOrder[0] ?? Infinity).toBeLessThan(
+        resetCronActiveJobs.mock.invocationCallOrder[0] ?? Infinity,
+      );
+      expect(resetCronActiveJobs.mock.invocationCallOrder[0] ?? Infinity).toBeLessThan(
+        resetAllLanes.mock.invocationCallOrder[0] ?? Infinity,
+      );
 
       sigusr1();
 
@@ -894,7 +936,13 @@ describe("runGatewayLoop", () => {
       expectRestartCloseCall(closeSecond, 1_234);
       expect(markGatewaySigusr1RestartHandled).toHaveBeenCalledTimes(2);
       expect(markGatewayDraining).toHaveBeenCalledTimes(2);
+      expect(abortActiveCronTaskRuns).toHaveBeenCalledTimes(2);
+      expect(waitForActiveCronTaskRuns).toHaveBeenCalledTimes(2);
+      expect(waitForActiveCronJobs).toHaveBeenCalledTimes(2);
       expect(resetAllLanes).toHaveBeenCalledTimes(2);
+      expect(advanceCronActiveJobGeneration).toHaveBeenCalledTimes(2);
+      expect(retireActiveCronTaskRunTracking).toHaveBeenCalledTimes(2);
+      expect(resetCronActiveJobs).toHaveBeenCalledTimes(2);
       expect(clearRuntimeConfigSnapshot).toHaveBeenCalledTimes(2);
       expect(resetGatewayRestartStateForInProcessRestart).toHaveBeenCalledTimes(2);
       expect(rotateAgentEventLifecycleGeneration).toHaveBeenCalledTimes(2);
@@ -907,6 +955,42 @@ describe("runGatewayLoop", () => {
         reason: "gateway stopping",
         restartExpectedMs: null,
       });
+    });
+  });
+
+  it("advances stale cron active markers after bounded restart cron-run drain", async () => {
+    vi.clearAllMocks();
+    waitForActiveCronJobs.mockResolvedValueOnce({ drained: false, active: 1 });
+    peekGatewaySigusr1RestartReason.mockReturnValue(undefined);
+    respawnGatewayProcessForUpdate.mockReturnValue({
+      mode: "disabled",
+      detail: "OPENCLAW_NO_RESPAWN",
+    });
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const { start, exited } = await createSignaledLoopHarness();
+      const sigusr1 = captureSignal("SIGUSR1");
+      const sigint = captureSignal("SIGINT");
+
+      sigusr1();
+      await waitForLoopCondition(
+        () => start.mock.calls.length >= 2,
+        "expected SIGUSR1 to trigger restart",
+      );
+
+      expect(abortActiveCronTaskRuns).toHaveBeenCalledWith("Gateway restarting.");
+      expect(waitForActiveCronTaskRuns).toHaveBeenCalledWith(1_000);
+      expect(waitForActiveCronJobs).toHaveBeenCalledWith(1_000);
+      expect(resetAllLanes).toHaveBeenCalledTimes(1);
+      expect(advanceCronActiveJobGeneration).toHaveBeenCalledTimes(1);
+      expect(retireActiveCronTaskRunTracking).toHaveBeenCalledTimes(1);
+      expect(resetCronActiveJobs).toHaveBeenCalledTimes(1);
+      expect(gatewayLog.warn).toHaveBeenCalledWith(
+        "cron run drain timed out during restart lifecycle reset after retiring old cron admission; 0 task handle(s) and 1 active marker(s) remain after aborting old cron runs",
+      );
+
+      sigint();
+      await expect(exited).resolves.toBe(0);
     });
   });
 

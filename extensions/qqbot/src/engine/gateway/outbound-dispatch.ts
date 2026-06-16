@@ -13,10 +13,12 @@
 import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "openclaw/plugin-sdk/reply-chunking";
 import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
+import { createQQBotMarkdownChunker } from "../messaging/markdown-table-chunking.js";
 import {
   parseAndSendMediaTags,
   sendPlainReply,
   sendTextOnlyReply,
+  TEXT_CHUNK_LIMIT,
   type DeliverDeps,
 } from "../messaging/outbound-deliver.js";
 import {
@@ -277,6 +279,9 @@ export async function dispatchOutbound(
   });
 
   // ---- Deliver deps ----
+  const markdownChunker = createQQBotMarkdownChunker((text, limit) =>
+    runtime.channel.text.chunkMarkdownText(text, limit),
+  );
   const deliverDeps: DeliverDeps = {
     mediaSender: {
       sendPhoto: (target, imageUrl) => sendPhoto(target, imageUrl),
@@ -286,7 +291,35 @@ export async function dispatchOutbound(
       sendDocument: (target, filePath) => sendDocument(target, filePath),
       sendMedia: (opts) => sendMedia(opts),
     },
-    chunkText: (text, limit) => runtime.channel.text.chunkMarkdownText(text, limit),
+    chunkText: (text, limit) => markdownChunker.chunkText(text, limit),
+  };
+  const flushPendingMarkdownText = async (): Promise<void> => {
+    const pendingChunks = markdownChunker.flushPendingText(TEXT_CHUNK_LIMIT);
+    if (pendingChunks.length === 0) {
+      return;
+    }
+    const passthroughDeps: DeliverDeps = {
+      ...deliverDeps,
+      chunkText: (text) => [text],
+    };
+    for (const chunk of pendingChunks) {
+      await sendTextOnlyReply(
+        chunk,
+        {
+          type: event.type,
+          senderId: event.senderId,
+          messageId: event.messageId,
+          channelId: event.channelId,
+          groupOpenid: event.groupOpenid,
+          msgIdx: event.msgIdx,
+        },
+        { account, qualifiedTarget, log },
+        sendWithRetry,
+        () => undefined,
+        passthroughDeps,
+      );
+      recordOutbound();
+    }
   };
 
   const replyDeps: ReplyDispatcherDeps = {
@@ -690,6 +723,7 @@ export async function dispatchOutbound(
       toolFallbackSent = true;
       await sendToolFallback();
     }
+    await flushPendingMarkdownText();
     if (streamingController && !streamingController.isTerminalPhase) {
       try {
         streamingController.markFullyComplete();

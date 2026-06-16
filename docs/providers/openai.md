@@ -1040,10 +1040,11 @@ the Server-side compaction accordion below.
     ```
 
     With `strict-agentic`, OpenClaw:
-    - No longer treats a plan-only turn as successful progress when a tool action is available
-    - Retries the turn with an act-now steer
     - Auto-enables `update_plan` for substantial work
-    - Surfaces an explicit blocked state if the model keeps planning without acting
+    - Retries structurally empty or reasoning-only turns with a visible-answer continuation
+    - Uses explicit harness plan events when the selected harness provides them
+
+    OpenClaw does not classify assistant prose to decide whether a turn is a plan, progress update, or final answer.
 
     <Note>
     Scoped to OpenAI and Codex GPT-5-family runs only. Other providers and older model families keep default behavior.

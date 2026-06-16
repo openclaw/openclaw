@@ -11,6 +11,7 @@ const SETUP_PNPM_STORE_CACHE_ACTION = ".github/actions/setup-pnpm-store-cache/ac
 const DOCKER_E2E_PLAN_ACTION = ".github/actions/docker-e2e-plan/action.yml";
 const RELEASE_CHECKS_WORKFLOW = ".github/workflows/openclaw-release-checks.yml";
 const RELEASE_PUBLISH_WORKFLOW = ".github/workflows/openclaw-release-publish.yml";
+const WINDOWS_NODE_RELEASE_WORKFLOW = ".github/workflows/windows-node-release.yml";
 const FULL_RELEASE_VALIDATION_WORKFLOW = ".github/workflows/full-release-validation.yml";
 const QA_LIVE_TRANSPORTS_WORKFLOW = ".github/workflows/qa-live-transports-convex.yml";
 const UPDATE_MIGRATION_WORKFLOW = ".github/workflows/update-migration.yml";
@@ -416,6 +417,10 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain(
       'gh_with_retry workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@"',
     );
+    expect(workflow).toContain(
+      "did not return an Actions run URL; refusing to guess from recent workflow_dispatch runs",
+    );
+    expect(workflow).not.toContain("BEFORE_IDS=");
     expect(workflow).toContain("child run used ${head_sha}, expected ${TARGET_SHA}");
     expect(workflow).toContain(
       "Dispatch Full Release Validation from a ref pinned to the target SHA",
@@ -1267,8 +1272,9 @@ describe("package artifact reuse", () => {
       TARGET_SHA: "${{ needs.resolve_target.outputs.sha }}",
     });
     expectTextToIncludeAll(dispatchStep.run, [
-      'gh_with_retry workflow run npm-telegram-beta-e2e.yml --ref "$CHILD_WORKFLOW_REF" "${args[@]}"',
-      'before_json="$(gh_with_retry run list --workflow npm-telegram-beta-e2e.yml',
+      'dispatch_output="$(gh_with_retry workflow run npm-telegram-beta-e2e.yml --ref "$CHILD_WORKFLOW_REF" "${args[@]}")"',
+      "sed -nE 's#.*actions/runs/([0-9]+).*#\\1#p'",
+      "did not return an Actions run URL; refusing to guess from recent workflow_dispatch runs",
       '-f harness_ref="$TARGET_SHA"',
       'args=(-f package_spec="${PACKAGE_SPEC:-openclaw@beta}"',
       'if [[ -z "${PACKAGE_SPEC// }" ]]; then',
@@ -1503,7 +1509,7 @@ describe("package artifact reuse", () => {
     const npmWorkflow = readFileSync(".github/workflows/openclaw-npm-release.yml", "utf8");
     const fullReleaseWorkflow = readFileSync(FULL_RELEASE_VALIDATION_WORKFLOW, "utf8");
 
-    expect(workflow).toContain("timeout-minutes: 60");
+    expect(workflow).toContain("timeout-minutes: 120");
     expect(workflow).toContain("environment: npm-release");
     expect(workflow).toContain("Download OpenClaw npm preflight manifest");
     expect(workflow).toContain("Validate OpenClaw npm preflight manifest");
@@ -1548,6 +1554,143 @@ describe("package artifact reuse", () => {
     expect(workflow).not.toContain("timeout-minutes: 360");
   });
 
+  it("gates stable GitHub publication on the Windows Hub release asset contract", () => {
+    const releaseWorkflow = readFileSync(RELEASE_PUBLISH_WORKFLOW, "utf8");
+    const windowsWorkflow = readFileSync(WINDOWS_NODE_RELEASE_WORKFLOW, "utf8");
+    const releaseDocs = readFileSync("docs/reference/RELEASING.md", "utf8");
+    const releaseSkill = readFileSync(
+      ".agents/skills/release-openclaw-maintainer/SKILL.md",
+      "utf8",
+    );
+
+    expect(releaseWorkflow).toContain(
+      "Stable OpenClaw publish requires an explicit windows_node_tag.",
+    );
+    expect(releaseWorkflow).toContain(
+      "Stable OpenClaw publish requires candidate-approved windows_node_installer_digests.",
+    );
+    expect(releaseWorkflow).toContain("promote_windows_release_assets()");
+    expect(releaseWorkflow).toContain("dispatch_workflow windows-node-release.yml");
+    expect(releaseWorkflow).toContain("verify_windows_release_asset_contract");
+    expect(releaseWorkflow).toContain("Validate stable Windows source release");
+    expect(releaseWorkflow).toContain("id: windows_source");
+    expect(releaseWorkflow).toContain(
+      "windows_node_installer_digests: ${{ steps.windows_source.outputs.installer_digests }}",
+    );
+    expect(releaseWorkflow).toContain(
+      "APPROVED_INSTALLER_DIGESTS: ${{ inputs.windows_node_installer_digests }}",
+    );
+    expect(releaseWorkflow).toContain("no longer matches its candidate-approved digest");
+    expect(releaseWorkflow).toContain(
+      "WINDOWS_NODE_INSTALLER_DIGESTS: ${{ needs.resolve_release_target.outputs.windows_node_installer_digests }}",
+    );
+    expect(releaseWorkflow).toContain(
+      '-f expected_installer_digests="${WINDOWS_NODE_INSTALLER_DIGESTS}"',
+    );
+    expect(releaseWorkflow).toContain("missing prevalidated Windows installer digests");
+    expect(releaseWorkflow).toContain("does not match its pinned digest");
+    expect(releaseWorkflow).toContain(
+      "Stable release OpenClawCompanion asset names do not exactly match the current contract",
+    );
+    expect(releaseWorkflow).toContain('select(.name | startswith("OpenClawCompanion-"))');
+    expect(releaseWorkflow).toContain(
+      "Windows checksum manifest does not exactly match the installer asset contract",
+    );
+    expect(releaseWorkflow).toContain("Windows checksum manifest contains malformed entries");
+    expect(releaseWorkflow).toContain("([.[].name] | unique | length) == length");
+    expect(releaseWorkflow).toContain("Windows checksum manifest does not match pinned digest");
+    expect(releaseWorkflow).toContain(
+      "Windows source release ${WINDOWS_NODE_TAG} must contain exactly one required asset",
+    );
+    expect(releaseWorkflow.indexOf("Validate stable Windows source release")).toBeLessThan(
+      releaseWorkflow.indexOf("\n  publish:\n"),
+    );
+
+    const createDraftCall = releaseWorkflow.lastIndexOf(
+      "\n            create_or_update_github_release\n",
+    );
+    const promoteWindowsCall = releaseWorkflow.lastIndexOf(
+      "\n            if ! promote_windows_release_assets; then\n",
+    );
+    const publishReleaseCall = releaseWorkflow.lastIndexOf(
+      "\n              publish_github_release\n",
+    );
+    expect(createDraftCall).toBeGreaterThan(-1);
+    expect(promoteWindowsCall).toBeGreaterThan(createDraftCall);
+    expect(publishReleaseCall).toBeGreaterThan(promoteWindowsCall);
+
+    expect(windowsWorkflow).not.toContain("default: latest");
+    expect(windowsWorkflow).toContain("expected_installer_digests:");
+    expect(windowsWorkflow).toContain("expected_installer_digests must contain exactly");
+    expect(windowsWorkflow).toContain("must be an explicit openclaw-windows-node release tag");
+    expect(windowsWorkflow).toContain("$installerPatterns = @(");
+    expect(windowsWorkflow).toContain("Every matched installer is signature-checked");
+    expect(windowsWorkflow).toContain("Get-ChildItem -LiteralPath dist -File");
+    expect(windowsWorkflow).toContain(
+      "Downloaded Windows source asset does not match pinned digest",
+    );
+    expect(windowsWorkflow).toContain(
+      "--repo openclaw/openclaw-windows-node --json tagName,isDraft,isPrerelease,assets,url",
+    );
+    expect(windowsWorkflow).toContain(
+      "Windows source release must contain exactly one required asset",
+    );
+    expect(windowsWorkflow).toContain(
+      "Windows source release asset digest does not match the pinned digest",
+    );
+    expect(windowsWorkflow).toContain(
+      "CN=OpenClaw Foundation, O=OpenClaw Foundation, L=Mill Valley, S=California, C=US",
+    );
+    expect(windowsWorkflow).toContain("has unexpected signer subject");
+    expect(windowsWorkflow).toContain("OpenClawCompanion-SHA256SUMS.txt");
+    expect(windowsWorkflow).toContain("Verify promoted release asset contract");
+    expect(windowsWorkflow).toContain(
+      "Promoted OpenClawCompanion asset names do not exactly match the current contract",
+    );
+    expect(windowsWorkflow).toContain(
+      "$targetRelease = gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --json assets",
+    );
+    expect(windowsWorkflow).toContain("Promoted Windows SHA-256 manifest does not match");
+    expect(windowsWorkflow).toContain("Promoted Windows release asset checksum mismatch");
+    expect(releaseDocs).toContain(
+      "the selected `windows_node_tag`, its saved `windows_node_installer_digests`,",
+    );
+    expect(releaseDocs).toContain(
+      "candidate-approved `windows_node_installer_digests`, and verify the canonical",
+    );
+    expect(releaseSkill).toContain(
+      "candidate-approved installer digest map as `windows_node_installer_digests`.",
+    );
+  });
+
+  it("rejects malformed Windows checksum manifest lines before parsing entries", () => {
+    const releaseWorkflow = readFileSync(RELEASE_PUBLISH_WORKFLOW, "utf8");
+    const validateManifestLinesIndex = releaseWorkflow.indexOf("all(.[]; test(");
+    const parseManifestLinesIndex = releaseWorkflow.indexOf("map(capture(");
+
+    expect(validateManifestLinesIndex).toBeGreaterThan(-1);
+    expect(parseManifestLinesIndex).toBeGreaterThan(validateManifestLinesIndex);
+    expect(releaseWorkflow).toContain('else error("malformed Windows checksum manifest entry")');
+  });
+
+  it("rejects unsafe direct Windows recovery before uploading assets", () => {
+    const windowsWorkflow = readFileSync(WINDOWS_NODE_RELEASE_WORKFLOW, "utf8");
+    const classifyStableReleaseIndex = windowsWorkflow.indexOf("$stableRelease = -not (");
+    const rejectPrereleaseSourceIndex = windowsWorkflow.indexOf(
+      "if ($stableRelease -and $sourceRelease.isPrerelease)",
+    );
+    const rejectUnexpectedTargetAssetsIndex = windowsWorkflow.indexOf(
+      "Target OpenClaw release contains unexpected OpenClawCompanion assets before upload",
+    );
+    const uploadAssetsIndex = windowsWorkflow.indexOf("gh release upload $env:RELEASE_TAG");
+
+    expect(classifyStableReleaseIndex).toBeGreaterThan(-1);
+    expect(rejectPrereleaseSourceIndex).toBeGreaterThan(classifyStableReleaseIndex);
+    expect(windowsWorkflow).not.toContain("-not $targetRelease.isPrerelease");
+    expect(rejectUnexpectedTargetAssetsIndex).toBeGreaterThan(-1);
+    expect(uploadAssetsIndex).toBeGreaterThan(rejectUnexpectedTargetAssetsIndex);
+  });
+
   it("keeps beta release verification and ClawHub publish repair hooks wired", () => {
     const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
       scripts?: Record<string, string>;
@@ -1557,6 +1700,11 @@ describe("package artifact reuse", () => {
     const clawHubNewWorkflow = readFileSync(".github/workflows/plugin-clawhub-new.yml", "utf8");
     const pluginNpmWorkflow = readFileSync(".github/workflows/plugin-npm-release.yml", "utf8");
     const openclawNpmWorkflow = readFileSync(".github/workflows/openclaw-npm-release.yml", "utf8");
+    const fastPretagScript = readFileSync("scripts/release-fast-pretag-check.sh", "utf8");
+    const pluginPretagPackScript = readFileSync(
+      "scripts/plugin-release-pretag-pack-check.ts",
+      "utf8",
+    );
     const approvalScript = readFileSync("scripts/validate-release-publish-approval.mjs", "utf8");
     const clawHubReleasePlanScript = readFileSync(
       "scripts/lib/openclaw-release-clawhub-plan.ts",
@@ -1583,6 +1731,15 @@ describe("package artifact reuse", () => {
     expect(packageJson.scripts?.["release:fast-pretag-check"]).toBe(
       "bash scripts/release-fast-pretag-check.sh",
     );
+    expect(fastPretagScript).toContain(
+      "node --import tsx scripts/plugin-release-pretag-pack-check.ts",
+    );
+    expect(fastPretagScript).not.toContain(
+      "check-plugin-npm-runtime-builds.mjs --package extensions/diffs-language-pack",
+    );
+    expect(pluginPretagPackScript).toContain("scripts/check-plugin-npm-runtime-builds.mjs");
+    expect(pluginPretagPackScript).toContain("scripts/plugin-npm-publish.sh");
+    expect(pluginPretagPackScript).toContain("scripts/plugin-clawhub-publish.sh");
     expect(clawHubWorkflow).toContain('CLAWHUB_CLI_PACKAGE: "clawhub@0.21.0"');
     expect(clawHubWorkflow).not.toContain("CLAWHUB_REPOSITORY:");
     expect(clawHubWorkflow).not.toContain("CLAWHUB_REF:");
@@ -1696,6 +1853,8 @@ describe("package artifact reuse", () => {
       "already has a public GitHub release page without complete postpublish evidence",
     );
     expect(releaseWorkflow).toContain("registry tarball");
+    expect(releaseWorkflow).toContain("openclawNpmTarball");
+    expect(releaseWorkflow).not.toContain('npm view "openclaw@${release_version}" dist.tarball');
     expect(releaseWorkflow).toContain("release SHA");
     expect(clawHubReleasePlanScript).toContain("not awaited by this proof");
     expect(releaseWorkflow).toContain("wait_for_job_success");

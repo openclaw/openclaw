@@ -1121,6 +1121,18 @@ describe("tool-loop-detection", () => {
       expect(hashes?.[0]).not.toBe(hashes?.[1]);
     });
 
+    it("keeps full result hashing for administrative message mutations", () => {
+      const state = createState();
+      const params = { action: "channel-create", name: "support" };
+      recordSend(state, "message", params, { ok: true, messageId: "m_0", timestamp: 1000 }, 0);
+      recordSend(state, "message", params, { ok: true, messageId: "m_1", timestamp: 2000 }, 1);
+      const hashes = state.toolCallHistory
+        ?.filter((call) => call.toolName === "message")
+        .map((call) => call.resultHash);
+      expect(hashes?.[0]).toBeTypeOf("string");
+      expect(hashes?.[0]).not.toBe(hashes?.[1]);
+    });
+
     it("preserves stable nested route ids so distinct routes stay distinguishable", () => {
       const state = createState();
       const params = { action: "send", target: "feishu:oc_chat", text: "ping" };

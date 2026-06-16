@@ -22,6 +22,11 @@ import {
   readTranscriptFileState,
   type TranscriptFileState,
 } from "./transcript-file-state.js";
+import {
+  persistRuntimeTranscriptStateMutation,
+  resolveRuntimeTranscriptReadTarget,
+  type RuntimeTranscriptScope,
+} from "./transcript-runtime-state.js";
 
 type SessionManagerLike = ReturnType<typeof SessionManager.open>;
 type SessionBranchEntry = ReturnType<SessionManagerLike["getBranch"]>[number];
@@ -372,8 +377,65 @@ export function rewriteTranscriptEntriesInState(params: {
 }
 
 /**
- * Open a transcript file, rewrite message entries on the active branch, and
- * emit a transcript update when the active branch changed.
+ * Rewrites message entries for a runtime transcript without using the
+ * file-backed path as caller identity.
+ */
+export async function rewriteTranscriptEntriesInRuntimeTranscript(params: {
+  scope: RuntimeTranscriptScope;
+  request: TranscriptRewriteRequest;
+  config?: SessionWriteLockAcquireTimeoutConfig;
+}): Promise<TranscriptRewriteResult> {
+  let sessionLock: Awaited<ReturnType<typeof acquireSessionWriteLock>> | undefined;
+  try {
+    const target = await resolveRuntimeTranscriptReadTarget(params.scope);
+    sessionLock = await acquireSessionWriteLock({
+      sessionFile: target.sessionFile,
+      ...resolveSessionWriteLockOptions(params.config),
+    });
+    const state = await readTranscriptFileState(target.sessionFile);
+    const result = rewriteTranscriptEntriesInState({
+      state,
+      replacements: params.request.replacements,
+      ...(params.request.allowedRewriteSuffixEntryIds
+        ? { allowedRewriteSuffixEntryIds: params.request.allowedRewriteSuffixEntryIds }
+        : {}),
+    });
+    if (result.changed) {
+      await persistRuntimeTranscriptStateMutation({
+        target,
+        state,
+        appendedEntries: result.appendedEntries,
+      });
+      emitSessionTranscriptUpdate({
+        sessionFile: target.sessionFile,
+        sessionKey: target.sessionKey,
+        agentId: target.agentId,
+      });
+      log.info(
+        `[transcript-rewrite] rewrote ${result.rewrittenEntries} entr` +
+          `${result.rewrittenEntries === 1 ? "y" : "ies"} ` +
+          `bytesFreed=${result.bytesFreed} ` +
+          `sessionKey=${target.sessionKey}`,
+      );
+    }
+    return result;
+  } catch (err) {
+    const reason = formatErrorMessage(err);
+    log.warn(`[transcript-rewrite] failed: ${reason}`);
+    return {
+      changed: false,
+      bytesFreed: 0,
+      rewrittenEntries: 0,
+      reason,
+    };
+  } finally {
+    await sessionLock?.release();
+  }
+}
+
+/**
+ * Rewrites a named transcript file artifact. Runtime callers should prefer
+ * rewriteTranscriptEntriesInRuntimeTranscript with agent/session scope.
  */
 export async function rewriteTranscriptEntriesInSessionFile(params: {
   sessionFile: string;

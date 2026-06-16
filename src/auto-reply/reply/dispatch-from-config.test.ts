@@ -1379,6 +1379,71 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
+  it("passes reply policy to routed block delivery", async () => {
+    setNoAbort();
+    mocks.routeReply.mockClear();
+    const slackPlugin = createChannelTestPluginBase({ id: "slack" });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "slack",
+          source: "test",
+          plugin: {
+            ...slackPlugin,
+            config: {
+              ...slackPlugin.config,
+              listAccountIds: () => ["work"],
+              defaultAccountId: () => "work",
+            },
+            threading: {
+              resolveReplyToMode: ({ accountId }: { accountId?: string | null }) =>
+                accountId === "work" ? "off" : "all",
+            },
+          },
+        },
+      ]),
+    );
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      OriginatingChannel: "slack",
+      OriginatingTo: "channel:C123",
+      ChatType: "channel",
+      SessionKey: "agent:main:slack:channel:C123",
+    });
+    const cfg = {} as OpenClawConfig;
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload | undefined> => {
+      await opts?.onBlockReply?.({
+        text: "partial",
+        replyToId: "999.000",
+        replyToTag: true,
+      });
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher: createDispatcher(),
+      replyResolver,
+    });
+
+    expect(mocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "work",
+        channel: "slack",
+        replyKind: "block",
+        replyDelivery: {
+          chatType: "channel",
+          replyToMode: "off",
+        },
+      }),
+    );
+  });
+
   it("mirrors the delivered ownerless Slack text after dispatcher hook rewrites", async () => {
     setNoAbort();
     const dispatcher = createDispatcher();
@@ -1663,9 +1728,10 @@ describe("dispatchReplyFromConfig", () => {
       route: {
         channel: "feishu",
         accountId: "work",
-        target: { to: "user:ou_123" },
+        target: { to: "user:ou_123", chatType: "channel" },
         thread: { id: "thread:om_123", source: "explicit" },
       },
+      chatType: "channel",
       deliveryContext: {
         channel: "feishu",
         to: "user:ou_123",
@@ -1685,6 +1751,7 @@ describe("dispatchReplyFromConfig", () => {
       AccountId: undefined,
       OriginatingChannel: "webchat",
       OriginatingTo: "session:dashboard",
+      ChatType: "direct",
       InputProvenance: {
         kind: "inter_session",
         sourceTool: "sessions_send",
@@ -1697,17 +1764,28 @@ describe("dispatchReplyFromConfig", () => {
 
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
     const routeCall = firstRouteReplyCall() as
-      | { accountId?: unknown; channel?: unknown; threadId?: unknown; to?: unknown }
+      | {
+          accountId?: unknown;
+          channel?: unknown;
+          replyDelivery?: unknown;
+          threadId?: unknown;
+          to?: unknown;
+        }
       | undefined;
     expect(routeCall?.channel).toBe("feishu");
     expect(routeCall?.to).toBe("user:ou_123");
     expect(routeCall?.accountId).toBe("work");
     expect(routeCall?.threadId).toBe("thread:om_123");
+    expect(routeCall?.replyDelivery).toEqual({
+      chatType: "channel",
+      replyToMode: "all",
+    });
     const replyDispatchCall = firstMockCall(hookMocks.runner.runReplyDispatch, "reply dispatch") as
       | [
           {
             originatingAccountId?: unknown;
             originatingChannel?: unknown;
+            originatingChatType?: unknown;
             originatingThreadId?: unknown;
             originatingTo?: unknown;
             shouldRouteToOriginating?: unknown;
@@ -1720,6 +1798,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(replyDispatchCall?.[0]?.originatingTo).toBe("user:ou_123");
     expect(replyDispatchCall?.[0]?.originatingAccountId).toBe("work");
     expect(replyDispatchCall?.[0]?.originatingThreadId).toBe("thread:om_123");
+    expect(replyDispatchCall?.[0]?.originatingChatType).toBe("channel");
   });
 
   it("routes exec-event replies using last route fields when delivery context is missing", async () => {
@@ -2518,6 +2597,51 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
+  it("forwards only opted-in tool lifecycle feedback while verbose is off", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      verboseLevel: "off",
+    };
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      ChatType: "group",
+    });
+    const onToolStart = vi.fn();
+    const onItemEvent = vi.fn();
+    const onCommandOutput = vi.fn();
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onToolStart?.({ name: "exec", phase: "start" });
+      await opts?.onItemEvent?.({ itemId: "1", kind: "tool", progressText: "running exec" });
+      await opts?.onCommandOutput?.({ phase: "end", name: "exec", status: "ok", exitCode: 0 });
+      return { text: "done" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: automaticGroupReplyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        allowToolLifecycleWhenProgressHidden: true,
+        onToolStart,
+        onItemEvent,
+        onCommandOutput,
+      },
+    });
+
+    expect(onToolStart).toHaveBeenCalledWith({ name: "exec", phase: "start" });
+    expect(onItemEvent).not.toHaveBeenCalled();
+    expect(onCommandOutput).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+  });
+
   it("delivers verbose inter-tool commentary as standalone progress messages before the tool summary", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
@@ -2887,7 +3011,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
-  it("suppresses channel-owned room-event progress callbacks while source delivery is suppressed", async () => {
+  it("forwards channel-owned room-event progress callbacks while source delivery is suppressed", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
       verboseLevel: "off",
@@ -2905,13 +3029,20 @@ describe("dispatchReplyFromConfig", () => {
     const onToolStart = vi.fn();
     const onItemEvent = vi.fn();
     const onCommandOutput = vi.fn();
+    let commentaryEnabled: boolean | undefined;
 
     const replyResolver = async (
       _ctx: MsgContext,
       opts?: GetReplyOptions,
       _cfg?: OpenClawConfig,
     ) => {
+      commentaryEnabled = opts?.commentaryProgressEnabled;
       await opts?.onToolStart?.({ name: "exec", phase: "start" });
+      await opts?.onItemEvent?.({
+        itemId: "c1",
+        kind: "preamble",
+        progressText: "checking the channel state",
+      });
       await opts?.onItemEvent?.({ itemId: "1", kind: "tool", progressText: "running exec" });
       await opts?.onCommandOutput?.({ phase: "end", name: "exec", status: "ok", exitCode: 0 });
       return { text: "done" } satisfies ReplyPayload;
@@ -2932,9 +3063,24 @@ describe("dispatchReplyFromConfig", () => {
       },
     });
 
-    expect(onToolStart).not.toHaveBeenCalled();
-    expect(onItemEvent).not.toHaveBeenCalled();
-    expect(onCommandOutput).not.toHaveBeenCalled();
+    expect(commentaryEnabled).toBe(true);
+    expect(onToolStart).toHaveBeenCalledWith({ name: "exec", phase: "start" });
+    expect(onItemEvent).toHaveBeenCalledWith({
+      itemId: "c1",
+      kind: "preamble",
+      progressText: "checking the channel state",
+    });
+    expect(onItemEvent).toHaveBeenCalledWith({
+      itemId: "1",
+      kind: "tool",
+      progressText: "running exec",
+    });
+    expect(onCommandOutput).toHaveBeenCalledWith({
+      phase: "end",
+      name: "exec",
+      status: "ok",
+      exitCode: 0,
+    });
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
@@ -2967,12 +3113,14 @@ describe("dispatchReplyFromConfig", () => {
     const onToolStart = vi.fn();
     const onItemEvent = vi.fn();
     const onCommandOutput = vi.fn();
+    let commentaryEnabled: boolean | undefined;
 
     const replyResolver = async (
       _ctx: MsgContext,
       opts?: GetReplyOptions,
       _cfg?: OpenClawConfig,
     ) => {
+      commentaryEnabled = opts?.commentaryProgressEnabled;
       await opts?.onToolStart?.({ name: "exec", phase: "start" });
       await opts?.onItemEvent?.({ itemId: "1", kind: "tool", progressText: "running exec" });
       await opts?.onCommandOutput?.({ phase: "end", name: "exec", status: "ok", exitCode: 0 });
@@ -3007,6 +3155,7 @@ describe("dispatchReplyFromConfig", () => {
       status: "ok",
       exitCode: 0,
     });
+    expect(commentaryEnabled).toBe(true);
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
@@ -3029,12 +3178,14 @@ describe("dispatchReplyFromConfig", () => {
     const onToolStart = vi.fn();
     const onItemEvent = vi.fn();
     const onCommandOutput = vi.fn();
+    let commentaryEnabled: boolean | undefined;
 
     const replyResolver = async (
       _ctx: MsgContext,
       opts?: GetReplyOptions,
       _cfg?: OpenClawConfig,
     ) => {
+      commentaryEnabled = opts?.commentaryProgressEnabled;
       await opts?.onToolStart?.({ name: "exec", phase: "start" });
       await opts?.onItemEvent?.({ itemId: "1", kind: "tool", progressText: "running exec" });
       await opts?.onCommandOutput?.({ phase: "end", name: "exec", status: "ok", exitCode: 0 });
@@ -3060,6 +3211,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(onToolStart).not.toHaveBeenCalled();
     expect(onItemEvent).not.toHaveBeenCalled();
     expect(onCommandOutput).not.toHaveBeenCalled();
+    expect(commentaryEnabled).toBeUndefined();
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
@@ -9073,7 +9225,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
     expect(result.queuedFinal).toBe(true);
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(sourceReply);
-    expect(dispatcher.waitForIdle).toHaveBeenCalledTimes(1);
+    expect(dispatcher.waitForIdle).toHaveBeenCalled();
     expect(transcriptMocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
   });
 

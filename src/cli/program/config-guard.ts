@@ -5,6 +5,7 @@ import path from "node:path";
 import { withSuppressedNotes } from "../../../packages/terminal-core/src/note.js";
 import { readConfigFileSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { resolveLegacyStateDirs, resolveOAuthDir, resolveStateDir } from "../../config/paths.js";
+import type { ConfigFileSnapshot } from "../../config/types.js";
 import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { shouldMigrateStateFromPath } from "../argv.js";
@@ -111,6 +112,13 @@ function hasLegacyExecApprovalsMigrationInput(stateDir: string): boolean {
   );
 }
 
+function hasPendingSqliteSidecarArchive(sourcePath: string): boolean {
+  return (
+    fileOrDirExists(`${sourcePath}.migrated`) &&
+    ["-shm", "-wal", "-journal"].some((suffix) => fileOrDirExists(`${sourcePath}${suffix}`))
+  );
+}
+
 function hasLegacyStateMigrationInputs(): boolean {
   // Only run migration prompts when old state actually exists in known legacy locations.
   const stateDir = resolveStateDir(process.env, os.homedir);
@@ -123,16 +131,21 @@ function hasLegacyStateMigrationInputs(): boolean {
   ) {
     return true;
   }
+  const sqliteSidecarPaths = [
+    path.join(stateDir, "flows", "registry.sqlite"),
+    path.join(stateDir, "plugin-state", "state.sqlite"),
+    path.join(stateDir, "tasks", "runs.sqlite"),
+  ];
   return (
     [
       path.join(stateDir, "agent"),
       path.join(stateDir, "agents"),
-      path.join(stateDir, "flows", "registry.sqlite"),
-      path.join(stateDir, "plugin-state", "state.sqlite"),
       path.join(stateDir, "plugins", "installs.json"),
       path.join(stateDir, "sessions"),
-      path.join(stateDir, "tasks", "runs.sqlite"),
     ].some(fileOrDirExists) ||
+    sqliteSidecarPaths.some(
+      (sourcePath) => fileOrDirExists(sourcePath) || hasPendingSqliteSidecarArchive(sourcePath),
+    ) ||
     hasBundledChannelLegacyStateMigrationInputs(stateDir, oauthDir) ||
     hasLegacyExecApprovalsMigrationInput(stateDir)
   );
@@ -179,6 +192,7 @@ export async function ensureConfigReady(params: {
   commandPath?: string[];
   suppressDoctorStdout?: boolean;
   allowInvalid?: boolean;
+  beforeStateMigrations?: (snapshot?: ConfigFileSnapshot) => Promise<boolean>;
 }): Promise<void> {
   const commandPath = params.commandPath ?? [];
   let preflightSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>> | null = null;
@@ -191,6 +205,9 @@ export async function ensureConfigReady(params: {
         migrateState: true,
         migrateLegacyConfig: false,
         invalidConfigNote: false,
+        ...(params.beforeStateMigrations
+          ? { beforeStateMigrations: params.beforeStateMigrations }
+          : {}),
       });
     return !params.suppressDoctorStdout
       ? (await runDoctorConfigPreflight()).snapshot

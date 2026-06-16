@@ -10,7 +10,10 @@ import {
 } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
-import { configureSqliteWalMaintenance, type SqliteWalMaintenance } from "../infra/sqlite-wal.js";
+import {
+  configureSqliteConnectionPragmas,
+  type SqliteWalMaintenance,
+} from "../infra/sqlite-wal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
@@ -227,13 +230,66 @@ function tableExists(db: DatabaseSync, tableName: string): boolean {
   return row?.ok === 1;
 }
 
-function ensureColumn(db: DatabaseSync, tableName: string, columnSql: string): void {
+function ensureColumn(db: DatabaseSync, tableName: string, columnSql: string): boolean {
   const columnName = columnSql.trim().split(/\s+/, 1)[0];
   if (!columnName || !tableExists(db, tableName) || tableHasColumn(db, tableName, columnName)) {
-    return;
+    return false;
   }
   // State migrations are additive here; destructive or shape-changing repairs belong in doctor.
   db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnSql};`);
+  return true;
+}
+
+function repairLegacyTaskAgentAttribution(db: DatabaseSync): void {
+  if (!tableExists(db, "task_runs") || !tableHasColumn(db, "task_runs", "requester_agent_id")) {
+    return;
+  }
+  // Before requester_agent_id existed, scoped subagent/ACP rows stored the
+  // requester in agent_id. Repair only rows with recoverable requester
+  // provenance; global legacy rows must keep the existing fallback behavior.
+  db.exec(`
+    UPDATE task_runs
+    SET
+      requester_agent_id = CASE
+        WHEN owner_key GLOB 'agent:*:*' THEN substr(
+          owner_key,
+          7,
+          instr(substr(owner_key, 7), ':') - 1
+        )
+        WHEN requester_session_key GLOB 'agent:*:*' THEN substr(
+          requester_session_key,
+          7,
+          instr(substr(requester_session_key, 7), ':') - 1
+        )
+        WHEN agent_id <> substr(
+          child_session_key,
+          7,
+          instr(substr(child_session_key, 7), ':') - 1
+        ) THEN agent_id
+        ELSE NULL
+      END,
+      agent_id = substr(
+        child_session_key,
+        7,
+        instr(substr(child_session_key, 7), ':') - 1
+      )
+    WHERE requester_agent_id IS NULL
+      AND runtime IN ('subagent', 'acp')
+      AND child_session_key GLOB 'agent:*:*'
+      AND instr(substr(child_session_key, 7), ':') > 1
+      AND (
+        owner_key GLOB 'agent:*:*'
+        OR requester_session_key GLOB 'agent:*:*'
+        OR (
+          agent_id IS NOT NULL
+          AND agent_id <> substr(
+            child_session_key,
+            7,
+            instr(substr(child_session_key, 7), ':') - 1
+          )
+        )
+      );
+  `);
 }
 
 function hasCanonicalAgentDatabasesPrimaryKey(db: DatabaseSync): boolean {
@@ -854,6 +910,12 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "gateway_restart_sentinel", "continuation_json TEXT");
   ensureColumn(db, "gateway_restart_sentinel", "doctor_hint TEXT");
   ensureColumn(db, "gateway_restart_sentinel", "stats_json TEXT");
+  runSqliteImmediateTransactionSync(db, () => {
+    const addedTaskRequesterAgentId = ensureColumn(db, "task_runs", "requester_agent_id TEXT");
+    if (addedTaskRequesterAgentId) {
+      repairLegacyTaskAgentAttribution(db);
+    }
+  });
   ensureColumn(db, "subagent_runs", "task_name TEXT");
 }
 
@@ -892,7 +954,7 @@ function ensureSchema(db: DatabaseSync, pathname: string): void {
 }
 
 function resolveDatabasePath(options: OpenClawStateDatabaseOptions = {}): string {
-  return options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env);
+  return path.resolve(options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env));
 }
 
 /** Open or return a cached shared state database after schema and migration checks. */
@@ -915,20 +977,24 @@ export function openOpenClawStateDatabase(
   ensureOpenClawStatePermissions(pathname, env);
   const sqlite = requireNodeSqlite();
   const db = new sqlite.DatabaseSync(pathname);
-  const walMaintenance = configureSqliteWalMaintenance(db, {
-    databaseLabel: "openclaw-state",
-    databasePath: pathname,
-  });
-  db.exec("PRAGMA synchronous = NORMAL;");
-  db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
-  db.exec("PRAGMA foreign_keys = ON;");
-  try {
-    ensureSchema(db, pathname);
-  } catch (err) {
-    walMaintenance.close();
-    db.close();
-    throw err;
-  }
+  const walMaintenance = (() => {
+    let maintenance: SqliteWalMaintenance | undefined;
+    try {
+      maintenance = configureSqliteConnectionPragmas(db, {
+        busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+        databaseLabel: "openclaw-state",
+        databasePath: pathname,
+        foreignKeys: true,
+        synchronous: "NORMAL",
+      });
+      ensureSchema(db, pathname);
+      return maintenance;
+    } catch (err) {
+      maintenance?.close();
+      db.close();
+      throw err;
+    }
+  })();
   ensureOpenClawStatePermissions(pathname, env);
   const database = { db, path: pathname, walMaintenance };
   cachedDatabases.set(pathname, database);

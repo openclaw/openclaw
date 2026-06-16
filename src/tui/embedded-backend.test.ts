@@ -39,6 +39,14 @@ const getRuntimeConfigMock = vi.fn(() => ({}));
 const loadGatewayModelCatalogMock = vi.fn(
   (_params?: unknown): Array<{ id: string; name: string; provider: string }> => [],
 );
+const readSessionMessagesAsyncMock = vi.fn(
+  async (
+    _sessionId?: string,
+    _storePath?: string,
+    _sessionFile?: string,
+    _opts?: unknown,
+  ): Promise<unknown[]> => [],
+);
 type LoadSessionEntryMockResult = {
   cfg: Record<string, unknown>;
   canonicalKey: string;
@@ -168,7 +176,6 @@ vi.mock("../gateway/session-utils.js", () => ({
   loadSessionEntry: (sessionKey: string, opts?: { agentId?: string }) =>
     loadSessionEntryMock(sessionKey, opts),
   migrateAndPruneGatewaySessionStoreKey: ({ key }: { key: string }) => ({ primaryKey: key }),
-  readSessionMessagesAsync: async () => [],
   resolveGatewaySessionStoreTarget: ({ key }: { key: string }) => ({
     canonicalKey: key,
     storePath: "/tmp/openclaw-sessions.json",
@@ -184,8 +191,10 @@ vi.mock("../gateway/session-reset-service.js", () => ({
   performGatewaySessionReset: () => ({ ok: true, key: "agent:main:main", entry: {} }),
 }));
 
-vi.mock("../gateway/session-utils.fs.js", () => ({
+vi.mock("../gateway/session-transcript-readers.js", () => ({
   capArrayByJsonBytes: (items: unknown[]) => ({ items }),
+  readSessionMessagesAsync: (...args: Parameters<typeof readSessionMessagesAsyncMock>) =>
+    readSessionMessagesAsyncMock(...args),
 }));
 
 vi.mock("../gateway/sessions-patch.js", () => ({
@@ -264,6 +273,8 @@ describe("EmbeddedTuiBackend", () => {
     getRuntimeConfigMock.mockReturnValue({});
     loadGatewayModelCatalogMock.mockReset();
     loadGatewayModelCatalogMock.mockReturnValue([]);
+    readSessionMessagesAsyncMock.mockReset();
+    readSessionMessagesAsyncMock.mockResolvedValue([]);
     loadSessionEntryMock.mockReset();
     loadSessionEntryMock.mockImplementation((sessionKey: string) => ({
       cfg: {},
@@ -623,6 +634,35 @@ describe("EmbeddedTuiBackend", () => {
       messages: [],
     });
     expect(loadSessionEntryMock).toHaveBeenCalledWith("global", { agentId: "work" });
+  });
+
+  it("uses reset-archive fallback for embedded TUI history reads", async () => {
+    loadSessionEntryMock.mockReturnValue({
+      cfg: {},
+      canonicalKey: "agent:main:main",
+      storePath: "/tmp/openclaw-sessions.json",
+      entry: { sessionId: "sess-main" },
+    });
+
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+
+    await backend.loadHistory({ sessionKey: "agent:main:main" });
+
+    expect(readSessionMessagesAsyncMock).toHaveBeenCalledWith(
+      {
+        agentId: "main",
+        sessionFile: undefined,
+        sessionId: "sess-main",
+        storePath: "/tmp/openclaw-sessions.json",
+      },
+      {
+        mode: "recent",
+        maxMessages: 200,
+        maxBytes: 1024 * 1024,
+        allowResetArchiveFallback: true,
+      },
+    );
   });
 
   it("loads runtime plugins for the send-path workspace before returning embedded history", async () => {

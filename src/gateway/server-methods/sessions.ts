@@ -49,7 +49,6 @@ import { compactEmbeddedAgentSession } from "../../agents/embedded-agent.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import { normalizeReasoningLevel, normalizeThinkLevel } from "../../auto-reply/thinking.js";
 import {
-  loadSessionStore,
   runSessionsCleanup,
   serializeSessionCleanupResult,
   resolveMainSessionKey,
@@ -96,16 +95,18 @@ import {
 } from "../session-store-key.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import {
+  readRecentSessionMessagesWithStatsAsync,
+  readRecentSessionTranscriptLines,
+  readSessionMessageCountAsync,
+  readSessionPreviewItemsFromTranscript,
+} from "../session-transcript-readers.js";
+import {
   archiveFileOnDisk,
   buildGatewaySessionRow,
   listSessionsFromStoreAsync,
   loadCombinedSessionStoreForGateway,
   loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,
-  readRecentSessionMessagesWithStatsAsync,
-  readRecentSessionTranscriptLines,
-  readSessionMessageCountAsync,
-  readSessionPreviewItemsFromTranscript,
   resolveDeletedAgentIdFromSessionKey,
   resolveFreshestSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTarget,
@@ -259,6 +260,22 @@ function resolveGatewaySessionTargetFromKey(
     ...(opts?.agentId ? { agentId: opts.agentId } : {}),
   });
   return { cfg, target, storePath: target.storePath };
+}
+
+function loadSessionEntriesForTarget(params: {
+  key: string;
+  cfg: OpenClawConfig;
+  agentId?: string;
+}) {
+  const target = resolveGatewaySessionStoreTargetWithStore({
+    cfg: params.cfg,
+    key: params.key,
+    clone: false,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+  });
+  const store = target.store;
+  const entry = resolveFreshestSessionEntryFromStoreKeys(store, target.storeKeys);
+  return { target, storePath: target.storePath, store, entry };
 }
 
 function resolveOptionalInitialSessionMessage(params: {
@@ -848,7 +865,12 @@ async function handleSessionSend(params: {
   }
 
   const messageSeq =
-    (await readSessionMessageCountAsync(entry.sessionId, storePath, entry.sessionFile)) + 1;
+    (await readSessionMessageCountAsync({
+      agentId: requestedAgentId,
+      sessionFile: entry.sessionFile,
+      sessionId: entry.sessionId,
+      storePath,
+    })) + 1;
   let sendAcked = false;
   let sendPayload: unknown;
   let sendCached = false;
@@ -1186,10 +1208,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           continue;
         }
         const items = readSessionPreviewItemsFromTranscript(
-          entry.sessionId,
-          target.storePath,
-          entry.sessionFile,
-          target.agentId,
+          {
+            agentId: target.agentId,
+            sessionFile: entry.sessionFile,
+            sessionId: entry.sessionId,
+            storePath: target.storePath,
+          },
           limit,
           maxChars,
         );
@@ -1215,9 +1239,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const cfg = context.getRuntimeConfig();
-    const { target, storePath } = resolveGatewaySessionTargetFromKey(key, cfg);
-    const store = loadSessionStore(storePath);
-    const entry = resolveFreshestSessionEntryFromStoreKeys(store, target.storeKeys);
+    const { target, storePath, store, entry } = loadSessionEntriesForTarget({ key, cfg });
     if (!entry) {
       respond(true, { session: null }, undefined);
       return;
@@ -1244,6 +1266,10 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const resolved = await resolveSessionKeyFromResolveParams({ cfg, p });
     if (!resolved.ok) {
       respond(false, undefined, resolved.error);
+      return;
+    }
+    if ("missing" in resolved) {
+      respond(true, { ok: false }, undefined);
       return;
     }
     respond(true, { ok: true, key: resolved.key }, undefined);
@@ -1561,11 +1587,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     let runError: unknown;
     let runMeta: Record<string, unknown> | undefined;
     const messageSeq = initialMessage
-      ? (await readSessionMessageCountAsync(
-          createdEntry.sessionId,
-          target.storePath,
-          createdEntry.sessionFile,
-        )) + 1
+      ? (await readSessionMessageCountAsync({
+          agentId: target.agentId,
+          sessionFile: createdEntry.sessionFile,
+          sessionId: createdEntry.sessionId,
+          storePath: target.storePath,
+        })) + 1
       : undefined;
 
     if (initialMessage) {
@@ -2420,22 +2447,26 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       respond(false, undefined, requestedAgent.error);
       return;
     }
-    const { target, storePath } = resolveGatewaySessionTargetFromKey(key, cfg, {
+    const { storePath, entry } = loadSessionEntriesForTarget({
+      key,
+      cfg,
       agentId: requestedAgent.agentId,
     });
-    const store = loadSessionStore(storePath);
-    const entry = resolveFreshestSessionEntryFromStoreKeys(store, target.storeKeys);
     if (!entry?.sessionId) {
       respond(true, { messages: [] }, undefined);
       return;
     }
     const { messages } = await readRecentSessionMessagesWithStatsAsync(
-      entry.sessionId,
-      storePath,
-      entry.sessionFile,
+      {
+        agentId: requestedAgent.agentId,
+        sessionFile: entry.sessionFile,
+        sessionId: entry.sessionId,
+        storePath,
+      },
       {
         maxMessages: limit,
         maxLines: limit * 20 + 20,
+        allowResetArchiveFallback: true,
       },
     );
     respond(true, { messages }, undefined);

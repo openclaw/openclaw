@@ -289,6 +289,31 @@ export async function appendSessionTranscriptMessage<TMessage>(
   );
 }
 
+export type AppendSessionTranscriptEventParams = {
+  config?: OpenClawConfig;
+  event: unknown;
+  transcriptPath: string;
+};
+
+/** Appends a raw transcript event using the same write lock and FIFO as message appends. */
+export async function appendSessionTranscriptEvent(
+  params: AppendSessionTranscriptEventParams,
+): Promise<void> {
+  const activeLockRunner = resolveOwnedSessionTranscriptWriteLockRunner({
+    sessionFile: params.transcriptPath,
+  });
+  if (activeLockRunner) {
+    return await activeLockRunner(() =>
+      withTranscriptAppendQueue(params.transcriptPath, () =>
+        appendSessionTranscriptEventLocked(params),
+      ),
+    );
+  }
+  return await withTranscriptAppendQueue(params.transcriptPath, () =>
+    withSessionTranscriptWriteLock(params, () => appendSessionTranscriptEventLocked(params)),
+  );
+}
+
 async function withSessionTranscriptWriteLock<T>(
   params: Pick<AppendSessionTranscriptMessageParams, "transcriptPath" | "config">,
   run: () => Promise<T> | T,
@@ -303,6 +328,13 @@ async function withSessionTranscriptWriteLock<T>(
   } finally {
     await lock.release();
   }
+}
+
+async function appendSessionTranscriptEventLocked(
+  params: AppendSessionTranscriptEventParams,
+): Promise<void> {
+  await fs.mkdir(path.dirname(params.transcriptPath), { recursive: true });
+  await appendJsonlEntry(params.transcriptPath, params.event);
 }
 
 async function appendSessionTranscriptMessageLocked<TMessage>(

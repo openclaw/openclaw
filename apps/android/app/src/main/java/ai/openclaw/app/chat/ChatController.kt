@@ -311,7 +311,6 @@ class ChatController(
     }
   }
 
-  /** Applies gateway chat/agent stream events to local transcript and pending-run state. */
   fun handleGatewayEvent(
     event: String,
     payloadJson: String?,
@@ -321,7 +320,6 @@ class ChatController(
         scope.launch { pollHealthIfNeeded(force = false) }
       }
       "health" -> {
-        // If we receive a health snapshot, the gateway is reachable.
         _healthOk.value = true
       }
       "seqGap" -> {
@@ -331,6 +329,17 @@ class ChatController(
       "chat" -> {
         if (payloadJson.isNullOrBlank()) return
         handleChatEvent(payloadJson)
+      }
+      "sessions.changed" -> {
+        if (payloadJson.isNullOrBlank()) {
+          refreshSessionsForCurrentWindow()
+        } else {
+          handleSessionsChangedEvent(payloadJson)
+        }
+      }
+      "session.message" -> {
+        if (payloadJson.isNullOrBlank()) return
+        handleSessionMessageEvent(payloadJson)
       }
       "agent" -> {
         if (payloadJson.isNullOrBlank()) return
@@ -353,6 +362,7 @@ class ChatController(
         )
       if (!isCurrentHistoryLoad(sessionKey, _sessionKey.value, generation, historyLoadGeneration.get())) return
       val history = parseHistory(historyJson, sessionKey = sessionKey, previousMessages = _messages.value)
+      updateSessionFromHistory(history)
       prunePersistedOptimisticMessages(history.messages)
       _messages.value = mergeOptimisticMessages(incoming = history.messages, optimistic = optimisticMessagesByRunId.values)
       _sessionId.value = history.sessionId
@@ -386,6 +396,10 @@ class ChatController(
     } catch (_: Throwable) {
       // best-effort
     }
+  }
+
+  private fun refreshSessionsForCurrentWindow() {
+    scope.launch { fetchSessions(limit = _sessions.value.size.takeIf { it > 0 } ?: 100) }
   }
 
   private suspend fun pollHealthIfNeeded(force: Boolean) {
@@ -457,6 +471,7 @@ class ChatController(
                 sessionKey = currentSessionKey,
                 previousMessages = _messages.value,
               )
+            updateSessionFromHistory(history)
             prunePersistedOptimisticMessages(history.messages)
             _messages.value = mergeOptimisticMessages(incoming = history.messages, optimistic = optimisticMessagesByRunId.values)
             _sessionId.value = history.sessionId
@@ -471,6 +486,31 @@ class ChatController(
       }
     }
   }
+
+  private fun handleSessionsChangedEvent(payloadJson: String) {
+    val payload = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: return
+    if (payload["reason"].asStringOrNull() == "delete") {
+      removeSessionEntry(payload["sessionKey"].asStringOrNull() ?: payload["key"].asStringOrNull())
+      return
+    }
+    val entry = parseEventSessionEntry(payload)
+    if (entry != null) {
+      upsertSessionEntry(entry)
+    } else {
+      refreshSessionsForCurrentWindow()
+    }
+  }
+
+  private fun handleSessionMessageEvent(payloadJson: String) {
+    val payload = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: return
+    val entry = parseEventSessionEntry(payload)
+    if (entry != null) {
+      upsertSessionEntry(entry)
+    }
+  }
+
+  private fun parseEventSessionEntry(payload: JsonObject): ChatSessionEntry? =
+    payload["session"].asObjectOrNull()?.let(::parseSessionEntry) ?: parseSessionEntry(payload)
 
   private fun handleAgentEvent(payloadJson: String) {
     val payload = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: return
@@ -600,6 +640,7 @@ class ChatController(
     val root = json.parseToJsonElement(historyJson).asObjectOrNull() ?: return ChatHistory(sessionKey, null, null, emptyList())
     val sid = root["sessionId"].asStringOrNull()
     val thinkingLevel = root["thinkingLevel"].asStringOrNull()
+    val sessionInfo = root["sessionInfo"].asObjectOrNull()?.let { parseSessionEntry(it, fallbackKey = sessionKey) }
     val array = root["messages"].asArrayOrNull() ?: JsonArray(emptyList())
 
     val messages =
@@ -622,20 +663,69 @@ class ChatController(
       sessionId = sid,
       thinkingLevel = thinkingLevel,
       messages = reconcileMessageIds(previous = previousMessages, incoming = messages),
+      sessionInfo = sessionInfo,
     )
   }
 
   private fun parseSessions(jsonString: String): List<ChatSessionEntry> {
     val root = json.parseToJsonElement(jsonString).asObjectOrNull() ?: return emptyList()
     val sessions = root["sessions"].asArrayOrNull() ?: return emptyList()
-    return sessions.mapNotNull { item ->
-      val obj = item.asObjectOrNull() ?: return@mapNotNull null
-      val key = obj["key"].asStringOrNull()?.trim().orEmpty()
-      if (key.isEmpty()) return@mapNotNull null
-      val updatedAt = obj["updatedAt"].asLongOrNull()
-      val displayName = obj["displayName"].asStringOrNull()?.trim()
-      ChatSessionEntry(key = key, updatedAtMs = updatedAt, displayName = displayName)
-    }
+    return sessions.mapNotNull { item -> parseSessionEntry(item.asObjectOrNull()) }
+  }
+
+  private fun parseSessionEntry(
+    obj: JsonObject?,
+    fallbackKey: String? = null,
+  ): ChatSessionEntry? {
+    if (obj == null) return null
+    val key =
+      obj["key"].asStringOrNull()?.trim().orEmpty()
+        .ifEmpty { obj["sessionKey"].asStringOrNull()?.trim().orEmpty() }
+        .ifEmpty { fallbackKey?.trim().orEmpty() }
+    if (key.isEmpty()) return null
+    return ChatSessionEntry(
+      key = key,
+      updatedAtMs = obj["updatedAt"].asLongOrNull(),
+      displayName = obj["displayName"].asStringOrNull()?.trim(),
+      totalTokens = obj["totalTokens"].asLongOrNull(),
+      totalTokensFresh = obj["totalTokensFresh"].asBooleanOrNull(),
+      contextTokens = obj["contextTokens"].asLongOrNull(),
+      hasContextUsageMetadata =
+        "totalTokens" in obj ||
+          "totalTokensFresh" in obj ||
+          "contextTokens" in obj,
+    )
+  }
+
+  private fun updateSessionFromHistory(history: ChatHistory) {
+    val info = history.sessionInfo ?: return
+    upsertSessionEntry(info, preserveExistingContextUsageWithoutTotal = true)
+  }
+
+  private fun upsertSessionEntry(
+    entry: ChatSessionEntry,
+    preserveExistingContextUsageWithoutTotal: Boolean = false,
+  ) {
+    val current = _sessions.value
+    val index = current.indexOfFirst { it.key == entry.key }
+    _sessions.value =
+      if (index >= 0) {
+        current.toMutableList().also {
+          it[index] =
+            mergeChatSessionEntry(
+              existing = it[index],
+              next = entry,
+              preserveExistingContextUsageWithoutTotal = preserveExistingContextUsageWithoutTotal,
+            )
+        }
+      } else {
+        listOf(entry) + current
+      }
+  }
+
+  private fun removeSessionEntry(sessionKey: String?) {
+    val key = sessionKey?.trim()?.takeIf { it.isNotEmpty() } ?: return
+    _sessions.value = _sessions.value.filterNot { it.key == key }
   }
 
   private fun parseRunId(resJson: String): String? =
@@ -857,3 +947,44 @@ private fun JsonElement?.asLongOrNull(): Long? =
     is JsonPrimitive -> content.toLongOrNull()
     else -> null
   }
+
+private fun JsonElement?.asBooleanOrNull(): Boolean? =
+  when (this) {
+    is JsonPrimitive -> content.toBooleanStrictOrNull()
+    else -> null
+  }
+
+internal fun mergeChatSessionEntry(
+  existing: ChatSessionEntry,
+  next: ChatSessionEntry,
+  preserveExistingContextUsageWithoutTotal: Boolean = false,
+): ChatSessionEntry {
+  val preserveExistingContextUsage = preserveExistingContextUsageWithoutTotal && next.totalTokens == null
+  return existing.copy(
+    updatedAtMs = next.updatedAtMs ?: existing.updatedAtMs,
+    displayName = next.displayName ?: existing.displayName,
+    totalTokens =
+      when {
+        preserveExistingContextUsage -> existing.totalTokens
+        next.hasContextUsageMetadata -> next.totalTokens
+        else -> null
+      },
+    totalTokensFresh =
+      when {
+        preserveExistingContextUsage -> existing.totalTokensFresh
+        next.hasContextUsageMetadata -> next.totalTokensFresh
+        else -> null
+      },
+    contextTokens =
+      when {
+        preserveExistingContextUsage -> next.contextTokens ?: existing.contextTokens
+        next.hasContextUsageMetadata -> next.contextTokens
+        else -> null
+      },
+    hasContextUsageMetadata =
+      when {
+        preserveExistingContextUsage -> existing.hasContextUsageMetadata || next.contextTokens != null
+        else -> next.hasContextUsageMetadata
+      },
+  )
+}

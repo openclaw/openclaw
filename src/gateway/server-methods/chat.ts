@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
+import { fileURLToPath } from "node:url";
 import { isAudioFileName } from "@openclaw/media-core/mime";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
@@ -52,7 +53,10 @@ import {
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
-import { stageSandboxMedia } from "../../auto-reply/reply/stage-sandbox-media.js";
+import {
+  stageSandboxMedia,
+  type StageSandboxMediaResult,
+} from "../../auto-reply/reply/stage-sandbox-media.js";
 import type { MsgContext, TemplateContext } from "../../auto-reply/templating.js";
 import { resolveSessionFilePath, updateSessionStoreEntry } from "../../config/sessions.js";
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
@@ -77,6 +81,7 @@ import {
   appendLocalMediaParentRoots,
   getAgentScopedMediaLocalRoots,
 } from "../../media/local-roots.js";
+import { parseInboundMediaUri } from "../../media/media-reference.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import {
   deleteMediaBuffer,
@@ -98,6 +103,8 @@ import {
 } from "../../sessions/user-turn-transcript.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
 import {
+  parseInlineDirectives,
+  stripInlineDirectiveTagsForDelivery,
   stripInlineDirectiveTagsForDisplay,
   sanitizeReplyDirectiveId,
 } from "../../utils/directive-tags.js";
@@ -149,15 +156,17 @@ import { resolveSessionHistoryTailReadOptions } from "../session-history-state.j
 import { readSessionTranscriptIndex } from "../session-transcript-index.fs.js";
 import {
   capArrayByJsonBytes,
+  readSessionMessageByIdAsync,
+  readRecentSessionMessagesAsync,
+  readSessionMessagesAsync,
+} from "../session-transcript-readers.js";
+import {
   buildGatewaySessionInfo,
   getSessionDefaults,
   loadSessionEntry,
   listAgentsForGateway,
-  readSessionMessageByIdAsync,
-  readSessionMessagesAsync,
   resolveGatewayModelSupportsImages,
   resolveDeletedAgentIdFromSessionKey,
-  readRecentSessionMessagesAsync,
   resolveSessionModelRef,
   resolveSessionStoreKey,
 } from "../session-utils.js";
@@ -761,13 +770,20 @@ function buildTranscriptReplyText(payloads: ReplyPayload[]): string {
       }
       const parts = resolveSendableOutboundReplyParts(payload);
       const lines: string[] = [];
-      const replyToId = sanitizeReplyDirectiveId(payload.replyToId);
+      const parsedText = payload.text?.includes("[[")
+        ? parseInlineDirectives(payload.text)
+        : undefined;
+      const replyToId =
+        sanitizeReplyDirectiveId(payload.replyToId) ??
+        sanitizeReplyDirectiveId(parsedText?.replyToExplicitId);
       if (replyToId) {
         lines.push(`[[reply_to:${replyToId}]]`);
-      } else if (payload.replyToCurrent) {
+      } else if (payload.replyToCurrent || parsedText?.replyToCurrent) {
         lines.push("[[reply_to_current]]");
       }
-      const text = payload.text?.trim();
+      const text = payload.text
+        ? stripInlineDirectiveTagsForDelivery(payload.text).text.trim()
+        : "";
       if (text && !isSuppressedControlReplyText(text)) {
         lines.push(text);
       }
@@ -780,7 +796,10 @@ function buildTranscriptReplyText(payloads: ReplyPayload[]): string {
           lines.push(`Attachment: ${trimmed}`);
         }
       }
-      if (payload.audioAsVoice && parts.mediaUrls.some((mediaUrl) => isAudioFileName(mediaUrl))) {
+      if (
+        (payload.audioAsVoice || parsedText?.audioAsVoice) &&
+        parts.mediaUrls.some((mediaUrl) => isAudioFileName(mediaUrl))
+      ) {
         lines.push("[[audio_as_voice]]");
       }
       return lines.join("\n").trim();
@@ -1320,17 +1339,54 @@ function stripTrailingOffloadedMediaMarkers(message: string, refs: OffloadedRef[
   return lines.join("\n").trimEnd();
 }
 
+function isPdfOffloadedRef(ref: OffloadedRef): boolean {
+  const mime = ref.mimeType.trim().toLowerCase();
+  if (mime === "application/pdf" || mime.endsWith("+pdf")) {
+    return true;
+  }
+  return path.extname(ref.path.split(/[?#]/u)[0] ?? "").toLowerCase() === ".pdf";
+}
+
+// A managed inbound PDF saved to the media store is safe to hand the agent as its
+// media path without sandbox staging: host-side media-understanding extracts its
+// text (see resolveFileExtractionLimits) by reading the media-store root, so even
+// locked-down agents receive the document. This gates both the up-front bypass for
+// oversized PDFs and the fallback to the managed path when sandbox staging fails
+// for an already-managed PDF. #90097
+function isManagedInboundPdfOffloadRef(ref: OffloadedRef): boolean {
+  if (!isPdfOffloadedRef(ref)) {
+    return false;
+  }
+  try {
+    return parseInboundMediaUri(ref.mediaRef) !== null;
+  } catch {
+    return false;
+  }
+}
+
+// Oversized managed PDFs skip sandbox staging up front: copying a large PDF into
+// every sandbox is wasteful, and files above the 5MB staging cap would otherwise
+// be rejected as a 4xx (see prestageMediaPathOffloads).
+function shouldPassThroughManagedInboundPdfOffloadRef(ref: OffloadedRef): boolean {
+  return ref.sizeBytes > MEDIA_MAX_BYTES && isManagedInboundPdfOffloadRef(ref);
+}
+
 // Stages media-path offloads into the agent sandbox synchronously so chat.send
-// can surface 5xx before respond(). Throws MediaOffloadError on any staging
-// failure (ENOSPC / EPERM / partial-stage) so the outer chat.send handler can
-// map it to UNAVAILABLE (5xx); plain Error would be misclassified as 4xx. All
-// offloaded refs are cleaned up from the media store before rethrow.
+// can surface 5xx before respond(). Throws MediaOffloadError when staging fails
+// for a ref that cannot fall back (ENOSPC / EPERM / partial-stage of a non-PDF or
+// unmanaged ref) so the outer chat.send handler maps it to UNAVAILABLE (5xx);
+// plain Error would be misclassified as 4xx. Already-managed inbound PDFs instead
+// fall back to their managed media path on staging failure (#90097), since
+// host-side media-understanding reads them from the media-store root. Offloaded
+// refs are cleaned up from the media store before rethrow.
 // Callers MUST set ctx.MediaStaged=true when this runs so the dispatch
 // pipeline skips its own stageSandboxMedia pass.
 //
-// Returned paths are absolute media-store paths when no sandbox is active, or
-// sandbox-relative paths plus `workspaceDir` when sandboxing is active. Host-side
-// media-understanding uses MediaWorkspaceDir to resolve those relative paths.
+// Returned paths are absolute media-store paths when no sandbox is active, for
+// oversized managed PDFs that bypass staging, or for already-managed PDFs that
+// fall back when staging fails (#90097); files staged into the sandbox use
+// sandbox-relative paths plus `workspaceDir`. Host-side media-understanding
+// resolves both via MediaWorkspaceDir and the media-store root.
 async function prestageMediaPathOffloads(params: {
   offloadedRefs: OffloadedRef[];
   includeImageRefs?: boolean;
@@ -1344,6 +1400,21 @@ async function prestageMediaPathOffloads(params: {
   if (mediaPathRefs.length === 0) {
     return { paths: [], types: [] };
   }
+  const refsByManagedPath = (refs: OffloadedRef[]) => ({
+    paths: refs.map((ref) => ref.path),
+    types: refs.map((ref) => ref.mimeType),
+  });
+
+  // Oversized managed PDFs bypass sandbox staging and are read host-side, so they
+  // do not need a workspace copy or the staging-cap check below.
+  const passThroughRefs: OffloadedRef[] = [];
+  const refsToStage: OffloadedRef[] = [];
+  for (const ref of mediaPathRefs) {
+    (shouldPassThroughManagedInboundPdfOffloadRef(ref) ? passThroughRefs : refsToStage).push(ref);
+  }
+  if (refsToStage.length === 0) {
+    return refsByManagedPath(mediaPathRefs);
+  }
 
   try {
     const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
@@ -1353,19 +1424,17 @@ async function prestageMediaPathOffloads(params: {
       workspaceDir,
     });
     if (!sandbox) {
-      return {
-        paths: mediaPathRefs.map((ref) => ref.path),
-        types: mediaPathRefs.map((ref) => ref.mimeType),
-      };
+      return refsByManagedPath(mediaPathRefs);
     }
 
     // stageSandboxMedia caps each file at STAGED_MEDIA_MAX_BYTES (=
     // MEDIA_MAX_BYTES, 5MB) and silently skips oversized files. The parse cap
     // (resolveChatAttachmentMaxBytes, default 20MB) is higher, so a sandboxed
-    // session receiving a file between the two caps would otherwise
+    // session receiving a non-PDF file between the two caps would otherwise
     // pass parse, fail staging, and surface as a retryable 5xx even though
-    // retry cannot succeed. Reject here as a client-side 4xx instead.
-    const oversizedForSandbox = mediaPathRefs.filter((ref) => ref.sizeBytes > MEDIA_MAX_BYTES);
+    // retry cannot succeed. Reject here as a client-side 4xx instead. Managed
+    // PDFs in that range pass through above instead of being rejected.
+    const oversizedForSandbox = refsToStage.filter((ref) => ref.sizeBytes > MEDIA_MAX_BYTES);
     if (oversizedForSandbox.length > 0) {
       const details = oversizedForSandbox
         .map((ref) => `${ref.label} (${ref.sizeBytes} bytes)`)
@@ -1377,39 +1446,75 @@ async function prestageMediaPathOffloads(params: {
     }
 
     const stagingCtx: MsgContext = {
-      MediaPath: mediaPathRefs[0].path,
-      MediaPaths: mediaPathRefs.map((ref) => ref.path),
-      MediaType: mediaPathRefs[0].mimeType,
-      MediaTypes: mediaPathRefs.map((ref) => ref.mimeType),
+      MediaPath: refsToStage[0].path,
+      MediaPaths: refsToStage.map((ref) => ref.path),
+      MediaType: refsToStage[0].mimeType,
+      MediaTypes: refsToStage.map((ref) => ref.mimeType),
     };
-    const stageResult = await stageSandboxMedia({
-      ctx: stagingCtx,
-      sessionCtx: stagingCtx as TemplateContext,
-      cfg: params.cfg,
-      sessionKey: params.sessionKey,
-      workspaceDir,
-    });
+    let stageResult: StageSandboxMediaResult;
+    try {
+      stageResult = await stageSandboxMedia({
+        ctx: stagingCtx,
+        sessionCtx: stagingCtx as TemplateContext,
+        cfg: params.cfg,
+        sessionKey: params.sessionKey,
+        workspaceDir,
+      });
+    } catch (stageErr) {
+      // stageSandboxMedia threw before copying anything (e.g. workspace mkdir
+      // ENOSPC/EPERM), so nothing reached the sandbox. Already-managed inbound
+      // PDFs still reach the agent via their managed media path (host-side
+      // media-understanding reads the media-store root); fail the send only when a
+      // ref cannot fall back. #90097
+      if (refsToStage.some((ref) => !isManagedInboundPdfOffloadRef(ref))) {
+        throw stageErr;
+      }
+      return refsByManagedPath(mediaPathRefs);
+    }
 
     // stageSandboxMedia silently keeps unstaged entries as their original
-    // absolute path, so length parity with `nonImage` does not prove every
-    // file landed in the sandbox. The RPC max (20MB via
-    // resolveChatAttachmentMaxBytes) admits files above the staging cap
-    // (STAGED_MEDIA_MAX_BYTES = 5MB); check the returned `staged` map so any
-    // missing source becomes a 5xx MediaOffloadError the client can retry.
+    // absolute path, so length parity does not prove every file landed in the
+    // sandbox. The RPC max (20MB via resolveChatAttachmentMaxBytes) admits files
+    // above the staging cap (STAGED_MEDIA_MAX_BYTES = 5MB); check the returned
+    // `staged` map for missing sources. Already-managed inbound PDFs fall back to
+    // their absolute managed path (host-side media-understanding reads the
+    // media-store root); any other missing source is a 5xx MediaOffloadError the
+    // client can retry. #90097
     const stagedSources = stageResult.staged;
-    const missing = mediaPathRefs.filter((ref) => !stagedSources.has(ref.path));
-    if (missing.length > 0) {
+    const missing = refsToStage.filter((ref) => !stagedSources.has(ref.path));
+    const unstageable = missing.filter((ref) => !isManagedInboundPdfOffloadRef(ref));
+    if (unstageable.length > 0) {
       throw new Error(
-        `attachment staging incomplete: ${stagedSources.size}/${mediaPathRefs.length} paths staged into sandbox workspace (missing: ${missing.map((ref) => ref.path).join(", ")})`,
+        `attachment staging incomplete: ${stagedSources.size}/${refsToStage.length} paths staged into sandbox workspace (missing: ${unstageable.map((ref) => ref.path).join(", ")})`,
       );
     }
     const stagedPaths = stagingCtx.MediaPaths ?? [];
-    const stagedTypes = stagingCtx.MediaTypes ?? mediaPathRefs.map((ref) => ref.mimeType);
+    const stagedTypes = stagingCtx.MediaTypes ?? refsToStage.map((ref) => ref.mimeType);
 
-    // Keep stagedPaths sandbox-relative (e.g. `media/inbound/foo.pdf`) so the
-    // agent inside the container can read them. Host-side media-understanding
-    // resolves them via ctx.MediaWorkspaceDir, which we carry separately.
-    return { paths: stagedPaths, types: stagedTypes, workspaceDir: sandbox.workspaceDir };
+    // Map each ref to its post-staging path. Staged files become sandbox-relative
+    // (e.g. `media/inbound/foo.pdf`) so the agent inside the container can read
+    // them; pass-through PDFs and managed PDFs that fell back from staging keep
+    // their absolute managed path (stagedPaths preserves the absolute path for any
+    // unstaged entry). Host-side media-understanding resolves both via
+    // ctx.MediaWorkspaceDir plus the media-store root. Preserve attachment order.
+    const resolvedByRef = new Map<OffloadedRef, { path: string; mimeType: string }>();
+    refsToStage.forEach((ref, index) => {
+      resolvedByRef.set(ref, {
+        path: stagedPaths[index] ?? ref.path,
+        mimeType: stagedTypes[index] ?? ref.mimeType,
+      });
+    });
+    for (const ref of passThroughRefs) {
+      resolvedByRef.set(ref, { path: ref.path, mimeType: ref.mimeType });
+    }
+    const ordered = mediaPathRefs.map(
+      (ref) => resolvedByRef.get(ref) ?? { path: ref.path, mimeType: ref.mimeType },
+    );
+    return {
+      paths: ordered.map((entry) => entry.path),
+      types: ordered.map((entry) => entry.mimeType),
+      workspaceDir: sandbox.workspaceDir,
+    };
   } catch (err) {
     await Promise.allSettled(
       params.offloadedRefs.map((ref) => deleteMediaBuffer(ref.id, "inbound")),
@@ -2427,19 +2532,25 @@ async function isChatMessageIdVisibleAfterHistoryFilters(params: {
   sessionId: string;
   storePath: string | undefined;
   sessionFile: string | undefined;
+  agentId?: string;
   messageId: string;
   sessionStartedAt?: number;
+  allowResetArchiveFallback?: boolean;
 }): Promise<boolean> {
   if (params.sessionStartedAt === undefined) {
     return true;
   }
   const messages = await readSessionMessagesAsync(
-    params.sessionId,
-    params.storePath,
-    params.sessionFile,
+    {
+      agentId: params.agentId,
+      sessionFile: params.sessionFile,
+      sessionId: params.sessionId,
+      storePath: params.storePath,
+    },
     {
       mode: "full",
       reason: "chat.message.get visibility",
+      ...(params.allowResetArchiveFallback === true ? { allowResetArchiveFallback: true } : {}),
     },
   );
   return dropPreSessionStartAnnouncePairs(messages, params.sessionStartedAt).some(
@@ -2549,10 +2660,19 @@ async function handleChatHistoryRequest({
   };
   const localMessages =
     sessionId && storePath
-      ? await readRecentSessionMessagesAsync(sessionId, storePath, entry?.sessionFile, {
-          ...localHistoryReadOptions,
-          maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
-        })
+      ? await readRecentSessionMessagesAsync(
+          {
+            agentId: sessionAgentId,
+            sessionFile: entry?.sessionFile,
+            sessionId,
+            storePath,
+          },
+          {
+            ...localHistoryReadOptions,
+            maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
+            allowResetArchiveFallback: true,
+          },
+        )
       : [];
   const overreadContextMessage =
     localMessages.length > rawHistoryWindow.maxMessages ? localMessages[0] : undefined;
@@ -2728,11 +2848,20 @@ export const chatHandlers: GatewayRequestHandlers = {
       return;
     }
 
+    const sessionAgentId = resolveSessionAgentId({
+      sessionKey,
+      config: cfg,
+      agentId: selectedAgent.agentId,
+    });
     const resolved = await readSessionMessageByIdAsync(
-      sessionId,
-      storePath,
-      entry?.sessionFile,
+      {
+        agentId: sessionAgentId,
+        sessionFile: entry?.sessionFile,
+        sessionId,
+        storePath,
+      },
       messageId,
+      { allowResetArchiveFallback: true },
     );
     if (!resolved.found) {
       respond(true, { ok: false, unavailableReason: "not_found" });
@@ -2742,9 +2871,11 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionId,
       storePath,
       sessionFile: entry?.sessionFile,
+      agentId: sessionAgentId,
       messageId,
       sessionStartedAt:
         typeof entry?.sessionStartedAt === "number" ? entry.sessionStartedAt : undefined,
+      allowResetArchiveFallback: true,
     });
     if (!visible) {
       respond(true, { ok: false, unavailableReason: "not_found" });
@@ -3533,6 +3664,8 @@ export const chatHandlers: GatewayRequestHandlers = {
           : {}),
         GatewayClientScopes: client?.connect?.scopes ?? [],
       };
+      const isInternalTextSlashCommandTurn =
+        ctx.Provider === INTERNAL_MESSAGE_CHANNEL && ctx.CommandSource === "text";
       if (mediaPathOffloadPaths.length > 0) {
         // Inject offloads via the same MsgContext fields the channel
         // path uses so buildInboundMediaNote renders a real `[media attached:
@@ -3938,12 +4071,271 @@ export const chatHandlers: GatewayRequestHandlers = {
                     agentId,
                   });
                 } else {
-                  await persistGatewayUserTurnTranscriptBestEffort();
+                  const finalPayloadEntries = deliveredReplies.filter(
+                    (entryItem) => entryItem.kind === "final",
+                  );
+                  const parseReplyInlineDirectives = (payload: ReplyPayload) =>
+                    typeof payload.text === "string" && payload.text.includes("[[")
+                      ? parseInlineDirectives(payload.text)
+                      : undefined;
+                  const shouldFoldCommandBlocks = isInternalTextSlashCommandTurn;
+                  const commandBlockPayloadEntries = shouldFoldCommandBlocks
+                    ? deliveredReplies.filter((entryItem) => entryItem.kind === "block")
+                    : [];
+                  const replyMediaUrls = (payload: ReplyPayload) =>
+                    resolveSendableOutboundReplyParts(payload).mediaUrls;
+                  const normalizeCommandMediaDedupeKey = (value: string): string => {
+                    const trimmed = value.trim();
+                    if (!trimmed) {
+                      return "";
+                    }
+                    if (!trimmed.toLowerCase().startsWith("file://")) {
+                      return path.isAbsolute(trimmed) ? path.normalize(trimmed) : trimmed;
+                    }
+                    try {
+                      const parsed = new URL(trimmed);
+                      if (parsed.protocol === "file:") {
+                        return path.normalize(fileURLToPath(parsed));
+                      }
+                    } catch {
+                      // Keep malformed file URL-like values comparable with the fallback below.
+                    }
+                    return trimmed.replace(/^file:\/\//iu, "");
+                  };
+                  const replyMediaDedupeKeys = (payload: ReplyPayload) =>
+                    replyMediaUrls(payload).map((mediaUrl) =>
+                      normalizeCommandMediaDedupeKey(mediaUrl),
+                    );
+                  const canonicalizeReplyMedia = (payload: ReplyPayload): ReplyPayload => {
+                    const mediaUrls = replyMediaUrls(payload);
+                    return {
+                      ...payload,
+                      mediaUrl: undefined,
+                      mediaUrls: mediaUrls.length > 0 ? mediaUrls : undefined,
+                    };
+                  };
+                  const mergeDefinedReplySemantics = (
+                    target: ReplyPayload,
+                    source: ReplyPayload,
+                  ): ReplyPayload => {
+                    const sourceInlineDirectives = parseReplyInlineDirectives(source);
+                    const sourceReplyToId =
+                      sanitizeReplyDirectiveId(source.replyToId) ??
+                      sanitizeReplyDirectiveId(sourceInlineDirectives?.replyToExplicitId);
+                    return {
+                      ...target,
+                      ...(source.trustedLocalMedia === true || target.trustedLocalMedia === true
+                        ? { trustedLocalMedia: true }
+                        : {}),
+                      ...(source.sensitiveMedia === true || target.sensitiveMedia === true
+                        ? { sensitiveMedia: true }
+                        : {}),
+                      ...(source.presentation !== undefined
+                        ? { presentation: source.presentation }
+                        : {}),
+                      ...(source.delivery !== undefined ? { delivery: source.delivery } : {}),
+                      ...(source.interactive !== undefined
+                        ? { interactive: source.interactive }
+                        : {}),
+                      ...(sourceReplyToId !== undefined ? { replyToId: sourceReplyToId } : {}),
+                      ...(source.replyToTag === true || target.replyToTag === true
+                        ? { replyToTag: true }
+                        : {}),
+                      ...(source.replyToCurrent === true ||
+                      sourceInlineDirectives?.replyToCurrent === true ||
+                      target.replyToCurrent === true
+                        ? { replyToCurrent: true }
+                        : {}),
+                      ...(source.audioAsVoice === true ||
+                      sourceInlineDirectives?.audioAsVoice === true ||
+                      target.audioAsVoice === true
+                        ? { audioAsVoice: true }
+                        : {}),
+                      ...(source.spokenText !== undefined ? { spokenText: source.spokenText } : {}),
+                      ...(source.ttsSupplement !== undefined
+                        ? { ttsSupplement: source.ttsSupplement }
+                        : {}),
+                      ...(source.isError === true || target.isError === true
+                        ? { isError: true }
+                        : {}),
+                      ...(source.channelData !== undefined
+                        ? { channelData: source.channelData }
+                        : {}),
+                    };
+                  };
+                  const mergeMediaReplySemantics = (
+                    target: ReplyPayload,
+                    source: ReplyPayload,
+                  ): ReplyPayload => {
+                    const sourceInlineDirectives = parseReplyInlineDirectives(source);
+                    return {
+                      ...target,
+                      ...(source.trustedLocalMedia === true || target.trustedLocalMedia === true
+                        ? { trustedLocalMedia: true }
+                        : {}),
+                      ...(source.sensitiveMedia === true || target.sensitiveMedia === true
+                        ? { sensitiveMedia: true }
+                        : {}),
+                      ...(source.audioAsVoice === true ||
+                      sourceInlineDirectives?.audioAsVoice === true ||
+                      target.audioAsVoice === true
+                        ? { audioAsVoice: true }
+                        : {}),
+                    };
+                  };
+                  const hasMergeableReplySemantics = (payload: ReplyPayload): boolean => {
+                    const inlineDirectives = parseReplyInlineDirectives(payload);
+                    return Boolean(
+                      payload.trustedLocalMedia !== undefined ||
+                      payload.sensitiveMedia !== undefined ||
+                      payload.presentation ||
+                      payload.delivery ||
+                      payload.interactive ||
+                      payload.replyToId ||
+                      payload.replyToTag !== undefined ||
+                      payload.replyToCurrent !== undefined ||
+                      payload.audioAsVoice !== undefined ||
+                      inlineDirectives?.hasReplyTag ||
+                      inlineDirectives?.hasAudioTag ||
+                      payload.spokenText ||
+                      payload.ttsSupplement ||
+                      payload.isError !== undefined ||
+                      payload.channelData,
+                    );
+                  };
+                  const hasUnmergedReplySemantics = (payload: ReplyPayload): boolean =>
+                    Boolean(
+                      payload.isReasoning ||
+                      payload.isReasoningSnapshot ||
+                      payload.isCompactionNotice ||
+                      payload.isFallbackNotice ||
+                      payload.isStatusNotice ||
+                      payload.btw,
+                    );
+                  const hasReplySemantics = (payload: ReplyPayload): boolean =>
+                    hasMergeableReplySemantics(payload) || hasUnmergedReplySemantics(payload);
+                  const mediaSetsMatch = (
+                    leftMediaUrls: readonly string[],
+                    rightMediaUrls: readonly string[],
+                  ): boolean => {
+                    if (leftMediaUrls.length !== rightMediaUrls.length) {
+                      return false;
+                    }
+                    return leftMediaUrls.every(
+                      (mediaUrl, index) => mediaUrl === rightMediaUrls[index],
+                    );
+                  };
+                  const replyDisplayText = (payload: ReplyPayload): string =>
+                    sanitizeAssistantDisplayText(payload.text) ?? "";
+                  const commandBlockPayloadEntriesForDelivery = commandBlockPayloadEntries.map(
+                    (entryItem) => ({
+                      kind: entryItem.kind,
+                      payload: canonicalizeReplyMedia(entryItem.payload),
+                    }),
+                  );
+                  const sensitiveMediaDedupeKeys = new Set(
+                    finalPayloadEntries.flatMap((entryItem) =>
+                      entryItem.payload.sensitiveMedia === true
+                        ? replyMediaDedupeKeys(entryItem.payload).filter(Boolean)
+                        : [],
+                    ),
+                  );
+                  if (sensitiveMediaDedupeKeys.size > 0) {
+                    for (const entryItem of commandBlockPayloadEntriesForDelivery) {
+                      if (
+                        replyMediaDedupeKeys(entryItem.payload).some((key) =>
+                          sensitiveMediaDedupeKeys.has(key),
+                        )
+                      ) {
+                        entryItem.payload = { ...entryItem.payload, sensitiveMedia: true };
+                      }
+                    }
+                  }
+                  const finalPayloadEntriesForDelivery = shouldFoldCommandBlocks
+                    ? finalPayloadEntries.flatMap((entryItem) => {
+                        const finalMediaUrls = replyMediaUrls(entryItem.payload);
+                        const finalMediaKeys = replyMediaDedupeKeys(entryItem.payload);
+                        const finalDisplayText = replyDisplayText(entryItem.payload);
+                        const matchingMediaBlockEntry =
+                          finalMediaUrls.length > 0
+                            ? commandBlockPayloadEntriesForDelivery.find((candidate) =>
+                                mediaSetsMatch(
+                                  replyMediaDedupeKeys(candidate.payload),
+                                  finalMediaKeys,
+                                ),
+                              )
+                            : undefined;
+                        const matchingTextBlockEntry = finalDisplayText
+                          ? commandBlockPayloadEntriesForDelivery.find(
+                              (candidate) =>
+                                replyDisplayText(candidate.payload) === finalDisplayText,
+                            )
+                          : undefined;
+                        const matchingMediaAndTextBlockEntry =
+                          finalMediaUrls.length > 0 && finalDisplayText
+                            ? commandBlockPayloadEntriesForDelivery.find(
+                                (candidate) =>
+                                  replyDisplayText(candidate.payload) === finalDisplayText &&
+                                  mediaSetsMatch(
+                                    replyMediaDedupeKeys(candidate.payload),
+                                    finalMediaKeys,
+                                  ),
+                              )
+                            : undefined;
+                        const duplicateBlockEntry =
+                          finalMediaUrls.length > 0
+                            ? finalDisplayText
+                              ? matchingMediaAndTextBlockEntry
+                              : matchingMediaBlockEntry
+                            : finalMediaUrls.length === 0
+                              ? matchingTextBlockEntry
+                              : undefined;
+                        if (duplicateBlockEntry) {
+                          duplicateBlockEntry.payload = mergeDefinedReplySemantics(
+                            duplicateBlockEntry.payload,
+                            entryItem.payload,
+                          );
+                        } else if (matchingMediaBlockEntry) {
+                          matchingMediaBlockEntry.payload = mergeMediaReplySemantics(
+                            matchingMediaBlockEntry.payload,
+                            entryItem.payload,
+                          );
+                        }
+                        const remainingFinalMediaUrls = matchingMediaBlockEntry
+                          ? []
+                          : finalMediaUrls;
+                        if (
+                          remainingFinalMediaUrls.length === 0 &&
+                          ((duplicateBlockEntry && !hasUnmergedReplySemantics(entryItem.payload)) ||
+                            (!duplicateBlockEntry &&
+                              !finalDisplayText &&
+                              !hasReplySemantics(entryItem.payload)))
+                        ) {
+                          return [];
+                        }
+                        return [
+                          {
+                            ...entryItem,
+                            payload: {
+                              ...entryItem.payload,
+                              mediaUrl: undefined,
+                              mediaUrls:
+                                remainingFinalMediaUrls.length > 0
+                                  ? remainingFinalMediaUrls
+                                  : undefined,
+                            },
+                          },
+                        ];
+                      })
+                    : finalPayloadEntries;
+                  // Non-agent command paths can enqueue only block replies. If no visible final
+                  // supersedes them, fold those blocks into the final WebChat message.
                   const rawFinalPayloads = appendedWebchatAgentMedia
                     ? []
-                    : deliveredReplies
-                        .filter((entryItem) => entryItem.kind === "final")
-                        .map((entryCandidate) => entryCandidate.payload);
+                    : [
+                        ...commandBlockPayloadEntriesForDelivery,
+                        ...finalPayloadEntriesForDelivery,
+                      ].map((entryCandidate) => entryCandidate.payload);
                   const finalPayloads = await normalizeWebchatReplyMediaPathsForDisplay({
                     cfg,
                     sessionKey,
@@ -4034,16 +4426,23 @@ export const chatHandlers: GatewayRequestHandlers = {
                   const displayReply =
                     extractAssistantDisplayTextFromContent(assistantContent) ??
                     buildTranscriptReplyText(finalPayloads);
+                  const transcriptDisplayReply = displayReply
+                    ? stripInlineDirectiveTagsForDisplay(displayReply).text.trim()
+                    : "";
                   const transcriptReply =
                     mediaMessage?.transcriptText ||
                     buildTranscriptReplyText(finalPayloads) ||
-                    displayReply;
+                    transcriptDisplayReply;
                   let message: Record<string, unknown> | undefined;
-                  if (
-                    transcriptReply ||
-                    persistedContentForAppend?.length ||
-                    assistantContent?.length
-                  ) {
+                  const shouldAppendAssistantTranscript = Boolean(
+                    transcriptReply || persistedContentForAppend?.length,
+                  );
+                  if (shouldAppendAssistantTranscript) {
+                    await persistGatewayUserTurnTranscriptBestEffort();
+                  } else {
+                    await persistGatewayUserTurnTranscriptBestEffort();
+                  }
+                  if (shouldAppendAssistantTranscript) {
                     const appended = await appendAssistantTranscriptMessage({
                       sessionKey,
                       message: transcriptReply,
@@ -4097,6 +4496,15 @@ export const chatHandlers: GatewayRequestHandlers = {
                         usage: { input: 0, output: 0, totalTokens: 0 },
                       };
                     }
+                  } else if (broadcastAssistantContent?.length) {
+                    message = {
+                      role: "assistant",
+                      content: broadcastAssistantContent,
+                      text: extractAssistantDisplayText(broadcastAssistantContent) ?? "",
+                      timestamp: Date.now(),
+                      stopReason: "stop",
+                      usage: { input: 0, output: 0, totalTokens: 0 },
+                    };
                   }
                   if (hasVisibleAssistantFinalMessage(message)) {
                     emitFirstAssistantServerTiming();

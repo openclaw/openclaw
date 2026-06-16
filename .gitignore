@@ -127,6 +127,8 @@ mantis/
 !.agents/skills/clawdtributor/**
 !.agents/skills/control-ui-e2e/
 !.agents/skills/control-ui-e2e/**
+!.agents/skills/discord-user-post/
+!.agents/skills/discord-user-post/**
 !.agents/skills/gitcrawl/
 !.agents/skills/gitcrawl/**
 !.agents/skills/technical-documentation/
