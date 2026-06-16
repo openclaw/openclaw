@@ -119,6 +119,10 @@ type TelegramSendOpts = {
   buttons?: TelegramInlineButtons;
   /** Send image as document to avoid Telegram compression. Defaults to false. */
   forceDocument?: boolean;
+  /** Explicit rich-message opt-in override; when set, supersedes account config. */
+  richMessages?: boolean;
+  /** Explicit auto-detect override; when set, supersedes account config. */
+  richMessagesAutoDetect?: boolean;
 };
 
 type TelegramSendResult = {
@@ -655,7 +659,9 @@ export async function sendMessageTelegram(
 
   const textMode = opts.textMode ?? "markdown";
   const useRichMessages =
+    opts.richMessages === true ||
     account.config.richMessages === true ||
+    (opts.richMessagesAutoDetect === true && detectTelegramRichContent(text)) ||
     (account.config.richMessagesAutoDetect === true && detectTelegramRichContent(text));
   const tableMode =
     opts.tableMode ??
@@ -1531,7 +1537,9 @@ export async function editMessageTelegram(
 
   const textMode = opts.textMode ?? "markdown";
   const useRichMessages =
+    opts.richMessages === true ||
     account.config.richMessages === true ||
+    (opts.richMessagesAutoDetect === true && detectTelegramRichContent(text)) ||
     (account.config.richMessagesAutoDetect === true && detectTelegramRichContent(text));
   const tableMode = resolveMarkdownTableMode({
     cfg,
