@@ -34,6 +34,11 @@ const installedPackageMetadataCache = new Map<string, InstalledPackageMetadata>(
 const MAX_INSTALLED_PACKAGE_JSON_PATH_CACHE_ENTRIES = 256;
 const MAX_INSTALLED_PACKAGE_METADATA_CACHE_ENTRIES = 256;
 
+// Reusable realpath cache shared across buildInstalledManifestRegistryIndexKey calls.
+// Creating a new Map per call (~179 per config validation) caused a ~13s lstat gap on
+// Windows vs the global-cache baseline. A single Map lets safeRealpathSync hits compound.
+let _buildIndexRealpathCache: Map<string, string> | undefined;
+
 type InstalledPackageMetadata = {
   packageManifest?: OpenClawPackageManifest;
   packageDependencies?: PluginDependencySpecMap;
@@ -43,6 +48,7 @@ type InstalledPackageMetadata = {
 export function clearInstalledManifestRegistryProcessCaches(): void {
   installedPackageJsonPathCache.clear();
   installedPackageMetadataCache.clear();
+  _buildIndexRealpathCache = undefined;
 }
 
 registerPluginMetadataProcessMemoLifecycleClear(clearInstalledManifestRegistryProcessCaches);
@@ -195,7 +201,12 @@ function buildInstalledPackageMetadataCacheKey(params: {
 }
 
 function buildInstalledManifestRegistryIndexKey(index: InstalledPluginIndex) {
-  const realpathCache = new Map<string, string>();
+  // Reuse a module-level cache so safeRealpathSync lookups compound across the ~179
+  // calls per config-validation pass, instead of starting from scratch each time.
+  if (!_buildIndexRealpathCache) {
+    _buildIndexRealpathCache = new Map<string, string>();
+  }
+  const realpathCache = _buildIndexRealpathCache;
   return {
     version: index.version,
     hostContractVersion: index.hostContractVersion,
