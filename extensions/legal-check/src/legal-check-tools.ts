@@ -3,6 +3,7 @@ import { jsonResult, type OpenClawPluginApi } from "../api.js";
 import { extractUrl } from "./extract-url.js";
 import { getJson, LegalApiError, postForm, resolveConfig } from "./http-client.js";
 import { ApiKeyResolver } from "./key-resolver.js";
+import { RecentJobStore } from "./recent-jobs.js";
 import type { LegalApiConfig } from "./types.js";
 
 /** Chat agents are named `rabbitmq-<userId>`; that userId is the trusted identity. */
@@ -54,7 +55,14 @@ const CreateSchema = Type.Object(
 );
 
 const StatusSchema = Type.Object(
-  { jobId: Type.Number({ description: "The check job id returned by legal_check_create." }) },
+  {
+    jobId: Type.Optional(
+      Type.Number({
+        description:
+          "Internal — leave unset. The tool polls the most recent check for this account on its own.",
+      }),
+    ),
+  },
   { additionalProperties: false },
 );
 
@@ -85,6 +93,7 @@ function envelopeError(res: Record<string, unknown>): string | null {
 export function createLegalCheckCreateToolFactory(
   api: OpenClawPluginApi,
   resolver: ApiKeyResolver,
+  store: RecentJobStore,
 ) {
   const config = resolveConfig(api.pluginConfig ?? {});
 
@@ -99,8 +108,9 @@ export function createLegalCheckCreateToolFactory(
       label: "Create Legal Check",
       description:
         "Create a 图文/视频违规检测 or 不实信息检测 task (the same engine as the web 内容检测 page). " +
-        "Returns a jobId; the analysis runs asynchronously — poll legal_check_status with that id. " +
-        "Each check consumes the account's legal-check credit.",
+        "The analysis runs asynchronously — call legal_check_status (no arguments) to poll the result. " +
+        "Each check consumes the account's legal-check credit. " +
+        "The job is tracked server-side; never mention any internal job id or number to the user.",
       parameters: CreateSchema,
       async execute(_toolCallId: string, rawParams: Record<string, unknown>) {
         let apiKey: string;
@@ -164,11 +174,13 @@ export function createLegalCheckCreateToolFactory(
         if (!Number.isInteger(jobId) || jobId <= 0) {
           return jsonResult({ success: false, error: "Backend did not return a job id." });
         }
+        const label = asString(job?.label) ?? null;
+        // Keep the id server-side only; legal_check_status polls it back.
+        store.remember(userId, { jobId, label, mode });
         return jsonResult({
           success: true,
-          jobId,
           duplicated: Boolean(res.duplicated),
-          label: asString(job?.label) ?? null,
+          label,
           status: asString(job?.status) ?? "Pending",
           mode,
           detailPath: `/business/content/${jobId}`,
@@ -181,6 +193,7 @@ export function createLegalCheckCreateToolFactory(
 export function createLegalCheckStatusToolFactory(
   api: OpenClawPluginApi,
   resolver: ApiKeyResolver,
+  store: RecentJobStore,
 ) {
   const config = resolveConfig(api.pluginConfig ?? {});
 
@@ -194,7 +207,8 @@ export function createLegalCheckStatusToolFactory(
       name: "legal_check_status",
       label: "Legal Check Status",
       description:
-        "Get the status and result of a 违规/不实信息检测 job created with legal_check_create. " +
+        "Get the status and result of the most recent 违规/不实信息检测 created with legal_check_create. " +
+        "Call it with no arguments — it polls the latest check for this account on its own. " +
         "Returns the job stage, the verdict/result when done, and which complaint letters are ready.",
       parameters: StatusSchema,
       async execute(_toolCallId: string, rawParams: Record<string, unknown>) {
@@ -211,9 +225,14 @@ export function createLegalCheckStatusToolFactory(
               "Could not resolve an API key for this account; ask the operator to check legal-check config.",
           });
         }
-        const jobId = Number(rawParams.jobId);
+        // The agent never holds the id; default to the latest job we created.
+        const jobId =
+          rawParams.jobId != null ? Number(rawParams.jobId) : (store.latest(userId)?.jobId ?? 0);
         if (!Number.isInteger(jobId) || jobId <= 0) {
-          return jsonResult({ success: false, error: "jobId must be a positive integer." });
+          return jsonResult({
+            success: false,
+            error: "No recent check to poll; create one with legal_check_create first.",
+          });
         }
 
         let res: Record<string, unknown>;
@@ -253,7 +272,6 @@ function summarizeJob(jobId: number, res: Record<string, unknown>): Record<strin
 
   return {
     success: true,
-    jobId,
     status,
     statusLabel: STATUS_LABELS[status] ?? status ?? "未知",
     done: status === "Done",

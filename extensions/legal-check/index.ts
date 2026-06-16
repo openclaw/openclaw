@@ -6,6 +6,7 @@ import {
   createLegalCheckCreateToolFactory,
   createLegalCheckStatusToolFactory,
 } from "./src/legal-check-tools.js";
+import { RecentJobStore } from "./src/recent-jobs.js";
 
 export default definePluginEntry({
   id: "legal-check",
@@ -18,11 +19,13 @@ export default definePluginEntry({
     const config = resolveConfig(api.pluginConfig ?? {});
     // One shared resolver: explicit override -> existing api_key row -> auto-mint.
     const resolver = new ApiKeyResolver(config.apiKeys, config.db);
+    // Per-user memory of the last job so status can poll without exposing the id.
+    const recentJobs = new RecentJobStore();
 
-    api.registerTool(createLegalCheckCreateToolFactory(api, resolver), {
+    api.registerTool(createLegalCheckCreateToolFactory(api, resolver, recentJobs), {
       name: "legal_check_create",
     });
-    api.registerTool(createLegalCheckStatusToolFactory(api, resolver), {
+    api.registerTool(createLegalCheckStatusToolFactory(api, resolver, recentJobs), {
       name: "legal_check_status",
     });
 
