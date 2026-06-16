@@ -161,13 +161,13 @@ function parseGatewayRpcTimeoutOption(raw: unknown, fallback = 10_000): number {
  * when the diagnostic was emitted (and the process is exiting); callers should
  * stop processing. Otherwise the raw error is rethrown for the default handler.
  */
-async function callGatewayCliWithAuthDiagnostic<T = unknown>(
+async function callGatewayCliWithAuthDiagnostic(
   method: string,
   rpcOpts: GatewayRpcOpts,
   params?: unknown,
-): Promise<{ handled: true } | { handled: false; result: T }> {
+): Promise<{ handled: true } | { handled: false; result: unknown }> {
   try {
-    const result = (await callGatewayCli(method, rpcOpts, params)) as T;
+    const result = await callGatewayCli(method, rpcOpts, params);
     return { handled: false, result };
   } catch (error) {
     const [
