@@ -1585,6 +1585,76 @@ describe("tryDispatchAcpReply", () => {
     expect(dispatcherCall(dispatcher.sendFinalReply).text).toContain("ACP metadata is missing");
   });
 
+  it("unbinds stale bindings on generic ACP runTurn init failure when persisted cwd is missing", async () => {
+    const aliasSessionKey = "main";
+    const canonicalSessionKey = "agent:main:main";
+    const missingCwd = path.join(os.tmpdir(), "openclaw-pr68843-missing-cwd-does-not-exist");
+    managerMocks.resolveSession.mockReturnValue({
+      kind: "ready",
+      sessionKey: canonicalSessionKey,
+      meta: createAcpSessionMeta({ runtimeOptions: { cwd: missingCwd } }),
+    });
+    // Generic spawn failure (e.g. ENOENT) surfaced as ACP_SESSION_INIT_FAILED without a
+    // stale-metadata message; the reliable stale signal is the missing persisted cwd.
+    managerMocks.runTurn.mockRejectedValueOnce(
+      new AcpRuntimeError(
+        "ACP_SESSION_INIT_FAILED",
+        "Failed to spawn agent command: /run/current-system/sw/bin/codex-acp-openclaw",
+      ),
+    );
+    bindingServiceMocks.unbind.mockResolvedValueOnce([
+      {
+        bindingId: "telegram:default:thread-1",
+        targetSessionKey: canonicalSessionKey,
+        targetKind: "session",
+        conversation: {
+          channel: "telegram",
+          accountId: "default",
+          conversationId: "thread-1",
+        },
+        status: "active",
+        boundAt: 0,
+      },
+    ]);
+    const { dispatcher } = createDispatcher();
+
+    await runDispatch({
+      bodyForAgent: "test",
+      dispatcher,
+      sessionKeyOverride: aliasSessionKey,
+    });
+
+    expect(bindingServiceMocks.unbind).toHaveBeenCalledTimes(1);
+    expect(bindingServiceMocks.unbind).toHaveBeenCalledWith({
+      targetSessionKey: canonicalSessionKey,
+      reason: "acp-session-init-failed",
+    });
+    expect(dispatcherCall(dispatcher.sendFinalReply).isError).toBe(true);
+  });
+
+  it("does not unbind valid bindings on generic ACP runTurn init failure when persisted cwd still exists", async () => {
+    const canonicalSessionKey = "agent:main:main";
+    // os.tmpdir() is guaranteed to exist, so the cwd-existence probe must not classify
+    // this generic init failure as stale.
+    managerMocks.resolveSession.mockReturnValue({
+      kind: "ready",
+      sessionKey: canonicalSessionKey,
+      meta: createAcpSessionMeta({ runtimeOptions: { cwd: os.tmpdir() } }),
+    });
+    managerMocks.runTurn.mockRejectedValueOnce(
+      new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "Could not initialize ACP session runtime."),
+    );
+    const { dispatcher } = createDispatcher();
+
+    await runDispatch({
+      bodyForAgent: "test",
+      dispatcher,
+    });
+
+    expect(bindingServiceMocks.unbind).not.toHaveBeenCalled();
+    expect(dispatcherCall(dispatcher.sendFinalReply).isError).toBe(true);
+  });
+
   it("uses canonical session keys for bound-session identity notices", async () => {
     const aliasSessionKey = "main";
     const canonicalSessionKey = "agent:main:main";
