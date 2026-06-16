@@ -724,6 +724,72 @@ describe("session cost usage", () => {
     });
   });
 
+  it("reclaims stale usage cache temp files before refreshing", async () => {
+    const root = await makeSessionCostRoot("cost-cache-temp-cleanup");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-cache-temp-cleanup.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      transcriptText("sess-cache-temp-cleanup", {
+        type: "message",
+        timestamp: "2026-02-05T12:00:00.000Z",
+        message: {
+          role: "assistant",
+          provider: "openai",
+          model: "gpt-5.4",
+          usage: {
+            input: 10,
+            output: 20,
+            totalTokens: 30,
+            cost: { total: 0.03 },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const staleLegacyTempPath = path.join(sessionsDir, ".usage-cost-cache.json.12345.tmp");
+    const staleCurrentTempPath = path.join(sessionsDir, ".usage-cost-cache.12345.tmp");
+    const recentTempPath = path.join(sessionsDir, ".usage-cost-cache.67890.tmp");
+    const lockTempPath = path.join(sessionsDir, ".usage-cost-cache.json.lock.12345.tmp");
+    await Promise.all(
+      [staleLegacyTempPath, staleCurrentTempPath, recentTempPath, lockTempPath].map((tempPath) =>
+        fs.writeFile(tempPath, "partial\n", "utf-8"),
+      ),
+    );
+    const staleTime = new Date(Date.now() - 60_000);
+    await Promise.all(
+      [staleLegacyTempPath, staleCurrentTempPath, lockTempPath].map((tempPath) =>
+        fs.utimes(tempPath, staleTime, staleTime),
+      ),
+    );
+
+    const exists = async (filePath: string): Promise<boolean> =>
+      await fs.stat(filePath).then(
+        () => true,
+        () => false,
+      );
+
+    await withStateDir(root, async () => {
+      const result = await refreshCostUsageCache();
+      expect(result).toBe("refreshed");
+
+      expect(await exists(staleLegacyTempPath)).toBe(false);
+      expect(await exists(staleCurrentTempPath)).toBe(false);
+      expect(await exists(recentTempPath)).toBe(true);
+      expect(await exists(lockTempPath)).toBe(true);
+
+      const summary = await loadCostUsageSummaryFromCache({
+        startMs: Date.UTC(2026, 1, 5),
+        endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
+        requestRefresh: false,
+      });
+      expect(summary.totals.totalTokens).toBe(30);
+      expect(summary.cacheStatus?.status).toBe("fresh");
+    });
+  });
+
   it("keeps queued durable aggregate refresh state scoped to the cache path", async () => {
     const firstRoot = await makeSessionCostRoot("cost-cache-queued-first");
     const secondRoot = await makeSessionCostRoot("cost-cache-queued-second");
