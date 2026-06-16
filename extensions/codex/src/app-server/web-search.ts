@@ -38,7 +38,9 @@ function hasNativeDomainRestrictions(config: OpenClawConfig | undefined): boolea
   );
 }
 
-function buildNativeWebSearchThreadConfig(config: OpenClawConfig | undefined): JsonObject {
+export function buildCodexNativeWebSearchThreadConfig(
+  config: OpenClawConfig | undefined,
+): JsonObject {
   const nativeConfig = config?.tools?.web?.search?.openaiCodex;
   const threadConfig: JsonObject = {
     // Production app-server traffic rejects standalone web.run's user-defined
@@ -120,6 +122,6 @@ export function resolveCodexWebSearchPlan(params: {
     // Native and managed search must stay mutually exclusive. In particular,
     // exposing managed web_search here could bypass native allowed_domains.
     suppressManagedWebSearch: true,
-    threadConfig: buildNativeWebSearchThreadConfig(params.config),
+    threadConfig: buildCodexNativeWebSearchThreadConfig(params.config),
   };
 }

@@ -240,8 +240,14 @@ describe("codex media understanding provider", () => {
       developerInstructions:
         "You are OpenClaw's bounded image-understanding worker. Describe only the provided image content. Do not call tools, edit files, or ask follow-up questions.",
       config: {
+        "features.apps": false,
         "features.code_mode": false,
         "features.code_mode_only": false,
+        "features.image_generation": false,
+        "features.multi_agent": false,
+        "features.plugins": false,
+        "features.standalone_web_search": false,
+        web_search: "disabled",
       },
       environments: [],
       dynamicTools: [],
@@ -486,8 +492,14 @@ describe("codex media understanding provider", () => {
       developerInstructions:
         "You are OpenClaw's bounded structured-extraction worker. Return only the requested extraction. Do not call tools, edit files, ask follow-up questions, or include secrets.",
       config: {
+        "features.apps": false,
         "features.code_mode": false,
         "features.code_mode_only": false,
+        "features.image_generation": false,
+        "features.multi_agent": false,
+        "features.plugins": false,
+        "features.standalone_web_search": false,
+        web_search: "disabled",
       },
       environments: [],
       dynamicTools: [],
