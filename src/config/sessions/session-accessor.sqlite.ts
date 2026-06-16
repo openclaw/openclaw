@@ -46,7 +46,7 @@ import {
   shouldRunSessionEntryMaintenance,
 } from "./store-maintenance.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
-import type { SessionEntry } from "./types.js";
+import type { SessionCompactionCheckpoint, SessionEntry } from "./types.js";
 import { mergeSessionEntry, mergeSessionEntryPreserveActivity } from "./types.js";
 
 type SessionSqliteDatabase = Pick<
@@ -94,6 +94,45 @@ type ResolvedTranscriptReadScope = ResolvedSqliteReadScope & {
 type ResolvedSqliteStoreTarget = {
   agentId?: string;
   path?: string;
+};
+type SqliteCheckpointTranscriptForkSource = {
+  sessionId: string;
+  leafId?: string;
+  totalTokens?: number;
+};
+
+/** Result from SQLite compaction checkpoint branch or restore operations. */
+export type SqliteCompactionCheckpointSessionMutationResult =
+  | {
+      status: "created";
+      key: string;
+      checkpoint: SessionCompactionCheckpoint;
+      entry: SessionEntry;
+    }
+  | { status: "missing-session" }
+  | { status: "missing-checkpoint" }
+  | { status: "missing-boundary" }
+  | { status: "failed" };
+
+/** Parameters for branching a SQLite session from a compaction checkpoint. */
+export type SqliteBranchCheckpointSessionParams = {
+  agentId?: string;
+  env?: NodeJS.ProcessEnv;
+  storePath?: string;
+  sourceKey: string;
+  sourceStoreKey?: string;
+  nextKey: string;
+  checkpointId: string;
+};
+
+/** Parameters for restoring a SQLite session from a compaction checkpoint. */
+export type SqliteRestoreCheckpointSessionParams = {
+  agentId?: string;
+  env?: NodeJS.ProcessEnv;
+  storePath?: string;
+  sessionKey: string;
+  sessionStoreKey?: string;
+  checkpointId: string;
 };
 
 const SQLITE_SESSION_WRITER_QUEUES = new Map<string, StoreWriterQueue>();
@@ -312,6 +351,50 @@ export function loadSqliteTranscriptEventsSync(
   return rows.map((row) => JSON.parse(row.event_json) as TranscriptEvent);
 }
 
+/** Checks whether the additive SQLite transcript store has rows for a transcript. */
+export function sqliteTranscriptExists(scope: SessionTranscriptReadScope): boolean {
+  const resolved = resolveSqliteTranscriptReadScope(scope);
+  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  const db = getSessionKysely(database.db);
+  const row = executeSqliteQueryTakeFirstSync(
+    database.db,
+    db
+      .selectFrom("transcript_events")
+      .select("seq")
+      .where("session_id", "=", resolved.sessionId)
+      .limit(1),
+  );
+  return row !== undefined;
+}
+
+/** Deletes rows for one transcript from the additive SQLite transcript store. */
+export async function deleteSqliteTranscript(scope: SessionTranscriptReadScope): Promise<boolean> {
+  const resolved = resolveSqliteTranscriptReadScope(scope);
+  return await runExclusiveSqliteSessionWrite(resolved, async () => {
+    let deleted = false;
+    runOpenClawAgentWriteTransaction((database) => {
+      deleted = deleteSqliteTranscriptEventsInTransaction(database, resolved.sessionId);
+    }, toDatabaseOptions(resolved));
+    return deleted;
+  });
+}
+
+/** Fully replaces rows for one transcript in the additive SQLite transcript store. */
+export async function replaceSqliteTranscriptEvents(
+  scope: SessionTranscriptAccessScope,
+  events: TranscriptEvent[],
+): Promise<void> {
+  const resolved = resolveSqliteTranscriptScope(scope);
+  await runExclusiveSqliteSessionWrite(resolved, async () => {
+    runOpenClawAgentWriteTransaction((database) => {
+      deleteSqliteTranscriptEventsInTransaction(database, resolved.sessionId);
+      for (const event of events) {
+        appendTranscriptEventInTransaction(database, resolved, event);
+      }
+    }, toDatabaseOptions(resolved));
+  });
+}
+
 /** Appends one raw transcript event to the additive SQLite transcript store. */
 export async function appendSqliteTranscriptEvent(
   scope: SessionTranscriptAccessScope,
@@ -322,6 +405,24 @@ export async function appendSqliteTranscriptEvent(
   await runExclusiveSqliteSessionWrite(resolved, async () => {
     runOpenClawAgentWriteTransaction((database) => {
       appendTranscriptEventInTransaction(database, resolved, event);
+    }, toDatabaseOptions(resolved));
+  });
+}
+
+/** Appends raw transcript events to the additive SQLite transcript store in one transaction. */
+export async function appendSqliteTranscriptEvents(
+  scope: SessionTranscriptAccessScope,
+  events: TranscriptEvent[],
+): Promise<void> {
+  if (events.length === 0) {
+    return;
+  }
+  const resolved = resolveSqliteTranscriptScope(scope);
+  await runExclusiveSqliteSessionWrite(resolved, async () => {
+    runOpenClawAgentWriteTransaction((database) => {
+      for (const event of events) {
+        appendTranscriptEventInTransaction(database, resolved, event);
+      }
     }, toDatabaseOptions(resolved));
   });
 }
@@ -402,6 +503,59 @@ export async function appendSqliteTranscriptMessage<TMessage>(
       };
     }, toDatabaseOptions(resolved));
     return result;
+  });
+}
+
+/** Branches a SQLite session from a compaction checkpoint in one queued transaction. */
+export async function branchSqliteCompactionCheckpointSession(
+  params: SqliteBranchCheckpointSessionParams,
+): Promise<SqliteCompactionCheckpointSessionMutationResult> {
+  const sourceKey = normalizeSqliteSessionKey(params.sourceStoreKey ?? params.sourceKey);
+  const targetKey = normalizeSqliteSessionKey(params.nextKey);
+  const resolved = resolveSqliteScope({
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    ...(params.env ? { env: params.env } : {}),
+    sessionKey: sourceKey,
+    ...(params.storePath ? { storePath: params.storePath } : {}),
+  });
+  return await runExclusiveSqliteSessionWrite(resolved, async () => {
+    let result: SqliteCompactionCheckpointSessionMutationResult | undefined;
+    runOpenClawAgentWriteTransaction((database) => {
+      result = branchSqliteCompactionCheckpointSessionInTransaction(database, {
+        checkpointId: params.checkpointId,
+        parentSessionKey: normalizeSqliteSessionKey(params.sourceKey),
+        resolved,
+        sourceKey,
+        targetKey,
+      });
+    }, toDatabaseOptions(resolved));
+    return result ?? { status: "failed" };
+  });
+}
+
+/** Restores a SQLite session from a compaction checkpoint in one queued transaction. */
+export async function restoreSqliteCompactionCheckpointSession(
+  params: SqliteRestoreCheckpointSessionParams,
+): Promise<SqliteCompactionCheckpointSessionMutationResult> {
+  const sessionKey = normalizeSqliteSessionKey(params.sessionStoreKey ?? params.sessionKey);
+  const targetKey = normalizeSqliteSessionKey(params.sessionKey);
+  const resolved = resolveSqliteScope({
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    ...(params.env ? { env: params.env } : {}),
+    sessionKey,
+    ...(params.storePath ? { storePath: params.storePath } : {}),
+  });
+  return await runExclusiveSqliteSessionWrite(resolved, async () => {
+    let result: SqliteCompactionCheckpointSessionMutationResult | undefined;
+    runOpenClawAgentWriteTransaction((database) => {
+      result = restoreSqliteCompactionCheckpointSessionInTransaction(database, {
+        checkpointId: params.checkpointId,
+        resolved,
+        sourceKey: sessionKey,
+        targetKey,
+      });
+    }, toDatabaseOptions(resolved));
+    return result ?? { status: "failed" };
   });
 }
 
@@ -738,9 +892,9 @@ function applySqliteSessionEntryMaintenance(
 
   const removedKeys = new Set<string>();
   const removedSessionIds = new Set<string>();
-  const rememberRemovedEntry = (params: { key: string; entry: SessionEntry }) => {
-    removedKeys.add(params.key);
-    removedSessionIds.add(params.entry.sessionId);
+  const rememberRemovedEntry = (removed: { key: string; entry: SessionEntry }) => {
+    removedKeys.add(removed.key);
+    removedSessionIds.add(removed.entry.sessionId);
   };
   const preserveKeys = collectSessionMaintenancePreserveKeys([params.activeSessionKey]);
   pruneStaleEntries(store, maintenance.pruneAfterMs, {
@@ -1219,6 +1373,307 @@ function readNextTranscriptSeq(database: OpenClawAgentDatabase, sessionId: strin
   return maxSeq + 1;
 }
 
+function deleteSqliteTranscriptEventsInTransaction(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+): boolean {
+  const db = getSessionKysely(database.db);
+  executeSqliteQuerySync(
+    database.db,
+    db.deleteFrom("transcript_event_identities").where("session_id", "=", sessionId),
+  );
+  const result = executeSqliteQuerySync(
+    database.db,
+    db.deleteFrom("transcript_events").where("session_id", "=", sessionId),
+  );
+  return (result.numAffectedRows ?? 0n) > 0n;
+}
+
+function branchSqliteCompactionCheckpointSessionInTransaction(
+  database: OpenClawAgentDatabase,
+  params: {
+    checkpointId: string;
+    parentSessionKey: string;
+    resolved: ResolvedSqliteScope;
+    sourceKey: string;
+    targetKey: string;
+  },
+): SqliteCompactionCheckpointSessionMutationResult {
+  const currentEntry = readSessionEntryRow(database, params.sourceKey)?.entry;
+  if (!currentEntry?.sessionId) {
+    return { status: "missing-session" };
+  }
+  const checkpoint = readSessionCompactionCheckpoint(currentEntry, params.checkpointId);
+  if (!checkpoint) {
+    return { status: "missing-checkpoint" };
+  }
+  const forked = forkSqliteCheckpointTranscriptInTransaction(database, params.resolved, {
+    checkpoint,
+    targetSessionKey: params.targetKey,
+  });
+  if (forked.status !== "created") {
+    return forked;
+  }
+
+  const label = currentEntry.label?.trim()
+    ? `${currentEntry.label.trim()} (checkpoint)`
+    : "Checkpoint branch";
+  const nextEntry = cloneSqliteCheckpointSessionEntry({
+    currentEntry,
+    label,
+    nextSessionFile: forked.sessionFile,
+    nextSessionId: forked.sessionId,
+    parentSessionKey: params.parentSessionKey,
+    totalTokens: forked.totalTokens,
+  });
+  writeSessionEntry(database, params.targetKey, nextEntry);
+  return {
+    status: "created",
+    key: params.targetKey,
+    checkpoint,
+    entry: nextEntry,
+  };
+}
+
+function restoreSqliteCompactionCheckpointSessionInTransaction(
+  database: OpenClawAgentDatabase,
+  params: {
+    checkpointId: string;
+    resolved: ResolvedSqliteScope;
+    sourceKey: string;
+    targetKey: string;
+  },
+): SqliteCompactionCheckpointSessionMutationResult {
+  const currentEntry = readSessionEntryRow(database, params.sourceKey)?.entry;
+  if (!currentEntry?.sessionId) {
+    return { status: "missing-session" };
+  }
+  const checkpoint = readSessionCompactionCheckpoint(currentEntry, params.checkpointId);
+  if (!checkpoint) {
+    return { status: "missing-checkpoint" };
+  }
+  const restored = forkSqliteCheckpointTranscriptInTransaction(database, params.resolved, {
+    checkpoint,
+    targetSessionKey: params.targetKey,
+  });
+  if (restored.status !== "created") {
+    return restored;
+  }
+
+  const nextEntry = cloneSqliteCheckpointSessionEntry({
+    currentEntry,
+    nextSessionFile: restored.sessionFile,
+    nextSessionId: restored.sessionId,
+    preserveCompactionCheckpoints: true,
+    totalTokens: restored.totalTokens,
+  });
+  writeSessionEntry(database, params.targetKey, nextEntry);
+  return {
+    status: "created",
+    key: params.targetKey,
+    checkpoint,
+    entry: nextEntry,
+  };
+}
+
+function forkSqliteCheckpointTranscriptInTransaction(
+  database: OpenClawAgentDatabase,
+  resolved: ResolvedSqliteScope,
+  params: {
+    checkpoint: SessionCompactionCheckpoint;
+    targetSessionKey: string;
+  },
+):
+  | {
+      status: "created";
+      sessionId: string;
+      sessionFile: string;
+      totalTokens?: number;
+    }
+  | { status: "missing-boundary" }
+  | { status: "failed" } {
+  const sources = resolveSqliteCheckpointTranscriptForkSources(params.checkpoint);
+  if (sources.length === 0) {
+    return { status: "missing-boundary" };
+  }
+  let lastFailure: { status: "missing-boundary" } | { status: "failed" } = {
+    status: "missing-boundary",
+  };
+  let selected:
+    | {
+        source: SqliteCheckpointTranscriptForkSource;
+        rows: TranscriptEvent[];
+      }
+    | undefined;
+  for (const source of sources) {
+    const rows = readSqliteTranscriptRowsForFork(database, source);
+    if (rows.status === "created") {
+      selected = { source, rows: rows.events };
+      break;
+    }
+    lastFailure = rows;
+  }
+  if (!selected) {
+    return lastFailure;
+  }
+
+  const sessionId = randomUUID();
+  const targetScope = {
+    ...resolved,
+    sessionId,
+    sessionKey: params.targetSessionKey,
+  };
+  const sessionFile = formatSqliteTranscriptTarget(targetScope);
+  appendTranscriptEventInTransaction(
+    database,
+    targetScope,
+    createSessionTranscriptHeader({
+      cwd: readTranscriptHeaderCwd(selected.rows),
+      sessionId,
+    }),
+  );
+  for (const event of selected.rows) {
+    if (isSessionTranscriptHeader(event)) {
+      continue;
+    }
+    appendTranscriptEventInTransaction(database, targetScope, event);
+  }
+  return {
+    status: "created",
+    sessionId,
+    sessionFile,
+    ...(typeof selected.source.totalTokens === "number"
+      ? { totalTokens: selected.source.totalTokens }
+      : {}),
+  };
+}
+
+function resolveSqliteCheckpointTranscriptForkSources(
+  checkpoint: SessionCompactionCheckpoint,
+): SqliteCheckpointTranscriptForkSource[] {
+  const sources: SqliteCheckpointTranscriptForkSource[] = [];
+  if (checkpoint.preCompaction.sessionId) {
+    sources.push({
+      sessionId: checkpoint.preCompaction.sessionId,
+      ...(checkpoint.preCompaction.leafId ? { leafId: checkpoint.preCompaction.leafId } : {}),
+      ...(typeof checkpoint.tokensBefore === "number"
+        ? { totalTokens: checkpoint.tokensBefore }
+        : {}),
+    });
+  }
+
+  const postLeafId = checkpoint.postCompaction.leafId ?? checkpoint.postCompaction.entryId;
+  if (checkpoint.postCompaction.sessionId && postLeafId) {
+    sources.push({
+      sessionId: checkpoint.postCompaction.sessionId,
+      leafId: postLeafId,
+      ...(typeof checkpoint.tokensAfter === "number"
+        ? { totalTokens: checkpoint.tokensAfter }
+        : {}),
+    });
+  }
+
+  return sources;
+}
+
+function readSqliteTranscriptRowsForFork(
+  database: OpenClawAgentDatabase,
+  source: { sessionId: string; leafId?: string },
+): { status: "created"; events: TranscriptEvent[] } | { status: "missing-boundary" | "failed" } {
+  const boundarySeq = source.leafId
+    ? readTranscriptIdentityByEventId(database, source.sessionId, source.leafId)?.seq
+    : undefined;
+  if (source.leafId && boundarySeq === undefined) {
+    return { status: "missing-boundary" };
+  }
+
+  const db = getSessionKysely(database.db);
+  const query = db
+    .selectFrom("transcript_events")
+    .select(["event_json", "seq"])
+    .where("session_id", "=", source.sessionId)
+    .orderBy("seq", "asc");
+  const rows = executeSqliteQuerySync(
+    database.db,
+    boundarySeq === undefined ? query : query.where("seq", "<=", boundarySeq),
+  ).rows;
+  if (rows.length === 0) {
+    return { status: "failed" };
+  }
+  try {
+    return {
+      status: "created",
+      events: rows.map((row) => JSON.parse(row.event_json) as TranscriptEvent),
+    };
+  } catch {
+    return { status: "failed" };
+  }
+}
+
+function readSessionCompactionCheckpoint(
+  entry: Pick<SessionEntry, "compactionCheckpoints">,
+  checkpointId: string,
+): SessionCompactionCheckpoint | undefined {
+  const normalizedCheckpointId = checkpointId.trim();
+  if (!normalizedCheckpointId || !Array.isArray(entry.compactionCheckpoints)) {
+    return undefined;
+  }
+  return entry.compactionCheckpoints.find(
+    (checkpoint) => checkpoint.checkpointId === normalizedCheckpointId,
+  );
+}
+
+function cloneSqliteCheckpointSessionEntry(params: {
+  currentEntry: SessionEntry;
+  nextSessionId: string;
+  nextSessionFile: string;
+  label?: string;
+  parentSessionKey?: string;
+  totalTokens?: number;
+  preserveCompactionCheckpoints?: boolean;
+}): SessionEntry {
+  const hasTotalTokens =
+    typeof params.totalTokens === "number" && Number.isFinite(params.totalTokens);
+  return {
+    ...params.currentEntry,
+    sessionId: params.nextSessionId,
+    sessionFile: params.nextSessionFile,
+    updatedAt: Date.now(),
+    systemSent: false,
+    abortedLastRun: false,
+    startedAt: undefined,
+    endedAt: undefined,
+    runtimeMs: undefined,
+    status: undefined,
+    inputTokens: undefined,
+    outputTokens: undefined,
+    cacheRead: undefined,
+    cacheWrite: undefined,
+    estimatedCostUsd: undefined,
+    totalTokens: hasTotalTokens ? params.totalTokens : undefined,
+    totalTokensFresh: hasTotalTokens ? true : undefined,
+    label: params.label ?? params.currentEntry.label,
+    parentSessionKey: params.parentSessionKey ?? params.currentEntry.parentSessionKey,
+    compactionCheckpoints: params.preserveCompactionCheckpoints
+      ? params.currentEntry.compactionCheckpoints
+      : undefined,
+  };
+}
+
+function readTranscriptHeaderCwd(events: readonly TranscriptEvent[]): string | undefined {
+  const header = events.find(isSessionTranscriptHeader) as { cwd?: unknown } | undefined;
+  return typeof header?.cwd === "string" && header.cwd.trim() ? header.cwd : undefined;
+}
+
+function isSessionTranscriptHeader(event: TranscriptEvent): boolean {
+  return Boolean(
+    event &&
+    typeof event === "object" &&
+    !Array.isArray(event) &&
+    (event as { type?: unknown }).type === "session",
+  );
+}
+
 function appendTranscriptEventInTransaction(
   database: OpenClawAgentDatabase,
   scope: ResolvedTranscriptScope,
@@ -1453,4 +1908,9 @@ function isTranscriptAgentMessage(value: unknown): value is AgentMessage {
     !Array.isArray(value) &&
     typeof (value as { role?: unknown }).role === "string"
   );
+}
+
+function formatSqliteTranscriptTarget(scope: ResolvedTranscriptScope): string {
+  const pathPart = scope.path ? `:${scope.path}` : "";
+  return `sqlite:${scope.agentId}:${scope.sessionId}${pathPart}`;
 }
