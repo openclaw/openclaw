@@ -111,7 +111,7 @@ console.log("");
 console.log("--- OLD approach: extract from last assistant only ---");
 const lastAssistant = messages
   .slice()
-  .reverse()
+  .toReversed()
   .find((m) => m.role === "assistant");
 if (lastAssistant) {
   const oldToolUses = (lastAssistant.content || [])
