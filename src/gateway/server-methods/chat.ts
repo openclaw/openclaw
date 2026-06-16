@@ -136,7 +136,6 @@ import {
 import {
   augmentChatHistoryWithCanvasBlocks,
   dropPreSessionStartAnnouncePairs,
-  GATEWAY_ASSISTANT_ERROR_FALLBACK_TEXT,
   projectChatDisplayMessage,
   projectRecentChatDisplayMessages,
   resolveEffectiveChatHistoryMaxChars,

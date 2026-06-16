@@ -1595,8 +1595,7 @@ function projectSessionsSendInterSessionMessages(
   return changed ? projected : messages;
 }
 
-export const GATEWAY_ASSISTANT_ERROR_FALLBACK_TEXT =
-  "The agent run failed before producing a reply.";
+const GATEWAY_ASSISTANT_ERROR_FALLBACK_TEXT = "The agent run failed before producing a reply.";
 
 function projectEmptyAssistantErrorMessages(
   messages: Array<Record<string, unknown>>,
@@ -1606,6 +1605,8 @@ function projectEmptyAssistantErrorMessages(
     if (
       message.role !== "assistant" ||
       message.stopReason !== "error" ||
+      typeof message.errorMessage !== "string" ||
+      !message.errorMessage.trim() ||
       extractProjectedText(message.content ?? message.text).trim()
     ) {
       return message;
