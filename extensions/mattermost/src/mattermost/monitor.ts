@@ -1555,7 +1555,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         const bodyText = normalizeMention(baseText, botUsername);
         if (shouldDropEmptyMattermostBody({ bodyText, wasMentioned, rawText, botUsername })) {
           logVerboseMessage(
-            `mattermost: drop group message (empty body after normalization channel=${channelId} sender=${senderId})`,
+            `mattermost: drop message (empty body after normalization channel=${channelId} sender=${senderId} wasMentioned=${wasMentioned})`,
           );
           return;
         }
