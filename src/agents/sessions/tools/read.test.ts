@@ -4,11 +4,16 @@ import { Buffer } from "node:buffer";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
-import { decodeWindowsOutputBuffer } from "../../../infra/windows-encoding.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { createReadToolDefinition } from "./read.js";
 import { DEFAULT_MAX_BYTES } from "./truncate.js";
+
+const decodeWindowsOutputBufferMock = vi.hoisted(() => vi.fn(() => ""));
+
+vi.mock("../../../infra/windows-encoding.js", () => ({
+  decodeWindowsOutputBuffer: decodeWindowsOutputBufferMock,
+}));
 
 const ONE_PIXEL_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
@@ -21,6 +26,10 @@ function textContent(
 }
 
 describe("read tool", () => {
+  beforeEach(() => {
+    decodeWindowsOutputBufferMock.mockReset();
+  });
+
   it("reads managed inbound media refs as image files", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-read-media-"));
     const mediaId = `read-tool-${Date.now()}-${Math.random().toString(36).slice(2)}.png`;
@@ -102,125 +111,48 @@ describe("read tool", () => {
     expect(textContent(result)).toBe("alpha\n\n[2 more lines in file. Use offset=2 to continue.]");
   });
 
-  it("falls back to UTF-8 with replacement when auto-detection fails on non-Windows", async () => {
-    // Regression for issue #92664: Chinese Windows logs/files saved as GBK
-    // must still be readable through the auto-detection fallback.
-    // On non-Windows platforms the fallback produces replacement characters;
-    // on Windows with a matching codepage the actual Chinese text would appear.
-    const gbkBytes = Buffer.from([
-      0xc4,
-      0xe3, // 你
-      0xba,
-      0xc3, // 好
-      0xa3,
-      0xac, // ，
-      0xca,
-      0xc0, // 世
-      0xbd,
-      0xe7, // 界
-    ]);
+  it("uses the shared Windows decoder for local filesystem reads", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-read-encoding-"));
+    const filePath = path.join(tempDir, "legacy.txt");
+    const legacyBytes = Buffer.from([0xc4, 0xe3, 0xba, 0xc3]);
+    decodeWindowsOutputBufferMock.mockReturnValueOnce("decoded legacy text");
+
+    try {
+      await fs.writeFile(filePath, legacyBytes);
+      const tool = createReadToolDefinition(tempDir);
+      const result = await tool.execute(
+        "call-1",
+        { path: "legacy.txt" },
+        undefined,
+        undefined,
+        {} as never,
+      );
+
+      expect(decodeWindowsOutputBufferMock).toHaveBeenCalledWith({ buffer: legacyBytes });
+      expect(textContent(result)).toBe("decoded legacy text");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves injected read operation decoding owner-controlled", async () => {
+    const bytes = Buffer.from([0xc4, 0xe3, 0xba, 0xc3]);
     const tool = createReadToolDefinition("/workspace", {
       operations: {
         access: async () => {},
         detectImageMimeType: async () => null,
-        readFile: async () => gbkBytes,
+        readFile: async () => bytes,
       },
     });
-
     const result = await tool.execute(
       "call-1",
-      { path: "note.txt" },
+      { path: "legacy.txt" },
       undefined,
       undefined,
       {} as never,
     );
 
-    const text = textContent(result);
-    expect(text).toBeTruthy();
-  });
-
-  it("decodes GBK bytes to Chinese on simulated Windows with GBK codepage", () => {
-    // Simulate Chinese Windows by passing platform="win32" + windowsEncoding="gbk".
-    // GBK encoding of "你好，世界"
-    const gbkBytes = Buffer.from([
-      0xc4,
-      0xe3, // 你
-      0xba,
-      0xc3, // 好
-      0xa3,
-      0xac, // ，
-      0xca,
-      0xc0, // 世
-      0xbd,
-      0xe7, // 界
-    ]);
-
-    const result = decodeWindowsOutputBuffer({
-      buffer: gbkBytes,
-      platform: "win32",
-      windowsEncoding: "gbk",
-    });
-
-    expect(result).toBe("你好，世界");
-  });
-
-  it("decodes GBK bytes to Chinese through the full read tool path on simulated Windows", async () => {
-    // Proves that createReadToolDefinition routes text buffers through
-    // decodeReadBuffer → decodeWindowsOutputBuffer, not bypassing it.
-    const gbkBytes = Buffer.from([
-      0xc4,
-      0xe3, // 你
-      0xba,
-      0xc3, // 好
-      0xa3,
-      0xac, // ，
-      0xca,
-      0xc0, // 世
-      0xbd,
-      0xe7, // 界
-    ]);
-    const tool = createReadToolDefinition("/workspace", {
-      platform: "win32",
-      windowsEncoding: "gbk",
-      operations: {
-        access: async () => {},
-        detectImageMimeType: async () => null,
-        readFile: async () => gbkBytes,
-      },
-    });
-
-    const result = await tool.execute(
-      "call-1",
-      { path: "note.txt" },
-      undefined,
-      undefined,
-      {} as never,
-    );
-
-    expect(textContent(result)).toContain("你好，世界");
-  });
-
-  it("preserves valid UTF-8 on simulated Windows GBK path", () => {
-    const utf8Bytes = Buffer.from("Hello World — 正常文本", "utf-8");
-
-    const result = decodeWindowsOutputBuffer({
-      buffer: utf8Bytes,
-      platform: "win32",
-      windowsEncoding: "gbk",
-    });
-
-    expect(result).toBe("Hello World — 正常文本");
-  });
-
-  it("preserves valid UTF-8 on non-Windows platform", () => {
-    const utf8Bytes = Buffer.from("Hello World", "utf-8");
-
-    const result = decodeWindowsOutputBuffer({
-      buffer: utf8Bytes,
-      platform: "linux",
-      windowsEncoding: "gbk",
-    });
-
-    expect(result).toBe("Hello World");
+    expect(decodeWindowsOutputBufferMock).not.toHaveBeenCalled();
+    expect(textContent(result)).toBe(bytes.toString("utf8"));
   });
 });
