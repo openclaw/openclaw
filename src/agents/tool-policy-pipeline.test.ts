@@ -336,6 +336,33 @@ describe("tool-policy-pipeline", () => {
     ]);
   });
 
+  test("does not warn for MCP server namespace allowlist when one exact server tool is denied", () => {
+    const warnings: string[] = [];
+    const declared = buildDeclaredToolAllowlistContext({
+      config: {
+        mcp: { servers: { paperless: { command: "paperless-mcp" } } },
+      },
+      workspaceDir: process.cwd(),
+      toolDenylist: ["paperless__delete"],
+    });
+
+    applyToolPolicyPipeline({
+      tools: [{ name: "exec" }] as any,
+      toolMeta: () => undefined,
+      warn: (msg) => warnings.push(msg),
+      declaredToolAllowlist: declared,
+      steps: [
+        {
+          policy: { allow: ["paperless__*"], deny: ["paperless__delete"] },
+          label: "tools",
+          stripPluginOnlyAllowlist: true,
+        },
+      ],
+    });
+
+    expect(warnings).toEqual([]);
+  });
+
   test("warns when plugin group is denied and MCP server namespace is allowlisted", () => {
     const warnings: string[] = [];
     const declared = buildDeclaredToolAllowlistContext({

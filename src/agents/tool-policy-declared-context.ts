@@ -33,9 +33,10 @@ function denylistContainsMcpServerEntry(params: {
   if (!serverPrefix) {
     return false;
   }
+  const serverWideEntry = serverPrefix + "*";
   return (params.rawDenylist ?? []).some((entry) => {
     const normalized = normalizeToolName(entry);
-    return normalized === "bundle-mcp" || normalized.startsWith(serverPrefix);
+    return normalized === serverWideEntry;
   });
 }
 
