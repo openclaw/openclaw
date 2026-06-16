@@ -41,7 +41,9 @@ function coverageIdsForRole(
 ) {
   return new Set(
     entries.flatMap((entry) =>
-      entry.coverage.filter((coverage) => coverage.role === role).map((coverage) => coverage.id),
+      entry.result.status === "pass"
+        ? entry.coverage.filter((coverage) => coverage.role === role).map((coverage) => coverage.id)
+        : [],
     ),
   );
 }

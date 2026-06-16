@@ -28,12 +28,22 @@ import {
   renderQaScenarioMatchesMarkdownReport,
 } from "./coverage-report.js";
 import {
+  formatQaCrablineUnsupportedChannelMessage,
+  isQaCrablineChannelSupported,
   QA_CRABLINE_DEFAULT_CHANNEL,
   resolveQaCrablineChannelDriverSelection,
 } from "./crabline-channel-driver.js";
 import { buildQaDockerHarnessImage, writeQaDockerHarnessFiles } from "./docker-harness.js";
 import { runQaDockerUp } from "./docker-up.runtime.js";
 import { QaSuiteArtifactError, QaSuiteInfraError } from "./errors.js";
+import {
+  QA_EVIDENCE_FILENAME,
+  QA_EVIDENCE_SUMMARY_KIND,
+  QA_EVIDENCE_SUMMARY_SCHEMA_VERSION,
+  validateQaEvidenceSummaryJson,
+  type QaEvidenceSummaryEntry,
+  type QaEvidenceSummaryJson,
+} from "./evidence-summary.js";
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
 import {
   createMockJsonlReplayCellRunner,
@@ -82,7 +92,12 @@ import {
 } from "./scorecard-taxonomy.js";
 import { isQaSelfCheckSuccessful } from "./self-check.js";
 import { runQaFlowSuiteFromRuntime, runQaSuite } from "./suite-launch.runtime.js";
-import { resolveQaSuiteScenarioChannel, scenarioMatchesQaProviderLane } from "./suite-planning.js";
+import {
+  partitionQaSuiteScenariosByChannelSupport,
+  resolveQaSuiteScenarioChannel,
+  scenarioMatchesQaProviderLane,
+  splitModelRef,
+} from "./suite-planning.js";
 import { readQaSuiteFailedOrSkippedScenarioCountFromFile } from "./suite-summary.js";
 import {
   buildTokenEfficiencyReport,
@@ -706,27 +721,75 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
   process.stdout.write(
     `QA run profile: ${profile}; categories: ${categories.length}; scenarios: ${scenarios.length}\n`,
   );
+  const channelPlan =
+    profileReport.channelDriver === "crabline"
+      ? partitionQaSuiteScenariosByChannelSupport({
+          defaultChannel: QA_CRABLINE_DEFAULT_CHANNEL,
+          isChannelSupported: isQaCrablineChannelSupported,
+          scenarios,
+          unsupportedReason: formatQaCrablineUnsupportedChannelMessage,
+        })
+      : { runnableScenarios: scenarios, unsupportedScenarios: [] };
+  if (channelPlan.unsupportedScenarios.length > 0) {
+    process.stdout.write(
+      `QA profile infrastructure gaps: ${channelPlan.unsupportedScenarios.length} scenario${channelPlan.unsupportedScenarios.length === 1 ? "" : "s"} skipped for unsupported channel driver coverage\n`,
+    );
+  }
   let evidencePath: string | undefined;
+  let reportPath: string | undefined;
+  let summaryPath: string | undefined;
   await withTemporaryQaProfileEnv(profile, async () => {
-    const suiteResult = await runQaSuiteCommand({
-      repoRoot,
-      outputDir: opts.outputDir,
-      evidenceMode: opts.evidenceMode,
-      transportId: opts.transportId,
-      providerMode,
-      primaryModel: opts.primaryModel,
-      alternateModel: opts.alternateModel,
+    if (channelPlan.runnableScenarios.length > 0) {
+      const suiteResult = await runQaSuiteCommand({
+        repoRoot,
+        outputDir: opts.outputDir,
+        evidenceMode: opts.evidenceMode,
+        transportId: opts.transportId,
+        providerMode,
+        primaryModel: opts.primaryModel,
+        alternateModel: opts.alternateModel,
+        fastMode: opts.fastMode,
+        scenarioIds: channelPlan.runnableScenarios.map((scenario) => scenario.id),
+        concurrency: opts.concurrency,
+        allowFailures: opts.allowFailures,
+        ...qaSuiteChannelDriverOptionsForProfile(profileReport),
+      });
+      evidencePath =
+        suiteResult && "evidencePath" in suiteResult ? suiteResult.evidencePath : undefined;
+      reportPath = suiteResult && "reportPath" in suiteResult ? suiteResult.reportPath : undefined;
+      summaryPath =
+        suiteResult && "summaryPath" in suiteResult ? suiteResult.summaryPath : undefined;
+      return;
+    }
+
+    const artifacts = await writeQaProfileInfrastructureGapArtifacts({
+      evidenceMode: opts.evidenceMode ?? profileReport.evidenceMode,
       fastMode: opts.fastMode,
-      scenarioIds: scenarios.map((scenario) => scenario.id),
-      concurrency: opts.concurrency,
-      allowFailures: opts.allowFailures,
-      ...qaSuiteChannelDriverOptionsForProfile(profileReport),
+      gaps: channelPlan.unsupportedScenarios,
+      outputDir: resolveQaProfileArtifactOutputDir({
+        outputDir: opts.outputDir,
+        profile,
+        repoRoot,
+      }),
+      primaryModel,
+      profile,
+      providerMode,
+      alternateModel: opts.alternateModel,
     });
-    evidencePath =
-      suiteResult && "evidencePath" in suiteResult ? suiteResult.evidencePath : undefined;
+    evidencePath = artifacts.evidencePath;
+    reportPath = artifacts.reportPath;
+    summaryPath = artifacts.summaryPath;
   });
   if (!evidencePath) {
     throw new Error("qa run --qa-profile did not produce qa-evidence.json.");
+  }
+  if (reportPath && summaryPath) {
+    await appendQaProfileInfrastructureGapsToArtifacts({
+      evidencePath,
+      gaps: channelPlan.runnableScenarios.length > 0 ? channelPlan.unsupportedScenarios : [],
+      reportPath,
+      summaryPath,
+    });
   }
   await attachQaProfileScorecardEvidenceToFile({
     evidencePath,
@@ -819,6 +882,219 @@ function formatQaRunProfileNoMatchMessage(
     opts.category?.trim() ? `--category ${opts.category.trim()}` : null,
   ].filter((filter): filter is string => filter !== null);
   return `qa run did not find taxonomy categories for ${filters.join(" ")}.`;
+}
+
+type QaProfileScenario = ReturnType<typeof readQaScenarioPack>["scenarios"][number];
+
+type QaProfileUnsupportedChannelScenario = {
+  channel: string;
+  reason: string;
+  scenario: QaProfileScenario;
+};
+
+function buildQaInfrastructureGapEntry(
+  gap: QaProfileUnsupportedChannelScenario,
+): QaEvidenceSummaryEntry {
+  const refs = [
+    ...(gap.scenario.docsRefs ?? []).map((path) => ({ kind: "docs", path })),
+    ...(gap.scenario.codeRefs ?? []).map((path) => ({ kind: "code", path })),
+  ];
+  return {
+    test: {
+      kind: "qa-scenario",
+      id: gap.scenario.id,
+      title: gap.scenario.title,
+      source: { path: gap.scenario.sourcePath },
+    },
+    coverage: [
+      ...(gap.scenario.coverage?.primary ?? []).map((id) => ({ id, role: "primary" as const })),
+      ...(gap.scenario.coverage?.secondary ?? []).map((id) => ({
+        id,
+        role: "secondary" as const,
+      })),
+    ],
+    ...(refs.length > 0 ? { refs } : {}),
+    ...(gap.scenario.runtimeParityTier
+      ? { runtimeParityTier: gap.scenario.runtimeParityTier }
+      : {}),
+    result: {
+      status: "skipped",
+      failure: {
+        class: "qa-infrastructure-missing",
+        reason: gap.reason,
+      },
+    },
+  };
+}
+
+function buildQaInfrastructureGapScenario(gap: QaProfileUnsupportedChannelScenario) {
+  return {
+    name: gap.scenario.title,
+    status: "skip" as const,
+    details: gap.reason,
+    steps: [
+      {
+        name: "channel driver support",
+        status: "skip" as const,
+        details: gap.reason,
+      },
+    ],
+  };
+}
+
+function countQaSkippedScenarios(scenarios: Array<{ status?: unknown }>) {
+  return scenarios.filter((scenario) => scenario.status === "skip" || scenario.status === "skipped")
+    .length;
+}
+
+async function appendQaProfileInfrastructureGapsToArtifacts(params: {
+  evidencePath: string;
+  reportPath: string;
+  summaryPath: string;
+  gaps: readonly QaProfileUnsupportedChannelScenario[];
+}) {
+  if (params.gaps.length === 0) {
+    return;
+  }
+  const evidence = validateQaEvidenceSummaryJson(
+    JSON.parse(await fs.readFile(params.evidencePath, "utf8")),
+  );
+  const nextEvidence = validateQaEvidenceSummaryJson({
+    ...evidence,
+    entries: [...evidence.entries, ...params.gaps.map(buildQaInfrastructureGapEntry)],
+  });
+  await fs.writeFile(params.evidencePath, `${JSON.stringify(nextEvidence, null, 2)}\n`, "utf8");
+
+  const summary = JSON.parse(await fs.readFile(params.summaryPath, "utf8")) as {
+    counts?: { total?: number; passed?: number; failed?: number; skipped?: number };
+    scenarios?: Array<{ status?: unknown }>;
+  };
+  const scenarios = [
+    ...(Array.isArray(summary.scenarios) ? summary.scenarios : []),
+    ...params.gaps.map(buildQaInfrastructureGapScenario),
+  ];
+  summary.scenarios = scenarios;
+  summary.counts = {
+    total: scenarios.length,
+    passed: scenarios.filter((scenario) => scenario.status === "pass").length,
+    failed: scenarios.filter((scenario) => scenario.status === "fail").length,
+    skipped: countQaSkippedScenarios(scenarios),
+  };
+  await fs.writeFile(params.summaryPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
+
+  const lines = [
+    "",
+    "## Infrastructure Coverage Gaps",
+    "",
+    ...params.gaps.map(
+      (gap) => `- ${gap.scenario.id}: skipped ${gap.channel} via Crabline; ${gap.reason}`,
+    ),
+    "",
+  ];
+  await fs.appendFile(params.reportPath, lines.join("\n"), "utf8");
+}
+
+function resolveQaProfileArtifactOutputDir(params: {
+  outputDir?: string;
+  profile: string;
+  repoRoot: string;
+}) {
+  return (
+    resolveRepoRelativeOutputDir(params.repoRoot, params.outputDir) ??
+    path.join(
+      params.repoRoot,
+      ".artifacts",
+      "qa-e2e",
+      `${params.profile}-${Date.now().toString(36)}`,
+    )
+  );
+}
+
+async function writeQaProfileInfrastructureGapArtifacts(params: {
+  alternateModel?: string;
+  evidenceMode: QaScorecardEvidenceMode;
+  fastMode?: boolean;
+  gaps: readonly QaProfileUnsupportedChannelScenario[];
+  outputDir: string;
+  primaryModel: string;
+  profile: string;
+  providerMode: QaProviderModeInput;
+}) {
+  await fs.mkdir(params.outputDir, { recursive: true });
+  const generatedAt = new Date().toISOString();
+  const evidencePath = path.join(params.outputDir, QA_EVIDENCE_FILENAME);
+  const reportPath = path.join(params.outputDir, "qa-suite-report.md");
+  const summaryPath = path.join(params.outputDir, "qa-suite-summary.json");
+  const entries = params.gaps.map(buildQaInfrastructureGapEntry);
+  const evidence: QaEvidenceSummaryJson = validateQaEvidenceSummaryJson({
+    kind: QA_EVIDENCE_SUMMARY_KIND,
+    schemaVersion: QA_EVIDENCE_SUMMARY_SCHEMA_VERSION,
+    generatedAt,
+    evidenceMode: params.evidenceMode,
+    entries,
+    profile: params.profile,
+  });
+  const primarySplit = splitModelRef(params.primaryModel);
+  const alternateModel =
+    params.alternateModel ??
+    defaultQaModelForMode(normalizeQaProviderMode(params.providerMode), true);
+  const alternateSplit = splitModelRef(alternateModel);
+  const scenarios = params.gaps.map(buildQaInfrastructureGapScenario);
+  await fs.writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`, "utf8");
+  await fs.writeFile(
+    summaryPath,
+    `${JSON.stringify(
+      {
+        scenarios,
+        counts: {
+          total: scenarios.length,
+          passed: 0,
+          failed: 0,
+          skipped: scenarios.length,
+        },
+        run: {
+          startedAt: generatedAt,
+          finishedAt: generatedAt,
+          providerMode: normalizeQaProviderMode(params.providerMode),
+          primaryModel: params.primaryModel,
+          primaryProvider: primarySplit?.provider ?? null,
+          primaryModelName: primarySplit?.model ?? null,
+          alternateModel,
+          alternateProvider: alternateSplit?.provider ?? null,
+          alternateModelName: alternateSplit?.model ?? null,
+          fastMode: params.fastMode ?? false,
+          concurrency: 0,
+          channelDriver: "crabline",
+          channel: null,
+          channelCapabilityMatrixPath: null,
+          channelDriverSmokePath: null,
+          scenarioIds: params.gaps.map((gap) => gap.scenario.id),
+          runtimePair: null,
+        },
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+  await fs.writeFile(
+    reportPath,
+    [
+      "# OpenClaw QA Scenario Suite",
+      "",
+      "- Status: skipped",
+      "- Reason: selected scenarios require unsupported Crabline channels",
+      "",
+      "## Infrastructure Coverage Gaps",
+      "",
+      ...params.gaps.map(
+        (gap) => `- ${gap.scenario.id}: skipped ${gap.channel} via Crabline; ${gap.reason}`,
+      ),
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  return { evidencePath, reportPath, summaryPath };
 }
 
 async function withTemporaryQaProfileEnv<T>(profile: string, run: () => Promise<T>): Promise<T> {

@@ -21,6 +21,7 @@ export type QaSuiteSummaryJson = {
     total: number;
     passed: number;
     failed: number;
+    skipped?: number;
   };
   metrics?: {
     wallMs: number;
