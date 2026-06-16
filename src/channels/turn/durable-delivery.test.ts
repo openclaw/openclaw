@@ -22,6 +22,7 @@ vi.mock("../message/send.js", async (importOriginal) => {
   };
 });
 
+import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import {
   deliverInboundReplyWithMessageSendContext,
@@ -101,7 +102,7 @@ describe("durable inbound reply delivery", () => {
 
     expect(
       resolveDurableInboundReplyToId({
-        payload: { text: "plain reply", replyToId: null },
+        payload: { text: "plain reply", replyToId: null } as unknown as ReplyPayload,
         ctxPayload: ctxPayload({
           MessageSidFull: "context-full-message",
           MessageSid: "context-message",
