@@ -1,5 +1,6 @@
 // Account lookup helpers resolve route accounts from normalized account ids.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 
 // Case-insensitive account lookup for config maps that may preserve user
 // casing. Exact keys win so callers can still distinguish intentional entries.
@@ -34,6 +35,8 @@ export function resolveNormalizedAccountEntry<T>(
     return accounts[accountId];
   }
   const normalized = normalizeAccountId(accountId);
-  const matchKey = Object.keys(accounts).find((key) => normalizeAccountId(key) === normalized);
+  const matchKey = Object.keys(accounts).find(
+    (key) => !isBlockedObjectKey(key) && normalizeAccountId(key) === normalized,
+  );
   return matchKey ? accounts[matchKey] : undefined;
 }
