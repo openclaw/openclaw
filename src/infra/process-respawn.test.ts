@@ -368,4 +368,57 @@ describe("respawnGatewayProcessForUpdate", () => {
     expect(result.mode).toBe("failed");
     expect(result.detail).toContain("spawn failed");
   });
+
+  it("rewrites pnpm-versioned entrypoint to stable openclaw.mjs during respawn", () => {
+    delete process.env.OPENCLAW_NO_RESPAWN;
+    clearSupervisorHints();
+    setPlatform("linux");
+    // Simulate pnpm versioned path:
+    // /home/user/node_modules/.pnpm/openclaw@2026.6.2/node_modules/openclaw/dist/entry.js
+    process.execArgv = [];
+    process.argv = [
+      "/usr/local/bin/node",
+      "/home/user/node_modules/.pnpm/openclaw@2026.6.2/node_modules/openclaw/dist/entry.js",
+      "gateway",
+      "run",
+    ];
+    spawnMock.mockReturnValue({ pid: 7701, unref: vi.fn(), kill: vi.fn() });
+
+    const result = respawnGatewayProcessForUpdate();
+
+    expect(result.mode).toBe("spawned");
+    expect(spawnMock).toHaveBeenCalledWith(
+      process.execPath,
+      expect.arrayContaining([expect.stringContaining("openclaw.mjs"), "gateway", "run"]),
+      expect.any(Object),
+    );
+    const callArgs = spawnMock.mock.calls[0][1] as string[];
+    const entryArg = callArgs[0];
+    expect(entryArg).toContain("openclaw.mjs");
+    expect(entryArg).not.toContain(".pnpm");
+    expect(entryArg).toContain("node_modules/openclaw");
+  });
+
+  it("keeps argv unchanged when not on a pnpm versioned path", () => {
+    delete process.env.OPENCLAW_NO_RESPAWN;
+    clearSupervisorHints();
+    setPlatform("linux");
+    process.execArgv = [];
+    process.argv = [
+      "/usr/local/bin/node",
+      "/usr/local/lib/node_modules/openclaw/dist/entry.js",
+      "gateway",
+      "run",
+    ];
+    spawnMock.mockReturnValue({ pid: 7801, unref: vi.fn(), kill: vi.fn() });
+
+    const result = respawnGatewayProcessForUpdate();
+
+    expect(result.mode).toBe("spawned");
+    expect(spawnMock).toHaveBeenCalledWith(
+      process.execPath,
+      ["/usr/local/lib/node_modules/openclaw/dist/entry.js", "gateway", "run"],
+      expect.any(Object),
+    );
+  });
 });

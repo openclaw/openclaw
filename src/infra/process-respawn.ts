@@ -1,5 +1,6 @@
-// Respawns the gateway process when no supervisor handles restart.
 import { spawn, type ChildProcess } from "node:child_process";
+// Respawns the gateway process when no supervisor handles restart.
+import path from "node:path";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { isContainerEnvironment } from "./container-environment.js";
 import { formatErrorMessage } from "./errors.js";
@@ -26,12 +27,39 @@ function isTruthy(value: string | undefined): boolean {
   return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
 }
 
+function resolveStableEntrypoint(): { execPath: string; args: string[] } {
+  const argv1 = process.argv[1];
+  // Rewrite argv[1] when the current entrypoint is inside a
+  // pnpm-versioned .pnpm store path that can be replaced during
+  // self-update.  Switch to the stable <packageRoot>/openclaw.mjs
+  // wrapper which survives updates.
+  //
+  // pnpm path pattern:
+  //   <root>/node_modules/.pnpm/<pkg>@<ver>/node_modules/<pkg>/dist/entry.js
+  // stable wrapper:
+  //   <root>/node_modules/<pkg>/openclaw.mjs
+  const match = argv1.match(
+    /^(.+?[\\/]node_modules)[\\/]\.pnpm[\\/][^\\/]+[\\/]node_modules[\\/]([^\\/]+)[\\/]/,
+  );
+  if (match) {
+    const wrapper = path.join(match[1], match[2], "openclaw.mjs");
+    return {
+      execPath: process.execPath,
+      args: [...process.execArgv, wrapper, ...process.argv.slice(2)],
+    };
+  }
+  return {
+    execPath: process.execPath,
+    args: [...process.execArgv, ...process.argv.slice(1)],
+  };
+}
+
 function spawnDetachedGatewayProcess(opts: GatewayRespawnOptions = {}): {
   child: ChildProcess;
   pid?: number;
 } {
-  const args = [...process.execArgv, ...process.argv.slice(1)];
-  const child = spawn(process.execPath, args, {
+  const { execPath, args } = resolveStableEntrypoint();
+  const child = spawn(execPath, args, {
     env: opts.env ? { ...process.env, ...opts.env } : process.env,
     detached: true,
     stdio: "inherit",
