@@ -123,6 +123,7 @@ const PluginDiagnosticSchema = z.object({
   message: z.string(),
   pluginId: z.string().optional(),
   source: z.string().optional(),
+  code: z.string().optional(),
 });
 
 const InstalledPluginIndexSchema = z.object({
