@@ -34,6 +34,7 @@ function runExternalErrorHandler(context: FatalErrorHookContext): void {
     };
 
     const child = spawn(handler, [JSON.stringify(payload)], {
+      env: { PATH: process.env.PATH },
       stdio: "ignore",
       detached: true,
       shell: false,
