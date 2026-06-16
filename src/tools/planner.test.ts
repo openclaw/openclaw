@@ -1,5 +1,5 @@
 // Verifies tool planner filtering, ordering, and unsupported-tool reporting.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ToolPlanContractError } from "./diagnostics.js";
 import { formatToolExecutorRef } from "./execution.js";
 import { buildToolPlan } from "./planner.js";
@@ -111,6 +111,39 @@ describe("buildToolPlan", () => {
         message: "Empty availability allOf group",
       },
     ]);
+  });
+
+  it("warns when a tool is hidden due to unsupported-signal diagnostics", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    buildToolPlan({
+      descriptors: [descriptor("malformed", { availability: { anyOf: [] } })],
+    });
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toContain("malformed");
+    expect(warn.mock.calls[0][0]).toContain("unsupported-signal");
+    expect(warn.mock.calls[0][1]).toContain("Empty availability anyOf group");
+
+    warn.mockRestore();
+  });
+
+  it("does not warn for runtime availability conditions", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    buildToolPlan({
+      descriptors: [
+        descriptor("needs-auth", {
+          availability: { kind: "auth", providerId: "openai" },
+        }),
+      ],
+      availability: { authProviderIds: new Set() },
+    });
+
+    // auth-missing is a runtime condition, not an authoring error — no warn
+    expect(warn).not.toHaveBeenCalled();
+
+    warn.mockRestore();
   });
 
   it("keeps protocol conversion separate from executor refs and model normalization", () => {

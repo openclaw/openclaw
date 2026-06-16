@@ -50,6 +50,19 @@ export function buildToolPlan(options: BuildToolPlanOptions): ToolPlan {
     ];
     if (diagnostics.length > 0) {
       hidden.push({ descriptor, diagnostics });
+      // Surfaces authoring errors (e.g. empty availability groups) that
+      // would otherwise hide tools silently.  The upstream evaluator
+      // already classifies these as unsupported-signal to distinguish
+      // them from runtime conditions.
+      const unsupported = diagnostics.filter(
+        (d) => d.reason === "unsupported-signal",
+      );
+      if (unsupported.length > 0) {
+        console.warn(
+          `Tool "${descriptor.name}" hidden (unsupported-signal):`,
+          unsupported.map((d) => d.message).join("; "),
+        );
+      }
       continue;
     }
     if (!descriptor.executor) {
