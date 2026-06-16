@@ -11,7 +11,7 @@ import {
 } from "./test-helpers/fs-fixtures.js";
 
 const installPluginFromPathMock = vi.fn();
-const fetchWithSsrFGuardMock = vi.hoisted(() =>
+const fetchWithAppNetworkTransportMock = vi.hoisted(() =>
   vi.fn(async (params: { url: string; init?: RequestInit }) => {
     // Keep unit tests focused on guarded call sites, not AbortSignal timer behavior.
     const { signal: _signal, ...init } = params.init ?? {};
@@ -35,12 +35,12 @@ vi.mock("./install.js", () => ({
   installPluginFromPath: (...args: unknown[]) => installPluginFromPathMock(...args),
 }));
 
-vi.mock("../infra/net/fetch-guard.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/net/fetch-guard.js")>();
+vi.mock("../infra/net/fetch-transport.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/net/fetch-transport.js")>();
   return {
     ...actual,
-    fetchWithSsrFGuard: (params: { url: string; init?: RequestInit }) =>
-      fetchWithSsrFGuardMock(params),
+    fetchWithAppNetworkTransport: (params: { url: string; init?: RequestInit }) =>
+      fetchWithAppNetworkTransportMock(params),
   };
 });
 
@@ -164,7 +164,7 @@ function installPluginInput(callIndex = 0): Record<string, unknown> {
 }
 
 function fetchGuardInput(callIndex = 0): Record<string, unknown> {
-  const input = fetchWithSsrFGuardMock.mock.calls[callIndex]?.[0];
+  const input = fetchWithAppNetworkTransportMock.mock.calls[callIndex]?.[0];
   if (!input || typeof input !== "object") {
     throw new Error(`expected fetch guard input ${callIndex}`);
   }
@@ -212,7 +212,6 @@ function expectFetchDownloadCall(url = "https://example.com/frontend-design.tgz"
   const input = fetchGuardInput();
   expect(input.url).toBe(url);
   expect(input.timeoutMs).toBe(120_000);
-  expect(input.auditContext).toBe("marketplace-plugin-download");
 }
 
 function expectRemoteMarketplaceInstallResult(result: unknown) {
@@ -260,7 +259,7 @@ function expectLocalMarketplaceInstallResult(params: {
 
 describe("marketplace plugins", () => {
   afterEach(async () => {
-    fetchWithSsrFGuardMock.mockClear();
+    fetchWithAppNetworkTransportMock.mockClear();
     installPluginFromPathMock.mockReset();
     runCommandWithTimeoutMock.mockReset();
     vi.unstubAllGlobals();
@@ -667,7 +666,7 @@ describe("marketplace plugins", () => {
   it("returns a structured error for archive downloads with an empty response body", async () => {
     await withTempDir("openclaw-marketplace-test-", async (rootDir) => {
       const release = vi.fn(async () => undefined);
-      fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      fetchWithAppNetworkTransportMock.mockResolvedValueOnce({
         response: new Response(null, { status: 200 }),
         finalUrl: "https://example.com/frontend-design.tgz",
         release,
@@ -717,13 +716,13 @@ describe("marketplace plugins", () => {
         error: "failed to download https://%/frontend-design.tgz: Invalid URL",
       });
       expect(installPluginFromPathMock).not.toHaveBeenCalled();
-      expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+      expect(fetchWithAppNetworkTransportMock).not.toHaveBeenCalled();
     });
   });
 
   it("rejects Windows drive-relative archive filenames from redirects", async () => {
     await withTempDir("openclaw-marketplace-test-", async (rootDir) => {
-      fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      fetchWithAppNetworkTransportMock.mockResolvedValueOnce({
         response: new Response(new Blob([Buffer.from("tgz-bytes")]), {
           status: 200,
         }),
@@ -755,7 +754,7 @@ describe("marketplace plugins", () => {
 
   it("falls back to the default archive timeout when the caller passes NaN", async () => {
     await withTempDir("openclaw-marketplace-test-", async (rootDir) => {
-      fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      fetchWithAppNetworkTransportMock.mockResolvedValueOnce({
         response: new Response(new Blob([Buffer.from("tgz-bytes")]), {
           status: 200,
         }),
@@ -791,12 +790,12 @@ describe("marketplace plugins", () => {
     });
   });
 
-  it("downloads archive plugin sources through the SSRF guard", async () => {
+  it("downloads archive plugin sources through the app transport", async () => {
     await withTempDir("openclaw-marketplace-test-", async (rootDir) => {
       const release = vi.fn(async () => {
         throw new Error("dispatcher close failed");
       });
-      fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      fetchWithAppNetworkTransportMock.mockResolvedValueOnce({
         response: new Response(new Blob([Buffer.from("tgz-bytes")]), {
           status: 200,
         }),
@@ -847,7 +846,7 @@ describe("marketplace plugins", () => {
   it("rejects non-streaming archive responses before buffering them", async () => {
     await withTempDir("openclaw-marketplace-test-", async (rootDir) => {
       const arrayBuffer = vi.fn(async () => new Uint8Array([1, 2, 3]).buffer);
-      fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      fetchWithAppNetworkTransportMock.mockResolvedValueOnce({
         response: {
           ok: true,
           status: 200,
@@ -899,7 +898,7 @@ describe("marketplace plugins", () => {
         cancel: vi.fn(async () => undefined),
         releaseLock: vi.fn(),
       };
-      fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      fetchWithAppNetworkTransportMock.mockResolvedValueOnce({
         response: {
           ok: true,
           status: 200,
@@ -944,7 +943,7 @@ describe("marketplace plugins", () => {
         cancel: vi.fn(async () => undefined),
         releaseLock: vi.fn(),
       };
-      fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      fetchWithAppNetworkTransportMock.mockResolvedValueOnce({
         response: {
           ok: true,
           status: 200,
@@ -991,7 +990,7 @@ describe("marketplace plugins", () => {
         })),
         releaseLock: vi.fn(),
       };
-      fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      fetchWithAppNetworkTransportMock.mockResolvedValueOnce({
         response: {
           ok: true,
           status: 200,
@@ -1032,7 +1031,7 @@ describe("marketplace plugins", () => {
 
   it("sanitizes archive download errors before returning them", async () => {
     await withTempDir("openclaw-marketplace-test-", async (rootDir) => {
-      fetchWithSsrFGuardMock.mockRejectedValueOnce(
+      fetchWithAppNetworkTransportMock.mockRejectedValueOnce(
         new Error(
           "blocked\n\u001b[31mAuthorization: Bearer sk-1234567890abcdefghijklmnop\u001b[0m",
         ),
@@ -1073,9 +1072,9 @@ describe("marketplace plugins", () => {
     });
   });
 
-  it("returns a structured error when the SSRF guard rejects an archive URL", async () => {
+  it("returns a structured error when the app transport rejects an archive URL", async () => {
     await withTempDir("openclaw-marketplace-test-", async (rootDir) => {
-      fetchWithSsrFGuardMock.mockRejectedValueOnce(
+      fetchWithAppNetworkTransportMock.mockRejectedValueOnce(
         new Error("Blocked hostname (not in allowlist): 169.254.169.254"),
       );
       const manifestPath = await writeMarketplaceManifest(rootDir, {

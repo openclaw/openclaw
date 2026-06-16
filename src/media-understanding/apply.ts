@@ -539,7 +539,6 @@ export async function applyMediaUnderstanding(params: {
       ctx,
       workspaceDir: params.workspaceDir,
     }),
-    ssrfPolicy: cfg.tools?.web?.fetch?.ssrfPolicy,
     workspaceDir: mediaWorkspaceDir,
   });
 

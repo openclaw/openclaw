@@ -596,10 +596,9 @@ describe("media-understanding runtime", () => {
       MediaUrl: "https://httpbin.org/image/png",
       MediaType: "image/*",
     });
-    expect(mocks.createMediaAttachmentCache).toHaveBeenCalledWith(
-      [{ index: 0, url: "https://httpbin.org/image/png", mime: "image/png" }],
-      { ssrfPolicy: undefined },
-    );
+    expect(mocks.createMediaAttachmentCache).toHaveBeenCalledWith([
+      { index: 0, url: "https://httpbin.org/image/png", mime: "image/png" },
+    ]);
     expect(mocks.getBuffer).toHaveBeenCalledWith({
       attachmentIndex: 0,
       maxBytes: 10 * 1024 * 1024,

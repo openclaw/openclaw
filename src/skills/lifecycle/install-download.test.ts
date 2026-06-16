@@ -7,7 +7,7 @@ import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js"
 import { resolveSkillToolsRootDir } from "../runtime/tools-dir.js";
 import { createInstallDownloadTestState } from "../test-support/install-download-test-utils.js";
 import {
-  fetchWithSsrFGuardMock,
+  fetchWithAppNetworkTransportMock,
   hasBinaryMock,
   runCommandWithTimeoutMock,
 } from "../test-support/install-test-mocks.js";
@@ -19,8 +19,8 @@ vi.mock("../../process/exec.js", () => ({
   runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
 }));
 
-vi.mock("../../infra/net/fetch-guard.js", () => ({
-  fetchWithSsrFGuard: (...args: unknown[]) => fetchWithSsrFGuardMock(...args),
+vi.mock("../../infra/net/fetch-transport.js", () => ({
+  fetchWithAppNetworkTransport: (...args: unknown[]) => fetchWithAppNetworkTransportMock(...args),
 }));
 
 vi.mock("../loading/config.js", () => ({
@@ -85,7 +85,7 @@ async function installDownloadSkill(params: {
 }
 
 function mockArchiveResponse(buffer: Uint8Array): void {
-  fetchWithSsrFGuardMock.mockResolvedValue({
+  fetchWithAppNetworkTransportMock.mockResolvedValue({
     response: {
       ok: true,
       status: 200,
@@ -159,14 +159,14 @@ afterAll(async () => {
 beforeEach(() => {
   runCommandWithTimeoutMock.mockReset();
   runCommandWithTimeoutMock.mockResolvedValue(runCommandResult());
-  fetchWithSsrFGuardMock.mockReset();
+  fetchWithAppNetworkTransportMock.mockReset();
   hasBinaryMock.mockReset();
   hasBinaryMock.mockReturnValue(true);
 });
 
 describe("installDownloadSpec extraction safety", () => {
   it("rejects targetDir escapes outside the per-skill tools root", async () => {
-    const beforeFetchCalls = fetchWithSsrFGuardMock.mock.calls.length;
+    const beforeFetchCalls = fetchWithAppNetworkTransportMock.mock.calls.length;
     const entry = buildEntry("relative-traversal");
     const toolsRoot = resolveSkillToolsRootDir(entry);
     const escapedTargetDir = path.resolve(toolsRoot, "../outside");
@@ -183,7 +183,7 @@ describe("installDownloadSpec extraction safety", () => {
 
     expect(result.ok).toBe(false);
     expect(result.stderr).toContain("Refusing to install outside the skill tools directory");
-    expect(fetchWithSsrFGuardMock.mock.calls.length).toBe(beforeFetchCalls);
+    expect(fetchWithAppNetworkTransportMock.mock.calls.length).toBe(beforeFetchCalls);
     await expect(fileExists(toolsRoot)).resolves.toBe(true);
     await expect(fileExists(escapedTargetDir)).resolves.toBe(false);
   });
@@ -215,7 +215,7 @@ describe("installDownloadSpec extraction safety", () => {
   it("cancels failed download response bodies before returning the error", async () => {
     const { stream, wasCanceled } = createCancelableBody();
     const release = vi.fn(async () => undefined);
-    fetchWithSsrFGuardMock.mockResolvedValue({
+    fetchWithAppNetworkTransportMock.mockResolvedValue({
       response: {
         ok: false,
         status: 500,
@@ -251,7 +251,7 @@ describe("installDownloadSpec extraction safety", () => {
       const outsideRoot = path.join(workspaceDir, "outside-root");
       await fs.mkdir(outsideRoot, { recursive: true });
 
-      fetchWithSsrFGuardMock.mockResolvedValue({
+      fetchWithAppNetworkTransportMock.mockResolvedValue({
         response: {
           ok: true,
           status: 200,

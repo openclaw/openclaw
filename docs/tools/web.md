@@ -216,9 +216,8 @@ Codex Hosted Search is the exception: its bounded worker delegates network
 access to Codex app-server's hosted `web_search` tool.
 
 This automatic allowance does not apply to arbitrary `web_fetch` URLs. For
-`web_fetch`, enable `tools.web.fetch.ssrfPolicy.allowRfc2544BenchmarkRange` and
-`tools.web.fetch.ssrfPolicy.allowIpv6UniqueLocalRange` explicitly only when your
-trusted proxy owns those synthetic ranges.
+`web_fetch` and other app-owned downloads, use the managed runtime proxy and
+enforce private-network or fake-IP destination policy in the external proxy.
 
 ## Setting up web search
 

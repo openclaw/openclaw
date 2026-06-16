@@ -8,6 +8,9 @@ import {
   type JsonRecord,
 } from "./legacy-config-record-shared.js";
 const DANGEROUS_RECORD_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+const RETIRED_WEB_FETCH_POLICY_KEYS = new Set(["useTrustedEnvProxy", "ssrfPolicy"]);
+const RETIRED_WEB_FETCH_POLICY_CHANGE =
+  "Removed retired tools.web.fetch useTrustedEnvProxy/ssrfPolicy knobs. Configure proxy.enabled=true and enforce SSRF/private-network egress policy in the operator-managed external proxy.";
 
 function resolveLegacyFetchConfig(raw: unknown): JsonRecord | undefined {
   if (!isRecord(raw)) {
@@ -33,7 +36,10 @@ function hasMappedLegacyWebFetchConfig(raw: unknown): boolean {
   if (!fetch) {
     return false;
   }
-  return isRecord(fetch.firecrawl);
+  return (
+    isRecord(fetch.firecrawl) ||
+    [...RETIRED_WEB_FETCH_POLICY_KEYS].some((key) => hasOwnKey(fetch, key))
+  );
 }
 
 function migratePluginWebFetchConfig(params: {
@@ -76,17 +82,25 @@ function migratePluginWebFetchConfig(params: {
   );
 }
 
-/** List legacy tools.web.fetch.firecrawl config paths present in raw config. */
+/** List legacy tools.web.fetch config paths present in raw config. */
 export function listLegacyWebFetchConfigPaths(raw: unknown): string[] {
   const fetch = resolveLegacyFetchConfig(raw);
   const firecrawl = fetch ? copyLegacyFirecrawlFetchConfig(fetch) : undefined;
-  if (!firecrawl) {
-    return [];
+  const paths: string[] = [];
+  if (firecrawl) {
+    paths.push(...Object.keys(firecrawl).map((key) => `tools.web.fetch.firecrawl.${key}`));
   }
-  return Object.keys(firecrawl).map((key) => `tools.web.fetch.firecrawl.${key}`);
+  if (fetch) {
+    for (const key of RETIRED_WEB_FETCH_POLICY_KEYS) {
+      if (hasOwnKey(fetch, key)) {
+        paths.push(`tools.web.fetch.${key}`);
+      }
+    }
+  }
+  return paths;
 }
 
-/** Move legacy Firecrawl web-fetch config into plugins.entries.firecrawl.config.webFetch. */
+/** Move legacy Firecrawl web-fetch config and remove retired web-fetch egress knobs. */
 export function migrateLegacyWebFetchConfig<T>(raw: T): { config: T; changes: string[] } {
   if (!isRecord(raw) || !hasMappedLegacyWebFetchConfig(raw)) {
     return { config: raw, changes: [] };
@@ -109,8 +123,13 @@ function normalizeLegacyWebFetchConfigRecord<T extends JsonRecord>(
   }
 
   const nextFetch: JsonRecord = {};
+  let removedRetiredPolicy = false;
   for (const [key, value] of Object.entries(fetch)) {
     if (key === "firecrawl" && isRecord(value)) {
+      continue;
+    }
+    if (RETIRED_WEB_FETCH_POLICY_KEYS.has(key)) {
+      removedRetiredPolicy = true;
       continue;
     }
     if (DANGEROUS_RECORD_KEYS.has(key)) {
@@ -130,6 +149,9 @@ function normalizeLegacyWebFetchConfigRecord<T extends JsonRecord>(
     });
   } else if (hasOwnKey(fetch, "firecrawl")) {
     changes.push("Removed empty tools.web.fetch.firecrawl.");
+  }
+  if (removedRetiredPolicy) {
+    changes.push(RETIRED_WEB_FETCH_POLICY_CHANGE);
   }
 
   return { config: nextRoot, changes };

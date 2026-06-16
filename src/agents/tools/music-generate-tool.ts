@@ -7,7 +7,6 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { Type } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import {
@@ -61,7 +60,6 @@ import {
   resolveCapabilityModelConfigForTool,
   resolveGenerateAction,
   resolveMediaToolLocalRoots,
-  resolveRemoteMediaSsrfPolicy,
   resolveSelectedCapabilityProvider,
 } from "./media-tool-shared.js";
 import {
@@ -296,7 +294,6 @@ async function loadReferenceImages(params: {
   inputs: string[];
   workspaceDir?: string;
   sandboxConfig: { root: string; bridge: SandboxFsBridge; workspaceOnly: boolean } | null;
-  ssrfPolicy?: SsrFPolicy;
   timeoutMs?: number;
 }): Promise<
   Array<{
@@ -375,7 +372,6 @@ async function loadReferenceImages(params: {
               return await loadWebMedia(resolvedPath ?? resolvedInput, {
                 localRoots,
                 requestInit: signal ? { signal } : undefined,
-                ssrfPolicy: params.ssrfPolicy,
               });
             } finally {
               cleanup();
@@ -708,12 +704,10 @@ export function createMusicGenerateTool(options?: {
       if (duplicateGuardResult) {
         return duplicateGuardResult;
       }
-      const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(effectiveCfg);
       const loadedReferenceImages = await loadReferenceImages({
         inputs: imageInputs,
         workspaceDir: options?.workspaceDir,
         sandboxConfig,
-        ssrfPolicy: remoteMediaSsrfPolicy,
       });
       validateMusicGenerationCapabilities({
         provider: selectedProvider,

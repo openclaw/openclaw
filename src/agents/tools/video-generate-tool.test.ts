@@ -1560,7 +1560,6 @@ describe("createVideoGenerateTool", () => {
             videoGenerationModel: { primary: "video-plugin/vid-v1" },
           },
         },
-        tools: { web: { fetch: { ssrfPolicy: { allowRfc2544BenchmarkRange: true } } } },
       }),
     });
     if (!tool) {
@@ -1575,7 +1574,7 @@ describe("createVideoGenerateTool", () => {
     const loadCall = firstMockCall(vi.mocked(webMedia.loadWebMedia));
     expect(loadCall?.[0]).toBe("/tmp/reference.png");
     const loadOptions = loadCall?.[1] as { ssrfPolicy?: unknown } | undefined;
-    expect(loadOptions?.ssrfPolicy).toEqual({ allowRfc2544BenchmarkRange: true });
+    expect(loadOptions?.ssrfPolicy).toBeUndefined();
   });
 
   it("rejects audio data: URLs via the templated rejection branch", async () => {

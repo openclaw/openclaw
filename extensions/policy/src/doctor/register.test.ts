@@ -3966,15 +3966,6 @@ describe("registerPolicyDoctorChecks", () => {
           dangerouslyAllowPrivateNetwork: true,
         },
       },
-      tools: {
-        web: {
-          fetch: {
-            ssrfPolicy: {
-              allowIpv6UniqueLocalRange: true,
-            },
-          },
-        },
-      },
     } as OpenClawConfig;
     await fs.writeFile(configPath, "{}", "utf-8");
     await fs.writeFile(
@@ -3994,12 +3985,6 @@ describe("registerPolicyDoctorChecks", () => {
         checkId: "policy/network-private-access-enabled",
         severity: "error",
         ocPath: "oc://openclaw.config/browser/ssrfPolicy/dangerouslyAllowPrivateNetwork",
-        requirement: "oc://policy.jsonc/network/privateNetwork/allow",
-      }),
-      expect.objectContaining({
-        checkId: "policy/network-private-access-enabled",
-        severity: "error",
-        ocPath: "oc://openclaw.config/tools/web/fetch/ssrfPolicy/allowIpv6UniqueLocalRange",
         requirement: "oc://policy.jsonc/network/privateNetwork/allow",
       }),
     ]);

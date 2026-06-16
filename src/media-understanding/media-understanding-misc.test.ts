@@ -1,4 +1,4 @@
-// Misc media-understanding tests cover scope matching and attachment cache SSRF
+// Misc media-understanding tests cover scope matching, attachment URL fetch,
 // and local path safety behavior.
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
@@ -60,7 +60,7 @@ async function withLocalAttachmentCache(
   });
 }
 
-describe("media understanding attachments SSRF", () => {
+describe("media understanding attachment URL fetch", () => {
   afterEach(() => {
     globalThis.fetch = originalFetch;
     restoreProcessState();
@@ -75,35 +75,31 @@ describe("media understanding attachments SSRF", () => {
     return call;
   }
 
-  it("blocks private IP URLs before fetching", async () => {
-    const fetchSpy = vi.fn();
-    globalThis.fetch = withFetchPreconnect(fetchSpy);
-
-    const cache = new MediaAttachmentCache([{ index: 0, url: "http://127.0.0.1/secret.jpg" }]);
-
-    await expect(
-      cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 }),
-    ).rejects.toThrow(/private|internal|blocked/i);
-
-    expect(fetchSpy).not.toHaveBeenCalled();
-  });
-
-  it("allows RFC2544 benchmark-range URLs only when media fetch policy opts in", async () => {
-    const url = "http://198.18.0.153/file.jpg";
-    const deniedCache = new MediaAttachmentCache([{ index: 0, url }]);
-    await expect(
-      deniedCache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 }),
-    ).rejects.toThrow(/private|internal|blocked/i);
-
+  it("allows private IP URLs through media app egress", async () => {
     const fetchSpy = vi.fn().mockResolvedValue(
       new Response("image", {
         headers: { "content-type": "image/jpeg" },
       }),
     );
     globalThis.fetch = withFetchPreconnect(fetchSpy);
-    const allowedCache = new MediaAttachmentCache([{ index: 0, url }], {
-      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
-    });
+
+    const cache = new MediaAttachmentCache([{ index: 0, url: "http://127.0.0.1/secret.jpg" }]);
+
+    const result = await cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 });
+
+    expect(result.buffer).toStrictEqual(Buffer.from("image"));
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows RFC2544 benchmark-range URLs through media app egress", async () => {
+    const url = "http://198.18.0.153/file.jpg";
+    const fetchSpy = vi.fn().mockResolvedValue(
+      new Response("image", {
+        headers: { "content-type": "image/jpeg" },
+      }),
+    );
+    globalThis.fetch = withFetchPreconnect(fetchSpy);
+    const allowedCache = new MediaAttachmentCache([{ index: 0, url }]);
 
     const result = await allowedCache.getBuffer({
       attachmentIndex: 0,
@@ -127,9 +123,7 @@ describe("media understanding attachments SSRF", () => {
       }),
     );
     globalThis.fetch = withFetchPreconnect(fetchSpy);
-    const cache = new MediaAttachmentCache([{ index: 0, url, mime: "image/*" }], {
-      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
-    });
+    const cache = new MediaAttachmentCache([{ index: 0, url, mime: "image/*" }]);
 
     const result = await cache.getBuffer({
       attachmentIndex: 0,

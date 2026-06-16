@@ -10,7 +10,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { pathExists } from "../infra/fs-safe.js";
 import { resolveOsHomeRelativePath } from "../infra/home-dir.js";
 import { tryReadJson } from "../infra/json-files.js";
-import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
+import { fetchWithAppNetworkTransport } from "../infra/net/fetch-transport.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { InstallPolicySource } from "../security/install-policy.js";
@@ -864,10 +864,9 @@ async function downloadUrlToTempFile(
   try {
     sourceFileName = resolveSafeMarketplaceDownloadFileName(url, sourceFileName);
     const downloadTimeoutMs = resolveMarketplaceDownloadTimeoutMs(timeoutMs);
-    const { response, finalUrl, release } = await fetchWithSsrFGuard({
+    const { response, finalUrl, release } = await fetchWithAppNetworkTransport({
       url,
       timeoutMs: downloadTimeoutMs,
-      auditContext: "marketplace-plugin-download",
     });
     try {
       if (!response.ok) {

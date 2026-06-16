@@ -42,7 +42,8 @@ Truncate output to this many characters.
 <Steps>
   <Step title="Fetch">
     Sends an HTTP GET with a Chrome-like User-Agent and `Accept-Language`
-    header. Blocks private/internal hostnames and re-checks redirects.
+    header. Follows redirects up to `maxRedirects`; enforce
+    private-network destination policy in the managed runtime proxy.
   </Step>
   <Step title="Extract">
     Runs Readability (main-content extraction) on the HTML response.
@@ -87,13 +88,8 @@ content.
         timeoutSeconds: 30,
         cacheTtlMinutes: 15,
         maxRedirects: 3,
-        useTrustedEnvProxy: false, // let a trusted HTTP(S) env proxy resolve DNS
         readability: true, // use Readability extraction
         userAgent: "Mozilla/5.0 ...", // override User-Agent
-        ssrfPolicy: {
-          allowRfc2544BenchmarkRange: true, // opt-in for trusted fake-IP proxies using 198.18.0.0/15
-          allowIpv6UniqueLocalRange: true, // opt-in for trusted fake-IP proxies using fc00::/7
-        },
       },
     },
   },
@@ -133,6 +129,13 @@ If Readability extraction fails, `web_fetch` can fall back to
 }
 ```
 
+Provider fallback is a third-party boundary. OpenClaw does not delegate
+localhost, private, link-local, metadata, special-use, or private-DNS-resolving
+URLs to external web-fetch providers; those requests use the local fetch result
+or local fetch error instead. If the local request follows a redirect before a
+fallback condition, OpenClaw also skips provider fallback rather than sending the
+redirect target URL to a third party.
+
 `plugins.entries.firecrawl.config.webFetch.apiKey` supports SecretRef objects.
 Legacy `tools.web.fetch.firecrawl.*` config is auto-migrated by `openclaw doctor --fix`.
 
@@ -158,20 +161,30 @@ Current runtime behavior:
 - If Readability is disabled, `web_fetch` skips straight to the selected
   provider fallback. If no provider is available, it fails closed.
 
-## Trusted env proxy
+## Egress proxy
 
-If your deployment requires `web_fetch` to go through a trusted outbound
-HTTP(S) proxy, set `tools.web.fetch.useTrustedEnvProxy: true`.
+If your deployment requires `web_fetch` to go through a filtered outbound
+HTTP(S) proxy, enable the managed runtime proxy:
 
-In this mode, OpenClaw still applies hostname-based SSRF checks before sending
-the request, but it lets the proxy resolve DNS instead of doing local DNS
-pinning. Enable this only when the proxy is operator-controlled and enforces
-outbound policy after DNS resolution.
+```json5
+{
+  proxy: {
+    enabled: true,
+    proxyUrl: "http://127.0.0.1:3128",
+  },
+}
+```
+
+OpenClaw no longer accepts `tools.web.fetch.useTrustedEnvProxy` or
+`tools.web.fetch.ssrfPolicy`. Keep hostname, private-network, and destination
+policy in the operator-managed external proxy so web/media/download egress has
+one central enforcement point. `openclaw doctor --fix` removes the retired
+`tools.web.fetch` egress knobs from existing config files.
 
 <Note>
-  If no HTTP(S) proxy env var is configured, or the target host is excluded by
-  `NO_PROXY`, `web_fetch` falls back to the normal strict path with local DNS
-  pinning.
+  `proxy.enabled` applies at the runtime egress layer. See
+  [Network proxy](/security/network-proxy) for managed proxy behavior and
+  shutdown restoration details.
 </Note>
 
 ## Limits and safety
@@ -179,15 +192,9 @@ outbound policy after DNS resolution.
 - `maxChars` is clamped to `tools.web.fetch.maxCharsCap`
 - Response body is capped at `maxResponseBytes` before parsing; oversized
   responses are truncated with a warning
-- Private/internal hostnames are blocked
-- `tools.web.fetch.ssrfPolicy.allowRfc2544BenchmarkRange` and
-  `tools.web.fetch.ssrfPolicy.allowIpv6UniqueLocalRange` are narrow opt-ins
-  for trusted fake-IP proxy stacks; leave them unset unless your proxy owns
-  those synthetic ranges and enforces its own destination policy
 - Redirects are checked and limited by `maxRedirects`
-- `useTrustedEnvProxy` is an explicit opt-in and should only be enabled for
-  operator-controlled proxies that still enforce outbound policy after DNS
-  resolution
+- SSRF/private-network filtering for `web_fetch` belongs in the managed
+  external proxy, not in `tools.web.fetch`
 - `web_fetch` is best-effort -- some sites need the [Web Browser](/tools/browser)
 
 ## Tool profiles

@@ -192,16 +192,6 @@ async function expectBoundedErrorBodyCase(
   expect(result.message).not.toContain("body:");
 }
 
-async function expectPrivateIpFetchBlockedCase() {
-  const fetchImpl = vi.fn();
-  await expectReadRemoteMediaBufferRejected({
-    url: "http://127.0.0.1/secret.jpg",
-    fetchImpl,
-    expectedError: /private|internal|blocked/i,
-  });
-  expect(fetchImpl).not.toHaveBeenCalled();
-}
-
 function createReadRemoteMediaBufferParams(
   params: Omit<Parameters<typeof readRemoteMediaBuffer>[0], "lookupFn"> & { lookupFn?: LookupFn },
 ) {
@@ -546,17 +536,22 @@ describe("readRemoteMediaBuffer", () => {
           }),
       ),
     },
-    {
-      name: "blocks private IP literals before fetching",
-      kind: "private-ip-block" as const,
-    },
   ] as const)("$name", async (testCase) => {
-    if (testCase.kind === "private-ip-block") {
-      await expectPrivateIpFetchBlockedCase();
-      return;
-    }
-
     await expectBoundedErrorBodyCase(testCase.fetchImpl);
+  });
+
+  it("allows private IP literals through policy-free app media egress", async () => {
+    const fetchImpl = vi.fn(async () => new Response("private ok", { status: 200 }));
+
+    const result = await readRemoteMediaBuffer({
+      url: "http://127.0.0.1/secret.jpg",
+      fetchImpl,
+      maxBytes: 1024,
+    });
+
+    expect(result.buffer.toString()).toBe("private ok");
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+    expect(fetchImpl).toHaveBeenCalledWith("http://127.0.0.1/secret.jpg", expect.any(Object));
   });
 
   it("uses trusted explicit-proxy mode when the caller opts in for proxy-side DNS", async () => {

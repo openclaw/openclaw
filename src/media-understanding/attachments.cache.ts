@@ -1,5 +1,5 @@
 // Lazy attachment cache resolves local/remote media bytes and temporary files
-// under local-root and SSRF policy.
+// under local-root policy.
 import { realpathSync, statSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -11,7 +11,6 @@ import { detectMime } from "@openclaw/media-core/mime";
 import { resolveStateDir } from "../config/paths.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { FsSafeError, openLocalFileSafely } from "../infra/fs-safe.js";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { isAbortError } from "../infra/unhandled-rejections.js";
 import {
   readRemoteMediaBuffer,
@@ -105,7 +104,6 @@ function resolveUsableLocalCandidate(
 export type MediaAttachmentCacheOptions = {
   localPathRoots?: readonly string[];
   includeDefaultLocalPathRoots?: boolean;
-  ssrfPolicy?: SsrFPolicy;
   workspaceDir?: string;
 };
 
@@ -119,13 +117,11 @@ export class MediaAttachmentCache {
   private readonly entries = new Map<number, AttachmentCacheEntry>();
   private readonly attachments: MediaAttachment[];
   private readonly localPathRoots: readonly string[];
-  private readonly ssrfPolicy: SsrFPolicy | undefined;
   private readonly workspaceDir?: string;
   private canonicalLocalPathRoots?: Promise<readonly string[]>;
 
   constructor(attachments: MediaAttachment[], options?: MediaAttachmentCacheOptions) {
     this.attachments = attachments;
-    this.ssrfPolicy = options?.ssrfPolicy;
     this.localPathRoots =
       options?.includeDefaultLocalPathRoots === false
         ? mergeInboundPathRoots(options.localPathRoots)
@@ -214,7 +210,6 @@ export class MediaAttachmentCache {
         url,
         timeoutMs: params.timeoutMs,
         maxBytes: params.maxBytes,
-        ssrfPolicy: this.ssrfPolicy,
         retry: REMOTE_MEDIA_FETCH_RETRY,
       });
       entry.buffer = fetched.buffer;
@@ -357,10 +352,7 @@ export class MediaAttachmentCache {
         return usableCwdCandidate;
       }
       const stateCandidate = path.resolve(resolveStateDir(), rawPath);
-      const usableStateCandidate = resolveUsableLocalCandidate(
-        stateCandidate,
-        this.localPathRoots,
-      );
+      const usableStateCandidate = resolveUsableLocalCandidate(stateCandidate, this.localPathRoots);
       if (usableStateCandidate) {
         return usableStateCandidate;
       }

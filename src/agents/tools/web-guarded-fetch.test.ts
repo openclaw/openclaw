@@ -1,34 +1,36 @@
-// Guarded web fetch tests pin the SSRF policies used by trusted, self-hosted,
-// and strict web tool endpoint wrappers.
+// Web fetch transport wrapper tests cover timeout normalization and release handling.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchWithSsrFGuard, GUARDED_FETCH_MODE } from "../../infra/net/fetch-guard.js";
+import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
+import { fetchWithAppNetworkTransport } from "../../infra/net/fetch-transport.js";
 import {
+  fetchWithWebToolsNetworkGuard,
   withSelfHostedWebToolsEndpoint,
   withStrictWebToolsEndpoint,
   withTrustedWebToolsEndpoint,
 } from "./web-guarded-fetch.js";
 
-vi.mock("../../infra/net/fetch-guard.js", () => {
-  const GUARDED_FETCH_MODELocal = {
-    STRICT: "strict",
-    TRUSTED_ENV_PROXY: "trusted_env_proxy",
-  } as const;
+vi.mock("../../infra/net/fetch-guard.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../infra/net/fetch-guard.js")>();
   return {
-    GUARDED_FETCH_MODE: GUARDED_FETCH_MODELocal,
+    ...actual,
     fetchWithSsrFGuard: vi.fn(),
-    withStrictGuardedFetchMode: (params: Record<string, unknown>) => ({
-      ...params,
-      mode: GUARDED_FETCH_MODELocal.STRICT,
-    }),
-    withTrustedEnvProxyGuardedFetchMode: (params: Record<string, unknown>) => ({
-      ...params,
-      mode: GUARDED_FETCH_MODELocal.TRUSTED_ENV_PROXY,
-    }),
   };
 });
 
-function firstFetchCall(): Record<string, unknown> {
+vi.mock("../../infra/net/fetch-transport.js", () => ({
+  fetchWithAppNetworkTransport: vi.fn(),
+}));
+
+function firstAppFetchCall(): Record<string, unknown> {
+  const call = vi.mocked(fetchWithAppNetworkTransport).mock.calls[0]?.[0];
+  if (!call || typeof call !== "object") {
+    throw new Error("Expected app transport fetch call");
+  }
+  return call as Record<string, unknown>;
+}
+
+function firstGuardedFetchCall(): Record<string, unknown> {
   const call = vi.mocked(fetchWithSsrFGuard).mock.calls[0]?.[0];
   if (!call || typeof call !== "object") {
     throw new Error("Expected guarded fetch call");
@@ -36,86 +38,71 @@ function firstFetchCall(): Record<string, unknown> {
   return call as Record<string, unknown>;
 }
 
+function mockAppTransportResponse() {
+  const release = vi.fn(async () => undefined);
+  vi.mocked(fetchWithAppNetworkTransport).mockResolvedValue({
+    response: new Response("ok", { status: 200 }),
+    finalUrl: "https://example.com",
+    release,
+  });
+  return { release };
+}
+
+function mockGuardedFetchResponse() {
+  const release = vi.fn(async () => undefined);
+  vi.mocked(fetchWithSsrFGuard).mockResolvedValue({
+    response: new Response("ok", { status: 200 }),
+    finalUrl: "https://example.com",
+    release,
+  });
+  return { release };
+}
+
 describe("web-guarded-fetch", () => {
   afterEach(() => {
     vi.clearAllMocks();
   });
 
-  it("uses a host-scoped fake-IP SSRF policy for trusted web tools endpoints", async () => {
-    // Trusted hosted providers can resolve through fake-IP proxy ranges, but
-    // only for the exact hostname selected by the wrapper.
-    vi.mocked(fetchWithSsrFGuard).mockResolvedValue({
-      response: new Response("ok", { status: 200 }),
-      finalUrl: "https://example.com",
-      release: async () => {},
-    });
+  it("uses the app transport for app-owned web tool fetches", async () => {
+    mockAppTransportResponse();
 
-    await withTrustedWebToolsEndpoint({ url: "https://example.com" }, async () => undefined);
+    await fetchWithWebToolsNetworkGuard({ url: "https://public.example" });
 
-    const call = firstFetchCall();
-    expect(call?.url).toBe("https://example.com");
-    expect(call?.policy).toEqual({
-      allowRfc2544BenchmarkRange: true,
-      allowIpv6UniqueLocalRange: true,
-      hostnameAllowlist: ["example.com"],
-    });
-    expect(call?.mode).toBe(GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY);
+    expect(firstAppFetchCall().url).toBe("https://public.example");
+    expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
   });
 
-  it("uses private-network policy only for self-hosted web tools endpoints", async () => {
-    // Self-hosted provider endpoints are the explicit exception that may target
-    // private network addresses.
-    vi.mocked(fetchWithSsrFGuard).mockResolvedValue({
-      response: new Response("ok", { status: 200 }),
-      finalUrl: "http://127.0.0.1:8080",
-      release: async () => {},
-    });
+  it("uses guarded fetch for trusted, self-hosted, and strict endpoint wrappers", async () => {
+    mockGuardedFetchResponse();
 
+    await withTrustedWebToolsEndpoint({ url: "https://trusted.example" }, async () => undefined);
     await withSelfHostedWebToolsEndpoint({ url: "http://127.0.0.1:8080" }, async () => undefined);
+    await withStrictWebToolsEndpoint({ url: "https://strict.example" }, async () => undefined);
 
-    const call = firstFetchCall();
-    expect(call?.url).toBe("http://127.0.0.1:8080");
-    const policy = call.policy as Record<string, unknown> | undefined;
-    expect(policy?.dangerouslyAllowPrivateNetwork).toBe(true);
-    expect(policy?.allowRfc2544BenchmarkRange).toBe(true);
-    expect(policy?.allowIpv6UniqueLocalRange).toBe(true);
-    expect(call?.mode).toBe(GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY);
+    expect(vi.mocked(fetchWithSsrFGuard).mock.calls.map(([params]) => params.url)).toEqual([
+      "https://trusted.example",
+      "http://127.0.0.1:8080",
+      "https://strict.example",
+    ]);
+    expect(vi.mocked(fetchWithSsrFGuard).mock.calls.map(([params]) => params.mode)).toEqual([
+      "trusted_env_proxy",
+      "trusted_env_proxy",
+      "strict",
+    ]);
+    expect(fetchWithAppNetworkTransport).not.toHaveBeenCalled();
   });
 
-  it("keeps strict endpoint policy unchanged", async () => {
-    vi.mocked(fetchWithSsrFGuard).mockResolvedValue({
-      response: new Response("ok", { status: 200 }),
-      finalUrl: "https://example.com",
-      release: async () => {},
-    });
-
-    await withStrictWebToolsEndpoint({ url: "https://example.com" }, async () => undefined);
-
-    const call = firstFetchCall();
-    expect(call?.url).toBe("https://example.com");
-    expect(call?.policy).toBeUndefined();
-    expect(call?.mode).toBe(GUARDED_FETCH_MODE.STRICT);
-  });
-
-  it("normalizes string timeouts before guarded fetch dispatch", async () => {
-    vi.mocked(fetchWithSsrFGuard).mockResolvedValue({
-      response: new Response("ok", { status: 200 }),
-      finalUrl: "https://example.com",
-      release: async () => {},
-    });
+  it("normalizes string timeouts before guarded dispatch", async () => {
+    mockGuardedFetchResponse();
 
     await withStrictWebToolsEndpoint(
       { url: "https://example.com", timeoutSeconds: "7" as never },
       async () => undefined,
     );
-    expect(firstFetchCall().timeoutMs).toBe(7000);
+    expect(firstGuardedFetchCall().timeoutMs).toBe(7000);
 
     vi.clearAllMocks();
-    vi.mocked(fetchWithSsrFGuard).mockResolvedValue({
-      response: new Response("ok", { status: 200 }),
-      finalUrl: "https://example.com",
-      release: async () => {},
-    });
+    mockGuardedFetchResponse();
 
     await withStrictWebToolsEndpoint(
       {
@@ -125,25 +112,46 @@ describe("web-guarded-fetch", () => {
       },
       async () => undefined,
     );
-    expect(firstFetchCall().timeoutMs).toBe(2500);
+    expect(firstGuardedFetchCall().timeoutMs).toBe(2500);
   });
 
-  it("caps oversized timeoutSeconds before guarded fetch dispatch", async () => {
-    vi.mocked(fetchWithSsrFGuard).mockResolvedValue({
-      response: new Response("ok", { status: 200 }),
-      finalUrl: "https://example.com",
-      release: async () => {},
+  it("keeps trusted endpoint redirects on the initial hostname allowlist", async () => {
+    mockGuardedFetchResponse();
+
+    await withTrustedWebToolsEndpoint(
+      {
+        url: "https://TRUSTED.example./api",
+      },
+      async () => undefined,
+    );
+
+    expect(firstGuardedFetchCall().policy).toEqual({
+      allowRfc2544BenchmarkRange: true,
+      allowIpv6UniqueLocalRange: true,
+      hostnameAllowlist: ["trusted.example."],
     });
+  });
+
+  it("caps oversized timeoutSeconds before guarded dispatch", async () => {
+    mockGuardedFetchResponse();
 
     await withStrictWebToolsEndpoint(
       { url: "https://example.com", timeoutSeconds: Number.MAX_SAFE_INTEGER },
       async () => undefined,
     );
 
-    expect(firstFetchCall().timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
+    expect(firstGuardedFetchCall().timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
   });
 
-  it("rejects malformed timeouts before guarded fetch dispatch", async () => {
+  it("releases the guarded fetch after the endpoint callback", async () => {
+    const { release } = mockGuardedFetchResponse();
+
+    await withStrictWebToolsEndpoint({ url: "https://example.com" }, async () => "done");
+
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects malformed timeouts before transport dispatch", async () => {
     await expect(
       withStrictWebToolsEndpoint(
         { url: "https://example.com", timeoutMs: "2.5" as never },
@@ -156,6 +164,7 @@ describe("web-guarded-fetch", () => {
         async () => undefined,
       ),
     ).rejects.toThrow("timeoutSeconds must be a positive integer");
+    expect(fetchWithAppNetworkTransport).not.toHaveBeenCalled();
     expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
   });
 });
