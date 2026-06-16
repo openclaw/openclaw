@@ -3214,7 +3214,8 @@ export class AgentSession {
           return false;
         }
         const msg = m;
-        // Skip aborted messages with no content
+        // Skip aborted messages with no content. `.length === 0` is correct for
+        // both an empty content array and a persisted/legacy string content "".
         if (msg.stopReason === "aborted" && msg.content.length === 0) {
           return false;
         }
@@ -3226,9 +3227,18 @@ export class AgentSession {
     }
 
     let text = "";
-    for (const content of (lastAssistant as AssistantMessage).content) {
-      if (content.type === "text") {
-        text += content.text;
+    // Persisted/legacy transcripts may carry a string `content` (the same case
+    // hasAssistantToolCallArguments guards against). Treat it as the text itself,
+    // matching extractTextContent(); otherwise iterating the string would yield
+    // characters, never a `type === "text"` block, and silently drop the text.
+    const lastAssistantContent = (lastAssistant as AssistantMessage).content;
+    if (typeof lastAssistantContent === "string") {
+      text = lastAssistantContent;
+    } else {
+      for (const content of lastAssistantContent) {
+        if (content.type === "text") {
+          text += content.text;
+        }
       }
     }
 
