@@ -81,7 +81,7 @@ export function parseSlashCommandName(content: string | undefined | null): strin
 
 export function classifyCoreCommandForGroup(
   content: string | undefined | null,
-  commandLevel: QQBotGroupCommandLevel = "safety",
+  commandLevel: QQBotGroupCommandLevel = "all",
 ): {
   commandName?: string;
   visibility: GroupCommandVisibility;

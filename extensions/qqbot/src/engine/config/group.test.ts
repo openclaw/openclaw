@@ -20,7 +20,7 @@ describe("engine/config/group", () => {
       expect(cfg).toStrictEqual({
         requireMention: true,
         ignoreOtherMentions: false,
-        commandLevel: "safety",
+        commandLevel: "all",
         name: "",
         prompt: undefined,
         historyLimit: DEFAULT_GROUP_HISTORY_LIMIT,
@@ -164,8 +164,8 @@ describe("engine/config/group", () => {
   });
 
   describe("resolveGroupCommandLevelFromAccountConfig", () => {
-    it("defaults to safety when unset", () => {
-      expect(resolveGroupCommandLevelFromAccountConfig({}, "G")).toBe("safety");
+    it("defaults to all when unset", () => {
+      expect(resolveGroupCommandLevelFromAccountConfig({}, "G")).toBe("all");
     });
 
     it("uses specific group before wildcard", () => {

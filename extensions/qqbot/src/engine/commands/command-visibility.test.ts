@@ -40,7 +40,13 @@ describe("QQBot command visibility", () => {
       "/config: show",
       "/model@bot sonnet",
     ]) {
-      expect(classifyCoreCommandForGroup(command).visibility).toBe("private");
+      expect(classifyCoreCommandForGroup(command, "safety").visibility).toBe("private");
+    }
+  });
+
+  it("keeps omitted command level compatible with all mode", () => {
+    for (const command of ["/config", "/bash", "/new", "/status"]) {
+      expect(classifyCoreCommandForGroup(command).visibility).not.toBe("private");
     }
   });
 
@@ -61,8 +67,13 @@ describe("QQBot command visibility", () => {
     expect(classifyCoreCommandForGroup("/config", "strict").visibility).toBe("private");
   });
 
-  it("leaves plugin and unknown slash commands to their existing dispatch path", () => {
-    expect(classifyCoreCommandForGroup("/bot-help").visibility).toBe("unknown");
-    expect(classifyCoreCommandForGroup("/unknown").visibility).toBe("unknown");
+  it("does not make plugin and unknown slash commands private in all mode", () => {
+    expect(classifyCoreCommandForGroup("/bot-help").visibility).not.toBe("private");
+    expect(classifyCoreCommandForGroup("/unknown").visibility).not.toBe("private");
+  });
+
+  it("leaves plugin and unknown slash commands to their existing dispatch path in safety mode", () => {
+    expect(classifyCoreCommandForGroup("/bot-help", "safety").visibility).toBe("unknown");
+    expect(classifyCoreCommandForGroup("/unknown", "safety").visibility).toBe("unknown");
   });
 });

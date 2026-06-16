@@ -174,7 +174,7 @@ export class SlashCommandRegistry {
     }
 
     const isGroup = ctx.type === "group" || ctx.type === "guild";
-    const groupCommandLevel = ctx.groupCommandLevel ?? "safety";
+    const groupCommandLevel = ctx.groupCommandLevel ?? "all";
     if (isGroup && groupCommandLevel === "strict") {
       return PRIVATE_CHAT_ONLY_TEXT;
     }

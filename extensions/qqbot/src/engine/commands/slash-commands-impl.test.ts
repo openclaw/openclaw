@@ -114,6 +114,27 @@ describe("QQBot framework slash commands", () => {
     expect(result).toBe("该命令仅限私聊使用，请在私聊中发送。");
   });
 
+  it("keeps requireAuth commands gated in default all group mode", async () => {
+    const registry = new SlashCommandRegistry();
+    registry.register({
+      name: "shared-admin",
+      description: "shared admin command",
+      requireAuth: true,
+      handler: () => "ok",
+    });
+
+    const result = await registry.matchSlashCommand(
+      createStreamingContext({
+        type: "group",
+        rawContent: "/shared-admin",
+        groupOpenid: "group-1",
+        commandAuthorized: false,
+      }),
+    );
+
+    expect(result).toContain("权限不足");
+  });
+
   it("does not write streaming config when the sender is not command-authorized", async () => {
     const writes: OpenClawConfig[] = [];
     installCommandRuntime(
