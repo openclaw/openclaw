@@ -42,6 +42,7 @@ import {
 import { resolveSessionTranscriptFile } from "./transcript-file-resolve.js";
 import { streamSessionTranscriptLines } from "./transcript-stream.js";
 import {
+  type OwnedSessionTranscriptPublishedEntry,
   resolveOwnedSessionTranscriptWriteLockRunner,
   withOwnedSessionTranscriptWrites,
 } from "./transcript-write-context.js";
@@ -511,6 +512,7 @@ async function appendTranscriptTurnMessages(
   options: SessionTranscriptTurnPersistOptions,
 ): Promise<TranscriptMessageAppendResult<unknown>[]> {
   const appendedMessages: TranscriptMessageAppendResult<unknown>[] = [];
+  const publishedEntries: OwnedSessionTranscriptPublishedEntry[] = [];
   const appendMessages = async (appendMessage: SessionTranscriptTurnAppendRunner) => {
     for (const append of options.messages) {
       const shouldAppend = append.shouldAppend
@@ -535,12 +537,18 @@ async function appendTranscriptTurnMessages(
         ...(append.prepareMessageAfterIdempotencyCheck
           ? { prepareMessageAfterIdempotencyCheck: append.prepareMessageAfterIdempotencyCheck }
           : {}),
+        onHeaderCreated: (header) => {
+          publishedEntries.push({ kind: "header", serialized: header });
+        },
         ...(append.useRawWhenLinear !== undefined
           ? { useRawWhenLinear: append.useRawWhenLinear }
           : {}),
       });
       if (result) {
         appendedMessages.push(result);
+        if (result.appended) {
+          publishedEntries.push({ kind: "id", id: result.messageId });
+        }
       }
     }
   };
@@ -560,7 +568,11 @@ async function appendTranscriptTurnMessages(
   if (activeLockRunner) {
     await activeLockRunner(
       () => withSessionTranscriptAppendQueue(target.sessionFile, runBatchWithOwnedLock),
-      { publishOwnedWrite: true },
+      {
+        publishOwnedWrite: true,
+        resolvePublishedEntries: () => publishedEntries,
+        resolvePublishedEntriesAfterFailure: () => publishedEntries,
+      },
     );
   } else {
     await withSessionTranscriptAppendQueue(target.sessionFile, async () => {

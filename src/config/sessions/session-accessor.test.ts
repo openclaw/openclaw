@@ -764,6 +764,7 @@ describe("session accessor file-backed seam", () => {
       storePath,
     };
     const publishOptions: Array<boolean | undefined> = [];
+    const publishedEntryBatches: unknown[][] = [];
 
     await withOwnedSessionTranscriptWrites(
       {
@@ -771,7 +772,9 @@ describe("session accessor file-backed seam", () => {
         sessionKey: scope.sessionKey,
         withSessionWriteLock: async (run, options) => {
           publishOptions.push(options?.publishOwnedWrite);
-          return await run();
+          const result = await run();
+          publishedEntryBatches.push([...(options?.resolvePublishedEntries?.(result) ?? [])]);
+          return result;
         },
       },
       async () =>
@@ -793,6 +796,11 @@ describe("session accessor file-backed seam", () => {
     );
 
     expect(publishOptions).toEqual([true]);
+    expect(publishedEntryBatches).toHaveLength(1);
+    expect(publishedEntryBatches[0]).toEqual([
+      expect.objectContaining({ kind: "header" }),
+      expect.objectContaining({ kind: "id" }),
+    ]);
     await expect(loadTranscriptEvents(scope)).resolves.toEqual([
       expect.objectContaining({ type: "session" }),
       expect.objectContaining({

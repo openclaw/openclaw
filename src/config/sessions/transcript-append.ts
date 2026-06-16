@@ -375,6 +375,8 @@ export type AppendSessionTranscriptMessageParams<TMessage = unknown> = {
   /** Runs under the transcript write lock after idempotency replay checks and before append. */
   prepareMessageAfterIdempotencyCheck?: (message: TMessage) => TMessage | undefined;
   config?: OpenClawConfig;
+  /** Internal owned-batch hook for publishing a newly created transcript header. */
+  onHeaderCreated?: (serializedHeader: string) => void;
 };
 
 export type AppendSessionTranscriptMessageResult<TMessage> = {
@@ -521,9 +523,7 @@ async function appendSessionTranscriptEventLocked(
 }
 
 async function appendSessionTranscriptMessageLocked<TMessage>(
-  params: AppendSessionTranscriptMessageParams<TMessage> & {
-    onHeaderCreated?: (serializedHeader: string) => void;
-  },
+  params: AppendSessionTranscriptMessageParams<TMessage>,
 ): Promise<AppendSessionTranscriptMessageResult<TMessage> | undefined> {
   const now = params.now ?? Date.now();
   const serializedHeader = await ensureTranscriptHeader(params.transcriptPath, {
