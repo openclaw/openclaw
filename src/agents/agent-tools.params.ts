@@ -105,6 +105,45 @@ export function getToolParamsRecord(params: unknown): Record<string, unknown> | 
   return params && typeof params === "object" ? (params as Record<string, unknown>) : undefined;
 }
 
+/**
+ * Known hallucinated extension patterns produced when the model blends a
+ * real office-document extension with "codex" (e.g. .docx + codex → .docodex).
+ * Maps each corrupted extension to its intended correction.
+ */
+const HALLUCINATED_EXTENSION_CORRECTIONS: ReadonlyMap<string, string> = new Map([
+  [".docodex", ".docx"],
+  [".docxcodex", ".docx"],
+  [".pptcodex", ".pptx"],
+  [".pptxcodex", ".pptx"],
+  [".xlscodex", ".xlsx"],
+  [".xlstcodex", ".xlsx"],
+  [".xlstxcodex", ".xlsx"],
+]);
+
+/**
+ * Correct known hallucinated file extension patterns in a file path.
+ * Returns the corrected path, or the original if no correction is needed.
+ *
+ * The model sometimes blends office-document extensions with "codex",
+ * producing paths like `report.docodex` instead of `report.docx`.
+ * This silently corrects such patterns so tool calls succeed.
+ */
+export function correctHallucinatedFileExtension(filePath: string): string {
+  if (typeof filePath !== "string" || !filePath.trim()) {
+    return filePath;
+  }
+  const dotIndex = filePath.lastIndexOf(".");
+  if (dotIndex < 0) {
+    return filePath;
+  }
+  const ext = filePath.slice(dotIndex).toLowerCase();
+  const correction = HALLUCINATED_EXTENSION_CORRECTIONS.get(ext);
+  if (correction) {
+    return filePath.slice(0, dotIndex) + correction;
+  }
+  return filePath;
+}
+
 /** Strip extra closing markers sometimes produced in XML arg_value path params. */
 export function stripMalformedXmlArgValueSuffix(value: string): string {
   return value.includes("</arg_value>") ? value.replace(XML_ARG_VALUE_SUFFIX_RE, "") : value;
@@ -186,6 +225,30 @@ export function assertRequiredParams(
   }
 }
 
+/**
+ * Normalize file-path tool params: correct hallucinated extensions and strip
+ * malformed XML suffixes.
+ */
+function normalizeFilePathParams<T extends Record<string, unknown>>(
+  record: T,
+  keys: readonly string[],
+): T {
+  let normalized: T | undefined;
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value !== "string") {
+      continue;
+    }
+    let fixed = correctHallucinatedFileExtension(value);
+    fixed = stripMalformedXmlArgValueSuffix(fixed);
+    if (fixed !== value) {
+      normalized ??= { ...record };
+      normalized[key as keyof T] = fixed as T[keyof T];
+    }
+  }
+  return normalized ?? record;
+}
+
 /** Wrap a tool execute function with required-parameter validation. */
 export function wrapToolParamValidation(
   tool: AnyAgentTool,
@@ -197,9 +260,7 @@ export function wrapToolParamValidation(
       const record = getToolParamsRecord(params);
       const pathKeys = resolveMalformedXmlArgValuePathKeys(requiredParamGroups);
       const normalizedParams =
-        record && pathKeys.length > 0
-          ? stripMalformedXmlArgValueSuffixFromKeys(record, pathKeys)
-          : params;
+        record && pathKeys.length > 0 ? normalizeFilePathParams(record, pathKeys) : params;
       if (requiredParamGroups?.length) {
         assertRequiredParams(getToolParamsRecord(normalizedParams), requiredParamGroups, tool.name);
       }
