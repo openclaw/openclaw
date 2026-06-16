@@ -1274,6 +1274,61 @@ export function registerControlUiAndPairingSuite(): void {
     }
   });
 
+  test("qr setup code leaves admin-required node commands pending", async () => {
+    const { writeConfigFile } = await import("../config/config.js");
+    const { issueDeviceBootstrapToken } = await import("../infra/device-bootstrap.js");
+    const { listNodePairing } = await import("../infra/node-pairing.js");
+    await writeConfigFile({
+      gateway: {
+        nodes: {
+          allowCommands: ["system.run"],
+        },
+      },
+    });
+    const { server, port, prevToken } = await startControlUiServer("secret");
+    const { identityPath, identity } = await createOperatorIdentityFixture(
+      "openclaw-bootstrap-node-admin-command-",
+    );
+    const client = {
+      id: "openclaw-ios",
+      version: "2026.3.30",
+      platform: "iOS 26.3.1",
+      mode: "node",
+      deviceFamily: "iPhone",
+    };
+
+    try {
+      const issued = await issueDeviceBootstrapToken();
+      const wsBootstrap = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
+      const initial = await connectReq(wsBootstrap, {
+        skipDefaultAuth: true,
+        bootstrapToken: issued.token,
+        role: "node",
+        scopes: [],
+        client,
+        commands: ["system.run"],
+        deviceIdentityPath: identityPath,
+      });
+      expect(initial.ok).toBe(true);
+      expect((initial.payload as { type?: string } | undefined)?.type).toBe("hello-ok");
+      wsBootstrap.close();
+
+      const nodePairing = await listNodePairing();
+      expect(
+        nodePairing.paired.find((entry) => entry.nodeId === identity.deviceId),
+      ).toBeUndefined();
+      expect(nodePairing.pending.filter((entry) => entry.nodeId === identity.deviceId)).toEqual([
+        expect.objectContaining({
+          nodeId: identity.deviceId,
+          commands: ["system.run"],
+        }),
+      ]);
+    } finally {
+      await server.close();
+      restoreGatewayToken(prevToken);
+    }
+  });
+
   test("qr bootstrap retry keeps bounded operator handoff after paired approval", async () => {
     const { issueDeviceBootstrapToken, verifyDeviceBootstrapToken } =
       await import("../infra/device-bootstrap.js");

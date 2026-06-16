@@ -179,7 +179,7 @@ const DEVICE_CREDENTIAL_INVALIDATING_METHODS = new Set([
   "device.token.revoke",
 ]);
 const unauthorizedHandshakeLogLimiter = new HandshakeAuthLogLimiter();
-const BOOTSTRAP_NODE_APPROVAL_SCOPES = [PAIRING_SCOPE, WRITE_SCOPE, ADMIN_SCOPE];
+const BOOTSTRAP_NODE_APPROVAL_SCOPES = [PAIRING_SCOPE, WRITE_SCOPE];
 
 class NodePairingRateLimitError extends Error {
   constructor(readonly retryAfterMs: number) {
