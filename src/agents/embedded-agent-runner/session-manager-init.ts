@@ -5,7 +5,12 @@ import fs from "node:fs/promises";
 import { serializeJsonlLine, writeJsonlLines } from "../../config/sessions/transcript-jsonl.js";
 import { invalidateSessionFileRepairCache } from "../session-file-repair.js";
 
-type SessionHeaderEntry = { type: "session"; id?: string; cwd?: string };
+type SessionHeaderEntry = {
+  type: "session";
+  id?: string;
+  cwd?: string;
+  parentSession?: string;
+};
 type SessionMessageEntry = { type: "message"; message?: { role?: string } };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -58,6 +63,8 @@ export async function prepareSessionManagerForRun(params: {
     labelsById?: Map<string, unknown>;
     leafId?: string | null;
     wasRecoveredFromCorruptHeader?: () => boolean;
+    clearPreservedOpaqueFileEntries?: () => void;
+    getSerializedFileLinesForRewrite?: () => string[];
     syncSnapshotAfterHeaderRewrite?: (expectedContent?: string) => void;
   };
 
@@ -75,14 +82,18 @@ export async function prepareSessionManagerForRun(params: {
   }
 
   if (params.hadSessionFile && header && !hasAssistant) {
-    if (sm.wasRecoveredFromCorruptHeader?.()) {
+    const preservesForkedBranch =
+      typeof header.parentSession === "string" && header.parentSession.length > 0;
+    if (sm.wasRecoveredFromCorruptHeader?.() || preservesForkedBranch) {
+      // Fork transcripts can intentionally select a user-only or empty branch.
+      // Keep their copied tree so the first run appends at the preserved cursor.
       header.id = params.sessionId;
       header.cwd = params.cwd;
       sm.sessionId = params.sessionId;
       sm.cwd = params.cwd;
       const content = await writeJsonlLines(
         params.sessionFile,
-        sm.fileEntries.map(serializeJsonlLine),
+        sm.getSerializedFileLinesForRewrite?.() ?? sm.fileEntries.map(serializeJsonlLine),
         {
           mode: 0o600,
         },
@@ -101,6 +112,7 @@ export async function prepareSessionManagerForRun(params: {
     sm.sessionId = params.sessionId;
     sm.cwd = params.cwd;
     sm.fileEntries = [header];
+    sm.clearPreservedOpaqueFileEntries?.();
     sm.byId?.clear?.();
     sm.labelsById?.clear?.();
     sm.leafId = null;
@@ -120,7 +132,7 @@ export async function prepareSessionManagerForRun(params: {
     }
     const content = await writeJsonlLines(
       params.sessionFile,
-      sm.fileEntries.map(serializeJsonlLine),
+      sm.getSerializedFileLinesForRewrite?.() ?? sm.fileEntries.map(serializeJsonlLine),
       {
         mode: 0o600,
       },

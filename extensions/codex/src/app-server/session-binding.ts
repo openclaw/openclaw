@@ -68,6 +68,7 @@ export type CodexAppServerThreadBinding = {
   serviceTier?: CodexServiceTier;
   dynamicToolsFingerprint?: string;
   dynamicToolsContainDeferred?: boolean;
+  webSearchThreadConfigFingerprint?: string;
   userMcpServersFingerprint?: string;
   mcpServersFingerprint?: string;
   nativeHookRelayGeneration?: string;
@@ -188,6 +189,10 @@ export async function readCodexAppServerBinding(
         typeof parsed.dynamicToolsContainDeferred === "boolean"
           ? parsed.dynamicToolsContainDeferred
           : undefined,
+      webSearchThreadConfigFingerprint:
+        typeof parsed.webSearchThreadConfigFingerprint === "string"
+          ? parsed.webSearchThreadConfigFingerprint
+          : undefined,
       userMcpServersFingerprint:
         typeof parsed.userMcpServersFingerprint === "string"
           ? parsed.userMcpServersFingerprint
@@ -253,6 +258,7 @@ export async function writeCodexAppServerBinding(
       serviceTier: binding.serviceTier,
       dynamicToolsFingerprint: binding.dynamicToolsFingerprint,
       dynamicToolsContainDeferred: binding.dynamicToolsContainDeferred,
+      webSearchThreadConfigFingerprint: binding.webSearchThreadConfigFingerprint,
       userMcpServersFingerprint: binding.userMcpServersFingerprint,
       mcpServersFingerprint: binding.mcpServersFingerprint,
       nativeHookRelayGeneration: binding.nativeHookRelayGeneration,

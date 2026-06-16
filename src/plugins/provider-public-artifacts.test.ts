@@ -207,6 +207,69 @@ describe("provider public artifacts", () => {
     expect(loadPluginManifestRegistry).not.toHaveBeenCalled();
   });
 
+  it("resolves bundled policy artifacts for a plugin-owned CLI backend", async () => {
+    const loadPluginManifestRegistry = vi.fn(() => {
+      throw new Error("unexpected manifest registry scan");
+    });
+    const loadBundledPluginPublicArtifactModuleSync = vi.fn(({ dirName }: { dirName: string }) => {
+      if (dirName !== "anthropic") {
+        throw new Error(`Unable to resolve bundled plugin public surface ${dirName}`);
+      }
+      return {
+        resolveThinkingProfile: ({ provider }: { provider: string }) => ({
+          levels: [{ id: provider }],
+        }),
+      };
+    });
+
+    vi.doMock("./manifest-registry.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("./manifest-registry.js")>();
+      return {
+        ...actual,
+        loadPluginManifestRegistry,
+      };
+    });
+    vi.doMock("./public-surface-loader.js", () => ({
+      loadBundledPluginPublicArtifactModuleSync,
+    }));
+
+    const { resolveBundledProviderPolicySurface: resolvePolicySurface } = await importFreshModule<
+      typeof import("./provider-public-artifacts.js")
+    >(import.meta.url, "./provider-public-artifacts.js?scope=provider-cli-backend");
+
+    // CLI backend ids use the same provider-policy owner boundary as provider ids.
+    // Without it, claude-cli subagents fall back to the base thinking profile.
+    const surface = resolvePolicySurface("claude-cli", {
+      manifestRegistry: {
+        plugins: [
+          {
+            id: "anthropic",
+            channels: [],
+            cliBackends: ["claude-cli"],
+            hooks: [],
+            origin: "bundled",
+            manifestPath: "/tmp/anthropic/openclaw.plugin.json",
+            providers: ["anthropic"],
+            rootDir: "/tmp/anthropic",
+            skills: [],
+            source: "/tmp/anthropic/index.js",
+          },
+        ],
+      },
+    });
+
+    expect(
+      surface?.resolveThinkingProfile?.({ provider: "claude-cli", modelId: "claude-opus-4-8" }),
+    ).toEqual({
+      levels: [{ id: "claude-cli" }],
+    });
+    expect(loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledWith({
+      dirName: "anthropic",
+      artifactBasename: "provider-policy-api.js",
+    });
+    expect(loadPluginManifestRegistry).not.toHaveBeenCalled();
+  });
+
   it("does not cache manifest-owned provider policy aliases across bundled metadata changes", async () => {
     const bundledPluginsDir = fs.mkdtempSync(
       path.join(os.tmpdir(), "openclaw-provider-policy-refresh-"),

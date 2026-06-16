@@ -42,6 +42,10 @@ import { parseArgs as parseLinuxSmokeArgs } from "../../scripts/e2e/parallels/li
 import { parseArgs as parseMacosSmokeArgs } from "../../scripts/e2e/parallels/macos-smoke.ts";
 import { parseArgs as parseNpmUpdateSmokeArgs } from "../../scripts/e2e/parallels/npm-update-smoke.ts";
 import { PhaseRunner } from "../../scripts/e2e/parallels/phase-runner.ts";
+import {
+  posixCodexPlatformPackageRepairFunction,
+  windowsCodexPlatformPackageRepairFunction,
+} from "../../scripts/e2e/parallels/plugin-isolation.ts";
 import { parseArgs as parseWindowsSmokeArgs } from "../../scripts/e2e/parallels/windows-smoke.ts";
 import { withEnv } from "../../src/test-utils/env.js";
 import { spawnNodeEvalSync } from "../../src/test-utils/node-process.js";
@@ -273,6 +277,20 @@ describe("Parallels smoke model selection", () => {
       expect(script, scriptPath).toContain("--model <provider/model>");
       expect(script, scriptPath).toContain("modelId");
     }
+  });
+
+  it("repairs only the exact missing Codex platform package failure with a fresh npm cache", () => {
+    const posixRepair = posixCodexPlatformPackageRepairFunction();
+    const windowsRepair = windowsCodexPlatformPackageRepairFunction();
+
+    for (const repair of [posixRepair, windowsRepair]) {
+      expect(repair).toContain("Missing optional dependency @openai/codex-");
+      expect(repair).toContain("NPM_CONFIG_CACHE");
+      expect(repair).toContain("--ignore-scripts");
+      expect(repair).toContain("codex-platform-repair: managed npm install completed");
+    }
+    expect(posixRepair).toContain("repair_missing_codex_platform_package");
+    expect(windowsRepair).toContain("Repair-MissingCodexPlatformPackage");
   });
 
   it("writes full model ids as config map keys in provider batches", () => {
@@ -739,7 +757,15 @@ if (isPrlctl) {
   it("waits for apt locks during Linux snapshot bootstrap", () => {
     const script = readFileSync(TS_PATHS.linux, "utf8");
 
-    expect(script).toContain("DPkg::Lock::Timeout=300");
+    expect(script).toContain("APT_LOCK_RETRY_SECONDS = 900");
+    expect(script).toContain("BOOTSTRAP_TIMEOUT_SECONDS = 1200");
+    expect(script).toContain("command -v wget");
+    expect(script).toContain("run_apt_with_lock_retry");
+    expect(script).toContain('"Could not get lock"');
+    expect(script).toContain('"Unable to acquire the dpkg frontend lock"');
+    expect(script).toContain('"Unable to lock directory"');
+    expect(script).toContain("downloadGuestFile");
+    expect(script).toContain("this.downloadGuestFile(tgzUrl");
   });
 
   it("keeps Linux bad-plugin diagnostics gated for historical update baselines", () => {

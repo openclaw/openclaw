@@ -8,6 +8,7 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import {
   configureSqliteConnectionPragmas,
@@ -36,7 +37,6 @@ export { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 const OPENCLAW_AGENT_SCHEMA_VERSION = 1;
 const OPENCLAW_AGENT_DB_DIR_MODE = 0o700;
 const OPENCLAW_AGENT_DB_FILE_MODE = 0o600;
-const OPENCLAW_AGENT_DB_SIDECAR_SUFFIXES = ["", "-shm", "-wal"] as const;
 
 /** Open per-agent SQLite database handle plus lifecycle maintenance. */
 export type OpenClawAgentDatabase = {
@@ -100,8 +100,7 @@ function ensureOpenClawAgentDatabasePermissions(
   if (isDefaultAgentDatabase || !dirExisted) {
     chmodSync(dir, OPENCLAW_AGENT_DB_DIR_MODE);
   }
-  for (const suffix of OPENCLAW_AGENT_DB_SIDECAR_SUFFIXES) {
-    const candidate = `${pathname}${suffix}`;
+  for (const candidate of resolveSqliteDatabaseFilePaths(pathname)) {
     if (existsSync(candidate)) {
       chmodSync(candidate, OPENCLAW_AGENT_DB_FILE_MODE);
     }
