@@ -565,6 +565,65 @@ function pluginMetadataSnapshotCoversProvider(
   });
 }
 
+/**
+ * Extract structured tool call blocks from assistant messages for hook payloads.
+ *
+ * Collects tool calls from all assistant messages in the provided message list
+ * so that downstream supervisors can see which tools an agent invoked — with
+ * what inputs — without parsing free-form text.
+ */
+function extractToolCallsForHooks(messages: AgentMessage[]): Array<{
+  id: string;
+  name: string;
+  input: Record<string, unknown>;
+}> {
+  const toolCalls: Array<{
+    id: string;
+    name: string;
+    input: Record<string, unknown>;
+  }> = [];
+  for (const message of messages) {
+    if ((message as { role?: unknown }).role !== "assistant") {
+      continue;
+    }
+    const content = (message as { content?: unknown }).content;
+    if (!Array.isArray(content)) {
+      continue;
+    }
+    for (const block of content) {
+      if (!block || typeof block !== "object") {
+        continue;
+      }
+      const typedBlock = block as {
+        type?: unknown;
+        id?: unknown;
+        name?: unknown;
+        arguments?: unknown;
+        input?: unknown;
+      };
+      const blockType = typedBlock.type;
+      if (
+        typeof blockType !== "string" ||
+        !["toolCall", "toolUse", "functionCall"].includes(blockType)
+      ) {
+        continue;
+      }
+      const id = typeof typedBlock.id === "string" ? typedBlock.id : "";
+      if (!id) {
+        continue;
+      }
+      const name = typeof typedBlock.name === "string" ? typedBlock.name : "";
+      const rawInput = typedBlock.input ?? typedBlock.arguments;
+      const input =
+        typeof rawInput === "object" && rawInput !== null && !Array.isArray(rawInput)
+          ? (rawInput as Record<string, unknown>)
+          : {};
+      toolCalls.push({ id, name, input });
+    }
+  }
+  return toolCalls;
+}
+
 function summarizeMessagePayload(msg: AgentMessage): { textChars: number; imageBlocks: number } {
   const content = (msg as { content?: unknown }).content;
   if (typeof content === "string") {
@@ -5165,12 +5224,14 @@ export async function runEmbeddedAttempt(
         anthropicPayloadLogger?.recordUsage(messagesSnapshot, promptError);
 
         if (!beforeAgentFinalizeRevisionReason) {
+          const hookToolCalls = extractToolCallsForHooks(messagesSnapshot);
           runAgentEndSideEffects({
             event: {
               messages: messagesSnapshot,
               success: !aborted && !promptError,
               error: promptError ? formatErrorMessage(promptError) : undefined,
               durationMs: Date.now() - promptStartedAt,
+              ...(hookToolCalls.length > 0 ? { toolCalls: hookToolCalls } : {}),
             },
             ctx: {
               runId: params.runId,

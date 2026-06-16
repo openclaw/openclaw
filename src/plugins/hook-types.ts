@@ -319,6 +319,20 @@ export type PluginHookModelCallEndedEvent = PluginHookModelCallBaseEvent & {
   upstreamRequestIdHash?: string;
 };
 
+/**
+ * Structured tool call block included in hook payloads so that downstream
+ * supervisors can see which tools an agent invoked — with what inputs —
+ * without parsing free-form text.
+ */
+export type PluginHookToolCall = {
+  /** Unique tool call identifier (matches `toolCallId` on the tool result). */
+  id: string;
+  /** Tool name as declared in the tool definition. */
+  name: string;
+  /** Structured arguments passed to the tool. */
+  input: Record<string, unknown>;
+};
+
 export type PluginHookLlmOutputEvent = {
   runId: string;
   sessionId: string;
@@ -346,6 +360,14 @@ export type PluginHookLlmOutputEvent = {
   /** The original user prompt that produced this output. */
   prompt?: string;
   assistantTexts: string[];
+  /**
+   * Structured tool call blocks from the assistant message(s) in this turn.
+   *
+   * Populated when the agent invokes tools so that downstream supervisors
+   * can enforce per-bot policy (tool budgets, capability caps, per-turn
+   * audit) deterministically instead of inferring from prose.
+   */
+  toolCalls?: PluginHookToolCall[];
   lastAssistant?: unknown;
   usage?: {
     input?: number;
@@ -370,6 +392,14 @@ export type PluginHookAgentEndEvent = {
   success: boolean;
   error?: string;
   durationMs?: number;
+  /**
+   * Structured tool call blocks from assistant messages in this run.
+   *
+   * Populated so that downstream supervisors can enforce per-bot policy
+   * (tool budgets, capability caps, per-turn audit) deterministically
+   * instead of inferring from prose.
+   */
+  toolCalls?: PluginHookToolCall[];
 };
 
 export type PluginHookBeforeAgentFinalizeEvent = {
