@@ -14,6 +14,7 @@ import {
   parseProvider,
   readPositiveIntEnv,
   modelProviderConfigBatchJson,
+  posixCodexPlatformPackageRepairFunction,
   posixProviderOnlyPluginIsolationScript,
   repoRoot,
   resolveParallelsModelTimeoutSeconds,
@@ -741,7 +742,8 @@ rm -f "$provider_config_batch"`);
     this.restrictAgentTurnPlugins();
     this.prepareAgentWorkspace();
     this.guestBash(
-      `agent_ok=false
+      `${posixCodexPlatformPackageRepairFunction()}
+agent_ok=false
 for attempt in 1 2; do
   session_id="parallels-linux-smoke"
   if [ "$attempt" -gt 1 ]; then session_id="parallels-linux-smoke-retry-$attempt"; fi
@@ -755,6 +757,11 @@ for attempt in 1 2; do
   set -e
   cat "$output_file"
   if [ "$rc" -ne 0 ]; then
+    if [ "$attempt" -lt 2 ] && repair_missing_codex_platform_package "$output_file"; then
+      rm -f "$output_file"
+      echo "agent turn attempt $attempt hit a missing Codex platform package; retrying"
+      continue
+    fi
     rm -f "$output_file"
     exit "$rc"
   fi

@@ -120,6 +120,33 @@ describe("group runtime loading", () => {
     expect(disallowed).not.toContain("Never say that you are staying quiet");
   });
 
+  it("binds an explicitly mentioned channel handle to the current assistant identity", () => {
+    const context = groups.buildGroupChatContext({
+      sessionCtx: {
+        ChatType: "group",
+        Provider: "telegram",
+        BotUsername: "SirPinchALotBot",
+        ExplicitlyMentionedBot: true,
+      },
+      silentToken: "NO_REPLY",
+      silentReplyPolicy: "allow",
+    });
+
+    expect(context).toContain("explicitly mentions your channel identity @SirPinchALotBot");
+    expect(context).toContain("Treat that mention as addressed to you");
+
+    const notExplicit = groups.buildGroupChatContext({
+      sessionCtx: {
+        ChatType: "group",
+        Provider: "telegram",
+        BotUsername: "kesslerAIBot",
+      },
+      silentToken: "NO_REPLY",
+      silentReplyPolicy: "allow",
+    });
+    expect(notExplicit).not.toContain("channel identity @kesslerAIBot");
+  });
+
   it("marks non-visible assistant replies silent for groups with silence allowed", () => {
     expect(
       groups.resolveGroupSilentReplyBehavior({
