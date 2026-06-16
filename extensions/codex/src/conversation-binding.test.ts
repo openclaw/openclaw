@@ -180,7 +180,7 @@ describe("codex conversation binding", () => {
     );
   });
 
-  it("uses Codex permissions for network-proxy app-server bind threads", async () => {
+  it("selects Codex network-proxy permissions through app-server bind thread config", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
     sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
@@ -212,10 +212,11 @@ describe("codex conversation binding", () => {
 
     expect(requests).toHaveLength(1);
     expect(requests[0]?.method).toBe("thread/start");
-    expect(requests[0]?.params.permissions).toEqual({ type: "profile", id: "openclaw-network" });
+    expect(requests[0]?.params).not.toHaveProperty("permissions");
     expect(requests[0]?.params).not.toHaveProperty("sandbox");
     expect(requests[0]?.params.config).toMatchObject({
       "features.network_proxy.enabled": true,
+      default_permissions: "openclaw-network",
       permissions: {
         "openclaw-network": {
           network: {
@@ -1252,7 +1253,7 @@ describe("codex conversation binding", () => {
     });
   });
 
-  it("uses Codex permissions for network-proxy bound app-server turns", async () => {
+  it("keeps network-proxy bound app-server turns on their thread permissions profile", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     await fs.writeFile(
       `${sessionFile}.codex-app-server.json`,

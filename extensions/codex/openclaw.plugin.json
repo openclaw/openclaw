@@ -433,7 +433,7 @@
     },
     "appServer.networkProxy.enabled": {
       "label": "Network Proxy Enabled",
-      "help": "When enabled, OpenClaw defines a Codex permissions profile and selects it on thread start or resume instead of sandbox fields.",
+      "help": "When enabled, OpenClaw defines a Codex permissions profile and selects it with default_permissions instead of sandbox fields.",
       "advanced": true
     },
     "appServer.networkProxy.profileName": {

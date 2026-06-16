@@ -30,7 +30,6 @@ import {
 } from "./app-server/config.js";
 import type {
   CodexServiceTier,
-  CodexPermissionProfileSelection,
   CodexThreadResumeResponse,
   CodexThreadStartResponse,
   CodexTurnStartResponse,
@@ -419,7 +418,6 @@ function buildThreadRequestRuntimeOptions(
   approvalsReviewer: ConversationAppServerRuntime["runtime"]["approvalsReviewer"];
   sandbox?: ConversationAppServerRuntime["runtime"]["sandbox"];
   serviceTier?: CodexServiceTier;
-  permissions?: CodexPermissionProfileSelection;
   config?: JsonObject;
 } {
   const serviceTier = params.serviceTier ?? resolved.runtime.serviceTier;
@@ -441,13 +439,11 @@ function codexConversationSandboxOrPermissions(
   sandbox: ConversationAppServerRuntime["runtime"]["sandbox"],
 ): {
   sandbox?: ConversationAppServerRuntime["runtime"]["sandbox"];
-  permissions?: CodexPermissionProfileSelection;
   config?: JsonObject;
 } {
   const networkProxy = runtime.networkProxy;
   if (networkProxy) {
     return {
-      permissions: { type: "profile", id: networkProxy.profileName },
       config: networkProxy.configPatch,
     };
   }

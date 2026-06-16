@@ -156,6 +156,7 @@ describe("Codex app-server config", () => {
       profileName: "mock-proxy",
       configPatch: {
         "features.network_proxy.enabled": true,
+        default_permissions: "mock-proxy",
         permissions: {
           "mock-proxy": {
             filesystem: {

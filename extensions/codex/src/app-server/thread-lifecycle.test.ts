@@ -93,6 +93,7 @@ function createNetworkProxyAppServerOptions() {
       profileName: "mock-proxy",
       configPatch: {
         "features.network_proxy.enabled": true,
+        default_permissions: "mock-proxy",
         permissions: {
           "mock-proxy": {
             filesystem: {
@@ -453,7 +454,7 @@ describe("Codex app-server native code mode config", () => {
     });
   });
 
-  it("uses a Codex permissions profile for network-proxy thread/start requests", () => {
+  it("selects the Codex network-proxy permissions profile in thread/start config", () => {
     const request = buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
       cwd: "/repo",
       dynamicTools: [],
@@ -461,10 +462,11 @@ describe("Codex app-server native code mode config", () => {
       developerInstructions: "test instructions",
     });
 
-    expect(request.permissions).toEqual({ type: "profile", id: "mock-proxy" });
+    expect(request).not.toHaveProperty("permissions");
     expect(request).not.toHaveProperty("sandbox");
     expect(request.config).toMatchObject({
       "features.network_proxy.enabled": true,
+      default_permissions: "mock-proxy",
       permissions: {
         "mock-proxy": {
           network: {
@@ -477,17 +479,18 @@ describe("Codex app-server native code mode config", () => {
     });
   });
 
-  it("uses a Codex permissions profile for network-proxy thread/resume requests", () => {
+  it("selects the Codex network-proxy permissions profile in thread/resume config", () => {
     const request = buildThreadResumeParams(createAttemptParams({ provider: "openai" }), {
       threadId: "thread-1",
       appServer: createNetworkProxyAppServerOptions() as never,
       developerInstructions: "test instructions",
     });
 
-    expect(request.permissions).toEqual({ type: "profile", id: "mock-proxy" });
+    expect(request).not.toHaveProperty("permissions");
     expect(request).not.toHaveProperty("sandbox");
     expect(request.config).toMatchObject({
       "features.network_proxy.enabled": true,
+      default_permissions: "mock-proxy",
       permissions: {
         "mock-proxy": {
           network: {

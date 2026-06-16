@@ -1401,16 +1401,11 @@ export function buildTurnStartParams(
 
 function codexThreadSandboxOrPermissions(
   appServer: Pick<CodexAppServerRuntimeOptions, "networkProxy" | "sandbox">,
-): Pick<CodexThreadStartParams, "permissions" | "sandbox"> {
-  const permissionProfile = appServer.networkProxy?.profileName;
-  if (permissionProfile) {
-    return { permissions: codexPermissionProfileSelection(permissionProfile) };
+): Pick<CodexThreadStartParams, "sandbox"> {
+  if (appServer.networkProxy) {
+    return {};
   }
   return { sandbox: appServer.sandbox };
-}
-
-function codexPermissionProfileSelection(profileName: string): CodexPermissionProfileSelection {
-  return { type: "profile", id: profileName };
 }
 
 function resolveCodexThreadEnvironmentSelection(options: {

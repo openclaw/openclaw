@@ -905,6 +905,7 @@ function resolveCodexAppServerNetworkProxy(
       profileName,
       configPatch: {
         "features.network_proxy.enabled": true,
+        default_permissions: profileName,
         permissions: {
           [profileName]: {
             filesystem: {
