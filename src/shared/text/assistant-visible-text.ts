@@ -17,7 +17,7 @@ const INTERNAL_TRACE_LINE_QUICK_RE =
 const INTERNAL_TRACE_LINE_RE =
   /^(?:>\s*)?(?:⚠️\s*)?(?:📊|🛠️|📖|📝|🔍|🔎|⚙️)\s*(?:Session Status|Exec|Read|Edit|Write|Patch|Search|Open|Click|Find|Screenshot|Update Plan|Tool Call|Tool Result|Function Call|Shell|Command)\s*:/i;
 const INTERNAL_COMPACT_FAILURE_TRACE_LINE_RE =
-  /^(?:>\s*)?⚠️\s*🛠️\s+\S[\s\S]*\s+\(agent\)`{0,2}\s+failed(?:\s*:.*)?\s*$/i;
+  /^(?:>\s*)?⚠️\s*🛠️\s+\S[\s\S]*\s+(?:\(agent\)|\(in\s+[^()]+\))`{0,2}\s+failed(?:\s*:.*)?\s*$/i;
 const INTERNAL_COMPACT_COMMAND_TRACE_LINE_RE =
   /^(?:>\s*)?🛠️\s*(?:(?:(?:elevated|pty)\b\s*(?:·|,)\s*)+)?(?:`{1,2}\s*\S|(?:run|check|fetch|pull|push|view|show|list|switch|create|merge|rebase|stage|restore|reset|stash|search|find|print|copy|move|remove|install|start|cd|git|pnpm|npm|yarn|bun|node|python|python3|bash|sh)\b)/i;
 const INTERNAL_CHANNEL_TRACE_LINE_RE =

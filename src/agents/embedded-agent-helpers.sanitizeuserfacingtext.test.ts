@@ -314,6 +314,8 @@ describe("sanitizeUserFacingText", () => {
       "⚠️ 🛠️ `run openclaw definitely-not-a-real-subcommand (agent)` failed",
       "⚠️ 🛠️ gh search issues --repo openclaw/openclaw --state open --no-search-pages.jsonl /tmp/openclaw_open_unlabeled_current.json (agent) failed",
       "⚠️ 🛠️ gh search issues --repo openclaw/openclaw --state open (agent) failed: command timed out",
+      "⚠️ 🛠️ systemctl --user status missing.service (in /tmp/openclaw) failed",
+      "⚠️ 🛠️ grep -n needle README.md (in /repo) failed: exit code 1",
       "🛠️ run git status",
       "📖 Read: lines 1-40 from secret.md",
       "Visible outro.",

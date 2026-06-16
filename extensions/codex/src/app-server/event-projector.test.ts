@@ -231,6 +231,27 @@ function agentMessageDelta(delta: string, itemId = "msg-1"): ProjectorNotificati
   return forCurrentTurn("item/agentMessage/delta", { itemId, delta });
 }
 
+function commandExecutionCompleted(params: {
+  id?: string;
+  command: string;
+  status?: "completed" | "failed";
+  cwd?: string;
+  aggregatedOutput?: string;
+  exitCode?: number | null;
+}): ProjectorNotification {
+  return forCurrentTurn("item/completed", {
+    item: {
+      id: params.id ?? "cmd-1",
+      type: "commandExecution",
+      command: params.command,
+      status: params.status ?? "completed",
+      ...(params.cwd ? { cwd: params.cwd } : {}),
+      ...(params.aggregatedOutput ? { aggregatedOutput: params.aggregatedOutput } : {}),
+      ...(params.exitCode !== undefined ? { exitCode: params.exitCode } : {}),
+    },
+  });
+}
+
 function appServerError(params: { message: string; willRetry: boolean }): ProjectorNotification {
   return forCurrentTurn("error", {
     error: {
@@ -274,6 +295,33 @@ function turnWithStatus(status: string, items: unknown[] = []): ProjectorNotific
 }
 
 describe("CodexAppServerEventProjector", () => {
+  it("projects commandExecution items as bash tool events", async () => {
+    const onAgentEvent = vi.fn();
+    const params = await createParams();
+    const projector = await createProjector({
+      ...params,
+      onAgentEvent,
+    });
+
+    await projector.handleNotification(
+      commandExecutionCompleted({
+        command: "git status",
+        status: "failed",
+        cwd: "/repo",
+        aggregatedOutput: "Command exited with code 1",
+        exitCode: 1,
+      }),
+    );
+
+    const toolResult = findAgentEvent(onAgentEvent, {
+      stream: "tool",
+      phase: "result",
+      itemId: "cmd-1",
+      name: "bash",
+    });
+    expect(toolResult.data.name).toBe("bash");
+  });
+
   it("projects assistant deltas and usage into embedded attempt results", async () => {
     const { onAssistantMessageStart, onPartialReply, projector } =
       await createProjectorWithAssistantHooks();
