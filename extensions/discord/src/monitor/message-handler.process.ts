@@ -1004,6 +1004,7 @@ async function processDiscordMessageInner(
           draftPreview.suppressDefaultToolProgressMessages
             ? true
             : undefined,
+        allowToolLifecycleWhenProgressHidden: statusReactionsEnabled ? true : undefined,
         commentaryProgressEnabled: draftPreview.isProgressMode
           ? draftPreview.commentaryProgressEnabled
           : undefined,

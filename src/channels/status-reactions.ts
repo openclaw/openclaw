@@ -362,11 +362,7 @@ export function createStatusReactionController(params: {
 
   function setTool(toolName?: string): void {
     const emoji = resolveToolEmoji(toolName, emojis, params.emojis);
-    // Apply tool emoji immediately so it is not overridden by rapid
-    // setThinking calls from onReasoningStream (which reuse the shared
-    // debounce timer).  The terminal done/error transitions flush this
-    // state; there is no need to debounce intermediate tool emojis.
-    scheduleEmoji(emoji, { immediate: true });
+    scheduleEmoji(emoji);
   }
 
   function setCompacting(): void {

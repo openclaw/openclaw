@@ -102,6 +102,8 @@ export type GetReplyOptions = {
    * channel to surface progress via its own streaming/edit UX.
    */
   suppressDefaultToolProgressMessages?: boolean;
+  /** Allow channel-owned tool lifecycle feedback while text progress remains hidden. */
+  allowToolLifecycleWhenProgressHidden?: boolean;
   /**
    * Called before dispatch with a live getter for whether verbose standalone
    * progress messages are active for this run. Channels that render tool or
