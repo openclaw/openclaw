@@ -274,6 +274,35 @@ export type GatewayReloadConfig = {
   deferralTimeoutMs?: number;
 };
 
+/**
+ * Controls SSE streaming chunk size for gateway HTTP endpoints.
+ * Buffles assistant text deltas and emits them in configurable-sized chunks,
+ * reducing HTTP overhead for high-frequency small deltas.
+ */
+export type GatewayHttpStreamingConfig = {
+  /**
+   * Minimum characters to buffer before flushing a streaming chunk.
+   * Small deltas will be accumulated until this threshold is reached.
+   * Default: 200.
+   */
+  minChars?: number;
+  /**
+   * Maximum characters to buffer before forcing a flush.
+   * Once the buffer reaches this size, it is flushed immediately
+   * regardless of minChars.
+   * Default: 800.
+   */
+  maxChars?: number;
+  /**
+   * Idle timeout in milliseconds. If no new delta arrives within this
+   * window, the buffer is flushed even if minChars is not yet reached.
+   * Set to 0 to disable idle flushing (buffer will only flush at
+   * minChars or maxChars).
+   * Default: 500.
+   */
+  idleMs?: number;
+};
+
 export type GatewayHttpChatCompletionsConfig = {
   /**
    * If false, the Gateway will not serve `POST /v1/chat/completions`.
@@ -297,6 +326,8 @@ export type GatewayHttpChatCompletionsConfig = {
   maxTotalImageBytes?: number;
   /** Image input controls for `image_url` parts. */
   images?: GatewayHttpChatCompletionsImagesConfig;
+  /** SSE streaming chunk size controls for assistant text deltas. */
+  streaming?: GatewayHttpStreamingConfig;
 };
 
 export type GatewayHttpChatCompletionsImagesConfig = {
@@ -337,6 +368,8 @@ export type GatewayHttpResponsesConfig = {
   files?: GatewayHttpResponsesFilesConfig;
   /** Image inputs (input_image). */
   images?: GatewayHttpResponsesImagesConfig;
+  /** SSE streaming chunk size controls for assistant text deltas. */
+  streaming?: GatewayHttpStreamingConfig;
 };
 
 export type GatewayHttpResponsesFilesConfig = {
