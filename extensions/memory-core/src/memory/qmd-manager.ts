@@ -1398,6 +1398,7 @@ export class QmdMemoryManager implements MemorySearchManager {
             limit,
             collectionGroups,
             qmdSearchCommand,
+            searchSignal,
           );
         }
         const args = this.buildSearchArgs(qmdSearchCommand, trimmed, limit);
@@ -1425,6 +1426,7 @@ export class QmdMemoryManager implements MemorySearchManager {
                 limit,
                 collectionGroups,
                 "query",
+                searchSignal,
               );
             }
             const fallbackArgs = this.buildSearchArgs("query", trimmed, limit);
@@ -3376,6 +3378,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     limit: number,
     collectionGroups: string[][],
     command: "query" | "search" | "vsearch",
+    signal?: AbortSignal,
   ): Promise<QmdQueryResult[]> {
     log.debug(
       `qmd ${command} multi-source collection grouping active (${collectionGroups.length} groups)`,
@@ -3384,7 +3387,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     for (const collectionNames of collectionGroups) {
       const args = this.buildSearchArgs(command, query, limit);
       args.push(...this.buildCollectionFilterArgs(collectionNames));
-      const parsed = await this.runQmdSearch(args, command);
+      const parsed = await this.runQmdSearch(args, command, signal);
       for (const entry of parsed) {
         const defaultCollection = collectionNames.length === 1 ? collectionNames[0] : undefined;
         const normalizedHints = this.normalizeDocHints({

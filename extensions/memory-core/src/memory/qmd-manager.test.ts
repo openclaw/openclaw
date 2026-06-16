@@ -2809,6 +2809,71 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("aborts the in-flight grouped qmd search subprocess when the caller signal aborts", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          sessions: { enabled: true },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    // Mixed memory/session sources route the search through
+    // runQueryAcrossCollectionGroups. The first grouped search child never
+    // closes on its own, so the only way the search can settle is the
+    // caller-owned abort signal reaching the grouped subprocess and killing it.
+    let groupedChildKill: ReturnType<typeof vi.fn> | undefined;
+    let groupedChild: MockChild | undefined;
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "--help") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(
+          child,
+          "stdout",
+          "-c, --collection <name>    Filter by one or more collections",
+        );
+        return child;
+      }
+      if (args[0] === "search") {
+        const child = createMockChild({ autoClose: false });
+        const kill = vi.fn(() => {
+          // Mirror a real child exiting after SIGKILL so the close handler runs.
+          queueMicrotask(() => child.emit("close", null));
+        });
+        Object.assign(child, { kill });
+        if (!groupedChildKill) {
+          groupedChildKill = kill;
+          groupedChild = child;
+        }
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager();
+    const controller = new AbortController();
+
+    const searchPromise = manager.search("test", {
+      sessionKey: "agent:main:slack:dm:u123",
+      signal: controller.signal,
+    });
+    searchPromise.catch(() => undefined);
+
+    await waitUntil(() => groupedChildKill !== undefined);
+    expect(groupedChild).toBeDefined();
+
+    controller.abort(new Error("memory_search timed out after 15s"));
+
+    await expect(searchPromise).rejects.toThrow("memory_search timed out after 15s");
+    expect(groupedChildKill).toHaveBeenCalledWith("SIGKILL");
+    await manager.close();
+  });
+
   it("does not pass --no-rerank to direct query fallback from search mode", async () => {
     cfg = {
       ...cfg,
