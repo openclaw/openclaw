@@ -288,6 +288,55 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
     expect(usageEvents).toEqual([]);
   });
 
+  it("emits billed model usage when the cron run is aborted before finalization", async () => {
+    const abortController = new AbortController();
+    const usageEvents: Array<{
+      type: string;
+      sessionId?: string;
+      usage?: { input?: number; output?: number; total?: number };
+    }> = [];
+    const unsubscribe = onInternalDiagnosticEvent((evt) => {
+      if (evt.type === "model.usage") {
+        usageEvents.push(evt);
+      }
+    });
+
+    runWithModelFallbackMock.mockImplementationOnce(async () => {
+      abortController.abort("cron: job execution timed out");
+      return {
+        result: {
+          payloads: [{ text: "late output" }],
+          meta: {
+            agentMeta: {
+              sessionId: "late-session",
+              usage: { input: 50, output: 10, total: 60 },
+            },
+          },
+        },
+        provider: "openai",
+        model: "gpt-5.4",
+      };
+    });
+
+    try {
+      const result = await runCronIsolatedAgentTurn({
+        ...makeParams(),
+        abortSignal: abortController.signal,
+      });
+      expect(result.status).toBe("error");
+      expect(result.error).toBe("cron: job execution timed out");
+    } finally {
+      unsubscribe();
+    }
+
+    expect(usageEvents).toHaveLength(1);
+    expect(usageEvents[0]).toMatchObject({
+      type: "model.usage",
+      sessionId: "test-session-id",
+      usage: { input: 50, output: 10, total: 60 },
+    });
+  });
+
   it("preserves total-only model usage in cron diagnostics", async () => {
     const usageEvents: Array<{
       type: string;

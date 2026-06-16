@@ -959,16 +959,21 @@ async function finalizeCronRun(params: {
   const { prepared, execution } = params;
   const finalRunResult = execution.runResult;
   const payloads = finalRunResult.payloads ?? [];
+  // Late aborted results may still contain billable usage, but their session,
+  // model, and CLI binding metadata must not replace the active run identity.
+  const abortedBeforeFinalize = params.isAborted();
   let telemetry: CronRunTelemetry | undefined;
 
-  if (finalRunResult.meta?.systemPromptReport) {
-    prepared.cronSession.sessionEntry.systemPromptReport = finalRunResult.meta.systemPromptReport;
+  if (!abortedBeforeFinalize) {
+    if (finalRunResult.meta?.systemPromptReport) {
+      prepared.cronSession.sessionEntry.systemPromptReport = finalRunResult.meta.systemPromptReport;
+    }
+    adoptCronRunSessionMetadata({
+      entry: prepared.cronSession.sessionEntry,
+      sessionKey: prepared.agentSessionKey,
+      runMeta: finalRunResult.meta?.agentMeta,
+    });
   }
-  adoptCronRunSessionMetadata({
-    entry: prepared.cronSession.sessionEntry,
-    sessionKey: prepared.agentSessionKey,
-    runMeta: finalRunResult.meta?.agentMeta,
-  });
   const usage = finalRunResult.meta?.agentMeta?.usage;
   const lastCallUsage = finalRunResult.meta?.agentMeta?.lastCallUsage;
   const promptTokens = finalRunResult.meta?.agentMeta?.promptTokens;
@@ -988,19 +993,21 @@ async function finalizeCronRun(params: {
     resolvePositiveContextTokens(prepared.cronSession.sessionEntry.contextTokens) ??
     DEFAULT_CONTEXT_TOKENS;
 
-  setSessionRuntimeModel(prepared.cronSession.sessionEntry, {
-    provider: providerUsed,
-    model: modelUsed,
-  });
-  prepared.cronSession.sessionEntry.contextTokens = contextTokens;
-  if (isCliProvider(providerUsed, prepared.cfgWithAgentDefaults)) {
-    const cliSessionId = finalRunResult.meta?.agentMeta?.sessionId?.trim();
-    if (finalRunResult.meta?.agentMeta?.clearCliSessionBinding === true) {
-      const { clearCliSession } = await loadCliRunnerRuntime();
-      clearCliSession(prepared.cronSession.sessionEntry, providerUsed);
-    } else if (cliSessionId) {
-      const { setCliSessionId } = await loadCliRunnerRuntime();
-      setCliSessionId(prepared.cronSession.sessionEntry, providerUsed, cliSessionId);
+  if (!abortedBeforeFinalize) {
+    setSessionRuntimeModel(prepared.cronSession.sessionEntry, {
+      provider: providerUsed,
+      model: modelUsed,
+    });
+    prepared.cronSession.sessionEntry.contextTokens = contextTokens;
+    if (isCliProvider(providerUsed, prepared.cfgWithAgentDefaults)) {
+      const cliSessionId = finalRunResult.meta?.agentMeta?.sessionId?.trim();
+      if (finalRunResult.meta?.agentMeta?.clearCliSessionBinding === true) {
+        const { clearCliSession } = await loadCliRunnerRuntime();
+        clearCliSession(prepared.cronSession.sessionEntry, providerUsed);
+      } else if (cliSessionId) {
+        const { setCliSessionId } = await loadCliRunnerRuntime();
+        setCliSessionId(prepared.cronSession.sessionEntry, providerUsed, cliSessionId);
+      }
     }
   }
   if (hasNonzeroUsage(usage)) {
@@ -1475,15 +1482,6 @@ export async function runCronIsolatedAgentTurn(params: {
       runTimeoutOverrideMs: prepared.context.runTimeoutOverrideMs,
       suppressExecNotifyOnExit: prepared.context.suppressExecNotifyOnExit,
     });
-    if (isAborted()) {
-      outcome = "error";
-      outcomeError = abortReason();
-      return prepared.context.withRunSession({
-        status: "error",
-        error: abortReason(),
-        diagnostics: createCronRunDiagnosticsFromError("cron-setup", abortReason()),
-      });
-    }
     const finalized = await finalizeCronRun({
       prepared: prepared.context,
       execution,
