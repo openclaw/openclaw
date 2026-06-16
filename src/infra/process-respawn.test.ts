@@ -25,7 +25,6 @@ vi.mock("./container-environment.js", () => ({
 }));
 
 import {
-  rewritePnpmVersionedEntryPath,
   respawnGatewayProcessForUpdate,
   restartGatewayProcessWithFreshPid,
 } from "./process-respawn.js";
@@ -299,7 +298,7 @@ describe("respawnGatewayProcessForUpdate", () => {
     process.execArgv = [];
     process.argv = [
       "C:\\Program Files\\node.exe",
-      "C:\\openclaw\\dist\\index.js",
+      "C:\\openclaw\\node_modules\\.pnpm\\openclaw@2026.6.5\\node_modules\\openclaw\\dist\\index.js",
       "gateway",
       "run",
     ];
@@ -311,13 +310,57 @@ describe("respawnGatewayProcessForUpdate", () => {
     expect(result.pid).toBe(5151);
     expect(spawnMock).toHaveBeenCalledWith(
       process.execPath,
-      ["C:\\openclaw\\dist\\index.js", "gateway", "run"],
+      ["C:\\openclaw\\node_modules\\openclaw\\openclaw.mjs", "gateway", "run"],
       {
         detached: true,
         env: process.env,
         stdio: "inherit",
       },
     );
+  });
+
+  it("rewrites a pnpm-versioned OpenClaw entry before detached update respawn", () => {
+    clearSupervisorHints();
+    setPlatform("linux");
+    process.execArgv = [];
+    process.argv = [
+      "/usr/local/bin/node",
+      "/app/node_modules/.pnpm/openclaw@2026.6.5/node_modules/openclaw/dist/entry.js",
+      "gateway",
+      "run",
+    ];
+    spawnMock.mockReturnValue({ pid: 7171, unref: vi.fn(), kill: vi.fn() });
+
+    const result = respawnGatewayProcessForUpdate();
+
+    expect(result.mode).toBe("spawned");
+    expect(spawnMock).toHaveBeenCalledWith(
+      process.execPath,
+      ["/app/node_modules/openclaw/openclaw.mjs", "gateway", "run"],
+      {
+        detached: true,
+        env: process.env,
+        stdio: "inherit",
+      },
+    );
+  });
+
+  it("does not rewrite another package's pnpm-versioned entry", () => {
+    clearSupervisorHints();
+    setPlatform("linux");
+    process.execArgv = [];
+    const entry =
+      "/app/node_modules/.pnpm/@anthropic+sdk@1.0.0/node_modules/@anthropic/sdk/dist/index.js";
+    process.argv = ["/usr/local/bin/node", entry, "gateway", "run"];
+    spawnMock.mockReturnValue({ pid: 8181, unref: vi.fn(), kill: vi.fn() });
+
+    respawnGatewayProcessForUpdate();
+
+    expect(spawnMock).toHaveBeenCalledWith(process.execPath, [entry, "gateway", "run"], {
+      detached: true,
+      env: process.env,
+      stdio: "inherit",
+    });
   });
 
   it("spawns a detached update process when macOS only has inherited XPC state", () => {
@@ -368,41 +411,5 @@ describe("respawnGatewayProcessForUpdate", () => {
 
     expect(result.mode).toBe("failed");
     expect(result.detail).toContain("spawn failed");
-  });
-});
-
-describe("rewritePnpmVersionedEntryPath", () => {
-  it("rewrites unscoped pnpm versioned path to stable wrapper", () => {
-    const input =
-      "/app/node_modules/.pnpm/openclaw@2026.6.5/node_modules/openclaw/dist/entry.js";
-    expect(rewritePnpmVersionedEntryPath(input)).toBe(
-      "/app/node_modules/openclaw/openclaw.mjs",
-    );
-  });
-
-  it("rewrites scoped pnpm versioned path to stable wrapper", () => {
-    const input =
-      "/app/node_modules/.pnpm/@anthropic+sdk@1.0.0/node_modules/@anthropic/sdk/dist/index.js";
-    expect(rewritePnpmVersionedEntryPath(input)).toBe(
-      "/app/node_modules/@anthropic/sdk/openclaw.mjs",
-    );
-  });
-
-  it("returns non-pnpm paths unchanged", () => {
-    const input = "/repo/src/entry.ts";
-    expect(rewritePnpmVersionedEntryPath(input)).toBe(input);
-  });
-
-  it("returns non-pnpm node_modules paths unchanged", () => {
-    const input = "/app/node_modules/openclaw/dist/entry.js";
-    expect(rewritePnpmVersionedEntryPath(input)).toBe(input);
-  });
-
-  it("handles pnpm versioned path with additional flags in the string", () => {
-    const input =
-      "/home/user/.local/share/pnpm/global/5/node_modules/.pnpm/openclaw@2026.6.5/node_modules/openclaw/dist/entry.js";
-    expect(rewritePnpmVersionedEntryPath(input)).toBe(
-      "/home/user/.local/share/pnpm/global/5/node_modules/openclaw/openclaw.mjs",
-    );
   });
 });

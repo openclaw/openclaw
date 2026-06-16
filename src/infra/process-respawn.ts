@@ -1,6 +1,5 @@
 // Respawns the gateway process when no supervisor handles restart.
 import { spawn, type ChildProcess } from "node:child_process";
-import path from "node:path";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { isContainerEnvironment } from "./container-environment.js";
 import { formatErrorMessage } from "./errors.js";
@@ -27,44 +26,27 @@ function isTruthy(value: string | undefined): boolean {
   return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
 }
 
-const pnpmVersionedMarker = "node_modules/.pnpm/";
-const pnpmVersionedEntryPattern =
-  /^(?:@([^/+]+)\+)?([^@/]+)@[^/]+\/node_modules\/(?:@([^/]+)\/)?([^/]+)\/(.+)$/;
+const PNPM_VERSIONED_OPENCLAW_ENTRY_PATTERN =
+  /^(.*?)([\\/])node_modules\2\.pnpm\2openclaw@[^\\/]+\2node_modules\2openclaw\2.+$/;
 
-/**
- * Detects pnpm versioned realpaths (e.g. `node_modules/.pnpm/openclaw@2026.6.5/node_modules/openclaw/dist/entry.js`)
- * and rewrites them to the stable `node_modules/<pkg>/openclaw.mjs` wrapper.
- *
- * During self-update the versioned directory may be removed, causing the
- * respawned child to fail. The stable symlink/wrapper survives package updates.
- */
-export function rewritePnpmVersionedEntryPath(entryPath: string): string {
-  const markerIndex = entryPath.indexOf(pnpmVersionedMarker);
-  if (markerIndex === -1) {
-    return entryPath;
-  }
-  const prefix = entryPath.slice(0, markerIndex);
-  const afterMarker = entryPath.slice(markerIndex + pnpmVersionedMarker.length);
-  const match = afterMarker.match(pnpmVersionedEntryPattern);
-  if (!match) {
-    return entryPath;
-  }
-  const scope = match[1] ? `@${match[1]}` : "";
-  const pkgName = match[2];
-  const pkgDir = scope ? `${scope}/${pkgName}` : pkgName;
-  return path.join(prefix, "node_modules", pkgDir, "openclaw.mjs");
+function rewritePnpmVersionedOpenClawEntryPath(entryPath: string): string {
+  // pnpm can expose argv[1] as a versioned realpath that self-update removes.
+  // Respawn through the stable OpenClaw package wrapper instead.
+  return entryPath.replace(
+    PNPM_VERSIONED_OPENCLAW_ENTRY_PATTERN,
+    "$1$2node_modules$2openclaw$2openclaw.mjs",
+  );
 }
 
 function spawnDetachedGatewayProcess(opts: GatewayRespawnOptions = {}): {
   child: ChildProcess;
   pid?: number;
 } {
-  const entryArg = process.argv[1] ?? "";
-  const rewrittenEntry = rewritePnpmVersionedEntryPath(entryArg);
+  const [entryArg, ...entryArgs] = process.argv.slice(1);
   const args = [
     ...process.execArgv,
-    rewrittenEntry,
-    ...process.argv.slice(2),
+    ...(entryArg ? [rewritePnpmVersionedOpenClawEntryPath(entryArg)] : []),
+    ...entryArgs,
   ];
   const child = spawn(process.execPath, args, {
     env: opts.env ? { ...process.env, ...opts.env } : process.env,
