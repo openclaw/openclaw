@@ -29,6 +29,7 @@ const cliMocks = vi.hoisted(() => ({
 
 let createOpenShellSandboxBackendManager: typeof import("./backend.js").createOpenShellSandboxBackendManager;
 let createOpenShellSandboxBackendFactory: typeof import("./backend.js").createOpenShellSandboxBackendFactory;
+let ensureOpenShellRemoteRealDirectoryScript: typeof import("./backend.js").ENSURE_OPEN_SHELL_REMOTE_REAL_DIRECTORY_SCRIPT;
 
 describe("openshell cli helpers", () => {
   const originalEnv = { ...process.env };
@@ -170,8 +171,11 @@ describe("openshell backend manager", () => {
         runOpenShellCli: cliMocks.runOpenShellCli,
       };
     });
-    ({ createOpenShellSandboxBackendFactory, createOpenShellSandboxBackendManager } =
-      await import("./backend.js"));
+    ({
+      ENSURE_OPEN_SHELL_REMOTE_REAL_DIRECTORY_SCRIPT: ensureOpenShellRemoteRealDirectoryScript,
+      createOpenShellSandboxBackendFactory,
+      createOpenShellSandboxBackendManager,
+    } = await import("./backend.js"));
   });
 
   afterAll(() => {
@@ -182,6 +186,36 @@ describe("openshell backend manager", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
+
+  it.runIf(process.platform !== "win32")(
+    "preserves caller positional args after OpenShell remote directory validation",
+    async () => {
+      const realParent = await makeTempDir("openclaw-openshell-real-");
+      const root = path.join(realParent, "sandbox");
+      const target = path.join(root, ".openclaw", "sandbox-skills");
+
+      const result = spawnSync(
+        "/bin/sh",
+        [
+          "-c",
+          [
+            ensureOpenShellRemoteRealDirectoryScript,
+            'printf "%s\\n%s\\n" "$1" "$2"',
+            'touch "$1/proof"',
+            'find "$1" -mindepth 1 -maxdepth 1 -name proof -print',
+          ].join("\n"),
+          "openclaw-openshell-dir",
+          target,
+          root,
+        ],
+        { encoding: "utf8" },
+      );
+
+      expect(result.status).toBe(0);
+      expect(result.stderr).toBe("");
+      expect(result.stdout.trim().split("\n")).toEqual([target, root, path.join(target, "proof")]);
+    },
+  );
 
   it("checks runtime status with config override from OpenClaw config", async () => {
     cliMocks.runOpenShellCli.mockResolvedValue({
