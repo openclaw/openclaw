@@ -1864,6 +1864,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         disableBlockStreaming,
         onModelSelected,
         suppressDefaultToolProgressMessages: suppressDefaultToolProgressMessages ? true : undefined,
+        allowProgressCallbacksWhenSourceDeliverySuppressed:
+          sourceReplyDeliveryMode === "message_tool_only" && statusReactionsEnabled
+            ? true
+            : undefined,
         allowToolLifecycleWhenProgressHidden: statusReactionsEnabled ? true : undefined,
         onPartialReply: useStreaming
           ? undefined
