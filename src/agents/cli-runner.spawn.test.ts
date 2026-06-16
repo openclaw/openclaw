@@ -3623,11 +3623,13 @@ ${JSON.stringify({
   it("formats CLI auth env diagnostics as key names without secret values", () => {
     vi.stubEnv("ANTHROPIC_API_KEY", "sk-ant-host");
     vi.stubEnv("ANTHROPIC_API_TOKEN", "token-host");
+    vi.stubEnv("GEMINI_CLI_SYSTEM_SETTINGS_PATH", "/tmp/host-gemini-settings.json");
     vi.stubEnv("OPENAI_API_KEY", "sk-openai-host");
 
     const log = buildCliEnvAuthLog({
       ANTHROPIC_API_TOKEN: "token-child",
       CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: "1",
+      GEMINI_CLI_HOME: "/tmp/child-gemini-home",
       OPENAI_API_KEY: "sk-openai-child",
     });
 
@@ -3638,8 +3640,12 @@ ${JSON.stringify({
     expect(log).toMatch(/child=.*CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST/);
     expect(log).toMatch(/child=.*OPENAI_API_KEY/);
     expect(log).toMatch(/cleared=.*ANTHROPIC_API_KEY/);
+    expect(log).toMatch(/runtimeHost=.*GEMINI_CLI_SYSTEM_SETTINGS_PATH/);
+    expect(log).toMatch(/runtimeChild=.*GEMINI_CLI_HOME/);
+    expect(log).toMatch(/runtimeCleared=.*GEMINI_CLI_SYSTEM_SETTINGS_PATH/);
     expect(log).not.toContain("sk-ant-host");
     expect(log).not.toContain("token-child");
+    expect(log).not.toContain("/tmp/child-gemini-home");
     expect(log).not.toContain("sk-openai-child");
   });
 

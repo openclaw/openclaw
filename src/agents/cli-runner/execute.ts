@@ -312,6 +312,8 @@ const CLI_ENV_AUTH_LOG_KEYS = [
   "OPENROUTER_API_KEY",
 ] as const;
 
+const CLI_ENV_RUNTIME_LOG_KEYS = ["GEMINI_CLI_HOME", "GEMINI_CLI_SYSTEM_SETTINGS_PATH"] as const;
+
 const CLI_BACKEND_PRESERVE_ENV = "OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV";
 
 function parseCliBackendPreserveEnv(raw: string | undefined): Set<string> {
@@ -341,6 +343,13 @@ function parseCliBackendPreserveEnv(raw: string | undefined): Set<string> {
 
 function listPresentCliAuthEnvKeys(env: Record<string, string | undefined>): string[] {
   return CLI_ENV_AUTH_LOG_KEYS.filter((key) => {
+    const value = env[key];
+    return typeof value === "string" && value.length > 0;
+  });
+}
+
+function listPresentCliRuntimeEnvKeys(env: Record<string, string | undefined>): string[] {
+  return CLI_ENV_RUNTIME_LOG_KEYS.filter((key) => {
     const value = env[key];
     return typeof value === "string" && value.length > 0;
   });
@@ -405,10 +414,17 @@ export function buildCliEnvAuthLog(childEnv: Record<string, string>): string {
   const childKeys = listPresentCliAuthEnvKeys(childEnv);
   const childKeySet = new Set(childKeys);
   const clearedKeys = hostKeys.filter((key) => !childKeySet.has(key));
+  const runtimeHostKeys = listPresentCliRuntimeEnvKeys(process.env);
+  const runtimeChildKeys = listPresentCliRuntimeEnvKeys(childEnv);
+  const runtimeChildKeySet = new Set(runtimeChildKeys);
+  const runtimeClearedKeys = runtimeHostKeys.filter((key) => !runtimeChildKeySet.has(key));
   return [
     `host=${formatCliEnvKeyList(hostKeys)}`,
     `child=${formatCliEnvKeyList(childKeys)}`,
     `cleared=${formatCliEnvKeyList(clearedKeys)}`,
+    `runtimeHost=${formatCliEnvKeyList(runtimeHostKeys)}`,
+    `runtimeChild=${formatCliEnvKeyList(runtimeChildKeys)}`,
+    `runtimeCleared=${formatCliEnvKeyList(runtimeClearedKeys)}`,
   ].join(" ");
 }
 
