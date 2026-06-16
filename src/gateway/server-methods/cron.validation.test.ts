@@ -599,6 +599,20 @@ describe("cron method validation", () => {
     expectResponseError(respond, { messageIncludes: "belongs to telegram, not slack" });
   });
 
+  it("accepts clearing an explicit channel back to runtime last", async () => {
+    setRuntimeConfig(telegramSlackConfig());
+
+    const { context, respond } = await invokeCronUpdateDelivery(
+      { channel: null },
+      createCronJob({
+        delivery: { mode: "announce", channel: "telegram", to: "123" },
+      }),
+    );
+
+    expect(context.cron.update).toHaveBeenCalled();
+    expectCronSuccess(respond);
+  });
+
   it("accepts completion webhook delivery patches and nullable clears", async () => {
     const currentJob = createCronJob({
       delivery: { mode: "announce" },

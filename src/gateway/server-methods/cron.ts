@@ -185,9 +185,16 @@ function assertValidCronUpdatePatch(params: {
     defaultAgentId: params.defaultAgentId,
   });
   if ("delivery" in params.patch) {
+    const delivery =
+      params.patch.delivery?.channel === null &&
+      nextJob.delivery &&
+      (nextJob.delivery.mode ?? "announce") === "announce" &&
+      nextJob.delivery.channel === undefined
+        ? { ...nextJob.delivery, channel: "last" as const }
+        : nextJob.delivery;
     assertValidCronAnnounceDelivery({
       cfg: params.cfg,
-      delivery: nextJob.delivery,
+      delivery,
     });
   }
 }
