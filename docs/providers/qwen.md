@@ -134,6 +134,56 @@ Choose your plan type and follow the setup steps.
 
   </Tab>
 
+  <Tab title="Token Plan (Team Edition)">
+    **Best for:** credit-based subscription access through the Alibaba Cloud Model Studio Token Plan (Team Edition), on the OpenAI-compatible Qwen gateway.
+
+    <Steps>
+      <Step title="Get your API key">
+        Create a Token Plan (Team Edition) API key (begins `sk-sp-`) from the
+        [Token Plan console](https://www.alibabacloud.com/help/en/model-studio/token-plan-overview).
+      </Step>
+      <Step title="Run onboarding">
+        For the **Global / International** gateway (Singapore):
+
+        ```bash
+        openclaw onboard --auth-choice qwen-token-plan
+        ```
+
+        For the **China** gateway (Beijing):
+
+        ```bash
+        openclaw onboard --auth-choice qwen-token-plan-cn
+        ```
+      </Step>
+      <Step title="Set a default model">
+        ```json5
+        {
+          agents: {
+            defaults: {
+              model: { primary: "qwen-token-plan/qwen3.7-plus" },
+            },
+          },
+        }
+        ```
+      </Step>
+      <Step title="Verify the model is available">
+        ```bash
+        openclaw models list --provider qwen-token-plan
+        ```
+      </Step>
+    </Steps>
+
+    <Note>
+    The Token Plan gateway exposes both an OpenAI-compatible base
+    (`/compatible-mode/v1`) and an Anthropic-compatible base (`/apps/anthropic`).
+    This provider uses the **OpenAI-compatible** base so it shares the same
+    transport, thinking handling, and stream wrapper as the rest of the qwen
+    provider. Alibaba's reference config names the provider `bailian-token-plan`;
+    that id keeps working as a compatibility alias for `qwen-token-plan`.
+    </Note>
+
+  </Tab>
+
   <Tab title="Qwen OAuth / Portal">
     **Best for:** a Qwen Portal token against `https://portal.qwen.ai/v1`.
 
@@ -175,13 +225,15 @@ Choose your plan type and follow the setup steps.
 
 ## Plan types and endpoints
 
-| Plan                       | Region | Auth choice                | Endpoint                                         |
-| -------------------------- | ------ | -------------------------- | ------------------------------------------------ |
-| Standard (pay-as-you-go)   | China  | `qwen-standard-api-key-cn` | `dashscope.aliyuncs.com/compatible-mode/v1`      |
-| Standard (pay-as-you-go)   | Global | `qwen-standard-api-key`    | `dashscope-intl.aliyuncs.com/compatible-mode/v1` |
-| Coding Plan (subscription) | China  | `qwen-api-key-cn`          | `coding.dashscope.aliyuncs.com/v1`               |
-| Coding Plan (subscription) | Global | `qwen-api-key`             | `coding-intl.dashscope.aliyuncs.com/v1`          |
-| Qwen Portal                | Global | `qwen-oauth`               | `portal.qwen.ai/v1`                              |
+| Plan                       | Region | Auth choice                | Endpoint                                                         |
+| -------------------------- | ------ | -------------------------- | ---------------------------------------------------------------- |
+| Standard (pay-as-you-go)   | China  | `qwen-standard-api-key-cn` | `dashscope.aliyuncs.com/compatible-mode/v1`                      |
+| Standard (pay-as-you-go)   | Global | `qwen-standard-api-key`    | `dashscope-intl.aliyuncs.com/compatible-mode/v1`                 |
+| Coding Plan (subscription) | China  | `qwen-api-key-cn`          | `coding.dashscope.aliyuncs.com/v1`                               |
+| Coding Plan (subscription) | Global | `qwen-api-key`             | `coding-intl.dashscope.aliyuncs.com/v1`                          |
+| Qwen Portal                | Global | `qwen-oauth`               | `portal.qwen.ai/v1`                                              |
+| Token Plan (Team Edition)  | China  | `qwen-token-plan-cn`       | `token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1`     |
+| Token Plan (Team Edition)  | Global | `qwen-token-plan`          | `token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1` |
 
 The provider auto-selects the endpoint based on your auth choice. Canonical
 choices use the `qwen-*` family; `modelstudio-*` remains compatibility-only.
@@ -215,6 +267,14 @@ the Standard endpoint.
 Availability can still vary by endpoint and billing plan even when a model is
 present in the static catalog.
 </Note>
+
+The `qwen-token-plan` provider ships its own 12-model chat catalog (default
+`qwen-token-plan/qwen3.7-plus`), shared across both regions: `qwen3.7-max`,
+`qwen3.7-plus`, `qwen3.6-plus`, `qwen3.6-flash`, `deepseek-v4-pro`,
+`deepseek-v4-flash`, `deepseek-v3.2`, `kimi-k2.6`, `kimi-k2.5`, `glm-5.1`,
+`glm-5`, and `MiniMax-M2.5`. All carry zeroed cost because the plan bills by a
+shared Credit pool rather than per token. Image-generation models from the plan
+are intentionally excluded from this chat catalog.
 
 ## Thinking Controls
 

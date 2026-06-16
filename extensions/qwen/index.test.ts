@@ -8,6 +8,7 @@ import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-sha
 import { describe, expect, it } from "vitest";
 import { QWEN_36_PLUS_MODEL_ID, QWEN_BASE_URL } from "./api.js";
 import qwenPlugin from "./index.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { wrapQwenProviderStream } from "./stream.js";
 
 function requireCatalogProvider(result: ProviderCatalogResult): ModelProviderConfig {
@@ -67,6 +68,32 @@ describe("qwen provider plugin", () => {
     const catalogProvider = requireCatalogProvider(result);
     expect(catalogProvider.baseUrl).toBe("https://portal.qwen.ai/v1");
     expect(catalogProvider.models?.map((model) => model.id)).toContain("qwen3.5-plus");
+  });
+
+  it("registers qwen-token-plan with the bailian alias and manifest-backed auth choices", async () => {
+    const { providers } = await registerProviderPlugin({
+      plugin: qwenPlugin,
+      id: "qwen",
+      name: "Qwen Provider",
+    });
+    const provider = requireRegisteredProvider(providers, "qwen-token-plan");
+
+    expect(provider.aliases).toEqual(["bailian-token-plan"]);
+    expect(provider.envVars).toEqual(["QWEN_TOKEN_PLAN_API_KEY"]);
+    expect(provider.auth?.map((method) => method.id)).toEqual(["api-key", "api-key-cn"]);
+
+    // Every runtime auth choice needs a manifest providerAuthChoices entry, else
+    // the interactive onboarding picker (manifest-driven) cannot list it.
+    const runtimeChoiceIds = (provider.auth ?? [])
+      .map((method) => method.wizard?.choiceId)
+      .filter((id): id is string => typeof id === "string")
+      .toSorted();
+    const manifestChoiceIds = manifest.providerAuthChoices
+      .filter((choice) => choice.provider === "qwen-token-plan")
+      .map((choice) => choice.choiceId)
+      .toSorted();
+    expect(runtimeChoiceIds).toEqual(["qwen-token-plan", "qwen-token-plan-cn"]);
+    expect(manifestChoiceIds).toEqual(runtimeChoiceIds);
   });
 
   it("reuses legacy qwen portal auth profiles for qwen-oauth catalog", async () => {

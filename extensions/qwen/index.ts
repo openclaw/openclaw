@@ -4,6 +4,8 @@ import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-en
 import { applyQwenNativeStreamingUsageCompat } from "./api.js";
 import { buildQwenMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import {
+  QWEN_TOKEN_PLAN_DEFAULT_MODEL_REF,
+  QWEN_TOKEN_PLAN_PROVIDER_ID,
   isQwenCodingPlanBaseUrl,
   QWEN_36_PLUS_MODEL_ID,
   QWEN_BASE_URL,
@@ -12,13 +14,18 @@ import {
   QWEN_OAUTH_PROVIDER_ID,
 } from "./models.js";
 import {
+  applyQwenTokenPlanConfig,
   applyQwenConfig,
   applyQwenConfigCn,
   applyQwenOAuthConfig,
   applyQwenStandardConfig,
   applyQwenStandardConfigCn,
 } from "./onboard.js";
-import { buildQwenOAuthProvider, buildQwenProvider } from "./provider-catalog.js";
+import {
+  buildQwenTokenPlanProvider,
+  buildQwenOAuthProvider,
+  buildQwenProvider,
+} from "./provider-catalog.js";
 import { wrapQwenProviderStream } from "./stream.js";
 import { buildQwenVideoGenerationProvider } from "./video-generation-provider.js";
 
@@ -48,6 +55,41 @@ function resolveConfiguredQwenBaseUrl(
     }
   }
   return undefined;
+}
+
+function resolveConfiguredQwenTokenPlanBaseUrl(
+  config: { models?: { providers?: Record<string, { baseUrl?: string } | undefined> } } | undefined,
+): string | undefined {
+  const baseUrl = config?.models?.providers?.[QWEN_TOKEN_PLAN_PROVIDER_ID]?.baseUrl?.trim();
+  return baseUrl || undefined;
+}
+
+function createQwenTokenPlanAuthMethod(region: "global" | "cn") {
+  const isCn = region === "cn";
+  const regionLabel = isCn ? "China" : "Global/Intl";
+  const host = isCn
+    ? "token-plan.cn-beijing.maas.aliyuncs.com"
+    : "token-plan.ap-southeast-1.maas.aliyuncs.com";
+  return createProviderApiKeyAuthMethod({
+    providerId: QWEN_TOKEN_PLAN_PROVIDER_ID,
+    methodId: isCn ? "api-key-cn" : "api-key",
+    label: `Qwen Token Plan API Key for ${regionLabel} (subscription)`,
+    hint: `Endpoint: ${host}`,
+    optionKey: isCn ? "qwenTokenPlanApiKeyCn" : "qwenTokenPlanApiKey",
+    flagName: isCn ? "--qwen-token-plan-api-key-cn" : "--qwen-token-plan-api-key",
+    envVar: "QWEN_TOKEN_PLAN_API_KEY",
+    promptMessage: `Enter Alibaba Qwen Token Plan API key (${regionLabel}, sk-sp-...)`,
+    defaultModel: QWEN_TOKEN_PLAN_DEFAULT_MODEL_REF,
+    applyConfig: (cfg) => applyQwenTokenPlanConfig(cfg, region),
+    wizard: {
+      choiceId: isCn ? "qwen-token-plan-cn" : "qwen-token-plan",
+      choiceLabel: `Qwen Token Plan (${regionLabel})`,
+      choiceHint: `Endpoint: ${host}`,
+      groupId: "qwen",
+      groupLabel: "Qwen Cloud",
+      groupHint: "Standard / Coding Plan / Token Plan / OAuth",
+    },
+  });
 }
 
 export default defineSingleProviderPluginEntry({
@@ -233,6 +275,39 @@ export default defineSingleProviderPluginEntry({
         order: "simple",
         run: async () => ({
           provider: buildQwenOAuthProvider(),
+        }),
+      },
+      wrapStreamFn: wrapQwenProviderStream,
+    });
+    api.registerProvider({
+      id: QWEN_TOKEN_PLAN_PROVIDER_ID,
+      label: "Qwen Token Plan",
+      docsPath: "/providers/qwen",
+      // Alibaba's recommended OpenClaw config names this provider
+      // `bailian-token-plan`; keep it as an alias so that config resolves.
+      aliases: ["bailian-token-plan"],
+      envVars: ["QWEN_TOKEN_PLAN_API_KEY"],
+      auth: [createQwenTokenPlanAuthMethod("global"), createQwenTokenPlanAuthMethod("cn")],
+      catalog: {
+        order: "simple",
+        run: async (ctx) => {
+          const apiKey = ctx.resolveProviderApiKey(QWEN_TOKEN_PLAN_PROVIDER_ID).apiKey;
+          if (!apiKey) {
+            return null;
+          }
+          const baseUrl = resolveConfiguredQwenTokenPlanBaseUrl(ctx.config);
+          return {
+            provider: {
+              ...buildQwenTokenPlanProvider({ baseUrl }),
+              apiKey,
+            },
+          };
+        },
+      },
+      staticCatalog: {
+        order: "simple",
+        run: async () => ({
+          provider: buildQwenTokenPlanProvider(),
         }),
       },
       wrapStreamFn: wrapQwenProviderStream,

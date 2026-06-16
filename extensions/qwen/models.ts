@@ -28,6 +28,151 @@ export const QWEN_DEFAULT_COST = {
 export const QWEN_DEFAULT_MODEL_REF = `qwen/${QWEN_DEFAULT_MODEL_ID}`;
 export const QWEN_OAUTH_DEFAULT_MODEL_REF = `qwen-oauth/${QWEN_DEFAULT_MODEL_ID}`;
 
+// ── Alibaba Qwen Token Plan (Team Edition) ──────────────────────────────
+// A credit-based subscription surface, distinct from the Coding Plan / Standard
+// dashscope endpoints above. Modelled on the OpenAI-compatible gateway
+// (`/compatible-mode/v1`, api `openai-completions`) so it reuses the rest of the
+// qwen provider's transport + thinking handling (enable_thinking injection via
+// the shared stream wrapper, reasoning_content parsing). The model set is
+// identical across regions; only the gateway host differs (Singapore for
+// International, Beijing for CN), so region is a base-URL swap, not a new catalog.
+export const QWEN_TOKEN_PLAN_PROVIDER_ID = "qwen-token-plan";
+export const QWEN_TOKEN_PLAN_GLOBAL_BASE_URL =
+  "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1";
+export const QWEN_TOKEN_PLAN_CN_BASE_URL =
+  "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1";
+
+const QWEN_TOKEN_PLAN_BASE_URLS = {
+  global: QWEN_TOKEN_PLAN_GLOBAL_BASE_URL,
+  cn: QWEN_TOKEN_PLAN_CN_BASE_URL,
+} as const;
+
+export type QwenTokenPlanRegion = keyof typeof QWEN_TOKEN_PLAN_BASE_URLS;
+
+export function resolveQwenTokenPlanBaseUrl(region: QwenTokenPlanRegion): string {
+  return QWEN_TOKEN_PLAN_BASE_URLS[region];
+}
+
+export const QWEN_TOKEN_PLAN_DEFAULT_MODEL_ID = "qwen3.7-plus";
+export const QWEN_TOKEN_PLAN_DEFAULT_MODEL_REF = `${QWEN_TOKEN_PLAN_PROVIDER_ID}/${QWEN_TOKEN_PLAN_DEFAULT_MODEL_ID}`;
+
+// All token-plan models are reasoning-capable (verified live against the gateway
+// 2026-06-15 — every model, incl. glm, returns reasoning_content). `reasoning: true`
+// lets OpenClaw manage thinking (budget, effort, on/off per request); the gateway
+// emits thinking by default regardless. thinkingFormat is left to auto-detection,
+// which resolves to "openai" for Qwen/ModelStudio (same as the rest of this plugin).
+// Credit-based plan, so all per-token costs are zeroed.
+export const QWEN_TOKEN_PLAN_MODEL_CATALOG: ReadonlyArray<ModelDefinitionConfig> = [
+  {
+    id: "qwen3.7-max",
+    name: "qwen3.7-max",
+    reasoning: true,
+    input: ["text"],
+    cost: QWEN_DEFAULT_COST,
+    contextWindow: 1_000_000,
+    maxTokens: 65_536,
+  },
+  {
+    id: "qwen3.7-plus",
+    name: "qwen3.7-plus",
+    reasoning: true,
+    input: ["text", "image"],
+    cost: QWEN_DEFAULT_COST,
+    contextWindow: 1_000_000,
+    maxTokens: 65_536,
+  },
+  {
+    id: "qwen3.6-plus",
+    name: "qwen3.6-plus",
+    reasoning: true,
+    input: ["text", "image"],
+    cost: QWEN_DEFAULT_COST,
+    contextWindow: 1_000_000,
+    maxTokens: 65_536,
+  },
+  {
+    id: "qwen3.6-flash",
+    name: "qwen3.6-flash",
+    reasoning: true,
+    input: ["text", "image"],
+    cost: QWEN_DEFAULT_COST,
+    contextWindow: 1_000_000,
+    maxTokens: 32_768,
+  },
+  {
+    id: "deepseek-v4-pro",
+    name: "deepseek-v4-pro",
+    reasoning: true,
+    input: ["text"],
+    cost: QWEN_DEFAULT_COST,
+    contextWindow: 163_840,
+    maxTokens: 32_768,
+  },
+  {
+    id: "deepseek-v4-flash",
+    name: "deepseek-v4-flash",
+    reasoning: true,
+    input: ["text"],
+    cost: QWEN_DEFAULT_COST,
+    contextWindow: 163_840,
+    maxTokens: 16_384,
+  },
+  {
+    id: "deepseek-v3.2",
+    name: "deepseek-v3.2",
+    reasoning: true,
+    input: ["text"],
+    cost: QWEN_DEFAULT_COST,
+    contextWindow: 163_840,
+    maxTokens: 16_384,
+  },
+  {
+    id: "kimi-k2.6",
+    name: "kimi-k2.6",
+    reasoning: true,
+    input: ["text", "image"],
+    cost: QWEN_DEFAULT_COST,
+    contextWindow: 262_144,
+    maxTokens: 32_768,
+  },
+  {
+    id: "kimi-k2.5",
+    name: "kimi-k2.5",
+    reasoning: true,
+    input: ["text", "image"],
+    cost: QWEN_DEFAULT_COST,
+    contextWindow: 262_144,
+    maxTokens: 16_384,
+  },
+  {
+    id: "glm-5.1",
+    name: "glm-5.1",
+    reasoning: true,
+    input: ["text"],
+    cost: QWEN_DEFAULT_COST,
+    contextWindow: 202_752,
+    maxTokens: 16_384,
+  },
+  {
+    id: "glm-5",
+    name: "glm-5",
+    reasoning: true,
+    input: ["text"],
+    cost: QWEN_DEFAULT_COST,
+    contextWindow: 202_752,
+    maxTokens: 16_384,
+  },
+  {
+    id: "MiniMax-M2.5",
+    name: "MiniMax-M2.5",
+    reasoning: true,
+    input: ["text"],
+    cost: QWEN_DEFAULT_COST,
+    contextWindow: 204_800,
+    maxTokens: 131_072,
+  },
+];
+
 export const QWEN_MODEL_CATALOG: ReadonlyArray<ModelDefinitionConfig> = [
   {
     id: "qwen3.5-plus",
