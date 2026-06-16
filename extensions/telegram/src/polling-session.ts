@@ -755,10 +755,21 @@ export class TelegramPollingSession {
     });
   }
 
+  #activeSpooledUpdateHandlerKeysForSpool(spoolDir: string): Set<string> {
+    const handlerKeys = new Set<string>();
+    for (const handlerKey of activeSpooledUpdateHandlersByLane.keys()) {
+      if (isSpooledUpdateHandlerKeyForSpool(handlerKey, spoolDir)) {
+        handlerKeys.add(handlerKey);
+      }
+    }
+    return handlerKeys;
+  }
+
   #activeSpooledUpdateLaneKeysForSpool(spoolDir: string): Set<string> {
     const laneKeys = new Set<string>();
-    for (const [handlerKey, handler] of activeSpooledUpdateHandlersByLane) {
-      if (isSpooledUpdateHandlerKeyForSpool(handlerKey, spoolDir)) {
+    for (const handlerKey of this.#activeSpooledUpdateHandlerKeysForSpool(spoolDir)) {
+      const handler = activeSpooledUpdateHandlersByLane.get(handlerKey);
+      if (handler) {
         laneKeys.add(handler.laneKey);
       }
     }
@@ -1119,12 +1130,9 @@ export class TelegramPollingSession {
             this.#status.notePollingError(handler.timeoutMessage);
           }
         }
-        // blockedByLane only carries handlers that have a later same-lane update
-        // queued behind them. A lone active handler with no backlog still needs
-        // timeout recovery, so union this session's own active handler keys into
-        // the candidate set (detection re-checks age/timedOutAt, so non-timed-out
-        // handlers stay no-ops) — otherwise a stuck lone handler never recovers (#84158).
-        const timeoutCandidateHandlerKeys = new Set<string>(this.#spooledUpdateHandlerKeys);
+        // Active handlers can outlive their owning session after shutdown grace.
+        // Recover every handler for this spool, including lone handlers with no backlog.
+        const timeoutCandidateHandlerKeys = this.#activeSpooledUpdateHandlerKeysForSpool(spoolDir);
         for (const handlerKey of drain.blockedByLane) {
           timeoutCandidateHandlerKeys.add(handlerKey);
         }

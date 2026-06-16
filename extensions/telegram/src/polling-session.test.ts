@@ -1808,47 +1808,97 @@ describe("TelegramPollingSession", () => {
     });
   });
 
-  it("recovers a lone active spooled handler that times out with no same-lane backlog (#84158)", async () => {
-    await withTempSpool(async (tempDir) => {
-      const abort = new AbortController();
-      const log = vi.fn();
-      const events: string[] = [];
-      let releaseLoneTurn: (() => void) | undefined;
-      const loneTurnDone = new Promise<void>((resolve) => {
-        releaseLoneTurn = resolve;
+  it("recovers a lone active spooled handler owned by a replaced session (#84158)", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const firstAbort = new AbortController();
+    const secondAbort = new AbortController();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-spool-"));
+    const log = vi.fn();
+    let releaseTurn: (() => void) | undefined;
+    const turnDone = new Promise<void>((resolve) => {
+      releaseTurn = resolve;
+    });
+    const handleUpdate = vi.fn(async () => {
+      await turnDone;
+    });
+    createTelegramBotMock.mockImplementation(() => ({
+      api: {
+        deleteWebhook: vi.fn(async () => true),
+        config: { use: vi.fn() },
+      },
+      init: vi.fn(async () => undefined),
+      handleUpdate,
+      stop: vi.fn(async () => undefined),
+    }));
+    await writeSpooledTestUpdates(tempDir, [topicUpdate(42, 10, "lone active topic turn")]);
+    const createWorker = vi.fn(() => {
+      let stopWorker: (() => void) | undefined;
+      const workerDone = new Promise<void>((resolve) => {
+        stopWorker = resolve;
       });
-      // A single spooled update with nothing queued behind it: the handler stays
-      // active but never lands in drain.blockedByLane, so timeout recovery keyed
-      // only on blockedByLane (the previous behavior) never evaluated it.
-      await writeSpooledTestUpdates(tempDir, [topicUpdate(42, 10, "lone active topic turn")]);
+      return {
+        onMessage: vi.fn(() => () => undefined),
+        stop: vi.fn(async () => {
+          stopWorker?.();
+        }),
+        task: vi.fn(async () => {
+          await workerDone;
+        }),
+      };
+    });
 
-      const { runPromise, stopWorker } = startIsolatedIngressSession({
-        abort,
-        spoolDir: tempDir,
+    try {
+      const firstSession = createPollingSession({
+        abortSignal: firstAbort.signal,
         log,
-        drainIntervalMs: 10,
-        spooledUpdateHandlerTimeoutMs: 20,
-        spooledUpdateHandlerAbortGraceMs: 10,
-        handleUpdate: async (update) => {
-          if (update.update_id === 42) {
-            events.push("topic10:start");
-            await loneTurnDone;
-            events.push("topic10:end");
-          }
+        isolatedIngress: {
+          enabled: true,
+          spoolDir: tempDir,
+          createWorker,
+          drainIntervalMs: 100,
+          spooledUpdateHandlerTimeoutMs: 100,
+          spooledUpdateHandlerAbortGraceMs: 5_000,
         },
       });
+      const firstRunPromise = firstSession.runUntilAbort();
+      await vi.waitFor(() => expect(handleUpdate).toHaveBeenCalledTimes(1));
+      firstAbort.abort();
+      await vi.advanceTimersByTimeAsync(16_000);
+      await firstRunPromise;
 
-      // Once the lone handler exceeds its timeout, recovery must fail the stuck
-      // update even though no later same-lane update is blocked behind it.
-      await vi.waitFor(() => expect(events).toEqual(["topic10:start"]));
+      const secondSession = createPollingSession({
+        abortSignal: secondAbort.signal,
+        log,
+        isolatedIngress: {
+          enabled: true,
+          spoolDir: tempDir,
+          createWorker,
+          drainIntervalMs: 100,
+          spooledUpdateHandlerTimeoutMs: 100,
+          spooledUpdateHandlerAbortGraceMs: 5_000,
+        },
+      });
+      const secondRunPromise = secondSession.runUntilAbort();
+
+      await vi.advanceTimersByTimeAsync(1_000);
       await vi.waitFor(async () => expect(await failedUpdateIds(tempDir)).toEqual([42]));
+      expect(log.mock.calls).toEqual(
+        expect.arrayContaining([
+          [expect.stringContaining("timed out spooled update 42 did not stop")],
+        ]),
+      );
+      expect(handleUpdate).toHaveBeenCalledTimes(1);
 
-      releaseLoneTurn?.();
-      abort.abort();
-      await runPromise;
-      releaseLoneTurn?.();
-      stopWorker();
-    });
+      secondAbort.abort();
+      await vi.advanceTimersByTimeAsync(20_000);
+      await secondRunPromise;
+    } finally {
+      releaseTurn?.();
+      firstAbort.abort();
+      secondAbort.abort();
+      vi.useRealTimers();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("lets isolated ingress drain interleave different Telegram topic lanes", async () => {
