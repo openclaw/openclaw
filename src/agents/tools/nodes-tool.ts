@@ -98,7 +98,7 @@ const NodesToolSchema = Type.Object({
   sound: Type.Optional(Type.String()),
   priority: optionalStringEnum(NOTIFY_PRIORITIES),
   delivery: optionalStringEnum(NOTIFY_DELIVERIES),
-  // camera_snap / camera_clip
+  // camera_snap / camera_clip / photos_latest / screen_snapshot
   facing: optionalStringEnum(CAMERA_FACING, {
     description: "camera_snap: front/back/both; camera_clip: front/back only.",
   }),

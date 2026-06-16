@@ -407,14 +407,19 @@ async function executeScreenSnapshot({
   const node = requireString(params, "node");
   const nodeId = await resolveNodeId(gatewayOpts, node);
   const screenIndex = readNonNegativeIntegerParam(params, "screenIndex") ?? 0;
+  const maxWidth = readPositiveIntegerParam(params, "maxWidth");
   const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", gatewayOpts, {
     nodeId,
     command: "screen.snapshot",
-    params: { screenIndex },
+    params: { screenIndex, maxWidth },
     idempotencyKey: crypto.randomUUID(),
   });
   const payload = parseScreenSnapshotPayload(raw?.payload);
-  const ext = `.${payload.format || "png"}`;
+  const normalizedFormat = normalizeLowercaseStringOrEmpty(payload.format);
+  if (normalizedFormat !== "jpg" && normalizedFormat !== "jpeg" && normalizedFormat !== "png") {
+    throw new Error(`unsupported screen.snapshot format: ${payload.format}`);
+  }
+  const ext = normalizedFormat === "png" ? "png" : "jpg";
   const filePath =
     typeof params.outPath === "string" && params.outPath.trim()
       ? params.outPath.trim()

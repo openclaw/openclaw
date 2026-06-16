@@ -135,6 +135,9 @@ describe("createNodesTool screen_record duration guardrails", () => {
     nodeUtilsMocks.resolveNode.mockClear();
     screenMocks.parseScreenRecordPayload.mockClear();
     screenMocks.writeScreenRecordToFile.mockClear();
+    screenMocks.parseScreenSnapshotPayload.mockClear();
+    screenMocks.screenSnapshotTempPath.mockClear();
+    screenMocks.writeScreenSnapshotToFile.mockClear();
     nodesCameraMocks.cameraTempPath.mockClear();
     nodesCameraMocks.parseCameraSnapPayload.mockClear();
     nodesCameraMocks.writeCameraPayloadToFile.mockClear();
@@ -270,23 +273,61 @@ describe("createNodesTool screen_record duration guardrails", () => {
     expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
   });
 
-  it("invokes screen.snapshot with screenIndex and returns file path", async () => {
+  it("invokes screen.snapshot with validated params and returns file details", async () => {
     gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
     const tool = createNodesTool();
 
-    await tool.execute("call-snapshot", {
+    const result = await tool.execute("call-snapshot", {
       action: "screen_snapshot",
       node: "macbook",
       screenIndex: 1,
+      maxWidth: "1200",
     });
 
     expect(gatewayMocks.callGatewayTool).toHaveBeenCalledTimes(1);
     const call = gatewayMocks.callGatewayTool.mock.calls[0] as
-      | [string, unknown, { command?: string; params?: { screenIndex?: unknown } }]
+      | [
+          string,
+          unknown,
+          { command?: string; params?: { screenIndex?: unknown; maxWidth?: unknown } },
+        ]
       | undefined;
     expect(call?.[0]).toBe("node.invoke");
     expect(call?.[2].command).toBe("screen.snapshot");
-    expect(call?.[2].params?.screenIndex).toBe(1);
+    expect(call?.[2].params).toEqual({ screenIndex: 1, maxWidth: 1200 });
+    expect(screenMocks.parseScreenSnapshotPayload).toHaveBeenCalledWith({ ok: true });
+    expect(screenMocks.screenSnapshotTempPath).toHaveBeenCalledWith({ ext: "png" });
+    expect(screenMocks.writeScreenSnapshotToFile).toHaveBeenCalledWith(
+      "/tmp/screen-snapshot.png",
+      "ZmFrZQ==",
+    );
+    expect(result).toEqual({
+      content: [{ type: "text", text: "FILE:/tmp/screen-snapshot.png" }],
+      details: {
+        path: "/tmp/screen-snapshot.png",
+        format: "png",
+        screenIndex: 0,
+        width: 1920,
+        height: 1080,
+      },
+    });
+  });
+
+  it("rejects unsupported screen.snapshot response formats before writing", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
+    screenMocks.parseScreenSnapshotPayload.mockReturnValueOnce({
+      base64: "ZmFrZQ==",
+      format: "webp",
+    });
+    const tool = createNodesTool();
+
+    await expect(
+      tool.execute("call-snapshot", {
+        action: "screen_snapshot",
+        node: "macbook",
+      }),
+    ).rejects.toThrow("unsupported screen.snapshot format: webp");
+    expect(screenMocks.writeScreenSnapshotToFile).not.toHaveBeenCalled();
   });
 
   it("rejects the removed run action", async () => {
@@ -418,6 +459,8 @@ describe("createNodesTool screen_record duration guardrails", () => {
     ["photos_latest", { quality: -0.1 }, "quality must be between 0 and 1"],
     ["screen_record", { fps: 0 }, "fps must be greater than 0"],
     ["screen_record", { screenIndex: 1.5 }, "screenIndex must be a non-negative integer"],
+    ["screen_snapshot", { maxWidth: 0 }, "maxWidth must be a positive integer"],
+    ["screen_snapshot", { screenIndex: -1 }, "screenIndex must be a non-negative integer"],
   ])("rejects invalid %s numeric params %s", async (action, params, message) => {
     const tool = createNodesTool();
 
@@ -589,6 +632,38 @@ describe("createNodesTool screen_record duration guardrails", () => {
       }),
     ).rejects.toThrow(
       'invokeCommand "file.fetch" enforces a path-allowlist policy and cannot be invoked via the generic nodes.invoke surface; use the dedicated file-transfer tool "file_fetch"',
+    );
+  });
+
+  it("blocks raw screen.snapshot invoke to prevent base64 context bloat", async () => {
+    const tool = createNodesTool();
+
+    await expect(
+      tool.execute("call-1", {
+        action: "invoke",
+        node: "macbook",
+        invokeCommand: "screen.snapshot",
+      }),
+    ).rejects.toThrow('use action="screen_snapshot"');
+    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("preserves explicitly enabled raw screen.snapshot invoke", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({
+      payload: { format: "png", base64: "ZmFrZQ==" },
+    });
+    const tool = createNodesTool({ allowMediaInvokeCommands: true });
+
+    await tool.execute("call-1", {
+      action: "invoke",
+      node: "macbook",
+      invokeCommand: "screen.snapshot",
+    });
+
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
+      "node.invoke",
+      {},
+      expect.objectContaining({ command: "screen.snapshot" }),
     );
   });
 
