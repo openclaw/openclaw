@@ -16,6 +16,15 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
 - Watch one parent run plus compact child summaries. Avoid broad `gh run view` polling loops; REST quota is easy to burn.
 - Fetch logs only for failed or currently-blocking jobs. If quota is low, stop polling and wait for reset.
 - Treat live-provider flakes separately from code failures: prove key validity, provider HTTP status, retry evidence, and exact failing lane before editing code.
+- Anthropic release lanes support both API keys and OAuth. When API keys are
+  exhausted but a maintainer-owned OAuth token passes a live Anthropic probe,
+  set `ANTHROPIC_OAUTH_TOKEN` for provider/runtime lanes and
+  refreshable `OPENCLAW_CLAUDE_CREDENTIALS_JSON` or
+  `CLAUDE_CODE_OAUTH_TOKEN` for Claude CLI subscription lanes before rerunning
+  the matrix. Revalidate short-lived OAuth immediately before dispatch. Never
+  keep retrying a known exhausted API key. Live-cache validation must prefer
+  the proven OAuth token instead of leaving an exhausted API key first in the
+  runtime key pool.
 - Full Release Validation parent monitors fail fast: once a required child job
   fails, the parent cancels the remaining child matrix and prints the failed
   job summary. Inspect that first red job instead of waiting for unrelated
@@ -36,6 +45,8 @@ git rev-parse HEAD
 preflight. Inject those exact targeted keys first, then run the verifier; use
 ambient env only when it was already intentionally injected for this release.
 The script prints only provider status and HTTP class, never tokens.
+For Anthropic it prefers `ANTHROPIC_OAUTH_TOKEN` and validates it with bearer
+OAuth headers when present; otherwise it checks API-key-shaped credentials.
 
 ## Dispatch
 
@@ -114,6 +125,10 @@ Stop watchers before ending the turn or switching strategy.
    ```
 3. Fetch one failed job log. If rate-limited, note reset time and avoid more REST calls.
 4. For secret-looking failures, validate the provider endpoint from the same secret source before editing code.
+   For Docker CLI-backend failures, also validate
+   `OPENCLAW_CLAUDE_CREDENTIALS_JSON` or `CLAUDE_CODE_OAUTH_TOKEN` in a
+   clean-home Claude CLI probe; that lane should use subscription mode when
+   either credential exists.
 5. For live-cache failures, inspect whether it is missing/invalid key, empty text, provider refusal, timeout, or baseline miss. Do not weaken release gates without clear provider evidence.
 6. Fix narrowly, run local/changed proof, commit, push, rerun the smallest matching group.
 

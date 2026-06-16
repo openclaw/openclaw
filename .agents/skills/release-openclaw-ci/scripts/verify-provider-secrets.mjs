@@ -42,7 +42,7 @@ async function checkProvider(id, config) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const headers = config.headers(secret.value);
+    const headers = config.headers(secret);
     const response = await fetch(config.url, {
       headers,
       signal: controller.signal,
@@ -69,25 +69,32 @@ const providers = {
   openai: {
     env: ["OPENAI_API_KEY"],
     url: "https://api.openai.com/v1/models",
-    headers: (token) => ({ authorization: `Bearer ${token}` }),
+    headers: ({ value }) => ({ authorization: `Bearer ${value}` }),
   },
   anthropic: {
-    env: ["ANTHROPIC_API_KEY", "ANTHROPIC_API_TOKEN"],
+    env: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_API_TOKEN"],
     url: "https://api.anthropic.com/v1/models",
-    headers: (token) => ({
-      "anthropic-version": "2023-06-01",
-      "x-api-key": token,
-    }),
+    headers: ({ name, value }) =>
+      name === "ANTHROPIC_OAUTH_TOKEN"
+        ? {
+            "anthropic-beta": "oauth-2025-04-20",
+            "anthropic-version": "2023-06-01",
+            authorization: `Bearer ${value}`,
+          }
+        : {
+            "anthropic-version": "2023-06-01",
+            "x-api-key": value,
+          },
   },
   fireworks: {
     env: ["FIREWORKS_API_KEY"],
     url: "https://api.fireworks.ai/inference/v1/models",
-    headers: (token) => ({ authorization: `Bearer ${token}` }),
+    headers: ({ value }) => ({ authorization: `Bearer ${value}` }),
   },
   openrouter: {
     env: ["OPENROUTER_API_KEY"],
     url: "https://openrouter.ai/api/v1/models",
-    headers: (token) => ({ authorization: `Bearer ${token}` }),
+    headers: ({ value }) => ({ authorization: `Bearer ${value}` }),
   },
 };
 

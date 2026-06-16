@@ -26,6 +26,14 @@ const mockMessage = {
   timestamp: "123",
 } as unknown as Parameters<MaybeCreateDiscordAutoThreadFn>[0]["message"];
 
+function createMockMessage(overrides: Record<string, unknown>) {
+  return Object.assign(
+    {},
+    mockMessage,
+    overrides,
+  ) as Parameters<MaybeCreateDiscordAutoThreadFn>[0]["message"];
+}
+
 function createBaseParams(
   overrides: Partial<Parameters<MaybeCreateDiscordAutoThreadFn>[0]> = {},
 ): Parameters<MaybeCreateDiscordAutoThreadFn>[0] {
@@ -144,10 +152,9 @@ describe("maybeCreateDiscordAutoThread", () => {
     getMock.mockResolvedValueOnce({ thread: { id: "existing-thread" } });
     const result = await maybeCreateDiscordAutoThread(
       createBaseParams({
-        message: {
-          ...mockMessage,
+        message: createMockMessage({
           author: { bot: true },
-        } as Parameters<MaybeCreateDiscordAutoThreadFn>[0]["message"],
+        }),
       }),
     );
 
@@ -159,10 +166,9 @@ describe("maybeCreateDiscordAutoThread", () => {
     getMock.mockResolvedValueOnce({});
     const result = await maybeCreateDiscordAutoThread(
       createBaseParams({
-        message: {
-          ...mockMessage,
+        message: createMockMessage({
           author: { bot: true },
-        } as Parameters<MaybeCreateDiscordAutoThreadFn>[0]["message"],
+        }),
       }),
     );
 

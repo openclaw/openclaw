@@ -421,7 +421,13 @@ export function createSkillUploadStore(options?: {
                 if (record) {
                   await removeRecordFiles(rootDir, record);
                 } else {
+                  // Mirror removeRecordFiles for the corrupt/missing-metadata branch.
+                  // The idempotency pointer still references this now-deleted upload,
+                  // so drop it too. Otherwise, if the active-upload cap throws below
+                  // before the pointer is rewritten, it strands an orphan idempotency
+                  // file pointing at a ghost uploadId.
                   await removeUploadDir(rootDir, existingUploadId);
+                  await fs.rm(resolveIdempotencyPath(rootDir, keyHash), { force: true });
                 }
                 return null;
               },

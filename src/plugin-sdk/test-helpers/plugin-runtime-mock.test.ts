@@ -28,7 +28,7 @@ describe("createPluginRuntimeMock", () => {
       rawText: "hello",
     }));
     const events: string[] = [];
-    const recordInboundSession = vi.fn(() => {
+    const recordInboundSession = vi.fn(async () => {
       events.push("record");
     });
     const afterRecord = vi.fn(() => {
