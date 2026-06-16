@@ -280,6 +280,7 @@ export function rewriteTranscriptEntriesInState(params: {
 
   const originalLeafId = params.state.getLeafId();
   const originalAppendParentId = params.state.getAppendParentId();
+  const originalAppendMode = params.state.getAppendMode();
   const activeBranch = params.state.getBranch();
   const allEntries = params.state.getEntries();
   let branch = activeBranch;
@@ -423,6 +424,7 @@ export function rewriteTranscriptEntriesInState(params: {
       params.state.appendLeafControl({
         targetId: originalLeafId,
         appendParentId: originalAppendParentId,
+        ...(originalAppendMode ? { appendMode: originalAppendMode } : {}),
       }),
     );
   }

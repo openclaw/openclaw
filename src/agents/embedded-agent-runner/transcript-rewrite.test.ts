@@ -434,6 +434,8 @@ describe("rewriteTranscriptEntriesInSessionFile", () => {
           parentId: "side-mirror",
           timestamp: "2026-06-15T00:00:03.000Z",
           targetId: "active-root",
+          appendParentId: "side-mirror",
+          appendMode: "side",
         },
       ]
         .map((entry) => JSON.stringify(entry))
@@ -470,6 +472,8 @@ describe("rewriteTranscriptEntriesInSessionFile", () => {
             id?: string;
             parentId?: string | null;
             targetId?: string | null;
+            appendParentId?: string | null;
+            appendMode?: "side";
             message?: AgentMessage;
           },
       );
@@ -483,6 +487,8 @@ describe("rewriteTranscriptEntriesInSessionFile", () => {
       type: "leaf",
       parentId: rewrittenSideEntry?.id,
       targetId: "active-root",
+      appendParentId: "side-mirror",
+      appendMode: "side",
     });
 
     const reopened = SessionManager.open(sessionFile, dir, dir);
@@ -491,6 +497,7 @@ describe("rewriteTranscriptEntriesInSessionFile", () => {
       asAppendMessage({ role: "user", content: "active continuation", timestamp: 3 }),
     );
     expect(reopened.getEntry(nextId)).toMatchObject({ parentId: "active-root" });
+    expect(reopened.getEntry(nextId)).not.toHaveProperty("appendMode");
   });
 
   it("rejects a rewrite batch split across active and side branches", async () => {

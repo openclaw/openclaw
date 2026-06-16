@@ -32,6 +32,7 @@ type ForkSourceTranscript = {
   sessionDir: string;
   leafId: string | null;
   appendParentId: string | null;
+  appendMode?: "side";
   preserveLeafControl: boolean;
   branchEntries: unknown[];
   labelsToWrite: Array<{ targetId: string; label: string; timestamp: string }>;
@@ -201,12 +202,14 @@ async function readForkSourceTranscript(
       isRecord(entry) && typeof entry.id === "string" ? [entry.id] : [],
     ),
   );
-  const lastLeafUpdateEntry = tree.nodes.findLast((node) => node.leafId !== undefined)?.entry;
+  const lastLeafUpdateNode = tree.nodes.findLast((node) => node.leafId !== undefined);
+  const lastLeafUpdateEntry = lastLeafUpdateNode?.entry;
   return {
     cwd: header?.cwd ?? process.cwd(),
     sessionDir: path.dirname(parentSessionFile),
     leafId,
     appendParentId: mergedPath.appendParentId,
+    ...(lastLeafUpdateNode?.appendMode ? { appendMode: lastLeafUpdateNode.appendMode } : {}),
     preserveLeafControl: isSessionTranscriptLeafControl(lastLeafUpdateEntry),
     branchEntries,
     labelsToWrite: collectBranchLabels({ allEntries: entries, pathEntryIds }),
@@ -300,6 +303,7 @@ async function writeBranchedSession(params: {
         timestamp,
         targetId: params.source.leafId,
         appendParentId: params.source.appendParentId,
+        ...(params.source.appendMode ? { appendMode: params.source.appendMode } : {}),
       }
     : null;
   const entries = [header, ...pathEntries, ...labelEntries, ...(leafEntry ? [leafEntry] : [])];

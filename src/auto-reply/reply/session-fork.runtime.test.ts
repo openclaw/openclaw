@@ -387,6 +387,7 @@ describe("forkSessionFromParentRuntime", () => {
         timestamp: "2026-06-15T00:00:03.000Z",
         targetId: "active-root",
         appendParentId: "plugin-metadata",
+        appendMode: "side",
       },
     ];
     await fs.writeFile(
@@ -423,6 +424,12 @@ describe("forkSessionFromParentRuntime", () => {
       targetId: "active-root",
       label: "selected",
     });
+    expect(forkedRecords.at(-1)).toMatchObject({
+      type: "leaf",
+      targetId: "active-root",
+      appendParentId: "plugin-metadata",
+      appendMode: "side",
+    });
     const reopened = SessionManager.open(fork.sessionFile, sessionsDir);
     reopened.appendMessage({ role: "user", content: "continued", timestamp: Date.now() });
     const records = (await fs.readFile(fork.sessionFile, "utf-8"))
@@ -430,6 +437,11 @@ describe("forkSessionFromParentRuntime", () => {
       .split(/\r?\n/)
       .map((line) => JSON.parse(line) as Record<string, unknown>);
     expect(records.at(-1)).toMatchObject({ type: "message", parentId: "plugin-metadata" });
+    expect(records.at(-1)).not.toHaveProperty("appendMode");
+    expect(reopened.buildSessionContext().messages).toMatchObject([
+      { role: "assistant", content: "active root" },
+      { role: "user", content: "continued" },
+    ]);
   });
 
   it("keeps parentless visible history with a disjoint append cursor", async () => {
