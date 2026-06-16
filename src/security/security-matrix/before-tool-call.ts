@@ -4,16 +4,6 @@ import {
   type SecurityMatrixToolFacts,
 } from "./facts.js";
 
-export type SecurityMatrixBeforeToolCallAuditConfig = {
-  readonly security?: {
-    readonly matrix?: {
-      readonly audit?: {
-        readonly enabled?: boolean;
-      };
-    };
-  };
-};
-
 export type SecurityMatrixBeforeToolCallFacts = Omit<
   SecurityMatrixToolFacts,
   "actor" | "approvalState" | "operatorPolicy"
@@ -25,12 +15,6 @@ export type SecurityMatrixBeforeToolCallFacts = Omit<
   /** Existing operator or hook policy result observed at the before_tool_call boundary. */
   readonly operatorPolicy?: SecurityMatrixToolFacts["operatorPolicy"];
 };
-
-export function isSecurityMatrixBeforeToolCallAuditEnabled(
-  config: SecurityMatrixBeforeToolCallAuditConfig | undefined,
-): boolean {
-  return config?.security?.matrix?.audit?.enabled === true;
-}
 
 /**
  * Build the Security Matrix audit event shape from facts available at the real
