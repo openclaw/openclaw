@@ -1177,6 +1177,7 @@ export class OpenClawApp extends LitElement {
     if (!this.client || !this.connected) {
       return;
     }
+    this.realtimeTalkCatalogProviders = null;
     try {
       const result = await this.client.request<{
         realtime?: {
@@ -1188,9 +1189,9 @@ export class OpenClawApp extends LitElement {
           }[];
         };
       }>("talk.catalog", {});
-      this.realtimeTalkCatalogProviders = result?.realtime?.providers ?? null;
+      this.realtimeTalkCatalogProviders = result?.realtime?.providers ?? [];
     } catch {
-      // leave existing catalog in place on error
+      this.realtimeTalkCatalogProviders = null;
     }
   }
 

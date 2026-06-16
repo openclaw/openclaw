@@ -212,4 +212,41 @@ describe("OpenClawApp Talk controls", () => {
 
     expect(guardHost.realtimeTalkOptionsOpen).toBe(false);
   });
+
+  it("clears stale Talk catalog providers when a refresh fails", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        realtime: {
+          providers: [
+            {
+              id: "plugin-realtime",
+              label: "Plugin realtime",
+              transports: ["gateway-relay"],
+            },
+          ],
+        },
+      })
+      .mockRejectedValueOnce(new Error("talk.catalog unavailable"));
+    const { OpenClawApp } = await import("./app.ts");
+    const app = Object.create(OpenClawApp.prototype) as {
+      client: { request: typeof request };
+      connected: boolean;
+      realtimeTalkCatalogProviders: unknown[] | null;
+    };
+    Object.defineProperties(app, {
+      client: { value: { request }, writable: true },
+      connected: { value: true, writable: true },
+      realtimeTalkCatalogProviders: {
+        value: [{ id: "stale", label: "Stale provider" }],
+        writable: true,
+      },
+    });
+
+    await OpenClawApp.prototype.fetchRealtimeTalkCatalog.call(app as never);
+    expect(app.realtimeTalkCatalogProviders).toMatchObject([{ id: "plugin-realtime" }]);
+
+    await OpenClawApp.prototype.fetchRealtimeTalkCatalog.call(app as never);
+    expect(app.realtimeTalkCatalogProviders).toBeNull();
+  });
 });
