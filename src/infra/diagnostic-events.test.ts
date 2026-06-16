@@ -340,7 +340,7 @@ describe("diagnostic-events", () => {
       action: "tool.execution.blocked",
       outcome: "denied",
       severity: "medium",
-    } as Parameters<typeof emitDiagnosticEvent>[0]);
+    } as unknown as Parameters<typeof emitDiagnosticEvent>[0]);
     emitTrustedDiagnosticEvent({
       type: "security.event",
       eventId: "generic-trusted-security-event",
@@ -348,7 +348,7 @@ describe("diagnostic-events", () => {
       action: "tool.execution.blocked",
       outcome: "denied",
       severity: "medium",
-    } as Parameters<typeof emitTrustedDiagnosticEvent>[0]);
+    } as unknown as Parameters<typeof emitTrustedDiagnosticEvent>[0]);
     emitTrustedSecurityEvent({
       eventId: "security-event-1",
       category: "tool",
