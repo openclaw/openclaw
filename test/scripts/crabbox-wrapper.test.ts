@@ -2301,6 +2301,119 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     );
   });
 
+  it("preserves sparse changed-gate Git bootstrap for direct env -i commands", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "aws", "--", "env", "-i", "pnpm", "check:changed"],
+      {
+        gitResponses: {
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+          [GIT_MERGE_BASE_MAIN_HEAD_KEY]: { stdout: "abc123\n" },
+        },
+      },
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
+    expect(result.status).toBe(0);
+    expect(output.args).toContain("--shell");
+    expect(remoteCommand).toContain("git init -q");
+    expect(remoteCommand).toMatch(
+      /&& env -i OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1 pnpm check:changed$/u,
+    );
+  });
+
+  it("does not mark assignment-prefixed env -i changed gates outside the sanitized env", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "aws", "--", "FOO=1", "env", "-i", "pnpm", "check:changed"],
+      {
+        gitResponses: {
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+          [GIT_MERGE_BASE_MAIN_HEAD_KEY]: { stdout: "abc123\n" },
+        },
+      },
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    expect(result.status).toBe(0);
+    expect(output.args.join("\0")).not.toContain("OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1");
+    expect(output.args.join("\0")).not.toContain("git init -q");
+  });
+
+  it("does not mark timeout-prefixed env -i changed gates outside the sanitized env", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      [
+        "run",
+        "--provider",
+        "aws",
+        "--",
+        "timeout",
+        "1200s",
+        "env",
+        "-i",
+        "CI=1",
+        "pnpm",
+        "check:changed",
+      ],
+      {
+        gitResponses: {
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+          [GIT_MERGE_BASE_MAIN_HEAD_KEY]: { stdout: "abc123\n" },
+        },
+      },
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    expect(result.status).toBe(0);
+    expect(output.args.join("\0")).not.toContain("OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1");
+    expect(output.args.join("\0")).not.toContain("git init -q");
+  });
+
+  it("does not mark nested env -i changed gates outside the sanitized env", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "aws", "--", "env", "env", "-i", "pnpm", "check:changed"],
+      {
+        gitResponses: {
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+          [GIT_MERGE_BASE_MAIN_HEAD_KEY]: { stdout: "abc123\n" },
+        },
+      },
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    expect(result.status).toBe(0);
+    expect(output.args.join("\0")).not.toContain("OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1");
+    expect(output.args.join("\0")).not.toContain("git init -q");
+  });
+
+  it("does not mark shell env -i changed gates outside the sanitized env", () => {
+    const shellScript = "bash -lc 'env -i CI=1 pnpm check:changed'";
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "aws", "--shell", "--", shellScript],
+      {
+        gitResponses: {
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+          [GIT_MERGE_BASE_MAIN_HEAD_KEY]: { stdout: "abc123\n" },
+        },
+      },
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
+    expect(result.status).toBe(0);
+    expect(remoteCommand).not.toContain("OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1");
+    expect(remoteCommand).not.toContain("git init -q");
+  });
+
   it("does not treat quoted sparse shell text as a changed gate", () => {
     const result = runWrapper(
       "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
