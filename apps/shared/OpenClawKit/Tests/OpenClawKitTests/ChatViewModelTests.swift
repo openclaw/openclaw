@@ -199,6 +199,7 @@ private func emitAssistantText(
     transport: TestChatTransport,
     runId: String,
     text: String,
+    sessionKey: String? = nil,
     seq: Int = 1)
 {
     transport.emit(
@@ -208,12 +209,14 @@ private func emitAssistantText(
                 seq: seq,
                 stream: "assistant",
                 ts: Int(Date().timeIntervalSince1970 * 1000),
+                sessionKey: sessionKey,
                 data: ["text": AnyCodable(text)])))
 }
 
 private func emitToolStart(
     transport: TestChatTransport,
     runId: String,
+    sessionKey: String? = nil,
     seq: Int = 2)
 {
     transport.emit(
@@ -223,6 +226,7 @@ private func emitToolStart(
                 seq: seq,
                 stream: "tool",
                 ts: Int(Date().timeIntervalSince1970 * 1000),
+                sessionKey: sessionKey,
                 data: [
                     "phase": AnyCodable("start"),
                     "name": AnyCodable("demo"),
