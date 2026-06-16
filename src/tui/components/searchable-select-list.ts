@@ -11,6 +11,7 @@ import {
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { stripAnsi, visibleWidth } from "../../../packages/terminal-core/src/ansi.js";
+import { escapeRegExp } from "../../shared/regexp.js";
 import { findWordBoundaryIndex, fuzzyFilterLower } from "./fuzzy-filter.js";
 
 const ANSI_ESCAPE = String.fromCharCode(27);
@@ -55,7 +56,7 @@ export class SearchableSelectList implements Component {
   private getCachedRegex(pattern: string): RegExp {
     let regex = this.regexCache.get(pattern);
     if (!regex) {
-      regex = new RegExp(this.escapeRegex(pattern), "gi");
+      regex = new RegExp(escapeRegExp(pattern), "gi");
       this.regexCache.set(pattern, regex);
     }
     return regex;
@@ -129,10 +130,6 @@ export class SearchableSelectList implements Component {
     scoredItems.sort(this.compareByScore);
     const fuzzyMatches = fuzzyFilterLower(fuzzyCandidates, q);
     return [...scoredItems.map((s) => s.item), ...fuzzyMatches.map((entry) => entry.item)];
-  }
-
-  private escapeRegex(str: string): string {
-    return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   }
 
   private compareByScore = (
