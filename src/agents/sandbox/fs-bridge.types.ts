@@ -20,6 +20,8 @@ export type SandboxFsStat = {
 
 /** Filesystem operations exposed across the sandbox boundary. */
 export type SandboxFsBridge = {
+  /** Host-backed bridges opt in to host text decoding; remote bridges default to UTF-8. */
+  textEncoding?: "host";
   resolvePath(params: { filePath: string; cwd?: string }): SandboxResolvedPath;
   readFile(params: { filePath: string; cwd?: string; signal?: AbortSignal }): Promise<Buffer>;
   writeFile(params: {

@@ -13,6 +13,7 @@ export function createSandboxFsBridgeFromResolver(
   resolvePath: (filePath: string, cwd?: string) => SandboxResolvedPath,
 ): SandboxFsBridge {
   return {
+    textEncoding: "host",
     resolvePath: ({ filePath, cwd }) => resolvePath(filePath, cwd),
     readFile: async ({ filePath, cwd }) => {
       const target = resolvePath(filePath, cwd);

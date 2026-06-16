@@ -917,7 +917,7 @@ function createSandboxReadOperations(params: SandboxToolParams) {
       }
       return resolveContainerPathCandidate(filePath) ?? filePath;
     },
-    textEncoding: "host",
+    textEncoding: params.bridge.textEncoding,
     readFile: (absolutePath: string) =>
       params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),
     access: (absolutePath: string) => assertSandboxFileExists(params, absolutePath),
