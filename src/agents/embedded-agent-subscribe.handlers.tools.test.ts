@@ -17,6 +17,8 @@ import {
 import type { MessagingToolSend } from "./embedded-agent-messaging.types.js";
 import { buildEmbeddedRunPayloads } from "./embedded-agent-runner/run/payloads.js";
 import {
+  countActivePotentialSideEffectToolExecutions,
+  countActiveToolExecutions,
   handleToolExecutionEnd,
   handleToolExecutionStart,
   handleToolExecutionUpdate,
@@ -193,6 +195,59 @@ function requireSingleMessagingTarget(ctx: ToolHandlerContext) {
   expect(targets).toHaveLength(1);
   return requireRecord(targets[0], "messaging target");
 }
+
+describe("active tool execution counters", () => {
+  it("counts active potential side-effect tool executions until tool end", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "write",
+      toolCallId: "tool-side-effect",
+      args: { file_path: "/tmp/openclaw-side-effect.txt", content: "hello" },
+    });
+
+    expect(countActiveToolExecutions("run-test")).toBe(1);
+    expect(countActivePotentialSideEffectToolExecutions("run-test")).toBe(1);
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "write",
+      toolCallId: "tool-side-effect",
+      isError: false,
+      result: { details: { status: "ok" } },
+    });
+
+    expect(countActiveToolExecutions("run-test")).toBe(0);
+    expect(countActivePotentialSideEffectToolExecutions("run-test")).toBe(0);
+  });
+
+  it("does not count active replay-safe tools as potential side effects", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "read",
+      toolCallId: "tool-replay-safe",
+      args: { file_path: "/tmp/openclaw-input.txt" },
+      replaySafe: true,
+    });
+
+    expect(countActiveToolExecutions("run-test")).toBe(1);
+    expect(countActivePotentialSideEffectToolExecutions("run-test")).toBe(0);
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "read",
+      toolCallId: "tool-replay-safe",
+      isError: false,
+      result: { details: { status: "ok" } },
+    });
+
+    expect(countActiveToolExecutions("run-test")).toBe(0);
+    expect(countActivePotentialSideEffectToolExecutions("run-test")).toBe(0);
+  });
+});
 
 describe("handleToolExecutionStart read path checks", () => {
   it("emits trace-only tool start diagnostics when trace logging is enabled", async () => {

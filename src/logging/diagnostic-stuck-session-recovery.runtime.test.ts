@@ -452,6 +452,9 @@ describe("stuck session recovery", () => {
     });
 
     expect(mocks.abortEmbeddedAgentRun).toHaveBeenCalledWith("queued-reply-session");
+    expect(mocks.abortAndDrainEmbeddedAgentRun).toHaveBeenCalledWith(
+      expect.objectContaining({ abortReason: "stuck_recovery" }),
+    );
     expect(mocks.waitForEmbeddedAgentRunEnd).toHaveBeenCalledWith("queued-reply-session", 15_000);
     expect(mocks.forceClearEmbeddedAgentRun).not.toHaveBeenCalled();
     expect(mocks.resetCommandLane).toHaveBeenCalledWith("session:agent:main:main");
