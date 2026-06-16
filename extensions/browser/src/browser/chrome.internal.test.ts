@@ -66,6 +66,8 @@ import {
 } from "./chrome.js";
 import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./config.js";
 
+const CHROME_TEST_WS_MAX_PAYLOAD_BYTES = 1024 * 1024;
+
 /**
  * Covers the parts of chrome.ts that the mainline chrome.test.ts does
  * not exercise: launchOpenClawChrome (with child_process.spawn mocked),
@@ -154,7 +156,7 @@ async function withMockChromeCdpServer(params: {
     res.writeHead(404);
     res.end();
   });
-  const wss = new WebSocketServer({ noServer: true });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: CHROME_TEST_WS_MAX_PAYLOAD_BYTES });
   server.on("upgrade", (req, socket, head) => {
     if (req.url !== params.wsPath) {
       socket.destroy();
@@ -746,6 +748,107 @@ describe("chrome.ts internal", () => {
       });
     });
 
+    it("stops a lock-owned stale managed CDP listener before relaunching", async () => {
+      const executablePath = path.join(tmpDir, "chrome");
+      await fsp.writeFile(executablePath, "");
+      const existsSync = fs.existsSync.bind(fs);
+      vi.spyOn(fs, "existsSync").mockImplementation((p) => {
+        const s = String(p);
+        if (s.endsWith("Local State") || s.endsWith("Preferences")) {
+          return true;
+        }
+        return existsSync(p);
+      });
+      const portBusy = new Error("Port is already in use.");
+      portBusy.name = "PortInUseError";
+      ensurePortAvailableMock.mockRejectedValueOnce(portBusy).mockResolvedValue(undefined);
+
+      const stalePid = 43210;
+      let staleProcessAlive = true;
+      const killSpy = vi.spyOn(process, "kill").mockImplementation(((pid, signal) => {
+        if (pid !== stalePid) {
+          return true;
+        }
+        if (signal === 0) {
+          if (staleProcessAlive) {
+            return true;
+          }
+          const err = new Error("no such process") as NodeJS.ErrnoException;
+          err.code = "ESRCH";
+          throw err;
+        }
+        if (signal === "SIGTERM") {
+          staleProcessAlive = false;
+          return true;
+        }
+        return true;
+      }) as typeof process.kill);
+
+      const fakeProc = makeFakeProc();
+      spawnMock.mockReturnValue(fakeProc);
+
+      await withMockChromeCdpServer({
+        wsPath: "/devtools/browser/STALE_OWNER",
+        onConnection: (wss) => {
+          wss.on("connection", (_ws) => {
+            // The stale listener accepts the WebSocket but never answers
+            // Browser.getVersion, matching the recovery gate in chrome.ts.
+          });
+        },
+        run: async (baseUrl) => {
+          const port = Number(new URL(baseUrl).port);
+          const profile = {
+            ...makeProfile(port),
+            cdpUrl: baseUrl,
+            executablePath,
+          } as ResolvedBrowserProfile;
+          const userDataDir = resolveOpenClawUserDataDir(profile.name);
+          await fsp.mkdir(userDataDir, { recursive: true });
+          await fsp.writeFile(path.join(userDataDir, "SingletonCookie"), "cookie");
+          await fsp.writeFile(path.join(userDataDir, "SingletonSocket"), "socket");
+          await fsp.symlink(
+            `${os.hostname()}-${stalePid}`,
+            path.join(userDataDir, "SingletonLock"),
+          );
+
+          try {
+            const running = await launchOpenClawChrome(makeResolved(), profile);
+            expect(running.proc).toBe(fakeProc);
+            expect(ensurePortAvailableMock).toHaveBeenCalledTimes(2);
+            expect(killSpy).toHaveBeenCalledWith(stalePid, "SIGTERM");
+            expect(spawnMock).toHaveBeenCalledTimes(1);
+            expect(fs.existsSync(path.join(userDataDir, "SingletonLock"))).toBe(false);
+            expect(fs.existsSync(path.join(userDataDir, "SingletonSocket"))).toBe(false);
+            running.proc.kill?.("SIGTERM");
+          } finally {
+            await fsp.rm(userDataDir, { recursive: true, force: true });
+          }
+        },
+      });
+    });
+
+    it("does not stop a stale CDP listener without current-host profile ownership proof", async () => {
+      const portBusy = new Error("Port is already in use.");
+      portBusy.name = "PortInUseError";
+      ensurePortAvailableMock.mockRejectedValue(portBusy);
+      const killSpy = vi.spyOn(process, "kill");
+
+      const profile = makeProfile(55554);
+      const userDataDir = resolveOpenClawUserDataDir(profile.name);
+      await fsp.mkdir(userDataDir, { recursive: true });
+      await fsp.symlink("remote-host-43210", path.join(userDataDir, "SingletonLock"));
+
+      try {
+        await expect(launchOpenClawChrome(makeResolved(), profile)).rejects.toThrow(
+          "Port is already in use.",
+        );
+        expect(killSpy).not.toHaveBeenCalledWith(43210, "SIGTERM");
+        expect(spawnMock).not.toHaveBeenCalled();
+      } finally {
+        await fsp.rm(userDataDir, { recursive: true, force: true });
+      }
+    });
+
     it("throws with stderr hint + sandbox hint when CDP never becomes reachable", async () => {
       const originalPlatform = process.platform;
       Object.defineProperty(process, "platform", { value: "linux" });
@@ -956,7 +1059,11 @@ describe("chrome.ts internal", () => {
   describe("canOpenWebSocket", () => {
     it("resolves false when the direct-ws probe cannot connect", async () => {
       // Bind a ws server and then close it, so connecting to it fails.
-      const wss = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+      const wss = new WebSocketServer({
+        port: 0,
+        host: "127.0.0.1",
+        maxPayload: CHROME_TEST_WS_MAX_PAYLOAD_BYTES,
+      });
       await new Promise<void>((resolve) => {
         wss.once("listening", () => resolve());
       });
@@ -970,7 +1077,11 @@ describe("chrome.ts internal", () => {
     });
 
     it("resolves true when the direct-ws handshake succeeds", async () => {
-      const wss = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+      const wss = new WebSocketServer({
+        port: 0,
+        host: "127.0.0.1",
+        maxPayload: CHROME_TEST_WS_MAX_PAYLOAD_BYTES,
+      });
       await new Promise<void>((resolve) => {
         wss.once("listening", () => resolve());
       });
@@ -1006,7 +1117,11 @@ describe("chrome.ts internal", () => {
       // Serve /json/version pointing at a port that's not actually
       // accepting ws upgrades — the canRunCdpHealthCommand probe will
       // fire its 'error' handler during handshake.
-      const dead = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+      const dead = new WebSocketServer({
+        port: 0,
+        host: "127.0.0.1",
+        maxPayload: CHROME_TEST_WS_MAX_PAYLOAD_BYTES,
+      });
       await new Promise<void>((resolve) => {
         dead.once("listening", () => resolve());
       });

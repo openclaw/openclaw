@@ -139,6 +139,36 @@ function processExists(pid: number): boolean {
   }
 }
 
+function isPortInUseError(err: unknown): boolean {
+  const errno = (err as NodeJS.ErrnoException | undefined)?.code;
+  const name = err instanceof Error ? err.name : "";
+  const message = err instanceof Error ? err.message : String(err);
+  return (
+    errno === "EADDRINUSE" ||
+    name === "PortInUseError" ||
+    /\bEADDRINUSE\b|already in use/i.test(message)
+  );
+}
+
+function readCurrentHostSingletonPid(userDataDir: string, hostname = os.hostname()): number | null {
+  let target: string;
+  try {
+    target = fs.readlinkSync(path.join(userDataDir, "SingletonLock"));
+  } catch {
+    return null;
+  }
+  const match = /^(?<lockHost>.+)-(?<pid>\d+)$/.exec(target);
+  if (!match?.groups) {
+    return null;
+  }
+  const lockHost = normalizeOptionalString(match.groups.lockHost) ?? "";
+  const pid = Number.parseInt(match.groups.pid ?? "", 10);
+  if (lockHost !== hostname || !processExists(pid)) {
+    return null;
+  }
+  return pid;
+}
+
 function clearChromeSingletonArtifacts(userDataDir: string) {
   for (const basename of CHROME_SINGLETON_LOCK_PATHS) {
     try {
@@ -204,6 +234,91 @@ async function terminateChromeForRetry(proc: ChildProcess, userDataDir: string) 
   }
   await waitForChromeProcessExit(proc, CHROME_BOOTSTRAP_EXIT_TIMEOUT_MS);
   clearStaleChromeSingletonLocks(userDataDir);
+}
+
+async function waitForPidExit(pid: number, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!processExists(pid)) {
+      return true;
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, CHROME_BOOTSTRAP_EXIT_POLL_MS);
+    });
+  }
+  return !processExists(pid);
+}
+
+async function terminateOwnedStaleChromeProcess(
+  pid: number,
+  timeoutMs = CHROME_STOP_TIMEOUT_MS,
+): Promise<boolean> {
+  try {
+    process.kill(pid, "SIGTERM");
+  } catch {
+    return false;
+  }
+  if (await waitForPidExit(pid, timeoutMs)) {
+    return true;
+  }
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch {
+    return false;
+  }
+  return await waitForPidExit(pid, CHROME_BOOTSTRAP_EXIT_TIMEOUT_MS);
+}
+
+async function recoverOwnedStaleManagedChromeCdpListener(params: {
+  profile: ResolvedBrowserProfile;
+  userDataDir: string;
+}): Promise<boolean> {
+  if (!params.profile.cdpIsLoopback) {
+    return false;
+  }
+  const pid = readCurrentHostSingletonPid(params.userDataDir);
+  if (pid == null) {
+    return false;
+  }
+  let diagnostic: ChromeCdpDiagnostic;
+  try {
+    diagnostic = await diagnoseChromeCdp(
+      params.profile.cdpUrl,
+      CHROME_REACHABILITY_TIMEOUT_MS,
+      CHROME_WS_READY_TIMEOUT_MS,
+    );
+  } catch {
+    return false;
+  }
+  if (diagnostic.ok || diagnostic.code !== "websocket_health_command_timeout") {
+    return false;
+  }
+  if (!(await terminateOwnedStaleChromeProcess(pid))) {
+    return false;
+  }
+  clearChromeSingletonArtifacts(params.userDataDir);
+  log.warn(
+    `Stopped stale managed Chrome CDP listener for profile "${params.profile.name}" (pid ${pid}) and retrying launch.`,
+  );
+  return true;
+}
+
+async function ensureManagedChromePortAvailable(
+  profile: ResolvedBrowserProfile,
+  userDataDir: string,
+): Promise<void> {
+  try {
+    await ensurePortAvailable(profile.cdpPort);
+    return;
+  } catch (err) {
+    if (
+      !isPortInUseError(err) ||
+      !(await recoverOwnedStaleManagedChromeCdpListener({ profile, userDataDir }))
+    ) {
+      throw err;
+    }
+  }
+  await ensurePortAvailable(profile.cdpPort);
 }
 
 function chromeLaunchHints(params: {
@@ -467,7 +582,8 @@ export async function launchOpenClawChrome(
     );
   }
 
-  await ensurePortAvailable(profile.cdpPort);
+  const userDataDir = resolveOpenClawUserDataDir(profile.name);
+  await ensureManagedChromePortAvailable(profile, userDataDir);
 
   const exe = resolveBrowserExecutable(resolved, profile);
   if (!exe) {
@@ -476,7 +592,6 @@ export async function launchOpenClawChrome(
     );
   }
 
-  const userDataDir = resolveOpenClawUserDataDir(profile.name);
   fs.mkdirSync(userDataDir, { recursive: true });
   await ensureOutputDirectory(DEFAULT_DOWNLOAD_DIR);
 
