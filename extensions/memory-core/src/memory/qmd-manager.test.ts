@@ -6296,8 +6296,8 @@ describe("QmdMemoryManager", () => {
 
     await expect(manager.probeVectorAvailability()).resolves.toBe(false);
     await expect(manager.probeEmbeddingAvailability()).resolves.toEqual({
-      ok: false,
-      error: "QMD semantic vectors are unavailable",
+      ok: true,
+      checked: false,
     });
     expect(spawnMock.mock.calls.length).toBe(baselineCalls);
     expect(manager.status().vector).toEqual({

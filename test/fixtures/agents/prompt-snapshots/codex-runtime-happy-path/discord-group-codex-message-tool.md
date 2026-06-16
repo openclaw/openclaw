@@ -80,7 +80,9 @@
   "config": {
     "features.apply_patch_streaming_events": true,
     "features.code_mode": true,
-    "features.code_mode_only": false
+    "features.code_mode_only": false,
+    "features.standalone_web_search": false,
+    "web_search": "cached"
   },
   "cwd": "/tmp/openclaw-happy-path/workspace",
   "developerInstructions": "<see Reconstructed Model-Bound Prompt Layers>",
@@ -119,7 +121,9 @@
   "config": {
     "features.apply_patch_streaming_events": true,
     "features.code_mode": true,
-    "features.code_mode_only": false
+    "features.code_mode_only": false,
+    "features.standalone_web_search": false,
+    "web_search": "cached"
   },
   "developerInstructions": "<see Reconstructed Model-Bound Prompt Layers>",
   "model": "gpt-5.5",
@@ -223,8 +227,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 45244,
-    "roughTokens": 11311
+    "chars": 45322,
+    "roughTokens": 11331
   },
   "openClawDeveloperInstructions": {
     "chars": 2988,
@@ -235,8 +239,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 6925
   },
   "totalWithDynamicToolsJson": {
-    "chars": 72946,
-    "roughTokens": 18237
+    "chars": 73024,
+    "roughTokens": 18256
   },
   "userInputText": {
     "chars": 1629,

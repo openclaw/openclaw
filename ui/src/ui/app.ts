@@ -84,6 +84,10 @@ import {
   type RealtimeTalkConversationState,
 } from "./chat/realtime-talk-conversation.ts";
 import {
+  reconcileRealtimeTalkCatalogSelection,
+  type RealtimeTalkCatalogProvider,
+} from "./chat/realtime-talk-catalog.ts";
+import {
   RealtimeTalkSession,
   type RealtimeTalkLaunchOptions,
   type RealtimeTalkStatus,
@@ -308,6 +312,7 @@ export class OpenClawApp extends LitElement {
   @state() realtimeTalkTranscript: string | null = null;
   @state() realtimeTalkConversation: RealtimeTalkConversationEntry[] = [];
   @state() realtimeTalkOptionsOpen = false;
+  @state() realtimeTalkCatalogProviders: RealtimeTalkCatalogProvider[] | null = null;
   @state() realtimeTalkOptions = {
     provider: "",
     model: "",
@@ -928,8 +933,8 @@ export class OpenClawApp extends LitElement {
     );
   }
 
-  async loadAssistantIdentity() {
-    await loadAssistantIdentityInternal(this);
+  async loadAssistantIdentity(opts?: { sessionKey?: string; expectedSessionKey?: string }) {
+    await loadAssistantIdentityInternal(this, opts);
   }
 
   applySettings(next: UiSettings) {
@@ -1170,6 +1175,29 @@ export class OpenClawApp extends LitElement {
     this.realtimeTalkOptions = { ...this.realtimeTalkOptions, ...next };
   }
 
+  async fetchRealtimeTalkCatalog() {
+    if (!this.client || !this.connected) {
+      return;
+    }
+    this.realtimeTalkCatalogProviders = null;
+    try {
+      const result = await this.client.request<{
+        realtime?: { providers?: RealtimeTalkCatalogProvider[] };
+      }>("talk.catalog", {});
+      const providers = result?.realtime?.providers ?? [];
+      this.realtimeTalkCatalogProviders = providers;
+      const update = reconcileRealtimeTalkCatalogSelection({
+        providers,
+        selection: this.realtimeTalkOptions,
+      });
+      if (update) {
+        this.updateRealtimeTalkOptions(update);
+      }
+    } catch {
+      this.realtimeTalkCatalogProviders = null;
+    }
+  }
+
   private buildRealtimeTalkLaunchOptions(): RealtimeTalkLaunchOptions {
     const options = this.realtimeTalkOptions ?? {
       provider: "",
@@ -1239,10 +1267,6 @@ export class OpenClawApp extends LitElement {
           if (status === "idle" || status === "error") {
             this.realtimeTalkActive = status !== "idle";
           }
-          if (status === "error" && this.realtimeTalkDetail) {
-            this.lastError = this.realtimeTalkDetail;
-            this.chatError = this.realtimeTalkDetail;
-          }
         },
         onTranscript: (entry) => {
           this.realtimeTalkTranscript = `${entry.role === "user" ? "You" : "OpenClaw"}: ${entry.text}`;
@@ -1266,8 +1290,6 @@ export class OpenClawApp extends LitElement {
       this.realtimeTalkActive = false;
       this.realtimeTalkStatus = "error";
       this.realtimeTalkDetail = error instanceof Error ? error.message : String(error);
-      this.lastError = this.realtimeTalkDetail;
-      this.chatError = this.realtimeTalkDetail;
     }
   }
 

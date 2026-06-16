@@ -7,7 +7,10 @@ import {
   assertOpenAiRequestLogUsed,
 } from "../agent-turn-output.mjs";
 import { readBoundedResponseText as readBoundedResponseTextWithLimit } from "../bounded-response-text.mjs";
-import { applyMockOpenAiModelConfig } from "../fixtures/mock-openai-config.mjs";
+import {
+  applyMockOpenAiModelConfig,
+  parseMockOpenAiPort,
+} from "../fixtures/mock-openai-config.mjs";
 import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
 import { readTextFileTail } from "../text-file-utils.mjs";
 
@@ -192,7 +195,7 @@ function assertOnboard() {
 }
 
 function configureMockModel() {
-  const mockPort = Number(process.argv[3]);
+  const mockPort = parseMockOpenAiPort(process.argv[3]);
   const cfg = readJson(configPath());
   applyMockOpenAiModelConfig(cfg, { mockPort });
   writeConfig(cfg);
@@ -345,7 +348,11 @@ async function postClickClackInbound() {
 
 async function waitClickClackSocket() {
   const baseUrl = process.argv[3];
-  const timeoutSeconds = Number(process.argv[4] ?? 30);
+  const timeoutSeconds = readPositiveInt(
+    process.argv[4],
+    30,
+    "ClickClack websocket timeout seconds",
+  );
   const deadline = Date.now() + timeoutSeconds * 1000;
   while (Date.now() < deadline) {
     const remainingMs = Math.max(1, deadline - Date.now());
@@ -384,7 +391,7 @@ function assertClickClackState() {
 async function waitClickClackReply() {
   const statePath = process.argv[3];
   const marker = process.argv[4];
-  const timeoutSeconds = Number(process.argv[5] ?? 30);
+  const timeoutSeconds = readPositiveInt(process.argv[5], 30, "ClickClack reply timeout seconds");
   const deadline = Date.now() + timeoutSeconds * 1000;
   while (Date.now() < deadline) {
     if (fs.existsSync(statePath)) {

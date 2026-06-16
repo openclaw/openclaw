@@ -1616,6 +1616,46 @@ describe("memory index", () => {
     );
   });
 
+  it("bounds per-keyword FTS fallback in provider-backed hybrid search", async () => {
+    const cfg = createCfg({
+      storePath: indexMainPath,
+      minScore: 0.35,
+      hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
+    });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+
+    const db = (
+      manager as unknown as {
+        db: {
+          prepare: (sql: string) => unknown;
+        };
+      }
+    ).db;
+    const originalPrepare = db.prepare.bind(db);
+    let ftsSelects = 0;
+    const prepareSpy = vi.spyOn(db, "prepare").mockImplementation((sql: string) => {
+      if (sql.includes("FROM chunks_fts") && sql.includes("WHERE chunks_fts MATCH ?")) {
+        ftsSelects += 1;
+      }
+      return originalPrepare(sql);
+    });
+
+    try {
+      const results = await manager.search(
+        "zebra project router gateway session transcript approval command owner workspace token budget retry queue",
+        { maxResults: 5 },
+      );
+
+      expect(results.length).toBeGreaterThan(0);
+      expect(results[0]?.path).toContain("memory/2026-01-12.md");
+      expect(ftsSelects).toBeGreaterThan(1);
+      expect(ftsSelects).toBeLessThanOrEqual(7);
+    } finally {
+      prepareSpy.mockRestore();
+    }
+  });
+
   it("reports vector availability after probe", async () => {
     const cfg = createCfg({ storePath: indexVectorPath, vectorEnabled: true });
     const manager = await getPersistentManager(cfg);

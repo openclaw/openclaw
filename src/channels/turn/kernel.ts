@@ -372,6 +372,7 @@ export async function dispatchAssembledChannelTurn(
       storePath: params.storePath,
       ctxPayload: params.ctxPayload,
       recordInboundSession: params.recordInboundSession,
+      afterRecord: params.afterRecord,
       record: params.record,
       history: params.history,
       admission: params.admission,
@@ -512,6 +513,7 @@ async function runPreparedChannelTurnCoreInTrace<
         admission: admission.kind,
       },
     });
+    await params.afterRecord?.();
   } catch (err) {
     emit({
       ...params,

@@ -52,6 +52,17 @@ type CronRunsRequestParams = CronJobIdParams & {
   sortDir?: "asc" | "desc";
 };
 
+function compactCronListJob(job: CronJob) {
+  return {
+    id: job.id,
+    name: job.name,
+    enabled: job.enabled,
+    nextRunAtMs: job.state.nextRunAtMs ?? null,
+    scheduleKind: job.schedule.kind,
+    lastRunStatus: job.state.lastRunStatus ?? job.state.lastStatus ?? null,
+  };
+}
+
 function listConfiguredAnnounceChannelIds(cfg: OpenClawConfig): string[] {
   return listConfiguredAnnounceChannelIdsForConfig({
     config: cfg,
@@ -337,6 +348,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       sortBy?: "nextRunAtMs" | "updatedAtMs" | "name";
       sortDir?: "asc" | "desc";
       agentId?: string;
+      compact?: boolean;
     };
     const page = await context.cron.listPage({
       includeDisabled: p.includeDisabled,
@@ -350,6 +362,10 @@ export const cronHandlers: GatewayRequestHandlers = {
       sortDir: p.sortDir,
       agentId: p.agentId,
     });
+    if (p.compact === true) {
+      respond(true, { ...page, jobs: page.jobs.map(compactCronListJob) }, undefined);
+      return;
+    }
     const deliveryPreviews = await resolveCronDeliveryPreviews({
       cfg: context.getRuntimeConfig(),
       defaultAgentId: context.cron.getDefaultAgentId(),

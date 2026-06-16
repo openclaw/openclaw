@@ -1606,10 +1606,12 @@ export async function dispatchReplyFromConfig(
   });
   const routeReplyTo = replyRoute.to;
   const deliveryChannel = shouldRouteToOriginating ? routeReplyChannel : currentSurface;
-  const routedReplyAccountId = routeReplyChannel
+  const shouldPrepareRoutedReplyDelivery = shouldRouteToOriginating && Boolean(routeReplyChannel);
+  const replyContextAccountId = routeReplyChannel
     ? resolveReplyDeliveryAccountId(cfg, routeReplyChannel, replyRoute.accountId)
     : undefined;
-  const routedReplyDelivery = routeReplyChannel
+  const routedReplyAccountId = shouldPrepareRoutedReplyDelivery ? replyContextAccountId : undefined;
+  const routedReplyDelivery = shouldPrepareRoutedReplyDelivery
     ? createReplyDeliveryContext(
         resolveReplyToMode(cfg, routeReplyChannel, routedReplyAccountId, replyRoute.chatType),
         replyRoute.chatType,
@@ -1630,7 +1632,7 @@ export async function dispatchReplyFromConfig(
       sessionKey: acpDispatchSessionKey,
       workspaceDir,
       messageProvider: deliveryChannel,
-      accountId: routedReplyAccountId,
+      accountId: replyContextAccountId,
       groupId,
       groupChannel: ctx.GroupChannel,
       groupSpace: ctx.GroupSpace,
@@ -2500,7 +2502,7 @@ export async function dispatchReplyFromConfig(
               shouldRouteToOriginating,
               originatingChannel: routeReplyChannel,
               originatingTo: routeReplyTo,
-              originatingAccountId: routedReplyAccountId,
+              originatingAccountId: replyContextAccountId,
               originatingThreadId: routeReplyThreadId,
               originatingChatType: replyRoute.chatType,
               shouldSendToolSummaries,
@@ -3216,7 +3218,7 @@ export async function dispatchReplyFromConfig(
               shouldRouteToOriginating,
               originatingChannel: routeReplyChannel,
               originatingTo: routeReplyTo,
-              originatingAccountId: routedReplyAccountId,
+              originatingAccountId: replyContextAccountId,
               originatingThreadId: routeReplyThreadId,
               originatingChatType: replyRoute.chatType,
               shouldSendToolSummaries,

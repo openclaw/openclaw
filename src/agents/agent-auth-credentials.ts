@@ -103,23 +103,3 @@ export function resolveAgentCredentialMapFromStore(
   }
   return credentials;
 }
-
-/** Compare agent runtime credential values without broad object equality. */
-export function agentCredentialsEqual(a: AgentCredential | undefined, b: AgentCredential): boolean {
-  if (!a || typeof a !== "object") {
-    return false;
-  }
-  if (a.type !== b.type) {
-    return false;
-  }
-
-  if (a.type === "api_key" && b.type === "api_key") {
-    return a.key === b.key;
-  }
-
-  if (a.type === "oauth" && b.type === "oauth") {
-    return a.access === b.access && a.refresh === b.refresh && a.expires === b.expires;
-  }
-
-  return false;
-}

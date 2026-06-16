@@ -689,22 +689,26 @@ export function switchChatSessionAndWait(
   );
 }
 
+export function dismissRealtimeTalkError(state: AppViewState) {
+  if (state.realtimeTalkStatus !== "error") {
+    return;
+  }
+  const talkHost = state as unknown as {
+    realtimeTalkSession?: { stop(): void } | null;
+  };
+  talkHost.realtimeTalkSession?.stop();
+  talkHost.realtimeTalkSession = null;
+  state.realtimeTalkActive = false;
+  state.realtimeTalkStatus = "idle";
+  state.realtimeTalkDetail = null;
+  state.realtimeTalkTranscript = null;
+  state.resetRealtimeTalkConversation?.();
+}
+
 export function dismissChatError(state: AppViewState) {
   state.lastError = null;
   state.lastErrorCode = null;
   state.chatError = null;
-  if (state.realtimeTalkStatus === "error") {
-    const talkHost = state as unknown as {
-      realtimeTalkSession?: { stop(): void } | null;
-    };
-    talkHost.realtimeTalkSession?.stop();
-    talkHost.realtimeTalkSession = null;
-    state.realtimeTalkActive = false;
-    state.realtimeTalkStatus = "idle";
-    state.realtimeTalkDetail = null;
-    state.realtimeTalkTranscript = null;
-    state.resetRealtimeTalkConversation?.();
-  }
 }
 
 export type CreateChatSessionIntent = { source: "user" };

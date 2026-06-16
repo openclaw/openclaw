@@ -2,7 +2,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
-import type { AgentEvent, BtwEvent, ChatEvent, TuiStateAccess } from "./tui-types.js";
+import type {
+  AgentEvent,
+  BtwEvent,
+  ChatEvent,
+  SessionChangedEvent,
+  TuiStateAccess,
+} from "./tui-types.js";
 
 type MockFn = ReturnType<typeof vi.fn>;
 type HandlerChatLog = {
@@ -133,6 +139,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     chatLog?: HandlerChatLog;
     btw?: HandlerBtwPresenter;
     localMode?: boolean;
+    refreshSessionInfo?: () => Promise<void>;
   }) => {
     const state = makeState(params?.state);
     const context = makeContext(state);
@@ -144,10 +151,12 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       state,
       localMode: params?.localMode,
       setActivityStatus: context.setActivityStatus,
+      refreshSessionInfo: params?.refreshSessionInfo,
       loadHistory: context.loadHistory,
       noteLocalRunId: context.noteLocalRunId,
       isLocalRunId: context.isLocalRunId,
       forgetLocalRunId: context.forgetLocalRunId,
+      clearLocalRunIds: context.clearLocalRunIds,
       isLocalBtwRunId: context.isLocalBtwRunId,
       forgetLocalBtwRunId: context.forgetLocalBtwRunId,
       clearLocalBtwRunIds: context.clearLocalBtwRunIds,
@@ -871,6 +880,122 @@ describe("tui-event-handlers: handleAgentEvent", () => {
 
     expect(chatLog.startTool).not.toHaveBeenCalled();
     expect(tui.requestRender).not.toHaveBeenCalled();
+  });
+
+  it("reloads the current session and clears stale run state after sessions.changed reset", () => {
+    const refreshSessionInfo = vi.fn<() => Promise<void>>(async () => undefined);
+    const {
+      state,
+      chatLog,
+      btw,
+      tui,
+      loadHistory,
+      setActivityStatus,
+      noteLocalRunId,
+      isLocalRunId,
+      handleChatEvent,
+      handleAgentEvent,
+      handleSessionsChangedEvent,
+    } = createHandlersHarness({
+      state: {
+        activeChatRunId: null,
+        currentSessionId: "session-before",
+        sessionInfo: { verboseLevel: "on", updatedAt: 100 },
+      },
+      refreshSessionInfo,
+    });
+
+    handleChatEvent({
+      runId: "run-old",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "done" }] },
+    });
+    noteLocalRunId("run-local");
+    state.activeChatRunId = "run-stale";
+    state.pendingChatRunId = "run-pending";
+    state.pendingOptimisticUserMessage = true;
+    state.pendingSubmitDraft = { runId: "run-pending", text: "pending" };
+    state.activityStatus = "streaming";
+    loadHistory.mockClear();
+    refreshSessionInfo.mockClear();
+    chatLog.startTool.mockClear();
+    btw.clear.mockClear();
+    tui.requestRender.mockClear();
+    setActivityStatus.mockClear();
+
+    handleSessionsChangedEvent({
+      sessionKey: "main",
+      reason: "reset",
+      sessionId: "session-after",
+      updatedAt: 200,
+    } satisfies SessionChangedEvent);
+
+    expect(state.activeChatRunId).toBeNull();
+    expect(state.pendingChatRunId).toBeNull();
+    expect(state.pendingSubmitDraft).toBeNull();
+    expect(state.pendingOptimisticUserMessage).toBe(false);
+    expect(state.activityStatus).toBe("idle");
+    expect(state.currentSessionId).toBe("session-after");
+    expect(state.sessionInfo.updatedAt).toBe(200);
+    expect(isLocalRunId("run-local")).toBe(false);
+    expect(setActivityStatus).toHaveBeenCalledWith("idle");
+    expect(btw.clear).toHaveBeenCalledTimes(1);
+    expect(loadHistory).toHaveBeenCalledTimes(1);
+    expect(refreshSessionInfo).not.toHaveBeenCalled();
+    expect(tui.requestRender).toHaveBeenCalledTimes(1);
+
+    handleAgentEvent({
+      runId: "run-old",
+      stream: "tool",
+      data: { phase: "start", toolCallId: "tc-old", name: "exec" },
+    });
+
+    expect(chatLog.startTool).not.toHaveBeenCalled();
+  });
+
+  it("ignores sessions.changed reset events for other sessions", () => {
+    const { state, loadHistory, setActivityStatus, handleSessionsChangedEvent } =
+      createHandlersHarness({
+        state: { activeChatRunId: "run-current", activityStatus: "streaming" },
+      });
+
+    handleSessionsChangedEvent({
+      sessionKey: "agent:other:main",
+      reason: "reset",
+    } satisfies SessionChangedEvent);
+
+    expect(state.activeChatRunId).toBe("run-current");
+    expect(state.activityStatus).toBe("streaming");
+    expect(loadHistory).not.toHaveBeenCalled();
+    expect(setActivityStatus).not.toHaveBeenCalledWith("idle");
+  });
+
+  it("ignores selected-global sessions.changed reset events from other agents", () => {
+    const { state, loadHistory, setActivityStatus, handleSessionsChangedEvent } =
+      createHandlersHarness({
+        state: {
+          agentDefaultId: "main",
+          currentAgentId: "work",
+          currentSessionKey: "global",
+          activeChatRunId: "run-current",
+          activityStatus: "streaming",
+        },
+      });
+
+    handleSessionsChangedEvent({
+      sessionKey: "global",
+      agentId: "main",
+      reason: "reset",
+      sessionId: "session-other-agent",
+      updatedAt: 300,
+    } satisfies SessionChangedEvent);
+
+    expect(state.activeChatRunId).toBe("run-current");
+    expect(state.activityStatus).toBe("streaming");
+    expect(state.currentSessionId).not.toBe("session-other-agent");
+    expect(loadHistory).not.toHaveBeenCalled();
+    expect(setActivityStatus).not.toHaveBeenCalledWith("idle");
   });
 
   it("accepts tool events after chat final for the same run", () => {

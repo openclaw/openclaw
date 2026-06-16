@@ -981,6 +981,9 @@ export function collectAppcastSparkleVersionErrors(xml: string): string[] {
     }
     const floors = sparkleBuildFloorsFromShortVersion(shortVersion);
     if (floors === null) {
+      errors.push(
+        `appcast item '${title}' has invalid sparkle:shortVersionString '${shortVersion}'.`,
+      );
       continue;
     }
 

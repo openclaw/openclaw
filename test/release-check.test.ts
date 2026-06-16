@@ -80,6 +80,14 @@ describe("collectAppcastSparkleVersionErrors", () => {
 
     expect(collectAppcastSparkleVersionErrors(xml)).toStrictEqual([]);
   });
+
+  it("rejects appcast entries with invalid prerelease lanes", () => {
+    const xml = `<rss><channel>${makeItem("2026.6.5-beta.0", "2606000500")}</channel></rss>`;
+
+    expect(collectAppcastSparkleVersionErrors(xml)).toEqual([
+      "appcast item '2026.6.5-beta.0' has invalid sparkle:shortVersionString '2026.6.5-beta.0'.",
+    ]);
+  });
 });
 
 describe("packed CLI smoke", () => {
