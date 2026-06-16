@@ -1758,6 +1758,111 @@ describe("SessionManager.open", () => {
     );
   });
 
+  it("persists the active leaf immediately after merging prompt-released side rows", async () => {
+    const dir = await makeTempDir();
+    const sessionManager = SessionManager.create(dir, dir);
+    sessionManager.appendMessage({ role: "user", content: "question", timestamp: 1 });
+    const baseAnswerId = sessionManager.appendMessage(buildAssistantMessage("base answer"));
+    const sideEntry = {
+      type: "message" as const,
+      id: "side-delivery",
+      parentId: baseAnswerId,
+      timestamp: "2026-06-15T00:00:03.000Z",
+      message: buildAssistantMessage("side delivery"),
+    };
+    const sessionFile = sessionManager.getSessionFile();
+    expect(sessionFile).toBeDefined();
+    await fs.appendFile(sessionFile!, `${JSON.stringify(sideEntry)}\n`, "utf8");
+
+    const mergeResult = sessionManager.mergePromptReleasedSessionEntries([sideEntry], {
+      persistLeaf: true,
+    });
+
+    expect(mergeResult?.publishedEntries).toEqual([{ kind: "id", id: expect.any(String) }]);
+    const records = (await fs.readFile(sessionFile!, "utf8"))
+      .trim()
+      .split("\n")
+      .map(
+        (line) =>
+          JSON.parse(line) as {
+            type?: string;
+            id?: string;
+            parentId?: string | null;
+            targetId?: string | null;
+            appendParentId?: string | null;
+            appendMode?: string;
+          },
+      );
+    expect(records.at(-1)).toMatchObject({
+      type: "leaf",
+      parentId: sideEntry.id,
+      targetId: baseAnswerId,
+      appendParentId: sideEntry.id,
+      appendMode: "side",
+    });
+
+    const nextSideEntry = {
+      ...sideEntry,
+      id: "next-side-delivery",
+      parentId: records.at(-1)?.appendParentId ?? records.at(-1)?.targetId ?? null,
+      appendMode: "side" as const,
+      timestamp: "2026-06-15T00:00:04.000Z",
+      message: buildAssistantMessage("next side delivery"),
+    };
+    await fs.appendFile(sessionFile!, `${JSON.stringify(nextSideEntry)}\n`, "utf8");
+    sessionManager.mergePromptReleasedSessionEntries([nextSideEntry], {
+      persistLeaf: true,
+    });
+
+    const finalRecords = (await fs.readFile(sessionFile!, "utf8"))
+      .trim()
+      .split("\n")
+      .map(
+        (line) =>
+          JSON.parse(line) as {
+            type?: string;
+            id?: string;
+            parentId?: string | null;
+            targetId?: string | null;
+            appendParentId?: string | null;
+            appendMode?: string;
+          },
+      );
+    expect(finalRecords.find((record) => record.id === nextSideEntry.id)?.parentId).toBe(
+      sideEntry.id,
+    );
+    expect(finalRecords.at(-1)).toMatchObject({
+      type: "leaf",
+      parentId: nextSideEntry.id,
+      targetId: baseAnswerId,
+      appendParentId: nextSideEntry.id,
+      appendMode: "side",
+    });
+
+    const reopened = SessionManager.open(sessionFile!, dir, dir);
+    expect(reopened.getLeafId()).toBe(baseAnswerId);
+    expect(JSON.stringify(reopened.buildSessionContext())).not.toContain("side delivery");
+    expect(
+      reopened
+        .getBranch(nextSideEntry.id)
+        .map((entry) => entry.id)
+        .slice(-2),
+    ).toEqual([sideEntry.id, nextSideEntry.id]);
+
+    const nextUserId = reopened.appendMessage({
+      role: "user",
+      content: "next question",
+      timestamp: 3,
+    });
+    expect(
+      reopened
+        .getBranch(nextUserId)
+        .map((entry) => entry.id)
+        .slice(-2),
+    ).toEqual([baseAnswerId, nextUserId]);
+    expect(JSON.stringify(reopened.buildSessionContext())).not.toContain("side delivery");
+  });
+
   it("applies merged leaf controls across separate callbacks", async () => {
     const dir = await makeTempDir();
     const sessionManager = SessionManager.create(dir, dir);

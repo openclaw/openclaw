@@ -2113,7 +2113,13 @@ export async function runEmbeddedAttempt(
         if (!sessionManager) {
           throw new Error("session manager unavailable during prompt-released entry merge");
         }
-        sessionManager.mergePromptReleasedSessionEntries(entries);
+        return sessionManager.mergePromptReleasedSessionEntries(entries, { persistLeaf: true });
+      },
+      reloadPromptReleasedSessionFile: () => {
+        if (!sessionManager) {
+          throw new Error("session manager unavailable during prompt-released file reload");
+        }
+        sessionManager.setSessionFile(params.sessionFile);
       },
     });
     releaseRetainedSessionLock = () => sessionLockController.dispose();

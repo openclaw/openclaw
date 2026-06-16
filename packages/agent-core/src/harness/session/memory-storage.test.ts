@@ -113,6 +113,62 @@ describe("InMemorySessionStorage", () => {
     ]);
   });
 
+  it("keeps marked side ancestry separate from the next active append", async () => {
+    const sideOne: SessionTreeEntry = {
+      type: "custom",
+      id: "side-one",
+      parentId: "root",
+      timestamp: "2026-01-01T00:00:01.000Z",
+      customType: "side",
+    };
+    const sideTwo: SessionTreeEntry = {
+      type: "custom",
+      id: "side-two",
+      parentId: sideOne.id,
+      timestamp: "2026-01-01T00:00:03.000Z",
+      appendMode: "side",
+      customType: "side",
+    };
+    const storage = new InMemorySessionStorage({
+      entries: [
+        rootEntry,
+        sideOne,
+        {
+          type: "leaf",
+          id: "first-leaf",
+          parentId: sideOne.id,
+          timestamp: "2026-01-01T00:00:02.000Z",
+          targetId: "root",
+          appendParentId: sideOne.id,
+          appendMode: "side",
+        },
+        sideTwo,
+        {
+          type: "leaf",
+          id: "second-leaf",
+          parentId: sideTwo.id,
+          timestamp: "2026-01-01T00:00:04.000Z",
+          targetId: "root",
+          appendParentId: sideTwo.id,
+          appendMode: "side",
+        },
+      ],
+    });
+    const session = new Session(storage);
+
+    expect((await storage.getPathToRoot(sideTwo.id)).map((entry) => entry.id)).toEqual([
+      "root",
+      sideOne.id,
+      sideTwo.id,
+    ]);
+
+    const nextEntryId = await session.appendCustomEntry("active");
+    expect((await storage.getPathToRoot(nextEntryId)).map((entry) => entry.id)).toEqual([
+      "root",
+      nextEntryId,
+    ]);
+  });
+
   it("rejects a leaf entry with a missing append parent before recording it", async () => {
     const storage = new InMemorySessionStorage({ entries: [rootEntry] });
 

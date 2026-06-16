@@ -1189,6 +1189,85 @@ describe("readTranscriptFileState", () => {
     ]);
   });
 
+  it("preserves marked side ancestry without capturing the next active append", async () => {
+    const root = await makeRoot("openclaw-transcript-state-side-append-");
+    const sessionFile = path.join(root, "session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      [
+        {
+          type: "session",
+          version: 3,
+          id: "session-1",
+          timestamp: "2026-06-15T00:00:00.000Z",
+          cwd: root,
+        },
+        {
+          type: "message",
+          id: "active-root",
+          parentId: null,
+          timestamp: "2026-06-15T00:00:01.000Z",
+          message: { role: "assistant", content: "active" },
+        },
+        {
+          type: "message",
+          id: "side-one",
+          parentId: "active-root",
+          timestamp: "2026-06-15T00:00:02.000Z",
+          message: { role: "assistant", content: "first side delivery" },
+        },
+        {
+          type: "leaf",
+          id: "first-leaf",
+          parentId: "side-one",
+          timestamp: "2026-06-15T00:00:03.000Z",
+          targetId: "active-root",
+          appendParentId: "side-one",
+          appendMode: "side",
+        },
+        {
+          type: "message",
+          id: "side-two",
+          parentId: "side-one",
+          timestamp: "2026-06-15T00:00:04.000Z",
+          appendMode: "side",
+          message: { role: "assistant", content: "second side delivery" },
+        },
+        {
+          type: "leaf",
+          id: "second-leaf",
+          parentId: "side-two",
+          timestamp: "2026-06-15T00:00:05.000Z",
+          targetId: "active-root",
+          appendParentId: "side-two",
+          appendMode: "side",
+        },
+      ]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n") + "\n",
+      "utf8",
+    );
+
+    const state = await readTranscriptFileState(sessionFile);
+
+    expect(state.getBranch("side-two").map((entry) => entry.id)).toEqual([
+      "active-root",
+      "side-one",
+      "side-two",
+    ]);
+    expect(state.getBranch().map((entry) => entry.id)).toEqual(["active-root"]);
+
+    const nextUser = state.appendMessage({
+      role: "user",
+      content: "next question",
+      timestamp: Date.now(),
+    });
+    expect(state.getBranch(nextUser.id).map((entry) => entry.id)).toEqual([
+      "active-root",
+      nextUser.id,
+    ]);
+  });
+
   it("keeps a terminal leaf control's opaque append parent", async () => {
     const root = await makeRoot("openclaw-transcript-state-opaque-append-parent-");
     const sessionFile = path.join(root, "session.jsonl");

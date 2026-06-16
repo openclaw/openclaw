@@ -11,6 +11,7 @@ import {
 import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { redactSecrets } from "../../logging/redact.js";
+import { isTranscriptOnlyOpenClawAssistantMessage } from "../../shared/transcript-only-openclaw-assistant.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import {
   appendJsonlEntry,
@@ -34,6 +35,7 @@ const transcriptAppendQueues = new Map<string, Promise<void>>();
 
 type TranscriptLeafInfo = {
   leafId?: string;
+  appendMode: "active" | "side";
   hasParentLinkedEntries: boolean;
   nonSessionEntryCount: number;
 };
@@ -42,9 +44,12 @@ type TranscriptLineInfo = {
   isNonSessionEntry: boolean;
   hasParentLinkedEntry: boolean;
   entryId?: string;
+  isCanonicalEntry?: boolean;
+  appendMode?: "side";
   leafControl?: {
     targetId: string | null;
     appendParentId?: string | null;
+    appendMode?: "side";
   };
   invalidLeafControl?: boolean;
 };
@@ -60,6 +65,7 @@ function readTranscriptLineInfo(line: string): TranscriptLineInfo {
       parentId?: unknown;
       targetId?: unknown;
       appendParentId?: unknown;
+      appendMode?: unknown;
     };
     if (parsed.type === "session") {
       return { isNonSessionEntry: false, hasParentLinkedEntry: false };
@@ -69,10 +75,14 @@ function readTranscriptLineInfo(line: string): TranscriptLineInfo {
       return { isNonSessionEntry: true, hasParentLinkedEntry: false };
     }
     if (!("parentId" in parsed)) {
+      const isCanonicalEntry = isCanonicalSessionTranscriptEntry(parsed);
       return {
         isNonSessionEntry: true,
         hasParentLinkedEntry: false,
-        ...(isCanonicalSessionTranscriptEntry(parsed) ? { entryId } : {}),
+        ...(isCanonicalEntry ? { entryId, isCanonicalEntry: true as const } : {}),
+        ...(isCanonicalEntry && parsed.appendMode === "side"
+          ? { appendMode: parsed.appendMode }
+          : {}),
       };
     }
     if (parsed.type === "leaf") {
@@ -85,7 +95,8 @@ function readTranscriptLineInfo(line: string): TranscriptLineInfo {
             : normalizeEntryId(parsed.appendParentId);
       if (
         (parsed.targetId !== null && targetId === undefined) ||
-        (parsed.appendParentId !== undefined && appendParentId === undefined)
+        (parsed.appendParentId !== undefined && appendParentId === undefined) ||
+        (parsed.appendMode !== undefined && parsed.appendMode !== "side")
       ) {
         return {
           isNonSessionEntry: true,
@@ -101,13 +112,19 @@ function readTranscriptLineInfo(line: string): TranscriptLineInfo {
         leafControl: {
           targetId: targetId ?? null,
           ...(appendParentId !== undefined ? { appendParentId } : {}),
+          ...(parsed.appendMode === "side" ? { appendMode: parsed.appendMode } : {}),
         },
       };
     }
+    const isCanonicalEntry = isCanonicalSessionTranscriptEntry(parsed);
     return {
       isNonSessionEntry: true,
       hasParentLinkedEntry: true,
       entryId,
+      ...(isCanonicalEntry ? { isCanonicalEntry: true as const } : {}),
+      ...(isCanonicalEntry && parsed.appendMode === "side"
+        ? { appendMode: parsed.appendMode }
+        : {}),
     };
   } catch {
     return { isNonSessionEntry: false, hasParentLinkedEntry: false };
@@ -174,14 +191,17 @@ async function validateTranscriptLeafControlReferences(params: {
 
 async function resolveTranscriptLeafIdFromTrailingControls(
   transcriptPath: string,
-): Promise<string | undefined> {
+): Promise<{ leafId?: string; appendMode: "active" | "side" }> {
   for await (const line of streamSessionTranscriptLinesReverse(transcriptPath)) {
     const lineInfo = readTranscriptLineInfo(line);
     if (!lineInfo.entryId || lineInfo.invalidLeafControl) {
       continue;
     }
     if (!lineInfo.leafControl) {
-      return lineInfo.entryId;
+      return {
+        leafId: lineInfo.entryId,
+        appendMode: lineInfo.appendMode === "side" ? "side" : "active",
+      };
     }
     const valid = await validateTranscriptLeafControlReferences({
       transcriptPath,
@@ -189,11 +209,15 @@ async function resolveTranscriptLeafIdFromTrailingControls(
       leafControl: lineInfo.leafControl,
     });
     if (valid) {
-      const { targetId, appendParentId } = lineInfo.leafControl;
-      return (appendParentId === undefined ? targetId : appendParentId) ?? undefined;
+      const { targetId, appendParentId, appendMode } = lineInfo.leafControl;
+      const leafId = (appendParentId === undefined ? targetId : appendParentId) ?? undefined;
+      return {
+        ...(leafId ? { leafId } : {}),
+        appendMode: appendMode === "side" ? "side" : "active",
+      };
     }
   }
-  return undefined;
+  return { appendMode: "active" };
 }
 
 async function readTranscriptLeafInfo(transcriptPath: string): Promise<TranscriptLeafInfo> {
@@ -201,6 +225,7 @@ async function readTranscriptLeafInfo(transcriptPath: string): Promise<Transcrip
   let hasParentLinkedEntries = false;
   let nonSessionEntryCount = 0;
   let hasTrailingLeafControl = false;
+  let appendMode: "active" | "side" = "active";
   for await (const line of streamSessionTranscriptLines(transcriptPath)) {
     const lineInfo = readTranscriptLineInfo(line);
     if (lineInfo.isNonSessionEntry) {
@@ -213,17 +238,26 @@ async function readTranscriptLeafInfo(transcriptPath: string): Promise<Transcrip
       continue;
     }
     if (lineInfo.invalidLeafControl || lineInfo.leafControl) {
+      if (lineInfo.leafControl) {
+        appendMode = lineInfo.leafControl.appendMode === "side" ? "side" : "active";
+      }
       hasTrailingLeafControl = true;
       continue;
     }
     leafId = lineInfo.entryId;
+    if (lineInfo.isCanonicalEntry) {
+      appendMode = lineInfo.appendMode === "side" ? "side" : "active";
+    }
     hasTrailingLeafControl = false;
   }
   if (hasTrailingLeafControl) {
-    leafId = await resolveTranscriptLeafIdFromTrailingControls(transcriptPath);
+    const resolvedLeaf = await resolveTranscriptLeafIdFromTrailingControls(transcriptPath);
+    leafId = resolvedLeaf.leafId;
+    appendMode = resolvedLeaf.appendMode;
   }
   return {
     ...(leafId ? { leafId } : {}),
+    appendMode,
     hasParentLinkedEntries,
     nonSessionEntryCount,
   };
@@ -496,6 +530,7 @@ async function appendSessionTranscriptMessageLocked<TMessage>(
     () => ({
       hasParentLinkedEntries: false,
       nonSessionEntryCount: 0,
+      appendMode: "active",
     }),
   );
   const hasLinearEntries = !leafInfo.hasParentLinkedEntries && leafInfo.nonSessionEntryCount > 0;
@@ -506,6 +541,7 @@ async function appendSessionTranscriptMessageLocked<TMessage>(
     const migrated = await migrateLinearTranscriptToParentLinked(params.transcriptPath);
     leafInfo = {
       ...(migrated.leafId ? { leafId: migrated.leafId } : {}),
+      appendMode: "active",
       hasParentLinkedEntries: Boolean(migrated.leafId),
       nonSessionEntryCount: leafInfo.nonSessionEntryCount,
     };
@@ -521,6 +557,9 @@ async function appendSessionTranscriptMessageLocked<TMessage>(
     ...(shouldRawAppend ? {} : { parentId: leafInfo.leafId ?? null }),
     timestamp: resolveTimestampMsToIsoString(now),
     message: finalMessage,
+    ...(leafInfo.appendMode === "side" && isTranscriptOnlyOpenClawAssistantMessage(finalMessage)
+      ? { appendMode: "side" as const }
+      : {}),
   };
   await appendJsonlEntry(params.transcriptPath, entry);
   return { messageId, message: finalMessage, appended: true };

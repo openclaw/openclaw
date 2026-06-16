@@ -4,6 +4,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isSessionTranscriptSideAppendEntry } from "../../config/sessions/transcript-tree.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import { appendRegularFile } from "../../infra/fs-safe.js";
 import { privateFileStore } from "../../infra/private-file-store.js";
@@ -36,6 +37,7 @@ export type TranscriptLeafControlEntry = {
   timestamp: string;
   targetId: string | null;
   appendParentId?: string | null;
+  appendMode?: "side";
 };
 
 export type TranscriptPersistedEntry = SessionEntry | TranscriptLeafControlEntry;
@@ -293,6 +295,7 @@ function parseLeafControlEntry(entry: unknown):
       parentId: string | null;
       targetId: string | null;
       appendParentId?: string | null;
+      appendMode?: "side";
     }
   | undefined {
   if (!isRecord(entry) || entry.type !== "leaf") {
@@ -303,6 +306,7 @@ function parseLeafControlEntry(entry: unknown):
     parentId?: unknown;
     targetId?: unknown;
     appendParentId?: unknown;
+    appendMode?: unknown;
     timestamp?: unknown;
   };
   if (
@@ -314,7 +318,8 @@ function parseLeafControlEntry(entry: unknown):
     (candidate.targetId !== null && typeof candidate.targetId !== "string") ||
     (candidate.appendParentId !== undefined &&
       candidate.appendParentId !== null &&
-      typeof candidate.appendParentId !== "string")
+      typeof candidate.appendParentId !== "string") ||
+    (candidate.appendMode !== undefined && candidate.appendMode !== "side")
   ) {
     return undefined;
   }
@@ -323,6 +328,7 @@ function parseLeafControlEntry(entry: unknown):
     parentId: candidate.parentId ?? null,
     targetId: candidate.targetId,
     ...(candidate.appendParentId !== undefined ? { appendParentId: candidate.appendParentId } : {}),
+    ...(candidate.appendMode === "side" ? { appendMode: candidate.appendMode } : {}),
   };
 }
 
@@ -515,7 +521,9 @@ function readableSessionState(fileEntries: FileEntry[]): ReadableSessionState {
     const hasSerializedParent = Object.hasOwn(rawRecord, "parentId");
     if (
       !hasSerializedParent ||
-      (entry.parentId === effectiveAppendParentId && effectiveLeafId !== effectiveAppendParentId)
+      (!isSessionTranscriptSideAppendEntry(rawRecord) &&
+        entry.parentId === effectiveAppendParentId &&
+        effectiveLeafId !== effectiveAppendParentId)
     ) {
       logicalParentsById.set(entry.id, effectiveLeafId);
     }
@@ -877,7 +885,11 @@ export class TranscriptFileState {
   }
 
   private appendEntry<T extends SessionEntry>(entry: T): T {
-    if (entry.parentId === this.appendParentId && this.leafId !== this.appendParentId) {
+    if (
+      !isSessionTranscriptSideAppendEntry(entry) &&
+      entry.parentId === this.appendParentId &&
+      this.leafId !== this.appendParentId
+    ) {
       this.logicalParentsById.set(entry.id, this.leafId);
     }
     this.entries.push(entry);

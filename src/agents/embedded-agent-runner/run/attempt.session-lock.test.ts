@@ -857,7 +857,8 @@ describe("embedded attempt session lock lifecycle", () => {
       acquireSessionWriteLock,
       lockOptions: { ...lockOptions, sessionFile },
       mergePromptReleasedSessionEntries: (entries) =>
-        staleManager.mergePromptReleasedSessionEntries(entries),
+        staleManager.mergePromptReleasedSessionEntries(entries, { persistLeaf: true }),
+      reloadPromptReleasedSessionFile: () => staleManager.setSessionFile(sessionFile),
     });
 
     await controller.releaseForPrompt();
@@ -882,6 +883,14 @@ describe("embedded attempt session lock lifecycle", () => {
       ].join("\n") + "\n",
       "utf8",
     );
+    await controller.withSessionWriteLock(() => undefined);
+
+    const reopenedBeforeReply = SessionManager.open(sessionFile, dir, dir);
+    expect(
+      reopenedBeforeReply.buildSessionContext().messages.map((message) => message.role),
+    ).toEqual(["user"]);
+    expect(reopenedBeforeReply.getSessionName()).toBe("first turn");
+
     await controller.withSessionWriteLock(() => {
       staleManager.appendMessage({
         role: "assistant",
@@ -912,6 +921,238 @@ describe("embedded attempt session lock lifecycle", () => {
       type: "custom",
       customType: "model-snapshot",
     });
+  });
+
+  it("persists the restored leaf before returning from a prompt-released merge", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attempt-session-leaf-fence-"));
+    tempDirs.push(dir);
+    const initialManager = SessionManager.create(dir, dir);
+    initialManager.appendMessage({ role: "user", content: "question", timestamp: 1 });
+    const baseAnswerId = initialManager.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "base answer" }],
+      api: "messages",
+      provider: "anthropic",
+      model: "sonnet-4.6",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: 2,
+    });
+    const sessionFile = initialManager.getSessionFile();
+    if (!sessionFile) {
+      throw new Error("expected persisted session file");
+    }
+    const staleManager = SessionManager.open(sessionFile, dir, dir);
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+      mergePromptReleasedSessionEntries: (entries) =>
+        staleManager.mergePromptReleasedSessionEntries(entries, { persistLeaf: true }),
+      reloadPromptReleasedSessionFile: () => staleManager.setSessionFile(sessionFile),
+    });
+    await controller.releaseForPrompt();
+    await fs.appendFile(
+      sessionFile,
+      `${JSON.stringify({
+        type: "message",
+        id: "side-delivery",
+        parentId: baseAnswerId,
+        timestamp: new Date().toISOString(),
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "side delivery" }],
+          provider: "openclaw",
+          model: "delivery-mirror",
+        },
+      })}\n`,
+      "utf8",
+    );
+
+    await controller.withSessionWriteLock(() => undefined);
+
+    const records = (await fs.readFile(sessionFile, "utf8"))
+      .trim()
+      .split("\n")
+      .map(
+        (line) =>
+          JSON.parse(line) as {
+            type?: string;
+            parentId?: string | null;
+            targetId?: string | null;
+            appendParentId?: string | null;
+            appendMode?: string;
+          },
+      );
+    expect(records.at(-1)).toMatchObject({
+      type: "leaf",
+      parentId: "side-delivery",
+      targetId: baseAnswerId,
+      appendParentId: "side-delivery",
+      appendMode: "side",
+    });
+    const reopened = SessionManager.open(sessionFile, dir, dir);
+    expect(reopened.getLeafId()).toBe(baseAnswerId);
+    expect(JSON.stringify(reopened.buildSessionContext())).not.toContain("side delivery");
+    expect(controller.hasSessionTakeover()).toBe(false);
+    await controller.dispose();
+  });
+
+  it("publishes the restoring leaf for every active session fence", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attempt-session-shared-leaf-"));
+    tempDirs.push(dir);
+    const initialManager = SessionManager.create(dir, dir);
+    initialManager.appendMessage({ role: "user", content: "question", timestamp: 1 });
+    const baseAnswerId = initialManager.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "base answer" }],
+      api: "messages",
+      provider: "anthropic",
+      model: "sonnet-4.6",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: 2,
+    });
+    const sessionFile = initialManager.getSessionFile();
+    if (!sessionFile) {
+      throw new Error("expected persisted session file");
+    }
+    const firstManager = SessionManager.open(sessionFile, dir, dir);
+    const secondManager = SessionManager.open(sessionFile, dir, dir);
+    const firstController = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+      mergePromptReleasedSessionEntries: (entries) =>
+        firstManager.mergePromptReleasedSessionEntries(entries, { persistLeaf: true }),
+      reloadPromptReleasedSessionFile: () => firstManager.setSessionFile(sessionFile),
+    });
+    await firstController.releaseForPrompt();
+    const secondController = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+      mergePromptReleasedSessionEntries: (entries) =>
+        secondManager.mergePromptReleasedSessionEntries(entries, { persistLeaf: true }),
+      reloadPromptReleasedSessionFile: () => secondManager.setSessionFile(sessionFile),
+    });
+    await secondController.releaseForPrompt();
+
+    await fs.appendFile(
+      sessionFile,
+      `${JSON.stringify({
+        type: "message",
+        id: "shared-side-delivery",
+        parentId: baseAnswerId,
+        timestamp: new Date().toISOString(),
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "side delivery" }],
+          provider: "openclaw",
+          model: "delivery-mirror",
+        },
+      })}\n`,
+      "utf8",
+    );
+    await firstController.withSessionWriteLock(() => undefined);
+    const recordsAfterFirstMerge = (await fs.readFile(sessionFile, "utf8")).trim().split("\n");
+
+    await secondController.withSessionWriteLock(() => undefined);
+
+    const recordsAfterSecondMerge = (await fs.readFile(sessionFile, "utf8")).trim().split("\n");
+    expect(recordsAfterSecondMerge).toHaveLength(recordsAfterFirstMerge.length);
+    expect(JSON.parse(recordsAfterSecondMerge.at(-1) ?? "{}")).toMatchObject({
+      type: "leaf",
+      targetId: baseAnswerId,
+      appendParentId: "shared-side-delivery",
+      appendMode: "side",
+    });
+    expect(firstController.hasSessionTakeover()).toBe(false);
+    expect(secondController.hasSessionTakeover()).toBe(false);
+    await firstController.dispose();
+    await secondController.dispose();
+  });
+
+  it("reloads a trusted first-turn rewrite for every active session fence", async () => {
+    const dir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-attempt-session-shared-rewrite-"),
+    );
+    tempDirs.push(dir);
+    const sessionFile = path.join(dir, "session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify({
+        type: "session",
+        version: 3,
+        id: "shared-first-turn",
+        timestamp: new Date().toISOString(),
+        cwd: dir,
+      })}\n`,
+      "utf8",
+    );
+    const firstManager = SessionManager.open(sessionFile, dir, dir);
+    const firstUserId = firstManager.appendMessage({
+      role: "user",
+      content: "first prepared question",
+      timestamp: 1,
+    });
+    const secondManager = SessionManager.open(sessionFile, dir, dir);
+    secondManager.appendMessage({
+      role: "user",
+      content: "stale prepared question",
+      timestamp: 1,
+    });
+    const firstController = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+      mergePromptReleasedSessionEntries: (entries) =>
+        firstManager.mergePromptReleasedSessionEntries(entries, { persistLeaf: true }),
+      reloadPromptReleasedSessionFile: () => firstManager.setSessionFile(sessionFile),
+    });
+    await firstController.releaseForPrompt();
+    const secondController = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+      mergePromptReleasedSessionEntries: (entries) =>
+        secondManager.mergePromptReleasedSessionEntries(entries, { persistLeaf: true }),
+      reloadPromptReleasedSessionFile: () => secondManager.setSessionFile(sessionFile),
+    });
+    await secondController.releaseForPrompt();
+    await fs.appendFile(
+      sessionFile,
+      `${JSON.stringify({
+        type: "session_info",
+        id: "shared-session-info",
+        parentId: null,
+        timestamp: new Date().toISOString(),
+        name: "shared first turn",
+      })}\n`,
+      "utf8",
+    );
+
+    await firstController.withSessionWriteLock(() => undefined);
+    await secondController.withSessionWriteLock(() => undefined);
+
+    expect(secondManager.getLeafId()).toBe(firstUserId);
+    expect(secondManager.getSessionName()).toBe("shared first turn");
+    expect(secondManager.buildSessionContext().messages).toMatchObject([
+      { role: "user", content: "first prepared question" },
+    ]);
+    expect(firstController.hasSessionTakeover()).toBe(false);
+    expect(secondController.hasSessionTakeover()).toBe(false);
+    await firstController.dispose();
+    await secondController.dispose();
   });
 
   it("preserves globally resolved metadata when a stale manager appends the reply branch", async () => {
@@ -949,7 +1190,8 @@ describe("embedded attempt session lock lifecycle", () => {
       acquireSessionWriteLock,
       lockOptions: { ...lockOptions, sessionFile },
       mergePromptReleasedSessionEntries: (entries) =>
-        staleManager.mergePromptReleasedSessionEntries(entries),
+        staleManager.mergePromptReleasedSessionEntries(entries, { persistLeaf: true }),
+      reloadPromptReleasedSessionFile: () => staleManager.setSessionFile(sessionFile),
     });
 
     await controller.releaseForPrompt();
@@ -1039,7 +1281,8 @@ describe("embedded attempt session lock lifecycle", () => {
       acquireSessionWriteLock,
       lockOptions: { ...lockOptions, sessionFile },
       mergePromptReleasedSessionEntries: (entries) =>
-        staleManager.mergePromptReleasedSessionEntries(entries),
+        staleManager.mergePromptReleasedSessionEntries(entries, { persistLeaf: true }),
+      reloadPromptReleasedSessionFile: () => staleManager.setSessionFile(sessionFile),
     });
 
     await controller.releaseForPrompt();
@@ -3264,7 +3507,8 @@ describe("embedded attempt session lock lifecycle", () => {
       acquireSessionWriteLock,
       lockOptions: { ...lockOptions, sessionFile },
       mergePromptReleasedSessionEntries: (entries) =>
-        staleManager.mergePromptReleasedSessionEntries(entries),
+        staleManager.mergePromptReleasedSessionEntries(entries, { persistLeaf: true }),
+      reloadPromptReleasedSessionFile: () => staleManager.setSessionFile(sessionFile),
     });
     await controller.releaseForPrompt();
 

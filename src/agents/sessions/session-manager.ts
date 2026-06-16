@@ -26,8 +26,11 @@ import {
   serializeJsonlLine,
   writeJsonlEntriesSync,
 } from "../../config/sessions/transcript-jsonl.js";
+import { isSessionTranscriptSideAppendEntry } from "../../config/sessions/transcript-tree.js";
 import {
   canAdvanceOwnedSessionEntryCache,
+  type OwnedSessionTranscriptCacheSnapshot,
+  type OwnedSessionTranscriptPublishedEntry,
   publishOwnedSessionFileSnapshot,
 } from "../../config/sessions/transcript-write-context.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
@@ -63,6 +66,8 @@ export interface SessionEntryBase {
   id: string;
   parentId: string | null;
   timestamp: string;
+  /** This row consumes the raw side cursor instead of the visible leaf. */
+  appendMode?: "side";
 }
 
 export interface SessionMessageEntry extends SessionEntryBase {
@@ -142,6 +147,12 @@ export type PromptReleasedSessionEntry =
   | LabelEntry
   | SessionInfoEntry
   | PromptReleasedOpaqueEntry;
+
+export type PromptReleasedSessionMergeResult = {
+  sessionFileSnapshot: OwnedSessionTranscriptCacheSnapshot;
+  publishedEntries?: readonly OwnedSessionTranscriptPublishedEntry[];
+  requiresReload?: true;
+};
 
 /**
  * Custom message entry for extensions to inject messages into LLM context.
@@ -980,6 +991,16 @@ type PreservedOpaqueFileEntry = {
   record: unknown;
 };
 
+type SessionLeafControl = {
+  type: "leaf";
+  id: string;
+  parentId: string | null;
+  timestamp: string;
+  targetId: string | null;
+  appendParentId?: string | null;
+  appendMode?: "side";
+};
+
 function parseParentLinkedOpaqueEntry(
   record: unknown,
 ): { id: string; parentId: string | null } | undefined {
@@ -1002,6 +1023,7 @@ function parseOpaqueLeafEntry(record: unknown):
       parentId: string | null;
       targetId: string | null;
       appendParentId?: string | null;
+      appendMode?: "side";
     }
   | undefined {
   if (
@@ -1023,11 +1045,15 @@ function parseOpaqueLeafEntry(record: unknown):
   ) {
     return undefined;
   }
+  if (record.appendMode !== undefined && record.appendMode !== "side") {
+    return undefined;
+  }
   return {
     id: record.id,
     parentId: record.parentId,
     targetId: record.targetId,
     ...(record.appendParentId !== undefined ? { appendParentId: record.appendParentId } : {}),
+    ...(record.appendMode === "side" ? { appendMode: record.appendMode } : {}),
   };
 }
 
@@ -1537,7 +1563,7 @@ export class SessionManager {
 
   private resolveOpaqueLeafControl(
     leafEntry: ReturnType<typeof parseOpaqueLeafEntry>,
-  ): { leafId: string | null; appendParentId: string | null } | undefined {
+  ): { leafId: string | null; appendParentId: string | null; appendMode?: "side" } | undefined {
     if (!leafEntry) {
       return undefined;
     }
@@ -1558,6 +1584,7 @@ export class SessionManager {
         leafEntry.appendParentId === undefined
           ? leafId
           : this.resolveOpaqueAppendParentId(leafEntry.appendParentId),
+      ...(leafEntry.appendMode ? { appendMode: leafEntry.appendMode } : {}),
     };
   }
 
@@ -1609,7 +1636,9 @@ export class SessionManager {
       const hasSerializedParent = Object.hasOwn(entry, "parentId");
       if (
         !hasSerializedParent ||
-        (entry.parentId === this.appendParentId && this.leafId !== this.appendParentId)
+        (!isSessionTranscriptSideAppendEntry(entry) &&
+          entry.parentId === this.appendParentId &&
+          this.leafId !== this.appendParentId)
       ) {
         this.logicalParentsById.set(entry.id, this.leafId);
       }
@@ -1729,7 +1758,36 @@ export class SessionManager {
     }
   }
 
-  private getPersistedFileEntries(): unknown[] {
+  private createLeafControl(
+    parentId: string | null,
+    appendParentId: string | null = this.appendParentId,
+    appendMode?: "side",
+  ): SessionLeafControl {
+    return {
+      type: "leaf",
+      id: generateId({
+        has: (id) => this.byId.has(id) || this.opaqueParentsById.has(id),
+      }),
+      parentId,
+      timestamp: new Date().toISOString(),
+      targetId: this.leafId,
+      ...(appendParentId !== this.leafId ? { appendParentId } : {}),
+      ...(appendMode ? { appendMode } : {}),
+    };
+  }
+
+  private rememberLeafControl(leafEntry: SessionLeafControl): void {
+    this.opaqueFileEntries.push({
+      index: this.fileEntries.length,
+      record: leafEntry,
+    });
+    this.opaqueParentsById.set(leafEntry.id, this.leafId);
+  }
+
+  private getPersistedFileEntries(
+    leafAppendParentId: string | null = this.appendParentId,
+    leafAppendMode?: "side",
+  ): unknown[] {
     // Tail cleanup removes canonical entries before rewriting. Clamp opaque
     // anchors now so later appends stay after records that the rewrite moved
     // to the new tail instead of crossing them on the next full rewrite.
@@ -1784,21 +1842,8 @@ export class SessionManager {
     if (persistedLeafId !== this.leafId || persistedAppendParentId !== this.appendParentId) {
       // Full rewrites preserve side branches in file order. Encode the active
       // branch explicitly so reopening does not adopt the serialized side tail.
-      const leafEntry = {
-        type: "leaf",
-        id: generateId({
-          has: (id) => this.byId.has(id) || this.opaqueParentsById.has(id),
-        }),
-        parentId: rawTailId,
-        timestamp: new Date().toISOString(),
-        targetId: this.leafId,
-        ...(this.appendParentId !== this.leafId ? { appendParentId: this.appendParentId } : {}),
-      };
-      this.opaqueFileEntries.push({
-        index: this.fileEntries.length,
-        record: leafEntry,
-      });
-      this.opaqueParentsById.set(leafEntry.id, this.leafId);
+      const leafEntry = this.createLeafControl(rawTailId, leafAppendParentId, leafAppendMode);
+      this.rememberLeafControl(leafEntry);
       entries.push(leafEntry);
     }
     return entries;
@@ -1816,21 +1861,33 @@ export class SessionManager {
     this.promptReleasedSideBranchParentId = undefined;
   }
 
-  private writeFullFile(): string {
+  private writeFullFile(
+    leafAppendParentId: string | null = this.appendParentId,
+    leafAppendMode?: "side",
+  ): string {
     if (!this.sessionFile) {
       return "";
     }
-    return writeJsonlEntriesSync(this.sessionFile, this.getPersistedFileEntries());
+    return writeJsonlEntriesSync(
+      this.sessionFile,
+      this.getPersistedFileEntries(leafAppendParentId, leafAppendMode),
+    );
   }
 
-  private rewriteFile(): void {
+  private rewriteFile(options?: {
+    publishSnapshot?: boolean;
+    leafAppendParentId?: string | null;
+    leafAppendMode?: "side";
+  }): void {
     if (!this.shouldPersist || !this.sessionFile) {
       return;
     }
-    const content = this.writeFullFile();
+    const leafAppendParentId =
+      options?.leafAppendParentId === undefined ? this.appendParentId : options.leafAppendParentId;
+    const content = this.writeFullFile(leafAppendParentId, options?.leafAppendMode);
     const rememberedWrite = rememberWrittenSessionEntries(this.sessionFile, content);
     this.sessionFileSnapshot = rememberedWrite.snapshot;
-    if (rememberedWrite.verifiedWrite) {
+    if (rememberedWrite.verifiedWrite && options?.publishSnapshot !== false) {
       publishRememberedSessionFileSnapshot(this.sessionFile, rememberedWrite.snapshot);
     }
   }
@@ -1974,7 +2031,11 @@ export class SessionManager {
     return removedEntries.length;
   }
 
-  persist(entry: SessionEntry, options?: AppendPersistenceOptions): void {
+  private persistRecord(
+    entry: unknown,
+    options?: AppendPersistenceOptions,
+    publishSnapshot = true,
+  ): void {
     if (!this.shouldPersist || !this.sessionFile) {
       return;
     }
@@ -1993,7 +2054,7 @@ export class SessionManager {
       this.flushed = true;
       const rememberedWrite = rememberWrittenSessionEntries(this.sessionFile, content);
       this.sessionFileSnapshot = rememberedWrite.snapshot;
-      if (rememberedWrite.verifiedWrite) {
+      if (rememberedWrite.verifiedWrite && publishSnapshot) {
         publishRememberedSessionFileSnapshot(this.sessionFile, rememberedWrite.snapshot);
       }
     } else {
@@ -2028,10 +2089,14 @@ export class SessionManager {
         invalidateSerializedPrefixCache,
       );
       this.sessionFileSnapshot = rememberedAppend.snapshot;
-      if (rememberedAppend.ownedAppendVerified) {
+      if (rememberedAppend.ownedAppendVerified && publishSnapshot) {
         publishRememberedSessionFileSnapshot(this.sessionFile, rememberedAppend.snapshot);
       }
     }
+  }
+
+  persist(entry: SessionEntry, options?: AppendPersistenceOptions): void {
+    this.persistRecord(entry, options);
   }
 
   /**
@@ -2058,11 +2123,19 @@ export class SessionManager {
    * Attach them as a side branch so rewrites retain external state without
    * moving the prepared reply branch or adding delivery mirrors to its context.
    */
-  mergePromptReleasedSessionEntries(entries: readonly PromptReleasedSessionEntry[]): void {
+  mergePromptReleasedSessionEntries(
+    entries: readonly PromptReleasedSessionEntry[],
+    options?: { persistLeaf?: boolean },
+  ): PromptReleasedSessionMergeResult | undefined {
     let sideBranchParentId =
       this.promptReleasedSideBranchParentId === undefined
         ? this.leafId
         : this.promptReleasedSideBranchParentId;
+    let persistedLeafId = this.leafId;
+    let persistedAppendParentId = this.appendParentId;
+    let persistedAppendMode: "active" | "side" = "active";
+    let sawPersistedStateUpdate = false;
+    let rawTailId: string | null = null;
     for (const sourceEntry of entries) {
       if (sourceEntry.type === "prompt_released_opaque") {
         this.opaqueFileEntries.push({
@@ -2071,6 +2144,7 @@ export class SessionManager {
         });
         const leafEntry = parseOpaqueLeafEntry(sourceEntry.record);
         if (leafEntry) {
+          rawTailId = leafEntry.id;
           const leafState = this.resolveOpaqueLeafControl(leafEntry);
           if (!leafState) {
             this.invalidLeafControlIds.add(leafEntry.id);
@@ -2082,12 +2156,19 @@ export class SessionManager {
           }
           this.opaqueParentsById.set(leafEntry.id, leafState.leafId);
           sideBranchParentId = leafState.appendParentId;
+          persistedLeafId = leafState.leafId;
+          persistedAppendParentId = leafState.appendParentId;
+          persistedAppendMode = leafState.appendMode === "side" ? "side" : "active";
+          sawPersistedStateUpdate = true;
           continue;
         }
         const link = parseParentLinkedOpaqueEntry(sourceEntry.record);
         if (link) {
           this.opaqueParentsById.set(link.id, link.parentId);
           sideBranchParentId = link.id;
+          persistedAppendParentId = link.id;
+          sawPersistedStateUpdate = true;
+          rawTailId = link.id;
         }
         continue;
       }
@@ -2104,6 +2185,11 @@ export class SessionManager {
       this.fileEntries.push(entry);
       this.byId.set(entry.id, entry);
       sideBranchParentId = entry.id;
+      persistedLeafId = entry.id;
+      persistedAppendParentId = entry.id;
+      persistedAppendMode = "active";
+      sawPersistedStateUpdate = true;
+      rawTailId = entry.id;
       if (entry.type === "label") {
         if (entry.label) {
           this.labelsById.set(entry.targetId, entry.label);
@@ -2118,10 +2204,55 @@ export class SessionManager {
     if (this.sessionFile) {
       this.sessionFileSnapshot = readSessionFileSnapshotIfExists(this.sessionFile);
     }
+    if (
+      options?.persistLeaf !== true ||
+      !this.shouldPersist ||
+      !this.sessionFile ||
+      !sawPersistedStateUpdate ||
+      (persistedLeafId === this.leafId &&
+        persistedAppendParentId === sideBranchParentId &&
+        persistedAppendMode === "side")
+    ) {
+      return undefined;
+    }
+
+    const hasAssistant = this.fileEntries.some(
+      (entry) => entry.type === "message" && entry.message.role === "assistant",
+    );
+    if (!this.flushed || !hasAssistant) {
+      this.rewriteFile({
+        publishSnapshot: false,
+        leafAppendParentId: sideBranchParentId,
+        leafAppendMode: "side",
+      });
+      this.flushed = true;
+      if (!this.sessionFileSnapshot) {
+        throw new Error(`Unable to snapshot restored session file: ${this.sessionFile}`);
+      }
+      // The rewrite can materialize an unflushed user turn as well as the leaf,
+      // so peer controllers must reload the trusted final file instead of
+      // attempting to replay an append-only entry delta.
+      return { sessionFileSnapshot: this.sessionFileSnapshot, requiresReload: true };
+    }
+
+    const leafEntry = this.createLeafControl(rawTailId, sideBranchParentId, "side");
+    this.persistRecord(leafEntry, undefined, false);
+    this.rememberLeafControl(leafEntry);
+    if (!this.sessionFileSnapshot) {
+      throw new Error(`Unable to snapshot restored session file: ${this.sessionFile}`);
+    }
+    return {
+      sessionFileSnapshot: this.sessionFileSnapshot,
+      publishedEntries: [{ kind: "id", id: leafEntry.id }],
+    };
   }
 
   private appendEntry(entry: SessionEntry, options?: AppendPersistenceOptions): void {
-    if (entry.parentId === this.appendParentId && this.leafId !== this.appendParentId) {
+    if (
+      !isSessionTranscriptSideAppendEntry(entry) &&
+      entry.parentId === this.appendParentId &&
+      this.leafId !== this.appendParentId
+    ) {
       this.logicalParentsById.set(entry.id, this.leafId);
     }
     this.fileEntries.push(entry);

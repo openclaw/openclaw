@@ -125,6 +125,9 @@ function parseEntryLine(line: string, filePath: string, lineNumber: number): Ses
   ) {
     throw invalidEntry(filePath, lineNumber, "has invalid appendParentId");
   }
+  if (parsed.appendMode !== undefined && parsed.appendMode !== "side") {
+    throw invalidEntry(filePath, lineNumber, "has invalid appendMode");
+  }
   return parsed as unknown as SessionTreeEntry;
 }
 

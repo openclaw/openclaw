@@ -28,6 +28,10 @@ function buildLabelsById(entries: SessionTreeEntry[]): Map<string, string> {
   return labelsById;
 }
 
+function isSideAppendEntry(entry: SessionTreeEntry): boolean {
+  return entry.appendMode === "side";
+}
+
 function generateEntryId(byId: { has(id: string): boolean }): string {
   for (let i = 0; i < 100; i++) {
     const id = uuidv7().slice(0, 8);
@@ -94,7 +98,12 @@ function buildLogicalParentsById(entries: readonly SessionTreeEntry[]): Map<stri
   let appendParentId: string | null = null;
   for (const entry of entries) {
     const leafUpdate = leafIdUpdateAfterEntry(entry);
-    if (leafUpdate === entry.id && entry.parentId === appendParentId && leafId !== appendParentId) {
+    if (
+      leafUpdate === entry.id &&
+      !isSideAppendEntry(entry) &&
+      entry.parentId === appendParentId &&
+      leafId !== appendParentId
+    ) {
       logicalParentsById.set(entry.id, leafId);
     }
     if (leafUpdate !== undefined) {
@@ -193,6 +202,7 @@ export abstract class BaseSessionStorage<
     const leafId = leafIdUpdateAfterEntry(entry);
     if (
       leafId === entry.id &&
+      !isSideAppendEntry(entry) &&
       entry.parentId === this.appendParentId &&
       this.leafId !== this.appendParentId
     ) {

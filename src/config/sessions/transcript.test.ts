@@ -13,6 +13,7 @@ import {
   appendSessionTranscriptEvent,
   appendSessionTranscriptMessage,
 } from "./transcript-append.js";
+import { selectSessionTranscriptLeafControlledPath } from "./transcript-tree.js";
 import {
   bindOwnedSessionTranscriptWrites,
   withOwnedSessionTranscriptWrites,
@@ -1465,6 +1466,112 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       .map((line) => JSON.parse(line) as { id?: string; parentId?: string | null })
       .find((entry) => entry.id === appended.messageId);
     expect(appendedEntry?.parentId).toBe(metadata.id);
+  });
+
+  it("marks transcript-only messages that consume a side append cursor", async () => {
+    const sessionFile = resolveSessionTranscriptPathInDir(
+      "side-append-mode-transcript-session",
+      fixture.sessionsDir(),
+    );
+    const activeEntry = {
+      type: "message",
+      id: "active-entry",
+      parentId: null,
+      timestamp: "2026-05-30T12:00:00.000Z",
+      message: { role: "user", content: "active question" },
+    };
+    const sideEntry = {
+      type: "message",
+      id: "side-entry",
+      parentId: activeEntry.id,
+      timestamp: "2026-05-30T12:00:01.000Z",
+      message: { role: "assistant", content: "first side delivery" },
+    };
+    fs.writeFileSync(
+      sessionFile,
+      [
+        {
+          type: "session",
+          version: 3,
+          id: "side-append-mode-transcript-session",
+          timestamp: "2026-05-30T12:00:00.000Z",
+          cwd: fixture.sessionsDir(),
+        },
+        activeEntry,
+        sideEntry,
+        {
+          type: "leaf",
+          id: "side-leaf",
+          parentId: sideEntry.id,
+          timestamp: "2026-05-30T12:00:02.000Z",
+          targetId: activeEntry.id,
+          appendParentId: sideEntry.id,
+          appendMode: "side",
+        },
+      ]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n") + "\n",
+    );
+
+    const appended = await appendSessionTranscriptMessage({
+      transcriptPath: sessionFile,
+      message: {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: "second side delivery",
+      },
+    });
+
+    const appendedEntry = fs
+      .readFileSync(sessionFile, "utf8")
+      .trim()
+      .split("\n")
+      .map(
+        (line) =>
+          JSON.parse(line) as {
+            id?: string;
+            parentId?: string | null;
+            appendMode?: string;
+          },
+      )
+      .find((entry) => entry.id === appended.messageId);
+    expect(appendedEntry).toMatchObject({
+      parentId: sideEntry.id,
+      appendMode: "side",
+    });
+
+    fs.appendFileSync(
+      sessionFile,
+      `${JSON.stringify({
+        type: "leaf",
+        id: "restored-side-leaf",
+        parentId: appended.messageId,
+        timestamp: "2026-05-30T12:00:04.000Z",
+        targetId: activeEntry.id,
+        appendParentId: appended.messageId,
+        appendMode: "side",
+      })}\n`,
+      "utf8",
+    );
+    const nextUser = await appendSessionTranscriptMessage({
+      transcriptPath: sessionFile,
+      message: { role: "user", content: "next question" },
+    });
+    const finalRecords = fs
+      .readFileSync(sessionFile, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(finalRecords.find((entry) => entry.id === nextUser.messageId)).toMatchObject({
+      parentId: appended.messageId,
+    });
+    expect(finalRecords.find((entry) => entry.id === nextUser.messageId)).not.toHaveProperty(
+      "appendMode",
+    );
+    expect(
+      selectSessionTranscriptLeafControlledPath(finalRecords)?.map((entry) => entry.id),
+    ).toEqual([activeEntry.id, nextUser.messageId]);
   });
 
   it("ignores dangling leaf references when choosing the direct append parent", async () => {

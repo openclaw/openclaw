@@ -374,6 +374,8 @@ export interface SessionTreeEntryBase {
   parentId: string | null;
   /** ISO timestamp string used for persistence and sorting. */
   timestamp: string;
+  /** This row consumes the raw side cursor instead of the visible leaf. */
+  appendMode?: "side";
 }
 
 /** Persisted transcript message entry. */

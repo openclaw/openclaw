@@ -6,6 +6,7 @@ export type SessionTranscriptTreeEntry = {
   parentId: string | null;
   leafId: string | null | undefined;
   appendParentId: string | null;
+  appendMode?: "side";
 };
 
 export type SessionTranscriptTreeNode<T> = SessionTranscriptTreeEntry & {
@@ -55,6 +56,10 @@ export function isCanonicalSessionTranscriptEntry(
   return isRecord(record) && isCanonicalSessionEntryType(record.type);
 }
 
+export function isSessionTranscriptSideAppendEntry(record: unknown): boolean {
+  return isCanonicalSessionTranscriptEntry(record) && record.appendMode === "side";
+}
+
 export function isSessionTranscriptLeafControl(
   record: unknown,
 ): record is TranscriptRecord & { type: "leaf" } {
@@ -92,15 +97,24 @@ export function parseSessionTranscriptTreeEntry(
         : record.appendParentId === null
           ? null
           : (readNonEmptyString(record.appendParentId) ?? undefined);
-    return targetId === undefined || appendParentId === undefined
+    const appendMode =
+      record.appendMode === undefined ? undefined : record.appendMode === "side" ? "side" : null;
+    return targetId === undefined || appendParentId === undefined || appendMode === null
       ? undefined
-      : { id, parentId: targetId, leafId: targetId, appendParentId };
+      : {
+          id,
+          parentId: targetId,
+          leafId: targetId,
+          appendParentId,
+          ...(appendMode ? { appendMode } : {}),
+        };
   }
   return {
     id,
     parentId,
     leafId: isCanonicalSessionTranscriptEntry(record) ? id : undefined,
     appendParentId: id,
+    ...(record.appendMode === "side" ? { appendMode: record.appendMode } : {}),
   };
 }
 
@@ -112,7 +126,15 @@ function parseParentlessCanonicalEntry(
     return undefined;
   }
   const id = readNonEmptyString(record.id);
-  return id ? { id, parentId, leafId: id, appendParentId: id } : undefined;
+  return id
+    ? {
+        id,
+        parentId,
+        leafId: id,
+        appendParentId: id,
+        ...(record.appendMode === "side" ? { appendMode: record.appendMode } : {}),
+      }
+    : undefined;
 }
 
 function resolveCanonicalParentId<T>(
@@ -186,7 +208,10 @@ export function scanSessionTranscriptTree<T>(entries: readonly T[]): SessionTran
       explicitTreeEntry ?? parseParentlessCanonicalEntry(entry, leafId);
     if (treeEntry && isCanonicalSessionTranscriptEntry(entry)) {
       const logicalParentId =
-        explicitTreeEntry && treeEntry.parentId === appendParentId && leafId !== appendParentId
+        explicitTreeEntry &&
+        treeEntry.appendMode !== "side" &&
+        treeEntry.parentId === appendParentId &&
+        leafId !== appendParentId
           ? leafId
           : treeEntry.parentId;
       const normalizedParentId = resolveCanonicalParentId(logicalParentId, byId);

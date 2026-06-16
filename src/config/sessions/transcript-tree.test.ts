@@ -273,6 +273,7 @@ describe("session transcript tree helpers", () => {
         parentId: "inactive",
         targetId: "visible",
         appendParentId: "append-root",
+        appendMode: "side",
       },
       { type: "custom", id: "continued", parentId: "append-root" },
     ];
@@ -284,6 +285,35 @@ describe("session transcript tree helpers", () => {
       entries[0],
       { ...entries[4], parentId: "visible" },
     ]);
+  });
+
+  it("preserves side ancestry after an explicit side append leaf", () => {
+    const entries = [
+      { type: "custom", id: "visible", parentId: null },
+      { type: "custom", id: "side-one", parentId: "visible" },
+      {
+        type: "leaf",
+        id: "first-leaf",
+        parentId: "side-one",
+        targetId: "visible",
+        appendParentId: "side-one",
+        appendMode: "side",
+      },
+      { type: "custom", id: "side-two", parentId: "side-one", appendMode: "side" },
+      {
+        type: "leaf",
+        id: "second-leaf",
+        parentId: "side-two",
+        targetId: "visible",
+        appendParentId: "side-two",
+        appendMode: "side",
+      },
+    ];
+
+    const tree = scanSessionTranscriptTree(entries);
+
+    expect(tree.byId.get("side-two")?.parentId).toBe("side-one");
+    expect(selectSessionTranscriptLeafControlledPath(entries)).toEqual([entries[0]]);
   });
 
   it("copies only the opaque suffix of a disjoint append path", () => {

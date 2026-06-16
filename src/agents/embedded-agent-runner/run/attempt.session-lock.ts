@@ -14,12 +14,14 @@ import {
   withOwnedSessionTranscriptWrites,
 } from "../../../config/sessions/transcript-write-context.js";
 import { resolveGlobalSingleton } from "../../../shared/global-singleton.js";
+import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../shared/transcript-only-openclaw-assistant.js";
 import { isSessionWriteLockAcquireError } from "../../session-write-lock-error.js";
 import type { acquireSessionWriteLock } from "../../session-write-lock.js";
 import type {
   CustomEntry,
   LabelEntry,
   PromptReleasedOpaqueEntry,
+  PromptReleasedSessionMergeResult,
   SessionInfoEntry,
   SessionMessageEntry,
 } from "../../sessions/session-manager.js";
@@ -126,7 +128,6 @@ type SessionFileFingerprint =
 
 export type TrustedSessionFileSnapshot = Extract<SessionFileFingerprint, { exists: true }>;
 
-const TRANSCRIPT_ONLY_OPENCLAW_ASSISTANT_MODELS = new Set(["delivery-mirror", "gateway-injected"]);
 const MAX_BENIGN_SESSION_FENCE_ADVANCE_BYTES = 1024 * 1024;
 const MAX_BENIGN_SESSION_FENCE_REWRITE_BYTES = 8 * 1024 * 1024;
 const MAX_BENIGN_SESSION_FENCE_REWRITE_RESULT_BYTES =
@@ -203,7 +204,8 @@ function parsePromptReleasedMessageLine(
       parsed.timestamp.trim().length === 0 ||
       (parsed.parentId !== undefined &&
         parsed.parentId !== null &&
-        typeof parsed.parentId !== "string")
+        typeof parsed.parentId !== "string") ||
+      (parsed.appendMode !== undefined && parsed.appendMode !== "side")
     ) {
       return undefined;
     }
@@ -211,11 +213,7 @@ function parsePromptReleasedMessageLine(
     if (!isJsonRecord(message)) {
       return undefined;
     }
-    const isOpenClawTranscriptOnlyAssistant =
-      message.role === "assistant" &&
-      message.provider === "openclaw" &&
-      typeof message.model === "string" &&
-      TRANSCRIPT_ONLY_OPENCLAW_ASSISTANT_MODELS.has(message.model);
+    const isOpenClawTranscriptOnlyAssistant = isTranscriptOnlyOpenClawAssistantMessage(message);
     if (
       typeof message.role !== "string" ||
       (!options?.allowAnyMessage && !isOpenClawTranscriptOnlyAssistant)
@@ -228,6 +226,7 @@ function parsePromptReleasedMessageLine(
       parentId: parsed.parentId ?? null,
       timestamp: parsed.timestamp,
       message: message as unknown as SessionMessageEntry["message"],
+      ...(parsed.appendMode === "side" ? { appendMode: parsed.appendMode } : {}),
     };
   } catch {
     return undefined;
@@ -793,6 +792,7 @@ type OwnedSessionFileWrite = {
   generation: number;
   fingerprint: SessionFileFingerprint;
   publishedEntries?: readonly OwnedSessionTranscriptPublishedEntry[];
+  requiresReload?: true;
 };
 
 type OwnedSessionFileWriteHistory = {
@@ -1009,12 +1009,14 @@ function recordOwnedSessionFileWrite(
   sessionFileKey: string,
   fingerprint: SessionFileFingerprint,
   publishedEntries?: readonly OwnedSessionTranscriptPublishedEntry[],
+  requiresReload?: true,
 ): number {
   ownedSessionFileWriteGeneration += 1;
   const state = {
     generation: ownedSessionFileWriteGeneration,
     fingerprint,
     ...(publishedEntries ? { publishedEntries: [...publishedEntries] } : {}),
+    ...(requiresReload ? { requiresReload } : {}),
   };
   const history = resolveOwnedSessionFileWriteHistory(sessionFileKey);
   history.writes.push(state);
@@ -1137,7 +1139,8 @@ export async function createEmbeddedAttemptSessionLockController(params: {
   lockOptions: LockOptions;
   mergePromptReleasedSessionEntries?: (
     entries: readonly PromptReleasedSessionEntry[],
-  ) => Promise<void> | void;
+  ) => Promise<PromptReleasedSessionMergeResult | void> | PromptReleasedSessionMergeResult | void;
+  reloadPromptReleasedSessionFile?: () => Promise<void> | void;
 }): Promise<EmbeddedAttemptSessionLockController> {
   const acquireLock = async (): Promise<SessionLock> =>
     await params.acquireSessionWriteLock({
@@ -1200,7 +1203,9 @@ export async function createEmbeddedAttemptSessionLockController(params: {
   ): Promise<
     | {
         snapshot: SessionFileFenceSnapshot;
-        publishedEntries: OwnedSessionTranscriptPublishedEntry[];
+        publishedEntries?: OwnedSessionTranscriptPublishedEntry[];
+        postMergePublishedEntries?: readonly OwnedSessionTranscriptPublishedEntry[];
+        requiresReload?: true;
       }
     | undefined
   > {
@@ -1222,21 +1227,53 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     ) {
       return undefined;
     }
+    let mergeResult: PromptReleasedSessionMergeResult | void;
     try {
-      await params.mergePromptReleasedSessionEntries(change.entries);
+      mergeResult = await params.mergePromptReleasedSessionEntries(change.entries);
     } catch (error) {
       takeoverDetected = true;
       throw error;
     }
     const refreshedSnapshot = await readSessionFileFenceSnapshot(params.lockOptions.sessionFile);
-    if (!sameSessionFileFingerprint(current, refreshedSnapshot.fingerprint)) {
+    const expectedFingerprint = mergeResult?.sessionFileSnapshot
+      ? { exists: true as const, ...mergeResult.sessionFileSnapshot }
+      : current;
+    if (!sameSessionFileFingerprint(expectedFingerprint, refreshedSnapshot.fingerprint)) {
       takeoverDetected = true;
       throw new EmbeddedAttemptSessionTakeoverError(params.lockOptions.sessionFile);
     }
     return {
       snapshot: refreshedSnapshot,
-      publishedEntries: change.publishedEntries,
+      publishedEntries: mergeResult?.requiresReload
+        ? undefined
+        : mergeResult?.publishedEntries
+          ? [...change.publishedEntries, ...mergeResult.publishedEntries]
+          : change.publishedEntries,
+      ...(mergeResult?.publishedEntries
+        ? { postMergePublishedEntries: mergeResult.publishedEntries }
+        : {}),
+      ...(mergeResult?.requiresReload ? { requiresReload: true as const } : {}),
     };
+  }
+
+  async function reloadPromptReleasedSessionFile(
+    expectedFingerprint: SessionFileFingerprint,
+  ): Promise<SessionFileFenceSnapshot | undefined> {
+    if (!params.reloadPromptReleasedSessionFile) {
+      return undefined;
+    }
+    try {
+      await params.reloadPromptReleasedSessionFile();
+    } catch (error) {
+      takeoverDetected = true;
+      throw error;
+    }
+    const snapshot = await readSessionFileFenceSnapshot(params.lockOptions.sessionFile);
+    if (!sameSessionFileFingerprint(expectedFingerprint, snapshot.fingerprint)) {
+      takeoverDetected = true;
+      throw new EmbeddedAttemptSessionTakeoverError(params.lockOptions.sessionFile);
+    }
+    return snapshot;
   }
 
   function beginRetainedLockUse(): () => void {
@@ -1350,6 +1387,17 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       const unseenOwnedWrites = ownedWriteHistory.filter(
         (write) => write.generation > fenceGeneration,
       );
+      if (unseenOwnedWrites.some((write) => write.requiresReload)) {
+        const reloadedSnapshot = await reloadPromptReleasedSessionFile(current);
+        if (!reloadedSnapshot) {
+          takeoverDetected = true;
+          throw new EmbeddedAttemptSessionTakeoverError(params.lockOptions.sessionFile);
+        }
+        fenceFingerprint = reloadedSnapshot.fingerprint;
+        fenceSnapshot = reloadedSnapshot;
+        setFenceGeneration(ownedWrite.generation);
+        return;
+      }
       const canValidateExactEntries = unseenOwnedWrites.every(
         (write) => write.publishedEntries !== undefined,
       );
@@ -1365,9 +1413,19 @@ export async function createEmbeddedAttemptSessionLockController(params: {
         takeoverDetected = true;
         throw new EmbeddedAttemptSessionTakeoverError(params.lockOptions.sessionFile);
       }
-      fenceFingerprint = current;
+      const mergedFingerprint = mergedChange?.snapshot.fingerprint ?? current;
+      const mergedGeneration =
+        mergedChange && !sameSessionFileFingerprint(current, mergedFingerprint)
+          ? recordOwnedSessionFileWrite(
+              sessionFileFenceKey,
+              mergedFingerprint,
+              mergedChange.postMergePublishedEntries,
+              mergedChange.requiresReload,
+            )
+          : ownedWrite.generation;
+      fenceFingerprint = mergedFingerprint;
       fenceSnapshot = mergedChange?.snapshot ?? { fingerprint: current };
-      setFenceGeneration(ownedWrite.generation);
+      setFenceGeneration(mergedGeneration);
       return;
     }
 
@@ -1404,8 +1462,12 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       fenceSnapshot = mergedChange.snapshot;
       fenceFingerprint = mergedChange.snapshot.fingerprint;
       setFenceGeneration(
-        trustSessionFileState(sessionFileFenceKey, mergedChange.snapshot.fingerprint) ??
-          fenceGeneration,
+        recordOwnedSessionFileWrite(
+          sessionFileFenceKey,
+          mergedChange.snapshot.fingerprint,
+          mergedChange.publishedEntries,
+          mergedChange.requiresReload,
+        ),
       );
       return;
     }
@@ -1463,10 +1525,18 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       takeoverDetected = true;
       throw new EmbeddedAttemptSessionTakeoverError(params.lockOptions.sessionFile);
     }
-    const publishedEntries = expectedPublishedEntries ?? mergedChange?.publishedEntries;
-    const generation = recordOwnedSessionFileWrite(sessionFileFenceKey, current, publishedEntries);
+    const publishedEntries = mergedChange
+      ? mergedChange.publishedEntries
+      : expectedPublishedEntries;
+    const publishedFingerprint = mergedChange?.snapshot.fingerprint ?? current;
+    const generation = recordOwnedSessionFileWrite(
+      sessionFileFenceKey,
+      publishedFingerprint,
+      publishedEntries,
+      mergedChange?.requiresReload,
+    );
     if (fenceActive) {
-      fenceFingerprint = current;
+      fenceFingerprint = publishedFingerprint;
       fenceSnapshot =
         mergedChange?.snapshot ??
         (await readSessionFileFenceSnapshot(params.lockOptions.sessionFile));
