@@ -987,7 +987,15 @@ export async function acquireSessionWriteLock(params: {
           );
         },
       });
-      return { release: lock.release };
+      return {
+        release: async () => {
+          await lock.release();
+          // Remove the lockfile so it does not block future session writes
+          // even when the owning process is still alive (e.g. after a session
+          // ends with status:done but the gateway PID persists). (#93383)
+          await fs.rm(lockPath, { force: true }).catch(() => {});
+        },
+      };
     } catch (err) {
       if (!isFileLockError(err, "file_lock_timeout") && !isFileLockError(err, "file_lock_stale")) {
         throw err;
