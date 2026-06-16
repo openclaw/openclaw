@@ -24,12 +24,13 @@ type LifecycleEventLike = Pick<AgentEventPayload, "ts" | "sessionId"> & {
     livenessState?: unknown;
     timeoutPhase?: unknown;
     providerStarted?: unknown;
+    yielded?: unknown;
   };
 };
 
 type LifecycleSessionShape = Pick<
   GatewaySessionRow,
-  "updatedAt" | "status" | "startedAt" | "endedAt" | "runtimeMs" | "abortedLastRun"
+  "updatedAt" | "status" | "startedAt" | "endedAt" | "runtimeMs" | "abortedLastRun" | "pauseReason"
 >;
 
 type PersistedLifecycleSessionShape = Pick<
@@ -41,6 +42,7 @@ type PersistedLifecycleSessionShape = Pick<
   | "runtimeMs"
   | "abortedLastRun"
   | "restartRecoveryRuns"
+  | "pauseReason"
 >;
 
 type GatewaySessionLifecycleSnapshot = Partial<LifecycleSessionShape>;
@@ -74,8 +76,22 @@ function mapAgentRunTerminalOutcomeToSessionStatus(
   }
 }
 
+function resolveYielded(event: LifecycleEventLike): boolean {
+  return event.data?.yielded === true;
+}
+
 function resolveTerminalStatus(event: LifecycleEventLike): SessionRunStatus {
   const phase = resolveLifecyclePhase(event);
+
+  // A `sessions_yield` tool call ends the run cleanly while the session
+  // remains active waiting for a queued continuation. Mark it paused instead
+  // of done so consumers (restart recovery, dashboards, channels) do not
+  // race the follow-up turn. Error phases still go through the terminal
+  // outcome path so failures are not masked as paused.
+  if (phase !== "error" && resolveYielded(event)) {
+    return "paused";
+  }
+
   const terminal = buildAgentRunTerminalOutcome({
     status: phase === "error" ? "error" : event.data?.aborted === true ? "timeout" : "ok",
     error: event.data?.error,
@@ -150,15 +166,20 @@ export function deriveGatewaySessionLifecycleSnapshot(params: {
       endedAt: undefined,
       runtimeMs: undefined,
       abortedLastRun: false,
+      // A fresh run drains the previously queued yield continuation, so the
+      // paused marker no longer applies. Mirrors how the subagent registry
+      // clears `pauseReason` on completion (see subagent-registry-lifecycle).
+      pauseReason: undefined,
     };
   }
 
   const startedAt = resolveLifecycleStartedAt(existing?.startedAt, params.event);
   const endedAt = resolveLifecycleEndedAt(params.event);
   const updatedAt = endedAt ?? existing?.updatedAt;
+  const terminalStatus = resolveTerminalStatus(params.event);
   return {
     updatedAt,
-    status: resolveTerminalStatus(params.event),
+    status: terminalStatus,
     startedAt,
     endedAt,
     runtimeMs: resolveRuntimeMs({
@@ -166,7 +187,10 @@ export function deriveGatewaySessionLifecycleSnapshot(params: {
       endedAt,
       existingRuntimeMs: existing?.runtimeMs,
     }),
-    abortedLastRun: resolveTerminalStatus(params.event) === "killed",
+    abortedLastRun: terminalStatus === "killed",
+    // Gate the marker on the derived terminal status so error end-events
+    // carrying `yielded: true` do not leak `sessions_yield` into failed rows.
+    pauseReason: terminalStatus === "paused" ? "sessions_yield" : undefined,
   };
 }
 

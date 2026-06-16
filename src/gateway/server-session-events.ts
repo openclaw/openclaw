@@ -121,6 +121,7 @@ function buildGatewaySessionSnapshot(params: {
     startedAt: sessionRow.startedAt,
     endedAt: sessionRow.endedAt,
     runtimeMs: sessionRow.runtimeMs,
+    pauseReason: sessionRow.pauseReason,
     compactionCheckpointCount: sessionRow.compactionCheckpointCount,
     latestCompactionCheckpoint: sessionRow.latestCompactionCheckpoint,
   };
