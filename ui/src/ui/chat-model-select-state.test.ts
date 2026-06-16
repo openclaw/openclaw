@@ -75,6 +75,20 @@ describe("chat-model-select-state", () => {
     expect(resolveChatModelSelectState(state).currentOverride).toBe("deepseek/deepseek-chat");
   });
 
+  it("prefers server session row over stale cached override when they differ", () => {
+    const state = createChatModelState({
+      chatModelOverrides: { main: { kind: "qualified", value: "openai/gpt-5-mini" } },
+      chatModelCatalog: createModelCatalog(DEEPSEEK_CHAT_MODEL),
+      sessionsResult: createSessionsListResult({
+        model: "deepseek-chat",
+        modelProvider: "deepseek",
+      }),
+    });
+
+    const resolved = resolveChatModelSelectState(state);
+    expect(resolved.currentOverride).toBe("deepseek/deepseek-chat");
+  });
+
   it("preserves already-qualified active-session models when the provider is stale and the catalog is empty", () => {
     const state = createChatModelState({
       sessionsResult: createSessionsListResult({

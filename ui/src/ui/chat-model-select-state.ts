@@ -35,17 +35,31 @@ function resolveActiveSessionRow(state: ChatModelSelectStateInput) {
 export function resolveChatModelOverrideValue(state: ChatModelSelectStateInput): string {
   const catalog = state.chatModelCatalog ?? [];
 
+  // Resolve the server's current session row model — reflects actual runtime model.
+  const activeRow = resolveActiveSessionRow(state);
+  const serverValue = resolvePreferredServerChatModelValue(
+    activeRow?.model,
+    activeRow?.modelProvider,
+    catalog,
+  );
+
   // Prefer the local cache — it reflects in-flight patches before sessionsResult refreshes.
   const cached = state.chatModelOverrides[state.sessionKey];
   if (cached) {
-    return normalizeChatModelOverrideValue(cached, catalog);
+    const normalizedCached = normalizeChatModelOverrideValue(cached, catalog);
+    // When the server reports an active runtime model that differs from the
+    // locally cached override, prefer the server value — the session may
+    // have been reset or drifted back to its default model.
+    if (serverValue && normalizedCached && serverValue !== normalizedCached) {
+      return serverValue;
+    }
+    return normalizedCached;
   }
   if (cached === null) {
     return "";
   }
 
-  const activeRow = resolveActiveSessionRow(state);
-  return resolvePreferredServerChatModelValue(activeRow?.model, activeRow?.modelProvider, catalog);
+  return serverValue;
 }
 
 function resolveDefaultModelValue(state: ChatModelSelectStateInput): string {
