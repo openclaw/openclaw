@@ -879,17 +879,11 @@ export function reconcileTaskRecordForOperatorInspection(
   );
 }
 
-let reconcileCache: { result: TaskRecord[]; time: number } | null = null;
-
 export function reconcileInspectableTasks(): TaskRecord[] {
-  const now = Date.now();
-  if (reconcileCache && now - reconcileCache.time < 5) {
-    return reconcileCache.result;
-  }
   taskRegistryMaintenanceRuntime.ensureTaskRegistryReady();
   const cronRecoveryContext = createCronRecoveryContext();
   const backingSessionContext = createBackingSessionLookupContext();
-  const result = taskRegistryMaintenanceRuntime
+  return taskRegistryMaintenanceRuntime
     .listTaskRecords()
     .map((task) =>
       reconcileTaskRecordForOperatorInspectionWithContexts(
@@ -898,8 +892,6 @@ export function reconcileInspectableTasks(): TaskRecord[] {
         backingSessionContext,
       ),
     );
-  reconcileCache = { result, time: now };
-  return result;
 }
 
 configureTaskAuditTaskProvider(reconcileInspectableTasks);
@@ -954,16 +946,19 @@ export function getInspectableActiveTaskRestartBlockers(): ActiveTaskRestartBloc
   return blockers;
 }
 
-export function getInspectableTaskRegistrySummary(): TaskRegistrySummary {
-  return summarizeTaskRecords(reconcileInspectableTasks());
+export function getInspectableTaskRegistrySummary(
+  tasks: TaskRecord[] = reconcileInspectableTasks(),
+): TaskRegistrySummary {
+  return summarizeTaskRecords(tasks);
 }
 
 export function getInspectableTaskAuditSummary(): TaskAuditSummary {
   return summarizeTaskAuditFindings(getInspectableTaskAuditFindings());
 }
 
-export function getInspectableTaskAuditFindings(): TaskAuditFinding[] {
-  const tasks = reconcileInspectableTasks();
+export function getInspectableTaskAuditFindings(
+  tasks: TaskRecord[] = reconcileInspectableTasks(),
+): TaskAuditFinding[] {
   return listTaskAuditFindings({ tasks });
 }
 
@@ -1247,7 +1242,6 @@ export function resetTaskRegistryMaintenanceRuntimeForTests(): void {
   taskRegistryMaintenanceRuntime = defaultTaskRegistryMaintenanceRuntime;
   configuredCronStorePath = undefined;
   configuredRuntimeAuthoritative = false;
-  reconcileCache = null;
 }
 
 export function configureTaskRegistryMaintenance(options: {
