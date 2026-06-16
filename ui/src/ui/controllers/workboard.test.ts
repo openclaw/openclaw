@@ -2691,6 +2691,33 @@ describe("workboard controller", () => {
     expect(client.request).not.toHaveBeenCalled();
   });
 
+  it.each(["editing", "dragging"] as const)(
+    "does not start lifecycle writes while a card is %s",
+    async (interaction) => {
+      const host = {};
+      const state = getWorkboardState(host);
+      state.loaded = true;
+      state.cards = [{ ...sampleCard, sessionKey: sampleSession.key }];
+      if (interaction === "editing") {
+        state.draftOpen = true;
+        state.editingCardId = sampleCard.id;
+      } else {
+        state.draggedCardId = sampleCard.id;
+      }
+      const client = createClient({
+        "workboard.cards.update": { card: { ...sampleCard, status: "running" } },
+      });
+
+      await syncWorkboardLifecycle({
+        host,
+        client: client as never,
+        sessions: [{ ...sampleSession, status: "running", hasActiveRun: true }],
+      });
+
+      expect(client.request).not.toHaveBeenCalled();
+    },
+  );
+
   it("does not start lifecycle writes while a canonical refresh is loading", async () => {
     const host = {};
     const state = getWorkboardState(host);
@@ -4747,6 +4774,9 @@ describe("workboard controller", () => {
           ? firstUpdate.promise
           : { card: { ...second, status: "running" } };
       }
+      if (method === "workboard.cards.list") {
+        return { cards: [first, second], statuses: ["todo", "running"] };
+      }
       return {};
     });
     const sessions = [
@@ -4762,6 +4792,9 @@ describe("workboard controller", () => {
       );
     });
     stopWorkboardLifecycleRefresh(host);
+    expect(state.syncingCardIds.size).toBe(0);
+    await expect(loadWorkboard({ host, client: client as never })).resolves.toBe(true);
+    expect(client.request).toHaveBeenCalledWith("workboard.cards.list", {});
     firstUpdate.resolve({ card: { ...first, status: "running" } });
     await syncing;
 

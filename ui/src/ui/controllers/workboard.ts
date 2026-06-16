@@ -561,6 +561,7 @@ export function stopWorkboardLifecycleRefresh(host: WorkboardHost) {
     setWorkboardLifecycleTaskRefreshFailed(state, false);
     state.lifecycleTaskRefreshError = null;
     resetWorkboardLifecycleTaskConfirmations(state);
+    state.syncingCardIds.clear();
     // Detach stale loads so reconnecting can start fresh without letting the
     // old request clear a concurrent draft-save loading state.
     if (!state.draftSaving) {
@@ -733,7 +734,14 @@ function workboardHasActiveLoad(host: WorkboardHost): boolean {
 }
 
 function workboardLifecycleSyncBlocked(host: WorkboardHost, state: WorkboardUiState): boolean {
-  return state.dispatching || workboardHasActiveWrites(state) || workboardHasActiveLoad(host);
+  return Boolean(
+    state.draftOpen ||
+    state.editingCardId ||
+    state.draggedCardId ||
+    state.dispatching ||
+    workboardHasActiveWrites(state) ||
+    workboardHasActiveLoad(host),
+  );
 }
 
 function hasWorkboardProofEvidence(card: WorkboardCard): boolean {
