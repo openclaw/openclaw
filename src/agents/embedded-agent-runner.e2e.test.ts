@@ -41,6 +41,8 @@ const resolveModelAsyncMock = vi.fn(
 const ensureOpenClawModelsJsonMock = vi.fn(async () => ({ wrote: false }));
 const loggerWarnMock = vi.fn();
 let refreshRuntimeAuthOnFirstPromptError = false;
+let clearRuntimeConfigSnapshot: typeof import("../config/config.js").clearRuntimeConfigSnapshot;
+let setRuntimeConfigSnapshot: typeof import("../config/config.js").setRuntimeConfigSnapshot;
 
 vi.mock("openclaw/plugin-sdk/llm", async () => {
   const actual =
@@ -178,6 +180,7 @@ beforeAll(async () => {
   vi.useRealTimers();
   vi.resetModules();
   installRunEmbeddedMocks();
+  ({ clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } = await import("../config/config.js"));
   ({ runEmbeddedAgent } = await import("./embedded-agent-runner/run.js"));
   ({ SessionManager } = await import("openclaw/plugin-sdk/agent-sessions"));
   e2eWorkspace = await createEmbeddedAgentRunnerTestWorkspace("openclaw-embedded-agent-");
@@ -190,6 +193,7 @@ afterAll(async () => {
 });
 
 beforeEach(() => {
+  clearRuntimeConfigSnapshot();
   vi.useRealTimers();
   runEmbeddedAttemptMock.mockReset();
   disposeSessionMcpRuntimeMock.mockReset();
@@ -321,6 +325,96 @@ function firstRunEmbeddedAttemptParams(): { sessionKey?: string } {
 }
 
 describe("runEmbeddedAgent", () => {
+  it("uses the configured default model when the caller omits provider and model", async () => {
+    const sessionFile = nextSessionFile();
+    const cfg = {
+      ...createEmbeddedAgentRunnerOpenAiConfig([]),
+      agents: {
+        defaults: {
+          model: {
+            primary: "openrouter/global-default",
+          },
+        },
+        list: [{ id: "research", model: "openrouter/research-default" }],
+      },
+    };
+    runEmbeddedAttemptMock.mockResolvedValueOnce(
+      makeEmbeddedRunnerAttempt({
+        assistantTexts: ["ok"],
+        lastAssistant: buildEmbeddedRunnerAssistant({
+          content: [{ type: "text", text: "ok" }],
+        }),
+      }),
+    );
+
+    await runEmbeddedAgent({
+      sessionId: "configured-default-model",
+      sessionFile,
+      workspaceDir,
+      config: cfg,
+      agentId: "research",
+      prompt: "hello",
+      timeoutMs: 5_000,
+      agentDir,
+      runId: nextRunId("configured-default-model"),
+      enqueue: immediateEnqueue,
+    });
+
+    expect(resolveModelAsyncMock).toHaveBeenNthCalledWith(
+      1,
+      "openrouter",
+      "openrouter/research-default",
+      agentDir,
+      cfg,
+      expect.objectContaining({ skipAgentDiscovery: true }),
+    );
+  });
+
+  it("uses runtime config for blank public runtime model overrides", async () => {
+    const sessionFile = nextSessionFile();
+    const cfg = {
+      ...createEmbeddedAgentRunnerOpenAiConfig([]),
+      agents: {
+        defaults: {
+          model: {
+            primary: "openrouter/runtime-default",
+          },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(cfg);
+    runEmbeddedAttemptMock.mockResolvedValueOnce(
+      makeEmbeddedRunnerAttempt({
+        assistantTexts: ["ok"],
+        lastAssistant: buildEmbeddedRunnerAssistant({
+          content: [{ type: "text", text: "ok" }],
+        }),
+      }),
+    );
+
+    await runEmbeddedAgent({
+      sessionId: "runtime-config-default-model",
+      sessionFile,
+      workspaceDir,
+      prompt: "hello",
+      provider: " ",
+      model: "",
+      timeoutMs: 5_000,
+      agentDir,
+      runId: nextRunId("runtime-config-default-model"),
+      enqueue: immediateEnqueue,
+    });
+
+    expect(resolveModelAsyncMock).toHaveBeenNthCalledWith(
+      1,
+      "openrouter",
+      "openrouter/runtime-default",
+      agentDir,
+      cfg,
+      expect.objectContaining({ skipAgentDiscovery: true }),
+    );
+  });
+
   it("skips models.json generation when dynamic model resolution succeeds", async () => {
     const sessionFile = nextSessionFile();
     const cfg = createEmbeddedAgentRunnerOpenAiConfig([]);
@@ -817,39 +911,26 @@ describe("runEmbeddedAgent", () => {
     expect(disposeSessionMcpRuntimeMock).toHaveBeenCalledWith("session:test");
   });
 
-  it("retries a planning-only GPT turn once with an act-now steer", async () => {
+  it("returns visible assistant prose without semantic retry classification", async () => {
     const sessionFile = nextSessionFile();
     const cfg = createEmbeddedAgentRunnerOpenAiConfig(["gpt-5.4"]);
     const sessionKey = nextSessionKey();
 
-    runEmbeddedAttemptMock
-      .mockImplementationOnce(async (params: unknown) => {
-        expect((params as { prompt?: string }).prompt).toMatch(/^ship it(?:\n\n|$)/);
-        return makeEmbeddedRunnerAttempt({
-          assistantTexts: ["I'll inspect the files, make the change, and run the checks."],
-          lastAssistant: buildEmbeddedRunnerAssistant({
-            model: "gpt-5.4",
-            content: [
-              {
-                type: "text",
-                text: "I'll inspect the files, make the change, and run the checks.",
-              },
-            ],
-          }),
-        });
-      })
-      .mockImplementationOnce(async (params: unknown) => {
-        expect((params as { prompt?: string }).prompt).toContain(
-          "Do not restate the plan. Act now",
-        );
-        return makeEmbeddedRunnerAttempt({
-          assistantTexts: ["done"],
-          lastAssistant: buildEmbeddedRunnerAssistant({
-            model: "gpt-5.4",
-            content: [{ type: "text", text: "done" }],
-          }),
-        });
+    runEmbeddedAttemptMock.mockImplementationOnce(async (params: unknown) => {
+      expect((params as { prompt?: string }).prompt).toMatch(/^ship it(?:\n\n|$)/);
+      return makeEmbeddedRunnerAttempt({
+        assistantTexts: ["I'll inspect the files, make the change, and run the checks."],
+        lastAssistant: buildEmbeddedRunnerAssistant({
+          model: "gpt-5.4",
+          content: [
+            {
+              type: "text",
+              text: "I'll inspect the files, make the change, and run the checks.",
+            },
+          ],
+        }),
       });
+    });
 
     const result = await runEmbeddedAgent({
       sessionId: "session:test",
@@ -862,12 +943,14 @@ describe("runEmbeddedAgent", () => {
       model: "gpt-5.4",
       timeoutMs: 5_000,
       agentDir,
-      runId: nextRunId("planning-only-retry"),
+      runId: nextRunId("visible-prose"),
       enqueue: immediateEnqueue,
     });
 
-    expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
-    expect(result.payloads?.[0]?.text).toBe("done");
+    expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
+    expect(result.payloads?.[0]?.text).toBe(
+      "I'll inspect the files, make the change, and run the checks.",
+    );
   });
 
   it("handles prompt error paths without dropping user state", async () => {

@@ -56,6 +56,7 @@ const DEFAULTED_OPTIONAL_INIT_PARAM_ENTRIES: readonly [string, readonly string[]
   ["SessionsResetParams", ["agentId"]],
   ["SessionsDeleteParams", ["agentId"]],
   ["SessionsCompactParams", ["agentId"]],
+  ["SessionsResolveParams", ["allowMissing"]],
   ["SessionsUsageParams", ["agentId", "agentScope"]],
   ["ChatHistoryParams", ["agentId"]],
   ["ChatSendParams", ["agentId"]],
@@ -241,6 +242,19 @@ function emitEnum(name: string, schema: JsonSchema): string {
     "}",
     "",
   ].join("\n");
+}
+
+function stringLiteralUnionValues(schema: JsonSchema): string[] | undefined {
+  const branches = schema.oneOf ?? schema.anyOf;
+  if (!branches || branches.length < 2) {
+    return undefined;
+  }
+  const values = branches.map((branch) => literalSchemaValue(branch));
+  if (values.some((value) => typeof value !== "string")) {
+    return undefined;
+  }
+  const stringValues = values as string[];
+  return new Set(stringValues).size === stringValues.length ? stringValues : undefined;
 }
 
 function emitStruct(name: string, schema: JsonSchema): string {
@@ -607,6 +621,11 @@ async function generate() {
     }
     if (schema.type === "string" && schema.enum) {
       parts.push(emitEnum(name, schema));
+      continue;
+    }
+    const literalUnionValues = stringLiteralUnionValues(schema);
+    if (literalUnionValues) {
+      parts.push(emitEnum(name, { enum: literalUnionValues }));
     }
   }
 

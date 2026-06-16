@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { describe, expect, test, vi } from "vitest";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import { buildSessionHistorySnapshot, SessionHistorySseState } from "./session-history-state.js";
-import * as sessionUtils from "./session-utils.js";
+import * as sessionTranscriptReaders from "./session-transcript-readers.js";
 
 type HistorySnapshot = ReturnType<typeof buildSessionHistorySnapshot>;
 type RawStateOptions = Omit<
@@ -90,7 +90,7 @@ function appendAssistantText(state: SessionHistorySseState, text: string, messag
 describe("SessionHistorySseState", () => {
   test("uses the initial raw snapshot for both first history and seq seeding", () => {
     const readSpy = vi
-      .spyOn(sessionUtils, "readSessionMessagesAsync")
+      .spyOn(sessionTranscriptReaders, "readSessionMessagesAsync")
       .mockResolvedValue([assistantTextMessage("stale disk message", 1)]);
     try {
       const state = newState([assistantTextMessage("fresh snapshot message", 2)]);
@@ -407,9 +407,11 @@ describe("SessionHistorySseState", () => {
   });
 
   test("refreshes limited SSE history from bounded async tail reads", async () => {
-    const fullReadSpy = vi.spyOn(sessionUtils, "readSessionMessagesAsync").mockResolvedValue([]);
+    const fullReadSpy = vi
+      .spyOn(sessionTranscriptReaders, "readSessionMessagesAsync")
+      .mockResolvedValue([]);
     const tailReadSpy = vi
-      .spyOn(sessionUtils, "readRecentSessionMessagesWithStatsAsync")
+      .spyOn(sessionTranscriptReaders, "readRecentSessionMessagesWithStatsAsync")
       .mockResolvedValueOnce({
         messages: [assistantTextMessage("tail two", 8)],
         totalMessages: 8,

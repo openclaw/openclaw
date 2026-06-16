@@ -5,9 +5,25 @@ import {
   extractCliErrorMessage,
   parseCliJson,
   parseCliJsonl,
+  supportsCliJsonlToolEvents,
   type CliToolUseStartDelta,
 } from "./cli-output.js";
 import { createClaudeApiErrorFixture } from "./test-helpers/claude-api-error-fixture.js";
+
+describe("supportsCliJsonlToolEvents", () => {
+  it.each([
+    ["Claude provider", { command: "claude", output: "jsonl" as const }, "claude-cli", true],
+    [
+      "explicit Claude dialect",
+      { command: "custom", output: "jsonl" as const, jsonlDialect: "claude-stream-json" as const },
+      "custom-cli",
+      true,
+    ],
+    ["generic JSONL", { command: "custom", output: "jsonl" as const }, "custom-cli", false],
+  ])("%s: %s", (_name, backend, providerId, expected) => {
+    expect(supportsCliJsonlToolEvents({ backend, providerId })).toBe(expected);
+  });
+});
 
 describe("parseCliJson", () => {
   it("recovers mixed-output Claude session metadata from embedded JSON objects", () => {

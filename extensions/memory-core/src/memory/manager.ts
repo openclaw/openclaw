@@ -387,44 +387,49 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     }
     this.sources = new Set(effectiveSettings.sources);
     this.db = this.openDatabase();
-    this.providerKey = this.computeProviderKey();
-    this.cache = {
-      enabled: effectiveSettings.cache.enabled,
-      maxEntries: effectiveSettings.cache.maxEntries,
-    };
-    this.fts = { enabled: effectiveSettings.query.hybrid.enabled, available: false };
-    this.ensureSchema();
-    this.vector = {
-      enabled: effectiveSettings.store.vector.enabled,
-      available: null,
-      extensionPath: effectiveSettings.store.vector.extensionPath,
-    };
-    const meta = this.readMeta();
-    if (meta?.vectorDims) {
-      this.vector.dims = meta.vectorDims;
-    }
-    const initialIndexIdentity = this.resolveCurrentIndexIdentityState({
-      meta,
-      providerKeyKnown: Boolean(params.providerResult),
-    });
-    this.indexIdentityState = initialIndexIdentity;
-    this.indexIdentityDirty =
-      initialIndexIdentity.status === "mismatched" ||
-      (initialIndexIdentity.status === "missing" && this.sources.has("memory"));
-    const transient = params.purpose === "status" || params.purpose === "cli";
-    if (!transient) {
-      this.ensureWatcher();
-      this.ensureSessionListener();
-      this.ensureIntervalSync();
-    }
-    this.dirty = resolveInitialMemoryDirty({
-      hasMemorySource: this.sources.has("memory"),
-      statusOnly: params.purpose === "status",
-      hasIndexedMeta: Boolean(meta),
-    });
-    this.batch = this.resolveBatchConfig();
-    if (!transient) {
-      this.ensureSessionStartupCatchup();
+    try {
+      this.providerKey = this.computeProviderKey();
+      this.cache = {
+        enabled: effectiveSettings.cache.enabled,
+        maxEntries: effectiveSettings.cache.maxEntries,
+      };
+      this.fts = { enabled: effectiveSettings.query.hybrid.enabled, available: false };
+      this.ensureSchema();
+      this.vector = {
+        enabled: effectiveSettings.store.vector.enabled,
+        available: null,
+        extensionPath: effectiveSettings.store.vector.extensionPath,
+      };
+      const meta = this.readMeta();
+      if (meta?.vectorDims) {
+        this.vector.dims = meta.vectorDims;
+      }
+      const initialIndexIdentity = this.resolveCurrentIndexIdentityState({
+        meta,
+        providerKeyKnown: Boolean(params.providerResult),
+      });
+      this.indexIdentityState = initialIndexIdentity;
+      this.indexIdentityDirty =
+        initialIndexIdentity.status === "mismatched" ||
+        (initialIndexIdentity.status === "missing" && this.sources.has("memory"));
+      const transient = params.purpose === "status" || params.purpose === "cli";
+      if (!transient) {
+        this.ensureWatcher();
+        this.ensureSessionListener();
+        this.ensureIntervalSync();
+      }
+      this.dirty = resolveInitialMemoryDirty({
+        hasMemorySource: this.sources.has("memory"),
+        statusOnly: params.purpose === "status",
+        hasIndexedMeta: Boolean(meta),
+      });
+      this.batch = this.resolveBatchConfig();
+      if (!transient) {
+        this.ensureSessionStartupCatchup();
+      }
+    } catch (err) {
+      closeMemoryDatabase(this.db);
+      throw err;
     }
   }
 
@@ -883,6 +888,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       db: this.db,
       vectorTable: VECTOR_TABLE,
       providerModel: this.provider.model,
+      providerModelAliases: this.resolveProviderIndexIdentities()
+        .slice(1)
+        .map((identity) => identity.model),
       queryVec,
       limit,
       snippetMaxChars: SNIPPET_MAX_CHARS,

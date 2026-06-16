@@ -20,6 +20,7 @@ import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../state/openclaw-state-db.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveRegisteredAgentIdForDir } from "../agent-dir-registry.js";
 import { resolveDefaultAgentDir } from "../agent-scope-config.js";
@@ -96,6 +97,10 @@ function readAuthProfileJsonCellReadOnly(pathname: string, target: "store" | "st
   const sqlite = requireNodeSqlite();
   const db = new sqlite.DatabaseSync(pathname, { readOnly: true });
   try {
+    // This short-lived reader bypasses the canonical agent DB bootstrap, but it
+    // must share its busy policy so brief rollback-journal locks do not look
+    // like missing credentials.
+    db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
     const kysely = getAuthProfileKysely(db);
     if (target === "store") {
       const row = executeSqliteQueryTakeFirstSync(

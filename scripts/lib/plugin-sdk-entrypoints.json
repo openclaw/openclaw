@@ -271,6 +271,7 @@
   "memory-host-markdown",
   "memory-host-search",
   "memory-host-status",
+  "message-tool-delivery-hints",
   "models-provider-runtime",
   "skill-commands-runtime",
   "native-command-config-runtime",

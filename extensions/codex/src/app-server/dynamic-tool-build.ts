@@ -96,6 +96,13 @@ export function resolveOpenClawCodingToolsSessionKeys(
   };
 }
 
+/** Returns the canonical channel used for Codex message routing and receipts. */
+export function resolveCodexMessageToolProvider(
+  params: Pick<EmbeddedRunAttemptParams, "messageChannel" | "messageProvider">,
+): string | undefined {
+  return params.messageChannel ?? params.messageProvider;
+}
+
 /** Resolves the channel id that hook events should target for this Codex app-server turn. */
 export function resolveCodexAppServerHookChannelId(
   params: EmbeddedRunAttemptParams,
@@ -209,7 +216,8 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
       elevated: params.bashElevated,
     },
     sandbox: input.sandbox,
-    messageProvider: params.messageChannel ?? params.messageProvider,
+    messageProvider: resolveCodexMessageToolProvider(params),
+    toolPolicyMessageProvider: params.messageProvider ?? params.messageChannel,
     agentAccountId: params.agentAccountId,
     messageTo: params.messageTo,
     messageThreadId: params.messageThreadId,
@@ -258,6 +266,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     ),
     suppressManagedWebSearch: false,
     currentChannelId: params.currentChannelId,
+    currentMessagingTarget: params.currentMessagingTarget,
     hookChannelId: resolveCodexAppServerHookChannelId(params, input.sandboxSessionKey),
     currentThreadTs: params.currentThreadTs,
     currentMessageId: params.currentMessageId,
@@ -281,6 +290,8 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     recordToolPrepStage: (name) => {
       toolBuildStages.mark(name);
     },
+    onToolOutcome: params.onToolOutcome,
+    allocateToolOutcomeOrdinal: params.allocateToolOutcomeOrdinal,
   });
   toolBuildStages.mark("create-openclaw-coding-tools");
   const preNormalizationDiagnostics: RuntimeToolSchemaDiagnostic[] = [];

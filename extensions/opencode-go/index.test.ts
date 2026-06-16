@@ -11,6 +11,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { buildOpencodeGoLiveProviderConfig } from "./provider-catalog.js";
+import opencodeGoProviderDiscovery from "./provider-discovery.js";
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -209,7 +210,23 @@ describe("opencode-go provider plugin", () => {
   });
 
   it("loads OpenCode Go model discovery through the provider runtime", () => {
+    expect(manifest.providerCatalogEntry).toBe("./provider-discovery.ts");
     expect(manifest.modelCatalog.discovery["opencode-go"]).toBe("runtime");
+  });
+
+  it("exposes the complete offline catalog through provider discovery", async () => {
+    const result = await opencodeGoProviderDiscovery.staticCatalog?.run({} as never);
+    if (!result || !("provider" in result)) {
+      throw new Error("expected OpenCode Go static provider");
+    }
+    const deepSeekPro = result.provider.models.find((model) => model.id === "deepseek-v4-pro");
+
+    expect(result.provider.models).toHaveLength(18);
+    expect(deepSeekPro).toMatchObject({
+      provider: "opencode-go",
+      contextWindow: 1_000_000,
+      maxTokens: 384_000,
+    });
   });
 
   it("skips live OpenCode Go catalog discovery when no shared key is configured", async () => {

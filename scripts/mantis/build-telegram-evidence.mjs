@@ -324,6 +324,7 @@ export function renderTelegramEvidenceHtml({ observedMessages, summary }) {
 export function buildTelegramEvidenceManifest({
   candidateRef,
   candidateSha,
+  hasObservedMessages = true,
   scenarioLabel,
   summary,
   summaryArtifactPath = "qa-evidence.json",
@@ -381,13 +382,17 @@ export function buildTelegramEvidenceManifest({
       path: summaryArtifactPath,
       targetPath: "summary.json",
     },
-    {
-      kind: "metadata",
-      lane: "run",
-      label: "Telegram observed messages",
-      path: "telegram-qa-observed-messages.json",
-      targetPath: "observed-messages.json",
-    },
+    ...(hasObservedMessages
+      ? [
+          {
+            kind: "metadata",
+            lane: "run",
+            label: "Telegram observed messages",
+            path: "telegram-qa-observed-messages.json",
+            targetPath: "observed-messages.json",
+          },
+        ]
+      : []),
     {
       kind: "metadata",
       lane: "run",
@@ -449,16 +454,14 @@ export function writeTelegramEvidence(rawArgs = process.argv.slice(2)) {
   mkdirSync(outputDir, { recursive: true });
   const evidenceSummaryPath = path.join(outputDir, "qa-evidence.json");
   const legacySummaryPath = path.join(outputDir, "telegram-qa-summary.json");
-  const summaryPath = existsSync(evidenceSummaryPath) ? evidenceSummaryPath : legacySummaryPath;
+  const usesCurrentEvidenceSummary = existsSync(evidenceSummaryPath);
+  const summaryPath = usesCurrentEvidenceSummary ? evidenceSummaryPath : legacySummaryPath;
   const observedPath = path.join(outputDir, "telegram-qa-observed-messages.json");
   const reportPath = path.join(outputDir, "telegram-qa-report.md");
   if (!existsSync(summaryPath)) {
     throw new Error(`Missing Telegram QA evidence summary: ${evidenceSummaryPath}`);
   }
-  if (!existsSync(observedPath)) {
-    throw new Error(`Missing Telegram observed messages: ${observedPath}`);
-  }
-  const summary = existsSync(evidenceSummaryPath)
+  const summary = usesCurrentEvidenceSummary
     ? readJson(evidenceSummaryPath)
     : legacyTelegramSummaryToEvidenceSummary(readJson(legacySummaryPath));
   const counts = evidenceCounts(summary);
@@ -469,12 +472,14 @@ export function writeTelegramEvidence(rawArgs = process.argv.slice(2)) {
     }
     writeFileSync(reportPath, "# Mantis Telegram Live QA\n\nTelegram QA report was unavailable.\n");
   }
-  const observedMessages = readJson(observedPath);
+  const hasLegacyObservedMessages = !usesCurrentEvidenceSummary && existsSync(observedPath);
+  const observedMessages = hasLegacyObservedMessages ? readJson(observedPath) : [];
   const transcriptHtml = renderTelegramEvidenceHtml({ observedMessages, summary });
   writeFileSync(path.join(outputDir, "telegram-live-transcript.html"), transcriptHtml, "utf8");
   const manifest = buildTelegramEvidenceManifest({
     candidateRef: args.candidate_ref,
     candidateSha: args.candidate_sha,
+    hasObservedMessages: hasLegacyObservedMessages,
     scenarioLabel: args.scenario_label,
     summary,
     summaryArtifactPath: path.basename(summaryPath),

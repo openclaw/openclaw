@@ -1,10 +1,12 @@
 // Whatsapp tests cover qa driver plugin behavior.
 import { EventEmitter } from "node:events";
 import type { WAMessage } from "baileys";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startWhatsAppQaDriverSession } from "./qa-driver.runtime.js";
+import { DEFAULT_WHATSAPP_SOCKET_TIMING } from "./socket-timing.js";
 
 const mocks = vi.hoisted(() => ({
+  createWebSendApi: vi.fn(),
   createWaSocket: vi.fn(),
   jidToE164: vi.fn(),
   sendContact: vi.fn(),
@@ -30,14 +32,7 @@ vi.mock("./text-runtime.js", () => ({
 }));
 
 vi.mock("./inbound/send-api.js", () => ({
-  createWebSendApi: () => ({
-    sendContact: mocks.sendContact,
-    sendLocation: mocks.sendLocation,
-    sendMessage: mocks.sendMessage,
-    sendPoll: mocks.sendPoll,
-    sendReaction: mocks.sendReaction,
-    sendSticker: mocks.sendSticker,
-  }),
+  createWebSendApi: mocks.createWebSendApi,
 }));
 
 function createMockSocket() {
@@ -224,6 +219,17 @@ function incomingQuotedLocationMessage(remoteJid: string): WAMessage {
 }
 
 describe("startWhatsAppQaDriverSession", () => {
+  beforeEach(() => {
+    mocks.createWebSendApi.mockImplementation(() => ({
+      sendContact: mocks.sendContact,
+      sendLocation: mocks.sendLocation,
+      sendMessage: mocks.sendMessage,
+      sendPoll: mocks.sendPoll,
+      sendReaction: mocks.sendReaction,
+      sendSticker: mocks.sendSticker,
+    }));
+  });
+
   afterEach(() => {
     vi.useRealTimers();
     vi.clearAllMocks();
@@ -619,6 +625,39 @@ describe("startWhatsAppQaDriverSession", () => {
     expect(mocks.waitForWaConnection).toHaveBeenCalledWith(sock, { timeoutMs: 45_000 });
 
     await session.close();
+  });
+
+  it("passes a bounded socket adapter to the send API", async () => {
+    const sock = createMockSocket();
+    mocks.createWaSocket.mockResolvedValue(sock);
+    mocks.waitForWaConnection.mockResolvedValue(undefined);
+
+    const session = await startWhatsAppQaDriverSession({
+      authDir: "/tmp/openclaw-whatsapp-auth",
+    });
+    const sendApiParams = mocks.createWebSendApi.mock.calls[0]?.[0] as {
+      sock: {
+        sendMessage: (jid: string, content: { text: string }) => Promise<unknown>;
+      };
+    };
+
+    vi.useFakeTimers();
+    try {
+      sock.sendMessage.mockImplementationOnce(async () => await new Promise(() => {}));
+
+      const sendPromise = sendApiParams.sock.sendMessage("1555@s.whatsapp.net", { text: "hi" });
+      const rejection = expect(sendPromise).rejects.toMatchObject({
+        name: "WhatsAppSocketOperationTimeoutError",
+        operation: "sendMessage",
+        timeoutMs: DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs,
+      });
+      await vi.advanceTimersByTimeAsync(DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs);
+
+      await rejection;
+    } finally {
+      vi.useRealTimers();
+      await session.close();
+    }
   });
 
   it("can wait for pending notifications before returning the driver session", async () => {

@@ -14,7 +14,7 @@ import * as globalsModule from "openclaw/plugin-sdk/runtime-env";
 import {
   loadSessionStore,
   resolveStorePath,
-  saveSessionStore,
+  upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import * as commandTextModule from "openclaw/plugin-sdk/text-utility-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -814,8 +814,10 @@ describe("Discord model picker interactions", () => {
     });
     const modelCommand = createModelCommandDefinition();
     const storePath = resolveStorePath(context.cfg.session?.store, { agentId: "worker" });
-    await saveSessionStore(storePath, {
-      "agent:worker:subagent:bound": {
+    await upsertSessionEntry({
+      storePath,
+      sessionKey: "agent:worker:subagent:bound",
+      entry: {
         updatedAt: Date.now(),
         sessionId: "bound-session",
       },
@@ -864,8 +866,10 @@ describe("Discord model picker interactions", () => {
     const pickerData = createDefaultModelPickerData();
     const modelCommand = createModelCommandDefinition();
     const storePath = resolveStorePath(context.cfg.session?.store, { agentId: "worker" });
-    await saveSessionStore(storePath, {
-      "agent:worker:subagent:bound": {
+    await upsertSessionEntry({
+      storePath,
+      sessionKey: "agent:worker:subagent:bound",
+      entry: {
         updatedAt: Date.now(),
         sessionId: "bound-session",
       },

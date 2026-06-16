@@ -1288,6 +1288,7 @@ jobs:
         env:
           OPENCLAW_LOCAL_CHECK: "0"
           TASK: ${{ matrix.task }}
+          PR_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -1297,6 +1298,10 @@ jobs:
               pnpm tool-display:check
               pnpm check:host-env-policy:swift
               pnpm dup:check:coverage
+              if [ -n "$PR_BASE_SHA" ]; then
+                git fetch --no-tags --depth=1 origin "+${PR_BASE_SHA}:refs/remotes/origin/pr-base"
+                node scripts/report-test-temp-creations.mjs --base refs/remotes/origin/pr-base --head HEAD --no-merge-base
+              fi
               pnpm deps:patches:check
               pnpm lint:webhook:no-low-level-body-read
               pnpm lint:auth:no-pairing-store-group
@@ -1358,6 +1363,10 @@ jobs:
           - check_name: check-additional-boundaries-bcd
             group: boundaries
             boundary_shard: 2/4,3/4,4/4
+          - check_name: check-session-accessor-boundary
+            group: session-accessor-boundary
+          - check_name: check-session-transcript-reader-boundary
+            group: session-transcript-reader-boundary
           - check_name: check-additional-extension-channels
             group: extension-channels
           - check_name: check-additional-extension-bundled
@@ -1503,6 +1512,24 @@ jobs:
           case "$ADDITIONAL_CHECK_GROUP" in
             boundaries)
               node scripts/run-additional-boundary-checks.mjs
+              ;;
+            session-accessor-boundary)
+              if [ ! -f scripts/check-session-accessor-boundary.mjs ]; then
+                echo "[skip] session accessor boundary check is not present in this checkout"
+              elif ! node -e 'const pkg = require("./package.json"); process.exit(pkg.scripts?.["lint:tmp:session-accessor-boundary"] ? 0 : 1);'; then
+                echo "[skip] session accessor boundary script is not present in package.json"
+              else
+                run_check "lint:tmp:session-accessor-boundary" pnpm run lint:tmp:session-accessor-boundary
+              fi
+              ;;
+            session-transcript-reader-boundary)
+              if [ ! -f scripts/check-session-transcript-reader-boundary.mjs ]; then
+                echo "[skip] session transcript reader boundary check is not present in this checkout"
+              elif ! node -e 'const pkg = require("./package.json"); process.exit(pkg.scripts?.["lint:tmp:session-transcript-reader-boundary"] ? 0 : 1);'; then
+                echo "[skip] session transcript reader boundary script is not present in package.json"
+              else
+                run_check "lint:tmp:session-transcript-reader-boundary" pnpm run lint:tmp:session-transcript-reader-boundary
+              fi
               ;;
             extension-channels)
               run_check "lint:extensions:channels" pnpm run lint:extensions:channels

@@ -116,8 +116,7 @@ export async function sweepCronRunSessions(params: {
       if (archivedDirs.size > 0) {
         await cleanupArchivedSessionTranscripts({
           directories: [...archivedDirs],
-          olderThanMs: retentionMs,
-          reason: "deleted",
+          rules: [{ reason: "deleted", olderThanMs: retentionMs }],
           nowMs: now,
         });
       }

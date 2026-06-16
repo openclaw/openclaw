@@ -658,4 +658,110 @@ describe("dispatchOutbound", () => {
     expect(finalized?.Surface).toBe("qqbot");
     expect(finalized?.ChatType).toBe("direct");
   });
+
+  it("keeps markdown table chunks self-contained across block deliveries", async () => {
+    const runtime = makeRuntime({
+      onDispatch: async ({ deliver }) => {
+        await deliver(
+          {
+            text: ["| Id | Value |", "|---:|---|", "| 1 | alpha |"].join("\n"),
+          },
+          { kind: "block" },
+        );
+        await deliver({ text: ["| 2 | beta |", "| 3 | gamma |"].join("\n") }, { kind: "block" });
+      },
+    });
+
+    await dispatchOutbound(makeInbound(), {
+      runtime,
+      cfg: {},
+      account,
+    });
+
+    expect(sendTextMock).toHaveBeenCalledTimes(2);
+    expect(sendTextMock.mock.calls[0]?.[1]).toBe(
+      ["| Id | Value |", "|---:|---|", "| 1 | alpha |"].join("\n"),
+    );
+    expect(sendTextMock.mock.calls[1]?.[1]).toBe(
+      ["| Id | Value |", "|---:|---|", "| 2 | beta |", "| 3 | gamma |"].join("\n"),
+    );
+  });
+
+  it("waits for a table separator when a block ends after the header", async () => {
+    const runtime = makeRuntime({
+      onDispatch: async ({ deliver }) => {
+        await deliver({ text: "| Id | Value |" }, { kind: "block" });
+        await deliver({ text: ["|---:|---|", "| 1 | alpha |"].join("\n") }, { kind: "block" });
+      },
+    });
+
+    await dispatchOutbound(makeInbound(), {
+      runtime,
+      cfg: {},
+      account,
+    });
+
+    expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual([
+      ["| Id | Value |", "|---:|---|", "| 1 | alpha |"].join("\n"),
+    ]);
+  });
+
+  it("flushes unfinished markdown table row fragments as plain text fields", async () => {
+    const runtime = makeRuntime({
+      onDispatch: async ({ deliver }) => {
+        await deliver(
+          {
+            text: ["| Id | Function | Status |", "|---:|---|---|", "| 1 | auth | ok |"].join("\n"),
+          },
+          { kind: "block" },
+        );
+        await deliver({ text: "| 10 | analyzeerror_patterns | 无需重试" }, { kind: "block" });
+      },
+    });
+
+    await dispatchOutbound(makeInbound(), {
+      runtime,
+      cfg: {},
+      account,
+    });
+
+    expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual([
+      ["| Id | Function | Status |", "|---:|---|---|", "| 1 | auth | ok |"].join("\n"),
+      ["Id: 10", "Function: analyzeerror_patterns", "Status: 无需重试"].join("\n"),
+    ]);
+  });
+
+  it("holds short table rows until a following block completes the columns", async () => {
+    const runtime = makeRuntime({
+      onDispatch: async ({ deliver }) => {
+        await deliver(
+          {
+            text: [
+              "| Id | Time | Owner | Note |",
+              "|---:|---|---|---|",
+              "| 16 | 40ms | He | ok |",
+              "| 17 | 100ms |",
+            ].join("\n"),
+          },
+          { kind: "block" },
+        );
+        await deliver({ text: "Lin | daily cap |" }, { kind: "block" });
+      },
+    });
+
+    await dispatchOutbound(makeInbound(), {
+      runtime,
+      cfg: {},
+      account,
+    });
+
+    expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual([
+      ["| Id | Time | Owner | Note |", "|---:|---|---|---|", "| 16 | 40ms | He | ok |"].join("\n"),
+      [
+        "| Id | Time | Owner | Note |",
+        "|---:|---|---|---|",
+        "| 17 | 100ms | Lin | daily cap |",
+      ].join("\n"),
+    ]);
+  });
 });
