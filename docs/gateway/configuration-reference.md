@@ -627,6 +627,25 @@ See [Inferred commitments](/concepts/commitments).
 
 </Accordion>
 
+### Gateway tool policy (`gateway.tools`)
+
+Gateway-level tool exposure, applied independently of agent/tool profiles for coarse production hardening:
+
+- `gateway.tools.allow` / `gateway.tools.deny`: explicit allow/deny lists applied at the gateway. `deny` wins.
+- `gateway.tools.byNode`: per-node tool restriction keyed by the **authenticated** node id that hosts a turn. When an agent turn is driven through a node (a node-originated `agent.request`), that node's `allow`/`deny` are applied to the turn. **Restriction-only** — it can narrow the toolset, never escalate — and the node id comes from the node's cryptographically-paired connection, so a client cannot forge it. An explicitly-present (even empty) `allow` is **fail-closed** (`allow: []` ⇒ no tools); an absent `allow` means "no allow restriction". Find a node's id from its bridge `/whoami` or `openclaw nodes list`.
+
+```json5
+gateway: {
+  tools: {
+    // Confine turns driven through a specific node (e.g. a node hosting a
+    // browser) to just browser + memory tools:
+    byNode: {
+      "<authenticated-node-id>": { allow: ["browser", "memory_search", "memory_get"] },
+    },
+  },
+}
+```
+
 ### OpenAI-compatible endpoints
 
 - Admin HTTP RPC: off by default as the `admin-http-rpc` plugin. Enable the plugin to register `POST /api/v1/admin/rpc`. See [Admin HTTP RPC](/plugins/admin-http-rpc).
