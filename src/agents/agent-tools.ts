@@ -1187,6 +1187,20 @@ export function createOpenClawCodingTools(options?: {
             (nodeAllowSet ? nodeAllowSet.has(tool.name) : true),
         )
       : subagentFiltered;
+  if ((nodeDenySet || nodeAllowSet) && process.env.OPENCLAW_BYNODE_DEBUG) {
+    // Box-proof instrumentation (env-gated): show the byNode restriction biting a
+    // real node-originated turn — before vs after the per-node allow/deny filter.
+    // eslint-disable-next-line no-console
+    console.error(
+      `[BYNODE_DEBUG] session=${options?.sessionKey ?? "?"} allow=${
+        nodeAllow ? `[${nodeAllow.join(",")}]` : "—"
+      } deny=[${nodeDeny.join(",")}] before=${subagentFiltered.length}{${subagentFiltered
+        .map((t) => t.name)
+        .join(",")}} after=${nodeScopedTools.length}{${nodeScopedTools
+        .map((t) => t.name)
+        .join(",")}}`,
+    );
+  }
   if (shouldInheritEffectiveToolAllowlist) {
     replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, nodeScopedTools);
   }
