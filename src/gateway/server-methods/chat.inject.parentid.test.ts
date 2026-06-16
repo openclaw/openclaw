@@ -125,4 +125,40 @@ describe("gateway chat.inject transcript writes", () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("deduplicates concurrent keyed appends under the transcript write lock", async () => {
+    const { dir, transcriptPath } = createTranscriptFixtureSync({
+      prefix: "openclaw-chat-inject-idempotent-",
+      sessionId: "sess-idempotent",
+    });
+    const updates: string[] = [];
+    const unsubscribe = onSessionTranscriptUpdate((update) => {
+      if (update.sessionFile === transcriptPath) {
+        updates.push(update.messageId);
+      }
+    });
+
+    try {
+      const append = () =>
+        appendInjectedAssistantMessageToTranscript({
+          transcriptPath,
+          message: "durable fallback",
+          idempotencyKey: "run-1:assistant-error",
+        });
+      const [first, second] = await Promise.all([append(), append()]);
+
+      expect(first.ok).toBe(true);
+      expect(second.ok).toBe(true);
+      expect([first.appended, second.appended].toSorted()).toEqual([false, true]);
+      expect(second.messageId).toBe(first.messageId);
+      const keyedRows = readTranscriptLines(transcriptPath)
+        .map((line) => JSON.parse(line) as { message?: { idempotencyKey?: string } })
+        .filter((record) => record.message?.idempotencyKey === "run-1:assistant-error");
+      expect(keyedRows).toHaveLength(1);
+      expect(updates).toEqual([first.messageId]);
+    } finally {
+      unsubscribe();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

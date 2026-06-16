@@ -4662,7 +4662,8 @@ describe("createFollowupRunner queued user message idempotency across fallback",
     expect(secondAttempt.suppressNextUserMessagePersistence).toBe(true);
   });
 
-  it("only persists assistant error stub on the first fallback candidate", async () => {
+  it("forwards and latches assistant error persistence across queued fallback candidates", async () => {
+    const onAssistantErrorMessagePersisted = vi.fn();
     runEmbeddedAgentMock.mockClear();
     runWithModelFallbackMock.mockReset();
     runWithModelFallbackMock.mockImplementationOnce(
@@ -4677,18 +4678,8 @@ describe("createFollowupRunner queued user message idempotency across fallback",
       },
     );
     runEmbeddedAgentMock.mockImplementationOnce(
-      async (args: {
-        onAssistantErrorMessagePersisted?: (message: {
-          role: "assistant";
-          content: string;
-          stopReason: "error";
-        }) => void;
-      }) => {
-        args.onAssistantErrorMessagePersisted?.({
-          role: "assistant",
-          content: "[assistant turn failed before producing content]",
-          stopReason: "error",
-        });
+      async (args: { onAssistantErrorMessagePersisted?: () => void }) => {
+        args.onAssistantErrorMessagePersisted?.();
         throw new Error("upstream 500");
       },
     );
@@ -4699,6 +4690,7 @@ describe("createFollowupRunner queued user message idempotency across fallback",
     });
 
     const runner = createFollowupRunner({
+      opts: { onAssistantErrorMessagePersisted },
       typing: createMockTypingController(),
       typingMode: "instant",
       defaultModel: "anthropic/claude-opus-4-7",
@@ -4713,6 +4705,7 @@ describe("createFollowupRunner queued user message idempotency across fallback",
       }),
     );
 
+    expect(onAssistantErrorMessagePersisted).toHaveBeenCalledOnce();
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(3);
     const firstAttempt = requireMockCallArg(runEmbeddedAgentMock, 0);
     const secondAttempt = requireMockCallArg(runEmbeddedAgentMock, 1);

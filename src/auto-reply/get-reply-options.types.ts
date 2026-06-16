@@ -1,5 +1,4 @@
 /** Public option types for reply generation callbacks, streaming, and delivery policy. */
-
 import type { ImageContent } from "../llm/types.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
@@ -53,15 +52,6 @@ export type PartialReplyPayload = Pick<ReplyPayload, "text" | "mediaUrls"> & {
   replace?: true;
 };
 
-export type AssistantErrorMessagePersisted = {
-  role: "assistant";
-  content: unknown;
-  stopReason?: string;
-  errorMessage?: string;
-  errorCode?: string;
-  errorType?: string;
-};
-
 /** Reply generation options shared by auto-reply, webchat, channels, and tests. */
 export type GetReplyOptions = {
   /** Override run id for agent events (defaults to random UUID). */
@@ -79,9 +69,7 @@ export type GetReplyOptions = {
   /** Shared lifecycle owner for the current user-turn transcript append. */
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
   /** Notifies callers when the runtime persisted an assistant error turn. */
-  onAssistantErrorMessagePersisted?: (
-    message: AssistantErrorMessagePersisted,
-  ) => Promise<void> | void;
+  onAssistantErrorMessagePersisted?: () => Promise<void> | void;
   onReplyStart?: () => Promise<void> | void;
   /** Called when the typing controller cleans up (e.g., run ended with NO_REPLY). */
   onTypingCleanup?: () => void;
