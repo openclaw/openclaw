@@ -35,6 +35,7 @@ import { setVerbose } from "../../globals.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
+import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import type { RespawnSupervisor } from "../../infra/supervisor-markers.js";
 import { setConsoleSubsystemFilter, setConsoleTimestampPrefix } from "../../logging/console.js";
 import { withDiagnosticPhase } from "../../logging/diagnostic-phase.js";
@@ -560,28 +561,10 @@ async function maybeWriteGatewayStartupFailureBundle(err: unknown): Promise<void
   }
 }
 
-function parseInheritedGatewayServicePid(value: string | undefined): number | undefined {
-  if (!value) {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  if (trimmed.length === 0) {
-    return undefined;
-  }
-  // Strict positive-integer parse. `Number.parseInt` would accept "123abc"
-  // (returns 123) and "123.4" (returns 123); either would let a malformed
-  // inherited env value protect the wrong PID from cleanup. Require an exact
-  // digit-only match so a partial or non-integer value is rejected outright
-  // and the cleanup falls back to its existing self/ancestor exclusion only.
-  if (!/^[0-9]+$/.test(trimmed)) {
-    return undefined;
-  }
-  const parsed = Number.parseInt(trimmed, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
-}
-
 export async function runGatewayCommand(opts: GatewayRunOpts, hooks: GatewayRunRuntimeHooks = {}) {
-  const inheritedGatewayServicePid = parseInheritedGatewayServicePid(
+  // Reparenting can hide the running service from the ancestor walk.
+  // Preserve its inherited PID before config env rebuilding overwrites it.
+  const inheritedGatewayServicePid = parseStrictPositiveInteger(
     process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV],
   );
   normalizeStateDirEnv(process.env);
@@ -739,12 +722,9 @@ export async function runGatewayCommand(opts: GatewayRunOpts, hooks: GatewayRunR
   const bindExplicitRaw = bindExplicitRawStr as GatewayBindMode | undefined;
   if (process.env.OPENCLAW_SERVICE_MARKER?.trim()) {
     const { cleanStaleGatewayProcessesSync } = await import("../../infra/restart-stale-pids.js");
-    // Pass the inherited gateway PID so the cleanup never SIGKILLs the
-    // launchd-managed parent when we were spawned underneath it. The
-    // ancestor walk inside the cleanup loses that parent when our spawning
-    // shell exits before we reach lsof, leaving `process.ppid === 1` and
-    // the parent gateway visible as an unrelated sibling on the port.
-    const stale = cleanStaleGatewayProcessesSync(port, inheritedGatewayServicePid);
+    const stale = cleanStaleGatewayProcessesSync(port, {
+      protectedPid: inheritedGatewayServicePid,
+    });
     if (stale.length > 0) {
       gatewayLog.info(
         `service-mode: cleared ${stale.length} stale gateway pid(s) before bind on port ${port}`,
@@ -1030,7 +1010,6 @@ export async function runGatewayCommand(opts: GatewayRunOpts, hooks: GatewayRunR
 
 export const testing = {
   normalizeGatewayHealthProbeHost,
-  parseInheritedGatewayServicePid,
   resolveGatewayLockErrorExitCode,
   runGatewayLoopWithSupervisedLockRecovery,
 };
