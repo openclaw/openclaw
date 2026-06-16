@@ -25,6 +25,7 @@ vi.mock("./container-environment.js", () => ({
 }));
 
 import {
+  rewritePnpmVersionedEntryPath,
   respawnGatewayProcessForUpdate,
   restartGatewayProcessWithFreshPid,
 } from "./process-respawn.js";
@@ -367,5 +368,41 @@ describe("respawnGatewayProcessForUpdate", () => {
 
     expect(result.mode).toBe("failed");
     expect(result.detail).toContain("spawn failed");
+  });
+});
+
+describe("rewritePnpmVersionedEntryPath", () => {
+  it("rewrites unscoped pnpm versioned path to stable wrapper", () => {
+    const input =
+      "/app/node_modules/.pnpm/openclaw@2026.6.5/node_modules/openclaw/dist/entry.js";
+    expect(rewritePnpmVersionedEntryPath(input)).toBe(
+      "/app/node_modules/openclaw/openclaw.mjs",
+    );
+  });
+
+  it("rewrites scoped pnpm versioned path to stable wrapper", () => {
+    const input =
+      "/app/node_modules/.pnpm/@anthropic+sdk@1.0.0/node_modules/@anthropic/sdk/dist/index.js";
+    expect(rewritePnpmVersionedEntryPath(input)).toBe(
+      "/app/node_modules/@anthropic/sdk/openclaw.mjs",
+    );
+  });
+
+  it("returns non-pnpm paths unchanged", () => {
+    const input = "/repo/src/entry.ts";
+    expect(rewritePnpmVersionedEntryPath(input)).toBe(input);
+  });
+
+  it("returns non-pnpm node_modules paths unchanged", () => {
+    const input = "/app/node_modules/openclaw/dist/entry.js";
+    expect(rewritePnpmVersionedEntryPath(input)).toBe(input);
+  });
+
+  it("handles pnpm versioned path with additional flags in the string", () => {
+    const input =
+      "/home/user/.local/share/pnpm/global/5/node_modules/.pnpm/openclaw@2026.6.5/node_modules/openclaw/dist/entry.js";
+    expect(rewritePnpmVersionedEntryPath(input)).toBe(
+      "/home/user/.local/share/pnpm/global/5/node_modules/openclaw/openclaw.mjs",
+    );
   });
 });
