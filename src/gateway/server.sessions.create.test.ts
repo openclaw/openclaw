@@ -36,6 +36,7 @@ test("sessions.create stores dashboard session model and parent linkage, and cre
     sessionId?: string;
     entry?: {
       label?: string;
+      displayName?: string;
       providerOverride?: string;
       modelOverride?: string;
       parentSessionKey?: string;
@@ -44,6 +45,7 @@ test("sessions.create stores dashboard session model and parent linkage, and cre
   }>("sessions.create", {
     agentId: "ops",
     label: "Dashboard Chat",
+    displayName: "Research Plan",
     model: "openai/gpt-test-a",
     parentSessionKey: "main",
   });
@@ -51,6 +53,7 @@ test("sessions.create stores dashboard session model and parent linkage, and cre
   expect(created.ok).toBe(true);
   expect(created.payload?.key).toMatch(/^agent:ops:dashboard:/);
   expect(created.payload?.entry?.label).toBe("Dashboard Chat");
+  expect(created.payload?.entry?.displayName).toBe("Research Plan");
   expect(created.payload?.entry?.providerOverride).toBe("openai");
   expect(created.payload?.entry?.modelOverride).toBe("gpt-test-a");
   expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:main");
@@ -67,6 +70,7 @@ test("sessions.create stores dashboard session model and parent linkage, and cre
     {
       sessionId?: string;
       label?: string;
+      displayName?: string;
       providerOverride?: string;
       modelOverride?: string;
       parentSessionKey?: string;
@@ -76,6 +80,7 @@ test("sessions.create stores dashboard session model and parent linkage, and cre
   const key = created.payload?.key as string;
   expect(rawStore[key]?.sessionId).toBe(created.payload?.sessionId);
   expect(rawStore[key]?.label).toBe("Dashboard Chat");
+  expect(rawStore[key]?.displayName).toBe("Research Plan");
   expect(rawStore[key]?.providerOverride).toBe("openai");
   expect(rawStore[key]?.modelOverride).toBe("gpt-test-a");
   expect(rawStore[key]?.parentSessionKey).toBe("agent:main:main");

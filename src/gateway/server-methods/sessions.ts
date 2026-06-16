@@ -1489,6 +1489,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           patch: {
             key: target.canonicalKey,
             label: normalizeOptionalString(p.label),
+            displayName: normalizeOptionalString(p.displayName),
             model: normalizeOptionalString(p.model),
           },
           loadGatewayModelCatalog: context.loadGatewayModelCatalog,

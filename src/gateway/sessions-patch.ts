@@ -374,6 +374,15 @@ export async function projectSessionsPatchEntry(params: {
     }
   }
 
+  if ("displayName" in patch) {
+    const displayName = normalizeOptionalString(patch.displayName);
+    if (patch.displayName === null || !displayName) {
+      delete next.displayName;
+    } else {
+      next.displayName = displayName;
+    }
+  }
+
   if ("thinkingLevel" in patch) {
     const raw = patch.thinkingLevel;
     if (raw === null) {
