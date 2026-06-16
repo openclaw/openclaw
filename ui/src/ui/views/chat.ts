@@ -2785,6 +2785,11 @@ export function renderChat(props: ChatProps) {
           })}
           .value=${visibleDraft}
           dir=${detectTextDirection(visibleDraft)}
+          autocomplete="off"
+          autocorrect="off"
+          autocapitalize="off"
+          spellcheck="false"
+          inputmode="text"
           ?disabled=${!props.connected}
           aria-autocomplete="list"
           aria-controls=${ifDefined(slashMenuVisible ? SLASH_MENU_LISTBOX_ID : undefined)}

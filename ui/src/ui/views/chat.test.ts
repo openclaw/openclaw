@@ -2394,6 +2394,17 @@ describe("chat slash menu accessibility", () => {
     expect(listbox?.querySelector(`#${activeId}`)?.getAttribute("role")).toBe("option");
   });
 
+  it("sets plain-text input attributes on the composer textarea to prevent auto-formatting", () => {
+    const container = renderChatView({ draft: "" });
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+
+    expect(textarea?.getAttribute("autocomplete")).toBe("off");
+    expect(textarea?.getAttribute("autocorrect")).toBe("off");
+    expect(textarea?.getAttribute("autocapitalize")).toBe("off");
+    expect(textarea?.getAttribute("spellcheck")).toBe("false");
+    expect(textarea?.getAttribute("inputmode")).toBe("text");
+  });
+
   it("updates the active descendant and live announcement during command navigation", () => {
     let draft = "";
     const onDraftChange = vi.fn((next: string) => {
