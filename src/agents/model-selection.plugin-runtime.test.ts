@@ -79,6 +79,7 @@ describe("model-selection plugin runtime normalization", () => {
     });
     expect(normalizeProviderModelIdWithPluginMock).not.toHaveBeenCalled();
   });
+
   it("keeps provider plugin normalization when inferring provider for bare defaults", async () => {
     normalizeProviderModelIdWithPluginMock.mockImplementation(({ provider, context }) => {
       if (
