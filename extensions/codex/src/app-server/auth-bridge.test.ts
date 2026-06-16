@@ -21,6 +21,7 @@ import {
   resolveCodexAppServerNativeHomeDir,
 } from "./auth-bridge.js";
 import type { CodexAppServerStartOptions } from "./config.js";
+import { CODEX_MODEL_CATALOG_FINGERPRINT_ENV } from "./model-catalog-bridge.js";
 
 const oauthMocks = vi.hoisted(() => ({
   refreshOpenAICodexToken: vi.fn(),
@@ -235,6 +236,58 @@ describe("bridgeCodexAppServerStartOptions", () => {
       await expect(fs.access(codexHome)).resolves.toBeUndefined();
       await expectPathMissing(nativeHome);
       expect(startOptions.env).toBeUndefined();
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("provisions configured custom model metadata in the isolated Codex home", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const startOptions = createStartOptions();
+    try {
+      const codexHome = resolveCodexAppServerHomeDir(agentDir);
+
+      const resolved = await bridgeCodexAppServerStartOptions({
+        startOptions,
+        agentDir,
+        config: {
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://api.openai.com/v1",
+                api: "openai-responses",
+                models: [
+                  {
+                    id: "custom-long-context",
+                    name: "Custom Long Context",
+                    reasoning: true,
+                    input: ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 1_000_000,
+                    contextTokens: 950_000,
+                    maxTokens: 128_000,
+                  },
+                ],
+              },
+            },
+          },
+        },
+      });
+
+      expect(resolved.env).toMatchObject({
+        CODEX_HOME: codexHome,
+        [CODEX_MODEL_CATALOG_FINGERPRINT_ENV]: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+      });
+      const configToml = await fs.readFile(path.join(codexHome, "config.toml"), "utf8");
+      const catalogPath = path.join(codexHome, "openclaw-model-catalog.json");
+      expect(configToml).toBe(`model_catalog_json = ${JSON.stringify(catalogPath)}\n`);
+      const catalog = JSON.parse(await fs.readFile(catalogPath, "utf8")) as {
+        models?: Array<{ slug?: string; context_window?: number; max_context_window?: number }>;
+      };
+      expect(catalog.models?.find((model) => model.slug === "custom-long-context")).toMatchObject({
+        context_window: 950_000,
+        max_context_window: 1_000_000,
+      });
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
     }

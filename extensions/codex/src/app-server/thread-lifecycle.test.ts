@@ -895,6 +895,85 @@ describe("Codex app-server model provider selection", () => {
     expect(request.modelProvider).toBe("openai");
   });
 
+  it("keeps custom catalog metadata out of thread/start config", () => {
+    const params = createAttemptParams({
+      provider: "openai",
+      modelId: "custom-long-context",
+    });
+    params.config = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-responses",
+            models: [
+              {
+                id: "custom-long-context",
+                name: "Custom Long Context",
+                reasoning: true,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 1_000_000,
+                contextTokens: 950_000,
+                maxTokens: 128_000,
+              },
+            ],
+          },
+        },
+      },
+    };
+
+    const request = buildThreadStartParams(params, {
+      cwd: "/repo",
+      dynamicTools: [],
+      appServer: createAppServerOptions() as never,
+      developerInstructions: "test instructions",
+    });
+
+    expect(request.model).toBe("custom-long-context");
+    expect(request.modelProvider).toBe("openai");
+    expect(request.config).not.toHaveProperty("model_catalog_json");
+  });
+
+  it("keeps custom catalog metadata out of thread/resume config", () => {
+    const params = createAttemptParams({
+      provider: "openai",
+      modelId: "custom-long-context",
+    });
+    params.config = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-responses",
+            models: [
+              {
+                id: "custom-long-context",
+                name: "Custom Long Context",
+                reasoning: true,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 1_000_000,
+                contextTokens: 950_000,
+                maxTokens: 128_000,
+              },
+            ],
+          },
+        },
+      },
+    };
+
+    const request = buildThreadResumeParams(params, {
+      threadId: "thread-1",
+      appServer: createAppServerOptions() as never,
+      developerInstructions: "test instructions",
+    });
+
+    expect(request.model).toBe("custom-long-context");
+    expect(request.modelProvider).toBe("openai");
+    expect(request.config).not.toHaveProperty("model_catalog_json");
+  });
+
   it("splits provider-qualified model refs for app-server thread/start", () => {
     const request = buildThreadStartParams(
       createAttemptParams({ provider: "codex", modelId: "lmstudio/local-model" }),

@@ -22,6 +22,7 @@ import {
 import { hasUsableOAuthCredential } from "openclaw/plugin-sdk/provider-auth";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
+import { provisionCodexAppServerModelCatalog } from "./model-catalog-bridge.js";
 import type {
   CodexChatgptAuthTokensRefreshResponse,
   CodexGetAccountResponse,
@@ -68,6 +69,7 @@ export async function bridgeCodexAppServerStartOptions(params: {
   const isolatedStartOptions = await withAgentCodexHomeEnvironment(
     params.startOptions,
     params.agentDir,
+    params.config,
   );
   if (params.authProfileId === null) {
     return isolatedStartOptions;
@@ -336,6 +338,7 @@ export function resolveCodexAppServerNativeHomeDir(agentDir: string): string {
 async function withAgentCodexHomeEnvironment(
   startOptions: CodexAppServerStartOptions,
   agentDir: string,
+  config?: AuthProfileOrderConfig,
 ): Promise<CodexAppServerStartOptions> {
   const codexHome = startOptions.env?.[CODEX_HOME_ENV_VAR]?.trim()
     ? startOptions.env[CODEX_HOME_ENV_VAR]
@@ -361,7 +364,11 @@ async function withAgentCodexHomeEnvironment(
   } else {
     delete nextStartOptions.clearEnv;
   }
-  return nextStartOptions;
+  return await provisionCodexAppServerModelCatalog({
+    startOptions: nextStartOptions,
+    codexHome,
+    config,
+  });
 }
 
 function withoutClearedCodexHomeEnv(clearEnv: string[] | undefined): string[] | undefined {
