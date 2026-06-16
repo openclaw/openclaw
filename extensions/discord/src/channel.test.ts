@@ -495,7 +495,8 @@ describe("discordPlugin outbound", () => {
         target: "channel:222",
       });
 
-      expect(String(diagnostics?.details?.permissions?.error)).toContain("timed out");
+      const timeoutPerms = recordField(diagnostics?.details?.permissions, "permissions");
+      expect(String(timeoutPerms.error)).toContain("timed out");
       expect(diagnostics?.lines?.[0]?.tone).toBe("error");
     } finally {
       fetchPermissionsSpy.mockRestore();
