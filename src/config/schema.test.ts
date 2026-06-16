@@ -144,6 +144,31 @@ describe("config schema", () => {
     expect(result.success).toBe(true);
   });
 
+  it("accepts per-agent env config", () => {
+    const config = OpenClawSchema.parse({
+      agents: {
+        list: [
+          {
+            id: "blueprint-platform",
+            env: {
+              GIT_AUTHOR_EMAIL: "blueprint-platform-pm@blueprint.local",
+              GIT_AUTHOR_NAME: "BluePrint Platform PM",
+              GIT_COMMITTER_EMAIL: "blueprint-platform-pm@blueprint.local",
+              GIT_COMMITTER_NAME: "BluePrint Platform PM",
+            },
+          },
+        ],
+      },
+    });
+
+    expect(config.agents?.list?.[0]?.env).toEqual({
+      GIT_AUTHOR_EMAIL: "blueprint-platform-pm@blueprint.local",
+      GIT_AUTHOR_NAME: "BluePrint Platform PM",
+      GIT_COMMITTER_EMAIL: "blueprint-platform-pm@blueprint.local",
+      GIT_COMMITTER_NAME: "BluePrint Platform PM",
+    });
+  });
+
   it("includes MCP SSE header schema under mcp.servers entries", () => {
     const schema = baseSchema.schema as {
       properties?: Record<string, unknown>;

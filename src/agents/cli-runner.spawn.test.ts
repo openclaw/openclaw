@@ -52,8 +52,8 @@ import {
 } from "./cli-runner/execute.js";
 import { buildSystemPrompt, writeCliSystemPromptFile } from "./cli-runner/helpers.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./cli-runner/log.js";
-import { setCliRunnerPrepareTestDeps } from "./cli-runner/prepare.js";
-import type { PreparedCliRunContext } from "./cli-runner/types.js";
+import { prepareCliRunContext, setCliRunnerPrepareTestDeps } from "./cli-runner/prepare.js";
+import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
 import { createClaudeApiErrorFixture } from "./test-helpers/claude-api-error-fixture.js";
 
 vi.mock("../plugin-sdk/anthropic-cli.js", () => ({
@@ -395,6 +395,59 @@ describe("runCliAgent spawn path", () => {
     expect(systemPrompt).toContain("## Skills");
     expect(systemPrompt).toContain("<name>weather</name>");
     expect(systemPrompt).toContain("/tmp/skills/weather/SKILL.md");
+  });
+
+  it("passes configured per-agent env vars to prepared CLI child processes", async () => {
+    mockSuccessfulCliRun();
+
+    const context = await prepareCliRunContext({
+      sessionId: "cli-agent-env-session",
+      sessionKey: "agent:blueprint-platform:main",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      agentId: "blueprint-platform",
+      config: {
+        agents: {
+          defaults: {
+            cliBackends: {
+              "claude-cli": {
+                command: "claude",
+                args: ["-p", "--output-format", "stream-json"],
+                output: "jsonl",
+                input: "stdin",
+                modelArg: "--model",
+                sessionArg: "--session-id",
+                sessionMode: "always",
+                systemPromptWhen: "first",
+                serialize: true,
+              },
+            },
+          },
+          list: [
+            {
+              id: "blueprint-platform",
+              env: {
+                GIT_AUTHOR_EMAIL: "blueprint-platform-pm@blueprint.local",
+                GIT_COMMITTER_EMAIL: "blueprint-platform-pm@blueprint.local",
+              },
+            },
+          ],
+        },
+      } as RunCliAgentParams["config"],
+      prompt: "hi",
+      provider: "claude-cli",
+      model: "sonnet",
+      timeoutMs: 1_000,
+      runId: "run-agent-env",
+      executionMode: "side-question",
+    });
+    await executePreparedCliRun(context);
+
+    const input = mockCallArg(supervisorSpawnMock) as { env?: Record<string, string> };
+    expect(input.env).toMatchObject({
+      GIT_AUTHOR_EMAIL: "blueprint-platform-pm@blueprint.local",
+      GIT_COMMITTER_EMAIL: "blueprint-platform-pm@blueprint.local",
+    });
   });
 
   it("pipes Claude prompts over stdin instead of argv", async () => {

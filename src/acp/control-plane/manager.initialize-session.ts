@@ -4,9 +4,11 @@ import {
   mergeSessionIdentity,
 } from "@openclaw/acp-core/runtime/session-identity";
 import type { AcpRuntime, AcpRuntimeHandle } from "@openclaw/acp-core/runtime/types";
+import { resolveAgentConfig } from "../../agents/agent-scope-config.js";
 import { resolveRuntimeConfigCacheKey } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
+import { sanitizeHostExecEnv } from "../../infra/host-env-security.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { AcpRuntimeError, withAcpRuntimeErrorBoundary } from "../runtime/errors.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
@@ -47,6 +49,14 @@ export async function runManagerInitializeSession(params: {
   const requestedCwd = initialRuntimeOptions.cwd;
   const requestedModel = initialRuntimeOptions.model;
   const requestedThinking = initialRuntimeOptions.thinking;
+  const agentEnv = resolveAgentConfig(input.cfg, input.configAgentId ?? agent)?.env;
+  const runtimeEnv = agentEnv
+    ? sanitizeHostExecEnv({
+        baseEnv: {},
+        overrides: agentEnv,
+        blockPathOverrides: true,
+      })
+    : undefined;
   params.enforceConcurrentSessionLimit({
     cfg: input.cfg,
     sessionKey,
@@ -61,6 +71,7 @@ export async function runManagerInitializeSession(params: {
         ...(requestedModel ? { model: requestedModel } : {}),
         ...(requestedThinking ? { thinking: requestedThinking } : {}),
         cwd: requestedCwd,
+        ...(runtimeEnv && Object.keys(runtimeEnv).length > 0 ? { env: runtimeEnv } : {}),
       }),
     fallbackCode: "ACP_SESSION_INIT_FAILED",
     fallbackMessage: "Could not initialize ACP session runtime.",

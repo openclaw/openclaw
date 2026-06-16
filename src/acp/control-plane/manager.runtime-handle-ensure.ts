@@ -9,9 +9,11 @@ import {
   resolveSessionIdentityFromMeta,
 } from "@openclaw/acp-core/runtime/session-identity";
 import type { AcpRuntime, AcpRuntimeHandle } from "@openclaw/acp-core/runtime/types";
+import { resolveAgentConfig } from "../../agents/agent-scope-config.js";
 import { resolveRuntimeConfigCacheKey } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
+import { sanitizeHostExecEnv } from "../../infra/host-env-security.js";
 import { toAcpRuntimeError, withAcpRuntimeErrorBoundary } from "../runtime/errors.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
 import type {
@@ -44,6 +46,15 @@ export async function ensureManagerRuntimeHandle(params: {
   const cwd = runtimeOptions.cwd ?? normalizeText(params.meta.cwd);
   const model = normalizeText(runtimeOptions.model);
   const thinking = normalizeText(runtimeOptions.thinking);
+  const configAgentId = resolveAcpAgentFromSessionKey(params.sessionKey, agent);
+  const agentEnv = resolveAgentConfig(params.cfg, configAgentId)?.env;
+  const runtimeEnv = agentEnv
+    ? sanitizeHostExecEnv({
+        baseEnv: {},
+        overrides: agentEnv,
+        blockPathOverrides: true,
+      })
+    : undefined;
   const configuredBackend = (params.meta.backend || params.cfg.acp?.backend || "").trim();
   const configSignature = resolveRuntimeConfigCacheKey(params.cfg);
   const cached = params.runtimeHandles.get(params.sessionKey);
@@ -109,6 +120,7 @@ export async function ensureManagerRuntimeHandle(params: {
           ...(model ? { model } : {}),
           ...(thinking ? { thinking } : {}),
           cwd,
+          ...(runtimeEnv && Object.keys(runtimeEnv).length > 0 ? { env: runtimeEnv } : {}),
         }),
       fallbackCode: "ACP_SESSION_INIT_FAILED",
       fallbackMessage: "Could not initialize ACP session runtime.",

@@ -50,6 +50,7 @@ import {
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { splitShellArgs } from "../utils/shell-argv.js";
+import { resolveAgentConfig } from "./agent-scope-config.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import { stripMalformedXmlArgValueSuffixFromKeys } from "./agent-tools.params.js";
 import { markBackgrounded } from "./bash-process-registry.js";
@@ -139,6 +140,23 @@ function filterPluginExecEnv(rawEnv: Record<string, string>): Record<string, str
     }
     env[key] = value;
   }
+  return Object.keys(env).length > 0 ? env : undefined;
+}
+
+function resolveConfiguredAgentExecEnv(
+  defaults: ExecToolDefaults | undefined,
+  agentId: string | undefined,
+) {
+  const agentEnv = agentId ? resolveAgentConfig(defaults?.config ?? {}, agentId)?.env : undefined;
+  if (!agentEnv) {
+    return undefined;
+  }
+  const env = sanitizeHostExecEnvWithDiagnostics({
+    baseEnv: {},
+    overrides: agentEnv,
+    blockPathOverrides: true,
+  }).env;
+  delete env[OPENCLAW_CLI_ENV_VAR];
   return Object.keys(env).length > 0 ? env : undefined;
 }
 
@@ -1571,9 +1589,14 @@ export function createExecTool(
 
       const inheritedBaseEnv = coerceEnv(process.env);
       const resolvedExecEnvState = getResolvedExecEnvPreparedState(params);
-      const requestedEnv = resolvedExecEnvState?.pluginEnv
-        ? { ...params.env, ...resolvedExecEnvState.pluginEnv }
-        : params.env;
+      const configuredAgentEnv = resolveConfiguredAgentExecEnv(defaults, agentId);
+      const mergedRequestedEnv = {
+        ...(configuredAgentEnv ?? {}),
+        ...(params.env ?? {}),
+        ...(resolvedExecEnvState?.pluginEnv ?? {}),
+      };
+      const requestedEnv =
+        Object.keys(mergedRequestedEnv).length > 0 ? mergedRequestedEnv : undefined;
       const hostEnvResult =
         host === "sandbox"
           ? null

@@ -17,6 +17,7 @@ import {
   resolveMcpLoopbackBearerToken,
 } from "../../gateway/mcp-http.loopback-runtime.js";
 import { resolveMcpLoopbackScopedTools } from "../../gateway/mcp-http.runtime.js";
+import { sanitizeHostExecEnv } from "../../infra/host-env-security.js";
 import { isClaudeCliProvider } from "../../plugin-sdk/anthropic-cli.js";
 import type {
   CliBackendAuthEpochMode,
@@ -30,7 +31,7 @@ import { resolveSkillsPromptForRun } from "../../skills/loading/workspace.js";
 import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
-import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
+import { resolveAgentConfig, resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import { externalCliDiscoveryForProviderAuth } from "../auth-profiles/external-cli-discovery.js";
 import { loadAuthProfileStoreForRuntime } from "../auth-profiles/store.js";
 import type { AuthProfileCredential } from "../auth-profiles/types.js";
@@ -427,10 +428,21 @@ export async function prepareCliRunContext(
     authProfileId: effectiveAuthProfileId,
     skipLocalCredential: skipLocalCredentialEpoch,
   });
+  const agentEnv = resolveAgentConfig(params.config ?? {}, sessionAgentId)?.env;
+  const sanitizedAgentEnv = agentEnv
+    ? sanitizeHostExecEnv({
+        baseEnv: {},
+        overrides: agentEnv,
+        blockPathOverrides: true,
+      })
+    : undefined;
+  const mergedPreparedBackendEnv = {
+    ...(preparedBackend.env ?? {}),
+    ...(sanitizedAgentEnv ?? {}),
+    ...(preparedExecution?.env ?? {}),
+  };
   const preparedBackendEnv =
-    preparedExecution?.env && Object.keys(preparedExecution.env).length > 0
-      ? { ...preparedBackend.env, ...preparedExecution.env }
-      : preparedBackend.env;
+    Object.keys(mergedPreparedBackendEnv).length > 0 ? mergedPreparedBackendEnv : undefined;
   const preparedBackendCleanup =
     preparedBackend.cleanup || preparedExecution?.cleanup
       ? async () => {

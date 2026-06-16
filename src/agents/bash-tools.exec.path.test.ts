@@ -7,6 +7,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ExecApprovalsResolved } from "../infra/exec-approvals.js";
 import { captureEnv } from "../test-utils/env.js";
 import { sanitizeBinaryOutput } from "./shell-utils.js";
@@ -81,6 +82,8 @@ vi.mock("../process/supervisor/index.js", () => ({
       const env = input.env ?? {};
       if (command.includes("OPENCLAW_SHELL")) {
         input.onStdout?.(env.OPENCLAW_SHELL ?? "");
+      } else if (command.includes("GIT_AUTHOR_EMAIL")) {
+        input.onStdout?.(`${env.GIT_AUTHOR_EMAIL ?? ""}\n${env.GIT_COMMITTER_EMAIL ?? ""}\n`);
       } else if (command.includes("SSLKEYLOGFILE")) {
         input.onStdout?.(env.SSLKEYLOGFILE ?? "");
       } else if (command.includes("$PATH")) {
@@ -388,6 +391,39 @@ describe("exec host env validation", () => {
         process.env.SSLKEYLOGFILE = original;
       }
     }
+  });
+
+  it("merges configured per-agent env into gateway shell execution", async () => {
+    const tool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      agentId: "blueprint-platform",
+      sessionKey: "agent:blueprint-platform:main",
+      config: {
+        agents: {
+          list: [
+            {
+              id: "blueprint-platform",
+              env: {
+                GIT_AUTHOR_EMAIL: "blueprint-platform-pm@blueprint.local",
+                GIT_COMMITTER_EMAIL: "blueprint-platform-pm@blueprint.local",
+              },
+            },
+          ],
+        },
+      } as OpenClawConfig,
+    });
+
+    const result = await tool.execute("call-agent-env", {
+      command: 'printf "%s\\n%s\\n" "$GIT_AUTHOR_EMAIL" "$GIT_COMMITTER_EMAIL"',
+      env: { GIT_AUTHOR_EMAIL: "request@blueprint.local" },
+      yieldMs: FOREGROUND_TEST_YIELD_MS,
+    });
+
+    expect(normalizeText(result.content.find((c) => c.type === "text")?.text)).toBe(
+      "request@blueprint.local\nblueprint-platform-pm@blueprint.local",
+    );
   });
 
   it("routes implicit auto host to gateway when sandbox runtime is unavailable", async () => {

@@ -45,6 +45,7 @@ export type AcpInitializeSessionInput = {
   cfg: OpenClawConfig;
   sessionKey: string;
   agent: string;
+  configAgentId?: string;
   mode: AcpRuntimeSessionMode;
   resumeSessionId?: string;
   runtimeOptions?: Partial<AcpSessionRuntimeOptions>;

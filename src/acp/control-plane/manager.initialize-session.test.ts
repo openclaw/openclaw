@@ -100,6 +100,50 @@ describe("AcpSessionManager initializeSession", () => {
     });
   });
 
+  it("passes per-agent env to ACP runtime sessions", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.upsertAcpSessionMetaMock.mockResolvedValue({
+      sessionKey: "agent:blueprint-platform:acp:session-env",
+      storeSessionKey: "agent:blueprint-platform:acp:session-env",
+      acp: readySessionMeta({ agent: "codex" }),
+    });
+
+    const manager = new AcpSessionManager();
+    await manager.initializeSession({
+      cfg: {
+        ...baseCfg,
+        agents: {
+          list: [
+            {
+              id: "blueprint-platform",
+              env: {
+                GIT_AUTHOR_EMAIL: "blueprint-platform-pm@blueprint.local",
+                GIT_COMMITTER_EMAIL: "blueprint-platform-pm@blueprint.local",
+              },
+            },
+          ],
+        },
+      } as OpenClawConfig,
+      sessionKey: "agent:blueprint-platform:acp:session-env",
+      agent: "codex",
+      configAgentId: "blueprint-platform",
+      mode: "persistent",
+    });
+
+    const ensureInput = expectRecordFields(mockCallArg(runtimeState.ensureSession), {
+      sessionKey: "agent:blueprint-platform:acp:session-env",
+      agent: "codex",
+    });
+    expect(ensureInput.env).toMatchObject({
+      GIT_AUTHOR_EMAIL: "blueprint-platform-pm@blueprint.local",
+      GIT_COMMITTER_EMAIL: "blueprint-platform-pm@blueprint.local",
+    });
+  });
+
   it("preserves runtimeOptions cwd when initializeSession cwd is omitted", async () => {
     const runtimeState = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({

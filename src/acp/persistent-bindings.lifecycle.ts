@@ -96,6 +96,7 @@ export async function ensureConfiguredAcpBindingSession(params: {
       cfg: params.cfg,
       sessionKey,
       agent: params.spec.acpAgentId ?? params.spec.agentId,
+      configAgentId: params.spec.agentId,
       mode: params.spec.mode,
       cwd: params.spec.cwd,
       backendId: params.spec.backend,

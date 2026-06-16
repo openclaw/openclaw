@@ -85,6 +85,7 @@ export type AgentConfig = {
   description?: string;
   workspace?: string;
   agentDir?: string;
+  env?: Record<string, string>;
   model?: AgentModelConfig;
   /**
    * @deprecated Legacy raw config accepted only by doctor/migration repair.
