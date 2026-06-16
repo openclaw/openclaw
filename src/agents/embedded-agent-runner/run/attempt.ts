@@ -24,10 +24,6 @@ import {
   withOwnedSessionTranscriptWrites,
 } from "../../../config/sessions/transcript-write-context.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
-import {
-  assertContextEngineHostSupport,
-  OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
-} from "../../../context-engine/host-compat.js";
 import { resolveContextEngineOwnerPluginId } from "../../../context-engine/registry.js";
 import type { AssembleResult } from "../../../context-engine/types.js";
 import { emitTrustedDiagnosticEvent } from "../../../infra/diagnostic-events.js";
@@ -1156,14 +1152,10 @@ export async function runEmbeddedAttempt(
         `raw model run enabled: modelRun=${params.modelRun === true} promptMode=${params.promptMode ?? "unset"}`,
       );
     }
+    // Host compatibility is enforced once per run at the harness bind seam
+    // (runAgentHarnessLifecycleAttempt), which demotes an unsupported engine to
+    // legacy before the openclaw harness runs. No second assert needed here.
     const activeContextEngine = isRawModelRun ? undefined : params.contextEngine;
-    if (activeContextEngine && activeContextEngine.info.id !== "legacy") {
-      assertContextEngineHostSupport({
-        contextEngine: activeContextEngine,
-        operation: "agent-run",
-        host: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
-      });
-    }
     const resolveActiveContextEnginePluginId = () =>
       resolveContextEngineOwnerPluginId(activeContextEngine);
     const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId);

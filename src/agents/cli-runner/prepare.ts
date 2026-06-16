@@ -5,8 +5,8 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { getRuntimeConfig } from "../../config/config.js";
 import {
-  assertContextEngineHostSupport,
   buildGenericCliContextEngineHostSupport,
+  resolveHostCompatibleContextEngine,
 } from "../../context-engine/host-compat.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import { resolveContextEngine } from "../../context-engine/registry.js";
@@ -819,18 +819,21 @@ export async function prepareCliRunContext(
       agentDir: contextEngineAgentDir,
       workspaceDir,
     });
-    const contextEngine =
-      resolvedContextEngine.info.id !== "legacy" ? resolvedContextEngine : undefined;
-    if (contextEngine) {
-      assertContextEngineHostSupport({
-        contextEngine,
-        operation: "agent-run",
-        host: buildGenericCliContextEngineHostSupport({
-          backendId: backendResolved.id,
-          capabilities: backendResolved.contextEngineHostCapabilities,
-        }),
-      });
+    const hostEngine =
+      resolvedContextEngine.info.id === "legacy"
+        ? undefined
+        : resolveHostCompatibleContextEngine({
+            contextEngine: resolvedContextEngine,
+            operation: "agent-run",
+            host: buildGenericCliContextEngineHostSupport({
+              backendId: backendResolved.id,
+              capabilities: backendResolved.contextEngineHostCapabilities,
+            }),
+          });
+    if (hostEngine && !hostEngine.ok) {
+      cliBackendLog.warn(hostEngine.warning);
     }
+    const contextEngine = hostEngine?.contextEngine;
     const hadSessionFile = await hasCliSessionTranscript({
       sessionId: params.sessionId,
       sessionFile: params.sessionFile,

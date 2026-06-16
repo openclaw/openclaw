@@ -6,6 +6,7 @@ import {
   CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
   evaluateContextEngineHostSupport,
   OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
+  resolveHostCompatibleContextEngine,
 } from "./host-compat.js";
 import type { ContextEngine, ContextEngineHostCapability } from "./types.js";
 
@@ -89,5 +90,34 @@ describe("context engine host compatibility", () => {
       operation: "agent-run",
       host: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
     });
+  });
+
+  it("resolves a supported engine without demotion", () => {
+    const engine = createEngine(["assemble-before-prompt"]);
+    const resolution = resolveHostCompatibleContextEngine({
+      contextEngine: engine,
+      operation: "agent-run",
+      host: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
+    });
+
+    expect(resolution.ok).toBe(true);
+    expect(resolution.contextEngine).toBe(engine);
+  });
+
+  it("demotes to legacy with a warning when the host is unsupported", () => {
+    const resolution = resolveHostCompatibleContextEngine({
+      contextEngine: createEngine(["assemble-before-prompt"]),
+      operation: "agent-run",
+      host: buildGenericCliContextEngineHostSupport({ backendId: "claude-cli" }),
+    });
+
+    expect(resolution.ok).toBe(false);
+    expect(resolution.contextEngine).toBeUndefined();
+    if (!resolution.ok) {
+      expect(resolution.warning).toContain(
+        'Context engine "lossless-claw" cannot run operation "agent-run" on CLI backend "claude-cli".',
+      );
+      expect(resolution.warning).toContain("switch contextEngine to legacy");
+    }
   });
 });

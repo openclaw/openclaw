@@ -5,8 +5,8 @@
  * diagnostic events, trace propagation, and result classification.
  */
 import {
-  assertContextEngineHostSupport,
   type ContextEngineHostSupport,
+  resolveHostCompatibleContextEngine,
 } from "../../context-engine/host-compat.js";
 import { diagnosticErrorCategory } from "../../infra/diagnostic-error-metadata.js";
 import {
@@ -21,12 +21,15 @@ import {
   runWithDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { applyAgentHarnessResultClassification } from "./result-classification.js";
 import type {
   AgentHarness,
   AgentHarnessAttemptParams,
   AgentHarnessAttemptResult,
 } from "./types.js";
+
+const log = createSubsystemLogger("agents/harness");
 
 type AgentHarnessLifecyclePhase = DiagnosticHarnessRunErrorEvent["phase"];
 type AgentRunCompletedOutcome = "completed" | "aborted" | "blocked" | "error";
@@ -46,18 +49,27 @@ function buildAgentHarnessContextEngineHostSupport(
   };
 }
 
-function assertAgentHarnessContextEngineSupport(
+// Bind a host-compatible engine for this attempt, demoting to legacy when the
+// harness cannot run the configured context engine. A mixed fleet shares one
+// global slot, so an incompatible harness degrades per-run instead of failing
+// every turn at assembly.
+function resolveAgentHarnessContextEngineParams(
   harness: AgentHarness,
   params: AgentHarnessAttemptParams,
-): void {
+): AgentHarnessAttemptParams {
   if (!params.contextEngine || params.contextEngine.info.id === "legacy") {
-    return;
+    return params;
   }
-  assertContextEngineHostSupport({
+  const resolution = resolveHostCompatibleContextEngine({
     contextEngine: params.contextEngine,
     operation: "agent-run",
     host: buildAgentHarnessContextEngineHostSupport(harness),
   });
+  if (resolution.ok) {
+    return params;
+  }
+  log.warn(resolution.warning);
+  return { ...params, contextEngine: undefined };
 }
 
 function agentHarnessDiagnosticBase(
@@ -230,7 +242,7 @@ export async function runAgentHarnessLifecycleAttempt(
   emitAgentHarnessRunStarted(harness, params, activeHarnessTrace);
   try {
     phase = "prepare";
-    assertAgentHarnessContextEngineSupport(harness, params);
+    const runParams = resolveAgentHarnessContextEngineParams(harness, params);
     if (shouldEmitAgentRunDiagnostics(harness) && activeHarnessTrace) {
       // Non-OpenClaw harnesses get a child run trace so provider/harness spans
       // stay linked without reusing the parent harness trace id.
@@ -245,11 +257,11 @@ export async function runAgentHarnessLifecycleAttempt(
     }
     const runAndClassify = async () => {
       phase = "send";
-      const rawResult = await harness.runAttempt(params);
+      const rawResult = await harness.runAttempt(runParams);
       phase = "resolve";
       // Classification happens inside the diagnostic phase so failures identify
       // whether they came from send or result resolution.
-      return applyAgentHarnessResultClassification(harness, rawResult, params);
+      return applyAgentHarnessResultClassification(harness, rawResult, runParams);
     };
     result = agentRunTrace
       ? await runWithDiagnosticTraceContext(agentRunTrace, runAndClassify)

@@ -960,7 +960,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     }
   });
 
-  it("rejects CLI runs for context engines that require pre-prompt assembly", async () => {
+  it("demotes CLI runs to legacy for context engines that require pre-prompt assembly", async () => {
     const { dir, sessionFile } = createSessionFile();
     const engineId = `cli-unsupported-engine-${Date.now().toString(36)}`;
     registerContextEngine(engineId, (): ContextEngine => {
@@ -982,24 +982,24 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     });
 
     try {
-      await expect(
-        prepareCliRunContext({
-          sessionId: "session-test",
-          sessionFile,
-          workspaceDir: dir,
-          prompt: "latest ask",
-          provider: "test-cli",
-          model: "test-model",
-          timeoutMs: 1_000,
-          runId: "run-test-context-engine-host-compat",
-          config: {
-            ...createCliBackendConfig(),
-            plugins: { slots: { contextEngine: engineId } },
-          },
-        }),
-      ).rejects.toThrow(
-        `Context engine "${engineId}" cannot run operation "agent-run" on CLI backend "test-cli".`,
-      );
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-context-engine-host-compat",
+        config: {
+          ...createCliBackendConfig(),
+          plugins: { slots: { contextEngine: engineId } },
+        },
+      });
+
+      // CLI backend lacks assemble-before-prompt, so the engine demotes to
+      // legacy (undefined) instead of hard-failing the run.
+      expect(context.contextEngine).toBeUndefined();
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

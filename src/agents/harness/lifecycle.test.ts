@@ -146,10 +146,11 @@ describe("AgentHarness lifecycle runner", () => {
     expect(runAttempt).toHaveBeenCalledWith(params);
   });
 
-  it("rejects harnesses that do not advertise required context-engine capabilities", async () => {
+  it("demotes to legacy when a harness lacks required context-engine capabilities", async () => {
     const params = createAttemptParams();
     params.contextEngine = createContextEngineRequiringAssembly();
-    const runAttempt = vi.fn(async () => createAttemptResult());
+    const result = createAttemptResult();
+    const runAttempt = vi.fn(async () => result);
     const harness: AgentHarness = {
       id: "custom",
       label: "Custom",
@@ -157,10 +158,11 @@ describe("AgentHarness lifecycle runner", () => {
       runAttempt,
     };
 
-    await expect(runAgentHarnessLifecycleAttempt(harness, params)).rejects.toThrow(
-      'Context engine "lossless-claw" cannot run operation "agent-run" on agent harness "custom".',
-    );
-    expect(runAttempt).not.toHaveBeenCalled();
+    const attemptResult = await runAgentHarnessLifecycleAttempt(harness, params);
+
+    expect(attemptResult).toEqual({ ...result, agentHarnessId: "custom" });
+    expect(runAttempt).toHaveBeenCalledTimes(1);
+    expect(runAttempt.mock.calls[0]?.[0].contextEngine).toBeUndefined();
   });
 
   it("allows harnesses that advertise required context-engine capabilities", async () => {

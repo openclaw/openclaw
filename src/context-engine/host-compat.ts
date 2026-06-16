@@ -97,6 +97,26 @@ export function evaluateContextEngineHostSupport(params: {
   };
 }
 
+function formatContextEngineHostUnsupportedMessage(params: {
+  engineId: string;
+  operation: ContextEngineOperation;
+  host: ContextEngineHostSupport;
+  evaluation: Extract<ContextEngineHostSupportEvaluation, { ok: false }>;
+}): string {
+  const required = params.evaluation.requirements.requiredCapabilities.join(", ");
+  const actual =
+    params.host.capabilities.length > 0 ? params.host.capabilities.join(", ") : "(none)";
+  const guidance = params.evaluation.requirements.unsupportedMessage
+    ? ` ${params.evaluation.requirements.unsupportedMessage}`
+    : "";
+  return (
+    `Context engine "${params.engineId}" cannot run operation "${params.operation}" on ${params.host.label}. ` +
+    `Missing host capabilities: ${params.evaluation.missingCapabilities.join(", ")}. ` +
+    `Required capabilities: ${required}. ` +
+    `Host capabilities: ${actual}.${guidance}`
+  );
+}
+
 /** Assert that a context engine can safely run under the supplied host. */
 export function assertContextEngineHostSupport(params: {
   contextEngine: ContextEngine;
@@ -111,18 +131,48 @@ export function assertContextEngineHostSupport(params: {
   if (evaluation.ok) {
     return;
   }
-
-  const engineId = params.contextEngine.info.id;
-  const required = evaluation.requirements.requiredCapabilities.join(", ");
-  const actual =
-    params.host.capabilities.length > 0 ? params.host.capabilities.join(", ") : "(none)";
-  const guidance = evaluation.requirements.unsupportedMessage
-    ? ` ${evaluation.requirements.unsupportedMessage}`
-    : "";
   throw new Error(
-    `Context engine "${engineId}" cannot run operation "${params.operation}" on ${params.host.label}. ` +
-      `Missing host capabilities: ${evaluation.missingCapabilities.join(", ")}. ` +
-      `Required capabilities: ${required}. ` +
-      `Host capabilities: ${actual}.${guidance}`,
+    formatContextEngineHostUnsupportedMessage({
+      engineId: params.contextEngine.info.id,
+      operation: params.operation,
+      host: params.host,
+      evaluation,
+    }),
   );
+}
+
+export type HostCompatibleContextEngineResolution =
+  | { ok: true; contextEngine: ContextEngine }
+  | { ok: false; contextEngine: undefined; warning: string };
+
+/**
+ * Resolve the engine to bind for a host, demoting to legacy when the host
+ * cannot satisfy the engine's requirements. A mixed fleet keeps one global
+ * contextEngine slot: doctor leaves it set when only some runtimes are
+ * incompatible, so each runtime degrades per-session here instead of
+ * hard-failing every turn.
+ */
+export function resolveHostCompatibleContextEngine(params: {
+  contextEngine: ContextEngine;
+  operation: ContextEngineOperation;
+  host: ContextEngineHostSupport;
+}): HostCompatibleContextEngineResolution {
+  const evaluation = evaluateContextEngineHostSupport({
+    contextEngineInfo: params.contextEngine.info,
+    operation: params.operation,
+    host: params.host,
+  });
+  if (evaluation.ok) {
+    return { ok: true, contextEngine: params.contextEngine };
+  }
+  return {
+    ok: false,
+    contextEngine: undefined,
+    warning: formatContextEngineHostUnsupportedMessage({
+      engineId: params.contextEngine.info.id,
+      operation: params.operation,
+      host: params.host,
+      evaluation,
+    }),
+  };
 }
