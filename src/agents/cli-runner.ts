@@ -378,6 +378,11 @@ async function runCliAgentInternal(params: RunCliAgentParams): Promise<EmbeddedA
   if (params.trigger === "cron") {
     const startedAt = Date.now();
     const hookRunner = getGlobalHookRunner();
+    params.onExecutionPhase?.({
+      phase: "before_agent_reply",
+      provider: params.provider,
+      model: params.model ?? "",
+    });
     if (hookRunner?.hasHooks("before_agent_reply")) {
       const hookContext = {
         runId: params.runId,
@@ -389,11 +394,6 @@ async function runCliAgentInternal(params: RunCliAgentParams): Promise<EmbeddedA
         trigger: params.trigger,
         ...buildAgentHookContextChannelFields(params),
       } as const;
-      params.onExecutionPhase?.({
-        phase: "before_agent_reply",
-        provider: params.provider,
-        model: params.model ?? "",
-      });
       const hookResult = await hookRunner.runBeforeAgentReply(
         { cleanedBody: params.prompt },
         hookContext,
