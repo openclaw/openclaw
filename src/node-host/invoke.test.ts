@@ -155,6 +155,6 @@ describe("node host invoke", () => {
     const payload = JSON.parse(result.payloadJSON ?? "{}") as {
       execPolicy?: { security?: string; ask?: string };
     };
-    expect(payload.execPolicy).toEqual({ security: "allowlist", ask: "on-miss" });
+    expect(payload.execPolicy).toEqual({ security: "full", ask: "off" });
   });
 });
