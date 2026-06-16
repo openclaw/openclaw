@@ -58,9 +58,27 @@ export default definePluginEntry({
       catalog: {
         order: "simple",
         run: async (ctx) => {
-          const auth = ctx.resolveProviderApiKey(PROVIDER_ID);
-          const apiKey = auth.apiKey ?? auth.discoveryApiKey;
-          if (!apiKey) {
+          const auth = ctx.resolveProviderAuth(PROVIDER_ID);
+          let discoveryApiKey = auth.discoveryApiKey;
+          if (!discoveryApiKey) {
+            try {
+              const { resolveApiKeyForProvider } =
+                await import("openclaw/plugin-sdk/provider-auth-runtime");
+              discoveryApiKey = (
+                await resolveApiKeyForProvider({
+                  provider: PROVIDER_ID,
+                  cfg: ctx.config,
+                  ...(ctx.agentDir ? { agentDir: ctx.agentDir } : {}),
+                  ...(ctx.workspaceDir ? { workspaceDir: ctx.workspaceDir } : {}),
+                  ...(auth.profileId ? { profileId: auth.profileId, lockedProfile: true } : {}),
+                })
+              )?.apiKey;
+            } catch {
+              return null;
+            }
+          }
+          const apiKey = auth.apiKey ?? discoveryApiKey;
+          if (!apiKey || !discoveryApiKey) {
             return null;
           }
           const configuredBaseUrl = ctx.config.models?.providers?.[PROVIDER_ID]?.baseUrl;
@@ -68,7 +86,7 @@ export default definePluginEntry({
             return {
               provider: await buildClawRouterProviderConfig({
                 apiKey,
-                discoveryApiKey: auth.discoveryApiKey,
+                discoveryApiKey,
                 baseUrl: configuredBaseUrl,
               }),
             };
@@ -82,6 +100,7 @@ export default definePluginEntry({
         return baseUrl !== providerConfig.baseUrl ? { ...providerConfig, baseUrl } : undefined;
       },
       normalizeResolvedModel: ({ model }) => normalizeClawRouterResolvedModel(model),
+      wrapSimpleCompletionStreamFn: wrapClawRouterProviderStream,
       wrapStreamFn: wrapClawRouterProviderStream,
       buildReplayPolicy: ({ modelApi, modelId }) => {
         if (modelApi === "anthropic-messages") {
