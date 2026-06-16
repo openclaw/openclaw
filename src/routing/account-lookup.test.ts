@@ -87,7 +87,7 @@ describe("resolveNormalizedAccountEntry", () => {
       name: "does not resolve keys that normalize to blocked object keys",
       accounts: {
         "constructor ": { id: "blocked" },
-      },
+      } as Record<string, { id: string }>,
       resolve: (accounts: Record<string, { id: string }>) =>
         resolveNormalizedAccountEntry(accounts, "constructor", (accountId) =>
           accountId.trim().toLowerCase(),
