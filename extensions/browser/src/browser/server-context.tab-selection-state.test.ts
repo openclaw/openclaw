@@ -307,6 +307,49 @@ describe("browser server-context tab selection state", () => {
     }
   });
 
+  it("keeps the last unfiltered local tab when later wsUrl polling lists are empty", async () => {
+    vi.useFakeTimers();
+    try {
+      let listCount = 0;
+      const fetchMock = vi.fn(async (url: unknown) => {
+        const value = String(url);
+        if (!value.includes("/json/list")) {
+          throw new Error(`unexpected fetch: ${value}`);
+        }
+        listCount += 1;
+        return {
+          ok: true,
+          json: async () =>
+            listCount <= 2
+              ? [
+                  {
+                    id: "NO_WS_THEN_EMPTY",
+                    title: "No WS Then Empty",
+                    url: "https://example.com",
+                    type: "page",
+                  },
+                ]
+              : [],
+        } as unknown as Response;
+      });
+
+      global.fetch = withBrowserFetchPreconnect(fetchMock);
+      const state = makeState("openclaw");
+      const ctx = createTestBrowserRouteContext({ getState: () => state });
+      const openclaw = ctx.forProfile("openclaw");
+
+      const selectedPromise = openclaw.ensureTabAvailable();
+      await vi.advanceTimersByTimeAsync(OPEN_TAB_DISCOVERY_WINDOW_MS + OPEN_TAB_DISCOVERY_POLL_MS);
+      await expect(selectedPromise).resolves.toEqual(
+        expect.objectContaining({ targetId: "NO_WS_THEN_EMPTY" }),
+      );
+      expect(state.profiles.get("openclaw")?.lastTargetId).toBe("NO_WS_THEN_EMPTY");
+      expect(listCount).toBeGreaterThan(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("opens a real tab when only browser-internal CDP targets are listed", async () => {
     const createTargetViaCdp = vi
       .spyOn(cdpModule, "createTargetViaCdp")

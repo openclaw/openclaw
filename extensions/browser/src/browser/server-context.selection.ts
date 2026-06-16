@@ -84,16 +84,20 @@ export function createProfileSelectionOps({
 
     if (capabilities.supportsPerTabWs && candidates.length === 0 && tabs.length > 0) {
       const deadline = Date.now() + OPEN_TAB_DISCOVERY_WINDOW_MS;
+      let lastUnfilteredTabs = tabs;
       while (Date.now() < deadline) {
         await waitForTabDiscoveryPoll();
         tabs = mergeOpenedTabSnapshot(await listTabs(), openedTab);
+        if (tabs.length > 0) {
+          lastUnfilteredTabs = tabs;
+        }
         candidates = candidateTabs(tabs);
         if (candidates.length > 0) {
           break;
         }
       }
       if (candidates.length === 0) {
-        candidates = tabs;
+        candidates = lastUnfilteredTabs;
       }
     }
 
