@@ -937,7 +937,7 @@ export function formatValidationErrors(errors: ValidationError[] | null | undefi
         firstStringParam(err?.params?.additionalProperties);
       if (additionalProperty) {
         const where = instancePath ? `at ${instancePath}` : "at root";
-        parts.push(`${where}: unexpected property '${additionalProperty}'`);
+        parts.push(`${where}: unexpected property ${JSON.stringify(additionalProperty)}`);
         continue;
       }
     }

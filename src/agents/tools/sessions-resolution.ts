@@ -259,7 +259,8 @@ async function callGatewayResolveSession(
       error instanceof GatewayClientRequestError &&
       error.gatewayCode === "INVALID_REQUEST" &&
       error.message.includes("invalid sessions.resolve params") &&
-      error.message.includes("unexpected property 'allowMissing'");
+      error.message.includes("unexpected property") &&
+      error.message.includes("allowMissing");
     if (!olderGatewayRejectedProbe) {
       throw error;
     }

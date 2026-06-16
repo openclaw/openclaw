@@ -1400,6 +1400,20 @@ async function compactEmbeddedAgentSessionDirectOnce(
             log.info(
               `[compaction] skipping — no real conversation messages (sessionKey=${params.sessionKey ?? params.sessionId})`,
             );
+            await runAfterCompactionHooks({
+              hookRunner,
+              sessionId: params.sessionId,
+              sessionAgentId,
+              hookSessionKey,
+              missingSessionKey,
+              workspaceDir: effectiveWorkspace,
+              messageProvider: resolvedMessageProvider,
+              messageCountAfter: session.messages.length,
+              tokensAfter: beforeHookMetrics.tokenCountBefore,
+              compactedCount: 0,
+              sessionFile: params.sessionFile,
+              tokensBefore: beforeHookMetrics.tokenCountBefore,
+            });
             return {
               ok: true,
               compacted: false,

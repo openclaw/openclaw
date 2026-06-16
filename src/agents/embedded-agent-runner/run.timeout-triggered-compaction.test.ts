@@ -528,6 +528,40 @@ describe("timeout-triggered compaction", () => {
     expect(mockedRunPostCompactionSideEffects).toHaveBeenCalledTimes(1);
   });
 
+  it("fires after_compaction when ownsCompaction timeout recovery succeeds without compacting", async () => {
+    mockedContextEngine.info.ownsCompaction = true;
+    mockedGlobalHookRunner.hasHooks.mockImplementation(
+      (hookName) => hookName === "before_compaction" || hookName === "after_compaction",
+    );
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          timedOut: true,
+          lastAssistant: {
+            usage: { input: 160000 },
+          } as never,
+        }),
+      )
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+    mockedCompactDirect.mockResolvedValueOnce({
+      ok: true,
+      compacted: false,
+      reason: "no real conversation messages",
+    });
+
+    await runEmbeddedAgent(overflowBaseRunParams);
+
+    const [afterEvent, afterContext] = hookCallAt(0, "after");
+    expect(afterEvent).toEqual({
+      messageCount: -1,
+      compactedCount: 0,
+      tokenCount: undefined,
+      sessionFile: "/tmp/session.json",
+    });
+    expect(afterContext.sessionKey).toBe("test-key");
+    expect(mockedRunPostCompactionSideEffects).not.toHaveBeenCalled();
+  });
+
   it("counts compacted:false timeout compactions against the retry cap across profile rotation", async () => {
     useTwoAuthProfiles();
     // Attempt 1 (profile-a): timeout → compaction #1 fails → rotate to profile-b

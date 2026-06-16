@@ -689,7 +689,8 @@ function isOlderGatewayWithoutCompactCronList(error: unknown): boolean {
     error instanceof GatewayClientRequestError &&
     error.gatewayCode === "INVALID_REQUEST" &&
     error.message.includes("invalid cron.list params") &&
-    error.message.includes("unexpected property 'compact'")
+    error.message.includes("unexpected property") &&
+    error.message.includes("compact")
   );
 }
 

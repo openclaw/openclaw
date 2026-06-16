@@ -316,7 +316,7 @@ describe("resolveSessionReference", () => {
     const unsupportedAllowMissing = () =>
       new GatewayClientRequestError({
         code: "INVALID_REQUEST",
-        message: "invalid sessions.resolve params: at root: unexpected property 'allowMissing'",
+        message: 'invalid sessions.resolve params: at root: unexpected property "allowMissing"',
       });
     callGatewayMock
       .mockRejectedValueOnce(unsupportedAllowMissing())

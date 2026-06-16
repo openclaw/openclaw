@@ -234,6 +234,49 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     });
   });
 
+  it("pairs before_compaction with after_compaction when direct compaction no-ops", async () => {
+    hookRunner.hasHooks.mockReturnValue(true);
+    sessionMessages.splice(0, sessionMessages.length, {
+      role: "toolResult",
+      toolCallId: "t1",
+      toolName: "exec",
+      content: [{ type: "text", text: "output" }],
+      isError: false,
+      timestamp: 1,
+    });
+
+    const result = await compactEmbeddedAgentSessionDirect({
+      sessionId: TEST_SESSION_ID,
+      sessionKey: TEST_SESSION_KEY,
+      sessionFile: TEST_SESSION_FILE,
+      workspaceDir: TEST_WORKSPACE_DIR,
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      compacted: false,
+      reason: "no real conversation messages",
+    });
+    expect(hookRunner.runBeforeCompaction).toHaveBeenCalledTimes(1);
+    expect(hookRunner.runAfterCompaction).toHaveBeenCalledTimes(1);
+    expect(mockCallArg(hookRunner.runAfterCompaction)).toEqual({
+      messageCount: 1,
+      tokenCount: 10,
+      compactedCount: 0,
+      sessionFile: TEST_SESSION_FILE,
+    });
+    expectRecordFields(mockCallArg(hookRunner.runAfterCompaction, 0, 1), {
+      sessionKey: TEST_SESSION_KEY,
+    });
+    expectRecordFields(sessionHook("compact:after")?.context, {
+      messageCount: 1,
+      compactedCount: 0,
+      tokenCount: 10,
+      tokensBefore: 10,
+      tokensAfter: 10,
+    });
+  });
+
   it("forwards gateway subagent binding opt-in during compaction bootstrap", async () => {
     // Coding-tool forwarding is covered elsewhere; this compaction test only
     // owns the runtime bootstrap wiring.
@@ -1647,6 +1690,35 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       messageCount: -1,
       compactedCount: -1,
       tokenCount: 50,
+      sessionFile: TEST_SESSION_FILE,
+    });
+    expectRecordFields(mockCallArg(hookRunner.runAfterCompaction, 0, 1), {
+      sessionKey: TEST_SESSION_KEY,
+      messageProvider: "telegram",
+    });
+  });
+
+  it("fires after_compaction with zero compactedCount when engine-owned compaction no-ops", async () => {
+    hookRunner.hasHooks.mockReturnValue(true);
+    contextEngineCompactMock.mockResolvedValue({
+      ok: true,
+      compacted: false,
+      reason: "no real conversation messages",
+      result: undefined,
+    });
+
+    const result = await compactEmbeddedAgentSession(
+      wrappedCompactionArgs({
+        messageChannel: "telegram",
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.compacted).toBe(false);
+    expect(mockCallArg(hookRunner.runAfterCompaction)).toEqual({
+      messageCount: -1,
+      compactedCount: 0,
+      tokenCount: undefined,
       sessionFile: TEST_SESSION_FILE,
     });
     expectRecordFields(mockCallArg(hookRunner.runAfterCompaction, 0, 1), {

@@ -471,7 +471,7 @@ describe("cron tool", () => {
       .mockRejectedValueOnce(
         new GatewayClientRequestError({
           code: "INVALID_REQUEST",
-          message: "invalid cron.list params: at root: unexpected property 'compact'",
+          message: 'invalid cron.list params: at root: unexpected property "compact"',
         }),
       )
       .mockResolvedValueOnce({ jobs: [] });

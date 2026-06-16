@@ -1670,7 +1670,6 @@ async function runEmbeddedAgentInternal(
           if (
             contextEngine.info.ownsCompaction !== true ||
             !compactResult.ok ||
-            !compactResult.compacted ||
             !hookRunner?.hasHooks("after_compaction")
           ) {
             return;
@@ -1679,7 +1678,7 @@ async function runEmbeddedAgentInternal(
             await hookRunner.runAfterCompaction(
               {
                 messageCount: -1,
-                compactedCount: -1,
+                compactedCount: compactResult.compacted ? -1 : 0,
                 tokenCount: compactResult.result?.tokensAfter,
                 sessionFile: compactResult.result?.sessionFile ?? activeSessionFile,
               },
