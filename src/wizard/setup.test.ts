@@ -627,6 +627,41 @@ describe("runSetupWizard", () => {
     vi.clearAllMocks();
   });
 
+  it("treats auth-only Gateway policy as existing", async () => {
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      path: "/tmp/.openclaw/openclaw.json",
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      resolved: {},
+      valid: true,
+      config: {
+        gateway: {
+          auth: {
+            allowTailscale: false,
+          },
+        },
+      },
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+    hasRunnableLocalAgent.mockResolvedValueOnce(true);
+    configureGatewayForSetup.mockClear();
+
+    await runSetupWizard({ acceptRisk: true }, createRuntime(), buildWizardPrompter({}));
+
+    expect(configureGatewayForSetup).toHaveBeenCalledWith(
+      expect.objectContaining({
+        quickstartGateway: expect.objectContaining({
+          hasExisting: true,
+          authMode: "token",
+        }),
+      }),
+    );
+    vi.clearAllMocks();
+  });
+
   it("preserves existing trusted-proxy auth for assisted setup", async () => {
     readConfigFileSnapshot.mockResolvedValueOnce({
       path: "/tmp/.openclaw/openclaw.json",

@@ -141,7 +141,7 @@ describe("agent-assisted Gateway runtime", () => {
         settings,
         prompter: createWizardPrompter(),
       }),
-    ).rejects.toThrow("cannot verify that it matches the active config and auth mode");
+    ).rejects.toThrow("cannot verify that it matches the active Gateway security settings");
 
     expect(spawn).not.toHaveBeenCalled();
   });
@@ -166,9 +166,81 @@ describe("agent-assisted Gateway runtime", () => {
         },
         prompter: createWizardPrompter(),
       }),
-    ).rejects.toThrow("cannot verify that it matches the active config and auth mode");
+    ).rejects.toThrow("cannot verify that it matches the active Gateway security settings");
 
     expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(18789);
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("rejects reuse for a reachable trusted-proxy Gateway", async () => {
+    probeGateway.mockResolvedValueOnce({
+      ok: true,
+      configSnapshot: {
+        path: "/tmp/openclaw.json",
+        config: {
+          gateway: {
+            port: 18789,
+            bind: "loopback",
+            auth: {
+              mode: "trusted-proxy",
+              trustedProxy: { userHeader: "x-forwarded-user" },
+            },
+          },
+        },
+      },
+    });
+
+    await expect(
+      ensureAgentAssistedGatewayRuntime({
+        config: {
+          gateway: {
+            auth: {
+              mode: "trusted-proxy",
+              trustedProxy: { userHeader: "x-forwarded-user" },
+            },
+          },
+        },
+        settings: {
+          ...settings,
+          authMode: "trusted-proxy",
+          gatewayToken: undefined,
+        },
+        prompter: createWizardPrompter(),
+      }),
+    ).rejects.toThrow("cannot verify that it matches the active Gateway security settings");
+
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("rejects reuse when the Tailscale exposure mode does not match", async () => {
+    probeGateway
+      .mockResolvedValueOnce({
+        ok: true,
+        configSnapshot: {
+          path: "/tmp/openclaw.json",
+          config: {
+            gateway: {
+              port: 18789,
+              bind: "loopback",
+              auth: { mode: "token" },
+              tailscale: { mode: "off" },
+            },
+          },
+        },
+      })
+      .mockResolvedValueOnce({ ok: false });
+
+    await expect(
+      ensureAgentAssistedGatewayRuntime({
+        config: {},
+        settings: {
+          ...settings,
+          tailscaleMode: "serve",
+        },
+        prompter: createWizardPrompter(),
+      }),
+    ).rejects.toThrow("cannot verify that it matches the active Gateway security settings");
+
     expect(spawn).not.toHaveBeenCalled();
   });
 

@@ -49,16 +49,23 @@ function snapshotMatchesGatewaySettings(params: {
   configSnapshot: unknown;
   settings: GatewayWizardSettings;
 }): boolean {
+  if (params.settings.authMode === "trusted-proxy") {
+    return false;
+  }
   const snapshot = asRecord(params.configSnapshot);
   const config = asRecord(snapshot?.config);
   const gateway = asRecord(config?.gateway);
   const auth = asRecord(gateway?.auth);
+  const tailscale = asRecord(gateway?.tailscale);
   return (
     typeof snapshot?.path === "string" &&
     path.resolve(snapshot.path) === path.resolve(resolveConfigPath()) &&
     gateway?.port === params.settings.port &&
     gateway.bind === params.settings.bind &&
-    auth?.mode === params.settings.authMode
+    gateway.customBindHost === params.settings.customBindHost &&
+    auth?.mode === params.settings.authMode &&
+    (tailscale?.mode ?? "off") === params.settings.tailscaleMode &&
+    (tailscale?.resetOnExit === true) === params.settings.tailscaleResetOnExit
   );
 }
 
@@ -213,7 +220,7 @@ export async function ensureAgentAssistedGatewayRuntime(params: {
     findVerifiedGatewayListenerPidsOnPortSync(params.settings.port).length > 0
   ) {
     throw new Error(
-      `An existing Gateway is listening on port ${params.settings.port}, but setup cannot verify that it matches the active config and auth mode. Stop the existing Gateway, then rerun onboarding.`,
+      `An existing Gateway is listening on port ${params.settings.port}, but setup cannot verify that it matches the active Gateway security settings. Stop the existing Gateway, then rerun onboarding.`,
     );
   }
 

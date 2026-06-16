@@ -429,9 +429,7 @@ export async function runSetupWizard(
     const hasExisting =
       typeof baseConfig.gateway?.port === "number" ||
       baseConfig.gateway?.bind !== undefined ||
-      baseConfig.gateway?.auth?.mode !== undefined ||
-      baseConfig.gateway?.auth?.token !== undefined ||
-      baseConfig.gateway?.auth?.password !== undefined ||
+      baseConfig.gateway?.auth !== undefined ||
       baseConfig.gateway?.customBindHost !== undefined ||
       baseConfig.gateway?.tailscale?.mode !== undefined;
 
