@@ -935,12 +935,12 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     expectDiagnosticsContainCode(result.diagnostics, "persisted-registry-stale-source");
   });
 
-  it("keeps persisted registry when a non-plugin diagnostic source path still does not exist", () => {
+  it("refreshes registry when an orphan diagnostic without pluginId exists", () => {
     const tempRoot = makeTempDir();
     const stateDir = path.join(tempRoot, "state");
     const env = { ...createHermeticEnv(tempRoot), OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" };
     const config = {};
-    const missingConfiguredPath = path.join(tempRoot, "missing-configured-plugin");
+    const missingConfiguredPath = path.join(tempRoot, "missing-configured-path.js");
     const index: InstalledPluginIndex = {
       ...loadInstalledPluginIndex({ config, env, stateDir, installRecords: {} }),
       diagnostics: [
@@ -948,6 +948,7 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
           level: "error",
           message: `plugin path not found: ${missingConfiguredPath}`,
           source: missingConfiguredPath,
+          code: "orphan-source-path",
         },
       ],
     };
@@ -955,8 +956,48 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
 
     const result = loadPluginRegistrySnapshotWithMetadata({ config, env, stateDir });
 
-    expect(result.source).toBe("persisted");
-    expectDiagnosticsContainSource(result.snapshot.diagnostics, missingConfiguredPath);
-    expect(result.diagnostics).toStrictEqual([]);
+    // Diagnostics tagged with orphan-source-path are always stale — the
+    // registry is refreshed so the current file system state is reflected.
+    expect(result.source).toBe("derived");
+    expectDiagnosticsContainCode(result.diagnostics, "persisted-registry-stale-source");
+  });
+
+  it("refreshes registry for orphan diagnostics even when the source path still does not exist", () => {
+    // This test documents a design choice: orphan diagnostics tagged with
+    // orphan-source-path (set by discoverFromPath when a configured load path
+    // doesn't exist) are always stale, even when the source path referenced by
+    // the diagnostic still doesn't exist. This means users with persistent
+    // config issues (e.g. a plugin path that genuinely doesn't exist) will
+    // experience a full rediscovery on every Gateway startup until they fix
+    // the config. This trade-off is acceptable because:
+    // 1. The rediscovery path is bounded and self-correcting.
+    // 2. It gives users an up-to-date view of their plugin system.
+    // 3. The fast path is a performance optimization, not a correctness requirement.
+    const tempRoot = makeTempDir();
+    const stateDir = path.join(tempRoot, "state");
+    const env = { ...createHermeticEnv(tempRoot), OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" };
+    const config = {};
+    const missingConfiguredPath = path.join(tempRoot, "missing-configured-path.js");
+    const index: InstalledPluginIndex = {
+      ...loadInstalledPluginIndex({ config, env, stateDir, installRecords: {} }),
+      diagnostics: [
+        {
+          level: "error",
+          message: `plugin path not found: ${missingConfiguredPath}`,
+          source: missingConfiguredPath,
+          code: "orphan-source-path",
+        },
+      ],
+    };
+    writePersistedInstalledPluginIndexSync(index, { stateDir });
+
+    const result = loadPluginRegistrySnapshotWithMetadata({ config, env, stateDir });
+
+    // Even though the source path still doesn't exist (so the diagnostic is
+    // still factually accurate), the orphan-source-path tag makes the
+    // diagnostic always stale. The registry is refreshed to produce a current
+    // snapshot.
+    expect(result.source).toBe("derived");
+    expectDiagnosticsContainCode(result.diagnostics, "persisted-registry-stale-source");
   });
 });

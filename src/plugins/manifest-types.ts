@@ -18,7 +18,7 @@ export type PluginBundleFormat = "codex" | "claude" | "cursor";
  * Closed classification codes for plugin diagnostics. Health surfaces branch
  * on these instead of matching freeform diagnostic message text.
  */
-export type PluginDiagnosticCode = "channel-setup-failure";
+export type PluginDiagnosticCode = "channel-setup-failure" | "orphan-source-path";
 
 /** Diagnostic emitted while discovering or validating plugins. */
 export type PluginDiagnostic = {
