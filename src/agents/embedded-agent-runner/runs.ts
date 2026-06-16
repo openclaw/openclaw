@@ -44,6 +44,7 @@ import {
   RETAINED_EMBEDDED_RUN_ABORTABILITY_RUN_IDS,
   type ActiveEmbeddedRunSnapshot,
   type AbandonedEmbeddedRun,
+  type EmbeddedAgentAbortReason,
   type EmbeddedAgentQueueHandle,
   type EmbeddedAgentQueueMessageOptions,
   type EmbeddedRunWaiter,
@@ -55,6 +56,8 @@ export {
   listActiveEmbeddedRunSessionIds,
   listActiveEmbeddedRunSessionKeys,
   resolveActiveEmbeddedRunSessionId,
+  type ActiveEmbeddedRunSnapshot,
+  type EmbeddedAgentAbortReason,
   type EmbeddedAgentQueueHandle,
   type EmbeddedAgentQueueMessageOptions,
 } from "./run-state.js";
@@ -524,14 +527,17 @@ function prepareEmbeddedAgentQueueMessage(
  * - With a sessionId, aborts that single run.
  * - With no sessionId, supports targeted abort modes (for example, compacting runs only).
  */
-export function abortEmbeddedAgentRun(sessionId: string): boolean;
+export function abortEmbeddedAgentRun(
+  sessionId: string,
+  opts?: { reason?: EmbeddedAgentAbortReason },
+): boolean;
 export function abortEmbeddedAgentRun(
   sessionId: undefined,
-  opts: { mode: "all" | "compacting"; reason?: "restart" },
+  opts: { mode: "all" | "compacting"; reason?: EmbeddedAgentAbortReason },
 ): boolean;
 export function abortEmbeddedAgentRun(
   sessionId?: string,
-  opts?: { mode?: "all" | "compacting"; reason?: "restart" },
+  opts?: { mode?: "all" | "compacting"; reason?: EmbeddedAgentAbortReason },
 ): boolean {
   if (typeof sessionId === "string" && sessionId.length > 0) {
     const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
@@ -778,8 +784,12 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
   settleMs?: number;
   forceClear?: boolean;
   reason?: string;
+  abortReason?: EmbeddedAgentAbortReason;
 }): Promise<AbortAndDrainEmbeddedAgentRunResult> {
   const settleMs = params.settleMs ?? 15_000;
+  const abortReason =
+    params.abortReason ?? (params.reason === "stuck_recovery" ? "stuck_recovery" : undefined);
+  const abortOptions = abortReason ? { reason: abortReason } : undefined;
   // Recovery is a staleness expiry: stamp run_stalled on the reply operation
   // BEFORE any handle abort, or the run loop's abort handler re-enters
   // abortByUser and misattributes the watchdog kill to the user.
@@ -795,7 +805,7 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
     const drained = await waitForEmbeddedAgentRunEnd(params.sessionId, settleMs);
     return { aborted: true, drained, forceCleared: false };
   }
-  const aborted = abortEmbeddedAgentRun(params.sessionId) || expiredReplyRun;
+  const aborted = abortEmbeddedAgentRun(params.sessionId, abortOptions) || expiredReplyRun;
   const drained = aborted ? await waitForEmbeddedAgentRunEnd(params.sessionId, settleMs) : false;
   const forceCleared =
     params.forceClear === true && (!aborted || !drained)

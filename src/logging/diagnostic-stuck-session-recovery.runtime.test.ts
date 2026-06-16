@@ -5,46 +5,55 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { saveCronStore } from "../cron/store.js";
 
-const mocks = vi.hoisted(() => ({
-  abortEmbeddedAgentRun: vi.fn(),
-  forceClearEmbeddedAgentRun: vi.fn(),
-  isEmbeddedAgentRunActive: vi.fn(),
-  isEmbeddedAgentRunHandleActive: vi.fn(),
-  getCommandLaneActiveTaskIds: vi.fn(),
-  getCommandLaneSnapshot: vi.fn(),
-  resetCommandLane: vi.fn(),
-  resolveActiveEmbeddedRunSessionId: vi.fn(),
-  resolveActiveEmbeddedRunSessionIdBySessionFile: vi.fn(),
-  resolveActiveEmbeddedRunHandleSessionId: vi.fn(),
-  resolveActiveEmbeddedRunHandleSessionIdBySessionFile: vi.fn(),
-  resolveEmbeddedAgentReplyRunPhase: vi.fn(),
-  resolveEmbeddedSessionLane: vi.fn((key: string) => `session:${key}`),
-  waitForEmbeddedAgentRunEnd: vi.fn(),
-  getDiagnosticSessionActivitySnapshot: vi.fn(),
-  diag: {
-    debug: vi.fn(),
-    warn: vi.fn(),
-  },
-}));
+const mocks = vi.hoisted(() => {
+  const state = {
+    abortEmbeddedAgentRun: vi.fn(),
+    forceClearEmbeddedAgentRun: vi.fn(),
+    isEmbeddedAgentRunActive: vi.fn(),
+    isEmbeddedAgentRunHandleActive: vi.fn(),
+    getCommandLaneActiveTaskIds: vi.fn(),
+    getCommandLaneSnapshot: vi.fn(),
+    resetCommandLane: vi.fn(),
+    resolveActiveEmbeddedRunSessionId: vi.fn(),
+    resolveActiveEmbeddedRunSessionIdBySessionFile: vi.fn(),
+    resolveActiveEmbeddedRunHandleSessionId: vi.fn(),
+    resolveActiveEmbeddedRunHandleSessionIdBySessionFile: vi.fn(),
+    resolveEmbeddedAgentReplyRunPhase: vi.fn(),
+    resolveEmbeddedSessionLane: vi.fn((key: string) => `session:${key}`),
+    waitForEmbeddedAgentRunEnd: vi.fn(),
+    getDiagnosticSessionActivitySnapshot: vi.fn(),
+    diag: {
+      debug: vi.fn(),
+      warn: vi.fn(),
+    },
+  };
+  return {
+    ...state,
+    abortAndDrainEmbeddedAgentRun: vi.fn(
+      async (params: {
+        sessionId: string;
+        sessionKey?: string;
+        settleMs?: number;
+        forceClear?: boolean;
+        reason?: string;
+        abortReason?: string;
+      }) => {
+        const aborted = state.abortEmbeddedAgentRun(params.sessionId);
+        const drained = aborted
+          ? await state.waitForEmbeddedAgentRunEnd(params.sessionId, params.settleMs)
+          : false;
+        const forceCleared =
+          params.forceClear === true && (!aborted || !drained)
+            ? state.forceClearEmbeddedAgentRun(params.sessionId, params.sessionKey, params.reason)
+            : false;
+        return { aborted, drained, forceCleared };
+      },
+    ),
+  };
+});
 
 vi.mock("../agents/embedded-agent-runner/runs.js", () => ({
-  abortAndDrainEmbeddedAgentRun: async (params: {
-    sessionId: string;
-    sessionKey?: string;
-    settleMs?: number;
-    forceClear?: boolean;
-    reason?: string;
-  }) => {
-    const aborted = mocks.abortEmbeddedAgentRun(params.sessionId);
-    const drained = aborted
-      ? await mocks.waitForEmbeddedAgentRunEnd(params.sessionId, params.settleMs)
-      : false;
-    const forceCleared =
-      params.forceClear === true && (!aborted || !drained)
-        ? mocks.forceClearEmbeddedAgentRun(params.sessionId, params.sessionKey, params.reason)
-        : false;
-    return { aborted, drained, forceCleared };
-  },
+  abortAndDrainEmbeddedAgentRun: mocks.abortAndDrainEmbeddedAgentRun,
   abortEmbeddedAgentRun: mocks.abortEmbeddedAgentRun,
   forceClearEmbeddedAgentRun: mocks.forceClearEmbeddedAgentRun,
   isEmbeddedAgentRunActive: mocks.isEmbeddedAgentRunActive,
@@ -84,6 +93,7 @@ import {
 
 function resetMocks() {
   testing.resetRecoveriesInFlight();
+  mocks.abortAndDrainEmbeddedAgentRun.mockClear();
   mocks.abortEmbeddedAgentRun.mockReset();
   mocks.forceClearEmbeddedAgentRun.mockReset();
   mocks.isEmbeddedAgentRunActive.mockReset();
@@ -184,6 +194,9 @@ describe("stuck session recovery", () => {
     });
 
     expect(mocks.abortEmbeddedAgentRun).toHaveBeenCalledWith("session-1");
+    expect(mocks.abortAndDrainEmbeddedAgentRun).toHaveBeenCalledWith(
+      expect.objectContaining({ abortReason: "stuck_recovery" }),
+    );
     expect(outcome.status).toBe("aborted");
     expect(warnLogMessages().some((m) => m.includes("reclaiming stale active run"))).toBe(true);
   });
