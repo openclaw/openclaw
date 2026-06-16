@@ -313,7 +313,6 @@ function wrapContextEngineWithSessionKeyCompat(engine: ContextEngine): ContextEn
     return engine;
   }
 
-  let isLegacy = false;
   const rejectedKeys = new Set<LegacyCompatKey>();
   const proxy: ContextEngine = new Proxy(engine, {
     get(target, property, receiver) {
@@ -333,17 +332,7 @@ function wrapContextEngineWithSessionKeyCompat(engine: ContextEngine): ContextEn
       return (params: SessionKeyCompatParams) => {
         const method = value.bind(target) as (params: SessionKeyCompatParams) => unknown;
         const allowedKeys = LEGACY_COMPAT_METHOD_KEYS[property];
-        if (
-          isLegacy &&
-          allowedKeys.some((key) => rejectedKeys.has(key) && hasOwnLegacyCompatKey(params, key))
-        ) {
-          // Fast path after first validation failure: skip keys the engine has already rejected.
-          return method(withoutLegacyCompatKeys(params, rejectedKeys));
-        }
         return invokeWithLegacyCompat(method, params, allowedKeys, {
-          onLegacyModeDetected: () => {
-            isLegacy = true;
-          },
           onLegacyKeysDetected: (keys) => {
             for (const key of keys) {
               rejectedKeys.add(key);

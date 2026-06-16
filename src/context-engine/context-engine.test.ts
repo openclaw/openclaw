@@ -467,6 +467,69 @@ class LegacyRuntimeSettingsStrictEngine implements ContextEngine {
   }
 }
 
+class LegacyRuntimeThenAssembleStrictEngine implements ContextEngine {
+  readonly info: ContextEngineInfo;
+  readonly maintainCalls: Array<Record<string, unknown>> = [];
+  readonly assembleCalls: Array<Record<string, unknown>> = [];
+
+  constructor(engineId = "legacy-runtime-then-assemble-strict") {
+    this.info = {
+      id: engineId,
+      name: "Legacy Runtime Then Assemble Strict Engine",
+    };
+  }
+
+  async ingest(_params: {
+    sessionId: string;
+    sessionKey?: string;
+    message: AgentMessage;
+    isHeartbeat?: boolean;
+  }): Promise<IngestResult> {
+    return { ingested: true };
+  }
+
+  async maintain(params: {
+    sessionId: string;
+    sessionKey?: string;
+    sessionFile: string;
+    runtimeSettings?: unknown;
+  }): Promise<ContextEngineMaintenanceResult> {
+    this.maintainCalls.push({ ...params });
+    if (Object.hasOwn(params, "runtimeSettings")) {
+      throw new Error("Unrecognized key(s) in object: 'runtimeSettings'");
+    }
+    return { changed: false, bytesFreed: 0, rewrittenEntries: 0 };
+  }
+
+  async assemble(params: {
+    sessionId: string;
+    sessionKey?: string;
+    messages: AgentMessage[];
+    prompt?: string;
+    runtimeSettings?: unknown;
+  }): Promise<AssembleResult> {
+    this.assembleCalls.push({ ...params });
+    if (Object.hasOwn(params, "sessionKey")) {
+      throw new Error("Unrecognized key(s) in object: 'sessionKey'");
+    }
+    if (Object.hasOwn(params, "prompt")) {
+      throw new Error("Unrecognized key(s) in object: 'prompt'");
+    }
+    if (Object.hasOwn(params, "runtimeSettings")) {
+      throw new Error("Unrecognized key(s) in object: 'runtimeSettings'");
+    }
+    return { messages: params.messages, estimatedTokens: 5 };
+  }
+
+  async compact(_params: {
+    sessionId: string;
+    sessionKey?: string;
+    sessionFile: string;
+  }): Promise<CompactResult> {
+    return { ok: true, compacted: false };
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // 1. Engine contract tests
 // ═══════════════════════════════════════════════════════════════════════════
@@ -758,6 +821,44 @@ describe("Legacy sessionKey compatibility", () => {
     expect(strictEngine.maintainCalls).toHaveLength(2);
     expect(strictEngine.maintainCalls[0]).toHaveProperty("sessionKey", "agent:main:test");
     expect(strictEngine.maintainCalls[1]).not.toHaveProperty("sessionKey");
+  });
+
+  it("keeps learning rejected legacy keys after runtimeSettings marks an engine legacy", async () => {
+    const engineId = uniqueEngineId("legacy-runtime-then-assemble");
+    const strictEngine = new LegacyRuntimeThenAssembleStrictEngine(engineId);
+    registerContextEngine(engineId, () => strictEngine);
+
+    const runtimeSettings = { schemaVersion: 1 } as never;
+    const engine = await resolveContextEngine(configWithSlot(engineId));
+
+    await engine.maintain?.({
+      sessionId: "s1",
+      sessionKey: "agent:main:test",
+      sessionFile: "/tmp/session.json",
+      runtimeSettings,
+    });
+    const assembled = await engine.assemble({
+      sessionId: "s1",
+      sessionKey: "agent:main:test",
+      messages: [makeMockMessage("user", "hello")],
+      prompt: "hello",
+      runtimeSettings,
+    });
+
+    expect(assembled.estimatedTokens).toBe(5);
+    expect(strictEngine.maintainCalls).toHaveLength(2);
+    expect(strictEngine.maintainCalls[0]).toHaveProperty("runtimeSettings");
+    expect(strictEngine.maintainCalls[1]).not.toHaveProperty("runtimeSettings");
+    expect(strictEngine.assembleCalls).toHaveLength(3);
+    expect(strictEngine.assembleCalls[0]).not.toHaveProperty("runtimeSettings");
+    expect(strictEngine.assembleCalls[0]).toHaveProperty("sessionKey", "agent:main:test");
+    expect(strictEngine.assembleCalls[0]).toHaveProperty("prompt", "hello");
+    expect(strictEngine.assembleCalls[1]).not.toHaveProperty("runtimeSettings");
+    expect(strictEngine.assembleCalls[1]).not.toHaveProperty("sessionKey");
+    expect(strictEngine.assembleCalls[1]).toHaveProperty("prompt", "hello");
+    expect(strictEngine.assembleCalls[2]).not.toHaveProperty("runtimeSettings");
+    expect(strictEngine.assembleCalls[2]).not.toHaveProperty("sessionKey");
+    expect(strictEngine.assembleCalls[2]).not.toHaveProperty("prompt");
   });
 
   it("quarantines and falls back for non-compat runtime errors", async () => {
