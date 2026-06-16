@@ -53,6 +53,7 @@ import {
   serializeSessionCleanupResult,
   resolveMainSessionKey,
   listConfiguredSessionStoreAgentIds,
+  deleteSessionEntryLifecycle,
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
@@ -2292,7 +2293,6 @@ export const sessionsHandlers: GatewayRequestHandlers = {
 
     const deleteTranscript = typeof p.deleteTranscript === "boolean" ? p.deleteTranscript : true;
     const {
-      archiveSessionTranscriptsForSessionDetailed,
       cleanupSessionBeforeMutation,
       emitGatewaySessionEndPluginHook,
       emitSessionUnboundLifecycleEvent,
@@ -2317,31 +2317,19 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       respond(false, undefined, mutationCleanupError);
       return;
     }
-    const sessionId = entry?.sessionId;
-    const deleted = await updateSessionStore(storePath, (store) => {
-      const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
-        cfg,
-        key,
-        store,
-        agentId: requestedAgentId,
-      });
-      const hadEntry = Boolean(store[primaryKey]);
-      if (hadEntry) {
-        delete store[primaryKey];
-      }
-      return hadEntry;
+    const deletion = await deleteSessionEntryLifecycle({
+      agentId: target.agentId,
+      archiveTranscript: deleteTranscript,
+      storePath,
+      target: {
+        canonicalKey: target.canonicalKey,
+        storeKeys: target.storeKeys,
+      },
     });
-
-    const archivedTranscripts =
-      deleted && deleteTranscript
-        ? archiveSessionTranscriptsForSessionDetailed({
-            sessionId,
-            storePath,
-            sessionFile: entry?.sessionFile,
-            agentId: target.agentId,
-            reason: "deleted",
-          })
-        : [];
+    const deleted = deletion.deleted;
+    const sessionId = deletion.deletedSessionId;
+    const sessionFile = deletion.deletedSessionFile;
+    const archivedTranscripts = deletion.archivedTranscripts;
     const archived = archivedTranscripts.map((entryLocal) => entryLocal.archivedPath);
     if (deleted) {
       emitGatewaySessionEndPluginHook({
@@ -2349,7 +2337,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         sessionKey: target.canonicalKey ?? key,
         sessionId,
         storePath,
-        sessionFile: entry?.sessionFile,
+        sessionFile,
         agentId: target.agentId,
         reason: "deleted",
         archivedTranscripts,
