@@ -1808,6 +1808,49 @@ describe("TelegramPollingSession", () => {
     });
   });
 
+  it("recovers a lone active spooled handler that times out with no same-lane backlog (#84158)", async () => {
+    await withTempSpool(async (tempDir) => {
+      const abort = new AbortController();
+      const log = vi.fn();
+      const events: string[] = [];
+      let releaseLoneTurn: (() => void) | undefined;
+      const loneTurnDone = new Promise<void>((resolve) => {
+        releaseLoneTurn = resolve;
+      });
+      // A single spooled update with nothing queued behind it: the handler stays
+      // active but never lands in drain.blockedByLane, so timeout recovery keyed
+      // only on blockedByLane (the previous behavior) never evaluated it.
+      await writeSpooledTestUpdates(tempDir, [topicUpdate(42, 10, "lone active topic turn")]);
+
+      const { runPromise, stopWorker } = startIsolatedIngressSession({
+        abort,
+        spoolDir: tempDir,
+        log,
+        drainIntervalMs: 10,
+        spooledUpdateHandlerTimeoutMs: 20,
+        spooledUpdateHandlerAbortGraceMs: 10,
+        handleUpdate: async (update) => {
+          if (update.update_id === 42) {
+            events.push("topic10:start");
+            await loneTurnDone;
+            events.push("topic10:end");
+          }
+        },
+      });
+
+      // Once the lone handler exceeds its timeout, recovery must fail the stuck
+      // update even though no later same-lane update is blocked behind it.
+      await vi.waitFor(() => expect(events).toEqual(["topic10:start"]));
+      await vi.waitFor(async () => expect(await failedUpdateIds(tempDir)).toEqual([42]));
+
+      releaseLoneTurn?.();
+      abort.abort();
+      await runPromise;
+      releaseLoneTurn?.();
+      stopWorker();
+    });
+  });
+
   it("lets isolated ingress drain interleave different Telegram topic lanes", async () => {
     const abort = new AbortController();
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-spool-"));
@@ -3224,8 +3267,13 @@ describe("TelegramPollingSession", () => {
             String(patch.lastError).includes("isolated polling spool handler timed out"),
         ),
       ).toBe(true);
-      await vi.waitFor(async () => expect(await failedUpdateIds(tempDir)).toEqual([42]));
-      expect(createWorker).toHaveBeenCalledTimes(2);
+      // 42 (the backlog handler) recovers first; after the restart 43 becomes a
+      // lone active handler on the same lane, hangs the same way, and is now also
+      // recovered on timeout rather than stranded with no backlog behind it (#84158).
+      // Each recovery restarts ingress, so the worker is created once more per
+      // recovered handler (initial + two restarts).
+      await vi.waitFor(async () => expect(await failedUpdateIds(tempDir)).toEqual([42, 43]));
+      expect(createWorker).toHaveBeenCalledTimes(3);
 
       abort.abort();
       await vi.advanceTimersByTimeAsync(20_000);

@@ -1119,7 +1119,18 @@ export class TelegramPollingSession {
             this.#status.notePollingError(handler.timeoutMessage);
           }
         }
-        const timedOutRecovery = await this.#recoverTimedOutSpooledHandler(drain.blockedByLane);
+        // blockedByLane only carries handlers that have a later same-lane update
+        // queued behind them. A lone active handler with no backlog still needs
+        // timeout recovery, so union this session's own active handler keys into
+        // the candidate set (detection re-checks age/timedOutAt, so non-timed-out
+        // handlers stay no-ops) — otherwise a stuck lone handler never recovers (#84158).
+        const timeoutCandidateHandlerKeys = new Set<string>(this.#spooledUpdateHandlerKeys);
+        for (const handlerKey of drain.blockedByLane) {
+          timeoutCandidateHandlerKeys.add(handlerKey);
+        }
+        const timedOutRecovery = await this.#recoverTimedOutSpooledHandler(
+          timeoutCandidateHandlerKeys,
+        );
         if (timedOutRecovery?.restart) {
           requestStopForRestart();
         } else if (timedOutRecovery) {
