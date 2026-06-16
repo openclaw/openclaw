@@ -250,6 +250,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
     channel: resolvedTarget.channel,
     to: resolved.to,
     sessionChatType: sessionChatTypeHint,
+    plugin,
   });
   if (deliveryChatType === "direct" && heartbeat?.directPolicy === "block") {
     return buildNoHeartbeatDeliveryTarget({
@@ -284,6 +285,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
     turnSource: params.turnSource,
     entry,
     resolvedTarget,
+    plugin,
   })
     ? resolvedTarget.lastThreadId
     : undefined;
@@ -410,6 +412,7 @@ export async function resolveHeartbeatDeliveryTargetWithSessionRoute(params: {
 function inferChatTypeFromTarget(params: {
   channel: DeliverableMessageChannel;
   to: string;
+  plugin?: ChannelPlugin;
 }): ChatType | undefined {
   const to = params.to.trim();
   if (!to) {
@@ -425,17 +428,19 @@ function inferChatTypeFromTarget(params: {
   if (/^group:/i.test(to)) {
     return "group";
   }
-  return (
+  const plugin =
+    params.plugin ??
     resolveOutboundChannelPlugin({
       channel: params.channel,
-    })?.messaging?.inferTargetChatType?.({ to }) ?? undefined
-  );
+    });
+  return plugin?.messaging?.inferTargetChatType?.({ to }) ?? undefined;
 }
 
 function resolveHeartbeatDeliveryChatType(params: {
   channel: DeliverableMessageChannel;
   to: string;
   sessionChatType?: ChatType;
+  plugin?: ChannelPlugin;
 }): ChatType | undefined {
   if (params.sessionChatType) {
     return params.sessionChatType;
@@ -443,6 +448,7 @@ function resolveHeartbeatDeliveryChatType(params: {
   return inferChatTypeFromTarget({
     channel: params.channel,
     to: params.to,
+    plugin: params.plugin,
   });
 }
 
@@ -453,10 +459,12 @@ function shouldReuseHeartbeatRouteThreadId(params: {
   turnSource?: DeliveryContext;
   entry?: SessionEntry;
   resolvedTarget: SessionDeliveryTarget;
+  plugin?: ChannelPlugin;
 }): boolean {
   const channel = params.resolvedTarget.channel;
-  const messaging =
-    channel && resolveOutboundChannelPlugin({ channel, cfg: params.cfg })?.messaging;
+  const messaging = params.plugin
+    ? params.plugin.messaging
+    : channel && resolveOutboundChannelPlugin({ channel, cfg: params.cfg })?.messaging;
   return (
     messaging?.preserveHeartbeatThreadIdForGroupRoute === true &&
     params.resolvedTarget.threadId == null &&

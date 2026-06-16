@@ -1155,6 +1155,45 @@ describe("resolveSessionDeliveryTarget", () => {
     expect(resolved.reason).toBe("dm-blocked");
   });
 
+  it("uses an activation-aware infer-only plugin for heartbeat direct policy", () => {
+    const external = createTestChannelPlugin({
+      id: "external-channel",
+      label: "External",
+      outbound: {
+        deliveryMode: "direct",
+        sendText: vi.fn(),
+        resolveTarget: ({ to }) =>
+          to
+            ? { ok: true as const, to: to.trim() }
+            : { ok: false as const, error: new Error("target required") },
+      },
+      messaging: {
+        inferTargetChatType: () => "direct",
+      },
+    });
+    const setupExternal = { ...external, messaging: undefined };
+    mocks.resolveOutboundChannelPlugin.mockImplementation(
+      ({ channel, allowBootstrap }: { channel: string; allowBootstrap?: boolean }) => {
+        if (channel !== "external-channel") {
+          return undefined;
+        }
+        return allowBootstrap === true ? external : setupExternal;
+      },
+    );
+
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg: {},
+      heartbeat: {
+        target: "external-channel",
+        to: "person-123",
+        directPolicy: "block",
+      },
+    });
+
+    expect(resolved.channel).toBe("none");
+    expect(resolved.reason).toBe("dm-blocked");
+  });
+
   it("keeps heartbeat route canonicalization best-effort when target resolution fails", async () => {
     setActivePluginRegistry(
       createTargetsTestRegistry([
