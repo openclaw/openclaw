@@ -159,6 +159,33 @@ describe("scripts/resolve-upgrade-survivor-baselines", () => {
     });
   });
 
+  it("rejects loose release-history count values", () => {
+    withReleaseFixture([], (file) => {
+      expect(() =>
+        resolveBaselines(
+          new Map([
+            ["requested", "release-history"],
+            ["releases-json", file],
+            ["history-count", "1e3"],
+          ]),
+        ),
+      ).toThrow("--history-count must be a positive integer");
+    });
+  });
+
+  it("rejects loose last-stable count tokens", () => {
+    withReleaseFixture([], (file) => {
+      expect(() =>
+        resolveBaselines(
+          new Map([
+            ["requested", "last-stable-1e3"],
+            ["releases-json", file],
+          ]),
+        ),
+      ).toThrow("last-stable baseline count must be a positive integer");
+    });
+  });
+
   it("maps release-history anchors to npm-published package versions when GitHub tags have republish suffixes", () => {
     const releases = (
       [

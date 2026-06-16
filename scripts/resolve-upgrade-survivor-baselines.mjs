@@ -33,6 +33,18 @@ function dedupeSpecs(specs) {
   return [...new Set(specs.map(normalizeUpgradeSurvivorBaselineSpec).filter(Boolean))];
 }
 
+function parsePositiveInteger(value, label) {
+  const text = String(value ?? "").trim();
+  if (!/^[1-9]\d*$/u.test(text)) {
+    throw new Error(`${label} must be a positive integer`);
+  }
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error(`${label} must be a positive integer`);
+  }
+  return parsed;
+}
+
 function readPublishedVersions(file) {
   if (!file) {
     return undefined;
@@ -111,10 +123,7 @@ export function resolveReleaseHistory(args) {
   if (!releasesJson) {
     throw new Error("--releases-json is required when requested baselines include release-history");
   }
-  const historyCount = Number.parseInt(args.get("history-count") ?? "6", 10);
-  if (!Number.isInteger(historyCount) || historyCount < 1) {
-    throw new Error("--history-count must be a positive integer");
-  }
+  const historyCount = parsePositiveInteger(args.get("history-count") ?? "6", "--history-count");
   const includeVersion = args.get("include-version") ?? "2026.4.23";
   const preDate = args.get("pre-date") ?? "2026-03-15T00:00:00Z";
   const publishedVersions = readPublishedVersions(args.get("npm-versions-json"));
@@ -181,7 +190,10 @@ export function resolveBaselines(args) {
     if (token === "release-history") {
       resolved.push(...resolveReleaseHistory(args));
     } else if (token.startsWith("last-stable-")) {
-      const count = Number.parseInt(token.slice("last-stable-".length), 10);
+      const count = parsePositiveInteger(
+        token.slice("last-stable-".length),
+        "last-stable baseline count",
+      );
       resolved.push(...resolveLastStable(args, count));
     } else if (token.startsWith("all-since-")) {
       const minimumVersion = token.slice("all-since-".length);

@@ -164,6 +164,8 @@ describe("Parallels smoke model selection", () => {
   let missingProviderKeyResult: ReturnType<typeof spawnNodeEvalSync>;
   let invalidModelTimeoutResult: ReturnType<typeof spawnNodeEvalSync>;
   let invalidHostPortResult: ReturnType<typeof spawnNodeEvalSync>;
+  let invalidLinuxHostPortResult: ReturnType<typeof spawnNodeEvalSync>;
+  let invalidWindowsHostPortResult: ReturnType<typeof spawnNodeEvalSync>;
   let invalidLinuxAgentTimeoutResult: ReturnType<typeof spawnNodeEvalSync>;
   let invalidWindowsAgentTimeoutResult: ReturnType<typeof spawnNodeEvalSync>;
   let invalidWindowsUpdateTimeoutResult: ReturnType<typeof spawnNodeEvalSync>;
@@ -200,6 +202,14 @@ describe("Parallels smoke model selection", () => {
     );
     invalidHostPortResult = spawnNodeEvalSync(
       `process.argv = ["node", "${TS_PATHS.macos}", "--host-port", "18425x"]; await import("./${TS_PATHS.macos}");`,
+      { env: process.env, imports: ["tsx"] },
+    );
+    invalidLinuxHostPortResult = spawnNodeEvalSync(
+      `process.argv = ["node", "${TS_PATHS.linux}", "--host-port", "1e4"]; await import("./${TS_PATHS.linux}");`,
+      { env: process.env, imports: ["tsx"] },
+    );
+    invalidWindowsHostPortResult = spawnNodeEvalSync(
+      `process.argv = ["node", "${TS_PATHS.windows}", "--host-port", "0x4800"]; await import("./${TS_PATHS.windows}");`,
       { env: process.env, imports: ["tsx"] },
     );
     invalidLinuxAgentTimeoutResult = spawnNodeEvalSync(
@@ -1400,6 +1410,12 @@ setInterval(() => {}, 1000);
 
     expect(invalidHostPortResult.status).toBe(1);
     expect(invalidHostPortResult.stderr).toContain("invalid --host-port: 18425x");
+
+    expect(invalidLinuxHostPortResult.status).toBe(1);
+    expect(invalidLinuxHostPortResult.stderr).toContain("invalid --host-port: 1e4");
+
+    expect(invalidWindowsHostPortResult.status).toBe(1);
+    expect(invalidWindowsHostPortResult.stderr).toContain("invalid --host-port: 0x4800");
 
     expect(invalidLinuxAgentTimeoutResult.status).toBe(1);
     expect(invalidLinuxAgentTimeoutResult.stderr).toContain(

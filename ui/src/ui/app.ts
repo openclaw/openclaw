@@ -928,8 +928,8 @@ export class OpenClawApp extends LitElement {
     );
   }
 
-  async loadAssistantIdentity() {
-    await loadAssistantIdentityInternal(this);
+  async loadAssistantIdentity(opts?: { sessionKey?: string; expectedSessionKey?: string }) {
+    await loadAssistantIdentityInternal(this, opts);
   }
 
   applySettings(next: UiSettings) {
