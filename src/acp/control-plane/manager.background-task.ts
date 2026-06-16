@@ -14,7 +14,7 @@ import type { AcpSessionManagerDeps } from "./manager.types.js";
 import { normalizeText } from "./runtime-options.js";
 
 const ACP_BACKGROUND_TASK_TEXT_MAX_LENGTH = 160;
-const ACP_BACKGROUND_TASK_PROGRESS_MAX_LENGTH = 240;
+const ACP_BACKGROUND_TASK_PROGRESS_MAX_LENGTH = 1_200;
 
 /** Context needed to mirror a child ACP turn into the requester task registry. */
 export type BackgroundTaskContext = {
@@ -90,7 +90,10 @@ export function resolveBackgroundTaskTerminalResult(progressSummary: string): {
       terminalSummary: "Writable session or apply_patch authorization required.",
     };
   }
-  return {};
+  if (normalized === "ANNOUNCE_SKIP") {
+    return {};
+  }
+  return { terminalSummary: normalized };
 }
 
 /** Resolves the requester task context for a spawned child ACP session. */

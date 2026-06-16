@@ -5,6 +5,10 @@ import {
   withAcpManagerTaskStateDir,
 } from "../../../test/helpers/acp-manager-task-state.js";
 import {
+  appendBackgroundTaskProgressSummary,
+  resolveBackgroundTaskTerminalResult,
+} from "./manager.background-task.js";
+import {
   AcpRuntimeError,
   AcpSessionManager,
   baseCfg,
@@ -268,7 +272,9 @@ describe("AcpSessionManager turn results", () => {
           "I'll inspect the repo now. The crash is a missing null check in src/foo.ts.",
       });
       expect(record.terminalOutcome).toBeUndefined();
-      expect(record.terminalSummary).toBeUndefined();
+      expect(record.terminalSummary).toBe(
+        "I'll inspect the repo now. The crash is a missing null check in src/foo.ts.",
+      );
     });
   });
 
@@ -343,7 +349,27 @@ describe("AcpSessionManager turn results", () => {
           "I'll inspect the repo now: the crash is a missing null check in src/foo.ts.",
       });
       expect(record.terminalOutcome).toBeUndefined();
-      expect(record.terminalSummary).toBeUndefined();
+      expect(record.terminalSummary).toBe(
+        "I'll inspect the repo now: the crash is a missing null check in src/foo.ts.",
+      );
+    });
+  });
+
+  it("cleans successful ACP terminal summaries without hiding useful progress", () => {
+    expect(resolveBackgroundTaskTerminalResult("ANNOUNCE_SKIP")).toEqual({});
+    expect(resolveBackgroundTaskTerminalResult("Set the reply to ANNOUNCE_SKIP")).toEqual({
+      terminalSummary: "Set the reply to ANNOUNCE_SKIP",
+    });
+    expect(resolveBackgroundTaskTerminalResult("Updated SHOULD_ANNOUNCE_SKIP")).toEqual({
+      terminalSummary: "Updated SHOULD_ANNOUNCE_SKIP",
+    });
+
+    const longChunk = "Completed a detailed background task summary. ".repeat(12);
+    const summary = appendBackgroundTaskProgressSummary("", longChunk);
+    expect(summary.length).toBeGreaterThan(240);
+    expect(summary.length).toBeLessThan(1_200);
+    expect(resolveBackgroundTaskTerminalResult(summary)).toEqual({
+      terminalSummary: summary.trim(),
     });
   });
 
