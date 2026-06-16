@@ -2,6 +2,7 @@
 import { getBundledChannelPlugin } from "../../channels/plugins/bundled.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { findBundledPackageChannelMetadata } from "../../plugins/bundled-package-channel-metadata.js";
 import type { PluginPackageChannelDoctorCapabilities } from "../../plugins/manifest.js";
 import type { AllowFromMode } from "./shared/allow-from-mode.types.js";
@@ -65,4 +66,22 @@ export function getDoctorChannelCapabilities(channelName?: string): DoctorChanne
     return mergeDoctorChannelCapabilities(pluginDoctor);
   }
   return mergeDoctorChannelCapabilities(getManifestDoctorCapabilities(channelId));
+}
+
+/** Resolve the account ids a channel plugin would activate for the current config. */
+export function listDoctorChannelAccountIds(
+  channelName: string,
+  cfg: OpenClawConfig,
+): string[] | undefined {
+  const channelId = normalizeAnyChannelId(channelName);
+  if (!channelId) {
+    return undefined;
+  }
+  const plugin = getChannelPlugin(channelId) ?? getBundledChannelPlugin(channelId);
+  try {
+    return plugin?.config.listAccountIds(cfg);
+  } catch {
+    // Keep doctor warnings conservative when a plugin cannot inspect its account set.
+    return undefined;
+  }
 }

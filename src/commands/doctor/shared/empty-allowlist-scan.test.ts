@@ -9,6 +9,14 @@ vi.mock("../channel-capabilities.js", () => ({
     groupAllowFromFallbackToAllowFrom: channelName !== "imessage",
     warnOnEmptyGroupSenderAllowlist: channelName !== "discord",
   }),
+  listDoctorChannelAccountIds: (
+    channelName: string,
+    cfg: { channels?: Record<string, { accounts?: Record<string, unknown>; baseUrl?: string }> },
+  ) => {
+    const channel = cfg.channels?.[channelName];
+    const ids = Object.keys(channel?.accounts ?? {});
+    return channelName === "qa-channel" && channel?.baseUrl ? ["default", ...ids] : ids;
+  },
 }));
 
 vi.mock("./channel-doctor.js", () => ({
@@ -76,6 +84,28 @@ describe("doctor empty allowlist policy scan", () => {
 
     expect(warnings).toContain(
       '- channels.telegram.groupPolicy is "allowlist" but groupAllowFrom (and allowFrom) is empty — all group messages will be silently dropped. Add sender IDs to channels.telegram.groupAllowFrom or channels.telegram.allowFrom, or set groupPolicy to "open".',
+    );
+  });
+
+  it("keeps parent groupAllowFrom warning when an implicit default account is active", () => {
+    const warnings = scanEmptyAllowlistPolicyWarnings(
+      {
+        channels: {
+          "qa-channel": {
+            baseUrl: "http://127.0.0.1:18789",
+            groupPolicy: "allowlist",
+            groupAllowFrom: [],
+            accounts: {
+              work: { groupAllowFrom: ["qa:group:work"] },
+            },
+          },
+        },
+      },
+      { doctorFixCommand: "openclaw doctor --fix" },
+    );
+
+    expect(warnings).toContain(
+      '- channels.qa-channel.groupPolicy is "allowlist" but groupAllowFrom (and allowFrom) is empty — all group messages will be silently dropped. Add sender IDs to channels.qa-channel.groupAllowFrom or channels.qa-channel.allowFrom, or set groupPolicy to "open".',
     );
   });
 
