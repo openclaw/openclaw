@@ -453,3 +453,129 @@ export function splitTelegramRichMessageTextChunks(params: {
     plainText: telegramHtmlToPlainTextFallback(chunk),
   }));
 }
+
+// ─── Structured rich message spec (heading / table / list / details / checklist) ───
+//
+// Many callers (OpenClaw agent tools, dashboards, status reporters) want to
+// compose a rich Telegram message from a structured spec rather than a hand-
+// written markdown or HTML string. This builder compiles such a spec into the
+// canonical markdown that buildTelegramRichMarkdown already understands, then
+// re-uses the existing markdown → html path. All escaping, chunking, and
+// structural limits therefore remain identical to the markdown entry point.
+
+export type TelegramRichMessageSpecListItem = {
+  text: string;
+  done?: boolean;
+};
+
+export type TelegramRichMessageSpecDetailsBlock = {
+  summary: string;
+  blocks: string[];
+};
+
+export type TelegramRichMessageSpec = {
+  heading?: string;
+  heading_level?: 1 | 2 | 3 | 4 | 5 | 6;
+  summary?: string;
+  table?: { columns: string[]; rows: string[][] };
+  list?: TelegramRichMessageSpecListItem[];
+  checklist?: TelegramRichMessageSpecListItem[];
+  details?: TelegramRichMessageSpecDetailsBlock[];
+  paragraphs?: string[];
+  quotes?: string[];
+  divider?: boolean;
+};
+
+function escapeMarkdownCell(text: string): string {
+  // Markdown tables use `|` as a cell separator. Escape it so user content
+  // can never break out of a cell. Newlines collapse to spaces.
+  return text.replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
+}
+
+function padTableRow(cells: string[], width: number): string {
+  const out = cells.slice(0, width);
+  while (out.length < width) out.push("");
+  return out.map(escapeMarkdownCell).join(" | ");
+}
+
+function buildTableMarkdown(table: { columns: string[]; rows: string[][] }): string {
+  if (table.columns.length === 0) {
+    throw new Error("telegram rich message spec: table.columns must be non-empty");
+  }
+  const header = `| ${table.columns.map(escapeMarkdownCell).join(" | ")} |`;
+  const divider = `| ${table.columns.map(() => "---").join(" | ")} |`;
+  const rows = table.rows.map((row) => `| ${padTableRow(row, table.columns.length)} |`);
+  return [header, divider, ...rows].join("\n");
+}
+
+function buildListMarkdown(items: TelegramRichMessageSpecListItem[], asChecklist: boolean): string {
+  if (items.length === 0) return "";
+  if (asChecklist) {
+    return items
+      .map((item) => `- [${item.done === true ? "x" : " "}] ${item.text}`)
+      .join("\n");
+  }
+  return items.map((item) => `- ${item.text}`).join("\n");
+}
+
+function buildDetailsMarkdown(blocks: TelegramRichMessageSpecDetailsBlock[]): string {
+  if (blocks.length === 0) return "";
+  return blocks
+    .map((block) => {
+      const summary = block.summary.replace(/[\r\n]+/g, " ").trim();
+      const body = block.blocks.join("\n\n");
+      // Telegram Bot API 10.1 native <details>/<summary> render. We emit
+      // markdown as-is (a single inline html-style block) so the markdown →
+      // html pipeline preserves it without modification.
+      return `<details>\n<summary>${summary}</summary>\n\n${body}\n\n</details>`;
+    })
+    .join("\n\n");
+}
+
+export function buildTelegramRichMarkdownFromSpec(
+  spec: TelegramRichMessageSpec,
+  options?: TelegramRichMessageOptions,
+): TelegramInputRichMessage {
+  const parts: string[] = [];
+
+  if (spec.heading) {
+    const level = clampHeadingLevel(spec.heading_level);
+    parts.push(`${"#".repeat(level)} ${spec.heading}`);
+  }
+  if (spec.summary) {
+    parts.push(spec.summary);
+  }
+  if (spec.table) {
+    parts.push(buildTableMarkdown(spec.table));
+  }
+  if (spec.list && spec.list.length > 0) {
+    parts.push(buildListMarkdown(spec.list, false));
+  }
+  if (spec.checklist && spec.checklist.length > 0) {
+    parts.push(buildListMarkdown(spec.checklist, true));
+  }
+  if (spec.details && spec.details.length > 0) {
+    parts.push(buildDetailsMarkdown(spec.details));
+  }
+  if (spec.paragraphs && spec.paragraphs.length > 0) {
+    parts.push(spec.paragraphs.join("\n\n"));
+  }
+  if (spec.quotes && spec.quotes.length > 0) {
+    parts.push(spec.quotes.map((q) => `> ${q}`).join("\n\n"));
+  }
+  if (spec.divider === true) {
+    parts.push("---");
+  }
+
+  const markdown = parts.filter((p) => p.length > 0).join("\n\n");
+  return buildTelegramRichMarkdown(markdown, options);
+}
+
+function clampHeadingLevel(level: number | undefined): 1 | 2 | 3 | 4 | 5 | 6 {
+  if (typeof level !== "number" || !Number.isFinite(level)) return 2;
+  const truncated = Math.trunc(level);
+  if (truncated < 1) return 1;
+  if (truncated > 6) return 6;
+  return truncated as 1 | 2 | 3 | 4 | 5 | 6;
+}
+
