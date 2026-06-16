@@ -292,6 +292,7 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
     const usageEvents: Array<{
       type: string;
       usage?: { input?: number; output?: number; promptTokens?: number; total?: number };
+      costUsd?: number;
     }> = [];
     const unsubscribe = onInternalDiagnosticEvent((evt) => {
       if (evt.type === "model.usage") {
@@ -326,5 +327,6 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
       promptTokens: 0,
       total: 42,
     });
+    expect(usageEvents[0]?.costUsd).toBeUndefined();
   });
 });

@@ -1009,6 +1009,11 @@ async function finalizeCronRun(params: {
     const output = usage.output ?? 0;
     const cacheRead = usage.cacheRead ?? 0;
     const cacheWrite = usage.cacheWrite ?? 0;
+    const hasBillableUsageBuckets =
+      usage.input !== undefined ||
+      usage.output !== undefined ||
+      usage.cacheRead !== undefined ||
+      usage.cacheWrite !== undefined;
     const lastCallTotalTokens = deriveSessionTotalTokens({
       usage: lastCallUsage,
       contextTokens,
@@ -1097,7 +1102,9 @@ async function finalizeCronRun(params: {
           limit: contextTokens,
           ...(contextUsedTokens !== undefined ? { used: contextUsedTokens } : {}),
         },
-        costUsd: runEstimatedCostUsd,
+        ...(hasBillableUsageBuckets && runEstimatedCostUsd !== undefined
+          ? { costUsd: runEstimatedCostUsd }
+          : {}),
         durationMs: execution.runEndedAt - execution.runStartedAt,
       });
     }
