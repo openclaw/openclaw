@@ -1306,7 +1306,7 @@ function buildAssistantFailoverSignal(
     errorType: msg.errorType,
     message: msg.errorMessage?.trim() || undefined,
     provider: opts?.provider ?? msg.provider,
-    details: extractFailoverSignalDetails(msg.errorBody),
+    details: extractFailoverSignalDetails(msg.errorCode, msg.errorType, msg.errorBody),
   };
 }
 
@@ -1706,7 +1706,9 @@ export function isAuthAssistantError(msg: AssistantMessage | undefined): boolean
   if (!msg || msg.stopReason !== "error") {
     return false;
   }
-  return isAuthErrorMessage(msg.errorMessage ?? "");
+  return (
+    isAuthErrorMessage(msg.errorMessage ?? "") || classifyAssistantFailoverReason(msg) === "auth"
+  );
 }
 
 export { isModelNotFoundErrorMessage };

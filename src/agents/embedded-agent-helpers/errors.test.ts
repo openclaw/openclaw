@@ -4,7 +4,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../../shared/assistant-error-format.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
-import { formatAssistantErrorText, isLikelyContextOverflowError } from "./errors.js";
+import {
+  classifyAssistantFailoverReason,
+  formatAssistantErrorText,
+  isAuthAssistantError,
+  isFailoverAssistantError,
+  isLikelyContextOverflowError,
+} from "./errors.js";
 
 const { toolPolicyAuditInfo } = vi.hoisted(() => ({
   toolPolicyAuditInfo: vi.fn(),
@@ -105,5 +111,20 @@ describe("isLikelyContextOverflowError", () => {
         "Codex ran out of room in the model's context window. Start a new thread or clear earlier history before retrying.",
       ),
     ).toBe(true);
+  });
+});
+
+describe("assistant failover classification", () => {
+  it("classifies structured auth error types without raw errorMessage text", () => {
+    const assistant = {
+      stopReason: "error",
+      errorType: "authentication_error",
+      provider: "openai",
+      model: "gpt-5.5",
+    };
+
+    expect(classifyAssistantFailoverReason(assistant as never)).toBe("auth");
+    expect(isAuthAssistantError(assistant as never)).toBe(true);
+    expect(isFailoverAssistantError(assistant as never)).toBe(true);
   });
 });
