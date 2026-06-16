@@ -802,6 +802,17 @@ export async function syncManagedNpmRootPeerDependencies(params: {
   const managedOverrides = params.omitUnsupportedManagedOverrides
     ? filterUnsupportedManagedNpmRootOverrides(params.managedOverrides)
     : readOverrideRecord(params.managedOverrides);
+  // Resolve conflicts: if a direct dependency pin differs from a managed
+  // override, update the pin to match. npm rejects manifests where an
+  // override changes the effective spec of a root direct dependency
+  // (EOVERRIDE). This happens when a stale managed peer pin from an older
+  // OpenClaw version survives while the host ships a newer override spec.
+  for (const [key, overrideSpec] of Object.entries(managedOverrides)) {
+    const depPin = nextDependencies[key];
+    if (depPin !== undefined && String(depPin) !== String(overrideSpec)) {
+      nextDependencies[key] = String(overrideSpec);
+    }
+  }
   const managedOverrideKeys = Object.keys(managedOverrides).toSorted();
   const overrides = readOverrideRecord(manifest.overrides);
   for (const key of readManagedOverrideKeys(manifest.openclaw)) {
