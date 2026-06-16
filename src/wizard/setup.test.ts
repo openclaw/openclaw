@@ -742,9 +742,9 @@ describe("runSetupWizard", () => {
       },
     ]);
     hasRunnableLocalAgent
+      .mockResolvedValue(true)
       .mockResolvedValueOnce(false)
-      .mockResolvedValueOnce(false)
-      .mockResolvedValueOnce(true);
+      .mockResolvedValueOnce(false);
     promptAuthChoiceGrouped.mockResolvedValueOnce("openai-api-key");
     runSetupMigrationImport.mockClear();
     promptAuthChoiceGrouped.mockClear();
@@ -793,7 +793,7 @@ describe("runSetupWizard", () => {
     vi.clearAllMocks();
   });
 
-  it("re-prompts until the effective default agent is runnable", async () => {
+  it("prompts for a replacement model when preserved defaults remain unrunnable", async () => {
     readConfigFileSnapshot.mockResolvedValueOnce({
       path: "/tmp/.openclaw/openclaw.json",
       exists: true,
@@ -822,21 +822,33 @@ describe("runSetupWizard", () => {
       .mockResolvedValueOnce(false)
       .mockResolvedValueOnce(false)
       .mockResolvedValueOnce(true);
-    promptAuthChoiceGrouped
-      .mockResolvedValueOnce("openai-api-key")
-      .mockResolvedValueOnce("anthropic-api-key");
+    promptAuthChoiceGrouped.mockResolvedValueOnce("openai-api-key");
+    promptDefaultModel.mockResolvedValueOnce({ model: "anthropic/claude-sonnet-4-6" });
     applyAuthChoice.mockClear();
+    promptDefaultModel.mockClear();
     finishAgentAssistedSetup.mockClear();
 
     const prompter = buildWizardPrompter({});
     const runtime = createRuntime();
 
-    await runSetupWizard({ acceptRisk: true }, runtime, prompter);
+    try {
+      await runSetupWizard({ acceptRisk: true }, runtime, prompter);
 
-    expect(promptAuthChoiceGrouped).toHaveBeenCalledTimes(2);
-    expect(applyAuthChoice).toHaveBeenCalledTimes(2);
-    expect(finishAgentAssistedSetup).toHaveBeenCalledOnce();
-    vi.clearAllMocks();
+      expect(promptAuthChoiceGrouped).toHaveBeenCalledOnce();
+      expect(applyAuthChoice).toHaveBeenCalledOnce();
+      expect(promptDefaultModel).toHaveBeenCalledWith(
+        expect.objectContaining({
+          allowKeep: false,
+        }),
+      );
+      expect(finishAgentAssistedSetup).toHaveBeenCalledOnce();
+    } finally {
+      hasRunnableLocalAgent.mockReset();
+      hasRunnableLocalAgent.mockResolvedValue(false);
+      promptDefaultModel.mockReset();
+      promptDefaultModel.mockResolvedValue({});
+      vi.clearAllMocks();
+    }
   });
 
   it("recovers the selected secondary agent without moving setup to the default agent", async () => {

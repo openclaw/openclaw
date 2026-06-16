@@ -936,15 +936,20 @@ export async function runSetupWizard(
       workspaceDir,
       resolvePreferredProviderForAuthChoice,
     });
+    const canFinishModelSetupAfterAuth =
+      useAgentAssistedSetup && authChoiceFromPrompt ? await canFinishModelSetup() : undefined;
+    const needsRunnableModelSelection = canFinishModelSetupAfterAuth === false;
     const shouldPromptModelSelection =
       authChoiceModelSelectionPolicy?.promptWhenAuthChoiceProvided ||
-      (authChoiceFromPrompt && !useAgentAssistedSetup);
+      (authChoiceFromPrompt && (!useAgentAssistedSetup || needsRunnableModelSelection));
     if (shouldPromptModelSelection) {
       const pickerConfig = createSetupAgentPickerConfig(nextConfig, applyPrimaryModel);
       const modelSelection = await promptDefaultModel({
         config: pickerConfig,
         prompter,
-        allowKeep: authChoiceModelSelectionPolicy?.allowKeepCurrent ?? true,
+        allowKeep: needsRunnableModelSelection
+          ? false
+          : (authChoiceModelSelectionPolicy?.allowKeepCurrent ?? true),
         ignoreAllowlist: true,
         includeProviderPluginSetups: true,
         preferredProvider: authChoiceModelSelectionPolicy?.preferredProvider,
@@ -965,7 +970,10 @@ export async function runSetupWizard(
       ...(opts.agentId ? { agentId: opts.agentId } : {}),
       validateCatalog: false,
     });
-    if (!(await canFinishModelSetup()) && authChoiceFromPrompt) {
+    const canFinishModelSetupAfterSelection = shouldPromptModelSelection
+      ? await canFinishModelSetup()
+      : (canFinishModelSetupAfterAuth ?? (await canFinishModelSetup()));
+    if (!canFinishModelSetupAfterSelection && authChoiceFromPrompt) {
       continue;
     }
     break;

@@ -96,11 +96,7 @@ export function rewriteUpdateFlagArgv(argv: string[]): string[] {
 
 export function shouldEnsureCliPath(argv: string[]): boolean {
   const invocation = resolveCliArgvInvocation(argv);
-  if (
-    invocation.hasHelpOrVersion ||
-    shouldHandleBareRoot(argv) ||
-    isBareParentDefaultHelpArgv(argv)
-  ) {
+  if (invocation.hasHelpOrVersion || isBareParentDefaultHelpArgv(argv)) {
     return false;
   }
   return resolveCliCommandPathPolicy(invocation.commandPath).ensureCliPath;

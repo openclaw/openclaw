@@ -144,8 +144,6 @@ describe("shouldEnsureCliPath", () => {
   });
 
   it("skips path bootstrap for read-only fast paths", () => {
-    expect(shouldEnsureCliPath(["node", "openclaw"])).toBe(false);
-    expect(shouldEnsureCliPath(["node", "openclaw", "--profile", "work"])).toBe(false);
     expect(shouldEnsureCliPath(["node", "openclaw", "approvals"])).toBe(false);
     expect(shouldEnsureCliPath(["node", "openclaw", "channels"])).toBe(false);
     expect(shouldEnsureCliPath(["node", "openclaw", "cron"])).toBe(false);
@@ -158,6 +156,12 @@ describe("shouldEnsureCliPath", () => {
     expect(shouldEnsureCliPath(["node", "openclaw", "config", "get", "update"])).toBe(false);
     expect(shouldEnsureCliPath(["node", "openclaw", "models", "status", "--json"])).toBe(false);
     expect(shouldEnsureCliPath(["node", "openclaw", "tools", "effective"])).toBe(false);
+  });
+
+  it("keeps path bootstrap for bare root invocations", () => {
+    expect(shouldEnsureCliPath(["node", "openclaw"])).toBe(true);
+    expect(shouldEnsureCliPath(["node", "openclaw", "--profile", "work"])).toBe(true);
+    expect(shouldEnsureCliPath(["node", "openclaw", "--dev"])).toBe(true);
   });
 
   it("keeps path bootstrap for mutating or unknown commands", () => {
