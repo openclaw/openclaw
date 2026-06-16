@@ -24,9 +24,9 @@ let createTelegramBot: (
   opts: Omit<Parameters<typeof createTelegramBotBase>[0], "telegramDeps">,
 ) => ReturnType<typeof createTelegramBotBase>;
 
-const FORUM_CHAT_ID = -1001234567890;
+const FORUM_CHAT_ID = -1009999999999;
 const TOPIC_ID = 28;
-const SENDER_ID = 1115595084;
+const SENDER_ID = 123456789;
 
 function makeForumCallbackCtx(params: {
   data: string;
@@ -38,7 +38,7 @@ function makeForumCallbackCtx(params: {
     callbackQuery: {
       id: "cbq-forum-models-1",
       data: params.data,
-      from: { id: SENDER_ID, first_name: "Renaud", username: "renaud13x6t" },
+      from: { id: SENDER_ID, first_name: "Test", username: "testuser" },
       message: {
         chat: {
           id: FORUM_CHAT_ID,
