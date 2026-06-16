@@ -924,6 +924,26 @@ describe("projectRecentChatDisplayMessages", () => {
     expect(JSON.stringify(result[0]?.content)).not.toContain("secret.internal.example");
   });
 
+  it("leaves tool-bearing assistant errors unchanged", () => {
+    const toolCall = {
+      type: "toolCall",
+      id: "call-1",
+      name: "read",
+      arguments: { path: "README.md" },
+    };
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        content: [toolCall],
+        stopReason: "error",
+        errorMessage: "Connection error.",
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result[0]?.content).toEqual([toolCall]);
+  });
+
   it("projects sessions_send inter-session turns as forwarded assistant-side display messages", () => {
     const result = projectRecentChatDisplayMessages([
       {
