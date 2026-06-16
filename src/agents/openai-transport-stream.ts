@@ -2652,6 +2652,7 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
         stopReason: "stop",
         timestamp: Date.now(),
       };
+      let removeRequestAbortListener: (() => void) | undefined;
       try {
         const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
         const client = createOpenAICompletionsClient(model, context, apiKey, options?.headers);
@@ -2679,21 +2680,33 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
           model as OpenAIModeModel,
           options as OpenAICompletionsOptions | undefined,
         );
+        const requestAbortController = new AbortController();
+        const abortRequest = () => requestAbortController.abort();
+        if (options?.signal?.aborted) {
+          abortRequest();
+        }
+        const abortListener = () => abortRequest();
+        options?.signal?.addEventListener("abort", abortListener, { once: true });
+        removeRequestAbortListener = () =>
+          options?.signal?.removeEventListener("abort", abortListener);
         const responseStream = (await client.chat.completions.create(
           params as never,
-          buildOpenAISdkRequestOptions(model, options?.signal),
+          buildOpenAISdkRequestOptions(model, requestAbortController.signal),
         )) as unknown as AsyncIterable<ChatCompletionChunk>;
         stream.push({ type: "start", partial: output as never });
         await processOpenAICompletionsStream(responseStream, output, model, stream, {
           signal: options?.signal,
           emitReasoning,
+          abortRequest,
         });
         if (options?.signal?.aborted) {
           throw new Error("Request was aborted");
         }
         stream.push({ type: "done", reason: output.stopReason as never, message: output as never });
         stream.end();
+        removeRequestAbortListener?.();
       } catch (error) {
+        removeRequestAbortListener?.();
         assignTransportErrorDetails(output, error, options?.signal);
         stream.push({ type: "error", reason: output.stopReason as never, error: output as never });
         stream.end();
@@ -2708,7 +2721,7 @@ async function processOpenAICompletionsStream(
   output: MutableAssistantOutput,
   model: Model,
   stream: { push(event: unknown): void },
-  options?: { signal?: AbortSignal; emitReasoning?: boolean },
+  options?: { signal?: AbortSignal; emitReasoning?: boolean; abortRequest?: () => void },
 ) {
   const MAX_POST_TOOL_CALL_BUFFER_BYTES = 256_000;
   const MAX_TOOL_CALL_ARGUMENT_BUFFER_BYTES = 256_000;
@@ -2741,6 +2754,7 @@ async function processOpenAICompletionsStream(
   const toolCallBlocksByIndex = new Map<number, ToolCallBlock>();
   const toolCallBlocksById = new Map<string, ToolCallBlock>();
   const toolCallBlockBytes = new WeakMap<ToolCallBlock, number>();
+  let sawFinishReason = false;
   let sawStopFinishReason = false;
   const blockIndex = () => output.content.length - 1;
   const measureUtf8Bytes = (text: string) => Buffer.byteLength(text, "utf8");
@@ -2963,7 +2977,47 @@ async function processOpenAICompletionsStream(
     }
   };
   const cooperativeScheduler = createModelStreamCooperativeScheduler(options?.signal);
-  for await (const rawChunk of responseStream as AsyncIterable<unknown>) {
+  const iterator = (responseStream as AsyncIterable<unknown>)[Symbol.asyncIterator]();
+  const terminalUsageGraceMs = compat.terminalUsageGraceMs;
+  const abortAndCloseIterator = async () => {
+    options?.abortRequest?.();
+    await iterator.return?.();
+  };
+  const closeIterator = async () => {
+    await iterator.return?.();
+  };
+  let waitForTerminalUsage = false;
+  while (true) {
+    throwIfModelStreamAborted(options?.signal);
+    let nextChunk: IteratorResult<unknown>;
+    if (waitForTerminalUsage) {
+      if (terminalUsageGraceMs === undefined) {
+        nextChunk = await iterator.next();
+      } else if (terminalUsageGraceMs === 0) {
+        void abortAndCloseIterator();
+        break;
+      } else {
+        const timeout = Symbol("terminal-usage-timeout");
+        const result = await Promise.race([
+          iterator.next(),
+          new Promise<typeof timeout>((resolve) =>
+            setTimeout(() => resolve(timeout), terminalUsageGraceMs),
+          ),
+        ]);
+        if (result === timeout) {
+          void abortAndCloseIterator();
+          break;
+        }
+        nextChunk = result;
+      }
+      waitForTerminalUsage = false;
+    } else {
+      nextChunk = await iterator.next();
+    }
+    if (nextChunk.done) {
+      break;
+    }
+    const rawChunk = nextChunk.value;
     throwIfModelStreamAborted(options?.signal);
     chunkPushedEvent = false;
     if (!rawChunk || typeof rawChunk !== "object") {
@@ -2981,6 +3035,10 @@ async function processOpenAICompletionsStream(
     if (!choice) {
       emitReasoningUsageActivity(hasReasoningUsageActivity);
       await cooperativeScheduler.afterEvent();
+      if (sawFinishReason && chunk.usage) {
+        await closeIterator();
+        break;
+      }
       continue;
     }
     const choiceUsage = (choice as unknown as { usage?: ChatCompletionChunk["usage"] }).usage;
@@ -2988,7 +3046,19 @@ async function processOpenAICompletionsStream(
       output.usage = parseTransportChunkUsage(choiceUsage, model);
       hasReasoningUsageActivity = hasOpenAICompletionsReasoningUsageActivity(choiceUsage);
     }
-    if (choice.finish_reason) {
+    const hasFinishReason = choice.finish_reason != null;
+    const shouldFinishAfterChunk =
+      compat.finishReasonTerminatesStream &&
+      hasFinishReason &&
+      (chunk.usage !== undefined || choiceUsage !== undefined || !compat.supportsUsageInStreaming);
+    const shouldWaitForTerminalUsage =
+      compat.finishReasonTerminatesStream &&
+      hasFinishReason &&
+      compat.supportsUsageInStreaming &&
+      chunk.usage === undefined &&
+      choiceUsage === undefined;
+    if (hasFinishReason) {
+      sawFinishReason = true;
       const finishReasonResult = mapStopReason(choice.finish_reason);
       output.stopReason = finishReasonResult.stopReason;
       if (finishReasonResult.stopReason === "stop") {
@@ -3004,6 +3074,13 @@ async function processOpenAICompletionsStream(
     if (!choiceDelta) {
       emitReasoningUsageActivity(hasReasoningUsageActivity);
       await cooperativeScheduler.afterEvent();
+      if (shouldFinishAfterChunk) {
+        await closeIterator();
+        break;
+      }
+      if (shouldWaitForTerminalUsage) {
+        waitForTerminalUsage = true;
+      }
       continue;
     }
     const reasoningDeltas = getCompletionsReasoningDeltas(
@@ -3113,6 +3190,13 @@ async function processOpenAICompletionsStream(
     flushPendingPostToolCallDeltas();
     emitReasoningUsageActivity(hasReasoningUsageActivity);
     await cooperativeScheduler.afterEvent();
+    if (shouldFinishAfterChunk) {
+      await closeIterator();
+      break;
+    }
+    if (shouldWaitForTerminalUsage) {
+      waitForTerminalUsage = true;
+    }
   }
   flushReasoningTagTextPartitionerAtEnd();
   flushDeepSeekToolCallRecovererAtEnd();
@@ -3477,6 +3561,8 @@ function getCompat(model: OpenAIModeModel): {
   supportsReasoningEffort: boolean;
   reasoningEffortMap: Record<string, string>;
   supportsUsageInStreaming: boolean;
+  finishReasonTerminatesStream: boolean;
+  terminalUsageGraceMs?: number;
   maxTokensField: string;
   requiresToolResultName: boolean;
   requiresAssistantAfterToolResult: boolean;
@@ -3501,12 +3587,17 @@ function getCompat(model: OpenAIModeModel): {
     typeof compat.supportsReasoningEffort === "boolean"
       ? compat.supportsReasoningEffort
       : detected.supportsReasoningEffort;
+  const finishReasonTerminatesStream = compat.finishReasonTerminatesStream === true;
   return {
     supportsStore,
     supportsDeveloperRole: compat.supportsDeveloperRole ?? detected.supportsDeveloperRole,
     supportsReasoningEffort,
     reasoningEffortMap: resolveOpenAIReasoningEffortMap(model, detected.reasoningEffortMap),
     supportsUsageInStreaming: compat.supportsUsageInStreaming ?? detected.supportsUsageInStreaming,
+    finishReasonTerminatesStream,
+    terminalUsageGraceMs: finishReasonTerminatesStream
+      ? (compat.terminalUsageGraceMs as number | undefined)
+      : undefined,
     maxTokensField: (compat.maxTokensField as string | undefined) ?? detected.maxTokensField,
     requiresToolResultName: compat.requiresToolResultName ?? detected.requiresToolResultName,
     requiresAssistantAfterToolResult:

@@ -416,6 +416,10 @@ export interface OpenAICompletionsCompat {
   supportsReasoningEffort?: boolean;
   /** Whether the provider supports `stream_options: { include_usage: true }` for token usage in streaming responses. Default: true. */
   supportsUsageInStreaming?: boolean;
+  /** Whether a terminal finish_reason is sufficient to close the stream even when the SSE socket stays open. Default: false. */
+  finishReasonTerminatesStream?: boolean;
+  /** Time to wait for a trailing usage-only chunk after a terminal finish_reason. Undefined waits until the stream closes. */
+  terminalUsageGraceMs?: number;
   /** Which field to use for max tokens. Default: auto-detected from URL. */
   maxTokensField?: "max_completion_tokens" | "max_tokens";
   /** Whether tool results require the `name` field. Default: auto-detected from URL. */

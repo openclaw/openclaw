@@ -353,6 +353,7 @@ function normalizeModelCatalogCompat(value: unknown): ModelCatalogCompatConfig |
     "supportsDeveloperRole",
     "supportsReasoningEffort",
     "supportsUsageInStreaming",
+    "finishReasonTerminatesStream",
     "supportsTools",
     "supportsStrictMode",
     "requiresStringContent",
@@ -372,6 +373,14 @@ function normalizeModelCatalogCompat(value: unknown): ModelCatalogCompatConfig |
   for (const field of booleanFields) {
     if (typeof value[field] === "boolean") {
       compat[field] = value[field];
+    }
+  }
+
+  const numberFields = ["terminalUsageGraceMs"] as const;
+  for (const field of numberFields) {
+    const normalized = normalizeFiniteNumber(value[field]);
+    if (normalized !== undefined && normalized >= 0) {
+      compat[field] = normalized;
     }
   }
 

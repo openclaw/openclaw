@@ -15,25 +15,43 @@ type OpenAICompatibleChatCompletionChunk = Omit<DeepPartial<ChatCompletionChunk>
   choices?: OpenAICompatibleChoice[];
 };
 
-const mockChunksRef: { chunks: OpenAICompatibleChatCompletionChunk[] } = { chunks: [] };
+const mockChunksRef: { chunks: OpenAICompatibleChatCompletionChunk[]; hangAfterChunks?: boolean } =
+  {
+    chunks: [],
+  };
+const mockRequestSignalsRef: { signals: AbortSignal[] } = {
+  signals: [],
+};
 
 vi.mock("openai", () => {
   class MockOpenAI {
     chat = {
       completions: {
-        create: () => ({
-          withResponse: async () => {
-            async function* generate() {
-              for (const chunk of mockChunksRef.chunks) {
-                yield chunk;
+        create: (_params?: unknown, requestOptions?: { signal?: AbortSignal }) => {
+          if (requestOptions?.signal) {
+            mockRequestSignalsRef.signals.push(requestOptions.signal);
+          }
+          return {
+            withResponse: async () => {
+              async function* generate() {
+                for (const chunk of mockChunksRef.chunks) {
+                  yield chunk;
+                }
+                if (mockChunksRef.hangAfterChunks) {
+                  await new Promise<void>((resolve) => {
+                    requestOptions?.signal?.addEventListener("abort", () => resolve(), {
+                      once: true,
+                    });
+                  });
+                }
               }
-            }
-            return {
-              data: generate(),
-              response: { status: 200, headers: new Headers() },
-            };
-          },
-        }),
+              return {
+                data: generate(),
+                response: { status: 200, headers: new Headers() },
+              };
+            },
+          };
+        },
       },
     };
   }
@@ -528,6 +546,118 @@ describe("OpenAI-compatible completions params", () => {
 });
 
 describe("openai-completions stop-reason tool-call guard", () => {
+  it("finishes legacy OpenAI-compatible streams after terminal finish_reason when configured", async () => {
+    mockChunksRef.chunks = [
+      makeTextChunk("done"),
+      makeFinishChunk("stop", { prompt_tokens: 3, completion_tokens: 1, total_tokens: 4 }),
+    ];
+    mockChunksRef.hangAfterChunks = true;
+
+    const stream = streamOpenAICompletions(
+      {
+        ...model,
+        provider: "opencode-go",
+        baseUrl: "https://opencode.ai/zen/go/v1",
+        compat: {
+          supportsUsageInStreaming: true,
+          finishReasonTerminatesStream: true,
+          terminalUsageGraceMs: 50,
+        },
+      },
+      context,
+      { apiKey: "sk-test" },
+    );
+
+    try {
+      const result = await Promise.race([
+        stream.result(),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("stream did not finalize")), 25),
+        ),
+      ]);
+
+      expect(result.content).toContainEqual({ type: "text", text: "done" });
+      expect(result.stopReason).toBe("stop");
+      expect(result.usage.input).toBe(3);
+      expect(result.usage.output).toBe(1);
+      expect(result.usage.totalTokens).toBe(4);
+    } finally {
+      mockChunksRef.hangAfterChunks = false;
+    }
+  });
+
+  it("finishes legacy OpenAI-compatible streams after terminal finish_reason without usage when configured", async () => {
+    mockChunksRef.chunks = [makeTextChunk("done"), makeFinishChunk("stop")];
+    mockChunksRef.hangAfterChunks = true;
+
+    const stream = streamOpenAICompletions(
+      {
+        ...model,
+        provider: "opencode-go",
+        baseUrl: "https://opencode.ai/zen/go/v1",
+        compat: {
+          supportsUsageInStreaming: true,
+          finishReasonTerminatesStream: true,
+          terminalUsageGraceMs: 50,
+        },
+      },
+      context,
+      { apiKey: "sk-test" },
+    );
+
+    try {
+      const result = await Promise.race([
+        stream.result(),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("stream did not finalize")), 100),
+        ),
+      ]);
+
+      expect(result.content).toContainEqual({ type: "text", text: "done" });
+      expect(result.stopReason).toBe("stop");
+    } finally {
+      mockChunksRef.hangAfterChunks = false;
+    }
+  });
+
+  it("aborts legacy OpenAI-compatible request when terminal usage grace expires", async () => {
+    mockChunksRef.chunks = [makeTextChunk("done"), makeFinishChunk("stop")];
+    mockChunksRef.hangAfterChunks = true;
+    mockRequestSignalsRef.signals = [];
+
+    const stream = streamOpenAICompletions(
+      {
+        ...model,
+        provider: "opencode-go",
+        baseUrl: "https://opencode.ai/zen/go/v1",
+        compat: {
+          supportsUsageInStreaming: true,
+          finishReasonTerminatesStream: true,
+          terminalUsageGraceMs: 1,
+        },
+      },
+      context,
+      { apiKey: "sk-test" },
+    );
+
+    try {
+      const result = await Promise.race([
+        stream.result(),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("stream did not finalize")), 100),
+        ),
+      ]);
+
+      expect(result.content).toContainEqual({ type: "text", text: "done" });
+      expect(result.stopReason).toBe("stop");
+      expect(mockRequestSignalsRef.signals).toHaveLength(1);
+      expect(mockRequestSignalsRef.signals[0].aborted).toBe(true);
+    } finally {
+      mockChunksRef.hangAfterChunks = false;
+      mockRequestSignalsRef.signals = [];
+    }
+  });
+
   it("keeps literal reasoning tag examples visible when no reasoning field is mirrored", async () => {
     mockChunksRef.chunks = [
       makeTextChunk("Use `<think>private</think>` only as an example."),

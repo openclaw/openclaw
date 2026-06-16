@@ -40,6 +40,8 @@
             },
             "compat": {
               "supportsUsageInStreaming": true,
+              "finishReasonTerminatesStream": true,
+              "terminalUsageGraceMs": 50,
               "supportsReasoningEffort": true,
               "maxTokensField": "max_tokens"
             }
@@ -59,6 +61,8 @@
             },
             "compat": {
               "supportsUsageInStreaming": true,
+              "finishReasonTerminatesStream": true,
+              "terminalUsageGraceMs": 50,
               "supportsReasoningEffort": true,
               "maxTokensField": "max_tokens"
             }

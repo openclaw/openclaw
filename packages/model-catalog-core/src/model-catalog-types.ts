@@ -42,6 +42,8 @@ export type ModelCatalogCompatConfig = {
   supportsDeveloperRole?: boolean;
   supportsReasoningEffort?: boolean;
   supportsUsageInStreaming?: boolean;
+  finishReasonTerminatesStream?: boolean;
+  terminalUsageGraceMs?: number;
   supportsStrictMode?: boolean;
   maxTokensField?: "max_completion_tokens" | "max_tokens";
   requiresToolResultName?: boolean;

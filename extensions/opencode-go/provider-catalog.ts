@@ -47,6 +47,8 @@ const OPENCODE_GO_MODELS = (
       maxTokens: 384_000,
       compat: {
         supportsUsageInStreaming: true,
+        finishReasonTerminatesStream: true,
+        terminalUsageGraceMs: 50,
         supportsReasoningEffort: true,
         maxTokensField: "max_tokens",
       },
@@ -69,6 +71,8 @@ const OPENCODE_GO_MODELS = (
       maxTokens: 384_000,
       compat: {
         supportsUsageInStreaming: true,
+        finishReasonTerminatesStream: true,
+        terminalUsageGraceMs: 50,
         supportsReasoningEffort: true,
         maxTokensField: "max_tokens",
       },

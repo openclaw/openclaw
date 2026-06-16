@@ -127,6 +127,23 @@ async function* streamChunks(chunks: readonly unknown[]): AsyncGenerator<never> 
   }
 }
 
+function streamChunksThenHang(chunks: readonly unknown[]): AsyncIterable<unknown> {
+  return {
+    [Symbol.asyncIterator]() {
+      let index = 0;
+      return {
+        next: async () => {
+          if (index < chunks.length) {
+            return { done: false, value: chunks[index++] };
+          }
+          return await new Promise<IteratorResult<unknown>>(() => {});
+        },
+        return: async () => ({ done: true, value: undefined }),
+      };
+    },
+  };
+}
+
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
   // Shared assertion helper for parsed transport payload/event records.
   if (!record || typeof record !== "object") {
@@ -1134,6 +1151,263 @@ describe("openai transport stream", () => {
         undefined,
       ),
     ).toBeUndefined();
+  });
+
+  it("finishes opencode-go Chat Completions streams after terminal finish_reason even when the socket stays open", async () => {
+    const model: Model<"openai-completions"> = {
+      ...createDeepSeekCompletionsModel(),
+      id: "deepseek-v4-flash",
+      name: "DeepSeek V4 Flash",
+      provider: "opencode-go",
+      baseUrl: "https://opencode.ai/zen/go/v1",
+      compat: {
+        supportsUsageInStreaming: true,
+        finishReasonTerminatesStream: true,
+        terminalUsageGraceMs: 50,
+      },
+    };
+    const output = createAssistantOutput(model);
+    const stream: { push(event: unknown): void } = { push() {} };
+    const chunks = [
+      {
+        id: "chatcmpl-opencode-go-terminal",
+        object: "chat.completion.chunk",
+        choices: [
+          {
+            index: 0,
+            delta: { content: "done" },
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-opencode-go-terminal",
+        object: "chat.completion.chunk",
+        choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+        usage: { prompt_tokens: 3, completion_tokens: 1, total_tokens: 4 },
+      },
+    ] as const;
+
+    await expect(
+      Promise.race([
+        testing.processOpenAICompletionsStream(streamChunksThenHang(chunks), output, model, stream),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("stream did not finalize")), 100),
+        ),
+      ]),
+    ).resolves.toBeUndefined();
+    expect(output.content).toEqual([{ type: "text", text: "done" }]);
+    expect(output.stopReason).toBe("stop");
+  });
+
+  it("finishes opencode-go Chat Completions streams after terminal finish_reason without usage", async () => {
+    const model: Model<"openai-completions"> = {
+      ...createDeepSeekCompletionsModel(),
+      id: "deepseek-v4-flash",
+      name: "DeepSeek V4 Flash",
+      provider: "opencode-go",
+      baseUrl: "https://opencode.ai/zen/go/v1",
+      compat: {
+        supportsUsageInStreaming: true,
+        finishReasonTerminatesStream: true,
+        terminalUsageGraceMs: 50,
+      },
+    };
+    const output = createAssistantOutput(model);
+    const stream: { push(event: unknown): void } = { push() {} };
+    const chunks = [
+      {
+        id: "chatcmpl-opencode-go-terminal-no-usage",
+        object: "chat.completion.chunk",
+        choices: [
+          {
+            index: 0,
+            delta: { content: "done" },
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-opencode-go-terminal-no-usage",
+        object: "chat.completion.chunk",
+        choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+      },
+    ] as const;
+
+    await expect(
+      Promise.race([
+        testing.processOpenAICompletionsStream(streamChunksThenHang(chunks), output, model, stream),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("stream did not finalize")), 100),
+        ),
+      ]),
+    ).resolves.toBeUndefined();
+    expect(output.content).toEqual([{ type: "text", text: "done" }]);
+    expect(output.stopReason).toBe("stop");
+  });
+
+  it("aborts opencode-go Chat Completions request when terminal usage grace expires", async () => {
+    const model: Model<"openai-completions"> = {
+      ...createDeepSeekCompletionsModel(),
+      id: "deepseek-v4-flash",
+      name: "DeepSeek V4 Flash",
+      provider: "opencode-go",
+      baseUrl: "https://opencode.ai/zen/go/v1",
+      compat: {
+        supportsUsageInStreaming: true,
+        finishReasonTerminatesStream: true,
+        terminalUsageGraceMs: 1,
+      },
+    };
+    const output = createAssistantOutput(model);
+    const stream: { push(event: unknown): void } = { push() {} };
+    const abortRequest = vi.fn();
+    const chunks = [
+      {
+        id: "chatcmpl-opencode-go-terminal-abort",
+        object: "chat.completion.chunk",
+        choices: [{ index: 0, delta: { content: "done" }, finish_reason: null }],
+      },
+      {
+        id: "chatcmpl-opencode-go-terminal-abort",
+        object: "chat.completion.chunk",
+        choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+      },
+    ] as const;
+
+    await expect(
+      Promise.race([
+        testing.processOpenAICompletionsStream(
+          streamChunksThenHang(chunks),
+          output,
+          model,
+          stream,
+          {
+            abortRequest,
+          },
+        ),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("stream did not finalize")), 100),
+        ),
+      ]),
+    ).resolves.toBeUndefined();
+    expect(abortRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps reading opencode-go Chat Completions streams through usage-only chunks after tool-call finish", async () => {
+    const model: Model<"openai-completions"> = {
+      ...createDeepSeekCompletionsModel(),
+      id: "deepseek-v4-flash",
+      name: "DeepSeek V4 Flash",
+      provider: "opencode-go",
+      baseUrl: "https://opencode.ai/zen/go/v1",
+      compat: {
+        supportsUsageInStreaming: true,
+        finishReasonTerminatesStream: true,
+        terminalUsageGraceMs: 50,
+      },
+    };
+    const output = createAssistantOutput(model);
+    const stream: { push(event: unknown): void } = { push() {} };
+    const chunks = [
+      {
+        id: "chatcmpl-opencode-go-tool-call-terminal",
+        object: "chat.completion.chunk",
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "call_1",
+                  type: "function",
+                  function: { name: "lookup", arguments: "{}" },
+                },
+              ],
+            },
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-opencode-go-tool-call-terminal",
+        object: "chat.completion.chunk",
+        choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+      },
+      {
+        id: "chatcmpl-opencode-go-tool-call-terminal",
+        object: "chat.completion.chunk",
+        choices: [],
+        usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 },
+      },
+    ] as const;
+
+    await expect(
+      Promise.race([
+        testing.processOpenAICompletionsStream(streamChunksThenHang(chunks), output, model, stream),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("stream did not finalize")), 100),
+        ),
+      ]),
+    ).resolves.toBeUndefined();
+    expect(output.stopReason).toBe("toolUse");
+    expectRecordFields(output.usage, {
+      input: 5,
+      output: 2,
+      totalTokens: 7,
+    });
+  });
+
+  it("keeps reading opencode-go Chat Completions streams through usage-only chunks after stop", async () => {
+    const model: Model<"openai-completions"> = {
+      ...createDeepSeekCompletionsModel(),
+      id: "deepseek-v4-flash",
+      name: "DeepSeek V4 Flash",
+      provider: "opencode-go",
+      baseUrl: "https://opencode.ai/zen/go/v1",
+      compat: {
+        supportsUsageInStreaming: true,
+        finishReasonTerminatesStream: true,
+        terminalUsageGraceMs: 50,
+      },
+    };
+    const output = createAssistantOutput(model);
+    const stream: { push(event: unknown): void } = { push() {} };
+    const chunks = [
+      {
+        id: "chatcmpl-opencode-go-terminal",
+        object: "chat.completion.chunk",
+        choices: [
+          {
+            index: 0,
+            delta: { content: "done" },
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-opencode-go-terminal",
+        object: "chat.completion.chunk",
+        choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+      },
+      {
+        id: "chatcmpl-opencode-go-terminal",
+        object: "chat.completion.chunk",
+        choices: [],
+        usage: { prompt_tokens: 3, completion_tokens: 1, total_tokens: 4 },
+      },
+    ] as const;
+
+    await testing.processOpenAICompletionsStream(streamChunks(chunks), output, model, stream);
+
+    expect(output.content).toEqual([{ type: "text", text: "done" }]);
+    expect(output.stopReason).toBe("stop");
+    expectRecordFields(output.usage, {
+      input: 3,
+      output: 1,
+      totalTokens: 4,
+    });
   });
 
   it("streams OpenAI-compatible loopback requests with the configured SDK timeout", async () => {

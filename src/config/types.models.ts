@@ -31,6 +31,8 @@ type SupportedOpenAICompatFields = Pick<
   | "supportsDeveloperRole"
   | "supportsReasoningEffort"
   | "supportsUsageInStreaming"
+  | "finishReasonTerminatesStream"
+  | "terminalUsageGraceMs"
   | "supportsStrictMode"
   | "maxTokensField"
   | "requiresToolResultName"

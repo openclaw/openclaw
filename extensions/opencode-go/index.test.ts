@@ -205,6 +205,8 @@ describe("opencode-go provider plugin", () => {
     expect(dynamicModel.maxTokens).toBe(384_000);
     const compat = requireRecord(dynamicModel.compat, "dynamic model compat");
     expect(compat.supportsUsageInStreaming).toBe(true);
+    expect(compat.finishReasonTerminatesStream).toBe(true);
+    expect(compat.terminalUsageGraceMs).toBe(50);
     expect(compat.supportsReasoningEffort).toBe(true);
     expect(compat.maxTokensField).toBe("max_tokens");
   });

@@ -52,6 +52,8 @@ import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
 import { buildBaseOptions } from "./simple-options.js";
 import { transformMessages } from "./transform-messages.js";
 
+const OPENAI_COMPLETIONS_TERMINAL_USAGE_GRACE_MS = 50;
+
 /**
  * Check if conversation messages contain tool calls or tool results.
  * This is needed because Anthropic (via proxy) requires the tools param
@@ -99,9 +101,10 @@ interface OpenAICompatCacheControl {
 
 type ResolvedOpenAICompletionsCompat = Omit<
   Required<OpenAICompletionsCompat>,
-  "cacheControlFormat"
+  "cacheControlFormat" | "terminalUsageGraceMs"
 > & {
   cacheControlFormat?: OpenAICompletionsCompat["cacheControlFormat"];
+  terminalUsageGraceMs?: OpenAICompletionsCompat["terminalUsageGraceMs"];
 };
 
 type ChatCompletionInstructionMessageParam =
@@ -151,6 +154,7 @@ export const streamOpenAICompletions: StreamFunction<
       timestamp: Date.now(),
     };
 
+    let removeRequestAbortListener: (() => void) | undefined;
     try {
       const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
       const compat = getCompat(model);
@@ -162,8 +166,17 @@ export const streamOpenAICompletions: StreamFunction<
       if (nextParams !== undefined) {
         params = nextParams as typeof params;
       }
+      const requestAbortController = new AbortController();
+      const abortRequest = () => requestAbortController.abort();
+      if (options?.signal?.aborted) {
+        abortRequest();
+      }
+      const abortListener = () => abortRequest();
+      options?.signal?.addEventListener("abort", abortListener, { once: true });
+      removeRequestAbortListener = () =>
+        options?.signal?.removeEventListener("abort", abortListener);
       const requestOptions = {
-        ...(options?.signal ? { signal: options.signal } : {}),
+        signal: requestAbortController.signal,
         ...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
         ...(options?.maxRetries !== undefined ? { maxRetries: options.maxRetries } : {}),
       };
@@ -332,7 +345,46 @@ export const streamOpenAICompletions: StreamFunction<
         }
       };
 
-      for await (const chunk of openaiStream) {
+      const iterator = (openaiStream as AsyncIterable<ChatCompletionChunk>)[Symbol.asyncIterator]();
+      const terminalUsageGraceMs = compat.terminalUsageGraceMs;
+      const abortAndCloseIterator = async () => {
+        abortRequest();
+        await iterator.return?.();
+      };
+      const closeIterator = async () => {
+        await iterator.return?.();
+      };
+      let waitForTerminalUsage = false;
+      while (true) {
+        let nextChunk: IteratorResult<ChatCompletionChunk>;
+        if (waitForTerminalUsage) {
+          if (terminalUsageGraceMs === undefined) {
+            nextChunk = await iterator.next();
+          } else if (terminalUsageGraceMs === 0) {
+            void abortAndCloseIterator();
+            break;
+          } else {
+            const timeout = Symbol("terminal-usage-timeout");
+            const result = await Promise.race([
+              iterator.next(),
+              new Promise<typeof timeout>((resolve) =>
+                setTimeout(() => resolve(timeout), terminalUsageGraceMs),
+              ),
+            ]);
+            if (result === timeout) {
+              void abortAndCloseIterator();
+              break;
+            }
+            nextChunk = result;
+          }
+          waitForTerminalUsage = false;
+        } else {
+          nextChunk = await iterator.next();
+        }
+        if (nextChunk.done) {
+          break;
+        }
+        const chunk = nextChunk.value;
         if (!chunk || typeof chunk !== "object") {
           continue;
         }
@@ -349,6 +401,10 @@ export const streamOpenAICompletions: StreamFunction<
 
         const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined;
         if (!choice) {
+          if (hasFinishReason && chunk.usage) {
+            await closeIterator();
+            break;
+          }
           continue;
         }
 
@@ -361,6 +417,18 @@ export const streamOpenAICompletions: StreamFunction<
           output.usage = parseChunkUsage(choiceUsage, model);
         }
 
+        const shouldFinishAfterChunk =
+          compat.finishReasonTerminatesStream &&
+          choice.finish_reason != null &&
+          (chunk.usage !== undefined ||
+            choiceUsage !== undefined ||
+            !compat.supportsUsageInStreaming);
+        const shouldWaitForTerminalUsage =
+          compat.finishReasonTerminatesStream &&
+          choice.finish_reason != null &&
+          compat.supportsUsageInStreaming &&
+          chunk.usage === undefined &&
+          choiceUsage === undefined;
         if (choice.finish_reason) {
           const finishReasonResult = mapStopReason(choice.finish_reason);
           output.stopReason = finishReasonResult.stopReason;
@@ -450,6 +518,13 @@ export const streamOpenAICompletions: StreamFunction<
             }
           }
         }
+        if (shouldFinishAfterChunk) {
+          await closeIterator();
+          break;
+        }
+        if (shouldWaitForTerminalUsage) {
+          waitForTerminalUsage = true;
+        }
       }
 
       flushPartitionedContent();
@@ -487,7 +562,9 @@ export const streamOpenAICompletions: StreamFunction<
 
       stream.push({ type: "done", reason: output.stopReason, message: output });
       stream.end();
+      removeRequestAbortListener?.();
     } catch (error) {
+      removeRequestAbortListener?.();
       for (const block of output.content) {
         delete (block as { index?: number }).index;
         // Streaming scratch buffers are only used during parsing; never persist them.
@@ -1310,6 +1387,8 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
     supportsReasoningEffort:
       !isGrok && !isZai && !isMoonshot && !isTogether && !isCloudflareAiGateway,
     supportsUsageInStreaming: true,
+    finishReasonTerminatesStream: false,
+    terminalUsageGraceMs: OPENAI_COMPLETIONS_TERMINAL_USAGE_GRACE_MS,
     maxTokensField: useMaxTokens ? "max_tokens" : "max_completion_tokens",
     requiresToolResultName: false,
     requiresAssistantAfterToolResult: false,
@@ -1347,6 +1426,7 @@ function getCompat(model: Model<"openai-completions">): ResolvedOpenAICompletion
     return detected;
   }
 
+  const finishReasonTerminatesStream = model.compat.finishReasonTerminatesStream === true;
   return {
     supportsStore: model.compat.supportsStore ?? detected.supportsStore,
     supportsDeveloperRole: model.compat.supportsDeveloperRole ?? detected.supportsDeveloperRole,
@@ -1354,6 +1434,8 @@ function getCompat(model: Model<"openai-completions">): ResolvedOpenAICompletion
       model.compat.supportsReasoningEffort ?? detected.supportsReasoningEffort,
     supportsUsageInStreaming:
       model.compat.supportsUsageInStreaming ?? detected.supportsUsageInStreaming,
+    finishReasonTerminatesStream,
+    terminalUsageGraceMs: model.compat.terminalUsageGraceMs ?? detected.terminalUsageGraceMs,
     maxTokensField: model.compat.maxTokensField ?? detected.maxTokensField,
     requiresToolResultName: model.compat.requiresToolResultName ?? detected.requiresToolResultName,
     requiresAssistantAfterToolResult:

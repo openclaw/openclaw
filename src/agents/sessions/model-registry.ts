@@ -104,6 +104,8 @@ const OpenAICompletionsCompatSchema = Type.Object({
   supportsDeveloperRole: Type.Optional(Type.Boolean()),
   supportsReasoningEffort: Type.Optional(Type.Boolean()),
   supportsUsageInStreaming: Type.Optional(Type.Boolean()),
+  finishReasonTerminatesStream: Type.Optional(Type.Boolean()),
+  terminalUsageGraceMs: Type.Optional(Type.Number({ minimum: 0 })),
   maxTokensField: Type.Optional(
     Type.Union([Type.Literal("max_completion_tokens"), Type.Literal("max_tokens")]),
   ),

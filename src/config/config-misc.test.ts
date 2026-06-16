@@ -1129,6 +1129,8 @@ describe("model compat config schema", () => {
                   name: "Qwen3 32B",
                   compat: {
                     supportsUsageInStreaming: true,
+                    finishReasonTerminatesStream: true,
+                    terminalUsageGraceMs: 50,
                     supportsStrictMode: false,
                     requiresStringContent: true,
                     thinkingFormat,

@@ -49,6 +49,8 @@ describe("model catalog normalization", () => {
                 },
                 compat: {
                   supportsTools: true,
+                  finishReasonTerminatesStream: true,
+                  terminalUsageGraceMs: 50,
                   openRouterRouting: {
                     only: ["anthropic", 1],
                     allow_fallbacks: false,
@@ -148,6 +150,8 @@ describe("model catalog normalization", () => {
               },
               compat: {
                 supportsTools: true,
+                finishReasonTerminatesStream: true,
+                terminalUsageGraceMs: 50,
                 openRouterRouting: { only: ["anthropic"], allow_fallbacks: false },
                 vercelGatewayRouting: { order: ["anthropic"] },
                 zaiToolStream: true,
