@@ -5,6 +5,7 @@ import path from "node:path";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { isLegacyContentInventoryCompatVersion } from "../../scripts/lib/content-inventory-compat.mjs";
 import { isLocalBuildMetadataDistPath } from "../../scripts/lib/local-build-metadata-paths.mjs";
+import { root as openFsRoot } from "./fs-safe.js";
 import { readJsonIfExists, writeJson } from "./json-files.js";
 import { readPackageVersion } from "./package-json.js";
 
@@ -105,6 +106,7 @@ type PackageDistInventoryScanContext = {
   fsConcurrency: number;
   waiters: Array<() => void>;
 };
+type PackageDistFsRoot = Awaited<ReturnType<typeof openFsRoot>>;
 
 export type PackageDistContentInventoryEntry = {
   path: string;
@@ -141,6 +143,56 @@ async function withPackageDistInventoryFsSlot<T>(
 
 function normalizeRelativePath(value: string): string {
   return value.replace(/\\/g, "/");
+}
+
+function isMissingPackageDistPathError(error: unknown): boolean {
+  return ["ENOENT", "ENOTDIR", "not-found"].includes((error as NodeJS.ErrnoException).code ?? "");
+}
+
+async function openPackageDistFsRootIfPresent(
+  packageRoot: string,
+): Promise<PackageDistFsRoot | null> {
+  const packageFs = await openFsRoot(packageRoot, {
+    hardlinks: "allow",
+    nonBlockingRead: true,
+    symlinks: "reject",
+  });
+  let distStats;
+  try {
+    distStats = await fs.lstat(path.join(packageFs.rootReal, "dist"));
+  } catch (error) {
+    if (isMissingPackageDistPathError(error)) {
+      return null;
+    }
+    throw error;
+  }
+  if (!distStats.isDirectory() || distStats.isSymbolicLink()) {
+    throw new Error("Unsafe package dist path: dist");
+  }
+  return packageFs;
+}
+
+async function readPackageDistJsonIfExists<T>(
+  packageRoot: string,
+  relativePath: string,
+): Promise<T | null> {
+  const packageFs = await openPackageDistFsRootIfPresent(packageRoot);
+  if (!packageFs) {
+    return null;
+  }
+  try {
+    return await packageFs.readJson<T>(relativePath, {
+      hardlinks: "allow",
+      maxBytes: Number.POSITIVE_INFINITY,
+      nonBlockingRead: true,
+      symlinks: "reject",
+    });
+  } catch (error) {
+    if (isMissingPackageDistPathError(error)) {
+      return null;
+    }
+    throw error;
+  }
 }
 
 function isInstallStageDirName(value: string): boolean {
@@ -520,11 +572,6 @@ export async function writePackageDistInventory(packageRoot: string): Promise<st
   return inventory;
 }
 
-async function hashFileSha256(filePath: string): Promise<string> {
-  const content = await fs.readFile(filePath);
-  return createHash("sha256").update(content).digest("hex");
-}
-
 function normalizeFileMode(mode: number): number {
   return mode & 0o777;
 }
@@ -534,20 +581,28 @@ export async function collectPackageDistContentInventory(
   inventory?: string[],
 ): Promise<PackageDistContentInventoryEntry[]> {
   const files = inventory ?? (await collectPackageDistInventory(packageRoot));
+  const packageFs = await openPackageDistFsRootIfPresent(packageRoot);
+  if (!packageFs) {
+    if (files.length === 0) {
+      return [];
+    }
+    throw new Error("Unsafe package dist path: dist");
+  }
   const scanContext = createPackageDistInventoryScanContext();
   const entries = await Promise.all(
     files.map((relativePath) =>
       withPackageDistInventoryFsSlot(scanContext, async () => {
-        const absolutePath = path.join(packageRoot, relativePath);
-        const stats = await fs.lstat(absolutePath);
-        if (!stats.isFile() || stats.isSymbolicLink()) {
-          throw new Error(`Unsafe package dist path: ${relativePath}`);
-        }
+        const current = await packageFs.read(relativePath, {
+          hardlinks: "allow",
+          maxBytes: Number.POSITIVE_INFINITY,
+          nonBlockingRead: true,
+          symlinks: "reject",
+        });
         return {
           path: normalizeRelativePath(relativePath),
-          sha256: await hashFileSha256(absolutePath),
-          mode: normalizeFileMode(stats.mode),
-          size: stats.size,
+          sha256: createHash("sha256").update(current.buffer).digest("hex"),
+          mode: normalizeFileMode(current.stat.mode),
+          size: current.buffer.length,
         } satisfies PackageDistContentInventoryEntry;
       }),
     ),
@@ -556,8 +611,10 @@ export async function collectPackageDistContentInventory(
 }
 
 async function readPackageDistInventoryOptional(packageRoot: string): Promise<string[] | null> {
-  const inventoryPath = path.join(packageRoot, PACKAGE_DIST_INVENTORY_RELATIVE_PATH);
-  const parsed = await readJsonIfExists<unknown>(inventoryPath);
+  const parsed = await readPackageDistJsonIfExists<unknown>(
+    packageRoot,
+    PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
+  );
   if (parsed === null) {
     return null;
   }
@@ -595,8 +652,10 @@ function isPackageDistContentInventoryEntry(
 export async function readPackageDistContentInventoryIfPresent(
   packageRoot: string,
 ): Promise<PackageDistContentInventoryEntry[] | null> {
-  const inventoryPath = path.join(packageRoot, PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH);
-  const parsed = await readJsonIfExists<unknown>(inventoryPath);
+  const parsed = await readPackageDistJsonIfExists<unknown>(
+    packageRoot,
+    PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH,
+  );
   if (parsed === null) {
     return null;
   }

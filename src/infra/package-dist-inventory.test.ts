@@ -1,6 +1,7 @@
 // Covers package dist inventory collection and validation.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
@@ -59,6 +60,87 @@ describe("package dist inventory", () => {
     });
   });
 
+  it.runIf(process.platform !== "win32")(
+    "rejects content inventories through symlinked dist roots",
+    async () => {
+      await withTempDir(
+        { prefix: "openclaw-dist-content-inventory-symlink-root-" },
+        async (base) => {
+          const packageRoot = path.join(base, "package");
+          const outsideDist = path.join(base, "outside-dist");
+          await fs.mkdir(packageRoot);
+          await fs.mkdir(outsideDist);
+          await fs.writeFile(
+            path.join(outsideDist, "postinstall-content-inventory.json"),
+            "[]\n",
+            "utf8",
+          );
+          await fs.symlink(outsideDist, path.join(packageRoot, "dist"), "dir");
+
+          await expect(readPackageDistContentInventoryIfPresent(packageRoot)).rejects.toThrow(
+            "Unsafe package dist path: dist",
+          );
+        },
+      );
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rejects content hash reads after the dist root swaps outside the package",
+    async () => {
+      await withTempDir({ prefix: "openclaw-dist-content-inventory-swap-root-" }, async (base) => {
+        const packageRoot = path.join(base, "package");
+        const distDir = path.join(packageRoot, "dist");
+        const preservedDistDir = path.join(packageRoot, "preserved-dist");
+        const currentFile = path.join(distDir, "current.js");
+        const outsideDist = path.join(base, "outside-dist");
+        await fs.mkdir(distDir, { recursive: true });
+        await fs.writeFile(currentFile, "export const value = 1;\n", "utf8");
+        await writePackageDistInventory(packageRoot);
+        await fs.mkdir(outsideDist);
+        await fs.writeFile(
+          path.join(outsideDist, "current.js"),
+          "export const value = 1;\n",
+          "utf8",
+        );
+
+        const realLstat = fs.lstat.bind(fs);
+        let distRootChanged = false;
+        const currentFileSuffix = path.join("dist", "current.js");
+        const replaceDistRoot = async () => {
+          if (distRootChanged) {
+            return;
+          }
+          distRootChanged = true;
+          await fs.rename(distDir, preservedDistDir);
+          await fs.symlink(outsideDist, distDir, "dir");
+        };
+        const lstatSpy = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+          const result = await realLstat(...args);
+          if (!distRootChanged && String(args[0]).endsWith(currentFileSuffix)) {
+            await replaceDistRoot();
+          }
+          return result;
+        });
+        __setFsSafeTestHooksForTest({
+          afterPreOpenLstat: async (filePath) => {
+            if (filePath.endsWith(currentFileSuffix)) {
+              await replaceDistRoot();
+            }
+          },
+        });
+
+        try {
+          await expect(collectPackageDistContentInventoryErrors(packageRoot)).rejects.toThrow();
+          expect(distRootChanged).toBe(true);
+        } finally {
+          __setFsSafeTestHooksForTest(undefined);
+          lstatSpy.mockRestore();
+        }
+      });
+    },
+  );
+
   it("rejects duplicate normalized content inventory paths", async () => {
     await withTempDir(
       { prefix: "openclaw-dist-content-inventory-duplicate-" },
@@ -101,24 +183,20 @@ describe("package dist inventory", () => {
           ),
         );
 
-        const realReadFile = fs.readFile;
         let activeReads = 0;
         let maxActiveReads = 0;
-        const readFileSpy = vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
-          const filePath = typeof args[0] === "string" ? args[0] : "";
-          if (!filePath.includes(`${path.sep}dist${path.sep}file-`)) {
-            return await realReadFile(...args);
-          }
-          activeReads += 1;
-          maxActiveReads = Math.max(maxActiveReads, activeReads);
-          try {
+        __setFsSafeTestHooksForTest({
+          beforeOpen: async (filePath) => {
+            if (!filePath.includes(`${path.sep}dist${path.sep}file-`)) {
+              return;
+            }
+            activeReads += 1;
+            maxActiveReads = Math.max(maxActiveReads, activeReads);
             await new Promise<void>((resolve) => {
               setTimeout(resolve, 5);
             });
-            return await realReadFile(...args);
-          } finally {
             activeReads -= 1;
-          }
+          },
         });
 
         try {
@@ -126,7 +204,7 @@ describe("package dist inventory", () => {
             collectPackageDistContentInventory(packageRoot, inventory),
           ).resolves.toHaveLength(inventory.length);
         } finally {
-          readFileSpy.mockRestore();
+          __setFsSafeTestHooksForTest(undefined);
         }
         expect(maxActiveReads).toBeGreaterThan(1);
         expect(maxActiveReads).toBeLessThanOrEqual(32);
