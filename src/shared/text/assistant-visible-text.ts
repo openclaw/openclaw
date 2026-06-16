@@ -808,7 +808,8 @@ export type AssistantVisibleTextSanitizerProfile =
   | "final-answer-delivery"
   | "history"
   | "internal-scaffolding"
-  | "tool-progress";
+  | "tool-progress"
+  | "tts";
 
 type AssistantVisibleTextPipelineOptions = {
   finalTrim: ReasoningTagTrim;
