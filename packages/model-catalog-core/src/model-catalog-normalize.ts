@@ -19,6 +19,7 @@ import {
   type ModelCatalogModel,
   type ModelCatalogOpenRouterRouting,
   type ModelCatalogProvider,
+  type ModelCatalogRequestContextHeaders,
   type ModelCatalogSource,
   type ModelCatalogStatus,
   type ModelCatalogSuppression,
@@ -33,6 +34,7 @@ const MODEL_CATALOG_INPUTS = new Set(["text", "image", "document"]);
 const MODEL_CATALOG_DISCOVERY_MODES = new Set(["static", "refreshable", "runtime"]);
 const MODEL_CATALOG_STATUSES = new Set(["available", "preview", "deprecated", "disabled"]);
 const MODEL_CATALOG_API_SET = new Set<string>(MODEL_CATALOG_APIS);
+const MODEL_CATALOG_REQUEST_CONTEXT_HEADER_KEYS = ["runId", "messageChannel", "runKind"] as const;
 const DEFAULT_MODEL_INPUT: ModelCatalogInput[] = ["text"];
 const DEFAULT_MODEL_STATUS: ModelCatalogStatus = "available";
 
@@ -97,6 +99,22 @@ function normalizeStringMap(value: unknown): Record<string, string> | undefined 
     const mapValue = normalizeOptionalString(rawValue) ?? "";
     if (key && mapValue) {
       normalized[key] = mapValue;
+    }
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function normalizeModelCatalogRequestContextHeaders(
+  value: unknown,
+): ModelCatalogRequestContextHeaders | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const normalized: ModelCatalogRequestContextHeaders = {};
+  for (const key of MODEL_CATALOG_REQUEST_CONTEXT_HEADER_KEYS) {
+    const headerName = normalizeOptionalString(value[key]);
+    if (headerName) {
+      normalized[key] = headerName;
     }
   }
   return Object.keys(normalized).length > 0 ? normalized : undefined;
@@ -428,6 +446,13 @@ function normalizeModelCatalogCompat(value: unknown): ModelCatalogCompatConfig |
   const vercelGatewayRouting = normalizeVercelGatewayRouting(value.vercelGatewayRouting);
   if (vercelGatewayRouting) {
     compat.vercelGatewayRouting = vercelGatewayRouting;
+  }
+
+  const requestContextHeaders = normalizeModelCatalogRequestContextHeaders(
+    value.requestContextHeaders,
+  );
+  if (requestContextHeaders) {
+    compat.requestContextHeaders = requestContextHeaders;
   }
 
   return Object.keys(compat).length > 0 ? (compat as ModelCatalogCompatConfig) : undefined;

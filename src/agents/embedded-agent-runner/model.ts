@@ -1482,7 +1482,14 @@ function mergeModelCompat(
   if (!override) {
     return base;
   }
-  return { ...base, ...override };
+  const merged: ModelCompatConfig = { ...base, ...override };
+  if (base.requestContextHeaders || override.requestContextHeaders) {
+    merged.requestContextHeaders = {
+      ...base.requestContextHeaders,
+      ...override.requestContextHeaders,
+    };
+  }
+  return merged;
 }
 
 function normalizeProviderModelRef(params: {

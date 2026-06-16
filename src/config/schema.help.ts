@@ -986,6 +986,16 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional low-level agent runtime policy for this provider. Use provider/model runtime policy instead of agent-wide runtime pins; omitted/default lets OpenClaw choose the runtime for the selected provider.",
   "models.providers.*.agentRuntime.id":
     'Provider agent runtime id: "openclaw", "auto", a registered plugin harness id such as "codex", or a supported CLI backend alias such as "claude-cli". OpenAI on the official endpoint defaults to the Codex harness when omitted.',
+  "models.providers.*.compat":
+    "Provider-level compatibility defaults for models under this provider. Use this for OpenAI-compatible proxy behavior that should apply to all declared models unless a model overrides it.",
+  "models.providers.*.compat.requestContextHeaders":
+    "Opt-in mapping from OpenClaw run context fields to HTTP header names for OpenAI-compatible model requests. Supported fields are runId, messageChannel, and runKind. Values are header names; nothing is sent when omitted.",
+  "models.providers.*.compat.requestContextHeaders.runId":
+    "Header name that receives the current OpenClaw run id on model requests when request context forwarding is enabled.",
+  "models.providers.*.compat.requestContextHeaders.messageChannel":
+    "Header name that receives the normalized inbound message channel for the current model request.",
+  "models.providers.*.compat.requestContextHeaders.runKind":
+    'Header name that receives the current run kind: "message", "heartbeat", or "cron".',
   "models.providers.*.localService":
     "Optional on-demand local model server process for this provider. OpenClaw probes healthUrl, starts the command when needed, waits for readiness, and then sends the model request.",
   "models.providers.*.localService.command":
@@ -1071,6 +1081,16 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional low-level agent runtime policy for this specific model. Model runtime policy overrides the provider runtime policy.",
   "models.providers.*.models[].agentRuntime.id":
     'Model agent runtime id: "openclaw", "auto", a registered plugin harness id such as "codex", or a supported CLI backend alias such as "claude-cli".',
+  "models.providers.*.models[].compat":
+    "Model-level compatibility settings for payload shaping, feature gating, and provider-specific request metadata. Values here override provider-level compat defaults for this model.",
+  "models.providers.*.models[].compat.requestContextHeaders":
+    "Model-level request context header mapping. These entries add to or override the provider-level mapping for this model only.",
+  "models.providers.*.models[].compat.requestContextHeaders.runId":
+    "Model-level header name for forwarding the current OpenClaw run id.",
+  "models.providers.*.models[].compat.requestContextHeaders.messageChannel":
+    "Model-level header name for forwarding the normalized inbound message channel.",
+  "models.providers.*.models[].compat.requestContextHeaders.runKind":
+    'Model-level header name for forwarding the current run kind: "message", "heartbeat", or "cron".',
   "models.providers.*.models[].mediaInput":
     "Optional model media capability metadata used by tools to choose conservative image compression defaults.",
   "models.providers.*.models[].mediaInput.image":

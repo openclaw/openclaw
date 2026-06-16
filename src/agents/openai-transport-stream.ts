@@ -1819,7 +1819,12 @@ function buildOpenAIClientHeaders(
       }),
     );
   }
-  const callerHeaders = { ...optionHeaders, ...turnHeaders };
+  const compat = model.compat as ModelCompatConfig | undefined;
+  const requestContextHeaders = buildOpenAIRequestContextHeaders(
+    context,
+    compat?.requestContextHeaders,
+  );
+  const callerHeaders = { ...requestContextHeaders, ...optionHeaders, ...turnHeaders };
   const headers = resolveProviderRequestPolicyConfig({
     provider: model.provider,
     api: model.api,
@@ -1831,6 +1836,29 @@ function buildOpenAIClientHeaders(
     precedence: "caller-wins",
   }).headers;
   return headers ?? {};
+}
+
+function buildOpenAIRequestContextHeaders(
+  context: Context,
+  requestContextHeaders: ModelCompatConfig["requestContextHeaders"],
+): Record<string, string> | undefined {
+  if (!requestContextHeaders || !context.runContext) {
+    return undefined;
+  }
+  const headers: Record<string, string> = {};
+  const headerEntries = [
+    ["runId", context.runContext.runId],
+    ["messageChannel", context.runContext.messageChannel],
+    ["runKind", context.runContext.runKind],
+  ] as const;
+  for (const [contextKey, contextValue] of headerEntries) {
+    const headerName = requestContextHeaders[contextKey]?.trim();
+    const headerValue = contextValue?.trim();
+    if (headerName && headerValue) {
+      headers[headerName] = headerValue;
+    }
+  }
+  return Object.keys(headers).length > 0 ? headers : undefined;
 }
 
 function resolveProviderTransportTurnState(

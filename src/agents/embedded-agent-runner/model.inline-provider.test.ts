@@ -130,6 +130,40 @@ describe("buildInlineProviderModels", () => {
     expect(result[0].name).toBe("claude-opus-4.5");
   });
 
+  it("merges provider and model request context header compat", () => {
+    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
+      proxy: {
+        baseUrl: "https://proxy.example.com/v1",
+        api: "openai-responses",
+        compat: {
+          requestContextHeaders: {
+            runId: "x-provider-run-id",
+            messageChannel: "x-provider-channel",
+          },
+        },
+        models: [
+          {
+            ...makeModel("proxy-model"),
+            compat: {
+              requestContextHeaders: {
+                runId: "x-model-run-id",
+                runKind: "x-model-run-kind",
+              },
+            },
+          },
+        ],
+      },
+    };
+
+    const result = buildInlineProviderModels(providers);
+
+    expect(result[0]?.compat?.requestContextHeaders).toEqual({
+      runId: "x-model-run-id",
+      messageChannel: "x-provider-channel",
+      runKind: "x-model-run-kind",
+    });
+  });
+
   it("normalizes bare Google API hosts for custom Google Generative AI providers", () => {
     // Google Generative AI requires the versioned endpoint even when users
     // configure the bare service host.

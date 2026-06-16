@@ -2,7 +2,11 @@
  * Converts inline provider model config into runtime model definitions.
  */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.js";
+import type {
+  ModelCompatConfig,
+  ModelDefinitionConfig,
+  ModelProviderConfig,
+} from "../../config/types.js";
 import { normalizeGoogleApiBaseUrl } from "../../infra/google-api-base-url.js";
 import type { Api } from "../../llm/types.js";
 import { isSecretRefHeaderValueMarker } from "../model-auth-markers.js";
@@ -31,6 +35,7 @@ export type InlineProviderConfig = {
   contextTokens?: ModelProviderConfig["contextTokens"];
   maxTokens?: ModelProviderConfig["maxTokens"];
   params?: ModelProviderConfig["params"];
+  compat?: ModelProviderConfig["compat"];
   headers?: unknown;
   authHeader?: boolean;
   timeoutSeconds?: ModelProviderConfig["timeoutSeconds"];
@@ -138,6 +143,26 @@ function resolveInlineProviderTransport(params: { api?: Api | null; baseUrl?: st
   };
 }
 
+function mergeInlineModelCompat(
+  base: ModelCompatConfig | undefined,
+  override: ModelCompatConfig | undefined,
+): ModelCompatConfig | undefined {
+  if (!base) {
+    return override;
+  }
+  if (!override) {
+    return base;
+  }
+  const merged: ModelCompatConfig = { ...base, ...override };
+  if (base.requestContextHeaders || override.requestContextHeaders) {
+    merged.requestContextHeaders = {
+      ...base.requestContextHeaders,
+      ...override.requestContextHeaders,
+    };
+  }
+  return merged;
+}
+
 /** Builds runtime model records from inline provider config, inheriting provider-level defaults. */
 export function buildInlineProviderModels(
   providers: Record<string, InlineProviderConfig>,
@@ -159,6 +184,7 @@ export function buildInlineProviderModels(
       const modelHeaders = sanitizeModelHeaders((model as InlineModelEntry).headers, {
         stripSecretRefMarkers: true,
       });
+      const compat = mergeInlineModelCompat(entry?.compat, model.compat);
       const requestConfig = resolveProviderRequestConfig({
         provider: trimmed,
         api: transport.api ?? model.api,
@@ -177,6 +203,7 @@ export function buildInlineProviderModels(
             contextWindow: model.contextWindow ?? entry?.contextWindow,
             contextTokens: model.contextTokens ?? entry?.contextTokens,
             maxTokens: model.maxTokens ?? entry?.maxTokens,
+            ...(compat ? { compat } : {}),
             input: resolveProviderModelInput({
               provider: trimmed,
               modelId: model.id,

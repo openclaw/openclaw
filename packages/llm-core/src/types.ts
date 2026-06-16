@@ -356,6 +356,23 @@ export interface Context {
   systemPrompt?: string;
   messages: Message[];
   tools?: Tool[];
+  runContext?: ModelRequestRunContext;
+}
+
+/** Run kind labels safe to forward as model request metadata. */
+export type ModelRequestRunKind = "message" | "heartbeat" | "cron";
+
+/** Supported OpenClaw run context fields that can be mapped to provider request headers. */
+export type ModelRequestContextHeaderKey = "runId" | "messageChannel" | "runKind";
+
+/** Opt-in mapping from OpenClaw run context fields to provider request header names. */
+export type ModelRequestContextHeaders = Partial<Record<ModelRequestContextHeaderKey, string>>;
+
+/** Runtime metadata for the active model request. */
+export interface ModelRequestRunContext {
+  runId?: string;
+  messageChannel?: string;
+  runKind?: ModelRequestRunKind;
 }
 
 /**
@@ -447,6 +464,8 @@ export interface OpenAICompletionsCompat {
   cacheControlFormat?: "anthropic";
   /** Whether to send known session-affinity headers (`session_id`, `x-client-request-id`, `x-session-affinity`) from `options.sessionId` when caching is enabled. Default: false. */
   sendSessionAffinityHeaders?: boolean;
+  /** Opt-in mapping from OpenClaw run context fields to provider request header names. */
+  requestContextHeaders?: ModelRequestContextHeaders;
   /** Whether the provider supports OpenAI-style `prompt_cache_key`. Default: false for third-party completions providers. */
   supportsPromptCacheKey?: boolean;
   /** Whether the provider supports long prompt cache retention (`prompt_cache_retention: "24h"` or Anthropic-style `cache_control.ttl: "1h"`, depending on format). Default: true. */
@@ -457,6 +476,8 @@ export interface OpenAICompletionsCompat {
 export interface OpenAIResponsesCompat {
   /** Whether to send the OpenAI `session_id` cache-affinity header from `options.sessionId` when caching is enabled. Default: true. */
   sendSessionIdHeader?: boolean;
+  /** Opt-in mapping from OpenClaw run context fields to provider request header names. */
+  requestContextHeaders?: ModelRequestContextHeaders;
   /** Whether the provider supports `prompt_cache_retention: "24h"`. Default: true. */
   supportsLongCacheRetention?: boolean;
 }

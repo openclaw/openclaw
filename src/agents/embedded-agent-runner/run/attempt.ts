@@ -392,6 +392,10 @@ import {
   wrapStreamFnWithDiagnosticModelCallEvents,
 } from "./attempt.model-diagnostic-events.js";
 import {
+  buildEmbeddedModelRequestRunContext,
+  wrapStreamFnWithModelRequestRunContext,
+} from "./attempt.model-run-context.js";
+import {
   buildAfterTurnRuntimeContext,
   buildAfterTurnRuntimeContextFromUsage,
   prependSystemPromptAddition,
@@ -2843,6 +2847,10 @@ export async function runEmbeddedAttempt(
         authProfileId: resolveAttemptStreamAuthProfileId(params),
         authStorage: params.authStorage,
       });
+      activeSession.agent.streamFn = wrapStreamFnWithModelRequestRunContext(
+        activeSession.agent.streamFn,
+        buildEmbeddedModelRequestRunContext(params),
+      );
       const providerTextTransforms = resolveProviderTextTransforms({
         provider: params.provider,
         config: params.config,

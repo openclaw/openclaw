@@ -42,12 +42,13 @@ type SupportedOpenAICompatFields = Pick<
   | "zaiToolStream"
   | "cacheControlFormat"
   | "sendSessionAffinityHeaders"
+  | "requestContextHeaders"
   | "supportsLongCacheRetention"
 >;
 
 type SupportedOpenAIResponsesCompatFields = Pick<
   OpenAIResponsesCompat,
-  "sendSessionIdHeader" | "supportsLongCacheRetention"
+  "sendSessionIdHeader" | "requestContextHeaders" | "supportsLongCacheRetention"
 >;
 
 type SupportedAnthropicMessagesCompatFields = Pick<
@@ -231,6 +232,8 @@ export type ModelProviderConfig = {
   params?: Record<string, unknown>;
   /** Optional default agent execution runtime for models under this provider. */
   agentRuntime?: AgentRuntimePolicyConfig;
+  /** Provider compatibility defaults for models under this provider. */
+  compat?: ModelCompatConfig;
   /** Optional local service to start before calling this provider. */
   localService?: ModelProviderLocalServiceConfig;
   /** Secret-bearing headers merged into provider requests. */

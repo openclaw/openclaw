@@ -36,6 +36,11 @@ export function isModelCatalogThinkingFormat(value: string): value is ModelCatal
   return (MODEL_CATALOG_THINKING_FORMATS as readonly string[]).includes(value);
 }
 
+/** Opt-in model request header names for OpenClaw run context fields. */
+export type ModelCatalogRequestContextHeaders = Partial<
+  Record<"runId" | "messageChannel" | "runKind", string>
+>;
+
 /** Compatibility flags and provider-specific routing metadata for one model. */
 export type ModelCatalogCompatConfig = {
   supportsStore?: boolean;
@@ -53,6 +58,7 @@ export type ModelCatalogCompatConfig = {
   cacheControlFormat?: "anthropic";
   sendSessionAffinityHeaders?: boolean;
   sendSessionIdHeader?: boolean;
+  requestContextHeaders?: ModelCatalogRequestContextHeaders;
   supportsEagerToolInputStreaming?: boolean;
   supportsLongCacheRetention?: boolean;
   supportsPromptCacheKey?: boolean;

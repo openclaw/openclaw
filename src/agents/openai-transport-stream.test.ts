@@ -638,6 +638,87 @@ describe("openai transport stream", () => {
     });
   });
 
+  it("forwards run context as opt-in OpenAI-compatible request headers", () => {
+    const model = {
+      id: "gpt-5.4",
+      name: "GPT-5.4",
+      api: "openai-responses",
+      provider: "custom-proxy",
+      baseUrl: "https://proxy.example.com/v1",
+      headers: {
+        "x-openclaw-channel": "static-channel",
+      },
+      compat: {
+        requestContextHeaders: {
+          runId: "x-openclaw-run-id",
+          messageChannel: "x-openclaw-channel",
+          runKind: "x-openclaw-run-kind",
+        },
+      },
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-responses">;
+
+    const headers = testing.buildOpenAIClientHeaders(
+      model,
+      {
+        systemPrompt: "",
+        messages: [],
+        runContext: {
+          runId: "run_123",
+          messageChannel: "slack",
+          runKind: "cron",
+        },
+      } as never,
+      {
+        "x-openclaw-run-id": "caller-run",
+      },
+      {
+        "x-turn": "turn",
+      },
+    );
+
+    expectRecordFields(headers, {
+      "x-openclaw-run-id": "caller-run",
+      "x-openclaw-channel": "slack",
+      "x-openclaw-run-kind": "cron",
+      "x-turn": "turn",
+    });
+  });
+
+  it("does not forward run context headers without an explicit mapping", () => {
+    const headers = testing.buildOpenAIClientHeaders(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "custom-proxy",
+        baseUrl: "https://proxy.example.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "",
+        messages: [],
+        runContext: {
+          runId: "run_123",
+          messageChannel: "slack",
+          runKind: "message",
+        },
+      } as never,
+    );
+
+    expect(headers["x-openclaw-run-id"]).toBeUndefined();
+    expect(headers["x-openclaw-channel"]).toBeUndefined();
+    expect(headers["x-openclaw-run-kind"]).toBeUndefined();
+  });
+
   it("adds OpenClaw attribution to native OpenAI Codex transport headers", () => {
     vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
     const headers = testing.buildOpenAIClientHeaders(

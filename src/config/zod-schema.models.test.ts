@@ -50,4 +50,34 @@ describe("ModelsConfigSchema", () => {
 
     expect(result.success).toBe(true);
   });
+
+  it("accepts provider and model request context header mappings", () => {
+    const result = ModelsConfigSchema.safeParse({
+      providers: {
+        "my-proxy": {
+          baseUrl: "https://my-proxy.example.com/v1",
+          api: "openai-responses",
+          compat: {
+            requestContextHeaders: {
+              runId: "x-openclaw-run-id",
+              messageChannel: "x-openclaw-channel",
+            },
+          },
+          models: [
+            {
+              id: "gpt-proxy",
+              name: "GPT Proxy",
+              compat: {
+                requestContextHeaders: {
+                  runKind: "x-openclaw-run-kind",
+                },
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
 });

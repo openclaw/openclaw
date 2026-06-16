@@ -87,6 +87,12 @@ const VercelGatewayRoutingSchema = Type.Object({
   order: Type.Optional(Type.Array(Type.String())),
 });
 
+const RequestContextHeadersSchema = Type.Object({
+  runId: Type.Optional(Type.String({ minLength: 1 })),
+  messageChannel: Type.Optional(Type.String({ minLength: 1 })),
+  runKind: Type.Optional(Type.String({ minLength: 1 })),
+});
+
 // Schema for thinking level support and provider-specific values
 const ThinkingLevelMapValueSchema = Type.Union([Type.String(), Type.Null()]);
 const ThinkingLevelMapSchema = Type.Object({
@@ -126,11 +132,13 @@ const OpenAICompletionsCompatSchema = Type.Object({
   openRouterRouting: Type.Optional(OpenRouterRoutingSchema),
   vercelGatewayRouting: Type.Optional(VercelGatewayRoutingSchema),
   supportsStrictMode: Type.Optional(Type.Boolean()),
+  requestContextHeaders: Type.Optional(RequestContextHeadersSchema),
   supportsLongCacheRetention: Type.Optional(Type.Boolean()),
 });
 
 const OpenAIResponsesCompatSchema = Type.Object({
   sendSessionIdHeader: Type.Optional(Type.Boolean()),
+  requestContextHeaders: Type.Optional(RequestContextHeadersSchema),
   supportsLongCacheRetention: Type.Optional(Type.Boolean()),
 });
 
@@ -287,6 +295,13 @@ function mergeCompat(
     mergedCompletions.vercelGatewayRouting = {
       ...baseCompletions?.vercelGatewayRouting,
       ...overrideCompletions.vercelGatewayRouting,
+    };
+  }
+
+  if (baseCompletions?.requestContextHeaders || overrideCompletions.requestContextHeaders) {
+    mergedCompletions.requestContextHeaders = {
+      ...baseCompletions?.requestContextHeaders,
+      ...overrideCompletions.requestContextHeaders,
     };
   }
 

@@ -1334,6 +1334,7 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
     supportsStrictMode: !isMoonshot && !isTogether && !isCloudflareAiGateway,
     cacheControlFormat,
     sendSessionAffinityHeaders: false,
+    requestContextHeaders: {},
     supportsPromptCacheKey: false,
     supportsLongCacheRetention: !(isTogether || isCloudflareWorkersAI || isCloudflareAiGateway),
   };
@@ -1372,6 +1373,7 @@ function getCompat(model: Model<"openai-completions">): ResolvedOpenAICompletion
     cacheControlFormat: model.compat.cacheControlFormat ?? detected.cacheControlFormat,
     sendSessionAffinityHeaders:
       model.compat.sendSessionAffinityHeaders ?? detected.sendSessionAffinityHeaders,
+    requestContextHeaders: model.compat.requestContextHeaders ?? detected.requestContextHeaders,
     supportsPromptCacheKey: model.compat.supportsPromptCacheKey ?? detected.supportsPromptCacheKey,
     supportsLongCacheRetention:
       model.compat.supportsLongCacheRetention ?? detected.supportsLongCacheRetention,

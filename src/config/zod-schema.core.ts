@@ -209,6 +209,15 @@ export const SecretsConfigSchema = z
 
 const ModelApiSchema = z.enum(MODEL_APIS);
 
+const ModelRequestContextHeadersSchema = z
+  .object({
+    runId: z.string().min(1).optional(),
+    messageChannel: z.string().min(1).optional(),
+    runKind: z.string().min(1).optional(),
+  })
+  .strict()
+  .optional();
+
 const ModelCompatSchema = z
   .object({
     supportsStore: z.boolean().optional(),
@@ -237,6 +246,7 @@ const ModelCompatSchema = z
     toolCallArgumentsEncoding: z.string().optional(),
     requiresMistralToolIds: z.boolean().optional(),
     requiresOpenAiAnthropicToolPayload: z.boolean().optional(),
+    requestContextHeaders: ModelRequestContextHeadersSchema,
   })
   .strict()
   .optional();
@@ -508,6 +518,7 @@ const ModelProviderSchema = z
     injectNumCtxForOpenAICompat: z.boolean().optional(),
     params: z.record(z.string(), z.unknown()).optional(),
     agentRuntime: ModelAgentRuntimePolicySchema,
+    compat: ModelCompatSchema,
     localService: ModelProviderLocalServiceSchema,
     headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
     authHeader: z.boolean().optional(),

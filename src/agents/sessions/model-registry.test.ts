@@ -147,6 +147,44 @@ describe("ModelRegistry models.json auth", () => {
     expect(registry.find("custom", "example-model")).toBeUndefined();
   });
 
+  it("merges provider and model request context header compat", () => {
+    const modelsPath = writeModelsJson({
+      providers: {
+        custom: {
+          baseUrl: "https://models.example/v1",
+          api: "openai-responses",
+          apiKey: "CUSTOM_API_KEY",
+          compat: {
+            requestContextHeaders: {
+              runId: "x-provider-run-id",
+              messageChannel: "x-provider-channel",
+            },
+          },
+          models: [
+            {
+              id: "example-model",
+              compat: {
+                requestContextHeaders: {
+                  runId: "x-model-run-id",
+                  runKind: "x-model-run-kind",
+                },
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    const registry = ModelRegistry.create(AuthStorage.inMemory(), modelsPath);
+
+    expect(registry.getError()).toBeUndefined();
+    expect(registry.find("custom", "example-model")?.compat?.requestContextHeaders).toEqual({
+      runId: "x-model-run-id",
+      messageChannel: "x-provider-channel",
+      runKind: "x-model-run-kind",
+    });
+  });
+
   it("loads provider models from generated plugin catalog shards", () => {
     const modelsPath = writeModelsJsonWithPluginCatalog({
       root: { providers: {} },

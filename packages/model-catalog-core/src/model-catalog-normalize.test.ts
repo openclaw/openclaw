@@ -59,6 +59,12 @@ describe("model catalog normalization", () => {
                   cacheControlFormat: "anthropic",
                   sendSessionAffinityHeaders: true,
                   sendSessionIdHeader: false,
+                  requestContextHeaders: {
+                    runId: "x-openclaw-run-id",
+                    messageChannel: "x-openclaw-channel",
+                    runKind: " ",
+                    unknown: "x-unknown",
+                  },
                   supportsEagerToolInputStreaming: false,
                   supportsLongCacheRetention: true,
                   supportsStore: "yes",
@@ -154,6 +160,10 @@ describe("model catalog normalization", () => {
                 cacheControlFormat: "anthropic",
                 sendSessionAffinityHeaders: true,
                 sendSessionIdHeader: false,
+                requestContextHeaders: {
+                  runId: "x-openclaw-run-id",
+                  messageChannel: "x-openclaw-channel",
+                },
                 supportsEagerToolInputStreaming: false,
                 supportsLongCacheRetention: true,
                 thinkingFormat: "together",
