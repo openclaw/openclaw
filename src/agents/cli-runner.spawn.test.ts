@@ -92,6 +92,7 @@ function buildPreparedCliRunContext(params: {
   sessionEntry?: PreparedCliRunContext["params"]["sessionEntry"];
   agentId?: string;
   backend?: Partial<PreparedCliRunContext["preparedBackend"]["backend"]>;
+  preparedEnv?: PreparedCliRunContext["preparedBackend"]["env"];
   resolveExecutionArgs?: PreparedCliRunContext["backendResolved"]["resolveExecutionArgs"];
   config?: PreparedCliRunContext["params"]["config"];
   mcpConfigHash?: string;
@@ -162,7 +163,7 @@ function buildPreparedCliRunContext(params: {
     },
     preparedBackend: {
       backend,
-      env: {},
+      env: params.preparedEnv ?? {},
       ...(params.mcpConfigHash ? { mcpConfigHash: params.mcpConfigHash } : {}),
     },
     reusableCliSession: {},
@@ -530,6 +531,35 @@ describe("runCliAgent spawn path", () => {
     expect(resolveArgsInput.baseArgs).toEqual(["-p", "--output-format", "stream-json"]);
     const input = mockCallArg(supervisorSpawnMock) as { argv?: string[] };
     expect(requireArgAfter(input.argv, "--effort")).toBe("high");
+  });
+
+  it("passes prepared backend env to the spawned CLI process", async () => {
+    mockSuccessfulCliRun();
+
+    await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "codex-cli",
+        model: "gpt-5.5",
+        runId: "run-prepared-env",
+        backend: {
+          env: {
+            GEMINI_CLI_HOME: "/ignored/static-home",
+            STATIC_BACKEND_FLAG: "set",
+          },
+        },
+        preparedEnv: {
+          GEMINI_CLI_HOME: "/tmp/openclaw-gemini-profile-home",
+          GEMINI_CLI_SYSTEM_SETTINGS_PATH: "/tmp/openclaw-gemini-system-settings.json",
+        },
+      }),
+    );
+
+    const input = mockCallArg(supervisorSpawnMock) as { env?: Record<string, string> };
+    expect(input.env?.STATIC_BACKEND_FLAG).toBe("set");
+    expect(input.env?.GEMINI_CLI_HOME).toBe("/tmp/openclaw-gemini-profile-home");
+    expect(input.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH).toBe(
+      "/tmp/openclaw-gemini-system-settings.json",
+    );
   });
 
   it("passes OpenClaw skills to Claude as a session plugin", async () => {

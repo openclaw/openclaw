@@ -676,12 +676,16 @@ export async function executePreparedCliRun(
             }
             delete next[key];
           }
-          if (backend.env && Object.keys(backend.env).length > 0) {
+          const backendEnv = {
+            ...(backend.env ?? {}),
+            ...(context.preparedBackend.env ?? {}),
+          };
+          if (Object.keys(backendEnv).length > 0) {
             Object.assign(
               next,
               sanitizeHostExecEnv({
                 baseEnv: {},
-                overrides: backend.env,
+                overrides: backendEnv,
                 blockPathOverrides: true,
               }),
             );
