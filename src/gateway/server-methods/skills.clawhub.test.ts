@@ -107,6 +107,26 @@ describe("skills gateway handlers (clawhub)", () => {
     await expectEmptySecurityVerdictsWithoutFetch();
   });
 
+  it("builds status with the selected agent filter", async () => {
+    listAgentIdsMock.mockReturnValue(["main", "research"]);
+    resolveAgentWorkspaceDirMock.mockImplementation((_cfg, agentId) =>
+      agentId === "research" ? "/tmp/research-workspace" : "/tmp/workspace",
+    );
+
+    const { ok, error } = await callSkillsHandler("skills.status", { agentId: "research" });
+
+    expect(ok).toBe(true);
+    expect(error).toBeUndefined();
+    expect(buildWorkspaceSkillStatusMock).toHaveBeenCalledWith(
+      "/tmp/research-workspace",
+      expect.objectContaining({
+        agentId: "research",
+        config: {},
+        eligibility: expect.any(Object),
+      }),
+    );
+  });
+
   it("fetches one bulk ClawHub verdict batch for linked installed skills", async () => {
     buildWorkspaceSkillStatusMock.mockReturnValue({
       workspaceDir: "/tmp/workspace",

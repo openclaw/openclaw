@@ -102,6 +102,7 @@ function buildRemoteAwareWorkspaceSkillStatus(resolved: ResolvedSkillsWorkspace)
   // not only the workspace contents, so status reports include live eligibility.
   return buildWorkspaceSkillStatus(resolved.workspaceDir, {
     config: resolved.cfg,
+    agentId: resolved.agentId,
     eligibility: {
       remote: getRemoteSkillEligibility({
         advertiseExecNode: canExecRequestNode({

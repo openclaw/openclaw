@@ -143,6 +143,7 @@ import {
   installSkill,
   loadClawHubDetail,
   loadSkills,
+  reconcileSkillsAgentId,
   saveSkillApiKey,
   searchClawHub,
   setClawHubSearchQuery,
@@ -3513,8 +3514,11 @@ export function renderApp(state: AppViewState) {
                 onFilterChange: (next) => (state.skillsFilter = next),
                 onStatusFilterChange: (next) => (state.skillsStatusFilter = next),
                 onRefresh: () => {
-                  void loadAgents(state);
-                  void loadSkills(state, { clearMessages: true });
+                  void (async () => {
+                    await loadAgents(state);
+                    reconcileSkillsAgentId(state, state.agentsList);
+                    await loadSkills(state, { clearMessages: true });
+                  })();
                 },
                 onToggle: (key, enabled) => void updateSkillEnabled(state, key, enabled),
                 onEdit: (key, value) => updateSkillEdit(state, key, value),

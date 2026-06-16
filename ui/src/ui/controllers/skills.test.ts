@@ -6,6 +6,7 @@ import {
   loadSkills,
   loadSkillCard,
   loadClawHubDetail,
+  reconcileSkillsAgentId,
   saveSkillApiKey,
   searchClawHub,
   setClawHubSearchQuery,
@@ -24,6 +25,7 @@ function createState(): { state: SkillsState; request: ReturnType<typeof vi.fn<T
     } as unknown as SkillsState["client"],
     connected: true,
     skillsAgentId: null,
+    skillsAgentRevision: 0,
     skillsLoading: false,
     skillsReport: null,
     skillsError: null,
@@ -258,6 +260,40 @@ describe("loadSkills", () => {
     expect(state.skillsAgentId).toBe("beta");
     expect(state.skillsReport?.workspaceDir).toBe("/tmp/beta");
     expect(state.skillsReport?.skills.map((skill) => skill.name)).toEqual(["Beta"]);
+    expect(state.skillsLoading).toBe(false);
+  });
+
+  it("ignores stale skill reports after switching away and back to the same agent", async () => {
+    const { state, request } = createState();
+    const queue = createDeferredRequestQueue(request);
+    state.skillsAgentId = "alpha";
+
+    const firstLoad = loadSkills(state);
+    await Promise.resolve();
+    setSkillsAgentId(state, "beta");
+    setSkillsAgentId(state, "alpha");
+    const secondLoad = loadSkills(state);
+    await Promise.resolve();
+
+    queue.resolveNext({
+      workspaceDir: "/tmp/stale-alpha",
+      managedSkillsDir: "/tmp/skills",
+      skills: [{ name: "Stale Alpha", skillKey: "stale-alpha", source: "workspace" }],
+    });
+    await firstLoad;
+
+    expect(state.skillsReport).toBeNull();
+    expect(state.skillsLoading).toBe(true);
+
+    queue.resolveNext({
+      workspaceDir: "/tmp/current-alpha",
+      managedSkillsDir: "/tmp/skills",
+      skills: [{ name: "Current Alpha", skillKey: "current-alpha", source: "workspace" }],
+    });
+    await secondLoad;
+
+    expect(state.skillsReport?.workspaceDir).toBe("/tmp/current-alpha");
+    expect(state.skillsReport?.skills.map((skill) => skill.name)).toEqual(["Current Alpha"]);
     expect(state.skillsLoading).toBe(false);
   });
 
@@ -681,5 +717,72 @@ describe("skill mutations", () => {
       kind: "success",
       text: "Installed github",
     });
+  });
+
+  it.each([
+    {
+      name: "legacy install",
+      run: (state: SkillsState) => installSkill(state, "github", "GitHub", "install-123"),
+      expectedRequest: {
+        agentId: "alpha",
+        name: "GitHub",
+        installId: "install-123",
+        dangerouslyForceUnsafeInstall: false,
+        timeoutMs: 120000,
+      },
+    },
+    {
+      name: "ClawHub install",
+      run: (state: SkillsState) => installFromClawHub(state, "github"),
+      expectedRequest: {
+        agentId: "alpha",
+        source: "clawhub",
+        slug: "github",
+      },
+    },
+  ])("ignores $name completion after switching agents", async ({ run, expectedRequest }) => {
+    const { state, request } = createState();
+    const queue = createDeferredRequestQueue(request);
+    state.skillsAgentId = "alpha";
+
+    const pending = run(state);
+    await Promise.resolve();
+    setSkillsAgentId(state, "beta");
+    queue.resolveNext({ message: "Installed" });
+    await pending;
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledWith("skills.install", expectedRequest);
+    expect(state.skillsAgentId).toBe("beta");
+    expect(state.skillsReport).toBeNull();
+    expect(state.skillMessages).toEqual({});
+    expect(state.clawhubInstallMessage).toBeNull();
+    expect(state.skillsBusyKey).toBeNull();
+    expect(state.clawhubInstallSlug).toBeNull();
+  });
+});
+
+describe("reconcileSkillsAgentId", () => {
+  it("resets a deleted selected agent to the current default scope", () => {
+    const { state } = createState();
+    state.skillsAgentId = "deleted";
+    state.skillsReport = {
+      workspaceDir: "/tmp/deleted",
+      managedSkillsDir: "/tmp/skills",
+      skills: [],
+    };
+    state.clawhubInstallSlug = "calendar";
+
+    reconcileSkillsAgentId(state, {
+      defaultId: "main",
+      mainKey: "main",
+      scope: "project",
+      agents: [{ id: "main" }],
+    });
+
+    expect(state.skillsAgentId).toBeNull();
+    expect(state.skillsAgentRevision).toBe(1);
+    expect(state.skillsReport).toBeNull();
+    expect(state.clawhubInstallSlug).toBeNull();
   });
 });

@@ -26,6 +26,7 @@ function createSkill(overrides: Partial<SkillStatusEntry> = {}): SkillStatusEntr
     always: false,
     disabled: false,
     blockedByAllowlist: false,
+    blockedByAgentFilter: false,
     eligible: true,
     requirements: {
       bins: [],
@@ -194,6 +195,39 @@ describe("renderSkills", () => {
     const updatedToggles = container.querySelectorAll<HTMLInputElement>(".skill-toggle");
     expect(updatedToggles).toHaveLength(1);
     expect(updatedToggles[0].checked).toBe(false);
+  });
+
+  it("treats skills blocked by the selected agent filter as needing setup", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    dialogRestores.push(() => container.remove());
+    installDialogMethod("showModal", function (this: HTMLDialogElement) {
+      this.setAttribute("open", "");
+    });
+    const report: SkillStatusReport = {
+      workspaceDir: "/tmp/workspace",
+      managedSkillsDir: "/tmp/skills",
+      skills: [createSkill({ blockedByAgentFilter: true })],
+    };
+
+    render(renderSkills(createProps({ report, statusFilter: "ready" })), container);
+    await Promise.resolve();
+
+    expect(container.querySelectorAll(".list-item")).toHaveLength(0);
+    expect(normalizeText(container)).toContain("Ready0");
+    expect(normalizeText(container)).toContain("Needs Setup1");
+
+    render(
+      renderSkills(createProps({ report, statusFilter: "needs-setup", detailKey: "repo-skill" })),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(container.querySelector(".list-item .statusDot")?.classList.contains("warn")).toBe(true);
+    expect(normalizeText(container)).toContain("Reason: blocked by agent filter");
+    expect(
+      Array.from(container.querySelectorAll(".chip")).map((chip) => normalizeText(chip)),
+    ).toContain("blocked");
   });
 
   it("defers detail dialog opening until the dialog is connected", async () => {

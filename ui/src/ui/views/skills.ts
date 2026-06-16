@@ -20,6 +20,7 @@ import { groupSkills } from "./skills-grouping.ts";
 import {
   computeSkillMissing,
   computeSkillReasons,
+  isSkillAvailable,
   renderSkillStatusChips,
 } from "./skills-shared.ts";
 
@@ -109,9 +110,9 @@ function skillMatchesStatus(skill: SkillStatusEntry, status: SkillsStatusFilter)
     case "all":
       return true;
     case "ready":
-      return !skill.disabled && skill.eligible;
+      return !skill.disabled && isSkillAvailable(skill);
     case "needs-setup":
-      return !skill.disabled && !skill.eligible;
+      return !skill.disabled && !isSkillAvailable(skill);
     case "disabled":
       return skill.disabled;
   }
@@ -122,7 +123,7 @@ function skillStatusClass(skill: SkillStatusEntry): string {
   if (skill.disabled) {
     return "muted";
   }
-  return skill.eligible ? "ok" : "warn";
+  return isSkillAvailable(skill) ? "ok" : "warn";
 }
 
 function verdictForSkill(skill: SkillStatusEntry, verdicts: SkillsProps["clawhubVerdicts"]) {
@@ -194,7 +195,7 @@ export function renderSkills(props: SkillsProps) {
   for (const s of skills) {
     if (s.disabled) {
       statusCounts.disabled++;
-    } else if (s.eligible) {
+    } else if (isSkillAvailable(s)) {
       statusCounts.ready++;
     } else {
       statusCounts["needs-setup"]++;
