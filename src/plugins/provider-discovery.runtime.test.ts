@@ -156,6 +156,16 @@ function createManifestPluginWithEntryAndRuntimeDiscovery(): PluginManifestRecor
   };
 }
 
+function createPoisonedModelCatalogPlugin(id: string): PluginManifestRecord {
+  const plugin = createManifestPluginWithoutDiscovery({ id });
+  Object.defineProperty(plugin, "modelCatalog", {
+    get() {
+      throw new Error("provider discovery model catalog metadata exploded");
+    },
+  });
+  return plugin;
+}
+
 function createManifestPluginWithoutDiscovery(params: {
   id: string;
   providerAuthEnvVars?: Record<string, string[]>;
@@ -673,6 +683,26 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
         },
       },
     });
+  });
+
+  it("skips unreadable manifest model-catalog metadata during provider discovery", () => {
+    mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["openai", "poisoned", "deepseek"]);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      index: { plugins: [] },
+      manifestRegistry: {
+        plugins: [
+          createManifestPluginWithModelCatalog("openai"),
+          createPoisonedModelCatalogPlugin("poisoned"),
+          createManifestPluginWithModelCatalog("deepseek"),
+        ],
+        diagnostics: [],
+      },
+    });
+
+    const providers = resolvePluginDiscoveryProvidersRuntime({ discoveryEntriesOnly: true });
+
+    expect(providers.map((provider) => provider.id)).toEqual(["openai", "deepseek"]);
+    expect(mocks.resolvePluginProviders).not.toHaveBeenCalled();
   });
 
   it("does not expose runtime-only manifest model catalogs as static discovery entries", () => {
