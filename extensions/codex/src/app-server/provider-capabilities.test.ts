@@ -62,13 +62,21 @@ describe("resolveCodexProviderWebSearchSupport", () => {
     expect(request).toHaveBeenCalledOnce();
   });
 
-  it("reads capabilities for explicit configured providers", async () => {
+  it("reads capabilities for the built-in OpenAI provider override", async () => {
     const supported = createClientFactory(true);
     const unsupported = createClientFactory(false);
 
-    await expect(resolveSupport(supported.clientFactory, "custom-provider")).resolves.toBe(true);
-    await expect(resolveSupport(unsupported.clientFactory, "amazon-bedrock")).resolves.toBe(false);
+    await expect(resolveSupport(supported.clientFactory, "openai")).resolves.toBe(true);
+    await expect(resolveSupport(unsupported.clientFactory, "openai")).resolves.toBe(false);
     expect(supported.request).toHaveBeenCalledOnce();
     expect(unsupported.request).toHaveBeenCalledOnce();
+  });
+
+  it("keeps managed search for provider overrides the capability RPC cannot target", async () => {
+    const { clientFactory, request } = createClientFactory(true);
+
+    await expect(resolveSupport(clientFactory, "amazon-bedrock")).resolves.toBe(false);
+    await expect(resolveSupport(clientFactory, "custom-provider")).resolves.toBe(false);
+    expect(request).not.toHaveBeenCalled();
   });
 });
