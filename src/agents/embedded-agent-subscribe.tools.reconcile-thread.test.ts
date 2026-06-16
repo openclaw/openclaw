@@ -25,7 +25,12 @@ function createPartialResultPlugin(): unknown {
           return null;
         }
         const threadId = typeof toolSend?.threadId === "string" ? toolSend.threadId : undefined;
-        return { to, ...(threadId ? { threadId } : {}) };
+        return {
+          to,
+          ...(threadId ? { threadId } : {}),
+          ...(toolSend?.threadImplicit === true ? { threadImplicit: true } : {}),
+          ...(toolSend?.threadSuppressed === true ? { threadSuppressed: true } : {}),
+        };
       },
     },
     threading: {
@@ -93,5 +98,67 @@ describe("extractMessagingToolSendResult thread evidence", () => {
     );
     expect(confirmed.threadId).toBe("root-9");
     expect(confirmed.threadImplicit).toBeUndefined();
+  });
+
+  it.each([
+    {
+      name: "provider suppression replaces pending implicit evidence",
+      pending: {
+        threadId: "root-1",
+        threadImplicit: true,
+      },
+      result: {
+        threadSuppressed: true,
+      },
+      expected: {
+        threadId: undefined,
+        threadImplicit: undefined,
+        threadSuppressed: true,
+      },
+    },
+    {
+      name: "provider implicit evidence replaces pending suppression",
+      pending: {
+        threadSuppressed: true,
+      },
+      result: {
+        threadImplicit: true,
+      },
+      expected: {
+        threadId: undefined,
+        threadImplicit: true,
+        threadSuppressed: undefined,
+      },
+    },
+    {
+      name: "a partial result preserves pending suppression",
+      pending: {
+        threadSuppressed: true,
+      },
+      result: {},
+      expected: {
+        threadId: undefined,
+        threadImplicit: undefined,
+        threadSuppressed: true,
+      },
+    },
+  ])("$name", ({ pending, result, expected }) => {
+    registerPartialResultProvider();
+
+    const confirmed = extractMessagingToolSendResult(
+      {
+        tool: "message",
+        provider: PARTIAL_RESULT_PROVIDER,
+        to: "channel:abc",
+        ...pending,
+      },
+      { details: { toolSend: { to: "channel:abc", ...result } } },
+    );
+
+    expect({
+      threadId: confirmed.threadId,
+      threadImplicit: confirmed.threadImplicit,
+      threadSuppressed: confirmed.threadSuppressed,
+    }).toEqual(expected);
   });
 });
