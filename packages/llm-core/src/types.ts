@@ -611,6 +611,13 @@ export interface Model<TApi extends Api = Api> {
   headers?: Record<string, string>;
   /** Sends runtime credentials as Authorization: Bearer instead of provider-specific key headers. */
   authHeader?: boolean;
+  /**
+   * Opt-in run-context key-to-header mapping. Each value is a header name.
+   * When `options.runContext` is provided at request time, the corresponding
+   * run values are injected as HTTP headers (nothing sent unless configured).
+   * E.g. `{ runId: "x-task-id", messageChannel: "x-channel", runKind: "x-operation" }`.
+   */
+  requestContextHeaders?: Record<string, string>;
   /** Compatibility overrides for OpenAI-compatible APIs. If not set, auto-detected from baseUrl. */
   compat?: TApi extends "openai-completions"
     ? OpenAICompletionsCompat

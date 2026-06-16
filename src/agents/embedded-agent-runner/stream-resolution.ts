@@ -125,6 +125,7 @@ export function resolveEmbeddedAgentStreamFn(params: {
   resolvedApiKey?: string;
   authProfileId?: string;
   authStorage?: { getApiKey(provider: string): Promise<string | undefined> };
+  runContext?: { runId?: string; messageChannel?: string; runKind?: string };
 }): StreamFn {
   if (params.providerStreamFn) {
     return wrapEmbeddedAgentStreamFn(params.providerStreamFn, {
@@ -231,6 +232,7 @@ function wrapEmbeddedAgentStreamFn(
     providerId: string;
     sessionId?: string;
     promptCacheKey?: string;
+    runContext?: { runId?: string; messageChannel?: string; runKind?: string };
     transformContext?: (context: Parameters<StreamFn>[1]) => Parameters<StreamFn>[1];
   },
 ): StreamFn {
@@ -249,6 +251,9 @@ function wrapEmbeddedAgentStreamFn(
     }
     if (params.authProfileId && !merged?.authProfileId) {
       merged = { ...merged, authProfileId: params.authProfileId };
+    }
+    if (params.runContext) {
+      merged = { ...merged, runContext: merged?.runContext ?? params.runContext };
     }
     return signal ? { ...merged, signal } : merged;
   };

@@ -151,6 +151,7 @@ type BaseStreamOptions = {
   frequencyPenalty?: number;
   presencePenalty?: number;
   seed?: number;
+  runContext?: { runId?: string; messageChannel?: string; runKind?: string };
 };
 
 type ModelStreamCooperativeScheduler = {
@@ -1808,6 +1809,7 @@ function buildOpenAIClientHeaders(
   context: Context,
   optionHeaders?: Record<string, string>,
   turnHeaders?: Record<string, string>,
+  runContext?: NonNullable<BaseStreamOptions>["runContext"],
 ): Record<string, string> {
   const providerHeaders = { ...model.headers };
   if (model.provider === "github-copilot") {
@@ -1818,6 +1820,14 @@ function buildOpenAIClientHeaders(
         hasImages: hasCopilotVisionInput(context.messages),
       }),
     );
+  }
+  if (model.requestContextHeaders && runContext) {
+    for (const [key, headerName] of Object.entries(model.requestContextHeaders)) {
+      const value = runContext[key as keyof typeof runContext];
+      if (typeof value === "string" && value) {
+        providerHeaders[headerName] = value;
+      }
+    }
   }
   const callerHeaders = { ...optionHeaders, ...turnHeaders };
   const headers = resolveProviderRequestPolicyConfig({
@@ -1898,12 +1908,13 @@ function createOpenAIResponsesClient(
   apiKey: string,
   optionHeaders?: Record<string, string>,
   turnHeaders?: Record<string, string>,
+  runContext?: NonNullable<BaseStreamOptions>["runContext"],
 ) {
   return new OpenAI({
     apiKey,
     baseURL: model.baseUrl,
     dangerouslyAllowBrowser: true,
-    defaultHeaders: buildOpenAIClientHeaders(model, context, optionHeaders, turnHeaders),
+    defaultHeaders: buildOpenAIClientHeaders(model, context, optionHeaders, turnHeaders, runContext),
     fetch: buildGuardedModelFetch(model),
     ...buildOpenAISdkClientOptions(model),
   });
@@ -1946,6 +1957,7 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
           apiKey,
           options?.headers,
           turnState?.headers,
+          responsesOptions?.runContext,
         );
         let params = buildOpenAIResponsesParams(
           model,
@@ -2395,6 +2407,7 @@ export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
           apiKey,
           options?.headers,
           turnState?.headers,
+          responsesOptions?.runContext,
         );
         const deploymentName = resolveAzureDeploymentName(model);
         let params = buildAzureOpenAIResponsesParams(
@@ -2486,12 +2499,13 @@ function createAzureOpenAIClient(
   apiKey: string,
   optionHeaders?: Record<string, string>,
   turnHeaders?: Record<string, string>,
+  runContext?: NonNullable<BaseStreamOptions>["runContext"],
 ) {
   const baseURL = normalizeAzureBaseUrl(model.baseUrl);
   const clientOptions = {
     apiKey,
     dangerouslyAllowBrowser: true,
-    defaultHeaders: buildOpenAIClientHeaders(model, context, optionHeaders, turnHeaders),
+    defaultHeaders: buildOpenAIClientHeaders(model, context, optionHeaders, turnHeaders, runContext),
     baseURL,
     fetch: buildGuardedModelFetch(model),
     ...buildOpenAISdkClientOptions(model),

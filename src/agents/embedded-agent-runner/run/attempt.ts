@@ -2864,6 +2864,11 @@ export async function runEmbeddedAttempt(
         resolvedApiKey: params.resolvedApiKey,
         authProfileId: resolveAttemptStreamAuthProfileId(params),
         authStorage: params.authStorage,
+        runContext: {
+          runId: params.runId,
+          messageChannel: params.messageChannel,
+          runKind: params.bootstrapContextRunKind ?? "default",
+        },
       });
       const providerTextTransforms = resolveProviderTextTransforms({
         provider: params.provider,
