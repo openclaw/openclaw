@@ -1988,7 +1988,34 @@ export function renderChat(props: ChatProps) {
       return;
     }
     const code = (btn as HTMLElement).dataset.code ?? "";
-    navigator.clipboard.writeText(code).then(
+
+    const copyToClipboard = async (text: string): Promise<void> => {
+      // 优先使用 Clipboard API（需要 HTTPS 安全上下文）
+      if (navigator.clipboard?.writeText) {
+        try {
+          await navigator.clipboard.writeText(text);
+          return;
+        } catch {
+          // Clipboard API 失败（如 HTTP 页面），降级到 execCommand
+        }
+      }
+      // 降级方案：document.execCommand('copy') + 临时 textarea
+      // 适用于 HTTP LAN 等非安全上下文环境
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      textarea.style.pointerEvents = "none";
+      document.body.appendChild(textarea);
+      try {
+        textarea.select();
+        document.execCommand("copy");
+      } finally {
+        document.body.removeChild(textarea);
+      }
+    };
+
+    copyToClipboard(code).then(
       () => {
         btn.classList.add("copied");
         setTimeout(() => btn.classList.remove("copied"), 1500);
