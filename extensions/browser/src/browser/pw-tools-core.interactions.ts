@@ -1761,7 +1761,9 @@ export async function executeActViaPlaywright(opts: {
       // After click/clickCoords, yield briefly to let download events fire.
       if (downloadHandler) {
         if (!detectedDownload) {
-          await new Promise<void>((resolve) => setTimeout(resolve, 200));
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 200);
+          });
         }
         page.removeListener("download", downloadHandler as never);
         downloadHandler = undefined;
