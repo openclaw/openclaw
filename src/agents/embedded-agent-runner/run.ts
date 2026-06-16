@@ -2102,6 +2102,9 @@ async function runEmbeddedAgentInternal(
                 sessionKey: resolvedSessionKey ?? params.sessionId,
                 provider: activeErrorContext.provider,
                 model: activeErrorContext.model,
+                authMode: lastProfileId
+                  ? attemptAuthProfileStore.profiles?.[lastProfileId]?.type
+                  : undefined,
               })
             : undefined;
           const assistantErrorText =
@@ -3134,6 +3137,9 @@ async function runEmbeddedAgentInternal(
             authFailure,
             rateLimitFailure,
             billingFailure,
+            authMode: lastProfileId
+              ? attemptAuthProfileStore.profiles?.[lastProfileId]?.type
+              : undefined,
             cloudCodeAssistFormatError,
             isProbeSession,
             overloadProfileRotations,
@@ -3249,6 +3255,9 @@ async function runEmbeddedAgentInternal(
             sessionKey: params.sessionKey ?? params.sessionId,
             provider: activeErrorContext.provider,
             model: activeErrorContext.model,
+            authMode: lastProfileId
+              ? attemptAuthProfileStore.profiles?.[lastProfileId]?.type
+              : undefined,
             verboseLevel: params.verboseLevel,
             reasoningLevel: params.reasoningLevel,
             thinkingLevel: params.thinkLevel,
