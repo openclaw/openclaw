@@ -1333,7 +1333,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           normalizeOptionalString(payload.data?.sender_name) ??
           normalizeOptionalString((await resolveUserInfo(senderId))?.username) ??
           senderId;
-        const rawText = normalizeOptionalString(post.message) ?? "";
+        const rawPostText = typeof post.message === "string" ? post.message : "";
+        const rawText = normalizeOptionalString(rawPostText) ?? "";
         const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
           cfg,
           surface: "mattermost",
@@ -1527,7 +1528,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         const bodySource = oncharTriggered ? oncharResult.stripped : rawText;
         const baseText = [bodySource, mediaPlaceholder].filter(Boolean).join("\n").trim();
         const bodyText = normalizeMention(baseText, botUsername);
-        if (shouldDropEmptyMattermostBody({ bodyText, rawText, botUsername })) {
+        if (shouldDropEmptyMattermostBody({ bodyText, rawText: rawPostText, botUsername })) {
           logVerboseMessage(
             `mattermost: drop message (empty body after normalization channel=${channelId} sender=${senderId} wasMentioned=${wasMentioned})`,
           );

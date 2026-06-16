@@ -63,6 +63,9 @@ export function shouldDropEmptyMattermostBody(params: {
   if (params.bodyText) {
     return false;
   }
+  if (/[\r\n]/u.test(params.rawText)) {
+    return true;
+  }
   const botUsername = normalizeLowercaseStringOrEmpty(params.botUsername ?? "");
   return !botUsername || normalizeLowercaseStringOrEmpty(params.rawText) !== `@${botUsername}`;
 }
