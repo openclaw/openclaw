@@ -444,6 +444,117 @@ describe("runMessageAction plugin dispatch", () => {
       });
     });
 
+    it("preserves no-context owner Discord admin actions through the shared runner", async () => {
+      const handleDiscordAction = vi.fn(async (ctx: ChannelMessageActionContext) => {
+        const currentProvider = ctx.toolContext?.currentChannelProvider?.trim().toLowerCase();
+        if (ctx.action === "channel-delete" && currentProvider && currentProvider !== "discord") {
+          throw new Error("Discord guild admin actions require a trusted Discord sender identity.");
+        }
+        if (ctx.action === "channel-delete" && !currentProvider && ctx.senderIsOwner !== true) {
+          throw new Error("Discord guild admin actions require a trusted Discord sender identity.");
+        }
+        return jsonResult({ ok: true, action: ctx.action });
+      });
+      const discordPlugin: ChannelPlugin = {
+        id: "discord",
+        meta: {
+          id: "discord",
+          label: "Discord",
+          selectionLabel: "Discord",
+          docsPath: "/channels/discord",
+          blurb: "Discord action dispatch test plugin.",
+        },
+        capabilities: { chatTypes: ["direct", "channel"] },
+        config: createAlwaysConfiguredPluginConfig(),
+        messaging: {
+          targetResolver: {
+            looksLikeId: () => true,
+          },
+        },
+        actions: {
+          describeMessageTool: () => ({ actions: ["channel-delete", "channel-info"] }),
+          supportsAction: ({ action }) => action === "channel-delete" || action === "channel-info",
+          requiresTrustedRequesterSender: ({ action, toolContext }) =>
+            Boolean(toolContext) && action === "channel-delete",
+          handleAction: handleDiscordAction,
+        },
+      };
+      const cfg = {
+        channels: {
+          discord: {
+            enabled: true,
+          },
+        },
+      } as OpenClawConfig;
+
+      setActivePluginRegistry(
+        createTestRegistry([{ pluginId: "discord", source: "test", plugin: discordPlugin }]),
+      );
+
+      await runMessageAction({
+        cfg,
+        action: "channel-delete",
+        params: {
+          channel: "discord",
+          channelId: "channel-1",
+        },
+        senderIsOwner: true,
+        dryRun: false,
+      });
+
+      expectRecordFields(
+        readFirstPluginCall(handleDiscordAction),
+        {
+          action: "channel-delete",
+          senderIsOwner: true,
+        },
+        "owner action call",
+      );
+
+      handleDiscordAction.mockClear();
+      await expect(
+        runMessageAction({
+          cfg,
+          action: "channel-delete",
+          params: {
+            channel: "discord",
+            channelId: "channel-1",
+          },
+          toolContext: { currentChannelProvider: "telegram" },
+          dryRun: false,
+        }),
+      ).rejects.toThrow("Trusted sender identity is required for discord:channel-delete");
+      expect(handleDiscordAction).not.toHaveBeenCalled();
+
+      await expect(
+        runMessageAction({
+          cfg,
+          action: "channel-delete",
+          params: {
+            channel: "discord",
+            channelId: "channel-1",
+          },
+          requesterSenderId: "telegram-user",
+          toolContext: { currentChannelProvider: "telegram" },
+          dryRun: false,
+        }),
+      ).rejects.toThrow("trusted Discord sender identity");
+      expect(handleDiscordAction).toHaveBeenCalledOnce();
+
+      handleDiscordAction.mockClear();
+      await runMessageAction({
+        cfg,
+        action: "channel-info",
+        params: {
+          channel: "discord",
+          channelId: "channel-1",
+        },
+        toolContext: { currentChannelProvider: "telegram" },
+        dryRun: false,
+      });
+      expect(handleDiscordAction).toHaveBeenCalledOnce();
+    });
+
     it("routes gateway-executed plugin actions through gateway RPC instead of local dispatch", async () => {
       const handleActionEntry = vi.fn(async () =>
         jsonResult({

@@ -84,7 +84,12 @@ function runOnboardAssert(home: string) {
   });
 }
 
-function runStatusAssert(channel: string, channelsStatus: unknown, statusText: string) {
+function runStatusAssert(
+  channel: string,
+  channelsStatus: unknown,
+  statusText: string,
+  env: NodeJS.ProcessEnv = {},
+) {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-status-assertions-"));
   try {
     const channelsStatusPath = path.join(tempDir, "channels-status.json");
@@ -96,6 +101,7 @@ function runStatusAssert(channel: string, channelsStatus: unknown, statusText: s
       [assertionsPath, "assert-status-surfaces", channel, channelsStatusPath, statusTextPath],
       {
         encoding: "utf8",
+        env: { ...process.env, ...env },
       },
     );
   } finally {
@@ -263,5 +269,29 @@ describe("npm onboard channel agent assertions", () => {
     expect(result.stderr).toContain(
       "plain status output did not mention telegram in the Channels section",
     );
+  });
+
+  it("rejects oversized plain status output before parsing it", () => {
+    const result = runStatusAssert(
+      "telegram",
+      { configuredChannels: ["telegram"] },
+      `# OpenClaw status\n${"x".repeat(128)}`,
+      { OPENCLAW_NPM_ONBOARD_STATUS_TEXT_MAX_BYTES: "64" },
+    );
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("plain status output exceeded 64 bytes");
+  });
+
+  it("rejects oversized channels status JSON before parsing it", () => {
+    const result = runStatusAssert(
+      "telegram",
+      { configuredChannels: ["telegram"], filler: "x".repeat(128) },
+      "# Channels\ntelegram ok configured",
+      { OPENCLAW_NPM_ONBOARD_JSON_ARTIFACT_MAX_BYTES: "64" },
+    );
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("JSON artifact exceeded 64 bytes");
   });
 });
