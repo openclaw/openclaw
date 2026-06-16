@@ -1439,6 +1439,10 @@ type TelegramEditOpts = {
   buttons?: TelegramInlineButtons;
   /** Use Telegram's media-caption edit endpoint, or fall back to it when text edits target media. */
   editMode?: "text" | "caption" | "auto";
+  /** Explicit rich-message opt-in override; when set, supersedes account config. */
+  richMessages?: boolean;
+  /** Explicit auto-detect override; when set, supersedes account config. */
+  richMessagesAutoDetect?: boolean;
   /** Resolved runtime config from the command or gateway boundary. */
   cfg: OpenClawConfig;
 };
