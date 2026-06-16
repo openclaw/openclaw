@@ -795,7 +795,7 @@ describe("sessions", () => {
     expect(store[sessionKey]?.displayName).toBe("Stable Default Lane");
   });
 
-  it("upsertSessionEntry allows explicit empty replacement title metadata", async () => {
+  it("upsertSessionEntry allows explicit empty string replacement title metadata", async () => {
     const sessionKey = "agent:main:direct:opaque-user";
     const { storePath } = await createSessionStoreFixture({
       prefix: "upsertSessionEntry-title-empty-replace",
@@ -815,14 +815,14 @@ describe("sessions", () => {
       entry: {
         sessionId: "sess-2",
         updatedAt: 200,
-        label: null as unknown as string,
+        label: "",
         displayName: "",
       },
     });
 
     const store = loadSessionStore(storePath);
     expect(store[sessionKey]?.sessionId).toBe("sess-2");
-    expect(store[sessionKey]?.label).toBeNull();
+    expect(store[sessionKey]?.label).toBe("");
     expect(store[sessionKey]?.displayName).toBe("");
   });
 
