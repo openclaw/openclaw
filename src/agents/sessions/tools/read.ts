@@ -44,7 +44,7 @@ const readSchema = Type.Object({
   encoding: Type.Optional(
     Type.String({
       description:
-        "File encoding (e.g. 'utf-8', 'gbk', 'gb2312', 'shift_jis'). Default: 'utf-8'. Use 'auto' to auto-detect.",
+        "File encoding (e.g. 'utf-8', 'gbk', 'gb2312', 'shift_jis'). Default: 'utf-8'.",
     }),
   ),
 });
@@ -52,32 +52,15 @@ export type { ReadToolDetails, ReadToolInput } from "./tool-contracts.js";
 
 /**
  * Decode a buffer using the specified encoding.
- * Supports 'auto' to detect BOM or default to utf-8.
  * Uses TextDecoder for non-UTF-8 encodings (e.g. gbk, gb2312, shift_jis).
  */
 function decodeBuffer(buffer: Buffer, encoding?: string): string {
   if (!encoding || encoding === "utf-8" || encoding === "utf8") {
     return buffer.toString("utf-8");
   }
-  if (encoding === "auto") {
-    // Check for BOM
-    if (buffer[0] === 0xef && buffer[1] === 0xbb && buffer[2] === 0xbf) {
-      return buffer.toString("utf-8");
-    }
-    if (buffer[0] === 0xff && buffer[1] === 0xfe) {
-      return new TextDecoder("utf-16le").decode(buffer);
-    }
-    if (buffer[0] === 0xfe && buffer[1] === 0xff) {
-      return new TextDecoder("utf-16be").decode(buffer);
-    }
-    // Default to utf-8
-    return buffer.toString("utf-8");
-  }
-  // Use TextDecoder for non-UTF-8 encodings
   try {
     return new TextDecoder(encoding).decode(buffer);
   } catch {
-    // Fallback to Buffer.toString for standard Node.js encodings
     return buffer.toString(encoding as BufferEncoding);
   }
 }
