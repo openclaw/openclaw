@@ -24,7 +24,6 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Onboarding/skills: show the Homebrew install recommendation only on macOS and Linux, so FreeBSD and other unsupported platforms no longer get a misleading brew prompt. Fixes #68893; carries forward #68894, #68910, #68941, #68943, #69002, and #69545. Thanks @yurivict, @Sanjays2402, @Eruditi, @JustInCache, @nnish16, and @Mlightsnow.
-- Telegram: deliver standalone local `MEDIA:` directives from ordinary final assistant replies as attachments instead of literal text. Fixes #77702. Thanks @butttersbot.
 - Channels and delivery: preserve account-scoped DM channel send policy, rich Telegram final replies, rich Telegram tables and lists, Telegram thread-create CLI remapping, Slack outbound `message_sent` hooks, contributed message-tool schema optionality, same-channel generated media completions, and channel chunking around surrogate pairs and Infinity limits. (#92788, #92679, #89421, #89943, #91137, #91246, #92735) Thanks @yetval, @obviyus, @spacegeologist, @rishitamrakar, @lundog, @TurboTheTurtle, and @yhterrance.
 - Auto-reply/groups: keep ordinary group text replies on automatic final-reply delivery while allowing `message(action=send)` for files, images, and other attachments to the same group or topic. Carries forward #43276; refs #48004. Thanks @NayukiChiba and @ShakaRover.
 - Auto-reply/skills: preserve multiline payloads for `/skill` and direct skill slash commands while keeping command-head normalization for aliases, colon syntax, and bot mentions. Fixes #79155; carries forward #81305. Thanks @web3blind.
