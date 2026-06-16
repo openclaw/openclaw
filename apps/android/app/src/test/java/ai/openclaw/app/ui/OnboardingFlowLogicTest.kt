@@ -26,12 +26,18 @@ class OnboardingFlowLogicTest {
   @Test
   fun blocksFinishWhenNodeCapabilityApprovalIsPending() {
     assertFalse(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApprovalState = GatewayNodeApprovalState.PendingApproval))
+    assertFalse(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApprovalState = GatewayNodeApprovalState.PendingReapproval))
     assertFalse(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApprovalState = GatewayNodeApprovalState.Unapproved))
   }
 
   @Test
-  fun allowsFinishOnlyWhenOperatorNodeAndCapabilityApprovalAreReady() {
+  fun allowsFinishWhenOperatorNodeAndCapabilityApprovalAreReady() {
     assertTrue(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved))
+  }
+
+  @Test
+  fun allowsFinishWhenOlderGatewayOmitsNodeCapabilityApprovalState() {
+    assertTrue(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApprovalState = GatewayNodeApprovalState.Unknown))
   }
 
   @Test

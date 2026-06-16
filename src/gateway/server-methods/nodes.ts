@@ -52,7 +52,7 @@ import {
   refreshRemoteNodeBins,
   removeRemoteNodeInfo,
 } from "../../skills/runtime/remote.js";
-import { createKnownNodeCatalog, listKnownNodes } from "../node-catalog.js";
+import { createKnownNodeCatalog, getKnownNode, listKnownNodes } from "../node-catalog.js";
 import {
   isForegroundRestrictedPluginNodeCommand,
   isNodeCommandAllowed,
@@ -140,6 +140,10 @@ function safeNodeReadProjection(node: NodeListNode): NodeListNode | null {
   return safeNode;
 }
 
+function isVisibleNode(node: NodeListNode | null): node is NodeListNode {
+  return node !== null;
+}
+
 function listNodesForClient(params: {
   client: GatewayClient | null;
   pairedDevices: Awaited<ReturnType<typeof listDevicePairing>>["paired"];
@@ -157,7 +161,7 @@ function listNodesForClient(params: {
   if (canReadPendingNodePairing(params.client)) {
     return nodes;
   }
-  return nodes.map(safeNodeReadProjection).filter((node) => node !== null);
+  return nodes.map(safeNodeReadProjection).filter(isVisibleNode);
 }
 
 function normalizeBrowserProxyPath(value: string): string {
@@ -1017,14 +1021,19 @@ export const nodeHandlers: GatewayRequestHandlers = {
         listDevicePairing(),
         listNodePairing(),
       ]);
-      const nodes = listNodesForClient({
-        client,
+      const catalog = createKnownNodeCatalog({
         pairedDevices: devicePairing.paired,
         pairedNodes: nodePairing.paired,
         pendingNodes: nodePairing.pending,
         connectedNodes: context.nodeRegistry.listConnected(),
       });
-      const node = nodes.find((entry) => entry.nodeId === id);
+      const catalogNode = getKnownNode(catalog, id);
+      const node =
+        catalogNode && canReadPendingNodePairing(client)
+          ? catalogNode
+          : catalogNode
+            ? safeNodeReadProjection(catalogNode)
+            : null;
       if (!node) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown nodeId"));
         return;

@@ -1294,7 +1294,7 @@ private class PermissionState(
   val applyToViewModel: () -> Unit,
 )
 
-/** Onboarding can finish only after gateway and node channels are both ready. */
+/** Onboarding finishes on ready channels unless the gateway explicitly reports node approval is pending. */
 internal fun canFinishOnboarding(
   isConnected: Boolean,
   isNodeConnected: Boolean,
@@ -1302,7 +1302,15 @@ internal fun canFinishOnboarding(
 ): Boolean =
   isConnected &&
     isNodeConnected &&
-    nodeCapabilityApprovalState == GatewayNodeApprovalState.Approved
+    when (nodeCapabilityApprovalState) {
+      GatewayNodeApprovalState.PendingApproval,
+      GatewayNodeApprovalState.PendingReapproval,
+      GatewayNodeApprovalState.Unapproved,
+      -> false
+      GatewayNodeApprovalState.Approved,
+      GatewayNodeApprovalState.Unknown,
+      -> true
+    }
 
 /** Builds permission rows and applies granted feature toggles after onboarding. */
 @Composable

@@ -1280,79 +1280,96 @@ export function registerControlUiAndPairingSuite(): void {
     }
   });
 
-  test("qr setup code auto-approves Android clients when mobile metadata matches", async () => {
-    const { issueDeviceBootstrapToken } = await import("../infra/device-bootstrap.js");
-    const { getPairedDevice, listDevicePairing } = await import("../infra/device-pairing.js");
-    const { server, port, prevToken } = await startControlUiServer("secret");
-    const { identityPath, identity } = await createOperatorIdentityFixture(
-      "openclaw-bootstrap-android-node-",
-    );
-    const client = {
-      id: "openclaw-android",
-      version: "2026.6.2",
-      platform: "Android 16",
-      mode: "node",
-      deviceFamily: "Android",
-    };
+  test.each([
+    {
+      name: "Android",
+      identityPrefix: "openclaw-bootstrap-android-node-",
+      client: {
+        id: "openclaw-android",
+        version: "2026.6.2",
+        platform: "Android 16",
+        mode: "node",
+        deviceFamily: "Android",
+      },
+    },
+    {
+      name: "iPadOS",
+      identityPrefix: "openclaw-bootstrap-ipados-node-",
+      client: {
+        id: "openclaw-ios",
+        version: "2026.6.2",
+        platform: "iPadOS 26.3.1",
+        mode: "node",
+        deviceFamily: "iPad",
+      },
+    },
+  ])(
+    "qr setup code auto-approves $name clients when mobile metadata matches",
+    async ({ client, identityPrefix }) => {
+      const { issueDeviceBootstrapToken } = await import("../infra/device-bootstrap.js");
+      const { getPairedDevice, listDevicePairing } = await import("../infra/device-pairing.js");
+      const { server, port, prevToken } = await startControlUiServer("secret");
+      const { identityPath, identity } = await createOperatorIdentityFixture(identityPrefix);
 
-    try {
-      const issued = await issueDeviceBootstrapToken();
-      const wsBootstrap = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
-      const initial = await connectReq(wsBootstrap, {
-        skipDefaultAuth: true,
-        bootstrapToken: issued.token,
-        role: "node",
-        scopes: [],
-        client,
-        deviceIdentityPath: identityPath,
-      });
-      expect(initial.ok).toBe(true);
-      const approvedPayload = initial.payload as
-        | {
-            type?: string;
-            auth?: {
-              deviceToken?: string;
-              role?: string;
-              scopes?: string[];
-              deviceTokens?: Array<{ deviceToken?: string; role?: string; scopes?: string[] }>;
-            };
-          }
-        | undefined;
-      expect(approvedPayload?.type).toBe("hello-ok");
-      expect(approvedPayload?.auth?.deviceToken).toBeTruthy();
-      expect(approvedPayload?.auth?.role).toBe("node");
-      expect(approvedPayload?.auth?.scopes ?? []).toEqual([]);
-      const operatorHandoff = approvedPayload?.auth?.deviceTokens?.find(
-        (entry) => entry.role === "operator",
-      );
-      expect(operatorHandoff?.deviceToken).toBeTruthy();
-      expect(operatorHandoff?.scopes).toEqual([
-        "operator.approvals",
-        "operator.read",
-        "operator.talk.secrets",
-        "operator.write",
-      ]);
-      expect(operatorHandoff?.scopes).not.toContain("operator.admin");
-      expect(operatorHandoff?.scopes).not.toContain("operator.pairing");
-      wsBootstrap.close();
+      try {
+        const issued = await issueDeviceBootstrapToken();
+        const wsBootstrap = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
+        const initial = await connectReq(wsBootstrap, {
+          skipDefaultAuth: true,
+          bootstrapToken: issued.token,
+          role: "node",
+          scopes: [],
+          client,
+          deviceIdentityPath: identityPath,
+        });
+        expect(initial.ok).toBe(true);
+        const approvedPayload = initial.payload as
+          | {
+              type?: string;
+              auth?: {
+                deviceToken?: string;
+                role?: string;
+                scopes?: string[];
+                deviceTokens?: Array<{ deviceToken?: string; role?: string; scopes?: string[] }>;
+              };
+            }
+          | undefined;
+        expect(approvedPayload?.type).toBe("hello-ok");
+        expect(approvedPayload?.auth?.deviceToken).toBeTruthy();
+        expect(approvedPayload?.auth?.role).toBe("node");
+        expect(approvedPayload?.auth?.scopes ?? []).toEqual([]);
+        const operatorHandoff = approvedPayload?.auth?.deviceTokens?.find(
+          (entry) => entry.role === "operator",
+        );
+        expect(operatorHandoff?.deviceToken).toBeTruthy();
+        expect(operatorHandoff?.scopes).toEqual([
+          "operator.approvals",
+          "operator.read",
+          "operator.talk.secrets",
+          "operator.write",
+        ]);
+        expect(operatorHandoff?.scopes).not.toContain("operator.admin");
+        expect(operatorHandoff?.scopes).not.toContain("operator.pairing");
+        wsBootstrap.close();
 
-      const pendingAfterInitial = await listDevicePairing();
-      expect(
-        pendingAfterInitial.pending.filter((entry) => entry.deviceId === identity.deviceId),
-      ).toEqual([]);
-      const paired = await getPairedDevice(identity.deviceId);
-      expect(paired?.roles).toEqual(["node", "operator"]);
-      expect(paired?.approvedScopes).toEqual([
-        "operator.approvals",
-        "operator.read",
-        "operator.talk.secrets",
-        "operator.write",
-      ]);
-    } finally {
-      await server.close();
-      restoreGatewayToken(prevToken);
-    }
-  });
+        const pendingAfterInitial = await listDevicePairing();
+        expect(
+          pendingAfterInitial.pending.filter((entry) => entry.deviceId === identity.deviceId),
+        ).toEqual([]);
+        const paired = await getPairedDevice(identity.deviceId);
+        expect(paired?.roles).toEqual(["node", "operator"]);
+        expect(paired?.approvedScopes).toEqual([
+          "operator.approvals",
+          "operator.read",
+          "operator.talk.secrets",
+          "operator.write",
+        ]);
+      } finally {
+        await server.close();
+        restoreGatewayToken(prevToken);
+      }
+    },
+  );
 
   test.each([
     {

@@ -1303,17 +1303,16 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
               boundBootstrapProfile !== null &&
               isPairingSetupBootstrapProfile(boundBootstrapProfile) &&
               isSetupCodeMobileBootstrapClient(connectParams.client);
-            const allowSilentBootstrapPairing = allowSetupCodeMobileBootstrapPairing;
             // This is the native QR/setup-code onboarding seam. Mobile clients
             // must prove their canonical client id and platform/family metadata
             // agree before the Gateway can skip owner approval and hand off the
             // bounded operator token below. Admin/pairing scopes still require
             // an explicit owner flow.
-            const bootstrapPairingRoles = allowSilentBootstrapPairing
+            const bootstrapPairingRoles = allowSetupCodeMobileBootstrapPairing
               ? uniqueStrings([role, ...boundBootstrapProfile.roles])
               : undefined;
             const bootstrapPairingScopes =
-              allowSilentBootstrapPairing && bootstrapPairingRoles
+              allowSetupCodeMobileBootstrapPairing && bootstrapPairingRoles
                 ? resolveBootstrapProfileScopesForRoles(
                     bootstrapPairingRoles,
                     boundBootstrapProfile.scopes,
@@ -1334,7 +1333,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                   ? false
                   : allowSilentLocalPairing ||
                     allowSilentTrustedCidrsNodePairing ||
-                    allowSilentBootstrapPairing,
+                    allowSetupCodeMobileBootstrapPairing,
             });
             const context = buildRequestContext();
             let approved: Awaited<ReturnType<typeof approveDevicePairing>> | undefined;
@@ -1356,7 +1355,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             };
             if (pairing.request.silent === true) {
               approved =
-                allowSilentBootstrapPairing && boundBootstrapProfile
+                allowSetupCodeMobileBootstrapPairing && boundBootstrapProfile
                   ? await approveBootstrapDevicePairing(
                       pairing.request.requestId,
                       boundBootstrapProfile,
@@ -1367,7 +1366,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                       accessMetadata: clientAccessMetadata,
                     });
               if (approved?.status === "approved") {
-                if (allowSilentBootstrapPairing && boundBootstrapProfile) {
+                if (allowSetupCodeMobileBootstrapPairing && boundBootstrapProfile) {
                   handoffBootstrapProfile = boundBootstrapProfile;
                 }
                 logGateway.info(
