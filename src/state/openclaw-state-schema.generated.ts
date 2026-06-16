@@ -1003,6 +1003,7 @@ CREATE TABLE IF NOT EXISTS task_runs (
   parent_flow_id TEXT,
   parent_task_id TEXT,
   agent_id TEXT,
+  requester_agent_id TEXT,
   run_id TEXT,
   label TEXT,
   task TEXT NOT NULL,

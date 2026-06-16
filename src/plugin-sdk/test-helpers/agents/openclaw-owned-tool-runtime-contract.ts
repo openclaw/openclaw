@@ -2,6 +2,8 @@
 import { vi } from "vitest";
 import { resetAdjustedParamsByToolCallIdForTests } from "../../../agents/agent-tools.before-tool-call.state.js";
 import type { AgentToolResult } from "../../../agents/runtime/index.js";
+import { setToolTerminalPresentation } from "../../../agents/tool-terminal-presentation.js";
+import type { AnyAgentTool } from "../../../agents/tools/common.js";
 import type {
   CodexAppServerExtensionFactory,
   CodexAppServerToolResultEvent,
@@ -38,6 +40,26 @@ export function mediaToolResult(
       ...(audioAsVoice ? { audioAsVoice } : {}),
     },
   });
+}
+
+export function createTerminalPresentationContractTool(params: {
+  name: string;
+  result: AgentToolResult<unknown>;
+  format: (params: unknown, result: AgentToolResult<unknown>) => string | undefined;
+}): AnyAgentTool {
+  return setToolTerminalPresentation(
+    {
+      name: params.name,
+      label: `${params.name} contract tool`,
+      description: `${params.name} contract tool`,
+      parameters: {},
+      execute: vi.fn(async () => params.result),
+    } as AnyAgentTool,
+    (toolParams, result) => {
+      const text = params.format(toolParams, result);
+      return text ? { text } : undefined;
+    },
+  );
 }
 
 export function installOpenClawOwnedToolHooks(params?: {

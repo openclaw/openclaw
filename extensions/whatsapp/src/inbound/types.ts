@@ -3,6 +3,7 @@ import type { AnyMessageContent, MiscMessageGenerationOptions } from "baileys";
 import type { NormalizedLocation } from "openclaw/plugin-sdk/channel-inbound";
 import type { PollInput } from "openclaw/plugin-sdk/poll-runtime";
 import type { WhatsAppIdentity, WhatsAppReplyContext, WhatsAppSelfIdentity } from "../identity.js";
+import type { WhatsAppInboundAdmission } from "./admission.js";
 import type { WhatsAppSendResult } from "./send-result.js";
 
 export type WebListenerCloseReason = {
@@ -199,13 +200,27 @@ export type DeprecatedWebInboundMessageFlatAliases = {
   isBatched?: boolean;
 };
 
-type WebInboundMessageCommon = {
+export type DeprecatedWebInboundAdmissionTopLevelFields = {
+  /** @deprecated Use `admission.conversation.id`. */
   from: string; // conversation id: E.164 for direct chats, group JID for groups
+  /** @deprecated Use `admission.conversation.id`. */
   conversationId: string; // alias for clarity (same as from)
+  /** @deprecated Use `admission.accountId`. */
   accountId: string;
-  /** Set by the real inbound monitor after access-control / pairing checks pass. */
+  /**
+   * @deprecated Use `admission.ingress.decision === "allow"`.
+   *
+   * Set by the real inbound monitor after access-control / pairing checks pass.
+   * On messages with `admission`, this is a derived compatibility view; writes
+   * are retained only for legacy inputs without an admission envelope.
+   */
   accessControlPassed?: boolean;
+  /** @deprecated Use `admission.conversation.kind`. */
   chatType: "direct" | "group";
+};
+
+type WebInboundMessageCommon = DeprecatedWebInboundAdmissionTopLevelFields & {
+  admission?: WhatsAppInboundAdmission;
   quote?: WhatsAppInboundQuote;
   group?: WhatsAppInboundGroupContext;
   wasMentioned?: boolean;

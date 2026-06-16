@@ -295,6 +295,30 @@ describe("detectChangedScope", () => {
     });
   });
 
+  it("runs macOS CI for macOS packaging scripts with Darwin-only tests", () => {
+    expect(detectChangedScope(["scripts/create-dmg.sh"])).toEqual({
+      runNode: true,
+      runMacos: true,
+      runAndroid: false,
+      runWindows: false,
+      runSkillsPython: false,
+      runChangedSmoke: false,
+      runControlUiI18n: false,
+    });
+  });
+
+  it("runs macOS CI for the Darwin-only DMG owner test", () => {
+    expect(detectChangedScope(["test/scripts/create-dmg.test.ts"])).toEqual({
+      runNode: true,
+      runMacos: true,
+      runAndroid: false,
+      runWindows: false,
+      runSkillsPython: false,
+      runChangedSmoke: false,
+      runControlUiI18n: false,
+    });
+  });
+
   it("runs Windows only for Windows-relevant changes", () => {
     expect(detectChangedScope(["extensions/memory-lancedb/index.test.ts"])).toEqual({
       runNode: true,

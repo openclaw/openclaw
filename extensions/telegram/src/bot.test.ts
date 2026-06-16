@@ -1770,6 +1770,7 @@ describe("createTelegramBot", () => {
       channels: {
         telegram: {
           groupPolicy: "open",
+          includeGroupHistoryContext: "recent",
           groups: { "*": { requireMention: false } },
         },
       },
@@ -1855,6 +1856,62 @@ describe("createTelegramBot", () => {
     expect(messagesById.get("201")?.body).toBe("After the incident review.");
   });
 
+  it("omits ambient group messages from default conversation prompt context", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
+      channels: {
+        telegram: {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["111", "222"],
+          groups: { "*": { requireMention: true } },
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+    const baseCtx = {
+      me: { id: 999, username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    };
+
+    await handler({
+      ...baseCtx,
+      message: {
+        chat: { id: 42, type: "group", title: "Ops" },
+        text: "Please run the maintenance step later.",
+        date: 1736380800,
+        message_id: 501,
+        from: { id: 111, is_bot: false, first_name: "Requester" },
+      },
+    });
+    expect(replySpy).not.toHaveBeenCalled();
+
+    await handler({
+      ...baseCtx,
+      message: {
+        chat: { id: 42, type: "group", title: "Ops" },
+        text: "@openclaw_bot Hello",
+        date: 1736380860,
+        message_id: 502,
+        from: { id: 222, is_bot: false, first_name: "Operator" },
+        entities: [{ type: "mention", offset: 0, length: 13 }],
+      },
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
+    expect(payload.UntrustedStructuredContext).toBeUndefined();
+    expect(payload.Body).not.toContain("Please run the maintenance step later.");
+  });
+
   it("updates cached bot messages from Telegram edit updates", async () => {
     onSpy.mockClear();
     replySpy.mockClear();
@@ -1868,6 +1925,7 @@ describe("createTelegramBot", () => {
       channels: {
         telegram: {
           groupPolicy: "open",
+          includeGroupHistoryContext: "recent",
           groups: { "*": { requireMention: false } },
         },
       },
@@ -2182,15 +2240,32 @@ describe("createTelegramBot", () => {
         mediaRef?: string;
         replyToId?: string;
       }>;
+      UntrustedStructuredContext?: unknown[];
     };
     expect(payload.ReplyChain).toHaveLength(2);
     expect(payload.ReplyChain?.[0]?.messageId).toBe("9001");
     expect(payload.ReplyChain?.[0]?.body).toBe("r u back from hermes");
     expect(payload.ReplyChain?.[0]?.replyToId).toBe("9000");
     expect(payload.ReplyChain?.[1]?.messageId).toBe("9000");
-    expect(payload.ReplyChain?.[1]?.mediaRef).toBe("telegram:file/root-photo-1");
     expect(payload.ReplyChain?.[1]?.mediaPath).toBeTypeOf("string");
-    expect(payload.ReplyChain?.[1]?.mediaPath).not.toBe("");
+    expect(payload.ReplyChain?.[1]?.mediaPath).toContain("/media/inbound/");
+    expect(payload.ReplyChain?.[1]?.mediaRef).toBeUndefined();
+    const [conversationContext] = requireArray(
+      payload.UntrustedStructuredContext,
+      "structured context",
+    );
+    const contextRecord = requireRecord(conversationContext, "conversation context");
+    const contextPayload = requireRecord(contextRecord.payload, "conversation context payload");
+    const messages = requireArray(contextPayload.messages, "conversation context messages").map(
+      (message, index) => requireRecord(message, `conversation context message ${index + 1}`),
+    );
+    const messagesById = new Map(messages.map((message) => [message.message_id, message]));
+    expect(messagesById.get("9000")).toMatchObject({
+      sender: "Kesava",
+    });
+    expect(messagesById.get("9000")?.media_path).toMatch(/^media:\/\/inbound\//);
+    expect(messagesById.get("9000")?.media_path).not.toBe(payload.ReplyChain?.[1]?.mediaPath);
+    expect(messagesById.get("9000")?.media_ref).toBeUndefined();
     expect(getFileSpy).toHaveBeenCalledWith("root-photo-1");
     expect(mediaFetch).toHaveBeenCalledTimes(1);
   });
@@ -2289,9 +2364,10 @@ describe("createTelegramBot", () => {
     expect(payload.ReplyChain?.[1]).toMatchObject({
       sender: "OpenClaw",
       body: "Done, here is the image",
-      mediaRef: "telegram:file/generated-photo-1",
     });
     expect(payload.ReplyChain?.[1]?.mediaPath).toBeTypeOf("string");
+    expect(payload.ReplyChain?.[1]?.mediaPath).toContain("/media/inbound/");
+    expect(payload.ReplyChain?.[1]?.mediaRef).toBeUndefined();
     const [conversationContext] = requireArray(
       payload.UntrustedStructuredContext,
       "structured context",
@@ -2308,6 +2384,7 @@ describe("createTelegramBot", () => {
       media_ref: "telegram:file/generated-photo-1",
       is_reply_target: true,
     });
+    expect(messagesById.get("101")?.media_path).toBeUndefined();
     expect(messagesById.get("102")).toMatchObject({
       sender: "UserB",
       body: "Why is there a 4th person?",

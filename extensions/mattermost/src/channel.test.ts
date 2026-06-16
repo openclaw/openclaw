@@ -74,6 +74,14 @@ function requireMattermostReplyToModeResolver() {
   return resolveReplyToMode;
 }
 
+function requireMattermostThreadTargetMatcher() {
+  const matchesToolContextTarget = mattermostPlugin.threading?.matchesToolContextTarget;
+  if (!matchesToolContextTarget) {
+    throw new Error("mattermost threading.matchesToolContextTarget missing");
+  }
+  return matchesToolContextTarget;
+}
+
 function requireMattermostSendText() {
   const sendText = mattermostPlugin.outbound?.sendText;
   if (!sendText) {
@@ -236,6 +244,27 @@ describe("mattermostPlugin", () => {
       },
     );
 
+    it("matches bare Mattermost channel ids against the active channel target", () => {
+      const matchesToolContextTarget = requireMattermostThreadTargetMatcher();
+
+      expect(
+        matchesToolContextTarget({
+          target: "tqfek9psh7fw8mpa5berwyytqw",
+          toolContext: {
+            currentChannelId: "channel:tqfek9psh7fw8mpa5berwyytqw",
+          },
+        }),
+      ).toBe(true);
+      expect(
+        matchesToolContextTarget({
+          target: "tqfek9psh7fw8mpa5berwyytqw",
+          toolContext: {
+            currentChannelId: "channel:kqfek9psh7fw8mpa5berwyytqw",
+          },
+        }),
+      ).toBe(false);
+    });
+
     it("exposes the effective reply root as the transport thread", () => {
       const resolveReplyTransport = mattermostPlugin.threading?.resolveReplyTransport;
       if (!resolveReplyTransport) {
@@ -249,8 +278,30 @@ describe("mattermostPlugin", () => {
           threadId: "other-thread",
         }),
       ).toEqual({
-        replyToId: "post-parent",
-        threadId: "post-parent",
+        replyToId: "other-thread",
+        threadId: "other-thread",
+      });
+      expect(
+        resolveReplyTransport({
+          cfg: {},
+          replyToId: "child-post",
+          replyToIsExplicit: true,
+          threadId: "root-post",
+        }),
+      ).toEqual({
+        replyToId: "root-post",
+        threadId: "root-post",
+      });
+      expect(
+        resolveReplyTransport({
+          cfg: {},
+          replyToId: "child-post",
+          replyToIsExplicit: false,
+          threadId: "root-post",
+        }),
+      ).toEqual({
+        replyToId: "root-post",
+        threadId: "root-post",
       });
       expect(
         resolveReplyTransport({
@@ -402,6 +453,17 @@ describe("mattermostPlugin", () => {
           },
         }),
       ).toBeUndefined();
+      expect(
+        resolveAutoThreadId({
+          cfg: {},
+          to: "tqfek9psh7fw8mpa5berwyytqw",
+          toolContext: {
+            currentChannelId: "channel:tqfek9psh7fw8mpa5berwyytqw",
+            currentThreadTs: "root-1",
+            replyToMode: "all",
+          },
+        }),
+      ).toBe("root-1");
       expect(
         resolveAutoThreadId({
           cfg: {},
@@ -714,7 +776,7 @@ describe("mattermostPlugin", () => {
       expect(options.replyToId).toBe("post-root");
     });
 
-    it("keeps explicit reply precedence when threadId is also provided", async () => {
+    it("uses threadId as the Mattermost root when generic replyTo names a child post", async () => {
       const cfg = createMattermostTestConfig();
 
       await mattermostPlugin.actions?.handleAction?.(
@@ -732,7 +794,29 @@ describe("mattermostPlugin", () => {
       );
 
       const options = expectSingleMattermostSend("channel:CHAN1", "hello");
-      expect(options.replyToId).toBe("child-post");
+      expect(options.replyToId).toBe("post-root");
+    });
+
+    it("keeps explicit replyToId precedence when threadId is also provided", async () => {
+      const cfg = createMattermostTestConfig();
+
+      await mattermostPlugin.actions?.handleAction?.(
+        createMattermostActionContext({
+          action: "send",
+          params: {
+            to: "channel:CHAN1",
+            message: "hello",
+            replyToId: "explicit-root",
+            threadId: "post-root",
+            replyTo: "child-post",
+          },
+          cfg,
+          accountId: "default",
+        }),
+      );
+
+      const options = expectSingleMattermostSend("channel:CHAN1", "hello");
+      expect(options.replyToId).toBe("explicit-root");
     });
 
     it("routes filePath send actions through Mattermost media upload options", async () => {

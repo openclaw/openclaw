@@ -53,6 +53,7 @@ const mocks = vi.hoisted(() => ({
   loadPresenceMock: vi.fn(async () => {}),
   loadSessionsMock: vi.fn(async () => {}),
   loadSkillsMock: vi.fn(async () => {}),
+  reconcileSkillsAgentIdMock: vi.fn(),
   loadUsageMock: vi.fn(async () => {}),
   loadWorkboardMock: vi.fn(async () => {}),
   stopWorkboardLifecycleRefreshMock: vi.fn(),
@@ -138,6 +139,7 @@ vi.mock("./controllers/sessions.ts", () => ({
 }));
 vi.mock("./controllers/skills.ts", () => ({
   loadSkills: mocks.loadSkillsMock,
+  reconcileSkillsAgentId: mocks.reconcileSkillsAgentIdMock,
 }));
 vi.mock("./controllers/usage.ts", () => ({
   loadUsage: mocks.loadUsageMock,
@@ -379,6 +381,28 @@ describe("refreshActiveTab", () => {
       requestUpdate: host.requestUpdate,
       refreshDiagnostics: false,
     });
+  });
+
+  it("loads agents before rendering the Skills tab agent selector", async () => {
+    const host = createHost();
+    host.tab = "skills";
+    const calls: string[] = [];
+    mocks.loadAgentsMock.mockImplementationOnce(async () => {
+      calls.push("agents");
+    });
+    mocks.reconcileSkillsAgentIdMock.mockImplementationOnce(() => {
+      calls.push("reconcile");
+    });
+    mocks.loadSkillsMock.mockImplementationOnce(async () => {
+      calls.push("skills");
+    });
+
+    await refreshActiveTab(host as never);
+
+    expect(calls).toEqual(["agents", "reconcile", "skills"]);
+    expect(mocks.loadAgentsMock).toHaveBeenCalledWith(host);
+    expect(mocks.reconcileSkillsAgentIdMock).toHaveBeenCalledWith(host, host.agentsList);
+    expect(mocks.loadSkillsMock).toHaveBeenCalledWith(host);
   });
 
   it("starts node polling and stops inactive tab pollers on tab changes", () => {

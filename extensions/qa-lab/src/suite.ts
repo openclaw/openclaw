@@ -51,6 +51,7 @@ import {
   type QaSeedScenarioWithSource,
 } from "./scenario-catalog.js";
 import { runScenarioFlow } from "./scenario-flow-runner.js";
+import type { QaScorecardEvidenceMode } from "./scorecard-taxonomy.js";
 import {
   applyQaMergePatch,
   collectQaSuiteGatewayConfigPatch,
@@ -101,6 +102,7 @@ type QaSuiteEnvironment = {
 export type QaSuiteStartLabFn = (params?: QaLabServerStartParams) => Promise<QaLabServerHandle>;
 
 export type QaSuiteRunParams = {
+  evidenceMode?: QaScorecardEvidenceMode;
   repoRoot?: string;
   outputDir?: string;
   providerMode?: QaProviderMode;
@@ -615,6 +617,7 @@ export function buildQaSuiteSummaryJson(params: QaSuiteSummaryJsonParams): QaSui
 }
 
 async function runQaRuntimeParitySuite(params: {
+  evidenceMode?: QaScorecardEvidenceMode;
   repoRoot: string;
   outputDir: string;
   startedAt: Date;
@@ -792,6 +795,7 @@ async function runQaRuntimeParitySuite(params: {
       finishedAt,
       scenarios,
       scenarioDefinitions: params.selectedScenarios,
+      evidenceMode: params.evidenceMode,
       transport,
       providerMode: params.providerMode,
       primaryModel: params.primaryModel,
@@ -838,6 +842,7 @@ async function writeQaSuiteArtifacts(params: {
   finishedAt: Date;
   scenarios: QaSuiteScenarioResult[];
   scenarioDefinitions?: readonly QaSeedScenarioWithSource[];
+  evidenceMode?: QaScorecardEvidenceMode;
   metrics?: QaSuiteSummaryJson["metrics"];
   transport: QaTransportAdapter;
   // Reuse the canonical QaProviderMode union instead of re-declaring it
@@ -876,6 +881,7 @@ async function writeQaSuiteArtifacts(params: {
             { kind: "summary", path: path.basename(summaryPath) },
             { kind: "report", path: path.basename(reportPath) },
           ],
+          evidenceMode: params.evidenceMode,
           channelId: params.transport.id,
           env: process.env,
           generatedAt: params.finishedAt.toISOString(),
@@ -1105,6 +1111,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
 
   if (params?.runtimePair) {
     return await runQaRuntimeParitySuite({
+      evidenceMode: params.evidenceMode,
       repoRoot,
       outputDir,
       startedAt,
@@ -1176,6 +1183,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
             finishedAt: partialFinishedAt,
             scenarios: partialScenarios,
             scenarioDefinitions: completedScenarioDefinitions,
+            evidenceMode: params?.evidenceMode,
             transport,
             providerMode,
             primaryModel,
@@ -1320,6 +1328,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
         finishedAt,
         scenarios,
         scenarioDefinitions: selectedScenarios,
+        evidenceMode: params?.evidenceMode,
         transport,
         providerMode,
         primaryModel,
@@ -1427,7 +1436,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
     lab,
     mock,
     gateway,
-    // Markdown scenarios should see the full staged gateway config, not just
+    // YAML scenarios should see the full staged gateway config, not just
     // the transport fragment. Routing/session/plugin assertions depend on it.
     cfg: gateway.cfg,
     transport,
@@ -1581,6 +1590,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
       scenarios,
       metrics,
       scenarioDefinitions: selectedScenarios,
+      evidenceMode: params?.evidenceMode,
       transport,
       providerMode,
       primaryModel,

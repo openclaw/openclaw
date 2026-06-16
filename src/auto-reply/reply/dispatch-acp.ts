@@ -42,7 +42,7 @@ import {
   type AcpDispatchDeliveryCoordinator,
 } from "./dispatch-acp-delivery.js";
 import { appendRecentHistoryImageContext } from "./history-media.js";
-import { hasInboundMedia } from "./inbound-media.js";
+import { hasInboundMediaForUnderstanding } from "./inbound-media.js";
 import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
 
 const dispatchAcpManagerRuntimeLoader = createLazyImportLoader(
@@ -540,7 +540,7 @@ export async function tryDispatchAcpReply(params: {
     if (agentPolicyError) {
       throw agentPolicyError;
     }
-    if (hasInboundMedia(params.ctx) && !params.ctx.MediaUnderstanding?.length) {
+    if (hasInboundMediaForUnderstanding(params.ctx) && !params.ctx.MediaUnderstanding?.length) {
       try {
         const { applyMediaUnderstanding } = await loadAgentTurnMediaRuntime();
         await applyMediaUnderstanding({

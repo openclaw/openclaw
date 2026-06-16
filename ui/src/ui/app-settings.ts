@@ -57,7 +57,7 @@ import {
   loadSkillWorkshopProposals,
   type SkillWorkshopState,
 } from "./controllers/skill-workshop.ts";
-import { loadSkills, type SkillsState } from "./controllers/skills.ts";
+import { loadSkills, reconcileSkillsAgentId, type SkillsState } from "./controllers/skills.ts";
 import { loadUsage, type UsageState } from "./controllers/usage.ts";
 import {
   loadWorkboard,
@@ -474,6 +474,8 @@ export async function refreshActiveTab(host: SettingsHost, opts?: { chatStartup?
         await loadCron(host);
         break;
       case "skills":
+        await loadAgents(app);
+        reconcileSkillsAgentId(app, app.agentsList);
         await loadSkills(app);
         break;
       case "skillWorkshop":

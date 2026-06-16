@@ -21,7 +21,11 @@ import { getCallByProviderCallId } from "./lookup.js";
 import { addTranscriptEntry, transitionState } from "./state.js";
 import { persistCallRecord } from "./store.js";
 import { resolveVoiceCallSecondsTimerDelayMs } from "./timer-delays.js";
-import { clearTranscriptWaiter, waitForFinalTranscript } from "./timers.js";
+import {
+  clearTranscriptWaiter,
+  ensureMaxDurationTimerForLiveCall,
+  waitForFinalTranscript,
+} from "./timers.js";
 import { generateDtmfRedirectTwiml, generateNotifyTwiml } from "./twiml.js";
 
 type InitiateContext = Pick<
@@ -37,7 +41,13 @@ type InitiateContext = Pick<
 
 type SpeakContext = Pick<
   CallManagerContext,
-  "activeCalls" | "providerCallIdMap" | "provider" | "config" | "storePath"
+  | "activeCalls"
+  | "providerCallIdMap"
+  | "provider"
+  | "config"
+  | "storePath"
+  | "transcriptWaiters"
+  | "maxDurationTimers"
 >;
 
 type ConversationContext = Pick<
@@ -267,6 +277,14 @@ export async function speak(
   const { call, providerCallId, provider } = connected;
 
   try {
+    ensureMaxDurationTimerForLiveCall({
+      ctx,
+      call,
+      liveAt: Date.now(),
+      onTimeout: async (id) => {
+        await endCall(ctx, id, { reason: "timeout" });
+      },
+    });
     transitionState(call, "speaking");
     persistCallRecord(ctx.storePath, call);
 

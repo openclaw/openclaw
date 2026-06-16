@@ -7,8 +7,10 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  ARTIFACT_TARBALL_SCAN_MAX_ENTRIES,
   cleanupPackageSourceWorktreeForTest,
   downloadUrl,
+  findSingleTarballForTest,
   loadTrustedPackageSource,
   parseArgs,
   readArtifactPackageCandidateMetadata,
@@ -671,6 +673,31 @@ describe("resolve-openclaw-package-candidate", () => {
       packageTrustedReason: "repository-branch-history",
       sha256: "a".repeat(64),
     });
+  });
+
+  it("rejects source artifact scans that exceed the filesystem entry limit", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-artifact-scan-"));
+    tempDirs.push(dir);
+
+    for (let index = 0; index <= ARTIFACT_TARBALL_SCAN_MAX_ENTRIES; index += 1) {
+      await writeFile(path.join(dir, `not-a-package-${index}.txt`), "x");
+    }
+
+    await expect(findSingleTarballForTest(dir)).rejects.toThrow(
+      `source=artifact scan exceeded ${ARTIFACT_TARBALL_SCAN_MAX_ENTRIES} filesystem entries`,
+    );
+  });
+
+  it("rejects source artifact directories with multiple tarballs", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-artifact-duplicates-"));
+    tempDirs.push(dir);
+
+    await writeFile(path.join(dir, "openclaw-a.tgz"), "a");
+    await writeFile(path.join(dir, "nested.tar.gz"), "b");
+
+    await expect(findSingleTarballForTest(dir)).rejects.toThrow(
+      "source=artifact requires exactly one .tgz",
+    );
   });
 
   it("reads the source SHA from packed npm build metadata", async () => {

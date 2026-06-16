@@ -10,6 +10,15 @@ ASC_APP_ID=YOUR_APP_STORE_CONNECT_APP_ID \
 DELIVER_METADATA=1 fastlane ios metadata
 ```
 
+## Release notes only
+
+`pnpm ios:release:upload` uses this mode before archiving so the editable App Store version has current release notes without rewriting all metadata:
+
+```bash
+cd apps/ios
+DELIVER_RELEASE_NOTES=1 fastlane ios metadata
+```
+
 ## Optional: include screenshots
 
 ```bash
@@ -39,6 +48,7 @@ Or set `APP_STORE_CONNECT_API_KEY_PATH`.
 - `release_notes.txt` is generated from `apps/ios/CHANGELOG.md`; after changelog updates, run `pnpm ios:version:sync`.
 - Release notes resolve from `## <pinned iOS version>` first, then fall back to `## Unreleased` while a TestFlight train is still in progress.
 - When starting a new production release train, pin the iOS version first with `pnpm ios:version:pin -- --from-gateway`.
+- The release upload flow uploads release notes and screenshots before the IPA, and never submits for App Review.
 - `privacy_url.txt` is set to `https://openclaw.ai/privacy`.
 - If app lookup fails in `deliver`, set one of:
   - `ASC_APP_IDENTIFIER` (bundle ID)

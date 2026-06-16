@@ -25,31 +25,35 @@ function emptyErrorAttempt(
 ): EmbeddedRunAttemptResult {
   // Models can report stopReason=error with no output after tool activity; that
   // is replay-safe only when the attempt metadata records no side effects.
+  const assistant = {
+    role: "assistant",
+    stopReason: "error",
+    provider,
+    model,
+    content,
+    usage: { input: 100, output: outputTokens, totalTokens: 100 + outputTokens },
+    ...(errorMessage ? { errorMessage } : {}),
+  } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
   return makeAttemptResult({
     assistantTexts: [],
-    lastAssistant: {
-      role: "assistant",
-      stopReason: "error",
-      provider,
-      model,
-      content,
-      usage: { input: 100, output: outputTokens, totalTokens: 100 + outputTokens },
-      ...(errorMessage ? { errorMessage } : {}),
-    } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+    lastAssistant: assistant,
+    currentAttemptAssistant: assistant,
   });
 }
 
 function successAttempt(provider: string, model: string): EmbeddedRunAttemptResult {
+  const assistant = {
+    role: "assistant",
+    stopReason: "stop",
+    provider,
+    model,
+    content: [{ type: "text", text: "Done." }],
+    usage: { input: 100, output: 5, totalTokens: 105 },
+  } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
   return makeAttemptResult({
     assistantTexts: ["Done."],
-    lastAssistant: {
-      role: "assistant",
-      stopReason: "stop",
-      provider,
-      model,
-      content: [{ type: "text", text: "Done." }],
-      usage: { input: 100, output: 5, totalTokens: 105 },
-    } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+    lastAssistant: assistant,
+    currentAttemptAssistant: assistant,
   });
 }
 
@@ -354,4 +358,36 @@ describe("runEmbeddedAgent silent-error retry", () => {
       expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
     },
   );
+
+  it("does not mark incomplete turns fallback-safe after a terminal heartbeat response", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        ...emptyErrorAttempt("anthropic", "claude-opus-4-8", 1120, [
+          {
+            type: "thinking",
+            thinking: "internal reasoning before provider error",
+            thinkingSignature: JSON.stringify({ id: "rs_heartbeat_error", type: "reasoning" }),
+          },
+        ]),
+        heartbeatToolResponse: {
+          outcome: "progress",
+          notify: false,
+          summary: "Still working",
+        },
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      runId: "run-terminal-heartbeat-not-fallback-safe",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.meta.error).toMatchObject({
+      kind: "incomplete_turn",
+      fallbackSafe: false,
+    });
+  });
 });

@@ -16,6 +16,8 @@ import {
   isRootVersionInvocation,
   normalizeGeneratedHelpCommandArgv,
   normalizeRootHelpTargetArgv,
+  normalizeRootLogLevelArgv,
+  normalizeRootNoColorArgv,
   shouldMigrateState,
   shouldMigrateStateFromPath,
 } from "./argv.js";
@@ -169,6 +171,118 @@ describe("argv helpers", () => {
     },
   ])("normalizes root help targets: $name", ({ argv, expected }) => {
     expect(normalizeRootHelpTargetArgv(argv)).toEqual(expected);
+  });
+
+  it.each([
+    {
+      name: "subcommand trailing no-color",
+      argv: ["node", "openclaw", "doctor", "--no-color", "--post-upgrade", "--json"],
+      expected: ["node", "openclaw", "--no-color", "doctor", "--post-upgrade", "--json"],
+    },
+    {
+      name: "keeps existing root options first",
+      argv: ["node", "openclaw", "--profile", "work", "doctor", "--no-color", "--lint", "--json"],
+      expected: [
+        "node",
+        "openclaw",
+        "--profile",
+        "work",
+        "--no-color",
+        "doctor",
+        "--lint",
+        "--json",
+      ],
+    },
+    {
+      name: "keeps no-color after possible command option value",
+      argv: ["node", "openclaw", "doctor", "--lint", "--json", "--no-color"],
+      expected: ["node", "openclaw", "doctor", "--lint", "--json", "--no-color"],
+    },
+    {
+      name: "flag terminator leaves no-color positional",
+      argv: ["node", "openclaw", "doctor", "--", "--no-color"],
+      expected: ["node", "openclaw", "doctor", "--", "--no-color"],
+    },
+    {
+      name: "command option value remains literal",
+      argv: ["node", "openclaw", "agent", "--message", "--no-color"],
+      expected: ["node", "openclaw", "agent", "--message", "--no-color"],
+    },
+    {
+      name: "assigned command option value does not block no-color",
+      argv: ["node", "openclaw", "agent", "--message=hello", "--no-color"],
+      expected: ["node", "openclaw", "--no-color", "agent", "--message=hello"],
+    },
+  ])("normalizes root --no-color before command parsing: $name", ({ argv, expected }) => {
+    expect(normalizeRootNoColorArgv(argv)).toEqual(expected);
+  });
+
+  it("allows final command metadata to lift no-color after boolean command flags", () => {
+    const argv = ["node", "openclaw", "doctor", "--lint", "--json", "--no-color"];
+
+    expect(
+      normalizeRootNoColorArgv(argv, {
+        shouldPreserveNoColor: ({ remainingArgs, noColorIndex }) =>
+          remainingArgs[noColorIndex - 1] === "--message",
+      }),
+    ).toEqual(["node", "openclaw", "--no-color", "doctor", "--lint", "--json"]);
+  });
+
+  it.each([
+    {
+      name: "subcommand trailing log-level",
+      argv: ["node", "openclaw", "doctor", "--log-level", "debug", "--json"],
+      expected: ["node", "openclaw", "--log-level", "debug", "doctor", "--json"],
+    },
+    {
+      name: "subcommand trailing log-level equals form",
+      argv: ["node", "openclaw", "doctor", "--log-level=trace", "--json"],
+      expected: ["node", "openclaw", "--log-level=trace", "doctor", "--json"],
+    },
+    {
+      name: "keeps existing root options first",
+      argv: ["node", "openclaw", "--profile", "work", "doctor", "--log-level", "debug"],
+      expected: ["node", "openclaw", "--profile", "work", "--log-level", "debug", "doctor"],
+    },
+    {
+      name: "keeps log-level after possible command option value",
+      argv: ["node", "openclaw", "agent", "--message", "--log-level", "debug"],
+      expected: ["node", "openclaw", "agent", "--message", "--log-level", "debug"],
+    },
+    {
+      name: "flag terminator leaves log-level positional",
+      argv: ["node", "openclaw", "nodes", "run", "--", "--log-level", "debug"],
+      expected: ["node", "openclaw", "nodes", "run", "--", "--log-level", "debug"],
+    },
+    {
+      name: "missing value remains command scoped",
+      argv: ["node", "openclaw", "doctor", "--log-level", "--json"],
+      expected: ["node", "openclaw", "doctor", "--log-level", "--json"],
+    },
+  ])("normalizes root --log-level before command parsing: $name", ({ argv, expected }) => {
+    expect(normalizeRootLogLevelArgv(argv)).toEqual(expected);
+  });
+
+  it("allows final command metadata to lift log-level after boolean command flags", () => {
+    const argv = ["node", "openclaw", "doctor", "--lint", "--json", "--log-level", "debug"];
+
+    expect(
+      normalizeRootLogLevelArgv(argv, {
+        shouldPreserveLogLevel: ({ remainingArgs, logLevelIndex }) =>
+          remainingArgs[logLevelIndex - 1] === "--message",
+      }),
+    ).toEqual(["node", "openclaw", "--log-level", "debug", "doctor", "--lint", "--json"]);
+  });
+
+  it("preserves log-level when final command metadata owns the option", () => {
+    const argv = ["node", "openclaw", "plugin-cmd", "--log-level", "debug"];
+
+    expect(
+      normalizeRootLogLevelArgv(argv, {
+        shouldPreserveLogLevel: ({ remainingArgs, logLevelIndex }) =>
+          remainingArgs[logLevelIndex] === "--log-level",
+      }),
+    ).toEqual(argv);
   });
 
   it.each([

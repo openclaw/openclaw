@@ -22,6 +22,7 @@ vi.mock("../session-write-lock.js", () =>
 
 let rewriteTranscriptEntriesInSessionFile: typeof import("./transcript-rewrite.js").rewriteTranscriptEntriesInSessionFile;
 let rewriteTranscriptEntriesInSessionManager: typeof import("./transcript-rewrite.js").rewriteTranscriptEntriesInSessionManager;
+let rewriteTranscriptEntriesInRuntimeTranscript: typeof import("./transcript-rewrite.js").rewriteTranscriptEntriesInRuntimeTranscript;
 let onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
 let installSessionToolResultGuard: typeof import("../session-tool-result-guard.js").installSessionToolResultGuard;
 
@@ -159,8 +160,11 @@ function requireString(value: string | undefined, label: string): string {
 beforeAll(async () => {
   ({ onSessionTranscriptUpdate } = await import("../../sessions/transcript-events.js"));
   ({ installSessionToolResultGuard } = await import("../session-tool-result-guard.js"));
-  ({ rewriteTranscriptEntriesInSessionFile, rewriteTranscriptEntriesInSessionManager } =
-    await import("./transcript-rewrite.js"));
+  ({
+    rewriteTranscriptEntriesInRuntimeTranscript,
+    rewriteTranscriptEntriesInSessionFile,
+    rewriteTranscriptEntriesInSessionManager,
+  } = await import("./transcript-rewrite.js"));
 });
 
 beforeEach(() => {
@@ -306,6 +310,25 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
 });
 
 describe("rewriteTranscriptEntriesInSessionFile", () => {
+  it("does not create session metadata for missing runtime transcripts", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-rewrite-runtime-"));
+    const storePath = path.join(dir, "sessions.json");
+    await fs.writeFile(storePath, "{}\n", "utf8");
+
+    const result = await rewriteTranscriptEntriesInRuntimeTranscript({
+      scope: {
+        agentId: "main",
+        sessionId: "missing-session",
+        sessionKey: "agent:main:missing",
+        storePath,
+      },
+      request: { replacements: [] },
+    });
+
+    expect(result.changed).toBe(false);
+    expect(await fs.readFile(storePath, "utf8")).toBe("{}\n");
+  });
+
   it("aborts under the write lock when the active suffix contains an unexpected entry", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-rewrite-guard-"));
     const sessionManager = SessionManager.create(dir, dir);

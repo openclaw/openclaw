@@ -71,6 +71,7 @@ function loadAvailableModels(
         ? !shouldSuppressBuiltInModelFromManifest({
             provider: model.provider,
             id: model.id,
+            baseUrl: model.baseUrl,
             config: cfg,
           })
         : !shouldSuppressBuiltInModel({
@@ -113,6 +114,7 @@ export async function loadModelRegistry(
       : !shouldSuppressBuiltInModelFromManifest({
           provider: model.provider,
           id: model.id,
+          baseUrl: model.baseUrl,
           config: cfg,
         }),
   );

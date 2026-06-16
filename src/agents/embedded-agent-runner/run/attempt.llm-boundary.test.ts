@@ -115,6 +115,93 @@ describe("normalizeMessagesForLlmBoundary", () => {
     expect(output[2]?.content).toBe(`${expectedCurrentPrefix}Current ask`);
   });
 
+  it("can leave user message bytes bare for cache-sensitive local providers", () => {
+    const input = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "Cache-sensitive current ask" }],
+        timestamp: 1717570860000,
+      },
+    ];
+
+    const output = normalizeMessagesForLlmBoundary(
+      input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+      { timezone: "UTC", includeTimestamp: false },
+    ) as unknown as Array<{ content?: string }>;
+
+    expect(output[0]?.content).toBe("Cache-sensitive current ask");
+  });
+
+  it("does not mutate transcript messages while leaving disabled timestamp output bare", () => {
+    const historicalContent =
+      'Conversation info (untrusted metadata):\n```json\n{"channel":"telegram"}\n```\n\nStored bare ask';
+    const input = [
+      {
+        role: "user",
+        content: [{ type: "text", text: historicalContent }],
+        timestamp: 1717570800000,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Historical answer" }],
+        timestamp: 2,
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "Current bare ask" }],
+        timestamp: 1717570860000,
+      },
+    ];
+
+    const output = normalizeMessagesForLlmBoundary(
+      input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+      { timezone: "UTC", includeTimestamp: false },
+    ) as unknown as Array<{ content?: string }>;
+
+    expect(output[0]?.content).toBe("Stored bare ask");
+    expect(output[2]?.content).toBe("Current bare ask");
+    const firstInput = input[0];
+    if (!firstInput) {
+      throw new Error("expected first input message");
+    }
+    expect(Array.isArray(firstInput.content)).toBe(true);
+    expect((firstInput.content as Array<{ text?: string }>)[0]?.text).toBe(historicalContent);
+  });
+
+  it("preserves stored sidecar metadata while preparing disabled timestamp model bytes", () => {
+    // This boundary normalization prepares provider input only: stored
+    // transcript/embedding sidecar state is preserved by identity, so no
+    // migration or persistent schema change is required for disabled stamps.
+    const input = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "Stored ask with index metadata" }],
+        timestamp: 1717570800000,
+        __openclaw: {
+          seq: 12,
+          embeddingInput: "Stored ask with index metadata",
+        },
+      },
+    ];
+
+    const output = normalizeMessagesForLlmBoundary(
+      input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+      { timezone: "UTC", includeTimestamp: false },
+    ) as unknown as Array<Record<string, unknown>>;
+
+    expect(output[0]?.content).toBe("Stored ask with index metadata");
+    expect(output[0]?.["__openclaw"]).toEqual({
+      seq: 12,
+      embeddingInput: "Stored ask with index metadata",
+    });
+    expect(output[0]?.["__openclaw"]).toBe(input[0]?.["__openclaw"]);
+    expect(input[0]?.content).toEqual([{ type: "text", text: "Stored ask with index metadata" }]);
+    expect(input[0]?.["__openclaw"]).toEqual({
+      seq: 12,
+      embeddingInput: "Stored ask with index metadata",
+    });
+  });
+
   it("stamps the current turn from the prepared persisted timestamp when supplied", () => {
     const preparedTimestamp = 1717570800000;
     const runtimeTimestamp = 1717574460000;
