@@ -2385,7 +2385,15 @@ export class QmdMemoryManager implements MemorySearchManager {
       throw err;
     }
 
-    const parsedUnknown: unknown = JSON.parse(result.stdout);
+    // mcporter daemon start may write startup logs (e.g. "[mcporter] Starting
+    // server…") to stdout.  Strip non-JSON lines so the first search after a
+    // gateway restart does not fall back to FTS-only mode.  (fixes #59808)
+    const cleanStdout = result.stdout
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("[mcporter]"))
+      .join("\n")
+      .trim();
+    const parsedUnknown: unknown = JSON.parse(cleanStdout);
     const parsedRecord = asRecord(parsedUnknown);
     const structuredContent = parsedRecord ? asRecord(parsedRecord.structuredContent) : null;
     const structured: unknown = structuredContent ?? parsedUnknown;
