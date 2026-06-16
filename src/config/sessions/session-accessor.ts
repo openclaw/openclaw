@@ -31,8 +31,12 @@ import {
 } from "./store.js";
 import { parseSessionThreadInfo } from "./thread-info.js";
 import {
+  type AppendSessionTranscriptMessageParams,
+  type AppendSessionTranscriptMessageResult,
   appendSessionTranscriptEvent,
   appendSessionTranscriptMessage,
+  appendSessionTranscriptMessageWithOwnedWriteLock,
+  withSessionTranscriptAppendQueue,
 } from "./transcript-append.js";
 import { resolveSessionTranscriptFile } from "./transcript-file-resolve.js";
 import { streamSessionTranscriptLines } from "./transcript-stream.js";
@@ -193,6 +197,10 @@ export type SessionTranscriptTurnPersistResult = {
   sessionEntry: SessionEntry | undefined;
   sessionFile: string;
 };
+
+type SessionTranscriptTurnAppendRunner = <TMessage>(
+  params: AppendSessionTranscriptMessageParams<TMessage>,
+) => Promise<AppendSessionTranscriptMessageResult<TMessage> | undefined>;
 
 export type SessionTranscriptRuntimeTarget = {
   agentId: string;
@@ -463,7 +471,7 @@ export async function persistSessionTranscriptTurn(
 ): Promise<SessionTranscriptTurnPersistResult> {
   const target = await resolveTranscriptTurnTarget(scope);
   const appendedMessages: TranscriptMessageAppendResult<unknown>[] = [];
-  const appendMessages = async () => {
+  const appendMessages = async (appendMessage: SessionTranscriptTurnAppendRunner) => {
     for (const append of options.messages) {
       const shouldAppend = append.shouldAppend
         ? await append.shouldAppend({
@@ -476,7 +484,7 @@ export async function persistSessionTranscriptTurn(
       if (!shouldAppend) {
         continue;
       }
-      const result = await appendSessionTranscriptMessage({
+      const result = await appendMessage({
         transcriptPath: target.sessionFile,
         message: append.message,
         ...(target.sessionId ? { sessionId: target.sessionId } : {}),
@@ -500,26 +508,33 @@ export async function persistSessionTranscriptTurn(
     sessionFile: target.sessionFile,
     sessionKey: target.sessionKey,
   });
+  const runBatchWithOwnedLock = async () =>
+    await withOwnedSessionTranscriptWrites(
+      {
+        sessionFile: target.sessionFile,
+        sessionKey: target.sessionKey,
+        withSessionWriteLock: async (run) => await run(),
+      },
+      async () => await appendMessages(appendSessionTranscriptMessageWithOwnedWriteLock),
+    );
   if (activeLockRunner) {
-    await activeLockRunner(appendMessages);
+    await activeLockRunner(
+      () => withSessionTranscriptAppendQueue(target.sessionFile, runBatchWithOwnedLock),
+      { publishOwnedWrite: true },
+    );
   } else {
-    const lock = await acquireSessionWriteLock({
-      sessionFile: target.sessionFile,
-      ...resolveSessionWriteLockOptions(options.config),
-      allowReentrant: true,
+    await withSessionTranscriptAppendQueue(target.sessionFile, async () => {
+      const lock = await acquireSessionWriteLock({
+        sessionFile: target.sessionFile,
+        ...resolveSessionWriteLockOptions(options.config),
+        allowReentrant: true,
+      });
+      try {
+        await runBatchWithOwnedLock();
+      } finally {
+        await lock.release();
+      }
     });
-    try {
-      await withOwnedSessionTranscriptWrites(
-        {
-          sessionFile: target.sessionFile,
-          sessionKey: target.sessionKey,
-          withSessionWriteLock: async (run) => await run(),
-        },
-        appendMessages,
-      );
-    } finally {
-      await lock.release();
-    }
   }
 
   const appendedCount = appendedMessages.filter((message) => message.appended).length;

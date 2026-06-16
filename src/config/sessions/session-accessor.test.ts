@@ -22,6 +22,7 @@ import {
   upsertSessionEntry,
 } from "./session-accessor.js";
 import { loadSessionStore } from "./store.js";
+import { withOwnedSessionTranscriptWrites } from "./transcript-write-context.js";
 import type { SessionEntry } from "./types.js";
 
 describe("session accessor file-backed seam", () => {
@@ -537,8 +538,8 @@ describe("session accessor file-backed seam", () => {
   it("persists a transcript turn, touches metadata, and publishes after the write", async () => {
     const scope = {
       agentId: "main",
-      sessionId: "session-1",
-      sessionKey: "agent:main:main",
+      sessionId: "session-lock-order",
+      sessionKey: "agent:main:lock-order",
       storePath,
     };
     await upsertSessionEntry(scope, {
@@ -612,6 +613,127 @@ describe("session accessor file-backed seam", () => {
         sessionFile: result.sessionFile,
         updatedAt: expect.any(Number),
       },
+    ]);
+  });
+
+  it("queues transcript turn appends before taking the file write lock", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "session-1",
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+    await upsertSessionEntry(scope, {
+      sessionId: scope.sessionId,
+      updatedAt: 10,
+    });
+    let markShouldAppendEntered!: () => void;
+    const shouldAppendEntered = new Promise<void>((resolve) => {
+      markShouldAppendEntered = resolve;
+    });
+    let resumeShouldAppend!: () => void;
+    const shouldAppendReleased = new Promise<boolean>((resolve) => {
+      resumeShouldAppend = () => resolve(true);
+    });
+
+    const turnPromise = persistSessionTranscriptTurn(scope, {
+      cwd: tempDir,
+      messages: [
+        {
+          message: {
+            role: "assistant",
+            content: "batch reply",
+            timestamp: 100,
+          },
+          shouldAppend: async () => {
+            markShouldAppendEntered();
+            return await shouldAppendReleased;
+          },
+        },
+      ],
+      publishWhen: "always",
+      touchSessionEntry: true,
+      updateMode: "file-only",
+    });
+
+    await shouldAppendEntered;
+    const queuedAppendPromise = appendTranscriptMessage(scope, {
+      cwd: tempDir,
+      message: {
+        role: "user",
+        content: "queued prompt",
+        timestamp: 200,
+      },
+    });
+    resumeShouldAppend();
+
+    const results = Promise.all([turnPromise, queuedAppendPromise]);
+    const completed = await Promise.race([
+      results.then(() => true),
+      new Promise<boolean>((resolve) => {
+        setTimeout(() => resolve(false), 1_000);
+      }),
+    ]);
+    expect(completed).toBe(true);
+    const [turnResult] = await results;
+
+    const events = await loadTranscriptEvents({ ...scope, sessionFile: turnResult.sessionFile });
+    expect(
+      events
+        .filter(
+          (event): event is { message?: { content?: unknown }; type?: unknown } =>
+            typeof event === "object" &&
+            event !== null &&
+            (event as { type?: unknown }).type === "message",
+        )
+        .map((event) => event.message?.content),
+    ).toEqual(["batch reply", "queued prompt"]);
+  });
+
+  it("publishes transcript turn appends through an active owned write lock", async () => {
+    const scope = {
+      agentId: "main",
+      sessionFile: transcriptPath,
+      sessionId: "session-owned-publish",
+      sessionKey: "agent:main:owned-publish",
+      storePath,
+    };
+    const publishOptions: Array<boolean | undefined> = [];
+
+    await withOwnedSessionTranscriptWrites(
+      {
+        sessionFile: transcriptPath,
+        sessionKey: scope.sessionKey,
+        withSessionWriteLock: async (run, options) => {
+          publishOptions.push(options?.publishOwnedWrite);
+          return await run();
+        },
+      },
+      async () =>
+        await persistSessionTranscriptTurn(scope, {
+          cwd: tempDir,
+          messages: [
+            {
+              message: {
+                role: "assistant",
+                content: "owned batch",
+                timestamp: 100,
+              },
+            },
+          ],
+          publishWhen: "always",
+          touchSessionEntry: true,
+          updateMode: "file-only",
+        }),
+    );
+
+    expect(publishOptions).toEqual([true]);
+    await expect(loadTranscriptEvents(scope)).resolves.toEqual([
+      expect.objectContaining({ type: "session" }),
+      expect.objectContaining({
+        message: expect.objectContaining({ content: "owned batch" }),
+        type: "message",
+      }),
     ]);
   });
 
