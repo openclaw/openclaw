@@ -59,7 +59,7 @@ export async function setVoiceWakeTriggers(
       triggers: sanitized,
       updatedAtMs: Date.now(),
     };
-    await writeJson(filePath, next);
+    await writeJson(filePath, next, { dirMode: 0o700 });
     return next;
   });
 }

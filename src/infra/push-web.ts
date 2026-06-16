@@ -95,7 +95,7 @@ async function loadState(baseDir?: string): Promise<WebPushRegistrationState> {
 
 async function persistState(state: WebPushRegistrationState, baseDir?: string): Promise<void> {
   const filePath = resolveWebPushStatePath(baseDir);
-  await writeJson(filePath, state, { trailingNewline: true });
+  await writeJson(filePath, state, { trailingNewline: true, dirMode: 0o700 });
 }
 
 // --- VAPID keys ---
@@ -134,7 +134,7 @@ export async function resolveVapidKeys(baseDir?: string): Promise<VapidKeyPair> 
       privateKey: keys.privateKey,
       subject: resolveVapidSubjectFromEnv(),
     };
-    await writeJson(filePath, pair, { trailingNewline: true });
+    await writeJson(filePath, pair, { trailingNewline: true, dirMode: 0o700 });
     return pair;
   });
 }

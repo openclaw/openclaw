@@ -212,6 +212,18 @@ describe("json file helpers", () => {
     expect(events).toEqual(expectedEvents);
   });
 
+  it("writeTextAtomic respects explicit dirMode override (#89589)", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    await withTempDir({ prefix: "openclaw-json-files-dirmode-" }, async (base) => {
+      const filePath = path.join(base, "nested", "note.txt");
+      await writeTextAtomic(filePath, "content", { dirMode: 0o700 });
+      const dirStat = await fsPromises.stat(path.join(base, "nested"));
+      expect(dirStat.mode & 0o777).toBe(0o700);
+    });
+  });
+
   describe("retry behaviors on 'File changed during read'", () => {
     /**
      * Helper: spy on fsPromises.lstat for our target file path.

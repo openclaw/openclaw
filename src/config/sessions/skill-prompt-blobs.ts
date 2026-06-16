@@ -187,6 +187,7 @@ async function ensurePromptBlob(storePath: string, prompt: string): Promise<Sess
   await writeTextAtomic(blobPath, prompt, {
     durable: false,
     mode: 0o600,
+    dirMode: 0o700,
     tempPrefix: path.basename(blobPath),
   });
   rememberValidPromptBlob(blobPath, await fs.promises.stat(blobPath), prompt);

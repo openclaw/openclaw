@@ -65,7 +65,7 @@ export async function loadNodeHostConfig(): Promise<NodeHostConfig | null> {
 /** Save node-host config with private file permissions. */
 export async function saveNodeHostConfig(config: NodeHostConfig): Promise<void> {
   const filePath = resolveNodeHostConfigPath();
-  await writeJson(filePath, config, { mode: 0o600 });
+  await writeJson(filePath, config, { mode: 0o600, dirMode: 0o700 });
 }
 
 /** Load or create a node-host config with a stable generated node id. */

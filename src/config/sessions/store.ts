@@ -1161,6 +1161,7 @@ async function writeSessionStoreAtomic(params: {
   await writeTextAtomic(params.storePath, params.serialized, {
     durable: false,
     mode: 0o600,
+    dirMode: 0o700,
     tempPrefix: path.basename(params.storePath),
     beforeRename: async () => {
       await ensureSessionStorePromptBlobsForPersistence({
