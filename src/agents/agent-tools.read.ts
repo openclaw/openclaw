@@ -1,12 +1,13 @@
 /**
  * Read/write/edit tool wrappers for host and sandbox workspaces.
  * Adds workspace-root guards, adaptive read paging, image validation, memory
- * append-only writes, and parameter cleanup around the session file tools.
+ * append-only writes, parameter cleanup, and extension validation around the
+ * session file tools.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { URL } from "node:url";
-import { detectMime } from "@openclaw/media-core/mime";
+import { detectMime, getFileExtension } from "@openclaw/media-core/mime";
 import { isWindowsDrivePath } from "../infra/archive-path.js";
 import {
   canonicalPathFromExistingAncestor,
@@ -533,12 +534,70 @@ function mapContainerPathToRoot(params: {
   };
 }
 
+/**
+ * Extensions that indicate model-side hallucination or corruption.
+ * These strings should never appear in legitimate file extensions and
+ * suggest the model blended "codex" (OpenAI Codex integration) with an
+ * office-document extension (e.g. .docx → .docodex).
+ *
+ * Extension validation rejects tool calls containing these patterns
+ * before they reach the filesystem or shell, producing a clear retry
+ * signal instead of a cryptic ENOENT.
+ */
+const HALLUCINATED_EXTENSION_SUBSTRINGS = new Set(["odex", "codex"]);
+
+/** Known-safe file extensions compiled from MIME mappings and common development formats. */
+const KNOWN_FILE_EXTENSIONS = new Set([
+  // Media/document types (from MIME_BY_EXT)
+  ".heic", ".heif", ".bmp", ".jpg", ".jpeg", ".png", ".svg", ".webp", ".gif",
+  ".ogg", ".mp3", ".wav", ".flac", ".aac", ".opus", ".m4a", ".caf",
+  ".avi", ".mp4", ".mkv", ".flv", ".wmv", ".mov",
+  ".pdf", ".json", ".yaml", ".yml", ".zip", ".gz", ".tar", ".7z", ".rar",
+  ".doc", ".xls", ".ppt", ".docx", ".xlsx", ".pptx",
+  ".csv", ".txt", ".md", ".html", ".htm", ".xml", ".css", ".js", ".log",
+  // Common development and config formats
+  ".ts", ".tsx", ".jsx", ".mjs", ".cjs", ".mts", ".cts",
+  ".py", ".rb", ".go", ".rs", ".java", ".c", ".cpp", ".h", ".hpp",
+  ".sh", ".bash", ".zsh", ".bat", ".ps1",
+  ".jsonl", ".toml", ".ini", ".cfg", ".conf", ".env",
+  ".sql", ".db", ".sqlite", ".sqlite3",
+  ".lock", ".patch", ".diff", ".snap",
+  ".wasm", ".d.ts", ".map",
+  ".eot", ".ttf", ".woff", ".woff2",
+  ".npmrc", ".yarnrc", ".editorconfig", ".gitattributes",
+]);
+
+/** Validate that a file path's extension is not a known hallucinated/corrupted pattern. */
+export function validateToolFilePathExtension(filePath: string): void {
+  if (typeof filePath !== "string" || !filePath.trim()) {
+    return;
+  }
+  const ext = getFileExtension(filePath);
+  if (!ext) {
+    return; // No extension to validate.
+  }
+  const lowerExt = ext.toLowerCase();
+  for (const substring of HALLUCINATED_EXTENSION_SUBSTRINGS) {
+    if (lowerExt.includes(substring)) {
+      // Try to suggest the intended extension.
+      const cleaned = lowerExt.replace(new RegExp(substring, "g"), "");
+      const suggestion = cleaned && KNOWN_FILE_EXTENSIONS.has(cleaned) ? ` (did you mean \`${cleaned}\`?)` : "";
+      throw new Error(
+        `Suspicious file extension \`${ext}\` in tool call argument. ` +
+        `This appears to be a model-side hallucination blending a real extension with "codex".${suggestion} ` +
+        `Use the correct file extension observed in the file system.`,
+      );
+    }
+  }
+}
+
 /** Resolve a model-supplied file path against the host workspace root. */
 export function resolveToolPathAgainstWorkspaceRoot(params: {
   filePath: string;
   root: string;
   containerWorkdir?: string;
 }): string {
+  validateToolFilePathExtension(params.filePath);
   const mapped = mapContainerPathToWorkspaceRoot(params);
   const candidate = mapped.startsWith("@") ? mapped.slice(1) : mapped;
   if (isWindowsDrivePath(candidate)) {
@@ -774,6 +833,7 @@ export function wrapToolWorkspaceRootGuardWithOptions(
         if (!filePath.trim()) {
           throw malformedXmlArgValuePathError(key);
         }
+        validateToolFilePathExtension(filePath);
         if (filePath !== rawFilePath && record) {
           normalizedRecord ??= { ...record };
           normalizedRecord[key] = filePath;
