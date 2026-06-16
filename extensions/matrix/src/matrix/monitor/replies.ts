@@ -2,7 +2,7 @@
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
 import type { MatrixClient } from "../sdk.js";
-import { chunkMatrixText, sendMessageMatrix } from "../send.js";
+import { chunkMatrixText, MsgType, sendMessageMatrix } from "../send.js";
 import type { MarkdownTableMode, OpenClawConfig, ReplyPayload, RuntimeEnv } from "./runtime-api.js";
 
 const THINKING_TAG_RE = /<\s*\/?\s*(?:think(?:ing)?|thought|antthinking)\b[^<>]*>/gi;
@@ -60,10 +60,11 @@ export async function deliverMatrixReplies(params: {
   let hasReplied = false;
   let deliveredAny = false;
   for (const reply of params.replies) {
-    if (reply.isReasoning === true || shouldSuppressReasoningReplyText(reply.text)) {
-      logVerbose("matrix reply suppressed as reasoning-only");
-      continue;
-    }
+    // Deliver reasoning payloads as m.notice instead of suppressing.
+    // Matrix supports m.notice for non-intrusive messages (like typing indicators).
+    // This matches Telegram's reasoning delivery behavior.
+    const isReasoning = reply.isReasoning === true || shouldSuppressReasoningReplyText(reply.text);
+    const reasoningMsgType = isReasoning ? MsgType.Notice : undefined;
     const hasMedia = Boolean(reply?.mediaUrl) || (reply?.mediaUrls?.length ?? 0) > 0;
     if (!reply?.text && !hasMedia) {
       if (reply?.audioAsVoice) {
@@ -108,6 +109,7 @@ export async function deliverMatrixReplies(params: {
           replyToId: replyToIdForReply,
           threadId: params.threadId,
           accountId: params.accountId,
+          msgtype: reasoningMsgType,
         });
         deliveredAny = true;
         sentTextChunk = true;
@@ -130,6 +132,7 @@ export async function deliverMatrixReplies(params: {
         threadId: params.threadId,
         audioAsVoice: reply.audioAsVoice,
         accountId: params.accountId,
+        msgtype: reasoningMsgType,
       });
       deliveredAny = true;
       first = false;

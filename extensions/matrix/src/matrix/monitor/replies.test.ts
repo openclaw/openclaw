@@ -18,6 +18,7 @@ vi.mock("../send.js", () => ({
   chunkMatrixText: (text: string, opts?: unknown) => chunkMatrixTextMock(text, opts),
   sendMessageMatrix: (to: string, message: string, opts?: unknown) =>
     sendMessageMatrixMock(to, message, opts),
+  MsgType: { Text: "m.text", Notice: "m.notice", Image: "m.image", Audio: "m.audio" },
 }));
 
 import { setMatrixRuntime } from "../../runtime.js";
@@ -177,7 +178,7 @@ describe("deliverMatrixReplies", () => {
     expect(sendOptions(1).threadId).toBe("thread-77");
   });
 
-  it("suppresses reasoning-only text before Matrix sends", async () => {
+  it("delivers reasoning-only text as m.notice and normal text as m.text", async () => {
     await deliverMatrixReplies({
       cfg,
       replies: [
@@ -192,10 +193,21 @@ describe("deliverMatrixReplies", () => {
       replyToMode: "off",
     });
 
-    expect(sendMessageMatrixMock).toHaveBeenCalledTimes(1);
+    // All 3 replies are now delivered: reasoning as m.notice, normal as m.text
+    expect(sendMessageMatrixMock).toHaveBeenCalledTimes(3);
+
+    // First reply (reasoning prefix) -> m.notice
     expect(sendCall(0)[0]).toBe("room:5");
-    expect(sendCall(0)[1]).toBe("Visible answer");
-    expect(sendOptions(0).cfg).toBe(cfg);
+    expect(sendCall(0)[1]).toBe("Reasoning:\n_hidden_");
+    expect(sendOptions(0).msgtype).toBe("m.notice");
+
+    // Second reply (thinking tags only) -> m.notice
+    expect(sendCall(1)[1]).toBe("<think>still hidden</think>");
+    expect(sendOptions(1).msgtype).toBe("m.notice");
+
+    // Third reply (normal text) -> undefined (defaults to m.text)
+    expect(sendCall(2)[1]).toBe("Visible answer");
+    expect(sendOptions(2).msgtype).toBeUndefined();
   });
 
   it("uses supplied cfg for chunking and send delivery without reloading runtime config", async () => {
@@ -254,5 +266,56 @@ describe("deliverMatrixReplies", () => {
     expect(sendCall(0)[0]).toBe("room:6");
     expect(sendCall(0)[1]).toBe("caption");
     expect(sendOptions(0).mediaUrl).toBe("https://example.com/a.jpg");
+  });
+
+  it("delivers reasoning payloads as m.notice instead of suppressing (regression #81892)", async () => {
+    await deliverMatrixReplies({
+      cfg,
+      replies: [{ text: "Thinking about the answer...", isReasoning: true }],
+      roomId: "room:7",
+      client: {} as MatrixClient,
+      runtime: runtimeEnv,
+      textLimit: 4000,
+      replyToMode: "off",
+    });
+
+    expect(sendMessageMatrixMock).toHaveBeenCalledTimes(1);
+    expect(sendCall(0)[0]).toBe("room:7");
+    expect(sendCall(0)[1]).toBe("Thinking about the answer...");
+    expect(sendOptions(0).msgtype).toBe("m.notice");
+  });
+
+  it("delivers reasoning text with thinking tags as m.notice", async () => {
+    await deliverMatrixReplies({
+      cfg,
+      replies: [{ text: "<thinking>internal reasoning</thinking> Here is my answer." }],
+      roomId: "room:8",
+      client: {} as MatrixClient,
+      runtime: runtimeEnv,
+      textLimit: 4000,
+      replyToMode: "off",
+    });
+
+    // Text with thinking tags that also has non-thinking content should be delivered normally
+    expect(sendMessageMatrixMock).toHaveBeenCalledTimes(1);
+    expect(sendCall(0)[0]).toBe("room:8");
+    // msgtype should be undefined (default m.text) since it's not pure reasoning
+    expect(sendOptions(0).msgtype).toBeUndefined();
+  });
+
+  it("delivers pure thinking-tag-only text as m.notice", async () => {
+    await deliverMatrixReplies({
+      cfg,
+      replies: [{ text: "<thinking>only thinking content here</thinking>" }],
+      roomId: "room:9",
+      client: {} as MatrixClient,
+      runtime: runtimeEnv,
+      textLimit: 4000,
+      replyToMode: "off",
+    });
+
+    expect(sendMessageMatrixMock).toHaveBeenCalledTimes(1);
+    expect(sendCall(0)[0]).toBe("room:9");
+    expect(sendOptions(0).msgtype).toBe("m.notice");
   });
 });
