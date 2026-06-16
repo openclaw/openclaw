@@ -1,6 +1,7 @@
 // Control UI chat module implements copy as markdown behavior.
 import { html, type TemplateResult } from "lit";
 import { icons } from "../icons.ts";
+import { copyToClipboard } from "./clipboard.ts";
 
 const COPIED_FOR_MS = 1500;
 const ERROR_FOR_MS = 2000;
@@ -12,19 +13,6 @@ type CopyButtonOptions = {
   text: () => string;
   label?: string;
 };
-
-async function copyTextToClipboard(text: string): Promise<boolean> {
-  if (!text) {
-    return false;
-  }
-
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 function setButtonLabel(button: HTMLButtonElement, label: string) {
   button.title = label;
@@ -50,7 +38,7 @@ function createCopyButton(options: CopyButtonOptions): TemplateResult {
         btn.setAttribute("aria-busy", "true");
         btn.disabled = true;
 
-        const copied = await copyTextToClipboard(options.text());
+        const copied = await copyToClipboard(options.text());
         if (!btn.isConnected) {
           return;
         }

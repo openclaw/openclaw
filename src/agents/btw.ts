@@ -30,7 +30,11 @@ import { EmbeddedBlockChunker, type BlockReplyChunking } from "./embedded-agent-
 import { resolveModelWithRegistry } from "./embedded-agent-runner/model.js";
 import { getActiveEmbeddedRunSnapshot } from "./embedded-agent-runner/runs.js";
 import { resolveEmbeddedAgentStreamFn } from "./embedded-agent-runner/stream-resolution.js";
-import { resolveAvailableAgentHarnessPolicy, selectAgentHarness } from "./harness/selection.js";
+import {
+  resolveAvailableAgentHarnessPolicy,
+  resolvePluginHarnessPolicyToolsAllow,
+  selectAgentHarness,
+} from "./harness/selection.js";
 import {
   resolveImageSanitizationLimits,
   type ImageSanitizationLimits,
@@ -357,6 +361,7 @@ type RunBtwSideQuestionParams = {
   sessionEntry: StoredSessionEntry;
   sessionStore?: Record<string, StoredSessionEntry>;
   sessionKey?: string;
+  sandboxSessionKey?: string;
   storePath?: string;
   resolvedThinkLevel?: ThinkLevel;
   resolvedReasoningLevel: ReasoningLevel;
@@ -366,6 +371,19 @@ type RunBtwSideQuestionParams = {
   isNewSession: boolean;
   messageChannel?: string;
   messageProvider?: string;
+  agentAccountId?: string;
+  messageTo?: string;
+  messageThreadId?: string | number;
+  groupId?: string | null;
+  groupChannel?: string | null;
+  groupSpace?: string | null;
+  memberRoleIds?: string[];
+  spawnedBy?: string | null;
+  senderId?: string | null;
+  senderName?: string | null;
+  senderUsername?: string | null;
+  senderE164?: string | null;
+  senderIsOwner?: boolean;
   currentChannelId?: string;
 };
 
@@ -479,6 +497,25 @@ export async function runBtwSideQuestion(
       storePath: params.storePath,
       isNewSession: params.isNewSession,
     });
+    const toolsAllow = resolvePluginHarnessPolicyToolsAllow({
+      config: params.cfg,
+      sessionKey: params.sessionKey,
+      sandboxSessionKey: params.sandboxSessionKey,
+      agentId: sessionAgentId,
+      provider: model.provider,
+      modelId: model.id,
+      messageProvider: params.messageProvider,
+      messageChannel: params.messageChannel,
+      spawnedBy: params.spawnedBy,
+      groupId: params.groupId,
+      groupChannel: params.groupChannel,
+      groupSpace: params.groupSpace,
+      agentAccountId: params.agentAccountId,
+      senderId: params.senderId,
+      senderName: params.senderName,
+      senderUsername: params.senderUsername,
+      senderE164: params.senderE164,
+    });
     const result = await harness.runSideQuestion({
       ...params,
       provider: model.provider,
@@ -488,6 +525,7 @@ export async function runBtwSideQuestion(
       sessionFile,
       agentId: sessionAgentId,
       workspaceDir,
+      ...(toolsAllow ? { toolsAllow } : {}),
       authProfileId,
       authProfileIdSource,
     });

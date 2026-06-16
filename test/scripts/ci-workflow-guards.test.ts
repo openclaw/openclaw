@@ -50,24 +50,27 @@ describe("ci workflow guards", () => {
 
   it("kills timed manual checkout fetches after the grace period", () => {
     const workflowPaths = [
-      ".github/workflows/ci.yml",
-      ".github/workflows/workflow-sanity.yml",
-      ".github/workflows/ci-check-testbox.yml",
-      ".github/workflows/ci-check-arm-testbox.yml",
-      ".github/workflows/ci-build-artifacts-testbox.yml",
-      ".github/workflows/crabbox-hydrate.yml",
+      [".github/workflows/ci.yml", "120s"],
+      [".github/workflows/workflow-sanity.yml", "30s"],
+      [".github/workflows/ci-check-testbox.yml", "120s"],
+      [".github/workflows/ci-check-arm-testbox.yml", "120s"],
+      [".github/workflows/ci-build-artifacts-testbox.yml", "120s"],
+      [".github/workflows/crabbox-hydrate.yml", "30s"],
     ];
 
-    for (const workflowPath of workflowPaths) {
+    for (const [workflowPath, timeoutSeconds] of workflowPaths) {
       const workflow = readFileSync(workflowPath, "utf8");
       const fetchTimeouts = workflow.match(
-        /timeout --signal=TERM[^\n]* 30s git(?: -C "(?:\$workdir|\$GITHUB_WORKSPACE|clawhub-source)")?/g,
+        new RegExp(
+          `timeout --signal=TERM[^\\n]* ${timeoutSeconds} git(?: -C "(?:\\$workdir|\\$GITHUB_WORKSPACE|clawhub-source)")?`,
+          "g",
+        ),
       );
 
       expect(fetchTimeouts?.length, workflowPath).toBeGreaterThan(0);
       expect(
         fetchTimeouts?.every((line) =>
-          line.startsWith("timeout --signal=TERM --kill-after=10s 30s git"),
+          line.startsWith(`timeout --signal=TERM --kill-after=10s ${timeoutSeconds} git`),
         ),
         workflowPath,
       ).toBe(true);
@@ -90,7 +93,7 @@ describe("ci workflow guards", () => {
       const checkoutStep = workflow.jobs[jobName].steps.find((step) => step.name === "Checkout");
 
       expect(checkoutStep.run, jobName).toContain(
-        'timeout --signal=TERM --kill-after=10s 30s git -C "$GITHUB_WORKSPACE"',
+        'timeout --signal=TERM --kill-after=10s 120s git -C "$GITHUB_WORKSPACE"',
       );
       expect(checkoutStep.run, jobName).toContain("for attempt in 1 2 3");
       expect(checkoutStep.run, jobName).toContain("timed out on attempt $attempt; retrying");
@@ -191,6 +194,35 @@ describe("ci workflow guards", () => {
     expect(workflow).toContain('throw "git fetch timed out after 30 seconds"');
     expect(workflow).not.toContain(
       'git fetch --no-tags --depth=50 origin "+refs/heads/main:refs/remotes/origin/main"',
+    );
+  });
+
+  it("fails Windows Testbox setup when Blacksmith phone-home is not accepted", () => {
+    const workflow = readFileSync(".github/workflows/windows-blacksmith-testbox.yml", "utf8");
+
+    expect(workflow).toContain('echo "phone_home_hydrating_http=${hydrating_http_code}"');
+    expect(workflow).toContain('echo "phone_home_ready_http=${http_code}"');
+    const hydratingFailureBlock = workflow.slice(
+      workflow.indexOf('if [[ ! "$hydrating_http_code" =~ ^2 ]]; then'),
+      workflow.indexOf('response="$(cat "$hydrating_response")"'),
+    );
+    const missingSshKeyFailureBlock = workflow.slice(
+      workflow.indexOf('if [ -z "$ssh_public_key" ]; then'),
+      workflow.indexOf("mkdir -p ~/.ssh"),
+    );
+    const readyFailureBlock = workflow.slice(
+      workflow.indexOf('if [[ ! "$http_code" =~ ^2 ]]; then'),
+      workflow.indexOf('echo "============================================"'),
+    );
+
+    expect(hydratingFailureBlock).toContain("exit 1");
+    expect(missingSshKeyFailureBlock).toContain("exit 1");
+    expect(readyFailureBlock).toContain("exit 1");
+    expect(workflow).toContain(
+      "Blacksmith phone-home did not return an SSH public key; testbox cannot accept CLI connections.",
+    );
+    expect(workflow).not.toContain(
+      'phone_home_ready_http=${http_code}"\n\n          echo "============================================"',
     );
   });
 
@@ -311,6 +343,18 @@ describe("ci workflow guards", () => {
       path: "ci-timings-summary.txt",
       "retention-days": 14,
     });
+  });
+
+  it("keeps workflow guards in fast CI-routing checks", () => {
+    const workflow = readCiWorkflow();
+    const fastCoreJob = workflow.jobs["checks-fast-core"];
+    const runStep = fastCoreJob.steps.find(
+      (step) => step.name === "Run ${{ matrix.task }} (${{ matrix.runtime }})",
+    );
+
+    expect(runStep.run).toContain("contracts-plugins-ci-routing)");
+    expect(runStep.run).toContain("ci-routing)");
+    expect(runStep.run.match(/test\/scripts\/ci-workflow-guards\.test\.ts/g)?.length).toBe(2);
   });
 
   it("keeps push docs validation ClawHub-backed", () => {
