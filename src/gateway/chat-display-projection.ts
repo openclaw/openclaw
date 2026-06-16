@@ -1609,7 +1609,12 @@ function projectEmptyAssistantErrorMessages(
           return false;
         }
         const type = (block as { type?: unknown }).type;
-        return type !== "text" && type !== "thinking" && type !== "reasoning";
+        return (
+          type !== "text" &&
+          type !== "thinking" &&
+          type !== "reasoning" &&
+          type !== "redacted_thinking"
+        );
       });
     if (
       message.role !== "assistant" ||
@@ -1622,10 +1627,12 @@ function projectEmptyAssistantErrorMessages(
       return message;
     }
     changed = true;
-    return {
+    const next = {
       ...message,
       content: [{ type: "text", text: GATEWAY_ASSISTANT_ERROR_FALLBACK_TEXT }],
     };
+    delete next.phase;
+    return next;
   });
   return changed ? projected : messages;
 }
@@ -1636,12 +1643,11 @@ export function projectChatDisplayMessages(
 ): Array<Record<string, unknown>> {
   const source = options?.stripEnvelope === false ? messages : stripEnvelopeFromMessages(messages);
   const mirrored = mirrorMessageToolVisibleReplies(source);
+  const projectedErrors = projectEmptyAssistantErrorMessages(toProjectedMessages(mirrored));
   const projectedForwarded = mergeTtsSupplementMessages(
     filterVisibleProjectedHistoryMessages(
-      projectEmptyAssistantErrorMessages(
-        projectSessionsSendInterSessionMessages(
-          toProjectedMessages(sanitizeChatHistoryMessages(mirrored, Number.MAX_SAFE_INTEGER)),
-        ),
+      projectSessionsSendInterSessionMessages(
+        toProjectedMessages(sanitizeChatHistoryMessages(projectedErrors, Number.MAX_SAFE_INTEGER)),
       ),
     ),
   );

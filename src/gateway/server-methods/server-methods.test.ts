@@ -956,6 +956,41 @@ describe("projectRecentChatDisplayMessages", () => {
     ]);
   });
 
+  it("projects redacted-thinking-only assistant errors as a generic safe failure", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        content: [{ type: "redacted_thinking", data: "private upstream details" }],
+        stopReason: "error",
+        errorMessage: "private upstream at secret.internal.example failed",
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result[0]?.content).toEqual([
+      { type: "text", text: "The agent run failed before producing a reply." },
+    ]);
+    expect(JSON.stringify(result[0]?.content)).not.toContain("secret.internal.example");
+  });
+
+  it("projects commentary-phase assistant errors as a visible generic safe failure", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        phase: "commentary",
+        content: [],
+        stopReason: "error",
+        errorMessage: "Connection error.",
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result[0]).not.toHaveProperty("phase");
+    expect(result[0]?.content).toEqual([
+      { type: "text", text: "The agent run failed before producing a reply." },
+    ]);
+  });
+
   it("leaves attachment-only assistant errors unchanged", () => {
     const attachment = {
       type: "attachment",
