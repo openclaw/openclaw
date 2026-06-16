@@ -122,6 +122,30 @@ function normalizeBranchSummaryResult(
   return { error: result.error.message };
 }
 
+function hasPersistedAssistantContent(content: unknown): boolean {
+  return (typeof content === "string" || Array.isArray(content)) && content.length > 0;
+}
+
+function extractPersistedAssistantText(content: unknown): string {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  let text = "";
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const candidate = block as { type?: unknown; text?: unknown };
+    if (candidate.type === "text" && typeof candidate.text === "string") {
+      text += candidate.text;
+    }
+  }
+  return text;
+}
+
 // ============================================================================
 // Skill Block Parsing
 // ============================================================================
@@ -3213,10 +3237,8 @@ export class AgentSession {
         if (m.role !== "assistant") {
           return false;
         }
-        const msg = m;
-        // Skip aborted messages with no content. `.length === 0` is correct for
-        // both an empty content array and a persisted/legacy string content "".
-        if (msg.stopReason === "aborted" && msg.content.length === 0) {
+        const content = (m as { content?: unknown }).content;
+        if (m.stopReason === "aborted" && !hasPersistedAssistantContent(content)) {
           return false;
         }
         return true;
@@ -3226,23 +3248,8 @@ export class AgentSession {
       return undefined;
     }
 
-    let text = "";
-    // Persisted/legacy transcripts may carry a string `content` (the same case
-    // hasAssistantToolCallArguments guards against). Treat it as the text itself,
-    // matching extractTextContent(); otherwise iterating the string would yield
-    // characters, never a `type === "text"` block, and silently drop the text.
-    const lastAssistantContent = (lastAssistant as AssistantMessage).content;
-    if (typeof lastAssistantContent === "string") {
-      text = lastAssistantContent;
-    } else {
-      for (const content of lastAssistantContent) {
-        if (content.type === "text") {
-          text += content.text;
-        }
-      }
-    }
-
-    return text.trim() || undefined;
+    const content = (lastAssistant as { content?: unknown }).content;
+    return extractPersistedAssistantText(content).trim() || undefined;
   }
 
   // =========================================================================
