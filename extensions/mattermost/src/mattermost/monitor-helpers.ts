@@ -57,11 +57,10 @@ export function normalizeMention(text: string, mention: string | undefined): str
 
 export function shouldDropEmptyMattermostBody(params: {
   bodyText: string;
-  wasMentioned: boolean;
   rawText: string;
   botUsername?: string | null;
 }): boolean {
-  if (params.bodyText || params.wasMentioned) {
+  if (params.bodyText) {
     return false;
   }
   const botUsername = normalizeLowercaseStringOrEmpty(params.botUsername ?? "");

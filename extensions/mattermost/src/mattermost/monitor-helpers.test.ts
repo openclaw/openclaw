@@ -87,7 +87,6 @@ describe("shouldDropEmptyMattermostBody", () => {
     expect(
       shouldDropEmptyMattermostBody({
         bodyText: "",
-        wasMentioned: false,
         rawText: "   ",
         botUsername: "openclaw",
       }),
@@ -98,7 +97,6 @@ describe("shouldDropEmptyMattermostBody", () => {
     expect(
       shouldDropEmptyMattermostBody({
         bodyText: "hello",
-        wasMentioned: false,
         rawText: "hello",
         botUsername: "openclaw",
       }),
@@ -109,7 +107,6 @@ describe("shouldDropEmptyMattermostBody", () => {
     expect(
       shouldDropEmptyMattermostBody({
         bodyText: "",
-        wasMentioned: true,
         rawText: "@openclaw",
         botUsername: "openclaw",
       }),
@@ -120,7 +117,6 @@ describe("shouldDropEmptyMattermostBody", () => {
     expect(
       shouldDropEmptyMattermostBody({
         bodyText: "",
-        wasMentioned: false,
         rawText: "@OpenClaw",
         botUsername: "openclaw",
       }),
@@ -131,9 +127,18 @@ describe("shouldDropEmptyMattermostBody", () => {
     expect(
       shouldDropEmptyMattermostBody({
         bodyText: "",
-        wasMentioned: false,
         rawText: "@someoneelse",
         botUsername: undefined,
+      }),
+    ).toBe(true);
+  });
+
+  it("drops a blank post even when a generic mention pattern matched it", () => {
+    expect(
+      shouldDropEmptyMattermostBody({
+        bodyText: "",
+        rawText: "",
+        botUsername: "openclaw",
       }),
     ).toBe(true);
   });
