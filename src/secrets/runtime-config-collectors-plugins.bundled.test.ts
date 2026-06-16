@@ -1,4 +1,5 @@
 /** Tests bundled plugin config secret collectors. */
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -105,15 +106,13 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
     });
   });
 
-  it("collects google-meet realtime provider SecretRef assignments from bundled manifest contracts", () => {
-    expect(
-      findBundledPluginMetadataById("google-meet", {
-        includeChannelConfigs: false,
-        includeSyntheticChannelConfigs: false,
-      })?.manifest.configContracts?.secretInputs?.paths,
-    ).toEqual([{ path: "realtime.providers.*.apiKey", expected: "string" }]);
+  it("collects google-meet realtime provider SecretRefs from its installed manifest", () => {
+    const googleMeetPluginDir = fileURLToPath(
+      new URL("../../extensions/google-meet", import.meta.url),
+    );
     const config = {
       plugins: {
+        load: { paths: [googleMeetPluginDir] },
         entries: {
           "google-meet": {
             enabled: true,
@@ -136,12 +135,8 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
     expect(
       resolvePluginConfigContractsById({
         config,
-        workspaceDir: resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config)),
         env: {},
-        fallbackToBundledMetadata: true,
-        fallbackToBundledMetadataForResolvedBundled: true,
         pluginIds: ["google-meet"],
-        fallbackBundledPluginIds: ["google-meet"],
       }).get("google-meet")?.configContracts.secretInputs?.paths,
     ).toEqual([{ path: "realtime.providers.*.apiKey", expected: "string" }]);
     const context = createResolverContext({
@@ -153,7 +148,7 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
       config,
       defaults: undefined,
       context,
-      loadablePluginOrigins: new Map([["google-meet", "bundled"]]),
+      loadablePluginOrigins: new Map([["google-meet", "config"]]),
     });
 
     expect({
