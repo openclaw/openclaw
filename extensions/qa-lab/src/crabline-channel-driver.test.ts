@@ -9,12 +9,12 @@ import {
 } from "./crabline-channel-driver.js";
 
 describe("crabline channel driver metadata", () => {
-  it("returns null when no channel driver is selected", () => {
-    expect(resolveQaCrablineChannelDriverSelection({})).toBeNull();
+  it("returns null when no channel driver is selected", async () => {
+    await expect(resolveQaCrablineChannelDriverSelection({})).resolves.toBeNull();
   });
 
-  it("resolves the Telegram SDK-backed channel driver", () => {
-    const selection = resolveQaCrablineChannelDriverSelection({
+  it("resolves the Telegram SDK-backed channel driver", async () => {
+    const selection = await resolveQaCrablineChannelDriverSelection({
       channel: "telegram",
       channelDriver: "crabline",
     });
@@ -24,6 +24,18 @@ describe("crabline channel driver metadata", () => {
       channel: "telegram",
       channelDriver: "crabline",
       smokeArtifactPath: "crabline-channel-smoke.json",
+    });
+  });
+
+  it("accepts channels reported ready by Crabline", async () => {
+    await expect(
+      resolveQaCrablineChannelDriverSelection({
+        channel: "slack",
+        channelDriver: "crabline",
+      }),
+    ).resolves.toMatchObject({
+      channel: "slack",
+      channelDriver: "crabline",
     });
   });
 
@@ -80,29 +92,31 @@ describe("crabline channel driver metadata", () => {
             outputDir,
           },
         ),
-      ).rejects.toThrow("provider telegram missing env TELEGRAM_BOT_TOKEN");
+      ).rejects.toThrow("provider telegram missing telegram.botToken or TELEGRAM_BOT_TOKEN");
     } finally {
       await fs.rm(outputDir, { recursive: true, force: true });
     }
   });
 
-  it("defaults to Telegram and rejects unsupported channels when the driver is selected", () => {
-    expect(resolveQaCrablineChannelDriverSelection({ channelDriver: "crabline" })).toEqual({
+  it("defaults to Telegram and rejects channels not reported ready by Crabline", async () => {
+    await expect(
+      resolveQaCrablineChannelDriverSelection({ channelDriver: "crabline" }),
+    ).resolves.toEqual({
       capabilityMatrixPath: "crabline-channel-capability-matrix.json",
       channel: "telegram",
       channelDriver: "crabline",
       smokeArtifactPath: "crabline-channel-smoke.json",
     });
-    expect(() =>
+    await expect(
       resolveQaCrablineChannelDriverSelection({
-        channel: "slack",
+        channel: "signal",
         channelDriver: "crabline",
       }),
-    ).toThrow("--channel must be one of telegram");
+    ).rejects.toThrow("--channel must be one of");
   });
 
-  it("rejects channel identity without a channel driver", () => {
-    expect(() => resolveQaCrablineChannelDriverSelection({ channel: "telegram" })).toThrow(
+  it("rejects channel identity without a channel driver", async () => {
+    await expect(resolveQaCrablineChannelDriverSelection({ channel: "telegram" })).rejects.toThrow(
       "--channel requires --channel-driver crabline",
     );
   });

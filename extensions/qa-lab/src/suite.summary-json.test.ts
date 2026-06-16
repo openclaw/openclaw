@@ -58,6 +58,18 @@ describe("buildQaSuiteSummaryJson", () => {
     expect(json.run.channelDriverSmokePath).toBe("crabline-channel-smoke.json");
   });
 
+  it("records declarative non-Crabline channel-driver metadata", () => {
+    const json = buildQaSuiteSummaryJson({
+      ...baseParams,
+      channelDriver: "live",
+    });
+
+    expect(json.run.channelDriver).toBe("live");
+    expect(json.run.channel).toBeNull();
+    expect(json.run.channelCapabilityMatrixPath).toBeNull();
+    expect(json.run.channelDriverSmokePath).toBeNull();
+  });
+
   it("includes scenarioIds in run metadata when provided", () => {
     const scenarioIds = ["approval-turn-tool-followthrough", "subagent-handoff", "memory-recall"];
     const json = buildQaSuiteSummaryJson({

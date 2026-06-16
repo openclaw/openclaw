@@ -1,18 +1,15 @@
 // Qa Lab plugin module models SDK-backed Crabline channel-driver metadata.
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
-const SUPPORTED_CRABLINE_CHANNELS = ["telegram"] as const;
-
-type CrablineChannel = (typeof SUPPORTED_CRABLINE_CHANNELS)[number];
-
 export type QaChannelDriverId = "crabline";
-export type QaCrablineChannelId = CrablineChannel;
+export type QaCrablineChannelId = string;
 
 export type QaCrablineChannelDriverSelection = {
   channel: QaCrablineChannelId;
@@ -26,9 +23,7 @@ export const QA_CRABLINE_CHANNEL_SMOKE_PATH = "crabline-channel-smoke.json";
 export const QA_CRABLINE_MANIFEST_PATH = "crabline-smoke.json";
 export const QA_CRABLINE_DEFAULT_CHANNEL = "telegram";
 
-function listSupportedCrablineChannels(): QaCrablineChannelId[] {
-  return [...SUPPORTED_CRABLINE_CHANNELS];
-}
+let supportedCrablineChannelsPromise: Promise<QaCrablineChannelId[]> | undefined;
 
 export function normalizeQaChannelDriverId(input?: string | null): QaChannelDriverId | null {
   const normalized = input?.trim().toLowerCase();
@@ -41,21 +36,23 @@ export function normalizeQaChannelDriverId(input?: string | null): QaChannelDriv
   throw new Error(`--channel-driver must be crabline, got "${input}".`);
 }
 
-export function normalizeQaCrablineChannel(input?: string | null): QaCrablineChannelId {
+export async function normalizeQaCrablineChannel(
+  input?: string | null,
+): Promise<QaCrablineChannelId> {
   const normalized = input?.trim().toLowerCase() || QA_CRABLINE_DEFAULT_CHANNEL;
-  if ((SUPPORTED_CRABLINE_CHANNELS as readonly string[]).includes(normalized)) {
-    return normalized as QaCrablineChannelId;
+  const supportedChannels = await listSupportedCrablineChannels();
+  if (supportedChannels.includes(normalized)) {
+    return normalized;
   }
-  const supportedChannels = listSupportedCrablineChannels();
   throw new Error(
     `--channel must be one of ${supportedChannels.join(", ")} for --channel-driver crabline, got "${input}".`,
   );
 }
 
-export function resolveQaCrablineChannelDriverSelection(params: {
+export async function resolveQaCrablineChannelDriverSelection(params: {
   channel?: string | null;
   channelDriver?: string | null;
-}): QaCrablineChannelDriverSelection | null {
+}): Promise<QaCrablineChannelDriverSelection | null> {
   const channelDriver = normalizeQaChannelDriverId(params.channelDriver);
   if (!channelDriver) {
     if (params.channel?.trim()) {
@@ -64,7 +61,7 @@ export function resolveQaCrablineChannelDriverSelection(params: {
     return null;
   }
 
-  const channel = normalizeQaCrablineChannel(params.channel);
+  const channel = await normalizeQaCrablineChannel(params.channel);
   return {
     channel,
     channelDriver,
@@ -90,36 +87,26 @@ function resolveCrablineBinPath() {
   return path.join(path.dirname(indexPath), "bin", "crabline.js");
 }
 
-function createCrablineManifest(selection: QaCrablineChannelDriverSelection, outputDir: string) {
-  switch (selection.channel) {
-    case "telegram":
-      return {
-        configVersion: 1,
-        fixtures: [
-          {
-            id: "telegram-openclaw-doctor",
-            mode: "probe",
-            provider: "telegram",
-            target: {
-              id: "openclaw-qa-lab-crabline-doctor",
-            },
-          },
-        ],
-        providers: {
-          telegram: {
-            adapter: "telegram",
-            env: ["TELEGRAM_BOT_TOKEN"],
-            telegram: {
-              mode: "polling",
-              recorder: {
-                path: path.join(outputDir, ".crabline", "recorders", "telegram.jsonl"),
-              },
-            },
-          },
-        },
-        userName: "openclaw-qa",
-      };
-  }
+function createCrablineCatalogManifest() {
+  return {
+    configVersion: 1,
+    fixtures: [],
+    providers: {},
+    userName: "openclaw-qa",
+  };
+}
+
+function createCrablineManifest(selection: QaCrablineChannelDriverSelection) {
+  return {
+    configVersion: 1,
+    fixtures: [],
+    providers: {
+      [selection.channel]: {
+        adapter: selection.channel,
+      },
+    },
+    userName: "openclaw-qa",
+  };
 }
 
 async function runCrablineJsonCommand(params: {
@@ -161,6 +148,55 @@ async function runCrablineJsonCommand(params: {
   }
 }
 
+function readCrablineSupportedChannels(payload: unknown): QaCrablineChannelId[] {
+  const support = (payload as { support?: unknown }).support;
+  if (!Array.isArray(support)) {
+    throw new Error("Crabline providers output did not include a support catalog.");
+  }
+  const channels = support
+    .flatMap((entry) => {
+      if (!entry || typeof entry !== "object") {
+        return [];
+      }
+      const candidate = entry as { platform?: unknown; status?: unknown };
+      return candidate.status === "ready" &&
+        typeof candidate.platform === "string" &&
+        candidate.platform !== "loopback"
+        ? [candidate.platform]
+        : [];
+    })
+    .toSorted((left, right) => left.localeCompare(right));
+  return [...new Set(channels)];
+}
+
+async function readSupportedCrablineChannels(): Promise<QaCrablineChannelId[]> {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "qa-crabline-catalog-"));
+  try {
+    const manifestPath = path.join(tempDir, "crabline-catalog.json");
+    await fs.writeFile(
+      manifestPath,
+      `${JSON.stringify(createCrablineCatalogManifest(), null, 2)}\n`,
+      "utf8",
+    );
+    const providers = await runCrablineJsonCommand({
+      args: ["--config", manifestPath, "providers"],
+      cwd: tempDir,
+    });
+    const supportedChannels = readCrablineSupportedChannels(providers.json);
+    if (supportedChannels.length === 0) {
+      throw new Error("Crabline did not report any ready channel providers.");
+    }
+    return supportedChannels;
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+async function listSupportedCrablineChannels(): Promise<QaCrablineChannelId[]> {
+  supportedCrablineChannelsPromise ??= readSupportedCrablineChannels();
+  return await supportedCrablineChannelsPromise;
+}
+
 export async function runQaCrablineChannelDriverSmoke(
   selection: QaCrablineChannelDriverSelection,
   params: {
@@ -171,7 +207,7 @@ export async function runQaCrablineChannelDriverSmoke(
   const manifestPath = path.join(params.outputDir, QA_CRABLINE_MANIFEST_PATH);
   await fs.writeFile(
     manifestPath,
-    `${JSON.stringify(createCrablineManifest(selection, params.outputDir), null, 2)}\n`,
+    `${JSON.stringify(createCrablineManifest(selection), null, 2)}\n`,
     "utf8",
   );
   const providers = await runCrablineJsonCommand({

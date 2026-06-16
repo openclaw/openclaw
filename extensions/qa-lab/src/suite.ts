@@ -60,7 +60,7 @@ import {
   type QaSeedScenarioWithSource,
 } from "./scenario-catalog.js";
 import { runScenarioFlow } from "./scenario-flow-runner.js";
-import type { QaScorecardEvidenceMode } from "./scorecard-taxonomy.js";
+import type { QaScorecardChannelDriver, QaScorecardEvidenceMode } from "./scorecard-taxonomy.js";
 import {
   applyQaMergePatch,
   collectQaSuiteGatewayConfigPatch,
@@ -116,6 +116,7 @@ export type QaSuiteRunParams = {
   outputDir?: string;
   providerMode?: QaProviderMode;
   transportId?: QaTransportId;
+  channelDriver?: QaScorecardChannelDriver;
   channelDriverSelection?: QaCrablineChannelDriverSelection | null;
   primaryModel?: string;
   alternateModel?: string;
@@ -419,6 +420,7 @@ function buildQaIsolatedScenarioWorkerParams(params: {
   outputDir: string;
   providerMode: QaProviderMode;
   transportId: QaTransportId;
+  channelDriver?: QaScorecardChannelDriver;
   channelDriverSelection?: QaCrablineChannelDriverSelection | null;
   primaryModel: string;
   alternateModel: string;
@@ -432,6 +434,7 @@ function buildQaIsolatedScenarioWorkerParams(params: {
     outputDir: params.outputDir,
     providerMode: params.providerMode,
     transportId: params.transportId,
+    channelDriver: params.channelDriver,
     channelDriverSelection: params.channelDriverSelection,
     primaryModel: params.primaryModel,
     alternateModel: params.alternateModel,
@@ -538,6 +541,7 @@ export type QaSuiteSummaryJsonParams = {
   alternateModel: string;
   fastMode: boolean;
   concurrency: number;
+  channelDriver?: QaScorecardChannelDriver | null;
   channelDriverSelection?: QaCrablineChannelDriverSelection | null;
   scenarioIds?: readonly string[];
   runtimePair?: [RuntimeId, RuntimeId];
@@ -598,7 +602,7 @@ export function buildQaSuiteSummaryJson(params: QaSuiteSummaryJsonParams): QaSui
       alternateModelName: alternateSplit?.model ?? null,
       fastMode: params.fastMode,
       concurrency: params.concurrency,
-      channelDriver: params.channelDriverSelection?.channelDriver ?? null,
+      channelDriver: params.channelDriver ?? params.channelDriverSelection?.channelDriver ?? null,
       channel: params.channelDriverSelection?.channel ?? null,
       channelCapabilityMatrixPath: params.channelDriverSelection?.capabilityMatrixPath ?? null,
       channelDriverSmokePath: params.channelDriverSelection?.smokeArtifactPath ?? null,
@@ -622,6 +626,7 @@ async function runQaRuntimeParitySuite(params: {
   thinkingDefault?: QaThinkingLevel;
   claudeCliAuthMode?: QaCliBackendAuthMode;
   enabledPluginIds?: string[];
+  channelDriver?: QaScorecardChannelDriver | null;
   channelDriverSelection?: QaCrablineChannelDriverSelection | null;
   concurrency: number;
   selectedScenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"];
@@ -695,6 +700,7 @@ async function runQaRuntimeParitySuite(params: {
               outputDir: cellOutputDir,
               providerMode: params.providerMode,
               transportId: params.transportId,
+              channelDriver: params.channelDriver ?? undefined,
               channelDriverSelection: params.channelDriverSelection,
               primaryModel: remapModelRefForForcedRuntime({
                 modelRef: params.primaryModel,
@@ -797,6 +803,7 @@ async function runQaRuntimeParitySuite(params: {
       alternateModel: params.alternateModel,
       fastMode: params.fastMode,
       concurrency: params.concurrency,
+      channelDriver: params.channelDriver,
       channelDriverSelection: params.channelDriverSelection,
       scenarioIds:
         params.scenarioIds && params.scenarioIds.length > 0
@@ -850,6 +857,7 @@ async function writeQaSuiteArtifacts(params: {
   alternateModel: string;
   fastMode: boolean;
   concurrency: number;
+  channelDriver?: QaScorecardChannelDriver | null;
   channelDriverSelection?: QaCrablineChannelDriverSelection | null;
   isolatedWorkers?: boolean;
   scenarioIds?: readonly string[];
@@ -863,6 +871,18 @@ async function writeQaSuiteArtifacts(params: {
         outputDir: params.outputDir,
       })
     : undefined;
+  const channelDriverArtifactPaths = params.channelDriverSelection
+    ? [
+        {
+          kind: "channel-capability-matrix",
+          path: params.channelDriverSelection.capabilityMatrixPath,
+        },
+        {
+          kind: "channel-driver-smoke",
+          path: params.channelDriverSelection.smokeArtifactPath,
+        },
+      ]
+    : [];
   const report = renderQaMarkdownReport({
     title: "OpenClaw QA Scenario Suite",
     startedAt: params.startedAt,
@@ -882,22 +902,11 @@ async function writeQaSuiteArtifacts(params: {
           artifactPaths: [
             { kind: "summary", path: path.basename(summaryPath) },
             { kind: "report", path: path.basename(reportPath) },
-            ...(params.channelDriverSelection
-              ? [
-                  {
-                    kind: "channel-capability-matrix",
-                    path: params.channelDriverSelection.capabilityMatrixPath,
-                  },
-                  {
-                    kind: "channel-driver-smoke",
-                    path: params.channelDriverSelection.smokeArtifactPath,
-                  },
-                ]
-              : []),
+            ...channelDriverArtifactPaths,
           ],
           evidenceMode: params.evidenceMode,
           channelId: params.channelDriverSelection?.channel ?? params.transport.id,
-          channelDriver: params.channelDriverSelection?.channelDriver,
+          channelDriver: params.channelDriver ?? params.channelDriverSelection?.channelDriver,
           env: process.env,
           generatedAt: params.finishedAt.toISOString(),
           primaryModel: params.primaryModel,
@@ -1152,6 +1161,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
       providerMode,
       transportId,
       channelDriverSelection: params?.channelDriverSelection,
+      channelDriver: params?.channelDriver,
       primaryModel,
       alternateModel,
       fastMode,
@@ -1225,6 +1235,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
             alternateModel,
             fastMode,
             concurrency,
+            channelDriver: params?.channelDriver,
             channelDriverSelection: params?.channelDriverSelection,
             isolatedWorkers: true,
             scenarioIds:
@@ -1274,6 +1285,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
                 outputDir: scenarioOutputDir,
                 providerMode,
                 transportId,
+                channelDriver: params?.channelDriver,
                 channelDriverSelection: params?.channelDriverSelection,
                 primaryModel,
                 alternateModel,
@@ -1372,6 +1384,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
         alternateModel,
         fastMode,
         concurrency,
+        channelDriver: params?.channelDriver,
         channelDriverSelection: params?.channelDriverSelection,
         isolatedWorkers: true,
         // When the caller supplied an explicit non-empty --scenario filter,
@@ -1638,6 +1651,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
       alternateModel,
       fastMode,
       concurrency,
+      channelDriver: params?.channelDriver,
       channelDriverSelection: params?.channelDriverSelection,
       isolatedWorkers: false,
       // Same "filtered → executed list, unfiltered → null" convention as

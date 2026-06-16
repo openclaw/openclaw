@@ -75,10 +75,11 @@ import {
 import { resolveQaScenarioPackScenarioIds } from "./scenario-packs.js";
 import { attachQaProfileScorecardEvidenceToFile } from "./scorecard-evidence.js";
 import {
+  qaScorecardChannelDriverSchema,
   readQaScorecardTaxonomyReport,
   type QaScorecardCategoryCoverageReport,
+  type QaScorecardChannelDriver,
   type QaScorecardEvidenceMode,
-  type QaScorecardProfileReport,
 } from "./scorecard-taxonomy.js";
 import { isQaSelfCheckSuccessful } from "./self-check.js";
 import { runQaFlowSuiteFromRuntime, runQaSuite } from "./suite-launch.runtime.js";
@@ -156,6 +157,20 @@ export type QaSuiteCommandOptions = QaScenarioRunCommandOptions & {
   runtimePair?: string;
   runtimeParityTier?: string[];
 };
+
+function normalizeQaSuiteChannelDriver(
+  input?: string | null,
+): QaScorecardChannelDriver | undefined {
+  const normalized = input?.trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  const parsed = qaScorecardChannelDriverSchema.safeParse(normalized);
+  if (parsed.success) {
+    return parsed.data;
+  }
+  throw new Error(`--channel-driver must be one of qa-channel, crabline, or live, got "${input}".`);
+}
 
 function resolveQaManualLaneModels(opts: {
   providerMode: QaProviderMode;
@@ -720,7 +735,7 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
       scenarioIds: scenarios.map((scenario) => scenario.id),
       concurrency: opts.concurrency,
       allowFailures: opts.allowFailures,
-      ...qaSuiteChannelDriverOptionsForProfile(profileReport),
+      channelDriver: profileReport.channelDriver,
     });
     evidencePath =
       suiteResult && "evidencePath" in suiteResult ? suiteResult.evidencePath : undefined;
@@ -739,17 +754,6 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
     categories,
   });
   process.stdout.write(`QA profile scorecard: ${evidencePath}\n`);
-}
-
-function qaSuiteChannelDriverOptionsForProfile(
-  profile: QaScorecardProfileReport,
-): Pick<QaSuiteCommandOptions, "channelDriver"> {
-  if (profile.channelDriver !== "crabline") {
-    return {};
-  }
-  return {
-    channelDriver: profile.channelDriver,
-  };
 }
 
 function selectQaScenarioDefinitionsForChannelResolution(params: {
@@ -857,8 +861,12 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
   const claudeCliAuthMode = parseQaCliBackendAuthMode(opts.cliAuthMode);
   const primaryModel = normalizeQaOptionalModelRef(opts.primaryModel);
   const alternateModel = normalizeQaOptionalModelRef(opts.alternateModel);
+  const channelDriver = normalizeQaSuiteChannelDriver(opts.channelDriver);
+  if (opts.channel?.trim() && channelDriver !== "crabline") {
+    throw new Error("--channel requires --channel-driver crabline.");
+  }
   const selectedScenarioChannel =
-    opts.channelDriver?.trim().toLowerCase() === "crabline"
+    channelDriver === "crabline"
       ? resolveQaSuiteScenarioChannel({
           defaultChannel: QA_CRABLINE_DEFAULT_CHANNEL,
           explicitChannel: opts.channel,
@@ -870,10 +878,13 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
           }),
         })
       : opts.channel;
-  const channelDriverSelection = resolveQaCrablineChannelDriverSelection({
-    channel: selectedScenarioChannel,
-    channelDriver: opts.channelDriver,
-  });
+  const channelDriverSelection =
+    channelDriver === "crabline"
+      ? await resolveQaCrablineChannelDriverSelection({
+          channel: selectedScenarioChannel,
+          channelDriver,
+        })
+      : undefined;
   if (runner !== "host" && runner !== "multipass") {
     throw new Error(`--runner must be one of host or multipass, got "${opts.runner}".`);
   }
@@ -951,7 +962,8 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
       outputDir: resolveRepoRelativeOutputDir(repoRoot, opts.outputDir),
       evidenceMode: opts.evidenceMode,
       transportId,
-      ...(channelDriverSelection ? { channelDriverSelection } : {}),
+      channelDriver,
+      channelDriverSelection,
       ...(opts.providerMode !== undefined ? { providerMode } : {}),
       primaryModel,
       alternateModel,
