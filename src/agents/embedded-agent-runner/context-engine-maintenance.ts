@@ -31,7 +31,6 @@ import {
 } from "../../tasks/task-owner-access.js";
 import { findActiveSessionTask } from "../session-async-task-status.js";
 import { resolveContextEngineCapabilities } from "./context-engine-capabilities.js";
-import { resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import {
   rewriteTranscriptEntriesInSessionFile,
@@ -207,6 +206,14 @@ export function resetDeferredTurnMaintenanceStateForTest(): void {
   delete processLike[DEFERRED_TURN_MAINTENANCE_ABORT_STATE_KEY];
 }
 
+export async function waitForDeferredTurnMaintenanceForSession(sessionKey?: string): Promise<void> {
+  const normalizedSessionKey = normalizeSessionKey(sessionKey);
+  if (!normalizedSessionKey) {
+    return;
+  }
+  await activeDeferredTurnMaintenanceRuns.get(normalizedSessionKey)?.promise;
+}
+
 function markDeferredTurnMaintenanceTaskScheduleFailure(params: {
   sessionKey: string;
   taskId: string;
@@ -302,7 +309,6 @@ export function buildContextEngineMaintenanceRuntimeContext(params: {
   runtimeContext?: ContextEngineRuntimeContext;
   agentId?: string;
   allowDeferredCompactionExecution?: boolean;
-  deferTranscriptRewriteToSessionLane?: boolean;
   config?: OpenClawConfig;
   purpose?: string;
   contextEnginePluginId?: string;
@@ -339,13 +345,6 @@ export function buildContextEngineMaintenanceRuntimeContext(params: {
           config: params.config,
           request,
         });
-      const rewriteSessionKey = normalizeSessionKey(params.sessionKey ?? params.sessionId);
-      if (params.deferTranscriptRewriteToSessionLane && rewriteSessionKey) {
-        return await enqueueCommandInLane(
-          resolveSessionLane(rewriteSessionKey),
-          async () => await rewriteTranscriptEntriesInFile(),
-        );
-      }
       return await rewriteTranscriptEntriesInFile();
     },
   };
@@ -381,7 +380,6 @@ async function executeContextEngineMaintenance(params: {
       runtimeContext: params.runtimeContext,
       agentId: params.agentId,
       allowDeferredCompactionExecution: params.executionMode === "background",
-      deferTranscriptRewriteToSessionLane: params.executionMode === "background",
       config: params.config,
       purpose: `context-engine.${params.reason}.maintenance`,
       contextEnginePluginId: resolveContextEngineOwnerPluginId(params.contextEngine),
