@@ -34,6 +34,7 @@ import {
   getActiveEmbeddedRunCount,
   type ActiveEmbeddedRunSnapshot,
   type AbandonedEmbeddedRun,
+  type EmbeddedAgentAbortReason,
   type EmbeddedAgentQueueHandle,
   type EmbeddedAgentQueueMessageOptions,
   type EmbeddedRunWaiter,
@@ -46,6 +47,7 @@ export {
   listActiveEmbeddedRunSessionKeys,
   resolveActiveEmbeddedRunSessionId,
   type ActiveEmbeddedRunSnapshot,
+  type EmbeddedAgentAbortReason,
   type EmbeddedAgentQueueHandle,
   type EmbeddedAgentQueueMessageOptions,
 } from "./run-state.js";
@@ -433,14 +435,17 @@ function prepareEmbeddedAgentQueueMessage(
  * - With a sessionId, aborts that single run.
  * - With no sessionId, supports targeted abort modes (for example, compacting runs only).
  */
-export function abortEmbeddedAgentRun(sessionId: string): boolean;
+export function abortEmbeddedAgentRun(
+  sessionId: string,
+  opts?: { reason?: EmbeddedAgentAbortReason },
+): boolean;
 export function abortEmbeddedAgentRun(
   sessionId: undefined,
-  opts: { mode: "all" | "compacting"; reason?: "restart" },
+  opts: { mode: "all" | "compacting"; reason?: EmbeddedAgentAbortReason },
 ): boolean;
 export function abortEmbeddedAgentRun(
   sessionId?: string,
-  opts?: { mode?: "all" | "compacting"; reason?: "restart" },
+  opts?: { mode?: "all" | "compacting"; reason?: EmbeddedAgentAbortReason },
 ): boolean {
   if (typeof sessionId === "string" && sessionId.length > 0) {
     const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
@@ -655,9 +660,11 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
   settleMs?: number;
   forceClear?: boolean;
   reason?: string;
+  abortReason?: EmbeddedAgentAbortReason;
 }): Promise<AbortAndDrainEmbeddedAgentRunResult> {
   const settleMs = params.settleMs ?? 15_000;
-  const aborted = abortEmbeddedAgentRun(params.sessionId);
+  const abortOptions = params.abortReason ? { reason: params.abortReason } : undefined;
+  const aborted = abortEmbeddedAgentRun(params.sessionId, abortOptions);
   const drained = aborted ? await waitForEmbeddedAgentRunEnd(params.sessionId, settleMs) : false;
   const forceCleared =
     params.forceClear === true && (!aborted || !drained)

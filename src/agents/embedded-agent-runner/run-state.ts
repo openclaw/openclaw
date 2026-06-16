@@ -16,14 +16,16 @@ import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
  * The maps are global-singleton backed so reloads and lazy imports inside the same gateway process
  * do not split active-run bookkeeping.
  */
+export type EmbeddedAgentAbortReason = "user_abort" | "restart" | "superseded" | "stuck_recovery";
+
 export type EmbeddedAgentQueueHandle = {
   kind?: "embedded";
   queueMessage: (text: string, options?: EmbeddedAgentQueueMessageOptions) => Promise<void>;
   isStreaming: () => boolean;
   isCompacting: () => boolean;
   supportsTranscriptCommitWait?: boolean;
-  cancel?: (reason?: "user_abort" | "restart" | "superseded") => void;
-  abort: (reason?: "restart") => void;
+  cancel?: (reason?: EmbeddedAgentAbortReason) => void;
+  abort: (reason?: EmbeddedAgentAbortReason) => void;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
 };
 

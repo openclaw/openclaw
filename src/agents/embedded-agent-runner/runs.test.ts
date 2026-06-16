@@ -357,12 +357,13 @@ describe("embedded-agent runner run registry", () => {
         settleMs: 100,
         forceClear: true,
         reason: "test_timeout",
+        abortReason: "stuck_recovery",
       });
       await vi.advanceTimersByTimeAsync(100);
       const result = await resultPromise;
 
       expect(result).toEqual({ aborted: true, drained: false, forceCleared: true });
-      expect(abortRun).toHaveBeenCalledTimes(1);
+      expect(abortRun).toHaveBeenCalledWith("stuck_recovery");
       expect(isEmbeddedAgentRunHandleActive("session-stuck")).toBe(false);
       expect(resolveActiveEmbeddedRunHandleSessionId("agent:main")).toBeUndefined();
     } finally {

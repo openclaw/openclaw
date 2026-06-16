@@ -298,6 +298,7 @@ import { observeReplayMetadata, replayMetadataFromState } from "../replay-state.
 import { createEmbeddedAgentResourceLoader } from "../resource-loader.js";
 import {
   clearActiveEmbeddedRun,
+  type EmbeddedAgentAbortReason,
   type EmbeddedAgentQueueHandle,
   markActiveEmbeddedRunAbandoned,
   setActiveEmbeddedRun,
@@ -3709,14 +3710,19 @@ export async function runEmbeddedAttempt(
         }
       };
 
-      const abortActiveRunExternally = (reason?: "user_abort" | "restart" | "superseded") => {
+      const abortActiveRunExternally = (reason?: EmbeddedAgentAbortReason) => {
+        if (reason === "stuck_recovery") {
+          idleTimedOut = true;
+          abortRun(true, makeTimeoutAbortReason());
+          return;
+        }
         externalAbort = true;
         params.onAttemptAbort?.();
         abortRun(false, reason === "restart" ? createAgentRunRestartAbortError() : undefined);
       };
       const queueHandle: EmbeddedAgentQueueHandle & {
         kind: "embedded";
-        cancel: (reason?: "user_abort" | "restart" | "superseded") => void;
+        cancel: (reason?: EmbeddedAgentAbortReason) => void;
       } = {
         kind: "embedded",
         queueMessage: async (text: string, options) => {
