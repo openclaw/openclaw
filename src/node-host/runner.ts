@@ -333,5 +333,23 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   if (!readiness.ready) {
     throw new Error("node host gateway event loop readiness timeout");
   }
+  if (process.env.OPENCLAW_BOX_EMIT_AGENT_REQUEST) {
+    // Box-proof only (env-gated): emit ONE node-originated agent.request over this
+    // node's authenticated connection, so the gateway records this node as the
+    // turn's host and gates its tools via gateway.tools.byNode. Mirrors what the
+    // extension bridge does in production.
+    setTimeout(() => {
+      void client
+        .request(
+          "node.event",
+          buildNodeEventParams("agent.request", {
+            message: process.env.OPENCLAW_BOX_EMIT_MESSAGE || "list your available tools",
+            sessionKey: process.env.OPENCLAW_BOX_EMIT_SESSION || "box-test-session",
+          }),
+        )
+        .then(() => writeStderrLine("[box] agent.request emitted"))
+        .catch((e) => writeStderrLine("[box] agent.request emit failed: " + String(e)));
+    }, 3000);
+  }
   await new Promise(() => {});
 }
