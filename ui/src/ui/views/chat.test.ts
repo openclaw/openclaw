@@ -1510,6 +1510,7 @@ describe("chat voice controls", () => {
       "medium",
       "high",
     ]);
+    expect(getTalkSelectOptionValues(container, "provider")).toEqual(["", "openai", "google"]);
     expect(container.textContent).toContain("Sensitivity");
     expect(container.textContent).toContain("Advanced");
     expect(container.textContent).toContain("Pause before send");

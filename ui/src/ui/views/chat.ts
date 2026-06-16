@@ -241,6 +241,11 @@ const TALK_SENSITIVITY_OPTIONS: TalkSelectOption[] = [
   { label: "High", value: "0.35" },
 ];
 const TALK_PROVIDER_AUTO_OPTION: TalkSelectOption = { label: "Auto", value: "" };
+const TALK_PROVIDER_FALLBACK_OPTIONS: TalkSelectOption[] = [
+  TALK_PROVIDER_AUTO_OPTION,
+  { label: "OpenAI", value: "openai" },
+  { label: "Google", value: "google" },
+];
 const TALK_TRANSPORT_OPTIONS: TalkSelectOption[] = [
   { label: "Auto", value: "" },
   { label: "WebRTC", value: "webrtc" },
@@ -321,8 +326,8 @@ function renderRealtimeTalkOptions(props: ChatProps) {
   if (!props.realtimeTalkOptionsOpen || !options || !onChange) {
     return nothing;
   }
-  const catalogProviders = props.realtimeTalkCatalogProviders ?? [];
-  const providerTransports = (provider: (typeof catalogProviders)[number]) =>
+  const catalogProviders = props.realtimeTalkCatalogProviders;
+  const providerTransports = (provider: NonNullable<typeof catalogProviders>[number]) =>
     (provider.transports ?? []).filter(
       (transport) =>
         transport === "gateway-relay" ||
@@ -332,13 +337,15 @@ function renderRealtimeTalkOptions(props: ChatProps) {
           transport === "provider-websocket" &&
           TALK_CONTROL_UI_PROVIDER_WEBSOCKET_IDS.has(provider.id)),
     );
-  const selectableProviders = catalogProviders.filter(
+  const selectableProviders = (catalogProviders ?? []).filter(
     (provider) => providerTransports(provider).length > 0,
   );
-  const providerOptions: TalkSelectOption[] = [
-    TALK_PROVIDER_AUTO_OPTION,
-    ...selectableProviders.map((provider) => ({ label: provider.label, value: provider.id })),
-  ];
+  const providerOptions: TalkSelectOption[] = catalogProviders
+    ? [
+        TALK_PROVIDER_AUTO_OPTION,
+        ...selectableProviders.map((provider) => ({ label: provider.label, value: provider.id })),
+      ]
+    : TALK_PROVIDER_FALLBACK_OPTIONS;
   const selectedCatalogProvider = options.provider
     ? selectableProviders.find((provider) => provider.id === options.provider)
     : null;
