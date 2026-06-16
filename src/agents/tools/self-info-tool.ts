@@ -131,9 +131,7 @@ ACTIONS:
           const agentList = agents?.list as Array<Record<string, unknown>> | undefined;
           let agentModel: unknown;
           if (agentName && Array.isArray(agentList)) {
-            const agentEntry = agentList.find(
-              (a) => a.id === agentName || a.name === agentName,
-            );
+            const agentEntry = agentList.find((a) => a.id === agentName || a.name === agentName);
             agentModel = agentEntry?.model;
           }
           return jsonResult({

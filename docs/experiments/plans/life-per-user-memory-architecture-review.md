@@ -24,15 +24,15 @@ agent's `mcp-bridge` shape as the template.
 
 ## Phase-by-phase verdict
 
-| Phase | Verdict | Reason |
-| --- | --- | --- |
-| Phase 0 - Identity | Needs revision | `appUserId` exists in the save-user-section design path, but Telegram identity is underspecified. In DMs, `chat_id` often equals user id; in groups, `chat_id` is the group, not the human. |
-| Phase 1 - Deploy Graphiti | Sound | FalkorDB is reasonable for v1. Keep the deploy small and agent-local. |
-| Phase 2 - Scoping proxy | Needs revision / security-critical | The proxy must allowlist safe tools and strip or verify unsafe parameters. Simple `group_id` rewriting is not enough. |
-| Phase 3 - Wire `life` | Needs revision | Missing `life/openclaw.json` is not a blocker, but the plan needs a concrete per-session identity handoff into the proxy. Static MCP config alone is not enough. |
-| Phase 4 - Recall/write loop | Sound with guardrails | Read-before-answer and write-after-turn are good. Add write policy to avoid storing secrets or noisy full transcripts by default. |
-| Phase 5 - User-file integration | Needs revision | Keeping user-file as visible artifact is right, but the current save-user-section path only handles app sessions with `appUserId`; Telegram needs an explicit visible-file path or a declared non-goal. |
-| Phase 6 - Smoke + isolation tests | Needs revision | Add adversarial proxy-level tests, not just happy-path recall tests. |
+| Phase                             | Verdict                            | Reason                                                                                                                                                                                                  |
+| --------------------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Phase 0 - Identity                | Needs revision                     | `appUserId` exists in the save-user-section design path, but Telegram identity is underspecified. In DMs, `chat_id` often equals user id; in groups, `chat_id` is the group, not the human.             |
+| Phase 1 - Deploy Graphiti         | Sound                              | FalkorDB is reasonable for v1. Keep the deploy small and agent-local.                                                                                                                                   |
+| Phase 2 - Scoping proxy           | Needs revision / security-critical | The proxy must allowlist safe tools and strip or verify unsafe parameters. Simple `group_id` rewriting is not enough.                                                                                   |
+| Phase 3 - Wire `life`             | Needs revision                     | Missing `life/openclaw.json` is not a blocker, but the plan needs a concrete per-session identity handoff into the proxy. Static MCP config alone is not enough.                                        |
+| Phase 4 - Recall/write loop       | Sound with guardrails              | Read-before-answer and write-after-turn are good. Add write policy to avoid storing secrets or noisy full transcripts by default.                                                                       |
+| Phase 5 - User-file integration   | Needs revision                     | Keeping user-file as visible artifact is right, but the current save-user-section path only handles app sessions with `appUserId`; Telegram needs an explicit visible-file path or a declared non-goal. |
+| Phase 6 - Smoke + isolation tests | Needs revision                     | Add adversarial proxy-level tests, not just happy-path recall tests.                                                                                                                                    |
 
 ## Specific risks and suggested fixes
 
@@ -162,4 +162,3 @@ user-file through explicit, scoped tools.
    workflow.
 7. State that user-file remains the visible artifact and Graphiti is the recall
    engine.
-

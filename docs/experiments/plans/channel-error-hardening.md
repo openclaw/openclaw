@@ -53,7 +53,7 @@
 
 2. **Hourly watchdog cron.** A lightweight script on each host (same pattern as
    `diagnostic-cron.sh`) that finds exited gateway containers and does `docker
-   compose up -d`. That's the "try again after an hour" part.
+compose up -d`. That's the "try again after an hour" part.
    - Smart touch: if the last N lines of the container's logs match known terminal
      signatures (401 loop, EPIPE on boot), skip the revival and instead write an
      entry to `bug_list.md` AUTOSCAN — let the human decide.
@@ -62,8 +62,8 @@
    template so a looping agent can't drag the host into swap. Directly addresses
    the 1478 MiB swap pressure (OB-9 / autoscan 2026-06-10).
 
-**Why do this even when Phase A is planned:** Phase B caps blast radius for *every
-future bug class*, not just Telegram. It protects the host regardless of whether
+**Why do this even when Phase A is planned:** Phase B caps blast radius for _every
+future bug class_, not just Telegram. It protects the host regardless of whether
 the loop is in a channel adapter, a model retry, or code not yet written.
 
 ---
@@ -73,6 +73,7 @@ the loop is in a channel adapter, a model retry, or code not yet written.
 **Repo:** `cryptolir/openclaw-dashboard` — dashboard deploy/create-agent flow.
 
 When an agent is created or reconfigured with a Telegram bot token:
+
 - Call `getMe` once during the deploy/provision step.
 - If 401 → fail the deploy with a clear user-facing error. Never write an invalid
   token to `docker.env` and start a container that will loop.
@@ -87,6 +88,7 @@ This would have caught both mikyhelper and productguy before they were ever depl
 
 The daily autoscan already detects 401 signatures and flags them in `bug_list.md`.
 Additions:
+
 - **Restart-count delta between scans** — flag agents whose `RestartCount` increased
   by more than N since yesterday, even if the error signature is new/unknown.
 - **Log-write-rate check** — containers writing logs at >1 MB/min between scans are
@@ -96,11 +98,11 @@ Additions:
 
 ## Suggested delivery order
 
-| Phase | Effort | Blocks release? | Rationale |
-|-------|--------|-----------------|-----------|
-| B     | Small  | No              | Caps blast radius today; survives any future bug |
-| C     | Small  | No              | Stops new occurrences at the source |
-| A     | Medium | Yes (gateway)   | Root fix; fold into next scheduled gateway release |
+| Phase | Effort | Blocks release? | Rationale                                            |
+| ----- | ------ | --------------- | ---------------------------------------------------- |
+| B     | Small  | No              | Caps blast radius today; survives any future bug     |
+| C     | Small  | No              | Stops new occurrences at the source                  |
+| A     | Medium | Yes (gateway)   | Root fix; fold into next scheduled gateway release   |
 | D     | Small  | No              | Faster signal; fold into next diagnostic cron update |
 
 ---
@@ -141,13 +143,13 @@ corrections to the original text:
 
 Delivered:
 
-| Phase | What shipped | Where |
-|-------|--------------|-------|
-| C | `getMe` probe blocks persisting terminally-invalid bot tokens (network failure = warn-and-save) | openclaw-dashboard#115 |
-| B2 | `gateway-watchdog.sh` hourly cron on both hosts: revives non-zero exits (max 3/run, 20 s stagger), skips terminal signatures, records to state file | `scripts/ops/gateway-watchdog.sh`, commit `abc1c6c5cd` |
-| B3 | **REVERTED same day**: 1g cap OOM-crash-cycled the EU fleet on rollout (V8 FatalProcessOutOfMemory during boot despite 248–440 MiB steady RSS). Retry requires `NODE_OPTIONS=--max-old-space-size` below the cap + testingbot canary | `docker-compose.yml` (revert commit) |
-| A | Terminal-error circuit in the gateway (pause + hourly re-probe + `terminalError` in snapshot) | openclaw#58 |
-| D | Diagnostic: restart-delta keyed on container ID, >5 MB/h log-rate flag, watchdog-state folding, terminal-pause signature | `agents_server_diagnostic.sh` (this commit) |
+| Phase | What shipped                                                                                                                                                                                                                         | Where                                                  |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------ |
+| C     | `getMe` probe blocks persisting terminally-invalid bot tokens (network failure = warn-and-save)                                                                                                                                      | openclaw-dashboard#115                                 |
+| B2    | `gateway-watchdog.sh` hourly cron on both hosts: revives non-zero exits (max 3/run, 20 s stagger), skips terminal signatures, records to state file                                                                                  | `scripts/ops/gateway-watchdog.sh`, commit `abc1c6c5cd` |
+| B3    | **REVERTED same day**: 1g cap OOM-crash-cycled the EU fleet on rollout (V8 FatalProcessOutOfMemory during boot despite 248–440 MiB steady RSS). Retry requires `NODE_OPTIONS=--max-old-space-size` below the cap + testingbot canary | `docker-compose.yml` (revert commit)                   |
+| A     | Terminal-error circuit in the gateway (pause + hourly re-probe + `terminalError` in snapshot)                                                                                                                                        | openclaw#58                                            |
+| D     | Diagnostic: restart-delta keyed on container ID, >5 MB/h log-rate flag, watchdog-state folding, terminal-pause signature                                                                                                             | `agents_server_diagnostic.sh` (this commit)            |
 
 Phase A's image release also unifies the US image drift (designer/agentav/gems
 were on stale local `v2026.05.05.1`) and recreates EU containers, closing OB-6

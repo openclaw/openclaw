@@ -43,8 +43,8 @@ plus decisions locked with the owner. **It supersedes any conflicting detail in 
      if verified to belong to `currentGroupId`.
    - **Erasure = admin-only**, never model-exposed.
    - **Per-session identity handoff — pick ONE and document it** (do _not_ rely on a static
-     agent-level env var): (a) proxy resolves group_id server-side from a signed per-session
-     token _(preferred)_, (b) bridge injects session context on every tool call, or (c) per-run
+     agent-level env var): (a) proxy resolves group*id server-side from a signed per-session
+     token *(preferred)\_, (b) bridge injects session context on every tool call, or (c) per-run
      MCP process per session with a scoped env var. **First task: determine how mcp-bridge
      actually passes session identity** (read `docs/gateway/bridge-protocol.md` + source), then choose.
 

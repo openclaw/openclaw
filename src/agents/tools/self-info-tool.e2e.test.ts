@@ -136,8 +136,6 @@ describe("self_info tool", () => {
 
   it("throws on unknown action", async () => {
     const tool = createSelfInfoTool();
-    await expect(tool.execute("call-7", { action: "unknown" })).rejects.toThrow(
-      "Unknown action",
-    );
+    await expect(tool.execute("call-7", { action: "unknown" })).rejects.toThrow("Unknown action");
   });
 });

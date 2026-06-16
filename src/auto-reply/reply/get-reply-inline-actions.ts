@@ -202,7 +202,10 @@ export async function handleInlineActions(params: {
         workspaceDir,
         config: cfg,
       });
-      const authorizedTools = applyOwnerOnlyToolPolicy(tools, command.senderIsOwner || command.senderIsAdmin);
+      const authorizedTools = applyOwnerOnlyToolPolicy(
+        tools,
+        command.senderIsOwner || command.senderIsAdmin,
+      );
 
       const tool = authorizedTools.find((candidate) => candidate.name === dispatch.toolName);
       if (!tool) {

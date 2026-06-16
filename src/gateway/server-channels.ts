@@ -3,12 +3,12 @@ import { type ChannelId, getChannelPlugin, listChannelPlugins } from "../channel
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { type BackoffPolicy, computeBackoff, sleepWithAbort } from "../infra/backoff.js";
-import { TERMINAL_ERROR_RETRY_MS, isTerminalChannelError } from "./channel-terminal-errors.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { TERMINAL_ERROR_RETRY_MS, isTerminalChannelError } from "./channel-terminal-errors.js";
 
 const CHANNEL_RESTART_POLICY: BackoffPolicy = {
   initialMs: 5_000,

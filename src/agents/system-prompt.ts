@@ -66,10 +66,7 @@ function buildMemorySection(params: {
   return lines;
 }
 
-function buildSelfManagementSection(params: {
-  isMinimal: boolean;
-  availableTools: Set<string>;
-}) {
+function buildSelfManagementSection(params: { isMinimal: boolean; availableTools: Set<string> }) {
   if (params.isMinimal) {
     return [];
   }
@@ -90,9 +87,7 @@ function buildSelfManagementSection(params: {
     lines.push("- When asked to schedule tasks, reminders, or recurring jobs: use `cron`.");
   }
   if (hasGateway) {
-    lines.push(
-      "- When asked to change settings, configuration, or restart: use `gateway`.",
-    );
+    lines.push("- When asked to change settings, configuration, or restart: use `gateway`.");
   }
   if (hasBrowser) {
     lines.push(

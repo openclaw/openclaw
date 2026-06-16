@@ -149,7 +149,11 @@ vi.mock("../../infra/session-cost-usage.js", async () => {
   };
 });
 
-import { discoverAllSessions, loadCostUsageSummary, loadSessionCostSummary } from "../../infra/session-cost-usage.js";
+import {
+  discoverAllSessions,
+  loadCostUsageSummary,
+  loadSessionCostSummary,
+} from "../../infra/session-cost-usage.js";
 import { __test, usageHandlers, type UsageReportSummary } from "./usage.js";
 
 describe("usage.report", () => {
