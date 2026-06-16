@@ -29,7 +29,7 @@ describe("native title tooltip promotion", () => {
     expect(button.getAttribute("data-floating-tooltip-active")).toBe("true");
     const tooltip = document.querySelector<HTMLElement>(".control-ui-floating-tooltip");
     expect(tooltip?.textContent).toBe("Refresh");
-    expect(button.getAttribute("aria-describedby")).toBe(tooltip?.id);
+    expect(button.getAttribute("aria-describedby")).toBeNull();
 
     restoreNativeTitleTooltip(button, root, "pointer");
 
@@ -426,9 +426,11 @@ describe("native title tooltip promotion", () => {
     const focused = document.createElement("button");
     focused.className = "btn";
     focused.title = "Focused";
+    focused.textContent = "Focused button";
     const hovered = document.createElement("button");
     hovered.className = "btn";
     hovered.title = "Hovered";
+    hovered.textContent = "Hovered button";
     root.append(focused, hovered);
 
     promoteNativeTitleTooltip(focused, root, "focus");

@@ -5361,6 +5361,7 @@ describe("workboard controller", () => {
     state.loaded = true;
     state.cards = [linked];
     state.tasksByCardId.set("card-1", sampleTask);
+    state.autoRefreshIntervalMs = 5000;
     state.lifecycleTasksPrepared = true;
     state.lifecycleTasksPreparedAt = Date.now();
     const completedTask = { ...sampleTask, status: "completed" as const };
@@ -5380,6 +5381,70 @@ describe("workboard controller", () => {
 
     expect(client.request).toHaveBeenNthCalledWith(1, "tasks.list", { limit: 500 });
     expect(client.request).toHaveBeenNthCalledWith(2, "workboard.cards.update", expect.anything());
+  });
+
+  it("does not refresh prepared task lifecycle state while auto-refresh is off", async () => {
+    vi.useFakeTimers();
+    const host = {};
+    const state = getWorkboardState(host);
+    const linked = {
+      ...sampleCard,
+      status: "running",
+      sessionKey: sampleTaskSessionKey,
+      runId: "run-1",
+      taskId: "task-1",
+    } satisfies WorkboardCard;
+    state.loaded = true;
+    state.cards = [linked];
+    state.tasksByCardId.set("card-1", sampleTask);
+    state.lifecycleTasksPrepared = true;
+    state.lifecycleTasksPreparedAt = Date.now();
+    const client = createClient({
+      "tasks.list": { tasks: [{ ...sampleTask, status: "completed" }] },
+    });
+    const requestUpdate = vi.fn();
+
+    await syncWorkboardLifecycle({ host, client: client as never, sessions: [], requestUpdate });
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(requestUpdate).not.toHaveBeenCalled();
+    expect(client.request).not.toHaveBeenCalled();
+  });
+
+  it("cancels prepared task lifecycle refresh when auto-refresh is turned off", async () => {
+    vi.useFakeTimers();
+    const host = {};
+    const state = getWorkboardState(host);
+    const linked = {
+      ...sampleCard,
+      status: "running",
+      sessionKey: sampleTaskSessionKey,
+      runId: "run-1",
+      taskId: "task-1",
+    } satisfies WorkboardCard;
+    state.loaded = true;
+    state.cards = [linked];
+    state.tasksByCardId.set("card-1", sampleTask);
+    state.autoRefreshIntervalMs = 5000;
+    state.lifecycleTasksPrepared = true;
+    state.lifecycleTasksPreparedAt = Date.now();
+    const client = createClient({
+      "tasks.list": { tasks: [{ ...sampleTask, status: "completed" }] },
+    });
+    const requestUpdate = vi.fn();
+
+    await syncWorkboardLifecycle({ host, client: client as never, sessions: [], requestUpdate });
+    state.autoRefreshIntervalMs = 0;
+    configureWorkboardPolling({
+      host,
+      client: client as never,
+      enabled: false,
+      requestUpdate,
+    });
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(requestUpdate).not.toHaveBeenCalled();
+    expect(client.request).not.toHaveBeenCalled();
   });
 
   it("retries a failed lifecycle task refresh after backoff", async () => {

@@ -596,7 +596,7 @@ function setWorkboardLifecycleTasksPrepared(
   if (
     !prepared ||
     !options.requestUpdate ||
-    state.autoRefreshIntervalMs !== 0 ||
+    state.autoRefreshIntervalMs === 0 ||
     !shouldRefreshWorkboardTasksForLifecycle(state)
   ) {
     return;
@@ -2357,6 +2357,7 @@ export function configureWorkboardPolling(params: {
   });
   if (!enabled) {
     clearWorkboardPolling(params.host);
+    clearWorkboardLifecycleTaskPreparedTimer(params.host);
     return;
   }
   const configChanged =

@@ -167,7 +167,14 @@ function showFloatingTooltip(element: HTMLElement, text: string) {
   if (activeFloatingTooltipOwner && activeFloatingTooltipOwner !== element) {
     restoreFloatingTooltipDescription(activeFloatingTooltipOwner);
   }
-  ensureFloatingTooltipDescription(element, tooltip);
+  const duplicatesGeneratedAccessibleName =
+    element.getAttribute(GENERATED_ARIA_LABEL_ATTR) === "true" &&
+    element.getAttribute("aria-label")?.trim() === text.trim();
+  if (duplicatesGeneratedAccessibleName) {
+    restoreFloatingTooltipDescription(element);
+  } else {
+    ensureFloatingTooltipDescription(element, tooltip);
+  }
   activeFloatingTooltipOwner = element;
   const rect = element.getBoundingClientRect();
   const viewportWidth = window.innerWidth || document.documentElement.clientWidth;
