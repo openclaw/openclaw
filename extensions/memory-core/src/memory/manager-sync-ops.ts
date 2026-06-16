@@ -1,5 +1,4 @@
 // Memory Core plugin module implements manager sync ops behavior.
-import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -46,15 +45,7 @@ import {
   type EmbeddingProviderId,
   type EmbeddingProviderRuntime,
 } from "./embeddings.js";
-import { removeMemoryIndexFiles, runMemoryAtomicReindex } from "./manager-atomic-reindex.js";
-import {
-  cleanupAgedMemoryReindexTempFiles,
-  closeMemoryDatabase,
-  openMemoryDatabaseAtPath,
-  openMemoryReindexTempDatabaseAtPath,
-  releaseMemoryDatabaseSwapLock,
-  restoreMemoryDatabaseSwapLock,
-} from "./manager-db.js";
+import { openMemoryDatabaseAtPath } from "./manager-db.js";
 import { isMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
 import {
   applyMemoryFallbackProviderState,
@@ -63,7 +54,6 @@ import {
   resolveMemoryPrimaryProviderRequest,
   type MemoryProviderLifecycleState,
 } from "./manager-provider-state.js";
-import { acquireMemoryReindexLock, type MemoryReindexLockHandle } from "./manager-reindex-lock.js";
 import {
   resolveConfiguredScopeHash,
   resolveConfiguredSourcesForMeta,
@@ -301,7 +291,6 @@ export abstract class MemoryManagerSyncOps {
   protected sessionPendingFiles = new Set<string>();
   protected sessionDeltas = new Map<string, MemorySessionDeltaState>();
   protected vectorDegradedWriteWarningShown = false;
-  protected embeddingCacheMirrorDb: DatabaseSync | null = null;
   private lastMetaSerialized: string | null = null;
 
   protected abstract readonly cache: { enabled: boolean; maxEntries?: number };
@@ -684,73 +673,8 @@ export abstract class MemoryManagerSyncOps {
   }
 
   protected openDatabase(): DatabaseSync {
-    const dbPath = resolveUserPath(this.settings.store.path);
-    return openMemoryDatabaseAtPath(dbPath, this.settings.store.vector.enabled);
-  }
-
-  private async seedEmbeddingCache(sourceDb: DatabaseSync): Promise<void> {
-    if (!this.cache.enabled) {
-      return;
-    }
-    let transactionStarted = false;
-    try {
-      const rows = sourceDb
-        .prepare(
-          `SELECT provider, model, provider_key, hash, embedding, dims, updated_at FROM ${EMBEDDING_CACHE_TABLE}`,
-        )
-        .iterate() as IterableIterator<{
-        provider: string;
-        model: string;
-        provider_key: string;
-        hash: string;
-        embedding: string;
-        dims: number | null;
-        updated_at: number;
-      }>;
-      // Keep gateway health probes responsive while rebuilding large caches.
-      const SEED_EMBEDDING_YIELD_EVERY = 1000;
-      let rowCount = 0;
-      let insert: ReturnType<DatabaseSync["prepare"]> | null = null;
-      for (const row of rows) {
-        if (!insert) {
-          insert = this.db.prepare(
-            `INSERT INTO ${EMBEDDING_CACHE_TABLE} (provider, model, provider_key, hash, embedding, dims, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT(provider, model, provider_key, hash) DO UPDATE SET
-               embedding=excluded.embedding,
-               dims=excluded.dims,
-               updated_at=excluded.updated_at`,
-          );
-          this.db.exec("BEGIN");
-          transactionStarted = true;
-        }
-        insert.run(
-          row.provider,
-          row.model,
-          row.provider_key,
-          row.hash,
-          row.embedding,
-          row.dims,
-          row.updated_at,
-        );
-        rowCount += 1;
-        if (rowCount % SEED_EMBEDDING_YIELD_EVERY === 0) {
-          await new Promise<void>((resolve) => {
-            setImmediate(resolve);
-          });
-        }
-      }
-      if (transactionStarted) {
-        this.db.exec("COMMIT");
-      }
-    } catch (err) {
-      if (transactionStarted) {
-        try {
-          this.db.exec("ROLLBACK");
-        } catch {}
-      }
-      throw err;
-    }
+    const dbPath = resolveUserPath(this.settings.store.databasePath);
+    return openMemoryDatabaseAtPath(dbPath, this.settings.store.vector.enabled, this.agentId);
   }
 
   protected ensureSchema() {
@@ -2266,22 +2190,11 @@ export abstract class MemoryManagerSyncOps {
     }
     try {
       if (needsFullReindex) {
-        if (
-          process.env.OPENCLAW_TEST_FAST === "1" &&
-          process.env.OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX === "1"
-        ) {
-          await this.runUnsafeReindex({
-            reason: params?.reason,
-            force: params?.force,
-            progress: progress ?? undefined,
-          });
-        } else {
-          await this.runSafeReindex({
-            reason: params?.reason,
-            force: params?.force,
-            progress: progress ?? undefined,
-          });
-        }
+        await this.runInPlaceReindex({
+          reason: params?.reason,
+          force: params?.force,
+          progress: progress ?? undefined,
+        });
         return;
       }
 
@@ -2330,7 +2243,7 @@ export abstract class MemoryManagerSyncOps {
         this.shouldFallbackOnError(err) && (await this.activateFallbackProvider(reason));
       if (activated) {
         if (needsFullReindex && !hasTargetSessionFiles) {
-          await this.runSafeReindex({
+          await this.runInPlaceReindex({
             reason: params?.reason ?? "fallback",
             force: true,
             progress: progress ?? undefined,
@@ -2418,203 +2331,13 @@ export abstract class MemoryManagerSyncOps {
     return true;
   }
 
-  protected async runSafeReindex(params: {
+  private async runInPlaceReindex(params: {
     reason?: string;
     force?: boolean;
     progress?: MemorySyncProgressState;
   }): Promise<void> {
-    this.assertFtsOnlySyncAllowed();
-
-    const dbPath = resolveUserPath(this.settings.store.path);
-    const tempDbPath = `${dbPath}.tmp-${randomUUID()}`;
-
-    const originalDb = this.db;
-    let reindexLock: MemoryReindexLockHandle | undefined;
-    let tempDb: DatabaseSync | undefined;
-    let tempDbClosed = false;
-    let originalDbClosed = false;
-    let originalDbSwapLockReleased = false;
-    const originalRetryState = this.snapshotReindexRetryState();
-    const shouldRetryMemoryOnFailure = this.sources.has("memory");
-    const shouldRetrySessionsOnFailure = this.shouldSyncSessions(
-      { reason: params.reason, force: params.force },
-      true,
-    );
-    const originalState = {
-      ftsAvailable: this.fts.available,
-      ftsError: this.fts.loadError,
-      vectorAvailable: this.vector.available,
-      vectorLoadError: this.vector.loadError,
-      vectorDims: this.vector.dims,
-      vectorDegradedWriteWarningShown: this.vectorDegradedWriteWarningShown,
-      vectorReady: this.vectorReady,
-    };
-
-    const restoreOriginalState = () => {
-      if (originalDbClosed) {
-        this.db = openMemoryDatabaseAtPath(dbPath, this.settings.store.vector.enabled, false);
-      } else {
-        if (originalDbSwapLockReleased) {
-          restoreMemoryDatabaseSwapLock(originalDb, dbPath);
-          originalDbSwapLockReleased = false;
-        }
-        this.db = originalDb;
-      }
-      this.fts.available = originalState.ftsAvailable;
-      this.fts.loadError = originalState.ftsError;
-      this.vector.available = originalDbClosed ? null : originalState.vectorAvailable;
-      this.vector.loadError = originalState.vectorLoadError;
-      this.vector.dims = originalState.vectorDims;
-      this.vectorDegradedWriteWarningShown = originalState.vectorDegradedWriteWarningShown;
-      this.vectorReady = originalDbClosed ? null : originalState.vectorReady;
-    };
-
-    let publishedIndex = false;
-
-    try {
-      cleanupAgedMemoryReindexTempFiles(dbPath);
-      reindexLock = acquireMemoryReindexLock(dbPath);
-      tempDb = openMemoryReindexTempDatabaseAtPath(tempDbPath, this.settings.store.vector.enabled);
-      const openedTempDb = tempDb;
-      this.db = openedTempDb;
-      this.embeddingCacheMirrorDb = originalDb;
-      this.lastMetaSerialized = null;
-      this.resetVectorState();
-      this.fts.available = false;
-      this.fts.loadError = undefined;
-      this.ensureSchema();
-
-      originalDbSwapLockReleased = true;
-      releaseMemoryDatabaseSwapLock(originalDb);
-      const nextMeta = await runMemoryAtomicReindex({
-        targetPath: dbPath,
-        tempPath: tempDbPath,
-        beforeTempCleanup: () => {
-          if (!tempDbClosed) {
-            closeMemoryDatabase(openedTempDb);
-            tempDbClosed = true;
-          }
-        },
-        afterPublish: () => {
-          publishedIndex = true;
-        },
-        build: async () => {
-          await this.seedEmbeddingCache(originalDb);
-          const shouldSyncMemory = shouldRetryMemoryOnFailure;
-          const shouldSyncSessions = shouldRetrySessionsOnFailure;
-
-          if (this.shouldDeferSourceWideBatch()) {
-            await this.executeSourceWideSync({
-              shouldSyncMemory,
-              shouldSyncSessions,
-              needsFullReindex: true,
-              progress: params.progress,
-            });
-            if (shouldSyncMemory) {
-              this.clearMemoryRetryState();
-            }
-            if (shouldSyncSessions) {
-              this.clearSessionRetryState();
-            } else {
-              this.refreshSessionDirtyFlag();
-            }
-          } else {
-            if (shouldSyncMemory) {
-              await this.syncMemoryFiles({ needsFullReindex: true, progress: params.progress });
-              this.clearMemoryRetryState();
-            }
-
-            if (shouldSyncSessions) {
-              await this.syncSessionFiles({ needsFullReindex: true, progress: params.progress });
-              this.clearSessionRetryState();
-            } else {
-              this.refreshSessionDirtyFlag();
-            }
-          }
-          if (!shouldSyncMemory) {
-            this.dirty = false;
-          }
-
-          const meta: MemoryIndexMeta = {
-            model: this.provider?.model ?? "fts-only",
-            provider: this.provider?.id ?? "none",
-            providerKey: this.providerKey!,
-            sources: resolveConfiguredSourcesForMeta(this.sources),
-            scopeHash: resolveConfiguredScopeHash({
-              workspaceDir: this.workspaceDir,
-              extraPaths: this.settings.extraPaths,
-              multimodal: {
-                enabled: this.settings.multimodal.enabled,
-                modalities: this.settings.multimodal.modalities,
-                maxFileBytes: this.settings.multimodal.maxFileBytes,
-              },
-            }),
-            chunkTokens: this.settings.chunking.tokens,
-            chunkOverlap: this.settings.chunking.overlap,
-            ftsTokenizer: this.settings.store.fts.tokenizer,
-          };
-
-          if (this.vector.available && this.vector.dims) {
-            meta.vectorDims = this.vector.dims;
-          }
-
-          this.writeMeta(meta);
-          this.pruneEmbeddingCacheIfNeeded?.();
-
-          closeMemoryDatabase(openedTempDb);
-          tempDbClosed = true;
-          closeMemoryDatabase(originalDb);
-          originalDbClosed = true;
-          return meta;
-        },
-      });
-
-      this.embeddingCacheMirrorDb = null;
-      this.db = openMemoryDatabaseAtPath(dbPath, this.settings.store.vector.enabled, false);
-      this.resetVectorState();
-      this.ensureSchema();
-      this.vector.dims = nextMeta?.vectorDims;
-    } catch (err) {
-      this.embeddingCacheMirrorDb = null;
-      try {
-        if (tempDb && !tempDbClosed && this.db === tempDb) {
-          closeMemoryDatabase(tempDb);
-          tempDbClosed = true;
-        }
-      } catch {}
-      if (publishedIndex) {
-        this.db = openMemoryDatabaseAtPath(dbPath, this.settings.store.vector.enabled, false);
-        this.resetVectorState();
-        this.ensureSchema();
-        this.vector.dims = this.readMeta()?.vectorDims;
-        throw err;
-      }
-      try {
-        await removeMemoryIndexFiles(tempDbPath);
-      } catch {}
-      restoreOriginalState();
-      this.restoreReindexRetryState(originalRetryState);
-      this.markFailedFullReindexRetry({
-        memory: shouldRetryMemoryOnFailure,
-        sessions: shouldRetrySessionsOnFailure,
-      });
-      throw err;
-    } finally {
-      try {
-        reindexLock?.release();
-      } catch (err) {
-        log.warn(`failed to release memory reindex lock for ${dbPath}: ${formatErrorMessage(err)}`);
-      }
-    }
-  }
-
-  private async runUnsafeReindex(params: {
-    reason?: string;
-    force?: boolean;
-    progress?: MemorySyncProgressState;
-  }): Promise<void> {
-    // Perf: for test runs, skip atomic temp-db swapping. The index is isolated
-    // under the per-test HOME anyway, and this cuts substantial fs+sqlite churn.
+    // Built-in memory shares the per-agent database. Full reindex must reset
+    // only memory-owned tables and never replace the shared database file.
     const originalRetryState = this.snapshotReindexRetryState();
     const shouldRetryMemoryOnFailure = this.sources.has("memory");
     const shouldRetrySessionsOnFailure = this.shouldSyncSessions(

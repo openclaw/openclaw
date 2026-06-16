@@ -244,22 +244,6 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       entries,
       tableName: EMBEDDING_CACHE_TABLE,
     });
-    if (this.embeddingCacheMirrorDb && this.embeddingCacheMirrorDb !== this.db) {
-      try {
-        upsertMemoryEmbeddingCache({
-          db: this.embeddingCacheMirrorDb,
-          enabled: this.cache.enabled,
-          provider,
-          providerKey: this.providerKey,
-          entries,
-          tableName: EMBEDDING_CACHE_TABLE,
-        });
-      } catch (err) {
-        log.warn("memory embeddings: failed to mirror safe-reindex cache batch", {
-          error: formatErrorMessage(err),
-        });
-      }
-    }
   }
 
   private async embedChunksInBatches(chunks: MemoryChunk[]): Promise<number[][]> {

@@ -973,6 +973,10 @@
       "types": "./dist/plugin-sdk/session-store-runtime.d.ts",
       "default": "./dist/plugin-sdk/session-store-runtime.js"
     },
+    "./plugin-sdk/sqlite-runtime": {
+      "types": "./dist/plugin-sdk/sqlite-runtime.d.ts",
+      "default": "./dist/plugin-sdk/sqlite-runtime.js"
+    },
     "./plugin-sdk/session-transcript-hit": {
       "types": "./dist/plugin-sdk/session-transcript-hit.d.ts",
       "default": "./dist/plugin-sdk/session-transcript-hit.js"
