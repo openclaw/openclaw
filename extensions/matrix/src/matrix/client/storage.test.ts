@@ -2,7 +2,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  createPluginStateSyncKeyedStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveMatrixAccountStorageRoot } from "../../storage-paths.js";
 import { installMatrixTestRuntime } from "../../test-runtime.js";
 import { readMatrixIdbSnapshotJson, writeMatrixIdbSnapshotJson } from "../crypto-state-store.js";
@@ -10,6 +14,7 @@ import { SqliteBackedMatrixSyncStore } from "./file-sync-store.js";
 import {
   claimCurrentTokenStorageState,
   maybeMigrateLegacyStorage,
+  openMatrixStorageMetaStoreOptions,
   recordCurrentStorageMetaDeviceId,
   repairCurrentTokenStorageMetaDeviceId,
   resolveMatrixStateFilePath,
@@ -51,6 +56,10 @@ describe("matrix client storage paths", () => {
     accessToken: "secret-token",
   };
 
+  beforeEach(() => {
+    resetPluginStateStoreForTests();
+  });
+
   afterEach(() => {
     createBackupArchiveMock.mockReset();
     createBackupArchiveMock.mockImplementation(async (_params: unknown) => ({
@@ -70,6 +79,7 @@ describe("matrix client storage paths", () => {
       markerPath: "/tmp/matrix-migration-snapshot.json",
     });
     vi.restoreAllMocks();
+    resetPluginStateStoreForTests();
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -155,7 +165,7 @@ describe("matrix client storage paths", () => {
       accessToken: "secret-token-new",
     });
     fs.mkdirSync(canonicalPaths.rootDir, { recursive: true });
-    writeJson(canonicalPaths.rootDir, "storage-meta.json", {
+    seedStorageMeta(canonicalPaths.rootDir, {
       homeserver: defaultStorageAuth.homeserver,
       userId: defaultStorageAuth.userId,
       accountId: "default",
@@ -280,7 +290,21 @@ describe("matrix client storage paths", () => {
     fs.writeFileSync(path.join(rootDir, filename), JSON.stringify(value, null, 2));
   }
 
-  it("records a learned deviceId in storage metadata without startup JSON", () => {
+  function readStorageMeta(rootDir: string): Record<string, unknown> | undefined {
+    return createPluginStateSyncKeyedStoreForTests<Record<string, unknown>>(
+      "matrix",
+      openMatrixStorageMetaStoreOptions(rootDir),
+    ).lookup("current");
+  }
+
+  function seedStorageMeta(rootDir: string, value: Record<string, unknown>): void {
+    createPluginStateSyncKeyedStoreForTests<Record<string, unknown>>(
+      "matrix",
+      openMatrixStorageMetaStoreOptions(rootDir),
+    ).register("current", value);
+  }
+
+  it("records a learned deviceId in SQLite storage metadata", () => {
     const stateDir = setupStateDir();
     const storagePaths = resolveMatrixStoragePaths({
       ...defaultStorageAuth,
@@ -302,10 +326,7 @@ describe("matrix client storage paths", () => {
       }),
     ).toBe(true);
 
-    const meta = JSON.parse(fs.readFileSync(storagePaths.metaPath, "utf8")) as {
-      deviceId?: string | null;
-    };
-    expect(meta.deviceId).toBe("DEVICE123");
+    expect(readStorageMeta(storagePaths.rootDir)).toMatchObject({ deviceId: "DEVICE123" });
     expect(fs.existsSync(path.join(storagePaths.rootDir, "startup-verification.json"))).toBe(false);
   });
 
@@ -323,7 +344,7 @@ describe("matrix client storage paths", () => {
     fs.mkdirSync(storagePaths.rootDir, { recursive: true });
     fs.writeFileSync(storagePaths.storagePath, params.storageBody ?? '{"legacy":true}');
     if (params.storageMeta) {
-      writeJson(storagePaths.rootDir, "storage-meta.json", params.storageMeta);
+      seedStorageMeta(storagePaths.rootDir, params.storageMeta);
     }
     if (params.startupVerificationDeviceId) {
       writeJson(storagePaths.rootDir, "startup-verification.json", {
@@ -345,7 +366,7 @@ describe("matrix client storage paths", () => {
       accessToken: params.accessToken,
     });
     fs.mkdirSync(canonicalPaths.rootDir, { recursive: true });
-    writeJson(canonicalPaths.rootDir, "storage-meta.json", params.storageMeta);
+    seedStorageMeta(canonicalPaths.rootDir, params.storageMeta);
     return canonicalPaths;
   }
 
@@ -394,7 +415,6 @@ describe("matrix client storage paths", () => {
     );
     expect(storagePaths.storagePath).toBe(path.join(storagePaths.rootDir, "bot-storage.json"));
     expect(storagePaths.cryptoPath).toBe(path.join(storagePaths.rootDir, "crypto"));
-    expect(storagePaths.metaPath).toBe(path.join(storagePaths.rootDir, "storage-meta.json"));
     expect(storagePaths.recoveryKeyPath).toBe(path.join(storagePaths.rootDir, "recovery-key.json"));
     expect(storagePaths.idbSnapshotPath).toBe(
       path.join(storagePaths.rootDir, "crypto-idb-snapshot.json"),
@@ -751,11 +771,7 @@ describe("matrix client storage paths", () => {
       env: createMigrationEnv(stateDir),
     });
 
-    const repairedMeta = JSON.parse(
-      fs.readFileSync(path.join(canonicalPaths.rootDir, "storage-meta.json"), "utf8"),
-    ) as { deviceId?: string | null };
-
-    expect(repairedMeta.deviceId).toBe("DEVICE123");
+    expect(readStorageMeta(canonicalPaths.rootDir)).toMatchObject({ deviceId: "DEVICE123" });
     const startupPaths = resolveDefaultStoragePaths({
       accessToken: "secret-token-new",
     });
