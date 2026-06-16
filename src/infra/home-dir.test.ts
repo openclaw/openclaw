@@ -1,7 +1,7 @@
 // Tests OpenClaw home directory resolution.
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   expandHomePrefix,
   resolveEffectiveHomeDir,
@@ -274,36 +274,30 @@ describe("resolveOsHomeRelativePath", () => {
 });
 
 describe("safeCwd", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("returns process.cwd() when cwd is accessible", () => {
     expect(safeCwd()).toBe(process.cwd());
   });
 
   it("falls back to os.homedir() when process.cwd() throws ENOENT", () => {
-    const originalCwd = process.cwd;
-    process.cwd = () => {
-      const error = new Error("ENOENT: no such file or directory, uv_cwd");
-      (error as NodeJS.ErrnoException).code = "ENOENT";
-      throw error;
-    };
-    try {
-      expect(safeCwd()).toBe(os.homedir());
-    } finally {
-      process.cwd = originalCwd;
-    }
+    const enoent = new Error("ENOENT: no such file or directory, uv_cwd");
+    (enoent as NodeJS.ErrnoException).code = "ENOENT";
+    vi.spyOn(process, "cwd").mockImplementation(() => {
+      throw enoent;
+    });
+    expect(safeCwd()).toBe(os.homedir());
   });
 
   it("uses explicit fallback when provided and cwd is deleted", () => {
-    const originalCwd = process.cwd;
-    process.cwd = () => {
-      const error = new Error("ENOENT: no such file or directory, uv_cwd");
-      (error as NodeJS.ErrnoException).code = "ENOENT";
-      throw error;
-    };
-    try {
-      expect(safeCwd("/custom/fallback")).toBe("/custom/fallback");
-    } finally {
-      process.cwd = originalCwd;
-    }
+    const enoent = new Error("ENOENT: no such file or directory, uv_cwd");
+    (enoent as NodeJS.ErrnoException).code = "ENOENT";
+    vi.spyOn(process, "cwd").mockImplementation(() => {
+      throw enoent;
+    });
+    expect(safeCwd("/custom/fallback")).toBe("/custom/fallback");
   });
 
   it("ignores explicit fallback when cwd is accessible", () => {
