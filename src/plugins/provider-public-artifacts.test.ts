@@ -237,9 +237,8 @@ describe("provider public artifacts", () => {
       typeof import("./provider-public-artifacts.js")
     >(import.meta.url, "./provider-public-artifacts.js?scope=provider-cli-backend");
 
-    // The anthropic plugin owns the "claude-cli" provider via cliBackends (not `providers`),
-    // so its bundled policy surface must resolve for claude-cli — otherwise claude-cli
-    // subagents silently fall back to the base thinking profile (capped at "high").
+    // CLI backend ids use the same provider-policy owner boundary as provider ids.
+    // Without it, claude-cli subagents fall back to the base thinking profile.
     const surface = resolvePolicySurface("claude-cli", {
       manifestRegistry: {
         plugins: [
