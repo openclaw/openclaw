@@ -977,20 +977,24 @@ export function openOpenClawStateDatabase(
   ensureOpenClawStatePermissions(pathname, env);
   const sqlite = requireNodeSqlite();
   const db = new sqlite.DatabaseSync(pathname);
-  const walMaintenance = configureSqliteConnectionPragmas(db, {
-    busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-    databaseLabel: "openclaw-state",
-    databasePath: pathname,
-    foreignKeys: true,
-    synchronous: "NORMAL",
-  });
-  try {
-    ensureSchema(db, pathname);
-  } catch (err) {
-    walMaintenance.close();
-    db.close();
-    throw err;
-  }
+  const walMaintenance = (() => {
+    let maintenance: SqliteWalMaintenance | undefined;
+    try {
+      maintenance = configureSqliteConnectionPragmas(db, {
+        busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+        databaseLabel: "openclaw-state",
+        databasePath: pathname,
+        foreignKeys: true,
+        synchronous: "NORMAL",
+      });
+      ensureSchema(db, pathname);
+      return maintenance;
+    } catch (err) {
+      maintenance?.close();
+      db.close();
+      throw err;
+    }
+  })();
   ensureOpenClawStatePermissions(pathname, env);
   const database = { db, path: pathname, walMaintenance };
   cachedDatabases.set(pathname, database);

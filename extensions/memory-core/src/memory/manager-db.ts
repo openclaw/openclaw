@@ -127,11 +127,18 @@ export function cleanupAgedMemoryReindexTempFiles(dbPath: string, nowMs = Date.n
 function openConfiguredMemoryDatabaseAtPath(dbPath: string, allowExtension: boolean): DatabaseSync {
   const { DatabaseSync } = requireNodeSqlite();
   const db = new DatabaseSync(dbPath, { allowExtension });
-  configureMemorySqliteWalMaintenance(db, {
-    busyTimeoutMs: 5000,
-    databasePath: dbPath,
-  });
-  return db;
+  try {
+    configureMemorySqliteWalMaintenance(db, {
+      busyTimeoutMs: 5000,
+      databasePath: dbPath,
+    });
+    return db;
+  } catch (err) {
+    try {
+      db.close();
+    } catch {}
+    throw err;
+  }
 }
 
 type ExistingMemoryDatabaseOpenResult =

@@ -19,6 +19,17 @@ async function expectPathMissing(targetPath: string): Promise<void> {
   await expect(fs.access(targetPath)).rejects.toThrow("ENOENT");
 }
 
+function listOpenFileDescriptorsForPath(targetPath: string): string[] {
+  return fsSync.readdirSync("/proc/self/fd").flatMap((fd) => {
+    try {
+      const descriptorPath = fsSync.readlinkSync(`/proc/self/fd/${fd}`);
+      return descriptorPath.startsWith(targetPath) ? [descriptorPath] : [];
+    } catch {
+      return [];
+    }
+  });
+}
+
 describe("openMemoryDatabaseAtPath readOnly probe", () => {
   let fixtureRoot = "";
   let caseId = 0;
@@ -58,6 +69,19 @@ describe("openMemoryDatabaseAtPath readOnly probe", () => {
     const stat = await fs.stat(dbPath);
     expect(stat.size).toBeGreaterThan(0);
   });
+
+  it.skipIf(process.platform !== "linux")(
+    "closes the database when SQLite maintenance configuration fails",
+    async () => {
+      const dbPath = path.join(fixtureRoot, `case-${caseId++}`, "malformed-index.sqlite");
+      await fs.mkdir(path.dirname(dbPath), { recursive: true });
+      await fs.writeFile(dbPath, "not a sqlite database");
+
+      expect(() => openMemoryDatabaseAtPath(dbPath, false, false)).toThrow(/not a database/);
+
+      expect(listOpenFileDescriptorsForPath(dbPath)).toEqual([]);
+    },
+  );
 
   it("refuses to create a missing live database while a safe reindex holds the lock", async () => {
     const dbPath = path.join(fixtureRoot, `case-${caseId++}`, "index.sqlite");

@@ -49,6 +49,7 @@ import {
   resolveTelegramOutboundClientTimeoutFloorSeconds,
 } from "./client-fetch.js";
 import { resolveTelegramTransport } from "./fetch.js";
+import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
 import { stringifyTelegramRawUpdateForLog } from "./raw-update-log.js";
 import { TELEGRAM_RICH_TEXT_LIMIT } from "./rich-message.js";
 import { createTelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
@@ -290,11 +291,13 @@ export function createTelegramBotCore(
       DEFAULT_GROUP_HISTORY_LIMIT,
   );
   const groupHistories = new Map<string, HistoryEntry[]>();
+  const telegramTextLimit =
+    telegramCfg.richMessages === true ? TELEGRAM_RICH_TEXT_LIMIT : TELEGRAM_TEXT_CHUNK_LIMIT;
   const textLimit = Math.min(
     resolveTextChunkLimit(cfg, "telegram", account.accountId, {
-      fallbackLimit: TELEGRAM_RICH_TEXT_LIMIT,
+      fallbackLimit: telegramTextLimit,
     }),
-    TELEGRAM_RICH_TEXT_LIMIT,
+    telegramTextLimit,
   );
   const dmPolicy = telegramCfg.dmPolicy ?? "pairing";
   const allowFrom = opts.allowFrom ?? telegramCfg.allowFrom;

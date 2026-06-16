@@ -107,6 +107,7 @@ import {
   shouldSuppressTelegramError,
 } from "./error-policy.js";
 import { shouldSuppressLocalTelegramExecApprovalPrompt } from "./exec-approvals.js";
+import { renderTelegramHtmlText } from "./format.js";
 import { includesRecentTelegramGroupHistoryContext } from "./group-history-context.js";
 import { beginTelegramInboundEventDeliveryCorrelation } from "./inbound-event-delivery.js";
 import {
@@ -116,6 +117,7 @@ import {
   type LaneDeliveryResult,
   type LaneName,
 } from "./lane-delivery.js";
+import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
 import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
 import {
   createTelegramReasoningStepState,
@@ -891,20 +893,29 @@ export const dispatchTelegramMessage = async ({
   const draftMaxChars =
     streamMode === "block"
       ? Math.min(resolveTelegramDraftStreamingChunking(cfg, route.accountId).maxChars, textLimit)
-      : Math.min(textLimit, TELEGRAM_RICH_TEXT_LIMIT);
+      : Math.min(
+          textLimit,
+          telegramCfg.richMessages === true ? TELEGRAM_RICH_TEXT_LIMIT : TELEGRAM_TEXT_CHUNK_LIMIT,
+        );
   const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "telegram",
     accountId: route.accountId,
-    supportsBlockTables: true,
+    supportsBlockTables: telegramCfg.richMessages === true,
   });
-  const renderStreamText = (text: string) => ({
-    text,
-    richMessage: buildTelegramRichMarkdown(text, {
-      tableMode,
-      skipEntityDetection: telegramCfg.linkPreview === false,
-    }),
-  });
+  const renderStreamText = (text: string): TelegramDraftPreview =>
+    telegramCfg.richMessages === true
+      ? {
+          text,
+          richMessage: buildTelegramRichMarkdown(text, {
+            tableMode,
+            skipEntityDetection: telegramCfg.linkPreview === false,
+          }),
+        }
+      : {
+          text: renderTelegramHtmlText(text, { tableMode }),
+          parseMode: "HTML",
+        };
   const accountBlockStreamingEnabled =
     resolveChannelStreamingBlockEnabled(telegramCfg) ??
     cfg.agents?.defaults?.blockStreamingDefault === "on";
@@ -988,6 +999,7 @@ export const dispatchTelegramMessage = async ({
           maxChars: draftMaxChars,
           thread: threadSpec,
           replyToMessageId: draftReplyToMessageId,
+          richMessages: telegramCfg.richMessages,
           minInitialChars: draftMinInitialChars,
           renderText: renderStreamText,
           onSupersededPreview: (superseded) => {
@@ -1507,6 +1519,7 @@ export const dispatchTelegramMessage = async ({
     thread: threadSpec,
     tableMode,
     chunkMode,
+    richMessages: telegramCfg.richMessages,
     linkPreview: telegramCfg.linkPreview,
     replyQuoteMessageId,
     replyQuoteText,
