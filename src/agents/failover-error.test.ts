@@ -958,12 +958,36 @@ describe("failover-error", () => {
     const err = coerceToFailoverError("credit balance too low", {
       provider: "anthropic",
       model: "claude-opus-4-6",
+      authMode: "oauth",
     });
     expect(err?.name).toBe("FailoverError");
     expect(err?.reason).toBe("billing");
     expect(err?.status).toBe(402);
     expect(err?.provider).toBe("anthropic");
     expect(err?.model).toBe("claude-opus-4-6");
+    expect(err?.authMode).toBe("oauth");
+  });
+
+  it("enriches an existing FailoverError with the active auth mode", () => {
+    const original = new FailoverError("credit balance too low", {
+      reason: "billing",
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      profileId: "anthropic:default",
+      status: 402,
+    });
+
+    const err = coerceToFailoverError(original, { authMode: "token" });
+
+    expect(err).not.toBe(original);
+    expect(err).toMatchObject({
+      reason: "billing",
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      profileId: "anthropic:default",
+      authMode: "token",
+      status: 402,
+    });
   });
 
   it("preserves raw provider error text for diagnostic logs", () => {
@@ -1202,6 +1226,7 @@ describe("failover-error", () => {
       provider: "anthropic",
       model: "claude-opus-4-6",
       profileId: "profile-2",
+      authMode: "oauth",
       sessionId: "session:browser-abcd",
       lane: "answer",
       status: 429,
@@ -1212,6 +1237,7 @@ describe("failover-error", () => {
     expect(description.provider).toBe("anthropic");
     expect(description.model).toBe("claude-opus-4-6");
     expect(description.profileId).toBe("profile-2");
+    expect(description.authMode).toBe("oauth");
     expect(description.sessionId).toBe("session:browser-abcd");
     expect(description.lane).toBe("answer");
     expect(description.reason).toBe("rate_limit");

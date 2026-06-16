@@ -2546,6 +2546,14 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     });
 
     mockedRunEmbeddedAttempt.mockResolvedValue(makeAttemptResult({ promptError }));
+    mockedEnsureAuthProfileStore.mockReturnValue({
+      profiles: {
+        "test-profile": {
+          provider: "anthropic",
+          type: "oauth",
+        },
+      },
+    });
     mockedCoerceToFailoverError.mockReturnValue(normalized);
     mockedDescribeFailoverError.mockImplementation((err: unknown) => ({
       message: err instanceof Error ? err.message : String(err),
@@ -2575,6 +2583,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       provider: "anthropic",
       model: "test-model",
       profileId: "test-profile",
+      authMode: "oauth",
     });
     expect(mockedResolveFailoverStatus).toHaveBeenCalledWith("rate_limit");
   });

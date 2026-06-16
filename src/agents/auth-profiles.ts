@@ -39,6 +39,7 @@ export {
   listProfilesForProvider,
   markAuthProfileSuccess,
   removeProviderAuthProfilesWithLock,
+  resolveSubscriptionAuthModeForProfiles,
   setAuthProfileOrder,
   upsertAuthProfile,
   upsertAuthProfileWithLock,

@@ -2718,10 +2718,14 @@ async function runEmbeddedAgentInternal(
             // promptErrorSource === "compaction" means the model call already completed and the
             // abort happened only while waiting for compaction/retry cleanup. Retrying from here
             // would replay that completed tool turn as a fresh prompt attempt.
+            const promptAuthMode = lastProfileId
+              ? attemptAuthProfileStore.profiles?.[lastProfileId]?.type
+              : undefined;
             const normalizedPromptFailover = coerceToFailoverError(promptError, {
               provider: activeErrorContext.provider,
               model: activeErrorContext.model,
               profileId: lastProfileId,
+              authMode: promptAuthMode,
               sessionId: sessionIdUsed,
               lane: globalLane,
             });
@@ -2951,6 +2955,7 @@ async function runEmbeddedAgentInternal(
                   provider,
                   model: modelId,
                   profileId: lastProfileId,
+                  authMode: promptAuthMode,
                   sessionId: sessionIdUsed,
                   lane: globalLane,
                   status,
