@@ -258,7 +258,9 @@ Gemini CLI OAuth is shipped as part of the bundled `google` plugin.
   </Step>
 </Steps>
 
-Gemini CLI JSON replies are parsed from `response`; usage falls back to `stats`, with `stats.cached` normalized into OpenClaw `cacheRead`.
+Gemini CLI uses `stream-json` by default. OpenClaw reads assistant stream
+messages and normalizes `stats.cached` into `cacheRead`; legacy
+`--output-format json` overrides still read reply text from `response`.
 
 ### Z.AI (GLM)
 

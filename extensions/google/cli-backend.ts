@@ -49,6 +49,9 @@ type PreparedGeminiCliExecution = {
   cleanup?: () => Promise<void>;
 };
 
+type GeminiCliBackendConfig = CliBackendPlugin["config"];
+type GeminiCliOutputMode = NonNullable<GeminiCliBackendConfig["output"]>;
+
 function normalizeString(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
@@ -403,6 +406,47 @@ async function prepareGeminiCliAuthHome(
   return null;
 }
 
+function mapGeminiCliOutputFormat(value: string | undefined): GeminiCliOutputMode | undefined {
+  if (value === "stream-json") {
+    return "jsonl";
+  }
+  if (value === "json" || value === "text") {
+    return value;
+  }
+  return undefined;
+}
+
+function readGeminiCliOutputFormat(args: readonly string[] | undefined): GeminiCliOutputMode {
+  for (let index = 0; index < (args?.length ?? 0); index += 1) {
+    const arg = args?.[index];
+    if (arg === "--output-format" || arg === "-o") {
+      return mapGeminiCliOutputFormat(args?.[index + 1]) ?? "text";
+    }
+    const inline = arg?.startsWith("--output-format=")
+      ? arg.slice("--output-format=".length)
+      : arg?.startsWith("-o=")
+        ? arg.slice("-o=".length)
+        : undefined;
+    const mapped = mapGeminiCliOutputFormat(inline);
+    if (mapped) {
+      return mapped;
+    }
+  }
+  return "text";
+}
+
+function normalizeGeminiCliBackendConfig(config: GeminiCliBackendConfig): GeminiCliBackendConfig {
+  const output = readGeminiCliOutputFormat(config.args);
+  const resumeOutput = readGeminiCliOutputFormat(config.resumeArgs ?? config.args);
+  const usesStreamJson = output === "jsonl" || resumeOutput === "jsonl";
+  return {
+    ...config,
+    output,
+    resumeOutput,
+    jsonlDialect: usesStreamJson ? "gemini-stream-json" : undefined,
+  };
+}
+
 export function buildGoogleGeminiCliBackend(): CliBackendPlugin {
   return {
     id: "google-gemini-cli",
@@ -420,6 +464,7 @@ export function buildGoogleGeminiCliBackend(): CliBackendPlugin {
     bundleMcpMode: "gemini-system-settings",
     nativeToolMode: "always-on",
     authEpochMode: "profile-only",
+    normalizeConfig: normalizeGeminiCliBackendConfig,
     prepareExecution: async (ctx) =>
       await prepareGeminiCliAuthHome(
         {
@@ -433,18 +478,19 @@ export function buildGoogleGeminiCliBackend(): CliBackendPlugin {
       ),
     config: {
       command: "gemini",
-      args: ["--skip-trust", "--output-format", "json", "--prompt", "{prompt}"],
+      args: ["--skip-trust", "--output-format", "stream-json", "--prompt", "{prompt}"],
       resumeArgs: [
         "--skip-trust",
         "--resume",
         "{sessionId}",
         "--output-format",
-        "json",
+        "stream-json",
         "--prompt",
         "{prompt}",
       ],
-      output: "json",
+      output: "jsonl",
       input: "arg",
+      jsonlDialect: "gemini-stream-json",
       imageArg: "@",
       imagePathScope: "workspace",
       modelArg: "--model",

@@ -91,6 +91,48 @@ describe("google setup entry", () => {
   });
 });
 
+describe("google gemini cli backend config", () => {
+  it("keeps legacy json output overrides on the json parser", () => {
+    const backend = buildGoogleGeminiCliBackend();
+    const normalized = backend.normalizeConfig?.({
+      ...backend.config,
+      args: ["--skip-trust", "--output-format", "json", "--prompt", "{prompt}"],
+      resumeArgs: [
+        "--skip-trust",
+        "--resume",
+        "{sessionId}",
+        "--output-format=json",
+        "--prompt",
+        "{prompt}",
+      ],
+    });
+
+    expect(normalized?.output).toBe("json");
+    expect(normalized?.resumeOutput).toBe("json");
+    expect(normalized?.jsonlDialect).toBeUndefined();
+  });
+
+  it("keeps short stream-json output overrides on the jsonl parser", () => {
+    const backend = buildGoogleGeminiCliBackend();
+    const normalized = backend.normalizeConfig?.({
+      ...backend.config,
+      args: ["--skip-trust", "-o", "stream-json", "--prompt", "{prompt}"],
+      resumeArgs: [
+        "--skip-trust",
+        "--resume",
+        "{sessionId}",
+        "-o=stream-json",
+        "--prompt",
+        "{prompt}",
+      ],
+    });
+
+    expect(normalized?.output).toBe("jsonl");
+    expect(normalized?.resumeOutput).toBe("jsonl");
+    expect(normalized?.jsonlDialect).toBe("gemini-stream-json");
+  });
+});
+
 describe("google gemini cli backend auth bridge", () => {
   it("materializes selected OpenClaw OAuth credentials into a persistent profile-scoped Gemini CLI home", async () => {
     const backend = buildGoogleGeminiCliBackend();

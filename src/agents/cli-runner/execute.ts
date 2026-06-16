@@ -1361,6 +1361,18 @@ export async function executePreparedCliRun(
               outputMode,
               fallbackSessionId: resolvedSessionId,
             });
+          if (parsed.errorText) {
+            const reason =
+              classifyFailoverReason(parsed.errorText, { provider: params.provider }) ?? "unknown";
+            throw new FailoverError(parsed.errorText, {
+              reason,
+              provider: params.provider,
+              model: context.modelId,
+              sessionId: params.sessionId,
+              lane: params.lane,
+              status: resolveFailoverStatus(reason),
+            });
+          }
           const rawText = parsed.text;
           cliBackendLog.info(
             `cli turn: provider=${params.provider} model=${context.modelId} durationMs=${Date.now() - cliTurnStartedAt} ${formatCliBackendOutputDigest(rawText)}`,

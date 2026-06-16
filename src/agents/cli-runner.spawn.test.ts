@@ -124,8 +124,9 @@ function buildPreparedCliRunContext(params: {
     if (params.provider === "google-gemini-cli") {
       return {
         command: "gemini",
-        args: ["--skip-trust", "--output-format", "json", "--prompt", "{prompt}"],
-        output: "json" as const,
+        args: ["--skip-trust", "--output-format", "stream-json", "--prompt", "{prompt}"],
+        output: "jsonl" as const,
+        jsonlDialect: "gemini-stream-json" as const,
         input: "arg" as const,
         modelArg: "--model",
         sessionMode: "existing" as const,
@@ -904,6 +905,51 @@ describe("runCliAgent spawn path", () => {
       stderrHash: "7597e6b3a377",
       useResume: false,
     });
+  });
+
+  it("rejects Gemini stream-json error results emitted with a zero exit code", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout:
+          [
+            JSON.stringify({
+              type: "message",
+              role: "assistant",
+              content: "partial text",
+              delta: true,
+            }),
+            JSON.stringify({
+              type: "result",
+              status: "error",
+              error: {
+                message: "Gemini stream failed",
+              },
+            }),
+          ].join("\n") + "\n",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    await expectRejectsWithFields(
+      executePreparedCliRun(
+        buildPreparedCliRunContext({
+          provider: "google-gemini-cli",
+          model: "gemini-3.1-pro-preview",
+          runId: "run-gemini-stream-json-error",
+        }),
+      ),
+      {
+        name: "FailoverError",
+        message: "Gemini stream failed",
+        reason: "unknown",
+      },
+    );
   });
 
   it("passes Codex system prompts through model_instructions_file", async () => {
