@@ -148,6 +148,7 @@ async function findConversationReference(recipient: {
 export async function resolveMSTeamsSendContext(params: {
   cfg: OpenClawConfig;
   to: string;
+  replyStyleOverride?: MSTeamsReplyStyle;
 }): Promise<MSTeamsProactiveContext> {
   const msteamsCfg = params.cfg.channels?.msteams;
 
@@ -236,12 +237,14 @@ export async function resolveMSTeamsSendContext(params: {
     // groupChat, or unknown defaults to groupChat behavior
     conversationType = "groupChat";
   }
-  const replyStyle = resolveMSTeamsProactiveReplyStyle({
-    cfg: msteamsCfg,
-    conversationId,
-    ref: safeRef,
-    conversationType,
-  });
+  const replyStyle =
+    params.replyStyleOverride ??
+    resolveMSTeamsProactiveReplyStyle({
+      cfg: msteamsCfg,
+      conversationId,
+      ref: safeRef,
+      conversationType,
+    });
 
   // Get SharePoint site ID from config (required for file uploads in group chats/channels)
   const sharePointSiteId = msteamsCfg.sharePointSiteId;

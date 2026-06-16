@@ -418,8 +418,14 @@ function describeMSTeamsMessageTool({
     capabilities: enabled ? ["presentation"] : [],
     schema: enabled
       ? {
-          actions: ["unpin"],
+          actions: ["send", "unpin"],
           properties: {
+            topLevel: Type.Optional(
+              Type.Boolean({
+                description:
+                  "Force a new root post instead of a thread reply (channel only; ignored for DMs / group chats).",
+              }),
+            ),
             pinnedMessageId: Type.Optional(
               Type.String({
                 description:
@@ -736,6 +742,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
                   cfg: ctx.cfg,
                   to,
                   card,
+                  replyStyleOverride: ctx.params.topLevel === true ? "top-level" : undefined,
                 });
                 return jsonActionResultWithDetails(
                   {
@@ -1100,6 +1107,41 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
                   name,
                 });
                 return jsonMSTeamsOkActionResult("renameGroup", result);
+              },
+            });
+          }
+
+          if (ctx.action === "send") {
+            return await runWithRequiredActionTarget({
+              actionLabel: "Send",
+              toolParams: ctx.params,
+              run: async (to) => {
+                const { sendMessageMSTeams } = await loadMSTeamsChannelRuntime();
+                const result = await sendMessageMSTeams({
+                  cfg: ctx.cfg,
+                  to,
+                  text: resolveActionContent(ctx.params),
+                  mediaUrl: readOptionalTrimmedString(ctx.params, "mediaUrl") ?? undefined,
+                  filename:
+                    readOptionalTrimmedString(ctx.params, "filename") ??
+                    readOptionalTrimmedString(ctx.params, "title"),
+                  mediaLocalRoots: ctx.mediaLocalRoots,
+                  mediaReadFile: ctx.mediaReadFile,
+                  replyStyleOverride: ctx.params.topLevel === true ? "top-level" : undefined,
+                });
+                return jsonActionResultWithDetails(
+                  {
+                    ok: true,
+                    channel: "msteams",
+                    messageId: result.messageId,
+                    conversationId: result.conversationId,
+                  },
+                  {
+                    ok: true,
+                    channel: "msteams",
+                    messageId: result.messageId,
+                  },
+                );
               },
             });
           }
