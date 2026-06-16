@@ -51,6 +51,7 @@ tool with the `react` action. Reaction behavior varies by channel and transport.
   <Accordion title="Telegram">
     - Empty `emoji` removes the bot's reactions.
     - `remove: true` also removes reactions but still requires a non-empty `emoji` for tool validation.
+    - Inbound reaction notifications depend on Telegram Bot API delivery. Bots generally must be administrators in the chat to receive reaction updates, so 1:1 DM reactions can be unavailable even with `channels.telegram.reactionNotifications` enabled.
 
   </Accordion>
 
