@@ -5,6 +5,7 @@
  */
 import {
   hasNonEmptyString as hasNonEmptyStringField,
+  normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
@@ -27,6 +28,7 @@ type RawToolCallBlock = {
   name?: unknown;
   input?: unknown;
   arguments?: unknown;
+  partialJson?: unknown;
 };
 
 const RAW_TOOL_CALL_BLOCK_TYPES = new Set([
@@ -70,6 +72,31 @@ function hasToolCallId(block: RawToolCallBlock): boolean {
     hasNonEmptyStringField(block.tool_call_id) ||
     hasNonEmptyStringField(block.tool_use_id)
   );
+}
+
+function hasPartialJson(
+  block: RawToolCallBlock,
+): block is RawToolCallBlock & { partialJson: string } {
+  return typeof block.partialJson === "string";
+}
+
+function isFinalizedOpenAIResponsesToolCall(block: RawToolCallBlock): boolean {
+  if (!hasPartialJson(block) || typeof block.id !== "string" || "input" in block) {
+    return false;
+  }
+
+  const separator = block.id.indexOf("|");
+  if (separator <= 0 || separator === block.id.length - 1) {
+    return false;
+  }
+
+  return "arguments" in block && block.arguments !== undefined && block.arguments !== null;
+}
+function isInterruptedAssistantTurn(message: AgentMessage): boolean {
+  if (message.role !== "assistant" || !("stopReason" in message)) {
+    return false;
+  }
+  return message.stopReason === "aborted" || message.stopReason === "error";
 }
 
 function sanitizeToolCallBlock(block: RawToolCallBlock): RawToolCallBlock {
@@ -382,31 +409,74 @@ function repairToolCallInputs(
     let messageChanged = false;
 
     for (const block of msg.content) {
-      if (
-        isRawToolCallBlock(block) &&
-        (!hasToolCallInput(block) ||
-          !hasToolCallId(block) ||
-          !isAllowedToolCallName((block as RawToolCallBlock).name, allowedToolNames))
-      ) {
-        droppedToolCalls += 1;
-        droppedInMessage += 1;
-        changed = true;
-        messageChanged = true;
-        continue;
-      }
       if (isRawToolCallBlock(block)) {
-        if (RAW_TOOL_CALL_BLOCK_TYPES.has((block as { type?: string }).type ?? "")) {
-          const sanitized = sanitizeToolCallBlock(block);
-          if (sanitized !== block) {
-            changed = true;
-            messageChanged = true;
-          }
-          nextContent.push(sanitized as typeof block);
+        // Drop genuinely incomplete streaming artifacts (missing required fields).
+        if (
+          !hasToolCallInput(block) ||
+          !hasToolCallId(block) ||
+          !isAllowedToolCallName((block as RawToolCallBlock).name, allowedToolNames)
+        ) {
+          droppedToolCalls += 1;
+          droppedInMessage += 1;
+          changed = true;
+          messageChanged = true;
           continue;
         }
-      } else {
-        nextContent.push(block);
       }
+      let workBlock = block;
+      if (isRawToolCallBlock(block) && hasPartialJson(block)) {
+        if (isInterruptedAssistantTurn(msg) || !isFinalizedOpenAIResponsesToolCall(block)) {
+          droppedToolCalls += 1;
+          droppedInMessage += 1;
+          changed = true;
+          messageChanged = true;
+          continue;
+        }
+
+        // OpenAI Responses persists finalized function calls with both parsed
+        // arguments and the original partialJson bytes. Strip only the
+        // redundant partialJson field so replay keeps the finalized call.
+        const stripped = { ...block };
+        delete (stripped as RawToolCallBlock & { partialJson?: unknown }).partialJson;
+        workBlock = stripped;
+        changed = true;
+        messageChanged = true;
+      }
+      if (isRawToolCallBlock(workBlock)) {
+        if (RAW_TOOL_CALL_BLOCK_TYPES.has((workBlock as { type?: string }).type ?? "")) {
+          // Only sanitize (redact) sessions_spawn blocks; all others are passed through
+          // unchanged to preserve provider-specific shapes (e.g. toolUse.input for Anthropic).
+          const blockName =
+            typeof (workBlock as { name?: unknown }).name === "string"
+              ? (workBlock as { name: string }).name.trim()
+              : undefined;
+          if (normalizeLowercaseStringOrEmpty(blockName) === "sessions_spawn") {
+            const sanitized = sanitizeToolCallBlock(workBlock);
+            if (sanitized !== workBlock) {
+              changed = true;
+              messageChanged = true;
+            }
+            nextContent.push(sanitized as typeof block);
+          } else {
+            if (typeof (workBlock as { name?: unknown }).name === "string") {
+              const rawName = (workBlock as { name: string }).name;
+              const trimmedName = rawName.trim();
+              if (rawName !== trimmedName && trimmedName) {
+                const renamed = { ...(workBlock as object), name: trimmedName } as typeof block;
+                nextContent.push(renamed);
+                changed = true;
+                messageChanged = true;
+              } else {
+                nextContent.push(workBlock);
+              }
+            } else {
+              nextContent.push(workBlock);
+            }
+          }
+          continue;
+        }
+      }
+      nextContent.push(workBlock);
     }
 
     if (droppedInMessage > 0) {
