@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it, vi } from "vitest";
 import { createCodexWebSearchProvider as createContractCodexWebSearchProvider } from "../web-search-contract-api.js";
@@ -189,10 +190,37 @@ describe("codex web search provider", () => {
     ).toBeNull();
   });
 
+  it("fails closed when configured app-server transport cannot be isolated", async () => {
+    const { client } = createFakeClient();
+    const provider = createCodexWebSearchProvider({
+      resolvePluginConfig: () => ({
+        appServer: {
+          transport: "websocket",
+          url: "ws://127.0.0.1:4501",
+        },
+      }),
+      clientFactory: async () => client,
+    });
+    const config = createConfig();
+    const tool = provider.createTool({
+      config,
+      searchConfig: config.tools?.web?.search,
+      agentDir: "/tmp/openclaw-agent",
+    });
+
+    await expect(tool?.execute({ query: "plumbers in Edmonton Alberta" })).rejects.toThrow(
+      "Bounded Codex turns require stdio transport so native tools can be isolated.",
+    );
+  });
+
   it("runs an isolated grounded Codex search with configured restrictions", async () => {
     const { client, requests } = createFakeClient();
+    let isolatedCodexHome: string | undefined;
     const provider = createCodexWebSearchProvider({
-      clientFactory: async () => client,
+      clientFactory: async (startOptions) => {
+        isolatedCodexHome = startOptions?.env?.CODEX_HOME;
+        return client;
+      },
     });
     const config = createConfig();
     const tool = provider.createTool({
@@ -229,7 +257,7 @@ describe("codex web search provider", () => {
     expect(requests[1]?.params).toMatchObject({
       model: "gpt-5.5",
       modelProvider: "openai",
-      cwd: "/tmp/openclaw-agent",
+      cwd: expect.any(String),
       approvalPolicy: "on-request",
       sandbox: "read-only",
       environments: [],
@@ -248,6 +276,13 @@ describe("codex web search provider", () => {
         "tools.web_search.location.timezone": "America/Edmonton",
       },
     });
+    const threadStartCwd = (requests[1]?.params as { cwd?: string } | undefined)?.cwd;
+    expect(threadStartCwd).not.toBe("/tmp/openclaw-agent");
+    expect(isolatedCodexHome).toEqual(expect.any(String));
+    if (!threadStartCwd || !isolatedCodexHome) {
+      throw new Error("expected isolated Codex home and workspace");
+    }
+    expect(path.dirname(threadStartCwd)).toBe(path.dirname(isolatedCodexHome));
   });
 
   it("fails closed when Codex returns an ungrounded answer", async () => {

@@ -1165,6 +1165,11 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(forkParams?.approvalPolicy).toBe("on-request");
     expect(forkParams?.sandbox).toBe("workspace-write");
     expect(forkParams?.approvalsReviewer).toBe("user");
+    expect(resolveCodexProviderWebSearchSupportForClientMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelProviderOverride: "lmstudio",
+      }),
+    );
     expect(config?.["features.code_mode"]).toBe(true);
     expect(config?.["features.code_mode_only"]).toBe(true);
   });

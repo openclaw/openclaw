@@ -212,9 +212,9 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
   });
   const modelHasVision = params.model.input?.includes("image") ?? false;
   const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, input.sessionAgentId);
+  const agentHarness = await import("openclaw/plugin-sdk/agent-harness");
   const createOpenClawCodingTools =
-    openClawCodingToolsFactoryForTests ??
-    (await import("openclaw/plugin-sdk/agent-harness")).createOpenClawCodingTools;
+    openClawCodingToolsFactoryForTests ?? agentHarness.createOpenClawCodingTools;
   toolBuildStages.mark("load-agent-harness-tools");
   const sessionKeys = resolveOpenClawCodingToolsSessionKeys(params, input.sandboxSessionKey);
   const allTools = createOpenClawCodingTools({
@@ -331,8 +331,34 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     hasInboundImages: (params.images?.length ?? 0) > 0,
   });
   toolBuildStages.mark("vision-filtering");
+  const webSearchPresent = visionFilteredTools.some((tool) => tool.name === "web_search");
+  const webSearchPolicy = agentHarness.resolveWebSearchToolPolicy({
+    config: params.config,
+    modelProvider: params.model.provider,
+    modelId: params.modelId,
+    agentId: input.sessionAgentId,
+    sessionKey: input.sandboxSessionKey,
+    sandboxToolPolicy: input.sandbox?.tools,
+    messageProvider: resolveCodexMessageToolProvider(params),
+    agentAccountId: params.agentAccountId,
+    groupId: params.groupId,
+    groupChannel: params.groupChannel,
+    groupSpace: params.groupSpace,
+    spawnedBy: params.spawnedBy,
+    senderId: params.senderId,
+    senderName: params.senderName,
+    senderUsername: params.senderUsername,
+    senderE164: params.senderE164,
+  });
+  const senderScopedWebSearchRestriction =
+    !webSearchPolicy.allowed && webSearchPolicy.persistentAllowed;
+  const persistentCodexWebSearchSurface =
+    !isCodexMemoryFlushRun(params) &&
+    !(input.pluginConfig.codexDynamicToolsExclude ?? []).some(
+      (name) => normalizeCodexDynamicToolName(name) === "web_search",
+    );
   input.onPersistentWebSearchPolicyResolved?.(
-    visionFilteredTools.some((tool) => tool.name === "web_search"),
+    webSearchPresent || (persistentCodexWebSearchSurface && senderScopedWebSearchRestriction),
   );
   const toolsAllow = includeForcedCodexDynamicToolAllow(params.toolsAllow, params);
   const filteredTools = filterCodexDynamicToolsForAllowlist(visionFilteredTools, toolsAllow);

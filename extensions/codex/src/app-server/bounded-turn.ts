@@ -1,6 +1,9 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import type { AuthProfileStore } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { readCodexNotificationItem } from "./attempt-notifications.js";
 import type { CodexAppServerClientFactory } from "./client-factory.js";
 import type { CodexAppServerClient } from "./client.js";
@@ -45,7 +48,7 @@ export type CodexBoundedTurnResult = {
   items: CodexThreadItem[];
 };
 
-export async function runBoundedCodexAppServerTurn(params: {
+type CodexBoundedTurnParams = {
   config?: OpenClawConfig;
   model: string;
   profile?: string;
@@ -59,21 +62,59 @@ export async function runBoundedCodexAppServerTurn(params: {
   input: CodexUserInput[];
   requiredModalities: string[];
   threadConfig?: JsonObject;
-}): Promise<CodexBoundedTurnResult> {
+};
+
+export async function runBoundedCodexAppServerTurn(
+  params: CodexBoundedTurnParams,
+): Promise<CodexBoundedTurnResult> {
   const appServer = resolveCodexAppServerRuntimeOptions({
     pluginConfig: params.options.pluginConfig,
   });
+  if (appServer.start.transport !== "stdio") {
+    throw new Error("Bounded Codex turns require stdio transport so native tools can be isolated.");
+  }
+  return await withTempWorkspace(
+    {
+      rootDir: resolvePreferredOpenClawTmpDir(),
+      prefix: "codex-bounded-turn-",
+    },
+    async (workspace) => {
+      const codexHome = path.join(workspace.dir, "codex-home");
+      const cwd = path.join(workspace.dir, "workspace");
+      await Promise.all([
+        fs.mkdir(codexHome, { recursive: true }),
+        fs.mkdir(cwd, { recursive: true }),
+      ]);
+      return await runBoundedCodexAppServerTurnInWorkspace(params, appServer, { codexHome, cwd });
+    },
+  );
+}
+
+async function runBoundedCodexAppServerTurnInWorkspace(
+  params: CodexBoundedTurnParams,
+  appServer: ReturnType<typeof resolveCodexAppServerRuntimeOptions>,
+  isolated: { codexHome: string; cwd: string },
+): Promise<CodexBoundedTurnResult> {
   const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 100, 100);
   const agentDir = params.agentDir?.trim() || undefined;
-  const cwd = agentDir ?? process.cwd();
+  const startOptions = {
+    ...appServer.start,
+    env: {
+      ...appServer.start.env,
+      CODEX_HOME: isolated.codexHome,
+    },
+    clearEnv: appServer.start.clearEnv?.filter(
+      (name) => name.trim().toUpperCase() !== "CODEX_HOME",
+    ),
+  };
   const ownsClient = !params.options.clientFactory;
   const client = params.options.clientFactory
-    ? await params.options.clientFactory(appServer.start, params.profile, agentDir, params.config, {
+    ? await params.options.clientFactory(startOptions, params.profile, agentDir, params.config, {
         timeoutMs,
       })
     : await import("./shared-client.js").then(({ createIsolatedCodexAppServerClient }) =>
         createIsolatedCodexAppServerClient({
-          startOptions: appServer.start,
+          startOptions,
           timeoutMs,
           authProfileId: params.profile,
           agentDir,
@@ -105,7 +146,7 @@ export async function runBoundedCodexAppServerTurn(params: {
         {
           model: params.model,
           modelProvider: "openai",
-          cwd,
+          cwd: isolated.cwd,
           approvalPolicy: "on-request",
           sandbox: "read-only",
           serviceName: "OpenClaw",
@@ -135,7 +176,7 @@ export async function runBoundedCodexAppServerTurn(params: {
           {
             threadId: thread.thread.id,
             input: params.input,
-            cwd,
+            cwd: isolated.cwd,
             approvalPolicy: "on-request",
             model: params.model,
             effort: "low",

@@ -268,6 +268,63 @@ describe("Codex app-server dynamic tool build", () => {
     expect(webSearchAllowed).toBe(false);
   });
 
+  it("treats sender-scoped web_search denial as transient", async () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.senderId = "restricted-sender";
+    params.config = {
+      tools: {
+        toolsBySender: {
+          "id:restricted-sender": { deny: ["web_search"] },
+        },
+      },
+    } as never;
+    setOpenClawCodingToolsFactoryForTests(() => [createRuntimeDynamicTool("message")]);
+    let persistentWebSearchAllowed = false;
+    let webSearchAllowed = true;
+
+    const tools = await buildDynamicToolsForTest(params, workspaceDir, {
+      onPersistentWebSearchPolicyResolved: (allowed) => {
+        persistentWebSearchAllowed = allowed;
+      },
+      onWebSearchPolicyResolved: (allowed) => {
+        webSearchAllowed = allowed;
+      },
+    });
+
+    expect(tools.map((tool) => tool.name)).toEqual(["message"]);
+    expect(persistentWebSearchAllowed).toBe(true);
+    expect(webSearchAllowed).toBe(false);
+  });
+
+  it("keeps persistent search denied when global and sender policy both deny it", async () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.senderId = "restricted-sender";
+    params.config = {
+      tools: {
+        deny: ["web_search"],
+        toolsBySender: {
+          "id:restricted-sender": { deny: ["web_search"] },
+        },
+      },
+    } as never;
+    setOpenClawCodingToolsFactoryForTests(() => [createRuntimeDynamicTool("message")]);
+    let persistentWebSearchAllowed = true;
+
+    await buildDynamicToolsForTest(params, workspaceDir, {
+      onPersistentWebSearchPolicyResolved: (allowed) => {
+        persistentWebSearchAllowed = allowed;
+      },
+    });
+
+    expect(persistentWebSearchAllowed).toBe(false);
+  });
+
   it("keeps managed web_search when a managed provider is explicitly selected", async () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);

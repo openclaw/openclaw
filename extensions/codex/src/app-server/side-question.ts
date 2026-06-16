@@ -266,7 +266,7 @@ export async function runCodexAppServerSideQuestion(
         ? await resolveCodexProviderWebSearchSupportForClient({
             client,
             timeoutMs: appServer.requestTimeoutMs,
-            modelProviderOverride: modelProvider,
+            modelProviderOverride: modelSelection.modelProvider,
             signal: runAbortController.signal,
           })
         : false;
