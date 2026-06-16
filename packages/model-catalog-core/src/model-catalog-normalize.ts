@@ -430,6 +430,19 @@ function normalizeModelCatalogCompat(value: unknown): ModelCatalogCompatConfig |
     compat.vercelGatewayRouting = vercelGatewayRouting;
   }
 
+  if (isRecord(value.requestContextHeaders)) {
+    const headers: Record<string, string> = {};
+    const allowedKeys = new Set(["runId", "messageChannel", "runKind"]);
+    for (const [key, val] of Object.entries(value.requestContextHeaders)) {
+      if (allowedKeys.has(key) && typeof val === "string" && val.length > 0) {
+        headers[key] = val;
+      }
+    }
+    if (Object.keys(headers).length > 0) {
+      compat.requestContextHeaders = headers;
+    }
+  }
+
   return Object.keys(compat).length > 0 ? (compat as ModelCatalogCompatConfig) : undefined;
 }
 

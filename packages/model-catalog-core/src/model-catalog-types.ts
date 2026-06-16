@@ -69,6 +69,11 @@ export type ModelCatalogCompatConfig = {
   supportedReasoningEfforts?: string[];
   reasoningEffortMap?: Record<string, string>;
   visibleReasoningDetailTypes?: string[];
+  requestContextHeaders?: {
+    runId?: string;
+    messageChannel?: string;
+    runKind?: string;
+  };
 };
 
 /** OpenRouter routing preferences copied into request metadata. */

@@ -451,6 +451,22 @@ export interface OpenAICompletionsCompat {
   supportsPromptCacheKey?: boolean;
   /** Whether the provider supports long prompt cache retention (`prompt_cache_retention: "24h"` or Anthropic-style `cache_control.ttl: "1h"`, depending on format). Default: true. */
   supportsLongCacheRetention?: boolean;
+  /**
+   * Maps run context fields to custom request header names for cost attribution behind a proxy.
+   * When set, the provider sends the specified headers with the current run's values.
+   * Keys are run-context field names, values are HTTP header names chosen by the operator.
+   * Nothing is sent unless this map is configured; header names are vendor-agnostic.
+   *
+   * Example: `{ runId: "X-Run-Id", messageChannel: "X-Message-Channel", runKind: "X-Run-Kind" }`
+   */
+  requestContextHeaders?: {
+    /** Sends the current run's unique ID using this header name. */
+    runId?: string;
+    /** Sends the inbound message channel (e.g. "slack", "telegram") using this header name. */
+    messageChannel?: string;
+    /** Sends the operation kind ("default", "heartbeat", "cron") using this header name. */
+    runKind?: string;
+  };
 }
 
 /** Compatibility settings for OpenAI Responses APIs. */
@@ -459,6 +475,22 @@ export interface OpenAIResponsesCompat {
   sendSessionIdHeader?: boolean;
   /** Whether the provider supports `prompt_cache_retention: "24h"`. Default: true. */
   supportsLongCacheRetention?: boolean;
+  /**
+   * Maps run context fields to custom request header names for cost attribution behind a proxy.
+   * When set, the provider sends the specified headers with the current run's values.
+   * Keys are run-context field names, values are HTTP header names chosen by the operator.
+   * Nothing is sent unless this map is configured; header names are vendor-agnostic.
+   *
+   * Example: `{ runId: "X-Run-Id", messageChannel: "X-Message-Channel", runKind: "X-Run-Kind" }`
+   */
+  requestContextHeaders?: {
+    /** Sends the current run's unique ID using this header name. */
+    runId?: string;
+    /** Sends the inbound message channel (e.g. "slack", "telegram") using this header name. */
+    messageChannel?: string;
+    /** Sends the operation kind ("default", "heartbeat", "cron") using this header name. */
+    runKind?: string;
+  };
 }
 
 /** Compatibility settings for Anthropic Messages-compatible APIs. */

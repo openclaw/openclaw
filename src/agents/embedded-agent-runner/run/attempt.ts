@@ -3029,6 +3029,22 @@ export async function runEmbeddedAttempt(
 
       const innerStreamFn = activeSession.agent.streamFn;
       activeSession.agent.streamFn = (model, context, options) => {
+        // Inject run context headers from model compat config for cost-attribution proxies.
+        const requestContextHeaders = (model as { compat?: Record<string, unknown> }).compat
+          ?.requestContextHeaders as
+          | { runId?: string; messageChannel?: string; runKind?: string }
+          | undefined;
+        if (requestContextHeaders) {
+          const extra: Record<string, string> = {};
+          if (requestContextHeaders.runId) extra[requestContextHeaders.runId] = params.runId;
+          if (requestContextHeaders.messageChannel)
+            extra[requestContextHeaders.messageChannel] = params.messageChannel ?? "";
+          if (requestContextHeaders.runKind)
+            extra[requestContextHeaders.runKind] = params.bootstrapContextRunKind ?? "default";
+          if (Object.keys(extra).length > 0) {
+            options = { ...options, headers: { ...options?.headers, ...extra } };
+          }
+        }
         const signal = runAbortController.signal as AbortSignal & { reason?: unknown };
         if (yieldDetected && signal.aborted && signal.reason === "sessions_yield") {
           return createYieldAbortedResponse(model) as unknown as Awaited<
