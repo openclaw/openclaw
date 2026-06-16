@@ -81,7 +81,8 @@ overrides:
   request-promise: "npm:@cypress/request-promise@5.0.0"
   basic-ftp: 6.0.1
   file-type: 22.0.1
-  form-data: 2.5.4
+  esbuild: 0.28.1
+  form-data: 2.5.6
   ip-address: 10.2.0
   minimatch: 10.2.5
   path-to-regexp: 8.4.0
@@ -91,7 +92,8 @@ overrides:
   tar: 7.5.15
   tough-cookie: 4.1.3
   yauzl: 3.2.1
-  protobufjs: 8.4.0
+  protobufjs: 8.4.1
+  vite: 8.0.16
   uuid: 14.0.0
 
 allowBuilds:
