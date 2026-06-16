@@ -74,6 +74,8 @@ import { listSessionEntries as listAccessorSessionEntries } from "../config/sess
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
+import { getActivePluginRegistryWorkspaceDirFromState } from "../plugins/runtime-state.js";
+import { runWithPinnedWorkspaceDir } from "../plugins/workspace-dir-pin.js";
 import {
   DEFAULT_AGENT_ID,
   normalizeAgentId,
@@ -2729,6 +2731,10 @@ export function listSessionsFromStore(params: {
 }): SessionsListResult {
   const { cfg, storePath, store, opts } = params;
   const now = Date.now();
+  // Pin the active plugin-registry workspace dir for the row-building batch
+  // so every row reads a stable value despite concurrent mutations (#90814).
+  const workspaceDir = getActivePluginRegistryWorkspaceDirFromState();
+  return runWithPinnedWorkspaceDir(workspaceDir, () => {
   const sessionListTranscriptUsageMaxBytes = 64 * 1024;
   const sessionListTranscriptFieldRows = 100;
   let rowContext: SessionListRowContext | undefined;
@@ -2798,6 +2804,7 @@ export function listSessionsFromStore(params: {
     defaults: getSessionDefaults(cfg, params.modelCatalog, { allowPluginNormalization: false }),
     sessions,
   };
+  }); // runWithPinnedWorkspaceDir
 }
 
 /**
@@ -2819,6 +2826,11 @@ export async function listSessionsFromStoreAsync(params: {
 }): Promise<SessionsListResult> {
   const { cfg, storePath, store, opts } = params;
   const now = Date.now();
+  // Pin workspace dir for the row loop. Yields between batches let concurrent
+  // agent-turns mutate the global workspaceDir; without the pin the plugin
+  // metadata snapshot memo misses every row → O(rows) scans (#90814).
+  const workspaceDir = getActivePluginRegistryWorkspaceDirFromState();
+  return runWithPinnedWorkspaceDir(workspaceDir, async () => {
   const sessionListTranscriptUsageMaxBytes = 64 * 1024;
   const sessionListTranscriptFieldRows = 100;
   let rowContext: SessionListRowContext | undefined;
@@ -2922,4 +2934,5 @@ export async function listSessionsFromStoreAsync(params: {
     defaults: getSessionDefaults(cfg, params.modelCatalog, { allowPluginNormalization: false }),
     sessions,
   };
+  }); // runWithPinnedWorkspaceDir
 }
