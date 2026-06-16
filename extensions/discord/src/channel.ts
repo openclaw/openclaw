@@ -529,7 +529,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
           }
           return lines;
         },
-        buildCapabilitiesDiagnostics: async ({ account, target }) => {
+        buildCapabilitiesDiagnostics: async ({ account, target, timeoutMs }) => {
           if (!target?.trim()) {
             return undefined;
           }
@@ -578,13 +578,27 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
             },
           };
           try {
-            const perms = await (
-              await loadDiscordSendModule()
-            ).fetchChannelPermissionsDiscord(parsedTarget.id, {
-              cfg: statusCfg,
-              token,
-              accountId: account.accountId ?? undefined,
-            });
+            const permsPromise = (await loadDiscordSendModule()).fetchChannelPermissionsDiscord(
+              parsedTarget.id,
+              {
+                cfg: statusCfg,
+                token,
+                accountId: account.accountId ?? undefined,
+              },
+            );
+            const perms = await (timeoutMs
+              ? Promise.race([
+                  permsPromise,
+                  new Promise<never>((_, reject) => {
+                    const timer = setTimeout(
+                      () =>
+                        reject(new Error(`Capabilities diagnostic timed out after ${timeoutMs}ms`)),
+                      timeoutMs,
+                    );
+                    timer.unref();
+                  }),
+                ])
+              : permsPromise);
             const requiredPermissions = resolveRequiredDiscordChannelPermissions(perms.channelType);
             const missingRequired = requiredPermissions.filter(
               (permission) => !perms.permissions.includes(permission),

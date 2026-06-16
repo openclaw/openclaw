@@ -482,6 +482,26 @@ describe("discordPlugin outbound", () => {
     }
   });
 
+  it("returns a timeout error when capabilities diagnostics exceed the timeout", async () => {
+    const fetchPermissionsSpy = vi
+      .spyOn(sendModule, "fetchChannelPermissionsDiscord")
+      .mockReturnValue(new Promise<never>(() => {}));
+    try {
+      const cfg = createCfg();
+      const diagnostics = await discordPlugin.status!.buildCapabilitiesDiagnostics!({
+        account: resolveAccount(cfg),
+        timeoutMs: 10,
+        cfg,
+        target: "channel:222",
+      });
+
+      expect(String(diagnostics?.details?.permissions?.error)).toContain("timed out");
+      expect(diagnostics?.lines?.[0]?.tone).toBe("error");
+    } finally {
+      fetchPermissionsSpy.mockRestore();
+    }
+  });
+
   it("uses direct Discord startup helpers for async startup enrichment", async () => {
     const runtimeProbeDiscord = vi.fn(async () => {
       throw new Error("runtime Discord probe should not be used");
