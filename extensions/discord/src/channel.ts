@@ -70,6 +70,7 @@ import {
   setThreadBindingIdleTimeoutBySessionKey,
   setThreadBindingMaxAgeBySessionKey,
 } from "./monitor/thread-bindings.session-updates.js";
+import { withAbortTimeout } from "./monitor/timeouts.js";
 import { looksLikeDiscordTargetId, normalizeDiscordMessagingTarget } from "./normalize.js";
 import { discordOutbound } from "./outbound-adapter.js";
 import { resolveDiscordOutboundSessionRoute } from "./outbound-session-route.js";
@@ -578,27 +579,20 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
             },
           };
           try {
-            const permsPromise = (await loadDiscordSendModule()).fetchChannelPermissionsDiscord(
-              parsedTarget.id,
-              {
-                cfg: statusCfg,
-                token,
-                accountId: account.accountId ?? undefined,
-              },
-            );
-            const perms = await (timeoutMs
-              ? Promise.race([
-                  permsPromise,
-                  new Promise<never>((_, reject) => {
-                    const timer = setTimeout(
-                      () =>
-                        reject(new Error(`Capabilities diagnostic timed out after ${timeoutMs}ms`)),
-                      timeoutMs,
-                    );
-                    timer.unref();
-                  }),
-                ])
-              : permsPromise);
+            const sendModule = await loadDiscordSendModule();
+            const perms = await withAbortTimeout({
+              timeoutMs,
+              createTimeoutError: () =>
+                new Error(`Capabilities diagnostic timed out after ${timeoutMs}ms`),
+              run: async (signal) =>
+                await sendModule.fetchChannelPermissionsDiscord(parsedTarget.id, {
+                  cfg: statusCfg,
+                  token,
+                  accountId: account.accountId ?? undefined,
+                  signal,
+                  timeoutMs,
+                }),
+            });
             const requiredPermissions = resolveRequiredDiscordChannelPermissions(perms.channelType);
             const missingRequired = requiredPermissions.filter(
               (permission) => !perms.permissions.includes(permission),
