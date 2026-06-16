@@ -101,6 +101,16 @@ const LOCAL_COMMANDS = new Set([
 
 const UI_ONLY_COMMANDS: SlashCommandDef[] = [
   {
+    key: "label",
+    name: "label",
+    description: "Name the current session.",
+    args: "<name>",
+    icon: "terminal",
+    category: "session",
+    executeLocal: true,
+    tier: "standard",
+  },
+  {
     key: "clear",
     name: "clear",
     description: "Clear chat history",

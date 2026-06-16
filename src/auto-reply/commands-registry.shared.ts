@@ -750,24 +750,6 @@ export function buildBuiltinChatCommands(
       ],
     }),
     defineChatCommand({
-      key: "label",
-      nativeName: "label",
-      description: "Name the current session.",
-      textAlias: "/label",
-      acceptsArgs: true,
-      category: "session",
-      tier: "standard",
-      args: [
-        {
-          name: "name",
-          description: "Session display name",
-          type: "string",
-          required: true,
-          captureRemaining: true,
-        },
-      ],
-    }),
-    defineChatCommand({
       key: "name",
       nativeName: "name",
       description: "Name or rename the current session.",
