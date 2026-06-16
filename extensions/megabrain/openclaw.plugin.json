@@ -1,0 +1,54 @@
+{
+  "id": "megabrain",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": ["megabrain"],
+  "modelIdNormalization": {
+    "providers": {
+      "megabrain": {
+        "prefixWhenBare": "megabrain"
+      }
+    }
+  },
+  "modelPricing": {
+    "providers": {
+      "megabrain": {
+        "openRouter": {
+          "passthroughProviderModel": true
+        },
+        "liteLLM": false
+      }
+    }
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "megabrain",
+        "envVars": ["MEGABRAIN_API_KEY"]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "megabrain",
+      "method": "api-key",
+      "choiceId": "megabrain-api-key",
+      "choiceLabel": "MegaBrain API key",
+      "groupId": "megabrain",
+      "groupLabel": "MegaBrain",
+      "groupHint": "API key from getmegabrain.com",
+      "onboardingScopes": ["text-inference"],
+      "optionKey": "megabrainApiKey",
+      "cliFlag": "--megabrain-api-key",
+      "cliOption": "--megabrain-api-key <key>",
+      "cliDescription": "MegaBrain API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
