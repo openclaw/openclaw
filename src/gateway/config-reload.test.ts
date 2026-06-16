@@ -260,6 +260,180 @@ describe("buildGatewayReloadPlan", () => {
     expect(afterPinPlan.restartChannels).toEqual(new Set(["telegram"]));
   });
 
+  it("skips channels with unreadable reload descriptors", () => {
+    const brokenPlugin = Object.defineProperty(
+      {
+        id: "broken",
+        meta: {
+          id: "broken",
+          label: "Broken",
+        },
+        capabilities: { chatTypes: ["direct"] },
+        config: {
+          listAccountIds: () => [],
+          resolveAccount: () => ({}),
+        },
+      },
+      "reload",
+      {
+        get() {
+          throw new Error("channel reload descriptor exploded");
+        },
+      },
+    ) as ChannelPlugin;
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "broken", plugin: brokenPlugin, source: "test" },
+        { pluginId: "telegram", plugin: telegramPlugin, source: "test" },
+      ]),
+    );
+
+    const plan = buildGatewayReloadPlan(["channels.telegram.botToken"]);
+
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartChannels).toEqual(new Set(["telegram"]));
+  });
+
+  it("skips unreadable channel reload prefix lists", () => {
+    const brokenReload = Object.defineProperty({}, "configPrefixes", {
+      get() {
+        throw new Error("channel reload config prefixes exploded");
+      },
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "broken",
+          plugin: {
+            id: "broken",
+            meta: {
+              id: "broken",
+              label: "Broken",
+            },
+            capabilities: { chatTypes: ["direct"] },
+            config: {
+              listAccountIds: () => [],
+              resolveAccount: () => ({}),
+            },
+            reload: brokenReload,
+          } as ChannelPlugin,
+          source: "test",
+        },
+        { pluginId: "telegram", plugin: telegramPlugin, source: "test" },
+      ]),
+    );
+
+    const plan = buildGatewayReloadPlan(["channels.telegram.botToken"]);
+
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartChannels).toEqual(new Set(["telegram"]));
+  });
+
+  it("does not keep lower-priority channel reload rules after an unreadable prefix list", () => {
+    const brokenReload = Object.defineProperty(
+      { noopPrefixes: ["channels.broken"] },
+      "configPrefixes",
+      {
+        get() {
+          throw new Error("channel reload config prefixes exploded");
+        },
+      },
+    );
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "broken",
+          plugin: {
+            id: "broken",
+            meta: {
+              id: "broken",
+              label: "Broken",
+            },
+            capabilities: { chatTypes: ["direct"] },
+            config: {
+              listAccountIds: () => [],
+              resolveAccount: () => ({}),
+            },
+            reload: brokenReload,
+          } as ChannelPlugin,
+          source: "test",
+        },
+      ]),
+    );
+
+    const plan = buildGatewayReloadPlan(["channels.broken.replyToMode"]);
+
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons).toContain("channels.broken.replyToMode");
+    expect(plan.noopPaths).toStrictEqual([]);
+  });
+
+  it("skips unreadable plugin reload registrations", () => {
+    const registryWithBrokenReload = createTestRegistry([]);
+    const brokenReloadEntry = Object.defineProperty(
+      {
+        pluginId: "broken",
+        pluginName: "Broken",
+        source: "test",
+      },
+      "registration",
+      {
+        get() {
+          throw new Error("plugin reload registration exploded");
+        },
+      },
+    );
+    registryWithBrokenReload.reloads = [
+      brokenReloadEntry as never,
+      {
+        pluginId: "healthy",
+        pluginName: "Healthy",
+        registration: { hotPrefixes: ["healthy"] },
+        source: "test",
+      },
+    ];
+    setActivePluginRegistry(registryWithBrokenReload);
+
+    const plan = buildGatewayReloadPlan(["healthy.enabled"]);
+
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.hotReasons).toEqual(["healthy.enabled"]);
+
+    const brokenPluginPlan = buildGatewayReloadPlan(["plugins.entries.broken.enabled"]);
+
+    expect(brokenPluginPlan.restartGateway).toBe(true);
+    expect(brokenPluginPlan.restartReasons).toContain("plugins.entries.broken.enabled");
+  });
+
+  it("fails closed when an unreadable plugin reload prefix list would expose lower-priority rules", () => {
+    const registryWithBrokenReload = createTestRegistry([]);
+    const brokenRegistration = Object.defineProperty(
+      { noopPrefixes: ["plugins.entries.broken"] },
+      "restartPrefixes",
+      {
+        get() {
+          throw new Error("plugin reload restart prefixes exploded");
+        },
+      },
+    );
+    registryWithBrokenReload.reloads = [
+      {
+        pluginId: "broken",
+        pluginName: "Broken",
+        registration: brokenRegistration,
+        source: "test",
+      },
+    ] as never;
+    setActivePluginRegistry(registryWithBrokenReload);
+
+    const plan = buildGatewayReloadPlan(["plugins.entries.broken.enabled"]);
+
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons).toContain("plugins.entries.broken.enabled");
+    expect(plan.hotReasons).toStrictEqual([]);
+    expect(plan.noopPaths).toStrictEqual([]);
+  });
+
   it("restarts loaded channel plugins when plugin entry state changes", () => {
     const plan = buildGatewayReloadPlan(["plugins.entries.telegram.enabled"]);
 
