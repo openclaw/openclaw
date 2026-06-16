@@ -17,7 +17,7 @@ final class ShareViewController: UIViewController {
         var attachments: [ShareAttachment]
     }
 
-    private let logger = Logger(subsystem: "ai.openclaw.ios", category: "ShareExtension")
+    private let logger = Logger(subsystem: "ai.openclawfoundation.app", category: "ShareExtension")
     private var statusLabel: UILabel?
     private let draftTextView = UITextView()
     private let sendButton = UIButton(type: .system)

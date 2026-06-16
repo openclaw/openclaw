@@ -1,3 +1,5 @@
+// Gateway agent prompt builder.
+// Converts conversation entries into the latest-message-plus-history prompt.
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import { buildHistoryContextFromEntries, type HistoryEntry } from "../auto-reply/reply/history.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
@@ -7,6 +9,12 @@ export type ConversationEntry = {
   entry: HistoryEntry;
   internalStreamError?: boolean;
 };
+
+// Placeholder user text for an image-only turn. The agent command requires a
+// non-empty message even when the real payload is the attached image, so both
+// the /v1/chat/completions and /v1/responses prompt builders substitute this
+// for the active user turn. Keep it shared so the two endpoints stay in sync.
+export const IMAGE_ONLY_USER_MESSAGE = "User sent image(s) with no text.";
 
 /**
  * Coerce body to string. Handles cases where body is a content array
@@ -32,6 +40,7 @@ function toPromptEntry(entry: ConversationEntry): HistoryEntry | null {
   };
 }
 
+/** Build the prompt text sent to an agent from ordered conversation entries. */
 export function buildAgentMessageFromConversationEntries(entries: ConversationEntry[]): string {
   if (entries.length === 0) {
     return "";

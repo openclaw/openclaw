@@ -1,3 +1,6 @@
+/**
+ * Test harness mocks for embedded-agent compaction hook coverage.
+ */
 import { vi, type Mock } from "vitest";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { clearAgentHarnesses } from "../harness/registry.js";
@@ -166,8 +169,9 @@ export const applyExtraParamsToAgentMock = vi.fn(() => ({ effectiveExtraParams: 
 export const resolveAgentTransportOverrideMock: Mock<(params?: unknown) => string | undefined> =
   vi.fn(() => undefined);
 export const resolveSandboxContextMock = vi.fn(async () => null);
-export const maybeCompactAgentHarnessSessionMock: Mock<(params?: unknown) => Promise<unknown>> =
-  vi.fn(async () => undefined);
+export const maybeCompactAgentHarnessSessionMock: Mock<
+  (params?: unknown, options?: unknown) => Promise<unknown>
+> = vi.fn(async () => undefined);
 export const rotateTranscriptAfterCompactionMock: Mock<
   (_params?: unknown) => Promise<CompactionTranscriptRotation>
 > = vi.fn(async () => ({
@@ -458,8 +462,11 @@ export async function loadCompactHooksHarness(): Promise<{
     };
   });
 
-  vi.doMock("../harness/selection.js", () => ({
+  vi.doMock("../harness/compaction.js", () => ({
     maybeCompactAgentHarnessSession: maybeCompactAgentHarnessSessionMock,
+  }));
+
+  vi.doMock("../harness/policy.js", () => ({
     resolveAgentHarnessPolicy: resolveAgentHarnessPolicyMock,
   }));
 
@@ -755,9 +762,12 @@ export async function loadCompactHooksHarness(): Promise<{
     limitHistoryTurns: vi.fn((msgs: unknown[]) => msgs.slice(0, 2)),
   }));
 
-  vi.doMock("../skills.js", () => ({
+  vi.doMock("../../skills/runtime/env-overrides.js", () => ({
     applySkillEnvOverrides: vi.fn(() => () => {}),
     applySkillEnvOverridesFromSnapshot: vi.fn(() => () => {}),
+  }));
+
+  vi.doMock("../../skills/loading/workspace.js", () => ({
     loadWorkspaceSkillEntries: vi.fn(() => []),
     resolveSkillsPromptForRun: vi.fn(() => undefined),
   }));
@@ -842,6 +852,7 @@ export async function loadCompactHooksHarness(): Promise<{
 
   vi.doMock("./sandbox-info.js", () => ({
     buildEmbeddedSandboxInfo: vi.fn(() => undefined),
+    resolveEmbeddedSandboxInfoExecPolicy: vi.fn(() => ({})),
   }));
 
   vi.doMock("./model.js", () => ({

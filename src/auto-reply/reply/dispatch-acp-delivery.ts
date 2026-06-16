@@ -1,13 +1,15 @@
+// Delivers ACP turn results through reply payload routing.
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
+import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
 import { createTtsDirectiveTextStreamCleaner } from "../../tts/directives.js";
 import { resolveStatusTtsSnapshot } from "../../tts/status-config.js";
 import { resolveConfiguredTtsMode, shouldCleanTtsDirectiveText } from "../../tts/tts-config.js";
@@ -16,6 +18,12 @@ import type { FinalizedMsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
+import { readDispatcherFailedCounts } from "./reply-dispatcher.types.js";
+import {
+  createReplyDeliveryContext,
+  resolveReplyDeliveryAccountId,
+  resolveReplyToMode,
+} from "./reply-threading.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 
 const routeReplyRuntimeLoader = createLazyImportLoader(() => import("./route-reply.runtime.js"));
@@ -192,6 +200,9 @@ export function createAcpDispatchDeliveryCoordinator(params: {
   shouldRouteToOriginating: boolean;
   originatingChannel?: string;
   originatingTo?: string;
+  originatingAccountId?: string;
+  originatingThreadId?: string | number;
+  originatingChatType?: ChatType;
   onReplyStart?: () => Promise<void> | void;
   abortSignal?: AbortSignal;
   runId?: string;
@@ -199,14 +210,25 @@ export function createAcpDispatchDeliveryCoordinator(params: {
   const directChannel = normalizeOptionalLowercaseString(params.ctx.Provider ?? params.ctx.Surface);
   const routedChannel = normalizeOptionalLowercaseString(params.originatingChannel);
   const deliverySessionKey = normalizeOptionalString(params.sessionKey) ?? params.ctx.SessionKey;
-  const explicitAccountId = normalizeOptionalString(params.ctx.AccountId);
-  const resolvedAccountId =
-    explicitAccountId ??
-    normalizeOptionalString(
-      (
-        params.cfg.channels as Record<string, { defaultAccount?: unknown } | undefined> | undefined
-      )?.[routedChannel ?? directChannel ?? ""]?.defaultAccount,
-    );
+  const explicitAccountId =
+    normalizeOptionalString(params.originatingAccountId) ??
+    normalizeOptionalString(params.ctx.AccountId);
+  const resolvedAccountId = resolveReplyDeliveryAccountId(
+    params.cfg,
+    routedChannel ?? directChannel,
+    explicitAccountId,
+  );
+  const routedReplyDelivery = params.originatingChannel
+    ? createReplyDeliveryContext(
+        resolveReplyToMode(
+          params.cfg,
+          params.originatingChannel,
+          resolvedAccountId,
+          params.originatingChatType ?? params.ctx.ChatType,
+        ),
+        params.originatingChatType ?? params.ctx.ChatType,
+      )
+    : undefined;
   const state: AcpDispatchDeliveryState = {
     startedReplyLifecycle: false,
     accumulatedBlockText: "",
@@ -253,7 +275,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     state.settledDirectVisibleText = true;
     hasPendingDirectBlockReplyDelivery = false;
     await params.dispatcher.waitForIdle();
-    const failedCounts = params.dispatcher.getFailedCounts();
+    const failedCounts = readDispatcherFailedCounts(params.dispatcher);
     const failedVisibleCount = failedCounts.block + failedCounts.final;
     if (failedVisibleCount > 0) {
       state.failedVisibleTextDelivery = true;
@@ -273,7 +295,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     if (params.suppressReplyLifecycle) {
       return;
     }
-    void Promise.resolve(params.onReplyStart?.()).catch((error) => {
+    void Promise.resolve(params.onReplyStart?.()).catch((error: unknown) => {
       logVerbose(
         `dispatch-acp: reply lifecycle start failed: ${error instanceof Error ? error.message : String(error)}`,
       );
@@ -404,10 +426,12 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         routed: true,
       });
       const { routeReply } = await loadRouteReplyRuntime();
-      const threadId = resolveRoutedDeliveryThreadId({
-        ctx: params.ctx,
-        sessionKey: deliverySessionKey,
-      });
+      const threadId =
+        params.originatingThreadId ??
+        resolveRoutedDeliveryThreadId({
+          ctx: params.ctx,
+          sessionKey: deliverySessionKey,
+        });
       const result = await routeReply({
         payload: ttsPayload,
         channel: params.originatingChannel,
@@ -422,6 +446,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         requesterSenderUsername: params.ctx.SenderUsername,
         requesterSenderE164: params.ctx.SenderE164,
         threadId,
+        replyDelivery: routedReplyDelivery,
         cfg: params.cfg,
         mirror: false,
         replyKind: kind,

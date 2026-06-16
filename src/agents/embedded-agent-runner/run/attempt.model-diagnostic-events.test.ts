@@ -1,3 +1,4 @@
+// Coverage for model-call diagnostic events around attempt stream functions.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -22,6 +23,8 @@ import { createHookRunnerWithRegistry } from "../../../plugins/hooks.test-helper
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagnostic-events.js";
 
 async function collectModelCallEvents(run: () => Promise<void>): Promise<DiagnosticEventPayload[]> {
+  // Diagnostics are emitted asynchronously; collect only public model-call
+  // events and flush one tick after the stream completes.
   const events: DiagnosticEventPayload[] = [];
   const stop = onInternalDiagnosticEvent((event) => {
     if (event.type.startsWith("model.call.")) {
@@ -30,7 +33,9 @@ async function collectModelCallEvents(run: () => Promise<void>): Promise<Diagnos
   });
   try {
     await run();
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     return events;
   } finally {
     stop();
@@ -54,7 +59,9 @@ async function collectTrustedModelCallEvents(run: () => Promise<void>): Promise<
   });
   try {
     await run();
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     return events;
   } finally {
     stop();
@@ -62,6 +69,8 @@ async function collectTrustedModelCallEvents(run: () => Promise<void>): Promise<
 }
 
 async function drain(stream: AsyncIterable<unknown>): Promise<void> {
+  // Force stream iteration so completion events include response byte and timing
+  // accounting.
   for await (const _ of stream) {
     // drain
   }
@@ -119,6 +128,8 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
   });
 
   it("emits started and completed events for async streams", async () => {
+    // Request payloads are measured for diagnostics but must be redacted from
+    // public event bodies.
     async function* stream() {
       yield { type: "text", text: "ok" };
     }
@@ -346,6 +357,99 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
     expect(JSON.stringify(events)).not.toContain("sk-original-secret");
   });
 
+  it("counts text deltas without serializing full partial snapshots", async () => {
+    const serializedPartial = vi.fn(() => {
+      throw new Error("partial snapshot should not be serialized for text deltas");
+    });
+    async function* stream() {
+      yield {
+        type: "text_delta",
+        contentIndex: 0,
+        delta: "a",
+        partial: {
+          toJSON: serializedPartial,
+          role: "assistant",
+          content: [{ type: "text", text: "a".repeat(200_000) }],
+        },
+      };
+      yield {
+        type: "text_delta",
+        contentIndex: 0,
+        delta: "bc",
+        partial: {
+          toJSON: serializedPartial,
+          role: "assistant",
+          content: [{ type: "text", text: "abc".repeat(200_000) }],
+        },
+      };
+    }
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      (() => stream()) as unknown as StreamFn,
+      {
+        runId: "run-1",
+        provider: "openai",
+        model: "gpt-5.4",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => "call-delta-bytes",
+      },
+    );
+
+    const events = await collectModelCallEvents(async () => {
+      await drain(wrapped({} as never, {} as never, {} as never) as AsyncIterable<unknown>);
+    });
+
+    const completedEvent = getEvent(events, 1);
+    expect(completedEvent.type).toBe("model.call.completed");
+    expect(completedEvent.responseStreamBytes).toBe(Buffer.byteLength("abc", "utf8"));
+    expect(serializedPartial).not.toHaveBeenCalled();
+  });
+
+  it("keeps streams alive when diagnostic byte inspection cannot read a chunk", async () => {
+    const opaqueChunk = new Proxy(
+      {},
+      {
+        get(_target, property) {
+          if (property === "then") {
+            return undefined;
+          }
+          throw new Error("chunk should not be inspected");
+        },
+      },
+    );
+    async function* stream() {
+      yield opaqueChunk;
+      yield { type: "text_delta", delta: "ok" };
+    }
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      (() => stream()) as unknown as StreamFn,
+      {
+        runId: "run-1",
+        provider: "openai",
+        model: "gpt-5.4",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => "call-opaque-chunk",
+      },
+    );
+
+    const chunks: unknown[] = [];
+    const events = await collectModelCallEvents(async () => {
+      for await (const chunk of wrapped(
+        {} as never,
+        {} as never,
+        {} as never,
+      ) as AsyncIterable<unknown>) {
+        chunks.push(chunk);
+      }
+    });
+
+    expect(chunks).toHaveLength(2);
+    expect(chunks[0]).toBe(opaqueChunk);
+    expect(chunks[1]).toEqual({ type: "text_delta", delta: "ok" });
+    const completedEvent = getEvent(events, 1);
+    expect(completedEvent.type).toBe("model.call.completed");
+    expect(completedEvent.responseStreamBytes).toBe(Buffer.byteLength("ok", "utf8"));
+  });
+
   it("captures model input, tools, and output only when content capture is enabled", async () => {
     const assistant = {
       role: "assistant",
@@ -553,7 +657,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
     const stream = {};
     Object.defineProperty(stream, Symbol.asyncIterator, {
       configurable: false,
-      value: async function* () {
+      async *value() {
         yield { type: "text", text: "ok" };
       },
     });
@@ -619,7 +723,9 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
     const events = await collectModelCallEvents(async () => {
       await drain(wrapped({} as never, {} as never, {} as never) as AsyncIterable<unknown>);
     });
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
     expect(events.map((event) => event.type)).toEqual([
       "model.call.started",

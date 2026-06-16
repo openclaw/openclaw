@@ -1,7 +1,8 @@
-import {
-  type ProviderAuthContext,
-  type ProviderAuthMethod,
-  type ProviderAuthMethodNonInteractiveContext,
+// Pixverse setup module handles plugin onboarding behavior.
+import type {
+  ProviderAuthContext,
+  ProviderAuthMethod,
+  ProviderAuthMethodNonInteractiveContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
   applyAuthProfileConfig,

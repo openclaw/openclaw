@@ -1,6 +1,8 @@
+// Diffs plugin module implements store behavior.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { MAX_DATE_TIMESTAMP_MS, timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import { root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { PluginLogger } from "../api.js";
@@ -64,15 +66,16 @@ export class DiffArtifactStore {
     const htmlPath = path.join(artifactDir, "viewer.html");
     const ttlMs = normalizeTtlMs(params.ttlMs);
     const createdAt = new Date();
-    const expiresAt = new Date(createdAt.getTime() + ttlMs);
+    const createdAtIso = createdAt.toISOString();
+    const expiresAt = resolveExpiresAtIso(createdAt.getTime(), ttlMs);
     const meta: DiffArtifactMeta = {
       id,
       token,
       title: params.title,
       inputKind: params.inputKind,
       fileCount: params.fileCount,
-      createdAt: createdAt.toISOString(),
-      expiresAt: expiresAt.toISOString(),
+      createdAt: createdAtIso,
+      expiresAt,
       viewerPath: `${VIEWER_PREFIX}/${id}/${token}`,
       htmlPath,
       ...(params.context ? { context: params.context } : {}),
@@ -144,11 +147,12 @@ export class DiffArtifactStore {
     const filePath = path.join(artifactDir, `preview.${format}`);
     const ttlMs = normalizeTtlMs(params.ttlMs);
     const createdAt = new Date();
-    const expiresAt = new Date(createdAt.getTime() + ttlMs).toISOString();
+    const createdAtIso = createdAt.toISOString();
+    const expiresAt = resolveExpiresAtIso(createdAt.getTime(), ttlMs);
     const meta: StandaloneFileMeta = {
       kind: "standalone_file",
       id,
-      createdAt: createdAt.toISOString(),
+      createdAt: createdAtIso,
       expiresAt,
       filePath: this.normalizeStoredPath(filePath, "filePath"),
       ...(params.context ? { context: params.context } : {}),
@@ -223,7 +227,7 @@ export class DiffArtifactStore {
 
     this.nextCleanupAt = now + this.cleanupIntervalMs;
     const cleanupPromise = this.cleanupExpired()
-      .catch((error) => {
+      .catch((error: unknown) => {
         this.nextCleanupAt = 0;
         this.logger?.warn(`Failed to clean expired diff artifacts: ${String(error)}`);
       })
@@ -355,6 +359,14 @@ function normalizeTtlMs(value?: number): number {
     return DEFAULT_TTL_MS;
   }
   return Math.min(rounded, MAX_TTL_MS);
+}
+
+function resolveExpiresAtIso(createdAtMs: number, ttlMs: number): string {
+  return (
+    timestampMsToIsoString(createdAtMs + ttlMs) ??
+    timestampMsToIsoString(MAX_DATE_TIMESTAMP_MS) ??
+    "1970-01-01T00:00:00.000Z"
+  );
 }
 
 function isExpired(meta: { expiresAt: string }): boolean {

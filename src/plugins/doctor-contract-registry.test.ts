@@ -1,3 +1,4 @@
+// Covers plugin doctor contract registry discovery and validation.
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -12,7 +13,9 @@ import {
 const tempDirs: string[] = [];
 const mocks = getRegistryJitiMocks();
 
+let applyPluginDoctorCompatibilityMigrations: typeof import("./doctor-contract-registry.js").applyPluginDoctorCompatibilityMigrations;
 let clearPluginDoctorContractRegistryCache: typeof import("./doctor-contract-registry.js").clearPluginDoctorContractRegistryCache;
+let collectRelevantDoctorPluginIds: typeof import("./doctor-contract-registry.js").collectRelevantDoctorPluginIds;
 let collectRelevantDoctorPluginIdsForTouchedPaths: typeof import("./doctor-contract-registry.js").collectRelevantDoctorPluginIdsForTouchedPaths;
 let listPluginDoctorLegacyConfigRules: typeof import("./doctor-contract-registry.js").listPluginDoctorLegacyConfigRules;
 let listPluginDoctorSessionRouteStateOwners: typeof import("./doctor-contract-registry.js").listPluginDoctorSessionRouteStateOwners;
@@ -42,7 +45,9 @@ describe("doctor-contract-registry module loader", () => {
     resetRegistryJitiMocks();
     vi.resetModules();
     ({
+      applyPluginDoctorCompatibilityMigrations,
       clearPluginDoctorContractRegistryCache,
+      collectRelevantDoctorPluginIds,
       collectRelevantDoctorPluginIdsForTouchedPaths,
       listPluginDoctorLegacyConfigRules,
       listPluginDoctorSessionRouteStateOwners,
@@ -280,7 +285,7 @@ describe("doctor-contract-registry module loader", () => {
         entries: {
           "load-path-doctor": {
             config: {
-              summaryModel: "openai-codex/gpt-5.4-mini",
+              summaryModel: "openai/gpt-5.4-mini",
             },
           },
         },
@@ -346,6 +351,80 @@ describe("doctor-contract-registry module loader", () => {
     expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledTimes(2);
   });
 
+  it("collects model provider ids for doctor compatibility migrations", () => {
+    expect(
+      collectRelevantDoctorPluginIds({
+        models: {
+          providers: {
+            "ollama-cloud": {
+              baseUrl: "https://ai.ollama.com",
+            },
+          },
+        },
+      }),
+    ).toEqual(["ollama-cloud"]);
+  });
+
+  it("loads a plugin doctor contract when scoped by a contributed provider id", () => {
+    const pluginRoot = makeTempDir();
+    fs.writeFileSync(path.join(pluginRoot, "doctor-contract-api.ts"), "export {};\n", "utf-8");
+    mocks.createJiti.mockImplementation(() => () => ({
+      normalizeCompatibilityConfig: ({
+        cfg,
+      }: {
+        cfg: { models?: { providers?: Record<string, Record<string, unknown>> } };
+      }) => ({
+        config: {
+          ...cfg,
+          models: {
+            ...cfg.models,
+            providers: {
+              ...cfg.models?.providers,
+              "ollama-cloud": {
+                ...cfg.models?.providers?.["ollama-cloud"],
+                baseUrl: "https://ollama.com",
+              },
+            },
+          },
+        },
+        changes: ["normalized ollama cloud provider endpoint"],
+      }),
+    }));
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "ollama",
+          rootDir: pluginRoot,
+          channels: [],
+          providers: ["ollama", "ollama-cloud"],
+        },
+      ],
+      diagnostics: [],
+    });
+    const config = {
+      models: {
+        providers: {
+          "ollama-cloud": {
+            baseUrl: "https://ai.ollama.com",
+            models: [],
+          },
+        },
+      },
+    };
+
+    const result = applyPluginDoctorCompatibilityMigrations(config, {
+      config,
+      env: {},
+      pluginIds: ["ollama-cloud"],
+    });
+
+    expect(result.changes).toEqual(["normalized ollama cloud provider endpoint"]);
+    expect(result.config.models?.providers?.["ollama-cloud"]).toEqual({
+      baseUrl: "https://ollama.com",
+      models: [],
+    });
+  });
+
   it("narrows touched-path doctor ids for scoped dry-run validation", () => {
     expect(
       collectRelevantDoctorPluginIdsForTouchedPaths({
@@ -359,6 +438,11 @@ describe("doctor-contract-registry module loader", () => {
               "memory-wiki": {},
             },
           },
+          models: {
+            providers: {
+              "ollama-cloud": {},
+            },
+          },
           talk: {
             voiceId: "legacy-voice",
           },
@@ -366,10 +450,11 @@ describe("doctor-contract-registry module loader", () => {
         touchedPaths: [
           ["channels", "discord", "token"],
           ["plugins", "entries", "memory-wiki", "enabled"],
+          ["models", "providers", "ollama-cloud", "baseUrl"],
           ["talk", "voiceId"],
         ],
       }),
-    ).toEqual(["discord", "elevenlabs", "memory-wiki"]);
+    ).toEqual(["discord", "elevenlabs", "memory-wiki", "ollama-cloud"]);
   });
 
   it("falls back to the full doctor-id set when touched paths are too broad", () => {

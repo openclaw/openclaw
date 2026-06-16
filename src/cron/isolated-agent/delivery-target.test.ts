@@ -1,6 +1,8 @@
+// Isolated agent delivery target tests cover target resolution for cron runs.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import {
   forumMessagingForTest,
   parseTelegramTargetForTest,
@@ -27,9 +29,8 @@ vi.mock("../../config/sessions/paths.js", () => ({
   resolveStorePath: vi.fn().mockReturnValue("/tmp/test-store.json"),
 }));
 
-vi.mock("../../config/sessions/store-load.js", () => ({
-  loadSessionStore: vi.fn().mockReturnValue({}),
-  readSessionEntry: vi.fn(),
+vi.mock("../../config/sessions/session-accessor.js", () => ({
+  loadSessionEntry: vi.fn(),
 }));
 
 vi.mock("../../infra/outbound/channel-selection.runtime.js", () => ({
@@ -49,13 +50,13 @@ const mockedModuleIds = [
   "../../config/sessions/main-session.js",
   "../../config/sessions/delivery-info.js",
   "../../config/sessions/paths.js",
-  "../../config/sessions/store-load.js",
+  "../../config/sessions/session-accessor.js",
   "../../infra/outbound/channel-selection.runtime.js",
   "../../infra/outbound/targets.runtime.js",
   "../../infra/outbound/target-id-resolution.js",
 ];
 
-import { loadSessionStore, readSessionEntry } from "../../config/sessions/store-load.js";
+import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.runtime.js";
 import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-id-resolution.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.runtime.js";
@@ -113,8 +114,7 @@ beforeEach(() => {
   extractDeliveryInfoMock.mockReturnValue({ deliveryContext: undefined, threadId: undefined });
   normalizeTelegramTargetForDeliveryTest.mockClear();
   vi.mocked(resolveOutboundTarget).mockReset();
-  vi.mocked(loadSessionStore).mockReset().mockReturnValue({});
-  vi.mocked(readSessionEntry).mockReset().mockReturnValue(undefined);
+  vi.mocked(loadSessionEntry).mockReset().mockReturnValue(undefined);
   setActivePluginRegistry(
     createTestRegistry([
       {
@@ -221,11 +221,10 @@ const DEFAULT_TARGET = {
   to: "room:default",
 };
 
-type SessionStore = ReturnType<typeof loadSessionStore>;
+type SessionStore = Record<string, SessionEntry>;
 
 function setSessionStore(store: SessionStore) {
-  vi.mocked(loadSessionStore).mockReturnValue(store);
-  vi.mocked(readSessionEntry).mockImplementation((_storePath, sessionKey) => store[sessionKey]);
+  vi.mocked(loadSessionEntry).mockImplementation(({ sessionKey }) => store[sessionKey]);
 }
 
 function setMainSessionEntry(entry?: SessionStore[string]) {
@@ -281,8 +280,11 @@ describe("resolveDeliveryTarget", () => {
 
     expect(result.channel).toBe("alpha");
     expect(result.to).toBe("room-allowed");
-    expect(readSessionEntry).toHaveBeenCalledWith("/tmp/test-store.json", "agent:test:main");
-    expect(loadSessionStore).not.toHaveBeenCalled();
+    expect(loadSessionEntry).toHaveBeenCalledWith({
+      agentId: AGENT_ID,
+      sessionKey: "agent:test:main",
+      storePath: "/tmp/test-store.json",
+    });
   });
 
   it("reroutes implicit delivery to an authorized allowFrom recipient", async () => {
@@ -432,6 +434,7 @@ describe("resolveDeliveryTarget", () => {
       to: "user:123456789",
       kind: "user",
       source: "directory",
+      resolutionSource: "plugin",
     });
 
     const cfg = makeCfg({ bindings: [] });
@@ -447,6 +450,8 @@ describe("resolveDeliveryTarget", () => {
       channel: "forum",
       input: "123456789",
       accountId: undefined,
+      plugin: expect.objectContaining({ id: "forum" }),
+      preferredKind: undefined,
     });
   });
 
@@ -585,6 +590,149 @@ describe("resolveDeliveryTarget", () => {
 
     expect(result.ok).toBe(true);
     expect(result.to).toBe("room-b");
+    expect(result.threadId).toBeUndefined();
+  });
+
+  it("preserves plugin-canonical targets that begin with the selected channel prefix", async () => {
+    setMainSessionEntry(undefined);
+    const canonicalTarget = "Bncr:tgBot:-1003891624016:6278285192";
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "bncr",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "bncr",
+            outbound: createStubOutbound("Bncr"),
+            messaging: {
+              targetPrefixes: ["bncr"],
+              targetResolver: {
+                resolveTarget: async ({ input }) =>
+                  input === canonicalTarget
+                    ? { to: canonicalTarget, kind: "group" as const, source: "normalized" as const }
+                    : null,
+              },
+            },
+          }),
+        },
+      ]),
+    );
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "bncr",
+      to: canonicalTarget,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.to).toBe(canonicalTarget);
+    expect(result.threadId).toBeUndefined();
+  });
+
+  it("preserves plugin-canonical targets returned for aliases", async () => {
+    setMainSessionEntry(undefined);
+    const canonicalTarget = "Bncr:tgBot:-1003891624016:6278285192";
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "bncr",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "bncr",
+            outbound: createStubOutbound("Bncr"),
+            messaging: {
+              targetPrefixes: ["bncr"],
+              targetResolver: {
+                resolveTarget: async ({ input }) =>
+                  input === "alerts"
+                    ? { to: canonicalTarget, kind: "group" as const, source: "normalized" as const }
+                    : null,
+              },
+            },
+          }),
+        },
+      ]),
+    );
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "bncr",
+      to: "alerts",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.to).toBe(canonicalTarget);
+    expect(result.threadId).toBeUndefined();
+  });
+
+  it("still strips selected prefixes from generic normalized fallback targets", async () => {
+    setMainSessionEntry(undefined);
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "alpha",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "alpha",
+            outbound: createStubOutbound("Alpha"),
+            messaging: { targetPrefixes: ["alpha"] },
+          }),
+        },
+      ]),
+    );
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "alpha",
+      to: "alpha:room-a",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.to).toBe("room-a");
+    expect(result.threadId).toBeUndefined();
+  });
+
+  it("uses plugin-resolved directory targets for route parsing", async () => {
+    setMainSessionEntry(undefined);
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "alpha",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "alpha",
+            outbound: createStubOutbound("Alpha"),
+            messaging: {
+              targetPrefixes: ["alpha"],
+              targetResolver: {
+                resolveTarget: async ({ input }) =>
+                  input === "alice"
+                    ? { to: "user:123", kind: "user" as const, source: "directory" as const }
+                    : null,
+              },
+              resolveOutboundSessionRoute: ({ cfg, agentId, accountId, target }) => {
+                const isUser = target.startsWith("user:");
+                return buildChannelOutboundSessionRoute({
+                  cfg,
+                  agentId,
+                  channel: "alpha",
+                  accountId,
+                  peer: { kind: isUser ? "direct" : "channel", id: target },
+                  chatType: isUser ? "direct" : "channel",
+                  from: target,
+                  to: isUser ? target : `channel:${target}`,
+                });
+              },
+            },
+          }),
+        },
+      ]),
+    );
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "alpha",
+      to: "alice",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.to).toBe("user:123");
     expect(result.threadId).toBeUndefined();
   });
 
@@ -777,6 +925,8 @@ describe("resolveDeliveryTarget", () => {
       channel: "forum",
       input: "123456789",
       accountId: undefined,
+      plugin: expect.objectContaining({ id: "forum" }),
+      preferredKind: undefined,
     });
   });
 

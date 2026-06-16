@@ -1,7 +1,13 @@
+// Context-engine registry owns engine registration, resolution, compatibility, and quarantine.
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { sanitizeForLog } from "../terminal/ansi.js";
+import {
+  clearPersistedContextEngineQuarantineForProcess,
+  listPersistedContextEngineQuarantines,
+  recordPersistedContextEngineQuarantine,
+} from "./quarantine-health.js";
 import type {
   AssembleResult,
   BootstrapResult,
@@ -96,11 +102,7 @@ function hasOwnLegacyCompatKey<K extends LegacyCompatKey>(
   params: unknown,
   key: K,
 ): params is SessionKeyCompatParams & Required<Pick<LegacyCompatParamMap, K>> {
-  return (
-    params !== null &&
-    typeof params === "object" &&
-    Object.prototype.hasOwnProperty.call(params, key)
-  );
+  return params !== null && typeof params === "object" && Object.hasOwn(params, key);
 }
 
 function withoutLegacyCompatKeys<T extends SessionKeyCompatParams>(
@@ -177,6 +179,8 @@ function isLegacyCompatUnknownFieldValidationMessage(
 }
 
 function isLegacyCompatErrorForKey(error: unknown, key: LegacyCompatKey): boolean {
+  // Some external engines validate params with zod/JSON schema and reject legacy host keys. Walk
+  // common error shapes without depending on a specific validator package.
   for (const candidate of iterateErrorChain(error)) {
     if (Array.isArray(candidate)) {
       if (candidate.some((entry) => issueRejectsLegacyCompatKeyStrictly(entry, key))) {
@@ -277,6 +281,7 @@ async function invokeWithLegacyCompat<TResult, TParams extends SessionKeyCompatP
         throw currentError;
       }
 
+      // Once an engine proves it rejects a legacy key, retry without it and remember that choice.
       opts?.onLegacyModeDetected?.();
       opts?.onLegacyKeysDetected?.(rejectedKeys);
       currentParams = withoutLegacyCompatKeys(params, activeRejectedKeys);
@@ -322,6 +327,7 @@ function wrapContextEngineWithSessionKeyCompat(engine: ContextEngine): ContextEn
           isLegacy &&
           allowedKeys.some((key) => rejectedKeys.has(key) && hasOwnLegacyCompatKey(params, key))
         ) {
+          // Fast path after first validation failure: skip keys the engine has already rejected.
           return method(withoutLegacyCompatKeys(params, rejectedKeys));
         }
         return invokeWithLegacyCompat(method, params, allowedKeys, {
@@ -432,6 +438,7 @@ function recordContextEngineQuarantine(params: {
   const registryState = getContextEngineRegistryState();
   const existing = registryState.quarantinedEngines.get(params.engineId);
   if (existing) {
+    // First failure wins so logs and diagnostics point at the root cause, not follow-on fallback use.
     return existing;
   }
 
@@ -443,6 +450,11 @@ function recordContextEngineQuarantine(params: {
     ...(params.owner ? { owner: params.owner } : {}),
   };
   registryState.quarantinedEngines.set(params.engineId, quarantine);
+  try {
+    recordPersistedContextEngineQuarantine(quarantine);
+  } catch {
+    // Quarantine behavior must not depend on the best-effort health mirror.
+  }
   const ownerSuffix = params.owner ? ` owner=${sanitizeForLog(params.owner)}` : "";
   console.error(
     `[context-engine] Context engine "${sanitizeForLog(params.engineId)}"${ownerSuffix} failed during ${sanitizeForLog(params.operation)}: ` +
@@ -469,6 +481,14 @@ export function listContextEngineQuarantines(): ContextEngineRuntimeQuarantine[]
     }
     quarantines.push(quarantine);
   }
+  const seenEngineIds = new Set(quarantines.map((entry) => entry.engineId));
+  for (const entry of listPersistedContextEngineQuarantines()) {
+    if (seenEngineIds.has(entry.engineId)) {
+      continue;
+    }
+    quarantines.push(entry);
+    seenEngineIds.add(entry.engineId);
+  }
   return quarantines;
 }
 
@@ -476,9 +496,11 @@ export function clearContextEngineRuntimeQuarantine(engineId?: string): void {
   const quarantinedEngines = getContextEngineRegistryState().quarantinedEngines;
   if (engineId === undefined) {
     quarantinedEngines.clear();
+    clearPersistedContextEngineQuarantineForProcess(undefined, process.pid);
     return;
   }
   quarantinedEngines.delete(engineId);
+  clearPersistedContextEngineQuarantineForProcess(engineId, process.pid);
 }
 
 /**
@@ -497,6 +519,7 @@ export function registerContextEngineForOwner(
     id === defaultSlotIdForKey("contextEngine") &&
     normalizedOwner !== CORE_CONTEXT_ENGINE_OWNER
   ) {
+    // The default fallback id is core-owned; plugins can select other ids through slots.
     return { ok: false, existingOwner: CORE_CONTEXT_ENGINE_OWNER };
   }
   if (existing && existing.owner !== normalizedOwner) {
@@ -540,12 +563,11 @@ export function listContextEngineIds(): string[] {
 
 export function clearContextEnginesForOwner(owner: string): void {
   const normalizedOwner = requireContextEngineOwner(owner);
-  const registryState = getContextEngineRegistryState();
-  const registry = registryState.engines;
+  const registry = getContextEngineRegistryState().engines;
   for (const [id, entry] of registry.entries()) {
     if (entry.owner === normalizedOwner) {
       registry.delete(id);
-      registryState.quarantinedEngines.delete(id);
+      clearContextEngineRuntimeQuarantine(id);
     }
   }
 }
@@ -572,6 +594,8 @@ function resolveEffectiveContextEngineMetadata(
 ): ResolvedContextEngineMetadata | undefined {
   const quarantineState = RUNTIME_QUARANTINE_PROXY_STATE.get(engine);
   if (quarantineState && getContextEngineQuarantine(quarantineState.engineId)) {
+    // After quarantine, metadata follows the resolved fallback so plugin-scoped operations do not
+    // keep attributing work to a disabled engine.
     const fallbackEngine = quarantineState.getResolvedFallbackEngine();
     return (
       (fallbackEngine ? RESOLVED_CONTEXT_ENGINE_METADATA.get(fallbackEngine) : undefined) ?? {
@@ -808,6 +832,7 @@ function wrapContextEngineWithRuntimeQuarantine(params: {
           throw aborted;
         }
         if (isQuarantined()) {
+          // Runtime failures downgrade future guarded calls for this process.
           return await invokeFallbackContextEngineMethod({
             getFallbackEngine,
             methodName,
@@ -819,6 +844,7 @@ function wrapContextEngineWithRuntimeQuarantine(params: {
           return await (value as (methodParams: unknown) => unknown).call(target, methodParams);
         } catch (error) {
           if (isContextEngineAbortRejection(error, methodParams)) {
+            // Abort is caller intent, not engine instability; never quarantine for it.
             throw error;
           }
           recordContextEngineQuarantine({
@@ -899,6 +925,7 @@ export async function resolveContextEngine(
 
   const quarantine = !isDefaultEngine ? getContextEngineQuarantine(engineId) : undefined;
   if (quarantine) {
+    // Previously failed custom engines stay downgraded until explicit quarantine clear/restart.
     return resolveDefaultContextEngine(defaultEngineId, factoryCtx);
   }
 

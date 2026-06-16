@@ -1,3 +1,4 @@
+// Browser tests cover server.agent contract form layout act commands plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -470,6 +471,44 @@ describe("browser control server", () => {
     expect(maxCharsRes.error).toContain("maxChars must be a positive integer.");
 
     expect(pwMocks.responseBodyViaPlaywright).toHaveBeenCalledTimes(beforeCalls);
+  });
+
+  it("rejects loose hook and download timeout options before dispatch", async () => {
+    const base = await startServerAndBase();
+    const uploadCalls = pwMocks.armFileUploadViaPlaywright.mock.calls.length;
+    const dialogCalls = pwMocks.armDialogViaPlaywright.mock.calls.length;
+    const waitCalls = pwMocks.waitForDownloadViaPlaywright.mock.calls.length;
+    const downloadCalls = pwMocks.downloadViaPlaywright.mock.calls.length;
+
+    const uploadRes = await postJson<{ error?: string }>(`${base}/hooks/file-chooser`, {
+      paths: ["a.txt"],
+      timeoutMs: "1e3",
+    });
+    expect(uploadRes.error).toContain("timeoutMs must be a positive integer.");
+
+    const dialogRes = await postJson<{ error?: string }>(`${base}/hooks/dialog`, {
+      accept: true,
+      timeoutMs: "0x10",
+    });
+    expect(dialogRes.error).toContain("timeoutMs must be a positive integer.");
+
+    const waitRes = await postJson<{ error?: string }>(`${base}/wait/download`, {
+      path: "report.pdf",
+      timeoutMs: "1000ms",
+    });
+    expect(waitRes.error).toContain("timeoutMs must be a positive integer.");
+
+    const downloadRes = await postJson<{ error?: string }>(`${base}/download`, {
+      ref: "e12",
+      path: "report.pdf",
+      timeoutMs: "1.5",
+    });
+    expect(downloadRes.error).toContain("timeoutMs must be a positive integer.");
+
+    expect(pwMocks.armFileUploadViaPlaywright).toHaveBeenCalledTimes(uploadCalls);
+    expect(pwMocks.armDialogViaPlaywright).toHaveBeenCalledTimes(dialogCalls);
+    expect(pwMocks.waitForDownloadViaPlaywright).toHaveBeenCalledTimes(waitCalls);
+    expect(pwMocks.downloadViaPlaywright).toHaveBeenCalledTimes(downloadCalls);
   });
 
   it("agent contract: hooks + response + downloads + screenshot", async () => {

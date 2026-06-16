@@ -1,8 +1,9 @@
-import {
-  parseStrictInteger,
-  parseStrictNonNegativeInteger,
-  parseStrictPositiveInteger,
-} from "openclaw/plugin-sdk/number-runtime";
+/**
+ * Browser action request normalization.
+ *
+ * Converts loosely typed route bodies into the closed BrowserActRequest union
+ * used by Playwright and Chrome MCP action executors.
+ */
 import {
   ACT_MAX_BATCH_ACTIONS,
   ACT_MAX_CLICK_DELAY_MS,
@@ -18,6 +19,11 @@ import {
   parseClickButton,
   parseClickModifiers,
 } from "./agent.act.shared.js";
+import {
+  readRouteInteger,
+  readRouteNonNegativeInteger,
+  readRouteTimerTimeoutMs,
+} from "./route-numeric.js";
 import { toBoolean, toNumber, toStringArray, toStringOrEmpty } from "./utils.js";
 
 function normalizeActKind(raw: unknown): ActKind {
@@ -39,6 +45,7 @@ function countBatchActions(actions: BrowserActRequest[]): number {
   return count;
 }
 
+/** Validate that nested batch actions cannot drift to a different target tab. */
 export function validateBatchTargetIds(
   actions: BrowserActRequest[],
   targetId: string,
@@ -76,27 +83,15 @@ function normalizeBatchAction(value: unknown): BrowserActRequest {
   return normalizeActRequest(value as Record<string, unknown>, { source: "batch" });
 }
 
-function readActionPositiveInteger(body: Record<string, unknown>, key: string): number | undefined {
-  const value = parseStrictPositiveInteger(body[key]);
-  if (value === undefined && body[key] != null) {
-    throw new Error(`${key} must be a positive integer.`);
-  }
-  return value;
-}
-
 function readActionNonNegativeInteger(
   body: Record<string, unknown>,
   key: string,
 ): number | undefined {
-  const value = parseStrictNonNegativeInteger(body[key]);
-  if (value === undefined && body[key] != null) {
-    throw new Error(`${key} must be a non-negative integer.`);
-  }
-  return value;
+  return readRouteNonNegativeInteger(body[key], key);
 }
 
 function readActionTimeoutMs(body: Record<string, unknown>): number | undefined {
-  return readActionPositiveInteger(body, "timeoutMs");
+  return readRouteTimerTimeoutMs(body.timeoutMs);
 }
 
 function readBoundedActionDurationMs(
@@ -113,13 +108,16 @@ function readBoundedActionDurationMs(
 }
 
 function readResizeDimension(body: Record<string, unknown>, key: "width" | "height") {
-  const value = parseStrictInteger(body[key]);
+  const value = readRouteInteger(body[key], key, {
+    invalidMessage: "resize requires positive width and height",
+  });
   if (value === undefined && Object.hasOwn(body, key)) {
     throw new Error("resize requires positive width and height");
   }
   return value;
 }
 
+/** Normalize one model/client action payload into a BrowserActRequest. */
 export function normalizeActRequest(
   body: Record<string, unknown>,
   options?: { source?: "request" | "batch" },

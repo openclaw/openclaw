@@ -1,13 +1,15 @@
 #!/usr/bin/env bun
+// Discord Acp Plain Language Smoke script supports OpenClaw repository automation.
 import { execFile } from "node:child_process";
 // Manual ACP thread smoke for plain-language routing.
 // Keep this script available for regression/debug validation. Do not delete.
 import { randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { formatErrorMessage } from "../../src/infra/errors.ts";
+import { createPluginStateKeyedStore } from "../../src/plugin-state/plugin-state-store.ts";
+import { readBoundedResponseText } from "../lib/bounded-response.ts";
 import {
   maskIdentifier,
   parseStrictIntegerOption,
@@ -39,11 +41,6 @@ type ThreadBindingRecord = {
   boundAt?: number;
 };
 
-type ThreadBindingsPayload = {
-  version?: number;
-  bindings?: Record<string, ThreadBindingRecord>;
-};
-
 type DiscordMessage = {
   id: string;
   content?: string;
@@ -67,6 +64,8 @@ type WebhookForCleanup = {
 };
 
 const execFileAsync = promisify(execFile);
+const THREAD_BINDINGS_NAMESPACE = "thread-bindings";
+const THREAD_BINDINGS_MAX_ENTRIES = 10_000;
 
 type DriverMode = "token" | "webhook" | "openclaw";
 
@@ -82,7 +81,7 @@ type Args = {
   pollMs: number;
   mentionUserId?: string;
   instruction?: string;
-  threadBindingsPath: string;
+  stateDir: string;
   openclawBin: string;
   json: boolean;
 };
@@ -135,10 +134,13 @@ type FailureResult = {
 const DISCORD_API_BASE = "https://discord.com/api/v10";
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 const DEFAULT_OPENCLAW_CLI_TIMEOUT_MS = 60_000;
+const DISCORD_RESPONSE_BODY_MAX_BYTES = 1024 * 1024;
 const WEBHOOK_CLEANUP_TIMEOUT_MS = 10_000;
 
 function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function remainingTimeoutMs(deadlineMs: number, nowMs = Date.now()): number {
@@ -183,6 +185,41 @@ async function withTimeout<T>(params: {
 
 function parseNumber(value: string | undefined, fallback: number, label: string): number {
   return parseStrictIntegerOption({ fallback, label, min: 1, raw: value });
+}
+
+function createDiscordResponseTooLargeError(message: string): Error {
+  const error = new Error(message);
+  (error as NodeJS.ErrnoException).code = "ETOOBIG";
+  return error;
+}
+
+function isTooLargeError(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException | undefined)?.code === "ETOOBIG";
+}
+
+async function readDiscordResponseText(params: {
+  response: Response;
+  label: string;
+  signal: AbortSignal;
+  maxBytes: number;
+}): Promise<string> {
+  return await readBoundedResponseText(params.response, params.label, params.maxBytes, {
+    createTooLargeError: createDiscordResponseTooLargeError,
+    signal: params.signal,
+  });
+}
+
+async function readDiscordResponseJson(params: {
+  response: Response;
+  label: string;
+  signal: AbortSignal;
+  maxBytes: number;
+}): Promise<unknown> {
+  const text = await readDiscordResponseText(params);
+  if (!text) {
+    return {};
+  }
+  return JSON.parse(text);
 }
 
 function resolveStateDir(): string {
@@ -257,7 +294,7 @@ function usage(): string {
     "  --instruction <text>         Custom instruction template (optional)\n" +
     "  --timeout-ms <n>             Total timeout in ms (default: 240000)\n" +
     "  --poll-ms <n>                Poll interval in ms (default: 1500)\n" +
-    "  --thread-bindings-path <p>   Override thread-bindings json path\n" +
+    "  --state-dir <p>              Override OpenClaw state dir for plugin-state polling\n" +
     "  --openclaw-bin <path>        OpenClaw CLI binary for driver=openclaw (default: openclaw)\n" +
     "  --json                       Emit JSON output\n" +
     "\n" +
@@ -272,7 +309,7 @@ function usage(): string {
     "  OPENCLAW_DISCORD_SMOKE_MENTION_USER_ID\n" +
     "  OPENCLAW_DISCORD_SMOKE_TIMEOUT_MS\n" +
     "  OPENCLAW_DISCORD_SMOKE_POLL_MS\n" +
-    "  OPENCLAW_DISCORD_SMOKE_THREAD_BINDINGS_PATH\n" +
+    "  OPENCLAW_STATE_DIR\n" +
     "  OPENCLAW_DISCORD_SMOKE_OPENCLAW_BIN"
   );
 }
@@ -310,11 +347,7 @@ function parseArgs(): Args {
     1_500,
     "--poll-ms",
   );
-  const defaultBindingsPath = path.join(resolveStateDir(), "discord", "thread-bindings.json");
-  const threadBindingsPath =
-    resolveArg("--thread-bindings-path") ||
-    process.env.OPENCLAW_DISCORD_SMOKE_THREAD_BINDINGS_PATH ||
-    defaultBindingsPath;
+  const stateDir = path.resolve(resolveArg("--state-dir") || resolveStateDir());
   const openclawBin =
     resolveArg("--openclaw-bin") || process.env.OPENCLAW_DISCORD_SMOKE_OPENCLAW_BIN || "openclaw";
   const json = hasFlag("--json");
@@ -341,7 +374,7 @@ function parseArgs(): Args {
     pollMs,
     mentionUserId,
     instruction,
-    threadBindingsPath,
+    stateDir,
     openclawBin,
     json,
   };
@@ -436,10 +469,10 @@ async function discordWebhookApi<T>(params: {
   timeoutMs?: number;
 }): Promise<T> {
   const suffix = params.query ? `?${params.query}` : "";
-  const path = `/webhooks/${encodeURIComponent(params.webhookId)}/${encodeURIComponent(params.webhookToken)}${suffix}`;
+  const pathLocal = `/webhooks/${encodeURIComponent(params.webhookId)}/${encodeURIComponent(params.webhookToken)}${suffix}`;
   return requestDiscordJson<T>({
     method: params.method,
-    path,
+    path: pathLocal,
     headers: {
       "Content-Type": "application/json",
     },
@@ -458,12 +491,14 @@ async function requestDiscordJson<T>(params: {
   retries?: number;
   timeoutMs?: number;
   errorPrefix: string;
+  responseBodyMaxBytes?: number;
   fetchImpl?: typeof fetch;
   sleepImpl?: (ms: number) => Promise<void>;
 }): Promise<T> {
   const retries = params.retries ?? 6;
   const fetchImpl = params.fetchImpl ?? fetch;
   const sleepImpl = params.sleepImpl ?? sleep;
+  const responseBodyMaxBytes = params.responseBodyMaxBytes ?? DISCORD_RESPONSE_BODY_MAX_BYTES;
   const deadlineMs = Date.now() + (params.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
   const timeoutError = () =>
     new Error(
@@ -488,20 +523,42 @@ async function requestDiscordJson<T>(params: {
     if (response.status === 429) {
       const bodyTimeoutMs = remainingTimeoutMs(deadlineMs);
       const body = (await withTimeout({
-        operation: response.json().catch(() => ({})),
+        operation: readDiscordResponseJson({
+          response,
+          label: `${params.errorPrefix} ${params.method} ${redactDiscordApiPath(params.path)}`,
+          signal: controller.signal,
+          maxBytes: responseBodyMaxBytes,
+        }).catch((error: unknown) => {
+          if (isTooLargeError(error)) {
+            throw error;
+          }
+          return {};
+        }),
         timeoutMs: bodyTimeoutMs,
         timeoutError,
         onTimeout: () => controller.abort(),
       })) as { retry_after?: number };
       const waitSeconds = typeof body.retry_after === "number" ? body.retry_after : 1;
-      await sleepImpl(Math.min(Math.ceil(waitSeconds * 1000), remainingTimeoutMs(deadlineMs)));
+      const waitMs = Math.ceil(waitSeconds * 1000);
+      const remainingMs = remainingTimeoutMs(deadlineMs);
+      if (waitMs >= remainingMs) {
+        throw new Error(
+          `${params.errorPrefix} ${params.method} ${redactDiscordApiPath(params.path)} exceeded total timeout before retry.`,
+        );
+      }
+      await sleepImpl(waitMs);
       continue;
     }
 
     if (!response.ok) {
       const bodyTimeoutMs = remainingTimeoutMs(deadlineMs);
       const text = await withTimeout({
-        operation: response.text().catch(() => ""),
+        operation: readDiscordResponseText({
+          response,
+          label: `${params.errorPrefix} ${params.method} ${redactDiscordApiPath(params.path)}`,
+          signal: controller.signal,
+          maxBytes: responseBodyMaxBytes,
+        }),
         timeoutMs: bodyTimeoutMs,
         timeoutError,
         onTimeout: () => controller.abort(),
@@ -519,7 +576,12 @@ async function requestDiscordJson<T>(params: {
 
     const bodyTimeoutMs = remainingTimeoutMs(deadlineMs);
     return (await withTimeout({
-      operation: response.json(),
+      operation: readDiscordResponseJson({
+        response,
+        label: `${params.errorPrefix} ${params.method} ${redactDiscordApiPath(params.path)}`,
+        signal: controller.signal,
+        maxBytes: responseBodyMaxBytes,
+      }),
       timeoutMs: bodyTimeoutMs,
       timeoutError,
       onTimeout: () => controller.abort(),
@@ -531,11 +593,16 @@ async function requestDiscordJson<T>(params: {
   );
 }
 
-async function readThreadBindings(filePath: string): Promise<ThreadBindingRecord[]> {
-  const raw = await fs.readFile(filePath, "utf8");
-  const payload = JSON.parse(raw) as ThreadBindingsPayload;
-  const entries = Object.values(payload.bindings ?? {});
-  return entries.filter((entry) => Boolean(entry?.threadId && entry?.targetSessionKey));
+async function readThreadBindings(stateDir: string): Promise<ThreadBindingRecord[]> {
+  const store = createPluginStateKeyedStore<ThreadBindingRecord>("discord", {
+    namespace: THREAD_BINDINGS_NAMESPACE,
+    maxEntries: THREAD_BINDINGS_MAX_ENTRIES,
+    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+  });
+  const entries = await store.entries();
+  return entries
+    .map((entry) => entry.value)
+    .filter((entry) => Boolean(entry?.threadId && entry?.targetSessionKey));
 }
 
 function normalizeBoundAt(record: ThreadBindingRecord): number {
@@ -695,10 +762,10 @@ async function run(): Promise<SuccessResult | FailureResult> {
   });
 
   let readAuthHeader = "";
-  let sentMessageId = "";
+  let sentMessageId;
   let setupStage: "discord-api" | "send-message" = "discord-api";
   let senderAuthorId: string | undefined;
-  let minBindingBoundAt = startedAt - 3_000;
+  let minBindingBoundAt;
   let webhookForCleanup: WebhookForCleanup | undefined;
 
   try {
@@ -828,7 +895,7 @@ async function run(): Promise<SuccessResult | FailureResult> {
   try {
     while (Date.now() < deadline && !winningBinding) {
       try {
-        const entries = await readThreadBindings(args.threadBindingsPath);
+        const entries = await readThreadBindings(args.stateDir);
         latestCandidates = resolveCandidateBindings({
           entries,
           minBoundAt: minBindingBoundAt,
@@ -858,7 +925,7 @@ async function run(): Promise<SuccessResult | FailureResult> {
         ok: false,
         stage: "wait-binding",
         smokeId,
-        error: `Timed out waiting for new ACP thread binding (path: ${redactHomePath(args.threadBindingsPath)}).`,
+        error: `Timed out waiting for new ACP thread binding (state: ${redactHomePath(args.stateDir)}).`,
         diagnostics: {
           bindingCandidates: latestCandidates.slice(0, 6).map((entry) => ({
             threadId: entry.threadId || "",
@@ -971,7 +1038,7 @@ async function main(): Promise<number> {
     return 0;
   }
   const result = await run().catch(
-    (err): FailureResult => ({
+    (err: unknown): FailureResult => ({
       ok: false,
       stage: "unexpected",
       smokeId: "n/a",
@@ -988,7 +1055,9 @@ async function main(): Promise<number> {
 export const testing = {
   parseDriverMode,
   parseNumber,
+  DISCORD_RESPONSE_BODY_MAX_BYTES,
   redactDiscordApiPath,
+  readDiscordResponseText,
   remainingTimeoutMs,
   requestDiscordJson,
   resolveStateDir,

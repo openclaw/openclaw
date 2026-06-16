@@ -1,9 +1,10 @@
+// Tests fatal unhandled rejection detection in process bootstrap.
 import process from "node:process";
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 
 const restoreTerminalStateMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../terminal/restore.js", () => ({
+vi.mock("../../packages/terminal-core/src/restore.js", () => ({
   restoreTerminalState: restoreTerminalStateMock,
 }));
 

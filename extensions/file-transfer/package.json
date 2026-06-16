@@ -1,11 +1,11 @@
 {
   "name": "@openclaw/file-transfer",
-  "version": "2026.5.28",
+  "version": "2026.6.9",
   "description": "OpenClaw file transfer plugin (file_fetch, dir_list, dir_fetch, file_write)",
   "type": "module",
   "dependencies": {
     "minimatch": "10.2.5",
-    "typebox": "1.1.38"
+    "typebox": "1.1.39"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

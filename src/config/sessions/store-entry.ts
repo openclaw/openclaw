@@ -1,9 +1,10 @@
+// Store entry lookup resolves canonical keys and safe legacy aliases.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   normalizeSessionKeyPreservingOpaquePeerIds,
   parseThreadSessionSuffix,
   requiresFoldedSessionKeyAliasProof,
 } from "../../sessions/session-key-utils.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import type { SessionEntry } from "./types.js";
 
 export function normalizeStoreSessionKey(sessionKey: string): string {
@@ -17,6 +18,7 @@ export function foldedSessionKeyAliasCandidates(normalizedKey: string): string[]
     aliases.add(foldedLegacyKey);
   }
   if (requiresFoldedSessionKeyAliasProof(normalizedKey)) {
+    // Thread suffixes preserve their opaque thread id while only folding the legacy base key.
     const { baseSessionKey, threadId } = parseThreadSessionSuffix(normalizedKey);
     const foldedBaseKey = normalizeLowercaseStringOrEmpty(baseSessionKey);
     if (baseSessionKey && threadId && foldedBaseKey !== baseSessionKey) {
@@ -107,6 +109,7 @@ export function hasMismatchedCaseSensitiveDeliveryProof(
   const { baseSessionKey, threadId } = parseThreadSessionSuffix(normalizedKey);
   const normalizedBaseKey = baseSessionKey ?? normalizedKey;
   const targets = entryDeliveryTargets(entry);
+  // Existing delivery metadata is treated as proof against folding to a different opaque target.
   if (targets.length > 0 && !targets.some((target) => normalizedBaseKey.includes(target))) {
     return true;
   }
@@ -128,7 +131,7 @@ export function resolveSessionStoreEntry(params: {
   const legacyKeySet = new Set<string>();
   if (
     trimmedKey !== normalizedKey &&
-    Object.prototype.hasOwnProperty.call(params.store, trimmedKey) &&
+    Object.hasOwn(params.store, trimmedKey) &&
     !hasMismatchedCaseSensitiveDeliveryProof(params.store[trimmedKey], normalizedKey)
   ) {
     legacyKeySet.add(trimmedKey);
@@ -140,7 +143,7 @@ export function resolveSessionStoreEntry(params: {
   let foldedLegacyUpdatedAt = 0;
   for (const foldedLegacyKey of foldedLegacyKeys) {
     if (
-      !Object.prototype.hasOwnProperty.call(params.store, foldedLegacyKey) ||
+      !Object.hasOwn(params.store, foldedLegacyKey) ||
       !isConfirmedLowercasedLegacyAlias(params.store[foldedLegacyKey], normalizedKey)
     ) {
       continue;
@@ -156,7 +159,7 @@ export function resolveSessionStoreEntry(params: {
   // An exact (opaque-preserving-normalized) entry always wins over any folded
   // legacy alias, regardless of freshness (openclaw#75670). Only when no exact
   // entry exists do we fall back to a confirmed legacy alias.
-  const exactEntry = Object.prototype.hasOwnProperty.call(params.store, normalizedKey)
+  const exactEntry = Object.hasOwn(params.store, normalizedKey)
     ? params.store[normalizedKey]
     : undefined;
   const usableExactEntry = hasMismatchedCaseSensitiveDeliveryProof(exactEntry, normalizedKey)

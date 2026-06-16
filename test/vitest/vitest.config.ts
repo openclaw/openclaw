@@ -1,3 +1,4 @@
+// Vitest config config wires the config test shard.
 import { defineConfig } from "vitest/config";
 import {
   resolveDefaultVitestPool,
@@ -39,6 +40,7 @@ export const rootVitestProjects = [
   "test/vitest/vitest.daemon.config.ts",
   "test/vitest/vitest.media.config.ts",
   "test/vitest/vitest.unit-fast.config.ts",
+  "test/vitest/vitest.unit-fast-fake-timers.config.ts",
   "test/vitest/vitest.plugin-sdk-light.config.ts",
   "test/vitest/vitest.plugin-sdk.config.ts",
   "test/vitest/vitest.plugins.config.ts",
@@ -48,6 +50,7 @@ export const rootVitestProjects = [
   "test/vitest/vitest.media-understanding.config.ts",
   "test/vitest/vitest.shared-core.config.ts",
   "test/vitest/vitest.tasks.config.ts",
+  "test/vitest/vitest.tooling-docker.config.ts",
   "test/vitest/vitest.tooling-isolated.config.ts",
   "test/vitest/vitest.tooling.config.ts",
   "test/vitest/vitest.tui.config.ts",

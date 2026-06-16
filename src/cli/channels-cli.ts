@@ -1,9 +1,10 @@
+// Commander registration for channel discovery, setup, status, auth, and diagnostics commands.
 import type { Command } from "commander";
+import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import { danger } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import { formatDocsLink } from "../terminal/links.js";
-import { theme } from "../terminal/theme.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import { runChannelLogin, runChannelLogout } from "./channel-auth.js";
 import { formatCliChannelOptions } from "./channel-options.js";
@@ -54,6 +55,7 @@ function shouldRegisterChannelSetupOptions(
   argv: string[] = process.argv,
   options: RegisterChannelsCliOptions = {},
 ): boolean {
+  // Channel-specific setup flags are expensive to load and only needed on `channels add`.
   if (options.includeSetupOptions) {
     return true;
   }

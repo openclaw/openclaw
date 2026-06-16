@@ -1,9 +1,14 @@
+// Outbound delivery formatting produces human CLI summaries and JSON payloads
+// for direct and gateway send results.
 import { getChatChannelMeta } from "../../channels/chat-meta.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { normalizeChatChannelId } from "../../channels/registry.js";
 import type { OutboundDeliveryResult } from "./deliver.js";
 
+/**
+ * Machine-readable delivery result emitted by outbound send commands.
+ */
 export type OutboundDeliveryJson = {
   channel: string;
   via: "direct" | "gateway";
@@ -35,6 +40,7 @@ const resolveChannelLabel = (channel: string) => {
   if (pluginLabel) {
     return pluginLabel;
   }
+  // Some legacy chat channels are not plugins; keep their human labels for CLI output.
   const normalized = normalizeChatChannelId(channel);
   if (normalized) {
     return getChatChannelMeta(normalized).label;
@@ -42,6 +48,9 @@ const resolveChannelLabel = (channel: string) => {
   return channel;
 };
 
+/**
+ * Formats the human-readable direct delivery summary for CLI output.
+ */
 export function formatOutboundDeliverySummary(
   channel: string,
   result?: OutboundDeliveryResult,
@@ -68,6 +77,9 @@ export function formatOutboundDeliverySummary(
   return base;
 }
 
+/**
+ * Builds the JSON delivery payload returned by direct or gateway sends.
+ */
 export function buildOutboundDeliveryJson(params: {
   channel: string;
   to: string;
@@ -110,6 +122,9 @@ export function buildOutboundDeliveryJson(params: {
   return payload;
 }
 
+/**
+ * Formats the human-readable gateway delivery summary for CLI output.
+ */
 export function formatGatewaySummary(params: {
   action?: string;
   channel?: string;

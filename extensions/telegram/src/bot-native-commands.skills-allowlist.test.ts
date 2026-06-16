@@ -1,3 +1,4 @@
+// Telegram tests cover bot native commands.skills allowlist plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -60,8 +61,8 @@ describe("registerTelegramNativeCommands skill allowlist integration", () => {
       ],
     };
     listSkillCommandsForAgents.mockImplementation(
-      ({ cfg, agentIds }: { cfg: OpenClawConfig; agentIds?: string[] }) =>
-        listActualSkillCommandsForAgents({ cfg, agentIds }),
+      ({ cfg: cfgLocal, agentIds }: { cfg: OpenClawConfig; agentIds?: string[] }) =>
+        listActualSkillCommandsForAgents({ cfg: cfgLocal, agentIds }),
     );
 
     registerTelegramNativeCommands({

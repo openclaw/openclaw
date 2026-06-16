@@ -1,7 +1,8 @@
+// Verifies bundled plugin metadata generation and import boundaries.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { expectNoReaddirSyncDuring } from "../test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, toRepoRelativePath } from "../test-utils/repo-files.js";
 import { collectBundledChannelConfigs } from "./bundled-channel-config-metadata.js";
@@ -48,11 +49,11 @@ const EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS = [
   "openshell",
   "phone-control",
   "policy",
-  "skill-workshop",
   "talk-voice",
   "thread-ownership",
   "voice-call",
   "webhooks",
+  "workboard",
 ] as const;
 const EXPECTED_EMPTY_CONFIG_GATEWAY_STARTUP_PLUGIN_IDS = [
   "acpx",
@@ -125,6 +126,10 @@ let repoBundledPluginMetadataCache: readonly BundledPluginMetadata[] | undefined
 let repoBundledPluginManifestsCache:
   | ReturnType<typeof listRepoBundledPluginManifestsUncached>
   | undefined;
+const repoBundledChannelConfigsCache = new Map<
+  string,
+  ReturnType<typeof collectBundledChannelConfigs>
+>();
 
 function listRepoBundledPluginMetadata(): readonly BundledPluginMetadata[] {
   repoBundledPluginMetadataCache ??= listBundledPluginMetadata({
@@ -263,16 +268,22 @@ function collectRootPackageExcludedExtensionDirsForTest(): readonly string[] {
 }
 
 function collectRepoBundledChannelConfigsForTest(dirName: string) {
+  const cached = repoBundledChannelConfigsCache.get(dirName);
+  if (cached) {
+    return cached;
+  }
   const pluginDir = path.join(repoRoot, "extensions", dirName);
   const manifest = loadPluginManifest(pluginDir, false);
   if (!manifest.ok) {
-    throw manifest.error;
+    throw toLintErrorObject(manifest.error, "Non-Error thrown");
   }
-  return collectBundledChannelConfigs({
+  const configs = collectBundledChannelConfigs({
     pluginDir,
     manifest: manifest.manifest,
     packageManifest: getPackageManifestMetadata(readPackageManifest(pluginDir)),
   });
+  repoBundledChannelConfigsCache.set(dirName, configs);
+  return configs;
 }
 
 function hasPluginKind(record: PluginManifestRecord, kind: string): boolean {
@@ -324,6 +335,12 @@ function createInstalledPluginIndexForManifests(
 }
 
 describe("bundled plugin metadata", () => {
+  beforeAll(() => {
+    listRepoBundledPluginMetadata();
+    collectRepoBundledChannelConfigsForTest("discord");
+    collectRepoBundledChannelConfigsForTest("tlon");
+  });
+
   it("lists bundled plugin manifests without scanning extension directories in-process", () => {
     expectNoReaddirSyncDuring(() => {
       const manifests = listRepoBundledPluginManifestsUncached();
@@ -1135,3 +1152,17 @@ describe("bundled plugin metadata", () => {
     expect(fs.existsSync(markerPath)).toBe(false);
   });
 });
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

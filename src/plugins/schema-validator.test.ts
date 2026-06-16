@@ -1,3 +1,4 @@
+/** Covers plugin schema validation for manifests and exported config schemas. */
 import { Format } from "typebox/format";
 import { describe, expect, it } from "vitest";
 import { validateJsonSchemaValue } from "./schema-validator.js";
@@ -311,6 +312,13 @@ describe("schema validator", () => {
         "schema-validator.test.invalid-ref",
         {
           $ref: "#/$defs/Missing",
+        },
+      ],
+      [
+        "schema-validator.test.invalid-array-ref-leading-zero",
+        {
+          anyOf: [{ type: "number" }, { type: "string" }],
+          $ref: "#/anyOf/01",
         },
       ],
       [

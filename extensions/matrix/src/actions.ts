@@ -1,3 +1,4 @@
+// Matrix plugin module implements actions behavior.
 import {
   createActionGate,
   readPositiveIntegerParam,
@@ -239,6 +240,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
         limit,
         before: readStringParam(params, "before"),
         after: readStringParam(params, "after"),
+        threadId: readStringParam(params, "threadId"),
       });
     }
 

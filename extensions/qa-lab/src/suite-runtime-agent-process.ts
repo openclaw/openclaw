@@ -1,6 +1,9 @@
+// Qa Lab plugin module implements suite runtime agent process behavior.
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   appendQaChildOutput,
   appendQaChildOutputTail,
@@ -10,10 +13,12 @@ import {
   QA_CHILD_STDOUT_MAX_BYTES,
   readQaChildOutput,
 } from "./child-output.js";
+import { QaSuiteInfraError } from "./errors.js";
 import { resolveQaNodeExecPath } from "./node-exec.js";
 import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
 import { waitForGatewayHealthy, waitForTransportReady } from "./suite-runtime-gateway.js";
 import type { QaDreamingStatus, QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
+import { resolveQaGatewayTimeoutWithGraceMs } from "./timer-timeouts.js";
 
 type QaMemorySearchResult = {
   results?: Array<{ snippet?: string; text?: string; path?: string }>;
@@ -97,10 +102,13 @@ async function runQaCli(
       },
       stdio: ["ignore", "pipe", "pipe"],
     });
+    const timeoutMs = resolveTimerTimeoutMs(opts?.timeoutMs, 60_000);
     const timeout = setTimeout(() => {
       child.kill("SIGKILL");
-      reject(new Error(`qa cli timed out: openclaw ${args.join(" ")}`));
-    }, opts?.timeoutMs ?? 60_000);
+      reject(
+        new QaSuiteInfraError("qa_cli_timeout", `qa cli timed out: openclaw ${args.join(" ")}`),
+      );
+    }, timeoutMs);
     child.stdout.on("data", (chunk) => appendQaChildOutput(stdout, chunk));
     child.stderr.on("data", (chunk) => appendQaChildOutputTail(stderr, chunk));
     child.once("error", (error) => {
@@ -183,16 +191,24 @@ async function waitForAgentRun(
   runId: string,
   timeoutMs = 30_000,
 ) {
-  return (await env.gateway.call(
-    "agent.wait",
-    {
-      runId,
-      timeoutMs,
-    },
-    {
-      timeoutMs: timeoutMs + 5_000,
-    },
-  )) as { status?: string; error?: string };
+  try {
+    return (await env.gateway.call(
+      "agent.wait",
+      {
+        runId,
+        timeoutMs,
+      },
+      {
+        timeoutMs: resolveQaGatewayTimeoutWithGraceMs(timeoutMs),
+      },
+    )) as { status?: string; error?: string };
+  } catch (error) {
+    throw new QaSuiteInfraError(
+      "agent_wait_failed",
+      `agent.wait failed: ${formatErrorMessage(error)}`,
+      { cause: error },
+    );
+  }
 }
 
 async function listCronJobs(env: Pick<QaSuiteRuntimeEnv, "gateway">) {
@@ -252,7 +268,9 @@ async function waitForMemorySearchMatch(params: {
     if (haystack.includes(params.expectedNeedle)) {
       return result;
     }
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 500);
+    });
   }
   throw new Error(`memory index missing expected fact after reindex: ${params.expectedNeedle}`);
 }

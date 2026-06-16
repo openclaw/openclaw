@@ -78,7 +78,7 @@ OpenClaw resolves these via `src/config/sessions.ts`.
 
 Session persistence has automatic maintenance controls (`session.maintenance`) for `sessions.json`, transcript artifacts, and trajectory sidecars:
 
-- `mode`: `warn` (default) or `enforce`
+- `mode`: `enforce` (default) or `warn`
 - `pruneAfter`: stale-entry age cutoff (default `30d`)
 - `maxEntries`: cap entries in `sessions.json` (default `500`)
 - `resetArchiveRetention`: retention for `*.reset.<timestamp>` transcript archives (default: same as `pruneAfter`; `false` disables cleanup)
@@ -125,7 +125,7 @@ openclaw sessions cleanup --enforce
 Isolated cron runs also create session entries/transcripts, and they have dedicated retention controls:
 
 - `cron.sessionRetention` (default `24h`) prunes old isolated cron run sessions from the session store (`false` disables).
-- `cron.runLog.maxBytes` + `cron.runLog.keepLines` prune `~/.openclaw/cron/runs/<jobId>.jsonl` files (defaults: `2_000_000` bytes and `2000` lines).
+- `cron.runLog.keepLines` prunes retained SQLite run-history rows per cron job (default: `2000`). `cron.runLog.maxBytes` remains accepted for older file-backed run logs.
 
 When cron force-creates a new isolated run session, it sanitizes the previous
 `cron:<jobId>` session entry before writing the new row. It carries safe

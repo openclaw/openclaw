@@ -1,3 +1,5 @@
+// Block-reply rejection tests ensure async callback failures are contained and
+// do not escape as process-level unhandled rejections.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createSubscribedSessionHarness,
@@ -7,13 +9,18 @@ import {
 } from "./embedded-agent-subscribe.e2e-harness.js";
 
 const waitForAsyncCallbacks = async () => {
+  // Block reply callbacks are scheduled asynchronously; this drains both
+  // microtasks and the immediate queue before checking unhandled rejections.
   await Promise.resolve();
-  await new Promise<void>((resolve) => setImmediate(resolve));
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 };
 
 describe("subscribeEmbeddedAgentSession block reply rejections", () => {
   const unhandledRejections: unknown[] = [];
   const onUnhandledRejection = (reason: unknown) => {
+    // Capture process-level failures so tests prove callback containment.
     unhandledRejections.push(reason);
   };
 

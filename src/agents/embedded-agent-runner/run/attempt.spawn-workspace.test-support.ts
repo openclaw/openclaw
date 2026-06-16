@@ -1,6 +1,11 @@
+// Shared harness and mocks for embedded attempt spawn-workspace tests.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "@openclaw/normalization-core/string-coerce";
 import { expect, vi, type Mock } from "vitest";
 import type {
   AssembleResult,
@@ -14,10 +19,6 @@ import type {
 import { formatErrorMessage } from "../../../infra/errors.js";
 import type { Model } from "../../../llm/types.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "../../../shared/string-coerce.js";
 import type { EmbeddedContextFile } from "../../embedded-agent-helpers.js";
 import type {
   MessagingToolSend,
@@ -45,6 +46,8 @@ type BootstrapContext = {
 };
 
 function normalizeMockProviderId(providerId?: string): string {
+  // Provider ids in mocked model routing follow the same lowercase normalization
+  // as production helpers.
   return normalizeLowercaseStringOrEmpty(providerId);
 }
 
@@ -56,6 +59,7 @@ type SessionManagerMocks = {
   appendCustomEntry: UnknownMock;
   flushPendingToolResults: UnknownMock;
   clearPendingToolResults: UnknownMock;
+  removeTrailingEntries: UnknownMock;
 };
 type AttemptSpawnWorkspaceHoisted = {
   spawnSubagentDirectMock: UnknownMock;
@@ -96,14 +100,18 @@ type AttemptSpawnWorkspaceHoisted = {
 };
 
 export function createSubscriptionMock(): SubscriptionMock {
+  // Minimal subscription surface for runEmbeddedAttempt tests; individual tests
+  // override only the lifecycle method they need.
   return {
     assistantTexts: [] as string[],
+    getLastAssistantTextMessageIndex: () => undefined,
     toolMetas: [] as Array<{ toolName: string; meta?: string; asyncStarted?: boolean }>,
     runToolLifecycle: async <T>(toolParams: { execute: () => Promise<T> }) =>
       await toolParams.execute(),
     unsubscribe: () => {},
     setTerminalLifecycleMeta: () => {},
     waitForCompactionRetry: async () => {},
+    waitForPendingEvents: async () => {},
     getAcceptedSessionSpawns: () => [],
     getMessagingToolSentTexts: () => [] as string[],
     getMessagingToolSentMediaUrls: () => [] as string[],
@@ -111,6 +119,7 @@ export function createSubscriptionMock(): SubscriptionMock {
     getMessagingToolSourceReplyPayloads: () => [] as MessagingToolSourceReplyPayload[],
     getHeartbeatToolResponse: () => undefined,
     getPendingToolMediaReply: () => null,
+    hasToolMediaBlockReply: () => false,
     getVisibleBlockReplyCount: () => 0,
     getSuccessfulCronAdds: () => 0,
     getReplayState: () => ({
@@ -130,6 +139,8 @@ export function createSubscriptionMock(): SubscriptionMock {
 }
 
 const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
+  // Hoisted mocks must exist before the runner module graph is imported, because
+  // runEmbeddedAttempt captures these dependencies at module load.
   const spawnSubagentDirectMock = vi.fn();
   const createAgentSessionMock = vi.fn();
   const sessionManagerOpenMock = vi.fn();
@@ -198,6 +209,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     appendCustomEntry: vi.fn(),
     flushPendingToolResults: vi.fn(),
     clearPendingToolResults: vi.fn(),
+    removeTrailingEntries: vi.fn(() => 0),
   };
   return {
     spawnSubagentDirectMock,
@@ -283,6 +295,7 @@ vi.mock("../../../plugins/plugin-metadata-snapshot.js", () => ({
   isPluginMetadataSnapshotCompatible: () => true,
   listPluginOriginsFromMetadataSnapshot: () => new Map(),
   loadPluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
+  resolvePluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
 }));
 
 vi.mock("../../../trajectory/metadata.js", () => ({
@@ -379,13 +392,16 @@ vi.mock("../../bootstrap-files.js", async () => {
   };
 });
 
-vi.mock("../../skills.js", () => ({
+vi.mock("../../../skills/runtime/env-overrides.js", () => ({
   applySkillEnvOverrides: () => () => {},
   applySkillEnvOverridesFromSnapshot: () => () => {},
+}));
+
+vi.mock("../../../skills/loading/workspace.js", () => ({
   resolveSkillsPromptForRun: (...args: unknown[]) => hoisted.resolveSkillsPromptForRunMock(...args),
 }));
 
-vi.mock("../skills-runtime.js", () => ({
+vi.mock("../../../skills/runtime/embedded-run-entries.js", () => ({
   resolveEmbeddedRunSkillEntries: (...args: unknown[]) =>
     hoisted.resolveEmbeddedRunSkillEntriesMock(...args),
 }));
@@ -451,7 +467,7 @@ vi.mock("../tool-schema-runtime.js", () => ({
 }));
 
 vi.mock("../../session-file-repair.js", () => ({
-  repairSessionFileIfNeeded: async () => {},
+  repairSessionFileIfNeeded: async () => ({ repaired: false, droppedLines: 0 }),
 }));
 
 vi.mock("../session-manager-cache.js", () => ({
@@ -677,6 +693,7 @@ vi.mock("../../tool-policy.js", async (importOriginal) => {
 vi.mock("../../transcript-policy.js", () => ({
   resolveTranscriptPolicy: () => ({
     allowSyntheticToolResults: false,
+    repairToolUseResultPairing: true,
   }),
   shouldAllowProviderOwnedThinkingReplay: () => false,
 }));
@@ -776,12 +793,17 @@ vi.mock("../model.js", () => ({
 
 vi.mock("../sandbox-info.js", () => ({
   buildEmbeddedSandboxInfo: () => undefined,
+  resolveEmbeddedSandboxInfoExecPolicy: () => ({}),
 }));
 
-vi.mock("../thinking.js", () => ({
-  dropReasoningFromHistory: <T>(messages: T) => messages,
-  dropThinkingBlocks: <T>(messages: T) => messages,
-}));
+vi.mock("../thinking.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../thinking.js")>();
+  return {
+    ...actual,
+    dropReasoningFromHistory: <T>(messages: T) => messages,
+    dropThinkingBlocks: <T>(messages: T) => messages,
+  };
+});
 
 vi.mock("../tool-name-allowlist.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../tool-name-allowlist.js")>();
@@ -905,6 +927,10 @@ async function loadRunEmbeddedAttempt() {
   return await runEmbeddedAttemptPromise;
 }
 
+export async function preloadRunEmbeddedAttemptForTests(): Promise<void> {
+  await loadRunEmbeddedAttempt();
+}
+
 export function resetEmbeddedAttemptHarness(
   params: {
     includeSpawnSubagent?: boolean;
@@ -923,13 +949,14 @@ export function resetEmbeddedAttemptHarness(
   }
   hoisted.createAgentSessionMock.mockReset();
   hoisted.sessionManagerOpenMock.mockReset().mockReturnValue(hoisted.sessionManager);
+  hoisted.defaultResourceLoaderInitMock.mockReset();
   hoisted.resolveSandboxContextMock.mockReset();
   hoisted.ensureGlobalUndiciEnvProxyDispatcherMock.mockReset();
   hoisted.ensureGlobalUndiciDispatcherStreamTimeoutsMock.mockReset();
   hoisted.ensureGlobalUndiciStreamTimeoutsMock.mockReset();
   hoisted.buildEmbeddedMessageActionDiscoveryInputMock
     .mockReset()
-    .mockImplementation((params) => params);
+    .mockImplementation((paramsLocal) => paramsLocal);
   hoisted.createOpenClawCodingToolsMock.mockReset().mockImplementation((...args: unknown[]) => {
     const options = args[0] as
       | {

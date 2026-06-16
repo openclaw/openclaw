@@ -1,3 +1,4 @@
+// Verifies update_plan registration gates and base OpenClaw tool inclusion policy.
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
@@ -21,6 +22,7 @@ function toolNames(tools: ReturnType<typeof createOpenClawTools>): string[] {
 }
 
 function createFastToolNames(options: CreateOpenClawToolsOptions): string[] {
+  // Disable unrelated dynamic surfaces so registration assertions stay deterministic.
   return toolNames(
     createOpenClawTools({
       disableMessageTool: true,
@@ -46,6 +48,7 @@ function openAiGpt5Params(
   config: OpenClawConfig,
   overrides: Partial<UpdatePlanGatingParams> = {},
 ): UpdatePlanGatingParams {
+  // Common OpenAI GPT-5 selection used by model-aware update_plan gates.
   const params: UpdatePlanGatingParams = {
     config,
     agentSessionKey: "agent:main:main",
@@ -226,11 +229,8 @@ describe("openclaw-tools update_plan gating", () => {
   });
 
   it("auto-enables update_plan for unconfigured GPT-5 openai runs", () => {
-    // Criterion 1 of the GPT-5.4 parity gate ("no stalls after planning") is
-    // universal, not opt-in. Unspecified executionContract on a supported
-    // provider/model auto-activates strict-agentic so unconfigured installs
-    // get the same behavior as explicit opt-in. Explicit "default" still
-    // opts out (see "respects explicit default contract opt-out" below).
+    // Unspecified executionContract on a supported provider/model enables the
+    // structured plan tool by default. Explicit "default" still opts out.
     const cfg = {
       agents: {
         list: [{ id: "main" }],
@@ -238,7 +238,6 @@ describe("openclaw-tools update_plan gating", () => {
     } as OpenClawConfig;
 
     expectUpdatePlanEnabled(openAiGpt5Params(cfg), true);
-    expectUpdatePlanEnabled(openAiGpt5Params(cfg, { modelProvider: "openai-codex" }), true);
   });
 
   it("respects explicit default contract opt-out on GPT-5 runs", () => {

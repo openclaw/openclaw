@@ -1,6 +1,7 @@
+// Starts and monitors SSH tunnels for remote gateway access.
 import { spawn } from "node:child_process";
 import net from "node:net";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { formatErrorMessage, isErrno } from "./errors.js";
 import { parseStrictPositiveInteger } from "./parse-finite-number.js";
 import { ensurePortAvailable } from "./ports.js";
@@ -97,7 +98,9 @@ async function waitForLocalListener(port: number, timeoutMs: number): Promise<vo
     if (await canConnectLocal(port)) {
       return;
     }
-    await new Promise((r) => setTimeout(r, 50));
+    await new Promise((r) => {
+      setTimeout(r, 50);
+    });
   }
   throw new Error(`ssh tunnel did not start listening on localhost:${port}`);
 }

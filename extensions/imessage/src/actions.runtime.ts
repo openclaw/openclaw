@@ -1,6 +1,12 @@
+// Imessage plugin module implements actions behavior.
 import { spawn } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { extname, join } from "node:path";
+import {
+  asDateTimestampMs,
+  parseStrictInteger,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { appendIMessageCliStderrTail, appendIMessageCliStdout } from "./cli-output.js";
@@ -50,13 +56,7 @@ function numberFromUnknown(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isFinite(value)) {
     return value;
   }
-  if (typeof value === "string") {
-    const parsed = Number(value.trim());
-    if (Number.isFinite(parsed)) {
-      return parsed;
-    }
-  }
-  return undefined;
+  return parseStrictInteger(value);
 }
 
 function stringFromUnknown(value: unknown): string | undefined {
@@ -81,12 +81,14 @@ function chatListCacheGet(
   cliPath: string,
   dbPath?: string,
 ): ReadonlyArray<Record<string, unknown>> | null {
-  const entry = chatListCache.get(chatListCacheKey(cliPath, dbPath));
+  const key = chatListCacheKey(cliPath, dbPath);
+  const entry = chatListCache.get(key);
   if (!entry) {
     return null;
   }
-  if (entry.expiresAt < Date.now()) {
-    chatListCache.delete(chatListCacheKey(cliPath, dbPath));
+  const now = asDateTimestampMs(Date.now());
+  if (now === undefined || entry.expiresAt <= now) {
+    chatListCache.delete(key);
     return null;
   }
   return entry.list;
@@ -97,9 +99,13 @@ function chatListCacheSet(
   dbPath: string | undefined,
   list: ReadonlyArray<Record<string, unknown>>,
 ): void {
+  const expiresAt = resolveExpiresAtMsFromDurationMs(CHAT_LIST_CACHE_TTL_MS);
+  if (expiresAt === undefined) {
+    return;
+  }
   chatListCache.set(chatListCacheKey(cliPath, dbPath), {
     list,
-    expiresAt: Date.now() + CHAT_LIST_CACHE_TTL_MS,
+    expiresAt,
   });
 }
 
@@ -184,20 +190,20 @@ async function runIMessageCliJson(
     let stderr = "";
     let killEscalation: ReturnType<typeof setTimeout> | null = null;
     let settled = false;
-    const clearTimers = (options: { keepKillEscalation?: boolean } = {}): void => {
+    const clearTimers = (optionsValue: { keepKillEscalation?: boolean } = {}): void => {
       if (timer) {
         clearTimeout(timer);
       }
-      if (killEscalation && !options.keepKillEscalation) {
+      if (killEscalation && !optionsValue.keepKillEscalation) {
         clearTimeout(killEscalation);
       }
     };
-    const fail = (error: Error, options: { keepKillEscalation?: boolean } = {}): void => {
+    const fail = (error: Error, optionsLocal: { keepKillEscalation?: boolean } = {}): void => {
       if (settled) {
         return;
       }
       settled = true;
-      clearTimers(options);
+      clearTimers(optionsLocal);
       reject(error);
     };
     const succeed = (value: Record<string, unknown>): void => {

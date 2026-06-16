@@ -1,9 +1,11 @@
+// Ios Version tests cover ios version script behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   extractChangelogSection,
   normalizeGatewayVersionToPinnedIosVersion,
+  normalizePinnedIosVersion,
   renderIosReleaseNotes,
   renderIosVersionXcconfig,
   resolveGatewayVersionForIosRelease,
@@ -14,7 +16,7 @@ import { installIosFixtureCleanup, writeIosFixture } from "./ios-version.test-su
 installIosFixtureCleanup();
 
 describe("resolveIosVersion", () => {
-  it("parses pinned CalVer versions and derives Apple marketing fields", () => {
+  it("parses pinned release versions and derives Apple marketing fields", () => {
     const rootDir = writeIosFixture({
       version: "2026.4.6",
       changelog: "# OpenClaw iOS Changelog\n\n## 2026.4.6\n\nStable notes.\n",
@@ -37,7 +39,9 @@ describe("resolveIosVersion", () => {
       changelog: "# OpenClaw iOS Changelog\n\n## Unreleased\n\nNotes.\n",
     });
 
-    expect(() => resolveIosVersion(rootDir)).toThrow("Expected pinned CalVer like 2026.4.6");
+    expect(() => resolveIosVersion(rootDir)).toThrow(
+      "Expected pinned release version like 2026.6.5",
+    );
   });
 
   it("rejects prerelease suffixes in the pinned iOS version file", () => {
@@ -46,12 +50,23 @@ describe("resolveIosVersion", () => {
       changelog: "# OpenClaw iOS Changelog\n\n## Unreleased\n\nNotes.\n",
     });
 
-    expect(() => resolveIosVersion(rootDir)).toThrow("Expected pinned CalVer like 2026.4.6");
+    expect(() => resolveIosVersion(rootDir)).toThrow(
+      "Expected pinned release version like 2026.6.5",
+    );
+  });
+
+  it("rejects impossible pinned release versions", () => {
+    expect(() => normalizePinnedIosVersion("2026.13.6")).toThrow(
+      "Expected pinned release version like 2026.6.5",
+    );
+    expect(() => normalizePinnedIosVersion("2026.4.9007199254740993")).toThrow(
+      "Expected pinned release version like 2026.6.5",
+    );
   });
 });
 
 describe("gateway version normalization", () => {
-  it("keeps stable gateway CalVer values", () => {
+  it("keeps stable gateway release values", () => {
     expect(normalizeGatewayVersionToPinnedIosVersion("2026.4.6")).toBe("2026.4.6");
   });
 
@@ -65,6 +80,15 @@ describe("gateway version normalization", () => {
 
   it("strips fallback correction suffixes when pinning from gateway version", () => {
     expect(normalizeGatewayVersionToPinnedIosVersion("2026.4.6-3")).toBe("2026.4.6");
+  });
+
+  it("rejects impossible gateway release versions", () => {
+    expect(() => normalizeGatewayVersionToPinnedIosVersion("2026.13.6-alpha.1")).toThrow(
+      "Expected YYYY.M.PATCH",
+    );
+    expect(() =>
+      normalizeGatewayVersionToPinnedIosVersion("2026.4.6-alpha.9007199254740993"),
+    ).toThrow("Expected YYYY.M.PATCH");
   });
 
   it("reads and normalizes the root package version for iOS releases", () => {

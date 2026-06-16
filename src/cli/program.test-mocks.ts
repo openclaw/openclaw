@@ -1,3 +1,4 @@
+// Program test mocks provide shared CLI command doubles and typed Vitest helpers.
 import { vi, type Mock } from "vitest";
 
 type AnyMock = Mock<(...args: unknown[]) => unknown>;
@@ -69,12 +70,12 @@ vi.mock("../commands/configure.js", () => ({
   ],
   configureCommand: programMocks.configureCommand,
   configureCommandWithSections: programMocks.configureCommandWithSections,
-  configureCommandFromSectionsArg: (sections: unknown, runtime: unknown) => {
+  configureCommandFromSectionsArg: (sections: unknown, runtimeLocal: unknown) => {
     const resolved = Array.isArray(sections) ? sections : [];
     if (resolved.length > 0) {
-      return programMocks.configureCommandWithSections(resolved, runtime);
+      return programMocks.configureCommandWithSections(resolved, runtimeLocal);
     }
-    return programMocks.configureCommand({}, runtime);
+    return programMocks.configureCommand({}, runtimeLocal);
   },
 }));
 vi.mock("../commands/setup.js", () => ({ setupCommand: programMocks.setupCommand }));

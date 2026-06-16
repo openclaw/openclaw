@@ -1,3 +1,4 @@
+// Nextcloud Talk tests cover room info plugin behavior.
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -71,6 +72,36 @@ describe("nextcloud talk room info", () => {
     );
     expect(fetchParams.auditContext).toBe("nextcloud-talk.room-info");
     expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("normalizes signed decimal room type strings through the shared parser", async () => {
+    fetchWithSsrFGuard.mockResolvedValue({
+      response: {
+        ok: true,
+        json: async () => ({
+          ocs: {
+            data: {
+              type: "+01",
+            },
+          },
+        }),
+      },
+      release: vi.fn(async () => {}),
+    });
+
+    await expect(
+      resolveNextcloudTalkRoomKind({
+        account: {
+          accountId: "acct-direct-string",
+          baseUrl: "https://nc.example.com",
+          config: {
+            apiUser: "bot",
+            apiPassword: "secret",
+          },
+        } as never,
+        roomToken: "room-direct-string",
+      }),
+    ).resolves.toBe("direct");
   });
 
   it("does not coerce partial room type strings", async () => {

@@ -1,3 +1,9 @@
+// Implements commitment listing and dismissal commands for scheduled follow-up records.
+import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
   listCommitments,
@@ -8,10 +14,6 @@ import type { CommitmentRecord, CommitmentStatus } from "../commitments/types.js
 import { getRuntimeConfig } from "../config/config.js";
 import { info } from "../globals.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
-import { sanitizeTerminalText } from "../terminal/safe-text.js";
-import { isRich, theme } from "../terminal/theme.js";
 
 const STATUS_VALUES = new Set<CommitmentStatus>([
   "pending",
@@ -49,7 +51,7 @@ function isActiveCommitment(commitment: CommitmentRecord): boolean {
 }
 
 function formatDue(ms: number): string {
-  return new Date(ms).toISOString();
+  return timestampMsToIsoString(ms) ?? "n/a";
 }
 
 function formatRows(commitments: CommitmentRecord[], rich: boolean): string[] {
@@ -87,6 +89,7 @@ function formatRows(commitments: CommitmentRecord[], rich: boolean): string[] {
   return lines;
 }
 
+/** List commitments with status/agent filters in text or JSON form. */
 export async function commitmentsListCommand(
   opts: { json?: boolean; status?: string; all?: boolean; agent?: string },
   runtime: RuntimeEnv,
@@ -134,6 +137,7 @@ export async function commitmentsListCommand(
   }
 }
 
+/** Mark one or more commitments as dismissed. */
 export async function commitmentsDismissCommand(
   opts: { ids: string[]; json?: boolean },
   runtime: RuntimeEnv,

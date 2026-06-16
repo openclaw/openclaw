@@ -1,3 +1,4 @@
+// Control UI tests cover config behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyConfigSnapshot,
@@ -11,6 +12,7 @@ import {
   saveConfig,
   stageDefaultAgentConfigEntry,
   stageConfigPreset,
+  updateMcpServerEnabled,
   updateConfigFormValue,
   updateConfigRawValue,
   type ConfigState,
@@ -43,6 +45,7 @@ function createState(): ConfigState {
     connected: false,
     lastError: null,
     pendingUpdateExpectedVersion: null,
+    pendingUpdateHandoff: false,
     updateStatusBanner: null,
     updateRunning: false,
   };
@@ -479,6 +482,40 @@ describe("updateConfigFormValue", () => {
       },
     });
     expect(state.configFormDirty).toBe(false);
+  });
+});
+
+describe("updateMcpServerEnabled", () => {
+  it("removes disabled-only MCP overrides when enabling", () => {
+    const state = createState();
+    applyConfigSnapshot(state, {
+      hash: "hash-mcp",
+      config: { mcp: { servers: { local: { enabled: false } } } },
+      valid: true,
+      issues: [],
+      raw: "{}",
+    });
+
+    updateMcpServerEnabled(state, "local", true);
+
+    expect(state.configForm).toEqual({ mcp: { servers: {} } });
+    expect(state.configFormDirty).toBe(true);
+  });
+
+  it("keeps real MCP server configuration when enabling", () => {
+    const state = createState();
+    applyConfigSnapshot(state, {
+      hash: "hash-mcp",
+      config: { mcp: { servers: { local: { command: "node", enabled: false } } } },
+      valid: true,
+      issues: [],
+      raw: "{}",
+    });
+
+    updateMcpServerEnabled(state, "local", true);
+
+    expect(state.configForm).toEqual({ mcp: { servers: { local: { command: "node" } } } });
+    expect(state.configFormDirty).toBe(true);
   });
 });
 
@@ -1121,6 +1158,27 @@ describe("runUpdate", () => {
     await runUpdate(state);
 
     expect(state.pendingUpdateExpectedVersion).toBe("2.0.0");
+    expect(state.pendingUpdateHandoff).toBe(false);
+    expect(state.updateStatusBanner).toBeNull();
+  });
+
+  it("tracks managed-service handoff updates for reconnect verification", async () => {
+    const request = vi.fn().mockResolvedValue({
+      ok: true,
+      result: {
+        status: "skipped",
+        reason: "managed-service-handoff-started",
+      },
+      handoff: { status: "started" },
+    });
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+
+    await runUpdate(state);
+
+    expect(state.pendingUpdateExpectedVersion).toBeNull();
+    expect(state.pendingUpdateHandoff).toBe(true);
     expect(state.updateStatusBanner).toBeNull();
   });
 });

@@ -1,3 +1,4 @@
+// Routing session key tests cover route-derived session key behavior.
 import { describe, expect, it } from "vitest";
 import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
 import {
@@ -7,6 +8,7 @@ import {
   resolveThreadParentSessionKey,
 } from "../sessions/session-key-utils.js";
 import {
+  agentSessionKeysMatchByRequestKey,
   buildAgentPeerSessionKey,
   buildGroupHistoryKey,
   classifySessionKeyShape,
@@ -73,6 +75,14 @@ describe("isUnscopedSessionKeySentinel", () => {
     expect(isUnscopedSessionKeySentinel("UNKNOWN")).toBe(true);
     expect(isUnscopedSessionKeySentinel("agent:ops:global")).toBe(false);
     expect(isUnscopedSessionKeySentinel("incident-42")).toBe(false);
+  });
+});
+
+describe("agentSessionKeysMatchByRequestKey", () => {
+  it("matches canonical agent keys against their request-key aliases", () => {
+    expect(agentSessionKeysMatchByRequestKey("agent:main:main", "main")).toBe(true);
+    expect(agentSessionKeysMatchByRequestKey("agent:ops:incident-42", "incident-42")).toBe(true);
+    expect(agentSessionKeysMatchByRequestKey("agent:ops:incident-42", "main")).toBe(false);
   });
 });
 

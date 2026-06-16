@@ -1,3 +1,4 @@
+// Telegram plugin module implements fetch behavior.
 import { randomUUID } from "node:crypto";
 import * as dns from "node:dns";
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -12,6 +13,10 @@ import {
   type PinnedDispatcherPolicy,
 } from "openclaw/plugin-sdk/fetch-runtime";
 import {
+  isFutureDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
+import {
   captureHttpExchange,
   resolveEffectiveDebugProxyUrl,
 } from "openclaw/plugin-sdk/proxy-capture";
@@ -23,6 +28,7 @@ import { normalizeTelegramApiRoot } from "./api-root.js";
 import {
   resolveTelegramAutoSelectFamilyDecision,
   resolveTelegramDnsResultOrderDecision,
+  TELEGRAM_DNS_RESULT_ORDER_ENV,
 } from "./network-config.js";
 import { getProxyUrlFromFetch, makeProxyFetch } from "./proxy.js";
 
@@ -212,8 +218,7 @@ function shouldBypassEnvProxyForTelegramApi(env: NodeJS.ProcessEnv = process.env
   const targetHostname = normalizeLowercaseStringOrEmpty(TELEGRAM_API_HOSTNAME);
   const targetPort = 443;
   const noProxyEntries = noProxyValue.split(/[,\s]/);
-  for (let i = 0; i < noProxyEntries.length; i++) {
-    const entry = noProxyEntries[i];
+  for (const entry of noProxyEntries) {
     if (!entry) {
       continue;
     }
@@ -631,9 +636,14 @@ export function resolveTelegramTransport(
   });
   const defaultDispatcher = createTelegramDispatcher(defaultDispatcherResolution.policy);
   const shouldBypassEnvProxy = shouldBypassEnvProxyForTelegramApi();
+  const hasExplicitDnsResultOrder =
+    (dnsDecision.source === "config" ||
+      dnsDecision.source === `env:${TELEGRAM_DNS_RESULT_ORDER_ENV}`) &&
+    dnsDecision.value !== "ipv4first";
   const allowStickyFallback =
-    defaultDispatcher.mode === "direct" ||
-    (defaultDispatcher.mode === "env-proxy" && shouldBypassEnvProxy);
+    !hasExplicitDnsResultOrder &&
+    (defaultDispatcher.mode === "direct" ||
+      (defaultDispatcher.mode === "env-proxy" && shouldBypassEnvProxy));
   const fallbackDispatcherPolicy = allowStickyFallback
     ? resolveTelegramDispatcherPolicy({
         autoSelectFamily: false,
@@ -667,7 +677,7 @@ export function resolveTelegramTransport(
 
   const getAttemptCooldownError = (attemptIndex: number): Error | null => {
     const health = attemptHealth[attemptIndex];
-    if (health.unhealthyUntilMs <= Date.now()) {
+    if (!isFutureDateTimestampMs(health.unhealthyUntilMs)) {
       return null;
     }
     return new TelegramTransportAttemptUnhealthyError(health.unhealthyUntilMs);
@@ -688,7 +698,12 @@ export function resolveTelegramTransport(
     );
     health.consecutiveFailures = 0;
     health.cooldownMs = Math.min(TELEGRAM_TRANSPORT_ATTEMPT_MAX_COOLDOWN_MS, cooldownMs * 2);
-    health.unhealthyUntilMs = Date.now() + cooldownMs;
+    const unhealthyUntilMs = resolveExpiresAtMsFromDurationMs(cooldownMs);
+    if (unhealthyUntilMs === undefined) {
+      health.unhealthyUntilMs = 0;
+      return;
+    }
+    health.unhealthyUntilMs = unhealthyUntilMs;
     log.warn(
       `telegram transport attempt marked temporarily unhealthy for ${cooldownMs}ms (codes=${formatErrorCodes(err)})`,
     );

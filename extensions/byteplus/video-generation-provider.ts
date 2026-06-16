@@ -1,3 +1,6 @@
+/**
+ * BytePlus Seedance video generation provider implementation.
+ */
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
@@ -13,6 +16,7 @@ import {
   waitProviderOperationPollInterval,
   type ProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
   asSafeIntegerInRange,
   isRecord,
@@ -32,6 +36,7 @@ const MAX_POLL_ATTEMPTS = 120;
 const BYTEPLUS_SEED_MAX = 2_147_483_647;
 const BYTEPLUS_MIN_DURATION_SECONDS = 2;
 const BYTEPLUS_MAX_DURATION_SECONDS = 12;
+const DEFAULT_GENERATED_VIDEO_MAX_BYTES = 16 * 1024 * 1024;
 
 type BytePlusTaskCreateResponse = {
   id?: unknown;
@@ -102,6 +107,14 @@ function resolveBytePlusVideoBaseUrl(req: VideoGenerationRequest): string {
   return (
     normalizeOptionalString(req.cfg?.models?.providers?.byteplus?.baseUrl) ?? BYTEPLUS_BASE_URL
   );
+}
+
+function resolveGeneratedVideoMaxBytes(req: VideoGenerationRequest): number {
+  const configured = req.cfg.agents?.defaults?.mediaMaxMb;
+  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
+    return Math.floor(configured * 1024 * 1024);
+  }
+  return DEFAULT_GENERATED_VIDEO_MAX_BYTES;
 }
 
 function toDataUrl(buffer: Buffer, mimeType: string): string {
@@ -183,8 +196,6 @@ async function pollBytePlusTask(params: {
         throw new Error(
           readBytePlusErrorMessage(payload.error) || "BytePlus video generation failed",
         );
-      case "queued":
-      case "running":
       default:
         await waitProviderOperationPollInterval({ deadline, pollIntervalMs: POLL_INTERVAL_MS });
         break;
@@ -197,6 +208,7 @@ async function downloadBytePlusVideo(params: {
   url: string;
   timeoutMs?: ProviderOperationTimeoutMs;
   fetchFn: typeof fetch;
+  maxBytes: number;
 }): Promise<GeneratedVideoAsset> {
   const response = await fetchProviderDownloadResponse({
     url: params.url,
@@ -207,14 +219,18 @@ async function downloadBytePlusVideo(params: {
     requestFailedMessage: "BytePlus generated video download failed",
   });
   const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
-  const arrayBuffer = await response.arrayBuffer();
+  const buffer = await readResponseWithLimit(response, params.maxBytes, {
+    onOverflow: ({ maxBytes }) =>
+      new Error(`BytePlus generated video download exceeds ${maxBytes} bytes`),
+  });
   return {
-    buffer: Buffer.from(arrayBuffer),
+    buffer,
     mimeType,
     fileName: `video-1.${extensionForMime(mimeType)?.slice(1) ?? "mp4"}`,
   };
 }
 
+/** Builds the BytePlus video generation provider registered by the plugin. */
 export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider {
   return {
     id: "byteplus",
@@ -393,6 +409,7 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
             defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
           }),
           fetchFn,
+          maxBytes: resolveGeneratedVideoMaxBytes(req),
         });
         return {
           videos: [video],

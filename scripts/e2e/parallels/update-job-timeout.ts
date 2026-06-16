@@ -1,13 +1,16 @@
+// Update Job Timeout script supports OpenClaw repository automation.
 interface TimedUpdateJobOptions {
+  abortSettleMs?: number;
   append(this: void, chunk: string): void;
   label: string;
-  run(this: void): Promise<void> | void;
+  run(this: void, context: { signal: AbortSignal }): Promise<void> | void;
   timeoutDescription: string;
   timeoutMs: number;
   writeLog(this: void): Promise<void>;
 }
 
 export async function runTimedUpdateJob({
+  abortSettleMs = 2_500,
   append,
   label,
   run,
@@ -16,18 +19,36 @@ export async function runTimedUpdateJob({
   writeLog,
 }: TimedUpdateJobOptions): Promise<number> {
   let timedOut = false;
+  const controller = new AbortController();
   const timeoutMessage = `${label} update timed out after ${timeoutDescription}`;
   let timeout: NodeJS.Timeout | undefined;
-  const timeoutPromise = new Promise<never>((_, reject) => {
+  const runOutcome = Promise.resolve()
+    .then(() => run({ signal: controller.signal }))
+    .then(
+      () => ({ status: "pass" as const }),
+      (error: unknown) => ({ error, status: "fail" as const }),
+    );
+  const timeoutPromise = new Promise<"timeout">((resolve) => {
     timeout = setTimeout(() => {
       timedOut = true;
       append(`${timeoutMessage}\n`);
-      reject(new Error(timeoutMessage));
+      controller.abort(new Error(timeoutMessage));
+      resolve("timeout");
     }, timeoutMs);
   });
 
   try {
-    await Promise.race([Promise.resolve(run()), timeoutPromise]);
+    const outcome = await Promise.race([runOutcome, timeoutPromise]);
+    if (outcome === "timeout") {
+      await waitForAbortSettle(runOutcome, abortSettleMs);
+      await writeLog();
+      return 1;
+    }
+    if (outcome.status === "fail") {
+      append(`${outcome.error instanceof Error ? outcome.error.message : String(outcome.error)}\n`);
+      await writeLog();
+      return 1;
+    }
     await writeLog();
     return 0;
   } catch (error) {
@@ -41,4 +62,14 @@ export async function runTimedUpdateJob({
       clearTimeout(timeout);
     }
   }
+}
+
+async function waitForAbortSettle<T>(runOutcome: Promise<T>, ms: number): Promise<T | undefined> {
+  return await new Promise((resolve) => {
+    const timeout = setTimeout(resolve, ms);
+    void runOutcome.then((outcome) => {
+      clearTimeout(timeout);
+      resolve(outcome);
+    });
+  });
 }

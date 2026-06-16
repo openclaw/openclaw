@@ -1,3 +1,7 @@
+// Session artifact filename classifiers and archive timestamp helpers.
+// Cleanup, disk-budget, and usage accounting use these predicates to avoid deleting live transcripts.
+
+import { timestampMsToIsoFileStamp } from "@openclaw/normalization-core/number-coercion";
 import { escapeRegExp } from "../../shared/regexp.js";
 
 export type SessionArchiveReason = "bak" | "reset" | "deleted";
@@ -17,6 +21,7 @@ function hasArchiveSuffix(fileName: string, reason: SessionArchiveReason): boole
   return ARCHIVE_TIMESTAMP_RE.test(raw);
 }
 
+/** Returns true for archived session artifacts and legacy store backup names. */
 export function isSessionArchiveArtifactName(fileName: string): boolean {
   if (LEGACY_STORE_BACKUP_RE.test(fileName)) {
     return true;
@@ -58,6 +63,7 @@ export function isSessionStoreTempArtifactName(fileName: string, storeBasename: 
   return sessionStoreTempPattern(storeBasename).test(fileName);
 }
 
+/** Parses a compaction checkpoint transcript filename into session/checkpoint ids. */
 export function parseCompactionCheckpointTranscriptFileName(fileName: string): {
   sessionId: string;
   checkpointId: string;
@@ -68,22 +74,27 @@ export function parseCompactionCheckpointTranscriptFileName(fileName: string): {
   return sessionId && checkpointId ? { sessionId, checkpointId } : null;
 }
 
+/** Returns true when a filename is a compaction checkpoint transcript. */
 export function isCompactionCheckpointTranscriptFileName(fileName: string): boolean {
   return parseCompactionCheckpointTranscriptFileName(fileName) !== null;
 }
 
+/** Returns true for trajectory runtime jsonl artifacts. */
 export function isTrajectoryRuntimeArtifactName(fileName: string): boolean {
   return fileName.endsWith(".trajectory.jsonl");
 }
 
+/** Returns true for trajectory pointer artifacts. */
 export function isTrajectoryPointerArtifactName(fileName: string): boolean {
   return fileName.endsWith(".trajectory-path.json");
 }
 
+/** Returns true for any trajectory-related session artifact. */
 export function isTrajectorySessionArtifactName(fileName: string): boolean {
   return isTrajectoryRuntimeArtifactName(fileName) || isTrajectoryPointerArtifactName(fileName);
 }
 
+/** Returns true for primary session transcript files that represent live session history. */
 export function isPrimarySessionTranscriptFileName(fileName: string): boolean {
   if (fileName === "sessions.json") {
     return false;
@@ -100,6 +111,7 @@ export function isPrimarySessionTranscriptFileName(fileName: string): boolean {
   return !isSessionArchiveArtifactName(fileName);
 }
 
+/** Returns true for transcript files counted in usage, including reset/deleted archives. */
 export function isUsageCountedSessionTranscriptFileName(fileName: string): boolean {
   if (isPrimarySessionTranscriptFileName(fileName)) {
     return true;
@@ -107,6 +119,7 @@ export function isUsageCountedSessionTranscriptFileName(fileName: string): boole
   return hasArchiveSuffix(fileName, "reset") || hasArchiveSuffix(fileName, "deleted");
 }
 
+/** Extracts the session id from a usage-counted transcript filename. */
 export function parseUsageCountedSessionIdFromFileName(fileName: string): string | null {
   if (isPrimarySessionTranscriptFileName(fileName)) {
     return fileName.slice(0, -".jsonl".length);
@@ -121,8 +134,9 @@ export function parseUsageCountedSessionIdFromFileName(fileName: string): string
   return null;
 }
 
+/** Formats an archive timestamp that is safe for filenames. */
 export function formatSessionArchiveTimestamp(nowMs = Date.now()): string {
-  return new Date(nowMs).toISOString().replaceAll(":", "-");
+  return timestampMsToIsoFileStamp(nowMs);
 }
 
 function restoreSessionArchiveTimestamp(raw: string): string {

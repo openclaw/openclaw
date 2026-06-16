@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Audits repo ownership seams, optional plugin leaks, and nearby test coverage signals.
 
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -125,7 +126,7 @@ async function walkAllCodeFiles(rootDir, options = {}) {
   const includeTests = options.includeTests === true;
 
   async function walk(dir) {
-    let entries = [];
+    let entries;
     try {
       entries = await fs.readdir(dir, { withFileTypes: true });
     } catch {

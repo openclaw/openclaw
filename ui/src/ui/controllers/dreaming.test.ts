@@ -1,3 +1,4 @@
+// Control UI tests cover dreaming behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   backfillDreamDiary,
@@ -15,8 +16,10 @@ import {
   type DreamingState,
 } from "./dreaming.ts";
 
-function createState(): { state: DreamingState; request: ReturnType<typeof vi.fn> } {
-  const request = vi.fn();
+type TestRequest = (method: string, payload?: unknown) => Promise<unknown>;
+
+function createState(): { state: DreamingState; request: ReturnType<typeof vi.fn<TestRequest>> } {
+  const request = vi.fn<TestRequest>();
   const state: DreamingState = {
     client: {
       request,
@@ -25,6 +28,7 @@ function createState(): { state: DreamingState; request: ReturnType<typeof vi.fn
     hello: null,
     configSnapshot: { hash: "hash-1" },
     applySessionKey: "main",
+    selectedAgentId: null,
     dreamingStatusLoading: false,
     dreamingStatusError: null,
     dreamingStatus: null,
@@ -47,7 +51,22 @@ function createState(): { state: DreamingState; request: ReturnType<typeof vi.fn
   return { state, request };
 }
 
-function getConfigPatchRawPayload(request: ReturnType<typeof vi.fn>): Record<string, unknown> {
+function createDeferred<T>() {
+  let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
+  let reject: ((reason?: unknown) => void) | undefined;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  if (!resolve || !reject) {
+    throw new Error("Expected deferred promise callbacks to be initialized");
+  }
+  return { promise, resolve, reject };
+}
+
+function getConfigPatchRawPayload(
+  request: ReturnType<typeof vi.fn<TestRequest>>,
+): Record<string, unknown> {
   const patchCall = request.mock.calls.find((entry) => entry[0] === "config.patch");
   if (!patchCall) {
     throw new Error("Expected config.patch request");
@@ -57,7 +76,7 @@ function getConfigPatchRawPayload(request: ReturnType<typeof vi.fn>): Record<str
 }
 
 function getRequestPayload(
-  request: ReturnType<typeof vi.fn>,
+  request: ReturnType<typeof vi.fn<TestRequest>>,
   method: string,
 ): Record<string, unknown> {
   const call = request.mock.calls.find((entry) => entry[0] === method);
@@ -207,6 +226,94 @@ describe("dreaming controller", () => {
     );
     expect(status?.phases?.deep?.minScore).toBe(0.8);
     expect(status?.phases?.deep?.nextRunAtMs).toBe(23456);
+    expect(state.dreamingStatusLoading).toBe(false);
+    expect(state.dreamingStatusError).toBeNull();
+  });
+
+  it("loads dreaming status for the selected agent", async () => {
+    const { state, request } = createState();
+    state.selectedAgentId = "research-analyst";
+    request.mockResolvedValue({
+      dreaming: {
+        enabled: true,
+        shortTermCount: 1,
+      },
+    });
+
+    await loadDreamingStatus(state);
+
+    expect(request).toHaveBeenCalledWith("doctor.memory.status", {
+      agentId: "research-analyst",
+    });
+  });
+
+  it("starts a new selected-agent status load and ignores stale completions", async () => {
+    const { state, request } = createState();
+    const agentA = createDeferred<unknown>();
+    const agentB = createDeferred<unknown>();
+    request.mockImplementation(async (_method: string, payload?: unknown) => {
+      const agentId =
+        typeof payload === "object" && payload !== null && "agentId" in payload
+          ? payload.agentId
+          : undefined;
+      return agentId === "agent-b" ? agentB.promise : agentA.promise;
+    });
+
+    state.selectedAgentId = "agent-a";
+    const firstLoad = loadDreamingStatus(state);
+    state.selectedAgentId = "agent-b";
+    const secondLoad = loadDreamingStatus(state);
+
+    expect(request).toHaveBeenCalledWith("doctor.memory.status", { agentId: "agent-a" });
+    expect(request).toHaveBeenCalledWith("doctor.memory.status", { agentId: "agent-b" });
+
+    agentB.resolve({ dreaming: { enabled: true, shortTermCount: 2 } });
+    await secondLoad;
+
+    expect(state.dreamingStatus?.shortTermCount).toBe(2);
+    expect(state.dreamingStatusLoading).toBe(false);
+
+    agentA.resolve({ dreaming: { enabled: true, shortTermCount: 1 } });
+    await firstLoad;
+
+    expect(state.dreamingStatus?.shortTermCount).toBe(2);
+    expect(state.dreamingStatusLoading).toBe(false);
+    expect(state.dreamingStatusError).toBeNull();
+  });
+
+  it("ignores older same-agent status completions after switching back", async () => {
+    const { state, request } = createState();
+    const firstAgentA = createDeferred<unknown>();
+    const agentB = createDeferred<unknown>();
+    const secondAgentA = createDeferred<unknown>();
+    request
+      .mockImplementationOnce(async () => firstAgentA.promise)
+      .mockImplementationOnce(async () => agentB.promise)
+      .mockImplementationOnce(async () => secondAgentA.promise);
+
+    state.selectedAgentId = "agent-a";
+    const firstLoad = loadDreamingStatus(state);
+    state.selectedAgentId = "agent-b";
+    const secondLoad = loadDreamingStatus(state);
+    state.selectedAgentId = "agent-a";
+    const thirdLoad = loadDreamingStatus(state);
+
+    expect(request).toHaveBeenCalledWith("doctor.memory.status", { agentId: "agent-a" });
+    expect(request).toHaveBeenCalledWith("doctor.memory.status", { agentId: "agent-b" });
+    expect(request).toHaveBeenCalledTimes(3);
+
+    secondAgentA.resolve({ dreaming: { enabled: true, shortTermCount: 3 } });
+    await thirdLoad;
+
+    expect(state.dreamingStatus?.shortTermCount).toBe(3);
+    expect(state.dreamingStatusLoading).toBe(false);
+
+    firstAgentA.resolve({ dreaming: { enabled: true, shortTermCount: 1 } });
+    agentB.resolve({ dreaming: { enabled: true, shortTermCount: 2 } });
+    await firstLoad;
+    await secondLoad;
+
+    expect(state.dreamingStatus?.shortTermCount).toBe(3);
     expect(state.dreamingStatusLoading).toBe(false);
     expect(state.dreamingStatusError).toBeNull();
   });
@@ -849,6 +956,93 @@ describe("dreaming controller", () => {
     expect(state.dreamDiaryError).toBeNull();
   });
 
+  it("loads dream diary content for the selected agent", async () => {
+    const { state, request } = createState();
+    state.selectedAgentId = "infra-sre";
+    request.mockResolvedValue({
+      found: true,
+      path: "DREAMS.md",
+      content: "infra dreams",
+    });
+
+    await loadDreamDiary(state);
+
+    expect(request).toHaveBeenCalledWith("doctor.memory.dreamDiary", {
+      agentId: "infra-sre",
+    });
+  });
+
+  it("starts a new selected-agent diary load and ignores stale completions", async () => {
+    const { state, request } = createState();
+    const agentA = createDeferred<unknown>();
+    const agentB = createDeferred<unknown>();
+    request.mockImplementation(async (_method: string, payload?: unknown) => {
+      const agentId =
+        typeof payload === "object" && payload !== null && "agentId" in payload
+          ? payload.agentId
+          : undefined;
+      return agentId === "agent-b" ? agentB.promise : agentA.promise;
+    });
+
+    state.selectedAgentId = "agent-a";
+    const firstLoad = loadDreamDiary(state);
+    state.selectedAgentId = "agent-b";
+    const secondLoad = loadDreamDiary(state);
+
+    expect(request).toHaveBeenCalledWith("doctor.memory.dreamDiary", { agentId: "agent-a" });
+    expect(request).toHaveBeenCalledWith("doctor.memory.dreamDiary", { agentId: "agent-b" });
+
+    agentB.resolve({ found: true, path: "DREAMS.md", content: "agent-b diary" });
+    await secondLoad;
+
+    expect(state.dreamDiaryContent).toBe("agent-b diary");
+    expect(state.dreamDiaryLoading).toBe(false);
+
+    agentA.resolve({ found: true, path: "DREAMS.md", content: "agent-a diary" });
+    await firstLoad;
+
+    expect(state.dreamDiaryContent).toBe("agent-b diary");
+    expect(state.dreamDiaryLoading).toBe(false);
+    expect(state.dreamDiaryError).toBeNull();
+  });
+
+  it("ignores older same-agent diary completions after switching back", async () => {
+    const { state, request } = createState();
+    const firstAgentA = createDeferred<unknown>();
+    const agentB = createDeferred<unknown>();
+    const secondAgentA = createDeferred<unknown>();
+    request
+      .mockImplementationOnce(async () => firstAgentA.promise)
+      .mockImplementationOnce(async () => agentB.promise)
+      .mockImplementationOnce(async () => secondAgentA.promise);
+
+    state.selectedAgentId = "agent-a";
+    const firstLoad = loadDreamDiary(state);
+    state.selectedAgentId = "agent-b";
+    const secondLoad = loadDreamDiary(state);
+    state.selectedAgentId = "agent-a";
+    const thirdLoad = loadDreamDiary(state);
+
+    expect(request).toHaveBeenCalledWith("doctor.memory.dreamDiary", { agentId: "agent-a" });
+    expect(request).toHaveBeenCalledWith("doctor.memory.dreamDiary", { agentId: "agent-b" });
+    expect(request).toHaveBeenCalledTimes(3);
+
+    secondAgentA.resolve({ found: true, path: "DREAMS.md", content: "new agent-a diary" });
+    await thirdLoad;
+
+    expect(state.dreamDiaryContent).toBe("new agent-a diary");
+    expect(state.dreamDiaryLoading).toBe(false);
+
+    firstAgentA.resolve({ found: true, path: "DREAMS.md", content: "old agent-a diary" });
+    agentB.resolve({ found: true, path: "DREAMS.md", content: "agent-b diary" });
+    await firstLoad;
+    await secondLoad;
+
+    expect(state.dreamDiaryContent).toBe("new agent-a diary");
+    expect(state.dreamDiaryLoading).toBe(false);
+    expect(state.dreamDiaryError).toBeNull();
+  });
+
   it("handles missing dream diary without error", async () => {
     const { state, request } = createState();
     request.mockResolvedValue({
@@ -939,6 +1133,36 @@ describe("dreaming controller", () => {
     expect(request).toHaveBeenCalledWith("doctor.memory.status", {});
     expect(state.dreamDiaryContent).toBe("backfilled diary");
     expect(state.dreamDiaryActionLoading).toBe(false);
+  });
+
+  it("runs dream diary actions and reloads state for the selected agent", async () => {
+    const { state, request } = createState();
+    state.selectedAgentId = "fishing-bot";
+    request.mockImplementation(async (method: string) => {
+      if (method === "doctor.memory.backfillDreamDiary") {
+        return { action: "backfill", written: 1 };
+      }
+      if (method === "doctor.memory.dreamDiary") {
+        return { found: true, path: "DREAMS.md", content: "fish dreams" };
+      }
+      if (method === "doctor.memory.status") {
+        return { dreaming: null };
+      }
+      return {};
+    });
+
+    const ok = await backfillDreamDiary(state);
+
+    expect(ok).toBe(true);
+    expect(request).toHaveBeenCalledWith("doctor.memory.backfillDreamDiary", {
+      agentId: "fishing-bot",
+    });
+    expect(request).toHaveBeenCalledWith("doctor.memory.dreamDiary", {
+      agentId: "fishing-bot",
+    });
+    expect(request).toHaveBeenCalledWith("doctor.memory.status", {
+      agentId: "fishing-bot",
+    });
   });
 
   it("resets and reloads dream diary state", async () => {

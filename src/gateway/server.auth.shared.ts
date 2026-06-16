@@ -1,3 +1,5 @@
+// Shared auth suite helpers provide WebSocket clients, signed device payloads,
+// pairing utilities, and gateway harness setup for auth-mode tests.
 import os from "node:os";
 import path from "node:path";
 import { expect } from "vitest";
@@ -58,7 +60,9 @@ async function waitForWsClose(ws: WebSocket, timeoutMs: number): Promise<boolean
 const openWs = async (port: number, headers?: Record<string, string>) => {
   const ws = new WebSocket(`ws://127.0.0.1:${port}`, headers ? { headers } : undefined);
   trackConnectChallengeNonce(ws);
-  await new Promise<void>((resolve) => ws.once("open", resolve));
+  await new Promise<void>((resolve) => {
+    ws.once("open", resolve);
+  });
   return ws;
 };
 
@@ -89,7 +93,9 @@ const openTailscaleWs = async (port: number, headers?: Record<string, string>) =
     },
   });
   trackConnectChallengeNonce(ws);
-  await new Promise<void>((resolve) => ws.once("open", resolve));
+  await new Promise<void>((resolve) => {
+    ws.once("open", resolve);
+  });
   return ws;
 };
 

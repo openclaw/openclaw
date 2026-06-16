@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+// Discord tests cover proxy request client plugin behavior.
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createAbortableFetchMock,
   createJsonResponse,
@@ -21,6 +22,14 @@ async function expectAbortError(promise: Promise<unknown>) {
 }
 
 describe("createDiscordRequestClient", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("preserves the REST client's abort signal for proxied fetch calls", async () => {
     const fetchSpy = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
       if (!(init?.signal instanceof AbortSignal)) {
@@ -41,6 +50,7 @@ describe("createDiscordRequestClient", () => {
 
   it("lets the REST client abort hanging proxied requests after its timeout", async () => {
     const { fetch: fetchSpy } = createAbortableFetchMock();
+    vi.useFakeTimers();
 
     const client = createDiscordRequestClient("Bot test-token", {
       fetch: fetchSpy as never,
@@ -48,7 +58,12 @@ describe("createDiscordRequestClient", () => {
       timeout: 20,
     });
 
-    await expectAbortError(client.get("/channels/123/messages"));
+    const request = client.get("/channels/123/messages");
+    const abortExpectation = expectAbortError(request);
+    await Promise.resolve();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(20);
+    await abortExpectation;
   }, 1_000);
 
   it("lets abortAllRequests cancel active proxied fetches", async () => {
@@ -70,6 +85,25 @@ describe("createDiscordRequestClient", () => {
       throw new Error("Expected proxied fetch abort signal");
     }
     expect(abortable.receivedSignal.aborted).toBe(true);
+  });
+
+  it("lets a caller signal cancel active proxied fetches", async () => {
+    const abortable = createAbortableFetchMock();
+    const controller = new AbortController();
+    const client = createDiscordRequestClient("Bot test-token", {
+      fetch: abortable.fetch as never,
+      queueRequests: false,
+      signal: controller.signal,
+      timeout: 5_000,
+    });
+
+    const request = client.get("/channels/123/messages");
+    await vi.waitFor(() => expect(abortable.fetch).toHaveBeenCalledTimes(1));
+
+    controller.abort();
+
+    await expectAbortError(request);
+    expect(abortable.receivedSignal?.aborted).toBe(true);
   });
 
   it("provides the REST client's timeout signal even without a caller signal", async () => {

@@ -1,3 +1,4 @@
+// OC Path tests cover edit plugin behavior.
 import { describe, expect, it } from "vitest";
 import { setJsoncOcPath } from "../../jsonc/edit.js";
 import { emitJsonc } from "../../jsonc/emit.js";
@@ -54,6 +55,15 @@ describe("setJsoncOcPath — value replacement", () => {
     if (r.ok) {
       expect(JSON.parse(emitJsonc(r.ast))).toEqual({ limits: [10, 99, 30] });
     }
+  });
+
+  it("reports unresolved for noncanonical array indexes", () => {
+    const { ast } = parseJsonc('{ "limits": [10, 20, 30] }');
+    const r = setJsoncOcPath(ast, parseOcPath("oc://config/limits.01"), {
+      kind: "number",
+      value: 99,
+    });
+    expect(r).toEqual({ ok: false, reason: "unresolved" });
   });
 
   it("reports unresolved when a key is missing", () => {

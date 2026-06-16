@@ -1,3 +1,5 @@
+// Whatsapp plugin module implements group gating behavior.
+import type { BuildMentionRegexesOptions } from "openclaw/plugin-sdk/channel-mention-gating";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveWhatsAppGroupsConfigPath } from "../../group-config-path.js";
 import {
@@ -8,9 +10,9 @@ import {
   identitiesOverlap,
 } from "../../identity.js";
 import { resolveWhatsAppInboundPolicy } from "../../inbound-policy.js";
+import type { WebInboundMessage } from "../../inbound/types.js";
 import type { MentionConfig } from "../mentions.js";
 import { buildMentionConfig, debugMention, resolveOwnerList } from "../mentions.js";
-import type { WebInboundMsg } from "../types.js";
 import { stripMentionsForCommand } from "./commands.js";
 import { resolveGroupActivationFor } from "./group-activation.js";
 import {
@@ -33,7 +35,7 @@ export type GroupHistoryEntry = {
 
 type ApplyGroupGatingParams = {
   cfg: OpenClawConfig;
-  msg: WebInboundMsg;
+  msg: WebInboundMessage;
   mentionText?: string;
   deferMissingMention?: boolean;
   conversationId: string;
@@ -41,6 +43,7 @@ type ApplyGroupGatingParams = {
   agentId: string;
   sessionKey: string;
   baseMentionConfig: MentionConfig;
+  providerMentionPatterns?: BuildMentionRegexesOptions["providerPolicy"];
   authDir?: string;
   groupHistories: Map<string, GroupHistoryEntry[]>;
   groupHistoryLimit: number;
@@ -75,7 +78,7 @@ function shouldWarnForGroupDrop(warnKey: string): boolean {
   return true;
 }
 
-function isOwnerSender(baseMentionConfig: MentionConfig, msg: WebInboundMsg) {
+function isOwnerSender(baseMentionConfig: MentionConfig, msg: WebInboundMessage) {
   const sender = normalizeE164(getSenderIdentity(msg).e164 ?? "");
   if (!sender) {
     return false;
@@ -85,7 +88,7 @@ function isOwnerSender(baseMentionConfig: MentionConfig, msg: WebInboundMsg) {
 }
 
 function recordPendingGroupHistoryEntry(params: {
-  msg: WebInboundMsg;
+  msg: WebInboundMessage;
   body?: string;
   groupHistories: Map<string, GroupHistoryEntry[]>;
   groupHistoryKey: string;
@@ -104,10 +107,10 @@ function recordPendingGroupHistoryEntry(params: {
     limit: params.groupHistoryLimit,
     entry: {
       sender,
-      body: params.body ?? params.msg.body,
-      timestamp: params.msg.timestamp,
-      id: params.msg.id,
-      senderJid: senderIdentity.jid ?? params.msg.senderJid,
+      body: params.body ?? params.msg.payload.body,
+      timestamp: params.msg.event.timestamp,
+      id: params.msg.event.id,
+      senderJid: senderIdentity.jid ?? params.msg.platform.senderJid,
     },
   });
 }
@@ -167,13 +170,19 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
     allowFrom: inboundPolicy.configuredAllowFrom,
   };
   const mentionConfig = {
-    ...buildMentionConfig(params.cfg, params.agentId),
+    ...buildMentionConfig(params.cfg, params.agentId, {
+      provider: "whatsapp",
+      conversationId: params.conversationId,
+      providerPolicy: params.providerMentionPatterns,
+    }),
     allowFrom: inboundPolicy.configuredAllowFrom,
   };
   const mentionMsg =
-    params.mentionText !== undefined ? { ...params.msg, body: params.mentionText } : params.msg;
+    params.mentionText !== undefined
+      ? { ...params.msg, payload: { ...params.msg.payload, body: params.mentionText } }
+      : params.msg;
   const commandBody = stripMentionsForCommand(
-    mentionMsg.body,
+    mentionMsg.payload.body,
     mentionConfig.mentionRegexes,
     self.e164,
   );
@@ -244,7 +253,7 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
     }
     return skipGroupMessageAndStoreHistory(
       params,
-      `Group message stored for context (no mention detected) in ${params.conversationId}: ${mentionMsg.body}`,
+      `Group message stored for context (no mention detected) in ${params.conversationId}: ${mentionMsg.payload.body}`,
       params.mentionText,
     );
   }

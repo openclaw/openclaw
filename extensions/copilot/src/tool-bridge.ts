@@ -1,3 +1,4 @@
+// Copilot plugin module implements tool bridge behavior.
 import type { Tool as SdkTool, ToolInvocation, ToolResultObject } from "@github/copilot-sdk";
 import type {
   AnyAgentTool,
@@ -9,9 +10,11 @@ import {
   buildEmbeddedAttemptToolRunContext,
   getPluginToolMeta,
   isSubagentSessionKey,
+  isToolResultError,
   resolveAttemptSpawnWorkspaceDir,
   resolveEmbeddedAttemptToolConstructionPlan,
   resolveModelAuthMode,
+  sanitizeToolResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 
 type CreateOpenClawCodingTools =
@@ -204,6 +207,7 @@ export async function createCopilotToolBridge(
       convertOpenClawToolToSdkTool(sourceTool, {
         abortSignal: input.abortSignal,
         beforeExecute: input.beforeExecute,
+        onAgentToolResult: input.attemptParams?.onAgentToolResult,
       }),
     ),
     sourceTools: filteredTools,
@@ -337,6 +341,7 @@ function buildOpenClawCodingToolsOptions(
       workspaceDir,
     }),
     currentChannelId: a.currentChannelId,
+    currentMessagingTarget: a.currentMessagingTarget,
     currentThreadTs: a.currentThreadTs,
     currentMessageId: a.currentMessageId,
     replyToMode: a.replyToMode,
@@ -383,6 +388,7 @@ export function convertOpenClawToolToSdkTool(
   ctx: {
     abortSignal?: AbortSignal;
     beforeExecute?: CopilotToolBridgeInput["beforeExecute"];
+    onAgentToolResult?: CopilotToolAttemptParams["onAgentToolResult"];
   },
 ): SdkTool {
   if (typeof sourceTool.name !== "string" || sourceTool.name.trim().length === 0) {
@@ -396,13 +402,30 @@ export function convertOpenClawToolToSdkTool(
   }
 
   let sequentialLock = Promise.resolve();
+  const notifyToolResult = (result: unknown, isError: boolean) => {
+    try {
+      ctx.onAgentToolResult?.({ toolName: sourceTool.name, result, isError });
+    } catch (error) {
+      console.warn("[copilot-tool-bridge] onAgentToolResult handler threw; continuing", error);
+    }
+  };
+  const failureResult = (message: string, error: unknown): ToolResultObject => {
+    notifyToolResult(
+      sanitizeToolResult({
+        content: [{ type: "text", text: message }],
+        details: { status: "failed", error: toError(error).message },
+      }),
+      true,
+    );
+    return createFailureResult(message, error);
+  };
   const executeOnce = async (
     args: unknown,
     invocation: ToolInvocation,
   ): Promise<ToolResultObject> => {
     if (ctx.abortSignal?.aborted) {
       const error = new Error("[copilot-tool-bridge] aborted before execution");
-      return createFailureResult(error.message, error);
+      return failureResult(error.message, error);
     }
 
     try {
@@ -414,17 +437,17 @@ export function convertOpenClawToolToSdkTool(
         toolName: sourceTool.name,
       });
     } catch (error: unknown) {
-      return createFailureResult(
+      return failureResult(
         `[copilot-tool-bridge] beforeExecute failed for tool '${sourceTool.name}': ${toError(error).message}`,
         error,
       );
     }
 
-    let preparedArgs = args;
+    let preparedArgs;
     try {
       preparedArgs = sourceTool.prepareArguments ? sourceTool.prepareArguments(args) : args;
     } catch (error: unknown) {
-      return createFailureResult(
+      return failureResult(
         `[copilot-tool-bridge] prepareArguments failed for tool '${sourceTool.name}': ${toError(error).message}`,
         error,
       );
@@ -439,13 +462,19 @@ export function convertOpenClawToolToSdkTool(
         undefined,
       );
     } catch (error: unknown) {
-      return createFailureResult(
+      return failureResult(
         `[copilot-tool-bridge] tool '${sourceTool.name}' failed: ${toError(error).message}`,
         error,
       );
     }
 
-    return agentToolResultToSdk(result);
+    const sdkResult = agentToolResultToSdk(result);
+    const sanitizedResult = sanitizeToolResult(result);
+    notifyToolResult(
+      sanitizedResult,
+      sdkResult.resultType === "failure" || isToolResultError(sanitizedResult),
+    );
+    return sdkResult;
   };
 
   const handler =
