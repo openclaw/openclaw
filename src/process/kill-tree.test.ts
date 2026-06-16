@@ -203,6 +203,26 @@ describe("killProcessTree", () => {
     });
   });
 
+  it("on Unix uses group kill with explicit detached:true", async () => {
+    killSpy.mockImplementation(((pid: number, signal?: NodeJS.Signals | number) => {
+      if (pid === -6767 && signal === 0) {
+        throw new Error("ESRCH");
+      }
+      if (pid === 6767 && signal === 0) {
+        throw new Error("ESRCH");
+      }
+      return true;
+    }) as typeof process.kill);
+
+    await withMockedPlatform("linux", async () => {
+      killProcessTree(6767, { graceMs: 10, detached: true });
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(killSpy).toHaveBeenCalledWith(-6767, "SIGTERM");
+      expect(killSpy).not.toHaveBeenCalledWith(6767, "SIGTERM");
+    });
+  });
+
   it("on Unix sends a single requested tree signal without scheduling escalation", async () => {
     killSpy.mockImplementation(() => true);
 
