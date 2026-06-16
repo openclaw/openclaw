@@ -38,7 +38,6 @@ import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
-import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
 import {
   getSessionEntry,
   listSessionEntries,
@@ -51,7 +50,6 @@ import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
   normalizeDmAllowFromWithStore,
   firstDefined,
-  isSenderAllowed,
   resolveTelegramEffectiveDmPolicy,
   type NormalizedAllowFrom,
 } from "./bot-access.js";
@@ -273,7 +271,6 @@ export const registerTelegramHandlers = ({
     key: string;
     threadId?: number;
     messages: Array<{ msg: Message; ctx: TelegramContext; receivedAtMs: number }>;
-    effectiveGroupAllow: NormalizedAllowFrom;
     promptContextMinTimestampMs?: number;
     dispatchDedupeKeys: string[];
     spooledReplayParticipants: TelegramSpooledReplayDeferredParticipant[];
@@ -304,7 +301,6 @@ export const registerTelegramHandlers = ({
     msg: Message;
     allMedia: TelegramMediaRef[];
     storeAllowFrom: string[];
-    effectiveGroupAllow: NormalizedAllowFrom;
     receivedAtMs: number;
     debounceKey: string | null;
     debounceLane: TelegramDebounceLane;
@@ -597,7 +593,6 @@ export const registerTelegramHandlers = ({
             msg: last.msg,
             allMedia: last.allMedia,
             storeAllowFrom: last.storeAllowFrom,
-            effectiveGroupAllow: last.effectiveGroupAllow,
             options: {
               receivedAtMs: last.receivedAtMs,
               ingressBuffer: "inbound-debounce",
@@ -635,7 +630,6 @@ export const registerTelegramHandlers = ({
           msg: syntheticMessage,
           allMedia: combinedMedia,
           storeAllowFrom: first.storeAllowFrom,
-          effectiveGroupAllow: first.effectiveGroupAllow,
           options: {
             ...(messageIdOverride ? { messageIdOverride } : {}),
             receivedAtMs: first.receivedAtMs,
@@ -1017,7 +1011,6 @@ export const registerTelegramHandlers = ({
         msg: primaryEntry.msg,
         allMedia,
         storeAllowFrom: entry.storeAllowFrom,
-        effectiveGroupAllow: entry.effectiveGroupAllow,
         options: {
           ...promptContextBoundaryOptions(entry.promptContextMinTimestampMs),
           ...spooledReplayOptions(entry.spooledReplayParticipants),
@@ -1069,7 +1062,6 @@ export const registerTelegramHandlers = ({
         msg: syntheticMessage,
         allMedia: [],
         storeAllowFrom,
-        effectiveGroupAllow: entry.effectiveGroupAllow,
         options: {
           messageIdOverride: String(last.msg.message_id),
           receivedAtMs: first.receivedAtMs,
@@ -1345,7 +1337,6 @@ export const registerTelegramHandlers = ({
     msg: Message;
     allMedia: TelegramMediaRef[];
     storeAllowFrom: string[];
-    effectiveGroupAllow: NormalizedAllowFrom;
     options?: TelegramMessageContextOptions;
     dispatchDedupeKeys?: string[];
   }): Promise<TelegramMessageProcessingResult> => {
@@ -1383,29 +1374,19 @@ export const registerTelegramHandlers = ({
         channel: "telegram",
         accountId,
       });
-      for (const entry of replyChain) {
-        const senderAllowed = params.effectiveGroupAllow.hasEntries
-          ? isSenderAllowed({
-              allow: params.effectiveGroupAllow,
-              senderId: entry.senderId,
-              senderUsername: entry.senderUsername,
-            })
-          : true;
-        const visible =
-          !isGroupConversation ||
-          evaluateSupplementalContextVisibility({
-            mode: contextVisibilityMode,
-            kind: "quote",
-            senderAllowed,
-          }).include;
-        const promptMediaPath = entry.mediaPath
-          ? resolveTelegramPromptMediaPath(entry.mediaPath)
-          : undefined;
-        if (visible && entry.messageId && entry.mediaPath && promptMediaPath) {
-          promptContextMediaByMessageId.set(entry.messageId, {
-            path: promptMediaPath,
-            ...(entry.mediaType ? { contentType: entry.mediaType } : {}),
-          });
+      // Strict allowlist visibility needs live membership for every reply sender. This early
+      // hydration stage cannot prove that, and later context filtering cannot revoke media_path.
+      if (!isGroupConversation || contextVisibilityMode !== "allowlist") {
+        for (const entry of replyChain) {
+          const promptMediaPath = entry.mediaPath
+            ? resolveTelegramPromptMediaPath(entry.mediaPath)
+            : undefined;
+          if (entry.messageId && entry.mediaPath && promptMediaPath) {
+            promptContextMediaByMessageId.set(entry.messageId, {
+              path: promptMediaPath,
+              ...(entry.mediaType ? { contentType: entry.mediaType } : {}),
+            });
+          }
         }
       }
       const promptContext = await buildPromptContextForMessage(
@@ -2045,7 +2026,6 @@ export const registerTelegramHandlers = ({
         const entry: TextFragmentEntry = {
           key,
           messages: [{ msg, ctx, receivedAtMs: nowMs }],
-          effectiveGroupAllow,
           dispatchDedupeKeys,
           spooledReplayParticipants: spooledReplayParticipant ? [spooledReplayParticipant] : [],
           ...promptContextBoundaryOptions(promptContextMinTimestampMs),
@@ -2239,7 +2219,6 @@ export const registerTelegramHandlers = ({
       msg,
       allMedia,
       storeAllowFrom,
-      effectiveGroupAllow,
       receivedAtMs: Date.now(),
       debounceKey: isAbortControlMessage ? null : debounceKey,
       debounceLane,
@@ -2546,7 +2525,6 @@ export const registerTelegramHandlers = ({
             msg: synthetic.message,
             allMedia: [],
             storeAllowFrom,
-            effectiveGroupAllow: eventAuthContext.effectiveGroupAllow,
             options: {
               forceWasMentioned: true,
               messageIdOverride: callback.id,
@@ -2578,7 +2556,6 @@ export const registerTelegramHandlers = ({
           msg: synthetic.message,
           allMedia: [],
           storeAllowFrom,
-          effectiveGroupAllow: eventAuthContext.effectiveGroupAllow,
           options: {
             forceWasMentioned: true,
             messageIdOverride: callback.id,
@@ -2956,7 +2933,6 @@ export const registerTelegramHandlers = ({
         msg: syntheticMessage,
         allMedia: [],
         storeAllowFrom,
-        effectiveGroupAllow: eventAuthContext.effectiveGroupAllow,
         options: {
           ...(nativeCallbackCommand ? { commandSource: "native" as const } : {}),
           forceWasMentioned: true,
