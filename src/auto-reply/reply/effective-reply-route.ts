@@ -21,7 +21,14 @@ export type EffectiveReplyRouteContext = Pick<
 /** Persisted session fields used as route fallback/inheritance. */
 export type EffectiveReplyRouteEntry = Pick<
   SessionEntry,
-  "deliveryContext" | "lastChannel" | "lastTo" | "lastAccountId" | "route" | "chatType" | "origin"
+  | "deliveryContext"
+  | "lastChannel"
+  | "lastTo"
+  | "lastAccountId"
+  | "lastThreadId"
+  | "route"
+  | "chatType"
+  | "origin"
 >;
 
 /** Effective channel target selected for source reply delivery. */
@@ -113,6 +120,10 @@ export function resolveEffectiveReplyRoute(params: {
     !liveChannel ||
     normalizeMessageChannel(liveChannel) === normalizeMessageChannel(persistedChannel);
   const chatType = liveChatType ?? (canInheritPersistedTuple ? persistedChatType : undefined);
+  const persistedThreadId =
+    persistedDeliveryContext?.threadId ??
+    params.entry?.lastThreadId ??
+    params.entry?.origin?.threadId;
   return {
     channel: liveChannel ?? persistedChannel,
     to:
@@ -126,5 +137,8 @@ export function resolveEffectiveReplyRoute(params: {
         ? (persistedDeliveryContext?.accountId ?? params.entry?.lastAccountId)
         : undefined),
     ...(chatType ? { chatType } : {}),
+    ...(canInheritPersistedTuple && persistedThreadId != null
+      ? { threadId: persistedThreadId }
+      : {}),
   };
 }

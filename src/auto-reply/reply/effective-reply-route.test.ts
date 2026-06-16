@@ -396,6 +396,160 @@ describe("resolveEffectiveReplyRoute", () => {
       chatType: "direct",
     });
   });
+
+  it("inherits persisted threadId from deliveryContext for system events", () => {
+    expect(
+      resolveEffectiveReplyRoute({
+        ctx: ctx({ Provider: "exec-event" }),
+        entry: entry({
+          deliveryContext: {
+            channel: "slack",
+            to: "channel:persisted",
+            accountId: "persisted-account",
+            threadId: "1712345678.123456",
+          },
+        }),
+      }),
+    ).toEqual({
+      channel: "slack",
+      to: "channel:persisted",
+      accountId: "persisted-account",
+      threadId: "1712345678.123456",
+    });
+  });
+
+  it("inherits persisted threadId from lastThreadId for system events", () => {
+    expect(
+      resolveEffectiveReplyRoute({
+        ctx: ctx({ Provider: "heartbeat" }),
+        entry: entry({
+          lastChannel: "slack",
+          lastTo: "channel:persisted",
+          lastAccountId: "persisted-account",
+          lastThreadId: "1712345678.123456",
+        }),
+      }),
+    ).toEqual({
+      channel: "slack",
+      to: "channel:persisted",
+      accountId: "persisted-account",
+      threadId: "1712345678.123456",
+    });
+  });
+
+  it("inherits persisted threadId from origin.threadId for system events", () => {
+    expect(
+      resolveEffectiveReplyRoute({
+        ctx: ctx({ Provider: "cron-event" }),
+        entry: entry({
+          lastChannel: "slack",
+          lastTo: "channel:persisted",
+          lastAccountId: "persisted-account",
+          origin: { threadId: "1712345678.123456" },
+        }),
+      }),
+    ).toEqual({
+      channel: "slack",
+      to: "channel:persisted",
+      accountId: "persisted-account",
+      threadId: "1712345678.123456",
+    });
+  });
+
+  it("prefers deliveryContext.threadId over lastThreadId and origin.threadId", () => {
+    expect(
+      resolveEffectiveReplyRoute({
+        ctx: ctx({ Provider: "exec-event" }),
+        entry: entry({
+          deliveryContext: {
+            channel: "slack",
+            to: "channel:persisted",
+            accountId: "persisted-account",
+            threadId: "1712345678.delivery",
+          },
+          lastChannel: "slack",
+          lastTo: "channel:persisted",
+          lastAccountId: "persisted-account",
+          lastThreadId: "1712345678.last",
+          origin: { threadId: "1712345678.origin" },
+        }),
+      }),
+    ).toEqual({
+      channel: "slack",
+      to: "channel:persisted",
+      accountId: "persisted-account",
+      threadId: "1712345678.delivery",
+    });
+  });
+
+  it("does not inherit threadId for system events when live channel differs from persisted", () => {
+    expect(
+      resolveEffectiveReplyRoute({
+        ctx: ctx({
+          Provider: "exec-event",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "chat:live",
+        }),
+        entry: entry({
+          deliveryContext: {
+            channel: "slack",
+            to: "channel:persisted",
+            accountId: "persisted-account",
+            threadId: "1712345678.123456",
+          },
+        }),
+      }),
+    ).toEqual({
+      channel: "telegram",
+      to: "chat:live",
+      accountId: undefined,
+    });
+  });
+
+  it("inherits threadId for system events when live channel matches persisted channel", () => {
+    expect(
+      resolveEffectiveReplyRoute({
+        ctx: ctx({
+          Provider: "exec-event",
+          OriginatingChannel: "slack",
+          OriginatingTo: "channel:live",
+          AccountId: "live-account",
+        }),
+        entry: entry({
+          deliveryContext: {
+            channel: "slack",
+            to: "channel:persisted",
+            accountId: "persisted-account",
+            threadId: "1712345678.123456",
+          },
+        }),
+      }),
+    ).toEqual({
+      channel: "slack",
+      to: "channel:live",
+      accountId: "live-account",
+      threadId: "1712345678.123456",
+    });
+  });
+
+  it("does not include threadId when no thread source is available for system events", () => {
+    expect(
+      resolveEffectiveReplyRoute({
+        ctx: ctx({ Provider: "exec-event" }),
+        entry: entry({
+          deliveryContext: {
+            channel: "slack",
+            to: "channel:persisted",
+            accountId: "persisted-account",
+          },
+        }),
+      }),
+    ).toEqual({
+      channel: "slack",
+      to: "channel:persisted",
+      accountId: "persisted-account",
+    });
+  });
 });
 
 describe("isSystemEventProvider", () => {
