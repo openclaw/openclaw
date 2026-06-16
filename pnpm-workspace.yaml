@@ -97,7 +97,7 @@ overrides:
   "@aws-sdk/core": 3.974.13
   "@aws-sdk/credential-provider-node": 3.972.52
   "@aws-sdk/xml-builder": 3.972.25
-  hono: 4.12.21
+  hono: 4.12.25
   "@hono/node-server": 1.19.14
   axios: 1.16.0
   fast-uri: 3.1.2

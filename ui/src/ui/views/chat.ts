@@ -19,6 +19,7 @@ import { buildChatItems, type BuildChatItemsProps } from "../chat/build-chat-ite
 import { renderChatQueue } from "../chat/chat-queue.ts";
 import { buildRawSidebarContent } from "../chat/chat-sidebar-raw.ts";
 import { renderWelcomeState, resolveAssistantDisplayAvatar } from "../chat/chat-welcome.ts";
+import { copyToClipboard } from "../chat/clipboard.ts";
 import { renderContextNotice } from "../chat/context-notice.ts";
 import { DeletedMessages } from "../chat/deleted-messages.ts";
 import { exportChatMarkdown } from "../chat/export.ts";
@@ -171,6 +172,7 @@ export type ChatProps = {
     next: Partial<NonNullable<ChatProps["realtimeTalkOptions"]>>,
   ) => void;
   onDismissError?: () => void;
+  onDismissRealtimeTalkError?: () => void;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
   onQueueRetry?: (id: string) => void;
@@ -1988,13 +1990,13 @@ export function renderChat(props: ChatProps) {
       return;
     }
     const code = (btn as HTMLElement).dataset.code ?? "";
-    navigator.clipboard.writeText(code).then(
-      () => {
-        btn.classList.add("copied");
-        setTimeout(() => btn.classList.remove("copied"), 1500);
-      },
-      () => {},
-    );
+    void copyToClipboard(code).then((copied) => {
+      if (!copied) {
+        return;
+      }
+      btn.classList.add("copied");
+      setTimeout(() => btn.classList.remove("copied"), 1500);
+    });
   };
   const handleChatThreadScroll = (event: Event) => {
     maybeExpandChatHistoryRenderWindow(event, requestUpdate);
@@ -2444,16 +2446,34 @@ export function renderChat(props: ChatProps) {
       ${renderRealtimeTalkOptions(props)}
       ${props.realtimeTalkActive || props.realtimeTalkDetail || props.realtimeTalkTranscript
         ? html`
-            <div class="agent-chat__stt-interim agent-chat__talk-status">
-              ${props.realtimeTalkDetail ??
-              ((props.realtimeTalkConversation?.length ?? 0) === 0
-                ? props.realtimeTalkTranscript
-                : null) ??
-              (props.realtimeTalkStatus === "thinking"
-                ? "Asking OpenClaw..."
-                : props.realtimeTalkStatus === "connecting"
-                  ? "Connecting Talk..."
-                  : "Talk live")}
+            <div
+              class="agent-chat__stt-interim agent-chat__talk-status"
+              role=${props.realtimeTalkStatus === "error" ? "alert" : nothing}
+            >
+              <span class="agent-chat__talk-status-text">
+                ${props.realtimeTalkDetail ??
+                ((props.realtimeTalkConversation?.length ?? 0) === 0
+                  ? props.realtimeTalkTranscript
+                  : null) ??
+                (props.realtimeTalkStatus === "thinking"
+                  ? "Asking OpenClaw..."
+                  : props.realtimeTalkStatus === "connecting"
+                    ? "Connecting Talk..."
+                    : "Talk live")}
+              </span>
+              ${props.realtimeTalkStatus === "error" && props.onDismissRealtimeTalkError
+                ? html`
+                    <button
+                      class="callout__dismiss"
+                      type="button"
+                      @click=${props.onDismissRealtimeTalkError}
+                      aria-label=${t("chat.composer.dismissTalkError")}
+                      title=${t("chat.composer.dismissTalkError")}
+                    >
+                      ${icons.x}
+                    </button>
+                  `
+                : nothing}
             </div>
           `
         : nothing}
