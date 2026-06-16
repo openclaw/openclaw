@@ -27,6 +27,27 @@ describe("config io invalid config formatting", () => {
     expect(details).toContain("- <root>: root problem");
   });
 
+  it("prefers displayPath over raw path in formatted details", () => {
+    const details = formatInvalidConfigDetails([
+      {
+        path: "models.providers.openrouter.models.0.api",
+        message: "invalid option",
+      },
+    ]);
+    expect(details).toContain("- models.providers.openrouter.models.#1.api: invalid option");
+  });
+
+  it("uses displayPath field when provided", () => {
+    const details = formatInvalidConfigDetails([
+      {
+        path: "models.providers.openrouter.models.0.api",
+        displayPath: "models.providers.openrouter.models.#1.api",
+        message: "invalid option",
+      },
+    ]);
+    expect(details).toContain("- models.providers.openrouter.models.#1.api: invalid option");
+  });
+
   it("formats the logger message with the escaped newline separator", () => {
     expect(formatInvalidConfigLogMessage("/tmp/openclaw.json", "- gateway.port: bad")).toBe(
       "Invalid config at /tmp/openclaw.json:\\n- gateway.port: bad",

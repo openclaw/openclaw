@@ -263,6 +263,12 @@ export type ConfigValidationIssue = {
   allowedValues?: string[];
   /** Number of allowed values omitted from the display list. */
   allowedValuesHiddenCount?: number;
+  /**
+   * Display-friendly path where numeric array indexes are converted to
+   * one-based row numbers matching Control UI array row labels (e.g. "#3").
+   * Absent when the path has no numeric segments; consumers fall back to `path`.
+   */
+  displayPath?: string;
 };
 
 export type LegacyConfigIssue = {

@@ -4,6 +4,7 @@ import type { ConfigValidationIssue } from "./types.js";
 
 export type ConfigIssueLineInput = {
   path?: string | null;
+  displayPath?: string | null;
   message: string;
 };
 
@@ -24,9 +25,37 @@ export function normalizeConfigIssuePath(path: string | null | undefined): strin
   return trimmed ? trimmed : "<root>";
 }
 
-/** Return the public config issue shape with a normalized path and non-empty allowed values. */
+/**
+ * Convert a dot-separated config path with zero-based numeric array indexes
+ * to a display-friendly path using one-based row numbers matching Control UI
+ * array row labels.  E.g. "models.providers.openrouter.models.0.api" becomes
+ * "models.providers.openrouter.models.#1.api".  Returns `null` when the path
+ * contains no numeric segments (no conversion needed).
+ */
+export function formatConfigPathForDisplay(path: string | null | undefined): string | null {
+  if (typeof path !== "string") {
+    return null;
+  }
+  const trimmed = path.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const segments = trimmed.split(".");
+  let converted = false;
+  const display = segments.map((segment) => {
+    if (/^\d+$/.test(segment)) {
+      converted = true;
+      return `#${Number(segment) + 1}`;
+    }
+    return segment;
+  });
+  return converted ? display.join(".") : null;
+}
+
+/** Return the public config issue shape with a normalized path, non-empty allowed values, and display path. */
 export function normalizeConfigIssue(issue: ConfigValidationIssue): ConfigValidationIssue {
   const hasAllowedValues = Array.isArray(issue.allowedValues) && issue.allowedValues.length > 0;
+  const displayPath = formatConfigPathForDisplay(issue.path);
   return {
     path: normalizeConfigIssuePath(issue.path),
     message: issue.message,
@@ -36,6 +65,7 @@ export function normalizeConfigIssue(issue: ConfigValidationIssue): ConfigValida
     issue.allowedValuesHiddenCount > 0
       ? { allowedValuesHiddenCount: issue.allowedValuesHiddenCount }
       : {}),
+    ...(displayPath ? { displayPath } : {}),
   };
 }
 
@@ -48,12 +78,14 @@ export function normalizeConfigIssues(
 
 function resolveIssuePathForLine(
   path: string | null | undefined,
+  displayPath: string | null | undefined,
   opts?: ConfigIssueFormatOptions,
 ): string {
+  const effectivePath = displayPath ?? path;
   if (opts?.normalizeRoot) {
-    return normalizeConfigIssuePath(path);
+    return normalizeConfigIssuePath(effectivePath);
   }
-  return typeof path === "string" ? path : "";
+  return typeof effectivePath === "string" ? effectivePath : "";
 }
 
 /**
@@ -66,7 +98,7 @@ export function formatConfigIssueLine(
   opts?: ConfigIssueFormatOptions,
 ): string {
   const prefix = marker ? `${marker} ` : "";
-  const path = sanitizeTerminalText(resolveIssuePathForLine(issue.path, opts));
+  const path = sanitizeTerminalText(resolveIssuePathForLine(issue.path, issue.displayPath, opts));
   const message = sanitizeTerminalText(issue.message);
   return `${prefix}${path}: ${message}`;
 }

@@ -1900,7 +1900,18 @@ export function renderConfig(props: ConfigProps) {
 
         ${props.issues.length > 0
           ? html`<div class="callout danger" style="margin-top: 12px;">
-              <pre class="code-block">${JSON.stringify(props.issues, null, 2)}</pre>
+              <pre class="code-block">${JSON.stringify(
+                props.issues.map((issue) => {
+                  const record = issue as Record<string, unknown>;
+                  return {
+                    ...record,
+                    path: record.displayPath ?? record.path,
+                    displayPath: undefined,
+                  };
+                }),
+                null,
+                2,
+              )}</pre>
             </div>`
           : nothing}
       </main>

@@ -4,6 +4,7 @@ import {
   formatConfigIssueLine,
   formatConfigIssueLines,
   formatConfigIssueSummary,
+  formatConfigPathForDisplay,
   normalizeConfigIssue,
   normalizeConfigIssuePath,
   normalizeConfigIssues,
@@ -37,6 +38,21 @@ describe("config issue format", () => {
     ).toEqual(["× <root>: first", "× channels.signal.dmPolicy: second"]);
   });
 
+  it("prefers displayPath over path in formatted lines", () => {
+    expect(
+      formatConfigIssueLine(
+        { path: "models.providers.openrouter.models.0.api", displayPath: "models.providers.openrouter.models.#1.api", message: "invalid" },
+        "-",
+      ),
+    ).toBe("- models.providers.openrouter.models.#1.api: invalid");
+    expect(
+      formatConfigIssueLine(
+        { path: "models.providers.openrouter.models.0.api", message: "invalid" },
+        "-",
+      ),
+    ).toBe("- models.providers.openrouter.models.0.api: invalid");
+  });
+
   it("sanitizes control characters and ANSI sequences in formatted lines", () => {
     expect(
       formatConfigIssueLine(
@@ -61,6 +77,21 @@ describe("config issue format", () => {
         { maxIssues: 2 },
       ),
     ).toBe("<root>: root broken; gateway.auth.password.source: Required; and 1 more");
+  });
+
+  it("converts zero-based numeric array indexes to one-based display paths", () => {
+    expect(formatConfigPathForDisplay(null)).toBeNull();
+    expect(formatConfigPathForDisplay(undefined)).toBeNull();
+    expect(formatConfigPathForDisplay("")).toBeNull();
+    expect(formatConfigPathForDisplay("gateway.bind")).toBeNull();
+    expect(formatConfigPathForDisplay("models.providers.openrouter.models.0.api")).toBe(
+      "models.providers.openrouter.models.#1.api",
+    );
+    expect(formatConfigPathForDisplay("agents.list.3.model")).toBe(
+      "agents.list.#4.model",
+    );
+    expect(formatConfigPathForDisplay("channels.0")).toBe("channels.#1");
+    expect(formatConfigPathForDisplay("a.0.b.1.c")).toBe("a.#1.b.#2.c");
   });
 
   it("normalizes issue metadata for machine output", () => {
@@ -105,6 +136,29 @@ describe("config issue format", () => {
       message: "invalid",
       allowedValues: ["stable"],
       allowedValuesHiddenCount: 2,
+    });
+  });
+
+  it("adds displayPath to normalized issues with numeric array indexes", () => {
+    expect(
+      normalizeConfigIssue({
+        path: "models.providers.openrouter.models.0.api",
+        message: "invalid option",
+      }),
+    ).toEqual({
+      path: "models.providers.openrouter.models.0.api",
+      message: "invalid option",
+      displayPath: "models.providers.openrouter.models.#1.api",
+    });
+
+    expect(
+      normalizeConfigIssue({
+        path: "gateway.bind",
+        message: "invalid",
+      }),
+    ).toEqual({
+      path: "gateway.bind",
+      message: "invalid",
     });
   });
 });
