@@ -246,10 +246,10 @@ internal fun nodeStatusText(node: GatewayNodeSummary): String =
     GatewayNodeApprovalState.PendingApproval -> "Approval Pending"
     GatewayNodeApprovalState.PendingReapproval -> "Reapproval Pending"
     GatewayNodeApprovalState.Approved ->
-      if (node.paired) {
+      if (node.connected) {
         "Ready"
       } else {
-        onlineOfflineText(node)
+        "Offline"
       }
     GatewayNodeApprovalState.Unapproved ->
       if (node.paired) {
@@ -263,7 +263,7 @@ internal fun nodeStatusText(node: GatewayNodeSummary): String =
 internal fun nodeStatus(node: GatewayNodeSummary): ClawStatus =
   when (node.approvalState) {
     GatewayNodeApprovalState.Approved ->
-      if (node.paired || node.connected) {
+      if (node.connected) {
         ClawStatus.Success
       } else {
         ClawStatus.Warning

@@ -137,6 +137,18 @@ class ShellScreenLogicTest {
   }
 
   @Test
+  fun approvedOfflineNodeKeepsOfflineStatus() {
+    val approvedOffline =
+      androidNode(
+        approvalState = GatewayNodeApprovalState.Approved,
+        connected = false,
+      )
+
+    assertEquals("Offline", nodeStatusText(approvedOffline))
+    assertTrue(nodeSubtitle(approvedOffline).contains("Ready"))
+  }
+
+  @Test
   fun homeAttentionRowsSurfaceNodeCapabilityApprovalRequests() {
     val rows =
       homeAttentionRows(
