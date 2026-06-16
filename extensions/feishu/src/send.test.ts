@@ -1,7 +1,7 @@
 // Feishu tests cover send plugin behavior.
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
-import { buildMarkdownCard } from "./send.js";
+import { buildFeishuPostMessagePayload, buildMarkdownCard } from "./send.js";
 
 const {
   mockConvertMarkdownTables,
@@ -169,6 +169,39 @@ describe("getMessageFeishu", () => {
             conversationId: "oc_send",
           },
         ],
+      },
+    });
+  });
+
+  it("sends post markdown with bare underscore URLs preserved as links", async () => {
+    const createMessage = vi.fn().mockResolvedValue({ code: 0, data: { message_id: "om_url" } });
+    mockCreateFeishuClient.mockReturnValue({
+      im: {
+        message: {
+          create: createMessage,
+          reply: vi.fn(),
+          get: mockClientGet,
+          list: mockClientList,
+          patch: mockClientPatch,
+        },
+      },
+    });
+
+    await sendMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      to: "oc_send",
+      text: "see https://example.com/path_with_under_score",
+    });
+
+    expect(createMessage).toHaveBeenCalledWith({
+      params: { receive_id_type: "chat_id" },
+      data: {
+        receive_id: "oc_send",
+        content: buildFeishuPostMessagePayload({
+          messageText:
+            "see [https://example.com/path_with_under_score](https://example.com/path_with_under_score)",
+        }).content,
+        msg_type: "post",
       },
     });
   });
@@ -592,6 +625,26 @@ describe("editMessageFeishu", () => {
       },
     });
     expect(result).toEqual({ messageId: "om_edit", contentType: "post" });
+  });
+
+  it("patches post markdown with bare underscore URLs preserved as links", async () => {
+    mockClientPatch.mockResolvedValueOnce({ code: 0 });
+
+    await editMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_edit",
+      text: "updated https://example.com/path_with_under_score",
+    });
+
+    expect(mockClientPatch).toHaveBeenCalledWith({
+      path: { message_id: "om_edit" },
+      data: {
+        content: buildFeishuPostMessagePayload({
+          messageText:
+            "updated [https://example.com/path_with_under_score](https://example.com/path_with_under_score)",
+        }).content,
+      },
+    });
   });
 
   it("patches interactive content for card edits", async () => {

@@ -11,6 +11,7 @@ import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { requestFeishuApi } from "./comment-shared.js";
+import { preserveFeishuBareMarkdownUrls } from "./markdown-urls.js";
 import type { MentionTarget } from "./mention-target.types.js";
 import { buildMentionedCardContent, buildMentionedMessage } from "./mention.js";
 import { parsePostContent } from "./post.js";
@@ -550,7 +551,7 @@ export function buildFeishuPostMessagePayload(params: { messageText: string }): 
   content: string;
   msgType: string;
 } {
-  const { messageText } = params;
+  const messageText = preserveFeishuBareMarkdownUrls(params.messageText);
   return {
     content: JSON.stringify({
       zh_cn: {
