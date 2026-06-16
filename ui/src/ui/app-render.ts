@@ -1905,7 +1905,7 @@ export function renderApp(state: AppViewState) {
             assistantAvatarUploadBusy: state.assistantAvatarUploadBusy,
             assistantAvatarUploadError: state.assistantAvatarUploadError,
             onAssistantAvatarOverrideChange: (dataUrl) => {
-              setAssistantAvatarOverride(state, dataUrl);
+              setAssistantAvatarOverride(state, dataUrl, state.assistantAgentId);
               state.chatAvatarUrl = dataUrl;
               state.chatAvatarSource = dataUrl;
               state.chatAvatarStatus = "data";
@@ -1914,7 +1914,7 @@ export function renderApp(state: AppViewState) {
               requestHostUpdate?.();
             },
             onAssistantAvatarClearOverride: () => {
-              setAssistantAvatarOverride(state, null);
+              setAssistantAvatarOverride(state, null, state.assistantAgentId);
               state.chatAvatarUrl = null;
               state.chatAvatarSource = null;
               state.chatAvatarStatus = null;

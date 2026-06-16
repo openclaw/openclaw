@@ -363,9 +363,11 @@ export function saveLocalUserIdentity(next: LocalUserIdentity) {
   }
 }
 
-export type LocalAssistantIdentity = { avatar: string | null };
+export type LocalAssistantIdentity = { avatar: string | null; agentId?: string | null };
 
-export function loadLocalAssistantIdentity(): LocalAssistantIdentity {
+export function loadLocalAssistantIdentity(opts?: {
+  agentId?: string | null;
+}): LocalAssistantIdentity {
   const storage = getSafeLocalStorage();
   try {
     const raw = storage?.getItem(LOCAL_ASSISTANT_IDENTITY_KEY);
@@ -373,7 +375,13 @@ export function loadLocalAssistantIdentity(): LocalAssistantIdentity {
       return { avatar: null };
     }
     const parsed = JSON.parse(raw) as Partial<LocalAssistantIdentity>;
-    return { avatar: typeof parsed.avatar === "string" ? parsed.avatar : null };
+    const avatar = typeof parsed.avatar === "string" ? parsed.avatar : null;
+    // Only return the avatar if it was saved for the requested agent (or if no
+    // agentId filter is provided, for backward compatibility).
+    if (opts?.agentId && parsed.agentId && parsed.agentId !== opts.agentId) {
+      return { avatar: null };
+    }
+    return { avatar, agentId: parsed.agentId ?? null };
   } catch {
     return { avatar: null };
   }
@@ -386,7 +394,10 @@ export function saveLocalAssistantIdentity(next: LocalAssistantIdentity) {
       storage?.removeItem(LOCAL_ASSISTANT_IDENTITY_KEY);
       return;
     }
-    storage?.setItem(LOCAL_ASSISTANT_IDENTITY_KEY, JSON.stringify({ avatar: next.avatar }));
+    storage?.setItem(LOCAL_ASSISTANT_IDENTITY_KEY, JSON.stringify({
+      avatar: next.avatar,
+      agentId: next.agentId ?? null,
+    }));
   } catch {
     // best-effort — quota exceeded or security restrictions should not
     // prevent in-memory identity updates from being applied
