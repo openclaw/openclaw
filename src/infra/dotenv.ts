@@ -243,8 +243,17 @@ export { loadGlobalRuntimeDotEnvFiles };
 
 export function loadDotEnv(opts?: { quiet?: boolean }) {
   const quiet = opts?.quiet ?? true;
-  const cwdEnvPath = path.join(process.cwd(), ".env");
-  loadWorkspaceDotEnvFile(cwdEnvPath, { quiet });
+  // When cwd has been deleted, skip workspace .env — it cannot exist.
+  let cwd: string | undefined;
+  try {
+    cwd = process.cwd();
+  } catch {
+    // cwd deleted; workspace .env cannot exist, skip it.
+  }
+  if (cwd) {
+    const cwdEnvPath = path.join(cwd, ".env");
+    loadWorkspaceDotEnvFile(cwdEnvPath, { quiet });
+  }
 
   // Then load global fallback: ~/.openclaw/.env (or OPENCLAW_STATE_DIR/.env),
   // without overriding any env vars already present.

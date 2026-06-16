@@ -7,11 +7,20 @@ import { loadGlobalRuntimeDotEnvFiles } from "../infra/dotenv-global.js";
 /** Load only the env files needed before dispatching a command through the gateway. */
 export async function loadGatewayDispatchCliDotEnv(opts?: { quiet?: boolean }) {
   const quiet = opts?.quiet ?? true;
-  const cwdEnvPath = path.join(process.cwd(), ".env");
-  if (fs.existsSync(cwdEnvPath)) {
-    const { loadCliDotEnv } = await import("./dotenv.js");
-    loadCliDotEnv({ quiet });
-    return;
+  // When cwd has been deleted, skip workspace .env check — it cannot exist.
+  let cwd: string | undefined;
+  try {
+    cwd = process.cwd();
+  } catch {
+    // cwd deleted; workspace .env cannot exist.
+  }
+  if (cwd) {
+    const cwdEnvPath = path.join(cwd, ".env");
+    if (fs.existsSync(cwdEnvPath)) {
+      const { loadCliDotEnv } = await import("./dotenv.js");
+      loadCliDotEnv({ quiet });
+      return;
+    }
   }
 
   // Agent dispatch only needs trusted runtime env for gateway credentials.

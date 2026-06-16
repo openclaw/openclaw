@@ -8,6 +8,7 @@ import {
 } from "@openclaw/normalization-core/string-normalization";
 import { resolveBrewPathDirs } from "./brew.js";
 import { isTruthyEnvValue } from "./env.js";
+import { safeCwd } from "./home-dir.js";
 
 type EnsureOpenClawPathOpts = {
   /** Executable whose directory should stay first for shebang-compatible child processes. */
@@ -80,7 +81,10 @@ function candidateBinDirs(
   existingPathParts: ReadonlySet<string>,
 ): { prepend: string[]; append: string[] } {
   const execPath = opts.execPath ?? process.execPath;
-  const cwd = opts.cwd ?? process.cwd();
+  // safeCwd falls back to os.homedir() when cwd is deleted; must NOT use
+  // os.tmpdir() here — that would let shared temp participate in PATH
+  // resolution for project-local-bin (cf. PR #74994 review).
+  const cwd = opts.cwd ?? safeCwd();
   const homeDir = opts.homeDir ?? os.homedir();
   const platform = opts.platform ?? process.platform;
 

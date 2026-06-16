@@ -2,6 +2,22 @@
 import os from "node:os";
 import path from "node:path";
 
+/**
+ * Returns process.cwd(), falling back to os.homedir() when the working
+ * directory has been deleted or is otherwise inaccessible.
+ *
+ * This must NOT fall back to os.tmpdir() — shared temp can participate
+ * in PATH resolution for project-local-bin and would introduce a
+ * PATH-boundary security issue (cf. PR #74994 review).
+ */
+export function safeCwd(fallback?: string): string {
+  try {
+    return process.cwd();
+  } catch {
+    return fallback ?? os.homedir();
+  }
+}
+
 function normalize(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   if (!trimmed || trimmed === "undefined" || trimmed === "null") {
@@ -75,7 +91,7 @@ export function resolveRequiredHomeDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
 ): string {
-  return resolveEffectiveHomeDir(env, homedir) ?? path.resolve(process.cwd());
+  return resolveEffectiveHomeDir(env, homedir) ?? path.resolve(safeCwd());
 }
 
 /** Resolves the OS home or falls back to cwd when no OS home source exists. */
@@ -83,7 +99,7 @@ export function resolveRequiredOsHomeDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
 ): string {
-  return resolveOsHomeDir(env, homedir) ?? path.resolve(process.cwd());
+  return resolveOsHomeDir(env, homedir) ?? path.resolve(safeCwd());
 }
 
 /** Expands leading `~`, `~/`, or `~\` with the effective home when one is known. */

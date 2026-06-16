@@ -6,8 +6,17 @@ import { loadGlobalRuntimeDotEnvFiles, loadWorkspaceDotEnvFile } from "../infra/
 /** Load `.env` files for normal CLI commands without overriding existing process env. */
 export function loadCliDotEnv(opts?: { loadGlobalEnv?: boolean; quiet?: boolean }) {
   const quiet = opts?.quiet ?? true;
-  const cwdEnvPath = path.join(process.cwd(), ".env");
-  loadWorkspaceDotEnvFile(cwdEnvPath, { quiet });
+  // When cwd has been deleted, skip workspace .env — it cannot exist.
+  let cwd: string | undefined;
+  try {
+    cwd = process.cwd();
+  } catch {
+    // cwd deleted; workspace .env cannot exist, skip it.
+  }
+  if (cwd) {
+    const cwdEnvPath = path.join(cwd, ".env");
+    loadWorkspaceDotEnvFile(cwdEnvPath, { quiet });
+  }
 
   if (opts?.loadGlobalEnv === false) {
     return;

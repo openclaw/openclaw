@@ -315,7 +315,14 @@ export function resolveMissingPluginCommandMessage(
 }
 
 function shouldLoadCliDotEnv(env: NodeJS.ProcessEnv = process.env): boolean {
-  if (existsSync(path.join(process.cwd(), ".env"))) {
+  // When cwd has been deleted, skip workspace .env — it cannot exist.
+  let cwd: string | undefined;
+  try {
+    cwd = process.cwd();
+  } catch {
+    // cwd deleted; workspace .env cannot exist, skip it.
+  }
+  if (cwd && existsSync(path.join(cwd, ".env"))) {
     return true;
   }
   return existsSync(path.join(resolveStateDir(env), ".env"));

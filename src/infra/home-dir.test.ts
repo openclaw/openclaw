@@ -1,6 +1,7 @@
 // Tests OpenClaw home directory resolution.
+import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   expandHomePrefix,
   resolveEffectiveHomeDir,
@@ -8,6 +9,7 @@ import {
   resolveOsHomeDir,
   resolveOsHomeRelativePath,
   resolveRequiredHomeDir,
+  safeCwd,
 } from "./home-dir.js";
 
 describe("resolveEffectiveHomeDir", () => {
@@ -147,7 +149,7 @@ describe("resolveRequiredHomeDir", () => {
       homedir: () => {
         throw new Error("no home");
       },
-      expected: process.cwd(),
+      expected: safeCwd(),
     },
     {
       name: "returns a fully resolved path for OPENCLAW_HOME",
@@ -161,7 +163,7 @@ describe("resolveRequiredHomeDir", () => {
       homedir: () => {
         throw new Error("no home");
       },
-      expected: process.cwd(),
+      expected: safeCwd(),
     },
   ])("$name", ({ env, homedir, expected }) => {
     expect(resolveRequiredHomeDir(env, homedir)).toBe(expected);
@@ -251,7 +253,7 @@ describe("resolveHomeRelativePath", () => {
           throw new Error("no home");
         },
       },
-      expected: path.resolve(process.cwd()),
+      expected: path.resolve(safeCwd()),
     },
   ])("$name", ({ input, opts, expected }) => {
     expect(resolveHomeRelativePath(input, opts)).toBe(expected);
@@ -268,5 +270,43 @@ describe("resolveOsHomeRelativePath", () => {
         } as NodeJS.ProcessEnv,
       }),
     ).toBe(path.resolve("/home/alice/docs"));
+  });
+});
+
+describe("safeCwd", () => {
+  it("returns process.cwd() when cwd is accessible", () => {
+    expect(safeCwd()).toBe(process.cwd());
+  });
+
+  it("falls back to os.homedir() when process.cwd() throws ENOENT", () => {
+    const originalCwd = process.cwd;
+    process.cwd = () => {
+      const error = new Error("ENOENT: no such file or directory, uv_cwd");
+      (error as NodeJS.ErrnoException).code = "ENOENT";
+      throw error;
+    };
+    try {
+      expect(safeCwd()).toBe(os.homedir());
+    } finally {
+      process.cwd = originalCwd;
+    }
+  });
+
+  it("uses explicit fallback when provided and cwd is deleted", () => {
+    const originalCwd = process.cwd;
+    process.cwd = () => {
+      const error = new Error("ENOENT: no such file or directory, uv_cwd");
+      (error as NodeJS.ErrnoException).code = "ENOENT";
+      throw error;
+    };
+    try {
+      expect(safeCwd("/custom/fallback")).toBe("/custom/fallback");
+    } finally {
+      process.cwd = originalCwd;
+    }
+  });
+
+  it("ignores explicit fallback when cwd is accessible", () => {
+    expect(safeCwd("/should/not/be/used")).toBe(process.cwd());
   });
 });
