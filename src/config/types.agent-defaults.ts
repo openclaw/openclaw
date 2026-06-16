@@ -313,7 +313,8 @@ export type AgentDefaultsConfig = {
    */
   envelopeTimezone?: string;
   /**
-   * Include absolute timestamps in message envelopes ("on" | "off", default: "on").
+   * Include absolute timestamps in message envelopes, direct agent prompt prefixes,
+   * and embedded model-input prefixes ("on" | "off", default: "on").
    */
   envelopeTimestamp?: "on" | "off";
   /**

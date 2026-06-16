@@ -33,6 +33,7 @@ import {
   isWhatsAppSocketOperationTimeoutError,
   resolveWhatsAppSocketOperationTimeoutMs,
   resolveWhatsAppSocketTiming,
+  withWhatsAppSocketOperationTimeout,
   type WhatsAppSocketOperationAdapter,
   type WhatsAppSocketTimingOptions,
 } from "../socket-timing.js";
@@ -808,9 +809,11 @@ export async function attachWebInboxToSocket(
     }
     const { id, remoteJid, participant } = target;
     try {
-      await (getCurrentSock() ?? sock).readMessages([
-        { remoteJid, id, participant, fromMe: false },
-      ]);
+      await withWhatsAppSocketOperationTimeout(
+        "readMessages",
+        (getCurrentSock() ?? sock).readMessages([{ remoteJid, id, participant, fromMe: false }]),
+        sendOperationTimeoutMs,
+      );
       const suffix = participant ? ` (participant ${participant})` : "";
       logWhatsAppVerbose(options.verbose, `Marked message ${id} as read for ${remoteJid}${suffix}`);
     } catch (err) {

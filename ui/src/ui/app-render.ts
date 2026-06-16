@@ -23,6 +23,7 @@ import {
   renderTopbarThemeModeToggle,
   createChatSession,
   dismissChatError,
+  dismissRealtimeTalkError,
   switchChatSession,
   switchChatSessionAndWait,
 } from "./app-render.helpers.ts";
@@ -143,9 +144,11 @@ import {
   installSkill,
   loadClawHubDetail,
   loadSkills,
+  reconcileSkillsAgentId,
   saveSkillApiKey,
   searchClawHub,
   setClawHubSearchQuery,
+  setSkillsAgentId,
   updateSkillEdit,
   updateSkillEnabled,
 } from "./controllers/skills.ts";
@@ -1021,6 +1024,9 @@ function renderGuardedChatControls(state: AppViewState) {
       state.chatModelSwitchPromises,
       state.chatModelsLoading,
       state.chatModelCatalog,
+      // Provider usage windows arrive async after auth status loads; without this the guarded
+      // composer controls never re-render and the quota pill stays absent/stale (#93041).
+      state.modelAuthStatusResult,
       state.settings.chatShowThinking,
       state.settings.chatShowToolCalls,
       state.settings.chatAutoScroll,
@@ -3479,6 +3485,8 @@ export function renderApp(state: AppViewState) {
                 connected: state.connected,
                 loading: state.skillsLoading,
                 report: state.skillsReport,
+                agentsList: state.agentsList,
+                selectedAgentId: state.skillsAgentId ?? state.agentsList?.defaultId ?? null,
                 error: state.skillsError,
                 filter: state.skillsFilter,
                 statusFilter: state.skillsStatusFilter,
@@ -3503,9 +3511,19 @@ export function renderApp(state: AppViewState) {
                 clawhubDetailError: state.clawhubDetailError,
                 clawhubInstallSlug: state.clawhubInstallSlug,
                 clawhubInstallMessage: state.clawhubInstallMessage,
+                onAgentChange: (agentId) => {
+                  setSkillsAgentId(state, agentId);
+                  void loadSkills(state, { clearMessages: true });
+                },
                 onFilterChange: (next) => (state.skillsFilter = next),
                 onStatusFilterChange: (next) => (state.skillsStatusFilter = next),
-                onRefresh: () => void loadSkills(state, { clearMessages: true }),
+                onRefresh: () => {
+                  void (async () => {
+                    await loadAgents(state);
+                    reconcileSkillsAgentId(state, state.agentsList);
+                    await loadSkills(state, { clearMessages: true });
+                  })();
+                },
                 onToggle: (key, enabled) => void updateSkillEnabled(state, key, enabled),
                 onEdit: (key, value) => updateSkillEdit(state, key, value),
                 onSaveKey: (key) => void saveSkillApiKey(state, key),
@@ -3764,6 +3782,7 @@ export function renderApp(state: AppViewState) {
                   error: chatViewError,
                   runStatus: state.chatRunStatus,
                   onDismissError: () => dismissChatError(state),
+                  onDismissRealtimeTalkError: () => dismissRealtimeTalkError(state),
                   sessions: state.sessionsResult,
                   composerControls: renderGuardedChatControls(state),
                   sessionWorkspace: {

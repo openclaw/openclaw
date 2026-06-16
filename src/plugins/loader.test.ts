@@ -56,6 +56,7 @@ import {
 import {
   testing,
   clearPluginLoaderCache,
+  loadOpenClawPluginCliRegistry,
   loadOpenClawPlugins,
   type PluginLoadOptions,
   PluginLoadReentryError,
@@ -187,6 +188,59 @@ function updatePluginManifest(plugin: Pick<TempPlugin, "dir">, patch: Record<str
 
 function memoryPluginBody(id: string) {
   return `module.exports = { id: ${JSON.stringify(id)}, kind: "memory", register() {} };`;
+}
+
+function setupBundledDreamingMemoryPlugins(params?: {
+  selectedId?: string;
+  selectedKind?: unknown;
+  coreBody?: string;
+}) {
+  const selectedId = params?.selectedId ?? "memory-lancedb";
+  const bundledDir = makeTempDir();
+  const memoryCoreDir = path.join(bundledDir, "memory-core");
+  const selectedMemoryDir = path.join(bundledDir, selectedId);
+  mkdirSafe(memoryCoreDir);
+  mkdirSafe(selectedMemoryDir);
+  writePlugin({
+    id: "memory-core",
+    dir: memoryCoreDir,
+    filename: "index.cjs",
+    body: params?.coreBody ?? memoryPluginBody("memory-core"),
+  });
+  writePlugin({
+    id: selectedId,
+    dir: selectedMemoryDir,
+    filename: "index.cjs",
+    body:
+      params?.selectedKind === "utility"
+        ? `module.exports = { id: ${JSON.stringify(selectedId)}, kind: "utility", register() {} };`
+        : memoryPluginBody(selectedId),
+  });
+  const openSchema = { type: "object", additionalProperties: true };
+  fs.writeFileSync(
+    path.join(memoryCoreDir, "openclaw.plugin.json"),
+    JSON.stringify(
+      { id: "memory-core", kind: "memory", configSchema: EMPTY_PLUGIN_SCHEMA },
+      null,
+      2,
+    ),
+    "utf-8",
+  );
+  fs.writeFileSync(
+    path.join(selectedMemoryDir, "openclaw.plugin.json"),
+    JSON.stringify(
+      {
+        id: selectedId,
+        kind: params?.selectedKind ?? "memory",
+        configSchema: openSchema,
+      },
+      null,
+      2,
+    ),
+    "utf-8",
+  );
+  process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+  return { bundledDir, selectedId };
 }
 
 const RESERVED_ADMIN_PLUGIN_METHOD = "config.plugin.inspect";
@@ -7820,6 +7874,151 @@ module.exports = {
       },
       {
         label:
+          "loads dreaming engine through a restrictive allowlist when selected memory slot enables dreaming",
+        loadRegistry: () => {
+          const { selectedId } = setupBundledDreamingMemoryPlugins();
+
+          return loadOpenClawPlugins({
+            cache: false,
+            config: {
+              plugins: {
+                allow: [selectedId],
+                slots: { memory: selectedId },
+                entries: {
+                  [selectedId]: { enabled: true, config: { dreaming: { enabled: true } } },
+                },
+              },
+            },
+          });
+        },
+        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+          const core = registry.plugins.find((entry) => entry.id === "memory-core");
+          const lance = registry.plugins.find((entry) => entry.id === "memory-lancedb");
+          expect(core?.status).toBe("loaded");
+          expect(core?.enabled).toBe(true);
+          expect(lance?.status).toBe("loaded");
+          expect(lance?.memorySlotSelected).toBe(true);
+        },
+      },
+      {
+        label: "keeps restrictive allowlist dreaming sidecar in manifest-only snapshots",
+        loadRegistry: () => {
+          const { selectedId } = setupBundledDreamingMemoryPlugins({
+            coreBody: `throw new Error("manifest-only snapshot should not import memory-core");`,
+          });
+
+          return loadOpenClawPlugins({
+            cache: false,
+            activate: false,
+            loadModules: false,
+            config: {
+              plugins: {
+                allow: [selectedId],
+                slots: { memory: selectedId },
+                entries: {
+                  [selectedId]: { enabled: true, config: { dreaming: { enabled: true } } },
+                },
+              },
+            },
+          });
+        },
+        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+          const core = registry.plugins.find((entry) => entry.id === "memory-core");
+          const lance = registry.plugins.find((entry) => entry.id === "memory-lancedb");
+          expect(core?.status).toBe("loaded");
+          expect(lance?.status).toBe("loaded");
+          expect(lance?.memorySlotSelected).toBe(true);
+        },
+      },
+      {
+        label: "keeps denied dreaming sidecars fail-closed under restrictive allowlists",
+        loadRegistry: () => {
+          const { selectedId } = setupBundledDreamingMemoryPlugins({
+            coreBody: `throw new Error("denied memory-core should not load");`,
+          });
+
+          return loadOpenClawPlugins({
+            cache: false,
+            config: {
+              plugins: {
+                allow: [selectedId],
+                deny: ["memory-core"],
+                slots: { memory: selectedId },
+                entries: {
+                  [selectedId]: { enabled: true, config: { dreaming: { enabled: true } } },
+                },
+              },
+            },
+          });
+        },
+        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+          const core = registry.plugins.find((entry) => entry.id === "memory-core");
+          const lance = registry.plugins.find((entry) => entry.id === "memory-lancedb");
+          expect(core?.status).toBe("disabled");
+          expect(core?.error).toBe("blocked by denylist");
+          expect(lance?.status).toBe("loaded");
+        },
+      },
+      {
+        label: "keeps explicitly disabled dreaming sidecars fail-closed",
+        loadRegistry: () => {
+          const { selectedId } = setupBundledDreamingMemoryPlugins({
+            coreBody: `throw new Error("disabled memory-core should not load");`,
+          });
+
+          return loadOpenClawPlugins({
+            cache: false,
+            config: {
+              plugins: {
+                allow: [selectedId],
+                slots: { memory: selectedId },
+                entries: {
+                  "memory-core": { enabled: false },
+                  [selectedId]: { enabled: true, config: { dreaming: { enabled: true } } },
+                },
+              },
+            },
+          });
+        },
+        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+          const core = registry.plugins.find((entry) => entry.id === "memory-core");
+          const lance = registry.plugins.find((entry) => entry.id === "memory-lancedb");
+          expect(core?.status).toBe("disabled");
+          expect(core?.error).toBe("disabled in config");
+          expect(lance?.status).toBe("loaded");
+        },
+      },
+      {
+        label: "does not authorize dreaming sidecars for non-memory selected slots",
+        loadRegistry: () => {
+          const { selectedId } = setupBundledDreamingMemoryPlugins({
+            selectedKind: "utility",
+            coreBody: `throw new Error("non-memory selected slot should not load memory-core");`,
+          });
+
+          return loadOpenClawPlugins({
+            cache: false,
+            config: {
+              plugins: {
+                allow: [selectedId],
+                slots: { memory: selectedId },
+                entries: {
+                  [selectedId]: { enabled: true, config: { dreaming: { enabled: true } } },
+                },
+              },
+            },
+          });
+        },
+        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+          const core = registry.plugins.find((entry) => entry.id === "memory-core");
+          const selected = registry.plugins.find((entry) => entry.id === "memory-lancedb");
+          expect(core?.status).toBe("disabled");
+          expect(core?.error).toBe("not in allowlist");
+          expect(selected?.status).toBe("loaded");
+        },
+      },
+      {
+        label:
           "loads dreaming engine alongside a different memory slot plugin when dreaming is enabled",
         loadRegistry: () => {
           const bundledDir = makeTempDir();
@@ -8018,6 +8217,27 @@ module.exports = {
     ] as const;
 
     runRegistryScenarios(scenarios, ({ loadRegistry }) => loadRegistry());
+  });
+
+  it("loads dreaming sidecar metadata through a restrictive selected-memory allowlist", async () => {
+    const { selectedId } = setupBundledDreamingMemoryPlugins();
+
+    const registry = await loadOpenClawPluginCliRegistry({
+      cache: false,
+      config: {
+        plugins: {
+          allow: [selectedId],
+          slots: { memory: selectedId },
+          entries: {
+            [selectedId]: { enabled: true, config: { dreaming: { enabled: true } } },
+          },
+        },
+      },
+    });
+
+    expect(registry.plugins.map((entry) => entry.id)).toEqual(["memory-core", selectedId]);
+    expect(registry.plugins.find((entry) => entry.id === "memory-core")?.status).toBe("loaded");
+    expect(registry.plugins.find((entry) => entry.id === selectedId)?.status).toBe("loaded");
   });
 
   it("resolves duplicate plugin ids by source precedence", () => {

@@ -390,17 +390,27 @@ function createDatabase(dbPath: string): {
     fs.closeSync(fs.openSync(dbPath, "a", WORKBOARD_SQLITE_FILE_MODE));
   }
   const db = new DatabaseSync(dbPath);
-  const maintenance = configureSqliteConnectionPragmas(db, {
-    busyTimeoutMs: WORKBOARD_SQLITE_BUSY_TIMEOUT_MS,
-    checkpointIntervalMs: 0,
-    databaseLabel: "workboard database",
-    databasePath: dbPath,
-    foreignKeys: true,
-    synchronous: "NORMAL",
-  });
-  ensureWorkboardSchema(db);
-  hardenWorkboardDatabaseFiles(dbPath);
-  return { db, maintenance };
+  let maintenance: ReturnType<typeof configureSqliteConnectionPragmas> | undefined;
+  try {
+    maintenance = configureSqliteConnectionPragmas(db, {
+      busyTimeoutMs: WORKBOARD_SQLITE_BUSY_TIMEOUT_MS,
+      checkpointIntervalMs: 0,
+      databaseLabel: "workboard database",
+      databasePath: dbPath,
+      foreignKeys: true,
+      synchronous: "NORMAL",
+    });
+    ensureWorkboardSchema(db);
+    hardenWorkboardDatabaseFiles(dbPath);
+    return { db, maintenance };
+  } catch (error) {
+    try {
+      maintenance?.close();
+    } finally {
+      db.close();
+    }
+    throw error;
+  }
 }
 
 function childRows(db: DatabaseSync, table: string, cardId: string): Row[] {

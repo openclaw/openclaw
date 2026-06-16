@@ -255,6 +255,67 @@ describe("WhatsApp QA live runtime", () => {
     expect(report).not.toContain("+15550000002");
   });
 
+  it("publishes WhatsApp gateway debug artifacts only when files exist", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-wa-debug-test-"));
+    const debugDir = path.join(tempRoot, "gateway-debug");
+    try {
+      await expect(testing.hasWhatsAppGatewayDebugArtifacts(debugDir)).resolves.toBe(false);
+      await fs.mkdir(debugDir);
+      await expect(testing.hasWhatsAppGatewayDebugArtifacts(debugDir)).resolves.toBe(false);
+      await fs.writeFile(path.join(debugDir, "gateway.stderr.log"), "stderr\n");
+      await expect(testing.hasWhatsAppGatewayDebugArtifacts(debugDir)).resolves.toBe(true);
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("redacts published WhatsApp run output without advertising empty debug artifacts", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-wa-publish-test-"));
+    const debugDir = path.join(tempRoot, "gateway-debug");
+    try {
+      await fs.mkdir(debugDir);
+      const emptyDebugView = await testing.buildPublishedWhatsAppQaRunView({
+        cleanupIssues: [
+          "WhatsApp QA failed before scenario completion: private setup failure details",
+        ],
+        gatewayDebugDirPath: debugDir,
+        preservedGatewayDebugArtifacts: true,
+        redactMetadata: true,
+        scenarioResults: [
+          {
+            id: "whatsapp-canary",
+            title: "WhatsApp DM canary",
+            standardId: "canary",
+            status: "fail",
+            details: "private setup failure details",
+          },
+        ],
+      });
+
+      expect(emptyDebugView.gatewayDebugDirPath).toBeUndefined();
+      expect(emptyDebugView.cleanupIssues).toEqual([
+        "WhatsApp QA failed before scenario completion: " +
+          "details redacted (OPENCLAW_QA_REDACT_PUBLIC_METADATA=1)",
+      ]);
+      expect(emptyDebugView.scenarioResults[0]?.details).toBe(
+        "details redacted (OPENCLAW_QA_REDACT_PUBLIC_METADATA=1)",
+      );
+
+      await fs.writeFile(path.join(debugDir, "gateway.stderr.log"), "stderr\n");
+      await expect(
+        testing.buildPublishedWhatsAppQaRunView({
+          cleanupIssues: [],
+          gatewayDebugDirPath: debugDir,
+          preservedGatewayDebugArtifacts: true,
+          redactMetadata: true,
+          scenarioResults: [],
+        }),
+      ).resolves.toMatchObject({ gatewayDebugDirPath: debugDir });
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   it("redacts published scenario details before rendering public artifacts", () => {
     const publishedScenarios = testing.redactWhatsAppQaScenarioResults([
       {
