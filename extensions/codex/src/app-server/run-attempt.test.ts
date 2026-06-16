@@ -198,7 +198,7 @@ async function buildDynamicToolsForTest(
   options: Partial<
     Pick<
       Parameters<typeof testing.buildDynamicTools>[0],
-      "forceHeartbeatTool" | "ignoreRuntimePlan"
+      "forceHeartbeatTool" | "ignoreDisableMessageTool" | "ignoreRuntimePlan"
     >
   > = {},
 ) {
@@ -1648,6 +1648,46 @@ describe("runCodexAppServerAttempt", () => {
 
     expect(heartbeatBridge.specs.map((tool) => tool.name)).toEqual(registeredToolNames);
     expect(nextNormalBridge.specs.map((tool) => tool.name)).toEqual(registeredToolNames);
+  });
+
+  it("keeps message in the registered schema when disabled for an internal turn", async () => {
+    testing.setOpenClawCodingToolsFactoryForTests((options) =>
+      options?.disableMessageTool ? [] : [createRuntimeDynamicTool("message")],
+    );
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    params.disableMessageTool = true;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+
+    const availableTools = await buildDynamicToolsForTest(params, workspaceDir);
+    const registeredTools = await buildDynamicToolsForTest(params, workspaceDir, {
+      ignoreDisableMessageTool: true,
+      ignoreRuntimePlan: true,
+    });
+    const bridge = createCodexToolBridgeForTest(params, availableTools, registeredTools);
+
+    expect(bridge.availableSpecs.map((tool) => tool.name)).not.toContain("message");
+    expect(bridge.specs.map((tool) => tool.name)).toContain("message");
+    await expect(
+      bridge.handleToolCall({
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-1",
+        namespace: null,
+        tool: "message",
+        arguments: {},
+      }),
+    ).resolves.toMatchObject({
+      success: false,
+      contentItems: [
+        {
+          type: "inputText",
+          text: "OpenClaw tool is not available for this turn: message",
+        },
+      ],
+    });
   });
 
   it("keeps the persistent dynamic schema stable across heartbeat-only turns", async () => {
