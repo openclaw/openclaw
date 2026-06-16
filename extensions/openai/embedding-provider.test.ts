@@ -139,6 +139,20 @@ describe("OpenAI embedding provider", () => {
     expect(provider.model).toBe("text-embedding-3-small");
   });
 
+  it("strips openai/ prefix for semantically native URLs (uppercase hostname)", async () => {
+    mocks.resolveRemoteEmbeddingClient.mockResolvedValueOnce({
+      ...DEFAULT_MOCK_CLIENT,
+      baseUrl: "https://API.OPENAI.COM/v1",
+      model: "text-embedding-3-small",
+    });
+
+    const { provider } = await createOpenAiEmbeddingProvider(
+      createOptions({ model: "openai/text-embedding-3-small" }),
+    );
+
+    expect(provider.model).toBe("text-embedding-3-small");
+  });
+
   it("preserves openai/ prefix for non-native OpenAI base URLs", async () => {
     mocks.resolveRemoteEmbeddingClient.mockResolvedValueOnce({
       ...DEFAULT_MOCK_CLIENT,

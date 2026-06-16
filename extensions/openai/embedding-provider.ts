@@ -38,7 +38,11 @@ function normalizeOpenAiModel(model: string): string {
 
 /** Whether the embedding base URL points to the native OpenAI API endpoint. */
 function isNativeOpenAiBaseUrl(baseUrl: string): boolean {
-  return baseUrl.replace(/\/$/, "") === DEFAULT_OPENAI_BASE_URL;
+  try {
+    return new URL(baseUrl).hostname.toLowerCase().replace(/\.+$/, "") === "api.openai.com";
+  } catch {
+    return false;
+  }
 }
 
 export async function createOpenAiEmbeddingProvider(
