@@ -13,6 +13,7 @@ import {
   normalizeMessagePresentation,
   renderMessagePresentationFallbackText,
 } from "openclaw/plugin-sdk/interactive-runtime";
+import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-chunking";
 import {
   resolvePayloadMediaUrls,
   sendPayloadMediaSequenceOrFallback,
@@ -20,12 +21,12 @@ import {
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { resolveTelegramInlineButtons } from "./button-types.js";
+import { splitTelegramHtmlChunks } from "./format.js";
 import { resolveTelegramInteractiveTextFallback } from "./interactive-fallback.js";
 import { parseTelegramReplyToMessageId, parseTelegramThreadId } from "./outbound-params.js";
-import { splitTelegramRichTextChunks, TELEGRAM_RICH_TEXT_LIMIT } from "./rich-message.js";
 import { normalizeTelegramOutboundTarget, parseTelegramTarget } from "./targets.js";
 
-export const TELEGRAM_TEXT_CHUNK_LIMIT = TELEGRAM_RICH_TEXT_LIMIT;
+export const TELEGRAM_TEXT_CHUNK_LIMIT = 4000;
 export const TELEGRAM_POLL_OPTION_LIMIT = 10;
 
 type TelegramSendFn = typeof import("./send.js").sendMessageTelegram;
@@ -53,12 +54,9 @@ function chunkTelegramOutboundText(
   limit: number,
   ctx?: { formatting?: OutboundDeliveryFormattingOptions },
 ): string[] {
-  return splitTelegramRichTextChunks({
-    text,
-    textLimit: limit,
-    textMode: ctx?.formatting?.parseMode === "HTML" ? "html" : "markdown",
-    chunkMode: ctx?.formatting?.chunkMode ?? "length",
-  });
+  return ctx?.formatting?.parseMode === "HTML"
+    ? splitTelegramHtmlChunks(text, limit)
+    : chunkMarkdownTextWithMode(text, limit, ctx?.formatting?.chunkMode ?? "length");
 }
 
 async function resolveTelegramSendContext(params: {
@@ -77,6 +75,7 @@ async function resolveTelegramSendContext(params: {
     cfg: NonNullable<TelegramSendOpts>["cfg"];
     verbose: false;
     textMode?: "html";
+    tableMode?: OutboundDeliveryFormattingOptions["tableMode"];
     messageThreadId?: number;
     replyToMessageId?: number;
     accountId?: string;
@@ -96,6 +95,7 @@ async function resolveTelegramSendContext(params: {
       silent: params.silent,
       gatewayClientScopes: params.gatewayClientScopes,
       ...(params.formatting?.parseMode === "HTML" ? { textMode: "html" as const } : {}),
+      tableMode: params.formatting?.tableMode,
     },
   };
 }
@@ -251,9 +251,7 @@ export function createTelegramOutboundAdapter(
       });
     },
     resolveEffectiveTextChunkLimit: ({ fallbackLimit }) =>
-      typeof fallbackLimit === "number"
-        ? Math.min(fallbackLimit, TELEGRAM_RICH_TEXT_LIMIT)
-        : TELEGRAM_RICH_TEXT_LIMIT,
+      typeof fallbackLimit === "number" ? Math.min(fallbackLimit, 4096) : 4096,
     pollMaxOptions: TELEGRAM_POLL_OPTION_LIMIT,
     supportsPollDurationSeconds: true,
     supportsAnonymousPolls: true,

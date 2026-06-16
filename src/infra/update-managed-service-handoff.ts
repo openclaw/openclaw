@@ -4,6 +4,11 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import {
+  resolveGatewayLaunchAgentLabel,
+  resolveGatewaySystemdServiceName,
+  resolveGatewayWindowsTaskName,
+} from "../daemon/constants.js";
 import { resolveRestartSentinelPath } from "./restart-sentinel.js";
 import { SUPERVISOR_HINT_ENV_VARS, type RespawnSupervisor } from "./supervisor-markers.js";
 import {
@@ -22,7 +27,7 @@ const SERVICE_IDENTITY_ENV_VARS = new Set<string>([
 ] as const);
 
 const HANDOFF_SCRIPT = String.raw`
-const { spawn } = require("node:child_process");
+const { spawn, spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -174,6 +179,56 @@ function markUpdateSentinelFailureIfPending(reason) {
   writeJsonFile(params.sentinelPath, { version: 1, payload });
 }
 
+function runServiceCommand(command, args) {
+  try {
+    const result = spawnSync(command, args, { stdio: "ignore", timeout: 30000 });
+    return typeof result.status === "number" ? result.status : 1;
+  } catch {
+    return 1;
+  }
+}
+
+function startGatewayServiceBestEffort() {
+  const recovery = params.serviceRecovery;
+  if (!recovery || typeof recovery !== "object" || !recovery.kind) {
+    return;
+  }
+  let target = "";
+  let status = 1;
+  if (recovery.kind === "systemd") {
+    target = recovery.unit;
+    status = runServiceCommand("systemctl", ["--user", "start", recovery.unit]);
+  } else if (recovery.kind === "launchd") {
+    target = recovery.label;
+    const serviceTarget = "gui/" + recovery.uid + "/" + recovery.label;
+    status = runServiceCommand("launchctl", ["kickstart", serviceTarget]);
+    if (status !== 0) {
+      runServiceCommand("launchctl", ["enable", serviceTarget]);
+      status = runServiceCommand("launchctl", [
+        "bootstrap",
+        "gui/" + recovery.uid,
+        recovery.plistPath,
+      ]);
+      if (status !== 0) {
+        // Bootstrap can fail when the label is already loaded. Retry start-only
+        // so recovery does not bounce a gateway that is already running.
+        status = runServiceCommand("launchctl", ["kickstart", serviceTarget]);
+      }
+    }
+  } else if (recovery.kind === "schtasks") {
+    target = recovery.taskName;
+    status = runServiceCommand("schtasks.exe", ["/Run", "/TN", recovery.taskName]);
+  } else {
+    return;
+  }
+  appendLog(
+    "gateway service recovery " +
+      (status === 0 ? "succeeded" : "failed status=" + status) +
+      " target=" +
+      target,
+  );
+}
+
 (async () => {
   const deadline = Date.now() + params.parentExitTimeoutMs;
   while (isPidAlive(params.parentPid) && Date.now() < deadline) {
@@ -215,6 +270,7 @@ function markUpdateSentinelFailureIfPending(reason) {
     if (exit && exit.error) {
       appendLog("managed update command failed to start: " + (exit.error && exit.error.stack ? exit.error.stack : String(exit.error)));
       markUpdateSentinelFailureIfPending("managed-service-handoff-spawn-failed");
+      startGatewayServiceBestEffort();
       process.exitCode = 1;
       return;
     }
@@ -226,9 +282,11 @@ function markUpdateSentinelFailureIfPending(reason) {
     );
     if (exit && typeof exit.code === "number" && exit.code !== 0) {
       markUpdateSentinelFailureIfPending("managed-service-handoff-failed");
+      startGatewayServiceBestEffort();
       process.exitCode = exit.code;
     } else if (exit && exit.signal) {
       markUpdateSentinelFailureIfPending("managed-service-handoff-failed");
+      startGatewayServiceBestEffort();
       process.exitCode = 1;
     }
   } finally {
@@ -244,6 +302,7 @@ function markUpdateSentinelFailureIfPending(reason) {
 })().catch((err) => {
   appendLog("handoff failed: " + (err && err.stack ? err.stack : String(err)));
   markUpdateSentinelFailureIfPending("managed-service-handoff-helper-failed");
+  startGatewayServiceBestEffort();
   cleanupSensitiveFiles();
   process.exitCode = 1;
 });
@@ -301,6 +360,44 @@ export function formatManagedServiceUpdateCommand(params?: {
     args.push("--timeout", String(Math.max(1, Math.ceil(params.timeoutMs / 1000))));
   }
   return args.join(" ");
+}
+
+type GatewayServiceRecovery =
+  | { kind: "systemd"; unit: string }
+  | { kind: "launchd"; uid: number; label: string; plistPath: string }
+  | { kind: "schtasks"; taskName: string };
+
+function resolveGatewayServiceRecovery(
+  supervisor: RespawnSupervisor | null | undefined,
+  env: NodeJS.ProcessEnv,
+): GatewayServiceRecovery | undefined {
+  if (supervisor === "systemd") {
+    const override = env.OPENCLAW_SYSTEMD_UNIT?.trim();
+    const unit = override
+      ? override.endsWith(".service")
+        ? override
+        : `${override}.service`
+      : `${resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE)}.service`;
+    return { kind: "systemd", unit };
+  }
+  if (supervisor === "launchd") {
+    const label =
+      env.OPENCLAW_LAUNCHD_LABEL?.trim() || resolveGatewayLaunchAgentLabel(env.OPENCLAW_PROFILE);
+    const uid = typeof process.getuid === "function" ? process.getuid() : 501;
+    const home = env.HOME?.trim() || os.homedir();
+    return {
+      kind: "launchd",
+      uid,
+      label,
+      plistPath: path.join(home, "Library", "LaunchAgents", `${label}.plist`),
+    };
+  }
+  if (supervisor === "schtasks") {
+    const taskName =
+      env.OPENCLAW_WINDOWS_TASK_NAME?.trim() || resolveGatewayWindowsTaskName(env.OPENCLAW_PROFILE);
+    return { kind: "schtasks", taskName };
+  }
+  return undefined;
 }
 
 export function stripSupervisorHintEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
@@ -458,6 +555,7 @@ export async function startManagedServiceUpdateHandoff(params: {
     metaPath,
     sentinelPath: resolveRestartSentinelPath(),
     sensitivePaths: [scriptPath, paramsPath, metaPath],
+    serviceRecovery: resolveGatewayServiceRecovery(params.supervisor, params.env ?? process.env),
   };
 
   await fs.writeFile(scriptPath, `${HANDOFF_SCRIPT}\n`, { mode: 0o700 });

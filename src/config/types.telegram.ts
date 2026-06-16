@@ -67,6 +67,7 @@ export type TelegramNetworkConfig = {
 export type TelegramInlineButtonsScope = "off" | "dm" | "group" | "all" | "allowlist";
 export type TelegramStreamingMode = "off" | "partial" | "block" | "progress";
 export type TelegramExecApprovalTarget = "dm" | "channel" | "both";
+export type TelegramGroupHistoryContextMode = "none" | "mention-only" | "recent";
 
 export type TelegramPreviewStreamingConfig = Omit<ChannelPreviewStreamingConfig, "preview"> & {
   preview?: ChannelStreamingPreviewConfig;
@@ -154,6 +155,8 @@ export type TelegramAccountConfig = {
   mentionPatterns?: MentionPatternsPolicyConfig;
   /** Supplemental context visibility policy (all|allowlist|allowlist_quote). */
   contextVisibility?: ContextVisibilityMode;
+  /** Controls prior Telegram group messages included in prompt context. Default: mention-only. */
+  includeGroupHistoryContext?: TelegramGroupHistoryContextMode;
   /** Max group messages to keep as history context (0 disables). */
   historyLimit?: number;
   /** Max DM turns to keep as history context. */
@@ -162,6 +165,11 @@ export type TelegramAccountConfig = {
   dms?: Record<string, DmConfig>;
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
+  /**
+   * Use Telegram Bot API 10.1 rich messages for text sends and edits.
+   * Default: false until Telegram clients render rich messages consistently.
+   */
+  richMessages?: boolean;
   /** Streaming + chunking settings. Prefer this nested shape over legacy flat keys. */
   streaming?: TelegramPreviewStreamingConfig;
   mediaMaxMb?: number;

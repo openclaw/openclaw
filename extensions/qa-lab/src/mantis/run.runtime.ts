@@ -251,7 +251,7 @@ async function readNormalizedLaneResult(params: {
   const entry =
     summary.entries.find((candidate) => candidate.test.id === params.scenario) ??
     summary.entries[0];
-  const artifacts = entry?.execution.artifacts ?? [];
+  const artifacts = entry?.execution?.artifacts ?? [];
   return {
     details: entry?.result.failure?.reason,
     screenshotPath: artifacts.find((artifact) => artifact.kind === "screenshot")?.path,

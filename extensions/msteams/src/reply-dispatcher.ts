@@ -421,6 +421,10 @@ export function createMSTeamsReplyDispatcher(params: {
               msteamsCfg,
               {
                 event: "tool",
+                ...(typeof payload?.itemId === "string" ? { itemId: payload.itemId } : {}),
+                ...(typeof payload?.toolCallId === "string"
+                  ? { toolCallId: payload.toolCallId }
+                  : {}),
                 ...(name ? { name } : {}),
                 ...(typeof payload?.phase === "string" ? { phase: payload.phase } : {}),
                 ...(payload?.args && typeof payload.args === "object"
@@ -436,6 +440,10 @@ export function createMSTeamsReplyDispatcher(params: {
           await streamController.pushProgressLine(
             buildChannelProgressDraftLineForEntry(msteamsCfg, {
               event: "item",
+              ...(typeof payload?.itemId === "string" ? { itemId: payload.itemId } : {}),
+              ...(typeof payload?.toolCallId === "string"
+                ? { toolCallId: payload.toolCallId }
+                : {}),
               ...(typeof payload?.kind === "string" ? { itemKind: payload.kind } : {}),
               ...(typeof payload?.title === "string" ? { title: payload.title } : {}),
               ...(typeof payload?.name === "string" ? { name: payload.name } : {}),
@@ -490,6 +498,10 @@ export function createMSTeamsReplyDispatcher(params: {
           await streamController.pushProgressLine(
             buildChannelProgressDraftLine({
               event: "command-output",
+              ...(typeof payload?.itemId === "string" ? { itemId: payload.itemId } : {}),
+              ...(typeof payload?.toolCallId === "string"
+                ? { toolCallId: payload.toolCallId }
+                : {}),
               phase: payload.phase as string,
               ...(typeof payload?.title === "string" ? { title: payload.title } : {}),
               ...(typeof payload?.name === "string" ? { name: payload.name } : {}),
@@ -505,6 +517,10 @@ export function createMSTeamsReplyDispatcher(params: {
           await streamController.pushProgressLine(
             buildChannelProgressDraftLine({
               event: "patch",
+              ...(typeof payload?.itemId === "string" ? { itemId: payload.itemId } : {}),
+              ...(typeof payload?.toolCallId === "string"
+                ? { toolCallId: payload.toolCallId }
+                : {}),
               phase: payload.phase as string,
               ...(typeof payload?.title === "string" ? { title: payload.title } : {}),
               ...(typeof payload?.name === "string" ? { name: payload.name } : {}),

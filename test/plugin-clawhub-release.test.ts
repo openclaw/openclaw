@@ -216,6 +216,7 @@ describe("collectClawHubVersionGateErrors", () => {
         {
           name: "@openclaw/demo-plugin",
           version: "2026.4.1",
+          type: "module",
           repository: {
             type: "git",
             url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
@@ -928,7 +929,6 @@ exit 0
         encoding: "utf8",
         env: {
           ...process.env,
-          OPENCLAW_PLUGIN_NPM_RUNTIME_BUILD: "0",
           PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
         },
       },
@@ -998,7 +998,6 @@ exit 0
           ...process.env,
           OPENCLAW_CLAWHUB_MANUAL_OVERRIDE_REASON:
             "GitHub Actions trusted publisher repair before OIDC migration",
-          OPENCLAW_PLUGIN_NPM_RUNTIME_BUILD: "0",
           PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
         },
       },
@@ -1062,7 +1061,6 @@ exit 0
         env: {
           ...process.env,
           OPENCLAW_CLAWHUB_PACK_OUTPUT_DIR: outputDir,
-          OPENCLAW_PLUGIN_NPM_RUNTIME_BUILD: "0",
           PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
         },
       },
@@ -1107,7 +1105,7 @@ function createTempPluginRepo(
 
   writeFileSync(
     join(repoDir, "package.json"),
-    JSON.stringify({ name: "openclaw-test-root" }, null, 2),
+    JSON.stringify({ name: "openclaw-test-root", type: "module" }, null, 2),
   );
   writeFileSync(join(repoDir, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
   for (const currentExtensionId of extensionIds) {
@@ -1118,6 +1116,7 @@ function createTempPluginRepo(
         {
           name: `@openclaw/${currentExtensionId}`,
           version: "2026.4.1",
+          type: "module",
           repository: {
             type: "git",
             url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
@@ -1150,6 +1149,7 @@ function createTempPluginRepo(
       join(repoDir, "extensions", currentExtensionId, "index.ts"),
       `export const ${currentExtensionId.replaceAll(/[-.]/g, "_")} = 1;\n`,
     );
+    writeFileSync(join(repoDir, "extensions", currentExtensionId, "README.md"), "# Demo plugin\n");
   }
 
   git(repoDir, ["init", "-b", "main"]);

@@ -81,6 +81,7 @@ export {
 } from "./src/scenario-catalog.js";
 export { createQaSelfCheckScenario } from "./src/self-check-scenario.js";
 export {
+  isQaSelfCheckSuccessful,
   type QaSelfCheckResult,
   resolveQaSelfCheckOutputPath,
   runQaSelfCheckAgainstState,

@@ -20,7 +20,7 @@ import {
   resolveStorePath,
   updateSessionStore,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import { updateDreamsFile } from "./dreaming-dreams-file.js";
+import { readDreamsFile, resolveDreamsPath, updateDreamsFile } from "./dreaming-dreams-file.js";
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -54,6 +54,8 @@ export type NarrativePhaseData = {
   themes?: string[];
   /** Snippets that were promoted to durable memory (deep). */
   promotions?: string[];
+  currentDate?: string;
+  recentDiaryEntries?: string[];
 };
 
 type Logger = {
@@ -110,6 +112,8 @@ const SAFE_SESSION_ID_RE = /^[a-z0-9][a-z0-9._-]{0,127}$/i;
 const DIARY_START_MARKER = "<!-- openclaw:dreaming:diary:start -->";
 const DIARY_END_MARKER = "<!-- openclaw:dreaming:diary:end -->";
 const BACKFILL_ENTRY_MARKER = "openclaw:dreaming:backfill-entry";
+const RECENT_DIARY_CONTEXT_LIMIT = 3;
+const RECENT_DIARY_CONTEXT_MAX_CHARS = 360;
 const NARRATIVE_SESSION_LOCKS_KEY = Symbol.for(
   "openclaw.memoryCore.dreamingNarrative.sessionLocks",
 );
@@ -305,6 +309,27 @@ export function buildNarrativePrompt(data: NarrativePhaseData): string {
     }
   }
 
+  const currentDate = data.currentDate?.trim();
+  const recentDiaryEntries = (data.recentDiaryEntries ?? [])
+    .map(clampDiaryContextEntry)
+    .filter((entry) => entry.length > 0)
+    .slice(0, RECENT_DIARY_CONTEXT_LIMIT);
+  if (currentDate || recentDiaryEntries.length > 0) {
+    lines.push("\nDiary continuity context:");
+    if (currentDate) {
+      lines.push(`- Current sweep: ${currentDate}`);
+    }
+    if (recentDiaryEntries.length > 0) {
+      lines.push("- Recent diary entries already written:");
+      for (const entry of recentDiaryEntries) {
+        lines.push(`  - ${entry}`);
+      }
+    }
+    lines.push(
+      "- Prefer a fresh angle; do not replay the same first-day framing unless newer fragments change it.",
+    );
+  }
+
   return lines.join("\n");
 }
 
@@ -433,6 +458,78 @@ function splitDiaryBlocks(diaryContent: string): string[] {
     .split(/\n---\n/)
     .map((block) => block.trim())
     .filter((block) => block.length > 0);
+}
+
+function clampDiaryContextEntry(entry: string): string {
+  const normalized = entry.replace(/\s+/g, " ").trim();
+  if (normalized.length <= RECENT_DIARY_CONTEXT_MAX_CHARS) {
+    return normalized;
+  }
+  return `${normalized.slice(0, RECENT_DIARY_CONTEXT_MAX_CHARS).trimEnd()}...`;
+}
+
+function normalizeDiaryBlockBody(block: string): string {
+  const bodyLines: string[] = [];
+  for (const line of block.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("<!--") || trimmed.startsWith("#")) {
+      continue;
+    }
+    if (trimmed.startsWith("*") && trimmed.endsWith("*") && trimmed.length > 2) {
+      continue;
+    }
+    bodyLines.push(trimmed);
+  }
+  return clampDiaryContextEntry(bodyLines.join(" "));
+}
+
+function isOptionalDiaryContextReadError(err: unknown): boolean {
+  const code = extractErrorCode(err);
+  if (
+    code === "EACCES" ||
+    code === "EPERM" ||
+    code === "ENOENT" ||
+    code === "ENOTDIR" ||
+    code === "not-found" ||
+    code === "not-file" ||
+    code === "path-alias" ||
+    code === "path-mismatch" ||
+    code === "symlink"
+  ) {
+    return true;
+  }
+  return err instanceof Error && err.message === "path must be a regular file";
+}
+
+export async function readRecentDreamDiaryEntries(params: {
+  workspaceDir: string;
+  limit?: number;
+}): Promise<string[]> {
+  const limit = Math.max(0, Math.floor(params.limit ?? RECENT_DIARY_CONTEXT_LIMIT));
+  if (limit === 0) {
+    return [];
+  }
+  let existing: string;
+  try {
+    const dreamsPath = await resolveDreamsPath(params.workspaceDir);
+    existing = await readDreamsFile(dreamsPath);
+  } catch (err) {
+    if (isOptionalDiaryContextReadError(err)) {
+      return [];
+    }
+    throw err;
+  }
+  const startIdx = existing.indexOf(DIARY_START_MARKER);
+  const endIdx = existing.indexOf(DIARY_END_MARKER);
+  if (startIdx < 0 || endIdx < 0 || endIdx < startIdx) {
+    return [];
+  }
+  const inner = existing.slice(startIdx + DIARY_START_MARKER.length, endIdx);
+  return splitDiaryBlocks(inner)
+    .map(normalizeDiaryBlockBody)
+    .filter((entry) => entry.length > 0)
+    .slice(-limit)
+    .toReversed();
 }
 
 function normalizeDiaryBlockFingerprint(block: string): string {

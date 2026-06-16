@@ -59,6 +59,7 @@ type SessionManagerMocks = {
   appendCustomEntry: UnknownMock;
   flushPendingToolResults: UnknownMock;
   clearPendingToolResults: UnknownMock;
+  removeTrailingEntries: UnknownMock;
 };
 type AttemptSpawnWorkspaceHoisted = {
   spawnSubagentDirectMock: UnknownMock;
@@ -208,6 +209,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     appendCustomEntry: vi.fn(),
     flushPendingToolResults: vi.fn(),
     clearPendingToolResults: vi.fn(),
+    removeTrailingEntries: vi.fn(() => 0),
   };
   return {
     spawnSubagentDirectMock,
@@ -465,7 +467,7 @@ vi.mock("../tool-schema-runtime.js", () => ({
 }));
 
 vi.mock("../../session-file-repair.js", () => ({
-  repairSessionFileIfNeeded: async () => {},
+  repairSessionFileIfNeeded: async () => ({ repaired: false, droppedLines: 0 }),
 }));
 
 vi.mock("../session-manager-cache.js", () => ({

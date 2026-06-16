@@ -43,6 +43,8 @@ type EmbeddedSubscribeLogger = {
 /** Per-tool metadata tracked between tool start/update/end events. */
 export type ToolCallSummary = {
   meta?: string;
+  instanceReplaySafe: boolean;
+  replaySafe: boolean;
   mutatingAction: boolean;
   actionFingerprint?: string;
   fileTarget?: import("./tool-mutation.js").FileTarget;
@@ -69,6 +71,7 @@ export type EmbeddedAgentSubscribeState = {
   toolMetas: Array<{
     toolName?: string;
     meta?: string;
+    replaySafe?: boolean;
     asyncStarted?: boolean;
     asyncTaskRunId?: string;
     asyncTaskId?: string;
@@ -286,6 +289,7 @@ type ToolHandlerParams = Pick<
   | "hasRepliedRef"
   | "sessionId"
   | "agentId"
+  | "replaySafeToolNames"
   | "toolResultFormat"
   | "toolProgressDetail"
   | "sourceReplyDeliveryMode"

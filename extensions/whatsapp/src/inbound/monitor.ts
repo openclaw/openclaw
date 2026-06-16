@@ -33,11 +33,15 @@ import {
   isWhatsAppSocketOperationTimeoutError,
   resolveWhatsAppSocketOperationTimeoutMs,
   resolveWhatsAppSocketTiming,
+  withWhatsAppSocketOperationTimeout,
   type WhatsAppSocketOperationAdapter,
   type WhatsAppSocketTimingOptions,
 } from "../socket-timing.js";
 import { resolveJidToE164 } from "../text-runtime.js";
-import { checkInboundAccessControl } from "./access-control.js";
+import {
+  checkInboundAccessControl,
+  type AcceptedInboundAccessControlResult,
+} from "./access-control.js";
 import {
   claimRecentInboundMessageDelivery,
   commitRecentInboundMessage,
@@ -318,6 +322,7 @@ export async function attachWebInboxToSocket(
     return successor.getCurrentSock();
   };
   type QueuedInboundMessageMetadata = {
+    admission: NonNullable<WebInboundMessage["admission"]>;
     dedupeKey?: string;
     debounceKey?: string;
     durableId?: string;
@@ -682,7 +687,7 @@ export async function attachWebInboxToSocket(
     groupSubject?: string;
     groupParticipants?: string[];
     messageTimestampMs?: number;
-    access: Awaited<ReturnType<typeof checkInboundAccessControl>>;
+    access: AcceptedInboundAccessControlResult;
   };
 
   const normalizeInboundMessage = async (
@@ -757,6 +762,7 @@ export async function attachWebInboxToSocket(
       from,
       selfE164: self.e164 ?? null,
       senderE164,
+      senderJid: participantJid,
       group,
       pushName: msg.pushName ?? undefined,
       isFromMe: Boolean(msg.key?.fromMe),
@@ -803,9 +809,11 @@ export async function attachWebInboxToSocket(
     }
     const { id, remoteJid, participant } = target;
     try {
-      await (getCurrentSock() ?? sock).readMessages([
-        { remoteJid, id, participant, fromMe: false },
-      ]);
+      await withWhatsAppSocketOperationTimeout(
+        "readMessages",
+        (getCurrentSock() ?? sock).readMessages([{ remoteJid, id, participant, fromMe: false }]),
+        sendOperationTimeoutMs,
+      );
       const suffix = participant ? ` (participant ${participant})` : "";
       logWhatsAppVerbose(options.verbose, `Marked message ${id} as read for ${remoteJid}${suffix}`);
     } catch (err) {
@@ -1130,6 +1138,7 @@ export async function attachWebInboxToSocket(
           }
         : undefined;
     const inboundMessage: QueuedInboundMessage = withDeprecatedWebInboundMessageFlatAliases({
+      admission: inbound.access.admission,
       event: {
         id: inbound.id,
         timestamp,

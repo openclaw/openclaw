@@ -61,6 +61,7 @@ describe("codex app-server session binding", () => {
       model: "gpt-5.4-codex",
       modelProvider: "openai",
       dynamicToolsFingerprint: "tools-v1",
+      webSearchThreadConfigFingerprint: "web-search-v1",
       userMcpServersFingerprint: "user-mcp-v1",
       nativeHookRelayGeneration: "generation-v1",
     });
@@ -74,6 +75,7 @@ describe("codex app-server session binding", () => {
     expect(binding?.model).toBe("gpt-5.4-codex");
     expect(binding?.modelProvider).toBe("openai");
     expect(binding?.dynamicToolsFingerprint).toBe("tools-v1");
+    expect(binding?.webSearchThreadConfigFingerprint).toBe("web-search-v1");
     expect(binding?.userMcpServersFingerprint).toBe("user-mcp-v1");
     expect(binding?.nativeHookRelayGeneration).toBe("generation-v1");
     const bindingStat = await fs.stat(resolveCodexAppServerBindingPath(sessionFile));

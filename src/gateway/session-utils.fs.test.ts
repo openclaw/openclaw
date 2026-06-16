@@ -7,7 +7,10 @@ import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { estimateStringChars, estimateTokensFromChars } from "../utils/cjk-chars.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
-import { clearSessionTranscriptIndexCache } from "./session-transcript-index.fs.js";
+import {
+  clearSessionTranscriptIndexCache,
+  readSessionTranscriptIndex,
+} from "./session-transcript-index.fs.js";
 import {
   archiveSessionTranscripts,
   readFirstUserMessageFromTranscript,
@@ -410,6 +413,66 @@ describe("readSessionTitleFieldsFromTranscript cache", () => {
       lastMessagePreview: "tail preview",
     });
   });
+
+  test("uses the selected branch for the sync last-message preview", () => {
+    const sessionId = "test-cache-selected-preview";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 3, id: sessionId },
+      {
+        type: "message",
+        id: "active-preview",
+        parentId: null,
+        message: { role: "assistant", content: "active preview" },
+      },
+      {
+        type: "message",
+        id: "inactive-preview",
+        parentId: "active-preview",
+        message: { role: "assistant", content: "inactive side delivery" },
+      },
+      {
+        type: "leaf",
+        id: "active-leaf",
+        parentId: "inactive-preview",
+        targetId: "active-preview",
+      },
+    ]);
+
+    expect(readSessionTitleFieldsFromTranscript(sessionId, storePath).lastMessagePreview).toBe(
+      "active preview",
+    );
+  });
+
+  test("uses the selected branch for the async last-message preview", async () => {
+    const sessionId = "test-cache-selected-preview-async";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 3, id: sessionId },
+      {
+        type: "message",
+        id: "active-preview",
+        parentId: null,
+        message: { role: "assistant", content: "active preview" },
+      },
+      {
+        type: "message",
+        id: "inactive-preview",
+        parentId: "active-preview",
+        message: { role: "assistant", content: "inactive side delivery" },
+      },
+      {
+        type: "leaf",
+        id: "active-leaf",
+        parentId: "inactive-preview",
+        targetId: "active-preview",
+      },
+    ]);
+
+    await expect(
+      readSessionTitleFieldsFromTranscriptAsync(sessionId, storePath),
+    ).resolves.toMatchObject({
+      lastMessagePreview: "active preview",
+    });
+  });
 });
 
 describe("readSessionMessages", () => {
@@ -769,6 +832,23 @@ describe("readSessionMessages", () => {
         parentId: "assistant-1",
         message: { role: "user", content: "latest active" },
       },
+      {
+        type: "message",
+        id: "delivery-side-branch",
+        parentId: "user-2",
+        message: { role: "assistant", content: "side delivery" },
+      },
+      {
+        type: "leaf",
+        id: "active-leaf",
+        parentId: "delivery-side-branch",
+        targetId: "user-2",
+      },
+      {
+        type: "metadata",
+        id: "opaque-after-leaf",
+        parentId: "delivery-side-branch",
+      },
     ]);
     clearSessionTranscriptIndexCache();
     const sessionManagerOpenSpy = vi.spyOn(SessionManager, "open");
@@ -784,6 +864,14 @@ describe("readSessionMessages", () => {
         "active branch",
         "latest active",
       ]);
+      const recentMessages = await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
+        maxMessages: 10,
+      });
+      expect(recentMessages.map((message) => (message as { content?: unknown }).content)).toEqual([
+        "root",
+        "active branch",
+        "latest active",
+      ]);
       expectMessageFields(messages[2], { openclaw: { id: "user-2", seq: 3 } });
       expect(sessionManagerOpenSpy).not.toHaveBeenCalled();
       expect(readFileSpy).not.toHaveBeenCalled();
@@ -791,6 +879,106 @@ describe("readSessionMessages", () => {
       sessionManagerOpenSpy.mockRestore();
       readFileSpy.mockRestore();
     }
+  });
+
+  test("supports file-wide identity lookup without exposing side branches to history", async () => {
+    const sessionId = "test-session-index-views";
+    const transcriptPath = writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 3, id: sessionId },
+      {
+        type: "message",
+        id: "root",
+        parentId: null,
+        message: { role: "user", content: "root" },
+      },
+      {
+        type: "message",
+        id: "side-assistant",
+        parentId: "root",
+        message: {
+          role: "assistant",
+          content: "side",
+          idempotencyKey: "side-idempotency",
+        },
+      },
+      {
+        type: "message",
+        id: "active-assistant",
+        parentId: "root",
+        message: { role: "assistant", content: "active" },
+      },
+      {
+        type: "leaf",
+        id: "active-leaf",
+        parentId: "side-assistant",
+        targetId: "active-assistant",
+      },
+    ]);
+    clearSessionTranscriptIndexCache();
+
+    const activeIndex = await readSessionTranscriptIndex(transcriptPath);
+    const allIndex = await readSessionTranscriptIndex(transcriptPath, { view: "all" });
+
+    expect(activeIndex?.entries.map((entry) => entry.id)).toEqual(["root", "active-assistant"]);
+    expect(allIndex?.entries.map((entry) => entry.id)).toEqual([
+      "root",
+      "side-assistant",
+      "active-assistant",
+    ]);
+  });
+
+  test("keeps parentless linear history after a leaf control", async () => {
+    const sessionId = "test-linear-with-opaque-link";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 3, id: sessionId },
+      {
+        type: "message",
+        id: "linear-user",
+        message: { role: "user", content: "linear root" },
+      },
+      {
+        type: "message",
+        id: "linear-assistant",
+        message: { role: "assistant", content: "linear answer" },
+      },
+      {
+        type: "metadata",
+        id: "linear-metadata",
+        parentId: "linear-assistant",
+      },
+      {
+        type: "message",
+        id: "side-assistant",
+        parentId: "linear-assistant",
+        message: { role: "assistant", content: "side answer" },
+      },
+      {
+        type: "leaf",
+        id: "active-leaf",
+        parentId: "side-assistant",
+        targetId: "linear-assistant",
+        appendParentId: "linear-metadata",
+      },
+    ]);
+    clearSessionTranscriptIndexCache();
+
+    const messages = await readSessionMessagesAsync(sessionId, storePath, undefined, {
+      mode: "full",
+      reason: "test parentless leaf selection",
+    });
+
+    expect(messages.map((message) => (message as { content?: unknown }).content)).toEqual([
+      "linear root",
+      "linear answer",
+    ]);
+    expect(await readSessionMessageCountAsync(sessionId, storePath)).toBe(2);
+    expect(
+      (
+        await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
+          maxMessages: 10,
+        })
+      ).map((message) => (message as { content?: unknown }).content),
+    ).toEqual(["linear root", "linear answer"]);
   });
 
   test("falls back to the latest reset archive when the active transcript is missing", async () => {
@@ -1322,6 +1510,20 @@ describe("readSessionMessages", () => {
           timestamp: 3,
         },
       },
+      {
+        type: "message",
+        id: "delivery-side-branch",
+        parentId: "answer",
+        timestamp: "2026-04-27T00:00:04.000Z",
+        message: { role: "assistant", content: "side delivery", timestamp: 4 },
+      },
+      {
+        type: "leaf",
+        id: "active-leaf",
+        parentId: "delivery-side-branch",
+        timestamp: "2026-04-27T00:00:05.000Z",
+        targetId: "answer",
+      },
     ];
     fs.writeFileSync(sessionFile, lines.map((line) => JSON.stringify(line)).join("\n"), "utf-8");
     const rawTranscript = fs.readFileSync(sessionFile, "utf-8");
@@ -1340,6 +1542,7 @@ describe("readSessionMessages", () => {
         openclaw: { seq: 2 },
       });
       expect(JSON.stringify(out)).not.toContain("original wrapped prompt");
+      expect(JSON.stringify(out)).not.toContain("side delivery");
       expect(sessionManagerOpenSpy).not.toHaveBeenCalled();
     } finally {
       sessionManagerOpenSpy.mockRestore();
@@ -2305,6 +2508,96 @@ describe("oversized transcript line guards", () => {
     expect(serialized).toContain("oversized-leaf");
     expect(serialized).not.toContain(oversizedContent);
     expect(serialized).toContain("[chat.history omitted: message too large]");
+  });
+
+  test("recent readers stay bounded when a leaf target is outside the tail window", async () => {
+    const sessionId = "test-leaf-target-before-tail-window";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const lines = [
+      JSON.stringify({ type: "session", version: 3, id: sessionId }),
+      JSON.stringify({
+        type: "message",
+        id: "active-root",
+        parentId: null,
+        message: { role: "user", content: "active root" },
+      }),
+      JSON.stringify({
+        type: "message",
+        id: "side-delivery",
+        parentId: "active-root",
+        message: { role: "assistant", content: "x".repeat(16 * 1024) },
+      }),
+      JSON.stringify({
+        type: "leaf",
+        id: "active-leaf",
+        parentId: "side-delivery",
+        targetId: "active-root",
+      }),
+    ];
+    fs.writeFileSync(transcriptPath, `${lines.join("\n")}\n`, "utf-8");
+    const options = { maxMessages: 10, maxBytes: 1024, maxLines: 10 };
+    const readFileSpy = vi.spyOn(fs, "readFileSync");
+
+    try {
+      const syncMessages = readRecentSessionMessages(sessionId, storePath, undefined, options);
+      const asyncMessages = await readRecentSessionMessagesAsync(
+        sessionId,
+        storePath,
+        undefined,
+        options,
+      );
+
+      expect(syncMessages).toEqual([]);
+      expect(asyncMessages).toEqual(syncMessages);
+      expect(readFileSpy).not.toHaveBeenCalled();
+    } finally {
+      readFileSpy.mockRestore();
+    }
+  });
+
+  test("bounded recent readers do not expose a compact inactive side message", async () => {
+    const sessionId = "test-compact-side-before-bounded-leaf-target";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const lines = [
+      JSON.stringify({ type: "session", version: 3, id: sessionId }),
+      JSON.stringify({
+        type: "message",
+        id: "active-root",
+        parentId: null,
+        message: { role: "user", content: "active root" },
+      }),
+      JSON.stringify({
+        type: "metadata",
+        id: "large-padding",
+        parentId: "active-root",
+        payload: { padding: "x".repeat(16 * 1024) },
+      }),
+      JSON.stringify({
+        type: "message",
+        id: "side-delivery",
+        parentId: "active-root",
+        message: { role: "assistant", content: "compact side delivery" },
+      }),
+      JSON.stringify({
+        type: "leaf",
+        id: "active-leaf",
+        parentId: "side-delivery",
+        targetId: "active-root",
+      }),
+    ];
+    fs.writeFileSync(transcriptPath, `${lines.join("\n")}\n`, "utf-8");
+    const options = { maxMessages: 10, maxBytes: 1024, maxLines: 10 };
+
+    const syncMessages = readRecentSessionMessages(sessionId, storePath, undefined, options);
+    const asyncMessages = await readRecentSessionMessagesAsync(
+      sessionId,
+      storePath,
+      undefined,
+      options,
+    );
+
+    expect(syncMessages).toEqual([]);
+    expect(asyncMessages).toEqual([]);
   });
 
   test("readRecentSessionUsageFromTranscriptAsync skips oversized lines", async () => {

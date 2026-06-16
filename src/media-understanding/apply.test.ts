@@ -1701,6 +1701,28 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Body).toContain("hello from utf16 text");
   });
 
+  it("extracts inbound files above the 5MB OpenResponses default up to the managed-media cap", async () => {
+    // #90096: inbound extraction sizes to the agent media cap (default 20MB),
+    // not the OpenResponses input_file default (5MB). A ~6MB managed document
+    // would previously be skipped at the 5MB cap, leaving locked-down agents
+    // with only an attachment marker; it must now reach the prompt as text.
+    const marker = "LARGE-DOC-MARKER";
+    const largeText = `${marker} `.repeat(360_000); // ~6MB, above the old 5MB cap
+    const filePath = await createTempMediaFile({
+      fileName: "large-report.txt",
+      content: largeText,
+    });
+
+    const { ctx, result } = await applyWithDisabledMedia({
+      body: "<media:document>",
+      mediaPath: filePath,
+      mediaType: "text/plain",
+    });
+
+    expect(result.appliedFile).toBe(true);
+    expect(ctx.Body).toContain(marker);
+  });
+
   it("does not reclassify PDF attachments as text/plain", async () => {
     const pseudoPdf = Buffer.from("%PDF-1.7\n1 0 obj\n<< /Type /Catalog >>\nendobj\n", "utf8");
     const filePath = await createTempMediaFile({

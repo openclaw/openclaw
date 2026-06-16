@@ -365,8 +365,16 @@ export function runCommand(command, args, options = {}) {
           ? `timed out after ${timeoutMs}ms`
           : `failed with ${signal || status}`;
         reject(
-          new Error(
-            `${command} ${args.join(" ")} ${failure}${detail ? `\n${tailText(detail)}` : ""}`,
+          Object.assign(
+            new Error(
+              `${command} ${args.join(" ")} ${failure}${detail ? `\n${tailText(detail)}` : ""}`,
+            ),
+            {
+              signal,
+              status,
+              stderr: stderr.text,
+              stdout: stdout.text,
+            },
           ),
         );
       });
@@ -441,6 +449,38 @@ function parseJsonOutput(stdout) {
     }
   }
   throw new Error(`JSON output was not parseable:\n${tailText(trimmed)}`);
+}
+
+export function parseGatewayCliRequestFailure(error) {
+  if (typeof error?.stdout !== "string" || !error.stdout.trim()) {
+    return null;
+  }
+  let payload;
+  try {
+    payload = parseJsonOutput(error.stdout);
+  } catch {
+    return null;
+  }
+  const requestError = payload?.ok === false ? payload.error : null;
+  if (
+    requestError?.type !== "gateway_request_error" ||
+    !isNonEmptyString(requestError.code) ||
+    !isNonEmptyString(requestError.message) ||
+    typeof requestError.retryable !== "boolean" ||
+    (requestError.retryAfterMs !== undefined &&
+      (typeof requestError.retryAfterMs !== "number" ||
+        !Number.isInteger(requestError.retryAfterMs) ||
+        requestError.retryAfterMs < 0))
+  ) {
+    return null;
+  }
+  return Object.assign(new Error(requestError.message), {
+    name: "GatewayClientRequestError",
+    gatewayCode: requestError.code,
+    ...(requestError.details !== undefined ? { details: requestError.details } : {}),
+    retryable: requestError.retryable,
+    ...(requestError.retryAfterMs !== undefined ? { retryAfterMs: requestError.retryAfterMs } : {}),
+  });
 }
 
 function boundedJsonPreview(value, space) {
@@ -632,25 +672,30 @@ async function importCallGatewayModule() {
 
 async function rpcCallViaCli(method, params, options) {
   const config = resolveKitchenSinkRpcConfig(options.env);
-  const { stdout } = await runOpenClaw(
-    options.runner,
-    [
-      "gateway",
-      "call",
-      method,
-      "--url",
-      `ws://127.0.0.1:${options.port}`,
-      "--token",
-      TOKEN,
-      "--timeout",
-      String(config.rpcTimeoutMs),
-      "--json",
-      "--params",
-      JSON.stringify(params ?? {}),
-    ],
-    options.env,
-    createRpcCliRunOptions(method, options),
-  );
+  let stdout;
+  try {
+    ({ stdout } = await runOpenClaw(
+      options.runner,
+      [
+        "gateway",
+        "call",
+        method,
+        "--url",
+        `ws://127.0.0.1:${options.port}`,
+        "--token",
+        TOKEN,
+        "--timeout",
+        String(config.rpcTimeoutMs),
+        "--json",
+        "--params",
+        JSON.stringify(params ?? {}),
+      ],
+      options.env,
+      createRpcCliRunOptions(method, options),
+    ));
+  } catch (error) {
+    throw parseGatewayCliRequestFailure(error) ?? error;
+  }
   return parseJsonOutput(stdout);
 }
 
@@ -1399,10 +1444,7 @@ export async function assertOperatorRpcDenied(probe, call) {
   } catch (error) {
     const gatewayCode = error?.gatewayCode;
     const message = String(error?.message ?? "");
-    if (
-      (gatewayCode === undefined || gatewayCode === "INVALID_REQUEST") &&
-      message.includes("unauthorized role: operator")
-    ) {
+    if (gatewayCode === "INVALID_REQUEST" && message.includes("unauthorized role: operator")) {
       return;
     }
     throw error;

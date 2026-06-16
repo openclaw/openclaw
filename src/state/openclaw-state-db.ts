@@ -1,6 +1,6 @@
 // OpenClaw state database manages shared persisted state and migrations.
 import { randomUUID } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import {
@@ -9,6 +9,8 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { applyPrivateModeSync } from "../infra/private-mode.js";
+import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import {
   configureSqliteConnectionPragmas,
@@ -34,7 +36,6 @@ const OPENCLAW_STATE_SCHEMA_VERSION = 1;
 export const OPENCLAW_SQLITE_BUSY_TIMEOUT_MS = 30_000;
 const OPENCLAW_STATE_DIR_MODE = 0o700;
 const OPENCLAW_STATE_FILE_MODE = 0o600;
-const OPENCLAW_STATE_SIDECAR_SUFFIXES = ["", "-shm", "-wal"] as const;
 
 /** Open shared SQLite database handle plus WAL maintenance lifecycle. */
 export type OpenClawStateDatabase = {
@@ -119,70 +120,17 @@ const stateDbLog = createSubsystemLogger("state/db");
 /** Targets already warned about, so chmod-less filesystems warn once per path. */
 const chmodWarnedTargets = new Set<string>();
 
-// Unambiguous errno codes raised when the filesystem cannot enforce POSIX modes.
-const CHMOD_UNSUPPORTED_CODES = new Set(["ENOTSUP", "EOPNOTSUPP", "EINVAL"]);
-
-function hasRestrictivePermissions(target: string): boolean {
-  try {
-    return (statSync(target).mode & 0o077) === 0;
-  } catch {
-    return false;
-  }
-}
-
-function filesystemRejectsChmod(target: string): boolean {
-  let probePath: string;
-  try {
-    const probeDir = statSync(target).isDirectory() ? target : path.dirname(target);
-    probePath = path.join(probeDir, `.openclaw-chmod-probe-${randomUUID()}`);
-    writeFileSync(probePath, "", { flag: "wx", mode: OPENCLAW_STATE_FILE_MODE });
-  } catch {
-    return false;
-  }
-  try {
-    chmodSync(probePath, OPENCLAW_STATE_FILE_MODE);
-    return false;
-  } catch (err) {
-    return (err as NodeJS.ErrnoException).code === "EPERM";
-  } finally {
-    try {
-      unlinkSync(probePath);
-    } catch {
-      // The probe is best-effort cleanup after a failed capability check.
-    }
-  }
-}
-
-function canIgnoreChmodError(target: string, code: string | undefined): boolean {
-  if (code && CHMOD_UNSUPPORTED_CODES.has(code)) {
-    return true;
-  }
-  if (code !== "EPERM") {
-    return false;
-  }
-  // EPERM is ambiguous: keep restrictive targets usable, otherwise prove the
-  // containing filesystem also rejects chmod before weakening fail-closed behavior.
-  return hasRestrictivePermissions(target) || filesystemRejectsChmod(target);
-}
-
 // Permission hardening is best-effort only on filesystems that cannot apply
 // it: the database stays usable without the chmod, and crashing at open would
 // take the gateway down on Azure Files/NFS/Docker volumes (#91919). Unexpected
 // chmod failures still throw so credentials-adjacent hardening stays loud.
 function bestEffortChmodSync(target: string, mode: number): void {
-  try {
-    chmodSync(target, mode);
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (!canIgnoreChmodError(target, code)) {
-      throw err;
-    }
-    if (chmodWarnedTargets.has(target)) {
-      return;
-    }
-    chmodWarnedTargets.add(target);
-    stateDbLog.warn(`skipped permission hardening for ${target}: ${String(err)}`);
+  const result = applyPrivateModeSync(target, mode);
+  if (result.applied || chmodWarnedTargets.has(target)) {
+    return;
   }
+  chmodWarnedTargets.add(target);
+  stateDbLog.warn(`skipped permission hardening for ${target}: ${String(result.error)}`);
 }
 
 function ensureOpenClawStatePermissions(pathname: string, env: NodeJS.ProcessEnv): void {
@@ -199,8 +147,7 @@ function ensureOpenClawStatePermissions(pathname: string, env: NodeJS.ProcessEnv
   if (isDefaultStateDatabase || !dirExisted) {
     bestEffortChmodSync(dir, OPENCLAW_STATE_DIR_MODE);
   }
-  for (const suffix of OPENCLAW_STATE_SIDECAR_SUFFIXES) {
-    const candidate = `${pathname}${suffix}`;
+  for (const candidate of resolveSqliteDatabaseFilePaths(pathname)) {
     if (existsSync(candidate)) {
       bestEffortChmodSync(candidate, OPENCLAW_STATE_FILE_MODE);
     }
@@ -230,13 +177,66 @@ function tableExists(db: DatabaseSync, tableName: string): boolean {
   return row?.ok === 1;
 }
 
-function ensureColumn(db: DatabaseSync, tableName: string, columnSql: string): void {
+function ensureColumn(db: DatabaseSync, tableName: string, columnSql: string): boolean {
   const columnName = columnSql.trim().split(/\s+/, 1)[0];
   if (!columnName || !tableExists(db, tableName) || tableHasColumn(db, tableName, columnName)) {
-    return;
+    return false;
   }
   // State migrations are additive here; destructive or shape-changing repairs belong in doctor.
   db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnSql};`);
+  return true;
+}
+
+function repairLegacyTaskAgentAttribution(db: DatabaseSync): void {
+  if (!tableExists(db, "task_runs") || !tableHasColumn(db, "task_runs", "requester_agent_id")) {
+    return;
+  }
+  // Before requester_agent_id existed, scoped subagent/ACP rows stored the
+  // requester in agent_id. Repair only rows with recoverable requester
+  // provenance; global legacy rows must keep the existing fallback behavior.
+  db.exec(`
+    UPDATE task_runs
+    SET
+      requester_agent_id = CASE
+        WHEN owner_key GLOB 'agent:*:*' THEN substr(
+          owner_key,
+          7,
+          instr(substr(owner_key, 7), ':') - 1
+        )
+        WHEN requester_session_key GLOB 'agent:*:*' THEN substr(
+          requester_session_key,
+          7,
+          instr(substr(requester_session_key, 7), ':') - 1
+        )
+        WHEN agent_id <> substr(
+          child_session_key,
+          7,
+          instr(substr(child_session_key, 7), ':') - 1
+        ) THEN agent_id
+        ELSE NULL
+      END,
+      agent_id = substr(
+        child_session_key,
+        7,
+        instr(substr(child_session_key, 7), ':') - 1
+      )
+    WHERE requester_agent_id IS NULL
+      AND runtime IN ('subagent', 'acp')
+      AND child_session_key GLOB 'agent:*:*'
+      AND instr(substr(child_session_key, 7), ':') > 1
+      AND (
+        owner_key GLOB 'agent:*:*'
+        OR requester_session_key GLOB 'agent:*:*'
+        OR (
+          agent_id IS NOT NULL
+          AND agent_id <> substr(
+            child_session_key,
+            7,
+            instr(substr(child_session_key, 7), ':') - 1
+          )
+        )
+      );
+  `);
 }
 
 function hasCanonicalAgentDatabasesPrimaryKey(db: DatabaseSync): boolean {
@@ -857,6 +857,12 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "gateway_restart_sentinel", "continuation_json TEXT");
   ensureColumn(db, "gateway_restart_sentinel", "doctor_hint TEXT");
   ensureColumn(db, "gateway_restart_sentinel", "stats_json TEXT");
+  runSqliteImmediateTransactionSync(db, () => {
+    const addedTaskRequesterAgentId = ensureColumn(db, "task_runs", "requester_agent_id TEXT");
+    if (addedTaskRequesterAgentId) {
+      repairLegacyTaskAgentAttribution(db);
+    }
+  });
   ensureColumn(db, "subagent_runs", "task_name TEXT");
 }
 
@@ -918,20 +924,24 @@ export function openOpenClawStateDatabase(
   ensureOpenClawStatePermissions(pathname, env);
   const sqlite = requireNodeSqlite();
   const db = new sqlite.DatabaseSync(pathname);
-  const walMaintenance = configureSqliteConnectionPragmas(db, {
-    busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-    databaseLabel: "openclaw-state",
-    databasePath: pathname,
-    foreignKeys: true,
-    synchronous: "NORMAL",
-  });
-  try {
-    ensureSchema(db, pathname);
-  } catch (err) {
-    walMaintenance.close();
-    db.close();
-    throw err;
-  }
+  const walMaintenance = (() => {
+    let maintenance: SqliteWalMaintenance | undefined;
+    try {
+      maintenance = configureSqliteConnectionPragmas(db, {
+        busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+        databaseLabel: "openclaw-state",
+        databasePath: pathname,
+        foreignKeys: true,
+        synchronous: "NORMAL",
+      });
+      ensureSchema(db, pathname);
+      return maintenance;
+    } catch (err) {
+      maintenance?.close();
+      db.close();
+      throw err;
+    }
+  })();
   ensureOpenClawStatePermissions(pathname, env);
   const database = { db, path: pathname, walMaintenance };
   cachedDatabases.set(pathname, database);

@@ -131,6 +131,7 @@ async function runQaTestFileSuiteFromRuntime(params: {
   const providerMode = normalizeQaProviderMode(runParams?.providerMode ?? DEFAULT_QA_PROVIDER_MODE);
   const primaryModel = runParams?.primaryModel?.trim() || defaultQaModelForMode(providerMode);
   return await runQaTestFileScenarios({
+    evidenceMode: runParams?.evidenceMode,
     repoRoot,
     outputDir,
     providerMode,
@@ -163,11 +164,24 @@ function mergeQaEvidenceSummaries(params: {
   evidenceSummaries: readonly QaEvidenceSummaryJson[];
   generatedAt: string;
 }) {
+  const profiles = [
+    ...new Set(
+      params.evidenceSummaries
+        .map((summary) => summary.profile?.trim())
+        .filter((profile): profile is string => Boolean(profile)),
+    ),
+  ];
   return validateQaEvidenceSummaryJson({
     kind: QA_EVIDENCE_SUMMARY_KIND,
     schemaVersion: QA_EVIDENCE_SUMMARY_SCHEMA_VERSION,
     generatedAt: params.generatedAt,
+    evidenceMode:
+      params.evidenceSummaries.length > 0 &&
+      params.evidenceSummaries.every((summary) => summary.evidenceMode === "slim")
+        ? "slim"
+        : "full",
     entries: params.evidenceSummaries.flatMap((summary) => summary.entries),
+    profile: profiles.length === 1 ? profiles[0] : undefined,
   });
 }
 

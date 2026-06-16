@@ -15,7 +15,8 @@ import {
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { root as fsSafeRoot, FsSafeError, type ReadResult } from "../../infra/fs-safe.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
-import { loadSessionEntry, visitSessionMessagesAsync } from "../session-utils.js";
+import { visitSessionMessagesAsync } from "../session-transcript-readers.js";
+import { loadSessionEntry } from "../session-utils.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -601,9 +602,12 @@ async function loadSessionFiles(params: {
   const fileRoot = resolveFileRoot({ root, spawnedCwd });
   const files = new Map<string, TouchedFile>();
   await visitSessionMessagesAsync(
-    entry.sessionId,
-    storePath,
-    entry.sessionFile,
+    {
+      agentId,
+      sessionFile: entry.sessionFile,
+      sessionId: entry.sessionId,
+      storePath,
+    },
     (message) => collectTouchedFilesFromMessage(message, files),
     {
       mode: "full",

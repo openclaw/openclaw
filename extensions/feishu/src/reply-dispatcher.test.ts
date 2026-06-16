@@ -549,18 +549,23 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
   });
 
-  it("does not attach automatic mentions to non-streaming plain text replies", async () => {
+  it("passes mention-forward targets to non-streaming plain text replies without rewriting body text", async () => {
     useNonStreamingAutoAccount();
 
     const { options } = createDispatcherHarness({
       replyToMessageId: "om_msg",
+      mentionTargets: [{ openId: "ou_target", name: "Target User", key: "@_user_1" }],
     });
-    await options.deliver({ text: "plain text" }, { kind: "final" });
+    await options.deliver(
+      { text: 'plain text <at user_id="ou_body">Body User</at>' },
+      { kind: "final" },
+    );
 
     expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
-    expect(firstMockArg(sendMessageFeishuMock, "send message params")).not.toHaveProperty(
-      "mentions",
-    );
+    expectMockArgFields(sendMessageFeishuMock, "message send params", {
+      text: 'plain text <at user_id="ou_body">Body User</at>',
+      mentions: [{ openId: "ou_target", name: "Target User", key: "@_user_1" }],
+    });
   });
 
   it("does not attach automatic mentions to card replies", async () => {

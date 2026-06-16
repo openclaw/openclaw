@@ -6,17 +6,31 @@ import { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   cleanupAgedMemoryReindexTempFiles,
+  closeMemoryDatabase,
   openMemoryDatabaseAtPath,
   openMemoryReindexTempDatabaseAtPath,
 } from "./manager-db.js";
 import {
+  acquireMemoryReindexSwapLock,
   acquireMemoryReindexLock,
   resolveMemoryReindexLockPath,
+  tryAcquireMemoryReindexSwapLock,
   tryAcquireMemoryReindexLock,
 } from "./manager-reindex-lock.js";
 
 async function expectPathMissing(targetPath: string): Promise<void> {
   await expect(fs.access(targetPath)).rejects.toThrow("ENOENT");
+}
+
+function listOpenFileDescriptorsForPath(targetPath: string): string[] {
+  return fsSync.readdirSync("/proc/self/fd").flatMap((fd) => {
+    try {
+      const descriptorPath = fsSync.readlinkSync(`/proc/self/fd/${fd}`);
+      return descriptorPath.startsWith(targetPath) ? [descriptorPath] : [];
+    } catch {
+      return [];
+    }
+  });
 }
 
 describe("openMemoryDatabaseAtPath readOnly probe", () => {
@@ -45,7 +59,7 @@ describe("openMemoryDatabaseAtPath readOnly probe", () => {
 
     const db = openMemoryDatabaseAtPath(dbPath, false);
     expect(db).toBeDefined();
-    db.close();
+    closeMemoryDatabase(db);
   });
 
   it("allows creating a new database when allowCreate is true", async () => {
@@ -53,11 +67,24 @@ describe("openMemoryDatabaseAtPath readOnly probe", () => {
 
     const db = openMemoryDatabaseAtPath(dbPath, false, true);
     expect(db).toBeDefined();
-    db.close();
+    closeMemoryDatabase(db);
 
     const stat = await fs.stat(dbPath);
     expect(stat.size).toBeGreaterThan(0);
   });
+
+  it.skipIf(process.platform !== "linux")(
+    "closes the database when SQLite maintenance configuration fails",
+    async () => {
+      const dbPath = path.join(fixtureRoot, `case-${caseId++}`, "malformed-index.sqlite");
+      await fs.mkdir(path.dirname(dbPath), { recursive: true });
+      await fs.writeFile(dbPath, "not a sqlite database");
+
+      expect(() => openMemoryDatabaseAtPath(dbPath, false, false)).toThrow(/not a database/);
+
+      expect(listOpenFileDescriptorsForPath(dbPath)).toEqual([]);
+    },
+  );
 
   it("refuses to create a missing live database while a safe reindex holds the lock", async () => {
     const dbPath = path.join(fixtureRoot, `case-${caseId++}`, "index.sqlite");
@@ -71,7 +98,7 @@ describe("openMemoryDatabaseAtPath readOnly probe", () => {
 
     reindexLock.release();
     const db = openMemoryDatabaseAtPath(dbPath, false, true);
-    db.close();
+    closeMemoryDatabase(db);
   });
 
   it("refuses to auto-create an empty database when allowCreate is false", async () => {
@@ -94,7 +121,7 @@ describe("openMemoryDatabaseAtPath readOnly probe", () => {
 
     const reopen = openMemoryDatabaseAtPath(dbPath, false, false);
     expect(reopen).toBeDefined();
-    reopen.close();
+    closeMemoryDatabase(reopen);
   });
 
   it("removes aged orphan reindex temp files before opening the live database", async () => {
@@ -114,11 +141,59 @@ describe("openMemoryDatabaseAtPath readOnly probe", () => {
     }
 
     const db = openMemoryDatabaseAtPath(dbPath, false);
-    db.close();
+    closeMemoryDatabase(db);
 
     await expectPathMissing(orphanBase);
     await expectPathMissing(`${orphanBase}-wal`);
     await expectPathMissing(`${orphanBase}-shm`);
+  });
+
+  it("removes aged orphan reindex temp files including the rollback-journal sidecar", async () => {
+    const dbPath = path.join(fixtureRoot, `case-${caseId++}`, "index.sqlite");
+    const dir = path.dirname(dbPath);
+    await fs.mkdir(dir, { recursive: true });
+    const seed = new DatabaseSync(dbPath);
+    seed.exec("CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT)");
+    seed.close();
+
+    // NFS-backed stores keep journal_mode=DELETE, so a hard crash during a
+    // reindex leaves a rollback-journal sidecar (.tmp-<uuid>-journal) rather
+    // than -wal/-shm. Cleanup must remove it alongside the temp main file.
+    const orphanBase = `${dbPath}.tmp-22222222-3333-4444-5555-666666666666`;
+    for (const suffix of ["", "-journal"]) {
+      const filePath = `${orphanBase}${suffix}`;
+      await fs.writeFile(filePath, "orphan");
+      const old = new Date(Date.now() - 48 * 60 * 60_000);
+      await fs.utimes(filePath, old, old);
+    }
+
+    const db = openMemoryDatabaseAtPath(dbPath, false);
+    closeMemoryDatabase(db);
+
+    await expectPathMissing(orphanBase);
+    await expectPathMissing(`${orphanBase}-journal`);
+  });
+
+  it("removes a stranded rollback-journal sidecar whose temp main file is already gone", async () => {
+    const dbPath = path.join(fixtureRoot, `case-${caseId++}`, "index.sqlite");
+    const dir = path.dirname(dbPath);
+    await fs.mkdir(dir, { recursive: true });
+    const seed = new DatabaseSync(dbPath);
+    seed.exec("CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT)");
+    seed.close();
+
+    // Only the rollback journal survives (its temp main file was already
+    // removed). The discovery set must still recognize the orphan by its
+    // -journal suffix, otherwise it leaks forever.
+    const strandedJournal = `${dbPath}.tmp-33333333-4444-5555-6666-777777777777-journal`;
+    await fs.writeFile(strandedJournal, "stranded journal");
+    const old = new Date(Date.now() - 48 * 60 * 60_000);
+    await fs.utimes(strandedJournal, old, old);
+
+    const db = openMemoryDatabaseAtPath(dbPath, false);
+    closeMemoryDatabase(db);
+
+    await expectPathMissing(strandedJournal);
   });
 
   it("keeps young reindex temp files during live database startup", async () => {
@@ -135,7 +210,7 @@ describe("openMemoryDatabaseAtPath readOnly probe", () => {
     }
 
     const db = openMemoryDatabaseAtPath(dbPath, false);
-    db.close();
+    closeMemoryDatabase(db);
 
     await expect(fs.access(activeBase)).resolves.toBeUndefined();
     await expect(fs.access(`${activeBase}-wal`)).resolves.toBeUndefined();
@@ -161,7 +236,7 @@ describe("openMemoryDatabaseAtPath readOnly probe", () => {
 
     cleanupAgedMemoryReindexTempFiles(dbPath);
     const db = openMemoryDatabaseAtPath(dbPath, false);
-    db.close();
+    closeMemoryDatabase(db);
 
     await expect(fs.access(activeBase)).resolves.toBeUndefined();
     await expect(fs.access(`${activeBase}-wal`)).resolves.toBeUndefined();
@@ -182,7 +257,7 @@ describe("openMemoryDatabaseAtPath readOnly probe", () => {
     await fs.utimes(orphanBase, old, old);
 
     const db = openMemoryDatabaseAtPath(dbPath, false, true);
-    db.close();
+    closeMemoryDatabase(db);
 
     await expect(fs.access(orphanBase)).resolves.toBeUndefined();
   });
@@ -203,6 +278,36 @@ describe("openMemoryDatabaseAtPath readOnly probe", () => {
     await expect(fs.access(resolveMemoryReindexLockPath(dbPath))).resolves.toBeUndefined();
   });
 
+  it("blocks an atomic swap while a live memory database is open", async () => {
+    const dbPath = path.join(fixtureRoot, `case-${caseId++}`, "index.sqlite");
+    await fs.mkdir(path.dirname(dbPath), { recursive: true });
+    const seed = new DatabaseSync(dbPath);
+    seed.close();
+
+    const db = openMemoryDatabaseAtPath(dbPath, false);
+    expect(tryAcquireMemoryReindexSwapLock(dbPath)).toBeUndefined();
+
+    closeMemoryDatabase(db);
+    const swapLock = acquireMemoryReindexSwapLock(dbPath);
+    swapLock.release();
+  });
+
+  it("blocks a live database open while an atomic swap is active", async () => {
+    const dbPath = path.join(fixtureRoot, `case-${caseId++}`, "index.sqlite");
+    await fs.mkdir(path.dirname(dbPath), { recursive: true });
+    const seed = new DatabaseSync(dbPath);
+    seed.close();
+
+    const swapLock = acquireMemoryReindexSwapLock(dbPath);
+    expect(() => openMemoryDatabaseAtPath(dbPath, false)).toThrow(
+      /unavailable during a safe reindex swap/,
+    );
+    swapLock.release();
+
+    const db = openMemoryDatabaseAtPath(dbPath, false);
+    closeMemoryDatabase(db);
+  });
+
   it("does not block database startup when orphan discovery fails", async () => {
     const dbPath = path.join(fixtureRoot, `case-${caseId++}`, "index.sqlite");
     await fs.mkdir(path.dirname(dbPath), { recursive: true });
@@ -213,6 +318,6 @@ describe("openMemoryDatabaseAtPath readOnly probe", () => {
     });
 
     const db = openMemoryDatabaseAtPath(dbPath, false);
-    db.close();
+    closeMemoryDatabase(db);
   });
 });
