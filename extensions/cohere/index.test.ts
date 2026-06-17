@@ -32,11 +32,14 @@ function captureCoherePayload(context: Context): Record<string, unknown> {
       { maxTokens: 2048 } as never,
     );
     options?.onPayload?.(payload, model);
-    captured = payload;
     return {} as ReturnType<StreamFn>;
   };
 
-  void createCohereCompletionsWrapper(baseStreamFn)(requireCohereModel(), context, {});
+  void createCohereCompletionsWrapper(baseStreamFn)(requireCohereModel(), context, {
+    onPayload: (payload) => {
+      captured = payload as Record<string, unknown>;
+    },
+  });
   if (!captured) {
     throw new Error("Cohere payload was not captured");
   }
@@ -104,5 +107,11 @@ describe("Cohere provider plugin", () => {
     expect(params).not.toHaveProperty("store");
     expect(params).not.toHaveProperty("stream_options");
     expect(params).not.toHaveProperty("tool_choice");
+    expect(params.messages).toEqual(
+      expect.arrayContaining([expect.objectContaining({ role: "developer", content: "system" })]),
+    );
+    expect(params.messages).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ role: "system", content: "system" })]),
+    );
   });
 });
