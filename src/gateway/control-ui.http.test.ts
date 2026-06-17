@@ -787,6 +787,30 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  it("rewrites public asset hrefs in index.html when Control UI uses a configured base path (#94157)", async () => {
+    const html =
+      '<html><head><link rel="manifest" href="/manifest.webmanifest" /><link rel="icon" href="/favicon.svg" /></head><body></body></html>\n';
+    await withControlUiRoot({
+      indexHtml: html,
+      fn: async (tmp) => {
+        const { res, end } = makeMockHttpResponse();
+        const handled = await handleControlUiHttpRequest(
+          { url: "/openclaw/chat", method: "GET" } as IncomingMessage,
+          res,
+          {
+            basePath: "/openclaw",
+            root: { kind: "resolved", path: tmp },
+          },
+        );
+        expect(handled).toBe(true);
+        const body = String(end.mock.calls[0]?.[0] ?? "");
+        expect(body).toContain('href="/openclaw/manifest.webmanifest"');
+        expect(body).toContain('href="/openclaw/favicon.svg"');
+        expect(body).not.toContain('href="/manifest.webmanifest"');
+      },
+    });
+  });
+
   it("serves bootstrap config JSON", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
