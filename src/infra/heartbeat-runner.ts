@@ -42,6 +42,7 @@ import {
   stripHeartbeatToken,
   type HeartbeatTask,
 } from "../auto-reply/heartbeat.js";
+import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { replaceGenericExternalRunFailureText } from "../auto-reply/reply/agent-runner-failure-copy.js";
 import { resolveDefaultModel } from "../auto-reply/reply/directive-handling.defaults.js";
 import {
@@ -525,6 +526,26 @@ function shouldUseHeartbeatResponseToolPrompt(params: {
     return false;
   }
   return usesCodexHarness(params);
+}
+
+/**
+ * True only when the operator explicitly opted into message-tool visibility
+ * (messages.visibleReplies / groupChat.visibleReplies === "message_tool").
+ * This is the privacy contract: nothing user-facing should reach the channel
+ * unless the model surfaces it via the response/message tool. The Codex-harness
+ * default also forces the response tool, but that is a structural detail rather
+ * than a privacy opt-in, so plain-text fallback delivery stays allowed there.
+ */
+function isExplicitMessageToolVisibility(params: {
+  cfg: OpenClawConfig;
+  chatType?: ChatType;
+}): boolean {
+  const chatType = normalizeChatType(params.chatType);
+  const visibleReplies =
+    chatType === "group" || chatType === "channel"
+      ? (params.cfg.messages?.groupChat?.visibleReplies ?? params.cfg.messages?.visibleReplies)
+      : params.cfg.messages?.visibleReplies;
+  return visibleReplies === "message_tool";
 }
 
 function resolveHeartbeatAckMaxChars(cfg: OpenClawConfig, heartbeat?: HeartbeatConfig) {
@@ -1841,6 +1862,62 @@ export async function runHeartbeatOnce(opts: {
       : [];
     const ackMaxChars = resolveHeartbeatAckMaxChars(cfg, heartbeat);
     const responsePrefix = resolveHeartbeatResponsePrefix();
+
+    // message_tool_only privacy guard (issue #94053): when the operator
+    // explicitly set visibleReplies="message_tool", the heartbeat run forces
+    // the heartbeat response tool and sourceReplyDeliveryMode=message_tool_only.
+    // The privacy contract is that nothing user-facing reaches the channel
+    // unless the model surfaces it via heartbeat_respond. If the model instead
+    // returns plain final text WITHOUT calling the tool, that text is private
+    // and must not leak — treat it as a silent heartbeat ack.
+    //
+    // Scope is intentionally limited to the explicit opt-in so the Codex-harness
+    // default (which also forces the tool, but expects plain-text fallback
+    // delivery) keeps its existing behavior. Two payloads are still allowed
+    // through to preserve current behavior:
+    //  - notices explicitly marked deliverDespiteSourceReplySuppression
+    //    (e.g. Codex runtime usage-limit / failure notices), and
+    //  - relayable exec-completion events.
+    const replyMarkedForDelivery =
+      Boolean(replyPayload) &&
+      getReplyPayloadMetadata(replyPayload as object)?.deliverDespiteSourceReplySuppression ===
+        true;
+    if (
+      usesHeartbeatResponseTool &&
+      isExplicitMessageToolVisibility({ cfg, chatType: delivery.chatType }) &&
+      !heartbeatToolResponse &&
+      replyPayload &&
+      hasOutboundReplyContent(replyPayload) &&
+      !replyMarkedForDelivery &&
+      !hasRelayableExecCompletion
+    ) {
+      await restoreHeartbeatUpdatedAt({
+        storePath,
+        sessionKey,
+        updatedAt: previousUpdatedAt,
+      });
+
+      const okSent = await maybeSendHeartbeatOk();
+      emitHeartbeatEvent({
+        status: "ok-token",
+        reason: opts.reason,
+        preview: replyPayload.text?.slice(0, 200) ?? "",
+        durationMs: Date.now() - startedAt,
+        channel: delivery.channel !== "none" ? delivery.channel : undefined,
+        accountId: delivery.accountId,
+        silent: !okSent,
+        indicatorType: visibility.useIndicator ? resolveIndicatorType("ok-token") : undefined,
+      });
+      await markCommitmentsStatus({
+        cfg,
+        ids: dueCommitmentIds,
+        status: "dismissed",
+        nowMs: startedAt,
+      });
+      await updateTaskTimestamps();
+      consumeInspectedSystemEvents();
+      return { status: "ran", durationMs: Date.now() - startedAt };
+    }
 
     if (heartbeatToolResponse && !heartbeatToolResponse.notify) {
       await restoreHeartbeatUpdatedAt({

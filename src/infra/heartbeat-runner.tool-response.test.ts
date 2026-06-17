@@ -412,6 +412,42 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
     ]);
   });
 
+  it("keeps a private final reply off-channel when message_tool mode is forced and the tool is not called", async () => {
+    // Regression for #94053: with visibleReplies="message_tool" the run forces
+    // the heartbeat response tool (sourceReplyDeliveryMode=message_tool_only).
+    // If the model returns plain final text WITHOUT calling heartbeat_respond,
+    // that text is private and must NOT be delivered to the channel.
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createConfig({ tmpDir, storePath, visibleReplies: "message_tool" });
+      await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+      });
+      // Plain final text (no heartbeat_respond tool call). Includes HEARTBEAT_OK
+      // mid-string so edge-token stripping does not turn it into a quiet ack —
+      // this is the exact leak path described in the issue.
+      replySpy.mockResolvedValue({
+        text: "Reviewed the overnight logs and the deployment is HEARTBEAT_OK, but I noticed three private follow-ups I am tracking internally.",
+      });
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        deps: createDeps({ sendTelegram, getReplyFromConfig: replySpy }),
+      });
+
+      // Confirm the run actually forced message_tool_only mode.
+      const calledOpts = replyOptions(replySpy);
+      expect(calledOpts.sourceReplyDeliveryMode).toBe("message_tool_only");
+      expect(calledOpts.forceHeartbeatTool).toBe(true);
+
+      // The private text must not reach the channel; run still completes.
+      expect(result.status).toBe("ran");
+      expect(sendTelegram).not.toHaveBeenCalled();
+    });
+  });
+
   it("keeps the legacy heartbeat ok prompt outside heartbeat response tool mode", async () => {
     await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const cfg = createConfig({ tmpDir, storePath, visibleReplies: "automatic" });
