@@ -83,6 +83,7 @@ async function writeTuiPtyFixtureScript(dir: string) {
 
       const actionLogPath = process.env.OPENCLAW_TUI_PTY_LOG_PATH;
       const gatewayStatus = process.env.OPENCLAW_TUI_PTY_GATEWAY_STATUS ?? "fixture gateway ok";
+      const slowInitMs = Number(process.env.OPENCLAW_TUI_PTY_SLOW_INIT_MS ?? 0);
       const xaiLimitError = '403 {"code":"The caller does not have permission to execute the specified operation","error":"Your team team-redacted has either used all available credits or reached its monthly spending limit. To continue making API requests, please purchase more credits or raise your spending limit."}';
       let currentModel = "fixture-provider/fixture-model";
       let fastMode = process.env.OPENCLAW_TUI_PTY_FAST_MODE === "true";
@@ -229,6 +230,9 @@ async function writeTuiPtyFixtureScript(dir: string) {
         }
 
         async loadHistory() {
+          if (slowInitMs > 0) {
+            await new Promise((resolve) => setTimeout(resolve, slowInitMs));
+          }
           return { messages: [], fastMode };
         }
 
@@ -366,6 +370,24 @@ describe.sequential("TUI PTY harness", () => {
     expect(fixture.run.output()).toContain("local ready");
     expect(fixture.run.output()).not.toContain("host local");
   });
+
+  it(
+    "shows a busy startup loader during post-connect initialization",
+    async () => {
+      // With a slow post-connect init, the TUI must render the busy startup
+      // loader (activity status "starting up") before flipping to "local
+      // ready". Before the fix the activity stayed "idle" and no loader
+      // rendered, so the TUI looked frozen while onConnected init ran.
+      const slow = await startTuiFixture({ env: { OPENCLAW_TUI_PTY_SLOW_INIT_MS: "400" } });
+      try {
+        await slow.run.waitForOutput("starting up", STARTUP_TIMEOUT_MS);
+        await slow.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
+      } finally {
+        await slow.cleanup();
+      }
+    },
+    STARTUP_TEST_TIMEOUT_MS,
+  );
 
   it(
     "drives the real TUI terminal loop through typed input",

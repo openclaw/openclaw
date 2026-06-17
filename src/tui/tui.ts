@@ -405,6 +405,10 @@ const TUI_BUSY_ACTIVITY_STATUSES = new Set([
   "streaming",
   "running",
   "finishing context",
+  // Post-connect initialization (agent refresh, session restore, history load)
+  // in client.onConnected is async; marking it busy keeps the status loader
+  // visible so the TUI does not look frozen before it is actually ready.
+  "starting up",
 ]);
 
 export function isTuiBusyActivityStatus(status: string): boolean {
@@ -1534,7 +1538,15 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     if (reconnected) {
       reconnectStreamingWatchdog();
     }
-    setConnectionStatus(isLocalMode ? "local ready" : "connected");
+    // Post-connect initialization (agent refresh, session restore, history
+    // load) below is async. Keep the TUI in a busy "starting up" state for
+    // that work so the status loader renders instead of a falsely "ready"
+    // idle line that makes the UI look frozen. The connection status stays at
+    // its pre-connect "starting local runtime"/"connecting" value until init
+    // finishes. Cleared on both completion and startup failure below so the
+    // ready and "startup failed" statuses still render as static text.
+    setActivityStatus("starting up");
+    tui.requestRender();
     void (async () => {
       try {
         await client.subscribeSessionEvents?.();
@@ -1546,6 +1558,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       updateHeader();
       updateAutocompleteProvider();
       await loadHistory();
+      setActivityStatus("idle");
       setConnectionStatus(
         isLocalMode ? "local ready" : reconnected ? "gateway reconnected" : "gateway connected",
         4000,
@@ -1561,6 +1574,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       tui.requestRender();
     })().catch((err: unknown) => {
       chatLog.addSystem(`startup failed: ${String(err)}`);
+      setActivityStatus("idle");
       setConnectionStatus("startup failed", 5000);
       tui.requestRender();
     });

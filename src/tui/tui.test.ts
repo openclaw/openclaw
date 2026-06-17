@@ -190,6 +190,13 @@ describe("isTuiBusyActivityStatus", () => {
   it("treats finishing context as a visible busy status", () => {
     expect(isTuiBusyActivityStatus("finishing context")).toBe(true);
   });
+
+  it("treats post-connect startup initialization as a visible busy status", () => {
+    // During onConnected init (agent refresh, session restore, history load)
+    // the TUI must show the busy loader instead of a falsely "ready" idle
+    // line. See src/tui/tui.ts client.onConnected.
+    expect(isTuiBusyActivityStatus("starting up")).toBe(true);
+  });
 });
 
 describe("resolveTuiToolsToggleActivityStatus", () => {
