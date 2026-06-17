@@ -339,9 +339,9 @@ async function listFolder(client: Lark.Client, folderToken?: string, opts?: { pa
   let hasMore = true;
   while (hasMore) {
     const params: Record<string, string | number> = {};
-    if (validFolderToken) { params.folder_token } = validFolderToken;
-    if (opts?.pageSize) { params.page_size } = opts.pageSize;
-    if (pageToken) { params.page_token } = pageToken;
+    if (validFolderToken) params.folder_token = validFolderToken;
+    if (opts?.pageSize) params.page_size = opts.pageSize;
+    if (pageToken) params.page_token = pageToken;
     const res = await client.drive.file.list({ params });
     if (res.code !== 0) {
       throw new Error(res.msg);
