@@ -148,8 +148,9 @@ checks, lint pipelines, browser capture flows) without an LLM round-trip. This
 applies to BOTH `POST /tools/invoke` AND the SDK-facing JSON-RPC `tools.invoke`
 (they share the same direct-invoke resolver).
 
-**`read` is denied by default.** To enable it, operators must set TWO distinct
-config keys, intentionally:
+**`read` is denied by default.** Reaching it requires TWO distinct config keys
+(set intentionally) AND an owner/admin sender at request time. The two config
+keys:
 
 ```json5
 {
@@ -172,15 +173,18 @@ config keys, intentionally:
 }
 ```
 
-**Either key alone is insufficient.** Only the combination grants direct-invoke
-read access:
+**Neither config key alone — nor both together — is sufficient.** All three
+gates must hold: both config keys AND an owner/admin sender (`senderIsOwner ===
+true`, evaluated per request). A non-owner trusted-proxy caller (e.g.
+`operator.write`) is refused even when both config keys are set:
 
-| `tools.allow` includes `"read"` | `directInvoke.hostFsRead` | `read` reachable           |
-| ------------------------------- | ------------------------- | -------------------------- |
-| no                              | no                        | ❌                         |
-| yes                             | no                        | ❌ (tool not materialized) |
-| no                              | yes                       | ❌ (filtered by HTTP deny) |
-| yes                             | yes                       | ✅                         |
+| `tools.allow` includes `"read"` | `directInvoke.hostFsRead` | sender is owner/admin | `read` reachable                    |
+| ------------------------------- | ------------------------- | --------------------- | ----------------------------------- |
+| no                              | no                        | —                     | ❌                                  |
+| yes                             | no                        | yes                   | ❌ (tool not materialized)          |
+| no                              | yes                       | yes                   | ❌ (filtered by HTTP deny)          |
+| yes                             | yes                       | no                    | ❌ (owner gate — non-owner refused) |
+| yes                             | yes                       | yes                   | ✅                                  |
 
 **Security:** When enabled, `read` can access any file the gateway process can
 open, **outside the configured workspace** unless `tools.fs.workspaceOnly: true`
