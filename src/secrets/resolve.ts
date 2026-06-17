@@ -735,7 +735,7 @@ async function resolveExecRefs(params: {
     });
   }
 
-  const childEnv: NodeJS.ProcessEnv = {};
+  const childEnv: NodeJS.ProcessEnv = { ...params.env };
   for (const key of params.providerConfig.passEnv ?? []) {
     const value = params.env[key];
     if (value !== undefined) {
