@@ -184,7 +184,7 @@ export function convertTableToFlexBubble(table: MarkdownTable): FlexBubble {
             contents: [
               {
                 type: "text",
-                text: `… ${rowCells.length - maxDisplayRows} more rows`,
+                text: `… ${rowCells.length - maxDisplayRows} more ${rowCells.length - maxDisplayRows === 1 ? "row" : "rows"}`,
                 size: "xs",
                 color: "#999999",
                 align: "center",

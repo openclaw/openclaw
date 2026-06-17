@@ -370,9 +370,9 @@ describe("convertTableToFlexBubble", () => {
 
     const hintTexts = body.contents
       .flatMap((c) => c.contents ?? [])
-      .filter((c) => c.text?.includes("more rows"))
+      .filter((c) => c.text?.includes("more row"))
       .map((c) => c.text);
-    expect(hintTexts).toEqual(["… 1 more rows"]);
+    expect(hintTexts).toEqual(["… 1 more row"]);
   });
 
   it("shows truncation hint with correct count for 15 rows", () => {
