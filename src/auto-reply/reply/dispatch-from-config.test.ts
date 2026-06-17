@@ -8085,6 +8085,111 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     });
   });
 
+  it("does NOT force-silence a room_event direct turn (routes through policy, stays disallowed)", async () => {
+    // room_event must NOT be caught by the system_event OR-clause — it must flow
+    // through the normal policy path, which returns "disallow" for direct chats.
+    // This test would FAIL if emptyFinalAllowedAsSilent used === "room_event"
+    // or any predicate that includes room_event instead of === "system_event".
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => undefined);
+    const ctx = buildTestCtx({
+      ChatType: "direct",
+      InboundEventKind: "room_event",
+      SessionKey: "test:session",
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    // Policy returns "disallow" for direct → emptyFinalAllowedAsSilent=false →
+    // noVisibleReplyFallbackEligible is set. room_event delivery uses its own
+    // === "room_event" check; system_event delivery is default/automatic.
+    expect(result.queuedFinal).toBe(false);
+    expect(result.noVisibleReplyFallbackEligible).toBe(true);
+  });
+
+  it("allows direct silence for system_event turns (no no-visible fallback)", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => undefined);
+    const ctx = buildTestCtx({
+      ChatType: "direct",
+      InboundEventKind: "system_event",
+      SessionKey: "test:session",
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    // system_event is a first-class ambient kind (distinct from room_event) and is
+    // treated identically here: emptyFinalAllowedAsSilent === true → fallback omitted,
+    // and it routes through message-tool-only delivery.
+    expect(result.queuedFinal).toBe(false);
+    expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
+  });
+
+  it("marks direct user-request silence eligible for no-visible fallback", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => undefined);
+    const ctx = buildTestCtx({
+      ChatType: "direct",
+      InboundEventKind: "user_request",
+      SessionKey: "test:session",
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    // Direct user-request turns must never be silently swallowed.
+    expect(result).toEqual({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+      noVisibleReplyFallbackEligible: true,
+    });
+  });
+
+  it("respects group silentReply:disallow override for room_event group turns", async () => {
+    // room_event in a group chat must flow through resolveGroupSilentReplyBehavior and
+    // respect the config override, NOT be bypassed by the system_event OR-clause.
+    // This test would FAIL if emptyFinalAllowedAsSilent used === "room_event" or any
+    // predicate that includes room_event, because the override would be ignored.
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => undefined);
+    const ctx = buildTestCtx({
+      ChatType: "group",
+      InboundEventKind: "room_event",
+      SessionKey: "agent:main:slack:group:C123",
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: {
+        agents: { defaults: { silentReply: { group: "disallow" } } },
+      } as OpenClawConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    // silentReply.group=disallow → emptyFinalAllowedAsSilent=false → fallback eligible.
+    expect(result.queuedFinal).toBe(false);
+    expect(result.noVisibleReplyFallbackEligible).toBe(true);
+  });
+
   it("suppresses tool result delivery when sendPolicy is deny", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {

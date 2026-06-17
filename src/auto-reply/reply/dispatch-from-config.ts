@@ -1807,14 +1807,15 @@ export async function dispatchReplyFromConfig(
   const silentReplyConversationType = resolveRoutedPolicyConversationType(ctx);
   const silentReplySurface = normalizeLowercaseStringOrEmpty(ctx.Surface ?? ctx.Provider);
   const emptyFinalAllowedAsSilent =
-    silentReplyConversationType !== undefined &&
-    resolveSilentReplyPolicyFromPolicies({
-      conversationType: silentReplyConversationType,
-      defaultPolicy: cfg.agents?.defaults?.silentReply,
-      surfacePolicy: silentReplySurface
-        ? cfg.surfaces?.[silentReplySurface]?.silentReply
-        : undefined,
-    }) === "allow";
+    ctx.InboundEventKind === "system_event" ||
+    (silentReplyConversationType !== undefined &&
+      resolveSilentReplyPolicyFromPolicies({
+        conversationType: silentReplyConversationType,
+        defaultPolicy: cfg.agents?.defaults?.silentReply,
+        surfacePolicy: silentReplySurface
+          ? cfg.surfaces?.[silentReplySurface]?.silentReply
+          : undefined,
+      }) === "allow");
   const configuredVisibleReplies =
     chatType === "group" || chatType === "channel"
       ? (cfg.messages?.groupChat?.visibleReplies ?? cfg.messages?.visibleReplies)

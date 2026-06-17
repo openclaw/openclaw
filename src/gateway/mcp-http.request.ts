@@ -70,7 +70,9 @@ function resolveScopedSessionKey(cfg: OpenClawConfig, rawSessionKey: string | un
 
 function normalizeMcpInboundEventKind(value: string | undefined): InboundEventKind | undefined {
   const trimmed = normalizeOptionalString(value);
-  return trimmed === "room_event" || trimmed === "user_request" ? trimmed : undefined;
+  return trimmed === "room_event" || trimmed === "user_request" || trimmed === "system_event"
+    ? trimmed
+    : undefined;
 }
 
 function normalizeMcpSourceReplyDeliveryMode(

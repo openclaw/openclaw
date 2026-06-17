@@ -466,7 +466,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       senderIsOwner?: boolean;
       sessionKey?: string;
       sessionId?: string;
-      inboundTurnKind?: "user_request" | "room_event";
+      inboundTurnKind?: "user_request" | "room_event" | "system_event";
       agentId?: string;
       toolContext?: {
         currentChannelId?: string;

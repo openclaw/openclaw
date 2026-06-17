@@ -1620,6 +1620,53 @@ describe("gateway send mirroring", () => {
     );
   });
 
+  it("forwards system_event inboundTurnKind through the gateway-protocol schema and round-trips to dispatchChannelMessageAction", async () => {
+    // Verifies that system_event passes gateway-protocol TypeBox validation
+    // (MessageActionSchema enum: ["user_request","room_event","system_event"]) and
+    // round-trips as inboundEventKind === "system_event" into dispatchChannelMessageAction.
+    const reactPlugin: ChannelPlugin = {
+      id: "whatsapp",
+      meta: {
+        id: "whatsapp",
+        label: "WhatsApp",
+        selectionLabel: "WhatsApp",
+        docsPath: "/channels/whatsapp",
+        blurb: "WhatsApp action dispatch test plugin.",
+      },
+      capabilities: { chatTypes: ["direct"], reactions: true },
+      config: {
+        listAccountIds: () => ["default"],
+        resolveAccount: () => ({ enabled: true }),
+        isConfigured: () => true,
+      },
+      actions: {
+        describeMessageTool: () => ({ actions: ["react"] }),
+        supportsAction: ({ action }) => action === "react",
+        handleAction: async ({ params }) => jsonResult({ ok: true, messageId: params.messageId }),
+      },
+    };
+    mocks.getChannelPlugin.mockReturnValue(reactPlugin);
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "whatsapp", source: "test", plugin: reactPlugin }]),
+      "send-test-system-event-round-trip",
+    );
+    mocks.dispatchChannelMessageAction.mockResolvedValueOnce(
+      jsonResult({ ok: true, messageId: "wamid.system" }),
+    );
+
+    await runMessageActionRequest({
+      channel: "whatsapp",
+      action: "react",
+      params: { chatJid: "+15551234567", messageId: "wamid.system", emoji: "👍" },
+      inboundTurnKind: "system_event",
+      idempotencyKey: "idem-system-event",
+    });
+
+    expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledWith(
+      expect.objectContaining({ inboundEventKind: "system_event" }),
+    );
+  });
+
   it("mirrors successful source-conversation message.action sends into the assistant transcript", async () => {
     const telegramPlugin: ChannelPlugin = {
       id: "telegram",
