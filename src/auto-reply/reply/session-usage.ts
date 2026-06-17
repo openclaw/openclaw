@@ -279,7 +279,11 @@ export async function persistSessionUsageUpdate(params: {
               : (params.systemPromptReport ?? entry.systemPromptReport),
             updatedAt: Date.now(),
           };
-          if (!preserveUserFacingRunState) {
+          if (
+            !preserveUserFacingRunState &&
+            (params.preserveFreshTotalTokensOnStaleUsage !== true ||
+              entry.totalTokensFresh !== true)
+          ) {
             // A completed run without a context snapshot invalidates any fresh
             // zero persisted for the previously empty session.
             patch.totalTokensFresh = false;

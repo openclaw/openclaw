@@ -777,6 +777,10 @@ export async function initSessionState(params: {
         sessionEntry.sessionId = forked.sessionId;
         sessionEntry.sessionFile = forked.sessionFile;
         sessionEntry.forkedFromParent = true;
+        // The fork replaces the target transcript with inherited parent
+        // history, so any prior target-session token snapshot is stale.
+        sessionEntry.totalTokens = undefined;
+        sessionEntry.totalTokensFresh = false;
         inheritedParentContext = true;
         log.warn(`forked session created: file=${forked.sessionFile}`);
       }
