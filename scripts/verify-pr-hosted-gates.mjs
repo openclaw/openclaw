@@ -81,7 +81,8 @@ function successfulRunOrThrow(runs, workflowName, sha) {
 }
 
 function stripAnsi(raw) {
-  return raw.replace(/\x1B\[[0-?]*[ -/]*[@-~]/gu, "");
+  const escape = String.fromCharCode(27);
+  return raw.replace(new RegExp(`${escape}\\[[0-?]*[ -/]*[@-~]`, "gu"), "");
 }
 
 export function parseWorkflowRunPages(raw) {
