@@ -58,6 +58,7 @@ describe("qa scenario catalog", () => {
         "control-ui-chat-flow-playwright",
         "package-openclaw-for-docker",
         "plugin-lifecycle-probe",
+        "qa-otel-smoke",
       ].toSorted(),
     );
     expect(
