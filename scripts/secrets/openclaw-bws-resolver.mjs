@@ -52,6 +52,7 @@ const main = async () => {
     env: {
       BWS_ACCESS_TOKEN: process.env.BWS_ACCESS_TOKEN,
       PATH: process.env.PATH || "",
+      ...(process.env.BWS_SERVER_URL ? { BWS_SERVER_URL: process.env.BWS_SERVER_URL } : {}),
     },
     maxBuffer: 1024 * 1024,
     timeout: 15_000,
