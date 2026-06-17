@@ -570,6 +570,7 @@ function mapStopReason(reason: string | undefined): string {
     case "tool_use":
       return "toolUse";
     case "pause_turn":
+    case "max_turns":
       return "stop";
     case "refusal":
     case "sensitive":

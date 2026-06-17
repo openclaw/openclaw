@@ -36,9 +36,7 @@ export function handleRetryLimitExhaustion(params: {
   return {
     payloads: [
       {
-        text:
-          "Request failed after repeated internal retries. " +
-          "Please try again, or use /new to start a fresh session.",
+        text: `${params.message} Please try again, or use /new to start a fresh session.`,
         isError: true,
       },
     ],
