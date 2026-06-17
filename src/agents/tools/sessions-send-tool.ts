@@ -191,6 +191,12 @@ function isRequesterParentOfNativeSubagentSession(params: {
   return requester === spawnedBy || requester === parentSessionKey;
 }
 
+/** Detect isolated cron requesters by the `:cron:` marker in the session key. */
+function isRequesterIsolatedCron(requesterSessionKey: string | null | undefined): boolean {
+  const requester = normalizeOptionalString(requesterSessionKey);
+  return Boolean(requester?.includes(":cron:"));
+}
+
 function isTerminalAgentWaitTimeout(result: AgentWaitResult): boolean {
   return result.endedAt !== undefined || Boolean(result.stopReason || result.livenessState);
 }
@@ -635,7 +641,8 @@ export function createSessionsSendTool(opts?: {
           requesterSessionKey: effectiveRequesterKey,
           targetSessionKey: resolvedKey,
         });
-      const skipA2AFlow = skipAcpA2AFlow || skipNativeParentA2AFlow;
+      const skipCronA2AFlow = isRequesterIsolatedCron(effectiveRequesterKey);
+      const skipA2AFlow = skipAcpA2AFlow || skipNativeParentA2AFlow || skipCronA2AFlow;
       // When the A2A flow is skipped, no follow-up announcement will fire and
       // the reply (when present) is returned inline via the `reply` field.
       // Reflect that in the metadata so the parent LLM does not wait for a
