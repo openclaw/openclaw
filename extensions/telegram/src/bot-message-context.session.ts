@@ -421,6 +421,7 @@ export async function buildTelegramInboundContextPayload(params: {
       name: senderName,
       username: senderUsername || undefined,
       id: senderId || undefined,
+      isBot: msg.from?.is_bot === true,
     },
     previousTimestamp,
     envelope: envelopeOptions,
@@ -521,6 +522,7 @@ export async function buildTelegramInboundContextPayload(params: {
       ...(senderId ? { id: senderId } : {}),
       name: senderName,
       username: senderUsername || undefined,
+      isBot: msg.from?.is_bot === true,
     },
     conversation: {
       kind: conversationKind,
