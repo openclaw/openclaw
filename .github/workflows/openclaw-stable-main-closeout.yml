@@ -102,12 +102,31 @@ jobs:
           evidence_version="${evidence_source_tag#v}"
           evidence_asset="openclaw-${evidence_version}-postpublish-evidence.json"
           evidence_checksum_asset="${evidence_asset}.sha256"
+          closeout_asset="openclaw-${release_asset_version}-stable-main-closeout.json"
+          closeout_checksum_asset="${closeout_asset}.sha256"
           if [[ "$EVENT_NAME" == "push" ]]; then
             main_version="$(jq -r '.version // empty' package.json)"
             if [[ "$main_version" != "$release_package_version" &&
               "$main_version" != "$fallback_package_version" ]]; then
               echo "should_closeout=false" >> "$GITHUB_OUTPUT"
               exit 0
+            fi
+
+            closeout_dir="$RUNNER_TEMP/release-closeout-evidence"
+            mkdir -p "$closeout_dir"
+            gh release download "$tag" --repo "$GITHUB_REPOSITORY" \
+              --pattern "$closeout_asset" --pattern "$closeout_checksum_asset" --dir "$closeout_dir" || true
+            closeout_json_path="$closeout_dir/$closeout_asset"
+            closeout_checksum_path="$closeout_dir/$closeout_checksum_asset"
+            if [[ -f "$closeout_json_path" && -f "$closeout_checksum_path" ]]; then
+              expected_closeout_digest="$(awk 'NF { print $1; exit }' "$closeout_checksum_path")"
+              actual_closeout_digest="$(sha256sum "$closeout_json_path" | awk '{print $1}')"
+              if [[ "$expected_closeout_digest" =~ ^[0-9a-f]{64}$ &&
+                "$expected_closeout_digest" == "$actual_closeout_digest" ]]; then
+                echo "should_closeout=false" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+              echo "Stable closeout evidence for $tag is incomplete or invalid; refusing to skip verification." >&2
             fi
           else
             main_ref="main"
@@ -283,7 +302,9 @@ jobs:
             --rollback-drill-id "$ROLLBACK_DRILL_ID" \
             --rollback-drill-date "$ROLLBACK_DRILL_DATE" \
             --output "$CLOSEOUT_DIR/stable-main-closeout.json"
-          sha256sum "$CLOSEOUT_DIR/stable-main-closeout.json" \
+          release_version="${RELEASE_TAG#v}"
+          sha256sum "$CLOSEOUT_DIR/stable-main-closeout.json" | awk -v asset="openclaw-${release_version}-stable-main-closeout.json" \
+            '{print $1 "  " asset}' \
             > "$CLOSEOUT_DIR/stable-main-closeout.json.sha256"
 
       - name: Attach immutable closeout evidence

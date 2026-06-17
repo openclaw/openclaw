@@ -133,9 +133,14 @@ describe("package acceptance workflow", () => {
       "Stable closeout skipped: $evidence_source_tag predates immutable postpublish evidence.",
     );
     expect(workflow).toContain("Stable closeout is required for $tag");
-    expect(workflow).not.toContain('closeout_asset="openclaw-${release_asset_version}');
-    expect(workflow).not.toContain(
-      'if [[ "$EVENT_NAME" == "push" ]] && gh release view "$tag" --repo "$GITHUB_REPOSITORY"',
+    expect(workflow).toContain('closeout_checksum_asset="${closeout_asset}.sha256"');
+    expect(workflow).toContain('expected_closeout_digest="$(awk');
+    expect(workflow).toContain('actual_closeout_digest="$(sha256sum "$closeout_json_path"');
+    expect(workflow).toContain(
+      "Stable closeout evidence for $tag is incomplete or invalid; refusing to skip verification.",
+    );
+    expect(workflow).toContain(
+      'awk -v asset="openclaw-${release_version}-stable-main-closeout.json"',
     );
     expect(workflow).toContain("attach_or_verify \\");
     expect(checksumIndex).toBeGreaterThan(-1);
