@@ -176,15 +176,28 @@ keys:
 **Neither config key alone — nor both together — is sufficient.** All three
 gates must hold: both config keys AND an owner/admin sender (`senderIsOwner ===
 true`, evaluated per request). A non-owner trusted-proxy caller (e.g.
-`operator.write`) is refused even when both config keys are set:
+`operator.write`) is refused the **built-in** `read` coding tool even when both
+config keys are set — the owner gate scopes only built-in host-FS
+materialization; a same-named allowlisted plugin tool, if any, is unaffected and
+resolves under the normal `gateway.tools.allow`/`deny` policy (see _Plugin name
+collision_ below):
 
-| `tools.allow` includes `"read"` | `directInvoke.hostFsRead` | sender is owner/admin | `read` reachable                    |
-| ------------------------------- | ------------------------- | --------------------- | ----------------------------------- |
-| no                              | no                        | —                     | ❌                                  |
-| yes                             | no                        | yes                   | ❌ (tool not materialized)          |
-| no                              | yes                       | yes                   | ❌ (filtered by HTTP deny)          |
-| yes                             | yes                       | no                    | ❌ (owner gate — non-owner refused) |
-| yes                             | yes                       | yes                   | ✅                                  |
+| `tools.allow` includes `"read"` | `directInvoke.hostFsRead` | sender is owner/admin | built-in `read` reachable                   |
+| ------------------------------- | ------------------------- | --------------------- | ------------------------------------------- |
+| no                              | no                        | —                     | ❌                                          |
+| yes                             | no                        | yes                   | ❌ (tool not materialized)                  |
+| no                              | yes                       | yes                   | ❌ (filtered by HTTP deny)                  |
+| yes                             | yes                       | no                    | ❌ (owner gate — built-in not materialized) |
+| yes                             | yes                       | yes                   | ✅                                          |
+
+**Plugin name collision:** The owner gate and the dual-key opt-in apply only to
+the **built-in** `read` coding tool. For a non-owner caller the built-in is never
+materialized, so a same-named tool from an allowlisted plugin (if any) is not
+additionally gated by `senderIsOwner` — it resolves under the normal
+`gateway.tools.allow`/`deny` policy. When all three gates hold and both a plugin
+and the built-in share the name `read`, the built-in takes precedence on the
+direct-invoke surface, so the documented filesystem behavior holds regardless of
+installed plugins.
 
 **Security:** When enabled, `read` can access any file the gateway process can
 open, **outside the configured workspace** unless `tools.fs.workspaceOnly: true`
