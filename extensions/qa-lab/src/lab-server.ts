@@ -16,7 +16,11 @@ import {
   writeQaRequestBodyLimitError,
 } from "./bus-server.js";
 import { createQaBusState, type QaBusState } from "./bus-state.js";
-import { buildQaEvidenceGalleryModel, resolveQaEvidenceArtifactFile } from "./evidence-gallery.js";
+import {
+  QaEvidenceGalleryError,
+  buildQaEvidenceGalleryModel,
+  resolveQaEvidenceArtifactFile,
+} from "./evidence-gallery.js";
 import { createQaRunnerRuntime } from "./harness-runtime.js";
 import {
   isCaptureQueryPreset,
@@ -68,6 +72,10 @@ export type {
 
 export function writeQaLabServerError(res: Parameters<typeof writeError>[0], error: unknown): void {
   if (writeQaRequestBodyLimitError(res, error)) {
+    return;
+  }
+  if (error instanceof QaEvidenceGalleryError) {
+    writeError(res, error.statusCode, error.message);
     return;
   }
   writeError(res, 500, error);
@@ -454,6 +462,8 @@ export async function startQaLabServer(
           res.writeHead(200, {
             "content-type": detectQaEvidenceArtifactContentType(artifactFile),
             "content-length": artifactStats.size,
+            "cache-control": "no-store",
+            "x-content-type-options": "nosniff",
           });
           if (req.method === "HEAD") {
             res.end();

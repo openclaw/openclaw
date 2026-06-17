@@ -1,3 +1,12 @@
+import type {
+  QaEvidenceArtifactView,
+  QaEvidenceGalleryEntryView,
+  QaEvidenceGalleryModel,
+  QaEvidenceMatrixCellView,
+  QaEvidenceProducerContext,
+  QaEvidenceProducerContextFile,
+} from "../../src/evidence-gallery.js";
+
 /* ===== Shared types (unchanged from the bus protocol) ===== */
 
 type Conversation = {
@@ -251,85 +260,13 @@ export type CaptureStartupStatusEnvelope = {
   status: CaptureStartupStatus;
 };
 
-type EvidenceStatus = "pass" | "fail" | "blocked" | "skipped";
-
-type EvidenceArtifactView = {
-  exists: boolean;
-  error: string | null;
-  href: string | null;
-  kind: string;
-  mediaKind: "image" | "video" | "json" | "text" | "file";
-  path: string;
-  preview: string | null;
-  source: string;
-};
-
-type EvidenceEntryView = {
-  artifacts: EvidenceArtifactView[];
-  coverage: Array<{ id: string; role: string }>;
-  failureReason: string | null;
-  id: string;
-  kind: string;
-  sourcePath: string | null;
-  status: EvidenceStatus;
-  title: string;
-};
-
-type EvidenceProducerContextFile = {
-  href: string;
-  path: string;
-  preview: string | null;
-};
-
-type EvidenceMatrixCell = {
-  artifactKinds: string[];
-  artifactPaths: string[];
-  coverageIds: string[];
-  runner: {
-    availability: string | null;
-    command: string | null;
-    lane: string | null;
-    workflow: string | null;
-  } | null;
-  stage: string;
-  status: string;
-  surface: string;
-  testId: string | null;
-  title: string | null;
-};
-
-type EvidenceProducerContext = {
-  commands: EvidenceProducerContextFile | null;
-  kind: "ux-matrix";
-  manifest:
-    | (EvidenceProducerContextFile & { runStatus: string | null; runId: string | null })
-    | null;
-  matrix: {
-    cells: EvidenceMatrixCell[];
-    counts: Record<string, number>;
-    path: string;
-    stages: string[];
-    surfaces: string[];
-  } | null;
-  preflight: {
-    adbDevices: EvidenceProducerContextFile | null;
-    memory: EvidenceProducerContextFile | null;
-  };
-  releaseLedger: (EvidenceProducerContextFile & { counts: Record<string, number> }) | null;
-  rootPath: string;
-  scorecard: EvidenceProducerContextFile | null;
-};
-
-type EvidenceGalleryModel = {
-  counts: Record<EvidenceStatus, number>;
-  entries: EvidenceEntryView[];
-  evidenceMode: string;
-  evidencePath: string;
-  generatedAt: string;
-  profile: string | null;
-  producerContext: EvidenceProducerContext | null;
-  schemaVersion: number;
-};
+type EvidenceStatus = QaEvidenceGalleryEntryView["status"];
+type EvidenceArtifactView = QaEvidenceArtifactView;
+type EvidenceEntryView = QaEvidenceGalleryEntryView;
+type EvidenceProducerContextFile = QaEvidenceProducerContextFile;
+type EvidenceMatrixCell = QaEvidenceMatrixCellView;
+type EvidenceProducerContext = QaEvidenceProducerContext;
+type EvidenceGalleryModel = QaEvidenceGalleryModel;
 
 export type EvidenceEnvelope = {
   evidence: EvidenceGalleryModel | null;
@@ -1281,7 +1218,7 @@ function renderTabBar(state: UiState): string {
   const tabs: Array<{ id: TabId; label: string }> = [
     { id: "chat", label: "Chat" },
     { id: "results", label: "Results" },
-    { id: "evidence", label: "Evidence" },
+    { id: "evidence", label: "Evidence Archive" },
     { id: "report", label: "Report" },
     { id: "events", label: "Events" },
     { id: "capture", label: "Capture" },
@@ -1726,18 +1663,18 @@ function renderEvidenceArtifactBody(artifact: EvidenceArtifactView): string {
   const isInlineScreenshot =
     artifact.mediaKind === "image" && artifact.kind.toLowerCase().includes("screenshot");
   if (isInlineScreenshot) {
-    return `<a href="${esc(artifact.href)}" target="_blank" rel="noreferrer"><img src="${esc(artifact.href)}" alt="${esc(artifact.kind)} artifact" loading="lazy" /></a>`;
+    return `<a href="${esc(artifact.href)}" target="_blank" rel="noopener noreferrer"><img src="${esc(artifact.href)}" alt="${esc(artifact.kind)} artifact" loading="lazy" /></a>`;
   }
   if (artifact.mediaKind === "image") {
     return `<div class="evidence-artifact-deferred">
       <span>Media preview is deferred to keep the evidence view responsive.</span>
-      <a class="btn-sm" href="${esc(artifact.href)}" target="_blank" rel="noreferrer">Open media artifact</a>
+      <a class="btn-sm" href="${esc(artifact.href)}" target="_blank" rel="noopener noreferrer">Open media artifact</a>
     </div>`;
   }
   if (artifact.mediaKind === "video") {
     return `<div class="evidence-artifact-deferred">
       <span>Video preview is deferred to keep the evidence view responsive.</span>
-      <a class="btn-sm" href="${esc(artifact.href)}" target="_blank" rel="noreferrer">Open video artifact</a>
+      <a class="btn-sm" href="${esc(artifact.href)}" target="_blank" rel="noopener noreferrer">Open video artifact</a>
     </div>`;
   }
   if (artifact.preview !== null) {
@@ -1746,7 +1683,7 @@ function renderEvidenceArtifactBody(artifact: EvidenceArtifactView): string {
       <pre class="report-pre evidence-artifact-preview">${esc(artifact.preview)}</pre>
     </details>`;
   }
-  return `<a class="btn-sm" href="${esc(artifact.href)}" target="_blank" rel="noreferrer">Open artifact</a>`;
+  return `<a class="btn-sm" href="${esc(artifact.href)}" target="_blank" rel="noopener noreferrer">Open artifact</a>`;
 }
 
 function renderEvidenceArtifactCard(artifact: EvidenceArtifactView): string {
@@ -1756,7 +1693,7 @@ function renderEvidenceArtifactCard(artifact: EvidenceArtifactView): string {
         <div class="evidence-artifact-title">${esc(artifact.kind)}</div>
         <div class="evidence-artifact-source">${esc(artifact.source)}</div>
       </div>
-      ${artifact.href ? `<a class="btn-sm btn-ghost" href="${esc(artifact.href)}" target="_blank" rel="noreferrer">Open</a>` : ""}
+      ${artifact.href ? `<a class="btn-sm btn-ghost" href="${esc(artifact.href)}" target="_blank" rel="noopener noreferrer">Open</a>` : ""}
     </header>
     ${renderEvidenceArtifactBody(artifact)}
     <footer title="${esc(artifact.path)}">${esc(artifact.path)}</footer>
@@ -1841,7 +1778,7 @@ function renderProducerContextFile(params: {
           ? `<pre class="report-pre evidence-producer-preview">${esc(params.file.preview)}</pre>`
           : '<div class="empty-state">Preview unavailable for this artifact.</div>'
       }
-      <a class="btn-sm btn-ghost" href="${esc(params.file.href)}" target="_blank" rel="noreferrer">Open artifact</a>
+      <a class="btn-sm btn-ghost" href="${esc(params.file.href)}" target="_blank" rel="noopener noreferrer">Open artifact</a>
     </div>
   </details>`;
 }
@@ -2006,6 +1943,10 @@ function renderEvidenceView(state: UiState): string {
     ) ?? 0;
   return `<div class="evidence-view">
     <div class="evidence-toolbar">
+      <div class="evidence-toolbar-intro">
+        <div class="inspector-section-title">Evidence Archive</div>
+        <p>Saved QA evidence bundles, proof artifacts, logs, and producer context.</p>
+      </div>
       <div class="evidence-toolbar-main">
         <label class="capture-search-field">Evidence path
           <input id="evidence-path" value="${esc(state.evidencePathDraft)}" placeholder=".artifacts/qa-e2e/suite-.../qa-evidence.json" />

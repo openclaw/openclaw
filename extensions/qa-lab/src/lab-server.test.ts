@@ -511,12 +511,33 @@ describe("qa-lab server", () => {
     expect(headResponse.status).toBe(200);
     expect(headResponse.headers.get("content-type")).toBe("text/plain; charset=utf-8");
     expect(headResponse.headers.get("content-length")).toBe("14");
+    expect(headResponse.headers.get("cache-control")).toBe("no-store");
+    expect(headResponse.headers.get("x-content-type-options")).toBe("nosniff");
     expect(await headResponse.text()).toBe("");
 
     const getResponse = await fetchWithRetry(artifactUrl.toString());
     expect(getResponse.status).toBe(200);
     expect(getResponse.headers.get("content-length")).toBe("14");
+    expect(getResponse.headers.get("cache-control")).toBe("no-store");
+    expect(getResponse.headers.get("x-content-type-options")).toBe("nosniff");
     expect(await getResponse.text()).toBe("streamed body\n");
+
+    await writeFile(path.join(evidenceDir, "undeclared.log"), "hidden\n", "utf8");
+    const undeclaredUrl = new URL(artifactUrl);
+    undeclaredUrl.searchParams.set("artifactPath", "undeclared.log");
+    const undeclaredResponse = await fetchWithRetry(undeclaredUrl.toString());
+    expect(undeclaredResponse.status).toBe(403);
+
+    const outsideDir = await mkdtemp(path.join(os.tmpdir(), "qa-lab-outside-artifact-"));
+    cleanups.push(async () => {
+      await rm(outsideDir, { recursive: true, force: true });
+    });
+    const outsideArtifact = path.join(outsideDir, "outside.log");
+    await writeFile(outsideArtifact, "outside\n", "utf8");
+    const outsideUrl = new URL(artifactUrl);
+    outsideUrl.searchParams.set("artifactPath", outsideArtifact);
+    const outsideResponse = await fetchWithRetry(outsideUrl.toString());
+    expect(outsideResponse.status).toBe(404);
   });
 
   it("returns controlled errors for oversized JSON body reads", async () => {

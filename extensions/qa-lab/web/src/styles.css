@@ -1566,13 +1566,25 @@ select {
 .evidence-toolbar {
   flex-shrink: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1.45fr) minmax(380px, 0.9fr);
+  grid-template-columns: minmax(220px, 0.65fr) minmax(0, 1.35fr) minmax(380px, 0.9fr);
   gap: 12px;
+  align-items: end;
   padding: 10px 12px;
   border: 1px solid var(--border);
   border-radius: 10px;
   background: color-mix(in srgb, var(--bg-surface) 94%, transparent);
   box-shadow: var(--shadow);
+}
+
+.evidence-toolbar-intro {
+  min-width: 0;
+}
+
+.evidence-toolbar-intro p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.4;
 }
 
 .evidence-toolbar-main,

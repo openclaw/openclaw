@@ -664,7 +664,7 @@ export async function createQaLabApp(root: HTMLDivElement) {
       state.selectedEvidenceEntryId = payload.evidence?.entries[0]?.id ?? null;
       const url = new URL(window.location.href);
       url.pathname = "/evidence";
-      url.searchParams.set("path", evidencePath);
+      url.searchParams.set("path", state.evidencePathDraft);
       window.history.replaceState(null, "", `${url.pathname}${url.search}`);
     } catch (error) {
       state.evidence = null;

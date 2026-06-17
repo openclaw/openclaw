@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { toRepoRelativePath } from "./cli-paths.js";
 import {
   QA_EVIDENCE_FILENAME,
   validateQaEvidenceSummaryJson,
@@ -10,8 +11,33 @@ import {
 } from "./evidence-summary.js";
 
 const TEXT_PREVIEW_BYTES = 12 * 1024;
+const ARTIFACT_VIEW_CONCURRENCY = 8;
+
+const UX_MATRIX_PRODUCER_FILES = [
+  { key: "commands", path: "commands.txt", previewKind: "text" },
+  { key: "manifest", path: "manifest.json", previewKind: "json" },
+  { key: "matrix", path: "matrix.json", previewKind: "json" },
+  { key: "releaseLedger", path: "release-ledger.json", previewKind: "json" },
+  { key: "scorecard", path: "scorecard.md", previewKind: "text" },
+  { key: "memory", path: path.join("preflight", "memory.txt"), previewKind: "text" },
+  { key: "adbDevices", path: path.join("preflight", "adb-devices.txt"), previewKind: "text" },
+] as const;
 
 type QaEvidenceArtifact = NonNullable<QaEvidenceSummaryEntry["execution"]>["artifacts"][number];
+
+export class QaEvidenceGalleryError extends Error {
+  readonly statusCode: number;
+
+  constructor(message: string, statusCode: number) {
+    super(message);
+    this.name = "QaEvidenceGalleryError";
+    this.statusCode = statusCode;
+  }
+}
+
+function evidenceError(message: string, statusCode: number): QaEvidenceGalleryError {
+  return new QaEvidenceGalleryError(message, statusCode);
+}
 
 export type QaEvidenceProducerContextFile = {
   href: string;
@@ -126,20 +152,26 @@ export async function resolveQaEvidenceFile(params: {
   const repoRoot = await fs.realpath(path.resolve(params.repoRoot));
   const raw = params.inputPath.trim();
   if (!raw) {
-    throw new Error("Evidence path is required.");
+    throw evidenceError("Evidence path is required.", 400);
   }
   const candidate = path.resolve(repoRoot, raw);
   const realCandidate = await realpathIfExists(candidate);
-  if (!realCandidate || !isInside(repoRoot, realCandidate)) {
-    throw new Error("Evidence path must exist inside the repo root.");
+  if (!realCandidate) {
+    throw evidenceError("Evidence path not found.", 404);
+  }
+  if (!isInside(repoRoot, realCandidate)) {
+    throw evidenceError("Evidence path must stay inside the repo root.", 403);
   }
   const stats = await fs.stat(realCandidate);
   const evidencePath = stats.isDirectory()
     ? path.join(realCandidate, QA_EVIDENCE_FILENAME)
     : realCandidate;
   const realEvidencePath = await realpathIfExists(evidencePath);
-  if (!realEvidencePath || !isInside(repoRoot, realEvidencePath)) {
-    throw new Error("qa-evidence.json must exist inside the repo root.");
+  if (!realEvidencePath) {
+    throw evidenceError("qa-evidence.json not found.", 404);
+  }
+  if (!isInside(repoRoot, realEvidencePath)) {
+    throw evidenceError("qa-evidence.json must stay inside the repo root.", 403);
   }
   return realEvidencePath;
 }
@@ -169,7 +201,12 @@ export async function resolveQaEvidenceArtifactFile(params: {
   if (allowedArtifactFiles.has(artifactFile)) {
     return artifactFile;
   }
-  throw new Error("Evidence artifact is not declared by this evidence summary.");
+  throw evidenceError("Evidence artifact is not declared by this evidence summary.", 403);
+}
+
+function isExplicitRepoRootArtifactPath(raw: string): boolean {
+  const normalized = raw.split(/[\\/]+/u).join("/");
+  return normalized.startsWith(".artifacts/");
 }
 
 async function resolveExistingQaEvidenceArtifactFile(params: {
@@ -186,11 +223,12 @@ async function resolveExistingQaEvidenceArtifactFile(params: {
   );
   const raw = params.artifactPath.trim();
   if (!raw) {
-    throw new Error("Artifact path is required.");
+    throw evidenceError("Artifact path is required.", 400);
   }
-  const candidates = path.isAbsolute(raw)
-    ? [raw]
-    : [path.resolve(evidenceDir, raw), path.resolve(repoRoot, raw)];
+  const candidates = path.isAbsolute(raw) ? [raw] : [path.resolve(evidenceDir, raw)];
+  if (!path.isAbsolute(raw) && isExplicitRepoRootArtifactPath(raw)) {
+    candidates.push(path.resolve(repoRoot, raw));
+  }
   for (const candidate of candidates) {
     const realCandidate = await realpathIfExists(candidate);
     if (!realCandidate) {
@@ -204,7 +242,7 @@ async function resolveExistingQaEvidenceArtifactFile(params: {
       return realCandidate;
     }
   }
-  throw new Error("Evidence artifact not found.");
+  throw evidenceError("Evidence artifact not found.", 404);
 }
 
 async function collectDeclaredQaEvidenceArtifactFiles(params: {
@@ -232,14 +270,8 @@ async function collectDeclaredQaEvidenceArtifactFiles(params: {
   });
   if (producerRoot) {
     const producerFiles = [
-      "commands.txt",
-      "manifest.json",
-      "matrix.json",
-      "qa-evidence.json",
-      "release-ledger.json",
-      "scorecard.md",
-      path.join("preflight", "adb-devices.txt"),
-      path.join("preflight", "memory.txt"),
+      ...UX_MATRIX_PRODUCER_FILES.map((file) => file.path),
+      QA_EVIDENCE_FILENAME,
     ];
     for (const producerFile of producerFiles) {
       const realProducerFile = await realpathIfExists(path.join(producerRoot, producerFile));
@@ -304,28 +336,6 @@ async function readPreview(filePath: string, mediaKind: QaEvidenceArtifactView["
   }
 }
 
-async function readTextPreviewIfExists(
-  filePath: string,
-  allowedRoots: readonly string[],
-): Promise<string | null> {
-  const realFile = await resolveContainedFileIfExists(filePath, allowedRoots);
-  if (!realFile) {
-    return null;
-  }
-  return readPreview(realFile, "text").catch(() => null);
-}
-
-async function readJsonPreviewIfExists(
-  filePath: string,
-  allowedRoots: readonly string[],
-): Promise<string | null> {
-  const realFile = await resolveContainedFileIfExists(filePath, allowedRoots);
-  if (!realFile) {
-    return null;
-  }
-  return readPreview(realFile, "json").catch(() => null);
-}
-
 async function readJsonIfExists(
   filePath: string,
   allowedRoots: readonly string[],
@@ -368,10 +378,7 @@ async function buildProducerContextFile(params: {
   return {
     href: artifactHref(params.hrefEvidencePath, params.artifactPath),
     path: repoPath,
-    preview:
-      params.previewKind === "json"
-        ? await readJsonPreviewIfExists(realFile, params.allowedRoots)
-        : await readTextPreviewIfExists(realFile, params.allowedRoots),
+    preview: await readPreview(realFile, params.previewKind).catch(() => null),
   };
 }
 
@@ -498,7 +505,9 @@ function readMatrixCells(params: {
   summaryEntries: readonly QaEvidenceSummaryEntry[];
 }): QaEvidenceMatrixCellView[] {
   const rawCells = Array.isArray(params.matrix?.cells)
-    ? (params.matrix.cells as Array<Record<string, unknown>>)
+    ? params.matrix.cells
+        .map(readRecord)
+        .filter((cell): cell is Record<string, unknown> => Boolean(cell))
     : [];
   const entriesByCell = buildUxMatrixEvidenceEntryIndex(params.summaryEntries);
   return rawCells.flatMap((cell): QaEvidenceMatrixCellView[] => {
@@ -598,78 +607,44 @@ async function buildProducerContext(params: {
     await resolveQaEvidenceFile({ inputPath: params.evidencePath, repoRoot }),
   );
   const allowedRoots = [repoRoot, evidenceDir];
-  const manifestPath = path.join(rootPath, "manifest.json");
-  const matrixPath = path.join(rootPath, "matrix.json");
-  const releaseLedgerPath = path.join(rootPath, "release-ledger.json");
-  const scorecardPath = path.join(rootPath, "scorecard.md");
-  const commandsPath = path.join(rootPath, "commands.txt");
-  const memoryPath = path.join(rootPath, "preflight", "memory.txt");
-  const adbDevicesPath = path.join(rootPath, "preflight", "adb-devices.txt");
+  const producerPaths = Object.fromEntries(
+    UX_MATRIX_PRODUCER_FILES.map((file) => [file.key, path.join(rootPath, file.path)]),
+  ) as Record<(typeof UX_MATRIX_PRODUCER_FILES)[number]["key"], string>;
+  const manifestPath = producerPaths.manifest;
+  const matrixPath = producerPaths.matrix;
+  const releaseLedgerPath = producerPaths.releaseLedger;
   const manifest = await readJsonIfExists(manifestPath, allowedRoots);
   const matrix = await readJsonIfExists(matrixPath, allowedRoots);
   const releaseLedger = await readJsonIfExists(releaseLedgerPath, allowedRoots);
-  const [commandsFile, manifestFile, memoryFile, adbDevicesFile, releaseLedgerFile, scorecardFile] =
-    await Promise.all([
-      buildProducerContextFile({
-        allowedRoots,
-        artifactPath: toRepoRelativePath(repoRoot, commandsPath),
-        filePath: commandsPath,
-        hrefEvidencePath: params.hrefEvidencePath,
-        previewKind: "text",
-        repoRoot,
-      }),
-      buildProducerContextFile({
-        allowedRoots,
-        artifactPath: toRepoRelativePath(repoRoot, manifestPath),
-        filePath: manifestPath,
-        hrefEvidencePath: params.hrefEvidencePath,
-        previewKind: "json",
-        repoRoot,
-      }),
-      buildProducerContextFile({
-        allowedRoots,
-        artifactPath: toRepoRelativePath(repoRoot, memoryPath),
-        filePath: memoryPath,
-        hrefEvidencePath: params.hrefEvidencePath,
-        previewKind: "text",
-        repoRoot,
-      }),
-      buildProducerContextFile({
-        allowedRoots,
-        artifactPath: toRepoRelativePath(repoRoot, adbDevicesPath),
-        filePath: adbDevicesPath,
-        hrefEvidencePath: params.hrefEvidencePath,
-        previewKind: "text",
-        repoRoot,
-      }),
-      buildProducerContextFile({
-        allowedRoots,
-        artifactPath: toRepoRelativePath(repoRoot, releaseLedgerPath),
-        filePath: releaseLedgerPath,
-        hrefEvidencePath: params.hrefEvidencePath,
-        previewKind: "json",
-        repoRoot,
-      }),
-      buildProducerContextFile({
-        allowedRoots,
-        artifactPath: toRepoRelativePath(repoRoot, scorecardPath),
-        filePath: scorecardPath,
-        hrefEvidencePath: params.hrefEvidencePath,
-        previewKind: "text",
-        repoRoot,
-      }),
-    ]);
+  const producerFiles = Object.fromEntries(
+    await Promise.all(
+      UX_MATRIX_PRODUCER_FILES.map(async (file) => [
+        file.key,
+        await buildProducerContextFile({
+          allowedRoots,
+          artifactPath: toRepoRelativePath(repoRoot, producerPaths[file.key]),
+          filePath: producerPaths[file.key],
+          hrefEvidencePath: params.hrefEvidencePath,
+          previewKind: file.previewKind,
+          repoRoot,
+        }),
+      ]),
+    ),
+  ) as Record<
+    (typeof UX_MATRIX_PRODUCER_FILES)[number]["key"],
+    QaEvidenceProducerContextFile | null
+  >;
   const matrixCells = readMatrixCells({
     matrix,
     summaryEntries: params.summaryEntries,
   });
   return {
-    commands: commandsFile,
+    commands: producerFiles.commands,
     kind: "ux-matrix",
     manifest:
-      manifest && manifestFile
+      manifest && producerFiles.manifest
         ? {
-            ...manifestFile,
+            ...producerFiles.manifest,
             runId: readString(readRecord(manifest.run)?.runId),
             runStatus: readString(readRecord(manifest.run)?.status),
           }
@@ -690,23 +665,38 @@ async function buildProducerContext(params: {
         }
       : null,
     preflight: {
-      adbDevices: adbDevicesFile,
-      memory: memoryFile,
+      adbDevices: producerFiles.adbDevices,
+      memory: producerFiles.memory,
     },
     releaseLedger:
-      releaseLedger && releaseLedgerFile
+      releaseLedger && producerFiles.releaseLedger
         ? {
-            ...releaseLedgerFile,
+            ...producerFiles.releaseLedger,
             counts: readCountRecord(releaseLedger.counts),
           }
         : null,
     rootPath: toRepoRelativePath(repoRoot, rootPath),
-    scorecard: scorecardFile,
+    scorecard: producerFiles.scorecard,
   };
 }
 
-function toRepoRelativePath(repoRoot: string, filePath: string) {
-  return path.relative(repoRoot, filePath);
+function createConcurrencyLimit(limit: number) {
+  let active = 0;
+  const queue: Array<() => void> = [];
+  return async function runLimited<T>(task: () => Promise<T>): Promise<T> {
+    if (active >= limit) {
+      await new Promise<void>((resolve) => {
+        queue.push(resolve);
+      });
+    }
+    active += 1;
+    try {
+      return await task();
+    } finally {
+      active -= 1;
+      queue.shift()?.();
+    }
+  };
 }
 
 export async function buildQaEvidenceGalleryModel(params: {
@@ -728,13 +718,16 @@ export async function buildQaEvidenceGalleryModel(params: {
     blocked: 0,
     skipped: 0,
   };
+  const limitArtifactView = createConcurrencyLimit(ARTIFACT_VIEW_CONCURRENCY);
   const entries = await Promise.all(
     summary.entries.map(async (entry): Promise<QaEvidenceGalleryEntryView> => {
       counts[entry.result.status] += 1;
       return {
         artifacts: await Promise.all(
           (entry.execution?.artifacts ?? []).map((artifact) =>
-            buildArtifactView({ artifact, evidencePath, hrefEvidencePath, repoRoot }),
+            limitArtifactView(() =>
+              buildArtifactView({ artifact, evidencePath, hrefEvidencePath, repoRoot }),
+            ),
           ),
         ),
         coverage: entry.coverage,

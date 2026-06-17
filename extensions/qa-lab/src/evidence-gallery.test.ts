@@ -153,6 +153,7 @@ describe("evidence gallery", () => {
         { id: "cli", label: "CLI" },
       ],
       cells: [
+        null,
         {
           coverageIds: ["ui.control"],
           runner: {
@@ -487,15 +488,54 @@ describe("evidence gallery", () => {
         repoRoot,
       }),
     ).resolves.toBe(await fs.realpath(path.join(outputDir, "runner", "result.json")));
+    await fs.rm(path.join(outputDir, "runner", "result.json"));
+    const missingBundleModel = await buildQaEvidenceGalleryModel({ evidencePath, repoRoot });
+    expect(missingBundleModel.entries[0].artifacts[0]).toMatchObject({
+      exists: false,
+      error: "Evidence artifact not found.",
+      preview: null,
+    });
+    expect(JSON.stringify(missingBundleModel)).not.toContain('"from":"repo"');
     await expect(
       resolveQaEvidenceArtifactFile({
         artifactPath: "package.json",
         evidencePath,
         repoRoot,
       }),
+    ).rejects.toThrow("Evidence artifact not found.");
+    await fs.writeFile(path.join(outputDir, "undeclared.log"), "undeclared\n", "utf8");
+    await expect(
+      resolveQaEvidenceArtifactFile({
+        artifactPath: "undeclared.log",
+        evidencePath,
+        repoRoot,
+      }),
     ).rejects.toThrow("Evidence artifact is not declared by this evidence summary.");
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "qa-evidence-outside-artifact-"));
+    const outsideArtifact = path.join(outsideDir, "artifact.log");
+    await fs.writeFile(outsideArtifact, "outside secret\n", "utf8");
+    await fs.symlink(outsideArtifact, path.join(outputDir, "escape.log"));
+    await writeJson(evidencePath, {
+      ...collisionEvidence,
+      entries: [
+        {
+          ...collisionEvidence.entries[0],
+          execution: {
+            ...collisionEvidence.entries[0].execution,
+            artifacts: [{ kind: "log", path: "escape.log", source: "vitest" }],
+          },
+        },
+      ],
+    });
+    await expect(
+      resolveQaEvidenceArtifactFile({
+        artifactPath: "escape.log",
+        evidencePath,
+        repoRoot,
+      }),
+    ).rejects.toThrow("Evidence artifact not found.");
     await expect(
       resolveQaEvidenceFile({ inputPath: "/tmp/not-openclaw-evidence.json", repoRoot }),
-    ).rejects.toThrow("Evidence path must exist inside the repo root.");
+    ).rejects.toThrow("Evidence path not found.");
   });
 });
