@@ -444,4 +444,40 @@ describe("gateway/node-catalog", () => {
     expect(nodes[0]?.caps).toEqual(["camera"]);
     expect(nodes[0]?.commands).toEqual(["system.run"]);
   });
+
+  it("normalizes non-string scalar fields from malformed pairing records (no nodes-status crash)", () => {
+    // Paired/pending records are blind-cast from disk, so every formatter-facing scalar can be a
+    // non-string; before this guard a `nodes status` formatter (.trim() / sanitizeTerminalText) threw.
+    const catalog = createKnownNodeCatalog({
+      pairedDevices: [
+        pairedDevice({
+          deviceId: "mac-1",
+          clientId: 456 as unknown as string,
+          clientMode: 789 as unknown as string,
+        }),
+      ],
+      pairedNodes: [
+        pairedNode({
+          nodeId: "mac-1",
+          version: 123 as unknown as string,
+          displayName: 321 as unknown as string,
+          platform: 11 as unknown as string,
+          remoteIp: 22 as unknown as string,
+          deviceFamily: 33 as unknown as string,
+          modelIdentifier: 44 as unknown as string,
+        }),
+      ],
+      connectedNodes: [],
+    });
+
+    const node = getKnownNode(catalog, "mac-1");
+    expect(node?.version).toBeUndefined();
+    expect(node?.displayName).toBeUndefined();
+    expect(node?.clientId).toBeUndefined();
+    expect(node?.clientMode).toBeUndefined();
+    expect(node?.platform).toBeUndefined();
+    expect(node?.remoteIp).toBeUndefined();
+    expect(node?.deviceFamily).toBeUndefined();
+    expect(node?.modelIdentifier).toBeUndefined();
+  });
 });

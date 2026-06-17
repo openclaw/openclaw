@@ -1,6 +1,9 @@
 // Gateway node catalog builder.
 // Merges paired devices, approved node records, and live websocket sessions.
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { normalizeSortedUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { hasEffectivePairedDeviceRole, type PairedDevice } from "../infra/device-pairing.js";
 import {
@@ -75,6 +78,13 @@ type KnownNodeCatalog = {
 
 function uniqueSortedStrings(...items: Array<readonly unknown[] | undefined>): string[] {
   return normalizeSortedUniqueTrimmedStringList(items.flatMap((item) => item ?? []));
+}
+
+// Catalog scalars come from blind-cast pairing records, so coerce every formatter-facing optional
+// string scalar to a trimmed string or undefined: a non-string would crash `nodes status`/`nodes
+// list` formatters (.trim(), sanitizeTerminalText/stripAnsi). Scalar analog of uniqueSortedStrings.
+function firstNormalizedString(...values: unknown[]): string | undefined {
+  return normalizeOptionalString(values.find((value) => value != null));
 }
 
 function buildDevicePairingSource(entry: PairedDevice): KnownNodeDevicePairingSource {
@@ -182,7 +192,7 @@ function resolveEffectiveLastSeen(params: {
   }
   return {
     lastSeenAtMs: newest.atMs,
-    lastSeenReason: newest.reason,
+    lastSeenReason: normalizeOptionalString(newest.reason),
   };
 }
 
@@ -197,30 +207,59 @@ function buildEffectiveKnownNode(entry: {
   const lastSeen = resolveEffectiveLastSeen({ live, devicePairing, nodePairing });
   return {
     nodeId,
-    displayName:
-      live?.displayName ??
-      nodePairing?.displayName ??
-      devicePairing?.displayName ??
+    displayName: firstNormalizedString(
+      live?.displayName,
+      nodePairing?.displayName,
+      devicePairing?.displayName,
       pendingNodePairing?.displayName,
-    platform:
-      live?.platform ??
-      nodePairing?.platform ??
-      devicePairing?.platform ??
+    ),
+    platform: firstNormalizedString(
+      live?.platform,
+      nodePairing?.platform,
+      devicePairing?.platform,
       pendingNodePairing?.platform,
-    version: live?.version ?? nodePairing?.version ?? pendingNodePairing?.version,
-    coreVersion: live?.coreVersion ?? nodePairing?.coreVersion ?? pendingNodePairing?.coreVersion,
-    uiVersion: live?.uiVersion ?? nodePairing?.uiVersion ?? pendingNodePairing?.uiVersion,
-    clientId: live?.clientId ?? devicePairing?.clientId ?? pendingNodePairing?.clientId,
-    clientMode: live?.clientMode ?? devicePairing?.clientMode ?? pendingNodePairing?.clientMode,
-    deviceFamily:
-      live?.deviceFamily ?? nodePairing?.deviceFamily ?? pendingNodePairing?.deviceFamily,
-    modelIdentifier:
-      live?.modelIdentifier ?? nodePairing?.modelIdentifier ?? pendingNodePairing?.modelIdentifier,
-    remoteIp:
-      live?.remoteIp ??
-      nodePairing?.remoteIp ??
-      devicePairing?.remoteIp ??
+    ),
+    version: firstNormalizedString(
+      live?.version,
+      nodePairing?.version,
+      pendingNodePairing?.version,
+    ),
+    coreVersion: firstNormalizedString(
+      live?.coreVersion,
+      nodePairing?.coreVersion,
+      pendingNodePairing?.coreVersion,
+    ),
+    uiVersion: firstNormalizedString(
+      live?.uiVersion,
+      nodePairing?.uiVersion,
+      pendingNodePairing?.uiVersion,
+    ),
+    clientId: firstNormalizedString(
+      live?.clientId,
+      devicePairing?.clientId,
+      pendingNodePairing?.clientId,
+    ),
+    clientMode: firstNormalizedString(
+      live?.clientMode,
+      devicePairing?.clientMode,
+      pendingNodePairing?.clientMode,
+    ),
+    deviceFamily: firstNormalizedString(
+      live?.deviceFamily,
+      nodePairing?.deviceFamily,
+      pendingNodePairing?.deviceFamily,
+    ),
+    modelIdentifier: firstNormalizedString(
+      live?.modelIdentifier,
+      nodePairing?.modelIdentifier,
+      pendingNodePairing?.modelIdentifier,
+    ),
+    remoteIp: firstNormalizedString(
+      live?.remoteIp,
+      nodePairing?.remoteIp,
+      devicePairing?.remoteIp,
       pendingNodePairing?.remoteIp,
+    ),
     caps: live ? uniqueSortedStrings(live.caps) : uniqueSortedStrings(nodePairing?.caps),
     commands: live
       ? uniqueSortedStrings(live.commands)
