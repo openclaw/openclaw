@@ -140,8 +140,8 @@ describe("memory manager database publication", () => {
 
       concurrentDb = new DatabaseSync(targetPath);
       concurrentDb
-        .prepare("UPDATE memory_index_sources SET hash = ? WHERE path = ?")
-        .run("newer", "memory.md");
+        .prepare("UPDATE memory_index_sources SET hash = ? WHERE path = ? AND source = ?")
+        .run("newer", "memory.md", "memory");
       concurrentDb.close();
       concurrentDb = undefined;
 
@@ -154,7 +154,9 @@ describe("memory manager database publication", () => {
         }),
       ).rejects.toThrow(/changed while full reindex was building/);
       expect(
-        targetDb.prepare("SELECT hash FROM memory_index_sources WHERE path = ?").get("memory.md"),
+        targetDb
+          .prepare("SELECT hash FROM memory_index_sources WHERE path = ? AND source = ?")
+          .get("memory.md", "memory"),
       ).toEqual({ hash: "newer" });
     } finally {
       try {

@@ -719,8 +719,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     this.db
       .prepare(
         `INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(path) DO UPDATE SET
-           source=excluded.source,
+         ON CONFLICT(path, source) DO UPDATE SET
            hash=excluded.hash,
            mtime=excluded.mtime,
            size=excluded.size`,
