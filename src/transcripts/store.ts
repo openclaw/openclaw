@@ -4,9 +4,13 @@ import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline";
+import { writeTextAtomic } from "../infra/json-files.js";
 import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provider-types.js";
 import type { TranscriptsSummary } from "./summary.js";
 import { renderTranscriptsMarkdown } from "./summary.js";
+
+// Match a plain fs.writeFile's umask-derived mode so atomic writes keep permissions unchanged.
+const TRANSCRIPT_FILE_MODE = 0o666 & ~process.umask();
 
 /**
  * File-backed transcript session store.
@@ -130,7 +134,13 @@ export class TranscriptsStore {
   async writeSession(session: TranscriptSessionDescriptor): Promise<void> {
     const dir = this.sessionDir(session);
     await fs.mkdir(dir, { recursive: true });
-    await fs.writeFile(path.join(dir, "metadata.json"), `${JSON.stringify(session, null, 2)}\n`);
+    await writeTextAtomic(
+      path.join(dir, "metadata.json"),
+      `${JSON.stringify(session, null, 2)}\n`,
+      {
+        mode: TRANSCRIPT_FILE_MODE,
+      },
+    );
   }
 
   /** Read one session descriptor by session id or qualified date/id selector. */
@@ -245,9 +255,10 @@ export class TranscriptsStore {
     if (!session) {
       return;
     }
-    await fs.writeFile(
+    await writeTextAtomic(
       path.join(dir, "metadata.json"),
       `${JSON.stringify({ ...session, stoppedAt }, null, 2)}\n`,
+      { mode: TRANSCRIPT_FILE_MODE },
     );
   }
 
@@ -267,10 +278,12 @@ export class TranscriptsStore {
   /** Write summary JSON and markdown to a known directory. */
   async writeSummaryToDir(summary: TranscriptsSummary, dir: string): Promise<string> {
     await fs.mkdir(dir, { recursive: true });
-    await fs.writeFile(path.join(dir, "summary.json"), `${JSON.stringify(summary, null, 2)}\n`);
+    await writeTextAtomic(path.join(dir, "summary.json"), `${JSON.stringify(summary, null, 2)}\n`, {
+      mode: TRANSCRIPT_FILE_MODE,
+    });
     const markdown = renderTranscriptsMarkdown(summary);
     const markdownPath = path.join(dir, "summary.md");
-    await fs.writeFile(markdownPath, `${markdown}\n`);
+    await writeTextAtomic(markdownPath, `${markdown}\n`, { mode: TRANSCRIPT_FILE_MODE });
     return markdownPath;
   }
 }
