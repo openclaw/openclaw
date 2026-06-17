@@ -44,8 +44,21 @@ export async function startGatewayTailscaleExposure(params: {
         }
       }
       if (serviceName) {
+        // Best-effort pre-clean: remove stale serve entries from prior
+        // runs so tailscale serve (which is append-only) does not
+        // accumulate duplicate entries across gateway restarts.
+        try {
+          await disableTailscaleServe(undefined, serviceName);
+        } catch {
+          // pre-cleanup failure is non-fatal; serve enable proceeds either way
+        }
         await enableTailscaleServe(params.port, undefined, serviceName);
       } else {
+        try {
+          await disableTailscaleServe();
+        } catch {
+          // pre-cleanup failure is non-fatal; serve enable proceeds either way
+        }
         await enableTailscaleServe(params.port);
       }
     } else {
