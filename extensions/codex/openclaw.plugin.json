@@ -438,7 +438,7 @@
     },
     "appServer.networkProxy.profileName": {
       "label": "Network Proxy Profile",
-      "help": "Codex permissions profile name generated for app-server network access.",
+      "help": "Optional stable Codex permissions profile name. Leave unset to use a generated openclaw-network fingerprint name.",
       "advanced": true
     },
     "appServer.networkProxy.baseProfile": {

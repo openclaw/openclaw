@@ -1161,6 +1161,7 @@ describe("runCodexAppServerSideQuestion", () => {
           appServer: {
             networkProxy: {
               enabled: true,
+              profileName: "side-proxy",
               domains: { "api.openai.com": "allow" },
               unixSockets: { "/tmp/proxy.sock": "allow" },
               allowUpstreamProxy: true,
@@ -1176,9 +1177,9 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(forkParams).not.toHaveProperty("sandbox");
     expect(config).toMatchObject({
       "features.network_proxy.enabled": true,
-      default_permissions: "openclaw-network",
+      default_permissions: "side-proxy",
       permissions: {
-        "openclaw-network": {
+        "side-proxy": {
           filesystem: {
             ":minimal": "read",
             ":workspace_roots": { ".": "write" },

@@ -109,8 +109,9 @@ Supported `appServer` fields:
 `appServer.networkProxy` is explicit because it changes the Codex sandbox
 contract. When enabled, OpenClaw also sets `features.network_proxy.enabled` and
 `default_permissions` in the Codex thread config so the generated permission
-profile can start Codex managed networking. The default generated profile is
-`openclaw-network`; use `profileName` to choose another local name.
+profile can start Codex managed networking. By default, OpenClaw generates a
+collision-resistant `openclaw-network-<fingerprint>` profile name from the
+profile body; use `profileName` only when a stable local name is required.
 
 ```js
 export default {

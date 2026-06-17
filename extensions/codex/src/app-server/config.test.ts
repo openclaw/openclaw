@@ -226,13 +226,15 @@ describe("Codex app-server config", () => {
         },
       },
     });
+    const profileName = runtime.networkProxy?.profileName;
     const permissions = runtime.networkProxy?.configPatch.permissions as Record<
       string,
       { filesystem: { ":workspace_roots": { ".": string } } }
     >;
 
-    expect(runtime.networkProxy?.profileName).toBe("openclaw-network");
-    expect(permissions["openclaw-network"]?.filesystem[":workspace_roots"]["."]).toBe("read");
+    expect(profileName).toMatch(/^openclaw-network-[a-f0-9]{16}$/u);
+    expect(runtime.networkProxy?.configPatch.default_permissions).toBe(profileName);
+    expect(permissions[profileName ?? ""]?.filesystem[":workspace_roots"]["."]).toBe("read");
   });
 
   it("clamps oversized app-server timer config", () => {

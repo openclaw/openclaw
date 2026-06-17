@@ -284,7 +284,7 @@ export const CODEX_PLUGIN_ENTRY_CONFIG_KEYS = [
 const DEFAULT_CODEX_COMPUTER_USE_PLUGIN_NAME = "computer-use";
 const DEFAULT_CODEX_COMPUTER_USE_MCP_SERVER_NAME = "computer-use";
 const DEFAULT_CODEX_COMPUTER_USE_MARKETPLACE_DISCOVERY_TIMEOUT_MS = 60_000;
-const DEFAULT_CODEX_APP_SERVER_NETWORK_PROXY_PROFILE = "openclaw-network";
+const DEFAULT_CODEX_APP_SERVER_NETWORK_PROXY_PROFILE_PREFIX = "openclaw-network";
 
 const codexAppServerTransportSchema = z.enum(["stdio", "websocket"]);
 const codexAppServerPolicyModeSchema = z.enum(["yolo", "guardian"]);
@@ -887,8 +887,6 @@ function resolveCodexAppServerNetworkProxy(
   if (config?.enabled !== true) {
     return {};
   }
-  const profileName =
-    readNonEmptyString(config.profileName) ?? DEFAULT_CODEX_APP_SERVER_NETWORK_PROXY_PROFILE;
   const fileSystemMode =
     config.baseProfile === "read-only" || (!config.baseProfile && sandbox === "read-only")
       ? "read"
@@ -907,19 +905,21 @@ function resolveCodexAppServerNetworkProxy(
     dangerously_allow_non_loopback_proxy: config.dangerouslyAllowNonLoopbackProxy,
     dangerously_allow_all_unix_sockets: config.dangerouslyAllowAllUnixSockets,
   });
+  const profile = {
+    filesystem: {
+      ":minimal": "read",
+      ":workspace_roots": {
+        ".": fileSystemMode,
+      },
+    },
+    network: networkConfig,
+  };
+  const profileName = resolveNetworkProxyPermissionProfileName(config, profile);
   const configPatch: JsonObject = {
     "features.network_proxy.enabled": true,
     default_permissions: profileName,
     permissions: {
-      [profileName]: {
-        filesystem: {
-          ":minimal": "read",
-          ":workspace_roots": {
-            ".": fileSystemMode,
-          },
-        },
-        network: networkConfig,
-      },
+      [profileName]: profile,
     },
   };
   return {
@@ -929,6 +929,21 @@ function resolveCodexAppServerNetworkProxy(
       configPatch,
     },
   };
+}
+
+function resolveNetworkProxyPermissionProfileName(
+  config: CodexAppServerNetworkProxyConfig,
+  profile: JsonObject,
+): string {
+  const explicitProfileName = readNonEmptyString(config.profileName);
+  if (explicitProfileName) {
+    return explicitProfileName;
+  }
+  const suffix = createHash("sha256")
+    .update(stableStringifyJson({ version: 1, profile }))
+    .digest("hex")
+    .slice(0, 16);
+  return `${DEFAULT_CODEX_APP_SERVER_NETWORK_PROXY_PROFILE_PREFIX}-${suffix}`;
 }
 
 export function fingerprintCodexAppServerNetworkProxyConfigPatch(configPatch: JsonObject): string {

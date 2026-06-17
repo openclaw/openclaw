@@ -74,34 +74,29 @@ import {
   handleCodexConversationInboundClaim,
   startCodexConversationThread,
 } from "./conversation-binding.js";
-import { fingerprintCodexAppServerNetworkProxyConfigPatch } from "./app-server/config.js";
+import { resolveCodexAppServerRuntimeOptions } from "./app-server/config.js";
 
 let tempDir: string;
 
-const NETWORK_PROXY_CONFIG_PATCH = {
-  "features.network_proxy.enabled": true,
-  default_permissions: "openclaw-network",
-  permissions: {
-    "openclaw-network": {
-      filesystem: {
-        ":minimal": "read",
-        ":workspace_roots": {
-          ".": "write",
-        },
-      },
-      network: {
-        enabled: true,
-        domains: { "api.openai.com": "allow" },
-        allow_upstream_proxy: true,
-        proxy_url: "http://127.0.0.1:3128",
-      },
+const NETWORK_PROXY_PLUGIN_CONFIG = {
+  appServer: {
+    networkProxy: {
+      enabled: true,
+      domains: { "api.openai.com": "allow" },
+      allowUpstreamProxy: true,
+      proxyUrl: "http://127.0.0.1:3128",
     },
   },
 };
-
-const NETWORK_PROXY_CONFIG_FINGERPRINT = fingerprintCodexAppServerNetworkProxyConfigPatch(
-  NETWORK_PROXY_CONFIG_PATCH,
-);
+const NETWORK_PROXY_RUNTIME = resolveCodexAppServerRuntimeOptions({
+  env: {},
+  requirementsToml: null,
+  pluginConfig: NETWORK_PROXY_PLUGIN_CONFIG,
+});
+const NETWORK_PROXY_PROFILE_NAME = NETWORK_PROXY_RUNTIME.networkProxy?.profileName ?? "missing";
+const NETWORK_PROXY_CONFIG_PATCH = NETWORK_PROXY_RUNTIME.networkProxy?.configPatch ?? {};
+const NETWORK_PROXY_CONFIG_FINGERPRINT =
+  NETWORK_PROXY_RUNTIME.networkProxy?.configFingerprint ?? "missing";
 
 function conversationThreadStartResult(threadId: string) {
   return {
@@ -252,16 +247,7 @@ describe("codex conversation binding", () => {
     });
 
     await startCodexConversationThread({
-      pluginConfig: {
-        appServer: {
-          networkProxy: {
-            enabled: true,
-            domains: { "api.openai.com": "allow" },
-            allowUpstreamProxy: true,
-            proxyUrl: "http://127.0.0.1:3128",
-          },
-        },
-      },
+      pluginConfig: NETWORK_PROXY_PLUGIN_CONFIG,
       sessionFile,
       workspaceDir: tempDir,
       model: "gpt-5.4-mini",
@@ -272,19 +258,7 @@ describe("codex conversation binding", () => {
     expect(requests[0]?.method).toBe("thread/start");
     expect(requests[0]?.params).not.toHaveProperty("permissions");
     expect(requests[0]?.params).not.toHaveProperty("sandbox");
-    expect(requests[0]?.params.config).toMatchObject({
-      "features.network_proxy.enabled": true,
-      default_permissions: "openclaw-network",
-      permissions: {
-        "openclaw-network": {
-          network: {
-            domains: { "api.openai.com": "allow" },
-            allow_upstream_proxy: true,
-            proxy_url: "http://127.0.0.1:3128",
-          },
-        },
-      },
-    });
+    expect(requests[0]?.params.config).toMatchObject(NETWORK_PROXY_CONFIG_PATCH);
   });
 
   it("starts a fresh proxy-backed thread when binding an explicit app-server thread id", async () => {
@@ -301,16 +275,7 @@ describe("codex conversation binding", () => {
     });
 
     await startCodexConversationThread({
-      pluginConfig: {
-        appServer: {
-          networkProxy: {
-            enabled: true,
-            domains: { "api.openai.com": "allow" },
-            allowUpstreamProxy: true,
-            proxyUrl: "http://127.0.0.1:3128",
-          },
-        },
-      },
+      pluginConfig: NETWORK_PROXY_PLUGIN_CONFIG,
       sessionFile,
       threadId: "thread-old",
       workspaceDir: tempDir,
@@ -326,7 +291,7 @@ describe("codex conversation binding", () => {
       await fs.readFile(`${sessionFile}.codex-app-server.json`, "utf8"),
     ) as Record<string, unknown>;
     expect(bindingAfterStart.threadId).toBe("thread-new");
-    expect(bindingAfterStart.networkProxyProfileName).toBe("openclaw-network");
+    expect(bindingAfterStart.networkProxyProfileName).toBe(NETWORK_PROXY_PROFILE_NAME);
     expect(bindingAfterStart.networkProxyConfigFingerprint).toBe(
       NETWORK_PROXY_CONFIG_FINGERPRINT,
     );
@@ -1363,7 +1328,7 @@ describe("codex conversation binding", () => {
         schemaVersion: 2,
         threadId: "thread-1",
         cwd: tempDir,
-        networkProxyProfileName: "openclaw-network",
+        networkProxyProfileName: NETWORK_PROXY_PROFILE_NAME,
         networkProxyConfigFingerprint: NETWORK_PROXY_CONFIG_FINGERPRINT,
       }),
     );
@@ -1450,7 +1415,7 @@ describe("codex conversation binding", () => {
         schemaVersion: 2,
         threadId: "thread-old",
         cwd: tempDir,
-        networkProxyProfileName: "openclaw-network",
+        networkProxyProfileName: "openclaw-network-stale",
         networkProxyConfigFingerprint: "stale-proxy-config",
       }),
     );
@@ -1539,6 +1504,7 @@ describe("codex conversation binding", () => {
       await fs.readFile(`${sessionFile}.codex-app-server.json`, "utf8"),
     ) as Record<string, unknown>;
     expect(bindingAfterRefresh.threadId).toBe("thread-new");
+    expect(bindingAfterRefresh.networkProxyProfileName).toBe(NETWORK_PROXY_PROFILE_NAME);
     expect(bindingAfterRefresh.networkProxyConfigFingerprint).toBe(
       NETWORK_PROXY_CONFIG_FINGERPRINT,
     );
