@@ -1890,24 +1890,36 @@ function validateConfigObjectWithPluginsBase(
     const shouldValidate = enabled || entryHasConfig;
     if (shouldValidate) {
       if (record.configSchema) {
-        const res = validateJsonSchemaValue({
-          schema: record.configSchema,
-          cacheKey: record.schemaCacheKey ?? record.manifestPath ?? pluginId,
-          value: entry?.config ?? {},
-          applyDefaults: true, // Always apply defaults for AJV schema validation;
-          // writeConfigFile persists persistCandidate, not validated.config (#61841)
-        });
-        if (!res.ok) {
-          for (const error of res.errors) {
+        const configValue = entry?.config;
+        if (configValue === undefined) {
+          const requiredFields = record.configSchema.required;
+          const hasRequiredProperties =
+            Array.isArray(requiredFields) && requiredFields.length > 0;
+          if (hasRequiredProperties) {
             issues.push({
-              path: resolvePluginConfigIssuePath(pluginId, error.path),
-              message: `invalid config: ${error.message}`,
-              allowedValues: error.allowedValues,
-              allowedValuesHiddenCount: error.allowedValuesHiddenCount,
+              path: resolvePluginConfigIssuePath(pluginId, "<root>"),
+              message: `invalid config: missing required config for plugin with required properties: ${(requiredFields as string[]).join(", ")}`,
             });
           }
-        } else if (shouldReplacePluginConfig) {
-          replacePluginEntryConfig(pluginId, res.value as Record<string, unknown>);
+        } else {
+          const res = validateJsonSchemaValue({
+            schema: record.configSchema,
+            cacheKey: record.schemaCacheKey ?? record.manifestPath ?? pluginId,
+            value: configValue,
+            applyDefaults: true,
+          });
+          if (!res.ok) {
+            for (const error of res.errors) {
+              issues.push({
+                path: resolvePluginConfigIssuePath(pluginId, error.path),
+                message: `invalid config: ${error.message}`,
+                allowedValues: error.allowedValues,
+                allowedValuesHiddenCount: error.allowedValuesHiddenCount,
+              });
+            }
+          } else if (shouldReplacePluginConfig) {
+            replacePluginEntryConfig(pluginId, res.value as Record<string, unknown>);
+          }
         }
       } else if (record.format === "bundle") {
         // Compatible bundles currently expose no native OpenClaw config schema.

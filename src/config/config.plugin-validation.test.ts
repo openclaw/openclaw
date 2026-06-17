@@ -1437,6 +1437,32 @@ describe("config plugin validation", () => {
     }
   });
 
+  it("reports missing config for enabled plugins with required schema properties instead of required-property errors", () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "openclaw" }] },
+      plugins: {
+        enabled: true,
+        load: { paths: [badPluginDir] },
+        entries: { "bad-plugin": { enabled: true } },
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      const hasMissingConfig = res.issues.some(
+        (issue) =>
+          issue.path.startsWith("plugins.entries.bad-plugin.config") &&
+          issue.message.includes("missing required config"),
+      );
+      expect(hasMissingConfig).toBe(true);
+      const hasMisleadingError = res.issues.some(
+        (issue) =>
+          issue.path.startsWith("plugins.entries.bad-plugin.config") &&
+          issue.message.includes("must have required property"),
+      );
+      expect(hasMisleadingError).toBe(false);
+    }
+  });
+
   it("surfaces invalid Codex native plugin marketplaces as config diagnostics", () => {
     const res = validateConfigObjectWithPlugins(
       {
