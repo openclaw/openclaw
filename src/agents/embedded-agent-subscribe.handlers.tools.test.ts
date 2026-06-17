@@ -77,6 +77,7 @@ function createTestContext(): {
       messagingToolSentTextsNormalized: [],
       messagingToolSentMediaUrls: [],
       messagingToolSourceReplyPayloads: [],
+      messageToolOnlySourceReplyDelivered: false,
       messagingToolSentTargets: [],
       successfulCronAdds: 0,
       deterministicApprovalPromptSent: false,
@@ -380,6 +381,35 @@ describe("handleToolExecutionEnd cron.add commitment tracking", () => {
     expect(ctx.state.successfulCronAdds).toBe(0);
     expect(ctx.state.itemCompletedCount).toBe(1);
     expect(ctx.state.itemActiveIds.size).toBe(0);
+  });
+});
+
+describe("handleToolExecutionEnd private result observer", () => {
+  it("reports the sanitized original tool result", async () => {
+    const { ctx } = createTestContext();
+    const onAgentToolResult = vi.fn();
+    ctx.params.onAgentToolResult = onAgentToolResult;
+    const result = {
+      content: [{ type: "text", text: '{"results":[{"text":"ramen"}]}' }],
+      details: { results: [{ text: "ramen" }] },
+    };
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "memory_search",
+        toolCallId: "tool-memory-search",
+        isError: false,
+        result,
+      } as never,
+    );
+
+    expect(onAgentToolResult).toHaveBeenCalledWith({
+      toolName: "memory_search",
+      result,
+      isError: false,
+    });
   });
 });
 
@@ -930,7 +960,9 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
   it("emits a deterministic unavailable payload when the initiating surface cannot approve", async () => {
     const { ctx } = createTestContext();
     const onToolResult = vi.fn();
+    const onAgentToolResult = vi.fn();
     ctx.params.onToolResult = onToolResult;
+    ctx.params.onAgentToolResult = onAgentToolResult;
 
     await handleToolExecutionEnd(
       ctx as never,
@@ -960,6 +992,13 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
     expect(text).not.toContain("Pending command:");
     expect(text).not.toContain("Host:");
     expect(text).not.toContain("CWD:");
+    expect(onAgentToolResult).toHaveBeenCalledWith({
+      toolName: "exec",
+      result: expect.objectContaining({
+        details: expect.objectContaining({ status: "approval-unavailable" }),
+      }),
+      isError: true,
+    });
     expect(ctx.state.deterministicApprovalPromptSent).toBe(true);
   });
 
@@ -1545,6 +1584,7 @@ describe("messaging tool media URL tracking", () => {
           {
             type: "text",
             text: JSON.stringify({
+              ok: true,
               mediaUrls: ["file:///img-a.jpg", "file:///img-b.jpg"],
             }),
           },
@@ -1988,5 +2028,120 @@ describe("control UI credential redaction (issue #72283)", () => {
     }
     expect(emittedResult).not.toContain("sk-or-v1-abcdef0123456789");
     expect(emittedResult).toContain("OPENROUTER_API_KEY=");
+  });
+
+  it("records visible reply targets without terminal send evidence", async () => {
+    const { ctx } = createTestContext();
+    const toolCallId = "tool-message-reply-target";
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "message",
+        toolCallId,
+        args: {
+          action: "reply",
+          provider: "telegram",
+          target: "chat-reply",
+          message: "visible reply",
+        },
+      } as never,
+    );
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "message",
+        toolCallId,
+        isError: false,
+        result: { ok: true },
+      } as never,
+    );
+
+    expect(ctx.state.messagingToolSentTexts).toEqual([]);
+    expect(ctx.state.messagingToolSentMediaUrls).toEqual([]);
+    expect(ctx.state.messagingToolSentTargets).toEqual([
+      expect.objectContaining({
+        tool: "message",
+        provider: "telegram",
+        to: "chat-reply",
+      }),
+    ]);
+  });
+
+  it.each([
+    { name: "dry-run", result: { ok: true, dryRun: true } },
+    { name: "suppressed", result: { ok: true, status: "suppressed" } },
+  ])("does not record target evidence for $name reply results", async ({ result }) => {
+    const { ctx } = createTestContext();
+    const toolCallId = `tool-message-reply-${result.status ?? "dry-run"}`;
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "message",
+        toolCallId,
+        args: {
+          action: "reply",
+          provider: "telegram",
+          target: "chat-reply",
+          message: "visible reply",
+        },
+      } as never,
+    );
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "message",
+        toolCallId,
+        isError: false,
+        result,
+      } as never,
+    );
+
+    expect(ctx.state.messagingToolSentTexts).toEqual([]);
+    expect(ctx.state.messagingToolSentMediaUrls).toEqual([]);
+    expect(ctx.state.messagingToolSentTargets).toEqual([]);
+  });
+
+  it("records conversation creation target evidence", async () => {
+    const { ctx } = createTestContext();
+    const toolCallId = "tool-message-thread-create-target";
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "message",
+        toolCallId,
+        args: {
+          action: "thread-create",
+          provider: "telegram",
+          target: "chat-thread",
+          message: "new thread",
+        },
+      } as never,
+    );
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "message",
+        toolCallId,
+        isError: false,
+        result: { ok: true, thread: { id: "thread-1" } },
+      } as never,
+    );
+
+    expect(ctx.state.messagingToolSentTargets).toEqual([
+      expect.objectContaining({
+        tool: "message",
+        provider: "telegram",
+        to: "chat-thread",
+      }),
+    ]);
   });
 });

@@ -17,7 +17,7 @@ import {
 } from "openclaw/plugin-sdk/provider-stream-family";
 import { buildOpenRouterImageGenerationProvider } from "./image-generation-provider.js";
 import { openrouterMediaUnderstandingProvider } from "./media-understanding-provider.js";
-import { isOpenRouterMistralModelId } from "./models.js";
+import { isOpenRouterMistralModelId, normalizeOpenRouterApiModelId } from "./models.js";
 import { buildOpenRouterMusicGenerationProvider } from "./music-generation-provider.js";
 import { createOpenRouterOAuthAuthMethod } from "./oauth.js";
 import { applyOpenrouterConfig, OPENROUTER_DEFAULT_MODEL_REF } from "./onboard.js";
@@ -51,15 +51,18 @@ const OPENROUTER_CACHE_TTL_MODEL_PREFIXES = [
 
 function normalizeOpenRouterResolvedModel<T extends ProviderRuntimeModel>(model: T): T | undefined {
   const normalizedBaseUrl = normalizeOpenRouterBaseUrl(model.baseUrl);
+  const normalizedId = normalizeOpenRouterApiModelId(model.id);
   const reasoning = isOpenRouterProxyReasoningUnsupportedModel(model.id) ? false : model.reasoning;
   if (
     (!normalizedBaseUrl || normalizedBaseUrl === model.baseUrl) &&
+    (!normalizedId || normalizedId === model.id) &&
     reasoning === model.reasoning
   ) {
     return undefined;
   }
   return {
     ...model,
+    ...(normalizedId ? { id: normalizedId } : {}),
     ...(normalizedBaseUrl ? { baseUrl: normalizedBaseUrl } : {}),
     reasoning,
   };
@@ -73,7 +76,8 @@ export default definePluginEntry({
     function buildDynamicOpenRouterModel(
       ctx: ProviderResolveDynamicModelContext,
     ): ProviderRuntimeModel {
-      const capabilities = getOpenRouterModelCapabilities(ctx.modelId);
+      const apiModelId = normalizeOpenRouterApiModelId(ctx.modelId) ?? ctx.modelId;
+      const capabilities = getOpenRouterModelCapabilities(apiModelId);
       return {
         id: ctx.modelId,
         name: capabilities?.name ?? ctx.modelId,
@@ -166,7 +170,9 @@ export default definePluginEntry({
       },
       resolveDynamicModel: (ctx) => buildDynamicOpenRouterModel(ctx),
       prepareDynamicModel: async (ctx) => {
-        await loadOpenRouterModelCapabilities(ctx.modelId);
+        await loadOpenRouterModelCapabilities(
+          normalizeOpenRouterApiModelId(ctx.modelId) ?? ctx.modelId,
+        );
       },
       normalizeConfig: ({ providerConfig }) => {
         const normalizedBaseUrl = normalizeOpenRouterBaseUrl(providerConfig.baseUrl);

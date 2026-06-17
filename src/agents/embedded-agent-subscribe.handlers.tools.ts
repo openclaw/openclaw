@@ -29,7 +29,6 @@ import {
   emitAgentPatchSummaryEvent,
 } from "../infra/agent-events.js";
 import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
-import { normalizeInteractiveReply, normalizeMessagePresentation } from "../interactive/payload.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { truncateUtf16Safe } from "../utils.js";
@@ -39,8 +38,15 @@ import type { ApplyPatchSummary } from "./apply-patch.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import { sanitizeForConsole } from "./console-sanitize.js";
 import { normalizeTextForComparison } from "./embedded-agent-helpers.js";
-import { isMessagingTool, isMessagingToolSendAction } from "./embedded-agent-messaging.js";
-import type { MessagingToolSourceReplyPayload } from "./embedded-agent-messaging.types.js";
+import {
+  isDeliveredMessageToolOnlySourceReplyResult,
+  isDeliveredMessagingToolResult,
+} from "./embedded-agent-message-tool-source-reply.js";
+import {
+  isMessagingTool,
+  isMessagingToolSendAction,
+  isMessagingToolTargetEvidenceAction,
+} from "./embedded-agent-messaging.js";
 import { mergeEmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
 import type {
   ToolCallSummary,
@@ -48,6 +54,9 @@ import type {
 } from "./embedded-agent-subscribe.handlers.types.js";
 import { isPromiseLike } from "./embedded-agent-subscribe.promise.js";
 import {
+  collectMessagingMediaUrlsFromRecord,
+  collectMessagingMediaUrlsFromToolResult,
+  extractMessagingToolSourceReplyPayload,
   extractToolResultMediaArtifact,
   extractToolErrorCode,
   extractMessagingToolSend,
@@ -467,165 +476,6 @@ function extendExecMeta(toolName: string, args: unknown, meta?: string): string 
   return meta ? `${meta} · ${suffix}` : suffix;
 }
 
-function pushUniqueMediaUrl(urls: string[], seen: Set<string>, value: unknown): void {
-  if (typeof value !== "string") {
-    return;
-  }
-  const normalized = value.trim();
-  if (!normalized || seen.has(normalized)) {
-    return;
-  }
-  seen.add(normalized);
-  urls.push(normalized);
-}
-
-function collectMessagingMediaUrlsFromRecord(record: Record<string, unknown>): string[] {
-  const urls: string[] = [];
-  const seen = new Set<string>();
-  const pushAttachment = (value: unknown) => {
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
-      return;
-    }
-    const attachment = value as Record<string, unknown>;
-    pushUniqueMediaUrl(urls, seen, attachment.media);
-    pushUniqueMediaUrl(urls, seen, attachment.mediaUrl);
-    pushUniqueMediaUrl(urls, seen, attachment.path);
-    pushUniqueMediaUrl(urls, seen, attachment.filePath);
-    pushUniqueMediaUrl(urls, seen, attachment.fileUrl);
-    pushUniqueMediaUrl(urls, seen, attachment.url);
-  };
-
-  pushUniqueMediaUrl(urls, seen, record.media);
-  pushUniqueMediaUrl(urls, seen, record.mediaUrl);
-  pushUniqueMediaUrl(urls, seen, record.path);
-  pushUniqueMediaUrl(urls, seen, record.filePath);
-  pushUniqueMediaUrl(urls, seen, record.fileUrl);
-
-  const mediaUrls = record.mediaUrls;
-  if (Array.isArray(mediaUrls)) {
-    for (const mediaUrl of mediaUrls) {
-      pushUniqueMediaUrl(urls, seen, mediaUrl);
-    }
-  }
-  const attachments = record.attachments;
-  if (Array.isArray(attachments)) {
-    for (const attachment of attachments) {
-      pushAttachment(attachment);
-    }
-  }
-
-  return urls;
-}
-
-function collectMessagingMediaUrlsFromToolResult(result: unknown): string[] {
-  const urls: string[] = [];
-  const seen = new Set<string>();
-  const appendFromRecord = (value: unknown) => {
-    if (!value || typeof value !== "object") {
-      return;
-    }
-    const extracted = collectMessagingMediaUrlsFromRecord(value as Record<string, unknown>);
-    for (const url of extracted) {
-      if (seen.has(url)) {
-        continue;
-      }
-      seen.add(url);
-      urls.push(url);
-    }
-  };
-
-  appendFromRecord(result);
-  if (result && typeof result === "object") {
-    appendFromRecord((result as Record<string, unknown>).details);
-  }
-
-  const outputText = extractToolResultText(result);
-  if (outputText) {
-    try {
-      appendFromRecord(JSON.parse(outputText));
-    } catch {
-      // Ignore non-JSON tool output.
-    }
-  }
-
-  return urls;
-}
-
-function readStringField(record: Record<string, unknown>, key: string): string | undefined {
-  const value = record[key];
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
-
-function readStringArrayField(record: Record<string, unknown>, key: string): string[] | undefined {
-  const value = record[key];
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const strings = value.filter(
-    (item): item is string => typeof item === "string" && item.trim().length > 0,
-  );
-  return strings.length ? strings : undefined;
-}
-
-function copyRecordField(
-  record: Record<string, unknown>,
-  key: string,
-): Record<string, unknown> | undefined {
-  const value = record[key];
-  return readRecordField(value) ? { ...(value as Record<string, unknown>) } : undefined;
-}
-
-function extractMessagingToolSourceReplyPayload(
-  result: unknown,
-): MessagingToolSourceReplyPayload | undefined {
-  const details = readToolResultDetailsRecord(result);
-  if (!details || details.sourceReplySink !== "internal-ui") {
-    return undefined;
-  }
-  const status = normalizeOptionalLowercaseString(details.deliveryStatus);
-  if (status && status !== "sent") {
-    return undefined;
-  }
-  const sourceReply = readRecordField(details.sourceReply) ?? details;
-  const payload: MessagingToolSourceReplyPayload = {};
-  const text = readStringField(sourceReply, "text") ?? readStringField(details, "message");
-  if (text) {
-    payload.text = text;
-  }
-  const mediaUrl = readStringField(sourceReply, "mediaUrl") ?? readStringField(details, "mediaUrl");
-  if (mediaUrl) {
-    payload.mediaUrl = mediaUrl;
-  }
-  const mediaUrls =
-    readStringArrayField(sourceReply, "mediaUrls") ?? readStringArrayField(details, "mediaUrls");
-  if (mediaUrls) {
-    payload.mediaUrls = mediaUrls;
-  }
-  const audioAsVoice =
-    sourceReply.audioAsVoice === true || details.audioAsVoice === true ? true : undefined;
-  if (audioAsVoice) {
-    payload.audioAsVoice = true;
-  }
-  const presentation = normalizeMessagePresentation(sourceReply.presentation);
-  if (presentation) {
-    payload.presentation = presentation;
-  }
-  const interactive = normalizeInteractiveReply(sourceReply.interactive);
-  if (interactive) {
-    payload.interactive = interactive;
-  }
-  const channelData = copyRecordField(sourceReply, "channelData");
-  if (channelData) {
-    payload.channelData = channelData;
-  }
-  const idempotencyKey =
-    readStringField(sourceReply, "idempotencyKey") ?? readStringField(details, "idempotencyKey");
-  if (idempotencyKey) {
-    payload.idempotencyKey = idempotencyKey;
-  }
-  return Object.keys(payload).length > 0 ? payload : undefined;
-}
-
 function queuePendingToolMedia(
   ctx: ToolHandlerContext,
   mediaReply: { mediaUrls: string[]; audioAsVoice?: boolean; trustedLocalMedia?: boolean },
@@ -1029,11 +879,13 @@ export function handleToolExecutionStart(
     if (isMessagingTool(toolName)) {
       const argsRecord = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
       const isMessagingSend = isMessagingToolSendAction(toolName, argsRecord);
-      if (isMessagingSend) {
+      if (isMessagingToolTargetEvidenceAction(toolName, argsRecord)) {
         const sendTarget = extractMessagingToolSend(toolName, argsRecord);
         if (sendTarget) {
           ctx.state.pendingMessagingTargets.set(toolCallId, sendTarget);
         }
+      }
+      if (isMessagingSend) {
         // Field names vary by tool: Discord/Slack use "content", sessions_send uses "message"
         const text = (argsRecord.content as string) ?? (argsRecord.message as string);
         if (text && typeof text === "string") {
@@ -1165,8 +1017,21 @@ export async function handleToolExecutionEnd(
   const runId = ctx.params.runId;
   const isError = evt.isError;
   const result = evt.result;
-  const isToolError = isError || isToolResultError(result);
+  const observerIsError = isError || isToolResultError(result);
   const sanitizedResult = sanitizeToolResult(result);
+  const approvalUnavailable =
+    isExecToolName(toolName) &&
+    readExecToolDetails(sanitizedResult)?.status === "approval-unavailable";
+  const isToolError = observerIsError && !approvalUnavailable;
+  try {
+    ctx.params.onAgentToolResult?.({
+      toolName,
+      result: sanitizedResult,
+      isError: observerIsError,
+    });
+  } catch (error) {
+    ctx.log.warn(`onAgentToolResult handler failed: tool=${toolName} error=${String(error)}`);
+  }
   const eventResult = isExecToolName(toolName)
     ? capLiveExecResult(sanitizedResult)
     : sanitizedResult;
@@ -1245,13 +1110,21 @@ export async function handleToolExecutionEnd(
   const isMessagingSend =
     pendingMediaUrls.length > 0 ||
     (isMessagingTool(toolName) && isMessagingToolSendAction(toolName, startArgs));
+  const didDeliverMessagingResult =
+    isMessagingTool(toolName) &&
+    isDeliveredMessagingToolResult({
+      toolName,
+      args: startArgs,
+      result,
+      isError: isToolError,
+    });
   const committedMediaUrls =
-    !isToolError && isMessagingSend
+    didDeliverMessagingResult && isMessagingSend
       ? [...pendingMediaUrls, ...collectMessagingMediaUrlsFromToolResult(result)]
       : [];
   if (pendingText) {
     ctx.state.pendingMessagingTexts.delete(toolCallId);
-    if (!isToolError) {
+    if (didDeliverMessagingResult) {
       ctx.state.messagingToolSentTexts.push(pendingText);
       ctx.state.messagingToolSentTextsNormalized.push(normalizeTextForComparison(pendingText));
       ctx.log.debug(`Committed messaging text: tool=${toolName} len=${pendingText.length}`);
@@ -1260,7 +1133,7 @@ export async function handleToolExecutionEnd(
   }
   if (pendingTarget) {
     ctx.state.pendingMessagingTargets.delete(toolCallId);
-    if (!isToolError) {
+    if (didDeliverMessagingResult) {
       ctx.state.messagingToolSentTargets.push({
         ...pendingTarget,
         ...(pendingText ? { text: pendingText } : {}),
@@ -1270,10 +1143,21 @@ export async function handleToolExecutionEnd(
     }
   }
   ctx.state.pendingMessagingMediaUrls.delete(toolCallId);
-  if (!isToolError && isMessagingSend) {
+  if (didDeliverMessagingResult && isMessagingSend) {
     if (committedMediaUrls.length > 0) {
       ctx.state.messagingToolSentMediaUrls.push(...committedMediaUrls);
       ctx.trimMessagingToolSent();
+    }
+    if (
+      isDeliveredMessageToolOnlySourceReplyResult({
+        sourceReplyDeliveryMode: ctx.params.sourceReplyDeliveryMode,
+        toolName,
+        args: startArgs,
+        result,
+        isError: isToolError,
+      })
+    ) {
+      ctx.state.messageToolOnlySourceReplyDelivered = true;
     }
     const sourceReplyPayload = extractMessagingToolSourceReplyPayload(result);
     if (sourceReplyPayload) {

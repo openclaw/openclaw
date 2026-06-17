@@ -44,7 +44,6 @@ import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reas
 import { parseInlineDirectives } from "../../utils/directive-tags.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
-  normalizeMessageChannel,
   type GatewayClientMode,
   type GatewayClientName,
 } from "../../utils/message-channel.js";
@@ -52,11 +51,11 @@ import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import {
-  isConfiguredChannel,
   listConfiguredMessageChannels,
   resolveMessageChannelSelection,
 } from "./channel-selection.js";
 import type { OutboundSendDeps } from "./deliver.js";
+import { shouldUseInternalSourceReplySink } from "./internal-source-reply.js";
 import { normalizeMessageActionInput } from "./message-action-normalization.js";
 import {
   collectActionMediaSourceHints,
@@ -160,6 +159,8 @@ export type MessageActionRunResult =
           to: string;
           ok: boolean;
           error?: string;
+          sentBeforeError?: true;
+          payload?: unknown;
           result?: MessageSendResult;
         }>;
       };
@@ -524,17 +525,6 @@ function collectMessageAttachmentMediaHints(value: unknown): string[] {
   return mediaUrls;
 }
 
-function hasExplicitRouteParam(params: Record<string, unknown>): boolean {
-  for (const key of ["channel", "target", "to", "channelId"]) {
-    if (normalizeOptionalString(params[key])) {
-      return true;
-    }
-  }
-  return (
-    Array.isArray(params.targets) && params.targets.some((value) => normalizeOptionalString(value))
-  );
-}
-
 function hasExplicitTargetParam(params: Record<string, unknown>): boolean {
   for (const key of ["target", "to", "channelId"]) {
     if (normalizeOptionalString(params[key])) {
@@ -619,61 +609,6 @@ function applyImplicitSourceReplySendPolicy(
     return;
   }
   params.bestEffort = true;
-}
-
-function hasCurrentSourceReplyContext(input: RunMessageActionParams): boolean {
-  const provider = normalizeOptionalLowercaseString(input.toolContext?.currentChannelProvider);
-  if (!provider) {
-    return false;
-  }
-  if (provider === INTERNAL_MESSAGE_CHANNEL) {
-    return true;
-  }
-  const currentMessageId = input.toolContext?.currentMessageId;
-  return Boolean(
-    normalizeOptionalString(input.toolContext?.currentChannelId) ||
-    normalizeOptionalString(input.toolContext?.currentThreadTs) ||
-    (typeof currentMessageId === "number" && Number.isFinite(currentMessageId)) ||
-    normalizeOptionalString(currentMessageId),
-  );
-}
-
-async function hasConfiguredCurrentSourceChannel(input: RunMessageActionParams): Promise<boolean> {
-  const provider =
-    normalizeMessageChannel(input.toolContext?.currentChannelProvider) ??
-    normalizeOptionalLowercaseString(input.toolContext?.currentChannelProvider);
-  if (!provider || provider === INTERNAL_MESSAGE_CHANNEL) {
-    return false;
-  }
-  if (!isConfiguredChannel(input.cfg, provider)) {
-    return false;
-  }
-  if (!resolveOutboundChannelPlugin({ channel: provider, cfg: input.cfg, allowBootstrap: true })) {
-    return false;
-  }
-  const configuredChannels = await listConfiguredMessageChannels(input.cfg);
-  return configuredChannels.some((channel) => channel === provider);
-}
-
-async function shouldUseInternalSourceReplySink(
-  input: RunMessageActionParams,
-  params: Record<string, unknown>,
-) {
-  const hasImplicitCurrentSourceRoute =
-    input.action === "send" &&
-    input.sourceReplyDeliveryMode === "message_tool_only" &&
-    hasCurrentSourceReplyContext(input) &&
-    Boolean(input.sessionKey?.trim()) &&
-    !hasExplicitRouteParam(params);
-  if (!hasImplicitCurrentSourceRoute) {
-    return false;
-  }
-  if (!normalizeOptionalString(input.toolContext?.currentChannelId)) {
-    return true;
-  }
-  // Configured current-source channels can infer the target and deliver through
-  // the normal plugin path; the sink is only the private fallback.
-  return !(await hasConfiguredCurrentSourceChannel(input));
 }
 
 async function runGatewayPluginMessageActionOrNull(params: {
@@ -766,6 +701,8 @@ async function handleBroadcastAction(
     to: string;
     ok: boolean;
     error?: string;
+    sentBeforeError?: true;
+    payload?: unknown;
     result?: MessageSendResult;
   }> = [];
   const isAbortError = (err: unknown): boolean => err instanceof Error && err.name === "AbortError";
@@ -792,6 +729,7 @@ async function handleBroadcastAction(
           channel: targetChannel,
           to: resolved.to,
           ok: true,
+          payload: sendResult.kind === "send" ? sendResult.payload : undefined,
           result: sendResult.kind === "send" ? sendResult.sendResult : undefined,
         });
       } catch (err) {
@@ -803,6 +741,11 @@ async function handleBroadcastAction(
           to: target,
           ok: false,
           error: formatErrorMessage(err),
+          ...(err &&
+          typeof err === "object" &&
+          (err as { sentBeforeError?: unknown }).sentBeforeError === true
+            ? { sentBeforeError: true as const }
+            : {}),
         });
       }
     }
@@ -939,7 +882,8 @@ async function buildSendPayloadParts(params: {
     readStringParam(actionParams, "mediaUrl", { trim: false }) ??
     readStringParam(actionParams, "path", { trim: false }) ??
     readStringParam(actionParams, "filePath", { trim: false }) ??
-    readStringParam(actionParams, "fileUrl", { trim: false });
+    readStringParam(actionParams, "fileUrl", { trim: false }) ??
+    readStringParam(actionParams, "image", { trim: false });
   const mediaUrlHints = readStringArrayParam(actionParams, "mediaUrls") ?? [];
   const attachmentMediaHints = collectMessageAttachmentMediaHints(actionParams.attachments);
   const hasMediaHint =

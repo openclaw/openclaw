@@ -14,14 +14,23 @@ import {
   resolveContextEngine,
   resolveContextEngineOwnerPluginId,
 } from "../../context-engine/registry.js";
-import { emitAgentPlanEvent, registerAgentRunContext } from "../../infra/agent-events.js";
+import {
+  assertAgentRunLifecycleGenerationCurrent,
+  captureAgentRunLifecycleGeneration,
+  claimAgentRunContext,
+  emitAgentPlanEvent,
+  getAgentEventLifecycleGeneration,
+  getAgentRunContext,
+  registerAgentRunContext,
+  withAgentRunLifecycleGeneration,
+} from "../../infra/agent-events.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { freezeDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveProviderAuthProfileId } from "../../plugins/provider-runtime.js";
-import { enqueueCommandInLane } from "../../process/command-queue.js";
+import { enqueueCommandInLane, getCommandLaneSnapshot } from "../../process/command-queue.js";
 import type { CommandQueueEnqueueOptions } from "../../process/command-queue.types.js";
 import { createAgentHarnessTaskRuntimeScope } from "../../tasks/agent-harness-task-runtime-scope.js";
 import { resolveUserPath } from "../../utils.js";
@@ -53,6 +62,7 @@ import {
 } from "../command/session.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import {
+  classifyAssistantFailoverReason,
   classifyFailoverReason,
   extractObservedOverflowTokenCount,
   type FailoverReason,
@@ -127,7 +137,10 @@ import {
   type PostCompactionGuardObservation,
 } from "./post-compaction-loop-guard.js";
 import { createEmbeddedRunReplayState, observeReplayMetadata } from "./replay-state.js";
-import { handleAssistantFailover } from "./run/assistant-failover.js";
+import {
+  handleAssistantFailover,
+  isShortWindowRateLimitMessage,
+} from "./run/assistant-failover.js";
 import {
   createEmbeddedRunStageTracker,
   EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE,
@@ -408,10 +421,26 @@ function createScopedAuthProfileStore(
       return credential ? [[profileId, credential] as const] : [];
     }),
   );
+  const scopedRuntimeExternalProfileIds = (store.runtimeExternalProfileIds ?? []).filter(
+    (profileId) => scopedProfiles[profileId],
+  );
+  const scopedRuntimePersistedProfileIds = (store.runtimePersistedProfileIds ?? []).filter(
+    (profileId) => scopedProfiles[profileId],
+  );
   return Object.keys(scopedProfiles).length > 0
     ? {
         version: store.version,
         profiles: scopedProfiles,
+        ...(scopedRuntimePersistedProfileIds.length > 0
+          ? { runtimePersistedProfileIds: scopedRuntimePersistedProfileIds }
+          : {}),
+        ...(scopedRuntimeExternalProfileIds.length > 0 ||
+        store.runtimeExternalProfileIdsAuthoritative === true
+          ? { runtimeExternalProfileIds: scopedRuntimeExternalProfileIds }
+          : {}),
+        ...(store.runtimeExternalProfileIdsAuthoritative === true
+          ? { runtimeExternalProfileIdsAuthoritative: true }
+          : {}),
       }
     : createEmptyAuthProfileStore();
 }
@@ -496,10 +525,25 @@ function buildHandledReplyPayloads(reply?: ReplyPayload) {
   ];
 }
 
-export async function runEmbeddedAgent(
+export function runEmbeddedAgent(
+  paramsInput: RunEmbeddedAgentParams,
+): Promise<EmbeddedAgentRunResult> {
+  const lifecycleGeneration =
+    paramsInput.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(paramsInput.runId);
+  return withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
+    runEmbeddedAgentInternal({
+      ...paramsInput,
+      lifecycleGeneration,
+    }),
+  );
+}
+
+async function runEmbeddedAgentInternal(
   paramsInput: RunEmbeddedAgentParams,
 ): Promise<EmbeddedAgentRunResult> {
   let params = paramsInput;
+  let lifecycleGeneration = params.lifecycleGeneration!;
+  const queuedLifecycleGeneration = getAgentEventLifecycleGeneration();
   // Resolve sessionKey early so all downstream consumers (hooks, LCM, compaction)
   // receive a non-null key even when callers omit it. See #60552.
   const effectiveSessionKey = backfillSessionKey({
@@ -519,39 +563,6 @@ export async function runEmbeddedAgent(
   const noteLaneTaskProgress = () => {
     laneTaskProgressAtMs = Date.now();
   };
-  const withLaneTimeout = (opts?: CommandQueueEnqueueOptions) =>
-    withEmbeddedRunLaneTimeout(
-      {
-        ...opts,
-        taskTimeoutProgressAtMs: () => laneTaskProgressAtMs,
-      },
-      laneTaskTimeoutMs,
-    );
-  const enqueueGlobal = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) => {
-    const globalOpts: CommandQueueEnqueueOptions = {
-      ...opts,
-      priority: sessionQueuePriority,
-    };
-    return params.enqueue
-      ? params.enqueue(task, withLaneTimeout(globalOpts))
-      : enqueueCommandInLane(globalLane, task, withLaneTimeout(globalOpts));
-  };
-  const enqueueSession = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) => {
-    const sessionOpts: CommandQueueEnqueueOptions = { ...opts, priority: sessionQueuePriority };
-    return params.enqueue
-      ? params.enqueue(task, sessionOpts)
-      : enqueueCommandInLane(sessionLane, task, sessionOpts);
-  };
-  const channelHint = params.messageChannel ?? params.messageProvider;
-  const resolvedToolResultFormat =
-    params.toolResultFormat ??
-    (channelHint
-      ? isMarkdownCapableMessageChannel(channelHint)
-        ? "markdown"
-        : "plain"
-      : "markdown");
-  const isProbeSession = params.sessionId?.startsWith("probe-") ?? false;
-
   const throwIfAborted = () => {
     if (!params.abortSignal?.aborted) {
       return;
@@ -567,6 +578,103 @@ export async function runEmbeddedAgent(
     abortErr.name = "AbortError";
     throw abortErr;
   };
+  const withLaneTimeout = (opts?: CommandQueueEnqueueOptions) =>
+    withEmbeddedRunLaneTimeout(
+      {
+        ...opts,
+        taskTimeoutProgressAtMs: () => laneTaskProgressAtMs,
+      },
+      laneTaskTimeoutMs,
+    );
+  const withRunLaneWait = (opts?: CommandQueueEnqueueOptions) => {
+    if (!opts?.onWait && !params.onLaneWait) {
+      return opts;
+    }
+    return {
+      ...opts,
+      onWait: (waitMs, queuedAhead) => {
+        opts?.onWait?.(waitMs, queuedAhead);
+        params.onLaneWait?.({ waitMs, queuedAhead, waiting: true });
+      },
+    } satisfies CommandQueueEnqueueOptions;
+  };
+  const noteLaneWaitIfBusy = (lane: string) => {
+    if (!params.onLaneWait) {
+      return;
+    }
+    const snapshot = getCommandLaneSnapshot(lane);
+    if (snapshot.queuedCount > 0 || snapshot.activeCount >= snapshot.maxConcurrent) {
+      params.onLaneWait({
+        waitMs: 0,
+        queuedAhead: snapshot.queuedCount + snapshot.activeCount,
+        waiting: true,
+      });
+    }
+  };
+  const enqueueGlobal = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) => {
+    const globalOpts: CommandQueueEnqueueOptions = {
+      ...opts,
+      priority: sessionQueuePriority,
+    };
+    const taskWithCurrentLifecycle = () => {
+      params.onLaneWait?.({ waitMs: 0, queuedAhead: 0, waiting: false });
+      throwIfAborted();
+      const currentLifecycleGeneration = getAgentEventLifecycleGeneration();
+      const existingContext = getAgentRunContext(params.runId);
+      if (lifecycleGeneration !== currentLifecycleGeneration) {
+        const wasQueuedBeforeRotation = queuedLifecycleGeneration === lifecycleGeneration;
+        const canResumeAcrossRotation = sessionQueuePriority === "foreground";
+        const newerSameIdExecutionOwnsContext =
+          existingContext?.lifecycleGeneration === currentLifecycleGeneration;
+        if (
+          !wasQueuedBeforeRotation ||
+          !canResumeAcrossRotation ||
+          newerSameIdExecutionOwnsContext
+        ) {
+          assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
+        }
+        lifecycleGeneration = currentLifecycleGeneration;
+        params = { ...params, lifecycleGeneration };
+      }
+      claimAgentRunContext(params.runId, {
+        ...existingContext,
+        sessionKey: params.sessionKey ?? existingContext?.sessionKey,
+        sessionId: params.sessionId ?? existingContext?.sessionId,
+        lifecycleGeneration,
+      });
+      return withAgentRunLifecycleGeneration(lifecycleGeneration, task);
+    };
+    if (params.enqueue) {
+      return params.enqueue(taskWithCurrentLifecycle, withLaneTimeout(withRunLaneWait(globalOpts)));
+    }
+    noteLaneWaitIfBusy(globalLane);
+    return enqueueCommandInLane(
+      globalLane,
+      taskWithCurrentLifecycle,
+      withLaneTimeout(withRunLaneWait(globalOpts)),
+    );
+  };
+  const enqueueSession = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) => {
+    const sessionOpts: CommandQueueEnqueueOptions = { ...opts, priority: sessionQueuePriority };
+    const taskWithLaneAdmission = () => {
+      params.onLaneWait?.({ waitMs: 0, queuedAhead: 0, waiting: false });
+      return task();
+    };
+    if (params.enqueue) {
+      return params.enqueue(taskWithLaneAdmission, withRunLaneWait(sessionOpts));
+    }
+    noteLaneWaitIfBusy(sessionLane);
+    return enqueueCommandInLane(sessionLane, taskWithLaneAdmission, withRunLaneWait(sessionOpts));
+  };
+  const channelHint = params.messageChannel ?? params.messageProvider;
+  const resolvedToolResultFormat =
+    params.toolResultFormat ??
+    (channelHint
+      ? isMarkdownCapableMessageChannel(channelHint)
+        ? "markdown"
+        : "plain"
+      : "markdown");
+  const isProbeSession = params.sessionId?.startsWith("probe-") ?? false;
 
   throwIfAborted();
 
@@ -609,7 +717,7 @@ export async function runEmbeddedAgent(
           log.trace(message);
         }
       };
-      params.onExecutionStarted?.();
+      params.onExecutionStarted?.({ lifecycleGeneration });
       notifyExecutionPhase("runner_entered");
       const workspaceResolution = resolveRunWorkspaceDir({
         workspaceDir: params.workspaceDir,
@@ -1281,6 +1389,20 @@ export async function runEmbeddedAgent(
       const rateLimitProfileRotationLimit = resolveRateLimitProfileRotationLimit(params.config);
       let activeSessionId = params.sessionId;
       let activeSessionFile = params.sessionFile;
+      const adoptActiveSessionId = (nextSessionId: string | undefined) => {
+        if (!nextSessionId || nextSessionId === activeSessionId) {
+          return;
+        }
+        activeSessionId = nextSessionId;
+        // Keep every active-run owner on the rotated identity. Restart recovery
+        // uses the reply registry while lifecycle persistence uses run context.
+        params.replyOperation?.updateSessionId(activeSessionId);
+        params.onSessionIdChanged?.(activeSessionId);
+        registerAgentRunContext(params.runId, {
+          sessionId: activeSessionId,
+          lifecycleGeneration,
+        });
+      };
       let suppressNextUserMessagePersistence = params.suppressNextUserMessagePersistence ?? false;
       // The embedded agent owns JSONL persistence; this marker lets the outer retry avoid
       // replaying the same inbound channel message after overflow compaction.
@@ -1353,11 +1475,12 @@ export async function runEmbeddedAgent(
       };
       const resolveRunAuthProfileFailureReason = (
         failoverReason: FailoverReason | null,
-        opts?: { providerStarted?: boolean },
+        opts?: { providerStarted?: boolean; transientRateLimit?: boolean },
       ) =>
         resolveAuthProfileFailureReason({
           failoverReason,
           providerStarted: opts?.providerStarted,
+          transientRateLimit: opts?.transientRateLimit,
           policy: params.authProfileFailurePolicy,
         });
       const maybeBackoffBeforeOverloadFailover = async (reason: FailoverReason | null) => {
@@ -1427,13 +1550,7 @@ export async function runEmbeddedAgent(
         ) => {
           const nextSessionId = compactResult.result?.sessionId;
           const nextSessionFile = compactResult.result?.sessionFile;
-          if (nextSessionId && nextSessionId !== activeSessionId) {
-            activeSessionId = nextSessionId;
-            // Keep the run context's sessionId tracking the live session so
-            // lifecycle persistence isn't treated as stale after a legitimate
-            // mid-run compaction rotation (#88538).
-            registerAgentRunContext(params.runId, { sessionId: activeSessionId });
-          }
+          adoptActiveSessionId(nextSessionId);
           if (nextSessionFile && nextSessionFile !== activeSessionFile) {
             activeSessionFile = nextSessionFile;
           }
@@ -1718,6 +1835,7 @@ export async function runEmbeddedAgent(
             timeoutMs: params.timeoutMs,
             runTimeoutOverrideMs: params.runTimeoutOverrideMs,
             runId: params.runId,
+            lifecycleGeneration,
             abortSignal: attemptAbortController.signal,
             replyOperation: params.replyOperation,
             shouldEmitToolResult: params.shouldEmitToolResult,
@@ -1731,6 +1849,7 @@ export async function runEmbeddedAgent(
             onReasoningStream: params.onReasoningStream,
             onReasoningEnd: params.onReasoningEnd,
             onToolResult: params.onToolResult,
+            onAgentToolResult: params.onAgentToolResult,
             onAgentEvent: params.onAgentEvent,
             onExecutionPhase: params.onExecutionPhase,
             extraSystemPrompt: params.extraSystemPrompt,
@@ -1798,11 +1917,7 @@ export async function runEmbeddedAgent(
             attempt.setTerminalLifecycleMeta?.({ ...meta, aborted });
           };
           const timedOutDuringToolExecution = attempt.timedOutDuringToolExecution ?? false;
-          if (sessionIdUsed && sessionIdUsed !== activeSessionId) {
-            activeSessionId = sessionIdUsed;
-            // Track the live session for lifecycle persistence identity (#88538).
-            registerAgentRunContext(params.runId, { sessionId: activeSessionId });
-          }
+          adoptActiveSessionId(sessionIdUsed);
           if (sessionFileUsed && sessionFileUsed !== activeSessionFile) {
             activeSessionFile = sessionFileUsed;
           }
@@ -2639,6 +2754,8 @@ export async function runEmbeddedAgent(
               promptFailoverReason,
               {
                 providerStarted: promptErrorSource === "prompt",
+                transientRateLimit:
+                  promptFailoverReason === "rate_limit" && isShortWindowRateLimitMessage(errorText),
               },
             );
             const promptFailoverFailure =
@@ -2797,12 +2914,7 @@ export async function runEmbeddedAgent(
           const rateLimitFailure = isRateLimitAssistantError(assistantForFailover);
           const billingFailure = isBillingAssistantError(assistantForFailover);
           const failoverFailure = isFailoverAssistantError(assistantForFailover);
-          const assistantFailoverReason = classifyFailoverReason(
-            assistantForFailover?.errorMessage ?? "",
-            {
-              provider: assistantForFailover?.provider,
-            },
-          );
+          const assistantFailoverReason = classifyAssistantFailoverReason(assistantForFailover);
           const assistantProviderStarted =
             Boolean(currentAttemptAssistant?.provider) ||
             idleTimedOut ||
@@ -2814,6 +2926,9 @@ export async function runEmbeddedAgent(
             assistantProfileFailoverReason,
             {
               providerStarted: assistantProviderStarted,
+              transientRateLimit:
+                assistantProfileFailoverReason === "rate_limit" &&
+                isShortWindowRateLimitMessage(assistantForFailover?.errorMessage),
             },
           );
           const cloudCodeAssistFormatError = attempt.cloudCodeAssistFormatError;
@@ -3034,6 +3149,8 @@ export async function runEmbeddedAgent(
             suppressToolErrorWarnings: params.suppressToolErrorWarnings,
             inlineToolResultsAllowed: false,
             didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+            didDeliverSourceReplyViaMessageTool:
+              attempt.didDeliverSourceReplyViaMessageTool === true,
             messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
             sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
             agentId: params.agentId,

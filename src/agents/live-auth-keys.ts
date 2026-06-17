@@ -168,9 +168,14 @@ export function collectProviderApiKeys(
   return Array.from(seen);
 }
 
-/** Collect Anthropic API keys for live cache/model tests. */
-export function collectAnthropicApiKeys(): string[] {
-  return collectProviderApiKeys("anthropic");
+/** Collect Anthropic API keys for live cache/model tests when OAuth is unavailable. */
+export function collectAnthropicApiKeys(options: CollectProviderApiKeysOptions = {}): string[] {
+  const env = options.env ?? process.env;
+  if (normalizeOptionalString(env.ANTHROPIC_OAUTH_TOKEN)) {
+    // OAuth is a separate auth mode; API-key rotation would overwrite it.
+    return [];
+  }
+  return collectProviderApiKeys("anthropic", { ...options, env });
 }
 
 /** Collect Gemini API keys for live cache/model tests. */

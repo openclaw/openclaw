@@ -15,6 +15,8 @@ import {
   formatEmbeddedAgentQueueFailureSummary,
   queueEmbeddedAgentMessageWithOutcomeAsync,
 } from "../../agents/embedded-agent-runner/runs.js";
+import { resolveFastModeState } from "../../agents/fast-mode.js";
+import { resolveAgentIdentity } from "../../agents/identity.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { deriveContextPromptTokens, hasNonzeroUsage, normalizeUsage } from "../../agents/usage.js";
@@ -40,6 +42,7 @@ import {
 } from "../../infra/diagnostic-trace-context.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
+import type { PluginHookReplyUsageState } from "../../plugins/hook-types.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
@@ -67,6 +70,9 @@ import type { OriginatingChannelType, TemplateContext } from "../templating.js";
 import { resolveResponseUsageMode, type VerboseLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { buildUsageContract } from "../usage-bar/contract.js";
+import { loadUsageBarTemplate } from "../usage-bar/template.js";
+import { renderUsageBar } from "../usage-bar/translator.js";
 import {
   buildKnownAgentRunFailureReplyPayload,
   runAgentTurnWithFallback,
@@ -117,6 +123,7 @@ import { createReplyMediaContext } from "./reply-media-paths.js";
 import { replyRunRegistry, type ReplyOperation } from "./reply-run-registry.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { admitReplyTurn, resolveReplyTurnKind } from "./reply-turn-admission.js";
+import { recordReplyUsageState } from "./reply-usage-state.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
@@ -239,10 +246,12 @@ function hasSuccessfulSideEffectDelivery(params: {
   messagingToolSentTexts?: string[];
   messagingToolSentMediaUrls?: string[];
   messagingToolSentTargets?: unknown[];
+  didSendViaMessagingTool?: boolean;
   successfulCronAdds?: number;
   didSendDeterministicApprovalPrompt?: boolean;
 }): boolean {
   return (
+    params.didSendViaMessagingTool === true ||
     hasSuccessfulSourceReplyDelivery(params) ||
     (params.successfulCronAdds ?? 0) > 0 ||
     params.didSendDeterministicApprovalPrompt === true
@@ -1731,10 +1740,87 @@ export async function runReplyAgent(params: {
     }
 
     const usage = runResult.meta?.agentMeta?.usage;
+    const hasBillableUsageBuckets =
+      usage &&
+      (usage.input !== undefined ||
+        usage.output !== undefined ||
+        usage.cacheRead !== undefined ||
+        usage.cacheWrite !== undefined);
     const promptTokens = runResult.meta?.agentMeta?.promptTokens;
     const modelUsed = runResult.meta?.agentMeta?.model ?? fallbackModel ?? defaultModel;
     const providerUsed =
       runResult.meta?.agentMeta?.provider ?? fallbackProvider ?? followupRun.run.provider;
+
+    let replyUsageState: PluginHookReplyUsageState | undefined;
+    {
+      const winnerProvider = runResult.meta?.executionTrace?.winnerProvider ?? providerUsed;
+      const winnerModel = runResult.meta?.executionTrace?.winnerModel ?? modelUsed;
+      const ctxTokens = runResult.meta?.agentMeta?.contextTokens;
+      const compactions = runResult.meta?.agentMeta?.compactionCount;
+      const lastCallUsage = runResult.meta?.agentMeta?.lastCallUsage;
+      replyUsageState = {
+        provider: providerUsed,
+        model: modelUsed,
+        resolvedRef: winnerProvider && winnerModel ? `${winnerProvider}/${winnerModel}` : undefined,
+        reasoningEffort:
+          typeof followupRun.run.thinkLevel === "string" ? followupRun.run.thinkLevel : undefined,
+        fastMode: resolveFastModeState({
+          cfg,
+          provider: providerUsed ?? "",
+          model: modelUsed ?? "",
+          agentId: followupRun.run.agentId,
+          sessionEntry: activeSessionEntry,
+        }).enabled,
+        fallbackUsed: runResult.meta?.executionTrace?.fallbackUsed === true,
+        agentId: followupRun.run.agentId,
+        sessionId: followupRun.run.sessionId,
+        chatType: typeof sessionCtx.ChatType === "string" ? sessionCtx.ChatType : undefined,
+        authMode: runResult.meta?.requestShaping?.authMode ?? undefined,
+        overrideSource: activeSessionEntry?.modelOverrideSource ?? undefined,
+        requested:
+          followupRun.run.provider && followupRun.run.model
+            ? `${followupRun.run.provider}/${followupRun.run.model}`
+            : undefined,
+        turnUsd: hasBillableUsageBuckets
+          ? estimateUsageCost({
+              usage,
+              cost: resolveModelCostConfig({
+                provider: providerUsed,
+                model: modelUsed,
+                config: cfg,
+              }),
+            })
+          : undefined,
+        durationMs: Date.now() - runStartedAt,
+        identity: resolveAgentIdentity(cfg, followupRun.run.agentId),
+        compactionCount: typeof compactions === "number" ? compactions : undefined,
+        contextTokenBudget:
+          typeof ctxTokens === "number" && Number.isFinite(ctxTokens) ? ctxTokens : undefined,
+        contextUsedTokens:
+          typeof promptTokens === "number" && Number.isFinite(promptTokens)
+            ? promptTokens
+            : undefined,
+        usage: usage
+          ? {
+              input: usage.input,
+              output: usage.output,
+              cacheRead: usage.cacheRead,
+              cacheWrite: usage.cacheWrite,
+              total: usage.total,
+            }
+          : undefined,
+        lastUsage: lastCallUsage
+          ? {
+              input: lastCallUsage.input,
+              output: lastCallUsage.output,
+              cacheRead: lastCallUsage.cacheRead,
+              cacheWrite: lastCallUsage.cacheWrite,
+              total: lastCallUsage.total,
+            }
+          : undefined,
+      };
+      recordReplyUsageState(runId, replyUsageState);
+    }
     const verboseEnabled = resolvedVerboseLevel !== "off";
     const preserveUserFacingSessionState = shouldPreserveUserFacingSessionStateForInputProvenance(
       followupRun.run.inputProvenance,
@@ -1835,6 +1921,7 @@ export async function runReplyAgent(params: {
       messagingToolSentTexts: runResult.messagingToolSentTexts,
       messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
       messagingToolSentTargets: runResult.messagingToolSentTargets,
+      didSendViaMessagingTool: runResult.didSendViaMessagingTool,
       successfulCronAdds: runResult.successfulCronAdds,
       didSendDeterministicApprovalPrompt: runResult.didSendDeterministicApprovalPrompt,
     });
@@ -2052,7 +2139,9 @@ export async function runReplyAgent(params: {
         model: modelUsed,
         config: cfg,
       });
-      const costUsd = estimateUsageCost({ usage, cost: costConfig });
+      const costUsd = hasBillableUsageBuckets
+        ? estimateUsageCost({ usage, cost: costConfig })
+        : undefined;
       emitTrustedDiagnosticEvent({
         type: "model.usage",
         ...(runResult.diagnosticTrace
@@ -2103,7 +2192,16 @@ export async function runReplyAgent(params: {
         showCost,
         costConfig,
       });
-      if (formatted && responseUsageMode === "full" && sessionKey) {
+      const usageTemplate =
+        responseUsageMode === "full" && replyUsageState
+          ? loadUsageBarTemplate(cfg.messages?.usageTemplate)
+          : undefined;
+      const renderedUsageLine = usageTemplate
+        ? renderUsageBar(usageTemplate, buildUsageContract(replyUsageState, replyToChannel))
+        : undefined;
+      if (renderedUsageLine) {
+        formatted = renderedUsageLine;
+      } else if (formatted && responseUsageMode === "full" && sessionKey) {
         formatted = `${formatted} · session \`${sessionKey}\``;
       }
       if (formatted) {

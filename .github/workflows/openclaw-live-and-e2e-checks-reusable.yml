@@ -420,6 +420,7 @@ jobs:
               add_suite live-cache
 
               add_profile_suite native-live-src-agents "stable full"
+              add_profile_suite native-live-src-agents-zai-coding "stable full"
               add_profile_suite native-live-src-gateway-core "beta minimum stable full"
               add_profile_suite native-live-src-gateway-profiles-anthropic "stable full"
               add_profile_suite native-live-src-gateway-profiles-anthropic-smoke "stable"
@@ -1752,6 +1753,7 @@ jobs:
             anthropic) require_any Anthropic ANTHROPIC_API_KEY ANTHROPIC_API_KEY_OLD ANTHROPIC_API_TOKEN ;;
             google) require_any Google GEMINI_API_KEY GOOGLE_API_KEY ;;
             minimax) require_any MiniMax MINIMAX_API_KEY ;;
+            moonshot) require_any Moonshot MOONSHOT_API_KEY KIMI_API_KEY ;;
             openai) require_any OpenAI OPENAI_API_KEY ;;
             opencode-go) require_any OpenCode OPENCODE_API_KEY OPENCODE_ZEN_API_KEY ;;
             openrouter) require_any OpenRouter OPENROUTER_API_KEY ;;
@@ -1840,7 +1842,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          all_providers=(anthropic google minimax openai opencode-go openrouter xai zai fireworks)
+          all_providers=(anthropic google minimax moonshot openai opencode-go openrouter xai zai fireworks)
 
           normalize_provider() {
             local value="${1,,}"
@@ -1926,6 +1928,7 @@ jobs:
               anthropic) require_any Anthropic ANTHROPIC_API_KEY ANTHROPIC_API_KEY_OLD ANTHROPIC_API_TOKEN ;;
               google) require_any Google GEMINI_API_KEY GOOGLE_API_KEY ;;
               minimax) require_any MiniMax MINIMAX_API_KEY ;;
+              moonshot) require_any Moonshot MOONSHOT_API_KEY KIMI_API_KEY ;;
               openai) require_any OpenAI OPENAI_API_KEY ;;
               opencode-go) require_any OpenCode OPENCODE_API_KEY OPENCODE_ZEN_API_KEY ;;
               openrouter) require_any OpenRouter OPENROUTER_API_KEY ;;
@@ -1956,6 +1959,12 @@ jobs:
             label: Native live agents
             command: node .release-harness/scripts/test-live-shard.mjs native-live-src-agents
             timeout_minutes: 60
+            profile_env_only: false
+            profiles: stable full
+          - suite_id: native-live-src-agents-zai-coding
+            label: Native live Z.AI Coding Plan
+            command: ZAI_CODING_LIVE_TEST=1 node .release-harness/scripts/test-live-shard.mjs native-live-src-agents-zai-coding
+            timeout_minutes: 15
             profile_env_only: false
             profiles: stable full
           - suite_id: native-live-src-gateway-core
@@ -2217,7 +2226,11 @@ jobs:
           case "${{ matrix.suite_id }}" in
             live-cli-backend-docker)
               echo "OPENCLAW_LIVE_CLI_BACKEND_MODEL=claude-cli/claude-sonnet-4-6" >> "$GITHUB_ENV"
-              echo "OPENCLAW_LIVE_CLI_BACKEND_AUTH=api-key" >> "$GITHUB_ENV"
+              if [[ -n "${OPENCLAW_CLAUDE_CREDENTIALS_JSON:-}" || -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]]; then
+                echo "OPENCLAW_LIVE_CLI_BACKEND_AUTH=subscription" >> "$GITHUB_ENV"
+              else
+                echo "OPENCLAW_LIVE_CLI_BACKEND_AUTH=api-key" >> "$GITHUB_ENV"
+              fi
               echo "OPENCLAW_LIVE_CLI_BACKEND_DEBUG=1" >> "$GITHUB_ENV"
               echo "OPENCLAW_CLI_BACKEND_LOG_OUTPUT=1" >> "$GITHUB_ENV"
               echo "OPENCLAW_TEST_CONSOLE=1" >> "$GITHUB_ENV"
@@ -2443,7 +2456,11 @@ jobs:
           case "${{ matrix.suite_id }}" in
             live-cli-backend-docker)
               echo "OPENCLAW_LIVE_CLI_BACKEND_MODEL=claude-cli/claude-sonnet-4-6" >> "$GITHUB_ENV"
-              echo "OPENCLAW_LIVE_CLI_BACKEND_AUTH=api-key" >> "$GITHUB_ENV"
+              if [[ -n "${OPENCLAW_CLAUDE_CREDENTIALS_JSON:-}" || -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]]; then
+                echo "OPENCLAW_LIVE_CLI_BACKEND_AUTH=subscription" >> "$GITHUB_ENV"
+              else
+                echo "OPENCLAW_LIVE_CLI_BACKEND_AUTH=api-key" >> "$GITHUB_ENV"
+              fi
               echo "OPENCLAW_LIVE_CLI_BACKEND_DEBUG=1" >> "$GITHUB_ENV"
               echo "OPENCLAW_CLI_BACKEND_LOG_OUTPUT=1" >> "$GITHUB_ENV"
               echo "OPENCLAW_TEST_CONSOLE=1" >> "$GITHUB_ENV"

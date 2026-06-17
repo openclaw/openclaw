@@ -20,6 +20,7 @@ import { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
 import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
+import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import * as openClawPluginTools from "./openclaw-plugin-tools.js";
@@ -211,6 +212,36 @@ describe("createOpenClawCodingTools", () => {
     expect(beforeToolCall.mock.calls[0]?.[1]).toEqual(
       expect.objectContaining({ channelId: "-100123" }),
     );
+  });
+
+  it("re-wraps existing before_tool_call hooks once with the current context", async () => {
+    const beforeToolCall = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    const wrapped = wrapToolWithBeforeToolCallHook(
+      {
+        name: "already_wrapped",
+        label: "Already wrapped",
+        description: "Already wrapped tool",
+        parameters: {},
+        execute,
+      },
+      { agentId: "main", sessionId: "session-original" },
+    );
+    vi.mocked(createOpenClawTools).mockReturnValueOnce([wrapped as never]);
+
+    const tools = createOpenClawCodingTools({ agentId: "main", sessionId: "session-new" });
+    const tool = requireTool(tools, "already_wrapped");
+    await requireToolExecute(tool)("call-wrapped", {});
+
+    expect(beforeToolCall).toHaveBeenCalledTimes(1);
+    expect(beforeToolCall.mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({ agentId: "main", sessionId: "session-new" }),
+    );
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(tool.parameters).toEqual({ type: "object", properties: {} });
   });
 
   it("adds Tool Search control tools when explicitly requested", () => {

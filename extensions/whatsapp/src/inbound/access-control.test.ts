@@ -8,6 +8,7 @@ import {
   setupAccessControlTestHarness,
   upsertPairingRequestMock,
 } from "./access-control.test-harness.js";
+import { createTestWebInboundMessage } from "./test-message.test-helper.js";
 
 setupAccessControlTestHarness();
 let checkInboundAccessControl: typeof import("./access-control.js").checkInboundAccessControl;
@@ -48,15 +49,20 @@ async function checkCommandAuthorizedForDm(params: {
 }) {
   return await resolveWhatsAppCommandAuthorized({
     cfg: params.cfg as never,
-    msg: {
+    msg: createTestWebInboundMessage({
+      event: { id: "cmd-dm" },
+      payload: { body: "/status" },
+      platform: {
+        chatJid: params.from ?? "+15550001111",
+        recipientJid: params.selfE164 ?? "+15550009999",
+        senderE164: params.senderE164 ?? params.from ?? "+15550001111",
+        selfE164: params.selfE164 ?? "+15550009999",
+      },
       accountId: params.accountId ?? "work",
       chatType: "direct",
       from: params.from ?? "+15550001111",
-      senderE164: params.senderE164 ?? params.from ?? "+15550001111",
-      selfE164: params.selfE164 ?? "+15550009999",
-      body: "/status",
-      to: params.selfE164 ?? "+15550009999",
-    } as never,
+      conversationId: params.from ?? "+15550001111",
+    }) as never,
   });
 }
 
@@ -69,17 +75,20 @@ async function checkCommandAuthorizedForGroup(params: {
 }) {
   return await resolveWhatsAppCommandAuthorized({
     cfg: params.cfg as never,
-    msg: {
+    msg: createTestWebInboundMessage({
+      event: { id: "cmd-group" },
+      payload: { body: "/status" },
+      platform: {
+        chatJid: params.from ?? "120363401234567890@g.us",
+        recipientJid: params.selfE164 ?? "+15550009999",
+        senderE164: params.senderE164 ?? "+15550001111",
+        selfE164: params.selfE164 ?? "+15550009999",
+      },
       accountId: params.accountId ?? "work",
       chatType: "group",
       from: params.from ?? "120363401234567890@g.us",
       conversationId: params.from ?? "120363401234567890@g.us",
-      chatId: params.from ?? "120363401234567890@g.us",
-      senderE164: params.senderE164 ?? "+15550001111",
-      selfE164: params.selfE164 ?? "+15550009999",
-      body: "/status",
-      to: params.selfE164 ?? "+15550009999",
-    } as never,
+    }) as never,
   });
 }
 

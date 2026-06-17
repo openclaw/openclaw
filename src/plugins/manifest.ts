@@ -1953,6 +1953,7 @@ export type PluginPackageInstall = {
   minHostVersion?: string;
   expectedIntegrity?: string;
   allowInvalidConfigRecovery?: boolean;
+  requiredPlatformPackages?: string[];
 };
 
 export type OpenClawPackageStartup = {

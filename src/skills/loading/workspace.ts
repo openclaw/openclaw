@@ -34,6 +34,7 @@ import { loadSkillsFromDirSafe, readSkillFrontmatterSafe } from "./local-loader.
 import { resolvePluginSkillDirs } from "./plugin-skills.js";
 import { serializeByKey } from "./serialize.js";
 import { formatSkillsForPrompt, type Skill } from "./skill-contract.js";
+import { resolveAllowedSkillSymlinkTargetRealPaths, tryRealpath } from "./symlink-targets.js";
 
 const fsp = fs.promises;
 const skillsLogger = createSubsystemLogger("skills");
@@ -373,14 +374,6 @@ function hasLoadableSkillFrontmatter(
   const fallbackName = path.basename(skillDir).trim();
   const name = frontmatter?.name?.trim() || fallbackName;
   return Boolean(name) && Boolean(frontmatter?.description?.trim());
-}
-
-function tryRealpath(filePath: string): string | null {
-  try {
-    return fs.realpathSync(filePath);
-  } catch {
-    return null;
-  }
 }
 
 function isSymlinkPath(filePath: string): boolean {
@@ -735,16 +728,6 @@ function resolvePluginSkillRootRealPaths(pluginSkillDirs: readonly string[]): st
   );
 }
 
-function resolveAllowedSymlinkTargetRealPaths(config?: OpenClawConfig): string[] {
-  const rawTargets = config?.skills?.load?.allowSymlinkTargets ?? [];
-  const targetPaths = rawTargets
-    .map((dir) => normalizeOptionalString(dir) ?? "")
-    .filter(Boolean)
-    .map((dir) => tryRealpath(resolveUserPath(dir)))
-    .filter((dir): dir is string => Boolean(dir));
-  return uniqueStrings(targetPaths);
-}
-
 function loadGeneratedPluginSkillRecords(params: {
   pluginSkillsDir: string;
   pluginSkillDirs: readonly string[];
@@ -857,7 +840,7 @@ function loadSkillEntries(
   },
 ): SkillEntry[] {
   const limits = resolveSkillsLimits(opts?.config, opts?.agentId);
-  const allowedSymlinkTargetRealPaths = resolveAllowedSymlinkTargetRealPaths(opts?.config);
+  const allowedSymlinkTargetRealPaths = resolveAllowedSkillSymlinkTargetRealPaths(opts?.config);
 
   const loadSkills = (params: { dir: string; source: string }): LoadedSkillRecord[] => {
     const rootDir = path.resolve(params.dir);

@@ -2,6 +2,7 @@
 // outbound message execution context.
 import { Type } from "typebox";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../auto-reply/reply/delivery-hints.js";
 import type { ChannelMessageAdapterShape } from "../../channels/message/types.js";
 import type { ChannelMessageCapability } from "../../channels/plugins/message-capabilities.js";
 import type { ChannelMessageActionName, ChannelPlugin } from "../../channels/plugins/types.js";
@@ -1211,6 +1212,35 @@ describe("message tool explicit target guard", () => {
         filePath: "/tmp/report.png",
       }),
     ).rejects.toThrow(/Explicit message target required/i);
+
+    expect(mocks.runMessageAction).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      action: "poll",
+      params: {
+        action: "poll",
+        pollQuestion: "Lunch?",
+        pollOption: ["Pizza", "Sushi"],
+      },
+    },
+    {
+      action: "sticker",
+      params: {
+        action: "sticker",
+        stickerId: "sticker-1",
+      },
+    },
+  ] as const)("requires an explicit target for $action when configured", async ({ params }) => {
+    const tool = createMessageTool({
+      runMessageAction: mocks.runMessageAction as never,
+      requireExplicitTarget: true,
+      currentChannelProvider: "slack",
+      currentChannelId: "channel:C123",
+    });
+
+    await expect(tool.execute("1", params)).rejects.toThrow(/Explicit message target required/i);
 
     expect(mocks.runMessageAction).not.toHaveBeenCalled();
   });
@@ -2620,6 +2650,10 @@ describe("message tool internal-runtime-context sanitization", () => {
       name: "delivery hint only",
       message:
         "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.",
+    },
+    {
+      name: "narration-aware delivery hint only",
+      message: MESSAGE_TOOL_ONLY_DELIVERY_HINT,
     },
     {
       name: "inbound metadata only",

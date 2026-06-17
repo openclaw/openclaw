@@ -655,7 +655,7 @@ describe("config schema", () => {
       ToolsSchema.parse({
         toolSearch: {
           enabled: true,
-          mode: "tools",
+          mode: "directory",
           codeTimeoutMs: 5000,
           searchDefaultLimit: 4,
           maxSearchLimit: 12,
@@ -663,7 +663,7 @@ describe("config schema", () => {
       })?.toolSearch,
     ).toEqual({
       enabled: true,
-      mode: "tools",
+      mode: "directory",
       codeTimeoutMs: 5000,
       searchDefaultLimit: 4,
       maxSearchLimit: 12,
