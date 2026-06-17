@@ -395,6 +395,39 @@ export async function startOrResumeThread(params: {
     binding.webSearchThreadConfigFingerprint !== webSearchThreadConfigFingerprint;
   const persistentWebSearchRestriction =
     params.webSearchAllowed === false && params.persistentWebSearchAllowed === false;
+  const transientNativeToolRestriction =
+    params.nativeCodeModeEnabled === false && !persistentWebSearchRestriction;
+  const transientWebSearchRestriction = isTransientWebSearchRestriction(params);
+  const explicitTransientWebSearchRestriction =
+    params.webSearchAllowed === false &&
+    params.persistentWebSearchAllowed !== false &&
+    transientWebSearchRestriction;
+  const unknownProviderWebSearchSupport = params.nativeProviderWebSearchSupport === "unknown";
+  if (
+    binding?.threadId &&
+    params.mcpServersFingerprintEvaluated === true &&
+    binding.mcpServersFingerprint !== params.mcpServersFingerprint
+  ) {
+    if (
+      transientNativeToolRestriction ||
+      (webSearchBindingChanged &&
+        (explicitTransientWebSearchRestriction || unknownProviderWebSearchSupport))
+    ) {
+      embeddedAgentLog.debug(
+        "codex app-server MCP config changed during transient restricted turn; starting transient thread",
+        {
+          threadId: binding.threadId,
+        },
+      );
+      preserveExistingBinding = true;
+    } else {
+      embeddedAgentLog.debug("codex app-server MCP config changed; starting a new thread", {
+        threadId: binding.threadId,
+      });
+      await clearCodexAppServerBinding(params.params.sessionFile);
+    }
+    binding = undefined;
+  }
   // A transient native-tool restriction must not replace a legacy binding just
   // because that binding predates search fingerprints. Explicit persistent
   // search denial still rotates first so the restricted thread can persist.
@@ -407,7 +440,6 @@ export async function startOrResumeThread(params: {
     webSearchBindingChanged &&
     !deferLegacyWebSearchRotationToTransientNativeSurface
   ) {
-    const transientWebSearchRestriction = isTransientWebSearchRestriction(params);
     if (transientWebSearchRestriction) {
       embeddedAgentLog.debug(
         "codex app-server web search restricted for turn; starting transient thread",
@@ -428,8 +460,7 @@ export async function startOrResumeThread(params: {
   }
   if (
     binding?.threadId &&
-    params.nativeCodeModeEnabled === false &&
-    !persistentWebSearchRestriction
+    transientNativeToolRestriction
   ) {
     embeddedAgentLog.debug(
       "codex app-server native tool surface disabled for turn; starting transient thread",
@@ -484,17 +515,6 @@ export async function startOrResumeThread(params: {
     await clearCodexAppServerBinding(params.params.sessionFile);
     binding = undefined;
   }
-  if (
-    binding?.threadId &&
-    params.mcpServersFingerprintEvaluated === true &&
-    binding.mcpServersFingerprint !== params.mcpServersFingerprint
-  ) {
-    embeddedAgentLog.debug("codex app-server MCP config changed; starting a new thread", {
-      threadId: binding.threadId,
-    });
-    await clearCodexAppServerBinding(params.params.sessionFile);
-    binding = undefined;
-  }
   if (binding?.threadId) {
     let pluginBindingStale = isCodexPluginThreadBindingStale({
       codexPluginsEnabled: params.pluginThreadConfig?.enabled ?? false,
@@ -530,17 +550,6 @@ export async function startOrResumeThread(params: {
       await clearCodexAppServerBinding(params.params.sessionFile);
       binding = undefined;
     }
-  }
-  if (
-    binding?.threadId &&
-    params.mcpServersFingerprintEvaluated === true &&
-    binding.mcpServersFingerprint !== params.mcpServersFingerprint
-  ) {
-    embeddedAgentLog.debug("codex app-server MCP config changed; starting a new thread", {
-      threadId: binding.threadId,
-    });
-    await clearCodexAppServerBinding(params.params.sessionFile);
-    binding = undefined;
   }
   if (binding?.threadId) {
     if (
@@ -590,11 +599,12 @@ export async function startOrResumeThread(params: {
         await clearCodexAppServerBinding(params.params.sessionFile);
       }
     } else {
+      const resumeBinding = binding;
       try {
-        const authProfileId = params.params.authProfileId ?? binding.authProfileId;
+        const authProfileId = params.params.authProfileId ?? resumeBinding.authProfileId;
         const finalConfigPatch = params.buildFinalConfigPatch?.({
           action: "resume",
-          binding,
+          binding: resumeBinding,
         }) ?? {
           configPatch: params.finalConfigPatch,
           nativeHookRelayGeneration: params.nativeHookRelayGeneration,
@@ -606,7 +616,7 @@ export async function startOrResumeThread(params: {
         );
         const resumeParams = lifecycleTiming.measureSync("thread-resume-params", () =>
           buildThreadResumeParams(params.params, {
-            threadId: binding.threadId,
+            threadId: resumeBinding.threadId,
             authProfileId,
             model: startModelSelection.model,
             modelProvider: startModelProvider,
@@ -634,7 +644,7 @@ export async function startOrResumeThread(params: {
         const nextMcpServersFingerprint =
           params.mcpServersFingerprintEvaluated === true
             ? params.mcpServersFingerprint
-            : binding.mcpServersFingerprint;
+            : resumeBinding.mcpServersFingerprint;
         await lifecycleTiming.measure("thread-resume-write-binding", () =>
           writeCodexAppServerBinding(
             params.params.sessionFile,
@@ -650,13 +660,14 @@ export async function startOrResumeThread(params: {
               userMcpServersFingerprint,
               mcpServersFingerprint: nextMcpServersFingerprint,
               nativeHookRelayGeneration:
-                finalConfigPatch.nativeHookRelayGeneration ?? binding.nativeHookRelayGeneration,
-              pluginAppsFingerprint: binding.pluginAppsFingerprint,
-              pluginAppsInputFingerprint: binding.pluginAppsInputFingerprint,
-              pluginAppPolicyContext: binding.pluginAppPolicyContext,
+                finalConfigPatch.nativeHookRelayGeneration ??
+                resumeBinding.nativeHookRelayGeneration,
+              pluginAppsFingerprint: resumeBinding.pluginAppsFingerprint,
+              pluginAppsInputFingerprint: resumeBinding.pluginAppsInputFingerprint,
+              pluginAppPolicyContext: resumeBinding.pluginAppPolicyContext,
               contextEngine: contextEngineBinding,
               environmentSelectionFingerprint,
-              createdAt: binding.createdAt,
+              createdAt: resumeBinding.createdAt,
             },
             {
               authProfileStore: params.params.authProfileStore,
@@ -686,7 +697,7 @@ export async function startOrResumeThread(params: {
         });
         const activeTurnIds = readActiveCodexTurnIds(response.thread);
         return {
-          ...binding,
+          ...resumeBinding,
           threadId: response.thread.id,
           cwd: params.cwd,
           authProfileId: boundAuthProfileId,
@@ -698,10 +709,10 @@ export async function startOrResumeThread(params: {
           userMcpServersFingerprint,
           mcpServersFingerprint: nextMcpServersFingerprint,
           nativeHookRelayGeneration:
-            finalConfigPatch.nativeHookRelayGeneration ?? binding.nativeHookRelayGeneration,
-          pluginAppsFingerprint: binding.pluginAppsFingerprint,
-          pluginAppsInputFingerprint: binding.pluginAppsInputFingerprint,
-          pluginAppPolicyContext: binding.pluginAppPolicyContext,
+            finalConfigPatch.nativeHookRelayGeneration ?? resumeBinding.nativeHookRelayGeneration,
+          pluginAppsFingerprint: resumeBinding.pluginAppsFingerprint,
+          pluginAppsInputFingerprint: resumeBinding.pluginAppsInputFingerprint,
+          pluginAppPolicyContext: resumeBinding.pluginAppPolicyContext,
           contextEngine: contextEngineBinding,
           environmentSelectionFingerprint,
           lifecycle: {
