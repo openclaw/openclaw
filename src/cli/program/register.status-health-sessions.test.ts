@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   healthCommand: vi.fn(),
   sessionsCommand: vi.fn(),
   sessionsCleanupCommand: vi.fn(),
+  sessionsDiagnoseCommand: vi.fn(),
   sessionsTailCommand: vi.fn(),
   exportTrajectoryCommand: vi.fn(),
   commitmentsListCommand: vi.fn(),
@@ -33,6 +34,7 @@ const statusCommand = mocks.statusCommand;
 const healthCommand = mocks.healthCommand;
 const sessionsCommand = mocks.sessionsCommand;
 const sessionsCleanupCommand = mocks.sessionsCleanupCommand;
+const sessionsDiagnoseCommand = mocks.sessionsDiagnoseCommand;
 const sessionsTailCommand = mocks.sessionsTailCommand;
 const exportTrajectoryCommand = mocks.exportTrajectoryCommand;
 const commitmentsListCommand = mocks.commitmentsListCommand;
@@ -91,6 +93,10 @@ vi.mock("../../commands/sessions-cleanup.js", () => ({
   sessionsCleanupCommand: mocks.sessionsCleanupCommand,
 }));
 
+vi.mock("../../commands/sessions-diagnose.js", () => ({
+  sessionsDiagnoseCommand: mocks.sessionsDiagnoseCommand,
+}));
+
 vi.mock("../../commands/sessions-tail.js", () => ({
   sessionsTailCommand: mocks.sessionsTailCommand,
 }));
@@ -141,6 +147,7 @@ describe("registerStatusHealthSessionsCommands", () => {
     healthCommand.mockResolvedValue(undefined);
     sessionsCommand.mockResolvedValue(undefined);
     sessionsCleanupCommand.mockResolvedValue(undefined);
+    sessionsDiagnoseCommand.mockResolvedValue(undefined);
     sessionsTailCommand.mockResolvedValue(undefined);
     exportTrajectoryCommand.mockResolvedValue(undefined);
     commitmentsListCommand.mockResolvedValue(undefined);
@@ -350,6 +357,32 @@ describe("registerStatusHealthSessionsCommands", () => {
 
     expectCommandOptions(sessionsCleanupCommand, {
       allAgents: true,
+    });
+  });
+
+  it("runs sessions diagnose with forwarded live diagnosis options", async () => {
+    await runCli([
+      "sessions",
+      "--agent",
+      "work",
+      "--json",
+      "diagnose",
+      "--session-key",
+      "agent:work:telegram:direct:owner",
+      "--tail",
+      "50",
+      "--timeout",
+      "7000",
+    ]);
+
+    expectCommandOptions(sessionsDiagnoseCommand, {
+      sessionKey: "agent:work:telegram:direct:owner",
+      sessionId: undefined,
+      label: undefined,
+      agent: "work",
+      tail: "50",
+      timeoutMs: 7000,
+      json: true,
     });
   });
 

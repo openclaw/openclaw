@@ -203,6 +203,9 @@ openclaw [--dev] [--profile <name>] <command>
   status
   health
   sessions
+    diagnose
+    tail
+    export-trajectory
     cleanup
   tasks
     list

@@ -123,6 +123,151 @@ describe("lazy protocol validators", () => {
     expect(validateChatMetadataParams({ agentId: "work", view: "configured" })).toBe(false);
   });
 
+  it("validates sessions diagnose params and result without path-bearing fields", () => {
+    expect(
+      protocol.validateSessionsDiagnoseParams({
+        key: "agent:main:main",
+        agentId: "main",
+        tail: 30,
+      }),
+    ).toBe(true);
+    expect(protocol.validateSessionsDiagnoseParams({ key: "agent:main:main", tail: 0 })).toBe(
+      false,
+    );
+    expect(protocol.validateSessionsDiagnoseParams({ key: "agent:main:main", tail: 201 })).toBe(
+      false,
+    );
+    expect(
+      protocol.validateSessionsDiagnoseParams({
+        key: "agent:main:main",
+        includeLastMessage: true,
+      }),
+    ).toBe(false);
+
+    expect(
+      protocol.validateSessionsDiagnoseResult({
+        ok: true,
+        ts: 1,
+        outcome: "diagnosed",
+        selector: { key: "agent:main:main" },
+        summary: {
+          state: "active",
+          confidence: "high",
+          headline: "A live Gateway or embedded run is visible for this session.",
+        },
+        session: {
+          found: true,
+          key: "agent:main:main",
+          agentId: "main",
+          sessionId: "session-1",
+          kind: "direct",
+          updatedAt: 1,
+          hasActiveRun: true,
+        },
+        live: {
+          gatewayRun: {
+            hasActiveRun: true,
+            runs: [
+              {
+                runId: "run-1",
+                sessionId: "session-1",
+                sessionKey: "agent:main:main",
+                startedAgeMs: 10,
+              },
+            ],
+          },
+          embeddedRun: {
+            active: false,
+            sessionId: "session-1",
+          },
+          diagnostic: {
+            present: true,
+            state: "processing",
+            activeWorkKind: "embedded_run",
+            lastProgressAgeMs: 5,
+          },
+          lane: {
+            lane: "session:agent:main:main",
+            queuedCount: 0,
+            activeCount: 1,
+            maxConcurrent: 1,
+            draining: false,
+            generation: 1,
+          },
+        },
+        transcript: {
+          resolved: true,
+          source: "sessionFile",
+          recentEventCount: 2,
+        },
+        findings: [
+          {
+            code: "active_run_visible",
+            severity: "info",
+            message: "A live Gateway or embedded run is visible for this session.",
+            evidence: ["gateway or embedded run projection is active"],
+          },
+        ],
+        nextChecks: ["openclaw sessions tail --session-key agent:main:main"],
+      }),
+    ).toBe(true);
+
+    expect(
+      protocol.validateSessionsDiagnoseResult({
+        ok: true,
+        ts: 1,
+        outcome: "diagnosed",
+        selector: { key: "agent:main:main" },
+        summary: {
+          state: "active",
+          confidence: "high",
+          headline: "Path-bearing fields are rejected.",
+        },
+        session: { found: true, key: "agent:main:main" },
+        live: {
+          embeddedRun: {
+            active: false,
+            sessionId: "session-1",
+            sessionFile: "/Users/example/.openclaw/agents/main/sessions/session-1.jsonl",
+          },
+        },
+        transcript: {
+          resolved: true,
+          sessionFile: "/Users/example/.openclaw/agents/main/sessions/session-1.jsonl",
+        },
+        findings: [],
+        nextChecks: [],
+      }),
+    ).toBe(false);
+
+    expect(
+      protocol.validateSessionsDiagnoseResult({
+        ok: true,
+        ts: 1,
+        outcome: "diagnosed",
+        selector: { key: "agent:main:main" },
+        summary: {
+          state: "active",
+          confidence: "high",
+          headline: "Unknown closed values are rejected.",
+        },
+        session: { found: true, key: "agent:main:main" },
+        live: {
+          embeddedRun: {
+            active: false,
+            sourceReplyDeliveryMode: "manual",
+          },
+        },
+        transcript: {
+          resolved: true,
+          source: "path",
+        },
+        findings: [],
+        nextChecks: [],
+      }),
+    ).toBe(false);
+  });
+
   it("validates chat sends that suppress command interpretation", () => {
     expect(
       validateChatSendParams({
