@@ -201,13 +201,13 @@ async function assertRecoveryRootOutsidePackageRoot(
   packageRoot: string,
   recoveryRoot: string,
 ): Promise<void> {
-  const [realPackageRoot, resolvedRecoveryRoot] = await Promise.all([
-    fs.realpath(packageRoot),
+  const [resolvedPackageRoot, resolvedRecoveryRoot] = await Promise.all([
+    resolvePathTopology(packageRoot),
     resolvePathTopology(recoveryRoot),
   ]);
   if (
-    resolvedRecoveryRoot === realPackageRoot ||
-    resolvedRecoveryRoot.startsWith(`${realPackageRoot}${path.sep}`)
+    resolvedRecoveryRoot === resolvedPackageRoot ||
+    resolvedRecoveryRoot.startsWith(`${resolvedPackageRoot}${path.sep}`)
   ) {
     throw new Error(`local override recovery root must be outside package root: ${recoveryRoot}`);
   }
@@ -793,6 +793,9 @@ export async function captureLocalPackageOverrides(params: {
     if (!recoveryDir) {
       const recoveryRoot = path.join(resolveStateDir(), "update-recovery");
       await assertRecoveryRootOutsidePackageRoot(params.packageRoot, recoveryRoot);
+      if (params.recordedPackageRoot && params.recordedPackageRoot !== params.packageRoot) {
+        await assertRecoveryRootOutsidePackageRoot(params.recordedPackageRoot, recoveryRoot);
+      }
       await fs.mkdir(recoveryRoot, { recursive: true, mode: 0o700 });
       recoveryDir = await fs.mkdtemp(path.join(recoveryRoot, "openclaw-local-overrides-"));
     }

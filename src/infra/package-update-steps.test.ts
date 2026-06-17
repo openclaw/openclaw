@@ -1284,6 +1284,80 @@ describe("runGlobalPackageUpdateSteps", () => {
     });
   });
 
+  it("rejects staged recapture recovery roots inside the recorded live package path", async () => {
+    await withTempDir({ prefix: "openclaw-package-update-local-swap-recovery-" }, async (base) => {
+      const prefix = path.join(base, "prefix");
+      const globalRoot = path.join(prefix, "lib", "node_modules");
+      const packageRoot = path.join(globalRoot, "openclaw");
+      const lateOverridePath = path.join(packageRoot, "dist", "late-local.js");
+      const stateDir = path.join(packageRoot, "state");
+      await writePackageRoot(packageRoot, "1.0.0");
+
+      const priorStateDir = process.env.OPENCLAW_STATE_DIR;
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+      const realRename = fs.rename.bind(fs);
+      let lateOverrideCreated = false;
+      const renameSpy = vi
+        .spyOn(fs, "rename")
+        .mockImplementation(async (...args: Parameters<typeof fs.rename>) => {
+          if (!lateOverrideCreated && String(args[0]) === packageRoot) {
+            lateOverrideCreated = true;
+            await fs.writeFile(lateOverridePath, "export const late = true;\n", "utf8");
+          }
+          return await realRename(...args);
+        });
+
+      try {
+        const result = await runGlobalPackageUpdateSteps({
+          installTarget: createNpmTarget(globalRoot),
+          installSpec: "openclaw@2.0.0",
+          packageName: "openclaw",
+          packageRoot,
+          runCommand: createRootRunner(globalRoot),
+          runStep: async ({ name, argv, cwd }) => {
+            const stagePrefix = argv[argv.indexOf("--prefix") + 1];
+            if (!stagePrefix) {
+              throw new Error("missing staged prefix");
+            }
+            await writePackageRoot(
+              path.join(stagePrefix, "lib", "node_modules", "openclaw"),
+              "2.0.0",
+            );
+            return {
+              name,
+              command: argv.join(" "),
+              cwd: cwd ?? process.cwd(),
+              durationMs: 1,
+              exitCode: 0,
+            };
+          },
+          timeoutMs: 1000,
+        });
+
+        expect(lateOverrideCreated).toBe(true);
+        expect(result.failedStep?.name).toBe("local overrides");
+        expect(result.failedStep?.stderrTail).toContain(
+          "local override recovery root must be outside package root",
+        );
+        expect(result.afterVersion).toBe("1.0.0");
+        await expect(
+          fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
+        ).resolves.toContain('"version":"1.0.0"');
+        await expect(fs.readFile(lateOverridePath, "utf8")).resolves.toBe(
+          "export const late = true;\n",
+        );
+        await expectPathMissing(stateDir);
+      } finally {
+        renameSpy.mockRestore();
+        if (priorStateDir === undefined) {
+          delete process.env.OPENCLAW_STATE_DIR;
+        } else {
+          process.env.OPENCLAW_STATE_DIR = priorStateDir;
+        }
+      }
+    });
+  });
+
   it("preserves local dist overrides without reapplying by default", async () => {
     await withTempDir({ prefix: "openclaw-package-update-local-preserved-" }, async (base) => {
       const prefix = path.join(base, "prefix");
