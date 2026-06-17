@@ -15,8 +15,6 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
-- Codex harness: remove the configurable remote app-server plugin mutation policy; configured native Codex plugins now always use install-and-refresh activation on the connected app-server. (NOT_IN_SPEC)
-- Codex harness: replace the remote workspace mapping object with `remoteWorkspaceRoot` so app-server config names only remote filesystem paths while OpenClaw infers local cwd suffixes. (NOT_IN_SPEC)
 - Providers/models: add GLM-5.2 support and Claude Haiku 4.5 catalog entries while keeping provider-qualified model IDs normalized across OpenRouter and Google Vertex paths. (#92796, #90116, #92627, #91218) Thanks @arkyu2077, @liuhao1024, and @bymle.
 - Web search: keep key-free providers such as Parallel Free, DuckDuckGo, Ollama, and Codex Hosted Search as explicit opt-ins instead of selecting them automatically when no API-backed provider is configured. (#93616) Thanks @davemorin and @vincentkoc.
 - Channel plugins: ship Telegram rich-message delivery and WhatsApp ACP binding support, including preserved intentional line breaks, rich prompt handoff to CLI backends, and transport fixtures for richer drafts. (#92679, #93164, #92513) Thanks @obviyus and @TurboTheTurtle.
