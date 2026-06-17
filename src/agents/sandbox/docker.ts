@@ -187,6 +187,7 @@ import {
   appendWorkspaceMountArgs,
   formatReadOnlyWorkspaceSkillMountHashState,
   resolveReadOnlyWorkspaceSkillMounts,
+  rewriteHostPath,
   SANDBOX_MOUNT_FORMAT_VERSION,
   type ReadOnlyWorkspaceSkillMount,
 } from "./workspace-mounts.js";
@@ -553,8 +554,15 @@ function appendCustomBinds(args: string[], cfg: SandboxDockerConfig): void {
   if (!cfg.binds?.length) {
     return;
   }
+  const rewrite = (bind: string): string => {
+    const firstColon = bind.indexOf(":");
+    if (firstColon <= 0) return bind;
+    const source = bind.slice(0, firstColon);
+    const rest = bind.slice(firstColon);
+    return rewriteHostPath(source, cfg.hostMountPrefixMap) + rest;
+  };
   for (const bind of cfg.binds) {
-    args.push("-v", bind);
+    args.push("-v", rewrite(bind));
   }
 }
 
@@ -590,11 +598,13 @@ async function createSandboxContainer(params: {
     workspaceAccess: params.workspaceAccess,
     readOnlyWorkspaceSkillMounts: params.readOnlyWorkspaceSkillMounts,
     includeReadOnlyWorkspaceSkillMounts: false,
+    hostMountPrefixMap: cfg.hostMountPrefixMap,
   });
   appendCustomBinds(args, cfg);
   appendReadOnlyWorkspaceSkillMountArgs({
     args,
     readOnlyWorkspaceSkillMounts: params.readOnlyWorkspaceSkillMounts,
+    hostMountPrefixMap: cfg.hostMountPrefixMap,
   });
   args.push(cfg.image, "sleep", "infinity");
 
