@@ -7,7 +7,6 @@ import {
   type OnboardingPluginInstallEntry,
 } from "../commands/onboarding-plugin-install.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   resolveTrustedSourceLinkedOfficialClawHubInstall,
@@ -133,7 +132,7 @@ function hasMeaningfulConfig(config: OpenClawConfig): boolean {
       ) {
         return true;
       }
-      const installRecord = record as PluginInstallRecord;
+      const installRecord = record;
       if (typeof installRecord.installPath !== "string" || !installRecord.installPath.trim()) {
         return true;
       }
