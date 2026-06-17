@@ -271,7 +271,7 @@ function copyPartialBlockState(
 }
 
 /** Replaces a silent-reply token with the latest sent messaging-tool text when available. */
-export function resolveSilentReplyFallbackText(params: {
+function resolveSilentReplyFallbackText(params: {
   text: unknown;
   messagingToolSentTexts: string[];
 }): string {
@@ -475,7 +475,7 @@ function resolveStreamingReplyText(params: {
 }
 
 /** Records parsed reply directives until a sendable reply payload is built. */
-export function recordPendingAssistantReplyDirectives(
+function recordPendingAssistantReplyDirectives(
   state: Pick<EmbeddedAgentSubscribeState, "pendingAssistantReplyDirectives">,
   parsed: ReplyDirectiveParseResult | null | undefined,
 ) {
@@ -529,7 +529,7 @@ export function hasAssistantVisibleReply(params: {
 }
 
 /** Builds normalized stream payload data for assistant visible output. */
-export function buildAssistantStreamData(params: {
+function buildAssistantStreamData(params: {
   text?: string;
   delta?: string;
   replace?: boolean;

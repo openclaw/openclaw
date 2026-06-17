@@ -70,7 +70,7 @@ describe("plugin text transforms", () => {
     ).toBe("counter receipt on the right shelf");
   });
 
-  it("rewrites system prompt and message text content before transport", () => {
+  it("rewrites system prompt and message text content before transport", async () => {
     let capturedContext: Context | undefined;
     const wrapped = wrapStreamFnTextTransforms({
       streamFn: (_model, context) => {
@@ -87,21 +87,23 @@ describe("plugin text transforms", () => {
         { from: /red basket/g, to: "blue basket" },
       ],
     });
-    wrapped(
-      model,
-      {
-        systemPrompt: "Use orchid mailbox inside north tower",
-        messages: [
-          {
-            role: "user",
-            content: [
-              { type: "text", text: "Please use the red basket" },
-              { type: "image", url: "data:image/png;base64,abc" },
-            ],
-          },
-        ],
-      } as Context,
-      undefined,
+    await Promise.resolve(
+      wrapped(
+        model,
+        {
+          systemPrompt: "Use orchid mailbox inside north tower",
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: "Please use the red basket" },
+                { type: "image", url: "data:image/png;base64,abc" },
+              ],
+            },
+          ],
+        } as Context,
+        undefined,
+      ),
     );
 
     const context = capturedContext as unknown as {

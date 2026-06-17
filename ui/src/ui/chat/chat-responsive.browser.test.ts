@@ -1,8 +1,11 @@
 // Control UI tests cover chat responsive behavior.
-import { existsSync } from "node:fs";
 import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { readStyleSheet } from "../../../../test/helpers/ui-style-fixtures.js";
+import {
+  canRunPlaywrightChromium,
+  resolvePlaywrightChromiumExecutablePath,
+} from "../../test-helpers/control-ui-e2e.ts";
 
 const VIEWPORTS = [
   [320, 568],
@@ -14,7 +17,10 @@ const VIEWPORTS = [
   [1440, 900],
 ] as const;
 const TOUCH_TARGET_MIN_PX = 43.5;
-const describeBrowserLayout = existsSync(chromium.executablePath()) ? describe : describe.skip;
+const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
+const describeBrowserLayout = canRunPlaywrightChromium(chromiumExecutablePath)
+  ? describe
+  : describe.skip;
 
 let browser: Browser;
 
@@ -329,7 +335,7 @@ async function expectNoHorizontalOverflow(page: Page) {
 }
 
 beforeAll(async () => {
-  browser = await chromium.launch({ headless: true });
+  browser = await chromium.launch({ executablePath: chromiumExecutablePath, headless: true });
 });
 
 afterAll(async () => {

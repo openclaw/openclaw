@@ -132,6 +132,7 @@ type ResolveApiKeyForProfileResult = {
   email?: string;
   profileId: string;
   profileType: AuthProfileCredential["type"];
+  credential?: AuthProfileCredential;
 };
 
 function buildApiKeyProfileResult(params: {
@@ -140,6 +141,7 @@ function buildApiKeyProfileResult(params: {
   email?: string;
   profileId: string;
   profileType: AuthProfileCredential["type"];
+  credential?: AuthProfileCredential;
 }): ResolveApiKeyForProfileResult {
   const result = {
     apiKey: params.apiKey,
@@ -153,6 +155,10 @@ function buildApiKeyProfileResult(params: {
     },
     profileType: {
       value: params.profileType,
+      enumerable: false,
+    },
+    credential: {
+      value: params.credential,
       enumerable: false,
     },
   });
@@ -282,6 +288,7 @@ async function tryResolveOAuthProfile(
     email: resolved.credential.email ?? cred.email,
     profileId,
     profileType: cred.type,
+    credential: resolved.credential,
   });
 }
 
@@ -437,6 +444,7 @@ export async function resolveApiKeyForProfile(
       email: resolved.credential.email ?? cred.email,
       profileId,
       profileType: cred.type,
+      credential: resolved.credential,
     });
   } catch (error) {
     let refreshedStore =

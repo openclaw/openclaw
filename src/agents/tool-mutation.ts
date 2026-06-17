@@ -443,7 +443,7 @@ export function isReplaySafeToolCall(toolName: string, args: unknown): boolean {
   }
 }
 
-export function buildToolActionFingerprint(
+function buildToolActionFingerprint(
   toolName: string,
   args: unknown,
   meta?: string,
@@ -513,7 +513,7 @@ function readArgFingerprintValue(
   return undefined;
 }
 
-export function extractFileTarget(toolName: string, args: unknown): FileTarget | undefined {
+function extractFileTarget(toolName: string, args: unknown): FileTarget | undefined {
   if (!isFileMutatingToolName(toolName)) {
     return undefined;
   }

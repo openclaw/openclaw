@@ -332,7 +332,7 @@ type LinuxMountInfoEntry = {
   source: string;
 };
 
-export type LinuxSdBackedStateDir = {
+type LinuxSdBackedStateDir = {
   path: string;
   mountPoint: string;
   fsType: string;

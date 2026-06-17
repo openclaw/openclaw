@@ -9,7 +9,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
 
 export const CONTEXT_WINDOW_HARD_MIN_TOKENS = 4_000;
-export const CONTEXT_WINDOW_WARN_BELOW_TOKENS = 8_000;
+const CONTEXT_WINDOW_WARN_BELOW_TOKENS = 8_000;
 const CONTEXT_WINDOW_HARD_MIN_RATIO = 0.1;
 const CONTEXT_WINDOW_WARN_BELOW_RATIO = 0.2;
 
@@ -125,7 +125,7 @@ function resolveContextWindowGuardHint(params: {
 }
 
 /** Derive warning/block floors from the resolved model context window. */
-export function resolveContextWindowGuardThresholds(
+function resolveContextWindowGuardThresholds(
   contextWindowTokens: number,
 ): ContextWindowGuardThresholds {
   const tokens = normalizePositiveInt(contextWindowTokens) ?? 0;

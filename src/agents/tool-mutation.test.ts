@@ -2,7 +2,6 @@
 // used to decide whether repeated tool actions can recover prior failures.
 import { describe, expect, it } from "vitest";
 import {
-  buildToolActionFingerprint,
   buildToolMutationState,
   isLikelyMutatingToolName,
   isMutatingToolCall,
@@ -22,21 +21,23 @@ describe("tool mutation helpers", () => {
   });
 
   it("builds stable fingerprints for mutating calls and omits read-only calls", () => {
-    const writeFingerprint = buildToolActionFingerprint(
+    const writeFingerprint = buildToolMutationState(
       "write",
       { path: "/tmp/demo.txt", id: 42 },
       "write /tmp/demo.txt",
-    );
+    ).actionFingerprint;
     expect(writeFingerprint).toBe("tool=write|path=/tmp/demo.txt|id=42");
 
-    const metaOnlyFingerprint = buildToolActionFingerprint(
+    const metaOnlyFingerprint = buildToolMutationState(
       "exec",
       { command: "npm start" },
       "npm start",
-    );
+    ).actionFingerprint;
     expect(metaOnlyFingerprint).toBe("tool=exec|meta=npm start");
 
-    const readFingerprint = buildToolActionFingerprint("read", { path: "/tmp/demo.txt" });
+    const readFingerprint = buildToolMutationState("read", {
+      path: "/tmp/demo.txt",
+    }).actionFingerprint;
     expect(readFingerprint).toBeUndefined();
   });
 
@@ -49,7 +50,7 @@ describe("tool mutation helpers", () => {
   ])("treats read-only shell command as non-mutating: %s %s", (toolName, command) => {
     expect(isMutatingToolCall(toolName, { command })).toBe(false);
     expect(buildToolMutationState(toolName, { command }).mutatingAction).toBe(false);
-    expect(buildToolActionFingerprint(toolName, { command }, command)).toBeUndefined();
+    expect(buildToolMutationState(toolName, { command }, command).actionFingerprint).toBeUndefined();
   });
 
   it.each([
@@ -101,22 +102,22 @@ describe("tool mutation helpers", () => {
   ])("keeps ambiguous or mutating shell command mutating: %s %s", (toolName, command) => {
     expect(isMutatingToolCall(toolName, { command })).toBe(true);
     expect(buildToolMutationState(toolName, { command }, command).mutatingAction).toBe(true);
-    expect(buildToolActionFingerprint(toolName, { command }, command)).toBe(
+    expect(buildToolMutationState(toolName, { command }, command).actionFingerprint).toBe(
       `tool=${toolName}|meta=${command.toLowerCase().replace(/\s+/g, " ")}`,
     );
   });
 
   it("treats coding-tool path aliases as the same stable target", () => {
-    const filePathFingerprint = buildToolActionFingerprint("edit", {
+    const filePathFingerprint = buildToolMutationState("edit", {
       file_path: "/tmp/demo.txt",
       old_string: "before",
       new_string: "after",
-    });
-    const fileAliasFingerprint = buildToolActionFingerprint("edit", {
+    }).actionFingerprint;
+    const fileAliasFingerprint = buildToolMutationState("edit", {
       file: "/tmp/demo.txt",
       oldText: "before",
       newText: "after again",
-    });
+    }).actionFingerprint;
 
     expect(filePathFingerprint).toBe("tool=edit|path=/tmp/demo.txt");
     expect(fileAliasFingerprint).toBe("tool=edit|path=/tmp/demo.txt");

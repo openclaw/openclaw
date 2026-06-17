@@ -29,6 +29,7 @@ import {
   shouldUseDirectCodexDynamicToolsForModel,
 } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
+import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import { createCodexTestModel } from "./test-support.js";
 
 let tempDir: string;
@@ -401,7 +402,9 @@ describe("Codex app-server dynamic tool build", () => {
     expect(shouldUseDirectCodexDynamicToolsForModel("gpt-5.4-nano")).toBe(true);
     expect(resolveCodexDynamicToolsLoadingForModel({}, "gpt-5.4-nano")).toBe("direct");
     expect(resolveCodexDynamicToolsLoadingForModel({}, "gpt-5.5")).toBe("searchable");
-    const webSearch = toolBridge.specs.find((tool) => tool.name === "web_search");
+    const webSearch = flattenCodexDynamicToolFunctions(toolBridge.specs).find(
+      (tool) => tool.name === "web_search",
+    );
     expect(webSearch).not.toHaveProperty("deferLoading");
     expect(webSearch).not.toHaveProperty("namespace");
   });

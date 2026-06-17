@@ -52,14 +52,12 @@ import {
   runSessionsCleanup,
   serializeSessionCleanupResult,
   resolveMainSessionKey,
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
   listConfiguredSessionStoreAgentIds,
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
-import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
+import { createSessionEntryWithTranscript } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   createInternalHookEvent,
@@ -495,44 +493,6 @@ async function createAgentMainSessionForSend(params: {
     canonicalKey: loaded.canonicalKey,
     storePath: loaded.storePath,
   };
-}
-
-function ensureSessionTranscriptFile(params: {
-  sessionId: string;
-  storePath: string;
-  sessionFile?: string;
-  agentId: string;
-}): { ok: true; transcriptPath: string } | { ok: false; error: string } {
-  try {
-    const transcriptPath = resolveSessionFilePath(
-      params.sessionId,
-      params.sessionFile ? { sessionFile: params.sessionFile } : undefined,
-      resolveSessionFilePathOptions({
-        storePath: params.storePath,
-        agentId: params.agentId,
-      }),
-    );
-    if (!fs.existsSync(transcriptPath)) {
-      fs.mkdirSync(path.dirname(transcriptPath), { recursive: true });
-      const header = {
-        type: "session",
-        version: CURRENT_SESSION_VERSION,
-        id: params.sessionId,
-        timestamp: new Date().toISOString(),
-        cwd: process.cwd(),
-      };
-      fs.writeFileSync(transcriptPath, `${JSON.stringify(header)}\n`, {
-        encoding: "utf-8",
-        mode: 0o600,
-      });
-    }
-    return { ok: true, transcriptPath };
-  } catch (err) {
-    return {
-      ok: false,
-      error: formatErrorMessage(err),
-    };
-  }
 }
 
 function resolveAbortSessionKey(params: {
@@ -1511,76 +1471,56 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       : buildDashboardSessionKey(agentId);
     const target = resolveGatewaySessionStoreTarget({ cfg, key, agentId });
     const targetAgentId = target.agentId;
-    const created = await updateSessionStore(target.storePath, async (store) => {
-      const patched = await applySessionsPatchToStore({
-        cfg,
-        store,
-        storeKey: target.canonicalKey,
+    const created = await createSessionEntryWithTranscript(
+      {
         agentId: targetAgentId,
-        patch: {
-          key: target.canonicalKey,
-          label: normalizeOptionalString(p.label),
-          model: normalizeOptionalString(p.model),
-        },
-        loadGatewayModelCatalog: context.loadGatewayModelCatalog,
-      });
-      if (!patched.ok || !canonicalParentSessionKey) {
-        return patched;
-      }
-      const inheritedSelection = normalizeOptionalString(p.model)
-        ? {}
-        : inheritSessionRuntimeSelection(parentSessionEntry);
-      const nextEntry: SessionEntry = {
-        ...patched.entry,
-        ...inheritedSelection,
-        parentSessionKey: canonicalParentSessionKey,
-      };
-      store[target.canonicalKey] = nextEntry;
-      return {
-        ...patched,
-        entry: nextEntry,
-      };
-    });
+        sessionKey: target.canonicalKey,
+        storePath: target.storePath,
+      },
+      async ({ sessionEntries }) => {
+        const patched = await applySessionsPatchToStore({
+          cfg,
+          store: sessionEntries,
+          storeKey: target.canonicalKey,
+          agentId: targetAgentId,
+          patch: {
+            key: target.canonicalKey,
+            label: normalizeOptionalString(p.label),
+            model: normalizeOptionalString(p.model),
+          },
+          loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+        });
+        if (!patched.ok || !canonicalParentSessionKey) {
+          return patched;
+        }
+        const inheritedSelection = normalizeOptionalString(p.model)
+          ? {}
+          : inheritSessionRuntimeSelection(parentSessionEntry);
+        const nextEntry: SessionEntry = {
+          ...patched.entry,
+          ...inheritedSelection,
+          parentSessionKey: canonicalParentSessionKey,
+        };
+        return {
+          ...patched,
+          entry: nextEntry,
+        };
+      },
+    );
     if (!created.ok) {
-      respond(false, undefined, created.error);
-      return;
-    }
-    const ensured = ensureSessionTranscriptFile({
-      sessionId: created.entry.sessionId,
-      storePath: target.storePath,
-      sessionFile: created.entry.sessionFile,
-      agentId: targetAgentId,
-    });
-    if (!ensured.ok) {
-      await updateSessionStore(target.storePath, (store) => {
-        delete store[target.canonicalKey];
-      });
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, `failed to create session transcript: ${ensured.error}`),
+        created.phase === "transcript"
+          ? errorShape(
+              ErrorCodes.UNAVAILABLE,
+              `failed to create session transcript: ${created.error}`,
+            )
+          : created.error,
       );
       return;
     }
-
-    const createdEntry =
-      created.entry.sessionFile === ensured.transcriptPath
-        ? created.entry
-        : {
-            ...created.entry,
-            sessionFile: ensured.transcriptPath,
-          };
-    if (createdEntry !== created.entry) {
-      await updateSessionStore(target.storePath, (store) => {
-        const existing = store[target.canonicalKey];
-        if (existing) {
-          store[target.canonicalKey] = {
-            ...existing,
-            sessionFile: ensured.transcriptPath,
-          };
-        }
-      });
-    }
+    const createdEntry = created.entry;
 
     const initialMessage = resolveOptionalInitialSessionMessage(p);
     let runPayload: Record<string, unknown> | undefined;

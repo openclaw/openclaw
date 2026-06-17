@@ -60,35 +60,33 @@ function createLegacyConfigSnapshot() {
   } as const;
 }
 
-export const readConfigFileSnapshot = vi.fn() as unknown as MockFn;
+const readConfigFileSnapshot = vi.fn() as unknown as MockFn;
 export const confirm = vi.fn().mockResolvedValue(true) as unknown as MockFn;
-export const select = vi.fn().mockResolvedValue("node") as unknown as MockFn;
-export const note = vi.fn() as unknown as MockFn;
+const select = vi.fn().mockResolvedValue("node") as unknown as MockFn;
+const note = vi.fn() as unknown as MockFn;
 export const writeConfigFile = vi.fn().mockResolvedValue(undefined) as unknown as MockFn;
-export const resolveOpenClawPackageRoot = vi.fn().mockResolvedValue(null) as unknown as MockFn;
-export const runGatewayUpdate = vi
+const resolveOpenClawPackageRoot = vi.fn().mockResolvedValue(null) as unknown as MockFn;
+const runGatewayUpdate = vi
   .fn()
   .mockResolvedValue(createGatewayUpdateResult()) as unknown as MockFn;
-export const collectRelevantDoctorPluginIds = vi.fn(() => []) as unknown as MockFn;
-export const listPluginDoctorLegacyConfigRules = vi.fn(() => []) as unknown as MockFn;
-export const runDoctorHealthContributions = vi.fn(
+const collectRelevantDoctorPluginIds = vi.fn(() => []) as unknown as MockFn;
+const listPluginDoctorLegacyConfigRules = vi.fn(() => []) as unknown as MockFn;
+const runDoctorHealthContributions = vi.fn(
   defaultRunDoctorHealthContributions,
 ) as unknown as MockFn;
-export const maybeRepairMemoryRecallHealth = vi
-  .fn()
-  .mockResolvedValue(undefined) as unknown as MockFn;
-export const noteMemorySearchHealth = vi.fn().mockResolvedValue(undefined) as unknown as MockFn;
-export const noteMemoryRecallHealth = vi.fn().mockResolvedValue(undefined) as unknown as MockFn;
-export const migrateLegacyConfig = vi.fn((raw: unknown) => ({
+const maybeRepairMemoryRecallHealth = vi.fn().mockResolvedValue(undefined) as unknown as MockFn;
+const noteMemorySearchHealth = vi.fn().mockResolvedValue(undefined) as unknown as MockFn;
+const noteMemoryRecallHealth = vi.fn().mockResolvedValue(undefined) as unknown as MockFn;
+const migrateLegacyConfig = vi.fn((raw: unknown) => ({
   config: raw as Record<string, unknown>,
   changes: ["Moved routing.allowFrom → channels.whatsapp.allowFrom."],
 })) as unknown as MockFn;
 
-export const runExec = vi.fn().mockResolvedValue({
+const runExec = vi.fn().mockResolvedValue({
   stdout: "",
   stderr: "",
 }) as unknown as MockFn;
-export const runCommandWithTimeout = vi
+const runCommandWithTimeout = vi
   .fn()
   .mockResolvedValue(createCommandWithTimeoutResult()) as unknown as MockFn;
 
@@ -96,65 +94,65 @@ export const ensureAuthProfileStore = vi
   .fn()
   .mockReturnValue({ version: 1, profiles: {} }) as unknown as MockFn;
 
-export const legacyReadConfigFileSnapshot = vi
+const legacyReadConfigFileSnapshot = vi
   .fn()
   .mockResolvedValue(createLegacyConfigSnapshot()) as unknown as MockFn;
-export const createConfigIO = vi.fn(() => ({
+const createConfigIO = vi.fn(() => ({
   readConfigFileSnapshot: legacyReadConfigFileSnapshot,
 })) as unknown as MockFn;
 
-export const findLegacyGatewayServices = vi.fn().mockResolvedValue([]) as unknown as MockFn;
-export const uninstallLegacyGatewayServices = vi.fn().mockResolvedValue([]) as unknown as MockFn;
-export const findExtraGatewayServices = vi.fn().mockResolvedValue([]) as unknown as MockFn;
-export const findSystemGatewayServices = vi.fn().mockResolvedValue([]) as unknown as MockFn;
-export const renderGatewayServiceCleanupHints = vi
+const findLegacyGatewayServices = vi.fn().mockResolvedValue([]) as unknown as MockFn;
+const uninstallLegacyGatewayServices = vi.fn().mockResolvedValue([]) as unknown as MockFn;
+const findExtraGatewayServices = vi.fn().mockResolvedValue([]) as unknown as MockFn;
+const findSystemGatewayServices = vi.fn().mockResolvedValue([]) as unknown as MockFn;
+const renderGatewayServiceCleanupHints = vi
   .fn()
   .mockReturnValue(["cleanup"]) as unknown as MockFn;
-export const auditGatewayServiceConfig = vi
+const auditGatewayServiceConfig = vi
   .fn()
   .mockResolvedValue({ ok: true, issues: [] }) as unknown as MockFn;
-export const buildGatewayInstallPlan = vi.mocked(
+const buildGatewayInstallPlan = vi.mocked(
   vi.fn().mockResolvedValue({
     programArguments: ["node", "cli", "gateway", "--port", "18789"],
     workingDirectory: "/tmp",
     environment: {},
   }),
 ) as unknown as MockFn;
-export const resolveGatewayAuthTokenForService = vi
+const resolveGatewayAuthTokenForService = vi
   .fn()
   .mockResolvedValue({ token: undefined }) as unknown as MockFn;
-export const resolveGatewayProgramArguments = vi.fn().mockResolvedValue({
+const resolveGatewayProgramArguments = vi.fn().mockResolvedValue({
   programArguments: ["node", "cli", "gateway", "--port", "18789"],
 }) as unknown as MockFn;
-export const serviceInstall = vi.fn().mockResolvedValue(undefined) as unknown as MockFn;
+const serviceInstall = vi.fn().mockResolvedValue(undefined) as unknown as MockFn;
 export const serviceIsLoaded = vi.fn().mockResolvedValue(false) as unknown as MockFn;
-export const serviceStop = vi.fn().mockResolvedValue(undefined) as unknown as MockFn;
+const serviceStop = vi.fn().mockResolvedValue(undefined) as unknown as MockFn;
 export const serviceRestart = vi.fn().mockResolvedValue(undefined) as unknown as MockFn;
-export const serviceUninstall = vi.fn().mockResolvedValue(undefined) as unknown as MockFn;
-export const serviceReadCommand = vi.fn().mockResolvedValue(null) as unknown as MockFn;
+const serviceUninstall = vi.fn().mockResolvedValue(undefined) as unknown as MockFn;
+const serviceReadCommand = vi.fn().mockResolvedValue(null) as unknown as MockFn;
 export const callGateway = vi
   .fn()
   .mockRejectedValue(new Error("gateway closed")) as unknown as MockFn;
 
-export const autoMigrateLegacyStateDir = vi.fn().mockResolvedValue({
+const autoMigrateLegacyStateDir = vi.fn().mockResolvedValue({
   migrated: false,
   skipped: false,
   changes: [],
   warnings: [],
 }) as unknown as MockFn;
-export const autoMigrateLegacyState = vi.fn().mockResolvedValue({
+const autoMigrateLegacyState = vi.fn().mockResolvedValue({
   migrated: false,
   skipped: false,
   changes: [],
   warnings: [],
 }) as unknown as MockFn;
-export const autoMigrateLegacyTaskStateSidecars = vi.fn().mockResolvedValue({
+const autoMigrateLegacyTaskStateSidecars = vi.fn().mockResolvedValue({
   migrated: false,
   skipped: false,
   changes: [],
   warnings: [],
 }) as unknown as MockFn;
-export const runChannelPluginStartupMaintenance = vi
+const runChannelPluginStartupMaintenance = vi
   .fn()
   .mockResolvedValue(undefined) as unknown as MockFn;
 
@@ -254,11 +252,11 @@ function createLegacyStateMigrationDetectionResult(params?: {
   };
 }
 
-export const detectLegacyStateMigrations = vi
+const detectLegacyStateMigrations = vi
   .fn()
   .mockResolvedValue(createLegacyStateMigrationDetectionResult()) as unknown as MockFn;
 
-export const runLegacyStateMigrations = vi.fn().mockResolvedValue({
+const runLegacyStateMigrations = vi.fn().mockResolvedValue({
   changes: [],
   warnings: [],
 }) as unknown as MockFn;

@@ -19,7 +19,7 @@ import {
 } from "../flows/health-checks.js";
 import type { RuntimeEnv } from "../runtime.js";
 
-export interface DoctorLintCliOptions {
+interface DoctorLintCliOptions {
   readonly json?: boolean;
   readonly severityMin?: string;
   readonly skipIds?: readonly string[];

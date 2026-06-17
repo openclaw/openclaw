@@ -224,7 +224,7 @@ export function handleCompactionEnd(ctx: EmbeddedAgentSubscribeContext, evt: Com
 }
 
 /** Lazily reconciles persisted compaction count after a successful compaction. */
-export async function reconcileSessionStoreCompactionCountAfterSuccess(params: {
+async function reconcileSessionStoreCompactionCountAfterSuccess(params: {
   sessionKey?: string;
   agentId?: string;
   configStore?: string;
@@ -232,8 +232,9 @@ export async function reconcileSessionStoreCompactionCountAfterSuccess(params: {
   now?: number;
   attribution?: CompactionCounterAttribution;
 }): Promise<number | undefined> {
-  const { reconcileSessionStoreCompactionCountAfterSuccess: reconcile } =
-    await import("./embedded-agent-subscribe.handlers.compaction.runtime.js");
+  const { default: reconcile } = await import(
+    "./embedded-agent-subscribe.handlers.compaction.runtime.js"
+  );
   return reconcile(params);
 }
 

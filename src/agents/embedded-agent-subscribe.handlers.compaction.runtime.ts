@@ -6,7 +6,7 @@ import type { CompactionCounterAttribution } from "./compaction-attribution.js";
 import { log } from "./embedded-agent-runner/logger.js";
 
 /** Persist the highest observed compaction count after a successful subscribed run. */
-export async function reconcileSessionStoreCompactionCountAfterSuccess(params: {
+export default async function reconcileSessionStoreCompactionCountAfterSuccess(params: {
   sessionKey?: string;
   agentId?: string;
   configStore?: string;
