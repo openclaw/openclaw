@@ -25,6 +25,8 @@ pnpm android:version:check
 pnpm android:version:sync
 pnpm android:version:pin -- --from-gateway
 pnpm android:version:pin -- --version 2026.6.5 --version-code 2026060501
+pnpm android:release:signing:plan
+MATCH_PASSWORD=<signing repo password> pnpm android:release:signing:sync:pull
 pnpm android:release:preflight
 ```
 
@@ -45,10 +47,19 @@ Recommended workflow:
 1. Pin Android to the intended release version.
 2. Run `pnpm android:version:sync`.
 3. Update `apps/android/CHANGELOG.md`, then run `pnpm android:version:sync` again if needed.
-4. Run `pnpm android:release:preflight` to validate Play auth, signing, synced versioning, and release notes.
-5. Run `pnpm android:screenshots` to refresh raw Google Play screenshots.
-6. Run `pnpm android:release:archive` to produce the signed Play AAB and third-party APK.
-7. Run `pnpm android:release:upload` to upload metadata, screenshots, and the Play AAB to Google Play internal testing.
-8. Promote to production manually in Google Play Console.
+4. Run `MATCH_PASSWORD=<signing repo password> pnpm android:release:signing:sync:pull` to materialize encrypted Android signing assets from `apps-signing`.
+5. Run `pnpm android:release:preflight` to validate Play auth, signing, synced versioning, and release notes.
+6. Run `pnpm android:screenshots` to refresh raw Google Play screenshots.
+7. Run `pnpm android:release:archive` to produce the signed Play AAB and third-party APK.
+8. Run `pnpm android:release:upload` to upload metadata, screenshots, and the Play AAB to Google Play internal testing.
+9. Promote to production manually in Google Play Console.
 
 The third-party flavor is archived as a signed APK for non-Play distribution. It is not uploaded by the Play release lane.
+
+## Signing model
+
+`apps/android/Config/ReleaseSigning.json` pins the Android signing assets in the shared private `apps-signing` repo. The Android pipeline uses the same `MATCH_PASSWORD` release-owner secret as iOS, but the Android files are managed by `scripts/android-release-signing.mjs` instead of Fastlane `match`.
+
+`sync:pull` decrypts the Play upload keystore and Gradle signing properties into `apps/android/build/release-signing/`. That directory is gitignored, and Fastlane exports the materialized values as Gradle project properties for the current release command.
+
+If `MATCH_PASSWORD` is not set, the existing manual Gradle-property signing path still works: provide `OPENCLAW_ANDROID_STORE_FILE`, `OPENCLAW_ANDROID_STORE_PASSWORD`, `OPENCLAW_ANDROID_KEY_ALIAS`, and `OPENCLAW_ANDROID_KEY_PASSWORD` through your local Gradle user properties before running release tasks.

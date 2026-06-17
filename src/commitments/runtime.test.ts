@@ -5,7 +5,6 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
-import { DEFAULT_COMMITMENT_EXTRACTION_QUEUE_MAX_ITEMS } from "./config.js";
 import {
   configureCommitmentExtractionRuntime,
   drainCommitmentExtractionQueue,
@@ -14,6 +13,8 @@ import {
 } from "./runtime.js";
 import { loadCommitmentStore } from "./store.js";
 import type { CommitmentExtractionBatchResult, CommitmentExtractionItem } from "./types.js";
+
+const DEFAULT_COMMITMENT_EXTRACTION_QUEUE_MAX_ITEMS = 64;
 
 const runEmbeddedAgentMock = vi.hoisted(() => vi.fn());
 const resolveDefaultModelMock = vi.hoisted(() => vi.fn());

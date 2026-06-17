@@ -6,9 +6,9 @@ import type { ToolProfileId } from "../config/types.tools.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 
 /** Default DM scoping selected during local onboarding. */
-export const ONBOARDING_DEFAULT_DM_SCOPE: DmScope = "per-channel-peer";
+const ONBOARDING_DEFAULT_DM_SCOPE: DmScope = "per-channel-peer";
 /** Default tool profile selected during local onboarding. */
-export const ONBOARDING_DEFAULT_TOOLS_PROFILE: ToolProfileId = "coding";
+const ONBOARDING_DEFAULT_TOOLS_PROFILE: ToolProfileId = "coding";
 
 /** Applies local gateway/workspace defaults without overwriting explicit user defaults. */
 export function applyLocalSetupWorkspaceConfig(

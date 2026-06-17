@@ -85,6 +85,7 @@ type ModelCallObservationState = {
   outputMessages?: unknown[];
   contentCapture?: DiagnosticModelContentCapturePolicy;
   lastStreamProgressAt?: number;
+  terminalEventEmitted?: boolean;
 };
 
 const MODEL_CALL_STREAM_PROGRESS_INTERVAL_MS = 30_000;
@@ -181,6 +182,23 @@ function observeOutputMessageContent(state: ModelCallObservationState, chunk: un
     chunk.type === "done" ? chunk.message : chunk.type === "error" ? chunk.error : undefined;
   if (message !== undefined) {
     state.outputMessages = [cloneDiagnosticContentValue(message)];
+  }
+}
+
+function observeResultMessageContent(
+  state: ModelCallObservationState,
+  startedAt: number,
+  result: unknown,
+): void {
+  state.timeToFirstByteMs ??= Math.max(0, Date.now() - startedAt);
+  if (state.contentCapture?.outputMessages && state.outputMessages === undefined) {
+    state.outputMessages = [cloneDiagnosticContentValue(result)];
+  }
+  if (state.responseStreamBytes === 0) {
+    const bytes = utf8JsonByteLength(result);
+    if (bytes !== undefined) {
+      state.responseStreamBytes = bytes;
+    }
   }
 }
 
@@ -419,6 +437,10 @@ function emitModelCallCompleted(
   startedAt: number,
   state: ModelCallObservationState,
 ): void {
+  if (state.terminalEventEmitted) {
+    return;
+  }
+  state.terminalEventEmitted = true;
   const durationMs = Date.now() - startedAt;
   const sizeTimingFields = modelCallSizeTimingFields(state);
   emitTrustedDiagnosticEventWithPrivateData(
@@ -443,6 +465,10 @@ function emitModelCallError(
   state: ModelCallObservationState,
   fields: ModelCallErrorFields,
 ): void {
+  if (state.terminalEventEmitted) {
+    return;
+  }
+  state.terminalEventEmitted = true;
   const durationMs = Date.now() - startedAt;
   const sizeTimingFields = modelCallSizeTimingFields(state);
   emitTrustedDiagnosticEventWithPrivateData(
@@ -548,31 +574,78 @@ async function* observeModelCallIterator<T>(
   startedAt: number,
   state: ModelCallObservationState,
 ): AsyncIterable<T> {
-  let terminalEmitted = false;
+  // Tracks whether the underlying iterator terminated on its own (done or threw).
+  // This is independent of state.terminalEventEmitted: result() can emit the
+  // terminal event first, but the abandoned iterator still needs return() cleanup.
+  let iteratorSettled = false;
   try {
     for (;;) {
       const next = await iterator.next();
       if (next.done) {
+        iteratorSettled = true;
         break;
       }
       observeResponseChunk(state, startedAt, next.value);
       maybeEmitModelCallStreamProgress(eventBase, state);
       yield next.value;
     }
-    terminalEmitted = true;
     emitModelCallCompleted(eventBase, startedAt, state);
   } catch (err) {
-    terminalEmitted = true;
+    iteratorSettled = true;
     emitModelCallError(eventBase, startedAt, state, modelCallErrorFields(err));
     throw err;
   } finally {
-    if (!terminalEmitted) {
-      // A consumer can stop reading before the provider emits done/error. Close
-      // the iterator best-effort and record the call as completed with observed bytes.
+    if (!iteratorSettled) {
+      // A consumer can stop reading before the provider emits done/error — e.g.
+      // the agent loop returns on the terminal event after awaiting result().
+      // Close the underlying iterator for provider cleanup (idle-timeout abort
+      // listeners, SSE readers) even when result() already emitted the terminal
+      // event; emitModelCallCompleted self-dedupes via state.terminalEventEmitted.
       await safeReturnIterator(iterator);
       emitModelCallCompleted(eventBase, startedAt, state);
     }
   }
+}
+
+function observeModelCallFinalResult<T>(
+  result: T,
+  eventBase: ModelCallEventBase,
+  startedAt: number,
+  state: ModelCallObservationState,
+): T {
+  observeResultMessageContent(state, startedAt, result);
+  emitModelCallCompleted(eventBase, startedAt, state);
+  return result;
+}
+
+function createObservedResultFunction(
+  stream: unknown,
+  eventBase: ModelCallEventBase,
+  startedAt: number,
+  state: ModelCallObservationState,
+): ((...args: unknown[]) => unknown) | undefined {
+  if (!isRecord(stream) || typeof stream.result !== "function") {
+    return undefined;
+  }
+  const resultFn = stream.result;
+  return (...args: unknown[]) => {
+    try {
+      const result = resultFn.apply(stream, args);
+      if (isPromiseLike(result)) {
+        return result.then(
+          (resolved) => observeModelCallFinalResult(resolved, eventBase, startedAt, state),
+          (err: unknown) => {
+            emitModelCallError(eventBase, startedAt, state, modelCallErrorFields(err));
+            throw err;
+          },
+        );
+      }
+      return observeModelCallFinalResult(result, eventBase, startedAt, state);
+    } catch (err) {
+      emitModelCallError(eventBase, startedAt, state, modelCallErrorFields(err));
+      throw err;
+    }
+  };
 }
 
 function observeModelCallStream<T extends AsyncIterable<unknown>>(
@@ -584,6 +657,7 @@ function observeModelCallStream<T extends AsyncIterable<unknown>>(
 ): T {
   const observedIterator = () =>
     observeModelCallIterator(createIterator(), eventBase, startedAt, state)[Symbol.asyncIterator]();
+  const observedResult = createObservedResultFunction(stream, eventBase, startedAt, state);
   let hasNonConfigurableIterator;
   try {
     hasNonConfigurableIterator =
@@ -594,12 +668,16 @@ function observeModelCallStream<T extends AsyncIterable<unknown>>(
   if (hasNonConfigurableIterator) {
     return {
       [Symbol.asyncIterator]: observedIterator,
+      ...(observedResult ? { result: observedResult } : {}),
     } as T;
   }
   return new Proxy(stream, {
     get(target, property, receiver) {
       if (property === Symbol.asyncIterator) {
         return observedIterator;
+      }
+      if (property === "result" && observedResult) {
+        return observedResult;
       }
       const value = Reflect.get(target, property, receiver);
       return typeof value === "function" ? value.bind(target) : value;

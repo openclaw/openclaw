@@ -402,6 +402,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   [".crabbox.yaml", ["test/scripts/package-acceptance-workflow.test.ts"]],
   [".github/workflows/ci.yml", ["test/scripts/ci-workflow-guards.test.ts"]],
   [
+    ".github/workflows/security-sensitive-guard.yml",
+    ["test/scripts/security-sensitive-guard-workflow.test.ts"],
+  ],
+  [
     ".github/workflows/ci-check-testbox.yml",
     ["test/scripts/ci-workflow-guards.test.ts", "test/scripts/package-acceptance-workflow.test.ts"],
   ],
@@ -504,6 +508,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ],
   ],
   ["scripts/dependency-changes-report.mjs", ["test/scripts/dependency-changes-report.test.ts"]],
+  [
+    "scripts/github/security-sensitive-guard.mjs",
+    ["test/scripts/security-sensitive-guard-script.test.ts"],
+  ],
   [
     "scripts/dependency-ownership-surface-report.mjs",
     ["test/scripts/dependency-ownership-surface-report.test.ts"],

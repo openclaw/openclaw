@@ -498,6 +498,15 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
+  it("keeps security-sensitive guard workflow edits on guard workflow tests", () => {
+    expect(
+      resolveChangedTestTargetPlan([".github/workflows/security-sensitive-guard.yml"]),
+    ).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/security-sensitive-guard-workflow.test.ts"],
+    });
+  });
+
   it("keeps Crabbox and Testbox workflow edits on workflow regression tests", () => {
     for (const workflowPath of [
       ".github/workflows/ci-check-testbox.yml",
@@ -568,6 +577,11 @@ describe("scripts/test-projects changed-target routing", () => {
     expect(resolveChangedTestTargetPlan(["scripts/dependency-changes-report.mjs"])).toEqual({
       mode: "targets",
       targets: ["test/scripts/dependency-changes-report.test.ts"],
+    });
+
+    expect(resolveChangedTestTargetPlan(["scripts/github/security-sensitive-guard.mjs"])).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/security-sensitive-guard-script.test.ts"],
     });
 
     expect(
