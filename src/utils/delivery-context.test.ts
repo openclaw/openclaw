@@ -1,14 +1,12 @@
 // Delivery context tests cover context normalization for channel delivery.
 import { describe, expect, it } from "vitest";
 import {
-  formatConversationTarget,
   deliveryContextKey,
   deliveryContextFromSession,
   mergeDeliveryContext,
   normalizeDeliveryContext,
-  normalizeSessionDeliveryFields,
-  resolveConversationDeliveryTarget,
 } from "./delivery-context.js";
+import { normalizeSessionDeliveryFields } from "./delivery-context.shared.js";
 
 describe("delivery context helpers", () => {
   it("normalizes channel/to/accountId and drops empty contexts", () => {
@@ -83,22 +81,6 @@ describe("delivery context helpers", () => {
     expect(deliveryContextKey({ channel: "telegram", to: "-100123", threadId: 42.9 })).toBe(
       "telegram|-100123||42",
     );
-  });
-
-  it("formats generic fallback conversation targets as channels", () => {
-    expect(formatConversationTarget({ channel: "demo-channel", conversationId: "123" })).toBe(
-      "channel:123",
-    );
-  });
-
-  it("resolves generic parent-scoped thread delivery targets without channel runtime", () => {
-    expect(
-      resolveConversationDeliveryTarget({
-        channel: "thread-child-chat",
-        conversationId: "msg-child-id",
-        parentConversationId: "channel-parent-id",
-      }),
-    ).toEqual({ to: "channel:msg-child-id" });
   });
 
   it("derives delivery context from a session entry", () => {
