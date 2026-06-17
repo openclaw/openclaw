@@ -25,6 +25,7 @@ import {
   syncWorkboardLifecycle,
   workboardCardMatchesHealthKey,
   workboardHasActiveWrites,
+  workboardMutationsReady,
   WORKBOARD_PRIORITIES,
   type WorkboardAutoRefreshIntervalMs,
   type WorkboardDependencyState,
@@ -213,6 +214,10 @@ function truncateBadgeText(value: string, maxLength = 64): string {
 }
 
 function canMutate(props: WorkboardProps): boolean {
+  return props.canWrite !== false && workboardMutationsReady(getWorkboardState(props.host));
+}
+
+function canWrite(props: WorkboardProps): boolean {
   return props.canWrite !== false;
 }
 
@@ -1219,6 +1224,7 @@ function getVisibleDetailCard(state: WorkboardUiState): WorkboardCard | null {
 }
 
 function resetDraft(state: WorkboardUiState) {
+  const resolveStaleEdit = state.loaded && state.mutationReadiness === "stale_edit_draft";
   state.draftOpen = false;
   state.editingCardId = null;
   state.draftTitle = "";
@@ -1230,6 +1236,9 @@ function resetDraft(state: WorkboardUiState) {
   state.draftSessionKey = "";
   state.draftTemplateId = "";
   state.draftCommentBody = "";
+  if (resolveStaleEdit) {
+    state.mutationReadiness = "ready";
+  }
 }
 
 function openCreateModal(state: WorkboardUiState) {
@@ -1296,7 +1305,8 @@ function renderCardModal(props: WorkboardProps) {
     : null;
   const comments = editingCard?.metadata?.comments ?? [];
   const draftCommentBusy = editing && state.busyCardIds.has(state.editingCardId ?? "");
-  const draftActionsBusy = state.loading || state.dispatching || draftCommentBusy;
+  const draftActionsBusy =
+    !canMutate(props) || state.loading || state.dispatching || draftCommentBusy;
   return html`
     <div
       class="workboard-modal"
@@ -2497,7 +2507,7 @@ export function renderWorkboard(props: WorkboardProps) {
       host: props.host,
       client: props.client,
       requestUpdate: props.onRequestUpdate,
-      refreshDiagnostics: canMutate(props),
+      refreshDiagnostics: canWrite(props),
     });
     if (!state.pollRefreshInProgress && !state.dispatching) {
       void syncWorkboardLifecycle({
@@ -2749,7 +2759,7 @@ export function renderWorkboard(props: WorkboardProps) {
                         client: props.client,
                         requestUpdate: props.onRequestUpdate,
                         source: "manual",
-                        refreshDiagnostics: writable,
+                        refreshDiagnostics: canWrite(props),
                       })}
                   >
                     ${state.loading ? t("common.refreshing") : t("common.refresh")}

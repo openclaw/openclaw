@@ -538,6 +538,116 @@ describe("renderWorkboard", () => {
     expect(container.querySelector(".workboard-health")?.textContent).toContain("running");
   });
 
+  it("hides cached card mutation controls until a lifecycle teardown reload succeeds", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Stale cached card",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    stopWorkboardLifecycleRefresh(host);
+    const request = vi.fn(async (method: string) => {
+      if (method === "workboard.cards.list") {
+        return { cards: state.cards, statuses: ["todo", "done"] };
+      }
+      if (method === "tasks.list") {
+        return { tasks: [] };
+      }
+      return {};
+    });
+    const props = {
+      host,
+      client: { request } as unknown as GatewayBrowserClient,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+    };
+    const container = document.createElement("div");
+
+    render(renderWorkboard(props), container);
+
+    expect(container.querySelector('button[title="Edit card"]')).toBeNull();
+    expect(container.querySelector('button[title="Archive card"]')).toBeNull();
+    expect(container.querySelector('button[title="New card"]')).toBeNull();
+    expect(container.querySelector(".workboard-card")?.getAttribute("draggable")).toBe("false");
+
+    await vi.waitFor(() => expect(state.mutationReadiness).toBe("ready"));
+    render(renderWorkboard(props), container);
+
+    expect(container.querySelector('button[title="Edit card"]')).not.toBeNull();
+    expect(container.querySelector('button[title="New card"]')).not.toBeNull();
+  });
+
+  it("keeps a stale edit draft disabled until it is cancelled", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Canonical title",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    state.draftOpen = true;
+    state.editingCardId = "card-1";
+    state.draftTitle = "Unsaved edit";
+    stopWorkboardLifecycleRefresh(host);
+    const request = vi.fn(async (method: string) => {
+      if (method === "workboard.cards.list") {
+        return { cards: state.cards, statuses: ["todo", "done"] };
+      }
+      if (method === "tasks.list") {
+        return { tasks: [] };
+      }
+      return {};
+    });
+    const props = {
+      host,
+      client: { request } as unknown as GatewayBrowserClient,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+    };
+    const container = document.createElement("div");
+
+    render(renderWorkboard(props), container);
+    await vi.waitFor(() => expect(state.mutationReadiness).toBe("stale_edit_draft"));
+    render(renderWorkboard(props), container);
+
+    expect(
+      container.querySelector<HTMLButtonElement>(".workboard-modal__actions .primary")?.disabled,
+    ).toBe(true);
+    expect(container.querySelector<HTMLInputElement>(".workboard-draft__title")?.value).toBe(
+      "Unsaved edit",
+    );
+
+    container
+      .querySelector<HTMLButtonElement>('button[title="Cancel"]')
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(state.draftOpen).toBe(false);
+    expect(state.mutationReadiness).toBe("ready");
+  });
+
   it("renders health counts and dense card metadata", () => {
     const host = {};
     const state = getWorkboardState(host);

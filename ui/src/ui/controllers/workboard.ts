@@ -371,6 +371,7 @@ export type WorkboardUiState = {
   loading: boolean;
   loaded: boolean;
   loadAttempted: boolean;
+  mutationReadiness: "ready" | "canonical_reload_required" | "stale_edit_draft";
   error: string | null;
   cards: WorkboardCard[];
   statuses: readonly WorkboardStatus[];
@@ -430,6 +431,7 @@ const workboardLoadPromises = new WeakMap<WorkboardHost, Promise<boolean>>();
 const workboardLoadTokens = new WeakMap<WorkboardHost, WorkboardLoadToken>();
 const workboardLoadErrors = new WeakMap<WorkboardHost, string>();
 const workboardLifecycleTaskRefreshPromises = new WeakMap<WorkboardHost, Promise<number | null>>();
+const workboardLifecycleWritePromises = new WeakMap<WorkboardHost, Set<Promise<unknown>>>();
 const workboardLoadGenerations = new WeakMap<WorkboardHost, number>();
 const workboardLifecycleReconciliationEpochs = new WeakMap<WorkboardHost, number>();
 const workboardPollingGenerations = new WeakMap<WorkboardHost, number>();
@@ -465,7 +467,7 @@ const WORKBOARD_TASKS_LIST_LIMIT = 500;
 const WORKBOARD_TASK_POLL_BATCH_SIZE = 32;
 const WORKBOARD_TASK_DISCOVERY_BATCH_SIZE = 4;
 const WORKBOARD_TASK_LOOKUP_RETRY_DELAYS_MS = [100, 250, 500] as const;
-const WORKBOARD_LIFECYCLE_TASK_CACHE_MS = 5000;
+const WORKBOARD_LIFECYCLE_TASK_CONFIRMATION_WINDOW_MS = 5000;
 const WORKBOARD_LIFECYCLE_TASK_RETRY_MS = 5000;
 const WORKBOARD_LIFECYCLE_TASK_CONTINUE_MS = 100;
 
@@ -546,6 +548,30 @@ function clearWorkboardLifecycleTaskRetryTimer(host: WorkboardHost) {
   }
 }
 
+function trackWorkboardLifecycleWrite(host: WorkboardHost, write: Promise<unknown>) {
+  const writes = workboardLifecycleWritePromises.get(host) ?? new Set<Promise<unknown>>();
+  writes.add(write);
+  workboardLifecycleWritePromises.set(host, writes);
+}
+
+function releaseWorkboardLifecycleWrite(host: WorkboardHost, write: Promise<unknown>) {
+  const writes = workboardLifecycleWritePromises.get(host);
+  writes?.delete(write);
+  if (writes?.size === 0) {
+    workboardLifecycleWritePromises.delete(host);
+  }
+}
+
+async function waitForWorkboardLifecycleWrites(host: WorkboardHost) {
+  while (true) {
+    const writes = workboardLifecycleWritePromises.get(host);
+    if (!writes?.size) {
+      return;
+    }
+    await Promise.allSettled(writes);
+  }
+}
+
 function resetWorkboardLifecycleTaskConfirmations(state: WorkboardUiState) {
   state.lifecycleConfirmedTaskIds = new Set();
   state.lifecycleTaskConfirmationStartedAt = null;
@@ -561,12 +587,16 @@ export function stopWorkboardLifecycleRefresh(host: WorkboardHost) {
     setWorkboardLifecycleTaskRefreshFailed(state, false);
     state.lifecycleTaskRefreshError = null;
     resetWorkboardLifecycleTaskConfirmations(state);
-    state.syncingCardIds.clear();
+    // In-flight lifecycle writes clear themselves in finally. Keep them visible
+    // so reconnect loads wait for their backend mutations before becoming writable.
     // Detach stale loads so reconnecting can start fresh without letting the
     // old request clear a concurrent draft-save loading state.
     if (!state.draftSaving) {
       state.loading = false;
     }
+    // Keep cached cards visible across disconnects, but require a canonical
+    // reload before accepting writes against data that may now be stale.
+    state.mutationReadiness = "canonical_reload_required";
     state.loaded = false;
     state.loadAttempted = false;
   }
@@ -606,16 +636,18 @@ function setWorkboardLifecycleTasksPrepared(
       workboardLifecycleTaskPreparedTimers.delete(host);
       options.requestUpdate?.();
     },
-    Math.max(0, preparedAt + WORKBOARD_LIFECYCLE_TASK_CACHE_MS - Date.now()),
+    Math.max(0, preparedAt + state.autoRefreshIntervalMs - Date.now()),
   );
   workboardLifecycleTaskPreparedTimers.set(host, nextTimer);
 }
 
 function workboardLifecycleTasksPreparedAt(state: WorkboardUiState, now = Date.now()) {
+  if (!state.lifecycleTasksPrepared || state.lifecycleTasksPreparedAt === null) {
+    return null;
+  }
   if (
-    !state.lifecycleTasksPrepared ||
-    state.lifecycleTasksPreparedAt === null ||
-    now - state.lifecycleTasksPreparedAt >= WORKBOARD_LIFECYCLE_TASK_CACHE_MS
+    state.autoRefreshIntervalMs > 0 &&
+    now - state.lifecycleTasksPreparedAt >= state.autoRefreshIntervalMs
   ) {
     return null;
   }
@@ -662,6 +694,7 @@ function createDefaultState(): WorkboardUiState {
     loading: false,
     loaded: false,
     loadAttempted: false,
+    mutationReadiness: "ready",
     error: null,
     cards: [],
     statuses: WORKBOARD_STATUSES,
@@ -718,6 +751,10 @@ export function getWorkboardState(host: WorkboardHost): WorkboardUiState {
     workboardStates.set(host, state);
   }
   return state;
+}
+
+export function workboardMutationsReady(state: WorkboardUiState): boolean {
+  return state.mutationReadiness === "ready";
 }
 
 export function workboardHasActiveWrites(state: WorkboardUiState): boolean {
@@ -2175,6 +2212,9 @@ async function loadWorkboardInternal(
         state.error = null;
       }
       workboardLoadErrors.delete(params.host);
+      // Preserve stale edit text for recovery, but never re-enable its full-card
+      // save payload after canonical state may have changed.
+      state.mutationReadiness = state.editingCardId ? "stale_edit_draft" : "ready";
       state.loaded = true;
       return true;
     } catch (error) {
@@ -2451,6 +2491,7 @@ function removeCardAndReferences(cards: readonly WorkboardCard[], cardId: string
 }
 
 function resetDraftState(state: WorkboardUiState) {
+  const resolveStaleEdit = state.loaded && state.mutationReadiness === "stale_edit_draft";
   state.draftOpen = false;
   state.editingCardId = null;
   state.draftTitle = "";
@@ -2462,6 +2503,9 @@ function resetDraftState(state: WorkboardUiState) {
   state.draftSessionKey = "";
   state.draftTemplateId = "";
   state.draftCommentBody = "";
+  if (resolveStaleEdit) {
+    state.mutationReadiness = "ready";
+  }
 }
 
 function normalizeDraftLabels(value: string): string[] {
@@ -2892,6 +2936,7 @@ export async function captureSessionToWorkboard(params: {
   let captureStarted = false;
   try {
     if (!state.loaded) {
+      await waitForWorkboardLifecycleWrites(params.host);
       await loadWorkboard({
         host: params.host,
         client: params.client,
@@ -2979,7 +3024,7 @@ async function refreshWorkboardLifecycleTasks(
       if (
         state.lifecycleTaskConfirmationStartedAt === null ||
         confirmationNow - state.lifecycleTaskConfirmationStartedAt >=
-          WORKBOARD_LIFECYCLE_TASK_CACHE_MS
+          WORKBOARD_LIFECYCLE_TASK_CONFIRMATION_WINDOW_MS
       ) {
         resetWorkboardLifecycleTaskConfirmations(state);
         state.lifecycleTaskConfirmationStartedAt = confirmationNow;
@@ -3224,11 +3269,14 @@ export async function syncWorkboardLifecycle(params: {
     lifecycleWriteStarted = true;
     state.syncingCardIds.add(card.id);
     params.requestUpdate?.();
+    let write: Promise<unknown> | null = null;
     try {
-      const payload = await params.client.request("workboard.cards.update", {
+      write = params.client.request("workboard.cards.update", {
         id: card.id,
         patch,
       });
+      trackWorkboardLifecycleWrite(params.host, write);
+      const payload = await write;
       const currentCard = state.cards.find((candidate) => candidate.id === card.id);
       const responseCard = normalizeCardPayload(payload);
       // Lifecycle responses are full-card replacements. Any newer load or write
@@ -3252,6 +3300,9 @@ export async function syncWorkboardLifecycle(params: {
         syncKeys.set(card.id, key);
       }
     } finally {
+      if (write) {
+        releaseWorkboardLifecycleWrite(params.host, write);
+      }
       state.syncingCardIds.delete(card.id);
       if (
         isCurrentWorkboardLoadGeneration(params.host, generation) &&
@@ -3284,7 +3335,13 @@ export async function createWorkboardCard(params: {
   requestUpdate?: () => void;
 }) {
   const state = getWorkboardState(params.host);
-  if (!params.client || !state.draftTitle.trim() || state.dispatching || state.draftSaving) {
+  if (
+    !params.client ||
+    !workboardMutationsReady(state) ||
+    !state.draftTitle.trim() ||
+    state.dispatching ||
+    state.draftSaving
+  ) {
     return;
   }
   invalidateWorkboardLoads(params.host);
@@ -3317,6 +3374,7 @@ export async function saveWorkboardCardDraft(params: {
   }
   if (
     !params.client ||
+    !workboardMutationsReady(state) ||
     !state.draftTitle.trim() ||
     state.dispatching ||
     state.draftSaving ||
@@ -3365,6 +3423,7 @@ export async function addWorkboardCardComment(params: {
   if (
     !cardId ||
     !params.client ||
+    !workboardMutationsReady(state) ||
     !body ||
     state.dispatching ||
     state.draftSaving ||
@@ -3404,7 +3463,12 @@ export async function moveWorkboardCard(params: {
   requestUpdate?: () => void;
 }) {
   const state = getWorkboardState(params.host);
-  if (!params.client || state.dispatching || state.busyCardIds.has(params.cardId)) {
+  if (
+    !params.client ||
+    !workboardMutationsReady(state) ||
+    state.dispatching ||
+    state.busyCardIds.has(params.cardId)
+  ) {
     return;
   }
   invalidateWorkboardLoads(params.host);
@@ -3442,7 +3506,12 @@ export async function deleteWorkboardCard(params: {
   requestUpdate?: () => void;
 }) {
   const state = getWorkboardState(params.host);
-  if (!params.client || state.dispatching || state.busyCardIds.has(params.cardId)) {
+  if (
+    !params.client ||
+    !workboardMutationsReady(state) ||
+    state.dispatching ||
+    state.busyCardIds.has(params.cardId)
+  ) {
     return;
   }
   invalidateWorkboardLoads(params.host);
@@ -3468,7 +3537,12 @@ export async function archiveWorkboardCard(params: {
   requestUpdate?: () => void;
 }) {
   const state = getWorkboardState(params.host);
-  if (!params.client || state.dispatching || state.busyCardIds.has(params.cardId)) {
+  if (
+    !params.client ||
+    !workboardMutationsReady(state) ||
+    state.dispatching ||
+    state.busyCardIds.has(params.cardId)
+  ) {
     return;
   }
   invalidateWorkboardLoads(params.host);
@@ -3495,7 +3569,12 @@ export async function dispatchWorkboard(params: {
   requestUpdate?: () => void;
 }) {
   const state = getWorkboardState(params.host);
-  if (!params.client || state.dispatching || workboardHasActiveWrites(state)) {
+  if (
+    !params.client ||
+    !workboardMutationsReady(state) ||
+    state.dispatching ||
+    workboardHasActiveWrites(state)
+  ) {
     return;
   }
   invalidateWorkboardLoads(params.host);
@@ -3524,7 +3603,9 @@ export async function dispatchWorkboard(params: {
       });
       state.lastRefreshError = formatError(error);
     }
-    state.loaded = true;
+    // A teardown may have invalidated this in-flight dispatch. Keep its cached
+    // result reload-required so reconnect cannot treat an old completion as canonical.
+    state.loaded = workboardMutationsReady(state);
   } catch (error) {
     state.error = formatError(error);
   } finally {
@@ -3714,7 +3795,12 @@ export async function startWorkboardCard(params: {
   requestUpdate?: () => void;
 }): Promise<string | null> {
   const state = getWorkboardState(params.host);
-  if (!params.client || state.dispatching || state.busyCardIds.has(params.card.id)) {
+  if (
+    !params.client ||
+    !workboardMutationsReady(state) ||
+    state.dispatching ||
+    state.busyCardIds.has(params.card.id)
+  ) {
     return null;
   }
   const engine = params.engine;
@@ -3871,6 +3957,7 @@ export async function stopWorkboardCard(params: {
   const taskId = cardTaskId && !state.missingTaskIds.has(cardTaskId) ? cardTaskId : task?.taskId;
   if (
     !params.client ||
+    !workboardMutationsReady(state) ||
     state.dispatching ||
     state.busyCardIds.has(params.card.id) ||
     (!sessionKey && !taskId)

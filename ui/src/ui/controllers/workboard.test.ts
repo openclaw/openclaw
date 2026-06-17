@@ -1976,9 +1976,193 @@ describe("workboard controller", () => {
 
     expect(state.loaded).toBe(false);
     expect(state.loadAttempted).toBe(false);
+    expect(state.mutationReadiness).toBe("canonical_reload_required");
     await expect(loadWorkboard({ host, client: client as never })).resolves.toBe(true);
     expect(listCalls).toBe(2);
     expect(state.cards).toEqual([reopenedCard]);
+    expect(state.mutationReadiness).toBe("ready");
+  });
+
+  it("preserves edit drafts without re-enabling their stale save payload", async () => {
+    const editHost = {};
+    const editState = getWorkboardState(editHost);
+    const editClient = createClient({
+      "workboard.cards.list": {
+        cards: [{ ...sampleCard, title: "Canonical title" }],
+        statuses: ["todo", "done"],
+      },
+      "tasks.list": { tasks: [] },
+    });
+    editState.loaded = true;
+    editState.draftOpen = true;
+    editState.editingCardId = sampleCard.id;
+    editState.draftTitle = "Stale edit";
+
+    stopWorkboardLifecycleRefresh(editHost);
+
+    expect(editState.draftOpen).toBe(true);
+    expect(editState.editingCardId).toBe(sampleCard.id);
+    expect(editState.draftTitle).toBe("Stale edit");
+
+    await loadWorkboard({ host: editHost, client: editClient as never });
+
+    expect(editState.mutationReadiness).toBe("stale_edit_draft");
+    vi.clearAllMocks();
+    await saveWorkboardCardDraft({ host: editHost, client: editClient as never });
+    expect(editClient.request).not.toHaveBeenCalled();
+
+    const createHost = {};
+    const createState = getWorkboardState(createHost);
+    const createClientInstance = createClient({
+      "workboard.cards.list": { cards: [], statuses: ["todo", "done"] },
+    });
+    createState.loaded = true;
+    createState.draftOpen = true;
+    createState.draftTitle = "Unsaved new card";
+
+    stopWorkboardLifecycleRefresh(createHost);
+    await loadWorkboard({ host: createHost, client: createClientInstance as never });
+
+    expect(createState.draftOpen).toBe(true);
+    expect(createState.editingCardId).toBeNull();
+    expect(createState.draftTitle).toBe("Unsaved new card");
+    expect(createState.mutationReadiness).toBe("ready");
+  });
+
+  it("preserves an edit draft when its in-flight save fails after teardown", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    let rejectSave: ((reason?: unknown) => void) | undefined;
+    const saveResponse = new Promise<unknown>((_resolve, reject) => {
+      rejectSave = reject;
+    });
+    const client = createClient((method) => {
+      if (method === "workboard.cards.update") {
+        return saveResponse;
+      }
+      if (method === "workboard.cards.list") {
+        return { cards: [sampleCard], statuses: ["todo", "done"] };
+      }
+      if (method === "tasks.list") {
+        return { tasks: [] };
+      }
+      return {};
+    });
+    state.loaded = true;
+    state.cards = [sampleCard];
+    state.draftOpen = true;
+    state.editingCardId = sampleCard.id;
+    state.draftTitle = "Unsaved edit";
+
+    const save = saveWorkboardCardDraft({ host, client: client as never });
+    await vi.waitFor(() => {
+      expect(client.request).toHaveBeenCalledWith("workboard.cards.update", expect.anything());
+    });
+    stopWorkboardLifecycleRefresh(host);
+    rejectSave?.(new Error("Gateway disconnected"));
+    await save;
+
+    expect(state.draftOpen).toBe(true);
+    expect(state.editingCardId).toBe(sampleCard.id);
+    expect(state.draftTitle).toBe("Unsaved edit");
+
+    await loadWorkboard({ host, client: client as never });
+    expect(state.mutationReadiness).toBe("stale_edit_draft");
+  });
+
+  it("blocks cached card mutations until a lifecycle teardown reload succeeds", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const linked = {
+      ...sampleCard,
+      sessionKey: sampleTaskSessionKey,
+      runId: "run-1",
+      taskId: sampleTask.taskId,
+    } satisfies WorkboardCard;
+    const movedCard = { ...sampleCard, status: "review" as const };
+    const client = createClient({
+      "workboard.cards.list": { cards: [sampleCard], statuses: ["todo", "review"] },
+      "workboard.cards.move": { card: movedCard },
+      "tasks.list": { tasks: [] },
+    });
+    state.loaded = true;
+    state.cards = [linked];
+    state.tasksByCardId.set(linked.id, sampleTask);
+    state.draftTitle = "Stale draft";
+    state.editingCardId = linked.id;
+    state.draftCommentBody = "Stale comment";
+
+    stopWorkboardLifecycleRefresh(host);
+
+    await createWorkboardCard({ host, client: client as never });
+    await saveWorkboardCardDraft({ host, client: client as never });
+    await addWorkboardCardComment({ host, client: client as never });
+    await moveWorkboardCard({
+      host,
+      client: client as never,
+      cardId: linked.id,
+      status: "review",
+      position: 2000,
+    });
+    await deleteWorkboardCard({ host, client: client as never, cardId: linked.id });
+    await archiveWorkboardCard({ host, client: client as never, cardId: linked.id });
+    await dispatchWorkboard({ host, client: client as never });
+    await startWorkboardCard({ host, client: client as never, card: linked });
+    await stopWorkboardCard({ host, client: client as never, card: linked });
+
+    expect(client.request).not.toHaveBeenCalled();
+
+    state.editingCardId = null;
+    await loadWorkboard({ host, client: client as never });
+    vi.clearAllMocks();
+    await moveWorkboardCard({
+      host,
+      client: client as never,
+      cardId: sampleCard.id,
+      status: "review",
+      position: 2000,
+    });
+
+    expect(client.request).toHaveBeenCalledWith("workboard.cards.move", {
+      id: sampleCard.id,
+      status: "review",
+      position: 2000,
+    });
+  });
+
+  it("keeps an in-flight dispatch reload-required after lifecycle teardown", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const dispatchResult = createDeferred<unknown>();
+    const client = createClient((method) => {
+      if (method === "workboard.cards.dispatch") {
+        return dispatchResult.promise;
+      }
+      if (method === "workboard.cards.list") {
+        return { cards: [sampleCard], statuses: ["todo", "done"] };
+      }
+      if (method === "tasks.list") {
+        return { tasks: [] };
+      }
+      return {};
+    });
+    state.loaded = true;
+    state.cards = [sampleCard];
+
+    const dispatch = dispatchWorkboard({ host, client: client as never });
+    await vi.waitFor(() => {
+      expect(client.request).toHaveBeenCalledWith("workboard.cards.dispatch", {});
+    });
+    stopWorkboardLifecycleRefresh(host);
+    dispatchResult.resolve({});
+    await dispatch;
+
+    expect(state.loaded).toBe(false);
+    expect(state.mutationReadiness).toBe("canonical_reload_required");
+
+    await expect(loadWorkboard({ host, client: client as never })).resolves.toBe(true);
+    expect(state.loaded).toBe(true);
+    expect(state.mutationReadiness).toBe("ready");
   });
 
   it("does not attach a stale forced refresh to a reopened board load", async () => {
@@ -3182,6 +3366,78 @@ describe("workboard controller", () => {
 
     await expect(captured).resolves.toMatchObject({ sessionKey: sampleSession.key });
     expect(client.request).toHaveBeenCalledWith("workboard.cards.create", expect.any(Object));
+  });
+
+  it("waits for retained lifecycle writes before capturing after teardown", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const lifecycleCard = {
+      ...sampleCard,
+      sessionKey: sampleSession.key,
+    } satisfies WorkboardCard;
+    const capturedSession = {
+      ...sampleSession,
+      key: "agent:main:dashboard:capture",
+    };
+    const capturedCard = {
+      ...sampleCard,
+      id: "captured-card",
+      sessionKey: capturedSession.key,
+    };
+    const lifecycleUpdate = createDeferred<unknown>();
+    const client = createClient((method) => {
+      if (method === "workboard.cards.update") {
+        return lifecycleUpdate.promise;
+      }
+      if (method === "workboard.cards.list") {
+        return {
+          cards: [{ ...lifecycleCard, status: "running" }],
+          statuses: ["todo", "running", "done"],
+        };
+      }
+      if (method === "tasks.list") {
+        return { tasks: [] };
+      }
+      if (method === "chat.history") {
+        return { messages: [] };
+      }
+      if (method === "workboard.cards.create") {
+        return { card: capturedCard };
+      }
+      return {};
+    });
+    state.loaded = true;
+    state.cards = [lifecycleCard];
+    state.lifecycleTasksPrepared = true;
+    state.lifecycleTasksPreparedAt = Date.now();
+
+    const syncing = syncWorkboardLifecycle({
+      host,
+      client: client as never,
+      sessions: [sampleSession],
+    });
+    await vi.waitFor(() => {
+      expect(client.request).toHaveBeenCalledWith("workboard.cards.update", expect.anything());
+    });
+    stopWorkboardLifecycleRefresh(host);
+    const capture = captureSessionToWorkboard({
+      host,
+      client: client as never,
+      session: capturedSession,
+    });
+    await Promise.resolve();
+
+    expect(client.request).not.toHaveBeenCalledWith("workboard.cards.list", {});
+
+    lifecycleUpdate.resolve({ card: { ...lifecycleCard, status: "running" } });
+    await syncing;
+
+    await expect(capture).resolves.toEqual(capturedCard);
+    expect(client.request).toHaveBeenCalledWith("workboard.cards.list", {});
+    expect(client.request).toHaveBeenCalledWith(
+      "workboard.cards.create",
+      expect.objectContaining({ sessionKey: capturedSession.key }),
+    );
   });
 
   it("clamps long session labels before creating captured cards", async () => {
@@ -4827,11 +5083,14 @@ describe("workboard controller", () => {
       );
     });
     stopWorkboardLifecycleRefresh(host);
+    expect(state.syncingCardIds).toEqual(new Set([first.id]));
+    await expect(loadWorkboard({ host, client: client as never })).resolves.toBe(false);
+    expect(client.request).not.toHaveBeenCalledWith("workboard.cards.list", {});
+    firstUpdate.resolve({ card: { ...first, status: "running" } });
+    await syncing;
     expect(state.syncingCardIds.size).toBe(0);
     await expect(loadWorkboard({ host, client: client as never })).resolves.toBe(true);
     expect(client.request).toHaveBeenCalledWith("workboard.cards.list", {});
-    firstUpdate.resolve({ card: { ...first, status: "running" } });
-    await syncing;
 
     expect(
       client.request.mock.calls.filter(([method]) => method === "workboard.cards.update"),
@@ -5419,6 +5678,46 @@ describe("workboard controller", () => {
     expect(client.request).toHaveBeenNthCalledWith(2, "workboard.cards.update", expect.anything());
   });
 
+  it("uses the selected auto-refresh interval for prepared lifecycle tasks", async () => {
+    vi.useFakeTimers();
+    const host = {};
+    const state = getWorkboardState(host);
+    const linked = {
+      ...sampleCard,
+      status: "running",
+      sessionKey: sampleTaskSessionKey,
+      runId: "run-1",
+      taskId: "task-1",
+    } satisfies WorkboardCard;
+    state.loaded = true;
+    state.cards = [linked];
+    state.tasksByCardId.set("card-1", sampleTask);
+    state.autoRefreshIntervalMs = 15000;
+    state.lifecycleTasksPrepared = true;
+    state.lifecycleTasksPreparedAt = Date.now();
+    const completedTask = { ...sampleTask, status: "completed" as const };
+    const client = createClient({
+      "tasks.list": { tasks: [completedTask] },
+      "workboard.cards.update": { card: { ...linked, status: "review" } },
+    });
+    const requestUpdate = vi.fn();
+
+    await syncWorkboardLifecycle({ host, client: client as never, sessions: [], requestUpdate });
+    await vi.advanceTimersByTimeAsync(5000);
+    await syncWorkboardLifecycle({ host, client: client as never, sessions: [], requestUpdate });
+
+    expect(requestUpdate).not.toHaveBeenCalled();
+    expect(client.request).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(requestUpdate).toHaveBeenCalledOnce();
+    vi.clearAllMocks();
+    await syncWorkboardLifecycle({ host, client: client as never, sessions: [], requestUpdate });
+
+    expect(client.request).toHaveBeenNthCalledWith(1, "tasks.list", { limit: 500 });
+    expect(client.request).toHaveBeenNthCalledWith(2, "workboard.cards.update", expect.anything());
+  });
+
   it("does not refresh prepared task lifecycle state while auto-refresh is off", async () => {
     vi.useFakeTimers();
     const host = {};
@@ -5442,6 +5741,7 @@ describe("workboard controller", () => {
 
     await syncWorkboardLifecycle({ host, client: client as never, sessions: [], requestUpdate });
     await vi.advanceTimersByTimeAsync(5000);
+    await syncWorkboardLifecycle({ host, client: client as never, sessions: [], requestUpdate });
 
     expect(requestUpdate).not.toHaveBeenCalled();
     expect(client.request).not.toHaveBeenCalled();
