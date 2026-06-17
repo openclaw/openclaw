@@ -56,5 +56,12 @@ export function resolveThinkingProfile({
 }: {
   reasoning?: boolean;
 }): ProviderThinkingProfile {
-  return reasoning ? OLLAMA_REASONING_THINKING_PROFILE : OLLAMA_NON_REASONING_THINKING_PROFILE;
+  // When reasoning is not explicitly configured (live-discovered models),
+  // default to the reasoning profile because Ollama models typically
+  // support thinking capabilities even when unknown to the catalog.
+  // Explicit reasoning:false from config still yields the off-only profile.
+  if (reasoning === false) {
+    return OLLAMA_NON_REASONING_THINKING_PROFILE;
+  }
+  return OLLAMA_REASONING_THINKING_PROFILE;
 }
