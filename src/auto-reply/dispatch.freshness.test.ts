@@ -92,7 +92,7 @@ describe("foreground reply freshness", () => {
     resetGlobalHookRunner();
   });
 
-  it("suppresses an older foreground final after a newer inbound event starts for the same session target", async () => {
+  it("allows an older foreground final after a newer inbound event for the same session target when the older dispatch has not yet started delivering", async () => {
     const deliveries: Delivery[] = [];
     const olderStarted = createDeferred<void>();
     const releaseOlderFinal = createDeferred<void>();
@@ -131,11 +131,105 @@ describe("foreground reply freshness", () => {
       queuedFinal: true,
       counts: { tool: 0, block: 0, final: 1 },
     });
+    // Lazy fence: older dispatch had not created its fence before the newer
+    // dispatch delivered, so both are allowed to complete without cancellation.
     expect(olderResult).toEqual({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 1 },
     });
-    expect(deliveries).toEqual([{ kind: "final", text: "new final" }]);
+    expect(deliveries).toEqual([
+      { kind: "final", text: "new final" },
+      { kind: "final", text: "old final" },
+    ]);
+  });
+
+  it("keeps fresh settled delivery active when no ordinary delivery creates a foreground fence", async () => {
+    const deliveries: Delivery[] = [];
+    const onFreshSettledDelivery = vi.fn(() => ({ visibleReplySent: true }));
+
+    hoisted.dispatchReplyFromConfigMock.mockImplementation(
+      async (params: DispatchReplyFromConfigParams) => {
+        if (params.ctx.MessageSid === "no-delivery-message") {
+          return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+        }
+        throw new Error(`unexpected test message ${params.ctx.MessageSid ?? "<missing>"}`);
+      },
+    );
+
+    const result = await dispatchWithDeliveries(
+      buildForegroundCtx({ MessageSid: "no-delivery-message" }),
+      deliveries,
+      { onFreshSettledDelivery },
+    );
+
+    expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
+    expect(deliveries).toEqual([]);
+    // Lazy fence: when no ordinary delivery triggers fence creation,
+    // onFreshSettledDelivery still runs (no fence snapshot needed to guard it).
+    expect(onFreshSettledDelivery).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps an older foreground final when a newer same-session dispatch is pending before visible delivery", async () => {
+    const deliveries: Delivery[] = [];
+    const beforeDeliverStarted = createDeferred<void>();
+    const releaseBeforeDeliver = createDeferred<ReplyPayload | null>();
+    const newerPending = createDeferred<void>();
+    const beforeDeliver = vi.fn(() => {
+      beforeDeliverStarted.resolve();
+      return releaseBeforeDeliver.promise;
+    });
+
+    hoisted.dispatchReplyFromConfigMock.mockImplementation(
+      async (params: DispatchReplyFromConfigParams) => {
+        if (params.ctx.MessageSid === "old-message") {
+          params.dispatcher.sendFinalReply({ text: "old final" });
+          return queuedFinalResult();
+        }
+        if (params.ctx.MessageSid === "new-message") {
+          await newerPending.promise;
+          params.dispatcher.sendFinalReply({ text: "new final" });
+          return queuedFinalResult();
+        }
+        throw new Error(`unexpected test message ${params.ctx.MessageSid ?? "<missing>"}`);
+      },
+    );
+
+    const olderDispatch = dispatchWithDeliveries(
+      buildForegroundCtx({ MessageSid: "old-message" }),
+      deliveries,
+      { beforeDeliver },
+    );
+    await beforeDeliverStarted.promise;
+
+    // Newer dispatch begins but is blocked in its resolver — it has not yet
+    // created a fence, so the older dispatch's delivery is not cancelled.
+    const newerDispatch = dispatchWithDeliveries(
+      buildForegroundCtx({ MessageSid: "new-message" }),
+      deliveries,
+    );
+    await Promise.resolve();
+
+    releaseBeforeDeliver.resolve({ text: "old rewritten final" });
+    const olderResult = await olderDispatch;
+
+    expect(beforeDeliver).toHaveBeenCalledTimes(1);
+    expect(olderResult).toEqual({
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 1 },
+    });
+    expect(deliveries).toEqual([{ kind: "final", text: "old rewritten final" }]);
+
+    newerPending.resolve();
+    const newerResult = await newerDispatch;
+
+    expect(newerResult).toEqual({
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 1 },
+    });
+    expect(deliveries).toEqual([
+      { kind: "final", text: "old rewritten final" },
+      { kind: "final", text: "new final" },
+    ]);
   });
 
   it("keeps an older foreground final when a newer inbound has no visible delivery while beforeDeliver is pending", async () => {
