@@ -275,21 +275,42 @@ type EvidenceEntryView = {
   title: string;
 };
 
+type EvidenceProducerContextFile = {
+  href: string;
+  path: string;
+  preview: string | null;
+};
+
+type EvidenceMatrixCell = {
+  artifactKinds: string[];
+  artifactPaths: string[];
+  stage: string;
+  status: string;
+  surface: string;
+  testId: string | null;
+  title: string | null;
+};
+
 type EvidenceProducerContext = {
-  commands: { path: string; preview: string | null } | null;
+  commands: EvidenceProducerContextFile | null;
   kind: "ux-matrix";
-  manifest: { path: string; runStatus: string | null; runId: string | null } | null;
+  manifest:
+    | (EvidenceProducerContextFile & { runStatus: string | null; runId: string | null })
+    | null;
   matrix: {
-    cells: number;
+    cells: EvidenceMatrixCell[];
     counts: Record<string, number>;
     path: string;
     stages: string[];
     surfaces: string[];
   } | null;
-  preflight: { adbDevicesPath: string | null; memoryPath: string | null };
-  releaseLedger: { counts: Record<string, number>; path: string } | null;
+  preflight: {
+    adbDevices: EvidenceProducerContextFile | null;
+    memory: EvidenceProducerContextFile | null;
+  };
+  releaseLedger: (EvidenceProducerContextFile & { counts: Record<string, number> }) | null;
   rootPath: string;
-  scorecard: { path: string; preview: string | null } | null;
+  scorecard: EvidenceProducerContextFile | null;
 };
 
 type EvidenceGalleryModel = {
@@ -1745,6 +1766,114 @@ function renderProducerContextMetric(label: string, value: string | number): str
   </div>`;
 }
 
+function renderProducerCountChips(counts: Record<string, number>): string {
+  const entries = Object.entries(counts).toSorted(
+    (left, right) => right[1] - left[1] || left[0].localeCompare(right[0]),
+  );
+  if (entries.length === 0) {
+    return '<span class="text-dimmed text-sm">No counts recorded</span>';
+  }
+  return entries
+    .map(
+      ([status, count]) =>
+        `<span class="capture-chip">${esc(status)} <em>${esc(String(count))}</em></span>`,
+    )
+    .join("");
+}
+
+function renderProducerContextFile(params: {
+  file: EvidenceProducerContextFile | null;
+  open?: boolean;
+  title: string;
+}): string {
+  if (!params.file) {
+    return "";
+  }
+  return `<details class="evidence-producer-drilldown" ${params.open ? "open" : ""}>
+    <summary>
+      <span>${esc(params.title)}</span>
+      <span class="capture-mono">${esc(params.file.path)}</span>
+    </summary>
+    <div class="evidence-producer-drilldown-body">
+      ${
+        params.file.preview !== null
+          ? `<pre class="report-pre evidence-producer-preview">${esc(params.file.preview)}</pre>`
+          : '<div class="empty-state">Preview unavailable for this artifact.</div>'
+      }
+      <a class="btn-sm btn-ghost" href="${esc(params.file.href)}" target="_blank" rel="noreferrer">Open artifact</a>
+    </div>
+  </details>`;
+}
+
+function formatMatrixLabel(id: string): string {
+  return id
+    .split("-")
+    .map((part) => (part ? part[0].toUpperCase() + part.slice(1) : part))
+    .join(" ");
+}
+
+function matrixCellClass(status: string): string {
+  return status.replace(/[^a-z0-9-]/gi, "-").toLowerCase();
+}
+
+function renderEvidenceMatrixCell(
+  cell: EvidenceMatrixCell | undefined,
+  surface: string,
+  stage: string,
+): string {
+  if (!cell) {
+    return '<span class="evidence-matrix-cell evidence-matrix-cell-missing" title="No matrix cell was recorded for this surface and stage.">-</span>';
+  }
+  const isProofGap = cell.status === "proof-gap";
+  const artifactText =
+    cell.artifactPaths.length > 0 ? ` Artifacts: ${cell.artifactPaths.join(", ")}` : "";
+  const proofText =
+    cell.artifactKinds.length > 0
+      ? ` Proof: ${cell.artifactKinds.join(" + ")} (${cell.artifactPaths.length})`
+      : "";
+  const title = `${surface} / ${stage}: ${cell.status}${isProofGap ? " (not executed in this run)" : ""}.${proofText}${artifactText}`;
+  const className = `evidence-matrix-cell evidence-matrix-cell-${matrixCellClass(cell.status)}${cell.testId ? " evidence-matrix-cell-action" : ""}`;
+  const label = isProofGap ? "gap" : cell.status;
+  if (!cell.testId) {
+    return `<span class="${className}" title="${esc(title)}">${esc(label)}</span>`;
+  }
+  return `<button class="${className}" data-evidence-entry-id="${esc(cell.testId)}" type="button" title="${esc(cell.title ?? title)}">${esc(label)}</button>`;
+}
+
+function renderEvidenceMatrixMiniGrid(matrix: EvidenceProducerContext["matrix"]): string {
+  if (!matrix || matrix.cells.length === 0) {
+    return "";
+  }
+  const cellsByKey = new Map(
+    matrix.cells.map((cell) => [`${cell.surface}:${cell.stage}`, cell] as const),
+  );
+  return `<div class="evidence-matrix-mini" aria-label="UX Matrix surface by stage evidence grid">
+    <table>
+      <thead>
+        <tr>
+          <th scope="col">Surface</th>
+          ${matrix.stages.map((stage) => `<th scope="col" title="${esc(stage)}">${esc(formatMatrixLabel(stage))}</th>`).join("")}
+        </tr>
+      </thead>
+      <tbody>
+        ${matrix.surfaces
+          .map(
+            (surface) => `<tr>
+              <th scope="row" title="${esc(surface)}">${esc(formatMatrixLabel(surface))}</th>
+              ${matrix.stages
+                .map(
+                  (stage) =>
+                    `<td>${renderEvidenceMatrixCell(cellsByKey.get(`${surface}:${stage}`), surface, stage)}</td>`,
+                )
+                .join("")}
+            </tr>`,
+          )
+          .join("")}
+      </tbody>
+    </table>
+  </div>`;
+}
+
 function renderEvidenceProducerContext(producer: EvidenceProducerContext | null): string {
   if (!producer) {
     return "";
@@ -1770,19 +1899,47 @@ function renderEvidenceProducerContext(producer: EvidenceProducerContext | null)
       </div>
     </div>
     <div class="evidence-producer-grid">
-      ${renderProducerContextMetric("Cells", matrix?.cells ?? 0)}
+      ${renderProducerContextMetric("Cells", matrix?.cells.length ?? 0)}
       ${renderProducerContextMetric("Pass", counts.pass ?? 0)}
       ${renderProducerContextMetric("Proof gaps", proofGaps)}
       ${renderProducerContextMetric("Issues", issueCount)}
       ${renderProducerContextMetric("Surfaces", matrix?.surfaces.length ?? 0)}
       ${renderProducerContextMetric("Stages", matrix?.stages.length ?? 0)}
     </div>
+    <div class="evidence-producer-status-row">
+      <div>
+        <div class="inspector-section-title">Matrix counts</div>
+        <div class="capture-chip-row">${renderProducerCountChips(matrix?.counts ?? {})}</div>
+      </div>
+      ${
+        producer.releaseLedger
+          ? `<div>
+              <div class="inspector-section-title">Release ledger counts</div>
+              <div class="capture-chip-row">${renderProducerCountChips(producer.releaseLedger.counts)}</div>
+            </div>`
+          : ""
+      }
+    </div>
+    <div class="evidence-producer-drilldowns">
+      ${renderProducerContextFile({ title: "Scorecard", file: producer.scorecard, open: true })}
+      ${renderProducerContextFile({ title: "Commands", file: producer.commands })}
+      ${renderProducerContextFile({ title: "Preflight memory", file: producer.preflight.memory })}
+      ${renderProducerContextFile({
+        title: "Preflight adb devices",
+        file: producer.preflight.adbDevices,
+      })}
+      ${renderProducerContextFile({ title: "Manifest", file: producer.manifest })}
+      ${renderProducerContextFile({ title: "Release ledger", file: producer.releaseLedger })}
+    </div>
     <div class="evidence-producer-links">
       ${matrix ? `<span class="ref-tag">${esc(matrix.path)}</span>` : ""}
       ${producer.releaseLedger ? `<span class="ref-tag">${esc(producer.releaseLedger.path)}</span>` : ""}
       ${producer.scorecard ? `<span class="ref-tag">${esc(producer.scorecard.path)}</span>` : ""}
       ${producer.commands ? `<span class="ref-tag">${esc(producer.commands.path)}</span>` : ""}
+      ${producer.preflight.memory ? `<span class="ref-tag">${esc(producer.preflight.memory.path)}</span>` : ""}
+      ${producer.preflight.adbDevices ? `<span class="ref-tag">${esc(producer.preflight.adbDevices.path)}</span>` : ""}
     </div>
+    ${renderEvidenceMatrixMiniGrid(matrix)}
   </section>`;
 }
 

@@ -13,6 +13,22 @@ const TEXT_PREVIEW_BYTES = 12 * 1024;
 
 type QaEvidenceArtifact = NonNullable<QaEvidenceSummaryEntry["execution"]>["artifacts"][number];
 
+export type QaEvidenceProducerContextFile = {
+  href: string;
+  path: string;
+  preview: string | null;
+};
+
+export type QaEvidenceMatrixCellView = {
+  artifactKinds: string[];
+  artifactPaths: string[];
+  stage: string;
+  status: string;
+  surface: string;
+  testId: string | null;
+  title: string | null;
+};
+
 export type QaEvidenceArtifactView = {
   exists: boolean;
   error: string | null;
@@ -36,20 +52,29 @@ export type QaEvidenceGalleryEntryView = {
 };
 
 export type QaEvidenceProducerContext = {
-  commands: { path: string; preview: string | null } | null;
+  commands: QaEvidenceProducerContextFile | null;
   kind: "ux-matrix";
-  manifest: { path: string; runStatus: string | null; runId: string | null } | null;
+  manifest:
+    | (QaEvidenceProducerContextFile & {
+        path: string;
+        runStatus: string | null;
+        runId: string | null;
+      })
+    | null;
   matrix: {
-    cells: number;
+    cells: QaEvidenceMatrixCellView[];
     counts: Record<string, number>;
     path: string;
     stages: string[];
     surfaces: string[];
   } | null;
-  preflight: { adbDevicesPath: string | null; memoryPath: string | null };
-  releaseLedger: { counts: Record<string, number>; path: string } | null;
+  preflight: {
+    adbDevices: QaEvidenceProducerContextFile | null;
+    memory: QaEvidenceProducerContextFile | null;
+  };
+  releaseLedger: (QaEvidenceProducerContextFile & { counts: Record<string, number> }) | null;
   rootPath: string;
-  scorecard: { path: string; preview: string | null } | null;
+  scorecard: QaEvidenceProducerContextFile | null;
 };
 
 export type QaEvidenceGalleryModel = {
@@ -193,6 +218,14 @@ async function readTextPreviewIfExists(filePath: string): Promise<string | null>
   return readPreview(realFile, "text").catch(() => null);
 }
 
+async function readJsonPreviewIfExists(filePath: string): Promise<string | null> {
+  const realFile = await realpathIfExists(filePath);
+  if (!realFile) {
+    return null;
+  }
+  return readPreview(realFile, "json").catch(() => null);
+}
+
 async function readJsonIfExists(filePath: string): Promise<Record<string, unknown> | null> {
   const realFile = await realpathIfExists(filePath);
   if (!realFile) {
@@ -214,6 +247,27 @@ function artifactHref(evidencePath: string, artifactPath: string) {
     artifactPath,
   });
   return `/api/evidence/artifact?${params.toString()}`;
+}
+
+async function buildProducerContextFile(params: {
+  artifactPath: string;
+  evidencePath: string;
+  filePath: string;
+  previewKind: "json" | "text";
+  repoRoot: string;
+}): Promise<QaEvidenceProducerContextFile | null> {
+  if (!(await realpathIfExists(params.filePath))) {
+    return null;
+  }
+  const repoPath = toRepoRelativePath(params.repoRoot, params.filePath);
+  return {
+    href: artifactHref(params.evidencePath, params.artifactPath),
+    path: repoPath,
+    preview:
+      params.previewKind === "json"
+        ? await readJsonPreviewIfExists(params.filePath)
+        : await readTextPreviewIfExists(params.filePath),
+  };
 }
 
 async function buildArtifactView(params: {
@@ -276,10 +330,93 @@ function readCountRecord(value: unknown): Record<string, number> {
   );
 }
 
-function readStringArray(values: Iterable<unknown>) {
+function readOrderedStringArray(values: Iterable<unknown>) {
   return Array.from(
     new Set(Array.from(values).filter((value): value is string => typeof value === "string")),
-  ).sort();
+  );
+}
+
+function readStringArray(values: Iterable<unknown>) {
+  return readOrderedStringArray(values).sort();
+}
+
+function readMatrixDimensionIds(value: unknown, fallback: readonly string[]): string[] {
+  if (!Array.isArray(value)) {
+    return readOrderedStringArray(fallback);
+  }
+  const ids = readOrderedStringArray(
+    value.map((entry) => {
+      if (typeof entry === "string") {
+        return entry;
+      }
+      return readString(readRecord(entry)?.id);
+    }),
+  );
+  for (const fallbackId of fallback) {
+    if (!ids.includes(fallbackId)) {
+      ids.push(fallbackId);
+    }
+  }
+  return ids;
+}
+
+function uxMatrixEntryKey(
+  entry: QaEvidenceSummaryEntry,
+): { stage: string; surface: string } | null {
+  const idMatch = /^ux-matrix\.([a-z0-9-]+)\.([a-z0-9-]+)$/u.exec(entry.test.id);
+  if (idMatch) {
+    return { surface: idMatch[1], stage: idMatch[2] };
+  }
+  for (const artifact of entry.execution?.artifacts ?? []) {
+    const sourceMatch = /^ux-matrix:([a-z0-9-]+):([a-z0-9-]+)$/u.exec(artifact.source);
+    if (sourceMatch) {
+      return { surface: sourceMatch[1], stage: sourceMatch[2] };
+    }
+  }
+  return null;
+}
+
+function buildUxMatrixEvidenceEntryIndex(entries: readonly QaEvidenceSummaryEntry[]) {
+  const indexed = new Map<string, QaEvidenceSummaryEntry>();
+  for (const entry of entries) {
+    const key = uxMatrixEntryKey(entry);
+    if (key) {
+      indexed.set(`${key.surface}:${key.stage}`, entry);
+    }
+  }
+  return indexed;
+}
+
+function readMatrixCells(params: {
+  matrix: Record<string, unknown> | null;
+  summaryEntries: readonly QaEvidenceSummaryEntry[];
+}): QaEvidenceMatrixCellView[] {
+  const rawCells = Array.isArray(params.matrix?.cells)
+    ? (params.matrix.cells as Array<Record<string, unknown>>)
+    : [];
+  const entriesByCell = buildUxMatrixEvidenceEntryIndex(params.summaryEntries);
+  return rawCells.flatMap((cell): QaEvidenceMatrixCellView[] => {
+    const surface = readString(cell.surface);
+    const stage = readString(cell.stage);
+    const status = readString(cell.status) ?? "proof-gap";
+    if (!surface || !stage) {
+      return [];
+    }
+    const entry =
+      status === "proof-gap" ? null : (entriesByCell.get(`${surface}:${stage}`) ?? null);
+    const artifacts = entry?.execution?.artifacts ?? [];
+    return [
+      {
+        artifactKinds: readStringArray(artifacts.map((artifact) => artifact.kind)),
+        artifactPaths: artifacts.map((artifact) => artifact.path),
+        stage,
+        status,
+        surface,
+        testId: entry?.test.id ?? null,
+        title: entry?.test.title ?? null,
+      },
+    ];
+  });
 }
 
 async function candidateProducerRoots(params: {
@@ -345,57 +482,99 @@ async function buildProducerContext(params: {
   const releaseLedgerPath = path.join(rootPath, "release-ledger.json");
   const scorecardPath = path.join(rootPath, "scorecard.md");
   const commandsPath = path.join(rootPath, "commands.txt");
+  const memoryPath = path.join(rootPath, "preflight", "memory.txt");
+  const adbDevicesPath = path.join(rootPath, "preflight", "adb-devices.txt");
   const manifest = await readJsonIfExists(manifestPath);
   const matrix = await readJsonIfExists(matrixPath);
   const releaseLedger = await readJsonIfExists(releaseLedgerPath);
-  const matrixCells = Array.isArray(matrix?.cells)
-    ? (matrix.cells as Array<Record<string, unknown>>)
-    : [];
+  const [commandsFile, manifestFile, memoryFile, adbDevicesFile, releaseLedgerFile, scorecardFile] =
+    await Promise.all([
+      buildProducerContextFile({
+        artifactPath: toRepoRelativePath(repoRoot, commandsPath),
+        evidencePath: params.evidencePath,
+        filePath: commandsPath,
+        previewKind: "text",
+        repoRoot,
+      }),
+      buildProducerContextFile({
+        artifactPath: toRepoRelativePath(repoRoot, manifestPath),
+        evidencePath: params.evidencePath,
+        filePath: manifestPath,
+        previewKind: "json",
+        repoRoot,
+      }),
+      buildProducerContextFile({
+        artifactPath: toRepoRelativePath(repoRoot, memoryPath),
+        evidencePath: params.evidencePath,
+        filePath: memoryPath,
+        previewKind: "text",
+        repoRoot,
+      }),
+      buildProducerContextFile({
+        artifactPath: toRepoRelativePath(repoRoot, adbDevicesPath),
+        evidencePath: params.evidencePath,
+        filePath: adbDevicesPath,
+        previewKind: "text",
+        repoRoot,
+      }),
+      buildProducerContextFile({
+        artifactPath: toRepoRelativePath(repoRoot, releaseLedgerPath),
+        evidencePath: params.evidencePath,
+        filePath: releaseLedgerPath,
+        previewKind: "json",
+        repoRoot,
+      }),
+      buildProducerContextFile({
+        artifactPath: toRepoRelativePath(repoRoot, scorecardPath),
+        evidencePath: params.evidencePath,
+        filePath: scorecardPath,
+        previewKind: "text",
+        repoRoot,
+      }),
+    ]);
+  const matrixCells = readMatrixCells({
+    matrix,
+    summaryEntries: params.summaryEntries,
+  });
   return {
-    commands: (await realpathIfExists(commandsPath))
-      ? {
-          path: toRepoRelativePath(repoRoot, commandsPath),
-          preview: await readTextPreviewIfExists(commandsPath),
-        }
-      : null,
+    commands: commandsFile,
     kind: "ux-matrix",
-    manifest: manifest
-      ? {
-          path: toRepoRelativePath(repoRoot, manifestPath),
-          runId: readString(readRecord(manifest.run)?.runId),
-          runStatus: readString(readRecord(manifest.run)?.status),
-        }
-      : null,
+    manifest:
+      manifest && manifestFile
+        ? {
+            ...manifestFile,
+            runId: readString(readRecord(manifest.run)?.runId),
+            runStatus: readString(readRecord(manifest.run)?.status),
+          }
+        : null,
     matrix: matrix
       ? {
-          cells: matrixCells.length,
+          cells: matrixCells,
           counts: readCountRecord(matrix.counts),
           path: toRepoRelativePath(repoRoot, matrixPath),
-          stages: readStringArray(matrixCells.map((cell) => cell.stage)),
-          surfaces: readStringArray(matrixCells.map((cell) => cell.surface)),
+          stages: readMatrixDimensionIds(
+            matrix.stages,
+            matrixCells.map((cell) => cell.stage),
+          ),
+          surfaces: readMatrixDimensionIds(
+            matrix.surfaces,
+            matrixCells.map((cell) => cell.surface),
+          ),
         }
       : null,
     preflight: {
-      adbDevicesPath: (await realpathIfExists(path.join(rootPath, "preflight", "adb-devices.txt")))
-        ? toRepoRelativePath(repoRoot, path.join(rootPath, "preflight", "adb-devices.txt"))
-        : null,
-      memoryPath: (await realpathIfExists(path.join(rootPath, "preflight", "memory.txt")))
-        ? toRepoRelativePath(repoRoot, path.join(rootPath, "preflight", "memory.txt"))
-        : null,
+      adbDevices: adbDevicesFile,
+      memory: memoryFile,
     },
-    releaseLedger: releaseLedger
-      ? {
-          counts: readCountRecord(releaseLedger.counts),
-          path: toRepoRelativePath(repoRoot, releaseLedgerPath),
-        }
-      : null,
+    releaseLedger:
+      releaseLedger && releaseLedgerFile
+        ? {
+            ...releaseLedgerFile,
+            counts: readCountRecord(releaseLedger.counts),
+          }
+        : null,
     rootPath: toRepoRelativePath(repoRoot, rootPath),
-    scorecard: (await realpathIfExists(scorecardPath))
-      ? {
-          path: toRepoRelativePath(repoRoot, scorecardPath),
-          preview: await readTextPreviewIfExists(scorecardPath),
-        }
-      : null,
+    scorecard: scorecardFile,
   };
 }
 

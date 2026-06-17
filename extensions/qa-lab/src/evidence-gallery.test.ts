@@ -118,9 +118,17 @@ describe("evidence gallery", () => {
     await fs.mkdir(path.join(runDir, "surfaces", "web-ui", "stages", "first-run"), {
       recursive: true,
     });
+    await fs.mkdir(path.join(runDir, "surfaces", "cli", "stages", "error-state"), {
+      recursive: true,
+    });
     await fs.writeFile(
       path.join(runDir, "surfaces", "web-ui", "stages", "first-run", "screenshot.png"),
       "png",
+    );
+    await fs.writeFile(
+      path.join(runDir, "surfaces", "cli", "stages", "error-state", "logs.txt"),
+      "cli blocked\n",
+      "utf8",
     );
     await writeJson(path.join(runDir, "manifest.json"), {
       run: {
@@ -131,24 +139,39 @@ describe("evidence gallery", () => {
     await writeJson(path.join(runDir, "matrix.json"), {
       counts: {
         pass: 1,
-        "proof-gap": 2,
+        blocked: 1,
+        "proof-gap": 1,
       },
+      stages: [
+        { id: "first-run", label: "First run" },
+        { id: "error-state", label: "Error state" },
+      ],
+      surfaces: [
+        { id: "web-ui", label: "Web UI" },
+        { id: "cli", label: "CLI" },
+      ],
       cells: [
         { stage: "first-run", status: "pass", surface: "web-ui" },
         { stage: "first-run", status: "proof-gap", surface: "cli" },
-        { stage: "error-state", status: "proof-gap", surface: "cli" },
+        { stage: "error-state", status: "blocked", surface: "cli" },
       ],
     });
     await writeJson(path.join(runDir, "release-ledger.json"), {
       counts: {
         pass: 1,
-        "proof-gap": 2,
+        blocked: 1,
+        "proof-gap": 1,
       },
     });
     await fs.writeFile(path.join(runDir, "scorecard.md"), "# UX Matrix\n\n- pass: 1\n", "utf8");
     await fs.writeFile(path.join(runDir, "commands.txt"), "node ux matrix\n", "utf8");
     await fs.mkdir(path.join(runDir, "preflight"), { recursive: true });
     await fs.writeFile(path.join(runDir, "preflight", "memory.txt"), "memory ok\n", "utf8");
+    await fs.writeFile(
+      path.join(runDir, "preflight", "adb-devices.txt"),
+      "List of devices\n",
+      "utf8",
+    );
 
     await writeJson(path.join(suiteDir, QA_EVIDENCE_FILENAME), {
       kind: "openclaw.qa.evidence-summary",
@@ -188,6 +211,45 @@ describe("evidence gallery", () => {
           },
           result: { status: "pass", timing: { wallMs: 1 } },
         },
+        {
+          test: {
+            kind: "ux-matrix-cell",
+            id: "qa-lab.wrapper-cli-error",
+            title: "UX Matrix: cli / error-state",
+            source: { path: "scripts/ux-matrix/dashboard.ts" },
+          },
+          coverage: [{ id: "status-snapshots", role: "primary" }],
+          execution: {
+            runner: "ux-matrix-dashboard",
+            environment: {
+              ref: "gallery-test",
+              os: "darwin",
+              nodeVersion: "v24.0.0",
+            },
+            provider: {
+              id: "ux-matrix",
+              live: false,
+              model: { name: null, ref: null },
+              fixture: "mocked-control-ui-and-isolated-cli",
+            },
+            packageSource: { kind: "source-checkout", sha: "abc123" },
+            artifacts: [
+              {
+                kind: "log",
+                path: ".artifacts/qa-e2e/suite/script/ux-matrix-evidence-dashboard/run-1/surfaces/cli/stages/error-state/logs.txt",
+                source: "ux-matrix:cli:error-state",
+              },
+            ],
+          },
+          result: {
+            status: "blocked",
+            failure: {
+              class: "blocked",
+              reason: "CLI error-state proof captured a blocked result.",
+            },
+            timing: { wallMs: 2 },
+          },
+        },
       ],
     });
 
@@ -203,24 +265,67 @@ describe("evidence gallery", () => {
         runStatus: "pass",
       },
       matrix: {
-        cells: 3,
         counts: {
           pass: 1,
-          "proof-gap": 2,
+          blocked: 1,
+          "proof-gap": 1,
         },
-        stages: ["error-state", "first-run"],
-        surfaces: ["cli", "web-ui"],
+        stages: ["first-run", "error-state"],
+        surfaces: ["web-ui", "cli"],
       },
       releaseLedger: {
         counts: {
           pass: 1,
-          "proof-gap": 2,
+          blocked: 1,
+          "proof-gap": 1,
         },
       },
     });
+    expect(model.producerContext?.matrix?.cells).toEqual([
+      {
+        artifactKinds: ["screenshot"],
+        artifactPaths: [
+          ".artifacts/qa-e2e/suite/script/ux-matrix-evidence-dashboard/run-1/surfaces/web-ui/stages/first-run/screenshot.png",
+        ],
+        stage: "first-run",
+        status: "pass",
+        surface: "web-ui",
+        testId: "ux-matrix.web-ui.first-run",
+        title: "UX Matrix: web-ui / first-run",
+      },
+      {
+        artifactKinds: [],
+        artifactPaths: [],
+        stage: "first-run",
+        status: "proof-gap",
+        surface: "cli",
+        testId: null,
+        title: null,
+      },
+      {
+        artifactKinds: ["log"],
+        artifactPaths: [
+          ".artifacts/qa-e2e/suite/script/ux-matrix-evidence-dashboard/run-1/surfaces/cli/stages/error-state/logs.txt",
+        ],
+        stage: "error-state",
+        status: "blocked",
+        surface: "cli",
+        testId: "qa-lab.wrapper-cli-error",
+        title: "UX Matrix: cli / error-state",
+      },
+    ]);
     expect(model.producerContext?.scorecard?.preview).toContain("# UX Matrix");
+    expect(model.producerContext?.scorecard?.href).toContain("/api/evidence/artifact?");
     expect(model.producerContext?.commands?.preview).toBe("node ux matrix\n");
-    expect(model.producerContext?.preflight.memoryPath).toContain("preflight/memory.txt");
+    expect(model.producerContext?.commands?.path).toContain("commands.txt");
+    expect(model.producerContext?.manifest?.preview).toContain('"runId": "run-1"');
+    expect(model.producerContext?.releaseLedger?.preview).toContain('"proof-gap": 1');
+    expect(model.producerContext?.preflight.memory?.path).toContain("preflight/memory.txt");
+    expect(model.producerContext?.preflight.memory?.preview).toBe("memory ok\n");
+    expect(model.producerContext?.preflight.adbDevices?.path).toContain(
+      "preflight/adb-devices.txt",
+    );
+    expect(model.producerContext?.preflight.adbDevices?.preview).toBe("List of devices\n");
   });
 
   it("resolves evidence and artifacts inside the repo root only", async () => {

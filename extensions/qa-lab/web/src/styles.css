@@ -1710,11 +1710,190 @@ select {
   line-height: 1.1;
 }
 
+.evidence-producer-status-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.evidence-producer-status-row > div {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.evidence-producer-drilldowns {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  align-items: start;
+}
+
+.evidence-producer-drilldown {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-surface) 78%, var(--bg-inset));
+}
+
+.evidence-producer-drilldown summary {
+  display: grid;
+  grid-template-columns: minmax(100px, auto) minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  min-height: 34px;
+  padding: 8px 10px;
+  cursor: pointer;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.evidence-producer-drilldown summary::marker {
+  color: var(--text-tertiary);
+}
+
+.evidence-producer-drilldown summary .capture-mono {
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.evidence-producer-drilldown-body {
+  display: grid;
+  gap: 8px;
+  padding: 0 10px 10px;
+}
+
+.evidence-producer-preview {
+  max-height: 220px;
+  overflow: auto;
+  margin: 0;
+  border-radius: 6px;
+  font-size: 11px;
+}
+
 .evidence-producer-links {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
   min-width: 0;
+}
+
+.evidence-matrix-mini {
+  max-height: 212px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-surface) 68%, var(--bg-inset));
+}
+
+.evidence-matrix-mini table {
+  width: 100%;
+  min-width: 980px;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.evidence-matrix-mini th,
+.evidence-matrix-mini td {
+  padding: 4px;
+  border-bottom: 1px solid var(--border);
+  border-left: 1px solid var(--border);
+  text-align: center;
+  vertical-align: middle;
+}
+
+.evidence-matrix-mini th:first-child,
+.evidence-matrix-mini td:first-child {
+  border-left: 0;
+}
+
+.evidence-matrix-mini thead th,
+.evidence-matrix-mini tbody th {
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--bg-surface) 84%, var(--bg-inset));
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1.15;
+  text-transform: uppercase;
+}
+
+.evidence-matrix-mini thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.evidence-matrix-mini tbody th {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  width: 116px;
+  text-align: left;
+}
+
+.evidence-matrix-cell {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 22px;
+  padding: 2px 4px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text-secondary);
+  background: var(--bg-surface);
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1.1;
+  text-transform: uppercase;
+}
+
+button.evidence-matrix-cell {
+  white-space: normal;
+}
+
+.evidence-matrix-cell-action:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.evidence-matrix-cell-pass,
+.evidence-matrix-cell-fixed-in-pr {
+  color: var(--success-text);
+  border-color: color-mix(in srgb, var(--success) 42%, var(--border));
+  background: var(--success-soft);
+}
+
+.evidence-matrix-cell-fail,
+.evidence-matrix-cell-automation-issue {
+  color: var(--danger-text);
+  border-color: color-mix(in srgb, var(--danger) 44%, var(--border));
+  background: var(--danger-soft);
+}
+
+.evidence-matrix-cell-blocked,
+.evidence-matrix-cell-environment-issue {
+  color: var(--warning-text);
+  border-color: color-mix(in srgb, var(--warning) 44%, var(--border));
+  background: var(--warning-soft);
+}
+
+.evidence-matrix-cell-proof-gap {
+  color: var(--text-tertiary);
+  border-style: dashed;
+  background: transparent;
+}
+
+.evidence-matrix-cell-not-applicable,
+.evidence-matrix-cell-missing {
+  color: var(--text-tertiary);
+  background: color-mix(in srgb, var(--bg-surface) 58%, var(--bg-inset));
 }
 
 .evidence-meta-line {
@@ -1952,6 +2131,8 @@ select {
   .evidence-filters,
   .evidence-toolbar,
   .evidence-producer-grid,
+  .evidence-producer-status-row,
+  .evidence-producer-drilldowns,
   .evidence-workspace {
     grid-template-columns: 1fr;
   }
