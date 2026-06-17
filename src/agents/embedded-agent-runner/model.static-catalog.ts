@@ -1,7 +1,10 @@
 /**
  * Resolves bundled static catalog rows for embedded-agent model selection.
  */
-import type { NormalizedModelCatalogRow } from "@openclaw/model-catalog-core/model-catalog-types";
+import type {
+  ModelCatalogAlias,
+  NormalizedModelCatalogRow,
+} from "@openclaw/model-catalog-core/model-catalog-types";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -172,6 +175,10 @@ function listBundledStaticCatalogPlugins(params: {
   });
 }
 
+function hasModelCatalogAliasTransportOverride(alias: ModelCatalogAlias): boolean {
+  return Boolean(alias.api?.trim() || alias.baseUrl?.trim());
+}
+
 function resolveManifestModelCatalogProviderAlias(params: {
   provider: string;
   plugins: readonly Pick<PluginManifestRecord, "providers" | "modelCatalog">[];
@@ -188,6 +195,7 @@ function resolveManifestModelCatalogProviderAlias(params: {
       if (
         normalizedAlias === provider &&
         normalizedTarget &&
+        !hasModelCatalogAliasTransportOverride(alias) &&
         plugin.providers.some((providerId) => normalizeProviderId(providerId) === normalizedTarget)
       ) {
         targets.add(normalizedTarget);

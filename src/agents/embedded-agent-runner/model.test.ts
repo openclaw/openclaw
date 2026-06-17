@@ -2850,6 +2850,35 @@ describe("resolveModel", () => {
     });
   });
 
+  it("keeps transport-overriding manifest aliases on the requested provider", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "azure-openai-responses": {
+            baseUrl: "https://example.openai.azure.com/openai/v1",
+            api: "azure-openai-responses",
+            models: [
+              {
+                ...makeModel("gpt-5.5"),
+                api: "azure-openai-responses",
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("azure-openai-responses", "gpt-5.5", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expectRecordFields(result.model, {
+      provider: "azure-openai-responses",
+      id: "gpt-5.5",
+      api: "azure-openai-responses",
+      baseUrl: "https://example.openai.azure.com/openai/v1",
+    });
+  });
+
   it("does not treat arbitrary namespaced model ids as provider prefixes", () => {
     const cfg = {
       models: {
