@@ -2566,6 +2566,132 @@ describe("installPluginFromNpmSpec", () => {
     });
   });
 
+  it("emits archive source family after installing a local npm-pack archive", async () => {
+    const root = suiteTempRootTracker.makeTempDir();
+    const npmDir = path.join(root, "npm");
+    const extensionsDir = path.join(root, "extensions");
+    const packageName = "npm-pack-security-event";
+    const archivePath = await ensureDynamicArchiveTemplate({
+      outName: "npm-pack-security-event.tgz",
+      packageJson: {
+        name: packageName,
+        version: "1.2.3",
+        openclaw: { extensions: ["./dist/index.js"] },
+      },
+      withDistIndex: true,
+    });
+    vi.mocked(runCommandWithTimeout).mockResolvedValueOnce({
+      code: 0,
+      killed: false,
+      signal: null,
+      stderr: "",
+      termination: "exit",
+      stdout: JSON.stringify([
+        {
+          filename: path.basename(archivePath),
+          name: packageName,
+          version: "1.2.3",
+          integrity: "sha512-test",
+          shasum: "abc123",
+        },
+      ]),
+    });
+    mockSuccessfulManagedNpmInstall({ packageName, version: "1.2.3" });
+    const captured = captureSecurityEvents();
+
+    let result: Awaited<ReturnType<typeof installPluginFromNpmPackArchive>>;
+    try {
+      result = await installPluginFromNpmPackArchive({
+        archivePath,
+        extensionsDir,
+        npmDir,
+      });
+    } finally {
+      captured.stop();
+    }
+
+    expect(result!.ok).toBe(true);
+    expect(captured.events).toHaveLength(1);
+    expect(captured.events[0]).toMatchObject({
+      category: "plugin",
+      action: "plugin.installed",
+      outcome: "success",
+      target: { kind: "plugin", name: packageName },
+      attributes: {
+        source_family: "archive",
+        mode: "install",
+      },
+    });
+  });
+
+  it("preserves archive source family when a local npm-pack archive scan is blocked", async () => {
+    const root = suiteTempRootTracker.makeTempDir();
+    const npmDir = path.join(root, "npm");
+    const extensionsDir = path.join(root, "extensions");
+    const packageName = "npm-pack-blocked-security-event";
+    const archivePath = await ensureDynamicArchiveTemplate({
+      outName: "npm-pack-blocked-security-event.tgz",
+      packageJson: {
+        name: packageName,
+        version: "1.2.3",
+        openclaw: { extensions: ["./dist/index.js"] },
+      },
+      withDistIndex: true,
+    });
+    vi.mocked(runCommandWithTimeout).mockResolvedValueOnce({
+      code: 0,
+      killed: false,
+      signal: null,
+      stderr: "",
+      termination: "exit",
+      stdout: JSON.stringify([
+        {
+          filename: path.basename(archivePath),
+          name: packageName,
+          version: "1.2.3",
+          integrity: "sha512-test",
+          shasum: "abc123",
+        },
+      ]),
+    });
+    mockSuccessfulManagedNpmInstall({ packageName, version: "1.2.3" });
+    const scanSpy = vi.spyOn(installSecurityScan, "scanPackageInstallSource").mockResolvedValueOnce({
+      blocked: {
+        code: "security_scan_blocked",
+        reason: "blocked by package scan",
+      },
+    });
+    const captured = captureSecurityEvents();
+
+    let result: Awaited<ReturnType<typeof installPluginFromNpmPackArchive>>;
+    try {
+      result = await installPluginFromNpmPackArchive({
+        archivePath,
+        extensionsDir,
+        npmDir,
+      });
+    } finally {
+      captured.stop();
+      scanSpy.mockRestore();
+    }
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+    }
+    expect(captured.events).toHaveLength(1);
+    expect(captured.events[0]).toMatchObject({
+      category: "plugin",
+      action: "plugin.audit.failed",
+      outcome: "denied",
+      target: { kind: "plugin", name: packageName },
+      attributes: {
+        source_family: "archive",
+        mode: "install",
+      },
+    });
+  });
+
   it("emits effective install mode when requested npm update creates a new target", async () => {
     const root = suiteTempRootTracker.makeTempDir();
     const npmDir = path.join(root, "npm");
@@ -2747,14 +2873,20 @@ describe("installPluginFromNpmSpec", () => {
         },
       ]),
     });
+    const captured = captureSecurityEvents();
 
-    const result = await installPluginFromNpmPackArchive({
-      archivePath,
-      extensionsDir,
-      npmDir,
-      config: configWithInstallPolicy(scriptPath, logPath),
-      dryRun: true,
-    });
+    let result: Awaited<ReturnType<typeof installPluginFromNpmPackArchive>>;
+    try {
+      result = await installPluginFromNpmPackArchive({
+        archivePath,
+        extensionsDir,
+        npmDir,
+        config: configWithInstallPolicy(scriptPath, logPath),
+        dryRun: true,
+      });
+    } finally {
+      captured.stop();
+    }
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -2775,6 +2907,17 @@ describe("installPluginFromNpmSpec", () => {
     });
     expect(requests[0]?.sourcePath).toBe(archivePath);
     expect(requests[0]?.sourcePathKind).toBe("file");
+    expect(captured.events).toHaveLength(1);
+    expect(captured.events[0]).toMatchObject({
+      category: "plugin",
+      action: "plugin.audit.failed",
+      outcome: "denied",
+      target: { kind: "plugin", name: "npm-pack-policy-archive" },
+      attributes: {
+        source_family: "archive",
+        mode: "install",
+      },
+    });
   });
 });
 

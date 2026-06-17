@@ -1226,7 +1226,7 @@ async function installPluginFromManagedNpmRoot(
       subject: `Plugin "${expectedPluginId ?? params.packageName}"`,
       pluginId: expectedPluginId ?? params.packageName,
       mode: effectiveMode,
-      sourceFamily: "npm",
+      sourceFamily: sourceFamilyForInstallPolicySource(params.installPolicyRequest.source, "npm"),
       scan: async () =>
         await preflightPluginNpmInstallPolicy({
           config: params.config,
@@ -1842,6 +1842,31 @@ function sourceFamilyForInstallPolicyKind(
   return fallback;
 }
 
+function sourceFamilyForInstallPolicySource(
+  source: InstallPolicySource | undefined,
+  fallback: PluginSecuritySourceFamily,
+): PluginSecuritySourceFamily {
+  switch (source?.kind) {
+    case "archive":
+      return "archive";
+    case "file":
+      return "file";
+    case "git":
+      return "git";
+    case "npm":
+      return "npm";
+    case "bundled":
+    case "clawhub":
+    case "local-path":
+    case "managed":
+    case "upload":
+    case "workspace":
+    case undefined:
+      return fallback;
+  }
+  return fallback;
+}
+
 type PreparedInstallTarget = {
   targetPath: string;
   effectiveMode: "install" | "update";
@@ -2325,9 +2350,9 @@ async function validatePackagePluginInstallSource(params: {
     subject: `Plugin "${pluginId}"`,
     pluginId,
     mode: scanMode,
-    sourceFamily: sourceFamilyForInstallPolicyKind(
-      params.installPolicyRequest?.kind,
-      "installed-package",
+    sourceFamily: sourceFamilyForInstallPolicySource(
+      params.installPolicyRequest?.source,
+      sourceFamilyForInstallPolicyKind(params.installPolicyRequest?.kind, "installed-package"),
     ),
     scan: async () =>
       await params.runtime.scanPackageInstallSource({
@@ -2386,7 +2411,10 @@ async function scanAndLinkInstalledPackage(params: {
     subject: `Plugin "${params.pluginId}"`,
     pluginId: params.pluginId,
     mode: params.mode,
-    sourceFamily: sourceFamilyForInstallPolicyKind(params.requestKind, "installed-package"),
+    sourceFamily: sourceFamilyForInstallPolicySource(
+      params.source,
+      sourceFamilyForInstallPolicyKind(params.requestKind, "installed-package"),
+    ),
     scan: async () =>
       await params.runtime.scanInstalledPackageDependencyTree({
         ...(params.additionalDependencyPackageDirs
@@ -3133,7 +3161,7 @@ export async function installPluginFromNpmPackArchive(
   emitSuccessfulPluginInstallSecurityEvent(result, {
     dryRun,
     mode: effectiveMode,
-    sourceFamily: "npm",
+    sourceFamily: "archive",
     trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
   });
   return {
