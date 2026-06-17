@@ -4,7 +4,13 @@ import { findCodeRegions, isInsideCode } from "openclaw/plugin-sdk/text-chunking
 const INTERNAL_SEPARATOR_RE = /(?:#\+){2,}#?/;
 const ASSISTANT_ROLE_MARKER_RE = /\bassistant\s+to\s*=\s*\w+/i;
 // Require closing `>` to avoid false-positives on phrases like "<thought experiment>".
-const THINKING_TAG_RE = /<\s*\/?\s*(?:think(?:ing)?|thought|antthinking)\b[^<>]*>/i;
+// Reasoning tags may carry a model-specific namespace prefix (e.g. Anthropic's
+// `antml:`, MiniMax's `mm:`). Accept the known prefixes so namespaced variants
+// like `<mm:think>` are still detected as reflected assistant content instead of
+// being treated as normal inbound text (matches the shared reasoning-tag contract
+// in src/shared/text/reasoning-tags.ts).
+const THINKING_TAG_RE =
+  /<\s*\/?\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>/i;
 const RELEVANT_MEMORIES_TAG_RE = /<\s*\/?\s*relevant[-_]memories\b[^<>]*>/i;
 // Require closing `>` to avoid false-positives on phrases like "<final answer>".
 const FINAL_TAG_RE = /<\s*\/?\s*final\b[^<>]*>/i;

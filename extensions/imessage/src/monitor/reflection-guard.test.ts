@@ -37,6 +37,18 @@ describe("detectReflectedContent", () => {
     expect(result.matchedLabels).toContain("thinking-tag");
   });
 
+  it("detects Anthropic namespaced <think> tags", () => {
+    const result = detectReflectedContent("<antml:think>secret</antml:think>visible");
+    expect(result.isReflection).toBe(true);
+    expect(result.matchedLabels).toContain("thinking-tag");
+  });
+
+  it("detects MiniMax namespaced <mm:think> tags", () => {
+    const result = detectReflectedContent("<mm:think>secret</mm:think>visible");
+    expect(result.isReflection).toBe(true);
+    expect(result.matchedLabels).toContain("thinking-tag");
+  });
+
   it("detects <relevant_memories> tags", () => {
     const result = detectReflectedContent("<relevant_memories>data</relevant_memories>");
     expect(result.isReflection).toBe(true);
