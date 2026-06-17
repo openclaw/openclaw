@@ -108,14 +108,12 @@ export function resolveSandboxDockerConfig(params: {
 
   const binds = [...(globalDocker?.binds ?? []), ...(agentDocker?.binds ?? [])];
 
-  const hostMountPrefixMap = {
-    ...(globalDocker?.hostMountPrefixMap ?? {}),
-    ...(agentDocker?.hostMountPrefixMap ?? {}),
-  } as Record<string, string> | undefined;
+  const mergedHostMountPrefixMap = {
+    ...globalDocker?.hostMountPrefixMap,
+    ...agentDocker?.hostMountPrefixMap,
+  };
   const resolvedHostMountPrefixMap =
-    hostMountPrefixMap && Object.keys(hostMountPrefixMap).length > 0
-      ? hostMountPrefixMap
-      : undefined;
+    Object.keys(mergedHostMountPrefixMap).length > 0 ? mergedHostMountPrefixMap : undefined;
 
   return {
     image: agentDocker?.image ?? globalDocker?.image ?? DEFAULT_SANDBOX_IMAGE,

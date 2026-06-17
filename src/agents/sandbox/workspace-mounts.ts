@@ -34,7 +34,7 @@ export function rewriteHostPath(
   if (!hostMountPrefixMap) {
     return hostPath;
   }
-  const sorted = Object.keys(hostMountPrefixMap).sort((a, b) => b.length - a.length);
+  const sorted = Object.keys(hostMountPrefixMap).toSorted((a, b) => b.length - a.length);
   for (const prefix of sorted) {
     if (hostPath.startsWith(prefix)) {
       return hostMountPrefixMap[prefix] + hostPath.slice(prefix.length);
@@ -49,8 +49,8 @@ function formatManagedWorkspaceBind(params: {
   readOnly: boolean;
   hostMountPrefixMap?: Record<string, string>;
 }): string {
-  const hostPath_ = rewriteHostPath(params.hostPath, params.hostMountPrefixMap);
-  return `${hostPath_}:${params.containerPath}:${params.readOnly ? "ro,z" : "z"}`;
+  const mappedHostPath = rewriteHostPath(params.hostPath, params.hostMountPrefixMap);
+  return `${mappedHostPath}:${params.containerPath}:${params.readOnly ? "ro,z" : "z"}`;
 }
 
 function containerJoin(root: string, ...parts: string[]): string {
