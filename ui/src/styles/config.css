@@ -1097,11 +1097,21 @@
   line-height: 1.45;
 }
 
+.config-raw-field {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
 .config-raw-field textarea {
   min-height: 500px;
+  flex: 1;
   font-family: var(--mono);
   font-size: 13px;
   line-height: 1.55;
+  overflow-y: auto;
+  resize: vertical;
 }
 
 .config-raw-field .config-raw-toggle {
