@@ -1,5 +1,6 @@
 // Control UI module implements app settings behavior.
 import { applyActiveRouteTransition, refreshActiveRoute } from "../app/active-route.ts";
+import type { SettingsHost } from "../app/app-host.ts";
 import {
   inferBasePathFromPathname,
   normalizeBasePath,
@@ -8,25 +9,6 @@ import {
   tabFromPath,
   type Tab,
 } from "../routes/route-registry.ts";
-import type { AgentFilesState } from "./controllers/agent-files.ts";
-import type { AgentIdentityState } from "./controllers/agent-identity.ts";
-import type { AgentSkillsState } from "./controllers/agent-skills.ts";
-import type { AgentsState } from "./controllers/agents.ts";
-import type { ChannelsState } from "./controllers/channels.ts";
-import type { ConfigState } from "./controllers/config.ts";
-import type { CronState } from "./controllers/cron.ts";
-import type { DebugState } from "./controllers/debug.ts";
-import type { DevicesState } from "./controllers/devices.ts";
-import type { DreamingState } from "./controllers/dreaming.ts";
-import type { ExecApprovalsState } from "./controllers/exec-approvals.ts";
-import type { LogsState } from "./controllers/logs.ts";
-import type { ModelAuthStatusState } from "./controllers/model-auth-status.ts";
-import type { NodesState } from "./controllers/nodes.ts";
-import type { PresenceState } from "./controllers/presence.ts";
-import type { SessionsState } from "./controllers/sessions.ts";
-import type { SkillWorkshopState } from "./controllers/skill-workshop.ts";
-import type { SkillsState } from "./controllers/skills.ts";
-import type { UsageState } from "./controllers/usage.ts";
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
 import {
   normalizeTextScale,
@@ -38,82 +20,14 @@ import {
 import { normalizeOptionalString } from "./string-coerce.ts";
 import { startThemeTransition, type ThemeTransitionContext } from "./theme-transition.ts";
 import { resolveTheme, type ResolvedTheme, type ThemeMode, type ThemeName } from "./theme.ts";
-import type { AgentsListResult, AttentionItem } from "./types.ts";
 import { normalizeLocalUserIdentity } from "./user-identity.ts";
 
 export { setLastActiveSessionKey } from "./app-last-active-session.ts";
-
-export type SettingsHost = {
-  settings: UiSettings;
-  userName?: string | null;
-  userAvatar?: string | null;
-  password?: string;
-  theme: ThemeName;
-  themeMode: ThemeMode;
-  themeResolved: ResolvedTheme;
-  applySessionKey: string;
-  sessionKey: string;
-  tab: Tab;
-  connected: boolean;
-  chatHasAutoScrolled: boolean;
-  logsAtBottom: boolean;
-  eventLog: unknown[];
-  eventLogBuffer: unknown[];
-  basePath: string;
-  agentsList?: AgentsListResult | null;
-  selectedAgentId?: string | null;
-  agentsSelectedId?: string | null;
-  agentsPanel?: "overview" | "files" | "tools" | "skills" | "channels" | "cron";
-  pendingGatewayUrl?: string | null;
-  systemThemeCleanup?: (() => void) | null;
-  pendingGatewayToken?: string | null;
-  requestUpdate?: () => void;
-  updateComplete?: Promise<unknown>;
-  controlUiRefreshSeq?: number;
-  controlUiTabPaintSeq?: number;
-  controlUiOverviewRefreshSeq?: number;
-  controlUiCronRefreshSeq?: number;
-  sessionsChangedReloadTimer?: number | ReturnType<typeof globalThis.setTimeout> | null;
-  dreamingStatusLoading: boolean;
-  dreamingStatusError: string | null;
-  dreamingStatus: import("./controllers/dreaming.js").DreamingStatus | null;
-  dreamingModeSaving: boolean;
-  dreamDiaryLoading: boolean;
-  dreamDiaryError: string | null;
-  dreamDiaryPath: string | null;
-  dreamDiaryContent: string | null;
-};
 
 type LocalUserIdentityHost = {
   userName?: string | null;
   userAvatar?: string | null;
 };
-
-export type SettingsAppHost = SettingsHost &
-  AgentFilesState &
-  AgentIdentityState &
-  AgentSkillsState &
-  AgentsState &
-  ChannelsState &
-  ConfigState &
-  CronState &
-  DebugState &
-  DevicesState &
-  DreamingState &
-  ExecApprovalsState &
-  LogsState &
-  NodesState &
-  PresenceState &
-  SessionsState &
-  SkillsState &
-  SkillWorkshopState &
-  ModelAuthStatusState &
-  UsageState & {
-    overviewLogCursor: number | null;
-    overviewLogLines: string[];
-    attentionItems: AttentionItem[];
-    hello: { auth?: { role?: string; scopes?: string[] } } | null;
-  };
 
 export function applySettings(host: SettingsHost, next: UiSettings) {
   const normalized = {

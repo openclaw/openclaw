@@ -11,7 +11,6 @@ import {
   stopNodesPolling,
 } from "../ui/app-polling.ts";
 import { scheduleChatScroll, scheduleLogsScroll } from "../ui/app-scroll.ts";
-import type { SettingsAppHost, SettingsHost } from "../ui/app-settings.ts";
 import {
   beginControlUiRefresh,
   controlUiNowMs,
@@ -53,6 +52,7 @@ import { resolveCronJobLastRunStatus } from "../ui/cron-status.ts";
 import { isMonitoredAuthProvider } from "../ui/model-auth-helpers.ts";
 import { normalizeAgentId, parseAgentSessionKey } from "../ui/session-key.ts";
 import { resetChatViewState } from "../ui/views/chat.ts";
+import type { SettingsAppHost, SettingsHost } from "./app-host.ts";
 import { hasOperatorReadAccess, hasOperatorWriteAccess } from "./operator-access.ts";
 
 export function applyActiveRouteTransition(host: SettingsHost, previous: Tab, next: Tab): void {
