@@ -288,11 +288,15 @@ export async function resolveTelegramInboundBody(params: {
   if (stickerCacheHit && placeholder && rawBody !== placeholder) {
     bodyText = `${placeholder}\n${bodyText}`.trim();
   }
-  if (allMedia.length === 0 && placeholder && rawBody !== placeholder) {
-    const mediaTag = primaryMedia?.fileRef.file_id
-      ? `${placeholder} [file_id:${primaryMedia.fileRef.file_id}]`
-      : placeholder;
-    bodyText = `${mediaTag}\n${bodyText}`.trim();
+  if (allMedia.length === 0 && placeholder) {
+    const fileIdTag = primaryMedia?.fileRef.file_id
+      ? ` [file_id:${primaryMedia.fileRef.file_id}]`
+      : "";
+    if (rawBody !== placeholder) {
+      bodyText = `${placeholder}${fileIdTag}\n${bodyText}`.trim();
+    } else {
+      bodyText = `${placeholder}${fileIdTag}`;
+    }
   }
   const hasAudio = allMedia.some((media) => media.contentType?.startsWith("audio/"));
   const disableAudioPreflight =
