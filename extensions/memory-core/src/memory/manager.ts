@@ -570,7 +570,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     }
   }
 
-  private refreshIndexIdentityDirty(params?: { providerKeyKnown?: boolean }) {
+  private refreshIndexIdentityDirty(params?: {
+    providerKeyKnown?: boolean;
+  }): MemoryIndexIdentityState {
     const provider =
       this.settings.provider === "none"
         ? null
@@ -583,6 +585,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       ...(provider !== undefined ? { provider } : {}),
       providerKeyKnown: params?.providerKeyKnown,
     });
+    if (state.status !== "valid" && this.reopenDatabaseIfStoreFileChanged()) {
+      return this.refreshIndexIdentityDirty(params);
+    }
     this.indexIdentityState = state;
     this.indexIdentityDirty =
       state.status === "mismatched" ||

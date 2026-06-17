@@ -14,6 +14,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import "./test-runtime-mocks.js";
 import type { MemoryIndexManager } from "./index.js";
 import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js";
+import { moveMemoryIndexFiles, removeMemoryIndexFiles } from "./manager-atomic-reindex.js";
 import { splitSourceWideEmbeddingChunks } from "./manager-embedding-ops.js";
 import { LOCAL_EMBEDDING_WORKER_ERROR_CODES } from "./manager-local-worker-errors.js";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
@@ -972,7 +973,53 @@ describe("memory index", () => {
     }
   });
 
-  it("rebuilds missing metadata with existing chunks before search", async () => {
+  it("reopens a stale live handle after CLI reindex swaps the store", async () => {
+    vi.stubEnv("OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX", "0");
+    const dbPath = path.join(workspaceDir, "index-cli-repair-refresh.sqlite");
+    const repairedDbPath = path.join(workspaceDir, "index-cli-repair-refresh-rebuilt.sqlite");
+    const ftsOnlyCfg = createCfg({
+      storePath: dbPath,
+      provider: "none",
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const ftsOnlyManager = await getFreshManager(ftsOnlyCfg);
+    await ftsOnlyManager.sync({ reason: "test", force: true });
+    await ftsOnlyManager.close?.();
+
+    const geminiCfg = createCfg({
+      storePath: dbPath,
+      provider: "gemini",
+      model: "gemini-embedding-001",
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const liveManager = await getFreshManager(geminiCfg);
+    managersForCleanup.add(liveManager);
+    expect(liveManager.status().custom?.indexIdentity).toEqual({
+      status: "mismatched",
+      reason: "index was built for model fts-only, expected gemini-embedding-001",
+    });
+
+    const repairCfg = createCfg({
+      storePath: repairedDbPath,
+      provider: "gemini",
+      model: "gemini-embedding-001",
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const cliManager = await getFreshManager(repairCfg, "cli");
+    await cliManager.sync({ reason: "cli", force: true });
+    await cliManager.close?.();
+    await removeMemoryIndexFiles(dbPath);
+    await moveMemoryIndexFiles(repairedDbPath, dbPath);
+
+    const status = liveManager.status();
+    expect(status.provider).toBe("gemini");
+    expect(status.model).toBe("gemini-embedding-001");
+    expect(status.custom?.indexIdentity).toEqual({ status: "valid" });
+    const results = await liveManager.search("alpha");
+    expect(results[0]?.path).toContain("memory/2026-01-12.md");
+  });
+
+  it("rebuilds missing metadata with existing chunks on gateway sync", async () => {
     const dbPath = path.join(workspaceDir, "index-missing-meta-cutover.sqlite");
     const cfg = createCfg({
       storePath: dbPath,

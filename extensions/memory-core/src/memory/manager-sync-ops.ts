@@ -141,6 +141,13 @@ type MemoryReindexRetryState = {
   sessionDeltas: Map<string, MemorySessionDeltaState>;
 };
 
+type MemoryDatabaseFileIdentity = {
+  dev: number;
+  ino: number;
+  size: number;
+  mtimeMs: number;
+};
+
 const META_KEY = "memory_index_meta_v1";
 const VECTOR_TABLE = "chunks_vec";
 const FTS_TABLE = "chunks_fts";
@@ -303,6 +310,7 @@ export abstract class MemoryManagerSyncOps {
   protected vectorDegradedWriteWarningShown = false;
   protected embeddingCacheMirrorDb: DatabaseSync | null = null;
   private lastMetaSerialized: string | null = null;
+  private dbFileIdentity: MemoryDatabaseFileIdentity | null = null;
 
   protected abstract readonly cache: { enabled: boolean; maxEntries?: number };
   protected abstract db: DatabaseSync;
@@ -685,7 +693,68 @@ export abstract class MemoryManagerSyncOps {
 
   protected openDatabase(): DatabaseSync {
     const dbPath = resolveUserPath(this.settings.store.path);
-    return openMemoryDatabaseAtPath(dbPath, this.settings.store.vector.enabled);
+    const db = openMemoryDatabaseAtPath(dbPath, this.settings.store.vector.enabled);
+    this.dbFileIdentity = this.readDatabaseFileIdentity(dbPath);
+    return db;
+  }
+
+  private readDatabaseFileIdentity(dbPath: string): MemoryDatabaseFileIdentity | null {
+    try {
+      const stat = fsSync.statSync(dbPath);
+      return {
+        dev: stat.dev,
+        ino: stat.ino,
+        size: stat.size,
+        mtimeMs: stat.mtimeMs,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private databaseFileIdentityChanged(
+    current: MemoryDatabaseFileIdentity,
+    opened: MemoryDatabaseFileIdentity,
+  ): boolean {
+    return (
+      current.dev !== opened.dev ||
+      current.ino !== opened.ino ||
+      current.size !== opened.size ||
+      current.mtimeMs !== opened.mtimeMs
+    );
+  }
+
+  protected reopenDatabaseIfStoreFileChanged(): boolean {
+    const dbPath = resolveUserPath(this.settings.store.path);
+    const currentIdentity = this.readDatabaseFileIdentity(dbPath);
+    // CLI/status reindex publishes by atomic SQLite file replacement. A live
+    // Gateway manager can hold the old inode, so invalid identity checks must
+    // reopen before surfacing stale metadata to memory_search.
+    if (
+      !currentIdentity ||
+      !this.dbFileIdentity ||
+      !this.databaseFileIdentityChanged(currentIdentity, this.dbFileIdentity)
+    ) {
+      return false;
+    }
+
+    const oldDb = this.db;
+    const nextDb = openMemoryDatabaseAtPath(dbPath, this.settings.store.vector.enabled, false);
+    this.db = nextDb;
+    this.dbFileIdentity = currentIdentity;
+    this.lastMetaSerialized = null;
+    this.resetVectorState();
+    this.fts.available = false;
+    this.fts.loadError = undefined;
+    this.ensureSchema();
+    const meta = this.readMeta();
+    this.vector.dims = meta?.vectorDims;
+    try {
+      closeMemoryDatabase(oldDb);
+    } catch (err) {
+      log.warn(`failed to close replaced memory database handle: ${formatErrorMessage(err)}`);
+    }
+    return true;
   }
 
   private async seedEmbeddingCache(sourceDb: DatabaseSync): Promise<void> {
