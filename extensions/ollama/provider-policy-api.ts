@@ -56,5 +56,11 @@ export function resolveThinkingProfile({
 }: {
   reasoning?: boolean;
 }): ProviderThinkingProfile {
-  return reasoning ? OLLAMA_REASONING_THINKING_PROFILE : OLLAMA_NON_REASONING_THINKING_PROFILE;
+  // When reasoning is undefined (e.g. dynamically-discovered model not in catalog),
+  // treat it as reasoning-capable so the /think menu shows all available levels.
+  // Only restrict to off-only when reasoning is explicitly false.
+  if (reasoning === false) {
+    return OLLAMA_NON_REASONING_THINKING_PROFILE;
+  }
+  return OLLAMA_REASONING_THINKING_PROFILE;
 }
