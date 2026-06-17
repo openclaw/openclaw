@@ -144,17 +144,28 @@ async function getBitableMeta(client: Lark.Client, url: string) {
   ensureLarkSuccess(res, "bitable.app.get", { appToken });
 
   // List tables if no table_id specified
-  let tables: { table_id: string; name: string }[] = [];
+  const tables: { table_id: string; name: string }[] = [];
   if (!parsed.tableId) {
-    const tablesRes = await client.bitable.appTable.list({
-      path: { app_token: appToken },
-    });
-    if (tablesRes.code === 0) {
-      tables = (tablesRes.data?.items ?? []).map((t) => ({
-        table_id: t.table_id!,
-        name: t.name!,
-      }));
-    }
+    let pageToken: string | undefined;
+    let hasMore: boolean;
+    do {
+      const tablesRes = await client.bitable.appTable.list({
+        path: { app_token: appToken },
+        params: { page_token: pageToken },
+      });
+      if (tablesRes.code === 0) {
+        tables.push(
+          ...(tablesRes.data?.items ?? []).map((t) => ({
+            table_id: t.table_id!,
+            name: t.name!,
+          })),
+        );
+        pageToken = tablesRes.data?.page_token;
+        hasMore = tablesRes.data?.has_more ?? false;
+      } else {
+        hasMore = false;
+      }
+    } while (hasMore && pageToken);
   }
 
   return {
@@ -170,12 +181,26 @@ async function getBitableMeta(client: Lark.Client, url: string) {
 }
 
 async function listFields(client: Lark.Client, appToken: string, tableId: string) {
-  const res = await client.bitable.appTableField.list({
-    path: { app_token: appToken, table_id: tableId },
-  });
-  ensureLarkSuccess(res, "bitable.appTableField.list", { appToken, tableId });
+  type FieldListResponse = Awaited<
+    ReturnType<Lark.Client["bitable"]["appTableField"]["list"]>
+  >;
+  type FieldListItem = NonNullable<NonNullable<FieldListResponse["data"]>["items"]>[number];
 
-  const fields = res.data?.items ?? [];
+  const fields: FieldListItem[] = [];
+  let pageToken: string | undefined;
+  let hasMore: boolean;
+  do {
+    const res = await client.bitable.appTableField.list({
+      path: { app_token: appToken, table_id: tableId },
+      params: { page_token: pageToken },
+    });
+    ensureLarkSuccess(res, "bitable.appTableField.list", { appToken, tableId });
+
+    fields.push(...(res.data?.items ?? []));
+    pageToken = res.data?.page_token;
+    hasMore = res.data?.has_more ?? false;
+  } while (hasMore && pageToken);
+
   return {
     fields: fields.map((f) => ({
       field_id: f.field_id,

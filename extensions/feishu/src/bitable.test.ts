@@ -35,9 +35,22 @@ function createConfig(): OpenClawPluginApi["config"] {
 
 function createBitableClient(records: MockRecord[]) {
   const batchDelete = vi.fn(async () => ({ code: 0 }));
+  const appTableList = vi.fn(async () => ({
+    code: 0,
+    data: { items: [{ table_id: "tbl_main", name: "Table 1" }] },
+  }));
+  const appTableFieldList = vi.fn(async () => ({ code: 0, data: { items: [] } }));
   const client = {
     bitable: {
       app: {
+        get: vi.fn(async () => ({
+          code: 0,
+          data: {
+            app: {
+              name: "Project Tracker",
+            },
+          },
+        })),
         create: vi.fn(async () => ({
           code: 0,
           data: {
@@ -50,13 +63,10 @@ function createBitableClient(records: MockRecord[]) {
         })),
       },
       appTable: {
-        list: vi.fn(async () => ({
-          code: 0,
-          data: { items: [{ table_id: "tbl_main", name: "Table 1" }] },
-        })),
+        list: appTableList,
       },
       appTableField: {
-        list: vi.fn(async () => ({ code: 0, data: { items: [] } })),
+        list: appTableFieldList,
         update: vi.fn(async () => ({ code: 0 })),
         delete: vi.fn(async () => ({ code: 0 })),
       },
@@ -68,10 +78,10 @@ function createBitableClient(records: MockRecord[]) {
     },
   } as unknown as Lark.Client;
 
-  return { batchDelete, client };
+  return { appTableFieldList, appTableList, batchDelete, client };
 }
 
-describe("feishu bitable create app cleanup", () => {
+describe("feishu bitable tools", () => {
   afterAll(() => {
     vi.doUnmock("./client.js");
     vi.resetModules();
@@ -132,6 +142,113 @@ describe("feishu bitable create app cleanup", () => {
           "rec_empty_nested",
         ],
       },
+    });
+  });
+
+  it("get_meta accumulates tables from every Bitable table page", async () => {
+    const { appTableList, client } = createBitableClient([]);
+    appTableList.mockReset();
+    appTableList
+      .mockResolvedValueOnce({
+        code: 0,
+        data: {
+          items: [{ table_id: "tbl_first", name: "First Table" }],
+          has_more: true,
+          page_token: "page-2",
+        },
+      })
+      .mockResolvedValueOnce({
+        code: 0,
+        data: {
+          items: [{ table_id: "tbl_second", name: "Second Table" }],
+          has_more: false,
+        },
+      });
+    createFeishuClientMock.mockReturnValue(client);
+
+    const { api, resolveTool } = createToolFactoryHarness(createConfig());
+    registerFeishuBitableTools(api);
+
+    const result = await resolveTool("feishu_bitable_get_meta").execute("call_get_meta", {
+      url: "https://example.feishu.cn/base/apptoken",
+    });
+
+    expect(appTableList).toHaveBeenNthCalledWith(1, {
+      path: { app_token: "apptoken" },
+      params: { page_token: undefined },
+    });
+    expect(appTableList).toHaveBeenNthCalledWith(2, {
+      path: { app_token: "apptoken" },
+      params: { page_token: "page-2" },
+    });
+    expect(result.details.tables).toEqual([
+      { table_id: "tbl_first", name: "First Table" },
+      { table_id: "tbl_second", name: "Second Table" },
+    ]);
+  });
+
+  it("list_fields accumulates fields from every Bitable field page", async () => {
+    const { appTableFieldList, client } = createBitableClient([]);
+    appTableFieldList.mockReset();
+    appTableFieldList
+      .mockResolvedValueOnce({
+        code: 0,
+        data: {
+          items: [
+            { field_id: "fld_name", field_name: "Name", type: 1, is_primary: true },
+          ],
+          has_more: true,
+          page_token: "page-2",
+        },
+      })
+      .mockResolvedValueOnce({
+        code: 0,
+        data: {
+          items: [
+            { field_id: "fld_due", field_name: "Due Date", type: 5, is_primary: false },
+          ],
+          has_more: false,
+        },
+      });
+    createFeishuClientMock.mockReturnValue(client);
+
+    const { api, resolveTool } = createToolFactoryHarness(createConfig());
+    registerFeishuBitableTools(api);
+
+    const result = await resolveTool("feishu_bitable_list_fields").execute(
+      "call_list_fields",
+      {
+        app_token: "app_token",
+        table_id: "tbl_main",
+      },
+    );
+
+    expect(appTableFieldList).toHaveBeenNthCalledWith(1, {
+      path: { app_token: "app_token", table_id: "tbl_main" },
+      params: { page_token: undefined },
+    });
+    expect(appTableFieldList).toHaveBeenNthCalledWith(2, {
+      path: { app_token: "app_token", table_id: "tbl_main" },
+      params: { page_token: "page-2" },
+    });
+    expect(result.details).toMatchObject({
+      fields: [
+        {
+          field_id: "fld_name",
+          field_name: "Name",
+          type: 1,
+          type_name: "Text",
+          is_primary: true,
+        },
+        {
+          field_id: "fld_due",
+          field_name: "Due Date",
+          type: 5,
+          type_name: "DateTime",
+          is_primary: false,
+        },
+      ],
+      total: 2,
     });
   });
 
