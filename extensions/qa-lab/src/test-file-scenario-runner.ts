@@ -283,14 +283,39 @@ async function runQaTestFileScenario(params: {
   if (params.scenario.execution.kind !== "script" || result.status !== "pass") {
     return result;
   }
+  const producerEvidenceResult = await readScriptProducerEvidence({
+    outputDir: params.outputDir,
+    repoRoot: params.repoRoot,
+    scenario: params.scenario,
+  });
   return {
     ...result,
-    ...(await readScriptProducerEvidence({
-      outputDir: params.outputDir,
-      repoRoot: params.repoRoot,
-      scenario: params.scenario,
-    })),
+    ...producerEvidenceResult,
+    ...statusFromProducerEvidence(producerEvidenceResult.producerEvidence),
   };
+}
+
+function statusFromProducerEvidence(
+  producerEvidence: QaEvidenceSummaryJson | undefined,
+): Pick<QaTestFileScenarioResult, "failureMessage" | "status"> {
+  if (!producerEvidence || producerEvidence.entries.length === 0) {
+    return { status: "pass" };
+  }
+  const blockingEntry = producerEvidence.entries.find(
+    (entry) => entry.result.status === "fail" || entry.result.status === "blocked",
+  );
+  if (blockingEntry) {
+    return {
+      failureMessage:
+        blockingEntry.result.failure?.reason ??
+        `${blockingEntry.test.id} reported ${blockingEntry.result.status}`,
+      status: blockingEntry.result.status,
+    };
+  }
+  if (producerEvidence.entries.every((entry) => entry.result.status === "skipped")) {
+    return { status: "skipped" };
+  }
+  return { status: "pass" };
 }
 
 function resolveTestFileExecutionKind(scenarios: readonly QaTestFileScenario[]) {

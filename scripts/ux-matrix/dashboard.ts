@@ -237,7 +237,7 @@ const surfaces: Array<{ id: SurfaceId; label: string; readiness: AutomationReadi
   { id: "matrix-live", label: "Matrix live", readiness: "manual-only" },
 ];
 
-let activeRun: Promise<RunSummary> | null = null;
+let activeRun: Promise<unknown> | null = null;
 let activeRunSnapshot: RunSummary | null = null;
 
 function parseArgs(args: string[]): ServerOptions {
@@ -1045,7 +1045,10 @@ async function runWebUiLane(runRoot: string, recordingMs: number): Promise<Stage
       endedAt,
       reason,
     );
-    await writeStageArtifacts(firstRunDir, result, { chromiumExecutablePath, error: reason });
+    await Promise.all([
+      writeStageArtifacts(firstRunDir, result, { chromiumExecutablePath, error: reason }),
+      writeText(path.join(firstRunDir, "logs.txt"), `${reason}\n`),
+    ]);
     return [result];
   }
 
@@ -1664,6 +1667,21 @@ async function runMatrix(options: RunnerOptions): Promise<RunSummary> {
   return summary;
 }
 
+function startBackgroundRun(options: RunnerOptions): Promise<unknown> {
+  return runMatrix(options)
+    .catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      activeRunSnapshot = activeRunSnapshot
+        ? { ...activeRunSnapshot, endedAt: new Date().toISOString(), status: "fail" }
+        : null;
+      console.error(`[ux-matrix] run failed: ${message}`);
+      return null;
+    })
+    .finally(() => {
+      activeRun = null;
+    });
+}
+
 async function loadLatestRun(options: RunnerOptions) {
   if (activeRunSnapshot) {
     return readRunPayload(options, activeRunSnapshot.artifactRoot, activeRunSnapshot);
@@ -1858,17 +1876,7 @@ async function handleRequest(
       sendJson(response, 409, { error: "run already active", run: activeRunSnapshot });
       return;
     }
-    activeRun = runMatrix(options)
-      .catch((error: unknown) => {
-        const message = error instanceof Error ? error.message : String(error);
-        activeRunSnapshot = activeRunSnapshot
-          ? { ...activeRunSnapshot, endedAt: new Date().toISOString(), status: "fail" }
-          : null;
-        throw new Error(message);
-      })
-      .finally(() => {
-        activeRun = null;
-      });
+    activeRun = startBackgroundRun(options);
     sendJson(response, 202, { status: "started" });
     return;
   }
@@ -2771,6 +2779,9 @@ async function main() {
     const summary = await runMatrix(options);
     console.log(`[ux-matrix] run ${summary.runId} ${summary.status}`);
     console.log(`[ux-matrix] artifacts ${summary.artifactRoot}`);
+    if (summary.status !== "pass") {
+      process.exitCode = 1;
+    }
     return;
   }
   const server = createServer((request, response) => {
@@ -2785,9 +2796,7 @@ async function main() {
   console.log(`[ux-matrix] dashboard ${url}`);
   console.log(`[ux-matrix] artifacts ${options.artifactBase}`);
   if (options.runOnStart) {
-    activeRun = runMatrix(options).finally(() => {
-      activeRun = null;
-    });
+    activeRun = startBackgroundRun(options);
   }
 }
 
