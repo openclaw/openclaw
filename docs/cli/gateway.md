@@ -136,7 +136,63 @@ Inline `--password` can be exposed in local process listings. Prefer `--password
 - Run `pnpm build` first, then `pnpm test:restart:gateway -- --case skipChannels --runs 1 --restarts 5` to benchmark in-process Gateway restart against the built CLI entry on macOS or Linux. The restart benchmark uses SIGUSR1, enables both startup and restart traces in the child process, and records next `/healthz`, next `/readyz`, downtime, ready timing, CPU, RSS, and restart trace metrics.
 - Treat `/healthz` as liveness and `/readyz` as usable readiness. Trace lines and benchmark output are for owner attribution; do not treat one trace span or one sample as a complete performance conclusion.
 
-- Set `OPENCLAW_ERROR_HANDLER=<path>` to forward fatal errors to an external executable before the OpenClaw process exits. The handler receives a single argv entry containing a JSON document with the schema `{ schemaVersion, reason, timestamp, pid }` (no message, name, or stack — argv is visible to process listings, audit logs, and platform telemetry, so the payload is intentionally redacted). The handler is spawned with `detached: true`, `shell: false`, `stdio: "ignore"`, and `env: { PATH: process.env.PATH }`, which means it runs fire-and-forget: OpenClaw does not wait for completion, does not pipe its stdio, and does not pass through OpenClaw's process environment (only `PATH` is propagated so the handler can locate its executable). A misconfigured handler therefore cannot read provider keys, gateway tokens, or other runtime secrets from the parent. Only one executable path is honored — `shell: false` rejects shell metacharacters and any command-line arguments, so use a wrapper script (e.g. `/usr/local/bin/openclaw-fatal-hook`) if you need to invoke a pipeline.
+### External error handler
+
+Set `OPENCLAW_ERROR_HANDLER=<path>` to forward fatal errors to an external executable before the OpenClaw process exits. The handler runs fire-and-forget; OpenClaw does not wait for it to finish and does not pipe its stdio. The intent is a best-effort hook for crash reporting, paging, or local audit logging — not a synchronous failure path.
+
+#### Configuration
+
+```bash
+# Forward fatal errors to a wrapper script.
+export OPENCLAW_ERROR_HANDLER=/usr/local/bin/openclaw-fatal-hook
+openclaw gateway run
+```
+
+The path must be an absolute executable path. `shell: false` is enforced, so shell metacharacters (`;`, `|`, `&&`, `$(...)`, backticks, redirects) and any command-line arguments are rejected. To invoke a pipeline, wrap it in a script:
+
+```bash
+#!/usr/bin/env bash
+# /usr/local/bin/openclaw-fatal-hook
+# argv[1] is a JSON document (see payload schema below).
+exec /usr/local/bin/fatal-log "$1" | tee -a /var/log/openclaw-fatal.jsonl
+```
+
+#### Payload schema
+
+The handler is invoked with a single argv entry containing a JSON document:
+
+```json
+{
+  "schemaVersion": 1,
+  "reason": "uncaught_exception",
+  "timestamp": "2026-06-17T03:21:44.812Z",
+  "pid": 4242
+}
+```
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `schemaVersion` | integer | Currently `1`. Bump on breaking payload changes. |
+| `reason` | string | Short machine-readable code (e.g. `uncaught_exception`, `unhandled_rejection`, `process_exit_signal`). |
+| `timestamp` | string | ISO-8601 UTC timestamp the hook fired. |
+| `pid` | integer | OpenClaw process PID at the time of the hook. |
+
+The payload intentionally omits the error `message`, `name`, and `stack`. argv is visible to process listings, audit logs, and platform telemetry, and a fatal error from a user-supplied LLM tool can carry secrets, PII, or model output. If you need the raw error, capture it in-process via a registered `FatalErrorHook` (`registerFatalErrorHook`) and route it through a separate, authenticated channel.
+
+#### Spawn behavior
+
+The handler is spawned with:
+
+- `env: { PATH: process.env.PATH }` — only `PATH` is propagated. Provider keys, gateway tokens, channel credentials, and other runtime secrets are **not** passed to the child. A misconfigured handler therefore cannot read them from the parent environment.
+- `stdio: "ignore"` — the handler cannot read OpenClaw's stdio and OpenClaw does not capture the handler's output. The handler must persist its own logs.
+- `detached: true` and `child.unref()` — OpenClaw does not wait for the handler. If OpenClaw is killed by SIGKILL before the child is reaped, the handler may continue running detached.
+- `shell: false` — argv is passed verbatim; shell expansion is disabled.
+
+Failures during spawn (ENOENT, EACCES, invalid path) are swallowed and logged to stderr with the prefix `[fatal-error-hooks] OPENCLAW_ERROR_HANDLER failed:`. They do not propagate to OpenClaw's exit path.
+
+#### See also
+
+- `registerFatalErrorHook` — in-process hooks that can return a diagnostic line for fatal output. Use this when you need the raw error context; the value is kept inside OpenClaw's process boundary.
 
 ## Query a running Gateway
 
