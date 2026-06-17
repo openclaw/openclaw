@@ -92,6 +92,8 @@ type NativeHarnessCliCompactionOutcome = {
 type CliTranscriptCompactionOutcome = {
   compacted: boolean;
   failureReason?: string;
+  /** True when the failure is transient (e.g. spend-guard backoff) and the caller should soft-fail rather than throw. */
+  transient?: boolean;
 };
 type CliCompactionRuntimeContextParams = {
   sessionKey: string;
@@ -317,12 +319,13 @@ async function compactCliTranscript(params: {
       resolveCompactionTimeoutMs(params.cfg),
     );
   } catch (error) {
-    log.warn(
-      `CLI transcript compaction failed for ${params.provider}/${params.model}: ${error instanceof Error ? error.message : String(error)}`,
-    );
+    const reason = error instanceof Error ? error.message : String(error);
+    const transient = error instanceof Error && error.name === "LcmSummarySpendLimitError";
+    log.warn(`CLI transcript compaction failed for ${params.provider}/${params.model}: ${reason}`);
     return {
       compacted: false,
-      failureReason: error instanceof Error ? error.message : String(error),
+      failureReason: reason,
+      ...(transient ? { transient: true } : {}),
     };
   }
 
@@ -334,12 +337,16 @@ async function compactCliTranscript(params: {
       );
       return { compacted: false };
     }
+    const transient =
+      typeof compactResult.reason === "string" &&
+      compactResult.reason.startsWith("summary spend backoff");
     log.warn(
       `CLI transcript compaction did not reduce context for ${params.provider}/${params.model}: ${reason}`,
     );
     return {
       compacted: false,
-      failureReason: compactResult.reason ?? "compaction did not reduce context",
+      failureReason: reason,
+      ...(transient ? { transient: true } : {}),
     };
   }
 
@@ -664,6 +671,12 @@ export async function runCliTurnCompactionLifecycle(params: {
     });
     compacted = contextOutcome.compacted;
     if (!compacted && contextOutcome.failureReason) {
+      if (contextOutcome.transient) {
+        log.warn(
+          `CLI transcript compaction deferred for ${params.provider}/${params.model}: ${contextOutcome.failureReason ?? "transient error"}`,
+        );
+        return params.sessionEntry;
+      }
       throw new Error(
         `CLI transcript compaction failed for ${params.provider}/${params.model}: ${
           contextOutcome.failureReason ?? "compaction did not reduce context"
