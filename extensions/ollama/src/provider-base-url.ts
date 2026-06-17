@@ -1,7 +1,9 @@
 // Ollama provider module implements model/runtime integration.
-import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import type { ModelProviderConfigInput } from "openclaw/plugin-sdk/config-types";
 
-export function readProviderBaseUrl(provider: ModelProviderConfig | undefined): string | undefined {
+export function readProviderBaseUrl(
+  provider: ModelProviderConfigInput | undefined,
+): string | undefined {
   if (!provider) {
     return undefined;
   }
@@ -12,7 +14,7 @@ export function readProviderBaseUrl(provider: ModelProviderConfig | undefined): 
   ) {
     return provider.baseUrl.trim();
   }
-  const alternate = provider as ModelProviderConfig & { baseURL?: unknown };
+  const alternate = provider as ModelProviderConfigInput & { baseURL?: unknown };
   if (
     Object.hasOwn(alternate, "baseURL") &&
     typeof alternate.baseURL === "string" &&

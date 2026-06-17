@@ -1,4 +1,5 @@
 // Ollama tests cover discovery shared plugin behavior.
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { describe, expect, it } from "vitest";
 import { isLocalOllamaBaseUrl, resolveOllamaDiscoveryResult } from "./discovery-shared.js";
 
@@ -42,22 +43,37 @@ describe("isLocalOllamaBaseUrl", () => {
 });
 
 describe("resolveOllamaDiscoveryResult — remote base URL guard", () => {
-  const buildMockProvider = async (_configuredBaseUrl?: string, _opts?: { quiet?: boolean }) => ({
+  const discoveredModel = {
+    id: "discovered-model",
+    name: "discovered-model",
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128000,
+    maxTokens: 8192,
+    compat: { supportsTools: true, supportsUsageInStreaming: true },
+    params: { num_ctx: 128000 },
+  } satisfies ModelProviderConfig["models"][number];
+
+  const cloudModel = {
+    id: "minimax-m3:cloud",
+    name: "minimax-m3:cloud",
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128000,
+    maxTokens: 8192,
+    compat: { supportsTools: true, supportsUsageInStreaming: true },
+    params: { num_ctx: 128000 },
+  } satisfies ModelProviderConfig["models"][number];
+
+  const buildMockProvider = async (
+    _configuredBaseUrl?: string,
+    _opts?: { quiet?: boolean },
+  ): Promise<ModelProviderConfig> => ({
     baseUrl: "https://ollama.com",
-    api: "ollama" as const,
-    models: [
-      {
-        id: "discovered-model",
-        name: "discovered-model",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 128000,
-        maxTokens: 8192,
-        compat: { supportsTools: true, supportsUsageInStreaming: true },
-        params: { num_ctx: 128000 },
-      },
-    ],
+    api: "ollama",
+    models: [discoveredModel],
   });
 
   it("returns null for remote base URL without explicit models", async () => {
@@ -93,19 +109,7 @@ describe("resolveOllamaDiscoveryResult — remote base URL guard", () => {
                 baseUrl: "https://ollama.com",
                 apiKey: "test-key",
                 api: "ollama",
-                models: [
-                  {
-                    id: "minimax-m3:cloud",
-                    name: "minimax-m3:cloud",
-                    reasoning: false,
-                    input: ["text"],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                    contextWindow: 128000,
-                    maxTokens: 8192,
-                    compat: { supportsTools: true, supportsUsageInStreaming: true },
-                    params: { num_ctx: 128000 },
-                  },
-                ],
+                models: [cloudModel],
               },
             },
           },
@@ -123,9 +127,12 @@ describe("resolveOllamaDiscoveryResult — remote base URL guard", () => {
 
   it("does not call buildProvider for remote base URL without explicit models", async () => {
     let providerCalled = false;
-    const trackingBuildProvider = async (..._args: unknown[]) => {
+    const trackingBuildProvider = async (
+      _configuredBaseUrl?: string,
+      _opts?: { quiet?: boolean },
+    ): Promise<ModelProviderConfig> => {
       providerCalled = true;
-      return buildMockProvider([{ id: "unwanted-model", name: "unwanted-model" }]);
+      return buildMockProvider();
     };
 
     const result = await resolveOllamaDiscoveryResult({
