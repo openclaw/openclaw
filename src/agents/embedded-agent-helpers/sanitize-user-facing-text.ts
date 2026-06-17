@@ -73,6 +73,11 @@ const MODEL_CAPACITY_ERROR_USER_MESSAGE =
 const OVERLOADED_ERROR_USER_MESSAGE =
   "The AI service is temporarily overloaded. Please try again in a moment.";
 const TOOL_CALLS_OMITTED_PLACEHOLDER_LINE_RE = /^[ \t]*\[tool calls omitted\][ \t]*$/i;
+const NO_OUTPUT_PLACEHOLDER_LINE_RE = /^[ \t]*\(no output\)[ \t]*$/i;
+const HISTORY_CONTEXT_MARKER_LINE_RE =
+  /^[ \t]*\[Chat messages since your last reply - for context\][ \t]*$/i;
+const CURRENT_MESSAGE_MARKER_LINE_RE = /^[ \t]*\[Current message - respond to this\][ \t]*$/i;
+const CURRENT_MESSAGE_PRIORITY_LINE_RE = /^[ \t]*Current message priority:[^\n]*$/i;
 const ERROR_PREFIX_RE =
   /^(?:error|(?:[a-z][\w-]*\s+)?api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|codex\s*error|request failed|failed|exception)(?:\s+\d{3})?[:\s-]+/i;
 const CONTEXT_OVERFLOW_ERROR_HEAD_RE =
@@ -364,7 +369,7 @@ function stripFinalTagsFromText(text: unknown): string {
   return stripFinalTags(normalized);
 }
 
-function stripToolCallsOmittedPlaceholderLines(text: string): string {
+function stripPlaceholderLines(text: string): string {
   let result = "";
   let start = 0;
   while (start < text.length) {
@@ -372,12 +377,62 @@ function stripToolCallsOmittedPlaceholderLines(text: string): string {
     const end = newlineIndex === -1 ? text.length : newlineIndex + 1;
     const chunk = text.slice(start, end);
     const line = chunk.endsWith("\n") ? chunk.slice(0, -1).replace(/\r$/, "") : chunk;
-    if (!TOOL_CALLS_OMITTED_PLACEHOLDER_LINE_RE.test(line)) {
+    if (
+      !TOOL_CALLS_OMITTED_PLACEHOLDER_LINE_RE.test(line) &&
+      !NO_OUTPUT_PLACEHOLDER_LINE_RE.test(line)
+    ) {
       result += chunk;
     }
     start = end;
   }
   return result;
+}
+
+/**
+ * Drop copied current-message/history scaffolding blocks (the
+ * "[Chat messages since your last reply - for context]" / "[Current message -
+ * respond to this]" / "Current message priority:" prompt headers and their
+ * indented payload) that can leak into a final reply when the model echoes its
+ * own input. Only standalone blocks whose first line is one of these markers
+ * are removed, so ordinary inline prose that happens to mention the phrase is
+ * preserved. (#78177)
+ */
+function stripCopiedCurrentMessageScaffolding(text: string): string {
+  const blocks = text.split(/(\n[ \t]*\n)/);
+  let changed = false;
+  const kept: string[] = [];
+
+  for (let index = 0; index < blocks.length; index += 1) {
+    const block = blocks[index];
+    if (/^\n[ \t]*\n$/.test(block)) {
+      kept.push(block);
+      continue;
+    }
+
+    const firstLine = block.split(/\r?\n/, 1)[0] ?? "";
+    const shouldDrop =
+      HISTORY_CONTEXT_MARKER_LINE_RE.test(firstLine) ||
+      CURRENT_MESSAGE_PRIORITY_LINE_RE.test(firstLine) ||
+      CURRENT_MESSAGE_MARKER_LINE_RE.test(firstLine);
+    if (shouldDrop) {
+      changed = true;
+      if (/^\n[ \t]*\n$/.test(blocks[index + 1] ?? "")) {
+        index += 1;
+      }
+      continue;
+    }
+
+    kept.push(block);
+  }
+
+  if (!changed) {
+    return text;
+  }
+
+  return kept
+    .join("")
+    .replace(/^(?:[ \t]*\n)+/, "")
+    .replace(/(?:\n[ \t]*)+$/, "");
 }
 
 function collapseConsecutiveDuplicateBlocks(text: string): string {
@@ -437,10 +492,11 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
   // Replay repair may synthesize this placeholder to keep provider transcripts valid.
   // It is internal scaffolding, so drop standalone placeholder lines before delivery
   // while preserving ordinary inline mentions a user may be discussing.
-  const withoutPlaceholder = stripToolCallsOmittedPlaceholderLines(withoutToolCallXml);
+  const withoutPlaceholder = stripPlaceholderLines(withoutToolCallXml);
+  const withoutCurrentMessageScaffolding = stripCopiedCurrentMessageScaffolding(withoutPlaceholder);
   const withoutInternalTraceLines = errorContext
-    ? stripAssistantInternalTraceLines(withoutPlaceholder)
-    : withoutPlaceholder;
+    ? stripAssistantInternalTraceLines(withoutCurrentMessageScaffolding)
+    : withoutCurrentMessageScaffolding;
   const withoutToolCallBlocks = stripPlainTextToolCallBlocks(
     stripLegacyBracketToolCallBlocks(withoutInternalTraceLines),
   );
