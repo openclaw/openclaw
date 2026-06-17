@@ -367,9 +367,22 @@ export async function ensureSandboxBrowser(params: {
         args.push("-v", bind);
       }
     }
+    // Deduplicate: skip read-only skill mounts whose container path is already
+    // defined in user-configurable binds, to avoid Docker "Duplicate mount point" errors.
+    const browserUserBindContainerPaths = new Set(
+      (browserDockerCfg.binds ?? [])
+        .map((b) => {
+          const parts = b.split(":");
+          return parts.length >= 2 ? parts[1] : null;
+        })
+        .filter((p): p is string => p !== null),
+    );
+    const browserFilteredSkillMounts = readOnlyWorkspaceSkillMounts.filter(
+      (mount) => !browserUserBindContainerPaths.has(mount.containerPath),
+    );
     appendReadOnlyWorkspaceSkillMountArgs({
       args,
-      readOnlyWorkspaceSkillMounts,
+      readOnlyWorkspaceSkillMounts: browserFilteredSkillMounts,
     });
     args.push("-p", `127.0.0.1::${params.cfg.browser.cdpPort}`);
     if (noVncEnabled) {

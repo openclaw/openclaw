@@ -358,9 +358,10 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     expect(customMountIdx).toBeGreaterThan(workspaceMountIdx);
   });
 
-  it("applies read-only skill overlays after custom binds", async () => {
-    // Protected skill overlays must be appended last so even an overlapping
-    // custom bind cannot make checked-in skills writable.
+  it("skips read-only skill overlays when custom bind conflicts with same container path", async () => {
+    // When a user-defined bind targets the same container path as a protected
+    // skill overlay, the custom bind is kept and the skill overlay is dropped
+    // to avoid Docker "Duplicate mount point" errors on Docker 25+.
     const workspaceDir = makeTempDir();
     const customRoot = makeTempDir();
     fs.mkdirSync(path.join(workspaceDir, "skills", "demo"), { recursive: true });
@@ -389,7 +390,9 @@ describe("ensureSandboxContainer config-hash recreation", () => {
 
     expect(workspaceMountIdx).toBeGreaterThanOrEqual(0);
     expect(customMountIdx).toBeGreaterThan(workspaceMountIdx);
-    expect(protectedMountIdx).toBeGreaterThan(customMountIdx);
+    // Protected skill mount is skipped because its container path conflicts
+    // with the user-defined custom bind.
+    expect(protectedMountIdx).toBe(-1);
   });
 
   it.each([

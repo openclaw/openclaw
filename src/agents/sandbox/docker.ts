@@ -592,9 +592,22 @@ async function createSandboxContainer(params: {
     includeReadOnlyWorkspaceSkillMounts: false,
   });
   appendCustomBinds(args, cfg);
+  // Deduplicate: skip read-only skill mounts whose container path is already
+  // defined in user-configurable binds, to avoid Docker "Duplicate mount point" errors.
+  const userBindContainerPaths = new Set(
+    (cfg.binds ?? [])
+      .map((b) => {
+        const parts = b.split(":");
+        return parts.length >= 2 ? parts[1] : null;
+      })
+      .filter((p): p is string => p !== null),
+  );
+  const filteredSkillMounts = params.readOnlyWorkspaceSkillMounts.filter(
+    (mount) => !userBindContainerPaths.has(mount.containerPath),
+  );
   appendReadOnlyWorkspaceSkillMountArgs({
     args,
-    readOnlyWorkspaceSkillMounts: params.readOnlyWorkspaceSkillMounts,
+    readOnlyWorkspaceSkillMounts: filteredSkillMounts,
   });
   args.push(cfg.image, "sleep", "infinity");
 
