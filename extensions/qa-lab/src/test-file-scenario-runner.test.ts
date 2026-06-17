@@ -565,4 +565,57 @@ describe("qa test file scenario runner", () => {
       },
     });
   });
+
+  it("carries the suite profile into merged producer evidence", async () => {
+    const repoRoot = await makeTempRepo("qa-script-profile-");
+    const result = await runQaTestFileScenarios({
+      repoRoot,
+      outputDir: path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-script-profile"),
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.5",
+      scenarios: [makeTestFileScenario("script", "scripts/evidence-producer.ts")],
+      runCommand: async () => {
+        const scenarioOutputDir = path.join(
+          repoRoot,
+          ".artifacts",
+          "qa-e2e",
+          "scenario-script-profile",
+          "scenario-script",
+        );
+        await fs.mkdir(scenarioOutputDir, { recursive: true });
+        await fs.writeFile(
+          path.join(scenarioOutputDir, "qa-evidence.json"),
+          `${JSON.stringify({
+            kind: "openclaw.qa.evidence-summary",
+            schemaVersion: 2,
+            generatedAt: "2026-06-14T00:00:00.000Z",
+            evidenceMode: "full",
+            entries: [
+              {
+                test: {
+                  kind: "script-producer-check",
+                  id: "script-producer.web-ui.smoke",
+                  title: "Script producer: web-ui smoke",
+                  source: { path: "scripts/evidence-producer.ts" },
+                },
+                coverage: [{ id: "ui.control", role: "primary" }],
+                result: { status: "pass", timing: { wallMs: 1 } },
+              },
+            ],
+          })}\n`,
+          "utf8",
+        );
+        return { exitCode: 0, stdout: "script pass\n", stderr: "" };
+      },
+      env: {
+        OPENCLAW_QA_REF: "scenario-ref",
+        OPENCLAW_QA_PROFILE: "smoke-ci",
+      } as NodeJS.ProcessEnv,
+    });
+
+    const evidence = validateQaEvidenceSummaryJson(
+      JSON.parse(await fs.readFile(result.evidencePath, "utf8")),
+    );
+    expect(evidence.profile).toBe("smoke-ci");
+  });
 });

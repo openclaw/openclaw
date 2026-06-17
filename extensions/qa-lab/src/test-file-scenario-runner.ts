@@ -1,5 +1,4 @@
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -14,6 +13,7 @@ import {
   QA_EVIDENCE_SUMMARY_SCHEMA_VERSION,
   type QaEvidenceStatus,
   type QaEvidenceSummaryJson,
+  resolveQaEvidenceProfile,
   validateQaEvidenceSummaryJson,
 } from "./evidence-summary.js";
 import type { QaProviderMode } from "./providers/index.js";
@@ -358,11 +358,16 @@ function buildTestFileEvidence(params: {
     const fallbackResults = params.results.filter(
       (result) => !result.producerEvidence || result.includeFallbackEvidence,
     );
+    const evidenceMode =
+      params.evidenceMode ??
+      (params.results.every((result) => result.producerEvidence?.evidenceMode === "slim")
+        ? "slim"
+        : "full");
     const fallbackEvidence =
       fallbackResults.length > 0
         ? definition.buildEvidenceSummary({
             artifactPaths: params.artifactPaths,
-            evidenceMode: params.evidenceMode,
+            evidenceMode,
             env: params.env,
             generatedAt: params.generatedAt,
             primaryModel: params.primaryModel,
@@ -376,16 +381,12 @@ function buildTestFileEvidence(params: {
             })),
           })
         : undefined;
-    const evidenceMode =
-      params.evidenceMode ??
-      (params.results.every((result) => result.producerEvidence?.evidenceMode === "slim")
-        ? "slim"
-        : "full");
     return validateQaEvidenceSummaryJson({
       kind: QA_EVIDENCE_SUMMARY_KIND,
       schemaVersion: QA_EVIDENCE_SUMMARY_SCHEMA_VERSION,
       generatedAt: params.generatedAt,
       evidenceMode,
+      profile: resolveQaEvidenceProfile({ env: params.env }),
       entries: [
         ...producerEntries.map((entry) => {
           if (evidenceMode !== "slim") {
@@ -446,36 +447,17 @@ async function readJsonFileIfExists(filePath: string): Promise<unknown> {
   }
 }
 
-function looksRepoRelativeArtifactPath(artifactPath: string) {
-  return (
-    artifactPath.startsWith(".artifacts/") ||
-    artifactPath.startsWith("artifacts/") ||
-    artifactPath.startsWith("qa/") ||
-    artifactPath.startsWith("extensions/") ||
-    artifactPath.startsWith("scripts/") ||
-    artifactPath.startsWith("ui/")
-  );
-}
-
+// Producer artifact paths follow one convention: relative paths resolve against the
+// qa-evidence.json directory, absolute paths are taken as-is. Both normalize to repo-relative.
 function resolveScriptProducerArtifactPath(params: {
   evidenceDir: string;
   repoRoot: string;
   artifactPath: string;
 }) {
-  if (path.isAbsolute(params.artifactPath)) {
-    return toRepoRelativePath(params.repoRoot, params.artifactPath);
-  }
-  const evidenceRelativePath = path.join(params.evidenceDir, params.artifactPath);
-  if (existsSync(evidenceRelativePath)) {
-    return toRepoRelativePath(params.repoRoot, evidenceRelativePath);
-  }
-  if (looksRepoRelativeArtifactPath(params.artifactPath)) {
-    return params.artifactPath;
-  }
-  if (existsSync(path.join(params.repoRoot, params.artifactPath))) {
-    return params.artifactPath;
-  }
-  return toRepoRelativePath(params.repoRoot, evidenceRelativePath);
+  const absolutePath = path.isAbsolute(params.artifactPath)
+    ? params.artifactPath
+    : path.join(params.evidenceDir, params.artifactPath);
+  return toRepoRelativePath(params.repoRoot, absolutePath);
 }
 
 function normalizeScriptProducerEvidence(params: {
@@ -483,8 +465,10 @@ function normalizeScriptProducerEvidence(params: {
   evidencePath: string;
   repoRoot: string;
 }): QaEvidenceSummaryJson {
+  // Input is already validated by the caller; this only rewrites artifact path strings,
+  // so the transformed shape stays schema-valid without re-parsing.
   const evidenceDir = path.dirname(params.evidencePath);
-  return validateQaEvidenceSummaryJson({
+  return {
     ...params.evidence,
     entries: params.evidence.entries.map((entry) => ({
       ...entry,
@@ -502,7 +486,7 @@ function normalizeScriptProducerEvidence(params: {
           }
         : undefined,
     })),
-  });
+  };
 }
 
 async function readScriptProducerEvidence(params: {
