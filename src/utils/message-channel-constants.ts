@@ -7,7 +7,7 @@ export const INTERNAL_MESSAGE_CHANNEL = "webchat" as const;
 // own, but they should still pass agent-param channel validation so internal
 // callers (e.g. sessions_spawn from a heartbeat-driven parent run) are not
 // rejected as "unknown channel".
-export const INTERNAL_NON_DELIVERY_CHANNELS = [
+const INTERNAL_NON_DELIVERY_CHANNELS = [
   "heartbeat",
   "cron",
   "webhook",

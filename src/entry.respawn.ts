@@ -14,9 +14,9 @@ import {
   type RespawnChildRuntime,
 } from "./process/respawn-child-runner.js";
 
-export const EXPERIMENTAL_WARNING_FLAG = "--disable-warning=ExperimentalWarning";
-export const OPENCLAW_NODE_OPTIONS_READY = "OPENCLAW_NODE_OPTIONS_READY";
-export const OPENCLAW_NODE_EXTRA_CA_CERTS_READY = "OPENCLAW_NODE_EXTRA_CA_CERTS_READY";
+const EXPERIMENTAL_WARNING_FLAG = "--disable-warning=ExperimentalWarning";
+const OPENCLAW_NODE_OPTIONS_READY = "OPENCLAW_NODE_OPTIONS_READY";
+const OPENCLAW_NODE_EXTRA_CA_CERTS_READY = "OPENCLAW_NODE_EXTRA_CA_CERTS_READY";
 const WINDOWS_STACK_SIZE_FLAG = "--stack-size=8192";
 
 type CliRespawnPlan = {
@@ -33,7 +33,7 @@ function pathModuleForPlatform(platform: NodeJS.Platform): typeof path.posix {
   return platform === "win32" ? path.win32 : path.posix;
 }
 
-export function resolveCliRespawnCommand(params: {
+function resolveCliRespawnCommand(params: {
   execPath: string;
   platform?: NodeJS.Platform;
 }): string {

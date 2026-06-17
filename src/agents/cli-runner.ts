@@ -1291,10 +1291,3 @@ export function buildRunClaudeCliAgentParams(params: RunClaudeCliAgentParams): R
     senderIsOwner: params.senderIsOwner,
   };
 }
-
-/** Runs the legacy Claude CLI wrapper through the generic CLI runner. */
-export async function runClaudeCliAgent(
-  params: RunClaudeCliAgentParams,
-): Promise<EmbeddedAgentRunResult> {
-  return runCliAgent(buildRunClaudeCliAgentParams(params));
-}

@@ -156,7 +156,7 @@ describe("Codex app-server config", () => {
             },
             unixSockets: {
               " /tmp/mock-proxy.sock ": "allow",
-              "/tmp/blocked.sock": "deny",
+              "/tmp/blocked.sock": "none",
             },
             proxyUrl: "http://127.0.0.1:3128",
             socksUrl: "socks5h://127.0.0.1:8081",
@@ -183,7 +183,7 @@ describe("Codex app-server config", () => {
           "mock-proxy": {
             filesystem: {
               ":minimal": "read",
-              ":workspace_roots": {
+              ":project_roots": {
                 ".": "write",
               },
             },
@@ -196,7 +196,7 @@ describe("Codex app-server config", () => {
               },
               unix_sockets: {
                 "/tmp/mock-proxy.sock": "allow",
-                "/tmp/blocked.sock": "deny",
+                "/tmp/blocked.sock": "none",
               },
               proxy_url: "http://127.0.0.1:3128",
               socks_url: "socks5h://127.0.0.1:8081",
@@ -229,12 +229,12 @@ describe("Codex app-server config", () => {
     const profileName = runtime.networkProxy?.profileName;
     const permissions = runtime.networkProxy?.configPatch.permissions as Record<
       string,
-      { filesystem: { ":workspace_roots": { ".": string } } }
+      { filesystem: { ":project_roots": { ".": string } } }
     >;
 
     expect(profileName).toMatch(/^openclaw-network-[a-f0-9]{16}$/u);
     expect(runtime.networkProxy?.configPatch.default_permissions).toBe(profileName);
-    expect(permissions[profileName ?? ""]?.filesystem[":workspace_roots"]["."]).toBe("read");
+    expect(permissions[profileName ?? ""]?.filesystem[":project_roots"]["."]).toBe("read");
   });
 
   it("clamps oversized app-server timer config", () => {

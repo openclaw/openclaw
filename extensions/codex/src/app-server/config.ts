@@ -112,7 +112,7 @@ export type CodexAppServerExperimentalConfig = {
 };
 
 export type CodexAppServerNetworkProxyDomainPermission = "allow" | "deny";
-export type CodexAppServerNetworkProxyUnixSocketPermission = "allow" | "deny";
+export type CodexAppServerNetworkProxyUnixSocketPermission = "allow" | "none";
 export type CodexAppServerNetworkProxyBaseProfile = "read-only" | "workspace";
 export type CodexAppServerNetworkProxyMode = "limited" | "full";
 
@@ -310,7 +310,7 @@ const codexAppServerExperimentalSchema = z
   })
   .strict();
 const codexAppServerNetworkProxyDomainPermissionSchema = z.enum(["allow", "deny"]);
-const codexAppServerNetworkProxyUnixSocketPermissionSchema = z.enum(["allow", "deny"]);
+const codexAppServerNetworkProxyUnixSocketPermissionSchema = z.enum(["allow", "none"]);
 const codexAppServerNetworkProxySchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -908,7 +908,7 @@ function resolveCodexAppServerNetworkProxy(
   const profile = {
     filesystem: {
       ":minimal": "read",
-      ":workspace_roots": {
+      ":project_roots": {
         ".": fileSystemMode,
       },
     },

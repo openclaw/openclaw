@@ -2283,11 +2283,6 @@ function listTasksFromIndex(index: Map<string, Set<string>>, key: string): TaskR
     .map(({ insertionIndex: _, ...task }) => task);
 }
 
-export function findLatestTaskForSessionKey(sessionKey: string): TaskRecord | undefined {
-  const task = listTasksForSessionKey(sessionKey)[0];
-  return task ? cloneTaskRecord(task) : undefined;
-}
-
 export function listTasksForSessionKey(sessionKey: string): TaskRecord[] {
   ensureTaskRegistryReady();
   const key = normalizeOptionalString(sessionKey);

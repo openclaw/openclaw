@@ -422,15 +422,6 @@ export function listPluginDoctorSessionRouteStateOwners(params?: {
   return [...owners.values()].toSorted((left, right) => left.id.localeCompare(right.id));
 }
 
-export function listPluginDoctorStateMigrations(params?: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  pluginIds?: readonly string[];
-}): PluginDoctorStateMigration[] {
-  return listPluginDoctorStateMigrationEntries(params).map((entry) => entry.migration);
-}
-
 export function listPluginDoctorStateMigrationEntries(params?: {
   config?: OpenClawConfig;
   workspaceDir?: string;

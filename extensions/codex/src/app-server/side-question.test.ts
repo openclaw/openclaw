@@ -1182,7 +1182,7 @@ describe("runCodexAppServerSideQuestion", () => {
         "side-proxy": {
           filesystem: {
             ":minimal": "read",
-            ":workspace_roots": { ".": "write" },
+            ":project_roots": { ".": "write" },
           },
           network: {
             enabled: true,
