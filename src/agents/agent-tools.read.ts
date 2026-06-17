@@ -37,6 +37,7 @@ import type { AgentToolResult } from "./runtime/index.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { createEditTool, createReadTool, createWriteTool } from "./sessions/index.js";
+import { expandPath } from "./sessions/tools/path-utils.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
 
 export {
@@ -445,6 +446,74 @@ async function normalizeReadImageResult(
 /** Wrap a file tool so path params stay inside the workspace root. */
 export function wrapToolWorkspaceRootGuard(tool: AnyAgentTool, root: string): AnyAgentTool {
   return wrapToolWorkspaceRootGuardWithOptions(tool, root);
+}
+
+/**
+ * Returns true when a raw, model-supplied path expresses an *absolute* target
+ * (POSIX/Windows absolute, `~`/`~user` home expansion, or a `file://` URL).
+ *
+ * Absolute targets are intentionally allowed through the default (non
+ * `workspaceOnly`) host write/edit path so the documented "write anywhere on the
+ * host" operator behaviour keeps working. Relative paths, by contrast, are meant
+ * to resolve *inside* the workspace, so they get the parent-traversal guard below.
+ */
+function isAbsoluteToolPathInput(rawPath: string): boolean {
+  const trimmed = rawPath.startsWith("@") ? rawPath.slice(1) : rawPath;
+  if (!trimmed) {
+    return false;
+  }
+  // Parity with the write/edit sink resolver: a path only earns the "write
+  // anywhere" pass-through when `expandPath` — the same expander `resolveToCwd`
+  // runs before the sink touches the filesystem — turns it into an OS-absolute
+  // target (real `~`/`~/` home, `file://`, or an explicit absolute). `~user` /
+  // `~name` forms that `expandPath` does NOT expand stay relative and must be
+  // contained; classifying them as absolute here lets `~user/../../x` slip past
+  // the guard and then resolve cwd-relative out of the workspace.
+  const expanded = expandPath(trimmed);
+  return (
+    path.isAbsolute(expanded) || path.win32.isAbsolute(expanded) || isWindowsDrivePath(expanded)
+  );
+}
+
+/**
+ * Wrap a file tool so that *relative* path params cannot climb out of the
+ * workspace root via `..`, even when full `workspaceOnly` containment is off.
+ *
+ * This closes the relative path-traversal primitive (e.g. `../../etc/file`) on the
+ * default host write/edit path: a relative path is the natural way to ask for a
+ * file *inside* the workspace, so escaping it is rejected. Absolute / `~` / `file://`
+ * targets are passed through unchanged, preserving the documented default that the
+ * built-in write/edit tools may write anywhere on a trusted operator's host (the
+ * stricter, opt-in `tools.fs.workspaceOnly` mode contains those too).
+ */
+export function wrapToolRejectRelativeWorkspaceEscape(
+  tool: AnyAgentTool,
+  root: string,
+  pathParamKeys: readonly string[] = ["path"],
+): AnyAgentTool {
+  return {
+    ...tool,
+    execute: async (toolCallId, args, signal, onUpdate) => {
+      const record = getToolParamsRecord(args);
+      if (record) {
+        for (const key of pathParamKeys) {
+          const rawFilePath = record[key];
+          if (typeof rawFilePath !== "string" || !rawFilePath.trim()) {
+            continue;
+          }
+          const filePath = stripMalformedXmlArgValueSuffix(rawFilePath);
+          if (!filePath.trim() || isAbsoluteToolPathInput(filePath)) {
+            continue;
+          }
+          // Relative path: reject if it resolves outside the workspace root.
+          // `toRelativeWorkspacePath` throws "Path escapes workspace root" on any
+          // `..` escape (and on absolute inputs, already handled above).
+          toRelativeWorkspacePath(root, filePath);
+        }
+      }
+      return tool.execute(toolCallId, args, signal, onUpdate);
+    },
+  };
 }
 
 function mapContainerPathToWorkspaceRoot(params: {
