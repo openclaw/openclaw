@@ -1247,10 +1247,22 @@ export async function runReplyAgent(params: {
     activeSessionEntry.updatedAt = updatedAt;
     activeSessionStore[sessionKey] = activeSessionEntry;
     if (storePath) {
-      await updateSessionEntry({ storePath, sessionKey }, () => ({ updatedAt }), {
-        skipMaintenance: true,
-        takeCacheOwnership: true,
-      });
+      await updateSessionEntry(
+        { storePath, sessionKey },
+        () => {
+          // Persist the steered-inbound-audio flag so downstream dispatch
+          // can see it when it reloads the entry from the session store.
+          const patch: Partial<SessionEntry> = { updatedAt };
+          if (activeSessionEntry?.steeredInboundAudio) {
+            patch.steeredInboundAudio = true;
+          }
+          return patch;
+        },
+        {
+          skipMaintenance: true,
+          takeCacheOwnership: true,
+        },
+      );
     }
   };
 

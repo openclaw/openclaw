@@ -1297,6 +1297,21 @@ export async function dispatchReplyFromConfig(
   const routeReplyThreadId = replyRoute.threadId ?? routeThreadId;
   const inboundAudio =
     hasInboundAudio(ctx) || sessionStoreEntry.entry?.steeredInboundAudio === true;
+  // Clear the one-shot steered-audio marker after consuming it, so subsequent
+  // text-only turns in the same session do not incorrectly inherit voice behavior.
+  if (
+    sessionStoreEntry.entry?.steeredInboundAudio &&
+    sessionStoreEntry.storePath &&
+    sessionStoreEntry.sessionKey
+  ) {
+    updateSessionStoreEntry({
+      storePath: sessionStoreEntry.storePath,
+      sessionKey: sessionStoreEntry.sessionKey,
+      skipMaintenance: true,
+      takeCacheOwnership: true,
+      update: () => ({ steeredInboundAudio: undefined }),
+    });
+  }
   const sessionTtsAuto = normalizeTtsAutoMode(sessionStoreEntry.entry?.ttsAuto);
   const workspaceDir = resolveAgentWorkspaceDir(cfg, sessionAgentId);
   let dispatchReplyOperation: ReplyOperation | undefined;

@@ -463,6 +463,67 @@ describe("runReplyAgent media path normalization", () => {
     expect(sessionEntry.steeredInboundAudio).toBe(true);
   });
 
+  it("persists steered inbound audio through session store and clears after dispatch", async () => {
+    const { clearSessionStoreCacheForTest } =
+      await import("../../config/sessions/store-writer-state.js");
+    const { loadSessionStore } = await import("../../config/sessions.js");
+    const { updateSessionEntry } = await import("../../config/sessions/session-accessor.js");
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "steered-audio-test-"));
+    cleanupPaths.push(tmpDir);
+    const storePath = path.join(tmpDir, "store.json");
+    const sessionKey = "test-audio-session";
+
+    // Pre-populate a session entry in the store so updateSessionEntry has something
+    // to merge into.
+    const preExistingEntry: Record<string, unknown> = {
+      sessionId: "test-audio",
+      updatedAt: Date.now(),
+    };
+    await writeFile(storePath, JSON.stringify({ [sessionKey]: preExistingEntry }), "utf-8");
+    clearSessionStoreCacheForTest();
+
+    queueEmbeddedAgentMessageWithOutcomeAsyncMock.mockImplementation(async (sessionId: string) => ({
+      queued: true,
+      sessionId,
+      target: "embedded_run",
+      gatewayHealth: "live",
+    }));
+
+    await runReplyAgent(
+      makeRunReplyAgentParams({
+        resolvedQueue: { mode: "steer" } as QueueSettings,
+        shouldSteer: true,
+        shouldFollowup: true,
+        isStreaming: true,
+        sessionKey,
+        storePath,
+        sessionStore: { [sessionKey]: preExistingEntry } as Record<string, unknown>,
+        sessionEntry: preExistingEntry as Parameters<typeof runReplyAgent>[0]["sessionEntry"],
+        followupRun: {
+          ...createMockFollowupRun({ prompt: "generate chart" }),
+          currentInboundAudio: true,
+        } as unknown as FollowupRun,
+      }),
+    );
+
+    // Verify the flag was persisted through the session store path, not only
+    // on the local object.
+    clearSessionStoreCacheForTest();
+    const persisted = loadSessionStore(storePath, { skipCache: true });
+    expect(persisted[sessionKey]?.steeredInboundAudio).toBe(true);
+
+    // Simulate the dispatch consuming the flag (the same clear step added
+    // to dispatch-from-config.ts).
+    await updateSessionEntry(
+      { storePath, sessionKey },
+      () => ({ steeredInboundAudio: undefined }),
+      { skipMaintenance: true, takeCacheOwnership: true },
+    );
+    clearSessionStoreCacheForTest();
+    const afterClear = loadSessionStore(storePath, { skipCache: true });
+    expect(afterClear[sessionKey]?.steeredInboundAudio).toBeUndefined();
+  });
+
   it("queues active prompts in followup mode without steering", async () => {
     await runReplyAgent(
       makeRunReplyAgentParams({
