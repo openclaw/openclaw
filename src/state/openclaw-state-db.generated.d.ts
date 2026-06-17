@@ -828,6 +828,21 @@ export interface SubagentRuns {
   workspace_dir: string | null;
 }
 
+export interface TaskCompletionRoutes {
+  account_id: string | null;
+  channel: string | null;
+  delivery_attempts: Generated<number>;
+  last_delivery_at: number | null;
+  last_delivery_status: string | null;
+  registered_at: number;
+  retired_at: number | null;
+  route_fingerprint: string;
+  source: string;
+  task_id: string;
+  thread_id: string | null;
+  to_target: string | null;
+}
+
 export interface TaskDeliveryState {
   last_notified_event_at: number | null;
   requester_origin_json: string | null;
@@ -995,6 +1010,7 @@ export interface DB {
   skill_uploads: SkillUploads;
   state_leases: StateLeases;
   subagent_runs: SubagentRuns;
+  task_completion_routes: TaskCompletionRoutes;
   task_delivery_state: TaskDeliveryState;
   task_runs: TaskRuns;
   tui_last_sessions: TuiLastSessions;

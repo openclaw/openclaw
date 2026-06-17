@@ -1205,3 +1205,28 @@ CREATE TABLE IF NOT EXISTS backup_runs (
 
 CREATE INDEX IF NOT EXISTS idx_backup_runs_created
   ON backup_runs(created_at DESC, id);
+
+CREATE TABLE IF NOT EXISTS task_completion_routes (
+  task_id TEXT NOT NULL PRIMARY KEY,
+  source TEXT NOT NULL,
+  route_fingerprint TEXT NOT NULL,
+  channel TEXT,
+  to_target TEXT,
+  account_id TEXT,
+  thread_id TEXT,
+  registered_at INTEGER NOT NULL,
+  retired_at INTEGER,
+  delivery_attempts INTEGER NOT NULL DEFAULT 0,
+  last_delivery_status TEXT,
+  last_delivery_at INTEGER
+);
+
+-- Lookup active (non-retired) routes; most common query path.
+CREATE INDEX IF NOT EXISTS idx_task_completion_routes_active
+  ON task_completion_routes(retired_at, registered_at)
+  WHERE retired_at IS NULL;
+
+-- Prune orphans by source during doctor --fix.
+CREATE INDEX IF NOT EXISTS idx_task_completion_routes_source
+  ON task_completion_routes(source, registered_at)
+  WHERE retired_at IS NULL;
