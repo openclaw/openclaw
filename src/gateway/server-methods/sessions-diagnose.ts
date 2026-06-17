@@ -605,12 +605,11 @@ async function buildDiagnoseResult(params: {
     maxLines: clampDiagnoseTail(p.tail),
   });
   const transcriptResolved = transcript?.resolved === true;
-  const deliveryUncertain = Boolean(
+  const deliveryUncertain =
     isDiagnoseRowTerminal(target.row) &&
-      !target.row.lastChannel &&
-      !target.row.lastTo &&
-      !target.row.lastThreadId,
-  );
+    !target.row.lastChannel &&
+    !target.row.lastTo &&
+    !target.row.lastThreadId;
   const lastChannel = normalizeOptionalString(target.row.lastChannel);
   const lastTo = normalizeOptionalString(target.row.lastTo);
   const lastThreadId = normalizeOptionalString(target.row.lastThreadId);
