@@ -77,6 +77,9 @@ export type MemoryEmbeddingProviderCreateOptions = {
     baseUrl?: string;
     apiKey?: SecretInput;
     headers?: Record<string, string>;
+    network?: {
+      dangerouslyAllowPrivateNetwork?: boolean;
+    };
   };
   model: string;
   inputType?: string;
