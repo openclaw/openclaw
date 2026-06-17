@@ -1030,6 +1030,53 @@ describe("runGlobalPackageUpdateSteps", () => {
     });
   });
 
+  it("does not report a deletion applied when the target is recreated during cleanup", async () => {
+    await withTempDir(
+      { prefix: "openclaw-package-update-local-recreated-delete-" },
+      async (base) => {
+        const packageRoot = path.join(base, "package");
+        const indexPath = path.join(packageRoot, "dist", "index.js");
+        await writePackageRoot(packageRoot, "1.0.0");
+        await fs.rm(indexPath);
+
+        const plan = await captureLocalPackageOverrides({ packageRoot });
+        expect(plan).not.toBeNull();
+        await writePackageRoot(packageRoot, "2.0.0");
+
+        let targetRecreated = false;
+        __setFsSafeTestHooksForTest({
+          beforeRootFallbackMutation: async (operation, targetPath) => {
+            if (
+              !targetRecreated &&
+              operation === "remove" &&
+              path.basename(targetPath).startsWith(".openclaw-override-previous-")
+            ) {
+              targetRecreated = true;
+              await fs.writeFile(indexPath, "export const concurrent = true;\n", "utf8");
+            }
+          },
+        });
+
+        try {
+          const result = await applyLocalPackageOverrides({
+            packageRoot,
+            plan,
+            reapply: true,
+          });
+
+          expect(targetRecreated).toBe(true);
+          expect(result.status).toBe("error");
+          expect(result.applied).toBe(0);
+          await expect(fs.readFile(indexPath, "utf8")).resolves.toBe(
+            "export const concurrent = true;\n",
+          );
+        } finally {
+          __setFsSafeTestHooksForTest(undefined);
+        }
+      },
+    );
+  });
+
   it.runIf(process.platform !== "win32")(
     "does not mutate a redirect target when a deletion ancestor swaps at the mutation boundary",
     async () => {

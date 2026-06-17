@@ -637,6 +637,17 @@ async function deleteLocalOverrideTarget(params: {
     });
     backupWritten = true;
     await params.packageFs.remove(moved.movedPath);
+    await assertLocalOverrideMutationTopology({
+      packageRoot: params.packageFs.rootDir,
+      realPackageRoot: params.packageFs.rootReal,
+      relativePath: params.relativePath,
+    });
+    const targetProbe = await probeLocalOverrideTarget(
+      resolveSafePackagePath(params.packageFs.rootReal, params.relativePath),
+    );
+    if (targetProbe.status !== "missing") {
+      throw new Error(`local override deletion target recreated: ${params.relativePath}`);
+    }
     return moved.mode;
   } catch (error) {
     return await throwAfterRestoringMovedLocalOverrideTarget({
