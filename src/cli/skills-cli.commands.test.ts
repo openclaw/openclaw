@@ -854,10 +854,11 @@ describe("skills cli commands", () => {
     const provenance = {
       source: "server-resolved-github-import",
       repo: "openclaw/skills",
-      commit: "def456",
+      commit: "0123456789abcdef0123456789abcdef01234567",
       path: "agentreceipt",
     };
-    const verifiedSourceUrl = "https://github.com/openclaw/skills/tree/def456/agentreceipt";
+    const verifiedSourceUrl =
+      "https://github.com/openclaw/skills/tree/0123456789abcdef0123456789abcdef01234567/agentreceipt";
     readVerifiedClawHubSkillSourceUrlMock.mockReturnValueOnce(verifiedSourceUrl);
     fetchClawHubSkillVerificationMock.mockResolvedValueOnce({
       schema: "clawhub.skill.verify.v1",

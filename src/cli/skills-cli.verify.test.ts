@@ -196,7 +196,8 @@ describe("skills verify CLI", () => {
 
   it("surfaces only server-verified source provenance in verify JSON", async () => {
     const sourceUrl = "https://github.com/openclaw/skills/tree/main/agentreceipt";
-    const verifiedSourceUrl = "https://github.com/openclaw/skills/tree/def456/agentreceipt";
+    const verifiedSourceUrl =
+      "https://github.com/openclaw/skills/tree/0123456789abcdef0123456789abcdef01234567/agentreceipt";
     mocks.fetchClawHubSkillVerificationMock.mockResolvedValueOnce({
       schema: "clawhub.skill.verify.v1",
       ok: true,
@@ -213,7 +214,7 @@ describe("skills verify CLI", () => {
         url: sourceUrl,
         repo: "openclaw/skills",
         ref: "main",
-        commit: "def456",
+        commit: "0123456789abcdef0123456789abcdef01234567",
         path: "agentreceipt",
       },
       security: { status: "clean" },

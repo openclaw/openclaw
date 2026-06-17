@@ -296,7 +296,7 @@ function normalizeGitHubRepoName(raw: unknown): string | undefined {
 
 function normalizeGitHubCommitSegment(raw: unknown): string | undefined {
   const commit = normalizeOptionalStringValue(raw);
-  if (!commit || /[/?#\\]/.test(commit)) {
+  if (!commit || !/^[0-9a-f]{40}$/i.test(commit)) {
     return undefined;
   }
   return commit;
