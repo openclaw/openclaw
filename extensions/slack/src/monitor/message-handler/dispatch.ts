@@ -1307,6 +1307,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             text: normalizeSlackOutboundText(trimmedFinalText),
             ...(slackBlocks?.length ? { blocks: slackBlocks } : {}),
             threadTs: finalThreadTs,
+            identity: slackIdentity,
           });
         } catch (err) {
           logVerbose(
@@ -1393,6 +1394,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             text: edit.text,
             ...(edit.blocks?.length ? { blocks: edit.blocks } : {}),
             threadTs: edit.threadTs,
+            identity: slackIdentity,
           });
           if (!ttsSupplement) {
             emitSlackMessageSentHooks({
