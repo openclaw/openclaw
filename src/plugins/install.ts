@@ -1839,6 +1839,7 @@ function sourceFamilyForInstallPolicyKind(
     case undefined:
       return fallback;
   }
+  return fallback;
 }
 
 type PreparedInstallTarget = {
@@ -3074,11 +3075,11 @@ export async function installPluginFromNpmPackArchive(
   }
   const packageName = packageNameResult.packageName;
   const npmBaseDir = params.npmDir ? resolveUserPath(params.npmDir) : resolveDefaultPluginNpmDir();
-  const npmRoot = resolvePluginNpmProjectDir({
+  const npmProjectRoot = resolvePluginNpmProjectDir({
     npmDir: npmBaseDir,
     packageName,
   });
-  const installRoot = resolveManagedNpmRootPackageDir(npmRoot, packageName);
+  const installRoot = resolveManagedNpmRootPackageDir(npmProjectRoot, packageName);
   const effectiveMode = await resolveEffectiveInstallMode({
     runtime,
     requestedMode: mode,

@@ -2623,8 +2623,8 @@ describe("installPluginFromNpmSpec", () => {
 
     expect(result!.ok).toBe(false);
     if (!result!.ok) {
-      expect(result!.code, result!.error).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
-      expect(result!.error).toContain("npm installs are disabled by policy");
+      expect(result.code, result.error).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+      expect(result.error).toContain("npm installs are disabled by policy");
     }
     expect(vi.mocked(runCommandWithTimeout)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(runCommandWithTimeout).mock.calls[0]?.[0]).toEqual([
