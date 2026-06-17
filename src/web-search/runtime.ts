@@ -39,18 +39,6 @@ import type {
   RuntimeWebSearchConfig as WebSearchConfig,
 } from "./runtime-types.js";
 
-// Runtime provider selection and execution for web_search. This keeps plugin,
-// runtime, and explicit provider selections aligned before a tool executes.
-export type {
-  ListWebSearchProvidersParams,
-  ResolveWebSearchDefinitionParams,
-  RunWebSearchParams,
-  RunWebSearchResult,
-  RuntimeWebSearchConfig,
-  RuntimeWebSearchProviderEntry,
-  RuntimeWebSearchToolDefinition,
-} from "./runtime-types.js";
-
 function resolveSearchConfig(cfg?: OpenClawConfig): WebSearchConfig {
   return resolveWebProviderConfig(cfg, "search") as NonNullable<WebSearchConfig> | undefined;
 }
@@ -70,7 +58,7 @@ function resolveWebSearchRuntimeConfig(params?: {
 }
 
 /** Resolves whether web_search is enabled for the current config/sandbox. */
-export function resolveWebSearchEnabled(params: {
+function resolveWebSearchEnabled(params: {
   search?: WebSearchConfig;
   sandboxed?: boolean;
 }): boolean {
@@ -383,7 +371,7 @@ function loadSortedWebSearchProviders(
 }
 
 /** Resolves the executable web_search provider tool definition. */
-export function resolveWebSearchDefinition(
+function resolveWebSearchDefinition(
   options?: ResolveWebSearchDefinitionParams,
 ): { provider: PluginWebSearchProviderEntry; definition: WebSearchProviderToolDefinition } | null {
   const { config, search, runtimeWebSearch } = resolveWebSearchRequestContext(options);
@@ -603,14 +591,3 @@ export async function runWebSearch(params: RunWebSearchParams): Promise<RunWebSe
   }
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
-
-export const testing = {
-  resolveSearchConfig,
-  resolveSearchProvider: resolveWebSearchProviderId,
-  resolveWebSearchProviderId,
-  resolveWebSearchCandidates,
-  resolveExplicitWebSearchProviderId,
-  resolveExplicitWebSearchProviderPluginIds,
-  hasExplicitWebSearchSelection,
-};
-export { testing as __testing };
