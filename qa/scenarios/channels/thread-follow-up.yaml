@@ -6,6 +6,7 @@ scenario:
   coverage:
     primary:
       - channels.threads
+      - thread-parent-child-placement
     secondary:
       - channels.qa-channel
   objective: Verify the agent can keep follow-up work inside a thread and not leak context into the root channel.

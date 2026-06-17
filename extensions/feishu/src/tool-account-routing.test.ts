@@ -171,7 +171,7 @@ describe("feishu tool account routing", () => {
     const client = createFeishuClientMock.mock.results[0]?.value;
     expect(client.wiki.spaceNode.list).toHaveBeenCalledWith({
       path: { space_id: "7616123456789014828" },
-      params: { parent_node_token: undefined },
+      params: { page_size: 50, page_token: undefined, parent_node_token: undefined },
     });
   });
 

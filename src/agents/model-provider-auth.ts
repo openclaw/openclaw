@@ -45,8 +45,6 @@ import {
 import { normalizeProviderId } from "./model-selection.js";
 import { resolveDefaultAgentWorkspaceDir } from "./workspace.js";
 
-export type { ProviderAuthWarmSnapshot } from "./model-provider-auth-state.js";
-
 type ProviderAuthWarmWorkerResult =
   | {
       status: "ok";

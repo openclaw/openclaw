@@ -858,7 +858,7 @@ describe("test-projects args", () => {
       {
         config: "test/vitest/vitest.unit-fast.config.ts",
         forwardedArgs: [],
-        includePatterns: ["src/install-sh-version.test.ts"],
+        includePatterns: ["src/install-sh-version.test.ts", "test/scripts/android-version.test.ts"],
         watchMode: false,
       },
       {
@@ -873,9 +873,13 @@ describe("test-projects args", () => {
         includePatterns: [
           "src/scripts/docs-link-audit.test.ts",
           "src/scripts/sync-plugin-versions.test.ts",
+          "test/helpers/temp-dir.test.ts",
+          "test/scripts/android-pin-version.test.ts",
+          "test/scripts/ios-configure-signing.test.ts",
           "test/scripts/ios-pin-version.test.ts",
           "test/scripts/ios-team-id.test.ts",
           "test/scripts/ios-version.test.ts",
+          "test/scripts/report-test-temp-creations.test.ts",
           "test/test-env.test.ts",
           "test/vitest-scoped-config.test.ts",
         ],
@@ -884,7 +888,10 @@ describe("test-projects args", () => {
       {
         config: "test/vitest/vitest.agents.config.ts",
         forwardedArgs: [],
-        includePatterns: ["src/agents/models-config.file-mode.test.ts"],
+        includePatterns: [
+          "src/agents/models-config.file-mode.test.ts",
+          "src/agents/sandbox/ssh.test.ts",
+        ],
         watchMode: false,
       },
       {

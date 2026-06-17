@@ -505,9 +505,22 @@ Codex dynamic tools default to `searchable` loading. OpenClaw does not expose
 dynamic tools that duplicate Codex-native workspace operations: `read`, `write`,
 `edit`, `apply_patch`, `exec`, `process`, and `update_plan`. Most remaining
 OpenClaw integration tools such as messaging, media, cron, browser, nodes,
-gateway, `heartbeat_respond`, and `web_search` are available through Codex tool
-search under the `openclaw` namespace, keeping the initial model context
-smaller.
+gateway, and `heartbeat_respond` are available through Codex tool search under
+the `openclaw` namespace, keeping the initial model context smaller. Web search
+uses Codex's hosted `web_search` tool by default when search is enabled and no
+managed provider is selected. Native hosted search and OpenClaw's managed
+`web_search` dynamic tool are mutually exclusive so managed search cannot bypass
+native domain restrictions. OpenClaw uses the managed tool when hosted search is
+unavailable, explicitly disabled, or replaced by a selected managed provider.
+OpenClaw keeps Codex's standalone `web.run` extension disabled because
+production app-server traffic rejects its user-defined `web` namespace.
+`tools.web.search.enabled: false` disables both paths, as do tool-disabled
+LLM-only runs. Codex treats `"cached"` as a preference and resolves it to live
+external access for unrestricted app-server turns. Automatic managed fallback
+fails closed when native `allowedDomains` are set so the allowlist cannot be
+bypassed. Persistent effective search-policy changes rotate the bound Codex
+thread before the next turn. Transient per-turn restrictions use a temporary
+restricted thread and preserve the existing binding for later resume.
 `sessions_yield` and message-tool-only source replies stay direct because
 those are turn-control contracts. `sessions_spawn` stays searchable so Codex's
 native `spawn_agent` remains the primary Codex subagent surface, while explicit

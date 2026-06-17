@@ -542,6 +542,15 @@ export function dockerPreflightContainerNames(raw) {
     );
 }
 
+export function resolveDockerPreflightPlatform(arch = process.arch) {
+  return arch === "arm64" ? "linux/arm64" : "linux/amd64";
+}
+
+export function dockerPreflightSmokeCommand(arch = process.arch) {
+  const platform = resolveDockerPreflightPlatform(arch);
+  return `docker run --rm --platform ${shellQuote(platform)} alpine:3.20 true`;
+}
+
 export function runShellCommand({ command, env, label, logFile, timeoutMs, noOutputTimeoutMs }) {
   return new Promise((resolve) => {
     const pipeOutput = Boolean(logFile || noOutputTimeoutMs > 0);
@@ -873,7 +882,7 @@ async function runDockerPreflight(baseEnv, options) {
 
   const startedAt = Date.now();
   const run = await runShellCommand({
-    command: "docker run --rm alpine:3.20 true",
+    command: dockerPreflightSmokeCommand(),
     env: baseEnv,
     label: "docker-run-smoke",
     timeoutMs: options.runTimeoutMs,
@@ -881,7 +890,7 @@ async function runDockerPreflight(baseEnv, options) {
   const elapsedSeconds = Math.round((Date.now() - startedAt) / 1000);
   if (run.status !== 0) {
     throw new Error(
-      `Docker preflight failed: docker run alpine:3.20 true status=${run.status} elapsed=${elapsedSeconds}s`,
+      `Docker preflight failed: ${dockerPreflightSmokeCommand()} status=${run.status} elapsed=${elapsedSeconds}s`,
     );
   }
   console.log(`==> Docker preflight run: ${elapsedSeconds}s`);

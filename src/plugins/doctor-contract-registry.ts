@@ -244,6 +244,13 @@ export function collectRelevantDoctorPluginIds(raw: unknown): string[] {
     }
   }
 
+  const modelProviders = asNullableRecord(asNullableRecord(root.models)?.providers);
+  if (modelProviders) {
+    for (const providerId of Object.keys(modelProviders)) {
+      ids.add(providerId);
+    }
+  }
+
   if (hasLegacyElevenLabsTalkFields(root)) {
     ids.add("elevenlabs");
   }
@@ -274,6 +281,13 @@ export function collectRelevantDoctorPluginIdsForTouchedPaths(params: {
     }
     if (first === "plugins") {
       if (second !== "entries" || !third) {
+        return collectRelevantDoctorPluginIds(params.raw);
+      }
+      ids.add(third);
+      continue;
+    }
+    if (first === "models") {
+      if (second !== "providers" || !third) {
         return collectRelevantDoctorPluginIds(params.raw);
       }
       ids.add(third);

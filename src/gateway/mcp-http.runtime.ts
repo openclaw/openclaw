@@ -28,6 +28,9 @@ type CachedScopedTools = {
 type McpLoopbackScopeParams = {
   cfg: OpenClawConfig;
   sessionKey: string;
+  sessionId?: string;
+  yieldContextCacheKey?: string;
+  onYield?: (message: string) => Promise<void> | void;
   messageProvider: string | undefined;
   currentChannelId: string | undefined;
   currentThreadTs: string | undefined;
@@ -36,6 +39,7 @@ type McpLoopbackScopeParams = {
   accountId: string | undefined;
   inboundEventKind: InboundEventKind | undefined;
   sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined;
+  requireExplicitMessageTarget?: boolean;
   senderIsOwner: boolean | undefined;
 };
 
@@ -62,6 +66,8 @@ export class McpLoopbackToolCache {
   resolve(params: McpLoopbackScopeParams): CachedScopedTools {
     const cacheKey = [
       params.sessionKey,
+      params.sessionId ?? "",
+      params.yieldContextCacheKey ?? "",
       params.messageProvider ?? "",
       params.currentChannelId ?? "",
       params.currentThreadTs ?? "",
@@ -70,6 +76,7 @@ export class McpLoopbackToolCache {
       params.accountId ?? "",
       params.inboundEventKind ?? "",
       params.sourceReplyDeliveryMode ?? "",
+      params.requireExplicitMessageTarget === true ? "explicit-message-target" : "",
       params.senderIsOwner === true
         ? "owner"
         : params.senderIsOwner === false

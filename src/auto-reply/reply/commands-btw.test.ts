@@ -119,9 +119,22 @@ describe("handleBtwCommand", () => {
 
   it("delegates to the side-question runner", async () => {
     const params = buildParams("/btw what changed?");
+    params.command.senderId = "sender-1";
+    params.command.senderIsOwner = true;
+    params.ctx.AccountId = "account-1";
+    params.ctx.RuntimePolicySessionKey = "agent:main:runtime-policy";
+    params.ctx.GroupChannel = "#ops";
+    params.ctx.GroupSpace = "workspace-1";
+    params.ctx.SenderId = "sender-1";
+    params.ctx.SenderName = "Rosita";
+    params.ctx.SenderUsername = "rosita";
+    params.ctx.SenderE164 = "+15550001";
+    params.ctx.MessageThreadId = "thread-1";
     params.agentDir = "/tmp/agent";
     params.sessionEntry = {
       sessionId: "session-1",
+      groupId: "group-1",
+      parentSessionKey: "agent:main:parent",
       updatedAt: Date.now(),
     };
     runBtwSideQuestionMock.mockResolvedValue({ text: "nothing important" });
@@ -136,6 +149,18 @@ describe("handleBtwCommand", () => {
       resolvedReasoningLevel: "off",
       messageChannel: "whatsapp",
       messageProvider: "whatsapp",
+      agentAccountId: "account-1",
+      sandboxSessionKey: "agent:main:runtime-policy",
+      messageThreadId: "thread-1",
+      groupId: "group-1",
+      groupChannel: "#ops",
+      groupSpace: "workspace-1",
+      spawnedBy: "agent:main:parent",
+      senderId: "sender-1",
+      senderName: "Rosita",
+      senderUsername: "rosita",
+      senderE164: "+15550001",
+      senderIsOwner: true,
     });
     expect(String(runnerArgs.agentDir)).toContain("/agents/main/agent");
     expect(result).toEqual({

@@ -5,6 +5,7 @@ import { until } from "lit/directives/until.js";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import type { AssistantIdentity } from "../assistant-identity.ts";
 import type { EmbedSandboxMode } from "../embed-sandbox.ts";
+import { resolveUiHourCycleOptions } from "../format.ts";
 import { icons } from "../icons.ts";
 import { toSanitizedMarkdownHtml, toStreamingMarkdownHtml } from "../markdown.ts";
 import { openExternalUrlSafe } from "../open-external-url.ts";
@@ -63,8 +64,10 @@ export function formatChatTimestampForDisplay(timestamp: number): ChatTimestampD
     };
   }
 
+  const hourCycle = resolveUiHourCycleOptions();
   return {
     label: date.toLocaleString([], {
+      ...hourCycle,
       month: "short",
       day: "numeric",
       year: "numeric",
@@ -72,6 +75,7 @@ export function formatChatTimestampForDisplay(timestamp: number): ChatTimestampD
       minute: "2-digit",
     }),
     title: date.toLocaleString([], {
+      ...hourCycle,
       weekday: "long",
       month: "long",
       day: "numeric",

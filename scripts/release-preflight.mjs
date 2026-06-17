@@ -29,6 +29,7 @@ const checkCommands = [
   { name: "config docs baseline", args: ["config:docs:check"] },
   { name: "plugin SDK exports", args: ["plugin-sdk:check-exports"] },
   { name: "plugin SDK API baseline", args: ["plugin-sdk:api:check"] },
+  { name: "plugin SDK surface budget", args: ["plugin-sdk:surface:check"] },
 ];
 
 if (fix) {

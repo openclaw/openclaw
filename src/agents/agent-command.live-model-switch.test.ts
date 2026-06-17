@@ -1120,7 +1120,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     );
     expect(lifecycleFinishingCalls.length).toBeGreaterThanOrEqual(1);
     expectRecordFields(mockCallArg(state.runAgentAttemptMock), {
-      deferTerminalLifecycleEnd: true,
+      deferTerminalLifecycle: true,
     });
     const firstFinishingIndex = state.emitAgentEventMock.mock.calls.findIndex((call: unknown[]) => {
       const arg = call[0] as { stream?: string; data?: { phase?: string } };
@@ -3052,6 +3052,136 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       model: "claude",
       reason: "format",
     });
+  });
+
+  it("emits a failure lifecycle after delivering a preserved exhausted result", async () => {
+    const exhaustedResult = {
+      payloads: [{ text: "Terminal tool summary", isError: true }],
+      meta: {
+        durationMs: 100,
+        aborted: false,
+        stopReason: "end_turn",
+        error: {
+          kind: "incomplete_turn",
+          message: "All fallback candidates ended incomplete",
+          fallbackSafe: true,
+          terminalPresentation: true,
+        },
+        agentMeta: { provider: "anthropic", model: "claude" },
+      },
+    };
+    state.runAgentAttemptMock.mockImplementationOnce(async (attemptParams: unknown) => {
+      const params = attemptParams as {
+        deferTerminalLifecycle?: boolean;
+        onAgentEvent?: (event: { stream: string; data: Record<string, unknown> }) => void;
+      };
+      expect(params.deferTerminalLifecycle).toBe(true);
+      params.onAgentEvent?.({
+        stream: "lifecycle",
+        data: {
+          phase: "finishing",
+          error: "All fallback candidates ended incomplete",
+        },
+      });
+      return exhaustedResult;
+    });
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      outcome: "exhausted",
+      result: await params.run("anthropic", "claude"),
+      provider: "anthropic",
+      model: "claude",
+      attempts: [
+        {
+          provider: "anthropic",
+          model: "claude",
+          error: "All fallback candidates ended incomplete",
+          reason: "format",
+        },
+      ],
+    }));
+
+    await runBasicAgentCommand();
+
+    expect(state.deliverAgentCommandResultMock).toHaveBeenCalledTimes(1);
+    const lifecycleEvents = state.emitAgentEventMock.mock.calls
+      .map((call) => call[0] as { stream?: string; data?: Record<string, unknown> })
+      .filter((event) => event.stream === "lifecycle");
+    expect(lifecycleEvents.some((event) => event.data?.phase === "finishing")).toBe(false);
+    expect(lifecycleEvents.some((event) => event.data?.phase === "end")).toBe(false);
+    expect(lifecycleEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          data: expect.objectContaining({
+            phase: "error",
+            error: "All fallback candidates ended incomplete",
+            fallbackExhaustedFailure: true,
+          }),
+        }),
+      ]),
+    );
+  });
+
+  it("emits a failure lifecycle for completed non-fallbackable error results", async () => {
+    const terminalErrorResult = {
+      payloads: [{ text: "Command may have changed state", isError: true }],
+      meta: {
+        durationMs: 100,
+        aborted: false,
+        stopReason: "end_turn",
+        replayInvalid: true,
+        error: {
+          kind: "incomplete_turn",
+          message: "raw provider detail should stay private",
+          fallbackSafe: false,
+        },
+        agentMeta: { provider: "anthropic", model: "claude" },
+      },
+    };
+    state.runAgentAttemptMock.mockImplementationOnce(async (attemptParams: unknown) => {
+      const params = attemptParams as {
+        onAgentEvent?: (event: { stream: string; data: Record<string, unknown> }) => void;
+      };
+      params.onAgentEvent?.({
+        stream: "lifecycle",
+        data: {
+          phase: "finishing",
+          error: "Command may have changed state",
+          replayInvalid: true,
+        },
+      });
+      return terminalErrorResult;
+    });
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      outcome: "completed",
+      result: await params.run("anthropic", "claude"),
+      provider: "anthropic",
+      model: "claude",
+      attempts: [],
+    }));
+
+    await runBasicAgentCommand();
+
+    expect(state.deliverAgentCommandResultMock).toHaveBeenCalledTimes(1);
+    const lifecycleEvents = state.emitAgentEventMock.mock.calls
+      .map((call) => call[0] as { stream?: string; data?: Record<string, unknown> })
+      .filter((event) => event.stream === "lifecycle");
+    expect(lifecycleEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          data: expect.objectContaining({
+            phase: "error",
+            error: "Command may have changed state",
+            replayInvalid: true,
+          }),
+        }),
+      ]),
+    );
+    expect(
+      lifecycleEvents.some(
+        (event) => event.data?.phase === "end" || event.data?.fallbackExhaustedFailure === true,
+      ),
+    ).toBe(false);
+    expect(JSON.stringify(lifecycleEvents)).not.toContain("raw provider detail");
   });
 
   it("updates hasSessionModelOverride for fallback resolution after switch", async () => {

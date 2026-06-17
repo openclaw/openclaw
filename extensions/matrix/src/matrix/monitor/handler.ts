@@ -16,7 +16,6 @@ import {
   createChannelProgressDraftGate,
   type ChannelProgressDraftLine,
   formatChannelProgressDraftLine,
-  formatChannelProgressDraftLineForEntry,
   formatChannelProgressDraftText,
   isChannelProgressDraftWorkToolName,
   mergeChannelProgressDraftLine,
@@ -1933,10 +1932,12 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           onToolStart: async (payload) => {
             const toolName = payload.name?.trim();
             await pushPreviewToolProgress(
-              formatChannelProgressDraftLineForEntry(
+              buildChannelProgressDraftLineForEntry(
                 progressConfigEntry,
                 {
                   event: "tool",
+                  itemId: payload.itemId,
+                  toolCallId: payload.toolCallId,
                   name: toolName,
                   phase: payload.phase,
                   args: payload.args,
@@ -1951,6 +1952,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               buildChannelProgressDraftLineForEntry(progressConfigEntry, {
                 event: "item",
                 itemId: payload.itemId,
+                toolCallId: payload.toolCallId,
                 itemKind: payload.kind,
                 title: payload.title,
                 name: payload.name,
@@ -1996,8 +1998,10 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               return;
             }
             await pushPreviewToolProgress(
-              formatChannelProgressDraftLine({
+              buildChannelProgressDraftLineForEntry(progressConfigEntry, {
                 event: "command-output",
+                itemId: payload.itemId,
+                toolCallId: payload.toolCallId,
                 phase: payload.phase,
                 title: payload.title,
                 name: payload.name,
@@ -2011,8 +2015,10 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               return;
             }
             await pushPreviewToolProgress(
-              formatChannelProgressDraftLine({
+              buildChannelProgressDraftLineForEntry(progressConfigEntry, {
                 event: "patch",
+                itemId: payload.itemId,
+                toolCallId: payload.toolCallId,
                 phase: payload.phase,
                 title: payload.title,
                 name: payload.name,

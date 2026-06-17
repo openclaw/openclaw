@@ -14,7 +14,50 @@ enum AppleReviewDemoMode {
     }
 
     static var agents: [AgentSummary] {
-        [
+        LocalChatFixture.appleReviewDemo.agents
+    }
+}
+
+enum ScreenshotFixtureMode {
+    static let gatewayName = "OpenClaw Gateway"
+    static let gatewayAddress = "Mac Studio on local network"
+    static let gatewayID = "screenshot-fixture-gateway"
+
+    static var agents: [AgentSummary] {
+        LocalChatFixture.appScreenshots.agents
+    }
+}
+
+struct LocalChatFixture {
+    let sessionKey: String
+    let sessionIDPrefix: String
+    let displayName: String
+    let subject: String
+    let workspace: String
+    let modelProvider: String
+    let modelID: String
+    let modelName: String
+    let responsePrefix: String
+    let seedMessages: [String]
+    let agents: [AgentSummary]
+
+    static let appleReviewDemo = LocalChatFixture(
+        sessionKey: "main",
+        sessionIDPrefix: "apple-review-demo",
+        displayName: "Apple Review Demo",
+        subject: "Gateway review flow",
+        workspace: "Apple Review Demo",
+        modelProvider: "demo",
+        modelID: "local-demo",
+        modelName: "Apple Review Demo",
+        responsePrefix: "Demo mode is active.",
+        seedMessages: [
+            """
+            Apple Review demo mode is active. This local chat transport lets reviewers inspect the iOS app \
+            without a private Gateway.
+            """,
+        ],
+        agents: [
             AgentSummary(
                 id: "main",
                 name: "Main",
@@ -25,12 +68,70 @@ enum AppleReviewDemoMode {
                 thinkinglevels: nil,
                 thinkingoptions: ["auto", "low", "medium"],
                 thinkingdefault: "auto"),
-        ]
-    }
+        ])
+
+    static let appScreenshots = LocalChatFixture(
+        sessionKey: "main",
+        sessionIDPrefix: "screenshot-fixture",
+        displayName: "Molty",
+        subject: "Mobile command center",
+        workspace: "OpenClaw",
+        modelProvider: "openai",
+        modelID: "gpt-5.5",
+        modelName: "GPT-5.5",
+        responsePrefix: "OpenClaw is connected to your gateway.",
+        seedMessages: [
+            """
+            OpenClaw is connected to your gateway. I can coordinate agents, inspect project context, and prepare \
+            actions from your phone.
+            """,
+            """
+            The Molty agent is ready. Recent context, voice controls, and gateway settings are available \
+            across the app.
+            """,
+        ],
+        agents: [
+            AgentSummary(
+                id: "main",
+                name: "Molty",
+                identity: ["emoji": AnyCodable("M")],
+                workspace: "OpenClaw",
+                model: ["provider": AnyCodable("openai"), "model": AnyCodable("gpt-5.5")],
+                agentruntime: ["kind": AnyCodable("gateway")],
+                thinkinglevels: nil,
+                thinkingoptions: ["auto", "low", "medium", "high"],
+                thinkingdefault: "auto"),
+            AgentSummary(
+                id: "research",
+                name: "Research",
+                identity: ["emoji": AnyCodable("RS")],
+                workspace: "OpenClaw",
+                model: ["provider": AnyCodable("openai"), "model": AnyCodable("gpt-5.5")],
+                agentruntime: ["kind": AnyCodable("gateway")],
+                thinkinglevels: nil,
+                thinkingoptions: ["auto", "low", "medium", "high"],
+                thinkingdefault: "medium"),
+            AgentSummary(
+                id: "automation",
+                name: "Automation",
+                identity: ["emoji": AnyCodable("AU")],
+                workspace: "OpenClaw",
+                model: ["provider": AnyCodable("openai"), "model": AnyCodable("gpt-5.5")],
+                agentruntime: ["kind": AnyCodable("gateway")],
+                thinkinglevels: nil,
+                thinkingoptions: ["auto", "low", "medium", "high"],
+                thinkingdefault: "auto"),
+        ])
 }
 
-struct AppleReviewDemoChatTransport: OpenClawChatTransport {
-    private let store = AppleReviewDemoChatStore()
+struct LocalFixtureChatTransport: OpenClawChatTransport {
+    private let fixture: LocalChatFixture
+    private let store: LocalFixtureChatStore
+
+    init(fixture: LocalChatFixture) {
+        self.fixture = fixture
+        self.store = LocalFixtureChatStore(fixture: fixture)
+    }
 
     func createSession(
         key: String,
@@ -47,9 +148,9 @@ struct AppleReviewDemoChatTransport: OpenClawChatTransport {
     func listModels() async throws -> [OpenClawChatModelChoice] {
         [
             OpenClawChatModelChoice(
-                modelID: "local-demo",
-                name: "Apple Review Demo",
-                provider: "demo",
+                modelID: self.fixture.modelID,
+                name: self.fixture.modelName,
+                provider: self.fixture.modelProvider,
                 contextWindow: 128_000),
         ]
     }
@@ -101,26 +202,102 @@ struct AppleReviewDemoChatTransport: OpenClawChatTransport {
     func compactSession(sessionKey _: String) async throws {}
 }
 
-private actor AppleReviewDemoChatStore {
-    private let sessionKey = "main"
+struct AppleReviewDemoChatTransport: OpenClawChatTransport {
+    private let transport = LocalFixtureChatTransport(fixture: .appleReviewDemo)
+
+    func createSession(
+        key: String,
+        label: String?,
+        parentSessionKey: String?) async throws -> OpenClawChatCreateSessionResponse
+    {
+        try await self.transport.createSession(key: key, label: label, parentSessionKey: parentSessionKey)
+    }
+
+    func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {
+        try await self.transport.requestHistory(sessionKey: sessionKey)
+    }
+
+    func listModels() async throws -> [OpenClawChatModelChoice] {
+        try await self.transport.listModels()
+    }
+
+    func sendMessage(
+        sessionKey: String,
+        message: String,
+        thinking: String,
+        idempotencyKey: String,
+        attachments: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
+    {
+        try await self.transport.sendMessage(
+            sessionKey: sessionKey,
+            message: message,
+            thinking: thinking,
+            idempotencyKey: idempotencyKey,
+            attachments: attachments)
+    }
+
+    func abortRun(sessionKey: String, runId: String) async throws {
+        try await self.transport.abortRun(sessionKey: sessionKey, runId: runId)
+    }
+
+    func listSessions(limit: Int?) async throws -> OpenClawChatSessionsListResponse {
+        try await self.transport.listSessions(limit: limit)
+    }
+
+    func setSessionModel(sessionKey: String, model: String?) async throws {
+        try await self.transport.setSessionModel(sessionKey: sessionKey, model: model)
+    }
+
+    func setSessionThinking(sessionKey: String, thinkingLevel: String) async throws {
+        try await self.transport.setSessionThinking(sessionKey: sessionKey, thinkingLevel: thinkingLevel)
+    }
+
+    func requestHealth(timeoutMs: Int) async throws -> Bool {
+        try await self.transport.requestHealth(timeoutMs: timeoutMs)
+    }
+
+    func waitForRunCompletion(runId: String, timeoutMs: Int) async -> Bool {
+        await self.transport.waitForRunCompletion(runId: runId, timeoutMs: timeoutMs)
+    }
+
+    func events() -> AsyncStream<OpenClawChatTransportEvent> {
+        self.transport.events()
+    }
+
+    func setActiveSessionKey(_ sessionKey: String) async throws {
+        try await self.transport.setActiveSessionKey(sessionKey)
+    }
+
+    func resetSession(sessionKey: String) async throws {
+        try await self.transport.resetSession(sessionKey: sessionKey)
+    }
+
+    func compactSession(sessionKey: String) async throws {
+        try await self.transport.compactSession(sessionKey: sessionKey)
+    }
+}
+
+private actor LocalFixtureChatStore {
+    private let fixture: LocalChatFixture
     private var messages: [OpenClawChatMessage]
 
-    init() {
-        self.messages = AppleReviewDemoChatStore.seedMessages()
+    init(fixture: LocalChatFixture) {
+        self.fixture = fixture
+        self.messages = Self.seedMessages(fixture: fixture)
     }
 
     func createSession(key: String) throws -> OpenClawChatCreateSessionResponse {
         try Self.decode(
-            CreateSessionPayload(ok: true, key: key, sessionId: "apple-review-demo-\(key)"),
+            CreateSessionPayload(ok: true, key: key, sessionId: "\(self.fixture.sessionIDPrefix)-\(key)"),
             as: OpenClawChatCreateSessionResponse.self)
     }
 
     func history(sessionKey: String) throws -> OpenClawChatHistoryPayload {
-        let normalizedSessionKey = Self.normalizedSessionKey(sessionKey)
+        let normalizedSessionKey = Self.normalizedSessionKey(sessionKey, fallback: self.fixture.sessionKey)
         return try Self.decode(
             HistoryPayload(
                 sessionKey: normalizedSessionKey,
-                sessionId: "apple-review-demo-\(normalizedSessionKey)",
+                sessionId: "\(self.fixture.sessionIDPrefix)-\(normalizedSessionKey)",
                 messages: self.messages,
                 thinkingLevel: "auto"),
             as: OpenClawChatHistoryPayload.self)
@@ -135,9 +312,8 @@ private actor AppleReviewDemoChatStore {
             Self.message(
                 role: "assistant",
                 text: """
-                Demo mode is active. I can show the review flow locally for \(subject), including chat, agent \
-                selection, settings, and Gateway-connected UI states. Live automation requires pairing a real \
-                OpenClaw Gateway.
+                \(self.fixture.responsePrefix) I can help with \(subject), summarize current project context, \
+                prepare agent actions, and keep the mobile workflow connected to the gateway.
                 """,
                 timestamp: now + 1))
         return try Self.decode(
@@ -147,15 +323,15 @@ private actor AppleReviewDemoChatStore {
 
     func sessions() throws -> OpenClawChatSessionsListResponse {
         let entry = OpenClawChatSessionEntry(
-            key: self.sessionKey,
+            key: self.fixture.sessionKey,
             kind: "chat",
-            displayName: "Apple Review Demo",
+            displayName: self.fixture.displayName,
             surface: "ios",
-            subject: "Gateway review flow",
+            subject: self.fixture.subject,
             room: nil,
             space: nil,
             updatedAt: Date().timeIntervalSince1970 * 1000,
-            sessionId: "apple-review-demo-main",
+            sessionId: "\(self.fixture.sessionIDPrefix)-\(self.fixture.sessionKey)",
             systemSent: true,
             abortedLastRun: false,
             thinkingLevel: "auto",
@@ -163,50 +339,49 @@ private actor AppleReviewDemoChatStore {
             inputTokens: nil,
             outputTokens: nil,
             totalTokens: nil,
-            modelProvider: "demo",
-            model: "local-demo",
+            modelProvider: self.fixture.modelProvider,
+            model: self.fixture.modelID,
             contextTokens: 128_000,
-            thinkingLevels: [
-                OpenClawChatThinkingLevelOption(id: "auto", label: "Auto"),
-                OpenClawChatThinkingLevelOption(id: "low", label: "Low"),
-                OpenClawChatThinkingLevelOption(id: "medium", label: "Medium"),
-            ],
-            thinkingOptions: ["auto", "low", "medium"],
+            thinkingLevels: Self.thinkingLevels,
+            thinkingOptions: Self.thinkingOptions,
             thinkingDefault: "auto")
         return OpenClawChatSessionsListResponse(
             ts: Date().timeIntervalSince1970 * 1000,
             path: nil,
             count: 1,
             defaults: OpenClawChatSessionsDefaults(
-                modelProvider: "demo",
-                model: "local-demo",
+                modelProvider: self.fixture.modelProvider,
+                model: self.fixture.modelID,
                 contextTokens: 128_000,
-                thinkingLevels: [
-                    OpenClawChatThinkingLevelOption(id: "auto", label: "Auto"),
-                    OpenClawChatThinkingLevelOption(id: "low", label: "Low"),
-                    OpenClawChatThinkingLevelOption(id: "medium", label: "Medium"),
-                ],
-                thinkingOptions: ["auto", "low", "medium"],
+                thinkingLevels: Self.thinkingLevels,
+                thinkingOptions: Self.thinkingOptions,
                 thinkingDefault: "auto",
-                mainSessionKey: self.sessionKey),
+                mainSessionKey: self.fixture.sessionKey),
             sessions: [entry])
     }
 
     func reset() {
-        self.messages = Self.seedMessages()
+        self.messages = Self.seedMessages(fixture: self.fixture)
     }
 
-    private static func seedMessages() -> [OpenClawChatMessage] {
-        let now = Date().timeIntervalSince1970 * 1000
-        return [
-            self.message(
-                role: "assistant",
-                text: """
-                Apple Review demo mode is active. This local chat transport lets reviewers inspect the iOS app \
-                without a private Gateway.
-                """,
-                timestamp: now),
+    private static var thinkingOptions: [String] {
+        ["auto", "low", "medium", "high"]
+    }
+
+    private static var thinkingLevels: [OpenClawChatThinkingLevelOption] {
+        [
+            OpenClawChatThinkingLevelOption(id: "auto", label: "Auto"),
+            OpenClawChatThinkingLevelOption(id: "low", label: "Low"),
+            OpenClawChatThinkingLevelOption(id: "medium", label: "Medium"),
+            OpenClawChatThinkingLevelOption(id: "high", label: "High"),
         ]
+    }
+
+    private static func seedMessages(fixture: LocalChatFixture) -> [OpenClawChatMessage] {
+        let now = Date().timeIntervalSince1970 * 1000
+        return fixture.seedMessages.enumerated().map { index, text in
+            self.message(role: "assistant", text: text, timestamp: now + Double(index))
+        }
     }
 
     private static func message(role: String, text: String, timestamp: Double) -> OpenClawChatMessage {
@@ -223,9 +398,9 @@ private actor AppleReviewDemoChatStore {
             timestamp: timestamp)
     }
 
-    private static func normalizedSessionKey(_ value: String) -> String {
+    private static func normalizedSessionKey(_ value: String, fallback: String) -> String {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? "main" : trimmed
+        return trimmed.isEmpty ? fallback : trimmed
     }
 
     private static func decode<T: Decodable>(_ value: some Encodable, as type: T.Type) throws -> T {

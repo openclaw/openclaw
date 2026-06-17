@@ -20,6 +20,15 @@ vi.mock("../session-utils.js", async () => {
   return {
     ...actual,
     loadSessionEntry: hoisted.loadSessionEntry,
+  };
+});
+
+vi.mock("../session-transcript-readers.js", async () => {
+  const actual = await vi.importActual<typeof import("../session-transcript-readers.js")>(
+    "../session-transcript-readers.js",
+  );
+  return {
+    ...actual,
     visitSessionMessagesAsync: hoisted.visitSessionMessagesAsync,
   };
 });
@@ -207,12 +216,10 @@ describe("artifacts RPC handlers", () => {
   });
 
   function mockedMessages(messages: unknown[]) {
-    hoisted.visitSessionMessagesAsync.mockImplementation(
-      async (_sessionId, _storePath, _sessionFile, visit) => {
-        messages.forEach((message, index) => visit(message, index + 1));
-        return messages.length;
-      },
-    );
+    hoisted.visitSessionMessagesAsync.mockImplementation(async (_scope, visit) => {
+      messages.forEach((message, index) => visit(message, index + 1));
+      return messages.length;
+    });
   }
 
   it("lists stable transcript artifact summaries by sessionKey", async () => {
@@ -235,9 +242,12 @@ describe("artifacts RPC handlers", () => {
     expect(artifact?.id).toMatch(/^artifact_/);
     expect(artifact).not.toHaveProperty("data");
     expect(hoisted.visitSessionMessagesAsync).toHaveBeenCalledWith(
-      "sess-main",
-      "/tmp/sessions.json",
-      "/tmp/sess-main.jsonl",
+      {
+        agentId: "main",
+        sessionFile: "/tmp/sess-main.jsonl",
+        sessionId: "sess-main",
+        storePath: "/tmp/sessions.json",
+      },
       expect.any(Function),
       expect.objectContaining({ cache: "skip" }),
     );
@@ -295,6 +305,7 @@ describe("artifacts RPC handlers", () => {
     hoisted.getTaskSessionLookupByIdForStatus.mockReturnValue({
       agentId: "work",
       requesterSessionKey: "global",
+      ownerKey: "global",
     });
     mockedMessages([assistantFileMessage({ title: "task.txt", taskId: "task-global" })]);
 
@@ -544,6 +555,61 @@ describe("artifacts RPC handlers", () => {
 
     expectArtifactScopeNotFound(calls, {
       message: "no session found for artifact query",
+    });
+  });
+
+  it("keeps cross-agent task artifacts scoped to the requester transcript", async () => {
+    hoisted.getTaskSessionLookupByIdForStatus.mockReturnValue({
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      runId: "run-for-task-1",
+      agentId: "worker",
+      requesterAgentId: "main",
+    });
+    mockedMessages([
+      assistantImageMessage({ alt: "task-result.png", data: "dGFyZ2V0", taskId: "task-1" }),
+    ]);
+
+    const { calls } = await listArtifacts(
+      { taskId: "task-1", agentId: "worker" },
+      { id: "task-cross-agent-requester-session" },
+    );
+
+    expect(hoisted.resolveSessionKeyForRun).not.toHaveBeenCalled();
+    expect(hoisted.loadSessionEntry).toHaveBeenCalledWith("agent:main:main");
+    expectFields(expectFirstArtifact(calls), {
+      taskId: "task-1",
+      sessionKey: "agent:main:main",
+    });
+  });
+
+  it("uses the requester agent store for cross-agent global task artifacts", async () => {
+    hoisted.getTaskSessionLookupByIdForStatus.mockReturnValue({
+      requesterSessionKey: "global",
+      ownerKey: "global",
+      runId: "run-for-task-1",
+      agentId: "worker",
+      requesterAgentId: "main",
+    });
+    mockedMessages([
+      assistantImageMessage({ alt: "task-result.png", data: "dGFyZ2V0", taskId: "task-1" }),
+    ]);
+
+    const { calls } = await listArtifacts(
+      { taskId: "task-1", agentId: "worker" },
+      {
+        id: "task-cross-agent-global-requester",
+        context: runtimeContext({
+          session: { scope: "global" },
+          agents: { list: [{ id: "main", default: true }, { id: "worker" }] },
+        }),
+      },
+    );
+
+    expect(hoisted.loadSessionEntry).toHaveBeenCalledWith("global", { agentId: "main" });
+    expectFields(expectFirstArtifact(calls), {
+      taskId: "task-1",
+      sessionKey: "global",
     });
   });
 

@@ -6,7 +6,7 @@ import type { ManagedProxyTlsOptions } from "./proxy-tls.js";
 export type ActiveManagedProxyUrl = Readonly<URL>;
 
 /** Managed proxy loopback behavior shared by gateway and child-process fetch paths. */
-export type ActiveManagedProxyLoopbackMode = NonNullable<NonNullable<ProxyConfig>["loopbackMode"]>;
+type ActiveManagedProxyLoopbackMode = NonNullable<NonNullable<ProxyConfig>["loopbackMode"]>;
 
 /** Ref-counted active proxy handle; callers must stop it when their proxy scope ends. */
 export type ActiveManagedProxyRegistration = {
@@ -17,7 +17,7 @@ export type ActiveManagedProxyRegistration = {
 };
 
 /** Registration metadata for managed proxy URLs and their TLS trust material. */
-export type RegisterActiveManagedProxyOptions = {
+type RegisterActiveManagedProxyOptions = {
   loopbackMode?: ActiveManagedProxyLoopbackMode;
   proxyTls?: ManagedProxyTlsOptions;
 };

@@ -318,7 +318,7 @@ describe("OpenClaw-owned tool runtime contract — Codex app-server adapter", ()
 
   it("records successful Codex messaging text, media, and target telemetry", async () => {
     const hooks = installOpenClawOwnedToolHooks();
-    const execute = vi.fn(async () => textToolResult("Sent."));
+    const execute = vi.fn(async () => textToolResult("Sent.", { messageId: "message-1" }));
     const bridge = createCodexDynamicToolBridge({
       tools: [createContractTool({ name: "message", execute })],
       signal: new AbortController().signal,

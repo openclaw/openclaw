@@ -91,6 +91,7 @@ describe("run-additional-boundary-checks", () => {
     );
     expect(new Set(shardedLabels).size).toBe(BOUNDARY_CHECKS.length);
     expect(() => parseShardSpec("5/4")).toThrow("Invalid shard spec");
+    expect(() => parseShardSpec("9007199254740993/9007199254740994")).toThrow("Invalid shard spec");
   });
 
   it("keeps the raw HTTP/2 import guard in source boundary checks", () => {

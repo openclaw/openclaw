@@ -21,7 +21,7 @@ import {
 // Node connect reconciliation turns declared caps/commands/permissions into the
 // effective runtime surface. New or upgraded surfaces create a pending pairing
 // request while already-approved surfaces are intersected with the declaration.
-export type NodeConnectPairingReconcileResult = {
+type NodeConnectPairingReconcileResult = {
   nodeId: string;
   declaredCaps: string[];
   effectiveCaps: string[];

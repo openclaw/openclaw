@@ -966,6 +966,20 @@ describe("subscribeEmbeddedAgentSession", () => {
     expect(payloads[0]?.delta).toBe("Visible answer");
   });
 
+  it("replaces leaked MiniMax reasoning when its orphan close arrives in a later delta", () => {
+    const { emit, onAgentEvent } = createAgentEventHarness();
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta(emit, "private chain");
+    emitAssistantTextDelta(emit, "</mm:think>Visible answer");
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads).toMatchObject([
+      { text: "private chain", delta: "private chain" },
+      { text: "Visible answer", delta: "", replace: true },
+    ]);
+  });
+
   it("replaces malformed streamed reasoning when orphan close tags split across deltas", () => {
     const { emit, onAgentEvent } = createAgentEventHarness();
 

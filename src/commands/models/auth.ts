@@ -679,7 +679,7 @@ export async function modelsAuthPasteTokenCommand(
   };
   const tokenInput = await readPastedSecret({
     message: `Paste token for ${provider}`,
-    masked: false,
+    masked: true,
     validate: validateTokenInput,
   });
   const token =

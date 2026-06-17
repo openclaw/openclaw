@@ -15,7 +15,7 @@ import type { ImageContent } from "../../../llm/types.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import type { CommandQueueEnqueueFn } from "../../../process/command-queue.types.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
-import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
+import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
 import type { SkillSnapshot } from "../../../skills/types.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.exec-types.js";
 import type { AgentStreamParams, ClientToolDefinition } from "../../command/shared-types.js";
@@ -221,9 +221,11 @@ export type RunEmbeddedAgentParams = {
     sessionKey?: string;
   }) => void | Promise<void>;
   /**
-   * Emit lifecycle "finishing" when the model turn ends; the caller owns the
-   * final lifecycle "end" after durable post-turn maintenance completes.
+   * Emit lifecycle "finishing" when the attempt ends; the caller owns the
+   * final lifecycle "end" or "error" after fallback and post-turn work settle.
    */
+  deferTerminalLifecycle?: boolean;
+  /** @deprecated Use deferTerminalLifecycle. */
   deferTerminalLifecycleEnd?: boolean;
   lane?: string;
   enqueue?: CommandQueueEnqueueFn;

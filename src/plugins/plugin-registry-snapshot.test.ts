@@ -67,6 +67,44 @@ function writePackagePlugin(rootDir: string, options: { configPaths?: readonly s
   );
 }
 
+function writeBundledPlugin(rootDir: string, pluginId: string, entryPath: string) {
+  fs.mkdirSync(rootDir, { recursive: true });
+  fs.writeFileSync(path.join(rootDir, entryPath), "export default { register() {} };\n", "utf8");
+  fs.writeFileSync(
+    path.join(rootDir, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: pluginId,
+      name: pluginId,
+      description: pluginId,
+      configSchema: { type: "object" },
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(rootDir, "package.json"),
+    JSON.stringify({
+      name: `@openclaw/${pluginId}`,
+      version: "1.0.0",
+      openclaw: { extensions: [`./${entryPath}`] },
+    }),
+    "utf8",
+  );
+}
+
+function mockLinuxMountInfo(mountPoints: readonly string[]) {
+  const originalReadFileSync = fs.readFileSync;
+  return vi.spyOn(fs, "readFileSync").mockImplementation((filePath, options) => {
+    if (filePath === "/proc/self/mountinfo") {
+      return mountPoints
+        .map(
+          (mountPoint, index) => `${100 + index} 99 0:${index} / ${mountPoint} rw - tmpfs tmpfs rw`,
+        )
+        .join("\n");
+    }
+    return originalReadFileSync(filePath, options as never) as never;
+  });
+}
+
 function createCandidate(rootDir: string, pluginId = "demo"): PluginCandidate {
   fs.mkdirSync(rootDir, { recursive: true });
   fs.writeFileSync(path.join(rootDir, "index.ts"), "export default { register() {} };\n", "utf8");
@@ -751,6 +789,108 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
 
     expect(result.source).toBe("derived");
     expectDiagnosticsContainCode(result.diagnostics, "persisted-registry-stale-source");
+  });
+
+  it("keeps mixed source-checkout bundled roots from the same checkout", () => {
+    const tempRoot = makeTempDir();
+    const packageRoot = path.join(tempRoot, "openclaw");
+    const bundledRoot = path.join(packageRoot, "dist", "extensions");
+    const sourceRoot = path.join(packageRoot, "extensions");
+    const stateDir = path.join(tempRoot, "state");
+    const env = {
+      OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_VERSION: "2026.4.26",
+      VITEST: "true",
+    };
+
+    fs.mkdirSync(path.join(packageRoot, "src"), { recursive: true });
+    fs.writeFileSync(path.join(packageRoot, ".git"), "gitdir: /tmp/mock\n", "utf8");
+    fs.writeFileSync(path.join(packageRoot, "pnpm-workspace.yaml"), "packages: []\n", "utf8");
+    writeBundledPlugin(path.join(bundledRoot, "codex"), "codex", "index.js");
+    writeBundledPlugin(path.join(sourceRoot, "whatsapp"), "whatsapp", "index.ts");
+
+    const index = loadInstalledPluginIndex({ config: {}, env, stateDir });
+    expect(index.plugins.map((plugin) => plugin.pluginId)).toEqual(["codex", "whatsapp"]);
+    expect(index.plugins.map((plugin) => plugin.rootDir)).toEqual([
+      fs.realpathSync(path.join(bundledRoot, "codex")),
+      fs.realpathSync(path.join(sourceRoot, "whatsapp")),
+    ]);
+    writePersistedInstalledPluginIndexSync(index, { stateDir });
+
+    const result = loadPluginRegistrySnapshotWithMetadata({ config: {}, env, stateDir });
+
+    expect(result.source).toBe("persisted");
+    expect(result.diagnostics).toStrictEqual([]);
+    expect(result.snapshot.plugins.map((plugin) => plugin.pluginId)).toEqual(["codex", "whatsapp"]);
+  });
+
+  it("treats a persisted source bundled root as stale once its built peer appears", () => {
+    const tempRoot = makeTempDir();
+    const packageRoot = path.join(tempRoot, "openclaw");
+    const bundledRoot = path.join(packageRoot, "dist", "extensions");
+    const sourceRoot = path.join(packageRoot, "extensions");
+    const stateDir = path.join(tempRoot, "state");
+    const env = {
+      OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_VERSION: "2026.4.26",
+      VITEST: "true",
+    };
+
+    fs.mkdirSync(path.join(packageRoot, "src"), { recursive: true });
+    fs.mkdirSync(bundledRoot, { recursive: true });
+    fs.writeFileSync(path.join(packageRoot, ".git"), "gitdir: /tmp/mock\n", "utf8");
+    fs.writeFileSync(path.join(packageRoot, "pnpm-workspace.yaml"), "packages: []\n", "utf8");
+    writeBundledPlugin(path.join(sourceRoot, "whatsapp"), "whatsapp", "index.ts");
+
+    const sourceIndex = loadInstalledPluginIndex({ config: {}, env, stateDir });
+    expect(sourceIndex.plugins.map((plugin) => plugin.rootDir)).toEqual([
+      fs.realpathSync(path.join(sourceRoot, "whatsapp")),
+    ]);
+    writePersistedInstalledPluginIndexSync(sourceIndex, { stateDir });
+    writeBundledPlugin(path.join(bundledRoot, "whatsapp"), "whatsapp", "index.js");
+
+    const result = loadPluginRegistrySnapshotWithMetadata({ config: {}, env, stateDir });
+
+    expect(result.source).toBe("derived");
+    expectDiagnosticsContainCode(result.diagnostics, "persisted-registry-stale-source");
+    expect(result.snapshot.plugins.map((plugin) => plugin.rootDir)).toEqual([
+      fs.realpathSync(path.join(bundledRoot, "whatsapp")),
+    ]);
+  });
+
+  it("keeps a persisted bind-mounted source overlay when its built peer exists", () => {
+    const tempRoot = makeTempDir();
+    const packageRoot = path.join(tempRoot, "openclaw");
+    const bundledRoot = path.join(packageRoot, "dist", "extensions");
+    const sourcePluginDir = path.join(packageRoot, "extensions", "whatsapp");
+    const stateDir = path.join(tempRoot, "state");
+    const env = {
+      OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_VERSION: "2026.4.26",
+      VITEST: "true",
+    };
+
+    fs.mkdirSync(path.join(packageRoot, "src"), { recursive: true });
+    fs.mkdirSync(bundledRoot, { recursive: true });
+    fs.writeFileSync(path.join(packageRoot, ".git"), "gitdir: /tmp/mock\n", "utf8");
+    fs.writeFileSync(path.join(packageRoot, "pnpm-workspace.yaml"), "packages: []\n", "utf8");
+    writeBundledPlugin(sourcePluginDir, "whatsapp", "index.ts");
+
+    const sourceIndex = loadInstalledPluginIndex({ config: {}, env, stateDir });
+    writePersistedInstalledPluginIndexSync(sourceIndex, { stateDir });
+    writeBundledPlugin(path.join(bundledRoot, "whatsapp"), "whatsapp", "index.js");
+    mockLinuxMountInfo([sourcePluginDir]);
+
+    const result = loadPluginRegistrySnapshotWithMetadata({ config: {}, env, stateDir });
+
+    expect(result.source).toBe("persisted");
+    expect(result.diagnostics).toStrictEqual([]);
+    expect(result.snapshot.plugins.map((plugin) => plugin.rootDir)).toEqual([
+      fs.realpathSync(sourcePluginDir),
+    ]);
   });
 
   it("treats persisted registry as stale when a plugin diagnostic source path no longer exists", () => {

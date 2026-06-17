@@ -693,6 +693,34 @@ describe("tryDispatchAcpReply", () => {
     expect(mediaUnderstandingMocks.applyMediaUnderstanding).not.toHaveBeenCalled();
   });
 
+  it("skips media understanding for cached stickers while preserving their attachment", async () => {
+    setReadyAcpResolution();
+    mockVisibleTextTurn("cached sticker");
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-"));
+    const stickerPath = path.join(tempDir, "sticker.webp");
+    try {
+      await fs.writeFile(stickerPath, "image-bytes");
+
+      await runDispatch({
+        bodyForAgent: "[Sticker] Cached description",
+        ctxOverrides: {
+          MediaPath: stickerPath,
+          MediaPaths: [stickerPath],
+          MediaType: "image/webp",
+          MediaTypes: ["image/webp"],
+          Sticker: { cachedDescription: "Cached description" },
+          StickerMediaIncluded: true,
+          SkipStickerMediaUnderstanding: true,
+        },
+      });
+
+      expect(mediaUnderstandingMocks.applyMediaUnderstanding).not.toHaveBeenCalled();
+      expect(managerMocks.runTurn).toHaveBeenCalled();
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("passes the ACP agent directory to media understanding", async () => {
     setReadyAcpResolution();
     mockVisibleTextTurn("image turn");

@@ -64,6 +64,8 @@ type ReusableCatalogSnapshot = {
 export type ToolSearchCatalogToolExecutor = (params: {
   tool: CatalogTool;
   toolName: string;
+  source: CatalogSource;
+  sourceName?: string;
   toolCallId: string;
   parentToolCallId?: string;
   input: unknown;
@@ -1728,6 +1730,8 @@ export class ToolSearchRuntime {
     const result = await executeTool({
       tool: entry.tool,
       toolName: entry.name,
+      source: entry.source,
+      sourceName: entry.sourceName,
       toolCallId,
       parentToolCallId: options?.parentToolCallId,
       input: input ?? {},

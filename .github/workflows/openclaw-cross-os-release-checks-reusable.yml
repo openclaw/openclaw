@@ -407,12 +407,28 @@ jobs:
           const path = require("node:path");
 
           const packageDir = process.env.PACKAGE_DIR;
+          function resolveTarballFileName(value, label) {
+            const fileName = typeof value === "string" ? value.trim() : "";
+            if (
+              !fileName.endsWith(".tgz") ||
+              fileName.includes("\0") ||
+              fileName !== path.basename(fileName) ||
+              fileName !== path.win32.basename(fileName)
+            ) {
+              throw new Error(`${label} must be a local .tgz filename.`);
+            }
+            return fileName;
+          }
           const requestedFileName = process.env.INPUT_CANDIDATE_FILE_NAME.trim();
           const files = fs.readdirSync(packageDir).filter((file) => file.endsWith(".tgz"));
-          const candidateFileName = requestedFileName || (files.length === 1 ? files[0] : "");
-          if (!candidateFileName) {
+          const selectedCandidateFileName = requestedFileName || (files.length === 1 ? files[0] : "");
+          if (!selectedCandidateFileName) {
             throw new Error(`Expected exactly one candidate .tgz in ${packageDir}; found ${files.length}.`);
           }
+          const candidateFileName = resolveTarballFileName(
+            selectedCandidateFileName,
+            "candidate_file_name",
+          );
           if (!fs.existsSync(path.join(packageDir, candidateFileName))) {
             throw new Error(`Provided candidate artifact does not contain ${candidateFileName}.`);
           }
@@ -474,12 +490,23 @@ jobs:
         run: |
           node <<'NODE' >>"$GITHUB_OUTPUT"
           const fs = require("node:fs");
+          const path = require("node:path");
+          function resolveTarballFileName(value, label) {
+            const fileName = typeof value === "string" ? value.trim() : "";
+            if (
+              !fileName.endsWith(".tgz") ||
+              fileName.includes("\0") ||
+              fileName !== path.basename(fileName) ||
+              fileName !== path.win32.basename(fileName)
+            ) {
+              throw new Error(`${label} must be a local .tgz filename.`);
+            }
+            return fileName;
+          }
           const payload = JSON.parse(fs.readFileSync(process.env.BASELINE_PACK_JSON, "utf8"));
           const entry = Array.isArray(payload) ? payload.at(-1) : null;
-          if (!entry?.filename) {
-            throw new Error("Baseline npm pack did not produce a filename.");
-          }
-          process.stdout.write(`file_name=${entry.filename}\n`);
+          const fileName = resolveTarballFileName(entry?.filename, "Baseline npm pack filename");
+          process.stdout.write(`file_name=${fileName}\n`);
           NODE
 
       - name: Upload candidate artifact

@@ -9,6 +9,7 @@ import {
   resolveTrajectoryFilePath,
   resolveTrajectoryPointerFilePath,
 } from "../../trajectory/paths.js";
+import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import {
   isCompactionCheckpointTranscriptFileName,
   isPrimarySessionTranscriptFileName,
@@ -215,29 +216,36 @@ function resolveReferencedSessionArtifactPaths(params: {
   return referenced;
 }
 
+const SESSIONS_DIR_STAT_CONCURRENCY = 8;
+
 async function readSessionsDirFiles(sessionsDir: string): Promise<SessionsDirFileStat[]> {
   const dirEntries = await fs.promises
     .readdir(sessionsDir, { withFileTypes: true })
     .catch(() => []);
-  const files: SessionsDirFileStat[] = [];
-  for (const dirent of dirEntries) {
-    if (!dirent.isFile()) {
-      continue;
-    }
-    const filePath = path.join(sessionsDir, dirent.name);
-    const stat = await fs.promises.stat(filePath).catch(() => null);
-    if (!stat?.isFile()) {
-      continue;
-    }
-    files.push({
-      path: filePath,
-      canonicalPath: canonicalizePathForComparison(filePath),
-      name: dirent.name,
-      size: stat.size,
-      mtimeMs: stat.mtimeMs,
+  // Stat concurrently: the budget sweep stats every session file, and serial
+  // stats turn one sweep into per-file latency round trips on networked
+  // filesystems.
+  const tasks = dirEntries
+    .filter((dirent) => dirent.isFile())
+    .map((dirent) => async (): Promise<SessionsDirFileStat | null> => {
+      const filePath = path.join(sessionsDir, dirent.name);
+      const stat = await fs.promises.stat(filePath).catch(() => null);
+      if (!stat?.isFile()) {
+        return null;
+      }
+      return {
+        path: filePath,
+        canonicalPath: canonicalizePathForComparison(filePath),
+        name: dirent.name,
+        size: stat.size,
+        mtimeMs: stat.mtimeMs,
+      };
     });
-  }
-  return files;
+  const { results } = await runTasksWithConcurrency({
+    tasks,
+    limit: SESSIONS_DIR_STAT_CONCURRENCY,
+  });
+  return results.filter((file): file is SessionsDirFileStat => Boolean(file));
 }
 
 async function readSessionPromptBlobFiles(sessionsDir: string): Promise<SessionsDirFileStat[]> {

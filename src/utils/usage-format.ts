@@ -105,9 +105,6 @@ export function formatUsd(value?: number): string | undefined {
   if (value === undefined || !Number.isFinite(value)) {
     return undefined;
   }
-  if (value >= 1) {
-    return `$${value.toFixed(2)}`;
-  }
   if (value >= 0.01) {
     return `$${value.toFixed(2)}`;
   }

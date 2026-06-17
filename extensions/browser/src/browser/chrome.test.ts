@@ -36,6 +36,8 @@ import {
 import { BrowserCdpEndpointBlockedError } from "./errors.js";
 import { DEFAULT_DOWNLOAD_DIR } from "./paths.js";
 
+const CHROME_TEST_WS_MAX_PAYLOAD_BYTES = 1024 * 1024;
+
 type StopChromeTarget = Parameters<typeof stopOpenClawChrome>[0];
 type ChromeCdpDiagnostic = Awaited<ReturnType<typeof diagnoseChromeCdp>>;
 
@@ -90,7 +92,7 @@ async function withMockChromeCdpServer(params: {
     res.writeHead(404);
     res.end();
   });
-  const wss = new WebSocketServer({ noServer: true });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: CHROME_TEST_WS_MAX_PAYLOAD_BYTES });
   server.on("upgrade", (req, socket, head) => {
     if (!req.url?.startsWith(params.wsPath)) {
       socket.destroy();
@@ -730,7 +732,10 @@ describe("browser chrome helpers", () => {
       res.writeHead(404);
       res.end();
     });
-    const wss = new WebSocketServer({ noServer: true });
+    const wss = new WebSocketServer({
+      noServer: true,
+      maxPayload: CHROME_TEST_WS_MAX_PAYLOAD_BYTES,
+    });
     server.on("upgrade", (req, socket, head) => {
       if (req.url?.startsWith("/e/bad")) {
         socket.destroy();
@@ -795,7 +800,11 @@ describe("browser chrome helpers", () => {
       } as unknown as Response),
     );
     // A real WS server accepts the handshake.
-    const wss = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+    const wss = new WebSocketServer({
+      port: 0,
+      host: "127.0.0.1",
+      maxPayload: CHROME_TEST_WS_MAX_PAYLOAD_BYTES,
+    });
     await new Promise<void>((resolve) => {
       wss.once("listening", () => resolve());
     });
@@ -817,7 +826,11 @@ describe("browser chrome helpers", () => {
         json: async () => ({}),
       } as unknown as Response),
     );
-    const wss = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+    const wss = new WebSocketServer({
+      port: 0,
+      host: "127.0.0.1",
+      maxPayload: CHROME_TEST_WS_MAX_PAYLOAD_BYTES,
+    });
     wss.on("connection", (ws) => {
       ws.on("message", (raw) => {
         const message = JSON.parse(rawDataToString(raw)) as { id?: number; method?: string };

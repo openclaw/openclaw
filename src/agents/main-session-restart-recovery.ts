@@ -19,7 +19,7 @@ import {
 } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
-import { readSessionMessagesAsync } from "../gateway/session-utils.fs.js";
+import { readSessionMessagesAsync } from "../gateway/session-transcript-readers.js";
 import { resolveGatewaySessionStoreTarget } from "../gateway/session-utils.js";
 import {
   getAgentEventLifecycleGeneration,
@@ -27,7 +27,12 @@ import {
 } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { CommandLane } from "../process/lanes.js";
-import { isAcpSessionKey, isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
+import {
+  isAcpSessionKey,
+  isCronSessionKey,
+  isSubagentSessionKey,
+  resolveAgentIdFromSessionKey,
+} from "../routing/session-key.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
 import {
   deliveryContextFromSession,
@@ -785,9 +790,12 @@ async function recoverStore(params: {
     let messages: unknown[];
     try {
       messages = await readSessionMessagesAsync(
-        entry.sessionId,
-        params.storePath,
-        entry.sessionFile,
+        {
+          agentId: resolveAgentIdFromSessionKey(sessionKey),
+          sessionFile: entry.sessionFile,
+          sessionId: entry.sessionId,
+          storePath: params.storePath,
+        },
         {
           mode: "recent",
           maxMessages: 20,

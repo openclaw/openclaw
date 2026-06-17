@@ -18,6 +18,7 @@ import {
 import { resolveNpmIntegrityDriftWithDefaultMessage } from "../infra/npm-integrity.js";
 import {
   type ManagedNpmRootPeerDependencySnapshot,
+  listMissingRequiredPlatformPackages,
   readManagedNpmRootInstalledDependency,
   readManagedNpmRootPeerDependencySnapshot,
   readOpenClawManagedNpmRootOverrides,
@@ -1070,6 +1071,41 @@ function resolveManagedNpmRootPackageDir(npmRoot: string, packageName: string): 
   return path.join(npmRoot, "node_modules", ...packageName.split("/"));
 }
 
+function resolveRequiredPlatformPackageNames(
+  packageMetadata?: OpenClawPackageManifest,
+): { ok: true; packageNames: string[] } | { ok: false; error: string } {
+  const raw = packageMetadata?.install?.requiredPlatformPackages as unknown;
+  if (raw === undefined) {
+    return { ok: true, packageNames: [] };
+  }
+  if (!Array.isArray(raw)) {
+    return {
+      ok: false,
+      error: "package.json openclaw.install.requiredPlatformPackages must be an array",
+    };
+  }
+  const packageNames = new Set<string>();
+  for (const value of raw) {
+    if (typeof value !== "string") {
+      return {
+        ok: false,
+        error:
+          "package.json openclaw.install.requiredPlatformPackages must contain only npm package names",
+      };
+    }
+    const specError = validateRegistryNpmSpec(value);
+    const parsed = parseRegistryNpmSpec(value);
+    if (specError || !parsed || parsed.selectorKind !== "none") {
+      return {
+        ok: false,
+        error: `package.json openclaw.install.requiredPlatformPackages contains invalid package name: ${value}`,
+      };
+    }
+    packageNames.add(parsed.name);
+  }
+  return { ok: true, packageNames: [...packageNames] };
+}
+
 async function listNewManagedNpmRootPackageDirs(params: {
   beforeInstallPackageNames: Set<string>;
   npmRoot: string;
@@ -1406,6 +1442,93 @@ async function installPluginFromManagedNpmRoot(
         error:
           "npm install could not settle managed peer dependencies after 10 sync passes; refusing to leave a partially reconciled plugin dependency tree.",
       });
+    }
+    const packageManifestResult = await readOptionalPackageManifest({
+      runtime,
+      packageDir: installRoot,
+    });
+    if (!packageManifestResult.ok) {
+      return await rollbackFailedManagedNpmInstall(packageManifestResult);
+    }
+    const requiredPlatformPackageNames = resolveRequiredPlatformPackageNames(
+      packageManifestResult.manifest
+        ? runtime.getPackageManifestMetadata(packageManifestResult.manifest)
+        : undefined,
+    );
+    if (!requiredPlatformPackageNames.ok) {
+      return await rollbackFailedManagedNpmInstall({
+        ok: false,
+        error: requiredPlatformPackageNames.error,
+      });
+    }
+    let omittedPlatformPackages: Awaited<ReturnType<typeof listMissingRequiredPlatformPackages>>;
+    try {
+      omittedPlatformPackages = await listMissingRequiredPlatformPackages({
+        npmRoot,
+        requiredPackageNames: requiredPlatformPackageNames.packageNames,
+      });
+    } catch (error) {
+      return await rollbackFailedManagedNpmInstall({
+        ok: false,
+        error: `Failed to verify platform-specific npm dependencies for ${params.packageName}: ${String(error)}`,
+      });
+    }
+    if (omittedPlatformPackages.length > 0) {
+      const omittedPlatformPackageNames = omittedPlatformPackages.map((entry) => entry.name);
+      logger.warn?.(
+        `npm omitted current-platform package(s) ${omittedPlatformPackageNames.join(", ")}; retrying once with a fresh cache.`,
+      );
+      let freshCacheDir: string | undefined;
+      try {
+        freshCacheDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-npm-cache-"));
+        install = await runCommandWithTimeout(npmInstallArgs, {
+          ...npmInstallOptions,
+          env: {
+            ...npmInstallOptions.env,
+            NPM_CONFIG_CACHE: freshCacheDir,
+            npm_config_cache: freshCacheDir,
+          },
+        });
+      } catch (error) {
+        return await rollbackFailedManagedNpmInstall({
+          ok: false,
+          error: `Failed to repair omitted current-platform package(s) ${omittedPlatformPackageNames.join(", ")}: ${String(error)}`,
+        });
+      } finally {
+        if (freshCacheDir) {
+          try {
+            await fs.rm(freshCacheDir, { recursive: true, force: true });
+          } catch (error) {
+            logger.warn?.(
+              `Failed to remove temporary npm cache ${freshCacheDir}: ${String(error)}`,
+            );
+          }
+        }
+      }
+      if (install.code !== 0) {
+        return await rollbackFailedManagedNpmInstall({
+          ok: false,
+          error: `npm install failed while repairing omitted current-platform package(s) ${omittedPlatformPackageNames.join(", ")}: ${formatNpmCommandFailureOutput(install)}`,
+        });
+      }
+      let stillOmittedPlatformPackages: typeof omittedPlatformPackages;
+      try {
+        stillOmittedPlatformPackages = await listMissingRequiredPlatformPackages({
+          npmRoot,
+          requiredPackageNames: requiredPlatformPackageNames.packageNames,
+        });
+      } catch (error) {
+        return await rollbackFailedManagedNpmInstall({
+          ok: false,
+          error: `Failed to verify repaired platform-specific npm dependencies for ${params.packageName}: ${String(error)}`,
+        });
+      }
+      if (stillOmittedPlatformPackages.length > 0) {
+        return await rollbackFailedManagedNpmInstall({
+          ok: false,
+          error: `npm install reported success but omitted required current-platform package(s): ${stillOmittedPlatformPackages.map((entry) => entry.name).join(", ")}`,
+        });
+      }
     }
     if (params.packageName !== "openclaw") {
       const repairedOpenClawPeer = await repairManagedNpmRootOpenClawPeer({
