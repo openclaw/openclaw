@@ -361,6 +361,45 @@ describe("discordOutbound", () => {
     });
   });
 
+  it("batches normal media payloads through one native Discord send", async () => {
+    const result = await discordOutbound.sendPayload?.({
+      cfg: {},
+      to: "channel:123456",
+      text: "",
+      payload: {
+        text: "gallery",
+        mediaUrls: ["https://example.com/one.png", "https://example.com/two.png"],
+      },
+      accountId: "default",
+      replyToId: "reply-1",
+      replyToMode: "first",
+      mediaLocalRoots: ["/tmp/media"],
+      formatting: {
+        maxLinesPerMessage: 3,
+      },
+    });
+
+    expect(hoisted.sendMessageDiscordMock).toHaveBeenCalledTimes(1);
+    const call = mockCall(hoisted.sendMessageDiscordMock, "sendMessageDiscord");
+    expect(call[0]).toBe("channel:123456");
+    expect(call[1]).toBe("gallery");
+    const options = mockObjectArg(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 0, 2);
+    expect(options.mediaUrls).toEqual([
+      "https://example.com/one.png",
+      "https://example.com/two.png",
+    ]);
+    expect(options.mediaUrl).toBeUndefined();
+    expect(options.mediaLocalRoots).toEqual(["/tmp/media"]);
+    expect(options.accountId).toBe("default");
+    expect(options.replyTo).toBe("reply-1");
+    expect(options.maxLinesPerMessage).toBe(3);
+    expect(result).toEqual({
+      channel: "discord",
+      messageId: "msg-1",
+      channelId: "ch-1",
+    });
+  });
+
   it("keeps replyToId on every internal audioAsVoice send when replyToMode is all", async () => {
     await discordOutbound.sendPayload?.({
       cfg: {},

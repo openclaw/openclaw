@@ -7,7 +7,10 @@ import type { OutboundMediaAccess, PollInput } from "openclaw/plugin-sdk/media-r
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { resolveChunkMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import type { RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeOptionalString,
+  normalizeStringEntries,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import { resolveDiscordAccount } from "./accounts.js";
 import { createChannelMessage, createThread, type RequestClient } from "./internal/discord.js";
@@ -37,6 +40,7 @@ type DiscordSendOpts = {
   token?: string;
   accountId?: string;
   mediaUrl?: string;
+  mediaUrls?: string[];
   filename?: string;
   mediaAccess?: OutboundMediaAccess;
   mediaLocalRoots?: readonly string[];
@@ -60,6 +64,14 @@ type DiscordClientRequest = ReturnType<typeof createDiscordClient>["request"];
 const DEFAULT_DISCORD_MEDIA_MAX_MB = 100;
 
 type DiscordChannelMessageResult = DiscordReceiptResultSource;
+
+function resolveDiscordMediaUrls(opts: Pick<DiscordSendOpts, "mediaUrl" | "mediaUrls">): string[] {
+  const mediaUrls = normalizeStringEntries(opts.mediaUrls ?? []);
+  if (mediaUrls.length > 0) {
+    return mediaUrls;
+  }
+  return normalizeStringEntries(opts.mediaUrl ? [opts.mediaUrl] : []);
+}
 
 async function sendDiscordThreadTextChunks(params: {
   rest: RequestClient;
@@ -181,6 +193,7 @@ export async function sendMessageDiscord(
     accountId: accountInfo.accountId,
     mentionAliases: accountInfo.config.mentionAliases,
   });
+  const mediaUrls = resolveDiscordMediaUrls(opts);
   const { token, rest, request } = createDiscordClient({ ...opts, cfg });
   const recipient = await parseAndResolveChannelRecipient(to, cfg, opts.accountId);
   const { channelId } = await resolveChannelId(rest, recipient, request);
@@ -234,7 +247,7 @@ export async function sendMessageDiscord(
         cfg,
         rest,
         token,
-        hasMedia: Boolean(opts.mediaUrl),
+        hasMedia: mediaUrls.length > 0,
       });
     }
 
@@ -244,13 +257,13 @@ export async function sendMessageDiscord(
     const remainingChunks = chunks.slice(1);
 
     try {
-      if (opts.mediaUrl) {
+      if (mediaUrls.length > 0) {
         const [mediaCaption, ...afterMediaChunks] = remainingChunks;
         await sendDiscordMedia(
           rest,
           threadId,
           mediaCaption ?? "",
-          opts.mediaUrl,
+          mediaUrls,
           opts.filename,
           opts.mediaAccess,
           opts.mediaLocalRoots,
@@ -296,7 +309,7 @@ export async function sendMessageDiscord(
         cfg,
         rest,
         token,
-        hasMedia: Boolean(opts.mediaUrl),
+        hasMedia: mediaUrls.length > 0,
       });
     }
 
@@ -311,18 +324,18 @@ export async function sendMessageDiscord(
         channel_id: resultChannelId,
       },
       channelId,
-      { kind: opts.mediaUrl ? "media" : "text", threadId },
+      { kind: mediaUrls.length > 0 ? "media" : "text", threadId },
     );
   }
 
   let result: DiscordChannelMessageResult;
   try {
-    if (opts.mediaUrl) {
+    if (mediaUrls.length > 0) {
       result = await sendDiscordMedia(
         rest,
         channelId,
         textWithMentions,
-        opts.mediaUrl,
+        mediaUrls,
         opts.filename,
         opts.mediaAccess,
         opts.mediaLocalRoots,
@@ -360,7 +373,7 @@ export async function sendMessageDiscord(
       cfg,
       rest,
       token,
-      hasMedia: Boolean(opts.mediaUrl),
+      hasMedia: mediaUrls.length > 0,
     });
   }
 
@@ -370,7 +383,7 @@ export async function sendMessageDiscord(
     direction: "outbound",
   });
   return toDiscordSendResult(result, channelId, {
-    kind: opts.mediaUrl ? "media" : opts.components || opts.embeds ? "card" : "text",
+    kind: mediaUrls.length > 0 ? "media" : opts.components || opts.embeds ? "card" : "text",
     replyToId: opts.replyTo,
   });
 }

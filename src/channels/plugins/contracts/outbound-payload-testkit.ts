@@ -47,6 +47,7 @@ function sendCall(sendMock: Mock, index: number): unknown[] {
 export function installChannelOutboundPayloadContractSuite(params: {
   channel: string;
   chunking: ChunkingMode;
+  multiMediaMode?: "sequence" | "native-batch";
   createHarness: (
     params: OutboundPayloadHarnessParams,
   ) => OutboundPayloadHarness | Promise<OutboundPayloadHarness>;
@@ -92,6 +93,21 @@ export function installChannelOutboundPayloadContractSuite(params: {
       sendResults: [{ messageId: "m-1" }, { messageId: "m-2" }],
     });
     const result = await run();
+
+    if (params.multiMediaMode === "native-batch") {
+      expect(sendMock).toHaveBeenCalledTimes(1);
+      const call = sendCall(sendMock, 0);
+      expect(call[0]).toBe(to);
+      expect(call[1]).toBe("caption");
+      expect((call[2] as Record<string, unknown>).mediaUrl).toBeUndefined();
+      expect((call[2] as Record<string, unknown>).mediaUrls).toEqual([
+        "https://example.com/1.jpg",
+        "https://example.com/2.jpg",
+      ]);
+      expect(result.channel).toBe(params.channel);
+      expect(result.messageId).toBe("m-1");
+      return;
+    }
 
     expect(sendMock).toHaveBeenCalledTimes(2);
     const first = sendCall(sendMock, 0);

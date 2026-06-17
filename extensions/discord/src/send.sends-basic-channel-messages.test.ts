@@ -121,6 +121,11 @@ function expectBodyFileName(body: unknown, expectedName: string) {
   expectRecordFields(files[0], "Discord file", { name: expectedName });
 }
 
+function expectBodyFileNames(body: unknown, expectedNames: string[]) {
+  const files = requireArray(requireRecord(body, "Discord REST body").files, "Discord files");
+  expect(files.map((file) => requireRecord(file, "Discord file").name)).toEqual(expectedNames);
+}
+
 describe("resolveDiscordTargetChannelId", () => {
   it("creates a DM channel for user targets", async () => {
     const { rest, postMock } = makeDiscordRest();
@@ -572,6 +577,60 @@ describe("sendMessageDiscord", () => {
     expect(loadWebMedia).toHaveBeenCalledWith("file:///tmp/photo.jpg", {
       maxBytes: 100 * 1024 * 1024,
     });
+  });
+
+  it("uploads ordered media attachments in one Discord message", async () => {
+    const { rest, postMock } = makeDiscordRest();
+    postMock.mockResolvedValue({ id: "msg", channel_id: "789" });
+    vi.mocked(loadWebMedia).mockImplementation(async (url) => ({
+      buffer: Buffer.from(url),
+      fileName: url.split("/").pop() ?? "upload",
+      contentType: "image/png",
+      kind: "image",
+    }));
+
+    const res = await sendMessageDiscord("channel:789", "gallery", {
+      rest,
+      token: "t",
+      cfg: DISCORD_TEST_CFG,
+      mediaUrls: ["file:///tmp/one.png", "file:///tmp/two.png"],
+    } as Parameters<typeof sendMessageDiscord>[2]);
+
+    expect(res.messageId).toBe("msg");
+    expectRestRoute(postMock, 0, Routes.channelMessages("789"));
+    expectBodyFileNames(requireRestBody(postMock), ["one.png", "two.png"]);
+    expect(postMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("splits media attachments beyond Discord's per-message upload limit", async () => {
+    const { rest, postMock } = makeDiscordRest();
+    postMock
+      .mockResolvedValueOnce({ id: "msg1", channel_id: "789" })
+      .mockResolvedValueOnce({ id: "msg2", channel_id: "789" });
+    vi.mocked(loadWebMedia).mockImplementation(async (url) => ({
+      buffer: Buffer.from(url),
+      fileName: url.split("/").pop() ?? "upload",
+      contentType: "image/png",
+      kind: "image",
+    }));
+    const mediaUrls = Array.from({ length: 11 }, (_, index) => `file:///tmp/${index + 1}.png`);
+
+    const res = await sendMessageDiscord("channel:789", "gallery", {
+      rest,
+      token: "t",
+      cfg: DISCORD_TEST_CFG,
+      mediaUrls,
+    } as Parameters<typeof sendMessageDiscord>[2]);
+
+    expect(res.messageId).toBe("msg1");
+    expect(res.receipt.platformMessageIds).toEqual(["msg1", "msg2"]);
+    expectBodyFileNames(
+      requireRestBody(postMock, 0),
+      Array.from({ length: 10 }, (_, index) => `${index + 1}.png`),
+    );
+    expectBodyFileNames(requireRestBody(postMock, 1), ["11.png"]);
+    expect(requireRestBody(postMock, 0).content).toBe("gallery");
+    expect(requireRestBody(postMock, 1)).not.toHaveProperty("content");
   });
 
   it("passes mediaAccess workspaceDir when loading relative media attachments", async () => {

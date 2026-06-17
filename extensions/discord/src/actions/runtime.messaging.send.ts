@@ -219,8 +219,9 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
         readStringParam(ctx.params, "mediaUrl", { trim: false }) ??
         readStringParam(ctx.params, "path", { trim: false }) ??
         readStringParam(ctx.params, "filePath", { trim: false });
+      const mediaUrls = readStringArrayParam(ctx.params, "mediaUrls");
       const content = readStringParam(ctx.params, "content", {
-        required: !asVoice && !componentSpec && !components && !mediaUrl,
+        required: !asVoice && !componentSpec && !components && !mediaUrl && !mediaUrls?.length,
         allowEmpty: true,
       });
       const filename = readStringParam(ctx.params, "filename");
@@ -300,6 +301,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
         ...ctx.withOpts(),
         mediaAccess: ctx.options?.mediaAccess,
         mediaUrl,
+        mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
         filename: filename ?? undefined,
         mediaLocalRoots: ctx.options?.mediaLocalRoots,
         mediaReadFile: ctx.options?.mediaReadFile,

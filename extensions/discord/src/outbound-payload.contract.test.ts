@@ -45,6 +45,7 @@ describe("Discord outbound payload contract", () => {
   installChannelOutboundPayloadContractSuite({
     channel: "discord",
     chunking: { mode: "split", longTextLength: 3000, maxChunkLength: 2000 },
+    multiMediaMode: "native-batch",
     createHarness: createDiscordHarness,
   });
 });

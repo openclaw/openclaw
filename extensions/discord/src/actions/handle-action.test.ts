@@ -302,6 +302,40 @@ describe("handleDiscordMessageAction", () => {
     });
   });
 
+  it("forwards ordered mediaUrls on sends", async () => {
+    const cfg = discordConfig();
+    await handleDiscordMessageAction({
+      action: "send",
+      params: {
+        to: "channel:123",
+        message: "gallery",
+        mediaUrls: ["file:///tmp/one.png", "file:///tmp/two.png"],
+      },
+      cfg,
+    });
+
+    expectDiscordActionCall({
+      payload: {
+        action: "sendMessage",
+        accountId: undefined,
+        to: "channel:123",
+        content: "gallery",
+        mediaUrl: undefined,
+        mediaUrls: ["file:///tmp/one.png", "file:///tmp/two.png"],
+        filename: undefined,
+        replyTo: undefined,
+        components: undefined,
+        embeds: undefined,
+        asVoice: false,
+        silent: false,
+        __sessionKey: undefined,
+        __agentId: undefined,
+      },
+      cfg,
+      options: defaultActionOptions(),
+    });
+  });
+
   it("forwards threadName on sends", async () => {
     const cfg = discordConfig();
     await handleDiscordMessageAction({

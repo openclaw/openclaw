@@ -359,8 +359,11 @@ The `/model` and `/models` slash commands open an interactive model picker with 
 File attachments:
 
 - `file` blocks must point to an attachment reference (`attachment://<filename>`)
-- Provide the attachment via `media`/`path`/`filePath` (single file); use `media-gallery` for multiple files
+- Provide the matching component attachment via `media`/`path`/`filePath`
+- Use `media-gallery` when the component itself should render multiple media items
 - Use `filename` to override the upload name when it should match the attachment reference
+
+For normal Discord message sends without component `file` blocks, pass ordered attachments via `mediaUrls`. OpenClaw sends up to 10 Discord file attachments in one message and splits additional files into follow-up messages.
 
 Modal forms:
 
