@@ -179,10 +179,13 @@ export async function resolveCurrentTurnImages(params: {
 
   try {
     // Only send undescribed current images natively; described images already exist as text context.
+    // Request attachmentIndexes so we can map resolved images back to their original
+    // MediaPaths positions when some attachments fail to resolve.
     const resolved = await resolveAgentTurnAttachments({
       ctx: createUndescribedImageContext(params.ctx, undescribedImageAttachments),
       cfg: params.cfg,
       includeRecentHistoryImages: false,
+      includeAttachmentIndexes: true,
     });
     const images = resolved.attachments.map(
       (attachment): ImageContent => ({
@@ -193,15 +196,29 @@ export async function resolveCurrentTurnImages(params: {
     );
     if (images.length < undescribedImageAttachments.length) {
       logVerbose(
-        `agent-runner: native OpenClaw media resolution produced ${images.length}/${undescribedImageAttachments.length} current image attachment(s); falling back to prompt image refs`,
+        `agent-runner: native OpenClaw media resolution produced ${images.length}/${undescribedImageAttachments.length} current image attachment(s)`,
       );
+      // Preserve partial results when some attachments fail to resolve
+      // instead of dropping everything. Only fall back when nothing loaded.
+      if (images.length > 0) {
+        for (const [index, image] of images.entries()) {
+          const undescribedIndex = resolved.attachmentIndexes?.[index] ?? index;
+          appendOrderedImages({
+            entries,
+            images: [image],
+            sourceIndex: undescribedImageAttachments[undescribedIndex]?.index,
+          });
+        }
+        return resolveMergedTurnImages(entries);
+      }
       return resolveMergedTurnImages(entries);
     }
     for (const [index, image] of images.entries()) {
+      const undescribedIndex = resolved.attachmentIndexes?.[index] ?? index;
       appendOrderedImages({
         entries,
         images: [image],
-        sourceIndex: undescribedImageAttachments[index]?.index,
+        sourceIndex: undescribedImageAttachments[undescribedIndex]?.index,
       });
     }
     return resolveMergedTurnImages(entries);

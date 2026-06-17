@@ -737,7 +737,7 @@ describe("runReplyAgent media path normalization", () => {
     expect(call?.imageOrder).toBeUndefined();
   });
 
-  it("falls back to prompt refs instead of forwarding partial current media", async () => {
+  it("preserves partial current media when some attachments fail to resolve", async () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-native-agent-partial-"));
     cleanupPaths.push(tmpDir);
     const imagePath = path.join(tmpDir, "present.png");
@@ -781,7 +781,12 @@ describe("runReplyAgent media path normalization", () => {
           imageOrder?: string[];
         }
       | undefined;
-    expect(call?.images).toBeUndefined();
-    expect(call?.imageOrder).toBeUndefined();
+    // The valid image (present.png) should be preserved even though missing.png fails to resolve.
+    expect(call?.images).toHaveLength(1);
+    expect(call?.images?.[0]).toMatchObject({
+      type: "image",
+      mimeType: "image/png",
+    });
+    expect(call?.imageOrder).toEqual(["inline"]);
   });
 });

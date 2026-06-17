@@ -130,4 +130,88 @@ describe("resolveCurrentTurnImages", () => {
       expect(result.imageOrder).toEqual(["inline", "inline"]);
     });
   });
+
+  it("preserves partial results when some attachments fail to resolve", async () => {
+    await withTempDir({ prefix: "openclaw-current-turn-images-" }, async (base) => {
+      const stateDir = path.join(base, "state");
+      const validPath = "media/inbound/valid.jpg";
+      const validAttachmentPath = path.join(stateDir, validPath);
+      const imageBytes = Buffer.from("valid-image-bytes");
+      await fs.mkdir(path.dirname(validAttachmentPath), { recursive: true });
+      await fs.writeFile(validAttachmentPath, imageBytes);
+      setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+      vi.spyOn(process, "cwd").mockReturnValue(path.join(base, "cwd"));
+      await fs.mkdir(path.join(base, "cwd"), { recursive: true });
+
+      const result = await resolveCurrentTurnImages({
+        ctx: {
+          MediaPaths: [validPath, "media/inbound/missing.jpg"],
+          MediaTypes: ["image/jpeg", "image/jpeg"],
+        } satisfies MsgContext,
+        cfg: {} as OpenClawConfig,
+      });
+
+      // missing.jpg doesn't exist → resolveAgentTurnAttachments loads 1/2.
+      // We should preserve the one valid image instead of dropping everything.
+      expect(result.images).toHaveLength(1);
+      expect(result.images?.[0]).toMatchObject({
+        type: "image",
+        data: imageBytes.toString("base64"),
+        mimeType: "image/jpeg",
+      });
+    });
+  });
+
+  it("falls back when no attachments resolve", async () => {
+    await withTempDir({ prefix: "openclaw-current-turn-images-" }, async (base) => {
+      const stateDir = path.join(base, "state");
+      setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+      vi.spyOn(process, "cwd").mockReturnValue(path.join(base, "cwd"));
+      await fs.mkdir(path.join(base, "cwd"), { recursive: true });
+
+      const result = await resolveCurrentTurnImages({
+        ctx: {
+          MediaPaths: ["media/inbound/missing1.jpg", "media/inbound/missing2.jpg"],
+          MediaTypes: ["image/jpeg", "image/jpeg"],
+        } satisfies MsgContext,
+        cfg: {} as OpenClawConfig,
+      });
+
+      // Neither file exists → no images loaded.
+      expect(result.images).toBeUndefined();
+      expect(result.imageOrder).toBeUndefined();
+    });
+  });
+
+  it("preserves partial results with correct ordering when middle attachment fails", async () => {
+    await withTempDir({ prefix: "openclaw-current-turn-images-" }, async (base) => {
+      const stateDir = path.join(base, "state");
+      const firstPath = "media/inbound/first.jpg";
+      const thirdPath = "media/inbound/third.jpg";
+      const firstBytes = Buffer.from("first-image");
+      const thirdBytes = Buffer.from("third-image");
+      await fs.mkdir(path.join(stateDir, "media/inbound"), { recursive: true });
+      await fs.writeFile(path.join(stateDir, firstPath), firstBytes);
+      await fs.writeFile(path.join(stateDir, thirdPath), thirdBytes);
+      setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+      vi.spyOn(process, "cwd").mockReturnValue(path.join(base, "cwd"));
+      await fs.mkdir(path.join(base, "cwd"), { recursive: true });
+
+      const result = await resolveCurrentTurnImages({
+        ctx: {
+          // Second attachment is missing; first and third should still resolve.
+          MediaPaths: [firstPath, "media/inbound/missing.jpg", thirdPath],
+          MediaTypes: ["image/jpeg", "image/jpeg", "image/jpeg"],
+        } satisfies MsgContext,
+        cfg: {} as OpenClawConfig,
+      });
+
+      // missing.jpg (index 1) doesn't exist → 2/3 loaded.
+      // Both valid images should be preserved and ordered by sourceIndex (0, 2).
+      expect(result.images).toHaveLength(2);
+      expect(result.images?.[0]?.data).toBe(firstBytes.toString("base64"));
+      expect(result.images?.[1]?.data).toBe(thirdBytes.toString("base64"));
+      expect(result.imageOrder).toEqual(["inline", "inline"]);
+    });
+  });
 });
