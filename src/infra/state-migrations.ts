@@ -71,10 +71,11 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
-import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
+import { compareOpenClawReleaseVersions, parseRegistryNpmSpec } from "./npm-registry-spec.js";
 import { normalizeConversationRef } from "./outbound/session-binding-normalization.js";
 import type { SessionBindingRecord } from "./outbound/session-binding.types.js";
 import { isWithinDir } from "./path-safety.js";
+import { compareComparableSemver, parseComparableSemver } from "./semver-compare.js";
 import {
   detectLegacyDebugProxyCaptureSidecar,
   migrateLegacyDebugProxyCaptureSidecar,
@@ -539,6 +540,75 @@ function readAuthoritativeCurrentNpmIdentity(
   return null;
 }
 
+function addRegistrySpecIdentityCandidates(params: {
+  record: InstalledPluginIndex["installRecords"][string];
+  key: string;
+  names: Set<string>;
+  versions: Set<string>;
+}): boolean {
+  const spec = readInstallRecordStringField(params.record, params.key);
+  if (!spec) {
+    return true;
+  }
+  const parsed = parseRegistryNpmSpec(spec);
+  if (!parsed) {
+    return false;
+  }
+  params.names.add(parsed.name);
+  if (parsed.selectorKind === "exact-version" && parsed.selector) {
+    params.versions.add(parsed.selector);
+  }
+  return true;
+}
+
+function collectNpmInstallRecordIdentityCandidates(
+  record: InstalledPluginIndex["installRecords"][string],
+): { names: Set<string>; versions: Set<string> } | null {
+  const names = new Set<string>();
+  const versions = new Set<string>();
+  const resolvedName = readInstallRecordStringField(record, "resolvedName");
+  const version = readInstallRecordStringField(record, "version");
+  const resolvedVersion = readInstallRecordStringField(record, "resolvedVersion");
+  if (resolvedName) {
+    names.add(resolvedName);
+  }
+  if (version) {
+    versions.add(version);
+  }
+  if (resolvedVersion) {
+    versions.add(resolvedVersion);
+  }
+  if (!addRegistrySpecIdentityCandidates({ record, key: "spec", names, versions })) {
+    return null;
+  }
+  if (!addRegistrySpecIdentityCandidates({ record, key: "resolvedSpec", names, versions })) {
+    return null;
+  }
+  return { names, versions };
+}
+
+function npmInstallRecordIdentityCandidatesAgreeWith(params: {
+  record: InstalledPluginIndex["installRecords"][string];
+  identity: { name: string; version: string };
+}): boolean {
+  const candidates = collectNpmInstallRecordIdentityCandidates(params.record);
+  return Boolean(
+    candidates &&
+    candidates.names.size === 1 &&
+    candidates.names.has(params.identity.name) &&
+    candidates.versions.size === 1 &&
+    candidates.versions.has(params.identity.version),
+  );
+}
+
+function compareNpmInstallRecordVersions(left: string, right: string): number | null {
+  const releaseCmp = compareOpenClawReleaseVersions(left, right);
+  if (releaseCmp !== null) {
+    return releaseCmp;
+  }
+  return compareComparableSemver(parseComparableSemver(left), parseComparableSemver(right));
+}
+
 function legacyNpmInstallRecordSupersededByCurrent(params: {
   currentRecord: InstalledPluginIndex["installRecords"][string];
   legacyRecord: InstalledPluginIndex["installRecords"][string];
@@ -553,12 +623,30 @@ function legacyNpmInstallRecordSupersededByCurrent(params: {
     return false;
   }
   const currentIdentity = readAuthoritativeCurrentNpmIdentity(currentRecord);
-  return Boolean(
-    currentIdentity &&
-    legacyParsedSpec.selector &&
-    currentIdentity.name === legacyParsedSpec.name &&
-    currentIdentity.version === legacyParsedSpec.selector,
+  const legacyIdentity =
+    legacyParsedSpec.selector !== undefined
+      ? { name: legacyParsedSpec.name, version: legacyParsedSpec.selector }
+      : null;
+  if (!currentIdentity || !legacyIdentity || currentIdentity.name !== legacyIdentity.name) {
+    return false;
+  }
+  if (
+    !npmInstallRecordIdentityCandidatesAgreeWith({
+      record: currentRecord,
+      identity: currentIdentity,
+    }) ||
+    !npmInstallRecordIdentityCandidatesAgreeWith({
+      record: legacyRecord,
+      identity: legacyIdentity,
+    })
+  ) {
+    return false;
+  }
+  const versionCmp = compareNpmInstallRecordVersions(
+    currentIdentity.version,
+    legacyIdentity.version,
   );
+  return versionCmp !== null && versionCmp >= 0;
 }
 
 function legacyInstallRecordCoveredByCurrent(
