@@ -5,7 +5,6 @@ import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { ensureAgentAssistedGatewayRuntime } from "./setup.assisted-gateway.js";
 
 const spawn = vi.hoisted(() => vi.fn());
-const waitForGatewayReachable = vi.hoisted(() => vi.fn());
 const probeGateway = vi.hoisted(() => vi.fn());
 const resolveGatewayProgramArguments = vi.hoisted(() => vi.fn());
 const killProcessTree = vi.hoisted(() => vi.fn());
@@ -26,7 +25,6 @@ vi.mock("../commands/onboard-helpers.js", () => ({
     httpUrl: "http://127.0.0.1:18789/",
     wsUrl: "ws://127.0.0.1:18789",
   }),
-  waitForGatewayReachable,
 }));
 
 vi.mock("../daemon/program-args.js", () => ({
@@ -94,7 +92,6 @@ describe("agent-assisted Gateway runtime", () => {
     vi.clearAllMocks();
     vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "");
     spawn.mockReset();
-    waitForGatewayReachable.mockReset();
     probeGateway.mockReset().mockResolvedValue({ ok: false });
     resolveGatewayProgramArguments.mockReset();
     killProcessTree.mockReset();
@@ -132,7 +129,6 @@ describe("agent-assisted Gateway runtime", () => {
     expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(18789);
     expect(probeGateway).not.toHaveBeenCalled();
     expect(spawn).not.toHaveBeenCalled();
-    expect(waitForGatewayReachable).not.toHaveBeenCalled();
   });
 
   it("reuses a verified existing Gateway that accepts the active security settings", async () => {
@@ -180,7 +176,6 @@ describe("agent-assisted Gateway runtime", () => {
       }),
     );
     expect(spawn).not.toHaveBeenCalled();
-    expect(waitForGatewayReachable).not.toHaveBeenCalled();
   });
 
   it("reuses a verified existing Gateway configured without auth", async () => {
@@ -621,15 +616,14 @@ describe("agent-assisted Gateway runtime", () => {
     ).rejects.toThrow("requires gateway.auth.password or OPENCLAW_GATEWAY_PASSWORD");
 
     expect(spawn).not.toHaveBeenCalled();
-    expect(waitForGatewayReachable).not.toHaveBeenCalled();
   });
 
   it("probes a temporary trusted-proxy Gateway through its password fallback", async () => {
     vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "fallback-password");
     const child = createMockChild();
     spawn.mockReturnValueOnce(child);
-    waitForGatewayReachable.mockResolvedValueOnce({ ok: true });
-    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValueOnce([]).mockReturnValueOnce([4321]);
+    probeGateway.mockResolvedValueOnce({ ok: true });
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValueOnce([]).mockReturnValue([4321]);
 
     const result = await ensureAgentAssistedGatewayRuntime({
       config: {
@@ -650,8 +644,12 @@ describe("agent-assisted Gateway runtime", () => {
 
     expect(result.temporary).toBe(true);
     expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenLastCalledWith(18789);
-    expect(waitForGatewayReachable).toHaveBeenCalledWith(
-      expect.objectContaining({ password: "fallback-password" }),
+    expect(probeGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        auth: { password: "fallback-password" },
+        detailLevel: "none",
+        signal: expect.any(AbortSignal),
+      }),
     );
 
     const stop = result.stop();
@@ -687,8 +685,34 @@ describe("agent-assisted Gateway runtime", () => {
       }),
     ).rejects.toThrow("Unable to start Gateway for assisted setup");
 
-    expect(waitForGatewayReachable).not.toHaveBeenCalled();
+    expect(probeGateway).not.toHaveBeenCalled();
     expect(killProcessTree).not.toHaveBeenCalled();
+    expect(detach).toHaveBeenCalledOnce();
+  });
+
+  it("aborts temporary Gateway readiness when the owned listener exits during the probe", async () => {
+    const child = createMockChild();
+    spawn.mockReturnValueOnce(child);
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValueOnce([]).mockReturnValue([4321]);
+    let probeSignal: AbortSignal | undefined;
+    probeGateway.mockImplementationOnce(async ({ signal }: { signal?: AbortSignal }) => {
+      probeSignal = signal;
+      child.exitCode = 1;
+      child.emit("exit", 1, null);
+      return { ok: true };
+    });
+    const prompter = createWizardPrompter();
+
+    await expect(
+      ensureAgentAssistedGatewayRuntime({
+        config: {},
+        settings,
+        prompter,
+      }),
+    ).rejects.toThrow("Unable to start Gateway for assisted setup");
+
+    expect(probeSignal?.aborted).toBe(true);
+    expect(prompter.note).not.toHaveBeenCalled();
     expect(detach).toHaveBeenCalledOnce();
   });
 
@@ -731,7 +755,7 @@ describe("agent-assisted Gateway runtime", () => {
   it("runs a temporary Gateway when none is reachable", async () => {
     const child = createMockChild();
     spawn.mockReturnValueOnce(child);
-    waitForGatewayReachable.mockResolvedValueOnce({ ok: true });
+    probeGateway.mockResolvedValueOnce({ ok: true });
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValueOnce([]).mockReturnValue([4321]);
     const prompter = createWizardPrompter();
 
@@ -751,9 +775,9 @@ describe("agent-assisted Gateway runtime", () => {
       }),
     );
     expect(prompter.note).toHaveBeenCalled();
-    expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledTimes(2);
-    expect(findVerifiedGatewayListenerPidsOnPortSync.mock.invocationCallOrder[1]).toBeLessThan(
-      waitForGatewayReachable.mock.invocationCallOrder[0] ?? 0,
+    expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledTimes(4);
+    expect(findVerifiedGatewayListenerPidsOnPortSync.mock.invocationCallOrder[2]).toBeLessThan(
+      probeGateway.mock.invocationCallOrder[0] ?? 0,
     );
 
     const stop = result.stop();
@@ -783,7 +807,7 @@ describe("agent-assisted Gateway runtime", () => {
       }),
     ).rejects.toThrow("Unable to start Gateway for assisted setup: spawn ENOENT");
 
-    expect(waitForGatewayReachable).not.toHaveBeenCalled();
+    expect(probeGateway).not.toHaveBeenCalled();
     expect(killProcessTree).not.toHaveBeenCalled();
     expect(detach).not.toHaveBeenCalled();
   });
@@ -791,7 +815,7 @@ describe("agent-assisted Gateway runtime", () => {
   it("stops the temporary Gateway when post-spawn setup fails", async () => {
     const child = createMockChild();
     spawn.mockReturnValueOnce(child);
-    waitForGatewayReachable.mockResolvedValueOnce({ ok: true });
+    probeGateway.mockResolvedValueOnce({ ok: true });
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValueOnce([]).mockReturnValue([4321]);
     killProcessTree.mockImplementationOnce(() => queueMicrotask(() => child.emit("exit", 0, null)));
     const prompter = createWizardPrompter({

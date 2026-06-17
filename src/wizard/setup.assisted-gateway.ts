@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { resolveControlUiLinks, waitForGatewayReachable } from "../commands/onboard-helpers.js";
+import { resolveControlUiLinks } from "../commands/onboard-helpers.js";
 import { DEFAULT_GATEWAY_PORT, resolveConfigPath } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
@@ -331,6 +331,76 @@ async function waitForOwnedGatewayListener(params: {
   };
 }
 
+function temporaryGatewayOwnsListener(params: { port: number; child: ChildProcess }): boolean {
+  const pid = params.child.pid;
+  return Boolean(
+    pid &&
+    params.child.exitCode === null &&
+    params.child.signalCode === null &&
+    findVerifiedGatewayListenerPidsOnPortSync(params.port).includes(pid),
+  );
+}
+
+function temporaryGatewayOwnershipFailureDetail(params: {
+  port: number;
+  child: ChildProcess;
+}): string {
+  return params.child.exitCode !== null || params.child.signalCode !== null
+    ? `The temporary OpenClaw Gateway process exited while probing port ${params.port}.`
+    : `The temporary OpenClaw Gateway process no longer owns port ${params.port}.`;
+}
+
+async function waitForOwnedGatewayReachable(params: {
+  url: string;
+  auth: GatewayProbeAuth;
+  port: number;
+  child: ChildProcess;
+  deadlineMs: number;
+}): Promise<{ ok: boolean; detail?: string }> {
+  if (!params.child.pid) {
+    return { ok: false, detail: "The temporary OpenClaw Gateway process has no PID." };
+  }
+  const abortController = new AbortController();
+  const abortProbe = () => abortController.abort();
+  params.child.once("error", abortProbe);
+  params.child.once("exit", abortProbe);
+  const startedAt = Date.now();
+  let lastDetail: string | undefined;
+  try {
+    while (Date.now() - startedAt < params.deadlineMs) {
+      // Revalidate ownership immediately before every authenticated attempt.
+      if (!temporaryGatewayOwnsListener(params)) {
+        return { ok: false, detail: temporaryGatewayOwnershipFailureDetail(params) };
+      }
+      const remainingMs = params.deadlineMs - (Date.now() - startedAt);
+      const probe = await probeGateway({
+        url: params.url,
+        auth: params.auth,
+        timeoutMs: Math.min(1500, remainingMs),
+        detailLevel: "none",
+        signal: abortController.signal,
+      });
+      // Never accept a successful response after the owned listener has changed.
+      if (!temporaryGatewayOwnsListener(params)) {
+        return { ok: false, detail: temporaryGatewayOwnershipFailureDetail(params) };
+      }
+      if (probe.ok) {
+        return { ok: true };
+      }
+      lastDetail = probe.error ?? undefined;
+      const nextRemainingMs = params.deadlineMs - (Date.now() - startedAt);
+      if (nextRemainingMs <= 0) {
+        break;
+      }
+      await sleep(Math.min(400, nextRemainingMs));
+    }
+    return { ok: false, detail: lastDetail };
+  } finally {
+    params.child.removeListener("error", abortProbe);
+    params.child.removeListener("exit", abortProbe);
+  }
+}
+
 export async function ensureAgentAssistedGatewayRuntime(params: {
   config: OpenClawConfig;
   settings: GatewayWizardSettings;
@@ -347,13 +417,6 @@ export async function ensureAgentAssistedGatewayRuntime(params: {
   // Assisted setup invokes the Gateway directly, so trusted-proxy mode needs
   // its documented local password fallback before the agent can use it.
   const hasDirectAuth = params.settings.authMode !== "trusted-proxy" || Boolean(auth.password);
-  const probe = async (deadlineMs: number) => {
-    return await waitForGatewayReachable({
-      url: links.wsUrl,
-      ...auth,
-      deadlineMs,
-    });
-  };
 
   // Never send active Gateway credentials until the listener owner is verified.
   const existingListenerPids = findVerifiedGatewayListenerPidsOnPortSync(params.settings.port);
@@ -435,11 +498,17 @@ export async function ensureAgentAssistedGatewayRuntime(params: {
       child,
       deadlineMs: 15_000,
     });
-    const childAlive = child.exitCode === null && child.signalCode === null;
-    const directReady =
-      ownedReady.ok && childAlive ? await probe(15_000) : { ok: false, detail: ownedReady.detail };
+    const directReady = ownedReady.ok
+      ? await waitForOwnedGatewayReachable({
+          url: links.wsUrl,
+          auth,
+          port: params.settings.port,
+          child,
+          deadlineMs: 15_000,
+        })
+      : { ok: false, detail: ownedReady.detail };
     const ready = {
-      ok: childAlive && ownedReady.ok && directReady.ok,
+      ok: ownedReady.ok && directReady.ok,
       detail: ownedReady.detail ?? directReady.detail,
     };
     if (!ready.ok) {
