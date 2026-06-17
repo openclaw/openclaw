@@ -439,6 +439,16 @@ describe("markdownToTelegramHtml", () => {
   it("keeps an astral char whole when a positive limit starts on its pair", () => {
     expect(splitTelegramHtmlChunks("A😀B", 1)).toEqual(["A", "😀", "B"]);
   });
+
+  it("keeps astral chars whole in rendered Markdown chunks", () => {
+    const chunks = markdownToTelegramChunks("A😀B", 1);
+
+    expect(chunks.map((chunk) => chunk.text)).toEqual(["A", "😀", "B"]);
+    for (const chunk of chunks) {
+      expect(containsLoneSurrogate(chunk.html)).toBe(false);
+      expect(containsLoneSurrogate(chunk.text)).toBe(false);
+    }
+  });
 });
 
 function containsLoneSurrogate(text: string): boolean {
