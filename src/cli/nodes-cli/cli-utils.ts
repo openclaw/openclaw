@@ -28,6 +28,16 @@ export function runNodesCommand(label: string, action: () => Promise<void>) {
     if (hint) {
       defaultRuntime.error(warn(hint));
     }
+    // Provide actionable hints for common gateway RPC errors.
+    const normalizedMessage = message.toLowerCase();
+    if (normalizedMessage.includes("unknown requestid")) {
+      defaultRuntime.error(
+        warn(
+          "The pairing request may have expired or was already processed. " +
+            "Check pending requests with `openclaw nodes status` and ensure the companion app sent a valid requestId.",
+        ),
+      );
+    }
     defaultRuntime.exit(1);
   });
 }
