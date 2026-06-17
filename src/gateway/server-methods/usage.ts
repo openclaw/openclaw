@@ -179,7 +179,7 @@ const findInvalidExplicitDate = (params: {
 }): "startDate" | "endDate" | undefined => {
   for (const field of ["startDate", "endDate"] as const) {
     const raw = params[field];
-    if (raw === undefined || raw === null || (typeof raw === "string" && raw.trim() === "")) {
+    if (!hasExplicitDateValue(raw)) {
       continue;
     }
     if (parseDateParts(raw) === undefined) {
@@ -188,6 +188,9 @@ const findInvalidExplicitDate = (params: {
   }
   return undefined;
 };
+
+const hasExplicitDateValue = (raw: unknown): boolean =>
+  raw !== undefined && raw !== null && !(typeof raw === "string" && raw.trim() === "");
 
 /**
  * Parse a UTC offset string in the format UTC+H, UTC-H, UTC+HH, UTC-HH, UTC+H:MM, UTC-HH:MM.
@@ -257,6 +260,21 @@ const parseDateToMs = (
   }
   const ms = Date.UTC(year, monthIndex, day);
   return Number.isNaN(ms) ? undefined : ms;
+};
+
+const hasInvertedExplicitDateRange = (params: {
+  startDate?: unknown;
+  endDate?: unknown;
+  mode?: unknown;
+  utcOffset?: unknown;
+}): boolean => {
+  if (!hasExplicitDateValue(params.startDate) || !hasExplicitDateValue(params.endDate)) {
+    return false;
+  }
+  const interpretation = resolveDateInterpretation(params);
+  const startMs = parseDateToMs(params.startDate, interpretation);
+  const endMs = parseDateToMs(params.endDate, interpretation);
+  return startMs !== undefined && endMs !== undefined && startMs > endMs;
 };
 
 const getTodayStartMs = (now: Date, interpretation: DateInterpretation): number => {
@@ -876,6 +894,7 @@ function mergeUsageCacheStatus(
 export const testApi = {
   parseDateParts,
   findInvalidExplicitDate,
+  hasInvertedExplicitDateRange,
   parseUtcOffsetToMinutes,
   resolveDateInterpretation,
   parseDateToMs,
@@ -908,6 +927,21 @@ export const usageHandlers: GatewayRequestHandlers = {
           ErrorCodes.INVALID_REQUEST,
           `invalid ${invalidDate}: expected a valid YYYY-MM-DD calendar date`,
         ),
+      );
+      return;
+    }
+    if (
+      hasInvertedExplicitDateRange({
+        startDate: params?.startDate,
+        endDate: params?.endDate,
+        mode: params?.mode,
+        utcOffset: params?.utcOffset,
+      })
+    ) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "startDate must not be after endDate"),
       );
       return;
     }
@@ -954,6 +988,21 @@ export const usageHandlers: GatewayRequestHandlers = {
           ErrorCodes.INVALID_REQUEST,
           `invalid ${invalidDate}: expected a valid YYYY-MM-DD calendar date`,
         ),
+      );
+      return;
+    }
+    if (
+      hasInvertedExplicitDateRange({
+        startDate: p.startDate,
+        endDate: p.endDate,
+        mode: p.mode,
+        utcOffset: p.utcOffset,
+      })
+    ) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "startDate must not be after endDate"),
       );
       return;
     }

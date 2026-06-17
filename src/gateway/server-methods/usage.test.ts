@@ -123,6 +123,33 @@ describe("gateway usage helpers", () => {
     ).toBeUndefined();
   });
 
+  it("hasInvertedExplicitDateRange rejects startDate after endDate only when both dates are valid", () => {
+    expect(
+      testApi.hasInvertedExplicitDateRange({
+        startDate: "2026-02-03",
+        endDate: "2026-02-02",
+      }),
+    ).toBe(true);
+    expect(
+      testApi.hasInvertedExplicitDateRange({
+        startDate: "2026-02-02",
+        endDate: "2026-02-02",
+      }),
+    ).toBe(false);
+    expect(
+      testApi.hasInvertedExplicitDateRange({
+        startDate: "2026-02-01",
+        endDate: "2026-02-02",
+      }),
+    ).toBe(false);
+    expect(
+      testApi.hasInvertedExplicitDateRange({
+        startDate: "2026-02-30",
+        endDate: "2026-02-02",
+      }),
+    ).toBe(false);
+  });
+
   it("usage.cost rejects an explicitly provided invalid date with INVALID_REQUEST", async () => {
     const respond = vi.fn();
     await usageHandlers["usage.cost"]({
@@ -138,6 +165,25 @@ describe("gateway usage helpers", () => {
     // A rejected request must not query the cost loader for an unrelated range.
     expect(vi.mocked(loadCostUsageSummaryFromCache)).not.toHaveBeenCalled();
   });
+
+  it.each(["usage.cost", "sessions.usage"] as const)(
+    "%s rejects startDate after endDate with INVALID_REQUEST",
+    async (method) => {
+      const respond = vi.fn();
+      await usageHandlers[method]({
+        respond,
+        params: { startDate: "2026-02-03", endDate: "2026-02-02" },
+        context: { getRuntimeConfig: vi.fn(() => ({})) },
+      } as unknown as Parameters<(typeof usageHandlers)[typeof method]>[0]);
+
+      expect(respond).toHaveBeenCalledTimes(1);
+      const [ok, payload, error] = respond.mock.calls[0];
+      expect(ok).toBe(false);
+      expect(payload).toBeUndefined();
+      expect(JSON.stringify(error)).toContain("startDate must not be after endDate");
+      expect(vi.mocked(loadCostUsageSummaryFromCache)).not.toHaveBeenCalled();
+    },
+  );
 
   it("parseUtcOffsetToMinutes supports whole-hour and half-hour offsets", () => {
     expect(testApi.parseUtcOffsetToMinutes("UTC-4")).toBe(-240);
