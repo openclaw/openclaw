@@ -150,6 +150,7 @@ const CONTROL_UI_ROOT_PUBLIC_ASSETS = new Set([
   "favicon-32.png",
   "favicon.ico",
   "favicon.svg",
+  "manifest.json",
   "manifest.webmanifest",
   "sw.js",
 ]);
@@ -732,7 +733,15 @@ export async function handleControlUiAvatarRequest(
 
 function setStaticFileHeaders(res: ServerResponse, filePath: string) {
   const ext = path.extname(filePath).toLowerCase();
-  res.setHeader("Content-Type", contentTypeForExt(ext));
+  // PWA manifest files get the proper MIME type regardless of extension, so
+  // that the more widely recognised .json extension works through reverse
+  // proxies that may block the uncommon .webmanifest extension.
+  const basename = path.basename(filePath);
+  if (basename === "manifest.json" || basename === "manifest.webmanifest") {
+    res.setHeader("Content-Type", "application/manifest+json; charset=utf-8");
+  } else {
+    res.setHeader("Content-Type", contentTypeForExt(ext));
+  }
   // Static UI should never be cached aggressively while iterating; allow the
   // browser to revalidate.
   res.setHeader("Cache-Control", "no-cache");

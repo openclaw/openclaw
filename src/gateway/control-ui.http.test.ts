@@ -1398,12 +1398,14 @@ describe("handleControlUiHttpRequest", () => {
     await withControlUiRoot({
       fn: async (tmp) => {
         await fs.writeFile(path.join(tmp, "favicon.svg"), "<svg/>");
+        await fs.writeFile(path.join(tmp, "manifest.json"), "{}");
         await fs.writeFile(path.join(tmp, "manifest.webmanifest"), "{}");
         await fs.writeFile(path.join(tmp, "apple-touch-icon.png"), "png-bytes");
         await fs.writeFile(path.join(tmp, "sw.js"), "self.addEventListener('push', () => {});");
 
         for (const [url, expectedType] of [
           ["/__openclaw__/favicon.svg", "image/svg+xml"],
+          ["/__openclaw__/manifest.json", "application/manifest+json; charset=utf-8"],
           ["/__openclaw__/manifest.webmanifest", "application/manifest+json; charset=utf-8"],
           ["/__openclaw__/apple-touch-icon.png", "image/png"],
           ["/__openclaw__/sw.js", "application/javascript; charset=utf-8"],

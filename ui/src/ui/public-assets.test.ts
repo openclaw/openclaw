@@ -5,7 +5,7 @@ import { controlUiPublicAssetPath, inferControlUiPublicAssetPath } from "./publi
 describe("controlUiPublicAssetPath", () => {
   it("resolves root-mounted public assets from the URL root", () => {
     expect(controlUiPublicAssetPath("favicon.svg", "")).toBe("/favicon.svg");
-    expect(controlUiPublicAssetPath("manifest.webmanifest", null)).toBe("/manifest.webmanifest");
+    expect(controlUiPublicAssetPath("manifest.json", null)).toBe("/manifest.json");
   });
 
   it("resolves base-mounted public assets under the configured base path", () => {
@@ -16,9 +16,9 @@ describe("controlUiPublicAssetPath", () => {
 
 describe("inferControlUiPublicAssetPath", () => {
   it("uses the root for known nested routes without a configured base path", () => {
-    expect(
-      inferControlUiPublicAssetPath("manifest.webmanifest", { pathname: "/skills/workshop" }),
-    ).toBe("/manifest.webmanifest");
+    expect(inferControlUiPublicAssetPath("manifest.json", { pathname: "/skills/workshop" })).toBe(
+      "/manifest.json",
+    );
   });
 
   it("infers base-mounted assets from nested routes", () => {

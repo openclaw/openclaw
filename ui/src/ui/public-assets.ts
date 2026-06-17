@@ -6,7 +6,7 @@ export type ControlUiPublicAsset =
   | "favicon-32.png"
   | "favicon.ico"
   | "favicon.svg"
-  | "manifest.webmanifest"
+  | "manifest.json"
   | "sw.js";
 
 type WindowWithControlUiBasePath = Window &
