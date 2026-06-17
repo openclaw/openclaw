@@ -797,8 +797,7 @@ export async function runPreparedCliAgent(
     if (
       !assistantText &&
       !output.didSendViaMessagingTool &&
-      params.allowEmptyAssistantReplyAsSilent !== true &&
-      params.lane !== "cron"
+      params.allowEmptyAssistantReplyAsSilent !== true
     ) {
       const emptyOutputDiagnostics = formatCliEmptyOutputDiagnostics(output);
       if (emptyOutputDiagnostics) {
