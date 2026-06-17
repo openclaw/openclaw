@@ -12,7 +12,10 @@ import { resolveGatewayAuth } from "../gateway/auth.js";
 import { defaultGatewayBindMode, isLoopbackAddress } from "../gateway/net.js";
 import { probeGateway } from "../gateway/probe.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { findVerifiedGatewayListenerPidsOnPortSync } from "../infra/gateway-processes.js";
+import {
+  findVerifiedGatewayListenerPidsOnPortSync,
+  readGatewayProcessArgsSync,
+} from "../infra/gateway-processes.js";
 import { attachChildProcessBridge } from "../process/child-process-bridge.js";
 import { killProcessTree } from "../process/kill-tree.js";
 import { spawnWithFallback } from "../process/spawn-utils.js";
@@ -119,6 +122,49 @@ function snapshotMatchesGatewaySettings(params: {
     ) &&
     (tailscale?.resetOnExit === true) === params.settings.tailscaleResetOnExit
   );
+}
+
+function resolveGatewayProcessOptionValue(args: string[], name: string): string | null | undefined {
+  let value: string | null | undefined;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === name) {
+      const next = args[index + 1];
+      value = next && !next.startsWith("-") ? next : null;
+      index += 1;
+      continue;
+    }
+    if (arg?.startsWith(`${name}=`)) {
+      value = arg.slice(name.length + 1) || null;
+    }
+  }
+  return value;
+}
+
+function hasGatewayProcessOption(args: string[], name: string): boolean {
+  return args.some((arg) => arg === name || arg.startsWith(`${name}=`));
+}
+
+function runtimeExposureMatchesGatewaySettings(params: {
+  listenerPids: number[];
+  settings: GatewayWizardSettings;
+}): boolean {
+  return params.listenerPids.every((pid) => {
+    const args = readGatewayProcessArgsSync(pid);
+    if (!args) {
+      return false;
+    }
+    const bind = resolveGatewayProcessOptionValue(args, "--bind");
+    const tailscaleMode = resolveGatewayProcessOptionValue(args, "--tailscale");
+    return (
+      bind !== null &&
+      tailscaleMode !== null &&
+      (bind === undefined || bind === params.settings.bind) &&
+      (tailscaleMode === undefined || tailscaleMode === params.settings.tailscaleMode) &&
+      (!hasGatewayProcessOption(args, "--tailscale-reset-on-exit") ||
+        params.settings.tailscaleResetOnExit)
+    );
+  });
 }
 
 function buildInvalidProbeAuth(
@@ -299,7 +345,11 @@ export async function ensureAgentAssistedGatewayRuntime(params: {
   const existingListenerPids = findVerifiedGatewayListenerPidsOnPortSync(params.settings.port);
   if (existingListenerPids.length > 0) {
     const canVerifyExisting =
-      params.settings.authMode !== "trusted-proxy" || Boolean(auth.password);
+      runtimeExposureMatchesGatewaySettings({
+        listenerPids: existingListenerPids,
+        settings: params.settings,
+      }) &&
+      (params.settings.authMode !== "trusted-proxy" || Boolean(auth.password));
     const existingMatches =
       canVerifyExisting &&
       (await probeVerifiedExistingGateway({

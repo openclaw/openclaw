@@ -11,6 +11,7 @@ const resolveGatewayProgramArguments = vi.hoisted(() => vi.fn());
 const killProcessTree = vi.hoisted(() => vi.fn());
 const detach = vi.hoisted(() => vi.fn());
 const findVerifiedGatewayListenerPidsOnPortSync = vi.hoisted(() => vi.fn(() => [] as number[]));
+const readGatewayProcessArgsSync = vi.hoisted(() => vi.fn());
 const defaultGatewayBindMode = vi.hoisted(() => vi.fn(() => "loopback"));
 const isLoopbackAddress = vi.hoisted(() => vi.fn((host: string) => host === "127.0.0.1"));
 const resolveSetupSecretInputString = vi.hoisted(() => vi.fn());
@@ -56,6 +57,7 @@ vi.mock("../process/child-process-bridge.js", () => ({
 
 vi.mock("../infra/gateway-processes.js", () => ({
   findVerifiedGatewayListenerPidsOnPortSync,
+  readGatewayProcessArgsSync,
 }));
 
 vi.mock("./setup.secret-input.js", () => ({ resolveSetupSecretInputString }));
@@ -97,6 +99,9 @@ describe("agent-assisted Gateway runtime", () => {
     killProcessTree.mockReset();
     detach.mockReset();
     findVerifiedGatewayListenerPidsOnPortSync.mockReset().mockReturnValue([]);
+    readGatewayProcessArgsSync
+      .mockReset()
+      .mockReturnValue(["/usr/bin/node", "/app/openclaw.mjs", "gateway", "--port", "18789"]);
     resolveSetupSecretInputString
       .mockReset()
       .mockImplementation(async ({ value }: { value?: unknown }) =>
@@ -127,6 +132,15 @@ describe("agent-assisted Gateway runtime", () => {
 
   it("reuses a verified existing Gateway that accepts the active security settings", async () => {
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4321]);
+    readGatewayProcessArgsSync.mockReturnValue([
+      "/usr/bin/node",
+      "/app/openclaw.mjs",
+      "gateway",
+      "run",
+      "--bind=loopback",
+      "--tailscale",
+      "off",
+    ]);
     probeGateway
       .mockResolvedValueOnce({
         ok: true,
@@ -187,6 +201,67 @@ describe("agent-assisted Gateway runtime", () => {
     });
 
     expect(result.temporary).toBe(false);
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["separate bind", ["--bind", "lan"]],
+    ["inline bind", ["--bind=lan"]],
+    ["separate Tailscale", ["--tailscale", "serve"]],
+    ["inline Tailscale", ["--tailscale=serve"]],
+  ])("rejects a verified Gateway with a mismatched %s runtime override", async (_name, argv) => {
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4321]);
+    readGatewayProcessArgsSync.mockReturnValue([
+      "/usr/bin/node",
+      "/app/openclaw.mjs",
+      "gateway",
+      "run",
+      ...argv,
+    ]);
+    probeGateway
+      .mockResolvedValueOnce({
+        ok: true,
+        configSnapshot: {
+          path: "/tmp/openclaw.json",
+          config: {
+            gateway: {
+              port: 18789,
+              bind: "loopback",
+              auth: { mode: "token" },
+              tailscale: { mode: "off" },
+            },
+          },
+        },
+      })
+      .mockResolvedValueOnce({ ok: false });
+
+    await expect(
+      ensureAgentAssistedGatewayRuntime({
+        config: {},
+        settings,
+        prompter: createWizardPrompter(),
+      }),
+    ).rejects.toThrow("cannot verify that it matches the active Gateway security settings");
+
+    expect(readGatewayProcessArgsSync).toHaveBeenCalledWith(4321);
+    expect(probeGateway).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("rejects a verified Gateway whose runtime exposure can no longer be inspected", async () => {
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4321]);
+    readGatewayProcessArgsSync.mockReturnValue(null);
+
+    await expect(
+      ensureAgentAssistedGatewayRuntime({
+        config: {},
+        settings,
+        prompter: createWizardPrompter(),
+      }),
+    ).rejects.toThrow("cannot verify that it matches the active Gateway security settings");
+
+    expect(readGatewayProcessArgsSync).toHaveBeenCalledWith(4321);
+    expect(probeGateway).not.toHaveBeenCalled();
     expect(spawn).not.toHaveBeenCalled();
   });
 
