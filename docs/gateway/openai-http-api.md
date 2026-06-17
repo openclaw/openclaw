@@ -75,6 +75,7 @@ Auth matrix:
   - honor `x-openclaw-scopes` when the header is present
   - fall back to the normal operator default scope set when the header is absent
   - only lose owner semantics when the caller explicitly narrows scopes and omits `operator.admin`
+  - require `operator.admin` for owner-level request controls such as `x-openclaw-model`
 
 See [Security](/gateway/security) and [Remote access](/gateway/remote).
 
@@ -96,9 +97,9 @@ OpenClaw treats the OpenAI `model` field as an **agent target**, not a raw provi
 
 Optional request headers:
 
-- `x-openclaw-model: <provider/model-or-bare-id>` overrides the backend model for the selected agent.
+- `x-openclaw-model: <provider/model-or-bare-id>` overrides the backend model for the selected agent. Shared-secret bearer callers can use this header. Identity-bearing callers, such as trusted-proxy or private no-auth ingress requests with `x-openclaw-scopes`, need `operator.admin`; write-only callers get `403 missing scope: operator.admin`.
 - `x-openclaw-agent-id: <agentId>` remains supported as a compatibility override.
-- `x-openclaw-session-key: <sessionKey>` fully controls session routing.
+- `x-openclaw-session-key: <sessionKey>` explicitly controls session routing. The value must not use reserved internal session namespaces such as `subagent:`, `cron:`, or `acp:`; those requests are rejected with `400 invalid_request_error`.
 - `x-openclaw-message-channel: <channel>` sets the synthetic ingress channel context for channel-aware prompts and policies.
 
 Compatibility aliases still accepted:
@@ -144,7 +145,7 @@ By default the endpoint is **stateless per request** (a new session key is gener
 
 If the request includes an OpenAI `user` string, the Gateway derives a stable session key from it, so repeated calls can share an agent session.
 
-For custom apps, the safest default is to reuse the same `user` value per conversation thread. Avoid account-level identifiers unless you explicitly want multiple conversations or devices to share one OpenClaw session. Use `x-openclaw-session-key` when you need explicit routing control across multiple clients or threads.
+For custom apps, the safest default is to reuse the same `user` value per conversation thread. Avoid account-level identifiers unless you explicitly want multiple conversations or devices to share one OpenClaw session. Use `x-openclaw-session-key` only when you need explicit routing control across multiple clients or threads, and choose application-owned keys that do not start with reserved internal namespaces such as `subagent:`, `cron:`, or `acp:`.
 
 ## Why this surface matters
 
@@ -178,7 +179,7 @@ This is the highest-leverage compatibility set for self-hosted frontends and too
 
   </Accordion>
   <Accordion title="How do I override the backend model?">
-    Use `x-openclaw-model`.
+    Use `x-openclaw-model`. This is an owner-level override: it works with the Gateway shared-secret bearer token/password path, and it requires `operator.admin` on identity-bearing HTTP paths such as trusted proxy auth.
 
     Examples:
     `x-openclaw-model: openai/gpt-5.4`
@@ -191,7 +192,7 @@ This is the highest-leverage compatibility set for self-hosted frontends and too
     `/v1/embeddings` uses the same agent-target `model` ids.
 
     Use `model: "openclaw/default"` or `model: "openclaw/<agentId>"`.
-    When you need a specific embedding model, send it in `x-openclaw-model`.
+    When you need a specific embedding model, send it in `x-openclaw-model` from a shared-secret caller or an identity-bearing caller with `operator.admin`.
     Without that header, the request passes through to the selected agent's normal embedding setup.
 
   </Accordion>
@@ -285,7 +286,7 @@ Expected behavior:
 
 - `GET /v1/models` should list `openclaw/default`
 - Open WebUI should use `openclaw/default` as the chat model id
-- If you want a specific backend provider/model for that agent, set the agent's normal default model or send `x-openclaw-model`
+- If you want a specific backend provider/model for that agent, set the agent's normal default model or send `x-openclaw-model` from a shared-secret caller or an identity-bearing caller with `operator.admin`
 
 Quick smoke:
 
@@ -370,7 +371,7 @@ Notes:
 
 - `/v1/models` returns OpenClaw agent targets, not raw provider catalogs.
 - `openclaw/default` is always present so one stable id works across environments.
-- Backend provider/model overrides belong in `x-openclaw-model`, not the OpenAI `model` field.
+- Backend provider/model overrides belong in `x-openclaw-model`, not the OpenAI `model` field. On identity-bearing HTTP auth paths, this header requires `operator.admin`.
 - `/v1/embeddings` supports `input` as a string or array of strings.
 
 ## Related

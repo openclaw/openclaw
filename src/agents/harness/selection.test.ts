@@ -14,10 +14,15 @@ import { clearAgentHarnesses, registerAgentHarness } from "./registry.js";
 import {
   resolveAgentHarnessPolicy,
   resolveAvailableAgentHarnessPolicy,
+  resolvePluginHarnessPolicyToolsAllow,
   runAgentHarnessAttempt,
   selectAgentHarness,
 } from "./selection.js";
-import type { AgentHarness } from "./types.js";
+import type {
+  AgentHarness,
+  AgentHarnessCompactParams,
+  AgentHarnessCompactResult,
+} from "./types.js";
 
 const agentRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
   createAttemptResult("openclaw"),
@@ -487,6 +492,30 @@ describe("runAgentHarnessAttempt", () => {
     expect(attempt?.extraSystemPrompt).toContain("this chat is not allowed by policy");
   });
 
+  it.each([
+    {
+      name: "narrow allowlist",
+      config: { tools: { allow: ["message"] } } as OpenClawConfig,
+    },
+    {
+      name: "specific denylist",
+      config: { tools: { deny: ["exec"] } } as OpenClawConfig,
+    },
+    {
+      name: "narrow profile",
+      config: { tools: { profile: "coding" } } as OpenClawConfig,
+    },
+  ])("marks plugin side questions restricted for a $name", ({ config }) => {
+    expect(resolvePluginHarnessPolicyToolsAllow(createAttemptParams(config))).toEqual([]);
+  });
+
+  it.each([
+    { name: "full tool profile", config: { tools: { profile: "full" } } as OpenClawConfig },
+    { name: "explicit empty allowlist", config: { tools: { allow: [] } } as OpenClawConfig },
+  ])("leaves plugin side questions unrestricted for an $name", ({ config }) => {
+    expect(resolvePluginHarnessPolicyToolsAllow(createAttemptParams(config))).toBeUndefined();
+  });
+
   it("leaves OpenClaw harness params unchanged for channel group sender deny-all policy", async () => {
     await runAgentHarnessAttempt({
       ...createAttemptParams(groupSenderDenyAllConfig()),
@@ -822,6 +851,99 @@ describe("selectAgentHarness", () => {
       agentDir: "/tmp/main-agent",
       agentId: "main",
     });
+  });
+
+  it("routes internal post-context-engine compaction through the harness private capability", async () => {
+    const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
+      ok: true,
+      compacted: true,
+    }));
+    const compactAfterContextEngine = vi.fn(
+      async (_params: AgentHarnessCompactParams): Promise<AgentHarnessCompactResult> => ({
+        ok: true,
+        compacted: false,
+        result: {
+          summary: "native follow-up queued",
+          firstKeptEntryId: "entry-1",
+          tokensBefore: 10,
+          details: { request: "after_context_engine" },
+        },
+      }),
+    );
+    const harness: AgentHarness & {
+      compactAfterContextEngine(
+        params: AgentHarnessCompactParams,
+      ): Promise<AgentHarnessCompactResult | undefined>;
+    } = {
+      id: "codex",
+      label: "Codex",
+      supports: (ctx) =>
+        ctx.provider === "openai" ? { supported: true, priority: 100 } : { supported: false },
+      runAttempt: vi.fn(async () => createAttemptResult("codex")),
+      compact,
+      compactAfterContextEngine,
+    };
+    registerAgentHarness(harness, { ownerPluginId: "codex" });
+
+    await expect(
+      maybeCompactAgentHarnessSession(
+        {
+          sessionId: "session-1",
+          sessionKey: "agent:main:main",
+          sessionFile: "/tmp/session.jsonl",
+          workspaceDir: "/tmp/workspace",
+          provider: "openai",
+          model: "gpt-5.5",
+          agentHarnessId: "codex",
+        },
+        { nativeCompactionRequest: "after_context_engine" },
+      ),
+    ).resolves.toEqual({
+      ok: true,
+      compacted: false,
+      result: {
+        summary: "native follow-up queued",
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 10,
+        details: { request: "after_context_engine" },
+      },
+    });
+    expect(compact).not.toHaveBeenCalled();
+    expect(compactAfterContextEngine).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips internal post-context-engine compaction when the harness lacks the private capability", async () => {
+    const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
+      ok: true,
+      compacted: true,
+    }));
+    registerAgentHarness(
+      {
+        id: "codex",
+        label: "Codex",
+        supports: (ctx) =>
+          ctx.provider === "openai" ? { supported: true, priority: 100 } : { supported: false },
+        runAttempt: vi.fn(async () => createAttemptResult("codex")),
+        compact,
+      },
+      { ownerPluginId: "codex" },
+    );
+
+    await expect(
+      maybeCompactAgentHarnessSession(
+        {
+          sessionId: "session-1",
+          sessionKey: "agent:main:main",
+          sessionFile: "/tmp/session.jsonl",
+          workspaceDir: "/tmp/workspace",
+          provider: "openai",
+          model: "gpt-5.5",
+          agentHarnessId: "codex",
+        },
+        { nativeCompactionRequest: "after_context_engine" },
+      ),
+    ).resolves.toBeUndefined();
+    expect(compact).not.toHaveBeenCalled();
   });
 
   it("keeps compaction recoverable when auth profile lookup fails", async () => {

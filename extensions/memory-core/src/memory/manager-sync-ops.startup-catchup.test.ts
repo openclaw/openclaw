@@ -93,6 +93,10 @@ class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
     return "test";
   }
 
+  protected resolveProviderIndexIdentities() {
+    return [];
+  }
+
   protected async sync(params?: SyncParams): Promise<void> {
     this.syncCalls.push(params ?? {});
   }
@@ -112,6 +116,8 @@ class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
   protected pruneEmbeddingCacheIfNeeded(): void {}
 
   protected resetProviderInitializationForRetry(): void {}
+
+  protected assertRequiredProviderAvailable(): void {}
 
   protected async indexFile(
     _entry: MemoryIndexEntry,
@@ -191,9 +197,7 @@ describe("session startup catch-up", () => {
       });
 
     try {
-      await expect((harness as any).syncSessionFiles({ needsFullReindex: true })).resolves.toBe(
-        undefined,
-      );
+      await (harness as any).syncSessionFiles({ needsFullReindex: true });
       expect(attempts).toBe(2);
     } finally {
       openSpy.mockRestore();

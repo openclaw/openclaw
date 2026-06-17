@@ -193,8 +193,8 @@ export OPENCLAW_APNS_PRIVATE_KEY_P8="$(cat /path/to/AuthKey_KEYID.p8)"
 ```
 
 These are gateway-host runtime env vars, not Fastlane settings. `apps/ios/fastlane/.env` only stores
-App Store Connect / TestFlight auth such as `ASC_KEY_ID` and `ASC_ISSUER_ID`; it does not configure
-direct APNs delivery for local iOS builds.
+App Store Connect / TestFlight auth such as `APP_STORE_CONNECT_KEY_ID` and
+`APP_STORE_CONNECT_ISSUER_ID`; it does not configure direct APNs delivery for local iOS builds.
 
 Recommended gateway-host storage:
 
@@ -246,7 +246,7 @@ Notes:
 
 The iOS app is a mobile node surface, not a Codex Computer Use backend. Codex
 Computer Use and `cua-driver mcp` control a local macOS desktop through MCP
-tools; the iOS app exposes iPhone and iPad capabilities through OpenClaw node commands
+tools; the iOS app exposes iPhone capabilities through OpenClaw node commands
 such as `canvas.*`, `camera.*`, `screen.*`, `location.*`, and `talk.*`.
 
 Agents can still operate the iOS app through OpenClaw by invoking node

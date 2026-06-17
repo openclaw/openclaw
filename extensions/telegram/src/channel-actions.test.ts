@@ -27,6 +27,15 @@ describe("telegramMessageActions", () => {
     }
   });
 
+  it("classifies provider-native mutation actions", () => {
+    for (const action of ["sendMessage", "editMessage", "deleteMessage", "react", "topic-edit"]) {
+      expect(telegramMessageActions.isToolDeliveryAction?.({ args: { action } })).toBe(true);
+    }
+    for (const action of ["searchSticker", "stickerCacheStats"]) {
+      expect(telegramMessageActions.isToolDeliveryAction?.({ args: { action } })).toBe(false);
+    }
+  });
+
   it("allows interactive-only sends", async () => {
     await telegramMessageActions.handleAction!({
       action: "send",

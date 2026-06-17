@@ -9,6 +9,7 @@ import type { CommandOptions } from "../process/exec.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { captureEnv } from "../test-utils/env.js";
 import {
+  listMissingRequiredPlatformPackages,
   repairManagedNpmRootOpenClawPeer,
   removeManagedNpmRootDependency,
   readManagedNpmRootInstalledDependency,
@@ -99,6 +100,67 @@ function requireCommandOptions(
 }
 
 describe("managed npm root", () => {
+  it("finds explicitly required optional packages for the current platform", async () => {
+    const npmRoot = await makeTempRoot();
+    const matchingPackage = "@vendor/tool-platform";
+    const scriptedPackage = "@vendor/tool-scripted";
+    const foreignPackage = "@vendor/tool-foreign";
+    const unconstrainedPackage = "@vendor/tool-optional";
+    const unlistedPackage = "@vendor/tool-unlisted";
+    await fs.writeFile(
+      path.join(npmRoot, "package-lock.json"),
+      `${JSON.stringify({
+        lockfileVersion: 3,
+        packages: {
+          "": {},
+          [`node_modules/${matchingPackage}`]: {
+            optional: true,
+            os: [process.platform],
+            cpu: [process.arch],
+          },
+          [`node_modules/${scriptedPackage}`]: {
+            optional: true,
+            hasInstallScript: true,
+            os: [process.platform],
+            cpu: [process.arch],
+          },
+          [`node_modules/${foreignPackage}`]: {
+            optional: true,
+            os: [`not-${process.platform}`],
+            cpu: [process.arch],
+          },
+          [`node_modules/${unconstrainedPackage}`]: {
+            optional: true,
+          },
+          [`node_modules/${unlistedPackage}`]: {
+            optional: true,
+            os: [process.platform],
+            cpu: [process.arch],
+          },
+        },
+      })}\n`,
+    );
+
+    await expect(
+      listMissingRequiredPlatformPackages({
+        npmRoot,
+        requiredPackageNames: [
+          matchingPackage,
+          scriptedPackage,
+          foreignPackage,
+          unconstrainedPackage,
+        ],
+      }),
+    ).resolves.toEqual(
+      [matchingPackage, scriptedPackage]
+        .map((name) => ({
+          name,
+          packagePath: path.join(npmRoot, "node_modules", ...name.split("/")),
+        }))
+        .toSorted((left, right) => left.packagePath.localeCompare(right.packagePath)),
+    );
+  });
+
   it("keeps existing plugin dependencies when adding another managed plugin", async () => {
     const npmRoot = await makeTempRoot();
     await fs.writeFile(

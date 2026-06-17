@@ -40,6 +40,10 @@ function sanitizeAssistantText(text: string): string {
   return sanitizeAssistantVisibleText(text);
 }
 
+export function sanitizeAssistantVisibleStreamText(text: string): string {
+  return sanitizeUserFacingText(sanitizeAssistantText(text), { errorContext: false });
+}
+
 function finalizeAssistantExtraction(msg: AssistantMessage, extracted: string): string {
   const errorContext = msg.stopReason === "error";
   return sanitizeUserFacingText(extracted, { errorContext });
@@ -191,7 +195,7 @@ type ThinkTaggedSplitBlock =
   | { type: "thinking"; thinking: string }
   | { type: "text"; text: string };
 
-const THINKING_TAG_NAME_PATTERN = String.raw`(?:(?:antml:)?(?:think(?:ing)?|thought)|antthinking)`;
+const THINKING_TAG_NAME_PATTERN = String.raw`(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)`;
 const THINKING_TAG_OPEN_RE = new RegExp(String.raw`<\s*${THINKING_TAG_NAME_PATTERN}\s*>`, "i");
 const THINKING_TAG_CLOSE_RE = new RegExp(
   String.raw`<\s*\/\s*${THINKING_TAG_NAME_PATTERN}\s*>`,

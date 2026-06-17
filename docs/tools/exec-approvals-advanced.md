@@ -89,10 +89,11 @@ reduced to a small explicit allowlist (`TERM`, `LANG`, `LC_*`, `COLORTERM`,
 `NO_COLOR`, `FORCE_COLOR`).
 
 For `allow-always` decisions in allowlist mode, known dispatch wrappers (`env`,
-`nice`, `nohup`, `stdbuf`, `timeout`) persist the inner executable path instead
-of the wrapper path. Shell multiplexers (`busybox`, `toybox`) are unwrapped for
-shell applets (`sh`, `ash`, etc.) the same way. If a wrapper or multiplexer
-cannot be safely unwrapped, no allowlist entry is persisted automatically.
+`flock`, `nice`, `nohup`, `stdbuf`, `timeout`) persist the inner executable path
+instead of the wrapper path. Shell multiplexers (`busybox`, `toybox`) are
+unwrapped for shell applets (`sh`, `ash`, etc.) the same way. If a wrapper or
+multiplexer cannot be safely unwrapped, no allowlist entry is persisted
+automatically.
 
 If you allowlist interpreters like `python3` or `node`, prefer
 `tools.exec.strictInlineEval=true` so inline eval still requires an explicit
@@ -115,7 +116,7 @@ Configuration location:
 - `safeBins` comes from config (`tools.exec.safeBins` or per-agent `agents.list[].tools.exec.safeBins`).
 - `safeBinTrustedDirs` comes from config (`tools.exec.safeBinTrustedDirs` or per-agent `agents.list[].tools.exec.safeBinTrustedDirs`).
 - `safeBinProfiles` comes from config (`tools.exec.safeBinProfiles` or per-agent `agents.list[].tools.exec.safeBinProfiles`). Per-agent profile keys override global keys.
-- allowlist entries live in host-local `~/.openclaw/exec-approvals.json` under `agents.<id>.allowlist` (or via Control UI / `openclaw approvals allowlist ...`).
+- allowlist entries live in the host-local approvals file under `agents.<id>.allowlist` (or via Control UI / `openclaw approvals allowlist ...`).
 - `openclaw security audit` warns with `tools.exec.safe_bins_interpreter_unprofiled` when interpreter/runtime bins appear in `safeBins` without explicit profiles.
 - `openclaw doctor --fix` can scaffold missing custom `safeBinProfiles.<bin>` entries as `{}` (review and tighten afterward). Interpreter/runtime bins are not auto-scaffolded.
 

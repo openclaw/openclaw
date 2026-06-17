@@ -161,6 +161,116 @@ describe("stuck session recovery integration", () => {
     expect(getQueueSize(lane)).toBe(0);
   });
 
+  it("releases a wedged lane after a clean abort when session work remains queued (#91700)", async () => {
+    const sessionKey = "agent:main:wedged-delivery";
+    const sessionId = "wedged-delivery-session";
+    const lane = resolveEmbeddedSessionLane(sessionKey);
+    const operation = createReplyOperation({
+      sessionKey,
+      sessionId,
+      resetTriggered: false,
+    });
+    operation.setPhase("running");
+    // Cancel settles the registry (clean abort+drain) while the lane task that
+    // hosted the run stays wedged, mirroring a hang past the run's own cleanup.
+    operation.attachBackend({
+      kind: "embedded",
+      cancel: () => queueMicrotask(() => operation.complete()),
+      isStreaming: () => false,
+    });
+    void enqueueCommandInLane(lane, () => new Promise<never>(() => {}), {
+      warnAfterMs: Number.MAX_SAFE_INTEGER,
+    });
+    expect(getQueueSize(lane)).toBe(1);
+
+    const outcome = await recoverStuckDiagnosticSession({
+      sessionId,
+      sessionKey,
+      ageMs: 720_000,
+      queueDepth: 1,
+      allowActiveAbort: true,
+    });
+
+    expect(outcome).toMatchObject({
+      status: "aborted",
+      action: "abort_embedded_run",
+      aborted: true,
+      drained: true,
+      forceCleared: false,
+      released: 1,
+    });
+    const queued = enqueueCommandInLane(lane, async () => "drained", {
+      warnAfterMs: Number.MAX_SAFE_INTEGER,
+    });
+    await expect(Promise.race([queued, delay(100)])).resolves.toBe("drained");
+  });
+
+  it("does not reset a lane that unwedged and started a queued turn during the abort (#91700)", async () => {
+    const sessionKey = "agent:main:unwedged-during-abort";
+    const sessionId = "unwedged-during-abort-session";
+    const lane = resolveEmbeddedSessionLane(sessionKey);
+    const operation = createReplyOperation({
+      sessionKey,
+      sessionId,
+      resetTriggered: false,
+    });
+    operation.setPhase("running");
+    let markHostStarted!: () => void;
+    const hostStarted = new Promise<void>((resolve) => {
+      markHostStarted = resolve;
+    });
+    // Host task frees the lane on abort; the queued turn then pumps to active
+    // and only it settles the registry, so the drain resolves with fresh work
+    // already running — the race the queueDepth reset must not clobber.
+    const host = enqueueCommandInLane(
+      lane,
+      () =>
+        new Promise<"aborted">((resolve) => {
+          markHostStarted();
+          operation.abortSignal.addEventListener("abort", () => resolve("aborted"), {
+            once: true,
+          });
+        }),
+      { warnAfterMs: Number.MAX_SAFE_INTEGER },
+    );
+    let releaseFreshTurn!: (value: "done") => void;
+    const freshTurn = enqueueCommandInLane(
+      lane,
+      () => {
+        operation.complete();
+        return new Promise<"done">((resolve) => {
+          releaseFreshTurn = resolve;
+        });
+      },
+      { warnAfterMs: Number.MAX_SAFE_INTEGER },
+    );
+    await hostStarted;
+
+    const outcome = await recoverStuckDiagnosticSession({
+      sessionId,
+      sessionKey,
+      ageMs: 720_000,
+      queueDepth: 1,
+      allowActiveAbort: true,
+    });
+
+    await expect(host).resolves.toBe("aborted");
+    expect(outcome).toMatchObject({
+      status: "aborted",
+      aborted: true,
+      drained: true,
+      released: 0,
+    });
+    // The fresh turn still owns the lane slot: later work must wait for it.
+    const third = enqueueCommandInLane(lane, async () => "third", {
+      warnAfterMs: Number.MAX_SAFE_INTEGER,
+    });
+    await expect(Promise.race([third, delay(100)])).resolves.toBe("blocked");
+    releaseFreshTurn("done");
+    await expect(freshTurn).resolves.toBe("done");
+    await expect(third).resolves.toBe("third");
+  });
+
   it("does not reset a blocked lane while unregistered lane work is still active", async () => {
     const sessionKey = "agent:main:unregistered-work";
     const sessionId = "unregistered-work-session";

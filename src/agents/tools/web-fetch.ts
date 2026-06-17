@@ -19,6 +19,7 @@ import { isRecord } from "../../utils.js";
 import { extractReadableContent } from "../../web-fetch/content-extractors.runtime.js";
 import { resolveWebProviderConfig } from "../../web/provider-runtime-shared.js";
 import { stringEnum } from "../schema/string-enum.js";
+import { setToolTerminalPresentation } from "../tool-terminal-presentation.js";
 import type { AnyAgentTool } from "./common.js";
 import {
   jsonResult,
@@ -212,6 +213,42 @@ const WEB_FETCH_WRAPPER_NO_WARNING_OVERHEAD = wrapExternalContent("", {
   includeWarning: false,
 }).length;
 
+function formatTerminalWebFetchOrigin(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value.trim()) {
+    return undefined;
+  }
+  try {
+    const url = new URL(value);
+    return url.origin;
+  } catch {
+    return undefined;
+  }
+}
+
+function formatWebFetchTerminalPresentation(result: unknown): { text: string } | undefined {
+  if (!isRecord(result) || !isRecord(result.details)) {
+    return undefined;
+  }
+  const details = result.details;
+  const origin =
+    formatTerminalWebFetchOrigin(details.finalUrl) ?? formatTerminalWebFetchOrigin(details.url);
+  const status = typeof details.status === "number" ? details.status : undefined;
+  if (!origin || status === undefined) {
+    return undefined;
+  }
+  const lines = [`Web fetch completed.`, `Origin: ${origin}`, `Status: ${status}`];
+  if (typeof details.contentType === "string" && details.contentType.trim()) {
+    lines.push(`Content type: ${details.contentType.trim()}`);
+  }
+  if (typeof details.rawLength === "number" && Number.isFinite(details.rawLength)) {
+    lines.push(`Content length: ${Math.max(0, Math.floor(details.rawLength))} characters`);
+  }
+  if (details.truncated === true) {
+    lines.push("Truncated: yes");
+  }
+  return { text: lines.join("\n") };
+}
+
 function wrapWebFetchContent(
   value: string,
   maxChars: number,
@@ -330,6 +367,24 @@ function throwIfFetchAborted(signal: AbortSignal | undefined): void {
   // readResponseText may finish after an abort races with body reading. Recheck
   // before wrapping, caching, or returning content from a canceled tool call.
   throw signal.reason instanceof Error ? signal.reason : new Error("aborted");
+}
+
+/**
+ * Sanitize a web_fetch URL parameter that may contain LLM-injected whitespace.
+ *
+ * Fixes the reported case where a model emits a space between the scheme and
+ * authority (e.g. `https:// docs.openclaw.ai`), which causes `new URL()` to
+ * throw. Path and query whitespace is intentionally preserved — the WHATWG URL
+ * parser percent-encodes those characters correctly per RFC 3986.
+ */
+export function sanitizeWebFetchUrl(raw: string): string {
+  let end = raw.length;
+  while (end > 0 && raw.charCodeAt(end - 1) <= 0x20) {
+    end -= 1;
+  }
+  const trimmed = raw.slice(0, end).replace(/^\s+/, "");
+  const repaired = trimmed.replace(/^(https?:\/\/)\s+/i, "$1");
+  return repaired.replace(/^(https?:\/\/[^/?#\s]+)\s+$/i, "$1");
 }
 
 function normalizeProviderWebFetchPayload(params: {
@@ -655,7 +710,7 @@ export function createWebFetchTool(options?: {
   if (!resolveFetchEnabled({ fetch, sandboxed: options?.sandboxed })) {
     return null;
   }
-  return {
+  const tool: AnyAgentTool = {
     label: "Web Fetch",
     name: "web_fetch",
     description:
@@ -703,7 +758,9 @@ export function createWebFetchTool(options?: {
         return providerFallbackCache;
       };
       const params = args as Record<string, unknown>;
-      const url = readStringParam(params, "url", { required: true });
+      const url = sanitizeWebFetchUrl(
+        readStringParam(params, "url", { required: true, trim: false }),
+      );
       const extractMode = readStringParam(params, "extractMode") === "text" ? "text" : "markdown";
       const maxChars = readPositiveIntegerParam(params, "maxChars");
       const maxCharsCap = resolveFetchMaxCharsCap(executionFetch);
@@ -750,4 +807,7 @@ export function createWebFetchTool(options?: {
       }
     },
   };
+  return setToolTerminalPresentation(tool, (_params, result) =>
+    formatWebFetchTerminalPresentation(result),
+  );
 }

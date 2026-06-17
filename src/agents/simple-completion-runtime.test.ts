@@ -475,6 +475,44 @@ describe("prepareSimpleCompletionModel", () => {
     );
   });
 
+  it("can preserve asynchronous provider model discovery", async () => {
+    // Use a standalone mock so the default beforeEach delegation from
+    // resolveModelAsyncMock → resolveModelMock does not pollute call
+    // history. The point of the test is that when useAsyncModelResolution
+    // is true, only the async resolver is invoked.
+    const resolveModelAsync = vi.fn().mockResolvedValue({
+      model: {
+        provider: "anthropic",
+        id: "claude-opus-4-6",
+      },
+      authStorage: {
+        setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
+      },
+      modelRegistry: {},
+    });
+    // Reset the hoisted sync mock so any leftover calls from earlier tests
+    // or beforeEach setup don't cause a false positive.
+    hoisted.resolveModelMock.mockReset();
+
+    const result = await prepareSimpleCompletionModel({
+      cfg: undefined,
+      provider: "anthropic",
+      modelId: "claude-opus-4-6",
+      useAsyncModelResolution: true,
+      modelResolver: resolveModelAsync,
+    });
+
+    expectPreparedModelResult(result);
+    expect(hoisted.resolveModelMock).not.toHaveBeenCalled();
+    expect(resolveModelAsync).toHaveBeenCalledWith(
+      "anthropic",
+      "claude-opus-4-6",
+      undefined,
+      undefined,
+      {},
+    );
+  });
+
   it("passes static catalog fallback opt-in to skip-discovery model resolution", async () => {
     hoisted.resolveModelAsyncMock.mockResolvedValueOnce({
       model: {

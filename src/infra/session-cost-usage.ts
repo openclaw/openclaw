@@ -90,7 +90,13 @@ const emptyTotals = (): CostUsageTotals => ({
 const USAGE_COST_CACHE_VERSION = 4;
 const USAGE_COST_CACHE_FILE = ".usage-cost-cache.json";
 const USAGE_COST_CACHE_LOCK_WRITE_GRACE_MS = 10_000;
+const USAGE_COST_CACHE_TEMP_FILE_GRACE_MS = USAGE_COST_CACHE_LOCK_WRITE_GRACE_MS;
 const USAGE_COST_TRANSCRIPT_STAT_CONCURRENCY = 32;
+// Checkpoint policy for refreshCostUsageCache: bound the cost of full cache
+// serialization when scanning thousands of session files. Smaller of the two
+// limits triggers the next durable write.
+const USAGE_COST_CACHE_CHECKPOINT_FILES = 256;
+const USAGE_COST_CACHE_CHECKPOINT_INTERVAL_MS = 5_000;
 const logger = createSubsystemLogger("usage-cost-cache");
 
 type UsageCostRefreshState = {
@@ -369,6 +375,32 @@ async function writeUsageCostCache(cachePath: string, cache: UsageCostCacheFile)
     content: `${JSON.stringify(cache)}\n`,
     tempPrefix: ".usage-cost-cache",
   });
+}
+
+function isUsageCostCacheTempFileName(name: string): boolean {
+  if (!name.endsWith(".tmp") || name.startsWith(`${USAGE_COST_CACHE_FILE}.lock.`)) {
+    return false;
+  }
+  return name.startsWith(".usage-cost-cache.") || name.startsWith(`${USAGE_COST_CACHE_FILE}.`);
+}
+
+async function cleanupStaleUsageCostCacheTempFiles(cachePath: string): Promise<void> {
+  const dir = path.dirname(cachePath);
+  const cutoffMs = Date.now() - USAGE_COST_CACHE_TEMP_FILE_GRACE_MS;
+  const entries = await fs.promises.readdir(dir, { withFileTypes: true }).catch(() => []);
+  await Promise.all(
+    entries.map(async (entry) => {
+      if (!entry.isFile() || !isUsageCostCacheTempFileName(entry.name)) {
+        return;
+      }
+      const tempPath = path.join(dir, entry.name);
+      const stats = await fs.promises.stat(tempPath).catch(() => null);
+      if (!stats || stats.mtimeMs > cutoffMs) {
+        return;
+      }
+      await fs.promises.rm(tempPath, { force: true }).catch(() => undefined);
+    }),
+  );
 }
 
 async function listUsageCountedTranscriptFileStats(
@@ -1513,6 +1545,7 @@ async function refreshCostUsageCacheForPath(params?: {
     return "busy";
   }
   try {
+    await cleanupStaleUsageCostCacheTempFiles(cachePath);
     const pricingFingerprint = resolveUsageCostPricingFingerprint(params?.config);
     const cache = await readUsageCostCache(cachePath);
     const files = await listUsageCountedTranscriptFiles(params?.agentId, {
@@ -1527,9 +1560,11 @@ async function refreshCostUsageCacheForPath(params?: {
           ? files
           : files.filter((file) => file.mtimeMs >= refreshStartMs);
     const livePaths = new Set(files.map((file) => file.filePath));
+    let cacheMutated = false;
     for (const filePath of Object.keys(cache.files)) {
       if (!livePaths.has(filePath)) {
         delete cache.files[filePath];
+        cacheMutated = true;
       }
     }
 
@@ -1551,6 +1586,14 @@ async function refreshCostUsageCacheForPath(params?: {
       .slice(0, maxFiles);
     const resolveCost = createUsageCostResolver(params?.config);
 
+    // Throttle full cache rewrites: writing a 100MB+ JSON cache after every
+    // single scanned session balloons CPU/IO into O(N * cacheSize). Instead,
+    // checkpoint at most once every USAGE_COST_CACHE_CHECKPOINT_INTERVAL_MS
+    // (or every USAGE_COST_CACHE_CHECKPOINT_FILES files) so an interrupted
+    // refresh still makes durable forward progress while a normal refresh of
+    // thousands of files only pays the serialization cost a handful of times.
+    let dirtyCount = 0;
+    let lastCheckpointMs = Date.now();
     for (const file of staleFiles) {
       cache.files[file.filePath] = await scanUsageFileForCache({
         file,
@@ -1559,12 +1602,24 @@ async function refreshCostUsageCacheForPath(params?: {
         previous: cache.files[file.filePath],
         includeSessionSummary: sessionSummaryFiles.has(file.filePath),
       });
+      dirtyCount += 1;
+      cacheMutated = true;
+      const now = Date.now();
+      if (
+        dirtyCount >= USAGE_COST_CACHE_CHECKPOINT_FILES ||
+        now - lastCheckpointMs >= USAGE_COST_CACHE_CHECKPOINT_INTERVAL_MS
+      ) {
+        cache.updatedAt = now;
+        await writeUsageCostCache(cachePath, cache);
+        dirtyCount = 0;
+        lastCheckpointMs = Date.now();
+      }
+    }
+
+    if (cacheMutated || dirtyCount > 0) {
       cache.updatedAt = Date.now();
       await writeUsageCostCache(cachePath, cache);
     }
-
-    cache.updatedAt = Date.now();
-    await writeUsageCostCache(cachePath, cache);
     return "refreshed";
   } finally {
     await lock.release();
@@ -1765,6 +1820,96 @@ export async function loadSessionCostSummaryFromCache(params: {
       cachedFiles: stale ? 0 : 1,
       pendingFiles: stale ? 1 : 0,
       staleFiles: stale ? 1 : 0,
+      refreshedAt: cache.updatedAt || undefined,
+    },
+  };
+}
+
+export async function loadSessionCostSummariesFromCache(params: {
+  sessions: Array<{ sessionId?: string; sessionFile: string }>;
+  config?: OpenClawConfig;
+  agentId?: string;
+  startMs?: number;
+  endMs?: number;
+  requestRefresh?: boolean;
+}): Promise<{ summaries: Array<SessionCostSummary | null>; cacheStatus: UsageCacheStatus }> {
+  const cachePath = resolveUsageCostCachePath(params.agentId);
+  const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config);
+  const statTasks = params.sessions.map(
+    (session) => async () => await fs.promises.stat(session.sessionFile).catch(() => null),
+  );
+  const statsPromise = runTasksWithConcurrency({
+    tasks: statTasks,
+    limit: USAGE_COST_TRANSCRIPT_STAT_CONCURRENCY,
+  }).then(({ results }) => results);
+  const [cache, stats, refreshRunning] = await Promise.all([
+    readUsageCostCache(cachePath),
+    statsPromise,
+    isUsageCostCacheRefreshRunning(cachePath),
+  ]);
+  const staleFiles = new Set<string>();
+  let cachedFiles = 0;
+  const summaries = params.sessions.map((session, index) => {
+    const stat = stats[index];
+    const file = stat
+      ? { filePath: session.sessionFile, size: stat.size, mtimeMs: stat.mtimeMs }
+      : undefined;
+    const entry = cache.files[session.sessionFile];
+    const stale =
+      !file ||
+      !isUsageCostCacheEntryFresh({
+        entry,
+        file,
+        pricingFingerprint,
+        requireSessionSummary: true,
+      });
+    if (stale) {
+      staleFiles.add(session.sessionFile);
+      return null;
+    }
+    cachedFiles += 1;
+    const summary = entry?.sessionSummary ?? null;
+    if (
+      summary &&
+      params.startMs !== undefined &&
+      params.endMs !== undefined &&
+      !isSessionSummaryContainedInRange(summary, params.startMs, params.endMs)
+    ) {
+      return entry
+        ? buildSessionCostSummaryFromCacheEntry({
+            entry,
+            sessionId: session.sessionId,
+            sessionFile: session.sessionFile,
+            startMs: params.startMs,
+            endMs: params.endMs,
+          })
+        : null;
+    }
+    return summary;
+  });
+  const refreshRequested = params.requestRefresh !== false && staleFiles.size > 0;
+  if (refreshRequested) {
+    requestCostUsageCacheRefresh({
+      config: params.config,
+      agentId: params.agentId,
+      sessionFiles: [...staleFiles],
+    });
+  }
+  const staleFileCount = staleFiles.size;
+  return {
+    summaries,
+    cacheStatus: {
+      status:
+        staleFileCount === 0
+          ? "fresh"
+          : refreshRunning || refreshRequested
+            ? "refreshing"
+            : cachedFiles > 0
+              ? "partial"
+              : "stale",
+      cachedFiles,
+      pendingFiles: staleFileCount,
+      staleFiles: staleFileCount,
       refreshedAt: cache.updatedAt || undefined,
     },
   };

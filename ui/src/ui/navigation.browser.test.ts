@@ -421,6 +421,22 @@ describe("control UI routing", () => {
     expect([...nav.classList]).toEqual(["shell-nav"]);
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
 
+    const drawerClose = expectElement(
+      app,
+      ".sidebar-shell__header .nav-collapse-toggle",
+      HTMLButtonElement,
+    );
+    expect(drawerClose.getAttribute("aria-label")).toBe("Collapse sidebar");
+    drawerClose.click();
+    await app.updateComplete;
+
+    expect([...shell.classList]).toEqual(["shell", "shell--chat"]);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+
+    toggle.click();
+    await app.updateComplete;
+    expect([...shell.classList]).toEqual(["shell", "shell--chat", "shell--nav-drawer-open"]);
+
     const link = expectElement(app, 'a.nav-item[href="/config"]', HTMLAnchorElement);
     link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
 
@@ -758,7 +774,7 @@ describe("control UI routing", () => {
     expect(thread.scrollTop).toBe(targetScrollTop);
   });
 
-  it("hydrates hash tokens, restores same-tab refreshes, and clears after gateway changes", async () => {
+  it("hydrates hash tokens, preserves same-scope URL edits, and reloads after gateway changes", async () => {
     const app = mountApp("/ui/overview#token=abc123");
     await app.updateComplete;
 
@@ -783,12 +799,32 @@ describe("control UI routing", () => {
       'input[placeholder="ws://100.x.y.z:18789"]',
       HTMLInputElement,
     );
+
+    const sameScopeUrl = `${refreshed.settings.gatewayUrl}/`;
+    gatewayUrlInput.value = sameScopeUrl;
+    gatewayUrlInput.dispatchEvent(new Event("input", { bubbles: true }));
+    await refreshed.updateComplete;
+
+    expect(refreshed.settings.gatewayUrl).toBe(sameScopeUrl);
+    expect(refreshed.settings.token).toBe("abc123");
+
+    gatewayUrlInput.value = "wss://missing-token.example/openclaw";
+    gatewayUrlInput.dispatchEvent(new Event("input", { bubbles: true }));
+    await refreshed.updateComplete;
+
+    expect(refreshed.settings.gatewayUrl).toBe("wss://missing-token.example/openclaw");
+    expect(refreshed.settings.token).toBe("");
+
+    sessionStorage.setItem(
+      "openclaw.control.token.v1:wss://other-gateway.example/openclaw",
+      "other-token",
+    );
     gatewayUrlInput.value = "wss://other-gateway.example/openclaw";
     gatewayUrlInput.dispatchEvent(new Event("input", { bubbles: true }));
     await refreshed.updateComplete;
 
     expect(refreshed.settings.gatewayUrl).toBe("wss://other-gateway.example/openclaw");
-    expect(refreshed.settings.token).toBe("");
+    expect(refreshed.settings.token).toBe("other-token");
   });
 
   it("keeps a hash token pending until the gateway URL change is confirmed", async () => {

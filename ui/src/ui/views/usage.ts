@@ -290,7 +290,22 @@ export function renderUsage(props: UsageProps) {
         : filters.selectedDays.length > 0
           ? dayFilteredSessions
           : sortedSessions;
-  const activeAggregates = buildAggregatesFromSessions(aggregateSessions, data.aggregates);
+  const hasAggregateFilters =
+    filters.selectedSessions.length > 0 ||
+    hasQuery ||
+    filters.selectedHours.length > 0 ||
+    filters.selectedDays.length > 0 ||
+    Boolean(filters.agentId);
+  const activeAggregates = hasAggregateFilters
+    ? buildAggregatesFromSessions(aggregateSessions, data.aggregates)
+    : buildAggregatesFromSessions([], data.aggregates);
+  const insightsUseVisiblePage = data.sessionsLimitReached && !hasAggregateFilters;
+  const insightTotals = insightsUseVisiblePage
+    ? computeSessionTotals(aggregateSessions)
+    : displayTotals;
+  const insightAggregates = insightsUseVisiblePage
+    ? buildAggregatesFromSessions(aggregateSessions)
+    : activeAggregates;
 
   // Filter daily chart data if sessions are selected
   const filteredDaily =
@@ -311,18 +326,18 @@ export function renderUsage(props: UsageProps) {
         })()
       : data.costDaily;
 
-  const insightStats = buildUsageInsightStats(aggregateSessions, displayTotals, activeAggregates);
+  const insightStats = buildUsageInsightStats(aggregateSessions, insightTotals, insightAggregates);
   const isEmpty = !data.loading && !data.totals && data.sessions.length === 0;
   const cacheStatusTitle = getUsageCacheRefreshTitle(data.cacheStatus);
   const hasMissingCost =
-    (displayTotals?.missingCostEntries ?? 0) > 0 ||
-    (displayTotals
-      ? displayTotals.totalTokens > 0 &&
-        displayTotals.totalCost === 0 &&
-        displayTotals.input +
-          displayTotals.output +
-          displayTotals.cacheRead +
-          displayTotals.cacheWrite >
+    (insightTotals?.missingCostEntries ?? 0) > 0 ||
+    (insightTotals
+      ? insightTotals.totalTokens > 0 &&
+        insightTotals.totalCost === 0 &&
+        insightTotals.input +
+          insightTotals.output +
+          insightTotals.cacheRead +
+          insightTotals.cacheWrite >
           0
       : false);
   const datePresets = [
@@ -790,8 +805,8 @@ export function renderUsage(props: UsageProps) {
         ? renderUsageEmptyState(filterActions.onRefresh)
         : html`
             ${renderUsageInsights(
-              displayTotals,
-              activeAggregates,
+              insightTotals,
+              insightAggregates,
               insightStats,
               hasMissingCost,
               buildPeakErrorHours(aggregateSessions, filters.timeZone),

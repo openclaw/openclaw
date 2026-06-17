@@ -459,7 +459,7 @@ describe("windows command wrapper behavior", () => {
         child.emit("close", null, "SIGKILL");
         const result = await resultPromise;
         expect(result.termination).toBe("timeout");
-        expect(result.code).not.toBe(0);
+        expect(result.code).toBe(124);
       });
     } finally {
       vi.useRealTimers();

@@ -70,6 +70,11 @@ export type {
 export type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-response.js";
 export type { AgentApprovalEventData, AgentEventPayload } from "../infra/agent-events.js";
 export type { ExecApprovalDecision } from "../infra/exec-approvals.js";
+export type {
+  ExecAutoReviewDecision,
+  ExecAutoReviewInput,
+  ExecAutoReviewer,
+} from "../infra/exec-auto-review.js";
 export type { NormalizedUsage } from "../agents/usage.js";
 export type {
   AgentToolResultMiddleware,
@@ -124,8 +129,12 @@ export {
 } from "../auto-reply/heartbeat-tool-response.js";
 export { isMessagingTool, isMessagingToolSendAction } from "../agents/embedded-agent-messaging.js";
 export {
+  extractMessagingToolSend,
+  extractMessagingToolSendResult,
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
+  isToolResultError,
+  sanitizeToolResult,
 } from "../agents/embedded-agent-subscribe.tools.js";
 export { normalizeUsage } from "../agents/usage.js";
 export { resolveOpenClawAgentDir } from "./agent-dir-compat.js";
@@ -136,6 +145,8 @@ export {
 } from "../agents/agent-scope.js";
 export { resolveModelAuthMode } from "../agents/model-auth.js";
 export { supportsModelTools } from "../agents/model-tool-support.js";
+export { isAgentToolReplaySafe } from "../agents/tool-replay-safety.js";
+export { getChannelAgentToolMeta } from "../agents/channel-tool-metadata.js";
 export {
   buildSkillWorkshopPromptSection,
   SKILL_WORKSHOP_TOOL_NAME,
@@ -257,6 +268,9 @@ export {
 export { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.js";
 export { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 export {
+  consumeAdjustedParamsForToolCall,
+  consumePreExecutionBlockedToolCall,
+  finalizeToolTerminalPresentation,
   getBeforeToolCallPolicyDiagnosticState,
   hasBeforeToolCallPolicy,
   isToolWrappedWithBeforeToolCallHook,
@@ -267,6 +281,7 @@ export {
   type BeforeToolCallPolicyDiagnosticState,
   type DeferredPluginToolApproval,
 } from "../agents/agent-tools.before-tool-call.js";
+export { isReplaySafeToolCall } from "../agents/tool-mutation.js";
 export {
   resolveAgentHarnessBeforePromptBuildResult,
   runAgentHarnessAfterCompactionHook,

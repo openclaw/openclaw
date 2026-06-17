@@ -59,6 +59,10 @@ vi.mock("./session.js", async () => {
     waitForWaConnection: waitForWaConnectionLocal,
     formatError: formatErrorLocal,
     getStatusCode,
+    readWebAuthExistsForDecision: vi.fn(async () => ({
+      outcome: "stable" as const,
+      exists: true,
+    })),
     logoutWeb: vi.fn(async (params: { authDir?: string }) => {
       await fs.rm(params.authDir ?? authDir, {
         recursive: true,
@@ -164,18 +168,21 @@ describe("loginWeb coverage", () => {
     expect(renderQrTerminalMock).toHaveBeenCalledWith("restart-qr", { small: true });
   });
 
-  it("clears creds and throws when logged out", async () => {
-    waitForWaConnectionMock.mockRejectedValueOnce({
-      output: { statusCode: 401 },
-    });
+  it("clears stale creds and continues login when logged out", async () => {
+    waitForWaConnectionMock
+      .mockRejectedValueOnce({
+        output: { statusCode: 401 },
+      })
+      .mockResolvedValueOnce(undefined);
 
     const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-    await expect(loginWeb(false, waitForWaConnectionMock as never, runtime)).rejects.toThrow(
-      /cache cleared/i,
+    await loginWeb(false, waitForWaConnectionMock as never, runtime);
+
+    expect(createWaSocketMock).toHaveBeenCalledTimes(2);
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtimeMessageCalls(runtime.log)).toContain(
+      "✅ Linked after restart; web session ready.",
     );
-    expect(runtimeMessageCalls(runtime.error)).toEqual([
-      "WhatsApp reported the session is logged out. Cleared cached web session; please rerun openclaw channels login and scan the QR again.",
-    ]);
     expect(rmMock).toHaveBeenCalledWith(path.resolve(testState.authDir), {
       recursive: true,
       force: true,
