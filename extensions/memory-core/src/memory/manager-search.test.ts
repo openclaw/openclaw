@@ -49,6 +49,45 @@ function insertKeywordFixture(
   );
 }
 
+function insertKeywordFixtureWithPathInFtsText(
+  db: DatabaseSync,
+  params: {
+    text: string;
+    id: string;
+    path: string;
+    source: "memory" | "sessions";
+    model: string;
+    startLine: number;
+    endLine: number;
+  },
+): void {
+  db.prepare(
+    "INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  ).run(
+    params.id,
+    params.path,
+    params.source,
+    params.startLine,
+    params.endLine,
+    `${params.id}:hash`,
+    params.model,
+    params.text,
+    JSON.stringify([0]),
+    Date.now(),
+  );
+  db.prepare(
+    "INSERT INTO chunks_fts (text, id, path, source, model, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?, ?)",
+  ).run(
+    `${params.path}\n${params.text}`,
+    params.id,
+    params.path,
+    params.source,
+    params.model,
+    params.startLine,
+    params.endLine,
+  );
+}
+
 describe("searchKeyword trigram fallback", () => {
   const { DatabaseSync } = requireNodeSqlite();
 
@@ -1059,6 +1098,63 @@ describe("searchVector sqlite-vec KNN", () => {
       });
 
       expect(results.map((row) => row.id)).toEqual(["target-1", "alias-1"]);
+    } finally {
+      db.close();
+    }
+  });
+});
+
+describe("searchKeyword filename token ranking (issue #94102)", () => {
+  const { DatabaseSync } = requireNodeSqlite();
+
+  it("matches date-like filename stems when path is included in FTS indexed text", async () => {
+    const db = new DatabaseSync(":memory:");
+    const schema = ensureMemoryIndexSchema({
+      db,
+      embeddingCacheTable: "embedding_cache",
+      cacheEnabled: false,
+      ftsTable: "chunks_fts",
+      ftsEnabled: true,
+    });
+    if (!schema.ftsAvailable) {
+      db.close();
+      return;
+    }
+
+    try {
+      insertKeywordFixtureWithPathInFtsText(db, {
+        id: "chunk-target",
+        path: "memory/2026-06-17-1649.md",
+        text: "Token has been expired or revoked Google OAuth Testing mode",
+        source: "memory",
+        model: "gemini-embedding-001",
+        startLine: 1,
+        endLine: 36,
+      });
+      insertKeywordFixtureWithPathInFtsText(db, {
+        id: "chunk-nearby",
+        path: "memory/2026-06-17-1701.md",
+        text: "all important calendars PM Recurring Tasks Todoist highest-rigor",
+        source: "memory",
+        model: "gemini-embedding-001",
+        startLine: 23,
+        endLine: 30,
+      });
+
+      const results = await searchKeyword({
+        db,
+        ftsTable: "chunks_fts",
+        query: "2026-06-17-1649",
+        limit: 3,
+        snippetMaxChars: 200,
+        sourceFilter: { sql: "", params: [] },
+        buildFtsQuery,
+        bm25RankToScore,
+        boostFallbackRanking: true,
+      });
+
+      expect(results[0]?.path).toBe("memory/2026-06-17-1649.md");
+      expect(results[0]?.textScore).toBeGreaterThan(0);
     } finally {
       db.close();
     }
