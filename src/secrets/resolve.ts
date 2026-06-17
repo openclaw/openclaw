@@ -48,6 +48,13 @@ const DEFAULT_MAX_BATCH_BYTES = 256 * 1024;
 const DEFAULT_FILE_MAX_BYTES = 1024 * 1024;
 const DEFAULT_FILE_TIMEOUT_MS = 5_000;
 const DEFAULT_EXEC_TIMEOUT_MS = 5_000;
+
+/** Infrastructure env vars commonly needed by secret-provider CLIs (self-hosted URLs, etc.). */
+const DEFAULT_EXEC_PROVIDER_PASS_ENV = [
+  "BWS_SERVER_URL",
+  "INFISICAL_API_URL",
+  "VAULT_ADDR",
+];
 const DEFAULT_EXEC_MAX_OUTPUT_BYTES = 1024 * 1024;
 const WINDOWS_ABS_PATH_PATTERN = /^[A-Za-z]:[\\/]/;
 const WINDOWS_UNC_PATH_PATTERN = /^\\\\[^\\]+\\[^\\]+/;
@@ -735,7 +742,16 @@ async function resolveExecRefs(params: {
     });
   }
 
+  // Start with known-safe infrastructure env vars that secret-provider CLIs
+  // commonly need (self-hosted server URLs, etc.) — these are configuration
+  // endpoints, not secrets.
   const childEnv: NodeJS.ProcessEnv = {};
+  for (const key of DEFAULT_EXEC_PROVIDER_PASS_ENV) {
+    const value = params.env[key];
+    if (value !== undefined) {
+      childEnv[key] = value;
+    }
+  }
   for (const key of params.providerConfig.passEnv ?? []) {
     const value = params.env[key];
     if (value !== undefined) {
