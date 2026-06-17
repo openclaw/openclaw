@@ -305,6 +305,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/memory-lancedb/**"
+"extensions: xmemo-memory":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/xmemo-memory/**"
 "extensions: memory-wiki":
   - changed-files:
       - any-glob-to-any-file:
