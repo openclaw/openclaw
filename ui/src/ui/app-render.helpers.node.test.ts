@@ -1249,7 +1249,7 @@ describe("switchChatSession", () => {
       chatAvatarUrl: null,
       chatQueue: [],
       chatQueueBySession: {},
-      chatMessagesBySession: {},
+      chatMessagesBySession: new Map(),
       chatRunId: null,
       sessionsShowArchived: false,
       chatSideResultTerminalRuns: new Set<string>(),
@@ -1276,20 +1276,18 @@ describe("switchChatSession", () => {
     switchChatSession(state, "main");
 
     expect(state.chatMessages).toEqual(mainMessages);
-    expect((state as unknown as Record<string, unknown>).chatMessagesBySession).toMatchObject({
-      "agent:main:other": otherMessages,
-    });
+    expect(state.chatMessagesBySession.get("agent:main:other")).toEqual(otherMessages);
   });
 
-  it("restores visible messages across configured default-session aliases", () => {
-    const mainMessages = [{ role: "assistant", content: [{ type: "text", text: "ops report" }] }];
-    const otherMessages = [{ role: "assistant", content: [{ type: "text", text: "other reply" }] }];
+  it("restores configured main aliases without crossing agent scopes", () => {
+    const opsMessages = [{ role: "assistant", content: [{ type: "text", text: "ops report" }] }];
+    const mainMessages = [{ role: "assistant", content: [{ type: "text", text: "main report" }] }];
     const settings = createSettings();
     const state = {
       sessionKey: "home",
       chatMessage: "",
       chatAttachments: [],
-      chatMessages: mainMessages,
+      chatMessages: opsMessages,
       chatToolMessages: [],
       chatStreamSegments: [],
       chatThinkingLevel: null,
@@ -1301,7 +1299,7 @@ describe("switchChatSession", () => {
       chatAvatarUrl: null,
       chatQueue: [],
       chatQueueBySession: {},
-      chatMessagesBySession: {},
+      chatMessagesBySession: new Map(),
       chatRunId: null,
       sessionsShowArchived: false,
       chatSideResultTerminalRuns: new Set<string>(),
@@ -1330,18 +1328,16 @@ describe("switchChatSession", () => {
     loadChatHistoryMock.mockResolvedValue(undefined);
     loadSessionsMock.mockResolvedValue(undefined);
 
-    switchChatSession(state, "agent:ops:other");
-    state.chatMessages = otherMessages;
+    switchChatSession(state, "agent:main:home");
 
+    expect(state.chatMessages).toEqual([]);
+    state.chatMessages = mainMessages;
     switchChatSession(state, "agent:ops:home");
 
-    expect(state.chatMessages).toEqual(mainMessages);
-    const messagesBySession = (state as unknown as Record<string, unknown>)
-      .chatMessagesBySession as Record<string, unknown[]>;
-    expect(messagesBySession.home).toEqual(mainMessages);
-    expect(messagesBySession["agent:main:home"]).toEqual(mainMessages);
-    expect(messagesBySession["agent:ops:main"]).toEqual(mainMessages);
-    expect(messagesBySession["agent:ops:other"]).toEqual(otherMessages);
+    expect(state.chatMessages).toEqual(opsMessages);
+    expect(state.chatMessagesBySession.get("agent:ops:main")).toEqual(opsMessages);
+    expect(state.chatMessagesBySession.get("agent:main:main")).toEqual(mainMessages);
+    expect(state.chatMessagesBySession.size).toBe(2);
   });
 
   it("restores visible messages across plain and canonical non-main keys", () => {
@@ -1366,7 +1362,7 @@ describe("switchChatSession", () => {
       chatAvatarUrl: null,
       chatQueue: [],
       chatQueueBySession: {},
-      chatMessagesBySession: {},
+      chatMessagesBySession: new Map(),
       chatRunId: null,
       sessionsShowArchived: false,
       chatSideResultTerminalRuns: new Set<string>(),
@@ -1393,10 +1389,8 @@ describe("switchChatSession", () => {
     switchChatSession(state, "agent:main:project");
 
     expect(state.chatMessages).toEqual(projectMessages);
-    const messagesBySession = (state as unknown as Record<string, unknown>)
-      .chatMessagesBySession as Record<string, unknown[]>;
-    expect(messagesBySession.project).toEqual(projectMessages);
-    expect(messagesBySession["agent:main:project"]).toEqual(projectMessages);
+    expect(state.chatMessagesBySession.get("agent:main:project")).toEqual(projectMessages);
+    expect(state.chatMessagesBySession.size).toBe(2);
   });
 });
 

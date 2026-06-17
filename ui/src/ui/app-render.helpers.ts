@@ -18,10 +18,7 @@ import {
   resetChatSessionPickerState,
   resolveSessionOptionGroups,
 } from "./chat/session-controls.ts";
-import {
-  readChatMessageCacheSessionDefaults,
-  resolveEquivalentChatMessageCacheKeys,
-} from "./chat/session-message-cache-keys.ts";
+import { cacheChatMessages, readChatMessagesFromCache } from "./chat/session-message-cache.ts";
 import { refreshSlashCommands } from "./chat/slash-commands.ts";
 import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
 import { loadChatHistory } from "./controllers/chat.ts";
@@ -140,29 +137,16 @@ function restoreChatQueueForSession(state: AppViewState, sessionKey: string): Ch
   return [...(state.chatQueueBySession?.[sessionKey] ?? [])];
 }
 
+function chatMessageCacheForState(state: AppViewState) {
+  return (state.chatMessagesBySession ??= new Map());
+}
+
 function saveChatMessagesForSession(state: AppViewState, sessionKey: string) {
-  const messagesBySession = { ...state.chatMessagesBySession };
-  const defaults = readChatMessageCacheSessionDefaults(state);
-  const cacheKeys = resolveEquivalentChatMessageCacheKeys(sessionKey, defaults);
-  for (const cacheKey of cacheKeys) {
-    if (state.chatMessages.length > 0) {
-      messagesBySession[cacheKey] = [...state.chatMessages];
-    } else if (Object.prototype.hasOwnProperty.call(messagesBySession, cacheKey)) {
-      delete messagesBySession[cacheKey];
-    }
-  }
-  state.chatMessagesBySession = messagesBySession;
+  cacheChatMessages(chatMessageCacheForState(state), state, { sessionKey }, state.chatMessages);
 }
 
 function restoreChatMessagesForSession(state: AppViewState, sessionKey: string): unknown[] {
-  const defaults = readChatMessageCacheSessionDefaults(state);
-  for (const cacheKey of resolveEquivalentChatMessageCacheKeys(sessionKey, defaults)) {
-    const cached = state.chatMessagesBySession?.[cacheKey];
-    if (cached && cached.length > 0) {
-      return [...cached];
-    }
-  }
-  return [];
+  return readChatMessagesFromCache(chatMessageCacheForState(state), state, { sessionKey });
 }
 
 function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string) {

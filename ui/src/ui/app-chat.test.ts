@@ -2622,6 +2622,10 @@ describe("handleSendChat", () => {
       agentsList: { defaultId: "main" },
       chatMessage: "/clear",
       chatMessages: [{ role: "user", content: "hello", timestamp: 1 }],
+      chatMessagesBySession: new Map([
+        ["agent:work:main", [{ role: "assistant", content: "work history" }]],
+        ["agent:main:main", [{ role: "assistant", content: "main history" }]],
+      ]),
     });
 
     await handleSendChat(host);
@@ -2636,6 +2640,8 @@ describe("handleSendChat", () => {
       limit: 100,
     });
     expect(host.chatMessages).toStrictEqual([]);
+    expect(host.chatMessagesBySession?.has("agent:work:main")).toBe(false);
+    expect(host.chatMessagesBySession?.has("agent:main:main")).toBe(true);
   });
 
   it("shows a visible pending item for /steer on the active run", async () => {

@@ -34,10 +34,7 @@ import {
   resolveChatAgentFilterOptions,
   resolvePreferredSessionForAgent,
 } from "./chat/session-controls.ts";
-import {
-  readChatMessageCacheSessionDefaults,
-  resolveEquivalentChatMessageCacheKeys,
-} from "./chat/session-message-cache-keys.ts";
+import { clearChatMessagesFromCache } from "./chat/session-message-cache.ts";
 import {
   controlUiNowMs,
   recordControlUiRenderTiming,
@@ -2727,6 +2724,9 @@ export function renderApp(state: AppViewState) {
                     const next = new Set(state.sessionsSelectedKeys);
                     for (const k of deleted) {
                       next.delete(k);
+                      clearChatMessagesFromCache(state.chatMessagesBySession, state, {
+                        sessionKey: k,
+                      });
                     }
                     state.sessionsSelectedKeys = next;
                   }
@@ -3588,17 +3588,9 @@ export function renderApp(state: AppViewState) {
                         ...scopedAgentParamsForSession(state, state.sessionKey),
                       });
                       state.chatMessages = [];
-                      {
-                        const messagesBySession = { ...state.chatMessagesBySession };
-                        const defaults = readChatMessageCacheSessionDefaults(state);
-                        for (const cacheKey of resolveEquivalentChatMessageCacheKeys(
-                          state.sessionKey,
-                          defaults,
-                        )) {
-                          delete messagesBySession[cacheKey];
-                        }
-                        state.chatMessagesBySession = messagesBySession;
-                      }
+                      clearChatMessagesFromCache(state.chatMessagesBySession, state, {
+                        sessionKey: state.sessionKey,
+                      });
                       state.chatSideResult = null;
                       reconcileChatRunLifecycle(
                         state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0],

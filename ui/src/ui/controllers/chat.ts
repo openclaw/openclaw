@@ -7,10 +7,10 @@ import {
 import { extractText } from "../chat/message-extract.ts";
 import { reconcileChatRunLifecycle } from "../chat/run-lifecycle.ts";
 import {
-  chatMessageCacheSessionKeysMatch,
-  readChatMessageCacheSessionDefaults,
-  resolveEquivalentChatMessageCacheKeys,
-} from "../chat/session-message-cache-keys.ts";
+  appendChatMessageToCache,
+  cacheChatMessages,
+  type ChatMessageCache,
+} from "../chat/session-message-cache.ts";
 import {
   appendTerminalAssistantMessage,
   clearToolStreamSegments,
@@ -33,6 +33,7 @@ import {
 import { GatewayRequestError, type GatewayBrowserClient, type GatewayHelloOk } from "../gateway.ts";
 import {
   areUiSessionKeysEquivalent,
+  DEFAULT_AGENT_ID,
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../session-key.ts";
@@ -395,7 +396,7 @@ export type ChatState = {
   currentSessionId?: string | null;
   chatLoading: boolean;
   chatMessages: unknown[];
-  chatMessagesBySession?: Record<string, unknown[]>;
+  chatMessagesBySession?: ChatMessageCache;
   chatThinkingLevel: string | null;
   chatSending: boolean;
   chatMessage: string;
@@ -581,32 +582,28 @@ function recordChatHistoryTiming(
   );
 }
 
-function setCachedChatMessages(state: ChatState, sessionKey: string, messages: unknown[]) {
+function appendCachedChatMessage(
+  state: ChatState,
+  sessionKey: string,
+  message: unknown,
+  agentId?: string,
+) {
   if (!state.chatMessagesBySession) {
     return;
   }
-  const messagesBySession = { ...state.chatMessagesBySession };
-  if (messages.length > 0) {
-    messagesBySession[sessionKey] = [...messages];
-  } else {
-    delete messagesBySession[sessionKey];
-  }
-  state.chatMessagesBySession = messagesBySession;
+  appendChatMessageToCache(state.chatMessagesBySession, state, { sessionKey, agentId }, message);
 }
 
-function appendCachedChatMessage(state: ChatState, sessionKey: string, message: unknown) {
-  const defaults = readChatMessageCacheSessionDefaults(state);
-  for (const cacheKey of resolveEquivalentChatMessageCacheKeys(sessionKey, defaults)) {
-    const current = state.chatMessagesBySession?.[cacheKey] ?? [];
-    setCachedChatMessages(state, cacheKey, [...current, message]);
+function replaceCachedChatMessages(
+  state: ChatState,
+  sessionKey: string,
+  messages: unknown[],
+  agentId?: string,
+) {
+  if (!state.chatMessagesBySession) {
+    return;
   }
-}
-
-function replaceCachedChatMessages(state: ChatState, sessionKey: string, messages: unknown[]) {
-  const defaults = readChatMessageCacheSessionDefaults(state);
-  for (const cacheKey of resolveEquivalentChatMessageCacheKeys(sessionKey, defaults)) {
-    setCachedChatMessages(state, cacheKey, messages);
-  }
+  cacheChatMessages(state.chatMessagesBySession, state, { sessionKey, agentId }, messages);
 }
 
 export async function loadChatHistory(
@@ -754,7 +751,7 @@ async function loadChatHistoryUncached(
     if (lateOptimisticTail.length > 0) {
       state.chatMessages = [...state.chatMessages, ...lateOptimisticTail];
     }
-    replaceCachedChatMessages(state, sessionKey, state.chatMessages);
+    replaceCachedChatMessages(state, sessionKey, state.chatMessages, requestAgentId);
     state.currentSessionId =
       typeof res.sessionInfo?.sessionId === "string" && res.sessionInfo.sessionId.trim()
         ? res.sessionInfo.sessionId
@@ -1274,7 +1271,10 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     if (payload.state === "final") {
       const finalMessage = normalizeFinalAssistantMessage(payload.message);
       if (finalMessage && !shouldHideAssistantChatMessage(finalMessage)) {
-        appendCachedChatMessage(state, payload.sessionKey, finalMessage);
+        const cacheAgentId = isGlobalSessionKey(payload.sessionKey)
+          ? (payload.agentId ?? resolveDefaultAgentId(state) ?? DEFAULT_AGENT_ID)
+          : payload.agentId;
+        appendCachedChatMessage(state, payload.sessionKey, finalMessage, cacheAgentId);
       }
     }
     return null;

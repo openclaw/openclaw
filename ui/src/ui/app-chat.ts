@@ -25,10 +25,7 @@ import {
   type ChatInputHistoryState,
 } from "./chat/input-history.ts";
 import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
-import {
-  readChatMessageCacheSessionDefaults,
-  resolveEquivalentChatMessageCacheKeys,
-} from "./chat/session-message-cache-keys.ts";
+import { clearChatMessagesFromCache, type ChatMessageCache } from "./chat/session-message-cache.ts";
 import type { ChatSideResult } from "./chat/side-result.ts";
 import { executeSlashCommand } from "./chat/slash-command-executor.ts";
 import {
@@ -103,6 +100,7 @@ export type ChatHost = ChatInputHistoryState & {
   chatAttachments: ChatAttachment[];
   chatQueue: ChatQueueItem[];
   chatQueueBySession?: Record<string, ChatQueueItem[]>;
+  chatMessagesBySession?: ChatMessageCache;
   chatRunId: string | null;
   chatSending: boolean;
   lastError?: string | null;
@@ -1950,12 +1948,7 @@ function clearCachedChatMessagesForSession(host: ChatHost, sessionKey: string) {
   if (!host.chatMessagesBySession) {
     return;
   }
-  const messagesBySession = { ...host.chatMessagesBySession };
-  const defaults = readChatMessageCacheSessionDefaults(host);
-  for (const cacheKey of resolveEquivalentChatMessageCacheKeys(sessionKey, defaults)) {
-    delete messagesBySession[cacheKey];
-  }
-  host.chatMessagesBySession = messagesBySession;
+  clearChatMessagesFromCache(host.chatMessagesBySession, host, { sessionKey });
 }
 
 async function clearChatHistory(host: ChatHost) {
