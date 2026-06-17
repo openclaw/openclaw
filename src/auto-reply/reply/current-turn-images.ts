@@ -130,8 +130,13 @@ export async function resolveCurrentTurnImages(params: {
     );
     if (images.length < undescribedImageAttachments.length) {
       logVerbose(
-        `agent-runner: native OpenClaw media resolution produced ${images.length}/${undescribedImageAttachments.length} current image attachment(s); falling back to prompt image refs`,
+        `agent-runner: native OpenClaw media resolution produced ${images.length}/${undescribedImageAttachments.length} current image attachment(s)`,
       );
+      // Preserve partial results when some attachments fail to resolve
+      // instead of dropping everything. Only fall back when nothing loaded.
+      if (images.length > 0) {
+        return { images, imageOrder: images.map(() => "inline" as const) };
+      }
       return { images: params.images, imageOrder: params.imageOrder };
     }
     return images.length > 0
