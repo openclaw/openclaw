@@ -1509,14 +1509,6 @@ export function resolveLatestVersionFromPackage(detail: ClawHubPackageDetail): s
   return detail.package?.latestVersion ?? detail.package?.tags?.latest ?? null;
 }
 
-/** Detects package or skill detail payloads that represent skill-family packages. */
-export function isClawHubFamilySkill(detail: ClawHubPackageDetail | ClawHubSkillDetail): boolean {
-  if ("package" in detail) {
-    return detail.package?.family === "skill";
-  }
-  return Boolean(detail.skill);
-}
-
 /** Checks whether a host plugin API version satisfies a ClawHub plugin API range. */
 export function satisfiesPluginApiRange(
   pluginApiVersion: string,

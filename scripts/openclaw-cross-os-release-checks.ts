@@ -3,7 +3,7 @@
 // Executed directly via Node.js + tsx in the release workflow.
 
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   appendFileSync,
   chmodSync,
@@ -2470,7 +2470,7 @@ async function runInstalledModelsSet(params) {
 async function runInstalledAgentTurn(params) {
   let lastError;
   for (let attempt = 1; attempt <= 2; attempt += 1) {
-    const sessionId = `cross-os-release-check-${params.label}-${Date.now()}-${attempt}`;
+    const sessionId = buildCrossOsReleaseAgentSessionId(params.label, attempt);
     try {
       const logOffset = readLogFileSize(params.logPath);
       const result = await runInstalledCli({
@@ -2872,8 +2872,7 @@ async function maybeRunDiscordRoundtrip(params) {
     return "skipped-missing-config";
   }
 
-  const outboundNonce = `native-cross-os-outbound-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
-  const inboundNonce = `native-cross-os-inbound-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+  const { outboundNonce, inboundNonce } = buildCrossOsDiscordRoundtripNonces();
   let sentMessageId = null;
   let hostMessageId = null;
   try {
@@ -3398,7 +3397,7 @@ async function runModelsSet(params) {
 async function runAgentTurn(params) {
   let lastError;
   for (let attempt = 1; attempt <= 2; attempt += 1) {
-    const sessionId = `cross-os-release-check-${params.label}-${Date.now()}-${attempt}`;
+    const sessionId = buildCrossOsReleaseAgentSessionId(params.label, attempt);
     try {
       const logOffset = readLogFileSize(params.logPath);
       const result = await runOpenClaw({
@@ -3479,6 +3478,17 @@ export function shouldSkipOptionalCrossOsAgentTurnError(error, logPath) {
   }
   const log = readLogTextTail(logPath);
   return /"status"\s*:\s*"timeout"|Request timed out before a response was generated/u.test(log);
+}
+
+export function buildCrossOsReleaseAgentSessionId(label, attempt) {
+  return `cross-os-release-check-${label}-${randomUUID()}-${attempt}`;
+}
+
+export function buildCrossOsDiscordRoundtripNonces() {
+  return {
+    outboundNonce: `native-cross-os-outbound-${randomUUID()}`,
+    inboundNonce: `native-cross-os-inbound-${randomUUID()}`,
+  };
 }
 
 function buildReleaseAgentTurnArgs(sessionId) {

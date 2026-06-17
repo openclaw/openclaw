@@ -1,4 +1,5 @@
 // Guest Transports script supports OpenClaw repository automation.
+import { randomUUID } from "node:crypto";
 import { run } from "./host-command.ts";
 import type { PhaseRunner } from "./phase-runner.ts";
 import { encodePowerShell, psSingleQuote } from "./powershell.ts";
@@ -22,6 +23,10 @@ export interface WindowsBackgroundPowerShellOptions {
   script: string;
   timeoutMs: number;
   vmName: string;
+}
+
+function guestScriptName(extension: string): string {
+  return `openclaw-parallels-${randomUUID()}.${extension}`;
 }
 
 function appendOutput(
@@ -65,7 +70,7 @@ export async function runWindowsBackgroundPowerShell(
   const pollIntervalMs = Math.max(1, Math.floor(options.pollIntervalMs ?? 5_000));
   const runCommand = options.runCommand ?? run;
   const safeLabel = options.label.replaceAll(/[^A-Za-z0-9_-]/g, "-");
-  const nonce = `${safeLabel}-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+  const nonce = `${safeLabel}-${randomUUID()}`;
   const fileBase = `openclaw-parallels-${nonce}`;
   const pathsScript = `$base = Join-Path $env:TEMP ${psSingleQuote(fileBase)}
 $scriptPath = "$base.ps1"
@@ -366,7 +371,7 @@ export class LinuxGuest {
   }
 
   bash(script: string): string {
-    const scriptPath = `/tmp/openclaw-parallels-${process.pid}-${Date.now()}.sh`;
+    const scriptPath = `/tmp/${guestScriptName("sh")}`;
     const write = run(
       "prlctl",
       [
@@ -450,7 +455,7 @@ export class MacosGuest {
   }
 
   sh(script: string, env: Record<string, string> = {}): string {
-    const scriptPath = `/tmp/openclaw-parallels-${process.pid}-${Date.now()}.sh`;
+    const scriptPath = `/tmp/${guestScriptName("sh")}`;
     this.exec(["/bin/dd", `of=${scriptPath}`, "bs=1048576"], {
       input: `umask 022\n${script}`,
     });
@@ -486,7 +491,7 @@ export class WindowsGuest {
   }
 
   powershell(script: string, options: GuestExecOptions = {}): string {
-    const scriptName = `openclaw-parallels-${process.pid}-${Date.now()}.ps1`;
+    const scriptName = guestScriptName("ps1");
     const writeScript = `$scriptPath = Join-Path $env:TEMP ${JSON.stringify(scriptName)}
 [System.IO.File]::WriteAllText($scriptPath, [Console]::In.ReadToEnd(), [System.Text.UTF8Encoding]::new($false))`;
     const write = run(
