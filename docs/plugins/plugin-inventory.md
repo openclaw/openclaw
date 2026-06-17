@@ -137,7 +137,7 @@ Each entry lists the package, distribution route, and description.
 
 - **[mattermost](/plugins/reference/mattermost)** (`@openclaw/mattermost`) - included in OpenClaw. Adds the Mattermost channel surface for sending and receiving OpenClaw messages.
 
-- **[memory-core](/plugins/reference/memory-core)** (`@openclaw/memory-core`) - included in OpenClaw. Adds memory embedding provider support. Adds agent-callable tools.
+- **[memory-core](/plugins/reference/memory-core)** (`@openclaw/memory-core`) - included in OpenClaw. Adds agent-callable tools.
 
 - **[memory-wiki](/plugins/reference/memory-wiki)** (`@openclaw/memory-wiki`) - included in OpenClaw. Persistent wiki compiler and Obsidian-friendly knowledge vault for OpenClaw.
 
@@ -235,7 +235,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Official external packages
 
-34 plugins
+35 plugins
 
 - **[acpx](/plugins/reference/acpx)** (`@openclaw/acpx`) - npm; ClawHub. OpenClaw ACP runtime backend with plugin-owned session and transport management.
 
@@ -268,6 +268,8 @@ Each entry lists the package, distribution route, and description.
 - **[googlechat](/plugins/reference/googlechat)** (`@openclaw/googlechat`) - npm; ClawHub. OpenClaw Google Chat channel plugin for spaces and direct messages.
 
 - **[line](/plugins/reference/line)** (`@openclaw/line`) - npm; ClawHub. OpenClaw LINE channel plugin for LINE Bot API chats.
+
+- **[llama-cpp](/plugins/reference/llama-cpp)** (`@openclaw/llama-cpp-provider`) - npm; ClawHub. Local GGUF embeddings through node-llama-cpp.
 
 - **[lobster](/plugins/reference/lobster)** (`@openclaw/lobster`) - npm; ClawHub. Lobster workflow tool plugin for typed pipelines and resumable approvals.
 

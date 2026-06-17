@@ -1192,6 +1192,59 @@ describe("deliverOutboundPayloads", () => {
     resolveMediaAccessSpy.mockRestore();
   });
 
+  it("uses the base policy key for isolated heartbeat group media read denies", async () => {
+    const resolveMediaAccessSpy = vi.spyOn(
+      mediaCapabilityModule,
+      "resolveAgentScopedOutboundMediaAccess",
+    );
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
+
+    await deliverOutboundPayloads({
+      cfg: {
+        tools: {
+          allow: ["read"],
+        },
+        channels: {
+          matrix: {
+            groups: {
+              ops: {
+                toolsBySender: {
+                  "id:attacker": {
+                    deny: ["read"],
+                  },
+                },
+              },
+            },
+          },
+        } as OpenClawConfig["channels"],
+      },
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "heartbeat media", mediaUrl: "file:///tmp/policy.png" }],
+      deps: { matrix: sendMatrix },
+      session: {
+        key: "agent:main:matrix:group:ops:heartbeat",
+        policyKey: "agent:main:matrix:group:ops",
+        requesterSenderId: "attacker",
+      },
+    });
+
+    const [mediaAccessOptions] = requireMockCall(resolveMediaAccessSpy, "media access") as [
+      {
+        requesterSenderId?: unknown;
+        sessionKey?: unknown;
+      },
+    ];
+    expect(mediaAccessOptions?.sessionKey).toBe("agent:main:matrix:group:ops");
+    expect(mediaAccessOptions?.requesterSenderId).toBe("attacker");
+    const sendOptions = requireMatrixSendCall(sendMatrix)[2] as Record<string, unknown>;
+    expect(sendOptions.mediaReadFile).toBeUndefined();
+    expect((sendOptions.mediaLocalRoots as readonly string[] | undefined) ?? []).not.toContain(
+      "/tmp",
+    );
+    resolveMediaAccessSpy.mockRestore();
+  });
+
   it("forwards all sender fields to media access for non-id policy matching", async () => {
     const resolveMediaAccessSpy = vi.spyOn(
       mediaCapabilityModule,

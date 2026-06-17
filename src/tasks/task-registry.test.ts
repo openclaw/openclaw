@@ -17,6 +17,7 @@ import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-even
 import type { ParsedAgentSessionKey } from "../routing/session-key.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { registerActiveCronTaskRun, resetActiveCronTaskRunsForTests } from "./cron-task-cancel.js";
 import {
   createTaskFlowForTask as createTaskFlowForTaskOrNull,
   createManagedTaskFlow as createManagedTaskFlowOrNull,
@@ -57,6 +58,8 @@ import {
 } from "./task-registry.js";
 import {
   configureTaskRegistryMaintenance,
+  getInspectableTaskAuditFindings,
+  getInspectableTaskRegistrySummary,
   getInspectableTaskAuditSummary,
   previewTaskRegistryMaintenance,
   resetTaskRegistryMaintenanceRuntimeForTests,
@@ -471,6 +474,7 @@ describe("task-registry", () => {
     resetHeartbeatWakeStateForTests();
     resetAgentRunContextForTest();
     resetCronActiveJobsForTests();
+    resetActiveCronTaskRunsForTests();
     resetTaskRegistryControlRuntimeForTests();
     resetTaskRegistryDeliveryRuntimeForTests();
     resetTaskRegistryMaintenanceRuntimeForTests();
@@ -2090,6 +2094,27 @@ describe("task-registry", () => {
     });
   });
 
+  it("uses the child session agent for cross-agent background task attribution", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest({ persist: false });
+
+      const created = createTaskRecord({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:worker:subagent:child",
+        runId: "run-worker-subagent",
+        task: "Inspect worker state",
+        status: "running",
+        deliveryStatus: "pending",
+      });
+
+      expect(created.agentId).toBe("worker");
+      expect(listTasksForAgentId("worker").map((task) => task.taskId)).toEqual([created.taskId]);
+      expect(listTasksForAgentId("main")).toEqual([]);
+    });
+  });
+
   it("projects inspection-time orphaned tasks as lost without mutating the registry", async () => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryMemoryForTest();
@@ -2120,6 +2145,37 @@ describe("task-registry", () => {
         status: "running",
       });
       expect(peekSystemEvents("agent:main:main")).toStrictEqual([]);
+    });
+  });
+
+  it("keeps zero-argument inspection helpers fresh", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest();
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-06-16T00:00:00Z"));
+
+      const task = createTaskRecord({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "run-inspection-freshness",
+        task: "Inspect fresh task state",
+        status: "running",
+        deliveryStatus: "pending",
+      });
+      let listCalls = 0;
+      configureTaskRegistryMaintenanceRuntimeForTest({
+        currentTasks: new Map([[task.taskId, task]]),
+        snapshotTasks: [task],
+        listTaskRecords: () => {
+          listCalls += 1;
+          return listCalls === 1 ? [task] : [];
+        },
+      });
+
+      expect(getInspectableTaskRegistrySummary().total).toBe(1);
+      expect(getInspectableTaskAuditFindings()).toStrictEqual([]);
+      expect(listCalls).toBe(2);
     });
   });
 
@@ -3523,6 +3579,48 @@ describe("task-registry", () => {
       expectRecordFields(result.task, {
         taskId: task.taskId,
         status: "cancelled",
+      });
+    });
+  });
+
+  it("cancels active cron tasks through the cron runtime abort handle", async () => {
+    await withTaskRegistryTempDir(async () => {
+      const abortController = new AbortController();
+      const task = createTaskRecord({
+        runtime: "cron",
+        sourceId: "nightly-gmail-sync",
+        ownerKey: "",
+        scopeKind: "system",
+        runId: "cron:nightly-gmail-sync:123",
+        task: "Nightly Gmail sync",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+      });
+      if (!task) {
+        throw new Error("expected cron task");
+      }
+      registerActiveCronTaskRun({
+        runId: "cron:nightly-gmail-sync:123",
+        controller: abortController,
+      });
+
+      const result = await cancelTaskById({
+        cfg: {} as never,
+        taskId: task.taskId,
+      });
+
+      expect(abortController.signal.aborted).toBe(true);
+      expect(abortController.signal.reason).toBe("Cancelled by operator.");
+      expectRecordFields(result, {
+        found: true,
+        cancelled: true,
+      });
+      expectRecordFields(result.task, {
+        taskId: task.taskId,
+        runtime: "cron",
+        status: "cancelled",
+        error: "Cancelled by operator.",
       });
     });
   });

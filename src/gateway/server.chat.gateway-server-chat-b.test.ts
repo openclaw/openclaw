@@ -97,12 +97,24 @@ async function withGatewayChatHarness(
   }
 }
 
-async function writeMainSessionStore() {
+function testSessionFilePath(sessionDir: string, sessionId: string): string {
+  return path.join(sessionDir, `${sessionId}.jsonl`);
+}
+
+async function writeMainSessionStore(sessionDir?: string, sessionId = "sess-main") {
   await writeSessionStore({
     entries: {
-      main: { sessionId: "sess-main", updatedAt: Date.now() },
+      main: {
+        sessionId,
+        updatedAt: futureFixtureUpdatedAt(),
+        ...(sessionDir ? { sessionFile: testSessionFilePath(sessionDir, sessionId) } : {}),
+      },
     },
   });
+}
+
+function futureFixtureUpdatedAt(): number {
+  return Date.now() + 60_000;
 }
 
 async function writeGatewayConfig(config: Record<string, unknown>) {
@@ -115,8 +127,16 @@ async function writeGatewayConfig(config: Record<string, unknown>) {
   clearConfigCache();
 }
 
-async function writeMainSessionTranscript(sessionDir: string, lines: string[]) {
-  await fs.writeFile(path.join(sessionDir, "sess-main.jsonl"), `${lines.join("\n")}\n`, "utf-8");
+async function writeMainSessionTranscript(
+  sessionDir: string,
+  lines: string[],
+  sessionId = "sess-main",
+) {
+  await fs.writeFile(testSessionFilePath(sessionDir, sessionId), `${lines.join("\n")}\n`, "utf-8");
+}
+
+async function removeTempDir(dir: string): Promise<void> {
+  await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 }
 
 async function readTimelineEvents(filePath: string): Promise<Array<Record<string, unknown>>> {
@@ -193,13 +213,14 @@ async function prepareMainHistoryHarness(params: {
   ws: GatewaySocket;
   createSessionDir: () => Promise<string>;
   historyMaxBytes?: number;
+  sessionId?: string;
 }) {
   if (params.historyMaxBytes !== undefined) {
     setMaxChatHistoryMessagesBytesForTest(params.historyMaxBytes);
   }
   await connectOk(params.ws);
   const sessionDir = await params.createSessionDir();
-  await writeMainSessionStore();
+  await writeMainSessionStore(sessionDir, params.sessionId);
   return sessionDir;
 }
 
@@ -296,7 +317,7 @@ describe("gateway server chat", () => {
       clearConfigCache();
       testState.agentConfig = undefined;
       testState.sessionStorePath = undefined;
-      await fs.rm(sessionDir, { recursive: true, force: true });
+      await removeTempDir(sessionDir);
     }
   });
 
@@ -377,6 +398,27 @@ describe("gateway server chat", () => {
 
   test("chat.startup returns chat history with the initial agents list", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await writeGatewayConfig({
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-main",
+            },
+            models: {
+              "openai/gpt-main": {},
+            },
+          },
+          list: [{ id: "main", default: true }],
+        },
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://openai.example.com/v1",
+              models: [{ id: "gpt-main", name: "GPT Main" }],
+            },
+          },
+        },
+      });
       await connectOk(ws);
       const sessionDir = await createSessionDir();
       const updatedAt = Date.now();
@@ -406,6 +448,10 @@ describe("gateway server chat", () => {
           defaultId?: string | null;
           mainKey?: string | null;
         };
+        metadata?: {
+          commands?: Array<{ name?: string; textAliases?: string[] }>;
+          models?: Array<{ id?: string; provider?: string }>;
+        };
         messages?: unknown[];
         sessionInfo?: { key?: string; sessionId?: string };
       }>(ws, "chat.startup", { sessionKey: "main" });
@@ -418,6 +464,15 @@ describe("gateway server chat", () => {
         key: "agent:main:main",
         sessionId: "sess-main",
       });
+      expect(startup.payload?.metadata?.models).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: "gpt-main",
+            provider: "openai",
+          }),
+        ]),
+      );
+      expect(startup.payload?.metadata?.commands).toBeUndefined();
       expect(startup.payload?.messages).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
@@ -427,6 +482,234 @@ describe("gateway server chat", () => {
         ]),
       );
     });
+  });
+
+  test("chat.startup does not wait for slow optional model catalog metadata", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            modelProvider: "test-provider",
+            model: "slow-catalog-model",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+      const catalog =
+        createDeferred<Awaited<ReturnType<GatewayRequestContext["loadGatewayModelCatalog"]>>>();
+      const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+      const context = {
+        loadGatewayModelCatalog: vi
+          .fn<GatewayRequestContext["loadGatewayModelCatalog"]>()
+          .mockReturnValue(catalog.promise),
+        logGateway: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+          debug: vi.fn(),
+        },
+        chatAbortControllers: new Map(),
+        chatRunBuffers: new Map(),
+        getRuntimeConfig: () => ({}),
+      } as unknown as GatewayRequestContext;
+      const { chatHandlers } = await import("./server-methods/chat.js");
+
+      await chatHandlers["chat.startup"]({
+        req: {
+          type: "req",
+          id: "startup-slow-catalog",
+          method: "chat.startup",
+          params: { sessionKey: "main" },
+        },
+        params: { sessionKey: "main" },
+        client: null,
+        isWebchatConnect: () => false,
+        respond: ((ok, payload, error) => {
+          responses.push({ ok, payload, error });
+        }) as RespondFn,
+        context,
+      });
+
+      expect(context.loadGatewayModelCatalog).toHaveBeenCalledTimes(1);
+      expect(responses).toHaveLength(1);
+      expect(responses[0]?.ok).toBe(true);
+      const payload = responses[0]?.payload as
+        | {
+            agentsList?: { agents?: Array<{ id?: string }> };
+            metadata?: unknown;
+            sessionInfo?: { sessionId?: string };
+          }
+        | undefined;
+      expect(payload?.sessionInfo?.sessionId).toBe("sess-main");
+      expect(payload?.agentsList?.agents?.map((agent) => agent.id)).toContain("main");
+      expect(payload?.metadata).toBeUndefined();
+    } finally {
+      testState.sessionStorePath = undefined;
+      await removeTempDir(sessionDir);
+    }
+  });
+
+  test("chat.startup omits metadata when configured model visibility needs full discovery", async () => {
+    await withGatewayChatHarness(async ({ ws }) => {
+      await writeGatewayConfig({
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-main" },
+            models: {
+              "openai/*": {},
+            },
+          },
+          list: [{ id: "main", default: true }],
+        },
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://openai.example.com/v1",
+              models: [{ id: "gpt-main", name: "GPT Main" }],
+            },
+          },
+        },
+      });
+      await connectOk(ws);
+
+      const startup = await rpcReq<{ metadata?: unknown }>(ws, "chat.startup", {
+        sessionKey: "main",
+      });
+
+      expect(startup.ok).toBe(true);
+      expect(startup.payload?.metadata).toBeUndefined();
+    });
+  });
+
+  test("chat.startup scopes metadata to agent session keys without explicit agentId", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeSessionStore({
+        entries: {
+          "agent:work:main": {
+            sessionId: "sess-work",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+      const config = {
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-main",
+            },
+            models: {
+              "openai/gpt-main": {},
+            },
+          },
+          list: [
+            { id: "main", default: true },
+            {
+              id: "work",
+              model: {
+                primary: "minimax/MiniMax-M2.7-highspeed",
+              },
+              models: {
+                "minimax/MiniMax-M2.7-highspeed": {},
+              },
+            },
+          ],
+        },
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://openai.example.com/v1",
+              models: [{ id: "gpt-main", name: "GPT Main" }],
+            },
+            minimax: {
+              baseUrl: "https://minimax.example.com/v1",
+              models: [{ id: "MiniMax-M2.7-highspeed", name: "MiniMax M2.7 Highspeed" }],
+            },
+          },
+        },
+      };
+      await writeGatewayConfig(config);
+      const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+      const context = {
+        loadGatewayModelCatalog: vi
+          .fn<GatewayRequestContext["loadGatewayModelCatalog"]>()
+          .mockImplementation(async () => {
+            await Promise.resolve();
+            await Promise.resolve();
+            return [
+              {
+                id: "gpt-main",
+                name: "GPT Main",
+                provider: "openai",
+                input: ["text"],
+              },
+              {
+                id: "MiniMax-M2.7-highspeed",
+                name: "MiniMax M2.7 Highspeed",
+                provider: "minimax",
+                input: ["text"],
+              },
+            ];
+          }),
+        logGateway: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+          debug: vi.fn(),
+        },
+        chatAbortControllers: new Map(),
+        chatRunBuffers: new Map(),
+        getRuntimeConfig: () => config,
+      } as unknown as GatewayRequestContext;
+      const { chatHandlers } = await import("./server-methods/chat.js");
+
+      await chatHandlers["chat.startup"]({
+        req: {
+          type: "req",
+          id: "startup-agent-scoped-metadata",
+          method: "chat.startup",
+          params: { sessionKey: "agent:work:main" },
+        },
+        params: { sessionKey: "agent:work:main" },
+        client: null,
+        isWebchatConnect: () => false,
+        respond: ((ok, payload, error) => {
+          responses.push({ ok, payload, error });
+        }) as RespondFn,
+        context,
+      });
+
+      expect(context.loadGatewayModelCatalog).toHaveBeenCalledTimes(1);
+      expect(responses).toHaveLength(1);
+      expect(responses[0]?.ok).toBe(true);
+      const payload = responses[0]?.payload as
+        | {
+            metadata?: {
+              models?: Array<{ id?: string; provider?: string }>;
+            };
+            sessionInfo?: { key?: string; sessionId?: string };
+          }
+        | undefined;
+      expect(payload?.sessionInfo).toMatchObject({
+        key: "agent:work:main",
+        sessionId: "sess-work",
+      });
+      expect(payload?.metadata?.models).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: "MiniMax-M2.7-highspeed",
+            provider: "minimax",
+          }),
+        ]),
+      );
+    } finally {
+      testState.sessionStorePath = undefined;
+      await removeTempDir(sessionDir);
+    }
   });
 
   test("chat.metadata coalesces configured models and text commands", async () => {
@@ -630,7 +913,7 @@ describe("gateway server chat", () => {
       dispatchInboundMessageMock.mockReset();
       testState.sessionStorePath = undefined;
       clearConfigCache();
-      await fs.rm(sessionDir, { recursive: true, force: true });
+      await removeTempDir(sessionDir);
     }
   });
 
@@ -820,7 +1103,7 @@ describe("gateway server chat", () => {
       dispatchInboundMessageMock.mockReset();
       testState.sessionStorePath = undefined;
       clearConfigCache();
-      await fs.rm(sessionDir, { recursive: true, force: true });
+      await removeTempDir(sessionDir);
     }
   });
 
@@ -972,7 +1255,7 @@ describe("gateway server chat", () => {
         testState.agentConfig = undefined;
         testState.sessionStorePath = undefined;
         clearConfigCache();
-        await fs.rm(sessionDir, { recursive: true, force: true });
+        await removeTempDir(sessionDir);
       }
     },
   );
@@ -1159,7 +1442,7 @@ describe("gateway server chat", () => {
       dispatchInboundMessageMock.mockReset();
       testState.sessionStorePath = undefined;
       clearConfigCache();
-      await fs.rm(sessionDir, { recursive: true, force: true });
+      await removeTempDir(sessionDir);
     }
   });
 
@@ -1274,7 +1557,7 @@ describe("gateway server chat", () => {
       dispatchInboundMessageMock.mockReset();
       testState.sessionStorePath = undefined;
       clearConfigCache();
-      await fs.rm(sessionDir, { recursive: true, force: true });
+      await removeTempDir(sessionDir);
     }
   });
 
@@ -1408,7 +1691,7 @@ describe("gateway server chat", () => {
       dispatchInboundMessageMock.mockReset();
       testState.sessionStorePath = undefined;
       clearConfigCache();
-      await fs.rm(sessionDir, { recursive: true, force: true });
+      await removeTempDir(sessionDir);
     }
   });
 
@@ -1559,7 +1842,159 @@ describe("gateway server chat", () => {
       dispatchInboundMessageMock.mockReset();
       testState.sessionStorePath = undefined;
       clearConfigCache();
-      await fs.rm(sessionDir, { recursive: true, force: true });
+      await removeTempDir(sessionDir);
+    }
+  });
+
+  test("chat.send emits first-assistant timing for direct final replies", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+
+      const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+      const broadcast = vi.fn();
+      const broadcastToConnIds = vi.fn();
+      const context = {
+        loadGatewayModelCatalog: vi.fn<GatewayRequestContext["loadGatewayModelCatalog"]>(),
+        logGateway: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+          debug: vi.fn(),
+        },
+        agentRunSeq: new Map<string, number>(),
+        chatAbortControllers: new Map(),
+        chatAbortedRuns: new Map(),
+        chatRunBuffers: new Map(),
+        chatDeltaSentAt: new Map(),
+        chatDeltaLastBroadcastLen: new Map(),
+        chatDeltaLastBroadcastText: new Map(),
+        agentDeltaSentAt: new Map(),
+        bufferedAgentEvents: new Map(),
+        clearChatRunState: vi.fn(),
+        addChatRun: vi.fn(),
+        removeChatRun: vi.fn(),
+        broadcast,
+        broadcastToConnIds,
+        nodeSendToSession: vi.fn(),
+        registerToolEventRecipient: vi.fn(),
+        dedupe: new Map(),
+      } as unknown as GatewayRequestContext;
+      dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
+        const dispatcher = (
+          args as {
+            dispatcher?: {
+              sendFinalReply: (payload: { text: string }) => boolean;
+              markComplete: () => void;
+              waitForIdle: () => Promise<void>;
+            };
+          }
+        ).dispatcher;
+        dispatcher?.sendFinalReply({ text: "direct reply" });
+        dispatcher?.markComplete();
+        await dispatcher?.waitForIdle();
+        return {};
+      });
+
+      const { chatHandlers } = await import("./server-methods/chat.js");
+      await chatHandlers["chat.send"]({
+        req: {
+          type: "req",
+          id: "operator-direct-timing",
+          method: "chat.send",
+          params: {
+            sessionKey: "main",
+            message: "measure direct",
+            idempotencyKey: "idem-direct-server-timing",
+          },
+        },
+        params: {
+          sessionKey: "main",
+          message: "measure direct",
+          idempotencyKey: "idem-direct-server-timing",
+        },
+        client: {
+          connId: "conn-control-ui",
+          connect: {
+            client: {
+              id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+              mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+            },
+            scopes: ["operator.write"],
+          },
+        } as never,
+        isWebchatConnect: () => true,
+        respond: ((ok, payload, error) => {
+          responses.push({ ok, payload, error });
+        }) as RespondFn,
+        context,
+      });
+
+      expect(responses).toEqual([
+        {
+          ok: true,
+          payload: expect.objectContaining({
+            runId: "idem-direct-server-timing",
+            status: "started",
+          }),
+          error: undefined,
+        },
+      ]);
+      await vi.waitFor(
+        () => {
+          expect(broadcastToConnIds).toHaveBeenCalledWith(
+            "chat.send_timing",
+            expect.objectContaining({
+              phase: "first-assistant-event",
+              runId: "idem-direct-server-timing",
+              sessionKey: "agent:main:main",
+              ackToPhaseMs: expect.any(Number),
+              dispatchStartedToPhaseMs: expect.any(Number),
+              receivedToPhaseMs: expect.any(Number),
+            }),
+            new Set(["conn-control-ui"]),
+            { dropIfSlow: true },
+          );
+          expect(broadcast).toHaveBeenCalledWith(
+            "chat",
+            expect.objectContaining({
+              runId: "idem-direct-server-timing",
+              state: "final",
+              message: expect.objectContaining({
+                content: expect.arrayContaining([
+                  expect.objectContaining({
+                    text: "direct reply",
+                  }),
+                ]),
+              }),
+            }),
+          );
+        },
+        { timeout: 2_000, interval: 5 },
+      );
+
+      const firstAssistantTimingCallIndex = broadcastToConnIds.mock.calls.findIndex(
+        ([event, payload]) =>
+          event === "chat.send_timing" &&
+          (payload as { phase?: unknown }).phase === "first-assistant-event",
+      );
+      expect(firstAssistantTimingCallIndex).toBeGreaterThanOrEqual(0);
+      expect(
+        broadcastToConnIds.mock.invocationCallOrder[firstAssistantTimingCallIndex],
+      ).toBeLessThan(broadcast.mock.invocationCallOrder[0]);
+    } finally {
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await removeTempDir(sessionDir);
     }
   });
 
@@ -1567,6 +2002,7 @@ describe("gateway server chat", () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await connectOk(ws);
       const sessionDir = await createSessionDir();
+      const sessionId = "sess-claude-cli-backfill";
       const originalHome = process.env.HOME;
       const homeDir = path.join(sessionDir, "home");
       const cliSessionId = "5b8b202c-f6bb-4046-9475-d2f15fd07530";
@@ -1610,8 +2046,9 @@ describe("gateway server chat", () => {
         await writeSessionStore({
           entries: {
             main: {
-              sessionId: "sess-main",
-              updatedAt: Date.now(),
+              sessionId,
+              sessionFile: testSessionFilePath(sessionDir, sessionId),
+              updatedAt: futureFixtureUpdatedAt(),
               modelProvider: "claude-cli",
               model: "claude-sonnet-4-6",
               cliSessionBindings: {
@@ -1821,6 +2258,16 @@ describe("gateway server chat", () => {
       >;
       expect(stored["agent:main:main"]?.lastChannel).toBe("whatsapp");
       expect(stored["agent:main:main"]?.lastTo).toBe("+1555");
+
+      await vi.waitFor(async () => {
+        const completed = await rpcReq<{ status?: string }>(ws, "chat.send", {
+          sessionKey: "main",
+          message: "hello",
+          idempotencyKey: "idem-route",
+        });
+        expect(completed.ok).toBe(true);
+        expect(completed.payload?.status).toBe("ok");
+      }, FAST_WAIT_OPTS);
     });
   });
 
@@ -1940,7 +2387,7 @@ describe("gateway server chat", () => {
       } else {
         process.env.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH = previousTimelinePath;
       }
-      await fs.rm(timelineDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+      await removeTempDir(timelineDir);
     }
   });
 
@@ -2307,6 +2754,40 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.message.get returns archive-backed rows surfaced by history", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const sessionId = "sess-archive-backed";
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir, sessionId });
+      await fs.writeFile(
+        `${testSessionFilePath(sessionDir, sessionId)}.reset.2026-02-16T22-26-34.000Z`,
+        [
+          JSON.stringify({ type: "session", version: 1, id: sessionId }),
+          JSON.stringify({
+            id: "msg-archive-full-assistant",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "archive abcdefghij" }],
+              timestamp: Date.now(),
+            },
+          }),
+        ].join("\n"),
+        "utf-8",
+      );
+
+      const historyMessages = await fetchHistoryMessages(ws, { maxChars: 12 });
+      expect(JSON.stringify(historyMessages)).toContain("archive abcd\\n...(truncated)...");
+
+      const full = await fetchChatMessage(ws, {
+        sessionKey: "main",
+        messageId: "msg-archive-full-assistant",
+      });
+      expect(full.ok).toBe(true);
+      expect(full.unavailableReason).toBeUndefined();
+      expect(JSON.stringify(full.message)).toContain("archive abcdefghij");
+      expect(JSON.stringify(full.message)).not.toContain("...(truncated)...");
+    });
+  });
+
   test("chat.message.get accepts the selected agent for global sessions", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await writeGatewayConfig({
@@ -2399,6 +2880,21 @@ describe("gateway server chat", () => {
             timestamp: Date.now(),
           },
         }),
+        JSON.stringify({
+          id: "msg-side-delivery",
+          parentId: "msg-active",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "side delivery" }],
+            timestamp: Date.now(),
+          },
+        }),
+        JSON.stringify({
+          type: "leaf",
+          id: "active-leaf",
+          parentId: "msg-side-delivery",
+          targetId: "msg-active",
+        }),
       ]);
 
       const stale = await fetchChatMessage(ws, {
@@ -2408,12 +2904,20 @@ describe("gateway server chat", () => {
       expect(stale.ok).toBe(false);
       expect(stale.unavailableReason).toBe("not_found");
 
+      const sideDelivery = await fetchChatMessage(ws, {
+        sessionKey: "main",
+        messageId: "msg-side-delivery",
+      });
+      expect(sideDelivery.ok).toBe(false);
+      expect(sideDelivery.unavailableReason).toBe("not_found");
+
       const active = await fetchChatMessage(ws, {
         sessionKey: "main",
         messageId: "msg-active",
       });
       expect(active.ok).toBe(true);
       expect(JSON.stringify(active.message)).toContain("active branch");
+      expect(JSON.stringify(await fetchHistoryMessages(ws))).not.toContain("side delivery");
     });
   });
 

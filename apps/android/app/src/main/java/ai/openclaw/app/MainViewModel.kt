@@ -111,6 +111,8 @@ class MainViewModel(
 
   val isConnected: StateFlow<Boolean> = runtimeState(initial = false) { it.isConnected }
   val isNodeConnected: StateFlow<Boolean> = runtimeState(initial = false) { it.nodeConnected }
+  val nodeCapabilityApprovalState: StateFlow<GatewayNodeApprovalState> =
+    runtimeState(initial = GatewayNodeApprovalState.Loading) { it.nodeCapabilityApprovalState }
   val statusText: StateFlow<String> = runtimeState(initial = "Offline") { it.statusText }
   val gatewayConnectionProblem: StateFlow<GatewayConnectionProblem?> = runtimeState(initial = null) { it.gatewayConnectionProblem }
   val serverName: StateFlow<String?> = runtimeState(initial = null) { it.serverName }
@@ -172,6 +174,7 @@ class MainViewModel(
   val canvasDebugStatusEnabled: StateFlow<Boolean> = prefs.canvasDebugStatusEnabled
   val installedAppsSharingEnabled: StateFlow<Boolean> = prefs.installedAppsSharingEnabled
   val speakerEnabled: StateFlow<Boolean> = prefs.speakerEnabled
+  val appearanceThemeMode: StateFlow<AppearanceThemeMode> = prefs.appearanceThemeMode
   val voiceCaptureMode: StateFlow<VoiceCaptureMode> = runtimeState(initial = VoiceCaptureMode.Off) { it.voiceCaptureMode }
   val micEnabled: StateFlow<Boolean> = runtimeState(initial = false) { it.micEnabled }
 
@@ -438,6 +441,10 @@ class MainViewModel(
 
   fun setSpeakerEnabled(enabled: Boolean) {
     ensureRuntime().setSpeakerEnabled(enabled)
+  }
+
+  fun setAppearanceThemeMode(mode: AppearanceThemeMode) {
+    prefs.setAppearanceThemeMode(mode)
   }
 
   fun refreshGatewayConnection() {

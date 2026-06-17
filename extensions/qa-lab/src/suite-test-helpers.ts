@@ -24,7 +24,7 @@ export function makeQaSuiteTestScenario(
     ...(params.plugins ? { plugins: params.plugins } : {}),
     ...(params.gatewayConfigPatch ? { gatewayConfigPatch: params.gatewayConfigPatch } : {}),
     ...(params.gatewayRuntime ? { gatewayRuntime: params.gatewayRuntime } : {}),
-    sourcePath: `qa/scenarios/${id}.md`,
+    sourcePath: `qa/scenarios/${id}.yaml`,
     execution: {
       kind: "flow",
       ...(params.config ? { config: params.config } : {}),

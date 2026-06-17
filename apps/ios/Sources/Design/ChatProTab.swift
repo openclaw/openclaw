@@ -6,7 +6,26 @@ struct ChatProTab: View {
     @Environment(NodeAppModel.self) private var appModel
     @Environment(\.colorScheme) private var colorScheme
     @State private var viewModel: OpenClawChatViewModel?
-    @State private var viewModelUsesAppleReviewDemoTransport = false
+    @State private var viewModelTransportModeID = ""
+    let headerLeadingAction: OpenClawSidebarHeaderAction?
+    let headerTitle: String?
+    let headerSubtitle: String?
+    let showsAgentBadge: Bool
+    let openSettings: (() -> Void)?
+
+    init(
+        headerLeadingAction: OpenClawSidebarHeaderAction? = nil,
+        headerTitle: String? = nil,
+        headerSubtitle: String? = nil,
+        showsAgentBadge: Bool = true,
+        openSettings: (() -> Void)? = nil)
+    {
+        self.headerLeadingAction = headerLeadingAction
+        self.headerTitle = headerTitle
+        self.headerSubtitle = headerSubtitle
+        self.showsAgentBadge = showsAgentBadge
+        self.openSettings = openSettings
+    }
 
     var body: some View {
         NavigationStack {
@@ -45,6 +64,7 @@ struct ChatProTab: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .safeAreaPadding(.top, 8)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .navigationBarHidden(true)
@@ -59,6 +79,10 @@ struct ChatProTab: View {
             self.syncChatViewModel()
             self.viewModel?.refresh()
         }
+        .onChange(of: self.appModel.isScreenshotFixtureModeEnabled) { _, _ in
+            self.syncChatViewModel()
+            self.viewModel?.refresh()
+        }
         .onChange(of: self.appModel.isOperatorGatewayConnected) { _, connected in
             guard connected else { return }
             self.syncChatViewModel()
@@ -67,7 +91,29 @@ struct ChatProTab: View {
     }
 
     private var header: some View {
-        HStack(spacing: 11) {
+        OpenClawAdaptiveHeaderRow(
+            title: self.headerDisplayTitle,
+            subtitle: self.headerDisplaySubtitle,
+            titleFont: .headline.weight(.semibold),
+            subtitleFont: .caption,
+            subtitleLineLimit: 1)
+        {
+            HStack(spacing: 11) {
+                if let headerLeadingAction {
+                    OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
+                }
+                self.headerIdentityBadge
+            }
+        } accessory: {
+            self.connectionPillButton
+        }
+        .padding(.horizontal, OpenClawProMetric.pagePadding)
+        .padding(.bottom, 4)
+    }
+
+    @ViewBuilder
+    private var headerIdentityBadge: some View {
+        if self.showsAgentBadge {
             Text(self.agentBadge)
                 .font(.system(size: self.agentBadge.count > 2 ? 13 : 16, weight: .bold, design: .rounded))
                 .foregroundStyle(.white)
@@ -86,36 +132,19 @@ struct ChatProTab: View {
                                 endPoint: .bottomTrailing)))
                 .overlay(Circle().strokeBorder(.white.opacity(0.18), lineWidth: 1))
                 .shadow(color: OpenClawBrand.accent.opacity(0.18), radius: 10, y: 5)
-
-            VStack(alignment: .leading, spacing: 1) {
-                Text(self.agentDisplayName)
-                    .font(.headline.weight(.semibold))
-                    .lineLimit(1)
-                Text("AI Assistant")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-
-            Spacer(minLength: 8)
-
-            self.connectionPill
+        } else {
+            ProIconBadge(systemName: "bubble.left", color: OpenClawBrand.accent)
         }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
-        .padding(.top, 8)
-        .padding(.bottom, 4)
     }
 
     private func syncChatViewModel() {
         let sessionKey = self.appModel.chatSessionKey
-        let usesDemoTransport = self.appModel.isAppleReviewDemoModeEnabled
+        let transportModeID = self.appModel.chatTransportModeID
         guard let viewModel else {
-            self.viewModelUsesAppleReviewDemoTransport = usesDemoTransport
+            self.viewModelTransportModeID = transportModeID
             self.viewModel = OpenClawChatViewModel(
                 sessionKey: sessionKey,
-                transport: usesDemoTransport
-                    ? AppleReviewDemoChatTransport()
-                    : IOSGatewayChatTransport(gateway: self.appModel.operatorSession),
+                transport: self.appModel.makeChatTransport(),
                 onSessionChanged: { sessionKey in
                     self.appModel.focusChatSession(sessionKey)
                 },
@@ -124,13 +153,11 @@ struct ChatProTab: View {
                 })
             return
         }
-        if self.viewModelUsesAppleReviewDemoTransport != usesDemoTransport {
-            self.viewModelUsesAppleReviewDemoTransport = usesDemoTransport
+        if self.viewModelTransportModeID != transportModeID {
+            self.viewModelTransportModeID = transportModeID
             self.viewModel = OpenClawChatViewModel(
                 sessionKey: sessionKey,
-                transport: usesDemoTransport
-                    ? AppleReviewDemoChatTransport()
-                    : IOSGatewayChatTransport(gateway: self.appModel.operatorSession),
+                transport: self.appModel.makeChatTransport(),
                 onSessionChanged: { sessionKey in
                     self.appModel.focusChatSession(sessionKey)
                 },
@@ -162,35 +189,91 @@ struct ChatProTab: View {
             ?? "main"
     }
 
+    @ViewBuilder
+    private var connectionPillButton: some View {
+        if let openSettings {
+            Button(action: openSettings) {
+                self.connectionPill
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint("Opens Settings / Gateway")
+        } else {
+            self.connectionPill
+        }
+    }
+
     private var connectionPill: some View {
         HStack(spacing: 6) {
-            ProStatusDot(color: self.gatewayConnected ? OpenClawBrand.ok : .orange)
-            Text(self.gatewayConnected ? "Connected" : "Connecting")
+            ProStatusDot(color: self.gatewayPillColor)
+            Text(Self.gatewayPillTitle(state: self.gatewayDisplayState, isGatewayUsable: self.gatewayConnected))
                 .font(.caption.weight(.semibold))
                 .lineLimit(1)
         }
-        .foregroundStyle(self.gatewayConnected ? OpenClawBrand.ok : .orange)
+        .foregroundStyle(self.gatewayPillColor)
         .padding(.horizontal, 10)
         .frame(height: 30)
         .background {
             Capsule()
-                .fill((self.gatewayConnected ? OpenClawBrand.ok : Color.orange).opacity(0.11))
+                .fill(self.gatewayPillColor.opacity(0.11))
         }
         .overlay {
             Capsule()
-                .strokeBorder((self.gatewayConnected ? OpenClawBrand.ok : Color.orange).opacity(0.16), lineWidth: 1)
+                .strokeBorder(self.gatewayPillColor.opacity(0.16), lineWidth: 1)
         }
     }
 
     private var gatewayConnected: Bool {
-        guard GatewayStatusBuilder.build(appModel: self.appModel) == .connected else {
+        guard self.gatewayDisplayState == .connected else {
             return false
         }
-        return self.appModel.isAppleReviewDemoModeEnabled || self.appModel.isOperatorGatewayConnected
+        return self.appModel.isLocalChatFixtureEnabled || self.appModel.isOperatorGatewayConnected
+    }
+
+    private var gatewayDisplayState: GatewayDisplayState {
+        GatewayStatusBuilder.build(appModel: self.appModel)
+    }
+
+    private var gatewayPillColor: Color {
+        switch self.gatewayDisplayState {
+        case .connected:
+            self.gatewayConnected ? OpenClawBrand.ok : .secondary
+        case .connecting:
+            OpenClawBrand.accent
+        case .error:
+            OpenClawBrand.warn
+        case .disconnected:
+            .secondary
+        }
+    }
+
+    nonisolated static func gatewayPillTitle(state: GatewayDisplayState, isGatewayUsable: Bool) -> String {
+        switch state {
+        case .connected:
+            isGatewayUsable ? "Connected" : "Unavailable"
+        case .connecting:
+            "Connecting"
+        case .error:
+            "Attention"
+        case .disconnected:
+            "Offline"
+        }
     }
 
     private var messagePlaceholder: String {
         self.gatewayConnected ? "Message \(self.agentDisplayName)..." : "Connect to a gateway"
+    }
+
+    private var headerDisplayTitle: String {
+        self.normalized(self.headerTitle)
+            ?? Self.defaultHeaderTitle(showsAgentBadge: self.showsAgentBadge, agentDisplayName: self.agentDisplayName)
+    }
+
+    private var headerDisplaySubtitle: String {
+        self.normalized(self.headerSubtitle) ?? "AI Assistant"
+    }
+
+    nonisolated static func defaultHeaderTitle(showsAgentBadge: Bool, agentDisplayName: String) -> String {
+        showsAgentBadge ? agentDisplayName : "Chat"
     }
 
     private var chatUserAccent: Color {

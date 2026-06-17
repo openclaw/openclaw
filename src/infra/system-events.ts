@@ -99,33 +99,41 @@ function findDuplicateInQueue(
   return queue.some((event) => isDuplicateSystemEvent(event, incoming));
 }
 
-export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
+export function enqueueSystemEventEntry(
+  text: string,
+  options: SystemEventOptions,
+): SystemEvent | null {
   const key = requireSessionKey(options.sessionKey);
   const entry = getOrCreateSessionQueue(key);
   // These entries are rendered as `System:` lines, so strip nested system-marker
   // spoofs at the queue boundary before any plugin/channel text reaches a prompt.
   const cleaned = sanitizeInboundSystemTags(text).trim();
   if (!cleaned) {
-    return false;
+    return null;
   }
   const normalizedContextKey = normalizeContextKey(options.contextKey);
   const normalizedDeliveryContext = normalizeDeliveryContext(options.deliveryContext);
   if (findDuplicateInQueue(entry.queue, cleaned, normalizedContextKey, normalizedDeliveryContext)) {
-    return false;
+    return null;
   }
   if (normalizedContextKey !== null) {
     entry.lastContextKey = normalizedContextKey;
   }
-  entry.queue.push({
+  const event: SystemEvent = {
     text: cleaned,
     ts: Date.now(),
     contextKey: normalizedContextKey,
     deliveryContext: normalizedDeliveryContext,
-  });
+  };
+  entry.queue.push(event);
   if (entry.queue.length > MAX_EVENTS) {
     entry.queue.shift();
   }
-  return true;
+  return cloneSystemEvent(event);
+}
+
+export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
+  return enqueueSystemEventEntry(text, options) !== null;
 }
 
 export function drainSystemEventEntries(sessionKey: string): SystemEvent[] {

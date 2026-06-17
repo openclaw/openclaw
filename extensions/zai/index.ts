@@ -35,7 +35,7 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import { detectZaiEndpoint, type ZaiEndpointId } from "./detect.js";
 import { zaiMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { buildZaiModelDefinition } from "./model-definitions.js";
-import { applyZaiConfig, applyZaiProviderConfig, ZAI_DEFAULT_MODEL_REF } from "./onboard.js";
+import { applyZaiConfig, applyZaiProviderConfig, resolveZaiModelId } from "./onboard.js";
 
 const PROVIDER_ID = "zai";
 const GLM5_TEMPLATE_MODEL_ID = "glm-4.7";
@@ -104,6 +104,7 @@ function resolveGlm5ForwardCompatModel(
     ...template,
     id: def.id,
     name: def.name,
+    baseUrl: ctx.providerConfig?.baseUrl ?? template?.baseUrl,
     api: "openai-completions",
     provider: PROVIDER_ID,
     reasoning: def.reasoning,
@@ -112,10 +113,6 @@ function resolveGlm5ForwardCompatModel(
     contextWindow: def.contextWindow,
     maxTokens: def.maxTokens,
   } as ProviderRuntimeModel);
-}
-
-function resolveZaiDefaultModel(modelIdOverride?: string): string {
-  return modelIdOverride ? `zai/${modelIdOverride}` : ZAI_DEFAULT_MODEL_REF;
 }
 
 function isTrueParam(value: unknown): boolean {
@@ -222,6 +219,10 @@ async function runZaiApiKeyAuth(
   const detected = await detectZaiEndpoint({ apiKey, ...(endpoint ? { endpoint } : {}) });
   const modelIdOverride = detected?.modelId;
   const nextEndpoint = detected?.endpoint ?? endpoint ?? (await promptForZaiEndpoint(ctx));
+  const preset = {
+    ...(nextEndpoint ? { endpoint: nextEndpoint } : {}),
+    ...(modelIdOverride ? { modelId: modelIdOverride } : {}),
+  };
   return {
     profiles: [
       {
@@ -234,11 +235,8 @@ async function runZaiApiKeyAuth(
         ),
       },
     ],
-    configPatch: applyZaiProviderConfig(ctx.config, {
-      ...(nextEndpoint ? { endpoint: nextEndpoint } : {}),
-      ...(modelIdOverride ? { modelId: modelIdOverride } : {}),
-    }),
-    defaultModel: resolveZaiDefaultModel(modelIdOverride),
+    configPatch: applyZaiProviderConfig(ctx.config, preset),
+    defaultModel: `zai/${resolveZaiModelId(preset)}`,
     ...(detected?.note ? { notes: [detected.note] } : {}),
   };
 }

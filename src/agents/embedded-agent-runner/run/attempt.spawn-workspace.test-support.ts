@@ -59,6 +59,7 @@ type SessionManagerMocks = {
   appendCustomEntry: UnknownMock;
   flushPendingToolResults: UnknownMock;
   clearPendingToolResults: UnknownMock;
+  removeTrailingEntries: UnknownMock;
 };
 type AttemptSpawnWorkspaceHoisted = {
   spawnSubagentDirectMock: UnknownMock;
@@ -103,6 +104,7 @@ export function createSubscriptionMock(): SubscriptionMock {
   // override only the lifecycle method they need.
   return {
     assistantTexts: [] as string[],
+    getLastAssistantTextMessageIndex: () => undefined,
     toolMetas: [] as Array<{ toolName: string; meta?: string; asyncStarted?: boolean }>,
     runToolLifecycle: async <T>(toolParams: { execute: () => Promise<T> }) =>
       await toolParams.execute(),
@@ -117,6 +119,7 @@ export function createSubscriptionMock(): SubscriptionMock {
     getMessagingToolSourceReplyPayloads: () => [] as MessagingToolSourceReplyPayload[],
     getHeartbeatToolResponse: () => undefined,
     getPendingToolMediaReply: () => null,
+    hasToolMediaBlockReply: () => false,
     getVisibleBlockReplyCount: () => 0,
     getSuccessfulCronAdds: () => 0,
     getReplayState: () => ({
@@ -206,6 +209,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     appendCustomEntry: vi.fn(),
     flushPendingToolResults: vi.fn(),
     clearPendingToolResults: vi.fn(),
+    removeTrailingEntries: vi.fn(() => 0),
   };
   return {
     spawnSubagentDirectMock,
@@ -463,7 +467,7 @@ vi.mock("../tool-schema-runtime.js", () => ({
 }));
 
 vi.mock("../../session-file-repair.js", () => ({
-  repairSessionFileIfNeeded: async () => {},
+  repairSessionFileIfNeeded: async () => ({ repaired: false, droppedLines: 0 }),
 }));
 
 vi.mock("../session-manager-cache.js", () => ({
@@ -792,10 +796,14 @@ vi.mock("../sandbox-info.js", () => ({
   resolveEmbeddedSandboxInfoExecPolicy: () => ({}),
 }));
 
-vi.mock("../thinking.js", () => ({
-  dropReasoningFromHistory: <T>(messages: T) => messages,
-  dropThinkingBlocks: <T>(messages: T) => messages,
-}));
+vi.mock("../thinking.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../thinking.js")>();
+  return {
+    ...actual,
+    dropReasoningFromHistory: <T>(messages: T) => messages,
+    dropThinkingBlocks: <T>(messages: T) => messages,
+  };
+});
 
 vi.mock("../tool-name-allowlist.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../tool-name-allowlist.js")>();
@@ -824,13 +832,6 @@ vi.mock("./compaction-retry-aggregate-timeout.js", () => ({
 
 vi.mock("./compaction-timeout.js", () => ({
   resolveRunTimeoutDuringCompaction: () => "abort",
-  resolveRunTimeoutWithCompactionGraceMs: ({
-    runTimeoutMs,
-    compactionTimeoutMs,
-  }: {
-    runTimeoutMs: number;
-    compactionTimeoutMs: number;
-  }) => runTimeoutMs + compactionTimeoutMs,
   selectCompactionTimeoutSnapshot: ({
     currentSnapshot,
     currentSessionId,

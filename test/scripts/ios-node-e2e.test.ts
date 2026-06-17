@@ -164,7 +164,7 @@ async function listenGateway(params: {
   return `ws://127.0.0.1:${address.port}`;
 }
 
-function runScript(url: string): Promise<ScriptResult> {
+function runScript(url: string, extraArgs: readonly string[] = []): Promise<ScriptResult> {
   return new Promise((resolve) => {
     const child = spawn(
       process.execPath,
@@ -177,6 +177,7 @@ function runScript(url: string): Promise<ScriptResult> {
         "--token",
         "token",
         "--json",
+        ...extraArgs,
       ],
       { stdio: "pipe" },
     );
@@ -216,6 +217,14 @@ function runScript(url: string): Promise<ScriptResult> {
 }
 
 describe("ios-node-e2e", () => {
+  it("rejects malformed wait seconds before connecting", async () => {
+    const result = await runScript("ws://127.0.0.1:9", ["--wait-seconds", "1e3"]);
+
+    expect(result).toMatchObject({ signal: null, status: 1, timedOut: false });
+    expect(result.stderr).toContain("--wait-seconds must be a positive integer; got: 1e3");
+    expect(result.stdout).toBe("");
+  });
+
   it("fails empty node invoke payloads instead of counting them as proof", async () => {
     const invokeParams: Array<{ command?: string; idempotencyKey?: string }> = [];
     const url = await listenGateway({ mode: "empty", invokeParams });

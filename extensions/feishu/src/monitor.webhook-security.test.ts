@@ -164,9 +164,9 @@ function resolveTestClientIp(remoteAddress: string | undefined): string | undefi
   } as IncomingMessage);
 }
 
-afterEach(() => {
+afterEach(async () => {
   clearFeishuWebhookRateLimitStateForTest();
-  stopFeishuMonitor();
+  await stopFeishuMonitor();
 });
 
 afterAll(() => {

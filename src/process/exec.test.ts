@@ -234,7 +234,7 @@ describe("runCommandWithTimeout", () => {
       const result = await resultPromise;
       expect(result.termination).toBe("no-output-timeout");
       expect(result.noOutputTimedOut).toBe(true);
-      expect(result.code).not.toBe(0);
+      expect(result.code).toBe(124);
     },
   );
 
@@ -255,7 +255,7 @@ describe("runCommandWithTimeout", () => {
       const result = await resultPromise;
       expect(result.termination).toBe("timeout");
       expect(result.noOutputTimedOut).toBe(false);
-      expect(result.code).not.toBe(0);
+      expect(result.code).toBe(124);
     },
   );
 

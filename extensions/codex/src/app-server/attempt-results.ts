@@ -100,6 +100,7 @@ export function buildCodexTurnStartFailureResult(params: {
     assistantTexts: [],
     toolMetas: [],
     lastAssistant: undefined,
+    currentAttemptAssistant: undefined,
     didSendViaMessagingTool: false,
     messagingToolSentTexts: [],
     messagingToolSentMediaUrls: [],

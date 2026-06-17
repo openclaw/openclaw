@@ -328,3 +328,8 @@ export function resetShellPathCacheForTests(): void {
 export function getShellEnvAppliedKeys(): string[] {
   return [...lastAppliedKeys];
 }
+
+export function clearShellEnvAppliedKeys(keys: readonly string[]): void {
+  const removed = new Set(keys);
+  lastAppliedKeys = lastAppliedKeys.filter((key) => !removed.has(key));
+}

@@ -8,13 +8,14 @@ import type {
 import type { ReplyPayload } from "../../../auto-reply/reply-payload.js";
 import type { ReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
 import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
+import type { ChatType } from "../../../channels/chat-type.js";
 import type { InboundEventKind } from "../../../channels/inbound-event/kind.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { ImageContent } from "../../../llm/types.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import type { CommandQueueEnqueueFn } from "../../../process/command-queue.types.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
-import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
+import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
 import type { SkillSnapshot } from "../../../skills/types.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.exec-types.js";
 import type { AgentStreamParams, ClientToolDefinition } from "../../command/shared-types.js";
@@ -43,6 +44,8 @@ export type CurrentInboundPromptContext = {
 export type RunEmbeddedAgentParams = {
   sessionId: string;
   sessionKey?: string;
+  /** Immutable gateway lifecycle ownership captured when this execution was admitted. */
+  lifecycleGeneration?: string;
   /** Provider prompt-cache affinity key; distinct from transcript/session identity. */
   promptCacheKey?: string;
   /** Session-like key for sandbox and tool-policy resolution. Defaults to sessionKey. */
@@ -50,6 +53,7 @@ export type RunEmbeddedAgentParams = {
   agentId?: string;
   messageChannel?: string;
   messageProvider?: string;
+  chatType?: ChatType;
   agentAccountId?: string;
   /** What initiated this agent run: "user", "heartbeat", "cron", "memory", "overflow", or "manual". */
   trigger?: EmbeddedRunTrigger;
@@ -81,6 +85,8 @@ export type RunEmbeddedAgentParams = {
   senderIsOwner?: boolean;
   /** Current channel ID for auto-threading (Slack). */
   currentChannelId?: string;
+  /** Routable target for the current conversation when it differs from the native channel ID. */
+  currentMessagingTarget?: string;
   /** Current thread timestamp for auto-threading (Slack). */
   currentThreadTs?: string;
   /** Current inbound message id for action fallbacks (e.g. Telegram react). */
@@ -171,7 +177,7 @@ export type RunEmbeddedAgentParams = {
   runTimeoutOverrideMs?: number;
   runId: string;
   abortSignal?: AbortSignal;
-  onExecutionStarted?: () => void;
+  onExecutionStarted?: (info?: { lifecycleGeneration?: string }) => void;
   onExecutionPhase?: (info: {
     phase: EmbeddedAgentExecutionPhase;
     provider?: string;
@@ -183,12 +189,14 @@ export type RunEmbeddedAgentParams = {
     itemId?: string;
     firstModelCallStarted?: boolean;
   }) => void;
+  onLaneWait?: (info: { waitMs: number; queuedAhead: number; waiting?: boolean }) => void;
   onRunProgress?: (info: {
     reason: string;
     provider?: string;
     model?: string;
     backend?: string;
   }) => void;
+  onSessionIdChanged?: (sessionId: string) => void;
   replyOperation?: ReplyOperation;
   shouldEmitToolResult?: () => boolean;
   shouldEmitToolOutput?: () => boolean;
@@ -205,15 +213,19 @@ export type RunEmbeddedAgentParams = {
   }) => void | Promise<void>;
   onReasoningEnd?: () => void | Promise<void>;
   onToolResult?: (payload: ReplyPayload) => void | Promise<void>;
+  /** Synchronous private observer for the sanitized per-tool result. */
+  onAgentToolResult?: (event: { toolName: string; result: unknown; isError: boolean }) => void;
   onAgentEvent?: (evt: {
     stream: string;
     data: Record<string, unknown>;
     sessionKey?: string;
   }) => void | Promise<void>;
   /**
-   * Emit lifecycle "finishing" when the model turn ends; the caller owns the
-   * final lifecycle "end" after durable post-turn maintenance completes.
+   * Emit lifecycle "finishing" when the attempt ends; the caller owns the
+   * final lifecycle "end" or "error" after fallback and post-turn work settle.
    */
+  deferTerminalLifecycle?: boolean;
+  /** @deprecated Use deferTerminalLifecycle. */
   deferTerminalLifecycleEnd?: boolean;
   lane?: string;
   enqueue?: CommandQueueEnqueueFn;
@@ -255,4 +267,6 @@ export type RunEmbeddedAgentParams = {
    * exit promptly after emitting the final JSON result.
    */
   cleanupBundleMcpOnRunEnd?: boolean;
+  /** Mark explicit one-shot local CLI runs so plugin tools can release resources promptly. */
+  oneShotCliRun?: boolean;
 };

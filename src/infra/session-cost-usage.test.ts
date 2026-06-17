@@ -17,6 +17,7 @@ import {
   loadCostUsageSummaryFromCache,
   loadSessionCostSummary,
   loadSessionCostSummaryFromCache,
+  loadSessionCostSummariesFromCache,
   loadSessionLogs,
   loadSessionUsageTimeSeries,
   requestCostUsageCacheRefresh,
@@ -343,6 +344,45 @@ describe("session cost usage", () => {
         requestRefresh: false,
       });
       expect(cached.cacheStatus.status).toBe("stale");
+    });
+  });
+
+  it("loads multiple session summaries from one durable cache snapshot", async () => {
+    const root = await makeSessionCostRoot("cost-cache-batch");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFiles = await Promise.all(
+      ["sess-a", "sess-b"].map(async (sessionId, index) => {
+        const sessionFile = path.join(sessionsDir, `${sessionId}.jsonl`);
+        await fs.writeFile(
+          sessionFile,
+          transcriptText(sessionId, {
+            type: "message",
+            timestamp: `2026-02-05T12:0${index}:00.000Z`,
+            message: {
+              role: "assistant",
+              provider: "openai",
+              model: "gpt-5.5",
+              usage: { input: index + 1, output: 0, totalTokens: index + 1 },
+            },
+          }),
+          "utf-8",
+        );
+        return { sessionId, sessionFile };
+      }),
+    );
+
+    await withStateDir(root, async () => {
+      await refreshCostUsageCache({ sessionFiles: sessionFiles.map((entry) => entry.sessionFile) });
+      const result = await loadSessionCostSummariesFromCache({
+        sessions: sessionFiles,
+        agentId: "main",
+        startMs: Date.UTC(2026, 1, 5),
+        endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
+      });
+
+      expect(result.cacheStatus.status).toBe("fresh");
+      expect(result.summaries.map((summary) => summary?.totalTokens)).toEqual([1, 2]);
     });
   });
 
@@ -681,6 +721,72 @@ describe("session cost usage", () => {
       });
       expect(refreshed.totals.totalCost).toBeCloseTo(0.004, 5);
       expect(refreshed.cacheStatus?.status).toBe("fresh");
+    });
+  });
+
+  it("reclaims stale usage cache temp files before refreshing", async () => {
+    const root = await makeSessionCostRoot("cost-cache-temp-cleanup");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-cache-temp-cleanup.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      transcriptText("sess-cache-temp-cleanup", {
+        type: "message",
+        timestamp: "2026-02-05T12:00:00.000Z",
+        message: {
+          role: "assistant",
+          provider: "openai",
+          model: "gpt-5.4",
+          usage: {
+            input: 10,
+            output: 20,
+            totalTokens: 30,
+            cost: { total: 0.03 },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const staleLegacyTempPath = path.join(sessionsDir, ".usage-cost-cache.json.12345.tmp");
+    const staleCurrentTempPath = path.join(sessionsDir, ".usage-cost-cache.12345.tmp");
+    const recentTempPath = path.join(sessionsDir, ".usage-cost-cache.67890.tmp");
+    const lockTempPath = path.join(sessionsDir, ".usage-cost-cache.json.lock.12345.tmp");
+    await Promise.all(
+      [staleLegacyTempPath, staleCurrentTempPath, recentTempPath, lockTempPath].map((tempPath) =>
+        fs.writeFile(tempPath, "partial\n", "utf-8"),
+      ),
+    );
+    const staleTime = new Date(Date.now() - 60_000);
+    await Promise.all(
+      [staleLegacyTempPath, staleCurrentTempPath, lockTempPath].map((tempPath) =>
+        fs.utimes(tempPath, staleTime, staleTime),
+      ),
+    );
+
+    const exists = async (filePath: string): Promise<boolean> =>
+      await fs.stat(filePath).then(
+        () => true,
+        () => false,
+      );
+
+    await withStateDir(root, async () => {
+      const result = await refreshCostUsageCache();
+      expect(result).toBe("refreshed");
+
+      expect(await exists(staleLegacyTempPath)).toBe(false);
+      expect(await exists(staleCurrentTempPath)).toBe(false);
+      expect(await exists(recentTempPath)).toBe(true);
+      expect(await exists(lockTempPath)).toBe(true);
+
+      const summary = await loadCostUsageSummaryFromCache({
+        startMs: Date.UTC(2026, 1, 5),
+        endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
+        requestRefresh: false,
+      });
+      expect(summary.totals.totalTokens).toBe(30);
+      expect(summary.cacheStatus?.status).toBe("fresh");
     });
   });
 
@@ -1407,6 +1513,78 @@ describe("session cost usage", () => {
       });
       expect(summary.totals.totalTokens).toBe(10);
       expect(summary.cacheStatus?.status).toBe("fresh");
+    });
+  });
+
+  it("throttles cache writes during a large stale refresh and skips writes when nothing changed", async () => {
+    const root = await makeSessionCostRoot("cost-cache-throttle");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
+
+    const sessionCount = 300; // > USAGE_COST_CACHE_CHECKPOINT_FILES (256)
+    const baseTimestamp = "2026-02-05T12:00:00.000Z";
+    const makeEntry = (totalTokens: number, timestamp: string) =>
+      JSON.stringify({
+        type: "message",
+        timestamp,
+        message: {
+          role: "assistant",
+          provider: "openai",
+          model: "gpt-5.4",
+          usage: {
+            input: totalTokens,
+            output: 0,
+            totalTokens,
+            cost: { total: totalTokens / 1000 },
+          },
+        },
+      });
+
+    for (let index = 0; index < sessionCount; index += 1) {
+      const sessionId = `sess-throttle-${index}`;
+      await fs.writeFile(
+        path.join(sessionsDir, `${sessionId}.jsonl`),
+        `${JSON.stringify({ type: "session", version: 1, id: sessionId })}\n${makeEntry(1, baseTimestamp)}\n`,
+        "utf-8",
+      );
+    }
+
+    await withStateDir(root, async () => {
+      const renameSpy = vi.spyOn(fs, "rename");
+      const cacheRenamesBefore = renameSpy.mock.calls.length;
+      try {
+        await refreshCostUsageCache();
+        const cacheRenamesAfterCold = renameSpy.mock.calls.filter(
+          ([, dest]) => dest === cachePath,
+        ).length;
+
+        // Without throttling this cold refresh would rewrite once per file plus a final flush.
+        // With checkpointing it must be far fewer than the file count.
+        expect(cacheRenamesAfterCold).toBeGreaterThan(0);
+        expect(cacheRenamesAfterCold).toBeLessThan(sessionCount / 4);
+
+        const summary = await loadCostUsageSummaryFromCache({
+          startMs: Date.UTC(2026, 1, 5),
+          endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
+          requestRefresh: false,
+        });
+        expect(summary.totals.totalTokens).toBe(sessionCount);
+        expect(summary.cacheStatus?.status).toBe("fresh");
+
+        // No-op refresh: nothing stale, nothing deleted -> no cache rewrite.
+        const renamesBeforeNoOp = renameSpy.mock.calls.filter(
+          ([, dest]) => dest === cachePath,
+        ).length;
+        await refreshCostUsageCache();
+        const renamesAfterNoOp = renameSpy.mock.calls.filter(
+          ([, dest]) => dest === cachePath,
+        ).length;
+        expect(renamesAfterNoOp).toBe(renamesBeforeNoOp);
+      } finally {
+        renameSpy.mockRestore();
+        void cacheRenamesBefore;
+      }
     });
   });
 

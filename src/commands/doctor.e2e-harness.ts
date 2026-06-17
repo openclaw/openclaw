@@ -60,13 +60,13 @@ function createLegacyConfigSnapshot() {
   } as const;
 }
 
-export const readConfigFileSnapshot = vi.fn() as unknown as MockFn;
+const readConfigFileSnapshot = vi.fn() as unknown as MockFn;
 export const confirm = vi.fn().mockResolvedValue(true) as unknown as MockFn;
-export const select = vi.fn().mockResolvedValue("node") as unknown as MockFn;
-export const note = vi.fn() as unknown as MockFn;
+const select = vi.fn().mockResolvedValue("node") as unknown as MockFn;
+const note = vi.fn() as unknown as MockFn;
 export const writeConfigFile = vi.fn().mockResolvedValue(undefined) as unknown as MockFn;
-export const resolveOpenClawPackageRoot = vi.fn().mockResolvedValue(null) as unknown as MockFn;
-export const runGatewayUpdate = vi
+const resolveOpenClawPackageRoot = vi.fn().mockResolvedValue(null) as unknown as MockFn;
+const runGatewayUpdate = vi
   .fn()
   .mockResolvedValue(createGatewayUpdateResult()) as unknown as MockFn;
 export const collectRelevantDoctorPluginIds = vi.fn(() => []) as unknown as MockFn;
@@ -239,6 +239,11 @@ function createLegacyStateMigrationDetectionResult(params?: {
     deliveryQueues: {
       outboundPath: "/tmp/state/delivery-queue",
       sessionPath: "/tmp/state/session-delivery-queue",
+      hasLegacy: false,
+    },
+    execApprovals: {
+      sourcePath: "/tmp/state/exec-approvals.legacy.json",
+      targetPath: "/tmp/state/exec-approvals.json",
       hasLegacy: false,
     },
     channelPlans: {

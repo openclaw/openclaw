@@ -432,22 +432,21 @@ export async function runSearchSetupFlow(
 
   const existingProvider = config.tools?.web?.search?.provider;
 
-  const defaultProvider: SearchProvider = (() => {
+  const defaultChoice: SearchProvider = (() => {
     if (existingProvider && providerOptions.some((entry) => entry.id === existingProvider)) {
       return existingProvider;
     }
-    // Mirror the runtime auto-detect selection (honors autoDetectOrder and
-    // configured credentials, incl. keyless defaults) so accepting the setup
-    // default writes the same provider the gateway would pick — e.g. Parallel
-    // Search (Free), not whichever ready provider happens to sort first
-    // alphabetically. Resolve over the providers actually shown in setup
-    // (`providerOptions`) so the default can't pick an option that isn't listed
-    // or force-load runtime code for an install-catalog-only provider.
+    // Mirror runtime auto-detect only when it has a concrete configured signal.
+    // Keyless providers are selectable, but never preselected; pressing through
+    // setup should not opt the user into a third-party search destination.
+    // Resolve over the providers actually shown in setup (`providerOptions`) so
+    // the default can't pick an option that isn't listed or force-load runtime
+    // code for an install-catalog-only provider.
     // Clear any existing provider id before auto-detecting: the valid-existing
     // case already returned above, so a leftover value here is stale/invalid/
-    // disabled and would otherwise make the resolver short-circuit to
-    // providers[0] (e.g. Brave) instead of the keyless default. Keep the rest of
-    // the search config so configured credentials are still detected.
+    // disabled and would otherwise make the resolver short-circuit to that
+    // invalid selection. Keep the rest of the search config so configured
+    // credentials are still detected.
     const searchForAutoDetect = {
       ...config.tools?.web?.search,
       provider: undefined,
@@ -461,11 +460,13 @@ export async function runSearchSetupFlow(
     if (autoDetected) {
       return autoDetected.id;
     }
-    const detected = providerOptions.find((entry) => providerIsReady(config, entry));
+    const detected = providerOptions.find(
+      (entry) => providerNeedsCredential(entry) && providerIsReady(config, entry),
+    );
     if (detected) {
       return detected.id;
     }
-    return providerOptions[0].id;
+    return "__skip__";
   })();
 
   const options = providerOptions.map((entry) => {
@@ -488,7 +489,7 @@ export async function runSearchSetupFlow(
         hint: t("wizard.search.configureLaterHint"),
       },
     ],
-    initialValue: defaultProvider,
+    initialValue: defaultChoice,
     searchable: true,
   });
 

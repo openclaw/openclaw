@@ -220,6 +220,61 @@ describe("bundled plugin build entries", () => {
     }
   });
 
+  it("keeps dedicated channel contract exports off broad contract-api sidecars", () => {
+    const duplicateExportMarkersByArtifact = {
+      "directory-contract-api.ts": [
+        "DirectoryContractPlugin",
+        "DirectoryGroupsFromConfig",
+        "DirectoryPeersFromConfig",
+      ],
+      "doctor-contract-api.ts": [
+        "legacyConfigRules",
+        "normalizeCompatibilityConfig",
+        "stateMigrations",
+      ],
+      "secret-contract-api.ts": [
+        "channelSecrets",
+        "collectRuntimeConfigAssignments",
+        "secretTargetRegistryEntries",
+      ],
+      "security-audit-contract-api.ts": ["SecurityAuditFindings"],
+      "security-contract-api.ts": [
+        "collectUnsupportedSecretRefConfigCandidates",
+        "unsupportedSecretRefSurfacePatterns",
+      ],
+      "session-binding-contract-api.ts": [
+        "ConversationBindingManager",
+        "ThreadBindingManager",
+        "ThreadBindingsForTests",
+        "setMatrixRuntime",
+      ],
+    } as const;
+    const offenders: string[] = [];
+
+    for (const dirent of fs.readdirSync("extensions", { withFileTypes: true })) {
+      if (!dirent.isDirectory()) {
+        continue;
+      }
+      const contractApiPath = path.join("extensions", dirent.name, "contract-api.ts");
+      if (!fs.existsSync(contractApiPath)) {
+        continue;
+      }
+      const contractApi = fs.readFileSync(contractApiPath, "utf8");
+      for (const [artifact, markers] of Object.entries(duplicateExportMarkersByArtifact)) {
+        if (!fs.existsSync(path.join("extensions", dirent.name, artifact))) {
+          continue;
+        }
+        for (const marker of markers) {
+          if (contractApi.includes(marker)) {
+            offenders.push(`${contractApiPath} duplicates ${artifact}: ${marker}`);
+          }
+        }
+      }
+    }
+
+    expect(offenders).toStrictEqual([]);
+  });
+
   it("keeps bundled channel entry metadata on packed top-level sidecars", () => {
     const offenders: string[] = [];
 

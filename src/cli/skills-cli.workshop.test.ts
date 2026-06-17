@@ -63,6 +63,7 @@ vi.mock("../terminal/theme.js", () => ({
 
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => ({}),
+  resetConfigRuntimeState: () => undefined,
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({

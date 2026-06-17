@@ -205,6 +205,17 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
         },
       },
       {
+        id: "llama-cpp",
+        channels: [],
+        origin: "global",
+        enabledByDefault: true,
+        providers: [],
+        cliBackends: [],
+        contracts: {
+          embeddingProviders: ["local"],
+        },
+      },
+      {
         id: "google",
         channels: [],
         origin: "bundled",
@@ -395,6 +406,17 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
         enabledByDefault: undefined,
         providers: [],
         cliBackends: [],
+      },
+      {
+        id: "external-trusted-policy",
+        channels: [],
+        origin: "global",
+        enabledByDefault: undefined,
+        providers: [],
+        cliBackends: [],
+        contracts: {
+          trustedToolPolicies: ["workflow-budget"],
+        },
       },
       {
         id: "lossless-claw",
@@ -1102,7 +1124,7 @@ describe("resolveGatewayStartupPluginIds", () => {
       ["browser", "memory-core"],
     ],
     [
-      "ignores sentinel memory embedding providers that no plugin owns",
+      "includes the llama.cpp provider for configured local memory embeddings",
       {
         channels: {},
         agents: {
@@ -1111,7 +1133,7 @@ describe("resolveGatewayStartupPluginIds", () => {
           },
         },
       } as OpenClawConfig,
-      ["browser", "memory-core"],
+      ["browser", "llama-cpp", "memory-core"],
     ],
     [
       "skips memory embedding providers from disabled memory search blocks",
@@ -1296,6 +1318,32 @@ describe("resolveGatewayStartupPluginIds", () => {
       ["demo-channel", "browser", "voice-call", "memory-core", "demo-global-sidecar"],
     ],
     [
+      "includes explicitly enabled external channel plugins without channel config",
+      {
+        channels: {},
+        plugins: {
+          entries: {
+            "external-env-channel-plugin": { enabled: true },
+          },
+        },
+      } as OpenClawConfig,
+      ["browser", "external-env-channel-plugin", "memory-core"],
+    ],
+    [
+      "does not start explicitly enabled external channel plugins when every channel is disabled",
+      {
+        channels: {
+          "external-env-channel": { enabled: false },
+        },
+        plugins: {
+          entries: {
+            "external-env-channel-plugin": { enabled: true },
+          },
+        },
+      } as OpenClawConfig,
+      ["browser", "memory-core"],
+    ],
+    [
       "keeps default-enabled startup sidecars when a restrictive allowlist permits them",
       createStartupConfig({
         allowPluginIds: ["browser"],
@@ -1312,6 +1360,32 @@ describe("resolveGatewayStartupPluginIds", () => {
     ],
   ] as const)("%s", (_name, config, expected) => {
     expectStartupPluginIdsCase({ config, expected });
+  });
+
+  it("matches explicitly disabled channel ids case-insensitively", () => {
+    const registry = createManifestRegistryFixture();
+    useManifestRegistryFixture({
+      ...registry,
+      plugins: registry.plugins.map((plugin) =>
+        plugin.id === "external-env-channel-plugin"
+          ? Object.assign({}, plugin, { channels: ["External-Env-Channel"] })
+          : plugin,
+      ),
+    });
+
+    expectStartupPluginIdsCase({
+      config: {
+        channels: {
+          "external-env-channel": { enabled: false },
+        },
+        plugins: {
+          entries: {
+            "external-env-channel-plugin": { enabled: true },
+          },
+        },
+      } as OpenClawConfig,
+      expected: ["browser", "memory-core"],
+    });
   });
 
   it("keeps effective-only bundled sidecars behind restrictive allowlists", () => {
@@ -1431,6 +1505,17 @@ describe("resolveGatewayStartupPluginIds", () => {
         memorySlot: "none",
       }),
       expected: ["demo-global-explicit-startup"],
+    });
+  });
+
+  it("loads explicit trusted policy plugins at startup", () => {
+    expectStartupPluginIdsCase({
+      config: createStartupConfig({
+        allowPluginIds: ["external-trusted-policy"],
+        noConfiguredChannels: true,
+        memorySlot: "none",
+      }),
+      expected: ["external-trusted-policy"],
     });
   });
 
@@ -2355,6 +2440,78 @@ describe("resolveGatewayStartupPluginIds", () => {
         memorySlot: "memory-lancedb",
       }),
       expected: ["demo-channel", "browser", "memory-lancedb"],
+    });
+  });
+
+  it("includes memory-core as a dreaming sidecar for restrictive selected-memory allowlists", () => {
+    expectStartupPluginIdsCase({
+      config: {
+        channels: {},
+        plugins: {
+          allow: ["browser", "memory-lancedb"],
+          slots: { memory: "memory-lancedb" },
+          entries: {
+            "memory-lancedb": { enabled: true, config: { dreaming: { enabled: true } } },
+          },
+        },
+      } as OpenClawConfig,
+      expected: ["browser", "memory-core", "memory-lancedb"],
+    });
+  });
+
+  it("includes memory-core in restrictive dreaming startup metadata scopes", () => {
+    const registry = createManifestRegistryFixture();
+    const index = createInstalledPluginIndexFixture(registry);
+
+    expect(
+      resolveGatewayStartupMetadataPluginIds({
+        config: {
+          channels: {},
+          plugins: {
+            allow: ["browser", "memory-lancedb"],
+            slots: { memory: "memory-lancedb" },
+            entries: {
+              "memory-lancedb": { enabled: true, config: { dreaming: { enabled: true } } },
+            },
+          },
+        } as OpenClawConfig,
+        env: createPluginPlanningTestEnv(),
+        index,
+      }),
+    ).toEqual(["browser", "memory-core", "memory-lancedb"]);
+  });
+
+  it("does not include denied memory-core as a restrictive dreaming startup sidecar", () => {
+    expectStartupPluginIdsCase({
+      config: {
+        channels: {},
+        plugins: {
+          allow: ["browser", "memory-lancedb"],
+          deny: ["memory-core"],
+          slots: { memory: "memory-lancedb" },
+          entries: {
+            "memory-lancedb": { enabled: true, config: { dreaming: { enabled: true } } },
+          },
+        },
+      } as OpenClawConfig,
+      expected: ["browser", "memory-lancedb"],
+    });
+  });
+
+  it("does not include explicitly disabled memory-core as a restrictive dreaming startup sidecar", () => {
+    expectStartupPluginIdsCase({
+      config: {
+        channels: {},
+        plugins: {
+          allow: ["browser", "memory-lancedb"],
+          slots: { memory: "memory-lancedb" },
+          entries: {
+            "memory-core": { enabled: false },
+            "memory-lancedb": { enabled: true, config: { dreaming: { enabled: true } } },
+          },
+        },
+      } as OpenClawConfig,
+      expected: ["browser", "memory-lancedb"],
     });
   });
 

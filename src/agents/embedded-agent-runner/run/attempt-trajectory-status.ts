@@ -46,6 +46,7 @@ export type ResolveAttemptTrajectoryTerminalParams = {
   silentExpected?: boolean;
   emptyAssistantReplyIsSilent?: boolean;
   lastAssistantStopReason?: string;
+  hasTerminalOutput?: boolean;
 };
 
 /**
@@ -118,7 +119,6 @@ export function resolveAttemptTrajectoryTerminal(
     params.didSendDeterministicApprovalPrompt ||
     hasCommittedMessagingDeliveryEvidence(params) ||
     hasAcceptedSessionSpawn(params.acceptedSessionSpawns) ||
-    params.synthesizedPayloadCount > 0 ||
     params.heartbeatToolResponse !== undefined ||
     (params.clientToolCalls?.length ?? 0) > 0 ||
     params.yieldDetected === true ||
@@ -131,9 +131,21 @@ export function resolveAttemptTrajectoryTerminal(
       terminalError: NON_DELIVERABLE_TERMINAL_TURN_REASON,
     };
   }
+  if (
+    params.lastAssistantStopReason === "length" &&
+    !params.hasTerminalOutput &&
+    !hasExplicitTerminalDelivery
+  ) {
+    return {
+      status: "error",
+      terminalError: NON_DELIVERABLE_TERMINAL_TURN_REASON,
+    };
+  }
 
   const hasDeliverableOrProgress =
     hasExplicitTerminalDelivery ||
+    params.hasTerminalOutput ||
+    params.synthesizedPayloadCount > 0 ||
     hasNonEmptyAssistantText(params.assistantTexts) ||
     params.successfulCronAdds > 0;
 

@@ -2,10 +2,12 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { createConfigRuntimeEnv } from "../config/env-vars.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { saveAuthProfileStore } from "./auth-profiles/store.js";
 import { unsetEnv, withTempEnv } from "./models-config.e2e-harness.js";
 import {
@@ -16,6 +18,7 @@ import type { ProviderConfig } from "./models-config.providers.secrets.js";
 import { encodePluginModelCatalogRelativePath } from "./plugin-model-catalog.js";
 
 const TEST_ENV_VAR = "OPENCLAW_MODELS_CONFIG_TEST_ENV";
+const BUNDLED_PLUGINS_DIR = fileURLToPath(new URL("../../extensions/", import.meta.url));
 
 function createImplicitOpenRouterProvider(): ProviderConfig {
   return {
@@ -156,6 +159,38 @@ beforeAll(async () => {
 });
 
 describe("models-config", () => {
+  it("keeps the implicit provider catalog when explicit baseUrl is blank", async () => {
+    let observedConfig: OpenClawConfig | undefined;
+    const providers = await resolveProvidersForModelsJsonWithDeps(
+      {
+        cfg: {
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "   ",
+                apiKey: "OPENAI_API_KEY",
+                models: [],
+              },
+            },
+          },
+        },
+        agentDir: "/tmp/openclaw-models-config-env-vars-test",
+        env: {},
+      },
+      {
+        resolveImplicitProviders: async ({ config }) => {
+          observedConfig = config;
+          return { openai: createImplicitOpenAiProvider() };
+        },
+      },
+    );
+
+    expect(observedConfig?.models?.providers?.openai?.baseUrl).toBeUndefined();
+    expect(providers.openai?.baseUrl).toBe("https://api.openai.com/v1");
+    expect(providers.openai?.apiKey).toBe("OPENAI_API_KEY");
+    expect(providers.openai?.models?.[0]?.id).toBe("gpt-5.5");
+  });
+
   it("threads plugin metadata snapshots into implicit provider discovery", async () => {
     const pluginMetadataSnapshot = {
       index: { plugins: [{ pluginId: "zai", enabled: true }] },
@@ -500,33 +535,42 @@ describe("models-config", () => {
     const credentialsPath = path.join(agentDir, "application_default_credentials.json");
     await fs.writeFile(credentialsPath, JSON.stringify({ type: "authorized_user" }), "utf8");
     try {
-      const plan = await planOpenClawModelsJsonWithDeps(
+      const plan = await withEnvAsync(
         {
-          cfg: {
-            agents: {
-              defaults: {
-                models: {
-                  "google-vertex/gemini-2.5-pro": {},
+          OPENCLAW_BUNDLED_PLUGINS_DIR: BUNDLED_PLUGINS_DIR,
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+        },
+        async () =>
+          await planOpenClawModelsJsonWithDeps(
+            {
+              cfg: {
+                agents: {
+                  defaults: {
+                    models: {
+                      "google-vertex/gemini-2.5-pro": {},
+                    },
+                    model: { primary: "google-vertex/gemini-2.5-pro" },
+                  },
                 },
-                model: { primary: "google-vertex/gemini-2.5-pro" },
+                models: { providers: {} },
               },
+              agentDir,
+              env: {
+                OPENCLAW_BUNDLED_PLUGINS_DIR: BUNDLED_PLUGINS_DIR,
+                OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+                GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
+                GOOGLE_CLOUD_PROJECT: "vertex-project",
+                GOOGLE_CLOUD_LOCATION: "global",
+              } as NodeJS.ProcessEnv,
+              existingRaw: "",
+              existingParsed: null,
             },
-            models: { providers: {} },
-          },
-          agentDir,
-          env: {
-            GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
-            GOOGLE_CLOUD_PROJECT: "vertex-project",
-            GOOGLE_CLOUD_LOCATION: "global",
-          } as NodeJS.ProcessEnv,
-          existingRaw: "",
-          existingParsed: null,
-        },
-        {
-          resolveImplicitProviders: async () => ({
-            "google-vertex": createImplicitGoogleVertexProvider(),
-          }),
-        },
+            {
+              resolveImplicitProviders: async () => ({
+                "google-vertex": createImplicitGoogleVertexProvider(),
+              }),
+            },
+          ),
       );
 
       expect(plan.action).toBe("write");
@@ -566,17 +610,23 @@ describe("models-config", () => {
 
   it("does not overwrite already-set host env vars while ensuring models.json", async () => {
     await withTempEnv(["OPENROUTER_API_KEY", TEST_ENV_VAR], async () => {
-      process.env.OPENROUTER_API_KEY = "from-host"; // pragma: allowlist secret
-      process.env[TEST_ENV_VAR] = "from-host";
-      const { discoveryEnv, providers } = await resolveProvidersAndCaptureDiscoveryEnv(
-        createConfigEnvVarsConfig(),
-      );
+      await withEnvAsync(
+        {
+          OPENROUTER_API_KEY: "from-host", // pragma: allowlist secret
+          [TEST_ENV_VAR]: "from-host",
+        },
+        async () => {
+          const { discoveryEnv, providers } = await resolveProvidersAndCaptureDiscoveryEnv(
+            createConfigEnvVarsConfig(),
+          );
 
-      expect(discoveryEnv?.OPENROUTER_API_KEY).toBe("from-host");
-      expect(discoveryEnv?.[TEST_ENV_VAR]).toBe("from-host");
-      expect(providers.openrouter?.apiKey).toBe("OPENROUTER_API_KEY");
-      expect(process.env.OPENROUTER_API_KEY).toBe("from-host");
-      expect(process.env[TEST_ENV_VAR]).toBe("from-host");
+          expect(discoveryEnv?.OPENROUTER_API_KEY).toBe("from-host");
+          expect(discoveryEnv?.[TEST_ENV_VAR]).toBe("from-host");
+          expect(providers.openrouter?.apiKey).toBe("OPENROUTER_API_KEY");
+          expect(process.env.OPENROUTER_API_KEY).toBe("from-host");
+          expect(process.env[TEST_ENV_VAR]).toBe("from-host");
+        },
+      );
     });
   });
 });

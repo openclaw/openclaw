@@ -25,7 +25,7 @@ import { createServer } from "node:http";
 import { createConnection as createNetConnection, createServer as createNetServer } from "node:net";
 import type { Socket } from "node:net";
 import { tmpdir } from "node:os";
-import { dirname, join, relative, resolve, win32 as pathWin32 } from "node:path";
+import { basename, dirname, join, relative, resolve, win32 as pathWin32 } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isLocalBuildMetadataDistPath } from "./lib/local-build-metadata-paths.mjs";
 import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
@@ -128,6 +128,10 @@ export function buildCrossOsReleaseSmokePluginAllowlist(providerMeta) {
   return [...new Set([providerMeta.extensionId, ...RELEASE_SMOKE_PLUGIN_ALLOWLIST_BASE])];
 }
 
+export function buildCrossOsReleaseSmokeMemorySlotConfigArgs() {
+  return ["config", "set", "plugins.slots.memory", JSON.stringify("none"), "--strict-json"];
+}
+
 function shouldSeedProviderConfigModels(providerMeta) {
   return (
     typeof providerMeta.baseUrl === "string" || typeof providerMeta.timeoutSeconds === "number"
@@ -175,6 +179,19 @@ export const CROSS_OS_COMMAND_HEARTBEAT_SECONDS = parsePositiveIntegerEnv(
   "OPENCLAW_CROSS_OS_COMMAND_HEARTBEAT_SECONDS",
   60,
 );
+
+export function resolveNpmPackTarballFileName(value, label = "npm pack") {
+  const filename = typeof value === "string" ? value.trim() : "";
+  if (
+    !filename.endsWith(".tgz") ||
+    filename.includes("\0") ||
+    filename !== basename(filename) ||
+    filename !== pathWin32.basename(filename)
+  ) {
+    throw new Error(`${label} did not report a safe .tgz filename.`);
+  }
+  return filename;
+}
 
 if (isMainModule()) {
   try {
@@ -664,16 +681,14 @@ async function prepareCandidate(params) {
   writeFileSync(packJsonPath, packResult.stdout, "utf8");
   const parsedPack = JSON.parse(packResult.stdout);
   const lastPack = Array.isArray(parsedPack) ? parsedPack.at(-1) : null;
-  if (!lastPack?.filename) {
-    throw new Error("npm pack did not report a filename.");
-  }
+  const packFilename = resolveNpmPackTarballFileName(lastPack?.filename);
 
   return {
     sourceDir: params.sourceDir,
     sourceSha,
     candidateVersion: String(lastPack.version ?? packageJson.version ?? "").trim(),
-    candidateTgz: join(packDir, lastPack.filename),
-    candidateFileName: String(lastPack.filename).trim(),
+    candidateTgz: join(packDir, packFilename),
+    candidateFileName: packFilename,
   };
 }
 
@@ -2312,6 +2327,14 @@ async function runInstalledModelsSet(params) {
   });
   await runInstalledCli({
     cliPath: params.cliPath,
+    args: buildCrossOsReleaseSmokeMemorySlotConfigArgs(),
+    cwd: params.cwd,
+    env: params.env,
+    logPath: params.logPath,
+    timeoutMs: 2 * 60 * 1000,
+  });
+  await runInstalledCli({
+    cliPath: params.cliPath,
     args: ["config", "set", "agents.defaults.skipBootstrap", "true", "--strict-json"],
     cwd: params.cwd,
     env: params.env,
@@ -3230,6 +3253,13 @@ async function runModelsSet(params) {
       JSON.stringify(buildCrossOsReleaseSmokePluginAllowlist(params.providerConfig)),
       "--strict-json",
     ],
+    logPath: params.logPath,
+    timeoutMs: 2 * 60 * 1000,
+  });
+  await runOpenClaw({
+    lane: params.lane,
+    env: params.env,
+    args: buildCrossOsReleaseSmokeMemorySlotConfigArgs(),
     logPath: params.logPath,
     timeoutMs: 2 * 60 * 1000,
   });

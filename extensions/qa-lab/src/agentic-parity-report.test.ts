@@ -889,14 +889,14 @@ status=done`,
     expect(report.failures).toEqual([]);
   });
 
-  it("fails runtime parity reports when a runtime cell fails", () => {
+  it("fails runtime parity reports when a runtime cell has a hard failure", () => {
     const summary = makeRuntimeParitySummary();
     const scenario = summary.scenarios[1];
     if (!scenario?.runtimeParity) {
       throw new Error("runtime parity fixture missing");
     }
     scenario.status = "fail";
-    scenario.runtimeParity.cells.codex.runtimeErrorClass = "tool-error";
+    scenario.runtimeParity.cells.codex.runtimeErrorClass = "auth";
 
     const report = buildQaRuntimeParityReport({
       summary,
@@ -908,6 +908,24 @@ status=done`,
     expect(report.failures).toContain(
       "Compaction retry after mutating tool drift=tool-call-shape (tool call 1 differs).",
     );
+  });
+
+  it("passes runtime parity reports with controlled tool-error cells and advisory drift", () => {
+    const summary = makeRuntimeParitySummary();
+    const scenario = summary.scenarios[1];
+    if (!scenario?.runtimeParity) {
+      throw new Error("runtime parity fixture missing");
+    }
+    scenario.runtimeParity.cells.codex.runtimeErrorClass = "tool-error";
+
+    const report = buildQaRuntimeParityReport({
+      summary,
+      comparedAt: "2026-05-10T00:00:00.000Z",
+    });
+
+    expect(report.pass).toBe(true);
+    expect(report.failedScenarios).toBe(0);
+    expect(report.failures).toEqual([]);
   });
 
   it("fails live runtime parity reports when assistant-message usage is missing", () => {

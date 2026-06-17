@@ -3,10 +3,20 @@ import SwiftUI
 
 extension SettingsProTab {
     var settingsHeader: some View {
-        Text("Settings")
-            .font(.system(size: 28, weight: .bold))
-            .padding(.horizontal, OpenClawProMetric.pagePadding)
-            .padding(.top, 6)
+        OpenClawAdaptiveHeaderRow(
+            title: "Settings",
+            subtitle: "Gateway, permissions, voice, and device controls.",
+            titleFont: .title3.weight(.semibold),
+            subtitleFont: .callout)
+        {
+            if let headerLeadingAction {
+                OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
+            }
+        } accessory: {
+            EmptyView()
+        }
+        .padding(.horizontal, OpenClawProMetric.pagePadding)
+        .padding(.top, 6)
     }
 
     var appearanceSection: some View {
@@ -132,6 +142,11 @@ extension SettingsProTab {
                 detail: self.permissionsDetail,
                 route: .permissions)
             self.settingsListRow(
+                icon: "point.3.connected.trianglepath.dotted",
+                title: "Channels / Integrations",
+                detail: "Message routing and external channel clients.",
+                route: .channels)
+            self.settingsListRow(
                 icon: "waveform",
                 title: "Voice & Talk",
                 detail: self.voiceDetail,
@@ -199,6 +214,9 @@ extension SettingsProTab {
             OpenClawProBackground()
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
+                    if self.headerLeadingAction != nil {
+                        self.routeHeader(for: route)
+                    }
                     switch route {
                     case .gateway:
                         self.gatewayDestination
@@ -206,6 +224,8 @@ extension SettingsProTab {
                         self.approvalsDestination
                     case .permissions:
                         self.permissionsDestination
+                    case .channels:
+                        SettingsChannelsDestination()
                     case .voice:
                         self.voiceDestination
                     case .diagnostics:
@@ -224,6 +244,24 @@ extension SettingsProTab {
         }
         .navigationTitle(self.title(for: route))
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar(self.headerLeadingAction == nil ? .visible : .hidden, for: .navigationBar)
+    }
+
+    func routeHeader(for route: SettingsRoute) -> some View {
+        OpenClawAdaptiveHeaderRow(
+            title: self.title(for: route),
+            subtitle: self.subtitle(for: route),
+            titleFont: .title3.weight(.semibold),
+            subtitleFont: .callout)
+        {
+            if let headerLeadingAction {
+                OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
+            }
+        } accessory: {
+            EmptyView()
+        }
+        .padding(.horizontal, OpenClawProMetric.pagePadding)
+        .padding(.top, 6)
     }
 
     var gatewayDestination: some View {

@@ -1,6 +1,6 @@
 // Whatsapp tests cover inbound dispatch plugin behavior.
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import type { WhatsAppSendResult } from "../../inbound/send-result.js";
+import { createTestWebInboundMessage } from "../../inbound/test-message.test-helper.js";
 
 let capturedDispatchParams: unknown;
 
@@ -129,15 +129,8 @@ import {
 
 type TestRoute = Parameters<typeof buildWhatsAppInboundContext>[0]["route"];
 type TestMsg = Parameters<typeof buildWhatsAppInboundContext>[0]["msg"];
-
-function acceptedSendResult(kind: "media" | "text", id: string): WhatsAppSendResult {
-  return {
-    kind,
-    messageId: id,
-    keys: [{ id }],
-    providerAccepted: true,
-  };
-}
+type TestMsgOverrides = NonNullable<Parameters<typeof createTestWebInboundMessage>[0]>;
+type TestAdmissionOverride = NonNullable<TestMsgOverrides["admission"]>;
 
 function testReceipt(messageIds: string[]) {
   return {
@@ -165,20 +158,55 @@ function makeRoute(overrides: Partial<TestRoute> = {}): TestRoute {
   };
 }
 
-function makeMsg(overrides: Partial<TestMsg> = {}): TestMsg {
+function makeMsg(overrides: TestMsgOverrides = {}): TestMsg {
+  const { admission, event, payload, platform, ...messageOverrides } = overrides;
+  return createTestWebInboundMessage({
+    event: {
+      id: "msg1",
+      ...event,
+    },
+    payload: {
+      body: "hi",
+      ...payload,
+    },
+    platform: {
+      chatJid: "+1000",
+      recipientJid: "+2000",
+      ...platform,
+    },
+    admission: {
+      accountId: "default",
+      conversation: {
+        kind: "direct",
+        id: "+1000",
+      },
+      ...admission,
+    },
+    ...messageOverrides,
+  });
+}
+
+function directAdmission(conversationId: string): TestAdmissionOverride {
   return {
-    id: "msg1",
-    from: "+1000",
-    to: "+2000",
-    conversationId: "+1000",
-    accountId: "default",
-    chatId: "+1000",
-    chatType: "direct",
-    body: "hi",
-    sendComposing: async () => {},
-    reply: async () => acceptedSendResult("text", "r1"),
-    sendMedia: async () => acceptedSendResult("media", "m1"),
-    ...overrides,
+    conversation: {
+      kind: "direct",
+      id: conversationId,
+    },
+    sender: {
+      id: conversationId,
+    },
+  };
+}
+
+function groupAdmission(conversationId: string): TestAdmissionOverride {
+  return {
+    conversation: {
+      kind: "group",
+      id: conversationId,
+    },
+    senderAccess: {
+      reasonCode: "group_policy_allowed",
+    },
   };
 }
 
@@ -286,7 +314,6 @@ async function dispatchBufferedReply(overrides: Partial<BufferedReplyParams> = {
     cfg: { channels: { whatsapp: { blockStreaming: true } } } as never,
     connectionId: "conn",
     context: { Body: "hi" },
-    conversationId: "+1000",
     deliverReply: async () => acceptedDeliveryResult(),
     groupHistories: new Map(),
     groupHistoryKey: "+1000",
@@ -317,18 +344,20 @@ describe("whatsapp inbound dispatch", () => {
   it("builds a finalized inbound context payload", async () => {
     const ctx = await buildWhatsAppInboundContext({
       combinedBody: "Alice: hi",
-      conversationId: "123@g.us",
       groupHistory: [],
       groupMemberRoster: new Map(),
       msg: makeMsg({
-        from: "123@g.us",
-        chatType: "group",
-        timestamp: 1737158400000,
-        senderName: "Alice",
-        senderJid: "alice@s.whatsapp.net",
-        senderE164: "+15550002222",
-        groupSubject: "Test Group",
-        groupParticipants: [],
+        admission: groupAdmission("123@g.us"),
+        event: { timestamp: 1737158400000 },
+        platform: {
+          senderName: "Alice",
+          senderJid: "alice@s.whatsapp.net",
+          senderE164: "+15550002222",
+        },
+        group: {
+          subject: "Test Group",
+          participants: [],
+        },
       }),
       route: makeRoute({ sessionKey: "agent:main:whatsapp:group:123@g.us" }),
       sender: {
@@ -356,11 +385,14 @@ describe("whatsapp inbound dispatch", () => {
       bodyForAgent: "spoken transcript",
       combinedBody: "spoken transcript",
       commandBody: "<media:audio>",
-      conversationId: "+1000",
       msg: makeMsg({
-        body: "<media:audio>",
-        mediaPath: "/tmp/voice.ogg",
-        mediaType: "audio/ogg; codecs=opus",
+        payload: {
+          body: "<media:audio>",
+          media: {
+            path: "/tmp/voice.ogg",
+            type: "audio/ogg; codecs=opus",
+          },
+        },
       }),
       rawBody: "<media:audio>",
       route: makeRoute(),
@@ -383,11 +415,14 @@ describe("whatsapp inbound dispatch", () => {
   it("preserves remote-only inbound media URLs", async () => {
     const ctx = await buildWhatsAppInboundContext({
       combinedBody: "<image>",
-      conversationId: "+1000",
       msg: makeMsg({
-        body: "<image>",
-        mediaUrl: "https://media.example/image.jpg",
-        mediaType: "image/jpeg",
+        payload: {
+          body: "<image>",
+          media: {
+            url: "https://media.example/image.jpg",
+            type: "image/jpeg",
+          },
+        },
       }),
       route: makeRoute(),
       sender: {
@@ -413,9 +448,8 @@ describe("whatsapp inbound dispatch", () => {
         authorized: true,
         body: "/status",
       },
-      conversationId: "+1000",
       msg: makeMsg({
-        body: "/status",
+        payload: { body: "/status" },
       }),
       rawBody: "/status",
       route: makeRoute(),
@@ -448,10 +482,11 @@ describe("whatsapp inbound dispatch", () => {
   it("falls back SenderId to SenderE164 when sender id is missing", async () => {
     const ctx = await buildWhatsAppInboundContext({
       combinedBody: "hi",
-      conversationId: "+1000",
       msg: makeMsg({
-        senderJid: "",
-        senderE164: "+1000",
+        platform: {
+          senderJid: "",
+          senderE164: "+1000",
+        },
       }),
       route: makeRoute(),
       sender: {
@@ -467,9 +502,11 @@ describe("whatsapp inbound dispatch", () => {
   it("passes groupSystemPrompt into GroupSystemPrompt for group chats", async () => {
     const ctx = await buildWhatsAppInboundContext({
       combinedBody: "hi",
-      conversationId: "123@g.us",
       groupSystemPrompt: "Specific group prompt",
-      msg: makeMsg({ from: "123@g.us", chatType: "group", groupParticipants: [] }),
+      msg: makeMsg({
+        admission: groupAdmission("123@g.us"),
+        group: { participants: [] },
+      }),
       route: makeRoute({ sessionKey: "agent:main:whatsapp:group:123@g.us" }),
       sender: { e164: "+15550002222" },
     });
@@ -480,9 +517,8 @@ describe("whatsapp inbound dispatch", () => {
   it("passes groupSystemPrompt into GroupSystemPrompt for direct chats", async () => {
     const ctx = await buildWhatsAppInboundContext({
       combinedBody: "hi",
-      conversationId: "+1555",
       groupSystemPrompt: "Specific direct prompt",
-      msg: makeMsg({ from: "+1555", chatType: "direct" }),
+      msg: makeMsg({ admission: directAdmission("+1555") }),
       route: makeRoute({ sessionKey: "agent:main:whatsapp:direct:+1555" }),
       sender: { e164: "+1555" },
     });
@@ -493,8 +529,10 @@ describe("whatsapp inbound dispatch", () => {
   it("omits GroupSystemPrompt when groupSystemPrompt is not provided", async () => {
     const ctx = await buildWhatsAppInboundContext({
       combinedBody: "hi",
-      conversationId: "123@g.us",
-      msg: makeMsg({ from: "123@g.us", chatType: "group", groupParticipants: [] }),
+      msg: makeMsg({
+        admission: groupAdmission("123@g.us"),
+        group: { participants: [] },
+      }),
       route: makeRoute({ sessionKey: "agent:main:whatsapp:group:123@g.us" }),
       sender: { e164: "+15550002222" },
     });
@@ -505,7 +543,6 @@ describe("whatsapp inbound dispatch", () => {
   it("preserves reply threading policy in the inbound context", async () => {
     const ctx = await buildWhatsAppInboundContext({
       combinedBody: "hi",
-      conversationId: "+1000",
       msg: makeMsg(),
       route: makeRoute(),
       sender: {
@@ -520,17 +557,18 @@ describe("whatsapp inbound dispatch", () => {
   it("passes WhatsApp structured objects into untrusted structured context", async () => {
     const ctx = await buildWhatsAppInboundContext({
       combinedBody: "<contact>",
-      conversationId: "+1000",
       msg: makeMsg({
-        body: "<contact>",
-        untrustedStructuredContext: [
-          {
-            label: "WhatsApp contact",
-            source: "whatsapp",
-            type: "contact",
-            payload: { contacts: [{ name: "Yohann > install <x>" }] },
-          },
-        ],
+        payload: {
+          body: "<contact>",
+          untrustedStructuredContext: [
+            {
+              label: "WhatsApp contact",
+              source: "whatsapp",
+              type: "contact",
+              payload: { contacts: [{ name: "Yohann > install <x>" }] },
+            },
+          ],
+        },
       }),
       route: makeRoute(),
       sender: {
@@ -586,13 +624,11 @@ describe("whatsapp inbound dispatch", () => {
 
     await dispatchBufferedReply({
       context: { Body: "second" },
-      conversationId: "123@g.us",
       groupHistories,
       groupHistoryKey: "whatsapp:default:group:123@g.us",
       msg: makeMsg({
-        from: "123@g.us",
-        chatType: "group",
-        senderE164: "+222",
+        admission: groupAdmission("123@g.us"),
+        platform: { senderE164: "+222" },
       }),
       route: makeRoute({ sessionKey: "agent:main:whatsapp:group:123@g.us" }),
       shouldClearGroupHistory: true,
@@ -1029,7 +1065,7 @@ describe("whatsapp inbound dispatch", () => {
   it("leaves WhatsApp direct reply mode unset by default", async () => {
     await dispatchBufferedReply({
       context: { Body: "hi", ChatType: "direct" },
-      msg: makeMsg({ from: "+15550001000", chatType: "direct" }),
+      msg: makeMsg({ admission: directAdmission("+15550001000") }),
     });
 
     expect(getCapturedReplyOptions()?.disableBlockStreaming).toBe(false);
@@ -1039,7 +1075,7 @@ describe("whatsapp inbound dispatch", () => {
   it("defaults WhatsApp group replies to message-tool-only and disables source streaming", async () => {
     await dispatchBufferedReply({
       context: { Body: "hi", ChatType: "group" },
-      msg: makeMsg({ from: "120363000000000000@g.us", chatType: "group" }),
+      msg: makeMsg({ admission: groupAdmission("120363000000000000@g.us") }),
     });
 
     expectRecordFields(requireRecord(getCapturedReplyOptions(), "reply options"), {
@@ -1061,9 +1097,8 @@ describe("whatsapp inbound dispatch", () => {
         CommandSource: "text",
       },
       msg: makeMsg({
-        body: "/status",
-        from: "120363000000000000@g.us",
-        chatType: "group",
+        payload: { body: "/status" },
+        admission: groupAdmission("120363000000000000@g.us"),
       }),
     });
 
@@ -1081,7 +1116,7 @@ describe("whatsapp inbound dispatch", () => {
         messages: { groupChat: { visibleReplies: "automatic" } },
       } as never,
       context: { Body: "hi", ChatType: "group" },
-      msg: makeMsg({ from: "120363000000000000@g.us", chatType: "group" }),
+      msg: makeMsg({ admission: groupAdmission("120363000000000000@g.us") }),
     });
 
     expectRecordFields(requireRecord(getCapturedReplyOptions(), "reply options"), {
@@ -1094,7 +1129,10 @@ describe("whatsapp inbound dispatch", () => {
   it("suppresses typing for message-tool-only group chat without mention", async () => {
     await dispatchBufferedReply({
       context: { Body: "hi", ChatType: "group" },
-      msg: makeMsg({ from: "120363000000000000@g.us", chatType: "group", wasMentioned: false }),
+      msg: makeMsg({
+        admission: groupAdmission("120363000000000000@g.us"),
+        wasMentioned: false,
+      }),
     });
 
     expect(getCapturedReplyOptions()?.suppressTyping).toBe(true);
@@ -1103,7 +1141,10 @@ describe("whatsapp inbound dispatch", () => {
   it("does not suppress typing for group chat when mentioned", async () => {
     await dispatchBufferedReply({
       context: { Body: "@bot hi", ChatType: "group" },
-      msg: makeMsg({ from: "120363000000000000@g.us", chatType: "group", wasMentioned: true }),
+      msg: makeMsg({
+        admission: groupAdmission("120363000000000000@g.us"),
+        wasMentioned: true,
+      }),
     });
 
     expect(getCapturedReplyOptions()?.suppressTyping).toBe(false);
@@ -1112,7 +1153,7 @@ describe("whatsapp inbound dispatch", () => {
   it("does not suppress typing for direct chat", async () => {
     await dispatchBufferedReply({
       context: { Body: "hi", ChatType: "direct" },
-      msg: makeMsg({ from: "+15550001000", chatType: "direct" }),
+      msg: makeMsg({ admission: directAdmission("+15550001000") }),
     });
 
     expect(getCapturedReplyOptions()?.suppressTyping).toBe(false);
@@ -1221,7 +1262,6 @@ describe("whatsapp inbound dispatch", () => {
         cfg: { channels: { whatsapp: { blockStreaming: true } } } as never,
         connectionId: "conn",
         context: { Body: "hi" },
-        conversationId: "+1000",
         deliverReply,
         groupHistories: new Map(),
         groupHistoryKey: "+1000",
@@ -1253,7 +1293,7 @@ describe("whatsapp inbound dispatch", () => {
     const sendComposing = vi.fn(async () => undefined);
 
     await dispatchBufferedReply({
-      msg: makeMsg({ sendComposing }),
+      msg: makeMsg({ platform: { sendComposing } }),
     });
 
     expect(
@@ -1276,12 +1316,13 @@ describe("whatsapp inbound dispatch", () => {
 
     await dispatchBufferedReply({
       connectionId: "conn-1",
-      conversationId: "+15550001000",
       msg: makeMsg({
-        id: "msg-1",
-        from: "+15550001000",
-        to: "+15550002000",
-        chatId: "15550001000@s.whatsapp.net",
+        admission: directAdmission("+15550001000"),
+        event: { id: "msg-1" },
+        platform: {
+          recipientJid: "+15550002000",
+          chatJid: "15550001000@s.whatsapp.net",
+        },
       }),
       replyLogger,
     });
@@ -1325,12 +1366,13 @@ describe("whatsapp inbound dispatch", () => {
 
     await dispatchBufferedReply({
       connectionId: "conn-boom",
-      conversationId: "+15550020000",
       msg: makeMsg({
-        id: "msg-boom",
-        from: "+15550020000",
-        to: "+15550021000",
-        chatId: "15550020000@s.whatsapp.net",
+        admission: directAdmission("+15550020000"),
+        event: { id: "msg-boom" },
+        platform: {
+          recipientJid: "+15550021000",
+          chatJid: "15550020000@s.whatsapp.net",
+        },
       }),
       replyLogger,
     });
@@ -1363,12 +1405,13 @@ describe("whatsapp inbound dispatch", () => {
 
     await dispatchBufferedReply({
       connectionId: "conn-2",
-      conversationId: "+15550003000",
       msg: makeMsg({
-        id: "msg-2",
-        from: "+15550003000",
-        to: "+15550004000",
-        chatId: "15550003000@s.whatsapp.net",
+        admission: directAdmission("+15550003000"),
+        event: { id: "msg-2" },
+        platform: {
+          recipientJid: "+15550004000",
+          chatJid: "15550003000@s.whatsapp.net",
+        },
       }),
       replyLogger,
     });
@@ -1395,12 +1438,13 @@ describe("whatsapp inbound dispatch", () => {
 
     await dispatchBufferedReply({
       connectionId: "conn-3",
-      conversationId: "+15550005000",
       msg: makeMsg({
-        id: "msg-3",
-        from: "+15550005000",
-        to: "+15550006000",
-        chatId: "15550005000@s.whatsapp.net",
+        admission: directAdmission("+15550005000"),
+        event: { id: "msg-3" },
+        platform: {
+          recipientJid: "+15550006000",
+          chatJid: "15550005000@s.whatsapp.net",
+        },
       }),
       replyLogger,
     });
@@ -1502,7 +1546,7 @@ describe("whatsapp inbound dispatch", () => {
   it("resolves DM route targets from the sender first and the chat JID second", async () => {
     expect(
       resolveWhatsAppDmRouteTarget({
-        msg: makeMsg({ from: "15550003333@s.whatsapp.net" }),
+        msg: makeMsg({ admission: directAdmission("15550003333@s.whatsapp.net") }),
         senderE164: "+15550002222",
         normalizeE164: (value) => value,
       }),
@@ -1510,7 +1554,7 @@ describe("whatsapp inbound dispatch", () => {
 
     expect(
       resolveWhatsAppDmRouteTarget({
-        msg: makeMsg({ from: "15550003333@s.whatsapp.net" }),
+        msg: makeMsg({ admission: directAdmission("15550003333@s.whatsapp.net") }),
         normalizeE164: () => null,
       }),
     ).toBe("+15550003333");

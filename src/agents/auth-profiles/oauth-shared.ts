@@ -196,8 +196,15 @@ export function overlayRuntimeExternalOAuthProfiles(
 ): AuthProfileStore {
   const externalProfiles = Array.from(profiles);
   const next = cloneAuthProfileStore(store);
+  const overlaidProfileIds = new Set(externalProfiles.map((profile) => profile.profileId));
   for (const profile of externalProfiles) {
     next.profiles[profile.profileId] = profile.credential;
+  }
+  next.runtimePersistedProfileIds = store.runtimePersistedProfileIds
+    ?.filter((profileId) => next.profiles[profileId] && !overlaidProfileIds.has(profileId))
+    .toSorted();
+  if (next.runtimePersistedProfileIds?.length === 0) {
+    next.runtimePersistedProfileIds = undefined;
   }
   const runtimeOnlyProfileIds = new Set(
     externalProfiles

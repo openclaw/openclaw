@@ -18,4 +18,8 @@ export const iMessageChannelConfigUiHints = {
     label: "iMessage CLI Path",
     help: "Filesystem path to the iMessage bridge CLI binary used for send/receive operations. Set explicitly when the binary is not on PATH in service runtime environments.",
   },
+  sendTransport: {
+    label: "iMessage Send Transport",
+    help: 'Preferred imsg RPC send transport for normal outbound replies. "auto" uses the IMCore bridge when available, "bridge" requires it, and "applescript" forces Messages automation.',
+  },
 } satisfies Record<string, ChannelConfigUiHint>;

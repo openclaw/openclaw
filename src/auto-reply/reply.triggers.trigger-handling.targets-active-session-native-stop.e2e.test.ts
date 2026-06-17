@@ -16,7 +16,7 @@ import {
   withTempHome,
 } from "../../test/helpers/auto-reply/trigger-handling-test-harness.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
-import { loadSessionStore, resolveSessionKey } from "../config/sessions.js";
+import { loadSessionStore, resolveSessionKey, saveSessionStore } from "../config/sessions.js";
 import { registerGroupIntroPromptCases } from "./reply.triggers.group-intro-prompts.cases.js";
 import { registerTriggerHandlingUsageSummaryCases } from "./reply.triggers.trigger-handling.filters-usage-summary-current-model-provider.cases.js";
 import { enqueueFollowupRun, getFollowupQueueDepth, type FollowupRun } from "./reply/queue.js";
@@ -94,6 +94,11 @@ vi.mock("./reply/agent-runner.runtime.js", () => ({
   },
 }));
 
+vi.mock("./reply/commands-compact.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./reply/commands-compact.runtime.js")>()),
+  isEmbeddedAgentRunAbortableForCompaction: () => false,
+}));
+
 let capturedGetReplyFromConfig: GetReplyFromConfig | undefined;
 installTriggerHandlingReplyHarness((impl) => {
   capturedGetReplyFromConfig = impl;
@@ -160,14 +165,15 @@ async function writeDailyMemoryNotes(
 }
 
 async function seedTargetSession(storePath: string, targetSessionKey: string) {
-  await fs.writeFile(
+  await saveSessionStore(
     storePath,
-    JSON.stringify({
+    {
       [targetSessionKey]: {
         sessionId: "session-target",
         updatedAt: Date.now(),
       },
-    }),
+    },
+    { skipMaintenance: true },
   );
 }
 
@@ -257,17 +263,17 @@ async function expectNextRunUsesTargetSession(
 }
 
 async function writeStoredModelOverride(cfg: ReturnType<typeof makeCfg>): Promise<void> {
-  await fs.writeFile(
+  await saveSessionStore(
     requireSessionStorePath(cfg),
-    JSON.stringify({
+    {
       [MAIN_SESSION_KEY]: {
         sessionId: "main",
         updatedAt: Date.now(),
         providerOverride: "openai",
         modelOverride: "gpt-5.4",
       },
-    }),
-    "utf-8",
+    },
+    { skipMaintenance: true },
   );
 }
 
@@ -604,14 +610,15 @@ describe("trigger handling", () => {
       }
       const targetSessionKey = "agent:main:telegram:group:123";
       const targetSessionId = "session-target";
-      await fs.writeFile(
+      await saveSessionStore(
         storePath,
-        JSON.stringify({
+        {
           [targetSessionKey]: {
             sessionId: targetSessionId,
             updatedAt: Date.now(),
           },
-        }),
+        },
+        { skipMaintenance: true },
       );
       const followupRun: FollowupRun = {
         prompt: "queued",
@@ -725,16 +732,17 @@ describe("trigger handling", () => {
       const slashSessionKey = "agent:main:telegram:slash:7595562691";
       const targetSessionKey = "agent:main:main:thread:7595562691:12812";
 
-      await fs.writeFile(
+      await saveSessionStore(
         storePath,
-        JSON.stringify({
+        {
           [targetSessionKey]: {
             sessionId: "session-target",
             updatedAt: Date.now(),
             providerOverride: "zai",
             modelOverride: "glm-5.1",
           },
-        }),
+        },
+        { skipMaintenance: true },
       );
 
       const res = await getReplyFromConfig(

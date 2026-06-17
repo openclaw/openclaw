@@ -7,6 +7,35 @@ import {
   deliverApprovalRequestViaChannelNativePlan,
 } from "./approval-native-runtime.js";
 
+const hoisted = vi.hoisted(() => ({
+  callGatewayLeastPrivilege: vi.fn(async () => ({ ok: true })),
+  createOperatorApprovalsGatewayClient: vi.fn(
+    async (params: { onHelloOk?: (hello: unknown) => void }) => {
+      queueMicrotask(() => params.onHelloOk?.({ type: "hello-ok" }));
+      return {
+        request: vi.fn(async () => ({ ok: true })),
+        stop: vi.fn(),
+      };
+    },
+  ),
+  startGatewayClientWhenEventLoopReady: vi.fn(async () => ({
+    ready: true,
+    aborted: false,
+  })),
+}));
+
+vi.mock("../gateway/call.js", () => ({
+  callGatewayLeastPrivilege: hoisted.callGatewayLeastPrivilege,
+}));
+
+vi.mock("../gateway/operator-approvals-client.js", () => ({
+  createOperatorApprovalsGatewayClient: hoisted.createOperatorApprovalsGatewayClient,
+}));
+
+vi.mock("../gateway/client-start-readiness.js", () => ({
+  startGatewayClientWhenEventLoopReady: hoisted.startGatewayClientWhenEventLoopReady,
+}));
+
 const execRequest = {
   id: "approval-1",
   request: {
@@ -17,6 +46,9 @@ const execRequest = {
 };
 
 afterEach(() => {
+  hoisted.callGatewayLeastPrivilege.mockClear();
+  hoisted.createOperatorApprovalsGatewayClient.mockClear();
+  hoisted.startGatewayClientWhenEventLoopReady.mockClear();
   clearApprovalNativeRouteStateForTest();
   vi.useRealTimers();
 });
@@ -224,6 +256,75 @@ describe("createChannelNativeApprovalRuntime", () => {
       ts: 1,
     });
     expect(resolvedCall.entries).toEqual([{ chatId: "plugin:secondary", messageId: "m1" }]);
+  });
+
+  it("sends route notices over least-privilege gateway calls", async () => {
+    const runtime = createChannelNativeApprovalRuntime({
+      label: "test/native-runtime-route-notice",
+      clientDisplayName: "Test",
+      channel: "slack",
+      channelLabel: "Slack",
+      cfg: { gateway: { auth: { token: "configured-token" } } } as never,
+      accountId: "default",
+      nativeAdapter: {
+        describeDeliveryCapabilities: () => ({
+          enabled: true,
+          preferredSurface: "approver-dm",
+          supportsOriginSurface: true,
+          supportsApproverDmSurface: true,
+          notifyOriginWhenDmOnly: true,
+        }),
+        resolveOriginTarget: async () => ({
+          to: "channel:C123",
+          threadId: "1712345678.123456",
+        }),
+        resolveApproverDmTargets: async () => [{ to: "user:owner" }],
+      },
+      isConfigured: () => true,
+      shouldHandle: () => true,
+      buildPendingContent: async () => "pending exec",
+      prepareTarget: async ({ plannedTarget }) => ({
+        dedupeKey: plannedTarget.target.to,
+        target: { chatId: plannedTarget.target.to },
+      }),
+      deliverTarget: async () => ({ chatId: "user:owner", messageId: "m1" }),
+      finalizeResolved: async () => {},
+    });
+
+    await runtime.start();
+    try {
+      await runtime.handleRequested({
+        id: "approval-route-notice",
+        request: {
+          command: "echo hi",
+          turnSourceChannel: "slack",
+          turnSourceTo: "channel:C123",
+          turnSourceAccountId: "default",
+          turnSourceThreadId: "1712345678.123456",
+        },
+        createdAtMs: 0,
+        expiresAtMs: Date.now() + 60_000,
+      });
+    } finally {
+      await runtime.stop();
+    }
+
+    expect(hoisted.callGatewayLeastPrivilege).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: { gateway: { auth: { token: "configured-token" } } },
+        method: "send",
+        clientName: "gateway-client",
+        mode: "backend",
+        params: {
+          channel: "slack",
+          to: "channel:C123",
+          accountId: "default",
+          threadId: "1712345678.123456",
+          message: "Approval required. I sent the approval request to Slack DMs, not this chat.",
+          idempotencyKey: "approval-route-notice:approval-route-notice",
+        },
+      }),
+    );
   });
 
   it("runs expiration through the shared runtime factory", async () => {

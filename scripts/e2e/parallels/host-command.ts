@@ -253,6 +253,7 @@ export function resolveHostCommandInvocation(
   if (isBareCommand(command, "pnpm")) {
     const runner = resolvePnpmRunner({
       comSpec,
+      env,
       npmExecPath: env.npm_execpath,
       nodeExecPath: options.execPath ?? process.execPath,
       platform,

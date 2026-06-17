@@ -1,4 +1,5 @@
 // Codex tests cover sandbox exec server.http plugin behavior.
+import { spawn } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   closeCodexSandboxExecServersForTests,
@@ -13,7 +14,10 @@ import {
   rpc,
   waitForHttpBodyDeltas,
 } from "./sandbox-exec-server.test-helpers.js";
-import { SANDBOX_HTTP_STREAM_LINE_MAX_CHARS } from "./sandbox-exec-server/http.js";
+import {
+  SANDBOX_HTTP_REQUEST_SCRIPT,
+  SANDBOX_HTTP_STREAM_LINE_MAX_CHARS,
+} from "./sandbox-exec-server/http.js";
 
 afterEach(async () => {
   vi.unstubAllEnvs();
@@ -24,6 +28,32 @@ function testExecEnv(): NodeJS.ProcessEnv {
   return {
     PATH: process.env.PATH,
   };
+}
+
+function runSandboxHttpRequestScript(input: unknown): Promise<{
+  code: number | null;
+  stderr: string;
+  stdout: string;
+}> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("bash", ["-lc", SANDBOX_HTTP_REQUEST_SCRIPT], {
+      env: testExecEnv(),
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString("utf8");
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString("utf8");
+    });
+    child.once("error", reject);
+    child.once("close", (code) => {
+      resolve({ code, stderr, stdout });
+    });
+    child.stdin.end(JSON.stringify(input));
+  });
 }
 
 describe("OpenClaw Codex sandbox exec-server HTTP", () => {
@@ -69,6 +99,85 @@ describe("OpenClaw Codex sandbox exec-server HTTP", () => {
       }),
     );
     socket.close();
+  });
+
+  it("blocks private HTTP targets before starting the sandbox backend", async () => {
+    const runShellCommand = vi.fn(async () => ({
+      stdout: Buffer.alloc(0),
+      stderr: Buffer.alloc(0),
+      code: 0,
+    }));
+    const sandbox = createSandboxContext({ runShellCommand });
+    const client = createClient();
+    await ensureCodexSandboxExecServerEnvironment({
+      client: client as never,
+      sandbox,
+    });
+    const socket = await openSocket(execServerUrlFromClient(client));
+    await rpc(socket, "initialize", { clientName: "test" });
+    socket.send(JSON.stringify({ method: "initialized" }));
+
+    await expect(
+      rpc(socket, "http/request", {
+        requestId: "http-private",
+        method: "GET",
+        url: "http://127.0.0.1:6379/",
+      }),
+    ).rejects.toThrow("Blocked hostname or private/internal IP");
+    expect(runShellCommand).not.toHaveBeenCalled();
+    socket.close();
+  });
+
+  it("blocks metadata HTTP targets before starting the streaming sandbox backend", async () => {
+    const buildExecSpec = vi.fn(async () => ({
+      argv: [process.execPath, "-e", ""],
+      env: testExecEnv(),
+      stdinMode: "pipe-closed" as const,
+    }));
+    const sandbox = createSandboxContext({ buildExecSpec });
+    const client = createClient();
+    await ensureCodexSandboxExecServerEnvironment({
+      client: client as never,
+      sandbox,
+    });
+    const socket = await openSocket(execServerUrlFromClient(client));
+    await rpc(socket, "initialize", { clientName: "test" });
+    socket.send(JSON.stringify({ method: "initialized" }));
+
+    await expect(
+      rpc(socket, "http/request", {
+        requestId: "http-metadata",
+        method: "GET",
+        url: "http://metadata.google.internal/",
+        streamResponse: true,
+      }),
+    ).rejects.toThrow("Blocked hostname or private/internal IP");
+    expect(buildExecSpec).not.toHaveBeenCalled();
+    socket.close();
+  });
+
+  it("blocks protected IP classes inside the sandbox Python helper", async () => {
+    const blockedUrls = [
+      "http://100.100.100.200/",
+      "http://[fd00:ec2::254]/",
+      "http://[fec0::1]/",
+      "http://[64:ff9b::100.100.100.200]/",
+      "http://[64:ff9b:1::6464:64c8]/",
+      "http://[2002:6464:64c8::]/",
+      "http://[2001::9b9b:9b37]/",
+      "http://[2001:4860:1::5efe:6464:64c8]/",
+    ];
+
+    for (const url of blockedUrls) {
+      const result = await runSandboxHttpRequestScript({
+        method: "GET",
+        url,
+        timeoutMs: 1,
+      });
+      expect(result.code, url).not.toBe(0);
+      expect(result.stdout, url).toBe("");
+      expect(result.stderr, url).toContain("Blocked");
+    }
   });
 
   it("streams HTTP response body deltas from the sandbox backend", async () => {

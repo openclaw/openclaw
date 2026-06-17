@@ -16,6 +16,7 @@ type AgentPayloadLike = {
   presentation?: unknown;
   interactive?: unknown;
   channelData?: unknown;
+  attachments?: unknown;
   isError?: unknown;
   isReasoning?: unknown;
 };
@@ -49,6 +50,19 @@ function hasNonEmptyArray(value: unknown): boolean {
 
 function hasNonEmptyStringArray(value: unknown): boolean {
   return Array.isArray(value) && value.some(hasNonEmptyString);
+}
+
+function hasVisibleAttachmentReference(value: unknown): boolean {
+  if (!Array.isArray(value)) {
+    return false;
+  }
+  const urls = new Set<string>();
+  for (const attachment of value) {
+    if (attachment && typeof attachment === "object" && !Array.isArray(attachment)) {
+      collectMediaUrlsFromRecord(attachment as Record<string, unknown>, urls);
+    }
+  }
+  return urls.size > 0;
 }
 
 function collectStringValues(value: unknown, output: Set<string>) {
@@ -170,6 +184,7 @@ export function hasVisibleAgentPayload(
       hasNonEmptyString(record.text) ||
       hasNonEmptyString(record.mediaUrl) ||
       hasNonEmptyStringArray(record.mediaUrls) ||
+      hasVisibleAttachmentReference(record.attachments) ||
       record.presentation ||
       record.interactive ||
       record.channelData,
@@ -198,13 +213,20 @@ export function hasCommittedMessagingToolDeliveryEvidence(
   );
 }
 
-/** Returns whether any outbound side effect makes a retry unsafe. */
-export function hasOutboundDeliveryEvidence(result: AgentDeliveryEvidence): boolean {
+/** Returns whether committed outbound evidence makes replay unsafe. */
+export function hasCommittedOutboundDeliveryEvidence(result: AgentDeliveryEvidence): boolean {
   return (
     hasMessagingToolDeliveryEvidence(result) ||
     (Array.isArray(result.acceptedSessionSpawns) &&
       hasAcceptedSessionSpawn(result.acceptedSessionSpawns)) ||
-    hasPositiveNumber(result.successfulCronAdds) ||
+    hasPositiveNumber(result.successfulCronAdds)
+  );
+}
+
+/** Returns whether any tool progress or outbound side effect makes a retry unsafe. */
+export function hasOutboundDeliveryEvidence(result: AgentDeliveryEvidence): boolean {
+  return (
+    hasCommittedOutboundDeliveryEvidence(result) ||
     hasPositiveNumber(result.meta?.toolSummary?.calls)
   );
 }

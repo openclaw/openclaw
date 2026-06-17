@@ -2563,7 +2563,7 @@ describe("codex command", () => {
         await firstConfirmBindingRead;
       }
       return {
-        schemaVersion: 1 as const,
+        schemaVersion: 2 as const,
         threadId: "thread-race",
         cwd: "/repo",
         sessionFile: bindingSessionFile,

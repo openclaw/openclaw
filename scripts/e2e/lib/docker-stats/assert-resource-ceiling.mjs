@@ -3,14 +3,26 @@ import fs from "node:fs";
 import { createInterface } from "node:readline";
 
 const [statsFile, maxMemoryRaw, maxCpuRaw, label = "docker"] = process.argv.slice(2);
-const maxMemoryMiB = Number(maxMemoryRaw);
-const maxCpuPercent = Number(maxCpuRaw);
+const NON_NEGATIVE_DECIMAL_PATTERN = /^(?:0|[1-9]\d*)(?:\.\d+)?$/u;
 
-function assertFiniteLimit(value, raw, name) {
-  if (!Number.isFinite(value) || value < 0) {
-    throw new Error(`${name} must be a finite non-negative number. Got: ${JSON.stringify(raw)}`);
+function parseFiniteLimit(raw, name) {
+  const text = String(raw ?? "").trim();
+  if (!NON_NEGATIVE_DECIMAL_PATTERN.test(text)) {
+    throw new Error(
+      `${name} must be a finite non-negative number in decimal notation. Got: ${JSON.stringify(raw)}`,
+    );
   }
+  const parsed = Number(text);
+  if (!Number.isFinite(parsed)) {
+    throw new Error(
+      `${name} must be a finite non-negative number in decimal notation. Got: ${JSON.stringify(raw)}`,
+    );
+  }
+  return parsed;
 }
+
+const maxMemoryMiB = parseFiniteLimit(maxMemoryRaw, "max memory MiB");
+const maxCpuPercent = parseFiniteLimit(maxCpuRaw, "max CPU percent");
 
 function parseMemoryMiB(raw) {
   const value =
@@ -49,6 +61,14 @@ function parseCpuPercent(raw) {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+function isTerminalZeroMemorySample(raw) {
+  const parts = String(raw || "").split("/");
+  if (parts.length !== 2) {
+    return false;
+  }
+  return parts.every((part) => parseMemoryMiB(part.trim()) === 0);
+}
+
 function assertSampleValue(value, raw, name, labelLocal) {
   if (value === undefined) {
     throw new Error(
@@ -79,9 +99,6 @@ let maxObservedMemoryMiB = 0;
 let maxObservedCpuPercent = 0;
 let parsedSamples = 0;
 
-assertFiniteLimit(maxMemoryMiB, maxMemoryRaw, "max memory MiB");
-assertFiniteLimit(maxCpuPercent, maxCpuRaw, "max CPU percent");
-
 await scanStatsFileLines(statsFile, (line) => {
   let parsed;
   try {
@@ -91,6 +108,11 @@ await scanStatsFileLines(statsFile, (line) => {
   }
   const observedMemoryMiB = parseMemoryMiB(parsed.MemUsage);
   const observedCpuPercent = parseCpuPercent(parsed.CPUPerc);
+  // Docker can emit 0B / 0B after the target container exits; it proves
+  // lifecycle timing, not resource usage. Keep the real captured samples.
+  if (isTerminalZeroMemorySample(parsed.MemUsage)) {
+    return;
+  }
   assertSampleValue(observedMemoryMiB, parsed.MemUsage, "MemUsage", label);
   assertSampleValue(observedCpuPercent, parsed.CPUPerc, "CPUPerc", label);
   parsedSamples += 1;

@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const {
   refreshChatMock,
   refreshChatAvatarMock,
+  flushChatQueueAfterIdleSessionReconciliationMock,
   refreshSlashCommandsMock,
   loadChatHistoryMock,
   createSessionAndRefreshMock,
@@ -11,6 +12,7 @@ const {
 } = vi.hoisted(() => ({
   refreshChatMock: vi.fn(),
   refreshChatAvatarMock: vi.fn(),
+  flushChatQueueAfterIdleSessionReconciliationMock: vi.fn(),
   refreshSlashCommandsMock: vi.fn(),
   loadChatHistoryMock: vi.fn(),
   createSessionAndRefreshMock: vi.fn(),
@@ -51,6 +53,7 @@ vi.mock("./app-chat.ts", () => ({
   },
   refreshChat: refreshChatMock,
   refreshChatAvatar: refreshChatAvatarMock,
+  flushChatQueueAfterIdleSessionReconciliation: flushChatQueueAfterIdleSessionReconciliationMock,
 }));
 
 vi.mock("./chat/slash-commands.ts", () => ({
@@ -70,6 +73,7 @@ vi.mock("./controllers/sessions.ts", () => ({
 import {
   createChatSession,
   dismissChatError,
+  dismissRealtimeTalkError,
   handleChatManualRefresh,
   isCronSessionKey,
   parseSessionKey,
@@ -88,6 +92,7 @@ type SessionRow = SessionsListResult["sessions"][number];
 beforeEach(() => {
   refreshChatMock.mockReset();
   refreshChatAvatarMock.mockReset();
+  flushChatQueueAfterIdleSessionReconciliationMock.mockReset();
   refreshSlashCommandsMock.mockReset();
   loadChatHistoryMock.mockReset();
   createSessionAndRefreshMock.mockReset();
@@ -784,6 +789,17 @@ describe("handleChatManualRefresh", () => {
 });
 
 describe("createChatSession", () => {
+  it("does not create a session without explicit user intent", async () => {
+    const state = createChatSessionState();
+    createSessionAndRefreshMock.mockResolvedValue("agent:ops:dashboard:new-chat");
+
+    await expect(createChatSession(state)).resolves.toBe(false);
+
+    expect(createSessionAndRefreshMock).not.toHaveBeenCalled();
+    expect(state.sessionKey).toBe("agent:ops:main");
+    expect(state.chatMessages).toEqual([{ role: "assistant", content: "old" }]);
+  });
+
   it("creates a dashboard session, switches to it, and preserves the current composer", async () => {
     const state = createChatSessionState();
     createSessionAndRefreshMock.mockResolvedValue("agent:ops:dashboard:new-chat");
@@ -792,7 +808,7 @@ describe("createChatSession", () => {
     loadChatHistoryMock.mockResolvedValue(undefined);
     loadSessionsMock.mockResolvedValue(undefined);
 
-    await createChatSession(state);
+    await createChatSession(state, { source: "user" });
 
     expect(createSessionAndRefreshMock).toHaveBeenCalledWith(
       state,
@@ -820,6 +836,42 @@ describe("createChatSession", () => {
     expect(loadChatHistoryMock).toHaveBeenCalledWith(state);
   });
 
+  it("keeps the selected session as parent when the session list is stale", async () => {
+    const state = createChatSessionState({
+      sessionsResult: {
+        ts: 0,
+        path: "",
+        count: 1,
+        defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+        sessions: [row({ key: "agent:ops:dashboard:older" })],
+      },
+    });
+    createSessionAndRefreshMock.mockResolvedValue("agent:ops:dashboard:new-chat");
+    refreshChatAvatarMock.mockResolvedValue(undefined);
+    refreshSlashCommandsMock.mockResolvedValue(undefined);
+    loadChatHistoryMock.mockResolvedValue(undefined);
+    loadSessionsMock.mockResolvedValue(undefined);
+
+    await createChatSession(state, { source: "user" });
+
+    expect(createSessionAndRefreshMock).toHaveBeenCalledWith(
+      state,
+      {
+        agentId: "ops",
+        parentSessionKey: "agent:ops:main",
+        emitCommandHooks: true,
+      },
+      {
+        activeMinutes: 120,
+        limit: 50,
+        includeGlobal: true,
+        includeUnknown: true,
+        showArchived: false,
+        agentId: "ops",
+      },
+    );
+  });
+
   it("creates selected global sessions under the same agent used for refresh", async () => {
     const state = createChatSessionState({
       sessionKey: "global",
@@ -838,7 +890,7 @@ describe("createChatSession", () => {
     loadChatHistoryMock.mockResolvedValue(undefined);
     loadSessionsMock.mockResolvedValue(undefined);
 
-    await createChatSession(state);
+    await createChatSession(state, { source: "user" });
 
     expect(createSessionAndRefreshMock).toHaveBeenCalledWith(
       state,
@@ -859,6 +911,43 @@ describe("createChatSession", () => {
     expect(state.sessionKey).toBe("agent:work:dashboard:new-chat");
   });
 
+  it("does not use the synthetic unknown session as a parent", async () => {
+    const state = createChatSessionState({
+      sessionKey: "unknown",
+      sessionsResult: {
+        ts: 0,
+        path: "",
+        count: 1,
+        defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+        sessions: [row({ key: "unknown", kind: "unknown" })],
+      },
+    });
+    createSessionAndRefreshMock.mockResolvedValue("agent:main:dashboard:new-chat");
+    refreshChatAvatarMock.mockResolvedValue(undefined);
+    refreshSlashCommandsMock.mockResolvedValue(undefined);
+    loadChatHistoryMock.mockResolvedValue(undefined);
+    loadSessionsMock.mockResolvedValue(undefined);
+
+    await createChatSession(state, { source: "user" });
+
+    expect(createSessionAndRefreshMock).toHaveBeenCalledWith(
+      state,
+      {
+        agentId: "main",
+        parentSessionKey: undefined,
+        emitCommandHooks: undefined,
+      },
+      {
+        activeMinutes: 120,
+        limit: 50,
+        includeGlobal: true,
+        includeUnknown: true,
+        showArchived: false,
+      },
+    );
+    expect(state.sessionKey).toBe("agent:main:dashboard:new-chat");
+  });
+
   it("preserves draft and attachment edits made while session creation is in flight", async () => {
     const state = createChatSessionState();
     const updatedAttachments = [
@@ -874,7 +963,7 @@ describe("createChatSession", () => {
     loadChatHistoryMock.mockResolvedValue(undefined);
     loadSessionsMock.mockResolvedValue(undefined);
 
-    await createChatSession(state);
+    await createChatSession(state, { source: "user" });
 
     expect(state.sessionKey).toBe("agent:ops:dashboard:new-chat");
     expect(state.chatMessage).toBe("updated draft");
@@ -889,7 +978,7 @@ describe("createChatSession", () => {
       return "agent:ops:dashboard:new-chat";
     });
 
-    await createChatSession(state);
+    await createChatSession(state, { source: "user" });
 
     expect(state.sessionKey).toBe("agent:ops:other");
     expect(state.chatMessage).toBe("draft prompt");
@@ -903,7 +992,7 @@ describe("createChatSession", () => {
       chatQueue: [{ id: "queued-1", text: "follow up", createdAt: 1 }],
     });
 
-    await createChatSession(state);
+    await createChatSession(state, { source: "user" });
 
     expect(createSessionAndRefreshMock).not.toHaveBeenCalled();
     expect(state.sessionKey).toBe("agent:ops:main");
@@ -920,7 +1009,7 @@ describe("createChatSession", () => {
       lastError: "previous error",
     });
 
-    await createChatSession(state);
+    await createChatSession(state, { source: "user" });
 
     expect(createSessionAndRefreshMock).not.toHaveBeenCalled();
     expect(state.sessionKey).toBe("agent:ops:main");
@@ -934,7 +1023,7 @@ describe("createChatSession", () => {
     const state = createChatSessionState({ lastError: "previous error" });
     createSessionAndRefreshMock.mockResolvedValue(null);
 
-    await createChatSession(state);
+    await createChatSession(state, { source: "user" });
 
     expect(createSessionAndRefreshMock).toHaveBeenCalledTimes(1);
     expect(state.sessionKey).toBe("agent:ops:main");
@@ -951,7 +1040,7 @@ describe("createChatSession", () => {
       return null;
     });
 
-    await createChatSession(state);
+    await createChatSession(state, { source: "user" });
 
     expect(createSessionAndRefreshMock).toHaveBeenCalledTimes(1);
     expect(state.sessionKey).toBe("agent:ops:main");
@@ -1177,6 +1266,66 @@ describe("switchChatSession", () => {
     expect(state.chatQueue).toEqual([{ id: "queued-1", text: "message B", createdAt: 1 }]);
   });
 
+  it("passes restored queued messages through idle reconciliation after switching back", () => {
+    const queuedMessage = { id: "queued-1", text: "message B", createdAt: 1 };
+    const state = createChatSessionState({
+      sessionKey: "main",
+      chatMessage: "",
+      chatAttachments: [],
+      chatQueue: [queuedMessage],
+      chatRunId: "run-1",
+      chatStream: "stream",
+      sessionsResult: {
+        ts: 0,
+        path: "",
+        count: 2,
+        defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+        sessions: [
+          row({ key: "main", hasActiveRun: true, status: "running" }),
+          row({ key: "agent:main:other", hasActiveRun: false, status: "done" }),
+        ],
+      },
+    });
+    const reconciliationCalls: Array<{ sessionKey: string; queue: unknown[] }> = [];
+    flushChatQueueAfterIdleSessionReconciliationMock.mockImplementation((host, sessionKey) => {
+      reconciliationCalls.push({
+        sessionKey: String(sessionKey),
+        queue: [...((host as { chatQueue?: unknown[] }).chatQueue ?? [])],
+      });
+    });
+    loadChatHistoryMock
+      .mockResolvedValueOnce({
+        messages: [],
+        sessionInfo: row({ key: "agent:main:other", hasActiveRun: false, status: "done" }),
+      })
+      .mockResolvedValueOnce({
+        messages: [],
+        sessionInfo: row({ key: "main", hasActiveRun: false, status: "done" }),
+      });
+    refreshChatAvatarMock.mockResolvedValue(undefined);
+    refreshSlashCommandsMock.mockResolvedValue(undefined);
+    loadSessionsMock.mockResolvedValue(undefined);
+
+    switchChatSession(state, "agent:main:other");
+    expect(state.chatQueue).toStrictEqual([]);
+
+    state.sessionsResult = {
+      ...state.sessionsResult!,
+      sessions: [
+        row({ key: "main", hasActiveRun: false, status: "done" }),
+        row({ key: "agent:main:other", hasActiveRun: false, status: "done" }),
+      ],
+    };
+
+    switchChatSession(state, "main");
+
+    expect(state.chatQueue).toEqual([queuedMessage]);
+    expect(reconciliationCalls).toEqual([
+      { sessionKey: "agent:main:other", queue: [] },
+      { sessionKey: "main", queue: [queuedMessage] },
+    ]);
+  });
+
   it("does not force agentId=main for plain session keys", async () => {
     const settings = createSettings();
     const state = {
@@ -1228,14 +1377,179 @@ describe("switchChatSession", () => {
       agentId: undefined,
     });
   });
+
+  it("restores visible messages when switching back before history reloads", () => {
+    const mainMessages = [{ role: "assistant", content: [{ type: "text", text: "main report" }] }];
+    const otherMessages = [{ role: "assistant", content: [{ type: "text", text: "other reply" }] }];
+    const settings = createSettings();
+    const state = {
+      sessionKey: "main",
+      chatMessage: "",
+      chatAttachments: [],
+      chatMessages: mainMessages,
+      chatToolMessages: [],
+      chatStreamSegments: [],
+      chatThinkingLevel: null,
+      chatStream: null,
+      chatSideResult: null,
+      lastError: null,
+      compactionStatus: null,
+      fallbackStatus: null,
+      chatAvatarUrl: null,
+      chatQueue: [],
+      chatQueueBySession: {},
+      chatMessagesBySession: new Map(),
+      chatRunId: null,
+      sessionsShowArchived: false,
+      chatSideResultTerminalRuns: new Set<string>(),
+      chatStreamStartedAt: null,
+      settings,
+      announceSessionSwitch: vi.fn(),
+      applySettings(next: typeof settings) {
+        state.settings = next;
+      },
+      loadAssistantIdentity: vi.fn(),
+      resetToolStream: vi.fn(),
+      resetChatScroll: vi.fn(),
+      resetChatInputHistoryNavigation: vi.fn(),
+    } as unknown as AppViewState;
+
+    refreshChatAvatarMock.mockResolvedValue(undefined);
+    refreshSlashCommandsMock.mockResolvedValue(undefined);
+    loadChatHistoryMock.mockResolvedValue(undefined);
+    loadSessionsMock.mockResolvedValue(undefined);
+
+    switchChatSession(state, "agent:main:other");
+    state.chatMessages = otherMessages;
+
+    switchChatSession(state, "main");
+
+    expect(state.chatMessages).toEqual(mainMessages);
+    expect(state.chatMessagesBySession.get("agent:main:other")).toEqual(otherMessages);
+  });
+
+  it("restores configured main aliases without crossing agent scopes", () => {
+    const opsMessages = [{ role: "assistant", content: [{ type: "text", text: "ops report" }] }];
+    const mainMessages = [{ role: "assistant", content: [{ type: "text", text: "main report" }] }];
+    const settings = createSettings();
+    const state = {
+      sessionKey: "home",
+      chatMessage: "",
+      chatAttachments: [],
+      chatMessages: opsMessages,
+      chatToolMessages: [],
+      chatStreamSegments: [],
+      chatThinkingLevel: null,
+      chatStream: null,
+      chatSideResult: null,
+      lastError: null,
+      compactionStatus: null,
+      fallbackStatus: null,
+      chatAvatarUrl: null,
+      chatQueue: [],
+      chatQueueBySession: {},
+      chatMessagesBySession: new Map(),
+      chatRunId: null,
+      sessionsShowArchived: false,
+      chatSideResultTerminalRuns: new Set<string>(),
+      chatStreamStartedAt: null,
+      settings,
+      announceSessionSwitch: vi.fn(),
+      applySettings(next: typeof settings) {
+        state.settings = next;
+      },
+      loadAssistantIdentity: vi.fn(),
+      resetToolStream: vi.fn(),
+      resetChatScroll: vi.fn(),
+      resetChatInputHistoryNavigation: vi.fn(),
+      hello: {
+        snapshot: {
+          sessionDefaults: {
+            defaultAgentId: "ops",
+            mainKey: "home",
+          },
+        },
+      },
+    } as unknown as AppViewState;
+
+    refreshChatAvatarMock.mockResolvedValue(undefined);
+    refreshSlashCommandsMock.mockResolvedValue(undefined);
+    loadChatHistoryMock.mockResolvedValue(undefined);
+    loadSessionsMock.mockResolvedValue(undefined);
+
+    switchChatSession(state, "agent:main:home");
+
+    expect(state.chatMessages).toEqual([]);
+    state.chatMessages = mainMessages;
+    switchChatSession(state, "agent:ops:home");
+
+    expect(state.chatMessages).toEqual(opsMessages);
+    expect(state.chatMessagesBySession.get("agent:ops:main")).toEqual(opsMessages);
+    expect(state.chatMessagesBySession.get("agent:main:main")).toEqual(mainMessages);
+    expect(state.chatMessagesBySession.size).toBe(2);
+  });
+
+  it("restores visible messages across plain and canonical non-main keys", () => {
+    const projectMessages = [
+      { role: "assistant", content: [{ type: "text", text: "project report" }] },
+    ];
+    const mainMessages = [{ role: "assistant", content: [{ type: "text", text: "main reply" }] }];
+    const settings = createSettings();
+    const state = {
+      sessionKey: "project",
+      chatMessage: "",
+      chatAttachments: [],
+      chatMessages: projectMessages,
+      chatToolMessages: [],
+      chatStreamSegments: [],
+      chatThinkingLevel: null,
+      chatStream: null,
+      chatSideResult: null,
+      lastError: null,
+      compactionStatus: null,
+      fallbackStatus: null,
+      chatAvatarUrl: null,
+      chatQueue: [],
+      chatQueueBySession: {},
+      chatMessagesBySession: new Map(),
+      chatRunId: null,
+      sessionsShowArchived: false,
+      chatSideResultTerminalRuns: new Set<string>(),
+      chatStreamStartedAt: null,
+      settings,
+      announceSessionSwitch: vi.fn(),
+      applySettings(next: typeof settings) {
+        state.settings = next;
+      },
+      loadAssistantIdentity: vi.fn(),
+      resetToolStream: vi.fn(),
+      resetChatScroll: vi.fn(),
+      resetChatInputHistoryNavigation: vi.fn(),
+    } as unknown as AppViewState;
+
+    refreshChatAvatarMock.mockResolvedValue(undefined);
+    refreshSlashCommandsMock.mockResolvedValue(undefined);
+    loadChatHistoryMock.mockResolvedValue(undefined);
+    loadSessionsMock.mockResolvedValue(undefined);
+
+    switchChatSession(state, "main");
+    state.chatMessages = mainMessages;
+
+    switchChatSession(state, "agent:main:project");
+
+    expect(state.chatMessages).toEqual(projectMessages);
+    expect(state.chatMessagesBySession.get("agent:main:project")).toEqual(projectMessages);
+    expect(state.chatMessagesBySession.size).toBe(2);
+  });
 });
 
 describe("dismissChatError", () => {
-  it("clears persistent Talk error state", () => {
+  it("leaves persistent Talk error state for its dedicated dismiss action", () => {
     const stop = vi.fn();
     const state = {
-      lastError: 'Realtime voice provider "openai" is not configured',
+      lastError: "unrelated gateway error",
       lastErrorCode: "UNAVAILABLE",
+      chatError: "unrelated chat error",
       realtimeTalkActive: true,
       realtimeTalkSession: { stop },
       realtimeTalkStatus: "error",
@@ -1247,6 +1561,35 @@ describe("dismissChatError", () => {
 
     expect(state.lastError).toBeNull();
     expect(state.lastErrorCode).toBeNull();
+    expect(state.chatError).toBeNull();
+    expect(stop).not.toHaveBeenCalled();
+    expect(state.realtimeTalkSession).toEqual({ stop });
+    expect(state.realtimeTalkActive).toBe(true);
+    expect(state.realtimeTalkStatus).toBe("error");
+    expect(state.realtimeTalkDetail).toBe('Realtime voice provider "openai" is not configured');
+    expect(state.realtimeTalkTranscript).toBe("partial transcript");
+  });
+});
+
+describe("dismissRealtimeTalkError", () => {
+  it("clears only Talk-owned error state", () => {
+    const stop = vi.fn();
+    const state = {
+      lastError: "unrelated gateway error",
+      lastErrorCode: "UNAVAILABLE",
+      chatError: "unrelated chat error",
+      realtimeTalkActive: true,
+      realtimeTalkSession: { stop },
+      realtimeTalkStatus: "error",
+      realtimeTalkDetail: 'Realtime voice provider "openai" is not configured',
+      realtimeTalkTranscript: "partial transcript",
+    } as unknown as AppViewState & { realtimeTalkSession: { stop(): void } | null };
+
+    dismissRealtimeTalkError(state);
+
+    expect(state.lastError).toBe("unrelated gateway error");
+    expect(state.lastErrorCode).toBe("UNAVAILABLE");
+    expect(state.chatError).toBe("unrelated chat error");
     expect(stop).toHaveBeenCalledOnce();
     expect(state.realtimeTalkSession).toBeNull();
     expect(state.realtimeTalkActive).toBe(false);

@@ -20,6 +20,7 @@ Scope includes:
 - Thinking signature cleanup
 - Image payload sanitization
 - Blank text-block cleanup before provider replay
+- Incomplete reasoning-only length-turn cleanup before provider replay
 - User-input provenance tagging (for inter-session routed prompts)
 - Empty assistant error-turn repair for Bedrock Converse replay
 
@@ -88,6 +89,21 @@ Implementation:
 
 - `sanitizeToolCallInputs` in `src/agents/session-transcript-repair.ts`
 - Applied in `sanitizeSessionHistory` in `src/agents/embedded-agent-runner/replay-history.ts`
+
+---
+
+## Global rule: incomplete reasoning-only turns
+
+Assistant turns that hit the provider output limit with only thinking or
+redacted-thinking content are omitted from the in-memory replay copy. Such turns
+contain incomplete provider state and may carry a partial thinking signature.
+
+Empty length turns remain unchanged, as do length turns with visible text, tool
+calls, or unknown content blocks. Stored transcripts are not rewritten.
+
+Implementation:
+
+- `normalizeAssistantReplayContent` in `src/agents/embedded-agent-runner/replay-history.ts`
 
 ---
 

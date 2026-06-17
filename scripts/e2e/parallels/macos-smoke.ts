@@ -7,6 +7,7 @@ import { posixAgentWorkspaceScript } from "./agent-workspace.ts";
 import {
   die,
   ensureValue,
+  currentRunningSnapshotInfo,
   extractLastOpenClawVersionFromLog,
   makeTempDir,
   packageBuildCommitFromTgz,
@@ -15,6 +16,7 @@ import {
   parseMode,
   parseProvider,
   modelProviderConfigBatchJson,
+  posixCodexPlatformPackageRepairFunction,
   posixProviderOnlyPluginIsolationScript,
   parsePositiveInt,
   readPositiveIntEnv,
@@ -26,7 +28,9 @@ import {
   resolveSnapshot,
   run,
   say,
+  shouldSkipSnapshotRestore,
   shellQuote,
+  validateSnapshotRestoreMode,
   startHostServer,
   warn,
   withProgressOnStderr,
@@ -42,11 +46,12 @@ import {
 import { MacosGuest } from "./guest-transports.ts";
 import { runSmokeLane, type SmokeLane, type SmokeLaneStatus } from "./lane-runner.ts";
 import { MacosDiscordSmoke } from "./macos-discord.ts";
-import { waitForVmStatus } from "./parallels-vm.ts";
+import { resolveMacosVmName, waitForVmStatus } from "./parallels-vm.ts";
 import { PhaseRunner } from "./phase-runner.ts";
 
 interface MacosOptions {
   vmName: string;
+  vmNameExplicit: boolean;
   snapshotHint: string;
   mode: Mode;
   provider: Provider;
@@ -126,6 +131,7 @@ const defaultOptions = (): MacosOptions => ({
   snapshotHint: "macOS 26.5 latest",
   targetPackageSpec: "",
   vmName: "macOS Tahoe",
+  vmNameExplicit: false,
 });
 
 function usage(): string {
@@ -167,6 +173,7 @@ export function parseArgs(argv: string[]): MacosOptions {
         break parseArgv;
       case "--vm":
         options.vmName = ensureValue(args, i, arg);
+        options.vmNameExplicit = true;
         i++;
         break;
       case "--snapshot-hint":
@@ -306,6 +313,7 @@ class MacosSmoke {
   }
 
   async run(): Promise<void> {
+    this.options.vmName = resolveMacosVmName(this.options.vmName, this.options.vmNameExplicit);
     this.runDir = await makeTempDir("openclaw-parallels-macos.");
     this.phases = new PhaseRunner(this.runDir);
     this.guest = new MacosGuest(
@@ -321,7 +329,10 @@ class MacosSmoke {
     this.discord = this.createDiscordSmoke();
     this.tgzDir = await makeTempDir("openclaw-parallels-macos-tgz.");
     try {
-      this.snapshot = resolveSnapshot(this.options.vmName, this.options.snapshotHint);
+      validateSnapshotRestoreMode(this.options.mode, "macOS smoke");
+      this.snapshot = shouldSkipSnapshotRestore()
+        ? currentRunningSnapshotInfo(this.options.vmName)
+        : resolveSnapshot(this.options.vmName, this.options.snapshotHint);
       this.latestVersion = resolveLatestVersion(this.options.latestVersion);
       this.installVersion = this.options.installVersion || this.latestVersion;
       this.hostIp = resolveHostIp(this.options.hostIp);
@@ -489,7 +500,7 @@ class MacosSmoke {
     this.status.freshVersion = await this.extractLastVersion("fresh.install-main");
     await this.phase("fresh.verify-main-version", 60, () => this.verifyTargetVersion());
     await this.phase("fresh.verify-bundle-permissions", 180, () => this.verifyBundlePermissions());
-    await this.phase("fresh.onboard-ref", 180, () => this.runRefOnboard());
+    await this.phase("fresh.onboard-ref", 420, () => this.runRefOnboard());
     await this.phase("fresh.gateway-start", 180, () => this.startManualGatewayIfNeeded());
     await this.phase("fresh.gateway-status", 180, () => this.verifyGateway());
     this.status.freshGateway = "pass";
@@ -541,7 +552,7 @@ class MacosSmoke {
       this.status.upgradeVersion = await this.extractLastVersion("upgrade.update-dev");
       await this.phase("upgrade.verify-dev-channel", 60, () => this.verifyDevChannelUpdate());
     }
-    await this.phase("upgrade.onboard-ref", 180, () => this.runRefOnboard());
+    await this.phase("upgrade.onboard-ref", 420, () => this.runRefOnboard());
     await this.phase("upgrade.gateway-start", 180, () => this.startManualGatewayIfNeeded());
     await this.phase("upgrade.gateway-status", 180, () => this.verifyGateway());
     this.status.upgradeGateway = "pass";
@@ -712,6 +723,11 @@ exec node "$entry" ${argv}`,
   }
 
   private restoreSnapshot(): void {
+    if (shouldSkipSnapshotRestore()) {
+      say(`Skip snapshot restore; using current running VM ${this.options.vmName}`);
+      this.waitForCurrentUser();
+      return;
+    }
     say(`Restore snapshot ${this.options.snapshotHint} (${this.snapshot.id})`);
     let restored = false;
     for (let attempt = 1; attempt <= 2; attempt++) {
@@ -782,6 +798,8 @@ printf 'preflight.umask=%s\n' "$(umask)"
 printf 'preflight.npmRoot=%s\n' "$(${guestNpm} root -g 2>/dev/null || true)"
 ${guestNpm} uninstall -g openclaw >/dev/null 2>&1 || true
 rm -rf "$HOME/.openclaw"
+# Restored snapshots can contain corrupt optional-dependency tarballs that npm silently skips.
+rm -rf "$HOME/.npm/_cacache"
 rm -f /tmp/openclaw-parallels-macos-gateway.log`);
   }
 
@@ -798,7 +816,16 @@ ${guestOpenClaw} --version`,
     if (this.targetInstallsDirectly()) {
       this
         .guestSh(`printf 'install-source: registry-spec %s\\n' ${shellQuote(this.options.targetPackageSpec || "")}
-${guestNpm} install -g ${shellQuote(this.options.targetPackageSpec || "")}
+for attempt in 1 2; do
+  if ${guestNpm} install -g ${shellQuote(this.options.targetPackageSpec || "")}; then
+    break
+  fi
+  if [ "$attempt" -eq 2 ]; then
+    exit 1
+  fi
+  echo "npm install attempt $attempt failed; retrying in 5s" >&2
+  sleep 5
+done
 ${guestOpenClaw} --version`);
       return;
     }
@@ -1082,6 +1109,7 @@ rm -f "$provider_config_batch"`);
     this.restrictAgentTurnPlugins();
     this.guestSh(
       `${posixAgentWorkspaceScript("Parallels macOS smoke test assistant.")}
+${posixCodexPlatformPackageRepairFunction()}
 agent_ok=false
 for attempt in 1 2; do
   session_id="parallels-macos-smoke"
@@ -1096,6 +1124,11 @@ for attempt in 1 2; do
   set -e
   cat "$output_file"
   if [ "$rc" -ne 0 ]; then
+    if [ "$attempt" -lt 2 ] && repair_missing_codex_platform_package "$output_file"; then
+      rm -f "$output_file"
+      echo "agent turn attempt $attempt hit a missing Codex platform package; retrying"
+      continue
+    fi
     rm -f "$output_file"
     exit "$rc"
   fi

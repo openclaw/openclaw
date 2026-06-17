@@ -16,6 +16,16 @@ import {
   resolveInstalledBinaryPath,
 } from "../scripts/openclaw-npm-postpublish-verify.ts";
 
+const INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT = 10_000;
+
+function writeDistJavaScriptFiles(packageRoot: string, count: number): void {
+  const distDir = join(packageRoot, "dist");
+  mkdirSync(distDir, { recursive: true });
+  for (let index = 0; index < count; index += 1) {
+    writeFileSync(join(distDir, `chunk-${index}.js`), "export {};\n", "utf8");
+  }
+}
+
 describe("buildPublishedInstallScenarios", () => {
   it("uses a single fresh scenario for plain stable releases", () => {
     expect(buildPublishedInstallScenarios("2026.3.23")).toEqual([
@@ -143,6 +153,20 @@ describe("collectInstalledContextEngineRuntimeErrors", () => {
       );
 
       expect(collectInstalledContextEngineRuntimeErrors(packageRoot)).toStrictEqual([]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses unbounded packaged dist scans", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writeDistJavaScriptFiles(packageRoot, INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT + 1);
+
+      expect(collectInstalledContextEngineRuntimeErrors(packageRoot)).toEqual([
+        `installed package dist contains more than ${INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT} JavaScript files; refusing to scan unbounded package contents.`,
+      ]);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
     }
@@ -488,6 +512,24 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
 
       expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
         "installed package root dist file 'oversized.js' is invalid or exceeds 6291456 bytes.",
+      ]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses unbounded root dist dependency scans", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writePackageFile(packageRoot, "package.json", {
+        version: "2026.4.22",
+        dependencies: {},
+      });
+      writeDistJavaScriptFiles(packageRoot, INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT + 1);
+
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
+        `installed package root dist contains more than ${INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT} JavaScript files; refusing to scan unbounded package contents.`,
       ]);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });

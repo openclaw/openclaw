@@ -29,9 +29,25 @@ export type MemoryEmbeddingProviderCallOptions = {
 export type MemoryEmbeddingProviderRuntime = {
   id: string;
   cacheKeyData?: Record<string, unknown>;
+  /** Prior persisted model/cache identities that are equivalent to the current identity. */
+  indexIdentityAliases?: Array<{
+    model: string;
+    cacheKeyData: Record<string, unknown>;
+  }>;
   inlineQueryTimeoutMs?: number;
   inlineBatchTimeoutMs?: number;
+  sourceWideBatchEmbed?: boolean;
   batchEmbed?: (options: MemoryEmbeddingBatchOptions) => Promise<number[][] | null>;
+};
+
+/** Provider-owned canonical identity and exact aliases for persisted indexes. */
+export type MemoryEmbeddingProviderIndexIdentity = {
+  model: string;
+  cacheKeyData: Record<string, unknown>;
+  aliases?: Array<{
+    model: string;
+    cacheKeyData: Record<string, unknown>;
+  }>;
 };
 
 /** Created memory embedding provider instance. */
@@ -97,6 +113,9 @@ export type MemoryEmbeddingProviderAdapter = {
   autoSelectPriority?: number;
   allowExplicitWhenConfiguredAuto?: boolean;
   supportsMultimodalEmbeddings?: (params: { model: string }) => boolean;
+  resolveIndexIdentity?: (
+    options: MemoryEmbeddingProviderCreateOptions,
+  ) => MemoryEmbeddingProviderIndexIdentity;
   create: (
     options: MemoryEmbeddingProviderCreateOptions,
   ) => Promise<MemoryEmbeddingProviderCreateResult>;

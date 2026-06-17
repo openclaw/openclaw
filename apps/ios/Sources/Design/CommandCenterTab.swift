@@ -2,13 +2,17 @@ import OpenClawChatUI
 import SwiftUI
 
 struct CommandCenterTab: View {
-    fileprivate static let recentSessionsFetchLimit = 200
+    static let recentSessionsFetchLimit = 200
 
     @Environment(NodeAppModel.self) private var appModel
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.scenePhase) private var scenePhase
     @State private var defaultChatSessionEntry: OpenClawChatSessionEntry?
     @State private var recentChatSessions: [OpenClawChatSessionEntry] = []
+    var headerTitle: String = "OpenClaw"
+    var headerLeadingAction: OpenClawSidebarHeaderAction?
+    var showsHeaderMark: Bool = true
     var openChat: () -> Void
     var openSettings: () -> Void
 
@@ -31,20 +35,37 @@ struct CommandCenterTab: View {
 
     var body: some View {
         NavigationStack {
-            ZStack {
-                CommandControlBackground()
-                self.commandAmbientOverlay
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 10) {
-                        self.header
-                        self.gatewayCard
-                        self.defaultChatSessionSection
-                        self.recentSessions
+            GeometryReader { geometry in
+                ZStack {
+                    CommandControlBackground()
+                    self.commandAmbientOverlay
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 14) {
+                            self.header
+                            self.gatewayCard
+                            if Self.usesSplitSectionsLayout(
+                                horizontalSizeClass: self.horizontalSizeClass,
+                                containerWidth: geometry.size.width)
+                            {
+                                HStack(alignment: .top, spacing: 12) {
+                                    self.defaultChatSessionSection
+                                        .frame(maxWidth: .infinity, alignment: .topLeading)
+                                    self.recentSessions
+                                        .frame(maxWidth: .infinity, alignment: .topLeading)
+                                }
+                                .padding(.horizontal, OpenClawProMetric.pagePadding)
+                            } else {
+                                self.defaultChatSessionSection
+                                    .padding(.horizontal, OpenClawProMetric.pagePadding)
+                                self.recentSessions
+                                    .padding(.horizontal, OpenClawProMetric.pagePadding)
+                            }
+                        }
+                        .padding(.top, 18)
+                        .padding(.bottom, 18)
                     }
-                    .padding(.top, 16)
-                    .padding(.bottom, 18)
+                    .safeAreaPadding(.bottom, OpenClawProMetric.bottomScrollInset)
                 }
-                .safeAreaPadding(.bottom, OpenClawProMetric.bottomScrollInset)
             }
             .navigationBarHidden(true)
         }
@@ -53,12 +74,47 @@ struct CommandCenterTab: View {
         }
     }
 
+    static func usesSplitSectionsLayout(
+        horizontalSizeClass: UserInterfaceSizeClass?,
+        containerWidth: CGFloat) -> Bool
+    {
+        guard horizontalSizeClass == .regular else { return false }
+        return containerWidth >= 1000
+    }
+
+    static func shouldShowHeaderMark(
+        hasLeadingAction: Bool,
+        showsHeaderMark: Bool) -> Bool
+    {
+        !hasLeadingAction && showsHeaderMark
+    }
+
     private var header: some View {
-        HStack(alignment: .center, spacing: 11) {
-            OpenClawProMark(size: 31, shadowRadius: 9)
-            Text("OpenClaw")
-                .font(.system(size: 27, weight: .bold, design: .rounded))
-            Spacer()
+        OpenClawAdaptiveHeaderRow(
+            title: self.headerTitle,
+            subtitle: self.gatewaySubtitle,
+            titleFont: .title3.weight(.semibold),
+            subtitleFont: .caption,
+            subtitleLineLimit: 1)
+        {
+            if let headerLeadingAction {
+                OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
+            } else if Self.shouldShowHeaderMark(
+                hasLeadingAction: headerLeadingAction != nil,
+                showsHeaderMark: self.showsHeaderMark)
+            {
+                OpenClawProMark(size: 28, shadowRadius: 5)
+            }
+        } accessory: {
+            Button(action: self.openSettings) {
+                ProCapsule(
+                    title: self.gatewayStateText,
+                    color: self.gatewayStatusColor,
+                    icon: self.gatewayConnected ? "checkmark.circle.fill" : "wifi.slash")
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Gateway \(self.gatewayStateText)")
+            .accessibilityHint("Opens Settings / Gateway")
         }
         .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
@@ -86,7 +142,7 @@ struct CommandCenterTab: View {
                     title: "Gateway",
                     value: self.gatewayStateText,
                     color: self.gatewayStatusColor,
-                    icon: self.gatewayConnected ? "hourglass" : "wifi.slash")
+                    icon: self.gatewayConnected ? "checkmark.circle.fill" : "wifi.slash")
 
                 HStack(spacing: 0) {
                     self.gatewayFact(
@@ -160,7 +216,6 @@ struct CommandCenterTab: View {
                 .buttonStyle(.plain)
             }
         }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
     private var recentSessions: some View {
@@ -200,7 +255,6 @@ struct CommandCenterTab: View {
                 }
             }
         }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
     private func cardHeader(
@@ -213,7 +267,8 @@ struct CommandCenterTab: View {
     {
         HStack(spacing: 8) {
             Text(title)
-                .font(.subheadline.weight(.bold))
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
             if let badgeValue {
                 Text(badgeValue)
                     .font(.caption2.weight(.bold))
@@ -315,12 +370,11 @@ struct CommandCenterTab: View {
     }
 
     private var sessionListAvailable: Bool {
-        self.appModel.isAppleReviewDemoModeEnabled || self.appModel.isOperatorGatewayConnected
+        self.appModel.isLocalChatFixtureEnabled || self.appModel.isOperatorGatewayConnected
     }
 
     private var sessionListMode: String {
-        if self.appModel.isAppleReviewDemoModeEnabled { return "demo" }
-        return self.appModel.isOperatorGatewayConnected ? "operator" : "offline"
+        self.appModel.chatTransportModeID
     }
 
     private var sessionItems: [WorkItem] {
@@ -359,9 +413,7 @@ struct CommandCenterTab: View {
         }
 
         do {
-            let transport: any OpenClawChatTransport = self.appModel.isAppleReviewDemoModeEnabled
-                ? AppleReviewDemoChatTransport()
-                : IOSGatewayChatTransport(gateway: self.appModel.operatorSession)
+            let transport = self.appModel.makeChatTransport()
             let response = try await transport.listSessions(limit: Self.recentSessionsFetchLimit)
             self.defaultChatSessionEntry = response.sessions.first {
                 $0.key == self.appModel.defaultChatSessionKey
@@ -403,7 +455,7 @@ struct CommandCenterTab: View {
         return result
     }
 
-    fileprivate static func sessionWorkItem(
+    static func sessionWorkItem(
         for session: OpenClawChatSessionEntry,
         currentSessionKey: String) -> WorkItem
     {
@@ -558,13 +610,19 @@ struct CommandCenterTab: View {
     }
 }
 
-private struct CommandSessionsScreen: View {
+struct CommandSessionsScreen: View {
     @Environment(NodeAppModel.self) private var appModel
     @Environment(\.dismiss) private var dismiss
     @State private var sessions: [OpenClawChatSessionEntry] = []
     @State private var isLoading = false
     @State private var loadErrorText: String?
+    let headerLeadingAction: OpenClawSidebarHeaderAction?
     let openChat: () -> Void
+
+    init(headerLeadingAction: OpenClawSidebarHeaderAction? = nil, openChat: @escaping () -> Void) {
+        self.headerLeadingAction = headerLeadingAction
+        self.openChat = openChat
+    }
 
     var body: some View {
         ZStack {
@@ -587,12 +645,18 @@ private struct CommandSessionsScreen: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Sessions")
-                .font(.system(size: 27, weight: .bold, design: .rounded))
-            Text(self.headerDetail)
-                .font(.caption.weight(.medium))
-                .foregroundStyle(.secondary)
+        HStack(alignment: .top, spacing: 12) {
+            if let headerLeadingAction {
+                OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Sessions")
+                    .font(.system(size: 27, weight: .bold, design: .rounded))
+                Text(self.headerDetail)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+            }
         }
         .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
@@ -698,9 +762,7 @@ private struct CommandSessionsScreen: View {
         defer { self.isLoading = false }
 
         do {
-            let transport: any OpenClawChatTransport = self.appModel.isAppleReviewDemoModeEnabled
-                ? AppleReviewDemoChatTransport()
-                : IOSGatewayChatTransport(gateway: self.appModel.operatorSession)
+            let transport = self.appModel.makeChatTransport()
             let response = try await transport.listSessions(limit: CommandCenterTab.recentSessionsFetchLimit)
             self.sessions = response.sessions
         } catch {
@@ -712,11 +774,10 @@ private struct CommandSessionsScreen: View {
 
 extension NodeAppModel {
     fileprivate var isCommandSessionListAvailable: Bool {
-        self.isAppleReviewDemoModeEnabled || self.isOperatorGatewayConnected
+        self.isLocalChatFixtureEnabled || self.isOperatorGatewayConnected
     }
 
     fileprivate var commandSessionListMode: String {
-        if self.isAppleReviewDemoModeEnabled { return "demo" }
-        return self.isOperatorGatewayConnected ? "operator" : "offline"
+        self.chatTransportModeID
     }
 }

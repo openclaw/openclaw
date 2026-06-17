@@ -386,8 +386,15 @@ function normalizeUserContentForMerge(content: unknown): UserContentBlock[] {
  * Also strips dangling tool_use blocks that lack corresponding tool_result blocks.
  */
 export function validateAnthropicTurns(messages: AgentMessage[]): AgentMessage[] {
-  // First, strip dangling tool-call blocks from assistant messages.
-  const stripped = stripDanglingAnthropicToolUses(messages);
+  // Merge first so an injected assistant turn cannot hide the tool result that
+  // resolves the preceding signed tool call. Stripping first would destroy the
+  // active Anthropic tool-use turn before the adjacent turns can be repaired.
+  const mergedAssistant = validateTurnsWithConsecutiveMerge({
+    messages,
+    role: "assistant",
+    merge: mergeConsecutiveAssistantTurns,
+  });
+  const stripped = stripDanglingAnthropicToolUses(mergedAssistant);
 
   return validateTurnsWithConsecutiveMerge({
     messages: stripped,

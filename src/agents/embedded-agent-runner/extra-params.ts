@@ -1,3 +1,7 @@
+import {
+  type NativeWebSearchToolPolicyParams,
+  isNativeWebSearchAllowedByToolPolicy,
+} from "../../agents/codex-native-web-search-core.js";
 /**
  * Resolves model extra parameters and transport overrides for embedded agents.
  */
@@ -1043,7 +1047,10 @@ export function applyExtraParamsToAgent(
   model?: ProviderRuntimeModel,
   agentDir?: string,
   resolvedTransport?: SupportedTransport,
-  options?: { preparedExtraParams?: Record<string, unknown> },
+  options?: {
+    preparedExtraParams?: Record<string, unknown>;
+    nativeWebSearchPolicyContext?: NativeWebSearchToolPolicyParams;
+  },
 ): { effectiveExtraParams: Record<string, unknown> } {
   const resolvedExtraParams = resolveExtraParams({
     cfg,
@@ -1089,6 +1096,15 @@ export function applyExtraParamsToAgent(
   };
 
   const providerStreamBase = agent.streamFn;
+  const nativeWebSearchAllowedByToolPolicy = options?.nativeWebSearchPolicyContext
+    ? isNativeWebSearchAllowedByToolPolicy({
+        config: cfg,
+        modelProvider: model?.provider,
+        modelId: model?.id,
+        agentId,
+        ...options.nativeWebSearchPolicyContext,
+      })
+    : undefined;
   const pluginWrappedStreamFn = providerRuntimeDeps.wrapProviderStreamFn({
     provider,
     config: cfg,
@@ -1096,6 +1112,8 @@ export function applyExtraParamsToAgent(
       config: cfg,
       agentDir,
       workspaceDir,
+      agentId,
+      nativeWebSearchAllowedByToolPolicy,
       provider,
       modelId,
       extraParams: effectiveExtraParams,

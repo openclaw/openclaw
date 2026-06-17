@@ -74,6 +74,7 @@ export type TraceAttempt = {
     | "surface_error"
     | "candidate_failed"
     | "rotate_profile"
+    | "same_model_rate_limit"
     | "fallback_model"
     | "aborted"
     | "error";
@@ -159,8 +160,13 @@ export type EmbeddedAgentRunMeta = {
       | "role_ordering"
       | "image_size"
       | "retry_limit"
+      | "incomplete_turn"
       | "hook_block";
     message: string;
+    /** True only when model fallback can retry this terminal error without repeating side effects. */
+    fallbackSafe?: boolean;
+    /** True when the payload includes a trusted structured terminal tool summary. */
+    terminalPresentation?: boolean;
   };
   failureSignal?: EmbeddedRunFailureSignal;
   /** Stop reason for the agent run (e.g., "completed", "tool_calls"). */

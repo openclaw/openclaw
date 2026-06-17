@@ -65,11 +65,30 @@ export type CodexUserInput =
       path: string;
     };
 
-export type CodexDynamicToolSpec = JsonObject & {
+export type CodexDynamicToolFunctionSpec = JsonObject & {
+  type: "function";
   name: string;
   description: string;
   inputSchema: JsonValue;
+  deferLoading?: boolean;
 };
+
+export type CodexDynamicToolNamespaceTool = CodexDynamicToolFunctionSpec;
+
+export type CodexDynamicToolNamespaceSpec = JsonObject & {
+  type: "namespace";
+  name: string;
+  description: string;
+  tools: CodexDynamicToolNamespaceTool[];
+};
+
+export type CodexDynamicToolSpec = CodexDynamicToolFunctionSpec | CodexDynamicToolNamespaceSpec;
+
+export function flattenCodexDynamicToolFunctions(
+  tools: readonly CodexDynamicToolSpec[] | undefined,
+): CodexDynamicToolFunctionSpec[] {
+  return (tools ?? []).flatMap((tool) => (tool.type === "namespace" ? tool.tools : [tool]));
+}
 
 export type CodexTurnEnvironmentParams = JsonObject & {
   environmentId: string;
@@ -90,6 +109,7 @@ export type CodexThreadStartParams = JsonObject & {
   developerInstructions?: string;
   experimentalRawEvents?: boolean;
   environments?: CodexTurnEnvironmentParams[] | null;
+  /** Retired by Codex 0.137, but still sent for supported custom app-server 0.125-0.136. */
   persistExtendedHistory?: boolean;
 };
 
@@ -104,6 +124,7 @@ export type CodexThreadResumeParams = JsonObject & {
   serviceTier?: CodexServiceTier | null;
   config?: JsonObject;
   developerInstructions?: string;
+  /** Retired by Codex 0.137, but still sent for supported custom app-server 0.125-0.136. */
   persistExtendedHistory?: boolean;
 };
 
@@ -335,6 +356,12 @@ export type CodexGetAccountResponse = {
   requiresOpenaiAuth?: boolean;
 };
 
+export type CodexModelProviderCapabilitiesReadResponse = {
+  namespaceTools: boolean;
+  imageGeneration: boolean;
+  webSearch: boolean;
+};
+
 export type CodexChatgptAuthTokensRefreshResponse = {
   accessToken: string;
   chatgptAccountId: string;
@@ -540,6 +567,7 @@ type CodexAppServerRequestResultMap = {
   "marketplace/add": JsonValue;
   "mcpServerStatus/list": CodexListMcpServerStatusResponse;
   "model/list": CodexModelListResponse;
+  "modelProvider/capabilities/read": CodexModelProviderCapabilitiesReadResponse;
   "plugin/install": CodexPluginInstallResponse;
   "plugin/list": CodexPluginListResponse;
   "plugin/read": CodexPluginReadResponse;

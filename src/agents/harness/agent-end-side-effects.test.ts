@@ -44,7 +44,9 @@ describe("agent end side effects", () => {
       },
       ctx: {
         runId: "run-1",
+        sessionKey: "agent:main:main",
         workspaceDir: "/workspace",
+        trigger: "user",
         config: {
           skills: {
             workshop: {
@@ -65,7 +67,9 @@ describe("agent end side effects", () => {
       },
       ctx: {
         runId: "run-1",
+        sessionKey: "agent:main:main",
         workspaceDir: "/workspace",
+        trigger: "user",
         config: {
           skills: {
             workshop: {

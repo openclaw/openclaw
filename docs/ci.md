@@ -183,7 +183,7 @@ The workflow installs OCM from a pinned release and Kova from `openclaw/Kova` at
 - `mock-deep-profile`: CPU/heap/trace profiling for startup, gateway, and agent-turn hotspots.
 - `live-openai-candidate`: a real OpenAI `openai/gpt-5.5` agent turn, skipped when `OPENAI_API_KEY` is unavailable.
 
-The mock-provider lane also runs OpenClaw-native source probes after the Kova pass: gateway boot timing and memory across default, hook, and 50-plugin startup cases; bundled plugin import RSS, repeated mock-OpenAI `channel-chat-baseline` hello loops, and CLI startup commands against the booted gateway. When the previous published mock-provider source report is available for the tested ref, the source summary compares current RSS and heap values against that baseline and marks large RSS increases as `watch`. The source probe Markdown summary lives at `source/index.md` in the report bundle, with raw JSON beside it.
+The mock-provider lane also runs OpenClaw-native source probes after the Kova pass: gateway boot timing and memory across default, hook, and 50-plugin startup cases; bundled plugin import RSS, repeated mock-OpenAI `channel-chat-baseline` hello loops, CLI startup commands against the booted gateway, and the SQLite state smoke performance probe. When the previous published mock-provider source report is available for the tested ref, the source summary compares current RSS and heap values against that baseline and marks large RSS increases as `watch`. The source probe Markdown summary lives at `source/index.md` in the report bundle, with raw JSON beside it.
 
 Every lane uploads GitHub artifacts. When `CLAWGRIT_REPORTS_TOKEN` is configured, the workflow also commits `report.json`, `report.md`, bundles, `index.md`, and source-probe artifacts into `openclaw/clawgrit-reports` under `openclaw-performance/<tested-ref>/<run-id>-<attempt>/<lane>/`. The current tested-ref pointer is written as `openclaw-performance/<tested-ref>/latest-<lane>.json`.
 
@@ -200,13 +200,19 @@ from `release/YYYY.M.PATCH` or `main` after the release tag exists and after the
 OpenClaw npm preflight has succeeded. It verifies `pnpm plugins:sync:check`,
 dispatches `Plugin NPM Release` for all publishable plugin packages, dispatches
 `Plugin ClawHub Release` for the same release SHA, and only then dispatches
-`OpenClaw NPM Release` with the saved `preflight_run_id`.
+`OpenClaw NPM Release` with the saved `preflight_run_id`. Stable publish also
+requires an exact `windows_node_tag`; the workflow verifies the Windows source
+release and compares its x64/ARM64 installers with the candidate-approved
+`windows_node_installer_digests` input before any publish child, then promotes
+and verifies those same pinned installer digests plus the exact companion asset
+and checksum contract before publishing the GitHub release draft.
 
 ```bash
 gh workflow run openclaw-release-publish.yml \
   --ref release/YYYY.M.PATCH \
   -f tag=vYYYY.M.PATCH-beta.N \
   -f preflight_run_id=<successful-openclaw-npm-preflight-run-id> \
+  -f full_release_validation_run_id=<successful-full-release-validation-run-id> \
   -f npm_dist_tag=beta
 ```
 

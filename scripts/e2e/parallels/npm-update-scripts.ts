@@ -1,7 +1,11 @@
 // Npm Update Scripts script supports OpenClaw repository automation.
 import { posixAgentWorkspaceScript, windowsAgentWorkspaceScript } from "./agent-workspace.ts";
 import { shellQuote } from "./host-command.ts";
-import { posixProviderOnlyPluginIsolationScript } from "./plugin-isolation.ts";
+import {
+  posixCodexPlatformPackageRepairFunction,
+  posixProviderOnlyPluginIsolationScript,
+  windowsCodexPlatformPackageRepairFunction,
+} from "./plugin-isolation.ts";
 import {
   psSingleQuote,
   windowsAgentTurnConfigPatchScript,
@@ -72,6 +76,7 @@ function posixAssertAgentOkScript(command: string, input: NpmUpdateScriptInput, 
     fallbackPluginId: input.auth.modelId.split("/", 1)[0] || "openai",
     modelId: input.auth.modelId,
   })}
+${posixCodexPlatformPackageRepairFunction()}
 agent_ok=false
 for attempt in 1 2; do
   session_id=${shellQuote(sessionId)}
@@ -84,6 +89,11 @@ for attempt in 1 2; do
   set -e
   print_log_tail "$output_file"
   if [ "$rc" -ne 0 ]; then
+    if [ "$attempt" -lt 2 ] && repair_missing_codex_platform_package "$output_file"; then
+      rm -f "$output_file"
+      echo "agent turn attempt $attempt hit a missing Codex platform package; retrying"
+      continue
+    fi
     rm -f "$output_file"
     exit "$rc"
   fi
@@ -138,6 +148,7 @@ Wait-OpenClawGateway`;
 
 function windowsAssertAgentOkScript(input: NpmUpdateScriptInput): string {
   return `${windowsAgentTurnConfigPatchScript(input.auth.modelId)}
+${windowsCodexPlatformPackageRepairFunction()}
 $sessionPath = Join-Path $env:USERPROFILE '.openclaw\\agents\\main\\sessions\\parallels-npm-update-windows.jsonl'
 Remove-Item $sessionPath -Force -ErrorAction SilentlyContinue
 ${windowsAgentWorkspaceScript("Parallels npm update smoke test assistant.")}
@@ -149,16 +160,21 @@ for ($attempt = 1; $attempt -le 2; $attempt++) {
   $sessionPath = Join-Path $sessionsDir "$sessionId.jsonl"
   Remove-Item $sessionPath -Force -ErrorAction SilentlyContinue
   $output = Invoke-OpenClaw agent --local --agent main --session-id $sessionId --model ${psSingleQuote(input.auth.modelId)} --message 'Reply with exact ASCII text OK only.' --thinking off --timeout ${resolveParallelsModelTimeoutSeconds("windows")} --json 2>&1
+  $agentExitCode = $LASTEXITCODE
   if ($null -ne $output) { $output | ForEach-Object { $_ } }
-  if ($LASTEXITCODE -ne 0) { throw "agent failed with exit code $LASTEXITCODE" }
-  if (($output | Out-String) -match '"finalAssistant(Raw|Visible)Text":\\s*"OK"') {
+  if ($agentExitCode -eq 0 -and ($output | Out-String) -match '"finalAssistant(Raw|Visible)Text":\\s*"OK"') {
     $agentOk = $true
     break
+  }
+  if ($agentExitCode -ne 0 -and $attempt -lt 2 -and (Repair-MissingCodexPlatformPackage -Output $output)) {
+    Write-Host "agent turn attempt $attempt hit a missing Codex platform package; retrying"
+    continue
   }
   if ($attempt -lt 2) {
     Write-Host "agent turn attempt $attempt finished without OK response; retrying"
     Start-Sleep -Seconds 3
   }
+  if ($agentExitCode -ne 0) { throw "agent failed with exit code $agentExitCode" }
 }
 if (-not $agentOk) { throw 'openclaw agent finished without OK response' }`;
 }

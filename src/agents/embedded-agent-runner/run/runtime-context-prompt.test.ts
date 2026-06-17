@@ -219,7 +219,9 @@ describe("runtime context prompt submission", () => {
         "OpenClaw runtime event.",
         "This context is runtime-generated, not user-authored. Keep internal details private.",
         "",
+        "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
         "internal event",
+        "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
       ].join("\n"),
     });
   });
@@ -242,7 +244,9 @@ describe("runtime context prompt submission", () => {
         "OpenClaw runtime event.",
         "This context is runtime-generated, not user-authored. Keep internal details private.",
         "",
+        "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
         "internal event",
+        "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
       ].join("\n"),
     });
   });
@@ -339,7 +343,9 @@ describe("runtime context prompt submission", () => {
         "OpenClaw runtime context for the immediately preceding user message.",
         "This context is runtime-generated, not user-authored. Keep internal details private.",
         "",
+        "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
         "secret runtime context",
+        "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
       ].join("\n"),
       display: false,
       details: { source: "openclaw-runtime-context" },

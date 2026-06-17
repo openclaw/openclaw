@@ -247,6 +247,33 @@ openclaw_live_resource_value_disabled() {
   return 1
 }
 
+openclaw_live_detect_available_cpus() {
+  if [ -n "${OPENCLAW_LIVE_DOCKER_AVAILABLE_CPUS:-${OPENCLAW_DOCKER_E2E_AVAILABLE_CPUS:-}}" ]; then
+    printf '%s\n' "${OPENCLAW_LIVE_DOCKER_AVAILABLE_CPUS:-${OPENCLAW_DOCKER_E2E_AVAILABLE_CPUS:-}}"
+    return 0
+  fi
+  if command -v nproc >/dev/null 2>&1; then
+    nproc
+    return 0
+  fi
+  if command -v getconf >/dev/null 2>&1; then
+    getconf _NPROCESSORS_ONLN
+    return 0
+  fi
+  return 1
+}
+
+openclaw_live_resolve_cpus() {
+  local requested="$1"
+  local available=""
+  available="$(openclaw_live_detect_available_cpus 2>/dev/null || true)"
+  if [[ "$requested" =~ ^[0-9]+$ ]] && [[ "$available" =~ ^[0-9]+$ ]] && [ "$requested" -gt "$available" ]; then
+    printf '%s\n' "$available"
+    return 0
+  fi
+  printf '%s\n' "$requested"
+}
+
 openclaw_live_docker_run_resource_args() {
   local target_array="${1:?target array required}"
   eval "${target_array}=()"
@@ -257,6 +284,7 @@ openclaw_live_docker_run_resource_args() {
   local memory="${OPENCLAW_LIVE_DOCKER_MEMORY:-${OPENCLAW_DOCKER_E2E_MEMORY:-8g}}"
   local cpus="${OPENCLAW_LIVE_DOCKER_CPUS:-${OPENCLAW_DOCKER_E2E_CPUS:-16}}"
   local pids_limit="${OPENCLAW_LIVE_DOCKER_PIDS_LIMIT:-${OPENCLAW_DOCKER_E2E_PIDS_LIMIT:-2048}}"
+  cpus="$(openclaw_live_resolve_cpus "$cpus")"
 
   if ! openclaw_live_resource_value_disabled "$memory"; then
     eval "${target_array}+=(--memory \"\$memory\")"
