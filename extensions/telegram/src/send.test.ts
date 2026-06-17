@@ -592,6 +592,33 @@ describe("sendMessageTelegram", () => {
     });
   });
 
+  it("preserves telegram markdown edge cases reported in issue #94129", async () => {
+    botApi.sendMessage.mockResolvedValue({
+      message_id: 61,
+      chat: { id: "123" },
+    });
+
+    const markdown = [
+      "Stocks position: Entry $731.38 / TP $800.00",
+      "",
+      "A: bold warning **entered**, B: still watching",
+      "",
+      "#12345 user feedback: rendering issue",
+    ].join("\n");
+
+    await sendMessageTelegram("123", markdown, {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+    });
+
+    expect(botRawApi.sendRichMessage).toHaveBeenCalledWith({
+      chat_id: "123",
+      rich_message: {
+        markdown,
+      },
+    });
+  });
+
   it("pins and unpins Telegram messages", async () => {
     loadConfig.mockReturnValue({
       channels: {
