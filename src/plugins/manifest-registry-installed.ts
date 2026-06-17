@@ -31,6 +31,7 @@ import {
 const installedManifestRegistryIndexFingerprintCache = new WeakMap<InstalledPluginIndex, string>();
 const installedPackageJsonPathCache = new Map<string, string | null>();
 const installedPackageMetadataCache = new Map<string, InstalledPackageMetadata>();
+const realpathMemoCache = new Map<string, string>();
 const MAX_INSTALLED_PACKAGE_JSON_PATH_CACHE_ENTRIES = 256;
 const MAX_INSTALLED_PACKAGE_METADATA_CACHE_ENTRIES = 256;
 
@@ -43,6 +44,7 @@ type InstalledPackageMetadata = {
 export function clearInstalledManifestRegistryProcessCaches(): void {
   installedPackageJsonPathCache.clear();
   installedPackageMetadataCache.clear();
+  realpathMemoCache.clear();
 }
 
 registerPluginMetadataProcessMemoLifecycleClear(clearInstalledManifestRegistryProcessCaches);
@@ -195,7 +197,6 @@ function buildInstalledPackageMetadataCacheKey(params: {
 }
 
 function buildInstalledManifestRegistryIndexKey(index: InstalledPluginIndex) {
-  const realpathCache = new Map<string, string>();
   return {
     version: index.version,
     hostContractVersion: index.hostContractVersion,
@@ -205,7 +206,7 @@ function buildInstalledManifestRegistryIndexKey(index: InstalledPluginIndex) {
     installRecords: index.installRecords,
     diagnostics: index.diagnostics,
     plugins: index.plugins.map((record) => {
-      const packageJsonPath = resolvePackageJsonPath(record, realpathCache);
+      const packageJsonPath = resolvePackageJsonPath(record, realpathMemoCache);
       const packageJsonFile = record.packageJson?.fileSignature
         ? packageJsonPath
           ? formatFileSignature(packageJsonPath, record.packageJson.fileSignature)

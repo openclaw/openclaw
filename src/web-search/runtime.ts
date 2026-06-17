@@ -14,7 +14,9 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
 import { resolveManifestContractOwnerPluginId } from "../plugins/plugin-registry-contributions.js";
-import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
+import type {
+  PluginWebSearchProviderEntry,
+} from "../plugins/types.js";
 import {
   resolvePluginWebSearchProviders,
   resolveRuntimeWebSearchProviders,
