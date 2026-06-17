@@ -8,7 +8,7 @@
 
 import { normalizeStoredCronJobs } from "../../src/commands/doctor/cron/store-migration.js";
 
-console.log("🧪 Reproduction script for PR #93031");
+console.log("🧪 Reproduction script for issue #93031");
 console.log("Testing config-aware agent_id normalization for migrated cron jobs\n");
 
 // Simulate jobs migrated from legacy jobs.json (no agentId field)
