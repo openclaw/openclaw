@@ -93,8 +93,11 @@ Use this skill for release and publish-time workflow. Load `$release-private` if
   stop for explicit maintainer direction rather than weakening that boundary.
 - In maintainer Testbox mode, use `OPENCLAW_TESTBOX=1 scripts/pr prepare-run
   <PR>` only after the exact PR head has passed `CI` and every scheduled
-  `Blacksmith Testbox` or `Workflow Sanity` lane. This preserves the canonical
-  prepare artifacts while avoiding a redundant broad local suite. A
+  hosted gate. For a workflow change, that means `Blacksmith Testbox`,
+  `Blacksmith ARM Testbox`, `Blacksmith Build Artifacts Testbox`, and
+  `Workflow Sanity`; only gates GitHub actually scheduled for that exact head
+  are required. This preserves the canonical prepare artifacts while avoiding
+  a redundant broad local suite. A
   literal `CHANGELOG.md`-only head gets a clean diff check instead because
   those workflows intentionally do not dispatch. Documentation and README
   changes still require CI. If `merge-run` requires a mainline sync, run
