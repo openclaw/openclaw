@@ -5,7 +5,7 @@ import type {
   QaEvidenceMatrixCellView,
   QaEvidenceProducerContext,
   QaEvidenceProducerContextFile,
-} from "../../src/evidence-gallery.js";
+} from "../../shared/evidence-gallery-types.js";
 
 /* ===== Shared types (unchanged from the bus protocol) ===== */
 

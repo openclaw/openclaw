@@ -2,6 +2,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import type {
+  QaEvidenceArtifactView,
+  QaEvidenceGalleryEntryView,
+  QaEvidenceGalleryModel,
+  QaEvidenceMatrixCellView,
+  QaEvidenceProducerContext,
+  QaEvidenceProducerContextFile,
+} from "../shared/evidence-gallery-types.js";
 import { toRepoRelativePath } from "./cli-paths.js";
 import {
   QA_EVIDENCE_FILENAME,
@@ -9,6 +17,15 @@ import {
   type QaEvidenceStatus,
   type QaEvidenceSummaryEntry,
 } from "./evidence-summary.js";
+
+export type {
+  QaEvidenceArtifactView,
+  QaEvidenceGalleryEntryView,
+  QaEvidenceGalleryModel,
+  QaEvidenceMatrixCellView,
+  QaEvidenceProducerContext,
+  QaEvidenceProducerContextFile,
+} from "../shared/evidence-gallery-types.js";
 
 const TEXT_PREVIEW_BYTES = 12 * 1024;
 const ARTIFACT_VIEW_CONCURRENCY = 8;
@@ -38,88 +55,6 @@ export class QaEvidenceGalleryError extends Error {
 function evidenceError(message: string, statusCode: number): QaEvidenceGalleryError {
   return new QaEvidenceGalleryError(message, statusCode);
 }
-
-export type QaEvidenceProducerContextFile = {
-  href: string;
-  path: string;
-  preview: string | null;
-};
-
-export type QaEvidenceMatrixCellView = {
-  artifactKinds: string[];
-  artifactPaths: string[];
-  coverageIds: string[];
-  runner: {
-    availability: string | null;
-    command: string | null;
-    lane: string | null;
-    workflow: string | null;
-  } | null;
-  stage: string;
-  status: string;
-  surface: string;
-  testId: string | null;
-  title: string | null;
-};
-
-export type QaEvidenceArtifactView = {
-  exists: boolean;
-  error: string | null;
-  href: string | null;
-  kind: string;
-  mediaKind: "image" | "video" | "json" | "text" | "file";
-  path: string;
-  preview: string | null;
-  source: string;
-};
-
-export type QaEvidenceGalleryEntryView = {
-  artifacts: QaEvidenceArtifactView[];
-  coverage: QaEvidenceSummaryEntry["coverage"];
-  failureReason: string | null;
-  id: string;
-  kind: string;
-  sourcePath: string | null;
-  status: QaEvidenceStatus;
-  title: string;
-};
-
-export type QaEvidenceProducerContext = {
-  commands: QaEvidenceProducerContextFile | null;
-  kind: "ux-matrix";
-  manifest:
-    | (QaEvidenceProducerContextFile & {
-        path: string;
-        runStatus: string | null;
-        runId: string | null;
-      })
-    | null;
-  matrix: {
-    cells: QaEvidenceMatrixCellView[];
-    counts: Record<string, number>;
-    path: string;
-    stages: string[];
-    surfaces: string[];
-  } | null;
-  preflight: {
-    adbDevices: QaEvidenceProducerContextFile | null;
-    memory: QaEvidenceProducerContextFile | null;
-  };
-  releaseLedger: (QaEvidenceProducerContextFile & { counts: Record<string, number> }) | null;
-  rootPath: string;
-  scorecard: QaEvidenceProducerContextFile | null;
-};
-
-export type QaEvidenceGalleryModel = {
-  counts: Record<QaEvidenceStatus, number>;
-  entries: QaEvidenceGalleryEntryView[];
-  evidenceMode: string;
-  evidencePath: string;
-  generatedAt: string;
-  profile: string | null;
-  producerContext: QaEvidenceProducerContext | null;
-  schemaVersion: number;
-};
 
 function isInside(root: string, candidate: string) {
   const relative = path.relative(root, candidate);
