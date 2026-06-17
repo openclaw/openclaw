@@ -925,7 +925,22 @@ export async function runDevicesApproveCommand(
   }
   const result = await approvePairingWithFallback(opts, resolvedRequestId);
   if (!result) {
-    defaultRuntime.error("unknown requestId");
+    // 提供更友好的错误提示，帮助用户理解为什么找不到 requestId
+    try {
+      const list = await listPairingWithFallback(opts);
+      const pendingIds = list.pending?.map(p => p.requestId) || [];
+      const pairedIds = list.paired?.map(p => p.deviceId) || [];
+      defaultRuntime.error(`Request ID '${resolvedRequestId}' not found.`);
+      if (pendingIds.length === 0 && pairedIds.length === 0) {
+        defaultRuntime.error('No pending or paired devices found.');
+      } else if (pendingIds.length === 0) {
+        defaultRuntime.error('Only paired devices exist. Use "openclaw devices list" to see available devices.');
+      } else {
+        defaultRuntime.error('Pending requests: ' + pendingIds.join(', '));
+      }
+    } catch {
+      defaultRuntime.error("unknown requestId");
+    }
     defaultRuntime.exit(1);
     return;
   }
