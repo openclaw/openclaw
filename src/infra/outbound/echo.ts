@@ -9,9 +9,17 @@ import { deliverOutboundPayloadsInternal } from "./deliver.js";
 export function normalizeEchoTargetId(channel: string, to: string): string {
   const trimmed = to.trim();
   if (channel === "telegram") {
+    // Strip transport prefixes AND a trailing `:topic:<n>` forum-topic suffix.
+    // The topic is carried separately by threadId in every comparison (echo
+    // target key, self-exclusion, participant match), so the chat-id comparison
+    // must be topic-agnostic — otherwise a topic-qualified pinned target
+    // (`telegram:-100:topic:7`) never matches the bare origin chat id (`-100`)
+    // the post-hoc message:sent path supplies, so the origin forum topic fails
+    // to self-exclude (duplicate echo) and a same-thread operator add is rejected.
     return trimmed
       .replace(/^(telegram|tg):/i, "")
       .replace(/^group:/i, "")
+      .replace(/:topic:\d+$/i, "")
       .trim();
   }
   return trimmed;

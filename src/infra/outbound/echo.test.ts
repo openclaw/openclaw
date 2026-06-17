@@ -250,6 +250,56 @@ describe("resolveEchoTargets", () => {
     });
     expect(result).toEqual([]);
   });
+
+  it("self-excludes a forum-topic pinned target against the same chat+topic origin", () => {
+    // The pinned target carries the forum topic in its `:topic:<n>` suffix, but
+    // normalizeEchoTargetId strips it so the chat-id comparison is topic-agnostic.
+    // The topic is then matched via threadId (7 === origin 7), so a target
+    // `telegram:-100200300:topic:7` echoing back into the same chat+topic the
+    // post-hoc message:sent path supplies (bare "-100200300", threadId 7) is
+    // the same place and must self-exclude — otherwise it duplicates the echo.
+    const topicTarget = makeTarget({
+      channel: "telegram",
+      to: "telegram:-100200300:topic:7",
+      accountId: undefined,
+      threadId: "7",
+    });
+    const bareOrigin = resolveEchoTargets(makeEntry([topicTarget]), {
+      originChannel: "telegram",
+      originTo: "-100200300",
+      originThreadId: 7,
+      role: "assistant",
+    });
+    expect(bareOrigin).toEqual([]);
+    // Same self-exclusion when the origin keeps the telegram: prefix on the chat id.
+    const prefixedOrigin = resolveEchoTargets(makeEntry([topicTarget]), {
+      originChannel: "telegram",
+      originTo: "telegram:-100200300",
+      originThreadId: 7,
+      role: "assistant",
+    });
+    expect(prefixedOrigin).toEqual([]);
+  });
+
+  it("does NOT exclude a forum-topic pinned target when the origin is a different topic", () => {
+    // Stripping the `:topic:7` suffix only makes the chat-id comparison
+    // topic-agnostic; threadId still distinguishes topics. The same pinned
+    // target (topic 7) against an origin in a different topic (threadId 9) is a
+    // distinct destination and must still be returned.
+    const topicTarget = makeTarget({
+      channel: "telegram",
+      to: "telegram:-100200300:topic:7",
+      accountId: undefined,
+      threadId: "7",
+    });
+    const result = resolveEchoTargets(makeEntry([topicTarget]), {
+      originChannel: "telegram",
+      originTo: "-100200300",
+      originThreadId: 9,
+      role: "assistant",
+    });
+    expect(result).toEqual([topicTarget]);
+  });
 });
 
 describe("fireEchoDeliveries", () => {
