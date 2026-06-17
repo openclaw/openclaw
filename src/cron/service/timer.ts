@@ -1840,6 +1840,10 @@ async function applyStartupCatchupOutcomes(
           if (!job || !isJobEnabled(job)) {
             continue;
           }
+          // Track this id in the in-memory service state so all maintenance
+          // recompute callers (read RPCs, timer finalization, empty-due ticks)
+          // preserve the staggered slot. Auto-cleared once the slot is reached.
+          state.pendingCatchupDeferralJobIds.add(jobId);
           if (typeof deferred.delayMs === "number") {
             job.state.nextRunAtMs = baseNow + deferred.delayMs + offset - staggerMs;
             offset += staggerMs;

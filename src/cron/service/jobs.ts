@@ -679,6 +679,25 @@ export function recomputeNextRunsForMaintenance(
   const recomputeExpired = opts?.recomputeExpired ?? false;
   const repairFutureCronNextRunAtMs = opts?.repairFutureCronNextRunAtMs ?? true;
   const skipFutureRepairJobIds = opts?.skipFutureRepairJobIds;
+
+  // Auto-clear pending deferrals whose staggered slot has been reached.
+  // This must happen before the walk-schedulable loop so the same tick that
+  // reaches the slot sees the id as exempted.
+  // Guard against undefined for callers that create mock state directly.
+  const pendingDeferrals: ReadonlySet<string> = state.pendingCatchupDeferralJobIds ?? new Set();
+  for (const jobId of pendingDeferrals) {
+    if (!state.store) {
+      break;
+    }
+    const job = state.store.jobs.find((j) => j.id === jobId);
+    if (job && hasScheduledNextRunAtMs(job.state.nextRunAtMs)) {
+      const now = opts?.nowMs ?? state.deps.nowMs();
+      if (now >= job.state.nextRunAtMs) {
+        state.pendingCatchupDeferralJobIds.delete(jobId);
+      }
+    }
+  }
+
   return walkSchedulableJobs(
     state,
     ({ job, nowMs: now }) => {
@@ -690,6 +709,7 @@ export function recomputeNextRunsForMaintenance(
       } else if (
         repairFutureCronNextRunAtMs &&
         !skipFutureRepairJobIds?.has(job.id) &&
+        !pendingDeferrals.has(job.id) &&
         shouldRepairFutureCronNextRunAtMs({ state, job, nowMs: now })
       ) {
         if (recomputeJobNextRunAtMs({ state, job, nowMs: now })) {

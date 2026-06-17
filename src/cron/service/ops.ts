@@ -258,6 +258,16 @@ export async function start(state: CronServiceState) {
     deferAgentTurnJobs: true,
   });
 
+  // Store deferred catch-up job ids on the in-memory service state so every
+  // caller of recomputeNextRunsForMaintenance (read RPCs, timer finalization,
+  // empty-due ticks) exempts their staggered slots from future-slot repair.
+  // Each id is auto-cleared once its deferred slot is reached.
+  if (deferredCatchupJobIds.size > 0) {
+    for (const jobId of deferredCatchupJobIds) {
+      state.pendingCatchupDeferralJobIds.add(jobId);
+    }
+  }
+
   await locked(state, async () => {
     // Startup catch-up already persisted the latest in-memory store state, and
     // this path runs before the scheduler begins servicing regular timer ticks.
@@ -268,7 +278,6 @@ export async function start(state: CronServiceState) {
     }
     const changed = recomputeNextRunsForMaintenance(state, {
       recomputeExpired: true,
-      skipFutureRepairJobIds: deferredCatchupJobIds,
     });
     if (changed) {
       await persist(state);

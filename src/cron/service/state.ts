@@ -209,6 +209,17 @@ export type CronServiceState = {
   pendingQuarantineConfigJobs: QuarantinedCronConfigJob[];
   lastQuarantineFailureWarnKey: string | null;
   storeLoadedAtMs: number | null;
+  /**
+   * Job IDs with startup catch-up deferrals (overflow or deferred-agent) whose
+   * staggered next-run slots must be preserved across all maintenance recompute
+   * callers (read RPCs, timer finalization, empty-due ticks). Each id is removed
+   * once the deferred slot is reached (now >= nextRunAtMs).
+   *
+   * Set in ops.start() and timer.applyStartupCatchupOutcomes; read by
+   * recomputeNextRunsForMaintenance in jobs.ts. This replaces the one-shot
+   * skipFutureRepairJobIds option that only covered start()'s own recompute.
+   */
+  pendingCatchupDeferralJobIds: Set<string>;
 };
 
 /** Creates mutable cron service state with a concrete clock dependency. */
@@ -228,6 +239,7 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     pendingQuarantineConfigJobs: [],
     lastQuarantineFailureWarnKey: null,
     storeLoadedAtMs: null,
+    pendingCatchupDeferralJobIds: new Set<string>(),
   };
 }
 
