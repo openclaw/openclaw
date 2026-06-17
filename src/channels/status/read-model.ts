@@ -10,7 +10,7 @@ export type RuntimeChannelStatusPayload = {
   channelAccounts?: unknown;
 };
 
-export type RuntimeChannelAccount = Record<string, unknown>;
+type RuntimeChannelAccount = Record<string, unknown>;
 
 const CREDENTIAL_STATUS_KEYS = [
   "tokenStatus",

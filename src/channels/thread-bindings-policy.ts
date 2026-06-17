@@ -46,7 +46,7 @@ export type ThreadBindingSpawnPolicy = {
 };
 
 /** Starting transcript mode for a spawned thread-bound session. */
-export type ThreadBindingSpawnContext = "isolated" | "fork";
+type ThreadBindingSpawnContext = "isolated" | "fork";
 
 function normalizeChannelId(value: string | undefined | null): string {
   return normalizeLowercaseStringOrEmpty(value);

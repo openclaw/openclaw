@@ -221,7 +221,7 @@
                 "type": "object",
                 "additionalProperties": {
                   "type": "string",
-                  "enum": ["allow", "deny"]
+                  "enum": ["allow", "none"]
                 }
               },
               "proxyUrl": { "type": "string" },
@@ -453,7 +453,7 @@
     },
     "appServer.networkProxy.unixSockets": {
       "label": "Unix Sockets",
-      "help": "Unix socket allow and deny rules for Codex sandboxed networking.",
+      "help": "Unix socket allow and none rules for Codex sandboxed networking.",
       "advanced": true
     },
     "appServer.networkProxy.proxyUrl": {

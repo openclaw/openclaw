@@ -10,7 +10,7 @@ import { parseReplyDirectives } from "./reply-directives.js";
 import { applyReplyTagsToPayload, isRenderablePayload } from "./reply-payloads.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
-export type ReplyDirectiveParseMode = "always" | "auto" | "never";
+type ReplyDirectiveParseMode = "always" | "auto" | "never";
 
 /** Parses inline reply directives into payload fields and silent-reply state. */
 export function normalizeReplyPayloadDirectives(params: {

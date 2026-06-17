@@ -587,7 +587,7 @@ export default {
               },
               unixSockets: {
                 "/tmp/proxy.sock": "allow",
-                "/tmp/blocked.sock": "deny",
+                "/tmp/blocked.sock": "none",
               },
               allowUpstreamProxy: true,
               proxyUrl: "http://127.0.0.1:3128",
@@ -605,7 +605,7 @@ If the normal app-server runtime would be `danger-full-access`, enabling
 permission profile. Codex managed network enforcement is sandboxed networking,
 so a full-access profile would not protect outbound traffic.
 Domain entries use `allow` or `deny`; Unix socket entries use Codex's
-`allow` or `deny` values.
+`allow` or `none` values.
 
 OpenClaw-owned dynamic tool calls are bounded independently from
 `appServer.requestTimeoutMs`: Codex `item/tool/call` requests use a 90 second
