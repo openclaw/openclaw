@@ -1135,11 +1135,16 @@ export const registerTelegramNativeCommands = ({
                 sessionKey: await resolveTargetSessionKey(),
               })
             : {};
+        const menuCatalog =
+          commandDefinition && menuNeedsModelContext
+            ? await loadModelCatalog({ config: runtimeCfg })
+            : undefined;
         const menu = commandDefinition
           ? resolveCommandArgMenu({
               command: commandDefinition,
               args: commandArgs,
               cfg: runtimeCfg,
+              catalog: menuCatalog,
               ...menuModelContext,
             })
           : null;
