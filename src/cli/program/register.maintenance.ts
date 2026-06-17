@@ -266,11 +266,23 @@ function hasStructuredOnlyDoctorOptions(opts: {
 }
 
 function hasUnsupportedFocusedRepairOptions(opts: {
+  readonly yes?: boolean;
+  readonly force?: boolean;
+  readonly nonInteractive?: boolean;
+  readonly generateGatewayToken?: boolean;
+  readonly deep?: boolean;
+  readonly postUpgrade?: boolean;
   readonly json?: boolean;
   readonly severityMin?: unknown;
   readonly skip?: unknown;
 }): boolean {
   return (
+    opts.yes === true ||
+    opts.force === true ||
+    opts.nonInteractive === true ||
+    opts.generateGatewayToken === true ||
+    opts.deep === true ||
+    opts.postUpgrade === true ||
     opts.json === true ||
     typeof opts.severityMin === "string" ||
     (Array.isArray(opts.skip) && opts.skip.length > 0)

@@ -231,6 +231,23 @@ describe("registerMaintenanceCommands doctor action", () => {
     expect(runtime.exit).toHaveBeenCalledWith(2);
   });
 
+  it.each([
+    ["--post-upgrade"],
+    ["--deep"],
+    ["--force"],
+    ["--generate-gateway-token"],
+    ["--yes"],
+    ["--non-interactive"],
+  ])("rejects focused repair with unsupported doctor option %s", async (flag) => {
+    await runMaintenanceCli(["doctor", "--fix", "--only", "core/doctor/skills-readiness", flag]);
+
+    expect(runDoctorSelectedRepairCli).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
+      "doctor --fix --only supports --allow-exec only; use --lint or --explain for filtering output.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(2);
+  });
+
   it("passes noOpen to dashboard command", async () => {
     dashboardCommand.mockResolvedValue(undefined);
 

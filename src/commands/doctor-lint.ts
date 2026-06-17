@@ -371,6 +371,19 @@ async function maybePromptForExplainRepairs(
       onlyIds: [checkId],
       allowExec: opts.allowExec,
     });
-    repairSetup = { ...repairSetup, ctx: { ...repairSetup.ctx, cfg: result.config } };
+    repairSetup = updateReadyDoctorSetupConfig(repairSetup, result.config);
   }
+}
+
+function updateReadyDoctorSetupConfig(
+  setup: ReadyStructuredDoctorSetup,
+  cfg: OpenClawConfig,
+): ReadyStructuredDoctorSetup {
+  return {
+    ...setup,
+    ctx: {
+      ...setup.ctx,
+      cfg,
+    },
+  };
 }

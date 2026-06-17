@@ -239,6 +239,12 @@ registered in lint mode, no check runs for that id; use the command's
 `checksRun` and `checksSkipped` fields to verify a focused gate is selecting the
 checks you expect.
 
+Focused repair is intentionally narrow: `openclaw doctor --fix --only <id>`
+does not combine with regular doctor repair/setup flags such as
+`--post-upgrade`, `--deep`, `--force`, `--generate-gateway-token`, `--yes`, or
+`--non-interactive`. Use `openclaw doctor --fix` for the broader guided repair
+flow, and use `--lint` or `--explain` for filtered read-only output.
+
 ## Post-upgrade mode
 
 `openclaw doctor --post-upgrade` runs plugin compatibility probes intended to be
