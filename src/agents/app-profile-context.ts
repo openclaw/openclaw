@@ -41,9 +41,13 @@ export function extractAppProfileSection(fileContent: string): string | null {
   const start = "<!-- app:app_profile:start -->";
   const end = "<!-- app:app_profile:end -->";
   const firstStart = fileContent.indexOf(start);
-  if (firstStart === -1) return null;
+  if (firstStart === -1) {
+    return null;
+  }
   const firstEnd = fileContent.indexOf(end, firstStart + start.length);
-  if (firstEnd === -1) return null;
+  if (firstEnd === -1) {
+    return null;
+  }
   if (
     fileContent.indexOf(start, firstStart + start.length) !== -1 ||
     fileContent.indexOf(end, firstEnd + end.length) !== -1
@@ -59,9 +63,13 @@ export function extractAppProfileSection(fileContent: string): string | null {
  * dropping a truncated trailing multi-byte char.
  */
 export function clampAppProfile(content: string, maxBytes = APP_PROFILE_MAX_BYTES): string {
-  if (Buffer.byteLength(content, "utf8") <= maxBytes) return content;
+  if (Buffer.byteLength(content, "utf8") <= maxBytes) {
+    return content;
+  }
   let s = Buffer.from(content, "utf8").subarray(0, maxBytes).toString("utf8");
-  if (s.endsWith("�")) s = s.slice(0, -1);
+  if (s.endsWith("�")) {
+    s = s.slice(0, -1);
+  }
   return s;
 }
 
@@ -73,13 +81,56 @@ export function clampAppProfile(content: string, maxBytes = APP_PROFILE_MAX_BYTE
  */
 export function buildAppProfileContextFile(rawFileContent: string): WorkspaceBootstrapFile | null {
   const body = extractAppProfileSection(rawFileContent);
-  if (!body) return null;
+  if (!body) {
+    return null;
+  }
   return {
     name: APP_PROFILE_CONTEXT_NAME,
     path: APP_PROFILE_CONTEXT_NAME,
     content: clampAppProfile(body),
     missing: false,
   } as unknown as WorkspaceBootstrapFile;
+}
+
+/** Path-safe app-userId charset (mirrors `resolveAppUserId` / `save_user_section`). */
+const SAFE_APP_USER_ID = /^[a-z0-9_-]+$/;
+
+/**
+ * Fallback: derive the `appUserId` from the session KEY when the persisted
+ * session entry doesn't carry it yet.
+ *
+ * WHY: `chat.send` writes `appUserId` onto the session entry, but that write only
+ * patches an EXISTING entry — on the FIRST turn of a brand-new session the entry
+ * doesn't exist yet, so the id isn't persisted until the run has created it
+ * (turn 2+). Without this fallback the very first message of every new app
+ * conversation runs with NO profile injected and the agent asks the user their
+ * name even though we know it. The userId is the second-to-last `:`-segment of
+ * the canonical app key `agent:<id>:app:[<namespace>:]<userId>:<conversationId>`
+ * — correct for both the namespaced 4-part form and the legacy 3-part form,
+ * since the conversationId is always the final, colon-free segment. Read-only and
+ * same-user (the id comes from this very session's key), so it can never surface
+ * another user's profile.
+ */
+export function appUserIdFromSessionKey(sessionKey?: string): string | null {
+  if (typeof sessionKey !== "string") {
+    return null;
+  }
+  const marker = sessionKey.lastIndexOf(":app:");
+  const tail =
+    marker !== -1
+      ? sessionKey.slice(marker + ":app:".length)
+      : sessionKey.startsWith("app:")
+        ? sessionKey.slice("app:".length)
+        : null;
+  if (!tail) {
+    return null;
+  }
+  const segments = tail.split(":").filter(Boolean);
+  if (segments.length < 2) {
+    return null;
+  } // need at least <userId>:<conversationId>
+  const id = segments[segments.length - 2].trim().toLowerCase();
+  return SAFE_APP_USER_ID.test(id) ? id : null;
 }
 
 /**
@@ -89,16 +140,23 @@ export function buildAppProfileContextFile(rawFileContent: string): WorkspaceBoo
  * sessions, a missing/unreadable file, or an empty/malformed section.
  *
  * `workspaceDir` MUST be the shared agent home (where `users/<id>.md` lives),
- * not a jailed per-user cwd; `sessionKey` MUST be the real session key (the
- * `:app:` marker and the persisted `appUserId` live on it).
+ * not a jailed per-user cwd; `sessionKey` MUST be the real session key — the
+ * `appUserId` is taken from the persisted entry first, then the key itself.
  */
 export async function appendAppProfileBootstrapFile(
   files: WorkspaceBootstrapFile[],
   params: { workspaceDir: string; sessionKey?: string },
 ): Promise<WorkspaceBootstrapFile[]> {
-  if (!isAppUserSession(params.sessionKey)) return files;
-  const appUserId = resolveAppUserId(params.sessionKey);
-  if (!appUserId) return files;
+  if (!isAppUserSession(params.sessionKey)) {
+    return files;
+  }
+  // Prefer the persisted appUserId; fall back to the session key so the FIRST
+  // turn of a new session (entry not written yet) still injects the profile.
+  const appUserId =
+    resolveAppUserId(params.sessionKey) ?? appUserIdFromSessionKey(params.sessionKey);
+  if (!appUserId) {
+    return files;
+  }
 
   const filePath = path.join(canonicalUserFileDir(params.workspaceDir), `${appUserId}.md`);
   let raw: string;

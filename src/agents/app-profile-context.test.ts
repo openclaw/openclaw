@@ -1,8 +1,12 @@
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   APP_PROFILE_CONTEXT_NAME,
   APP_PROFILE_MAX_BYTES,
   appendAppProfileBootstrapFile,
+  appUserIdFromSessionKey,
   buildAppProfileContextFile,
   clampAppProfile,
   extractAppProfileSection,
@@ -101,5 +105,56 @@ describe("appendAppProfileBootstrapFile", () => {
   it("is a no-op when there is no session key", async () => {
     const out = await appendAppProfileBootstrapFile(base, { workspaceDir: "/w" });
     expect(out).toBe(base);
+  });
+
+  it("injects via the sessionKey fallback when the entry has no appUserId (first turn)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "app-profile-ctx-"));
+    try {
+      await mkdir(join(dir, "users"), { recursive: true });
+      await writeFile(join(dir, "users", "user_xyz.md"), wrap("name: Dana"), "utf-8");
+      const out = await appendAppProfileBootstrapFile(base, {
+        workspaceDir: dir,
+        sessionKey: "agent:main:app:havaya:user_xyz:2db59c18-3029-4165-83fb-a4c94d4df05f",
+      });
+      expect(out.length).toBe(base.length + 1);
+      expect(out[out.length - 1]?.name).toBe(APP_PROFILE_CONTEXT_NAME);
+      expect(out[out.length - 1]?.content).toBe("name: Dana");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("appUserIdFromSessionKey", () => {
+  it("extracts the userId from a namespaced 4-part app key", () => {
+    expect(
+      appUserIdFromSessionKey(
+        "agent:main:app:havaya:user_abc123:550e8400-e29b-41d4-a716-446655440000",
+      ),
+    ).toBe("user_abc123");
+  });
+
+  it("extracts the userId from a legacy 3-part app key (no namespace)", () => {
+    expect(appUserIdFromSessionKey("agent:main:app:user_abc123:conv-1")).toBe("user_abc123");
+  });
+
+  it("works on a bare app: key with no agent prefix", () => {
+    expect(appUserIdFromSessionKey("app:havaya:user_abc:conv-1")).toBe("user_abc");
+  });
+
+  it("lowercases the extracted id to match the on-disk filename", () => {
+    expect(appUserIdFromSessionKey("agent:main:app:havaya:User_ABC:conv-1")).toBe("user_abc");
+  });
+
+  it("returns null for a non-app session key", () => {
+    expect(appUserIdFromSessionKey("agent:main:telegram:acct:direct:123")).toBeNull();
+  });
+
+  it("returns null when there is no userId segment", () => {
+    expect(appUserIdFromSessionKey("agent:main:app:havaya")).toBeNull();
+  });
+
+  it("returns null for undefined", () => {
+    expect(appUserIdFromSessionKey(undefined)).toBeNull();
   });
 });
