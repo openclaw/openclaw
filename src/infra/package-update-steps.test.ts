@@ -3682,7 +3682,7 @@ describe("runGlobalPackageUpdateSteps", () => {
     }
   });
 
-  it("allows in-place updates for legacy installed packages without content inventory", async () => {
+  it("allows in-place updates for already-published installed packages without content inventory", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     try {
       await withTempDir(
@@ -3691,11 +3691,11 @@ describe("runGlobalPackageUpdateSteps", () => {
           const globalDir = path.join(base, "pnpm", "global");
           const globalRoot = path.join(globalDir, "5", "node_modules");
           const packageRoot = path.join(globalRoot, "openclaw");
-          await writePackageRoot(packageRoot, "2026.6.7-beta.1");
+          await writePackageRoot(packageRoot, "2026.6.8");
           await fs.rm(path.join(packageRoot, "dist", "postinstall-content-inventory.json"));
 
           const runStep = vi.fn(async ({ name, argv, cwd }): Promise<PackageUpdateStepResult> => {
-            await writePackageRoot(packageRoot, "2026.6.8");
+            await writePackageRoot(packageRoot, "2026.6.9");
             return {
               name,
               command: argv.join(" "),
@@ -3707,7 +3707,7 @@ describe("runGlobalPackageUpdateSteps", () => {
 
           const result = await runGlobalPackageUpdateSteps({
             installTarget: createPnpmTarget(globalRoot),
-            installSpec: "openclaw@2026.6.8",
+            installSpec: "openclaw@2026.6.9",
             packageName: "openclaw",
             packageRoot,
             runCommand: createRootRunner(globalRoot),
@@ -3716,7 +3716,7 @@ describe("runGlobalPackageUpdateSteps", () => {
           });
 
           expect(result.failedStep).toBeNull();
-          expect(result.afterVersion).toBe("2026.6.8");
+          expect(result.afterVersion).toBe("2026.6.9");
           expect(runStep).toHaveBeenCalledTimes(1);
         },
       );

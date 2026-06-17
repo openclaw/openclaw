@@ -1,8 +1,8 @@
 const LEGACY_CONTENT_INVENTORY_COMPAT_MAX = { year: 2026, month: 6, day: 6 };
 
-// These tagged prereleases predate content-inventory packaging. Keep the list
-// exact so later prereleases with the same calendar version must include it.
-const LEGACY_CONTENT_INVENTORY_PRERELEASES = new Set([
+// These tagged package versions predate content-inventory packaging. Keep the
+// list exact so later releases with the same calendar version must include it.
+const LEGACY_CONTENT_INVENTORY_TAGGED_VERSIONS = new Set([
   "2026.6.7-alpha.1",
   "2026.6.7-alpha.2",
   "2026.6.7-alpha.3",
@@ -11,11 +11,18 @@ const LEGACY_CONTENT_INVENTORY_PRERELEASES = new Set([
   "2026.6.7-alpha.6",
   "2026.6.7-beta.1",
   "2026.6.8-alpha.1",
+  "2026.6.8-alpha.2",
+  "2026.6.8-beta.1",
+  "2026.6.8-beta.2",
+  "2026.6.8",
   "2026.6.9-alpha.1",
   "2026.6.9-alpha.2",
   "2026.6.9-alpha.3",
+  "2026.6.9-alpha.4",
+  "2026.6.9-alpha.5",
   "2026.6.10-alpha.1",
   "2026.6.10-alpha.2",
+  "2026.6.15-alpha.1",
 ]);
 
 function parseCalver(version) {
@@ -41,7 +48,7 @@ function compareCalver(left, right) {
 
 export function isLegacyContentInventoryCompatVersion(version) {
   const normalized = typeof version === "string" ? version.trim() : "";
-  if (LEGACY_CONTENT_INVENTORY_PRERELEASES.has(normalized)) {
+  if (LEGACY_CONTENT_INVENTORY_TAGGED_VERSIONS.has(normalized)) {
     return true;
   }
   const parsed = parseCalver(normalized);

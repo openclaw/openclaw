@@ -254,7 +254,7 @@ describe("check-openclaw-package-tarball", () => {
     );
   });
 
-  it.each(["2026.6.7", "2026.6.10-alpha.3"])(
+  it.each(["2026.6.7", "2026.6.8-beta.3", "2026.6.10-alpha.3"])(
     "rejects missing content inventory for package %s",
     (version) => {
       withTarball(
@@ -374,7 +374,14 @@ describe("check-openclaw-package-tarball", () => {
     "2026.6.6-beta.2",
     "2026.6.7-alpha.6",
     "2026.6.7-beta.1",
+    "2026.6.8-alpha.2",
+    "2026.6.8-beta.1",
+    "2026.6.8-beta.2",
+    "2026.6.8",
+    "2026.6.9-alpha.4",
+    "2026.6.9-alpha.5",
     "2026.6.10-alpha.2",
+    "2026.6.15-alpha.1",
   ])("allows published package %s without content inventory", (version) => {
     withTarball(
       ["dist/index.js"],
