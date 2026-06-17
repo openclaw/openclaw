@@ -357,6 +357,20 @@ describe("Codex app-server config", () => {
     ).toStrictEqual({});
   });
 
+  it("rejects removed app-server topology fields", () => {
+    expect(
+      readCodexPluginConfig({
+        appServer: {
+          transport: "websocket",
+          url: "wss://codex-app-server.example.internal/ws",
+          authToken: "capability-token",
+          connectionClass: "remote",
+          remoteAppsSubstrate: "preconfigured",
+        },
+      }),
+    ).toStrictEqual({});
+  });
+
   it("requires a websocket url when websocket transport is configured", () => {
     expect(() =>
       resolveRuntimeForTest({
@@ -418,37 +432,9 @@ describe("Codex app-server config", () => {
           },
         },
       }),
-    ).toThrow("connectionClass=remote requires appServer.authToken or an Authorization header");
-  });
-
-  it("rejects unsupported remote app substrate verification mode", () => {
-    expect(() =>
-      resolveRuntimeForTest({
-        pluginConfig: {
-          appServer: {
-            transport: "websocket",
-            url: "wss://codex-app-server.example.internal/ws",
-            authToken: "capability-token",
-            remoteAppsSubstrate: "verify",
-          },
-        },
-      }),
-    ).toThrow("remoteAppsSubstrate=verify is not supported yet");
-  });
-
-  it("rejects explicit local-loopback classification for non-loopback websocket urls", () => {
-    expect(() =>
-      resolveRuntimeForTest({
-        pluginConfig: {
-          appServer: {
-            transport: "websocket",
-            url: "wss://codex-app-server.example.internal/ws",
-            connectionClass: "local-loopback",
-            authToken: "capability-token",
-          },
-        },
-      }),
-    ).toThrow("connectionClass=local-loopback requires a loopback appServer.url");
+    ).toThrow(
+      "remote Codex app-server WebSocket URLs require appServer.authToken or an Authorization header",
+    );
   });
 
   it("defaults native Codex approvals to unchained local execution", () => {

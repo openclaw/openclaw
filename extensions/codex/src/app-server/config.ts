@@ -29,7 +29,7 @@ const PLAIN_DECIMAL_NUMBER_RE = /^[+-]?(?:(?:\d+\.?\d*)|(?:\.\d+))$/;
 type CodexAppServerTransportMode = "stdio" | "websocket";
 type CodexAppServerPolicyMode = "yolo" | "guardian";
 export type CodexAppServerConnectionClass = "local-loopback" | "remote";
-export type CodexAppServerRemoteAppsSubstrate = "preconfigured" | "verify";
+export type CodexAppServerRemoteAppsSubstrate = "preconfigured";
 export type CodexAppServerRemoteMutationPolicy = "read-only" | "install-and-refresh";
 export type CodexAppServerRemoteWorkspaceMapping = {
   localRoot: string;
@@ -220,8 +220,6 @@ export type CodexPluginConfig = {
     authToken?: string;
     headers?: Record<string, string>;
     clearEnv?: string[];
-    connectionClass?: CodexAppServerConnectionClass;
-    remoteAppsSubstrate?: CodexAppServerRemoteAppsSubstrate;
     remoteMutationPolicy?: CodexAppServerRemoteMutationPolicy;
     remoteWorkspace?: CodexAppServerRemoteWorkspaceMapping;
     codeModeOnly?: boolean;
@@ -257,8 +255,6 @@ export const CODEX_APP_SERVER_CONFIG_KEYS = [
   "authToken",
   "headers",
   "clearEnv",
-  "connectionClass",
-  "remoteAppsSubstrate",
   "remoteMutationPolicy",
   "remoteWorkspace",
   "codeModeOnly",
@@ -307,8 +303,6 @@ const DEFAULT_CODEX_APP_SERVER_NETWORK_PROXY_PROFILE_PREFIX = "openclaw-network"
 
 const codexAppServerTransportSchema = z.enum(["stdio", "websocket"]);
 const codexAppServerPolicyModeSchema = z.enum(["yolo", "guardian"]);
-const codexAppServerConnectionClassSchema = z.enum(["local-loopback", "remote"]);
-const codexAppServerRemoteAppsSubstrateSchema = z.enum(["preconfigured", "verify"]);
 const codexAppServerRemoteMutationPolicySchema = z.enum(["read-only", "install-and-refresh"]);
 const codexAppServerApprovalPolicySchema = z.enum([
   "never",
@@ -410,8 +404,6 @@ const codexPluginConfigSchema = z
         authToken: z.string().optional(),
         headers: z.record(z.string(), z.string()).optional(),
         clearEnv: z.array(z.string()).optional(),
-        connectionClass: codexAppServerConnectionClassSchema.optional(),
-        remoteAppsSubstrate: codexAppServerRemoteAppsSubstrateSchema.optional(),
         remoteMutationPolicy: codexAppServerRemoteMutationPolicySchema.optional(),
         remoteWorkspace: codexAppServerRemoteWorkspaceSchema.optional(),
         codeModeOnly: z.boolean().optional(),
@@ -556,11 +548,8 @@ export function resolveCodexAppServerRuntimeOptions(
   const clearEnv = normalizeStringList(config.clearEnv);
   const authToken = readNonEmptyString(config.authToken);
   const url = readNonEmptyString(config.url);
-  const connectionClass =
-    resolveConnectionClass(config.connectionClass) ??
-    inferCodexAppServerConnectionClass({ transport, url });
-  const remoteAppsSubstrate =
-    resolveRemoteAppsSubstrate(config.remoteAppsSubstrate) ?? "preconfigured";
+  const connectionClass = inferCodexAppServerConnectionClass({ transport, url });
+  const remoteAppsSubstrate: CodexAppServerRemoteAppsSubstrate = "preconfigured";
   const remoteMutationPolicy =
     resolveRemoteMutationPolicy(config.remoteMutationPolicy) ??
     (connectionClass === "remote" ? "read-only" : "install-and-refresh");
@@ -658,15 +647,9 @@ export function resolveCodexAppServerRuntimeOptions(
     );
   }
   assertCodexAppServerConnectionClassConfig({
-    transport,
-    url,
     connectionClass,
     authToken,
     headers,
-  });
-  assertCodexAppServerRemoteAppsSubstrateConfig({
-    connectionClass,
-    remoteAppsSubstrate,
   });
 
   const configApprovalPolicy = resolveApprovalPolicy(config.approvalPolicy);
@@ -1067,16 +1050,6 @@ function resolveTransport(value: unknown): CodexAppServerTransportMode {
   return value === "websocket" ? "websocket" : "stdio";
 }
 
-function resolveConnectionClass(value: unknown): CodexAppServerConnectionClass | undefined {
-  return value === "remote" || value === "local-loopback" ? value : undefined;
-}
-
-function resolveRemoteAppsSubstrate(
-  value: unknown,
-): CodexAppServerRemoteAppsSubstrate | undefined {
-  return value === "preconfigured" || value === "verify" ? value : undefined;
-}
-
 function resolveRemoteMutationPolicy(
   value: unknown,
 ): CodexAppServerRemoteMutationPolicy | undefined {
@@ -1102,27 +1075,10 @@ function inferCodexAppServerConnectionClass(params: {
 }
 
 function assertCodexAppServerConnectionClassConfig(params: {
-  transport: CodexAppServerTransportMode;
-  url?: string;
   connectionClass: CodexAppServerConnectionClass;
   authToken?: string;
   headers: Record<string, string>;
 }): void {
-  if (params.connectionClass === "remote" && params.transport !== "websocket") {
-    throw new Error(
-      "plugins.entries.codex.config.appServer.connectionClass=remote requires appServer.transport=websocket",
-    );
-  }
-  if (
-    params.connectionClass === "local-loopback" &&
-    params.transport === "websocket" &&
-    params.url &&
-    !isLoopbackWebSocketUrl(params.url)
-  ) {
-    throw new Error(
-      "plugins.entries.codex.config.appServer.connectionClass=local-loopback requires a loopback appServer.url",
-    );
-  }
   if (
     params.connectionClass === "remote" &&
     !hasIdentityBearingWebSocketAuth({
@@ -1131,18 +1087,7 @@ function assertCodexAppServerConnectionClassConfig(params: {
     })
   ) {
     throw new Error(
-      "plugins.entries.codex.config.appServer.connectionClass=remote requires appServer.authToken or an Authorization header",
-    );
-  }
-}
-
-function assertCodexAppServerRemoteAppsSubstrateConfig(params: {
-  connectionClass: CodexAppServerConnectionClass;
-  remoteAppsSubstrate: CodexAppServerRemoteAppsSubstrate;
-}): void {
-  if (params.connectionClass === "remote" && params.remoteAppsSubstrate === "verify") {
-    throw new Error(
-      "plugins.entries.codex.config.appServer.remoteAppsSubstrate=verify is not supported yet; use preconfigured for remote app-servers that already have Codex apps enabled",
+      "remote Codex app-server WebSocket URLs require appServer.authToken or an Authorization header",
     );
   }
 }
