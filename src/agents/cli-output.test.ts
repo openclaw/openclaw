@@ -889,6 +889,32 @@ describe("parseCliJsonl", () => {
       usage: undefined,
     });
   });
+
+  it("does not fall back to raw JSONL when final-answer content is structured but empty", () => {
+    const result = parseCliOutput({
+      raw: JSON.stringify({
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "assistant",
+          phase: "final_answer",
+          content: [],
+        },
+      }),
+      backend: {
+        command: "codex",
+        output: "jsonl",
+      },
+      providerId: "openai-cli",
+      outputMode: "jsonl",
+    });
+
+    expect(result).toEqual({
+      text: "",
+      sessionId: undefined,
+      usage: undefined,
+    });
+  });
 });
 
 describe("createCliJsonlStreamingParser", () => {
