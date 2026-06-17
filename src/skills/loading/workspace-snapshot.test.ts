@@ -383,4 +383,33 @@ describe("buildWorkspaceSkillSnapshot", () => {
       omits: ["root-big-skill"],
     });
   });
+
+  it("persists skillKey from OpenClaw metadata in snapshots (#94146)", async () => {
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "pretty-weather"),
+      name: "Pretty Weather",
+      description: "Weather helper",
+      metadata: `
+  openclaw:
+    skillKey: weather
+    primaryEnv: WEATHER_API_KEY
+    requires:
+      env:
+        - WEATHER_API_KEY`,
+    });
+
+    const snapshot = buildSnapshot(workspaceDir, {
+      config: { skills: { entries: { weather: { apiKey: "snap-key" } } } },
+    });
+
+    expect(snapshot.skills).toContainEqual(
+      expect.objectContaining({
+        name: "Pretty Weather",
+        skillKey: "weather",
+        primaryEnv: "WEATHER_API_KEY",
+        requiredEnv: ["WEATHER_API_KEY"],
+      }),
+    );
+  });
 });

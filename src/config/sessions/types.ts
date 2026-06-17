@@ -656,7 +656,7 @@ export type SessionSkillSnapshot = {
   prompt: string;
   /** Persisted stores may replace large duplicate prompts with a content-addressed blob ref. */
   promptRef?: SessionSkillPromptRef;
-  skills: Array<{ name: string; primaryEnv?: string; requiredEnv?: string[] }>;
+  skills: Array<{ name: string; skillKey?: string; primaryEnv?: string; requiredEnv?: string[] }>;
   /** Normalized agent-level filter used to build this snapshot; undefined means unrestricted. */
   skillFilter?: string[];
   /**
