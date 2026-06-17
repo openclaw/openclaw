@@ -343,7 +343,7 @@ export async function runNonInteractiveLocalSetup(params: {
         hints: !opts.installDaemon
           ? [
               "Non-interactive local setup only waits for an already-running gateway unless you pass --install-daemon.",
-              `Fix: start \`${formatCliCommand("openclaw gateway run")}\`, re-run with \`--install-daemon\`, or use \`--skip-health\`.`,
+              `Fix: start \`${formatCliCommand("openclaw gateway run")}\`, or use \`${formatCliCommand("openclaw onboard --non-interactive --accept-risk --install-daemon")}\` to install the daemon, or \`${formatCliCommand("openclaw onboard --non-interactive --accept-risk --skip-health")}\` to bypass the health check.`,
               process.platform === "win32"
                 ? "Native Windows managed gateway install tries Scheduled Tasks first and falls back to a per-user Startup-folder login item when task creation is denied."
                 : undefined,
