@@ -46,6 +46,7 @@ struct OnboardingWizardView: View {
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("node.instanceId") private var instanceId: String = UUID().uuidString
     @AppStorage("gateway.discovery.domain") private var discoveryDomain: String = ""
+    @AppStorage("gateway.discovery.nearbyDetectionEnabled") private var nearbyDetectionEnabled = false
     @AppStorage("onboarding.developerMode") private var developerModeEnabled: Bool = false
     @State private var step: OnboardingStep
     @State private var selectedMode: OnboardingConnectionMode?
@@ -55,19 +56,25 @@ struct OnboardingWizardView: View {
     @State private var manualTLS: Bool = true
     @State private var gatewayToken: String = ""
     @State private var gatewayPassword: String = ""
+    @State private var credentialPersistSuppressionCount = 0
     @State private var connectMessage: String?
     @State private var statusLine: String = "In your OpenClaw chat, run /pair qr, then scan the code here."
     @State private var connectingGatewayID: String?
     @State private var issue: GatewayConnectionIssue = .none
     @State private var didMarkCompleted = false
+    @State private var didStartWizardConnectAttempt = false
+    @State private var didRequestNearbyDetection = false
+    @State private var isRefreshingNearbyGateways = false
     @State private var pairingRequestId: String?
     @State private var discoveryRestartTask: Task<Void, Never>?
+    @State private var nearbyDiscoveryRefreshTask: Task<Void, Never>?
     @State private var showQRScanner: Bool = false
     @State private var scannerError: String?
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var showGatewayProblemDetails: Bool = false
     @State private var lastPairingAutoResumeAttemptAt: Date?
     @State private var pendingManualAuthOverride: GatewayConnectionController.ManualAuthOverride?
+    @State private var selectedNearbyGatewayForAuth: GatewayDiscoveryModel.DiscoveredGateway?
     @State private var setupCode: String = ""
     @State private var setupCodeStatus: String?
     private static let pairingAutoResumeTicker = Timer.publish(every: 2.0, on: .main, in: .common).autoconnect()
@@ -93,7 +100,7 @@ struct OnboardingWizardView: View {
     }
 
     private var currentProblem: GatewayConnectionProblem? {
-        self.appModel.lastGatewayProblem
+        self.didStartWizardConnectAttempt ? self.appModel.lastGatewayProblem : nil
     }
 
     var body: some View {
@@ -242,6 +249,12 @@ struct OnboardingWizardView: View {
             .onDisappear {
                 self.discoveryRestartTask?.cancel()
                 self.discoveryRestartTask = nil
+                self.nearbyDiscoveryRefreshTask?.cancel()
+                self.nearbyDiscoveryRefreshTask = nil
+                self.isRefreshingNearbyGateways = false
+                if self.didRequestNearbyDetection {
+                    self.gatewayController.finishExplicitDiscoverySession()
+                }
             }
             .onChange(of: self.discoveryDomain) { _, _ in
                 self.scheduleDiscoveryRestart()
@@ -265,9 +278,18 @@ struct OnboardingWizardView: View {
                 }
             }
             .onChange(of: self.gatewayToken) { _, newValue in
+                guard self.shouldPersistCredentialFieldChange() else { return }
+                guard !self.gatewayTokenLooksLikeSetupInput(newValue) else {
+                    self.setupCode = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                    self.gatewayToken = ""
+                    self.setupCodeStatus = "Setup code detected. Tap Apply Setup Code."
+                    self.saveGatewayCredentials(token: "", password: self.gatewayPassword)
+                    return
+                }
                 self.saveGatewayCredentials(token: newValue, password: self.gatewayPassword)
             }
             .onChange(of: self.gatewayPassword) { _, newValue in
+                guard self.shouldPersistCredentialFieldChange() else { return }
                 self.saveGatewayCredentials(token: self.gatewayToken, password: newValue)
             }
             .onChange(of: self.appModel.lastGatewayProblem) { _, newValue in
@@ -275,6 +297,9 @@ struct OnboardingWizardView: View {
             }
             .onChange(of: self.appModel.gatewayStatusText) { _, newValue in
                 self.updateConnectionIssue(problem: self.appModel.lastGatewayProblem, statusText: newValue)
+            }
+            .onChange(of: self.gatewayController.discoveryStatusText) { _, newValue in
+                self.handleNearbyDiscoveryStatus(newValue)
             }
             .onChange(of: self.appModel.gatewayServerName) { _, newValue in
                 guard newValue != nil else { return }
@@ -302,9 +327,19 @@ struct OnboardingWizardView: View {
     private var welcomeStep: some View {
         OnboardingWelcomeStep(
             statusLine: self.statusLine,
+            discoveredGateways: self.gatewayController.gateways,
+            nearbyDiscoveryEnabled: self.nearbyDetectionEnabled || !self.gatewayController.gateways.isEmpty,
+            isRefreshingNearbyGateways: self.isRefreshingNearbyGateways,
+            discoveryStatusText: self.gatewayController.discoveryStatusText,
+            onSetNearbyDiscoveryEnabled: { enabled in
+                self.setNearbyDiscoveryEnabled(enabled)
+            },
             onScanQRCode: {
                 self.statusLine = "Opening QR scanner…"
                 self.showQRScanner = true
+            },
+            onSelectGateway: { gateway in
+                self.beginNearbyGatewayAuth(gateway)
             },
             onManualSetup: {
                 self.step = .mode
@@ -438,37 +473,31 @@ struct OnboardingWizardView: View {
                         .foregroundStyle(.secondary)
                 } else {
                     ForEach(self.gatewayController.gateways) { gateway in
-                        let hasHost = self.gatewayHasResolvableHost(gateway)
-
-                        HStack {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(gateway.name)
-                                if let host = gateway.lanHost ?? gateway.tailnetDns {
-                                    Text(host)
-                                        .font(.footnote)
-                                        .foregroundStyle(.secondary)
+                        Button {
+                            self.beginNearbyGatewayAuth(gateway)
+                        } label: {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(gateway.name)
+                                    if let host = gateway.lanHost ?? gateway.tailnetDns {
+                                        Text(host)
+                                            .font(.footnote)
+                                            .foregroundStyle(.secondary)
+                                    }
                                 }
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.footnote.weight(.semibold))
+                                    .foregroundStyle(.tertiary)
                             }
-                            Spacer()
-                            Button {
-                                Task { await self.connectDiscoveredGateway(gateway) }
-                            } label: {
-                                if self.connectingGatewayID == gateway.id {
-                                    ProgressView()
-                                        .progressViewStyle(.circular)
-                                } else if !hasHost {
-                                    Text("Resolving…")
-                                } else {
-                                    Text("Connect")
-                                }
-                            }
-                            .disabled(self.connectingGatewayID != nil || !hasHost)
+                            .contentShape(Rectangle())
                         }
+                        .buttonStyle(.plain)
                     }
                 }
 
                 Button("Restart Discovery") {
-                    self.gatewayController.restartDiscovery()
+                    self.gatewayController.restartDiscovery(allowAutoConnect: false)
                 }
                 .disabled(self.connectingGatewayID != nil)
             }
@@ -499,6 +528,8 @@ struct OnboardingWizardView: View {
 
     private var authStep: some View {
         Group {
+            self.setupCodeSection
+
             Section("Authentication") {
                 SecureField("Gateway Auth Token", text: self.$gatewayToken)
                     .textInputAutocapitalization(.never)
@@ -520,7 +551,7 @@ struct OnboardingWizardView: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 } else {
-                    Text("Auth token looks valid.")
+                    Text("Paste a setup code or enter gateway credentials.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -724,6 +755,39 @@ extension OnboardingWizardView {
         await self.connectManual()
     }
 
+    private func gatewayTokenLooksLikeSetupInput(_ value: String) -> Bool {
+        let raw = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !raw.isEmpty else { return false }
+        if AppleReviewDemoMode.isSetupCode(raw) { return true }
+        return GatewayConnectDeepLink.fromSetupInput(raw) != nil
+    }
+
+    private func applyGatewayTokenSetupInputIfNeeded() async -> Bool {
+        let raw = self.gatewayToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !raw.isEmpty else { return false }
+
+        if AppleReviewDemoMode.isSetupCode(raw) {
+            self.gatewayToken = ""
+            self.gatewayPassword = ""
+            self.setupCodeStatus = "Apple Review demo mode enabled."
+            self.handleScannedSetupCode(raw)
+            return true
+        }
+
+        guard let link = GatewayConnectDeepLink.fromSetupInput(raw) else { return false }
+        self.gatewayToken = ""
+        self.gatewayPassword = ""
+        self.setupCode = ""
+        self.connectingGatewayID = "setup-code"
+        self.applyGatewayLink(link)
+        self.setupCodeStatus = "Setup code applied. Connecting..."
+        self.connectMessage = "Connecting via setup code..."
+        self.statusLine = "Setup code loaded. Connecting to \(link.host):\(link.port)..."
+        self.step = .connect
+        await self.connectManual()
+        return true
+    }
+
     private func handleScannedLink(_ link: GatewayConnectDeepLink) {
         self.applyGatewayLink(link)
         self.setupCodeStatus = nil
@@ -816,6 +880,8 @@ extension OnboardingWizardView {
     }
 
     private func updateConnectionIssue(problem: GatewayConnectionProblem?, statusText: String) {
+        guard self.didStartWizardConnectAttempt else { return }
+
         let next = GatewayConnectionIssue.detect(problem: problem)
         let fallback = next == .none ? GatewayConnectionIssue.detect(from: statusText) : next
 
@@ -937,22 +1003,119 @@ extension OnboardingWizardView {
         if !hasSavedGateway, !hasToken, !hasPassword {
             self.statusLine = "No saved pairing found. In your OpenClaw chat, run /pair qr, then scan the code here."
         }
+        if self.nearbyDetectionEnabled, self.step == .welcome {
+            self.didRequestNearbyDetection = true
+            self.startNearbyDiscoveryRefresh()
+        }
     }
 
     private func scheduleDiscoveryRestart() {
+        self.didRequestNearbyDetection = true
         self.discoveryRestartTask?.cancel()
         self.discoveryRestartTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 350_000_000)
             guard !Task.isCancelled else { return }
-            self.gatewayController.restartDiscovery()
+            self.isRefreshingNearbyGateways = true
+            self.gatewayController.restartDiscovery(allowAutoConnect: false)
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            guard !Task.isCancelled else { return }
+            self.isRefreshingNearbyGateways = false
         }
+    }
+
+    private func setNearbyDiscoveryEnabled(_ enabled: Bool) {
+        self.nearbyDetectionEnabled = enabled
+        self.didRequestNearbyDetection = enabled
+        if enabled {
+            self.statusLine = "Searching for nearby gateways…"
+            self.startNearbyDiscoveryRefresh()
+        } else {
+            self.stopNearbyDiscovery()
+        }
+    }
+
+    private func stopNearbyDiscovery() {
+        self.nearbyDiscoveryRefreshTask?.cancel()
+        self.nearbyDiscoveryRefreshTask = nil
+        self.discoveryRestartTask?.cancel()
+        self.discoveryRestartTask = nil
+        self.isRefreshingNearbyGateways = false
+        self.gatewayController.stopDiscovery()
+    }
+
+    private func handleNearbyDiscoveryStatus(_ status: String) {
+        guard self.nearbyDetectionEnabled else { return }
+        guard Self.isLocalNetworkAccessDeniedStatus(status) else { return }
+        self.nearbyDetectionEnabled = false
+        self.didRequestNearbyDetection = false
+        self.stopNearbyDiscovery()
+        self.statusLine = "Local network access was not allowed."
+    }
+
+    private static func isLocalNetworkAccessDeniedStatus(_ status: String) -> Bool {
+        let normalized = status.lowercased()
+        return normalized.contains("policydenied") || normalized.contains("denied")
+    }
+
+    private func startNearbyDiscoveryRefresh() {
+        guard self.nearbyDiscoveryRefreshTask == nil else { return }
+        self.nearbyDiscoveryRefreshTask = Task { @MainActor in
+            await self.refreshNearbyGateways(initial: true)
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                guard !Task.isCancelled else { return }
+                await self.refreshNearbyGateways(initial: false)
+            }
+        }
+    }
+
+    private func refreshNearbyGateways(initial: Bool) async {
+        self.isRefreshingNearbyGateways = true
+        if initial {
+            self.gatewayController.startDiscovery(allowAutoConnect: false)
+        } else {
+            self.gatewayController.restartDiscovery(allowAutoConnect: false)
+        }
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
+        guard !Task.isCancelled else { return }
+        self.isRefreshingNearbyGateways = false
+    }
+
+    private func beginNearbyGatewayAuth(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) {
+        self.selectedNearbyGatewayForAuth = gateway
+        self.selectedMode = .homeNetwork
+        self.didStartWizardConnectAttempt = false
+        self.issue = .none
+        self.connectMessage = nil
+        self.pairingRequestId = nil
+        self.setCredentialFields(token: "", password: "", persist: false)
+        self.pendingManualAuthOverride = nil
+        self.setupCodeStatus = nil
+        self.statusLine = "Enter a setup code or gateway credentials for \(gateway.name)."
+        self.step = .auth
+    }
+
+    private func setCredentialFields(token: String, password: String, persist: Bool) {
+        if !persist {
+            if self.gatewayToken != token { self.credentialPersistSuppressionCount += 1 }
+            if self.gatewayPassword != password { self.credentialPersistSuppressionCount += 1 }
+        }
+        self.gatewayToken = token
+        self.gatewayPassword = password
+    }
+
+    private func shouldPersistCredentialFieldChange() -> Bool {
+        guard self.credentialPersistSuppressionCount > 0 else { return true }
+        self.credentialPersistSuppressionCount -= 1
+        return false
     }
 
     private func saveGatewayCredentials(token: String, password: String) {
         let trimmedInstanceId = GatewaySettingsStore.currentInstanceID()
         guard !trimmedInstanceId.isEmpty else { return }
         let trimmedToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
-        GatewaySettingsStore.saveGatewayToken(trimmedToken, instanceId: trimmedInstanceId)
+        let tokenToSave = self.gatewayTokenLooksLikeSetupInput(trimmedToken) ? "" : trimmedToken
+        GatewaySettingsStore.saveGatewayToken(tokenToSave, instanceId: trimmedInstanceId)
         let trimmedPassword = password.trimmingCharacters(in: .whitespacesAndNewlines)
         GatewaySettingsStore.saveGatewayPassword(trimmedPassword, instanceId: trimmedInstanceId)
     }
@@ -966,6 +1129,8 @@ extension OnboardingWizardView {
 
     private func connectDiscoveredGateway(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) async {
         self.connectingGatewayID = gateway.id
+        self.selectedNearbyGatewayForAuth = nil
+        self.didStartWizardConnectAttempt = true
         self.issue = .none
         self.connectMessage = "Connecting to \(gateway.name)…"
         self.statusLine = "Connecting to \(gateway.name)…"
@@ -986,6 +1151,7 @@ extension OnboardingWizardView {
         case .homeNetwork:
             if hostIsDefaultLike { self.manualHost = "openclaw.local" }
             self.manualTLS = true
+            self.setCredentialFields(token: "", password: "", persist: false)
             if self.manualPort <= 0 || self.manualPort > 65535 { self.manualPort = 18789 }
         case .remoteDomain:
             if host == "openclaw.local" || host == "localhost" { self.manualHost = "" }
@@ -998,17 +1164,12 @@ extension OnboardingWizardView {
         }
     }
 
-    private func gatewayHasResolvableHost(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) -> Bool {
-        let lanHost = gateway.lanHost?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !lanHost.isEmpty { return true }
-        let tailnetDns = gateway.tailnetDns?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return !tailnetDns.isEmpty
-    }
-
     private func connectManual() async {
         let host = self.manualHost.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !host.isEmpty, self.manualPort > 0, self.manualPort <= 65535 else { return }
         self.connectingGatewayID = "manual"
+        self.selectedNearbyGatewayForAuth = nil
+        self.didStartWizardConnectAttempt = true
         self.issue = .none
         self.connectMessage = "Connecting to \(host)…"
         self.statusLine = "Connecting to \(host):\(self.manualPort)…"
@@ -1026,7 +1187,19 @@ extension OnboardingWizardView {
     }
 
     private func retryLastAttempt(silent: Bool = false) async {
+        if !self.setupCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            await self.applySetupCodeAndConnect()
+            return
+        }
+        if await self.applyGatewayTokenSetupInputIfNeeded() {
+            return
+        }
+        if let gateway = self.selectedNearbyGatewayForAuth {
+            await self.connectDiscoveredGateway(gateway)
+            return
+        }
         self.connectingGatewayID = silent ? "retry-auto" : "retry"
+        self.didStartWizardConnectAttempt = true
         // Keep current auth/pairing issue sticky while retrying to avoid Step 3 UI flip-flop.
         if !silent {
             self.connectMessage = "Retrying…"

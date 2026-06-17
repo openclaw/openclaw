@@ -152,6 +152,36 @@ final class GatewayDiscoveryModel {
         }
     }
 
+    static func mergingResolvedTXT(
+        _ txt: [String: String],
+        into gateway: DiscoveredGateway) -> DiscoveredGateway
+    {
+        guard !txt.isEmpty else { return gateway }
+        var resolved = gateway
+        if let lanHost = self.txtValue(txt, key: "lanHost") {
+            resolved.lanHost = lanHost
+        }
+        if let tailnetDns = self.txtValue(txt, key: "tailnetDns") {
+            resolved.tailnetDns = tailnetDns
+        }
+        if let gatewayPort = self.txtIntValue(txt, key: "gatewayPort") {
+            resolved.gatewayPort = gatewayPort
+        }
+        if let canvasPort = self.txtIntValue(txt, key: "canvasPort") {
+            resolved.canvasPort = canvasPort
+        }
+        if self.txtBoolValue(txt, key: "gatewayTls") {
+            resolved.tlsEnabled = true
+        }
+        if let fingerprint = self.txtValue(txt, key: "gatewayTlsSha256") {
+            resolved.tlsFingerprintSha256 = fingerprint
+        }
+        if let cliPath = self.txtValue(txt, key: "cliPath") {
+            resolved.cliPath = cliPath
+        }
+        return resolved
+    }
+
     private func appendDebugLog(_ message: String) {
         guard self.debugLoggingEnabled else { return }
         self.debugLog.append(DebugLogEntry(ts: Date(), message: message))

@@ -242,6 +242,10 @@ extension SettingsProTab {
         if setupAuth.hasBootstrapToken {
             GatewayOnboardingReset.prepareForBootstrapPairing(appModel: self.appModel, instanceId: instanceId)
         }
+        GatewayDiagnostics.log(
+            "setup link applied host=\(link.host) port=\(link.port) tls=\(link.tls) "
+                + "hasBootstrap=\(setupAuth.hasBootstrapToken) tokenLen=\(setupAuth.token.count) "
+                + "passwordLen=\(setupAuth.password.count) instance=\(instanceId)")
         if !instanceId.isEmpty {
             GatewaySettingsStore.saveGatewayBootstrapToken(setupAuth.bootstrapToken, instanceId: instanceId)
         }
@@ -312,6 +316,11 @@ extension SettingsProTab {
             pendingOverride: self.pendingManualAuthOverride,
             password: self.gatewayPassword)
         self.pendingManualAuthOverride = nil
+        GatewayDiagnostics.log(
+            "manual connect submit host=\(host) port=\(self.manualGatewayPort) tls=\(self.manualGatewayTLS) "
+                + "overrideToken=\(authOverride?.token != nil) "
+                + "overrideBootstrap=\(authOverride?.bootstrapToken != nil) "
+                + "overridePassword=\(authOverride?.password != nil)")
         await self.gatewayController.connectManual(
             host: host,
             port: self.manualGatewayPort,
@@ -474,9 +483,17 @@ extension SettingsProTab {
         guard !self.suppressCredentialPersist else { return }
         let instanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !instanceId.isEmpty else { return }
-        GatewaySettingsStore.saveGatewayToken(
-            value.trimmingCharacters(in: .whitespacesAndNewlines),
-            instanceId: instanceId)
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if Self.gatewayTokenLooksLikeSetupInput(trimmed) {
+            self.suppressCredentialPersist = true
+            self.setupCode = trimmed
+            self.gatewayToken = ""
+            self.suppressCredentialPersist = false
+            self.setupStatusText = "Setup code detected. Tap Apply Setup Code."
+            GatewaySettingsStore.saveGatewayToken("", instanceId: instanceId)
+            return
+        }
+        GatewaySettingsStore.saveGatewayToken(trimmed, instanceId: instanceId)
     }
 
     func persistGatewayPassword(_ value: String) {
@@ -491,6 +508,13 @@ extension SettingsProTab {
     func openNotificationSettings() {
         guard let url = URL(string: UIApplication.openNotificationSettingsURLString) else { return }
         UIApplication.shared.open(url)
+    }
+
+    private static func gatewayTokenLooksLikeSetupInput(_ value: String) -> Bool {
+        let raw = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !raw.isEmpty else { return false }
+        if AppleReviewDemoMode.isSetupCode(raw) { return true }
+        return GatewayConnectDeepLink.fromSetupInput(raw) != nil
     }
 
     func title(for route: SettingsRoute) -> String {

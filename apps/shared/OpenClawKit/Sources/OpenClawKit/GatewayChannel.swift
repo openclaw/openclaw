@@ -333,8 +333,9 @@ public actor GatewayChannelActor {
             } catch {
                 if self.shouldPauseReconnectAfterAuthFailure(error) {
                     self.reconnectPausedForAuthFailure = true
+                    let message = error.localizedDescription
                     self.logger.error(
-                        "gateway watchdog reconnect paused for non-recoverable auth failure \(error.localizedDescription, privacy: .public)")
+                        "gateway watchdog reconnect paused auth=\(message, privacy: .public)")
                     continue
                 }
                 let wrapped = self.wrap(error, context: "gateway watchdog reconnect")
@@ -492,7 +493,23 @@ public actor GatewayChannelActor {
             self.pendingDeviceTokenRetry = false
         }
         self.lastAuthSource = selectedAuth.authSource
-        self.logger.info("gateway connect auth=\(selectedAuth.authSource.rawValue, privacy: .public)")
+        let authSourceName = selectedAuth.authSource.rawValue
+        let hasAuthToken = selectedAuth.authToken != nil
+        let hasAuthBootstrapToken = selectedAuth.authBootstrapToken != nil
+        let hasAuthDeviceToken = selectedAuth.authDeviceToken != nil
+        let hasAuthPassword = selectedAuth.authPassword != nil
+        let hasStoredDeviceToken = selectedAuth.storedToken != nil
+        let connectAuthLog = [
+            "gateway connect auth=\(authSourceName)",
+            "role=\(role)",
+            "identity=\(includeDeviceIdentity)",
+            "token=\(hasAuthToken)",
+            "bootstrap=\(hasAuthBootstrapToken)",
+            "deviceToken=\(hasAuthDeviceToken)",
+            "password=\(hasAuthPassword)",
+            "storedDeviceToken=\(hasStoredDeviceToken)",
+        ].joined(separator: " ")
+        self.logger.info("\(connectAuthLog, privacy: .public)")
         if let authToken = selectedAuth.authToken {
             var auth: [String: ProtoAnyCodable] = ["token": ProtoAnyCodable(authToken)]
             if let authDeviceToken = selectedAuth.authDeviceToken {
@@ -599,15 +616,15 @@ public actor GatewayChannelActor {
             includeDeviceIdentity && self.pendingDeviceTokenRetry &&
             !requestedScopesExceedStoredToken && storedToken != nil && explicitToken != nil &&
             self.isTrustedDeviceRetryEndpoint()
+        let authBootstrapToken = includeDeviceIdentity ? explicitBootstrapToken : nil
+        let authPassword = authBootstrapToken == nil ? explicitPassword : nil
         let authToken =
-            explicitToken ??
-            // A freshly scanned setup code should force the bootstrap pairing path instead of
-            // silently reusing an older stored device token.
-            (includeDeviceIdentity && explicitPassword == nil && explicitBootstrapToken == nil
-                ? storedToken
-                : nil)
-        let authBootstrapToken =
-            authToken == nil && explicitPassword == nil ? explicitBootstrapToken : nil
+            authBootstrapToken == nil
+                ? explicitToken ??
+                    // A freshly scanned setup code should force the bootstrap pairing path instead of
+                    // silently reusing an older stored device token.
+                    (includeDeviceIdentity && authPassword == nil ? storedToken : nil)
+                : nil
         let authDeviceToken = shouldUseDeviceRetryToken ? storedToken : nil
         let authSource: GatewayAuthSource = if authDeviceToken != nil || (explicitToken == nil && authToken != nil) {
             .deviceToken
@@ -615,16 +632,34 @@ public actor GatewayChannelActor {
             .sharedToken
         } else if authBootstrapToken != nil {
             .bootstrapToken
-        } else if explicitPassword != nil {
+        } else if authPassword != nil {
             .password
         } else {
             .none
         }
+        let authSourceName = authSource.rawValue
+        let hasExplicitToken = explicitToken != nil
+        let hasExplicitBootstrap = explicitBootstrapToken != nil
+        let hasExplicitPassword = explicitPassword != nil
+        let hasStoredToken = storedToken != nil
+        let pendingDeviceRetry = self.pendingDeviceTokenRetry
+        let selectAuthLog = [
+            "gateway select auth=\(authSourceName)",
+            "role=\(role)",
+            "identity=\(includeDeviceIdentity)",
+            "explicitToken=\(hasExplicitToken)",
+            "explicitBootstrap=\(hasExplicitBootstrap)",
+            "explicitPassword=\(hasExplicitPassword)",
+            "storedDeviceToken=\(hasStoredToken)",
+            "pendingDeviceRetry=\(pendingDeviceRetry)",
+            "scopeUpgrade=\(requestedScopesExceedStoredToken)",
+        ].joined(separator: " ")
+        self.logger.info("\(selectAuthLog, privacy: .public)")
         return SelectedConnectAuth(
             authToken: authToken,
             authBootstrapToken: authBootstrapToken,
             authDeviceToken: authDeviceToken,
-            authPassword: explicitPassword,
+            authPassword: authPassword,
             signatureToken: authToken ?? authBootstrapToken,
             storedToken: storedToken,
             storedScopes: storedEntry?.scopes,
@@ -1053,8 +1088,9 @@ public actor GatewayChannelActor {
         } catch {
             if self.shouldPauseReconnectAfterAuthFailure(error) {
                 self.reconnectPausedForAuthFailure = true
+                let message = error.localizedDescription
                 self.logger.error(
-                    "gateway reconnect paused for non-recoverable auth failure \(error.localizedDescription, privacy: .public)")
+                    "gateway reconnect paused auth=\(message, privacy: .public)")
                 return
             }
             let wrapped = self.wrap(error, context: "gateway reconnect")
@@ -1261,8 +1297,9 @@ public actor GatewayChannelActor {
             let data = try self.encoder.encode(frame)
             return (id: id, data: data)
         } catch {
+            let message = error.localizedDescription
             self.logger.error(
-                "gateway \(kind) encode failed \(method, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+                "gateway \(kind) encode failed method=\(method, privacy: .public) error=\(message, privacy: .public)")
             throw error
         }
     }

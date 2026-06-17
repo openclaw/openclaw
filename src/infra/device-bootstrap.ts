@@ -143,6 +143,20 @@ function warnIfIssuedBootstrapScopesWereStripped(params: {
   });
 }
 
+function summarizeBootstrapProfile(profile: DeviceBootstrapProfile): {
+  roles: string[];
+  scopes: string[];
+  roleCount: number;
+  scopeCount: number;
+} {
+  return {
+    roles: profile.roles,
+    scopes: profile.scopes,
+    roleCount: profile.roles.length,
+    scopeCount: profile.scopes.length,
+  };
+}
+
 function bootstrapProfileAllowsRequest(params: {
   allowedProfile: DeviceBootstrapProfile;
   requestedRole: string;
@@ -226,7 +240,17 @@ async function loadState(baseDir?: string): Promise<DeviceBootstrapStateFile> {
       lastUsedAtMs: typeof record.lastUsedAtMs === "number" ? record.lastUsedAtMs : undefined,
     };
   }
+  const beforePruneCount = Object.keys(state).length;
   pruneExpiredPending(state, asDateTimestampMs(Date.now()) ?? 0, DEVICE_BOOTSTRAP_TOKEN_TTL_MS);
+  const afterPruneCount = Object.keys(state).length;
+  if (afterPruneCount !== beforePruneCount) {
+    log.warn("bootstrap_token_state_pruned", {
+      removed: beforePruneCount - afterPruneCount,
+      remaining: afterPruneCount,
+      ttlMs: DEVICE_BOOTSTRAP_TOKEN_TTL_MS,
+      bootstrapPath,
+    });
+  }
   return state;
 }
 
@@ -266,6 +290,12 @@ export async function issueDeviceBootstrapToken(
       issuedAtMs,
     };
     await persistState(state, params.baseDir);
+    log.info("bootstrap_token_issued", {
+      expiresAtMs,
+      ttlMs: DEVICE_BOOTSTRAP_TOKEN_TTL_MS,
+      outstanding: Object.keys(state).length,
+      profile: summarizeBootstrapProfile(profile),
+    });
     return { token, expiresAtMs };
   });
 }
@@ -280,6 +310,9 @@ export async function clearDeviceBootstrapTokens(
     const state = await loadState(params.baseDir);
     const removed = Object.keys(state).length;
     await persistState({}, params.baseDir);
+    log.warn("bootstrap_tokens_cleared", {
+      removed,
+    });
     return { removed };
   });
 }
@@ -304,6 +337,12 @@ export async function revokeDeviceBootstrapToken(params: {
     const [tokenKey, record] = found;
     delete state[tokenKey];
     await persistState(state, params.baseDir);
+    log.info("bootstrap_token_revoked", {
+      removed: true,
+      remaining: Object.keys(state).length,
+      boundDevice: Boolean(record.deviceId),
+      lastUsedAtMs: record.lastUsedAtMs,
+    });
     return { removed: true, record };
   });
 }
@@ -335,6 +374,11 @@ export async function revokeDeviceBootstrapTokensForDevice(params: {
     if (removed > 0) {
       await persistState(state, params.baseDir);
     }
+    log.info("bootstrap_tokens_revoked_for_device", {
+      removed,
+      remaining: Object.keys(state).length,
+      deviceId,
+    });
     return { removed };
   });
 }
@@ -442,12 +486,21 @@ export async function verifyDeviceBootstrapToken(params: {
     const state = await loadState(params.baseDir);
     const providedToken = params.token.trim();
     if (!providedToken) {
+      log.warn("bootstrap_token_verify_failed", {
+        reason: "empty_token",
+        outstanding: Object.keys(state).length,
+      });
       return { ok: false, reason: "bootstrap_token_invalid" };
     }
     const found = Object.entries(state).find(([, candidate]) =>
       verifyPairingToken(providedToken, candidate.token),
     );
     if (!found) {
+      log.warn("bootstrap_token_verify_failed", {
+        reason: "token_not_found_or_expired",
+        outstanding: Object.keys(state).length,
+        ttlMs: DEVICE_BOOTSTRAP_TOKEN_TTL_MS,
+      });
       return { ok: false, reason: "bootstrap_token_invalid" };
     }
     const [tokenKey, record] = found;
@@ -456,6 +509,12 @@ export async function verifyDeviceBootstrapToken(params: {
     const publicKey = normalizeBootstrapPublicKey(params.publicKey);
     const role = params.role.trim();
     if (!deviceId || !publicKey || !role) {
+      log.warn("bootstrap_token_verify_failed", {
+        reason: "missing_identity_or_role",
+        devicePresent: Boolean(deviceId),
+        publicKeyPresent: Boolean(publicKey),
+        rolePresent: Boolean(role),
+      });
       return { ok: false, reason: "bootstrap_token_invalid" };
     }
     const allowedProfile = resolvePersistedBootstrapProfile(record);
@@ -469,6 +528,12 @@ export async function verifyDeviceBootstrapToken(params: {
         requestedScopes: params.scopes,
       })
     ) {
+      log.warn("bootstrap_token_verify_failed", {
+        reason: "profile_rejected_request",
+        role,
+        requestedScopes: params.scopes,
+        allowedProfile: summarizeBootstrapProfile(allowedProfile),
+      });
       return { ok: false, reason: "bootstrap_token_invalid" };
     }
     const requestedProfile = resolveRequestedBootstrapProfile({
@@ -483,10 +548,25 @@ export async function verifyDeviceBootstrapToken(params: {
         : undefined;
     if (boundDeviceId || boundPublicKey) {
       if (boundDeviceId !== deviceId || boundPublicKey !== publicKey) {
+        log.warn("bootstrap_token_verify_failed", {
+          reason: "bound_identity_mismatch",
+          role,
+          boundDeviceMatches: boundDeviceId === deviceId,
+          boundPublicKeyMatches: boundPublicKey === publicKey,
+          ageMs: Date.now() - record.issuedAtMs,
+          lastUsedAtMs: record.lastUsedAtMs,
+        });
         return { ok: false, reason: "bootstrap_token_invalid" };
       }
       const pendingProfile = resolvePersistedPendingProfile(record);
       if (pendingProfile && !sameBootstrapProfile(pendingProfile, requestedProfile)) {
+        log.warn("bootstrap_token_verify_failed", {
+          reason: "pending_profile_mismatch",
+          role,
+          requestedProfile: summarizeBootstrapProfile(requestedProfile),
+          pendingProfile: summarizeBootstrapProfile(pendingProfile),
+          allowedProfile: summarizeBootstrapProfile(allowedProfile),
+        });
         return { ok: false, reason: "bootstrap_token_invalid" };
       }
       state[tokenKey] = {
@@ -498,6 +578,14 @@ export async function verifyDeviceBootstrapToken(params: {
         lastUsedAtMs: Date.now(),
       };
       await persistState(state, params.baseDir);
+      log.info("bootstrap_token_verify_ok", {
+        mode: "existing_binding",
+        role,
+        requestedScopes: params.scopes,
+        ageMs: Date.now() - record.issuedAtMs,
+        allowedProfile: summarizeBootstrapProfile(allowedProfile),
+        pendingProfile: summarizeBootstrapProfile(pendingProfile ?? requestedProfile),
+      });
       return { ok: true };
     }
 
@@ -510,6 +598,14 @@ export async function verifyDeviceBootstrapToken(params: {
       lastUsedAtMs: Date.now(),
     };
     await persistState(state, params.baseDir);
+    log.info("bootstrap_token_verify_ok", {
+      mode: "new_binding",
+      role,
+      requestedScopes: params.scopes,
+      ageMs: Date.now() - record.issuedAtMs,
+      allowedProfile: summarizeBootstrapProfile(allowedProfile),
+      pendingProfile: summarizeBootstrapProfile(requestedProfile),
+    });
     return { ok: true };
   });
 }
