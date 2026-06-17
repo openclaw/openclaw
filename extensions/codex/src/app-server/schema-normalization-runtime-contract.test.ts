@@ -102,6 +102,7 @@ describe("Codex app-server dynamic tool schema boundary contract", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const parameterFreeTool = createParameterFreeTool("message");
     const dynamicTool = {
+      type: "function" as const,
       name: parameterFreeTool.name,
       description: parameterFreeTool.description,
       inputSchema: normalizedParameterFreeSchema(),
@@ -180,6 +181,7 @@ describe("Codex app-server dynamic tool schema boundary contract", () => {
       cwd: workspaceDir,
       dynamicTools: [
         {
+          type: "function",
           name: "message",
           description: "Permissive test tool",
           inputSchema: { type: "object" },
@@ -194,6 +196,7 @@ describe("Codex app-server dynamic tool schema boundary contract", () => {
       cwd: workspaceDir,
       dynamicTools: [
         {
+          type: "function",
           name: permissiveTool.name,
           description: permissiveTool.description,
           inputSchema: permissiveTool.parameters,

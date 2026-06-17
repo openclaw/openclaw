@@ -37,6 +37,7 @@ import {
   assertCodexThreadStartResponse,
 } from "./protocol-validators.js";
 import {
+  flattenCodexDynamicToolFunctions,
   isJsonObject,
   type CodexDynamicToolSpec,
   type CodexSandboxPolicy,
@@ -322,7 +323,7 @@ export async function startOrResumeThread(params: {
   const dynamicToolsFingerprint = lifecycleTiming.measureSync("dynamic-tools-fingerprint", () =>
     fingerprintDynamicTools(params.dynamicTools),
   );
-  const dynamicToolsContainDeferred = params.dynamicTools.some(
+  const dynamicToolsContainDeferred = flattenCodexDynamicToolFunctions(params.dynamicTools).some(
     (tool) => tool.deferLoading === true,
   );
   const webSearchPlan = lifecycleTiming.measureSync("web-search-plan", () =>
@@ -1489,17 +1490,25 @@ function fingerprintEnvironmentSelection(
 }
 
 function fingerprintDynamicToolSpec(tool: JsonValue): JsonValue {
-  if (!isJsonObject(tool)) {
-    return stabilizeJsonValue(tool);
+  return stabilizeDynamicToolFingerprintValue(tool);
+}
+
+function stabilizeDynamicToolFingerprintValue(value: JsonValue): JsonValue {
+  if (Array.isArray(value)) {
+    return value.map(stabilizeDynamicToolFingerprintValue);
   }
+  if (!isJsonObject(value)) {
+    return value;
+  }
+
   const stable: JsonObject = {};
-  for (const [key, child] of Object.entries(tool).toSorted(([left], [right]) =>
+  for (const [key, child] of Object.entries(value).toSorted(([left], [right]) =>
     left.localeCompare(right),
   )) {
     if (key === "description") {
       continue;
     }
-    stable[key] = stabilizeJsonValue(child);
+    stable[key] = stabilizeDynamicToolFingerprintValue(child);
   }
   return stable;
 }
@@ -1574,7 +1583,7 @@ function buildDeferredDynamicToolManifest(
 ): string | undefined {
   const deferredToolNames = [
     ...new Set(
-      (dynamicTools ?? [])
+      flattenCodexDynamicToolFunctions(dynamicTools)
         .filter((tool) => tool.deferLoading === true)
         .map((tool) => tool.name.trim())
         .filter(Boolean),
@@ -1589,7 +1598,7 @@ function buildDeferredDynamicToolManifest(
 function buildSkillWorkshopInstruction(
   dynamicTools: readonly CodexDynamicToolSpec[] | undefined,
 ): string | undefined {
-  const hasSkillWorkshop = (dynamicTools ?? []).some(
+  const hasSkillWorkshop = flattenCodexDynamicToolFunctions(dynamicTools).some(
     (tool) => tool.name.trim() === SKILL_WORKSHOP_TOOL_NAME,
   );
   if (!hasSkillWorkshop) {
@@ -1603,7 +1612,7 @@ function buildVisibleReplyInstruction(
   dynamicTools: readonly CodexDynamicToolSpec[] | undefined,
 ): string {
   const messageToolAvailable = dynamicTools
-    ? dynamicTools.some((tool) => tool.name.trim() === "message")
+    ? flattenCodexDynamicToolFunctions(dynamicTools).some((tool) => tool.name.trim() === "message")
     : params.disableMessageTool !== true;
   if (params.sourceReplyDeliveryMode === "message_tool_only" && messageToolAvailable) {
     return "Visible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. Do not repeat that visible content in your final answer.";
