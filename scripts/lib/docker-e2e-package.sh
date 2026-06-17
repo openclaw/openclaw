@@ -252,6 +252,7 @@ docker_e2e_harness_mount_args() {
     -v "$ROOT_DIR/scripts/e2e:/app/scripts/e2e:ro"
     -v "$ROOT_DIR/scripts/lib:/app/scripts/lib:ro"
     -v "$ROOT_DIR/test/e2e/qa-lab:/app/test/e2e/qa-lab:ro"
+    -v "$ROOT_DIR/test/helpers:/app/test/helpers:ro"
     -v "$ROOT_DIR/scripts/windows-cmd-helpers.mjs:/app/scripts/windows-cmd-helpers.mjs:ro"
   )
 }

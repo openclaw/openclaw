@@ -1,4 +1,6 @@
 // Plugin Lifecycle Probe tests cover QA Lab plugin lifecycle evidence.
+import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import fs, { mkdirSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -12,6 +14,19 @@ function makeTempDir(): string {
 }
 
 type ProbeEnv = Pick<NodeJS.ProcessEnv, "HOME" | "OPENCLAW_CONFIG_PATH" | "OPENCLAW_STATE_DIR">;
+
+type MatrixEnv = NodeJS.ProcessEnv & ProbeEnv;
+
+interface CommandOptions {
+  env?: NodeJS.ProcessEnv;
+  outputFile?: string;
+  timeoutMs?: number;
+}
+
+interface RegistryServer {
+  env: NodeJS.ProcessEnv;
+  stop(): void;
+}
 
 function stateDir(env: ProbeEnv = process.env) {
   return env.OPENCLAW_STATE_DIR || path.join(env.HOME ?? os.homedir(), ".openclaw");
@@ -129,8 +144,7 @@ function assertInspectLoaded(pluginId: string, inspectPath: string | undefined) 
   );
 }
 
-function assertEnabled(pluginId: string, expectedRaw: string, env: ProbeEnv = process.env) {
-  const expected = expectedRaw === "true";
+function assertEnabled(pluginId: string, expected: boolean, env: ProbeEnv = process.env) {
   const cfg = config(env) as {
     plugins?: { entries?: Record<string, { enabled?: boolean }> };
   };
@@ -171,49 +185,367 @@ function assertUninstalled(pluginId: string, env: ProbeEnv = process.env) {
   );
 }
 
-export async function runPluginLifecycleProbeCommand(
-  args: readonly string[],
-  env: ProbeEnv = process.env,
-) {
-  const [command, pluginId, arg] = args;
-  assertProbe(pluginId, "plugin id is required");
-  switch (command) {
-    case "assert-version":
-      assertProbe(arg, "expected version is required");
-      assertVersion(pluginId, arg, env);
-      return "";
-    case "assert-npm-project-root":
-      assertProbe(arg, "package name is required");
-      assertNpmProjectRoot(pluginId, arg, env);
-      return "";
-    case "assert-inspect-loaded":
-      assertInspectLoaded(pluginId, arg);
-      return "";
-    case "assert-enabled":
-      assertProbe(arg, "expected enabled value is required");
-      assertEnabled(pluginId, arg, env);
-      return "";
-    case "install-path":
-      return installPath(pluginId, env);
-    case "assert-uninstalled":
-      assertUninstalled(pluginId, env);
-      return "";
-    default:
-      throw new Error(`unknown plugin lifecycle matrix probe command: ${command ?? "<missing>"}`);
+function parseDurationMs(value: string | undefined, fallback: string) {
+  const text = (value || fallback).trim();
+  if (text === "0") {
+    return undefined;
+  }
+  const match = /^([0-9]+(?:\.[0-9]+)?)(ms|s|m|h)?$/u.exec(text);
+  if (!match) {
+    throw new Error(`unsupported duration value: ${text}`);
+  }
+  const amount = Number(match[1]);
+  const unit = match[2] ?? "s";
+  const multiplier = unit === "ms" ? 1 : unit === "s" ? 1_000 : unit === "m" ? 60_000 : 3_600_000;
+  return Math.max(1, Math.ceil(amount * multiplier));
+}
+
+function createMatrixStateEnv(resourceDir: string): MatrixEnv {
+  const home = fs.mkdtempSync(path.join(resourceDir, "home."));
+  const stateDir = path.join(home, ".openclaw");
+  const workspaceDir = path.join(home, "workspace");
+  const configFile = path.join(stateDir, "openclaw.json");
+  fs.mkdirSync(stateDir, { recursive: true });
+  fs.mkdirSync(workspaceDir, { recursive: true });
+  return {
+    ...process.env,
+    HOME: home,
+    USERPROFILE: home,
+    OPENCLAW_HOME: home,
+    OPENCLAW_STATE_DIR: stateDir,
+    OPENCLAW_CONFIG_PATH: configFile,
+    OPENCLAW_TEST_WORKSPACE_DIR: workspaceDir,
+    OPENCLAW_AUTH_PROFILE_SECRET_KEY: randomBytes(32).toString("hex"),
+  };
+}
+
+function packageEntrypoint(prefix: string) {
+  const packageRoot = path.join(prefix, "lib", "node_modules", "openclaw");
+  for (const entry of ["dist/index.mjs", "dist/index.js"]) {
+    const candidate = path.join(packageRoot, entry);
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  throw new Error(`OpenClaw package entrypoint not found under ${packageRoot}/dist/`);
+}
+
+async function runCommand(command: string, args: readonly string[], options: CommandOptions = {}) {
+  const outputFd =
+    options.outputFile === undefined ? undefined : fs.openSync(options.outputFile, "a");
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn(command, args, {
+        cwd: process.cwd(),
+        env: options.env ?? process.env,
+        stdio: outputFd === undefined ? "inherit" : (["ignore", outputFd, outputFd] as const),
+      });
+      let settled = false;
+      const timer =
+        options.timeoutMs === undefined
+          ? undefined
+          : setTimeout(() => {
+              child.kill("SIGTERM");
+              setTimeout(() => child.kill("SIGKILL"), 2_000).unref();
+            }, options.timeoutMs);
+      timer?.unref();
+      child.once("error", (error) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        if (timer) {
+          clearTimeout(timer);
+        }
+        reject(error);
+      });
+      child.once("exit", (code, signal) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        if (timer) {
+          clearTimeout(timer);
+        }
+        if (code === 0 && !signal) {
+          resolve();
+          return;
+        }
+        reject(new Error(`${command} ${args.join(" ")} failed with ${signal ?? `exit ${code}`}`));
+      });
+    });
+  } catch (error) {
+    if (options.outputFile && fs.existsSync(options.outputFile)) {
+      const log = fs.readFileSync(options.outputFile, "utf8");
+      if (log.trim()) {
+        process.stderr.write(`--- ${options.outputFile} ---\n${log}`);
+      }
+    }
+    throw error;
+  } finally {
+    if (outputFd !== undefined) {
+      fs.closeSync(outputFd);
+    }
   }
 }
 
-const isProbeCli = process.argv[2] === "--probe";
+async function installOpenClawPackage(prefix: string, env: MatrixEnv) {
+  const packageTgz = env.OPENCLAW_CURRENT_PACKAGE_TGZ;
+  assertProbe(packageTgz, "OPENCLAW_CURRENT_PACKAGE_TGZ is required");
+  const installLog = "/tmp/openclaw-plugin-lifecycle-install.log";
+  process.stdout.write("Installing mounted OpenClaw package...\n");
+  await runCommand(
+    "npm",
+    ["install", "-g", "--prefix", prefix, packageTgz, "--no-fund", "--no-audit"],
+    {
+      env,
+      outputFile: installLog,
+      timeoutMs: parseDurationMs(env.OPENCLAW_E2E_NPM_INSTALL_TIMEOUT, "600s"),
+    },
+  );
+}
 
-if (isProbeCli) {
-  try {
-    const output = await runPluginLifecycleProbeCommand(process.argv.slice(3));
-    if (output) {
-      process.stdout.write(output);
+async function packFixturePlugin(
+  packDir: string,
+  outputTgz: string,
+  pluginId: string,
+  version: string,
+  method: string,
+  name: string,
+) {
+  const packageDir = path.join(packDir, "package");
+  fs.mkdirSync(packageDir, { recursive: true });
+  await runCommand("node", [
+    "scripts/e2e/lib/fixture.mjs",
+    "plugin",
+    packageDir,
+    pluginId,
+    version,
+    method,
+    name,
+  ]);
+  await runCommand("tar", ["-czf", outputTgz, "-C", packDir, "package"]);
+}
+
+async function startNpmFixtureRegistry(
+  registryRoot: string,
+  packages: readonly [packageName: string, version: string, tarball: string][],
+  env: MatrixEnv,
+): Promise<RegistryServer> {
+  const serverLog = path.join(registryRoot, "npm-registry.log");
+  const serverPortFile = path.join(registryRoot, "npm-registry-port");
+  const logFd = fs.openSync(serverLog, "a");
+  const child = spawn(
+    "node",
+    [
+      "scripts/e2e/lib/plugins/npm-registry-server.mjs",
+      serverPortFile,
+      ...packages.flatMap(([packageName, version, tarball]) => [packageName, version, tarball]),
+    ],
+    {
+      cwd: process.cwd(),
+      env,
+      stdio: ["ignore", logFd, logFd],
+    },
+  );
+  fs.closeSync(logFd);
+
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (fs.existsSync(serverPortFile) && fs.statSync(serverPortFile).size > 0) {
+      const port = fs.readFileSync(serverPortFile, "utf8").trim();
+      return {
+        env: {
+          ...env,
+          NPM_CONFIG_REGISTRY: `http://127.0.0.1:${port}`,
+        },
+        stop() {
+          child.kill();
+        },
+      };
     }
+    if (child.exitCode !== null) {
+      const log = fs.existsSync(serverLog) ? fs.readFileSync(serverLog, "utf8") : "";
+      throw new Error(`npm fixture registry exited early${log ? `\n${log}` : ""}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  child.kill();
+  const log = fs.existsSync(serverLog) ? fs.readFileSync(serverLog, "utf8") : "";
+  throw new Error(`timed out waiting for npm fixture registry${log ? `\n${log}` : ""}`);
+}
+
+async function runMeasured(
+  summaryTsv: string,
+  phase: string,
+  command: string,
+  args: readonly string[],
+  env: MatrixEnv,
+) {
+  process.stdout.write(`Running plugin lifecycle phase: ${phase}\n`);
+  await runCommand(
+    "node",
+    [
+      "scripts/e2e/lib/plugin-lifecycle-matrix/measure.mjs",
+      summaryTsv,
+      phase,
+      "--",
+      command,
+      ...args,
+    ],
+    { env },
+  );
+}
+
+export async function runPluginLifecycleMatrix() {
+  const pluginId = "lifecycle-claw";
+  const packageName = "@openclaw/lifecycle-claw";
+  const resourceDir = tempDirs.make("openclaw-plugin-lifecycle-matrix-");
+  const npmPrefix = "/tmp/npm-prefix";
+  const env = createMatrixStateEnv(resourceDir);
+  const tarballV1 = path.join(resourceDir, "lifecycle-claw-1.0.0.tgz");
+  const tarballV2 = path.join(resourceDir, "lifecycle-claw-2.0.0.tgz");
+  const inspectV1 = path.join(resourceDir, "plugin-lifecycle-inspect-v1.json");
+  const summaryTsv = path.join(resourceDir, "resource-summary.tsv");
+  let registry: RegistryServer | undefined;
+
+  fs.writeFileSync(
+    summaryTsv,
+    "phase\tmax_rss_kb\tcpu_seconds\twall_ms\tcpu_core_ratio\tsignal\n",
+    "utf8",
+  );
+  fs.rmSync(npmPrefix, { recursive: true, force: true });
+
+  try {
+    await installOpenClawPackage(npmPrefix, env);
+    const entry = packageEntrypoint(npmPrefix);
+    const matrixEnv: MatrixEnv = {
+      ...env,
+      PATH: `${path.join(npmPrefix, "bin")}:${env.PATH ?? ""}`,
+      npm_config_audit: "false",
+      npm_config_fund: "false",
+      npm_config_loglevel: "error",
+    };
+    const packRoot = fs.mkdtempSync(path.join(resourceDir, "pack."));
+    const registryRoot = fs.mkdtempSync(path.join(resourceDir, "registry."));
+    await packFixturePlugin(
+      path.join(packRoot, "v1"),
+      tarballV1,
+      pluginId,
+      "1.0.0",
+      "lifecycle.v1",
+      "Lifecycle Claw",
+    );
+    await packFixturePlugin(
+      path.join(packRoot, "v2"),
+      tarballV2,
+      pluginId,
+      "2.0.0",
+      "lifecycle.v2",
+      "Lifecycle Claw",
+    );
+    registry = await startNpmFixtureRegistry(
+      registryRoot,
+      [
+        [packageName, "1.0.0", tarballV1],
+        [packageName, "2.0.0", tarballV2],
+      ],
+      matrixEnv,
+    );
+    const runEnv = registry.env as MatrixEnv;
+
+    await runMeasured(
+      summaryTsv,
+      "install-v1",
+      "node",
+      [entry, "plugins", "install", `npm:${packageName}@1.0.0`],
+      runEnv,
+    );
+    assertVersion(pluginId, "1.0.0", runEnv);
+    assertNpmProjectRoot(pluginId, packageName, runEnv);
+
+    await runMeasured(
+      summaryTsv,
+      "inspect-v1",
+      "bash",
+      [
+        "-c",
+        'node "$1" plugins inspect "$2" --runtime --json >"$3"',
+        "bash",
+        entry,
+        pluginId,
+        inspectV1,
+      ],
+      runEnv,
+    );
+    assertInspectLoaded(pluginId, inspectV1);
+
+    await runMeasured(
+      summaryTsv,
+      "disable",
+      "node",
+      [entry, "plugins", "disable", pluginId],
+      runEnv,
+    );
+    assertEnabled(pluginId, false, runEnv);
+
+    await runMeasured(summaryTsv, "enable", "node", [entry, "plugins", "enable", pluginId], runEnv);
+    assertEnabled(pluginId, true, runEnv);
+
+    await runMeasured(
+      summaryTsv,
+      "upgrade-v2",
+      "node",
+      [entry, "plugins", "update", `${packageName}@2.0.0`],
+      runEnv,
+    );
+    assertVersion(pluginId, "2.0.0", runEnv);
+    assertNpmProjectRoot(pluginId, packageName, runEnv);
+
+    await runMeasured(
+      summaryTsv,
+      "downgrade-v1",
+      "node",
+      [entry, "plugins", "update", `${packageName}@1.0.0`],
+      runEnv,
+    );
+    assertVersion(pluginId, "1.0.0", runEnv);
+    assertNpmProjectRoot(pluginId, packageName, runEnv);
+
+    const installedPath = installPath(pluginId, runEnv);
+    fs.rmSync(installedPath, { recursive: true, force: true });
+    assertProbe(
+      !fs.existsSync(installedPath),
+      `failed to remove plugin code before missing-code uninstall: ${installedPath}`,
+    );
+
+    await runMeasured(
+      summaryTsv,
+      "missing-code-uninstall",
+      "node",
+      [entry, "plugins", "uninstall", pluginId, "--force"],
+      runEnv,
+    );
+    assertUninstalled(pluginId, runEnv);
+
+    process.stdout.write(
+      `Plugin lifecycle resource summary:\n${fs.readFileSync(summaryTsv, "utf8")}`,
+    );
+    process.stdout.write("Plugin lifecycle matrix passed.\n");
+  } finally {
+    registry?.stop();
+  }
+}
+
+const isLifecycleMatrixCli = process.argv[2] === "--lifecycle-matrix";
+
+if (isLifecycleMatrixCli) {
+  try {
+    await runPluginLifecycleMatrix();
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     process.exitCode = 1;
+  } finally {
+    tempDirs.cleanup();
   }
 } else {
   const { afterEach, describe, expect, it } = await import("vitest");
@@ -230,9 +562,7 @@ if (isProbeCli) {
         "utf8",
       );
 
-      await expect(
-        runPluginLifecycleProbeCommand(["assert-inspect-loaded", "lifecycle-claw", inspectPath]),
-      ).resolves.toBe("");
+      expect(() => assertInspectLoaded("lifecycle-claw", inspectPath)).not.toThrow();
     });
 
     it("rejects inspect JSON that does not prove the runtime loaded", async () => {
@@ -244,18 +574,18 @@ if (isProbeCli) {
         "utf8",
       );
 
-      await expect(
-        runPluginLifecycleProbeCommand(["assert-inspect-loaded", "lifecycle-claw", inspectPath]),
-      ).rejects.toThrow("expected lifecycle-claw inspect status loaded, got pending");
+      expect(() => assertInspectLoaded("lifecycle-claw", inspectPath)).toThrow(
+        "expected lifecycle-claw inspect status loaded, got pending",
+      );
     });
 
     it("rejects missing inspect JSON instead of treating it as an empty object", async () => {
       const dir = makeTempDir();
       const inspectPath = path.join(dir, "missing.json");
 
-      await expect(
-        runPluginLifecycleProbeCommand(["assert-inspect-loaded", "lifecycle-claw", inspectPath]),
-      ).rejects.toThrow(`failed to read JSON from ${inspectPath}`);
+      expect(() => assertInspectLoaded("lifecycle-claw", inspectPath)).toThrow(
+        `failed to read JSON from ${inspectPath}`,
+      );
     });
 
     it("rejects unreadable config during uninstall proof", async () => {
@@ -264,12 +594,16 @@ if (isProbeCli) {
       mkdirSync(path.dirname(configFile), { recursive: true });
       writeFileSync(configFile, "{ malformed\n", "utf8");
 
-      await expect(
-        runPluginLifecycleProbeCommand(["assert-uninstalled", "lifecycle-claw"], {
+      expect(() =>
+        assertUninstalled("lifecycle-claw", {
           HOME: dir,
           OPENCLAW_CONFIG_PATH: configFile,
         }),
-      ).rejects.toThrow(`failed to read JSON from ${configFile}`);
+      ).toThrow(`failed to read JSON from ${configFile}`);
+    });
+
+    it("preserves disabled npm install timeout semantics", () => {
+      expect(parseDurationMs("0", "600s")).toBeUndefined();
     });
   });
 }
