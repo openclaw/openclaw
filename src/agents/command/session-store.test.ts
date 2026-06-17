@@ -1933,6 +1933,53 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
+  it("does not overwrite a replacement persisted row after a normal run", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:rebound-visible-row";
+      const sessionId = "run-session-id";
+      const replacementEntry: SessionEntry = {
+        sessionId: "replacement-session-id",
+        updatedAt: 2,
+        modelProvider: "openai",
+        model: "gpt-5.5",
+      };
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          modelProvider: "anthropic",
+          model: "claude-sonnet-4-6",
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify({ [sessionKey]: replacementEntry }, null, 2));
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-sonnet-4-6",
+        result: {
+          meta: {
+            durationMs: 1,
+            agentMeta: {
+              sessionId,
+              provider: "anthropic",
+              model: "claude-sonnet-4-6",
+            },
+          },
+        },
+      });
+
+      expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).toEqual(
+        replacementEntry,
+      );
+    });
+  });
+
   it("leaves contextTokens unset when entry has prior model but no contextTokens (heartbeat bleed guard)", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {} as OpenClawConfig;

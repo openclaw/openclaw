@@ -299,9 +299,14 @@ export async function updateSessionStoreAfterAgentRun(params: {
       sessionKey,
     },
     (_currentEntry, context) => {
-      if (!context.existingEntry && sessionStore[sessionKey]) {
-        // sessions.delete removed the persisted row while this run retained an old snapshot.
-        // Do not let the stale finalizer recreate the deleted key.
+      if (
+        (!preserveUserFacingRunState &&
+          context.existingEntry &&
+          context.existingEntry.sessionId !== entry.sessionId) ||
+        (!context.existingEntry && sessionStore[sessionKey])
+      ) {
+        // A normal run may rotate its session id, so compare to the pre-run entry.
+        // Do not merge stale finalizer metadata after a delete or a competing reset.
         return null;
       }
       return metadataPatch;
