@@ -102,6 +102,34 @@ describe("resolveEmbeddedRunFailureSignal", () => {
     ).toBeUndefined();
   });
 
+  it("marks exhausted unknown-tool runs as fatal for cron delivery", () => {
+    // When the agent run exhausts repeated calls to an unavailable tool,
+    // the guard rewrites the tool call into self-debug assistant text.
+    // Cron must not deliver that text as normal chat output.
+    expect(
+      resolveEmbeddedRunFailureSignal({
+        trigger: "cron",
+        exhaustedUnknownTool: true,
+      }),
+    ).toEqual({
+      kind: "exhausted_unavailable_tool",
+      source: "tool",
+      message:
+        "The agent run exhausted repeated calls to an unavailable tool. " +
+        "Delivery suppressed to prevent internal self-debug text from reaching the chat channel.",
+      fatalForCron: true,
+    });
+  });
+
+  it("does not mark exhausted unknown-tool runs outside cron", () => {
+    expect(
+      resolveEmbeddedRunFailureSignal({
+        trigger: "user",
+        exhaustedUnknownTool: true,
+      }),
+    ).toBeUndefined();
+  });
+
   it("uses a structured code even when the message is omitted", () => {
     expect(
       resolveEmbeddedRunFailureSignal({

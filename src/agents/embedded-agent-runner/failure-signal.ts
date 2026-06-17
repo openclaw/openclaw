@@ -28,9 +28,20 @@ function resolveFailureSignalCode(
 export function resolveEmbeddedRunFailureSignal(params: {
   trigger?: string | undefined;
   lastToolError?: ToolErrorSummary | undefined;
+  exhaustedUnknownTool?: boolean;
 }): EmbeddedRunFailureSignal | undefined {
   if (params.trigger !== "cron") {
     return undefined;
+  }
+  if (params.exhaustedUnknownTool) {
+    return {
+      kind: "exhausted_unavailable_tool",
+      source: "tool",
+      message:
+        "The agent run exhausted repeated calls to an unavailable tool. " +
+        "Delivery suppressed to prevent internal self-debug text from reaching the chat channel.",
+      fatalForCron: true,
+    };
   }
   const lastToolError = params.lastToolError;
   if (!lastToolError || !isExecLikeToolName(lastToolError.toolName)) {

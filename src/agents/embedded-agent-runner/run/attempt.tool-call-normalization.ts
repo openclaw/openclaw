@@ -35,10 +35,11 @@ import { wrapStreamObjectEvents } from "./stream-wrapper.js";
 
 const BLANK_TOOL_CALL_NAME_DESCRIPTION = "blank tool name";
 
-type UnknownToolLoopGuardState = {
+export type UnknownToolLoopGuardState = {
   lastUnknownToolName?: string;
   count: number;
   countedMessages: WeakSet<object>;
+  didExhaustUnknownTool?: boolean;
 };
 type AssistantStream = Awaited<ReturnType<StreamFn>>;
 
@@ -857,6 +858,7 @@ function guardUnknownToolLoopInMessage(
 
   if (state.count > threshold) {
     rewriteUnknownToolLoopMessage(message, unknownToolName);
+    state.didExhaustUnknownTool = true;
   }
   return true;
 }
@@ -1063,7 +1065,11 @@ export function wrapStreamFnPromoteStandaloneTextToolCalls(
 function wrapStreamTrimToolCallNames(
   stream: AssistantStream,
   allowedToolNames?: Set<string>,
-  options?: { unknownToolThreshold?: number; state?: UnknownToolLoopGuardState },
+  options?: {
+    unknownToolThreshold?: number;
+    state?: UnknownToolLoopGuardState;
+    exhaustionRef?: { value: boolean };
+  },
 ): AssistantStream {
   const unknownToolGuardState = options?.state ?? {
     count: 0,
@@ -1081,6 +1087,9 @@ function wrapStreamTrimToolCallNames(
       resetOnAllowedTool: true,
       rewriteMalformedBlankToolName: true,
     });
+    if (unknownToolGuardState.didExhaustUnknownTool && options?.exhaustionRef) {
+      options.exhaustionRef.value = true;
+    }
     return message;
   };
 
@@ -1115,7 +1124,7 @@ function wrapStreamTrimToolCallNames(
 export function wrapStreamFnTrimToolCallNames(
   baseFn: StreamFn,
   allowedToolNames?: Set<string>,
-  guardOptions?: { unknownToolThreshold?: number },
+  guardOptions?: { unknownToolThreshold?: number; exhaustionRef?: { value: boolean } },
 ): StreamFn {
   const unknownToolGuardState: UnknownToolLoopGuardState = {
     count: 0,
@@ -1128,12 +1137,14 @@ export function wrapStreamFnTrimToolCallNames(
         wrapStreamTrimToolCallNames(stream, allowedToolNames, {
           unknownToolThreshold: guardOptions?.unknownToolThreshold,
           state: unknownToolGuardState,
+          exhaustionRef: guardOptions?.exhaustionRef,
         }),
       );
     }
     return wrapStreamTrimToolCallNames(maybeStream, allowedToolNames, {
       unknownToolThreshold: guardOptions?.unknownToolThreshold,
       state: unknownToolGuardState,
+      exhaustionRef: guardOptions?.exhaustionRef,
     });
   };
 }

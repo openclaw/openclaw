@@ -2525,6 +2525,7 @@ export async function runEmbeddedAttempt(
       }
       session.setActiveToolsByName(sessionToolAllowlist);
       const activeSession = session;
+      const exhaustionRef = { value: false };
       const setActiveSessionSystemPrompt = (nextSystemPrompt: string) => {
         systemPromptText = nextSystemPrompt;
         applySystemPromptToSession(activeSession, nextSystemPrompt);
@@ -3080,6 +3081,7 @@ export async function runEmbeddedAttempt(
         liveAllowedToolNames,
         {
           unknownToolThreshold: resolveUnknownToolGuardThreshold(clientToolLoopDetection),
+          exhaustionRef,
         },
       );
 
@@ -5605,6 +5607,7 @@ export async function runEmbeddedAttempt(
         didSendViaMessagingTool: didSendViaMessagingTool(),
         didDeliverSourceReplyViaMessageTool,
         didSendDeterministicApprovalPrompt: didSendDeterministicApprovalPromptNow,
+        exhaustedUnknownTool: exhaustionRef.value,
         messagingToolSentTexts: getMessagingToolSentTexts(),
         messagingToolSentMediaUrls: getMessagingToolSentMediaUrls(),
         messagingToolSentTargets: getMessagingToolSentTargets(),

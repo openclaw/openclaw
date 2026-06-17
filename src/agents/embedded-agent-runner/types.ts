@@ -130,10 +130,10 @@ export type ContextManagementTrace = {
 export type EmbeddedRunLivenessState = "working" | "paused" | "blocked" | "abandoned";
 
 export type EmbeddedRunFailureSignal = {
-  kind: "execution_denied";
+  kind: "execution_denied" | "exhausted_unavailable_tool";
   source: "tool";
   toolName?: string;
-  code: "SYSTEM_RUN_DENIED" | "INVALID_REQUEST";
+  code?: "SYSTEM_RUN_DENIED" | "INVALID_REQUEST";
   message: string;
   fatalForCron: true;
 };
