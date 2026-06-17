@@ -3,15 +3,33 @@ import { hasProjectedAgentRunForSession } from "../../infra/agent-events.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import type { GatewayRequestContext } from "./types.js";
 
-/** Active-run matcher including hidden remote lifecycle projections. */
-type TrackedActiveSessionRun = {
+/** Active-run matcher for Control UI-visible controllers. */
+export type TrackedActiveSessionRun = {
   runId: string;
   sessionKey?: string;
   sessionId?: string;
   agentId?: string;
 };
 
-function collectTrackedActiveSessionRuns(
+export type TrackedActiveSessionRunSnapshot = {
+  hasActiveRun: boolean;
+  runs: Array<{
+    runId: string;
+    sessionId: string;
+    sessionKey: string;
+    agentId?: string;
+    ownerConnId?: string;
+    kind?: "chat-send" | "agent";
+    startedAtMs?: number;
+    expiresAtMs?: number;
+    startedAgeMs?: number;
+    expiresInMs?: number;
+    terminalPending?: boolean;
+    terminalPersisted?: boolean;
+  }>;
+};
+
+export function collectTrackedActiveSessionRuns(
   context: Partial<Pick<GatewayRequestContext, "chatAbortControllers">>,
 ): TrackedActiveSessionRun[] {
   const runs: TrackedActiveSessionRun[] = [];
@@ -34,6 +52,85 @@ function collectTrackedActiveSessionRuns(
     }
   }
   return runs;
+}
+
+export function collectTrackedActiveSessionRunSnapshot(params: {
+  context: Partial<Pick<GatewayRequestContext, "chatAbortControllers">>;
+  requestedKey: string;
+  canonicalKey: string;
+  agentId?: string;
+  defaultAgentId?: string;
+  now?: number;
+}): TrackedActiveSessionRunSnapshot {
+  const runs: TrackedActiveSessionRunSnapshot["runs"] = [];
+  if (!(params.context.chatAbortControllers instanceof Map)) {
+    return { hasActiveRun: false, runs };
+  }
+  const now = params.now ?? Date.now();
+  for (const [runId, active] of params.context.chatAbortControllers.entries()) {
+    const sessionKey = active.sessionKey?.trim();
+    const sessionId = active.sessionId?.trim();
+    if (
+      active.projectSessionActive === false ||
+      active.controlUiVisible === false ||
+      !sessionKey ||
+      !sessionId
+    ) {
+      continue;
+    }
+    const projected: TrackedActiveSessionRun = {
+      runId,
+      sessionKey,
+      sessionId,
+      agentId: typeof active.agentId === "string" ? normalizeAgentId(active.agentId) : undefined,
+    };
+    const matches =
+      isTrackedActiveSessionRunForKey(
+        projected,
+        params.canonicalKey,
+        params.agentId,
+        params.defaultAgentId,
+      ) ||
+      isTrackedActiveSessionRunForKey(
+        projected,
+        params.requestedKey,
+        params.agentId,
+        params.defaultAgentId,
+      );
+    if (!matches) {
+      continue;
+    }
+    runs.push({
+      runId,
+      sessionId,
+      sessionKey,
+      ...(projected.agentId ? { agentId: projected.agentId } : {}),
+      ...(active.ownerConnId ? { ownerConnId: active.ownerConnId } : {}),
+      ...(active.kind ? { kind: active.kind } : {}),
+      ...(typeof active.startedAtMs === "number"
+        ? {
+            startedAtMs: active.startedAtMs,
+            startedAgeMs: Math.max(0, now - active.startedAtMs),
+          }
+        : {}),
+      ...(typeof active.expiresAtMs === "number"
+        ? {
+            expiresAtMs: active.expiresAtMs,
+            expiresInMs: Math.max(0, active.expiresAtMs - now),
+          }
+        : {}),
+      ...(active.projectSessionTerminalPending !== undefined
+        ? { terminalPending: active.projectSessionTerminalPending }
+        : {}),
+      ...(active.projectSessionTerminalPersisted !== undefined
+        ? { terminalPersisted: active.projectSessionTerminalPersisted }
+        : {}),
+    });
+  }
+  return {
+    hasActiveRun: runs.length > 0,
+    runs: runs.toSorted((a, b) => a.runId.localeCompare(b.runId)),
+  };
 }
 
 function isTrackedActiveSessionRunForKey(

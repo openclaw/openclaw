@@ -449,6 +449,8 @@ import {
   SessionsCreateResultSchema,
   SessionsDeleteParamsSchema,
   SessionsDescribeParamsSchema,
+  SessionsDiagnoseParamsSchema,
+  SessionsDiagnoseResultSchema,
   SessionsDispatchParamsSchema,
   SessionsDispatchResultSchema,
   SessionsReclaimParamsSchema,
@@ -779,6 +781,8 @@ export const validateSessionsSearchParams = lazyCompile(SessionsSearchParamsSche
 export const validateSessionsCleanupParams = lazyCompile(SessionsCleanupParamsSchema);
 export const validateSessionsPreviewParams = lazyCompile(SessionsPreviewParamsSchema);
 export const validateSessionsDescribeParams = lazyCompile(SessionsDescribeParamsSchema);
+export const validateSessionsDiagnoseParams = lazyCompile(SessionsDiagnoseParamsSchema);
+export const validateSessionsDiagnoseResult = lazyCompile(SessionsDiagnoseResultSchema);
 export const validateSessionsResolveParams = lazyCompile(SessionsResolveParamsSchema);
 export const validateSessionsFilesListParams = lazyCompile(SessionsFilesListParamsSchema);
 export const validateSessionsFilesGetParams = lazyCompile(SessionsFilesGetParamsSchema);
@@ -1133,6 +1137,8 @@ export {
   SessionsCleanupParamsSchema,
   SessionsPreviewParamsSchema,
   SessionsDescribeParamsSchema,
+  SessionsDiagnoseParamsSchema,
+  SessionsDiagnoseResultSchema,
   SessionsResolveParamsSchema,
   SessionFileBrowserEntrySchema,
   SessionFileBrowserResultSchema,
@@ -1836,6 +1842,8 @@ export type {
   SessionsCleanupParams,
   SessionsPreviewParams,
   SessionsDescribeParams,
+  SessionsDiagnoseParams,
+  SessionsDiagnoseResult,
   SessionsResolveParams,
   SessionOperationEvent,
   SessionObserverDigest,

@@ -6,6 +6,7 @@ import { sessionCheckpointHandlers } from "./sessions-compaction-checkpoints.js"
 import { sessionCheckpointQueryHandlers } from "./sessions-compaction-queries.js";
 import { sessionCreateHandlers } from "./sessions-create.js";
 import { sessionDeleteHandlers } from "./sessions-delete.js";
+import { sessionDiagnoseHandlers } from "./sessions-diagnose.js";
 import { sessionDispatchHandlers } from "./sessions-dispatch.js";
 import { sessionGroupHandlers } from "./sessions-groups.js";
 import { sessionMessagingHandlers } from "./sessions-messaging.js";
@@ -24,6 +25,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
   ...sessionRewindHandlers,
   ...sessionDispatchHandlers,
   ...sessionMessagingHandlers,
+  ...sessionDiagnoseHandlers,
   ...sessionAbortHandlers,
   ...sessionMutationHandlers,
   ...sessionDeleteHandlers,

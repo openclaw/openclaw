@@ -7,6 +7,7 @@ import type {
 } from "../../auto-reply/get-reply-options.types.js";
 import {
   getActiveReplyRunCount,
+  isReplyRunActiveForSessionId,
   listActiveReplyRunSessionKeys,
   listActiveReplyRunSessionIds,
   resolveActiveReplyRunSessionId,
@@ -17,6 +18,7 @@ import {
   registerAgentEventLifecycleRotationHandler,
 } from "../../infra/agent-events.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { resolveEmbeddedSessionFileKey } from "./session-file-key.js";
 
 /**
  * Shared process state for embedded-agent runs, queues, and snapshots.
@@ -237,4 +239,100 @@ export function resolveActiveEmbeddedRunSessionId(sessionKey: string): string | 
     resolveActiveReplyRunSessionId(normalizedSessionKey) ??
     ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.get(normalizedSessionKey)
   );
+}
+
+export type EmbeddedRunDiagnosticSnapshot = {
+  active: boolean;
+  sessionId?: string;
+  sessionKey?: string;
+  streaming?: boolean;
+  compacting?: boolean;
+  transcriptCommitWait?: boolean;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  hasTranscriptSnapshot?: boolean;
+  abandoned?: {
+    sessionId: string;
+    sessionKey?: string;
+    abandonedAtMs: number;
+    reason: AbandonedEmbeddedRun["reason"];
+  };
+};
+
+function resolveEmbeddedRunDiagnosticSessionId(params: {
+  sessionId?: string;
+  sessionKey?: string;
+  sessionFile?: string;
+}): string | undefined {
+  const sessionId = params.sessionId?.trim();
+  if (
+    sessionId &&
+    (ACTIVE_EMBEDDED_RUNS.has(sessionId) || isReplyRunActiveForSessionId(sessionId))
+  ) {
+    return sessionId;
+  }
+  const sessionKey = params.sessionKey?.trim();
+  if (sessionKey) {
+    const activeSessionId =
+      resolveActiveReplyRunSessionId(sessionKey) ??
+      ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.get(sessionKey);
+    if (activeSessionId) {
+      return activeSessionId;
+    }
+    const abandonedSessionId = ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY.get(sessionKey);
+    if (abandonedSessionId) {
+      return abandonedSessionId;
+    }
+  }
+  const sessionFile = params.sessionFile?.trim();
+  if (sessionFile) {
+    const sessionFileKey = resolveEmbeddedSessionFileKey(sessionFile);
+    const activeSessionId = ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.get(sessionFileKey);
+    if (activeSessionId) {
+      return activeSessionId;
+    }
+    const abandonedSessionId = ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.get(sessionFileKey);
+    if (abandonedSessionId) {
+      return abandonedSessionId;
+    }
+  }
+  if (sessionId) {
+    return sessionId;
+  }
+  return undefined;
+}
+
+/** Projects embedded run state for read-only diagnostics without exposing prompts or messages. */
+export function getEmbeddedRunDiagnosticSnapshot(params: {
+  sessionId?: string;
+  sessionKey?: string;
+  sessionFile?: string;
+}): EmbeddedRunDiagnosticSnapshot {
+  const sessionId = resolveEmbeddedRunDiagnosticSessionId(params);
+  const handle = sessionId ? ACTIVE_EMBEDDED_RUNS.get(sessionId) : undefined;
+  const abandoned = sessionId ? ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.get(sessionId) : undefined;
+  const replyRunActive = sessionId ? isReplyRunActiveForSessionId(sessionId) : false;
+  return {
+    active: Boolean(handle) || replyRunActive,
+    ...(sessionId ? { sessionId } : {}),
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    ...(handle ? { streaming: handle.isStreaming() } : {}),
+    ...(handle ? { compacting: handle.isCompacting() } : {}),
+    ...(handle?.supportsTranscriptCommitWait !== undefined
+      ? { transcriptCommitWait: handle.supportsTranscriptCommitWait }
+      : {}),
+    ...(handle?.sourceReplyDeliveryMode
+      ? { sourceReplyDeliveryMode: handle.sourceReplyDeliveryMode }
+      : {}),
+    ...(sessionId ? { hasTranscriptSnapshot: ACTIVE_EMBEDDED_RUN_SNAPSHOTS.has(sessionId) } : {}),
+    ...(abandoned
+      ? {
+          abandoned: {
+            sessionId: abandoned.sessionId,
+            ...(abandoned.sessionKey ? { sessionKey: abandoned.sessionKey } : {}),
+            abandonedAtMs: abandoned.abandonedAtMs,
+            reason: abandoned.reason,
+          },
+        }
+      : {}),
+  };
 }

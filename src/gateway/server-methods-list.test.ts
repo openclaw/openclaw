@@ -106,6 +106,11 @@ describe("listGatewayMethods", () => {
     expect(coreGatewayHandlers["sessions.files.reveal"]).toBeTypeOf("function");
   });
 
+  it("advertises read-only session diagnosis", () => {
+    expect(listGatewayMethods()).toContain("sessions.diagnose");
+    expect(coreGatewayHandlers["sessions.diagnose"]).toBeTypeOf("function");
+  });
+
   it("advertises the versioned activity audit method", () => {
     expect(listGatewayMethods()).toContain("audit.activity.list");
     expect(coreGatewayHandlers["audit.activity.list"]).toBeTypeOf("function");

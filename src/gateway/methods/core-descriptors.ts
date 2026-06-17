@@ -217,6 +217,7 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "sessions.messages.unsubscribe", scope: "operator.read", since: "<=2026.7" },
   { name: "sessions.preview", scope: "operator.read", since: "<=2026.7" },
   { name: "sessions.describe", scope: "operator.read", since: "<=2026.7" },
+  { name: "sessions.diagnose", scope: "operator.read", since: "2026.7" },
   { name: "sessions.compaction.list", scope: "operator.read", since: "<=2026.7" },
   { name: "sessions.compaction.get", scope: "operator.read", since: "<=2026.7" },
   { name: "sessions.compaction.branch", scope: "operator.write", since: "<=2026.7" },
