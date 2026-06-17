@@ -1873,7 +1873,10 @@ export async function runDiscordQaLive(params: {
         ? [{ kind: "reaction-timelines", path: path.basename(reactionTimelinesPath) }]
         : []),
     ],
-    checks: scenarioResults,
+    checks: scenarioResults.map(({ standardId, ...check }) => ({
+      ...check,
+      coverageIds: standardId ? [`channels.discord.${standardId}`] : undefined,
+    })),
     env: process.env,
     generatedAt: finishedAt,
     primaryModel,

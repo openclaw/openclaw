@@ -1,9 +1,6 @@
 // Covers provider error text classifiers used by live model validation.
 import { describe, expect, it } from "vitest";
-import {
-  isMiniMaxModelNotFoundErrorMessage,
-  isModelNotFoundErrorMessage,
-} from "./live-model-errors.js";
+import { isModelNotFoundErrorMessage } from "./live-model-errors.js";
 
 describe("live model error helpers", () => {
   it("detects generic model-not-found messages", () => {
@@ -21,6 +18,8 @@ describe("live model error helpers", () => {
     expect(
       isModelNotFoundErrorMessage("404 No endpoints found for deepseek/deepseek-r1:free."),
     ).toBe(true);
+    expect(isModelNotFoundErrorMessage("404 page not found")).toBe(true);
+    expect(isModelNotFoundErrorMessage("Error: 404 404 page not found")).toBe(true);
     expect(
       isModelNotFoundErrorMessage(
         '400 Provider returned error {"code":400,"msg":"model[Alibaba-NLP/Tongyi-DeepResearch-30B-A3B] router not found"}',
@@ -63,11 +62,4 @@ describe("live model error helpers", () => {
     expect(isModelNotFoundErrorMessage("request ended without sending any chunks")).toBe(false);
   });
 
-  it("detects bare minimax 404 page-not-found responses", () => {
-    expect(isMiniMaxModelNotFoundErrorMessage("404 page not found")).toBe(true);
-    expect(isMiniMaxModelNotFoundErrorMessage("Error: 404 404 page not found")).toBe(true);
-    expect(isMiniMaxModelNotFoundErrorMessage("request ended without sending any chunks")).toBe(
-      false,
-    );
-  });
 });

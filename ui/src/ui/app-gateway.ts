@@ -152,6 +152,8 @@ type GatewayHost = {
   execApprovalError: string | null;
   updateAvailable: UpdateAvailable | null;
   reconcileWebPushState?: () => Promise<void> | void;
+  realtimeTalkOptionsOpen?: boolean;
+  fetchRealtimeTalkCatalog?: () => Promise<void>;
   sessionsChangedReloadTimer?: number | ReturnType<typeof globalThis.setTimeout> | null;
   controlUiBootstrapReady?: Promise<void> | null;
 };
@@ -810,6 +812,9 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       host.lastErrorCode = null;
       host.chatError = null;
       host.hello = hello;
+      if (host.realtimeTalkOptionsOpen) {
+        void host.fetchRealtimeTalkCatalog?.();
+      }
       applySnapshot(host, hello);
       prepareHelloScopedComposerRestore(host);
       restoreChatComposerState(host as unknown as Parameters<typeof restoreChatComposerState>[0], {
@@ -1176,6 +1181,12 @@ function handleSessionMessageGatewayEvent(
   // chatStream, which delays the user message card from appearing until the
   // first LLM delta arrives.
   if (host.chatRunId) {
+    // Gateway confirms the run is still active (plugin hook window, etc.).
+    // Skip reload — the pending chat terminal owns history reconciliation.
+    if ((payload as Record<string, unknown> | null)?.hasActiveRun === true) {
+      deferredReloadHost.pendingSessionMessageReloadSessionKey = sessionKey;
+      return;
+    }
     deferredReloadHost.pendingSessionMessageReloadSessionKey = sessionKey;
     const refreshStartedAt = Date.now();
     const runIdBeforeRefresh = host.chatRunId;

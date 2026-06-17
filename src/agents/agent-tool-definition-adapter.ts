@@ -13,6 +13,7 @@ import {
   isToolWrappedWithBeforeToolCallHook,
   isBeforeToolCallBlockedError,
   recordAdjustedParamsForToolCall,
+  recordStructuredReplayTrustForToolCall,
   runBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
 import {
@@ -59,7 +60,7 @@ const TOOL_ERROR_EXEC_COMMAND_HASH_CHARS = 16;
 const SENSITIVE_EXEC_ENV_VALUE = "[omitted exec env value]";
 const EXEC_COMMAND_PARAM_KEYS = new Set(["command", "cmd"]);
 
-export type ClientToolCallRecorder =
+type ClientToolCallRecorder =
   | ((toolName: string, params: Record<string, unknown>) => void)
   | {
       reserve?: (toolCallId: string, toolName: string) => void;
@@ -307,7 +308,7 @@ function finalizeToolParamsBeforeExecute(params: {
   return finalize ? finalize(params.executeParams, params.preparedParams) : params.executeParams;
 }
 
-export const CLIENT_TOOL_NAME_CONFLICT_PREFIX = "client tool name conflict:";
+const CLIENT_TOOL_NAME_CONFLICT_PREFIX = "client tool name conflict:";
 
 /** Find client-hosted tool names that collide with runtime or sibling tools. */
 export function findClientToolNameConflicts(params: {
@@ -368,8 +369,11 @@ export function toToolDefinitions(
       label: tool.label ?? name,
       description: tool.description ?? "",
       parameters: tool.parameters,
+      prepareArguments: tool.prepareArguments,
+      executionMode: tool.executionMode,
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
         const { toolCallId, params, onUpdate, signal } = splitToolExecuteArgs(args);
+        recordStructuredReplayTrustForToolCall(toolCallId, tool, hookContext?.runId);
         let executeParams = params;
         try {
           if (!beforeHookWrapped) {
@@ -400,6 +404,8 @@ export function toToolDefinitions(
                 return buildBlockedToolResult({
                   reason: hookOutcome.reason,
                   deniedReason: hookOutcome.deniedReason,
+                  toolCallId,
+                  runId: hookContext?.runId,
                 });
               }
               throw new Error(hookOutcome.reason);
@@ -431,6 +437,8 @@ export function toToolDefinitions(
             logDebug(`tools: ${normalizedName} blocked by before_tool_call: ${err.reason}`);
             return buildBlockedToolResult({
               reason: err.reason,
+              toolCallId,
+              runId: hookContext?.runId,
             });
           }
           const described = describeToolExecutionError(err);
@@ -520,6 +528,8 @@ export function toClientToolDefinitions(
               return buildBlockedToolResult({
                 reason: outcome.reason,
                 deniedReason: outcome.deniedReason,
+                toolCallId,
+                runId: hookContext?.runId,
               });
             }
             throw new Error(outcome.reason);

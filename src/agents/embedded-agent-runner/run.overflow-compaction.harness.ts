@@ -16,6 +16,7 @@ import type {
   PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildResult,
 } from "../../plugins/types.js";
+import { resetCommandQueueStateForTest } from "../../process/command-queue.js";
 import type { FailoverReason } from "../embedded-agent-helpers/types.js";
 import { clearAgentHarnesses, registerAgentHarness } from "../harness/registry.js";
 import type { buildEmbeddedRunPayloads } from "./run/payloads.js";
@@ -146,6 +147,9 @@ export const mockedBuildEmbeddedRunPayloads = vi.fn<
   ) => ReturnType<typeof buildEmbeddedRunPayloads>
 >(() => []);
 export const mockedRunContextEngineMaintenance = vi.fn(async () => undefined);
+export const mockedWaitForDeferredTurnMaintenanceForSession = vi.fn(
+  async (_sessionKey?: string) => undefined,
+);
 export const mockedSessionLikelyHasOversizedToolResults = vi.fn(() => false);
 export const mockedResolveLiveToolResultMaxChars = vi.fn(() => 32_000);
 type MockTruncateOversizedToolResultsResult = {
@@ -225,6 +229,9 @@ export const mockedIsBillingAssistantError = vi.fn(() => false);
 export const mockedIsCompactionFailureError = vi.fn(() => false);
 export const mockedIsFailoverAssistantError = vi.fn<MockAssistantErrorProbe>(() => false);
 export const mockedIsFailoverErrorMessage = vi.fn(() => false);
+export const mockedIsGenericUnknownStreamErrorMessage = vi.fn((raw: string) =>
+  /^\s*an unknown error occurred\.?\s*$/i.test(raw),
+);
 export const mockedIsLikelyContextOverflowError = vi.fn((msg?: string) => {
   const lower = normalizeLowercaseStringOrEmpty(msg ?? "");
   return (
@@ -292,6 +299,7 @@ export const overflowBaseRunParams = {
 
 /** Reset every mocked runner dependency to the default successful no-op state. */
 export function resetRunOverflowCompactionHarnessMocks(): void {
+  resetCommandQueueStateForTest();
   clearAgentHarnesses();
   registerAgentHarness({
     id: "codex",
@@ -354,6 +362,8 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   mockedBuildEmbeddedRunPayloads.mockReturnValue([]);
   mockedRunContextEngineMaintenance.mockReset();
   mockedRunContextEngineMaintenance.mockResolvedValue(undefined);
+  mockedWaitForDeferredTurnMaintenanceForSession.mockReset();
+  mockedWaitForDeferredTurnMaintenanceForSession.mockResolvedValue(undefined);
   mockedSessionLikelyHasOversizedToolResults.mockReset();
   mockedSessionLikelyHasOversizedToolResults.mockReturnValue(false);
   mockedResolveLiveToolResultMaxChars.mockReset();
@@ -412,6 +422,10 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   mockedIsFailoverAssistantError.mockReturnValue(false);
   mockedIsFailoverErrorMessage.mockReset();
   mockedIsFailoverErrorMessage.mockReturnValue(false);
+  mockedIsGenericUnknownStreamErrorMessage.mockReset();
+  mockedIsGenericUnknownStreamErrorMessage.mockImplementation((raw: string) =>
+    /^\s*an unknown error occurred\.?\s*$/i.test(raw),
+  );
   mockedIsLikelyContextOverflowError.mockReset();
   mockedIsLikelyContextOverflowError.mockImplementation((msg?: string) => {
     const lower = normalizeLowercaseStringOrEmpty(msg ?? "");
@@ -642,6 +656,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     isLikelyContextOverflowError: mockedIsLikelyContextOverflowError,
     isFailoverAssistantError: mockedIsFailoverAssistantError,
     isFailoverErrorMessage: mockedIsFailoverErrorMessage,
+    isGenericUnknownStreamErrorMessage: mockedIsGenericUnknownStreamErrorMessage,
     parseImageSizeError: mockedParseImageSizeError,
     parseImageDimensionError: mockedParseImageDimensionError,
     isRateLimitAssistantError: mockedIsRateLimitAssistantError,
@@ -662,6 +677,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
 
   vi.doMock("./context-engine-maintenance.js", () => ({
     runContextEngineMaintenance: mockedRunContextEngineMaintenance,
+    waitForDeferredTurnMaintenanceForSession: mockedWaitForDeferredTurnMaintenanceForSession,
   }));
 
   vi.doMock("./model.js", () => ({
@@ -685,16 +701,10 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
 
   vi.doMock("../context-window-guard.js", () => ({
     CONTEXT_WINDOW_HARD_MIN_TOKENS: 1000,
-    CONTEXT_WINDOW_WARN_BELOW_TOKENS: 5000,
     evaluateContextWindowGuard: mockedEvaluateContextWindowGuard,
     formatContextWindowBlockMessage: mockedFormatContextWindowBlockMessage,
     formatContextWindowWarningMessage: mockedFormatContextWindowWarningMessage,
     resolveContextWindowInfo: mockedResolveContextWindowInfo,
-  }));
-
-  vi.doMock("../../process/command-queue.js", () => ({
-    enqueueCommandInLane: vi.fn((_lane: string, task: () => unknown) => task()),
-    clearCommandLane: vi.fn(() => 0),
   }));
 
   vi.doMock("../../utils/message-channel.js", () => ({
@@ -715,8 +725,8 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   }));
 
   vi.doMock("./lanes.js", () => ({
-    resolveSessionLane: vi.fn(() => "session-lane"),
-    resolveEmbeddedSessionLane: vi.fn(() => "session-lane"),
+    resolveSessionLane: vi.fn((key: string) => `session:${key}`),
+    resolveEmbeddedSessionLane: vi.fn((key: string) => `session:${key}`),
     resolveGlobalLane: vi.fn(() => "global-lane"),
   }));
 

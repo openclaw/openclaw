@@ -8,6 +8,7 @@ import {
   listRegisteredMemoryEmbeddingProviderAdapters as listRegisteredAdapters,
   registerMemoryEmbeddingProvider as registerAdapter,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import { hashText } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-runtime-mocks.js";
@@ -41,6 +42,12 @@ let providerInitGate: Promise<void> | null = null;
 let providerCalls: Array<{ provider?: string; model?: string; outputDimensionality?: number }> = [];
 let forceNoProvider = false;
 
+const identityAliasFixture = vi.hoisted(() => ({
+  provider: "identity-alias-test",
+  canonicalModel: "hf:fixture/default-model.gguf",
+  cacheModel: "/fixture/cache/default-model.gguf",
+}));
+
 function createLocalWorkerExitError(): Error {
   return Object.assign(new Error("Local embedding worker exited unexpectedly (exit code 134)"), {
     code: LOCAL_EMBEDDING_WORKER_ERROR_CODES.exited,
@@ -73,6 +80,28 @@ vi.mock("./embeddings.js", () => {
     ) => config?.models?.providers?.[providerId]?.api ?? providerId,
     resolveEmbeddingProviderAdapterTransport: (providerId: string) =>
       providerId === "local" ? "local" : "remote",
+    resolveEmbeddingProviderIndexIdentity: (options: { provider?: string; model?: string }) =>
+      options.provider === identityAliasFixture.provider
+        ? {
+            provider: {
+              id: identityAliasFixture.provider,
+              model: identityAliasFixture.canonicalModel,
+            },
+            cacheKeyData: {
+              provider: identityAliasFixture.provider,
+              model: identityAliasFixture.canonicalModel,
+            },
+            aliases: [
+              {
+                model: identityAliasFixture.cacheModel,
+                cacheKeyData: {
+                  provider: identityAliasFixture.provider,
+                  model: identityAliasFixture.cacheModel,
+                },
+              },
+            ],
+          }
+        : undefined,
     createEmbeddingProvider: async (options: {
       provider?: string;
       model?: string;
@@ -96,10 +125,17 @@ vi.mock("./embeddings.js", () => {
         options.provider === "fallback-provider" ||
         options.provider === "batch-test" ||
         options.provider === "batch-wide-test" ||
+        options.provider === identityAliasFixture.provider ||
         options.provider === "ollama"
           ? options.provider
           : "mock";
-      const model = options.model ?? "mock-embed";
+      const requestedModel = options.model ?? "mock-embed";
+      const model =
+        providerId === identityAliasFixture.provider &&
+        (requestedModel === identityAliasFixture.canonicalModel ||
+          requestedModel === identityAliasFixture.cacheModel)
+          ? identityAliasFixture.canonicalModel
+          : requestedModel;
       return {
         requestedProvider: options.provider ?? "openai",
         provider: {
@@ -149,45 +185,64 @@ vi.mock("./embeddings.js", () => {
               }
             : {}),
         },
-        ...(providerId === "batch-test" || providerId === "batch-wide-test"
+        ...(providerId === identityAliasFixture.provider
           ? {
               runtime: {
                 id: providerId,
-                ...(providerId === "batch-wide-test" ? { sourceWideBatchEmbed: true } : {}),
-                batchEmbed: async (batch: { chunks: Array<{ text: string }> }) => {
-                  providerRuntimeActiveBatchCalls += 1;
-                  providerRuntimeMaxActiveBatchCalls = Math.max(
-                    providerRuntimeMaxActiveBatchCalls,
-                    providerRuntimeActiveBatchCalls,
-                  );
-                  try {
-                    await providerRuntimeBatchGate;
-                    providerRuntimeBatchCalls.push(batch.chunks.map((chunk) => chunk.text));
-                    if (providerRuntimeBatchFailuresRemaining > 0) {
-                      providerRuntimeBatchFailuresRemaining -= 1;
-                      throw new Error("provider runtime batch failed");
-                    }
-                    return batch.chunks.map((chunk) => embedText(chunk.text));
-                  } finally {
-                    providerRuntimeActiveBatchCalls -= 1;
-                  }
+                cacheKeyData: {
+                  provider: providerId,
+                  model: identityAliasFixture.canonicalModel,
                 },
+                indexIdentityAliases: [
+                  {
+                    model: identityAliasFixture.cacheModel,
+                    cacheKeyData: {
+                      provider: providerId,
+                      model: identityAliasFixture.cacheModel,
+                    },
+                  },
+                ],
               },
             }
-          : providerId === "gemini" || providerId === "fallback-provider"
+          : providerId === "batch-test" || providerId === "batch-wide-test"
             ? {
                 runtime: {
                   id: providerId,
-                  cacheKeyData: {
-                    provider: providerId,
-                    baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-                    model,
-                    outputDimensionality: options.outputDimensionality,
-                    headers: [],
+                  ...(providerId === "batch-wide-test" ? { sourceWideBatchEmbed: true } : {}),
+                  batchEmbed: async (batch: { chunks: Array<{ text: string }> }) => {
+                    providerRuntimeActiveBatchCalls += 1;
+                    providerRuntimeMaxActiveBatchCalls = Math.max(
+                      providerRuntimeMaxActiveBatchCalls,
+                      providerRuntimeActiveBatchCalls,
+                    );
+                    try {
+                      await providerRuntimeBatchGate;
+                      providerRuntimeBatchCalls.push(batch.chunks.map((chunk) => chunk.text));
+                      if (providerRuntimeBatchFailuresRemaining > 0) {
+                        providerRuntimeBatchFailuresRemaining -= 1;
+                        throw new Error("provider runtime batch failed");
+                      }
+                      return batch.chunks.map((chunk) => embedText(chunk.text));
+                    } finally {
+                      providerRuntimeActiveBatchCalls -= 1;
+                    }
                   },
                 },
               }
-            : {}),
+            : providerId === "gemini" || providerId === "fallback-provider"
+              ? {
+                  runtime: {
+                    id: providerId,
+                    cacheKeyData: {
+                      provider: providerId,
+                      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+                      model,
+                      outputDimensionality: options.outputDimensionality,
+                      headers: [],
+                    },
+                  },
+                }
+              : {}),
       };
     },
   };
@@ -380,6 +435,33 @@ describe("memory index", () => {
   ): Promise<MemoryIndexManager> {
     const { getRequiredMemoryIndexManager } = await import("./test-manager-helpers.js");
     return await getRequiredMemoryIndexManager({ cfg, agentId: "main", purpose });
+  }
+
+  function rewritePersistedProviderIdentity(manager: MemoryIndexManager, model: string): void {
+    const providerKey = hashText(
+      JSON.stringify({
+        provider: identityAliasFixture.provider,
+        model,
+      }),
+    );
+    const db = Reflect.get(manager, "db") as {
+      prepare: (sql: string) => {
+        get: (...params: unknown[]) => { value?: string } | undefined;
+        run: (...params: unknown[]) => void;
+      };
+    };
+    const metaRow = db.prepare("SELECT value FROM meta WHERE key = ?").get("memory_index_meta_v1");
+    const meta = JSON.parse(metaRow?.value ?? "{}") as MemoryIndexMeta;
+    db.prepare("UPDATE meta SET value = ? WHERE key = ?").run(
+      JSON.stringify({ ...meta, model, providerKey }),
+      "memory_index_meta_v1",
+    );
+    db.prepare("UPDATE chunks SET model = ?").run(model);
+    db.prepare("UPDATE embedding_cache SET model = ?, provider_key = ? WHERE provider = ?").run(
+      model,
+      providerKey,
+      identityAliasFixture.provider,
+    );
   }
 
   async function expectHybridKeywordSearchFindsMemory(cfg: TestCfg) {
@@ -752,6 +834,75 @@ describe("memory index", () => {
     }
   });
 
+  it.each([
+    {
+      direction: "HF to exact cache path",
+      indexedModel: identityAliasFixture.canonicalModel,
+      configuredModel: identityAliasFixture.cacheModel,
+    },
+    {
+      direction: "exact cache path to HF",
+      indexedModel: identityAliasFixture.cacheModel,
+      configuredModel: identityAliasFixture.canonicalModel,
+    },
+  ])(
+    "keeps $direction indexes and embedding caches usable",
+    async ({ indexedModel, configuredModel }) => {
+      const dbPath = path.join(
+        workspaceDir,
+        `index-provider-identity-alias-${configuredModel === identityAliasFixture.canonicalModel ? "hf" : "path"}.sqlite`,
+      );
+      const indexedCfg = createCfg({
+        storePath: dbPath,
+        provider: identityAliasFixture.provider,
+        model: identityAliasFixture.canonicalModel,
+        cacheEnabled: true,
+        vectorEnabled: false,
+        onSearch: false,
+        hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+      });
+      const indexedManager = await getFreshManager(indexedCfg);
+      await indexedManager.sync({ reason: "test", force: true });
+      if (indexedModel !== identityAliasFixture.canonicalModel) {
+        rewritePersistedProviderIdentity(indexedManager, indexedModel);
+      }
+      await indexedManager.close?.();
+
+      const embedsBeforeReuse = embedBatchCalls;
+      const nextCfg = createCfg({
+        storePath: dbPath,
+        provider: identityAliasFixture.provider,
+        model: configuredModel,
+        cacheEnabled: true,
+        vectorEnabled: false,
+        onSearch: false,
+        hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+      });
+      const statusManager = await getFreshManager(nextCfg, "status");
+      try {
+        expect(statusManager.status().dirty).toBe(false);
+        expect(statusManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+      } finally {
+        await statusManager.close?.();
+      }
+
+      const nextManager = await getFreshManager(nextCfg);
+      try {
+        const results = await nextManager.search("zebra");
+
+        expect(results.length).toBeGreaterThan(0);
+        expect(results[0]?.path).toContain("memory/2026-01-12.md");
+        expect(nextManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+
+        await nextManager.sync({ reason: "test", force: true });
+
+        expect(embedBatchCalls).toBe(embedsBeforeReuse);
+      } finally {
+        await nextManager.close?.();
+      }
+    },
+  );
+
   it("keeps status clean when configured provider alias resolves to indexed adapter", async () => {
     const dbPath = path.join(workspaceDir, "index-provider-alias-status.sqlite");
     const oldCfg = createCfg({
@@ -821,7 +972,7 @@ describe("memory index", () => {
     }
   });
 
-  it("rebuilds missing metadata with existing chunks on gateway sync", async () => {
+  it("rebuilds missing metadata with existing chunks before search", async () => {
     const dbPath = path.join(workspaceDir, "index-missing-meta-cutover.sqlite");
     const cfg = createCfg({
       storePath: dbPath,
@@ -847,25 +998,10 @@ describe("memory index", () => {
 
       const results = await nextManager.search("alpha");
 
-      expect(results).toStrictEqual([]);
-      expect(nextManager.status().dirty).toBe(true);
-      expect(nextManager.status().custom?.indexIdentity).toEqual({
-        status: "missing",
-        reason: "index metadata is missing",
-      });
-
-      vi.stubEnv("OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX", "0");
-      await nextManager.sync({ reason: "test" });
-
       expect(nextManager.status().dirty).toBe(false);
       expect(nextManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
-      const repairedAlphaResults = await nextManager.search("alpha");
-      expect(
-        repairedAlphaResults.some((result) => result.path.endsWith("memory/2026-01-12.md")),
-      ).toBe(false);
-      const repairedResults = await nextManager.search("beta");
-      expect(repairedResults.length).toBeGreaterThan(0);
-      expect(repairedResults[0]?.path).toContain("memory/2026-01-13.md");
+      expect(results.some((result) => result.path.endsWith("memory/2026-01-12.md"))).toBe(false);
+      expect(results.some((result) => result.path.endsWith("memory/2026-01-13.md"))).toBe(true);
     } finally {
       await nextManager.close?.();
     }
@@ -1463,6 +1599,46 @@ describe("memory index", () => {
         hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
       }),
     );
+  });
+
+  it("bounds per-keyword FTS fallback in provider-backed hybrid search", async () => {
+    const cfg = createCfg({
+      storePath: indexMainPath,
+      minScore: 0.35,
+      hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
+    });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+
+    const db = (
+      manager as unknown as {
+        db: {
+          prepare: (sql: string) => unknown;
+        };
+      }
+    ).db;
+    const originalPrepare = db.prepare.bind(db);
+    let ftsSelects = 0;
+    const prepareSpy = vi.spyOn(db, "prepare").mockImplementation((sql: string) => {
+      if (sql.includes("FROM chunks_fts") && sql.includes("WHERE chunks_fts MATCH ?")) {
+        ftsSelects += 1;
+      }
+      return originalPrepare(sql);
+    });
+
+    try {
+      const results = await manager.search(
+        "zebra project router gateway session transcript approval command owner workspace token budget retry queue",
+        { maxResults: 5 },
+      );
+
+      expect(results.length).toBeGreaterThan(0);
+      expect(results[0]?.path).toContain("memory/2026-01-12.md");
+      expect(ftsSelects).toBeGreaterThan(1);
+      expect(ftsSelects).toBeLessThanOrEqual(7);
+    } finally {
+      prepareSpy.mockRestore();
+    }
   });
 
   it("reports vector availability after probe", async () => {

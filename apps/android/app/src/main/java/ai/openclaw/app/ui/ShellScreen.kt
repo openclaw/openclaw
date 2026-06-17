@@ -3,6 +3,7 @@ package ai.openclaw.app.ui
 import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.GatewayChannelsSummary
 import ai.openclaw.app.GatewayDreamingSummary
+import ai.openclaw.app.GatewayNodeApprovalState
 import ai.openclaw.app.GatewayNodesDevicesSummary
 import ai.openclaw.app.GatewaySkillSummary
 import ai.openclaw.app.HomeDestination
@@ -566,7 +567,7 @@ internal fun homeAttentionRows(
     } else {
       null
     },
-    if (nodesDevicesSummary.pendingDevices.isNotEmpty()) {
+    if (nodesDevicesSummary.pendingDevices.isNotEmpty() || nodesDevicesSummary.hasNodeCapabilityApprovalPending()) {
       HomeAttentionRow("Nodes & Devices", nodesDevicesSummaryText(nodesDevicesSummary), Icons.Default.Cloud, Tab.Settings, SettingsRoute.NodesDevices)
     } else {
       null
@@ -997,6 +998,7 @@ private fun nodesDevicesSummaryText(summary: GatewayNodesDevicesSummary): String
   val devices = summary.pairedDevices.size
   return when {
     summary.pendingDevices.isNotEmpty() -> "${summary.pendingDevices.size} pending"
+    summary.hasNodeCapabilityApprovalPending() -> "Node approval pending"
     summary.nodes.isNotEmpty() -> "$online/${summary.nodes.size} online"
     devices > 0 -> "$devices paired"
     else -> "No devices"
@@ -1007,9 +1009,17 @@ private fun nodesDevicesSummaryText(summary: GatewayNodesDevicesSummary): String
 private fun nodesDevicesStatus(summary: GatewayNodesDevicesSummary): Boolean? =
   when {
     summary.pendingDevices.isNotEmpty() -> false
+    summary.hasNodeCapabilityApprovalPending() -> false
     summary.nodes.any { it.connected } -> true
     summary.pairedDevices.isNotEmpty() -> true
     else -> null
+  }
+
+private fun GatewayNodesDevicesSummary.hasNodeCapabilityApprovalPending(): Boolean =
+  nodes.any { node ->
+    node.approvalState == GatewayNodeApprovalState.PendingApproval ||
+      node.approvalState == GatewayNodeApprovalState.PendingReapproval ||
+      node.approvalState == GatewayNodeApprovalState.Unapproved
   }
 
 /** Summarizes channel connection state, surfacing errors before connected counts. */

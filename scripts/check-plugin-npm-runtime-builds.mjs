@@ -64,6 +64,7 @@ export async function checkPluginNpmRuntimeBuilds(params = {}) {
     }
     rows.push({
       pluginDir: result.pluginDir,
+      status: "built",
       entryCount: Object.keys(result.entry).length,
       copiedStaticAssets: result.copiedStaticAssets,
     });
@@ -75,11 +76,13 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   try {
     const args = parseArgs(process.argv.slice(2));
     const rows = await checkPluginNpmRuntimeBuilds(args);
-    console.log(`built ${rows.length} publishable plugin runtimes`);
+    const builtCount = rows.filter((row) => row.status === "built").length;
+    console.log(`checked ${rows.length} publishable plugins; built ${builtCount} npm runtimes`);
     for (const row of rows) {
       console.log(
         [
           row.pluginDir,
+          row.status,
           row.entryCount,
           row.copiedStaticAssets.length > 0 ? row.copiedStaticAssets.join(",") : "-",
         ].join("\t"),

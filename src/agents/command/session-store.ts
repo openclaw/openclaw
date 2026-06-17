@@ -5,14 +5,13 @@ import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   canonicalizeAbsoluteSessionFilePath,
-  mergeSessionEntry,
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   setSessionRuntimeModel,
   type SessionEntry,
-  updateSessionStore,
   rewriteSessionFileForNewSessionId,
 } from "../../config/sessions.js";
+import { patchSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
@@ -112,15 +111,14 @@ export async function updateSessionStoreAfterAgentRun(params: {
   const contextTokens =
     runtimeContextTokens !== undefined
       ? runtimeContextTokens
-      : typeof params.contextTokensOverride === "number" && params.contextTokensOverride > 0
-        ? params.contextTokensOverride
-        : ((await getContextModule()).resolveContextTokensForModel({
-            cfg,
-            provider: providerUsed,
-            model: modelUsed,
-            fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
-            allowAsyncLoad: false,
-          }) ?? DEFAULT_CONTEXT_TOKENS);
+      : ((await getContextModule()).resolveContextTokensForModel({
+          cfg,
+          provider: providerUsed,
+          model: modelUsed,
+          contextTokensOverride: params.contextTokensOverride,
+          fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
+          allowAsyncLoad: false,
+        }) ?? DEFAULT_CONTEXT_TOKENS);
 
   const preserveUserFacingRunState = params.preserveUserFacingSessionModelState === true;
   const preserveRuntimeModel = params.preserveRuntimeModel === true || preserveUserFacingRunState;
@@ -186,12 +184,14 @@ export async function updateSessionStoreAfterAgentRun(params: {
     });
   }
   if (!preserveUserFacingRunState) {
-    if (agentHarnessId) {
-      next.agentHarnessId = agentHarnessId;
-    } else if (result.meta.executionTrace?.runner === "cli") {
-      next.agentHarnessId = undefined;
+    if (!preserveRuntimeModel) {
+      if (agentHarnessId) {
+        next.agentHarnessId = agentHarnessId;
+      } else if (result.meta.executionTrace?.runner === "cli") {
+        next.agentHarnessId = undefined;
+      }
     }
-    if (isCliProvider(providerUsed, cfg)) {
+    if (!preserveRuntimeModel && isCliProvider(providerUsed, cfg)) {
       const cliSessionBinding = result.meta.agentMeta?.cliSessionBinding;
       if (result.meta.agentMeta?.clearCliSessionBinding === true) {
         clearCliSession(next, providerUsed);
@@ -293,21 +293,20 @@ export async function updateSessionStoreAfterAgentRun(params: {
       }
     : removeLifecycleStateFromMetadataPatch(next);
   const maintenanceConfig = resolveMaintenanceConfigFromInput(cfg.session?.maintenance);
-  const persisted = await updateSessionStore(
-    storePath,
-    (store) => {
-      if (preserveUserFacingRunState && !store[sessionKey]) {
-        return undefined;
+  const persisted = await patchSessionEntry(
+    {
+      storePath,
+      sessionKey,
+    },
+    (_currentEntry, context) => {
+      if (preserveUserFacingRunState && !context.existingEntry) {
+        return null;
       }
-      const merged = mergeSessionEntry(store[sessionKey], metadataPatch);
-      store[sessionKey] = merged;
-      return merged;
+      return metadataPatch;
     },
     {
-      takeCacheOwnership: true,
+      ...(preserveUserFacingRunState ? {} : { fallbackEntry: entry }),
       maintenanceConfig,
-      resolveSingleEntryPersistence: (entryLocal) =>
-        entryLocal ? { sessionKey, entry: entryLocal } : undefined,
     },
   );
   if (persisted) {
@@ -332,13 +331,18 @@ export async function clearCliSessionInStore(params: {
   clearCliSession(next, provider);
   next.updatedAt = Date.now();
 
-  const persisted = await updateSessionStore(storePath, (store) => {
-    const merged = mergeSessionEntry(store[sessionKey], next);
-    store[sessionKey] = merged;
-    return merged;
-  });
-  sessionStore[sessionKey] = persisted;
-  return persisted;
+  const persisted = await patchSessionEntry(
+    {
+      storePath,
+      sessionKey,
+    },
+    () => next,
+    { fallbackEntry: entry },
+  );
+  if (persisted) {
+    sessionStore[sessionKey] = persisted;
+  }
+  return persisted ?? undefined;
 }
 
 /** Records CLI compaction metadata on the persisted session entry. */
@@ -401,13 +405,18 @@ export async function recordCliCompactionInStore(params: {
     next.cacheWrite = undefined;
   }
 
-  const persisted = await updateSessionStore(storePath, (store) => {
-    const merged = mergeSessionEntry(store[sessionKey], next);
-    store[sessionKey] = merged;
-    return merged;
-  });
-  sessionStore[sessionKey] = persisted;
-  return persisted;
+  const persisted = await patchSessionEntry(
+    {
+      storePath,
+      sessionKey,
+    },
+    () => next,
+    { fallbackEntry: entry },
+  );
+  if (persisted) {
+    sessionStore[sessionKey] = persisted;
+  }
+  return persisted ?? undefined;
 }
 
 function resolveCompactionSessionFile(params: {

@@ -221,6 +221,161 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
+  it("copies a code block over a non-secure context via the execCommand fallback", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    // Simulate a plain-HTTP (non-secure) deployment: navigator.clipboard is
+    // undefined there, so the Clipboard API path throws. Capture the legacy
+    // execCommand copy the fallback should use instead.
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
+      (globalThis as unknown as { copiedViaExec: string[] }).copiedViaExec = [];
+      document.execCommand = ((command: string) => {
+        if (command !== "copy") {
+          return false;
+        }
+        // execCommand("copy") copies the active selection; the fallback selects
+        // its off-screen scratch textarea, so the focused element holds the text.
+        const active = document.activeElement as HTMLTextAreaElement | null;
+        (globalThis as unknown as { copiedViaExec: string[] }).copiedViaExec.push(
+          active?.value ?? "",
+        );
+        return true;
+      }) as typeof document.execCommand;
+    });
+    const code = "const hello = 1;";
+    const gateway = await installMockGateway(page, {
+      historyMessages: [
+        {
+          content: [{ text: `\`\`\`js\n${code}\n\`\`\``, type: "text" }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+      ],
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const copyButton = page.locator(".code-block-copy").first();
+      await copyButton.waitFor({ timeout: 10_000 });
+      await copyButton.click();
+
+      await expect
+        .poll(() => copyButton.evaluate((el) => el.classList.contains("copied")), {
+          timeout: 10_000,
+        })
+        .toBe(true);
+      const copied = await page.evaluate(
+        () => (globalThis as unknown as { copiedViaExec: string[] }).copiedViaExec,
+      );
+      expect(copied).toContain(code);
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("starts the workspace files panel collapsed and toggles it open", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "artifacts.list": {
+          artifacts: [
+            {
+              download: { mode: "bytes" },
+              id: "artifact-1",
+              mimeType: "image/png",
+              sizeBytes: 128,
+              title: "preview.png",
+              type: "image",
+            },
+          ],
+        },
+        "sessions.files.list": {
+          browser: {
+            entries: [
+              {
+                kind: "directory",
+                name: "src",
+                path: "src",
+                sessionKind: "modified",
+              },
+              {
+                kind: "file",
+                name: "package.json",
+                path: "package.json",
+                size: 4096,
+              },
+            ],
+            path: "",
+          },
+          files: [
+            {
+              kind: "modified",
+              missing: false,
+              name: "AGENTS.md",
+              path: "/workspace/AGENTS.md",
+              size: 2048,
+            },
+          ],
+          root: "/workspace",
+          sessionKey: "main",
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await page.getByRole("button", { name: "Expand session workspace" }).waitFor({
+        timeout: 10_000,
+      });
+      expect(await gateway.getRequests("sessions.files.list")).toHaveLength(0);
+      expect(await page.locator(".chat-workspace-rail__file").count()).toBe(0);
+      expect(await page.locator(".chat-workspace-rail__collapsed-icon svg").count()).toBe(1);
+
+      await page.getByRole("button", { name: "Expand session workspace" }).click();
+      await page.getByRole("button", { name: "Collapse session workspace" }).waitFor({
+        timeout: 10_000,
+      });
+      await page.getByText("AGENTS.md").waitFor({ timeout: 10_000 });
+      await page.getByText("preview.png").waitFor({ timeout: 10_000 });
+      await page.getByText("Project files").waitFor({ timeout: 10_000 });
+      await page.locator(".chat-workspace-rail__file-name", { hasText: "package.json" }).waitFor({
+        timeout: 10_000,
+      });
+      expect(await gateway.getRequests("sessions.files.list")).toHaveLength(1);
+      expect(await gateway.getRequests("artifacts.list")).toHaveLength(1);
+
+      await page.getByRole("button", { name: "Collapse session workspace" }).click();
+      await page.getByRole("button", { name: "Expand session workspace" }).waitFor({
+        timeout: 10_000,
+      });
+      expect(await page.locator(".chat-workspace-rail__file").count()).toBe(0);
+      expect(await page.locator(".chat-workspace-rail__collapsed-icon svg").count()).toBe(1);
+
+      await page.getByRole("button", { name: "Expand session workspace" }).click();
+      await page.getByRole("button", { name: "Collapse session workspace" }).waitFor({
+        timeout: 10_000,
+      });
+      await page.getByText("AGENTS.md").waitFor({ timeout: 10_000 });
+      expect(await gateway.getRequests("sessions.files.list")).toHaveLength(1);
+
+      await page.setViewportSize({ height: 900, width: 1000 });
+      expect(await page.locator(".chat-workspace-rail").isHidden()).toBe(true);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("renders stable markdown during a streaming chat turn and finalizes the tail", async () => {
     const context = await browser.newContext({
       locale: "en-US",

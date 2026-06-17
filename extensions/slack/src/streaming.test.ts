@@ -1,5 +1,5 @@
 // Slack tests cover streaming plugin behavior.
-import type { ChatStreamer } from "@slack/web-api/dist/chat-stream.js";
+import { ChatStreamer } from "@slack/web-api/dist/chat-stream.js";
 import { describe, expect, it, vi } from "vitest";
 import {
   appendSlackStream,
@@ -13,7 +13,7 @@ import {
 } from "./streaming.js";
 
 type AppendImpl = () => Promise<unknown>;
-type StopImpl = (args?: unknown) => Promise<void>;
+type StopImpl = (args?: unknown) => Promise<unknown>;
 
 function makeSession(params: { appendImpl?: AppendImpl; stopImpl?: StopImpl }): SlackStreamSession {
   return {
@@ -94,7 +94,7 @@ describe("stopSlackStream finalize error handling", () => {
     await appendSlackStream({ session, text: "some text that Slack saw" });
     expect(session.delivered).toBe(true);
 
-    await expect(stopSlackStream({ session })).resolves.toBeUndefined();
+    await expect(stopSlackStream({ session })).resolves.toEqual({});
     expect(session.stopped).toBe(true);
   });
 
@@ -202,7 +202,7 @@ describe("stopSlackStream finalize error handling", () => {
       },
     });
     await appendSlackStream({ session, text: "chars" });
-    await expect(stopSlackStream({ session })).resolves.toBeUndefined();
+    await expect(stopSlackStream({ session })).resolves.toEqual({});
     expect(session.stopped).toBe(true);
   });
 
@@ -239,7 +239,7 @@ describe("stopSlackStream finalize error handling", () => {
       delivered: false,
       pendingText: "",
     };
-    await expect(stopSlackStream({ session })).resolves.toBeUndefined();
+    await expect(stopSlackStream({ session })).resolves.toEqual({});
     expect(stop).not.toHaveBeenCalled();
   });
 
@@ -253,6 +253,37 @@ describe("stopSlackStream finalize error handling", () => {
     await stopSlackStream({ session });
     expect(session.delivered).toBe(true);
     expect(session.pendingText).toBe("");
+  });
+
+  it("returns the finalized message ts as messageId on a successful stop()", async () => {
+    const session = makeSession({
+      appendImpl: async () => null,
+      stopImpl: async () => ({ ok: true, ts: "1700000000.500100" }),
+    });
+    await appendSlackStream({ session, text: "short" });
+    await expect(stopSlackStream({ session })).resolves.toEqual({
+      messageId: "1700000000.500100",
+    });
+  });
+
+  it("falls back to message.ts when chat.stopStream omits the top-level ts", async () => {
+    const session = makeSession({
+      appendImpl: async () => null,
+      stopImpl: async () => ({ ok: true, message: { ts: "1700000000.500200" } }),
+    });
+    await appendSlackStream({ session, text: "short" });
+    await expect(stopSlackStream({ session })).resolves.toEqual({
+      messageId: "1700000000.500200",
+    });
+  });
+
+  it("returns an empty result when chat.stopStream reports no ts", async () => {
+    const session = makeSession({
+      appendImpl: async () => null,
+      stopImpl: async () => ({ ok: true }),
+    });
+    await appendSlackStream({ session, text: "short" });
+    await expect(stopSlackStream({ session })).resolves.toEqual({});
   });
 
   it("converts a start-time flush rejection into a pending-text fallback error", async () => {
@@ -278,10 +309,10 @@ describe("stopSlackStream finalize error handling", () => {
     );
   });
 
-  it("marks fallback-delivered sessions stopped only when no native stream exists", () => {
+  it("retires fallback-delivered sessions so buffered text cannot be resent", () => {
     const neverDelivered = makeSession({});
     markSlackStreamFallbackDelivered(neverDelivered);
-    expect(neverDelivered.delivered).toBe(true);
+    expect(neverDelivered.delivered).toBe(false);
     expect(neverDelivered.pendingText).toBe("");
     expect(neverDelivered.stopped).toBe(true);
 
@@ -291,6 +322,51 @@ describe("stopSlackStream finalize error handling", () => {
     expect(alreadyDelivered.delivered).toBe(true);
     expect(alreadyDelivered.pendingText).toBe("");
     expect(alreadyDelivered.stopped).toBe(false);
+  });
+
+  it("clears the SDK buffer before finalizing an already-visible fallback stream", async () => {
+    const startStream = vi.fn(async () => ({ ok: true, ts: "1700000000.500300" }));
+    const stopStream = vi.fn(async () => ({ ok: true, ts: "1700000000.500300" }));
+    const client = {
+      chat: {
+        startStream,
+        appendStream: vi.fn(async () => ({ ok: true })),
+        stopStream,
+      },
+    };
+    const streamer = new ChatStreamer(
+      client as never,
+      { debug: vi.fn() } as never,
+      {
+        channel: "C123",
+        thread_ts: "1700000000.000100",
+      },
+      { buffer_size: 10 },
+    );
+    const session: SlackStreamSession = {
+      streamer,
+      channel: "C123",
+      threadTs: "1700000000.000100",
+      stopped: false,
+      delivered: false,
+      pendingText: "",
+    };
+
+    await appendSlackStream({ session, text: "already visible" });
+    await appendSlackStream({ session, text: "tail" });
+    expect(session.delivered).toBe(true);
+    expect(session.pendingText).toBe("tail");
+
+    markSlackStreamFallbackDelivered(session);
+    await stopSlackStream({ session });
+
+    expect(startStream).toHaveBeenCalledOnce();
+    expect(stopStream).toHaveBeenCalledWith({
+      token: undefined,
+      channel: "C123",
+      ts: "1700000000.500300",
+      chunks: [],
+    });
   });
 });
 

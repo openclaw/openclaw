@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
 import { agentCommandFromIngress } from "../agents/agent-command.js";
 import {
+  resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
   resolveSessionAgentId,
@@ -48,7 +49,10 @@ import {
 } from "../gateway/server-methods/chat.js";
 import { loadGatewayModelCatalog } from "../gateway/server-model-catalog.js";
 import { performGatewaySessionReset } from "../gateway/session-reset-service.js";
-import { capArrayByJsonBytes } from "../gateway/session-utils.fs.js";
+import {
+  capArrayByJsonBytes,
+  readSessionMessagesAsync,
+} from "../gateway/session-transcript-readers.js";
 import {
   buildGatewaySessionInfo,
   getSessionDefaults,
@@ -59,7 +63,6 @@ import {
   migrateAndPruneGatewaySessionStoreKey,
   resolveGatewaySessionStoreTarget,
   resolveSessionModelRef,
-  readSessionMessagesAsync,
 } from "../gateway/session-utils.js";
 import { applySessionsPatchToStore } from "../gateway/sessions-patch.js";
 import { type AgentEventPayload, onAgentEvent } from "../infra/agent-events.js";
@@ -444,11 +447,20 @@ export class EmbeddedTuiBackend implements TuiBackend {
     const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
     const localMessages =
       sessionId && storePath
-        ? await readSessionMessagesAsync(sessionId, storePath, entry?.sessionFile, {
-            mode: "recent",
-            maxMessages: max,
-            maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
-          })
+        ? await readSessionMessagesAsync(
+            {
+              agentId: sessionAgentId,
+              sessionFile: entry?.sessionFile,
+              sessionId,
+              storePath,
+            },
+            {
+              mode: "recent",
+              maxMessages: max,
+              maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
+              allowResetArchiveFallback: true,
+            },
+          )
         : [];
     const rawMessages = augmentChatHistoryWithCliSessionImports({
       entry,
@@ -582,6 +594,63 @@ export class EmbeddedTuiBackend implements TuiBackend {
       throw new Error(result.error.message);
     }
     return { ok: true as const, key: result.key, entry: result.entry };
+  }
+
+  private async runBtwTurn(params: {
+    runId: string;
+    sessionKey: string;
+    agentId?: string;
+    question: string;
+    timeoutMs?: number;
+    controller: AbortController;
+  }) {
+    const loadOptions = params.agentId ? { agentId: params.agentId } : undefined;
+    const { cfg, canonicalKey, storePath, store, entry } = loadSessionEntry(
+      params.sessionKey,
+      loadOptions,
+    );
+    if (!entry?.sessionId) {
+      throw new Error("/btw requires an active session with existing context.");
+    }
+    const sessionAgentId = resolveSessionAgentId({
+      sessionKey: canonicalKey,
+      config: cfg,
+      agentId: params.agentId,
+    });
+    const resolvedModel = resolveSessionModelRef(cfg, entry, sessionAgentId);
+    const timeoutSeconds = timeoutSecondsFromMs(params.timeoutMs);
+    const { runBtwSideQuestion } = await import("../agents/btw.js");
+    const reply = await runBtwSideQuestion({
+      cfg,
+      agentDir: resolveAgentDir(cfg, sessionAgentId),
+      provider: resolvedModel.provider,
+      model: resolvedModel.model,
+      question: params.question,
+      sessionEntry: entry,
+      sessionStore: store,
+      sessionKey: canonicalKey,
+      storePath,
+      resolvedThinkLevel: "off",
+      resolvedReasoningLevel: "off",
+      opts: {
+        runId: params.runId,
+        abortSignal: params.controller.signal,
+        ...(timeoutSeconds !== undefined ? { timeoutOverrideSeconds: Number(timeoutSeconds) } : {}),
+      },
+      isNewSession: false,
+      messageChannel: INTERNAL_MESSAGE_CHANNEL,
+      messageProvider: INTERNAL_MESSAGE_CHANNEL,
+      currentChannelId: INTERNAL_MESSAGE_CHANNEL,
+    });
+    const text = reply?.text?.trim() ?? "";
+    if (!text) {
+      throw new Error("/btw produced no answer.");
+    }
+    return {
+      sessionKey: canonicalKey,
+      text,
+      isError: reply?.isError === true,
+    };
   }
 
   async getGatewayStatus() {
@@ -1003,6 +1072,35 @@ export class EmbeddedTuiBackend implements TuiBackend {
           }
           return;
         }
+      }
+      const activeRun = this.runs.get(params.runId);
+      if (activeRun?.isBtw && activeRun.question) {
+        const result = await this.runBtwTurn({
+          runId: params.runId,
+          sessionKey: params.sessionKey,
+          ...(params.agentId ? { agentId: params.agentId } : {}),
+          question: activeRun.question,
+          timeoutMs: params.timeoutMs,
+          controller: params.controller,
+        });
+        const run = this.runs.get(params.runId);
+        if (!run) {
+          return;
+        }
+        if (params.controller.signal.aborted) {
+          this.emitChatAborted(params.runId, run);
+          return;
+        }
+        this.emit("chat.side_result", {
+          kind: "btw",
+          runId: params.runId,
+          sessionKey: result.sessionKey,
+          question: run.question,
+          text: result.text,
+          ...(result.isError ? { isError: true } : {}),
+        });
+        this.emitChatFinal(params.runId, run);
+        return;
       }
       const loadOptions = params.agentId ? { agentId: params.agentId } : undefined;
       const { canonicalKey, entry } = loadSessionEntry(params.sessionKey, loadOptions);

@@ -899,8 +899,17 @@ function readProcessRssMb(pid: number | undefined): number | null {
   if (result.status !== 0) {
     return null;
   }
-  const rssKb = Number.parseInt(result.stdout.trim(), 10);
-  return Number.isFinite(rssKb) && rssKb > 0 ? rssKb / 1024 : null;
+  const rssKb = parseProcessRssKb(result.stdout);
+  return rssKb === null ? null : rssKb / 1024;
+}
+
+function parseProcessRssKb(raw: string): number | null {
+  const value = raw.trim();
+  if (!/^[1-9][0-9]*$/u.test(value)) {
+    return null;
+  }
+  const rssKb = Number(value);
+  return Number.isSafeInteger(rssKb) ? rssKb : null;
 }
 
 function readProcessFdCount(pid: number | undefined): number | null {
@@ -1783,6 +1792,7 @@ export const testing = {
   parseNonNegativeInt,
   parseOptions,
   parsePositiveInt,
+  parseProcessRssKb,
   resolveRestartDeadlineFailure,
   resolveEntry,
   resolvePhaseDeadlineAt,

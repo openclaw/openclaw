@@ -102,7 +102,7 @@ describe("scenario-flow-runner", () => {
         scenario: {
           id: "qa-import",
           title: "qa-import",
-          sourcePath: "qa/scenarios/qa-import.md",
+          sourcePath: "qa/scenarios/qa-import.yaml",
           surface: "test",
           objective: "test",
           successCriteria: ["test"],
@@ -173,7 +173,7 @@ describe("scenario-flow-runner", () => {
         scenario: {
           id: "qa-fixture-import",
           title: "qa-fixture-import",
-          sourcePath: "qa/scenarios/qa-fixture-import.md",
+          sourcePath: "qa/scenarios/qa-fixture-import.yaml",
           surface: "test",
           objective: "test",
           successCriteria: ["test"],
@@ -235,7 +235,7 @@ describe("scenario-flow-runner", () => {
         scenario: {
           id: "qa-gated-promise",
           title: "qa-gated-promise",
-          sourcePath: "qa/scenarios/qa-gated-promise.md",
+          sourcePath: "qa/scenarios/qa-gated-promise.yaml",
           surface: "test",
           objective: "test",
           successCriteria: ["test"],

@@ -114,7 +114,7 @@ vi.mock("../model-suppression.js", () => {
         (provider === "openai" || provider === "azure-openai-responses" || provider === "openai") &&
         id?.trim().toLowerCase() === "gpt-5.3-codex-spark"
       ) {
-        return `Unknown model: ${provider}/gpt-5.3-codex-spark. gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.`;
+        return `Unknown model: ${provider}/gpt-5.3-codex-spark. gpt-5.3-codex-spark is available only through ChatGPT/Codex OAuth. Run \`openclaw models auth login --provider openai\` and use openai/gpt-5.3-codex-spark with that OAuth profile; OpenAI API-key auth cannot use this model.`;
       }
       return undefined;
     },
@@ -686,6 +686,100 @@ describe("resolveModel", () => {
     expect(runProviderDynamicModel).toHaveBeenCalled();
     expect(discoverAuthStorage).not.toHaveBeenCalled();
     expect(discoverModels).not.toHaveBeenCalled();
+  });
+
+  it("resolves a deferred Fireworks manifest id from the bundled static catalog", async () => {
+    resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
+      provider: "fireworks",
+      id: "accounts/fireworks/models/kimi-k2p6",
+      name: "Kimi K2.6",
+      api: "openai-completions",
+      baseUrl: "https://api.fireworks.ai/inference/v1",
+      reasoning: false,
+      input: ["text", "image"],
+      cost: { input: 0.95, output: 4, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 262144,
+      maxTokens: 262144,
+    });
+
+    const result = await resolveModelAsync(
+      "fireworks",
+      "accounts/fireworks/models/kimi-k2p6",
+      "/tmp/agent",
+      undefined,
+      {
+        allowBundledStaticCatalogFallback: true,
+        runtimeHooks: createRuntimeHooks(),
+        skipAgentDiscovery: true,
+      },
+    );
+
+    expectRecordFields(expectResolvedModel(result), {
+      provider: "fireworks",
+      id: "accounts/fireworks/models/kimi-k2p6",
+      api: "openai-completions",
+      baseUrl: "https://api.fireworks.ai/inference/v1",
+      contextWindow: 262144,
+      maxTokens: 262144,
+    });
+    expect(resolveBundledStaticCatalogModelMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "fireworks",
+        modelId: "accounts/fireworks/models/kimi-k2p6",
+      }),
+    );
+  });
+
+  it("prefers user openclaw.json config over the Fireworks manifest for the same id", () => {
+    resolveBundledStaticCatalogModelMock.mockReturnValue({
+      ...makeModel("accounts/fireworks/models/kimi-k2p6"),
+      provider: "fireworks",
+      name: "Kimi K2.6",
+      api: "openai-completions",
+      baseUrl: "https://api.fireworks.ai/inference/v1",
+      input: ["text", "image"],
+      contextWindow: 262_144,
+      maxTokens: 262_144,
+    });
+    const cfg = {
+      models: {
+        providers: {
+          fireworks: {
+            api: "openai-completions",
+            baseUrl: "https://api.fireworks.ai/inference/v1",
+            models: [
+              {
+                ...makeModel("accounts/fireworks/models/kimi-k2p6"),
+                name: "Kimi K2.6 (user override)",
+                contextWindow: 300_000,
+                maxTokens: 300_000,
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest(
+      "fireworks",
+      "accounts/fireworks/models/kimi-k2p6",
+      "/tmp/agent",
+      cfg,
+    );
+
+    expectRecordFields(expectResolvedModel(result), {
+      provider: "fireworks",
+      id: "accounts/fireworks/models/kimi-k2p6",
+      contextWindow: 300_000,
+      maxTokens: 300_000,
+    });
+    expect(resolveBundledStaticCatalogModelMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "fireworks",
+        modelId: "accounts/fireworks/models/kimi-k2p6",
+        cfg,
+      }),
+    );
   });
 
   it("keeps provider dynamic metadata for runtime-preferred models", async () => {
@@ -2922,6 +3016,52 @@ describe("resolveModel", () => {
     });
   });
 
+  it("uses provider-normalized model ids for OpenRouter transport", () => {
+    const modelId = "openrouter/anthropic/claude-sonnet-4.6";
+    mockDiscoveredModel(discoverModels, {
+      provider: "openrouter",
+      modelId,
+      templateModel: {
+        ...makeModel(modelId),
+        provider: "openrouter",
+        api: "openai-completions",
+        baseUrl: "https://openrouter.ai/api/v1",
+      },
+    });
+    const baseRuntimeHooks = createRuntimeHooks();
+    const normalizeProviderResolvedModelWithPlugin = vi.fn(
+      (params: { context: { model: { id: string } } }) => ({
+        ...params.context.model,
+        id: params.context.model.id.slice("openrouter/".length),
+      }),
+    );
+
+    const result = resolveModel("openrouter", modelId, "/tmp/agent", undefined, {
+      authStorage: { mocked: true } as never,
+      modelRegistry: discoverModels({ mocked: true } as never, "/tmp/agent"),
+      runtimeHooks: {
+        ...baseRuntimeHooks,
+        normalizeProviderResolvedModelWithPlugin,
+      },
+    });
+
+    expect(normalizeProviderResolvedModelWithPlugin).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openrouter",
+        context: expect.objectContaining({
+          modelId,
+          model: expect.objectContaining({ id: modelId }),
+        }),
+      }),
+    );
+    expectRecordFields(result.model, {
+      provider: "openrouter",
+      id: "anthropic/claude-sonnet-4.6",
+      api: "openai-completions",
+      baseUrl: "https://openrouter.ai/api/v1",
+    });
+  });
+
   it("matches prefixed Hugging Face ids against discovered registry models", () => {
     mockDiscoveredModel(discoverModels, {
       provider: "huggingface",
@@ -3307,7 +3447,7 @@ describe("resolveModel", () => {
 
     expect(result.model).toBeUndefined();
     expect(result.error).toBe(
-      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.",
+      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is available only through ChatGPT/Codex OAuth. Run `openclaw models auth login --provider openai` and use openai/gpt-5.3-codex-spark with that OAuth profile; OpenAI API-key auth cannot use this model.",
     );
   });
 
@@ -3326,7 +3466,7 @@ describe("resolveModel", () => {
 
     expect(result.model).toBeUndefined();
     expect(result.error).toBe(
-      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.",
+      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is available only through ChatGPT/Codex OAuth. Run `openclaw models auth login --provider openai` and use openai/gpt-5.3-codex-spark with that OAuth profile; OpenAI API-key auth cannot use this model.",
     );
   });
 
@@ -3736,7 +3876,7 @@ describe("resolveModel", () => {
 
     expect(result.model).toBeUndefined();
     expect(result.error).toBe(
-      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.",
+      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is available only through ChatGPT/Codex OAuth. Run `openclaw models auth login --provider openai` and use openai/gpt-5.3-codex-spark with that OAuth profile; OpenAI API-key auth cannot use this model.",
     );
   });
 

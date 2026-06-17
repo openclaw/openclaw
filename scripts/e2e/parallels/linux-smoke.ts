@@ -11,9 +11,11 @@ import {
   makeTempDir,
   parseBoolEnv,
   parseMode,
+  parsePositiveInt,
   parseProvider,
   readPositiveIntEnv,
   modelProviderConfigBatchJson,
+  posixCodexPlatformPackageRepairFunction,
   posixProviderOnlyPluginIsolationScript,
   repoRoot,
   resolveParallelsModelTimeoutSeconds,
@@ -36,7 +38,7 @@ import {
   type SnapshotInfo,
 } from "./common.ts";
 import { LinuxGuest } from "./guest-transports.ts";
-import { resolveUbuntuVmName, waitForVmStatus } from "./parallels-vm.ts";
+import { ensureVmRunning, resolveUbuntuVmName } from "./parallels-vm.ts";
 import { PhaseRunner } from "./phase-runner.ts";
 import {
   buildCommonSmokeSummary,
@@ -52,6 +54,10 @@ import {
 
 // Older published baselines predate this warning, but still need update coverage.
 const BAD_PLUGIN_DIAGNOSTIC_MIN_VERSION = "2026.5.7";
+// Restored Ubuntu snapshots may immediately run package maintenance for hours.
+// Reuse an existing downloader before touching apt, then bound the fallback.
+const APT_LOCK_RETRY_SECONDS = 900;
+const BOOTSTRAP_TIMEOUT_SECONDS = 1200;
 
 function parseOpenClawPackageVersion(value: string): string | null {
   return value.match(/\b(\d{4}\.\d{1,2}\.\d{1,2}(?:-[A-Za-z0-9.]+)?)\b/u)?.[1] ?? null;
@@ -196,7 +202,7 @@ export function parseArgs(argv: string[]): LinuxOptions {
         i++;
         break;
       case "--host-port":
-        options.hostPort = Number(ensureValue(args, i, arg));
+        options.hostPort = parsePositiveInt(ensureValue(args, i, arg), arg);
         options.hostPortExplicit = true;
         i++;
         break;
@@ -315,7 +321,9 @@ class LinuxSmoke extends SmokeRunController<LinuxOptions> {
 
   protected async runFreshLane(): Promise<void> {
     await this.phase("fresh.restore-snapshot", 180, () => this.restoreSnapshot());
-    await this.phase("fresh.bootstrap-guest", 600, () => this.bootstrapGuest());
+    await this.phase("fresh.bootstrap-guest", BOOTSTRAP_TIMEOUT_SECONDS, () =>
+      this.bootstrapGuest(),
+    );
     await this.phase("fresh.preflight", 90, () => this.logGuestPreflight());
     await this.phase("fresh.install-latest-bootstrap", 420, () => this.installLatestRelease());
     await this.phase("fresh.install-main", 420, () =>
@@ -341,7 +349,9 @@ class LinuxSmoke extends SmokeRunController<LinuxOptions> {
 
   protected async runUpgradeLane(): Promise<void> {
     await this.phase("upgrade.restore-snapshot", 180, () => this.restoreSnapshot());
-    await this.phase("upgrade.bootstrap-guest", 600, () => this.bootstrapGuest());
+    await this.phase("upgrade.bootstrap-guest", BOOTSTRAP_TIMEOUT_SECONDS, () =>
+      this.bootstrapGuest(),
+    );
     await this.phase("upgrade.preflight", 90, () => this.logGuestPreflight());
     await this.phase("upgrade.install-latest", 420, () => this.installLatestRelease());
     this.status.latestInstalledVersion = await this.extractLastVersion("upgrade.install-latest");
@@ -423,16 +433,10 @@ printf 'preflight.npmRoot=%s\n' "$(npm root -g 2>/dev/null || true)"`);
       quiet: true,
       timeoutMs: this.remainingPhaseTimeoutMs(),
     });
-    if (this.snapshot.state === "poweroff") {
-      waitForVmStatus(this.options.vmName, "stopped", 180, {
-        probeTimeoutMs: () => this.remainingPhaseTimeoutMs(30_000),
-      });
-      say(`Start restored poweroff snapshot ${this.snapshot.name}`);
-      run("prlctl", ["start", this.options.vmName], {
-        quiet: true,
-        timeoutMs: this.remainingPhaseTimeoutMs(120_000),
-      });
-    }
+    ensureVmRunning(this.options.vmName, 180, {
+      probeTimeoutMs: () => this.remainingPhaseTimeoutMs(30_000),
+      transitionTimeoutMs: () => this.remainingPhaseTimeoutMs(120_000),
+    });
     this.waitForGuestReady();
   }
 
@@ -442,27 +446,44 @@ printf 'preflight.npmRoot=%s\n' "$(npm root -g 2>/dev/null || true)"`);
     this.guestExec(["hwclock", "--systohc"], { check: false });
     this.guestExec(["timedatectl", "set-ntp", "true"], { check: false });
     this.guestExec(["systemctl", "restart", "systemd-timesyncd"], { check: false });
-    this.guestExec([
-      "apt-get",
-      "-o",
-      "Acquire::Check-Date=false",
-      "-o",
-      "DPkg::Lock::Timeout=300",
-      "update",
-    ]);
-    this.guestExec([
-      "apt-get",
-      "-o",
-      "DPkg::Lock::Timeout=300",
-      "install",
-      "-y",
-      "curl",
-      "ca-certificates",
-    ]);
+    this.guest.bash(`
+set -e
+if command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1; then
+  exit 0
+fi
+deadline=$((SECONDS + ${APT_LOCK_RETRY_SECONDS}))
+run_apt_with_lock_retry() {
+  local output status
+  while true; do
+    if output="$("$@" 2>&1)"; then
+      status=0
+    else
+      status=$?
+    fi
+    printf '%s\n' "$output"
+    if [ "$status" -eq 0 ]; then
+      return 0
+    fi
+    case "$output" in
+      *"Could not get lock"*|*"Unable to acquire the dpkg frontend lock"*|*"Unable to lock directory"*)
+        if [ "$SECONDS" -ge "$deadline" ]; then
+          printf 'Timed out waiting for Ubuntu package maintenance locks\n' >&2
+          return "$status"
+        fi
+        sleep 5
+        ;;
+      *)
+        return "$status"
+        ;;
+    esac
+  done
+}
+run_apt_with_lock_retry apt-get -o Acquire::Check-Date=false -o DPkg::Lock::Timeout=30 update
+run_apt_with_lock_retry apt-get -o DPkg::Lock::Timeout=30 install -y curl ca-certificates`);
   }
 
   private installLatestRelease(): void {
-    this.guestExec(["curl", "-fsSL", this.options.installUrl, "-o", "/tmp/openclaw-install.sh"]);
+    this.downloadGuestFile(this.options.installUrl, "/tmp/openclaw-install.sh");
     if (this.options.installVersion) {
       this.guestExec([
         "/usr/bin/env",
@@ -485,12 +506,22 @@ printf 'preflight.npmRoot=%s\n' "$(npm root -g 2>/dev/null || true)"`);
     this.guestExec(["openclaw", "--version"]);
   }
 
+  private downloadGuestFile(url: string, outputPath: string): void {
+    this.guest.bash(`
+set -e
+if command -v curl >/dev/null 2>&1; then
+  curl -fsSL ${shellQuote(url)} -o ${shellQuote(outputPath)}
+else
+  wget -q -O ${shellQuote(outputPath)} ${shellQuote(url)}
+fi`);
+  }
+
   private installMainTgz(tempName: string): void {
     if (!this.artifact || !this.server) {
       die("package artifact/server missing");
     }
     const tgzUrl = this.server.urlFor(this.artifact.path);
-    this.guestExec(["curl", "-fsSL", tgzUrl, "-o", `/tmp/${tempName}`]);
+    this.downloadGuestFile(tgzUrl, `/tmp/${tempName}`);
     this.guestExec(["npm", "install", "-g", `/tmp/${tempName}`, "--no-fund", "--no-audit"]);
     this.guestExec(["openclaw", "--version"]);
   }
@@ -747,7 +778,8 @@ rm -f "$provider_config_batch"`);
     this.restrictAgentTurnPlugins();
     this.prepareAgentWorkspace();
     this.guestBash(
-      `agent_ok=false
+      `${posixCodexPlatformPackageRepairFunction()}
+agent_ok=false
 for attempt in 1 2; do
   session_id="parallels-linux-smoke"
   if [ "$attempt" -gt 1 ]; then session_id="parallels-linux-smoke-retry-$attempt"; fi
@@ -761,6 +793,11 @@ for attempt in 1 2; do
   set -e
   cat "$output_file"
   if [ "$rc" -ne 0 ]; then
+    if [ "$attempt" -lt 2 ] && repair_missing_codex_platform_package "$output_file"; then
+      rm -f "$output_file"
+      echo "agent turn attempt $attempt hit a missing Codex platform package; retrying"
+      continue
+    fi
     rm -f "$output_file"
     exit "$rc"
   fi

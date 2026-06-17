@@ -303,7 +303,7 @@ extension AgentProTab {
         }
         .padding(.vertical, 14)
         .padding(.horizontal, 13)
-        .frame(minHeight: AgentLayout.rowMinHeight, alignment: .center)
+        .frame(maxWidth: .infinity, minHeight: AgentLayout.rowMinHeight, alignment: .leading)
         .contentShape(Rectangle())
         .onTapGesture {
             self.appModel.setSelectedAgentId(agent.id)
@@ -557,7 +557,7 @@ extension AgentProTab {
     }
 
     var liveGatewayConnected: Bool {
-        !self.appModel.isAppleReviewDemoModeEnabled &&
+        !self.appModel.isLocalGatewayFixtureEnabled &&
             self.gatewayConnected &&
             self.appModel.isOperatorGatewayConnected
     }

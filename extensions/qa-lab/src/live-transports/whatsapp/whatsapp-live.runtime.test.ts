@@ -255,6 +255,67 @@ describe("WhatsApp QA live runtime", () => {
     expect(report).not.toContain("+15550000002");
   });
 
+  it("publishes WhatsApp gateway debug artifacts only when files exist", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-wa-debug-test-"));
+    const debugDir = path.join(tempRoot, "gateway-debug");
+    try {
+      await expect(testing.hasWhatsAppGatewayDebugArtifacts(debugDir)).resolves.toBe(false);
+      await fs.mkdir(debugDir);
+      await expect(testing.hasWhatsAppGatewayDebugArtifacts(debugDir)).resolves.toBe(false);
+      await fs.writeFile(path.join(debugDir, "gateway.stderr.log"), "stderr\n");
+      await expect(testing.hasWhatsAppGatewayDebugArtifacts(debugDir)).resolves.toBe(true);
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("redacts published WhatsApp run output without advertising empty debug artifacts", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-wa-publish-test-"));
+    const debugDir = path.join(tempRoot, "gateway-debug");
+    try {
+      await fs.mkdir(debugDir);
+      const emptyDebugView = await testing.buildPublishedWhatsAppQaRunView({
+        cleanupIssues: [
+          "WhatsApp QA failed before scenario completion: private setup failure details",
+        ],
+        gatewayDebugDirPath: debugDir,
+        preservedGatewayDebugArtifacts: true,
+        redactMetadata: true,
+        scenarioResults: [
+          {
+            id: "whatsapp-canary",
+            title: "WhatsApp DM canary",
+            standardId: "canary",
+            status: "fail",
+            details: "private setup failure details",
+          },
+        ],
+      });
+
+      expect(emptyDebugView.gatewayDebugDirPath).toBeUndefined();
+      expect(emptyDebugView.cleanupIssues).toEqual([
+        "WhatsApp QA failed before scenario completion: " +
+          "details redacted (OPENCLAW_QA_REDACT_PUBLIC_METADATA=1)",
+      ]);
+      expect(emptyDebugView.scenarioResults[0]?.details).toBe(
+        "details redacted (OPENCLAW_QA_REDACT_PUBLIC_METADATA=1)",
+      );
+
+      await fs.writeFile(path.join(debugDir, "gateway.stderr.log"), "stderr\n");
+      await expect(
+        testing.buildPublishedWhatsAppQaRunView({
+          cleanupIssues: [],
+          gatewayDebugDirPath: debugDir,
+          preservedGatewayDebugArtifacts: true,
+          redactMetadata: true,
+          scenarioResults: [],
+        }),
+      ).resolves.toMatchObject({ gatewayDebugDirPath: debugDir });
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   it("redacts published scenario details before rendering public artifacts", () => {
     const publishedScenarios = testing.redactWhatsAppQaScenarioResults([
       {
@@ -692,6 +753,94 @@ describe("WhatsApp QA live runtime", () => {
     expect(diagnostics).not.toContain("unrelated text");
   });
 
+  it("adds safe diagnostics when a WhatsApp scenario reply wait observes nothing", async () => {
+    const driver = createWhatsAppQaDriverMock({
+      getObservedMessages: () => [],
+      waitForMessage: async () => {
+        throw new Error("timed out waiting for WhatsApp QA driver message");
+      },
+    });
+    const recorded: unknown[] = [];
+    const context = {
+      driver,
+      driverPhoneE164: "+15550000001",
+      gateway: {
+        call: async () => ({}),
+        restart: async () => {},
+        workspaceDir: "/tmp/openclaw-whatsapp-qa-gateway",
+      },
+      gatewayTarget: "+15550000001",
+      gatewayWorkspaceDir: "/tmp/openclaw-whatsapp-qa-gateway",
+      recordObservedMessage: (message: unknown) => {
+        recorded.push(message);
+      },
+      requestStartedAt: new Date("2026-06-05T01:00:00.000Z"),
+      scenarioId: "whatsapp-canary",
+      scenarioTitle: "WhatsApp DM canary",
+      sent: { messageId: "driver-message-1" },
+      sutAccountId: "sut",
+      sutPhoneE164: "+15550000002",
+      target: "+15550000002",
+      waitForReady: async () => {},
+    } satisfies Parameters<typeof testing.waitForScenarioObservedMessage>[0];
+
+    await expect(
+      testing.waitForScenarioObservedMessage(context, {
+        observedAfter: new Date("2026-06-05T01:00:00.000Z"),
+        match: () => true,
+      }),
+    ).rejects.toThrow("observed 0 WhatsApp driver message(s) after wait lower bound");
+    expect(recorded).toEqual([]);
+  });
+
+  it("lets WhatsApp scenario waits use caller-specific sender matching", async () => {
+    const groupReply = {
+      fromJid: "120363000000000000@g.us",
+      fromPhoneE164: null,
+      kind: "text" as const,
+      messageId: "group-reply-1",
+      observedAt: "2026-06-05T01:00:01.000Z",
+      text: "group token",
+    };
+    const driver = createWhatsAppQaDriverMock({
+      waitForMessage: async (params) => {
+        expect(params.match(groupReply)).toBe(true);
+        return groupReply;
+      },
+    });
+    const recorded: unknown[] = [];
+    const context = {
+      driver,
+      driverPhoneE164: "+15550000001",
+      gateway: {
+        call: async () => ({}),
+        restart: async () => {},
+        workspaceDir: "/tmp/openclaw-whatsapp-qa-gateway",
+      },
+      gatewayTarget: "120363000000000000@g.us",
+      gatewayWorkspaceDir: "/tmp/openclaw-whatsapp-qa-gateway",
+      recordObservedMessage: (message: unknown) => {
+        recorded.push(message);
+      },
+      requestStartedAt: new Date("2026-06-05T01:00:00.000Z"),
+      scenarioId: "whatsapp-mention-gating",
+      scenarioTitle: "WhatsApp group mention gating",
+      sent: { messageId: "driver-message-1" },
+      sutAccountId: "sut",
+      sutPhoneE164: "+15550000002",
+      target: "120363000000000000@g.us",
+      waitForReady: async () => {},
+    } satisfies Parameters<typeof testing.waitForScenarioObservedMessage>[0];
+
+    await expect(
+      testing.waitForScenarioObservedMessage(context, {
+        expectedSender: (message) => message.fromJid === "120363000000000000@g.us",
+        match: (message) => message.text.includes("group token"),
+      }),
+    ).resolves.toBe(groupReply);
+    expect(recorded).toEqual([groupReply]);
+  });
+
   it("formats per-scenario progress lines for live lane visibility", () => {
     const [scenario] = testing.findScenarios(["whatsapp-inbound-structured-messages"]);
     if (!scenario) {
@@ -732,6 +881,13 @@ describe("WhatsApp QA live runtime", () => {
         "textLength=17 messageId=present(length=10) quoted=missing " +
         "quotedMessageId=missing fromExpectedSut=yes",
     );
+    expect(
+      testing.formatWhatsAppScenarioProgressDetails({
+        details:
+          "timed out waiting for WhatsApp QA driver message; observed 0 WhatsApp driver message(s) after wait lower bound",
+        redactMetadata: true,
+      }),
+    ).toBe("observed 0 WhatsApp driver message(s) after wait lower bound");
     expect(
       testing.formatWhatsAppScenarioProgressDetails({
         details: "safe local diagnostic",

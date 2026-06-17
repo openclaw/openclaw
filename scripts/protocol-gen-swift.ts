@@ -56,6 +56,7 @@ const DEFAULTED_OPTIONAL_INIT_PARAM_ENTRIES: readonly [string, readonly string[]
   ["SessionsResetParams", ["agentId"]],
   ["SessionsDeleteParams", ["agentId"]],
   ["SessionsCompactParams", ["agentId"]],
+  ["SessionsResolveParams", ["allowMissing"]],
   ["SessionsUsageParams", ["agentId", "agentScope"]],
   ["ChatHistoryParams", ["agentId"]],
   ["ChatSendParams", ["agentId"]],
@@ -77,6 +78,7 @@ const DEFAULTED_OPTIONAL_INIT_PARAM_ENTRIES: readonly [string, readonly string[]
   ["ChatInjectParams", ["agentId"]],
   ["ChatSendParams", ["agentId"]],
   ["MessageActionParams", ["inboundTurnKind"]],
+  ["CronListParams", ["compact"]],
   ["CronRunLogEntry", ["errorReason", "failureNotificationDelivery"]],
   ["ExecApprovalRequestParams", ["requireDeliveryRoute", "suppressDelivery"]],
   ["AgentSummary", ["thinkingLevels", "thinkingOptions", "thinkingDefault"]],
@@ -215,6 +217,22 @@ function swiftType(schema: JsonSchema, required: boolean, allowStructuralNamed =
   return isOptional ? `${base}?` : base;
 }
 
+function stringEnumCases(schema: JsonSchema): string[] | undefined {
+  if (schema.type === "string" && schema.enum) {
+    return schema.enum.every((value) => typeof value === "string") ? schema.enum : undefined;
+  }
+
+  const variants = schema.oneOf ?? schema.anyOf;
+  if (!variants?.length) {
+    return undefined;
+  }
+
+  const cases = variants
+    .map((variant) => literalSchemaValue(variant))
+    .filter((value): value is string => typeof value === "string");
+  return cases.length === variants.length ? cases : undefined;
+}
+
 function swiftInitializerParam(params: {
   structName: string;
   key: string;
@@ -234,13 +252,26 @@ function swiftInitializerParam(params: {
 }
 
 function emitEnum(name: string, schema: JsonSchema): string {
-  const cases = schema.enum ?? [];
+  const cases = stringEnumCases(schema) ?? [];
   return [
     `public enum ${name}: String, Codable, Sendable {`,
     ...cases.map((value) => `    case ${safeName(value)} = "${value}"`),
     "}",
     "",
   ].join("\n");
+}
+
+function stringLiteralUnionValues(schema: JsonSchema): string[] | undefined {
+  const branches = schema.oneOf ?? schema.anyOf;
+  if (!branches || branches.length < 2) {
+    return undefined;
+  }
+  const values = branches.map((branch) => literalSchemaValue(branch));
+  if (values.some((value) => typeof value !== "string")) {
+    return undefined;
+  }
+  const stringValues = values as string[];
+  return new Set(stringValues).size === stringValues.length ? stringValues : undefined;
 }
 
 function emitStruct(name: string, schema: JsonSchema): string {
@@ -605,8 +636,13 @@ async function generate() {
     if (name === "GatewayFrame") {
       continue;
     }
-    if (schema.type === "string" && schema.enum) {
+    if (stringEnumCases(schema)) {
       parts.push(emitEnum(name, schema));
+      continue;
+    }
+    const literalUnionValues = stringLiteralUnionValues(schema);
+    if (literalUnionValues) {
+      parts.push(emitEnum(name, { enum: literalUnionValues }));
     }
   }
 
