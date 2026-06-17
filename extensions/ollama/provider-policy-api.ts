@@ -2,6 +2,7 @@
 import type { ProviderThinkingProfile } from "openclaw/plugin-sdk/plugin-entry";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-types";
 import { OLLAMA_DEFAULT_BASE_URL } from "./src/defaults.js";
+import { isReasoningModelHeuristic } from "./src/provider-models.js";
 
 type OllamaProviderConfigDraft = Partial<ModelProviderConfig>;
 
@@ -53,8 +54,11 @@ export function normalizeConfig({
 
 export function resolveThinkingProfile({
   reasoning,
+  modelId,
 }: {
   reasoning?: boolean;
+  modelId?: string;
 }): ProviderThinkingProfile {
-  return reasoning ? OLLAMA_REASONING_THINKING_PROFILE : OLLAMA_NON_REASONING_THINKING_PROFILE;
+  const isReasoning = reasoning ?? (modelId ? isReasoningModelHeuristic(modelId) : false);
+  return isReasoning ? OLLAMA_REASONING_THINKING_PROFILE : OLLAMA_NON_REASONING_THINKING_PROFILE;
 }
