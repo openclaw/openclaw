@@ -63,13 +63,18 @@ export function extractThinking(message: unknown): string | null {
     return parts.join("\n");
   }
 
-  // Back-compat: older logs may still have <think> tags inside text blocks.
+  // Back-compat: older logs may still have <think> tags inside text blocks,
+  // including provider-namespaced variants such as <mm:think> (MiniMax) and
+  // <thought>/<antthinking>. Mirror the tag set recognized elsewhere in the
+  // reasoning-tag handling so this extraction path stays in sync.
   const rawText = extractRawText(message);
   if (!rawText) {
     return null;
   }
   const matches = [
-    ...rawText.matchAll(/<\s*think(?:ing)?\s*>([\s\S]*?)<\s*\/\s*think(?:ing)?\s*>/gi),
+    ...rawText.matchAll(
+      /<\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)\s*>([\s\S]*?)<\s*\/\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)\s*>/gi,
+    ),
   ];
   const extracted = normalizeStringEntries(matches.map((mLocal) => mLocal[1] ?? ""));
   return extracted.length > 0 ? extracted.join("\n") : null;

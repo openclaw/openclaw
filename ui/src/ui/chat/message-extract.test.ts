@@ -119,3 +119,32 @@ describe("extractThinkingCached", () => {
     expect(extractThinkingCached(message)).toBe("Plan A");
   });
 });
+
+describe("extractThinking back-compat reasoning tags", () => {
+  const fromText = (text: string) => ({
+    role: "assistant",
+    content: [{ type: "text", text }],
+  });
+
+  it("extracts MiniMax mm: namespaced think tags", () => {
+    expect(extractThinking(fromText("<mm:think>Plan A</mm:think>visible"))).toBe(
+      "Plan A",
+    );
+  });
+
+  it("extracts thought and antthinking tags", () => {
+    expect(extractThinking(fromText("<thought>Reasoning</thought>answer"))).toBe(
+      "Reasoning",
+    );
+    expect(
+      extractThinking(fromText("<antthinking>Hidden</antthinking>answer")),
+    ).toBe("Hidden");
+  });
+
+  it("still extracts plain think/thinking tags", () => {
+    expect(extractThinking(fromText("<think>Step 1</think>answer"))).toBe("Step 1");
+    expect(extractThinking(fromText("<thinking>Step 2</thinking>answer"))).toBe(
+      "Step 2",
+    );
+  });
+});
