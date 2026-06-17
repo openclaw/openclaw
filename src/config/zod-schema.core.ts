@@ -433,7 +433,6 @@ const BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS = new Set([
   "byteplus-plan",
   "cerebras",
   "chutes",
-  "clawrouter",
   "cloudflare-ai-gateway",
   "codex",
   "comfy",
