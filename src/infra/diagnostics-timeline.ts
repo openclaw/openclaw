@@ -64,7 +64,7 @@ type DiagnosticsTimelineOptions = {
 };
 
 /** Active timeline span carried through async-local scope for nested diagnostics. */
-export type ActiveDiagnosticsTimelineSpan = {
+type ActiveDiagnosticsTimelineSpan = {
   name: string;
   phase?: string;
   spanId: string;

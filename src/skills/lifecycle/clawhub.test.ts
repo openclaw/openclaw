@@ -60,6 +60,7 @@ vi.mock("../../infra/fs-safe.js", () => ({
 
 const {
   installSkillFromClawHub,
+  resolveClawHubSkillStatusLinkSync,
   resolveClawHubSkillVerificationTarget,
   searchSkillsFromClawHub,
   updateSkillsFromClawHub,
@@ -1360,5 +1361,162 @@ describe("skills-clawhub", () => {
       baseUrl: undefined,
     });
     expect(listClawHubSkillsMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("ClawHub origin provenance readback", () => {
+  async function writeOriginWithProvenance(params: {
+    workspaceDir: string;
+    slug: string;
+    origin: Record<string, unknown>;
+    lockSkill?: Record<string, unknown>;
+  }) {
+    const skillDir = path.join(params.workspaceDir, "skills", params.slug);
+    await fs.mkdir(path.join(skillDir, ".clawhub"), { recursive: true });
+    await fs.writeFile(path.join(skillDir, "SKILL.md"), "# Skill\n", "utf8");
+    await fs.writeFile(
+      path.join(skillDir, ".clawhub", "origin.json"),
+      `${JSON.stringify(params.origin, null, 2)}\n`,
+      "utf8",
+    );
+    await fs.mkdir(path.join(params.workspaceDir, ".clawhub"), { recursive: true });
+    await fs.writeFile(
+      path.join(params.workspaceDir, ".clawhub", "lock.json"),
+      `${JSON.stringify(
+        {
+          version: 1,
+          skills: {
+            [params.slug]: params.lockSkill ?? {
+              version: params.origin.installedVersion,
+              installedAt: params.origin.installedAt,
+              registry: params.origin.registry,
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    return skillDir;
+  }
+
+  it("restores matching provenance and rejects one-sided origin edits", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-origin-prov-"));
+    try {
+      const artifact = {
+        kind: "clawpack" as const,
+        sha256: "a".repeat(64),
+        integrity: "sha256-test",
+      };
+      const skillFile = { path: "SKILL.md", sha256: "b".repeat(64) };
+      const sourceUrl = "https://github.com/acme/skills/tree/abc/agentreceipt";
+      const origin = {
+        version: 1,
+        registry: "https://clawhub.ai",
+        slug: "agentreceipt",
+        installedVersion: "1.0.0",
+        installedAt: 123,
+        sourceUrl,
+        artifact,
+        skillFile,
+      };
+      const skillDir = await writeOriginWithProvenance({
+        workspaceDir,
+        slug: "agentreceipt",
+        origin,
+        lockSkill: {
+          version: "1.0.0",
+          installedAt: 123,
+          registry: "https://clawhub.ai",
+          sourceUrl,
+          artifact,
+          skillFile,
+        },
+      });
+
+      const link = resolveClawHubSkillStatusLinkSync({
+        workspaceDir,
+        skillDir,
+        skillKey: "agentreceipt",
+      });
+
+      expect(link?.status).toBe("linked");
+      expect(link?.valid).toBe(true);
+      if (link?.status !== "linked") {
+        throw new Error(`expected linked status, got ${link?.status}`);
+      }
+      expect(link.artifact).toEqual(artifact);
+      expect(link.skillFile).toEqual(skillFile);
+      expect(link.sourceUrl).toBe(sourceUrl);
+
+      const originPath = path.join(skillDir, ".clawhub", "origin.json");
+      for (const override of [
+        { sourceUrl: "https://github.com/acme/skills/tree/tampered/agentreceipt" },
+        {
+          artifact: {
+            kind: "clawpack",
+            sha256: "c".repeat(64),
+            integrity: "sha256-tampered",
+          },
+        },
+        { skillFile: { path: "SKILL.md", sha256: "d".repeat(64) } },
+      ]) {
+        await fs.writeFile(
+          originPath,
+          `${JSON.stringify({ ...origin, ...override }, null, 2)}\n`,
+          "utf8",
+        );
+        expect(
+          resolveClawHubSkillStatusLinkSync({
+            workspaceDir,
+            skillDir,
+            skillKey: "agentreceipt",
+          }),
+        ).toMatchObject({
+          status: "invalid",
+          valid: false,
+          reason: expect.stringContaining("does not match the workspace ClawHub lockfile"),
+        });
+      }
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("drops malformed provenance fields while keeping the link valid", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-origin-prov-"));
+    try {
+      const skillDir = await writeOriginWithProvenance({
+        workspaceDir,
+        slug: "agentreceipt",
+        origin: {
+          version: 1,
+          registry: "https://clawhub.ai",
+          slug: "agentreceipt",
+          installedVersion: "1.0.0",
+          installedAt: 123,
+          sourceUrl: "   ",
+          artifact: { kind: "bogus", sha256: 42, integrity: "" },
+          skillFile: { path: "", sha256: "c".repeat(64) },
+        },
+      });
+
+      const link = resolveClawHubSkillStatusLinkSync({
+        workspaceDir,
+        skillDir,
+        skillKey: "agentreceipt",
+      });
+
+      expect(link?.status).toBe("linked");
+      if (link?.status !== "linked") {
+        throw new Error(`expected linked status, got ${link?.status}`);
+      }
+      expect(link.artifact).toBeUndefined();
+      expect(link.skillFile).toBeUndefined();
+      expect(link.sourceUrl).toBeUndefined();
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
   });
 });

@@ -10,6 +10,7 @@ import type { ReplyDispatcherWithTypingOptions } from "../../auto-reply/reply/re
 import type { ReplyDispatchKind } from "../../auto-reply/reply/reply-dispatcher.types.js";
 import type {
   FinalizedMsgContext,
+  InboundSourceModality,
   MentionSource,
   MsgContext,
 } from "../../auto-reply/templating.js";
@@ -207,6 +208,7 @@ export type MessageFacts = {
   senderLabel?: string;
   preview?: string;
   inboundHistory?: HistoryEntry[];
+  sourceModality?: InboundSourceModality;
 };
 
 /** Parsed command facts for command-like channel turns. */
@@ -385,6 +387,7 @@ export type AssembledChannelTurn = {
   storePath: string;
   ctxPayload: FinalizedMsgContext;
   recordInboundSession: RecordInboundSession;
+  afterRecord?: () => void | Promise<void>;
   dispatchReplyWithBufferedBlockDispatcher: DispatchReplyWithBufferedBlockDispatcher;
   delivery: ChannelEventDeliveryAdapter;
   replyPipeline?: ChannelTurnReplyPipelineOptions;
@@ -408,6 +411,7 @@ export type PreparedChannelTurn<TDispatchResult = DispatchFromConfigResult> = {
   storePath: string;
   ctxPayload: FinalizedMsgContext;
   recordInboundSession: RecordInboundSession;
+  afterRecord?: () => void | Promise<void>;
   record?: ChannelTurnRecordOptions;
   history?: ChannelTurnHistoryFinalizeOptions;
   onPreDispatchFailure?: (err: unknown) => void | Promise<void>;

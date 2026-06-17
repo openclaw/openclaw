@@ -546,6 +546,7 @@ export async function buildTelegramInboundContextPayload(params: {
       bodyForAgent: bodyText,
       commandBody,
       inboundHistory,
+      sourceModality: msg.voice ? "voice" : undefined,
     },
     access: {
       commands: {

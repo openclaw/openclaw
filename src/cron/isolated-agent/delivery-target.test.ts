@@ -450,6 +450,8 @@ describe("resolveDeliveryTarget", () => {
       channel: "forum",
       input: "123456789",
       accountId: undefined,
+      plugin: expect.objectContaining({ id: "forum" }),
+      preferredKind: undefined,
     });
   });
 
@@ -923,6 +925,8 @@ describe("resolveDeliveryTarget", () => {
       channel: "forum",
       input: "123456789",
       accountId: undefined,
+      plugin: expect.objectContaining({ id: "forum" }),
+      preferredKind: undefined,
     });
   });
 

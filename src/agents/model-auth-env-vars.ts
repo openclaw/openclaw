@@ -47,15 +47,6 @@ export function listProviderEnvAuthLookupKeys(params: {
   ).toSorted((a, b) => a.localeCompare(b));
 }
 
-/** Resolves provider auth lookup maps and returns their sorted provider keys. */
-export function resolveProviderEnvAuthLookupKeys(params?: ProviderEnvVarLookupParams): string[] {
-  const lookupMaps = resolveProviderEnvAuthLookupMaps(params);
-  return listProviderEnvAuthLookupKeys({
-    envCandidateMap: lookupMaps.envCandidateMap,
-    authEvidenceMap: lookupMaps.authEvidenceMap,
-  });
-}
-
 /** Lists known provider API-key env var names for redaction and marker matching. */
 export function listKnownProviderEnvApiKeyNames(): string[] {
   return listKnownProviderAuthEnvVarNames();

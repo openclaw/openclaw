@@ -11,11 +11,13 @@ import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { getRuntimeConfigSnapshot } from "../../config/config.js";
 import { resolveStorePath } from "../../config/sessions.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import {
   resolveContextEngine,
   resolveContextEngineOwnerPluginId,
 } from "../../context-engine/registry.js";
+import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   captureAgentRunLifecycleGeneration,
@@ -100,7 +102,11 @@ import {
   resolveAuthProfileOrder,
   shouldPreferExplicitConfigApiKeyAuth,
 } from "../model-auth.js";
-import { resolveDefaultModelForAgent } from "../model-selection.js";
+import {
+  buildModelAliasIndex,
+  resolveDefaultModelForAgent,
+  resolveModelRefFromString,
+} from "../model-selection.js";
 import { resolveThinkingDefault } from "../model-thinking-default.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import {
@@ -115,7 +121,12 @@ import { runAgentCleanupStep } from "../run-cleanup-timeout.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
-import { resolveSessionSuspensionReason, suspendSession } from "../session-suspension.js";
+import {
+  resolveSessionSuspensionReason,
+  resolveSessionSuspensionTarget,
+  suspendSession,
+  type SessionSuspensionParams,
+} from "../session-suspension.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
@@ -126,7 +137,10 @@ import {
   resolveCompactionTimeoutMs,
 } from "./compaction-safety-timeout.js";
 import { resolveContextEngineCapabilities } from "./context-engine-capabilities.js";
-import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
+import {
+  runContextEngineMaintenance,
+  waitForDeferredTurnMaintenanceForSession,
+} from "./context-engine-maintenance.js";
 import {
   hasMessagingToolDeliveryEvidence,
   hasOutboundDeliveryEvidence,
@@ -528,6 +542,49 @@ function buildHandledReplyPayloads(reply?: ReplyPayload) {
   ];
 }
 
+function resolveInitialEmbeddedRunModel(params: {
+  config: RunEmbeddedAgentParams["config"];
+  agentId?: string;
+  provider?: string;
+  model?: string;
+}): { provider: string; modelId: string } {
+  const cfg = params.config ?? {};
+  const configuredDefault = resolveDefaultModelForAgent({
+    cfg,
+    agentId: params.agentId,
+  });
+  const explicitProvider = normalizeOptionalString(params.provider);
+  const explicitModel = normalizeOptionalString(params.model);
+  const defaultProvider = configuredDefault.provider || DEFAULT_PROVIDER;
+
+  if (explicitProvider && explicitModel) {
+    return { provider: explicitProvider, modelId: explicitModel };
+  }
+
+  if (explicitModel) {
+    const provider = explicitProvider ?? defaultProvider;
+    const aliasIndex = buildModelAliasIndex({
+      cfg,
+      defaultProvider: provider,
+    });
+    const resolved = resolveModelRefFromString({
+      cfg,
+      raw: explicitModel,
+      defaultProvider: provider,
+      aliasIndex,
+    });
+    return {
+      provider: explicitProvider ?? resolved?.ref.provider ?? provider,
+      modelId: resolved?.ref.model ?? explicitModel,
+    };
+  }
+
+  return {
+    provider: explicitProvider ?? defaultProvider,
+    modelId: configuredDefault.model || DEFAULT_MODEL,
+  };
+}
+
 export function runEmbeddedAgent(
   paramsInput: RunEmbeddedAgentParams,
 ): Promise<EmbeddedAgentRunResult> {
@@ -567,6 +624,17 @@ async function runEmbeddedAgentInternal(
   }
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
   const globalLane = resolveGlobalLane(params.lane);
+  // Outer fallback attempts defer session suspension only while another
+  // candidate remains. Direct and final-candidate runs suspend normally.
+  const failureSuspension = resolveSessionSuspensionTarget();
+  const suspendForFailure = (suspensionParams: Omit<SessionSuspensionParams, "laneId">) => {
+    const suspension = { ...suspensionParams, laneId: globalLane };
+    if (failureSuspension.mode === "defer") {
+      failureSuspension.defer(suspension);
+      return;
+    }
+    void suspendSession(suspension);
+  };
   const sessionQueuePriority = resolveEmbeddedRunSessionQueuePriority(params.trigger);
   const laneTaskTimeoutMs = resolveEmbeddedRunLaneTimeoutMs(params.timeoutMs);
   let laneTaskProgressAtMs = Date.now();
@@ -688,7 +756,12 @@ async function runEmbeddedAgentInternal(
 
   throwIfAborted();
 
-  return enqueueSession(() => {
+  return enqueueSession(async () => {
+    throwIfAborted();
+    // Same-session reads below must see any prior deferred transcript rewrite.
+    // Checkpoint before the global lane so unrelated sessions can still start
+    // while this session waits on its own maintenance lane.
+    await waitForDeferredTurnMaintenanceForSession(params.sessionKey);
     throwIfAborted();
     return enqueueGlobal(async () => {
       throwIfAborted();
@@ -758,17 +831,12 @@ async function runEmbeddedAgentInternal(
       startupStages.mark("runtime-plugins");
       notifyExecutionPhase("runtime_plugins");
 
-      const requestedProvider = normalizeOptionalString(params.provider);
-      const requestedModel = normalizeOptionalString(params.model);
-      const configuredDefault =
-        !requestedProvider && !requestedModel
-          ? resolveDefaultModelForAgent({
-              cfg: params.config ?? {},
-              agentId: workspaceResolution.agentId,
-            })
-          : undefined;
-      let provider = requestedProvider ?? configuredDefault?.provider ?? DEFAULT_PROVIDER;
-      let modelId = requestedModel ?? configuredDefault?.model ?? DEFAULT_MODEL;
+      let { provider, modelId } = resolveInitialEmbeddedRunModel({
+        config: params.config,
+        agentId: workspaceResolution.agentId,
+        provider: params.provider,
+        model: params.model,
+      });
       const agentDir =
         params.agentDir ?? resolveAgentDir(params.config ?? {}, workspaceResolution.agentId);
       const normalizedSessionKey = params.sessionKey?.trim();
@@ -826,6 +894,7 @@ async function runEmbeddedAgentInternal(
       });
       provider = hookSelection.provider;
       modelId = hookSelection.modelId;
+      const requestedModelId = modelId;
       const beforeAgentStartResult = hookSelection.beforeAgentStartResult;
       startupStages.mark("hooks");
       await ensureSelectedAgentHarnessPlugin({
@@ -1187,6 +1256,32 @@ async function runEmbeddedAgentInternal(
       const traceAttempts: TraceAttempt[] = [];
       const traceAttemptUsesFallback = (attempt: TraceAttempt): boolean =>
         attempt.result === "rotate_profile" || attempt.result === "fallback_model";
+      const resolveRuntimeFallbackReason = (): string | null => {
+        const fallbackAttempt = traceAttempts.findLast(
+          (attempt) => attempt.result === "fallback_model" && typeof attempt.reason === "string",
+        );
+        return fallbackAttempt?.reason ?? lastRetryFailoverReason ?? null;
+      };
+      const buildEmbeddedContextEngineRuntimeSettings = (settingsParams: {
+        tokenBudget?: number | null;
+        maxOutputTokens?: number | null;
+        degradedReason?: string | null;
+      }) => {
+        const fallbackReason = resolveRuntimeFallbackReason();
+        return buildContextEngineRuntimeSettings({
+          contextEngineHost: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
+          provider,
+          requestedModel: requestedModelId,
+          resolvedModel: modelId,
+          selectedContextEngineId: contextEngine.info.id,
+          contextEngineSelectionSource:
+            contextEngine.info.id === "legacy" ? "default" : "configured",
+          promptTokenBudget: settingsParams.tokenBudget,
+          maxOutputTokens: settingsParams.maxOutputTokens,
+          fallbackReason,
+          degradedReason: settingsParams.degradedReason,
+        });
+      };
 
       const initialThinkLevel = resolveInitialThinkLevel({
         requested: params.thinkLevel,
@@ -1809,6 +1904,9 @@ async function runEmbeddedAgentInternal(
             disableTools: params.disableTools,
             provider,
             modelId,
+            requestedModelId,
+            fallbackActive: modelId !== requestedModelId || Boolean(resolveRuntimeFallbackReason()),
+            fallbackReason: resolveRuntimeFallbackReason(),
             // Use the harness selected before model/auth setup for the actual
             // attempt too. Otherwise plugin-owned transports can skip OpenClaw auth
             // bootstrap but drift back to OpenClaw when the attempt is created.
@@ -2060,6 +2158,9 @@ async function runEmbeddedAgentInternal(
                 sessionKey: resolvedSessionKey ?? params.sessionId,
                 provider: activeErrorContext.provider,
                 model: activeErrorContext.model,
+                authMode: lastProfileId
+                  ? attemptAuthProfileStore.profiles?.[lastProfileId]?.type
+                  : undefined,
               })
             : undefined;
           const assistantErrorText =
@@ -2196,6 +2297,9 @@ async function runEmbeddedAgentInternal(
                     force: true,
                     compactionTarget: "budget",
                     runtimeContext: timeoutCompactionRuntimeContext,
+                    runtimeSettings: buildEmbeddedContextEngineRuntimeSettings({
+                      tokenBudget: ctxInfo.tokens,
+                    }),
                   },
                   resolveCompactionTimeoutMs(params.config),
                   params.abortSignal,
@@ -2381,6 +2485,12 @@ async function runEmbeddedAgentInternal(
                 // run-level abort signal through, so a hung plugin compact()
                 // cannot stall overflow recovery indefinitely. A timeout/abort
                 // surfaces as a thrown error handled by the catch below.
+                const overflowCompactionRuntimeSettings = buildEmbeddedContextEngineRuntimeSettings(
+                  {
+                    tokenBudget: ctxInfo.tokens,
+                    degradedReason: "context_overflow",
+                  },
+                );
                 compactResult = await compactContextEngineWithSafetyTimeout(
                   contextEngine,
                   {
@@ -2394,6 +2504,7 @@ async function runEmbeddedAgentInternal(
                     force: true,
                     compactionTarget: "budget",
                     runtimeContext: overflowCompactionRuntimeContext,
+                    runtimeSettings: overflowCompactionRuntimeSettings,
                   },
                   resolveCompactionTimeoutMs(params.config),
                   params.abortSignal,
@@ -2407,6 +2518,7 @@ async function runEmbeddedAgentInternal(
                     sessionFile: activeSessionFile,
                     reason: "compaction",
                     runtimeContext: overflowCompactionRuntimeContext,
+                    runtimeSettings: overflowCompactionRuntimeSettings,
                     config: params.config,
                     agentId: sessionAgentId,
                   });
@@ -2673,10 +2785,14 @@ async function runEmbeddedAgentInternal(
             // promptErrorSource === "compaction" means the model call already completed and the
             // abort happened only while waiting for compaction/retry cleanup. Retrying from here
             // would replay that completed tool turn as a fresh prompt attempt.
+            const promptAuthMode = lastProfileId
+              ? attemptAuthProfileStore.profiles?.[lastProfileId]?.type
+              : undefined;
             const normalizedPromptFailover = coerceToFailoverError(promptError, {
               provider: activeErrorContext.provider,
               model: activeErrorContext.model,
               profileId: lastProfileId,
+              authMode: promptAuthMode,
               sessionId: sessionIdUsed,
               lane: globalLane,
             });
@@ -2684,11 +2800,10 @@ async function runEmbeddedAgentInternal(
               ? describeFailoverError(normalizedPromptFailover)
               : describeFailoverError(promptError);
             if (normalizedPromptFailover?.suspend) {
-              void suspendSession({
+              suspendForFailure({
                 cfg: params.config,
                 agentDir,
                 sessionId: activeSessionId ?? params.sessionId,
-                laneId: globalLane,
                 reason: resolveSessionSuspensionReason(normalizedPromptFailover.reason),
                 failedProvider: normalizedPromptFailover.provider ?? provider,
                 failedModel: normalizedPromptFailover.model ?? modelId,
@@ -2906,6 +3021,7 @@ async function runEmbeddedAgentInternal(
                   provider,
                   model: modelId,
                   profileId: lastProfileId,
+                  authMode: promptAuthMode,
                   sessionId: sessionIdUsed,
                   lane: globalLane,
                   status,
@@ -3092,6 +3208,9 @@ async function runEmbeddedAgentInternal(
             authFailure,
             rateLimitFailure,
             billingFailure,
+            authMode: lastProfileId
+              ? attemptAuthProfileStore.profiles?.[lastProfileId]?.type
+              : undefined,
             cloudCodeAssistFormatError,
             isProbeSession,
             overloadProfileRotations,
@@ -3154,11 +3273,10 @@ async function runEmbeddedAgentInternal(
                 : {}),
             });
             if (assistantFailoverOutcome.error.suspend) {
-              void suspendSession({
+              suspendForFailure({
                 cfg: params.config,
                 agentDir,
                 sessionId: activeSessionId ?? params.sessionId,
-                laneId: globalLane,
                 reason: resolveSessionSuspensionReason(assistantFailoverOutcome.error.reason),
                 failedProvider: assistantFailoverOutcome.error.provider ?? provider,
                 failedModel: assistantFailoverOutcome.error.model ?? modelId,
@@ -3207,6 +3325,9 @@ async function runEmbeddedAgentInternal(
             sessionKey: params.sessionKey ?? params.sessionId,
             provider: activeErrorContext.provider,
             model: activeErrorContext.model,
+            authMode: lastProfileId
+              ? attemptAuthProfileStore.profiles?.[lastProfileId]?.type
+              : undefined,
             verboseLevel: params.verboseLevel,
             reasoningLevel: params.reasoningLevel,
             thinkingLevel: params.thinkLevel,
@@ -3335,6 +3456,17 @@ async function runEmbeddedAgentInternal(
                 livenessState,
                 timeoutPhase,
                 providerStarted,
+                // Completion-idle recovery is exhausted here. Keep this terminal so
+                // model fallback cannot replay a potentially still-active Codex turn.
+                ...(shouldSurfaceCodexCompletionTimeout
+                  ? {
+                      error: {
+                        kind: "incomplete_turn" as const,
+                        message: timeoutText,
+                        fallbackSafe: false,
+                      },
+                    }
+                  : {}),
                 toolSummary: attemptToolSummary,
                 ...(failureSignal ? { failureSignal } : {}),
                 agentHarnessResultClassification: attempt.agentHarnessResultClassification,

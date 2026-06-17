@@ -18,8 +18,8 @@ import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-
  * Preserves the user turn so strict providers that require at least one user
  * message do not reject the transcript.
  */
-export const BLANK_USER_FALLBACK_TEXT = "(continue)";
-export const CORRUPTED_IMAGE_FALLBACK_TEXT = "[image omitted: corrupted base64 payload]";
+const BLANK_USER_FALLBACK_TEXT = "(continue)";
+const CORRUPTED_IMAGE_FALLBACK_TEXT = "[image omitted: corrupted base64 payload]";
 
 type RepairReport = {
   repaired: boolean;
@@ -41,8 +41,6 @@ type SessionRepairFileSnapshot = {
   mtimeNs: bigint;
   ctimeNs: bigint;
 };
-
-export type TrustedSessionRepairSnapshot = SessionRepairFileSnapshot;
 
 type SessionRepairCacheEntry = {
   snapshot: SessionRepairFileSnapshot;
@@ -595,7 +593,7 @@ async function tryIncrementalSessionRepair(params: {
   sessionFile: string;
   currentSnapshot: SessionRepairFileSnapshot;
   cached: SessionRepairCacheEntry;
-  trustedSnapshot: TrustedSessionRepairSnapshot | undefined;
+  trustedSnapshot: SessionRepairFileSnapshot | undefined;
 }): Promise<RepairReport | undefined> {
   if (isSameSessionRepairSnapshot(params.cached.snapshot, params.currentSnapshot)) {
     return {
@@ -657,7 +655,7 @@ async function tryIncrementalSessionRepair(params: {
 /** Repair a persisted session JSONL file in place when replay-breaking corruption is found. */
 export async function repairSessionFileIfNeeded(params: {
   sessionFile: string;
-  trustedSnapshot?: TrustedSessionRepairSnapshot;
+  trustedSnapshot?: SessionRepairFileSnapshot;
   debug?: (message: string) => void;
   warn?: (message: string) => void;
 }): Promise<RepairReport> {

@@ -69,6 +69,7 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
+import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
 import { isWithinDir } from "./path-safety.js";
 import {
   ensureDir,
@@ -472,12 +473,53 @@ function legacyInstallRecordHasCurrentResolvedIdentity(params: {
   return Boolean(legacyResolvedSpec && currentResolvedSpec === legacyResolvedSpec);
 }
 
+function readAuthoritativeCurrentNpmIdentity(
+  record: InstalledPluginIndex["installRecords"][string],
+): { name: string; version: string } | null {
+  const resolvedName = readInstallRecordStringField(record, "resolvedName");
+  const resolvedVersion = readInstallRecordStringField(record, "resolvedVersion");
+  if (resolvedName && resolvedVersion) {
+    return { name: resolvedName, version: resolvedVersion };
+  }
+  const resolvedSpec = readInstallRecordStringField(record, "resolvedSpec");
+  const parsed = resolvedSpec ? parseRegistryNpmSpec(resolvedSpec) : null;
+  if (parsed?.selectorKind === "exact-version" && parsed.selector) {
+    return { name: parsed.name, version: parsed.selector };
+  }
+  return null;
+}
+
+function legacyNpmInstallRecordSupersededByCurrent(params: {
+  currentRecord: InstalledPluginIndex["installRecords"][string];
+  legacyRecord: InstalledPluginIndex["installRecords"][string];
+}): boolean {
+  const { currentRecord, legacyRecord } = params;
+  if (currentRecord.source !== "npm" || legacyRecord.source !== "npm") {
+    return false;
+  }
+  const legacySpec = readInstallRecordStringField(legacyRecord, "spec");
+  const legacyParsedSpec = legacySpec ? parseRegistryNpmSpec(legacySpec) : null;
+  if (legacyParsedSpec?.selectorKind !== "exact-version") {
+    return false;
+  }
+  const currentIdentity = readAuthoritativeCurrentNpmIdentity(currentRecord);
+  return Boolean(
+    currentIdentity &&
+    legacyParsedSpec.selector &&
+    currentIdentity.name === legacyParsedSpec.name &&
+    currentIdentity.version === legacyParsedSpec.selector,
+  );
+}
+
 function legacyInstallRecordCoveredByCurrent(
   currentRecord: InstalledPluginIndex["installRecords"][string],
   legacyRecord: InstalledPluginIndex["installRecords"][string],
 ): boolean {
   if (currentRecord.source !== legacyRecord.source) {
     return false;
+  }
+  if (legacyNpmInstallRecordSupersededByCurrent({ currentRecord, legacyRecord })) {
+    return true;
   }
   for (const key of Object.keys(legacyRecord).toSorted()) {
     const currentValue = readInstallRecordField(currentRecord, key);

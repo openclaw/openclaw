@@ -1482,6 +1482,144 @@ describe("runBtwSideQuestion", () => {
     );
   });
 
+  it("honors an explicitly empty active run snapshot", async () => {
+    const userEntry = createTranscriptEntry({
+      id: "user-seed",
+      message: createUserTranscriptMessage(),
+    });
+    const assistantEntry = createTranscriptEntry({
+      id: "assistant-seed",
+      parentId: "user-seed",
+      message: createAssistantTranscriptMessage([{ type: "text", text: "seed answer" }]),
+    });
+    mockTranscriptEntries([userEntry, assistantEntry]);
+    getActiveEmbeddedRunSnapshotMock.mockReturnValue({
+      transcriptLeafId: null,
+    });
+
+    await expect(runMathSideQuestion()).rejects.toThrow("No active session context.");
+
+    expect(buildSessionContextMock).toHaveBeenCalledTimes(1);
+    expect(buildSessionContextMock).toHaveBeenCalledWith([]);
+  });
+
+  it("uses the branch selected by a terminal transcript leaf control", async () => {
+    const userEntry = createTranscriptEntry({
+      id: "user-seed",
+      message: createUserTranscriptMessage(),
+    });
+    const assistantEntry = createTranscriptEntry({
+      id: "assistant-seed",
+      parentId: "user-seed",
+      message: createAssistantTranscriptMessage([{ type: "text", text: "seed answer" }]),
+    });
+    const sideEntry = createTranscriptEntry({
+      id: "side-delivery",
+      parentId: "assistant-seed",
+      message: createAssistantTranscriptMessage([{ type: "text", text: "side delivery" }]),
+    });
+    const leafEntry = {
+      type: "leaf",
+      id: "active-leaf",
+      parentId: "side-delivery",
+      targetId: "assistant-seed",
+    };
+    mockTranscriptEntries([userEntry, assistantEntry, sideEntry, leafEntry]);
+    mockDoneAnswer(MATH_ANSWER);
+
+    const result = await runMathSideQuestion();
+
+    expect(buildSessionContextMock).toHaveBeenCalledTimes(1);
+    expect(buildSessionContextMock).toHaveBeenCalledWith([userEntry, assistantEntry]);
+    expect(result).toEqual({ text: MATH_ANSWER });
+  });
+
+  it("keeps parentless history addressed by a terminal leaf control", async () => {
+    const userEntry = {
+      type: "message",
+      id: "user-seed",
+      message: createUserTranscriptMessage(),
+    };
+    const assistantEntry = {
+      type: "message",
+      id: "assistant-seed",
+      message: createAssistantTranscriptMessage([{ type: "text", text: "seed answer" }]),
+    };
+    const sideEntry = createTranscriptEntry({
+      id: "side-delivery",
+      parentId: "assistant-seed",
+      message: createAssistantTranscriptMessage([{ type: "text", text: "side delivery" }]),
+    });
+    const leafEntry = {
+      type: "leaf",
+      id: "active-leaf",
+      parentId: "side-delivery",
+      targetId: "assistant-seed",
+    };
+    mockTranscriptEntries([userEntry, assistantEntry, sideEntry, leafEntry]);
+    mockDoneAnswer(MATH_ANSWER);
+
+    const result = await runMathSideQuestion();
+
+    expect(buildSessionContextMock).toHaveBeenCalledWith([
+      { ...userEntry, parentId: null },
+      { ...assistantEntry, parentId: "user-seed" },
+    ]);
+    expect(result).toEqual({ text: MATH_ANSWER });
+  });
+
+  it("keeps visible history after continuing from a disjoint opaque append cursor", async () => {
+    const userEntry = createTranscriptEntry({
+      id: "user-seed",
+      message: createUserTranscriptMessage(),
+    });
+    const assistantEntry = createTranscriptEntry({
+      id: "assistant-seed",
+      parentId: "user-seed",
+      message: createAssistantTranscriptMessage([{ type: "text", text: "seed answer" }]),
+    });
+    const sideEntry = createTranscriptEntry({
+      id: "side-delivery",
+      parentId: "assistant-seed",
+      message: createAssistantTranscriptMessage([{ type: "text", text: "side delivery" }]),
+    });
+    const metadataEntry = {
+      type: "metadata",
+      id: "plugin-metadata",
+      parentId: "side-delivery",
+    };
+    const leafEntry = {
+      type: "leaf",
+      id: "active-leaf",
+      parentId: "side-delivery",
+      targetId: "assistant-seed",
+      appendParentId: "plugin-metadata",
+    };
+    const continuationEntry = createTranscriptEntry({
+      id: "assistant-continuation",
+      parentId: "plugin-metadata",
+      message: createAssistantTranscriptMessage([{ type: "text", text: "continued answer" }]),
+    });
+    mockTranscriptEntries([
+      userEntry,
+      assistantEntry,
+      sideEntry,
+      metadataEntry,
+      leafEntry,
+      continuationEntry,
+    ]);
+    mockDoneAnswer(MATH_ANSWER);
+
+    const result = await runMathSideQuestion();
+
+    expect(buildSessionContextMock).toHaveBeenCalledWith([
+      userEntry,
+      assistantEntry,
+      { ...continuationEntry, parentId: "assistant-seed" },
+    ]);
+    expect(result).toEqual({ text: MATH_ANSWER });
+  });
+
   it("returns the BTW answer without appending transcript custom entries", async () => {
     mockDoneAnswer(MATH_ANSWER);
 

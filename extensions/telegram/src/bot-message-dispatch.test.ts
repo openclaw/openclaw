@@ -2089,6 +2089,25 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
+  it("does not leak inline reply directives into block draft previews", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        const payload = { text: "[[reply_to: 123]] Visible chunk." };
+        await replyOptions?.onBlockReplyQueued?.(payload, { assistantMessageIndex: 0 });
+        await dispatcherOptions.deliver(payload, { kind: "block", assistantMessageIndex: 0 });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(answerDraftStream.update).toHaveBeenCalledTimes(1);
+    expect(answerDraftStream.update).toHaveBeenCalledWith("Visible chunk.");
+    expect(answerDraftStream.update).not.toHaveBeenCalledWith("[[reply_to: 123]] Visible chunk.");
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
   it("rotates answer previews when queued block assistant index changes", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
@@ -2606,8 +2625,12 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
 
     const lastUpdate = answerDraftStream.updatePreview.mock.calls.at(-1)?.[0];
-    expect(lastUpdate?.text).toContain("completed");
-    expect(lastUpdate?.text).not.toContain("install dependencies");
+    expect(lastUpdate?.text).toContain("install dependencies");
+    expect(lastUpdate?.text).not.toContain("completed");
+    expect(lastUpdate?.richMessage).toEqual({
+      html: "<b>Shelling</b><br><b>🛠️ Exec</b> <code>install dependencies</code>",
+      skip_entity_detection: true,
+    });
   });
 
   it("sends trailing verbose status after a progress-mode final answer", async () => {
@@ -2843,6 +2866,23 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(answerDraftStream.update).toHaveBeenCalledWith("Photo");
     expectDeliverRepliesParams({ mediaMaxBytes });
     expectDeliveredReply(0, { text: undefined, mediaUrl: "https://example.com/a.png" });
+  });
+
+  it("sends standalone MEDIA directive final replies as media", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "MEDIA:/tmp/reply-image.png" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(answerDraftStream.update).not.toHaveBeenCalledWith("MEDIA:/tmp/reply-image.png");
+    expectDeliveredReply(0, {
+      text: "",
+      mediaUrl: "/tmp/reply-image.png",
+      mediaUrls: ["/tmp/reply-image.png"],
+    });
   });
 
   it("attaches interactive buttons to streamed text when late media arrives", async () => {

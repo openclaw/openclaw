@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/ios-asc-keychain-setup.sh --key-path /path/to/AuthKey_XXXXXX.p8 --issuer-id <issuer-uuid> [options]
+  scripts/ios-app-store-connect-keychain-setup.sh --key-path /path/to/AuthKey_XXXXXX.p8 --issuer-id <issuer-uuid> [options]
 
 Required:
   --key-path <path>      Path to App Store Connect API key (.p8)
@@ -12,14 +12,14 @@ Required:
 
 Optional:
   --key-id <id>          API key ID (auto-detected from AuthKey_<id>.p8 if omitted)
-  --service <name>       Keychain service name (default: openclaw-asc-key)
+  --service <name>       Keychain service name (default: openclaw-app-store-connect-key)
   --account <name>       Keychain account name (default: $USER or $LOGNAME)
   --write-env            Upsert non-secret env vars into apps/ios/fastlane/.env
   --env-file <path>      Override env file path used with --write-env
   -h, --help             Show this help
 
 Example:
-  scripts/ios-asc-keychain-setup.sh \
+  scripts/ios-app-store-connect-keychain-setup.sh \
     --key-path "$HOME/keys/AuthKey_ABC1234567.p8" \
     --issuer-id "00000000-1111-2222-3333-444444444444" \
     --write-env
@@ -69,7 +69,7 @@ delete_env_line() {
 KEY_PATH=""
 KEY_ID=""
 ISSUER_ID=""
-SERVICE="openclaw-asc-key"
+SERVICE="openclaw-app-store-connect-key"
 ACCOUNT="${USER:-${LOGNAME:-}}"
 WRITE_ENV=0
 ENV_FILE=""
@@ -157,13 +157,13 @@ security add-generic-password \
   -w "$KEY_CONTENT" \
   -U >/dev/null
 
-echo "Stored ASC API private key in macOS Keychain (service='$SERVICE', account='$ACCOUNT')."
+echo "Stored App Store Connect API private key in macOS Keychain (service='$SERVICE', account='$ACCOUNT')."
 echo
 echo "Export these vars for Fastlane:"
-echo "ASC_KEY_ID=$KEY_ID"
-echo "ASC_ISSUER_ID=$ISSUER_ID"
-echo "ASC_KEYCHAIN_SERVICE=$SERVICE"
-echo "ASC_KEYCHAIN_ACCOUNT=$ACCOUNT"
+echo "APP_STORE_CONNECT_KEY_ID=$KEY_ID"
+echo "APP_STORE_CONNECT_ISSUER_ID=$ISSUER_ID"
+echo "APP_STORE_CONNECT_KEYCHAIN_SERVICE=$SERVICE"
+echo "APP_STORE_CONNECT_KEYCHAIN_ACCOUNT=$ACCOUNT"
 
 if [[ "$WRITE_ENV" -eq 1 ]]; then
   if [[ -z "$ENV_FILE" ]]; then
@@ -173,13 +173,13 @@ if [[ "$WRITE_ENV" -eq 1 ]]; then
   mkdir -p "$(dirname "$ENV_FILE")"
   touch "$ENV_FILE"
 
-  upsert_env_line "$ENV_FILE" "ASC_KEY_ID" "$KEY_ID"
-  upsert_env_line "$ENV_FILE" "ASC_ISSUER_ID" "$ISSUER_ID"
-  upsert_env_line "$ENV_FILE" "ASC_KEYCHAIN_SERVICE" "$SERVICE"
-  upsert_env_line "$ENV_FILE" "ASC_KEYCHAIN_ACCOUNT" "$ACCOUNT"
+  upsert_env_line "$ENV_FILE" "APP_STORE_CONNECT_KEY_ID" "$KEY_ID"
+  upsert_env_line "$ENV_FILE" "APP_STORE_CONNECT_ISSUER_ID" "$ISSUER_ID"
+  upsert_env_line "$ENV_FILE" "APP_STORE_CONNECT_KEYCHAIN_SERVICE" "$SERVICE"
+  upsert_env_line "$ENV_FILE" "APP_STORE_CONNECT_KEYCHAIN_ACCOUNT" "$ACCOUNT"
   # Remove file/path based keys so Keychain is used by default.
-  delete_env_line "$ENV_FILE" "ASC_KEY_PATH"
-  delete_env_line "$ENV_FILE" "ASC_KEY_CONTENT"
+  delete_env_line "$ENV_FILE" "APP_STORE_CONNECT_KEY_PATH"
+  delete_env_line "$ENV_FILE" "APP_STORE_CONNECT_KEY_CONTENT"
   delete_env_line "$ENV_FILE" "APP_STORE_CONNECT_API_KEY_PATH"
 
   echo

@@ -466,6 +466,7 @@ export async function handleFeishuMessage(params: {
   chatHistories?: Map<string, HistoryEntry[]>;
   accountId?: string;
   processingClaimHeld?: boolean;
+  messageDedupeKey?: string;
 }): Promise<void> {
   const {
     cfg,
@@ -477,6 +478,7 @@ export async function handleFeishuMessage(params: {
     chatHistories,
     accountId,
     processingClaimHeld = false,
+    messageDedupeKey: messageDedupeKeyOverride,
   } = params;
 
   // Resolve account with merged config
@@ -487,7 +489,7 @@ export async function handleFeishuMessage(params: {
   const error = runtime?.error ?? console.error;
 
   const messageId = event.message.message_id;
-  const messageDedupeKey = resolveFeishuMessageDedupeKey(event);
+  const messageDedupeKey = messageDedupeKeyOverride ?? resolveFeishuMessageDedupeKey(event);
   if (
     !(await finalizeFeishuMessageProcessing({
       messageId: messageDedupeKey,

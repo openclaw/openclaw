@@ -83,7 +83,7 @@ afterEach(() => {
 });
 
 function buildPreparedCliRunContext(params: {
-  provider: "claude-cli" | "codex-cli";
+  provider: "claude-cli" | "codex-cli" | "google-gemini-cli";
   model: string;
   runId: string;
   prompt?: string;
@@ -92,6 +92,7 @@ function buildPreparedCliRunContext(params: {
   sessionEntry?: PreparedCliRunContext["params"]["sessionEntry"];
   agentId?: string;
   backend?: Partial<PreparedCliRunContext["preparedBackend"]["backend"]>;
+  preparedEnv?: PreparedCliRunContext["preparedBackend"]["env"];
   resolveExecutionArgs?: PreparedCliRunContext["backendResolved"]["resolveExecutionArgs"];
   config?: PreparedCliRunContext["params"]["config"];
   mcpConfigHash?: string;
@@ -105,33 +106,55 @@ function buildPreparedCliRunContext(params: {
   // Produces a prepared context without invoking prepare.runtime, keeping spawn
   // assertions focused on execute/runtime behavior.
   const workspaceDir = params.workspaceDir ?? "/tmp";
-  const baseBackend =
-    params.provider === "claude-cli"
-      ? {
-          command: "claude",
-          args: ["-p", "--output-format", "stream-json"],
-          output: "jsonl" as const,
-          input: "stdin" as const,
-          modelArg: "--model",
-          sessionArg: "--session-id",
-          sessionMode: "always" as const,
-          systemPromptFileArg: "--append-system-prompt-file",
-          systemPromptWhen: "first" as const,
-          serialize: true,
-        }
-      : {
-          command: "codex",
-          args: ["exec", "--json"],
-          resumeArgs: ["exec", "resume", "{sessionId}", "--skip-git-repo-check"],
-          output: "text" as const,
-          input: "arg" as const,
-          modelArg: "--model",
-          sessionMode: "existing" as const,
-          systemPromptFileConfigArg: "-c",
-          systemPromptFileConfigKey: "model_instructions_file",
-          systemPromptWhen: "first" as const,
-          serialize: true,
-        };
+  const baseBackend = (() => {
+    if (params.provider === "claude-cli") {
+      return {
+        command: "claude",
+        args: ["-p", "--output-format", "stream-json"],
+        output: "jsonl" as const,
+        input: "stdin" as const,
+        modelArg: "--model",
+        sessionArg: "--session-id",
+        sessionMode: "always" as const,
+        systemPromptFileArg: "--append-system-prompt-file",
+        systemPromptWhen: "first" as const,
+        serialize: true,
+      };
+    }
+    if (params.provider === "google-gemini-cli") {
+      return {
+        command: "gemini",
+        args: [
+          "--skip-trust",
+          "--approval-mode",
+          "auto_edit",
+          "--output-format",
+          "stream-json",
+          "--prompt",
+          "{prompt}",
+        ],
+        output: "jsonl" as const,
+        jsonlDialect: "gemini-stream-json" as const,
+        input: "arg" as const,
+        modelArg: "--model",
+        sessionMode: "existing" as const,
+        serialize: true,
+      };
+    }
+    return {
+      command: "codex",
+      args: ["exec", "--json"],
+      resumeArgs: ["exec", "resume", "{sessionId}", "--skip-git-repo-check"],
+      output: "text" as const,
+      input: "arg" as const,
+      modelArg: "--model",
+      sessionMode: "existing" as const,
+      systemPromptFileConfigArg: "-c",
+      systemPromptFileConfigKey: "model_instructions_file",
+      systemPromptWhen: "first" as const,
+      serialize: true,
+    };
+  })();
   const backend = { ...baseBackend, ...params.backend };
   return {
     params: {
@@ -157,12 +180,17 @@ function buildPreparedCliRunContext(params: {
       id: params.provider,
       config: backend,
       bundleMcp: params.provider === "claude-cli",
-      pluginId: params.provider === "claude-cli" ? "anthropic" : "openai",
+      pluginId:
+        params.provider === "claude-cli"
+          ? "anthropic"
+          : params.provider === "google-gemini-cli"
+            ? "google"
+            : "openai",
       resolveExecutionArgs: params.resolveExecutionArgs,
     },
     preparedBackend: {
       backend,
-      env: {},
+      env: params.preparedEnv ?? {},
       ...(params.mcpConfigHash ? { mcpConfigHash: params.mcpConfigHash } : {}),
     },
     reusableCliSession: {},
@@ -532,6 +560,35 @@ describe("runCliAgent spawn path", () => {
     expect(requireArgAfter(input.argv, "--effort")).toBe("high");
   });
 
+  it("passes prepared backend env to the spawned CLI process", async () => {
+    mockSuccessfulCliRun();
+
+    await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "codex-cli",
+        model: "gpt-5.5",
+        runId: "run-prepared-env",
+        backend: {
+          env: {
+            GEMINI_CLI_HOME: "/ignored/static-home",
+            STATIC_BACKEND_FLAG: "set",
+          },
+        },
+        preparedEnv: {
+          GEMINI_CLI_HOME: "/tmp/openclaw-gemini-profile-home",
+          GEMINI_CLI_SYSTEM_SETTINGS_PATH: "/tmp/openclaw-gemini-system-settings.json",
+        },
+      }),
+    );
+
+    const input = mockCallArg(supervisorSpawnMock) as { env?: Record<string, string> };
+    expect(input.env?.STATIC_BACKEND_FLAG).toBe("set");
+    expect(input.env?.GEMINI_CLI_HOME).toBe("/tmp/openclaw-gemini-profile-home");
+    expect(input.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH).toBe(
+      "/tmp/openclaw-gemini-system-settings.json",
+    );
+  });
+
   it("passes OpenClaw skills to Claude as a session plugin", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-skills-"));
     const skillDir = path.join(workspaceDir, "skills", "weather");
@@ -820,6 +877,87 @@ describe("runCliAgent spawn path", () => {
     } finally {
       logInfoSpy.mockRestore();
     }
+  });
+
+  it("returns process diagnostics with byte counts and bounded output hashes", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 75,
+        stdout: "ok",
+        stderr: "warn\n",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    const result = await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "codex-cli",
+        model: "gpt-5.4",
+        runId: "run-process-diagnostics",
+      }),
+    );
+
+    expect(result.diagnostics?.process).toEqual({
+      backendId: "codex-cli",
+      processReason: "exit",
+      exitCode: 0,
+      exitSignal: null,
+      durationMs: 75,
+      stdoutBytes: 2,
+      stdoutHash: "2689367b205c",
+      stderrBytes: 5,
+      stderrHash: "7597e6b3a377",
+      useResume: false,
+    });
+  });
+
+  it("rejects Gemini stream-json error results emitted with a zero exit code", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout:
+          [
+            JSON.stringify({
+              type: "message",
+              role: "assistant",
+              content: "partial text",
+              delta: true,
+            }),
+            JSON.stringify({
+              type: "result",
+              status: "error",
+              error: {
+                message: "Gemini stream failed",
+              },
+            }),
+          ].join("\n") + "\n",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    await expectRejectsWithFields(
+      executePreparedCliRun(
+        buildPreparedCliRunContext({
+          provider: "google-gemini-cli",
+          model: "gemini-3.1-pro-preview",
+          runId: "run-gemini-stream-json-error",
+        }),
+      ),
+      {
+        name: "FailoverError",
+        message: "Gemini stream failed",
+        reason: "unknown",
+      },
+    );
   });
 
   it("passes Codex system prompts through model_instructions_file", async () => {
@@ -3593,11 +3731,13 @@ ${JSON.stringify({
   it("formats CLI auth env diagnostics as key names without secret values", () => {
     vi.stubEnv("ANTHROPIC_API_KEY", "sk-ant-host");
     vi.stubEnv("ANTHROPIC_API_TOKEN", "token-host");
+    vi.stubEnv("GEMINI_CLI_SYSTEM_SETTINGS_PATH", "/tmp/host-gemini-settings.json");
     vi.stubEnv("OPENAI_API_KEY", "sk-openai-host");
 
     const log = buildCliEnvAuthLog({
       ANTHROPIC_API_TOKEN: "token-child",
       CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: "1",
+      GEMINI_CLI_HOME: "/tmp/child-gemini-home",
       OPENAI_API_KEY: "sk-openai-child",
     });
 
@@ -3608,8 +3748,12 @@ ${JSON.stringify({
     expect(log).toMatch(/child=.*CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST/);
     expect(log).toMatch(/child=.*OPENAI_API_KEY/);
     expect(log).toMatch(/cleared=.*ANTHROPIC_API_KEY/);
+    expect(log).toMatch(/runtimeHost=.*GEMINI_CLI_SYSTEM_SETTINGS_PATH/);
+    expect(log).toMatch(/runtimeChild=.*GEMINI_CLI_HOME/);
+    expect(log).toMatch(/runtimeCleared=.*GEMINI_CLI_SYSTEM_SETTINGS_PATH/);
     expect(log).not.toContain("sk-ant-host");
     expect(log).not.toContain("token-child");
+    expect(log).not.toContain("/tmp/child-gemini-home");
     expect(log).not.toContain("sk-openai-child");
   });
 

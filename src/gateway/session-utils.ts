@@ -74,6 +74,7 @@ import { listSessionEntries as listAccessorSessionEntries } from "../config/sess
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
+import { withPinnedActivePluginRegistryWorkspaceDir } from "../plugins/runtime-workspace-state.js";
 import {
   DEFAULT_AGENT_ID,
   normalizeAgentId,
@@ -2824,6 +2825,12 @@ export async function listSessionsFromStoreAsync(params: {
   modelCatalog?: ModelCatalogEntry[];
   opts: SessionsListParams;
 }): Promise<SessionsListResult> {
+  // Pin the active plugin-registry workspace dir for the duration of this
+  // call so per-row metadata lookups use a stable memo key. Without this pin,
+  // concurrent agent turns / crons mutate the process-global workspace dir
+  // between rows, the memo never hits, and each row triggers a full
+  // loadPluginMetadataSnapshot scan (~100 ms).
+  return withPinnedActivePluginRegistryWorkspaceDir(async () => {
   const { cfg, storePath, store, opts } = params;
   const now = Date.now();
   const sessionListTranscriptUsageMaxBytes = 64 * 1024;
@@ -2929,4 +2936,5 @@ export async function listSessionsFromStoreAsync(params: {
     defaults: getSessionDefaults(cfg, params.modelCatalog, { allowPluginNormalization: false }),
     sessions,
   };
+  });
 }

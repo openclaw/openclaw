@@ -145,7 +145,7 @@ describe("sendMessage", () => {
     mocks.resolveRuntimePluginRegistry.mockClear();
 
     mocks.getChannelPlugin.mockReturnValue({
-      outbound: { deliveryMode: "direct" },
+      outbound: { deliveryMode: "direct", sendText: vi.fn() },
     });
     mocks.resolveOutboundTarget.mockImplementation(({ to }: { to: string }) => ({ ok: true, to }));
     mocks.deliverOutboundPayloads.mockResolvedValue([{ channel: "forum", messageId: "m1" }]);
@@ -460,7 +460,7 @@ describe("sendMessage", () => {
 
   it("does not load registries while resolving outbound plugins", async () => {
     const forumPlugin = {
-      outbound: { deliveryMode: "direct" },
+      outbound: { deliveryMode: "direct", sendText: vi.fn() },
     };
     mocks.getChannelPlugin
       .mockReturnValueOnce(undefined)
