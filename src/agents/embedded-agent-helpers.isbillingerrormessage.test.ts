@@ -853,8 +853,8 @@ describe("classifyFailoverReason HTTP 410 handling", () => {
   });
 
   it("does not match wrapped or unrelated unknown-error phrases as bare wrapper", () => {
-    // Wrapped messages must not slip into failover-as-timeout via the bare match.
-    expect(classifyFailoverReason("LLM request failed with an unknown error.")).toBeNull();
+    // "LLM request failed" is now classified as a transient server_error (#93931).
+    expect(classifyFailoverReason("LLM request failed with an unknown error.")).toBe("server_error");
     expect(
       classifyFailoverReason("user reported that an unknown error occurred during sync"),
     ).toBeNull();
