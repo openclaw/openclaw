@@ -258,6 +258,38 @@ describe("agent-assisted Gateway runtime", () => {
     await stop;
   });
 
+  it("rejects a temporary trusted-proxy Gateway that exits after binding", async () => {
+    const child = createMockChild();
+    spawn.mockReturnValueOnce(child);
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValueOnce([]).mockImplementationOnce(() => {
+      child.exitCode = 1;
+      return [4321];
+    });
+
+    await expect(
+      ensureAgentAssistedGatewayRuntime({
+        config: {
+          gateway: {
+            auth: {
+              mode: "trusted-proxy",
+              trustedProxy: { userHeader: "x-forwarded-user" },
+            },
+          },
+        },
+        settings: {
+          ...settings,
+          authMode: "trusted-proxy",
+          gatewayToken: undefined,
+        },
+        prompter: createWizardPrompter(),
+      }),
+    ).rejects.toThrow("Unable to start Gateway for assisted setup");
+
+    expect(waitForGatewayReachable).not.toHaveBeenCalled();
+    expect(killProcessTree).not.toHaveBeenCalled();
+    expect(detach).toHaveBeenCalledOnce();
+  });
+
   it("runs a temporary Gateway when none is reachable", async () => {
     const child = createMockChild();
     spawn.mockReturnValueOnce(child);

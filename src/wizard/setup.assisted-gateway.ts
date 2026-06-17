@@ -260,7 +260,6 @@ export async function ensureAgentAssistedGatewayRuntime(params: {
   };
 
   try {
-    const childAlive = child.exitCode === null && child.signalCode === null;
     // A competing process can win the port bind after the initial listener check.
     const ownedReady = child.pid
       ? await waitForOwnedGatewayListener({
@@ -273,6 +272,7 @@ export async function ensureAgentAssistedGatewayRuntime(params: {
       ownedReady.ok && params.settings.authMode !== "trusted-proxy"
         ? await probe(15_000)
         : { ok: false, detail: ownedReady.detail };
+    const childAlive = child.exitCode === null && child.signalCode === null;
     // Trusted-proxy policy can reject direct local RPCs, so that mode relies on
     // proving the listener belongs to the process started by this setup run.
     const ready = {
