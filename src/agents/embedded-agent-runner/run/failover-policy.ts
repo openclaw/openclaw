@@ -84,14 +84,31 @@ function shouldEscalateRetryLimit(reason: FailoverReason | null): boolean {
   );
 }
 
+const THINKING_SIGNATURE_ERROR_PATTERN =
+  /(?:invalid|expired|stale).*?(?:signature|thinking).*?(?:block|turn)|(?:thinking|redacted_thinking).*?(?:signature).*?(?:invalid|expired|stale)/i;
+
 function isTerminalFormatFailure(params: {
   allowFormatRetry?: boolean;
   failoverFailure: boolean;
   failoverReason: FailoverReason | null;
+  rawError?: string;
 }): boolean {
-  return (
-    params.failoverFailure && params.failoverReason === "format" && params.allowFormatRetry !== true
-  );
+  if (!params.failoverFailure || params.failoverReason !== "format") {
+    return false;
+  }
+  if (params.allowFormatRetry === true) {
+    return false;
+  }
+  // Thinking signature replay errors (e.g. Anthropic "Invalid signature in
+  // thinking block") are not terminal — a non-Anthropic fallback model can
+  // answer correctly even when the current provider rejects stale signatures.
+  if (
+    typeof params.rawError === "string" &&
+    THINKING_SIGNATURE_ERROR_PATTERN.test(params.rawError)
+  ) {
+    return false;
+  }
+  return true;
 }
 
 function shouldRotatePrompt(params: PromptDecisionParams): boolean {

@@ -3165,7 +3165,11 @@ async function runEmbeddedAgentInternal(
 
           const assistantFailoverDecision = resolveRunFailoverDecision({
             stage: "assistant",
-            allowFormatRetry: cloudCodeAssistFormatError,
+            allowFormatRetry:
+              cloudCodeAssistFormatError ||
+              /(?:invalid|expired|stale).*?(?:signature|thinking).*?(?:block|turn)|(?:thinking|redacted_thinking).*?(?:signature).*?(?:invalid|expired|stale)/i.test(
+                assistantForFailover?.errorMessage ?? "",
+              ),
             aborted,
             externalAbort,
             fallbackConfigured,
