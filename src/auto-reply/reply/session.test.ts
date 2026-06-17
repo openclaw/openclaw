@@ -2438,6 +2438,51 @@ describe("initSessionState browser tab cleanup", () => {
     expect(result.isNewSession).toBe(true);
     expect(browserMaintenanceMocks.closeTrackedBrowserTabsForSessions).not.toHaveBeenCalled();
   });
+
+  it("includes runtime-policy (peer-scoped) key in cleanup for direct-DM sessions", async () => {
+    // Tabs opened in a direct-DM run are tracked with the sandbox/policy key
+    // (e.g. "agent:main:telegram:default:direct:12345"), not the canonical
+    // main key ("agent:main:main"). The cleanup must include the peer-scoped
+    // key so the registry lookup matches tracked tabs.
+    const storePath = await createStorePath("openclaw-tab-cleanup-peer-key-");
+    // Default config produces "agent:main:main" for a per-sender direct DM.
+    const canonicalKey = "agent:main:main";
+    const existingSessionId = "tab-peer-key-session-id";
+
+    await writeSessionStoreFast(storePath, {
+      [canonicalKey]: {
+        sessionId: existingSessionId,
+        updatedAt: Date.now(),
+      },
+    });
+
+    const cfg = {
+      session: { store: storePath, idleMinutes: 999 },
+    } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: {
+        Body: "/new",
+        RawBody: "/new",
+        CommandBody: "/new",
+        // No explicit SessionKey — routes through From to canonical "agent:main:main"
+        From: "12345",
+        Provider: "telegram",
+        ChatType: "direct",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    const cleanupParams = requireMockCallArg(
+      browserMaintenanceMocks.closeTrackedBrowserTabsForSessions,
+      "closeTrackedBrowserTabsForSessions",
+    );
+    // Must include both the canonical key and the peer-scoped policy key
+    expect(cleanupParams.sessionKeys).toContain(existingSessionId);
+    expect(cleanupParams.sessionKeys).toContain(canonicalKey);
+    expect(cleanupParams.sessionKeys).toContain("agent:main:telegram:default:direct:12345");
+  });
 });
 
 describe("initSessionState channel reset overrides", () => {

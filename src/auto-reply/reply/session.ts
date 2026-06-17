@@ -68,6 +68,7 @@ import { resolveConversationBindingContextFromMessage } from "./conversation-bin
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import { isResetAuthorizedForContext } from "./reset-authorization.js";
+import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import {
   maybeRetireLegacyMainDeliveryRoute,
   resolveLastChannelRaw,
@@ -901,9 +902,22 @@ export async function initSessionState(params: {
       sessionFile: previousSessionEntry.sessionFile,
       reason: previousSessionEndReason ?? "unknown",
     });
+    // Include the runtime-policy (peer-scoped) key so tabs tracked under a
+    // direct-DM sandbox key are also found. For direct sessions the sandbox key
+    // diverges from sessionKey (e.g. "agent:main:telegram:direct:+1…" vs
+    // "agent:main"), causing the registry lookup to miss tracked tabs.
+    const runtimePolicyKey = resolveRuntimePolicySessionKey({
+      cfg,
+      ctx: sessionCtxForState,
+      sessionKey,
+    });
     void cleanupBrowserSessionsForLifecycleEnd({
       cfg,
-      sessionKeys: [previousSessionEntry.sessionId, sessionKey],
+      sessionKeys: [
+        previousSessionEntry.sessionId,
+        sessionKey,
+        ...(runtimePolicyKey && runtimePolicyKey !== sessionKey ? [runtimePolicyKey] : []),
+      ],
       onWarn: (message) => log.warn(message),
       onError: (error) => log.warn(`browser tab cleanup failed: ${String(error)}`),
     });
