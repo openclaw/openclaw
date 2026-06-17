@@ -612,6 +612,34 @@ describe("applySkillEnvOverrides", () => {
     });
   });
 
+  it("resolves config by skillKey when snapshot name differs from skillKey", () => {
+    const snapshot: SkillSnapshot = {
+      prompt: "",
+      skills: [
+        {
+          name: "Pretty Weather",
+          skillKey: "weather",
+          primaryEnv: "WEATHER_API_KEY",
+          requiredEnv: ["WEATHER_API_KEY"],
+        },
+      ],
+    };
+
+    withClearedEnv(["WEATHER_API_KEY"], () => {
+      const restore = applySkillEnvOverridesFromSnapshot({
+        snapshot,
+        config: { skills: { entries: { weather: { apiKey: "snap-key" } } } }, // pragma: allowlist secret
+      });
+
+      try {
+        expect(process.env.WEATHER_API_KEY).toBe("snap-key");
+      } finally {
+        restore();
+        expect(process.env.WEATHER_API_KEY).toBeUndefined();
+      }
+    });
+  });
+
   it("prefers the active runtime snapshot over raw SecretRef skill config", () => {
     const skillName = "env-skill";
     const entries = envSkillEntries(skillName, {
