@@ -667,7 +667,39 @@ describe("tool-loop-detection", () => {
       }
     });
 
-    it("keeps changing empty-output exec failures below the global no-progress breaker", () => {
+    it("blocks repeated failed exec calls despite varying output text (#93917)", () => {
+      const state = createState();
+      const params = { command: "docker exec alist /opt/alist/alist admin set admin123" };
+
+      for (let index = 0; index < CRITICAL_THRESHOLD; index += 1) {
+        recordSuccessfulCall(
+          state,
+          "exec",
+          params,
+          {
+            content: [
+              { type: "text", text: `Connection refused at ${Date.now() + index}` },
+            ],
+            details: {
+              status: "failed",
+              exitCode: 1,
+              durationMs: 100 + index,
+              aggregated: `ssh: connect to host 172.17.0.2 port 22: Connection refused (${index})`,
+            },
+          },
+          index,
+        );
+      }
+
+      const loopResult = detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig);
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("critical");
+        expect(loopResult.detector).toBe("generic_repeat");
+      }
+    });
+
+    it("blocks varying-output failed exec calls at the global circuit breaker (#93917)", () => {
       const state = createState();
       const params = { command: "openclaw flaky-helper" };
 
@@ -692,8 +724,8 @@ describe("tool-loop-detection", () => {
       const loopResult = detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig);
       expect(loopResult.stuck).toBe(true);
       if (loopResult.stuck) {
-        expect(loopResult.level).toBe("warning");
-        expect(loopResult.detector).toBe("generic_repeat");
+        expect(loopResult.level).toBe("critical");
+        expect(loopResult.detector).toBe("global_circuit_breaker");
       }
     });
 

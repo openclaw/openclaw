@@ -210,12 +210,26 @@ function hashExecToolOutcome(details: Record<string, unknown>, text: string): st
     });
   }
 
-  if (status === "completed" || status === "failed") {
+  if (status === "completed") {
     return digestStable({
       status,
       exitCode: typeof details.exitCode === "number" ? details.exitCode : null,
       timedOut: details.timedOut === true,
       output: nonEmptyStringField(details.aggregated) ?? text,
+    });
+  }
+
+  if (status === "failed") {
+    // Failed exec calls often produce output that varies between invocations
+    // (timestamps, connection state, etc.), which breaks noProgressStreak
+    // hashing and prevents the critical/circuit-breaker thresholds from ever
+    // firing.  Only hash the stable failure signals — status, exitCode, and
+    // timedOut — so repeated identical failures accumulate a streak regardless
+    // of volatile output text (#93917).
+    return digestStable({
+      status,
+      exitCode: typeof details.exitCode === "number" ? details.exitCode : null,
+      timedOut: details.timedOut === true,
     });
   }
 
