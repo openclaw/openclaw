@@ -4174,7 +4174,7 @@ describe("runGlobalPackageUpdateSteps", () => {
   );
 
   it.runIf(process.platform !== "win32")(
-    "restores fs-safe Python configuration after concurrent override applications",
+    "does not expose required fs-safe Python configuration to concurrent operations",
     async () => {
       await withTempDir(
         { prefix: "openclaw-package-update-local-concurrent-config-" },
@@ -4194,13 +4194,18 @@ describe("runGlobalPackageUpdateSteps", () => {
               }),
             );
 
+            const observedModes = new Set<string>();
+            const configObserver = setInterval(() => {
+              observedModes.add(getFsSafePythonConfig().mode);
+            }, 0);
             const results = await Promise.all(
               prepared.map(({ packageRoot, plan }) =>
                 applyLocalPackageOverrides({ packageRoot, plan, reapply: true }),
               ),
-            );
+            ).finally(() => clearInterval(configObserver));
 
             expect(results.map((result) => result.status)).toEqual(["applied", "applied"]);
+            expect([...observedModes]).toEqual(["off"]);
             expect(getFsSafePythonConfig().mode).toBe("off");
           } finally {
             configureFsSafePython(previousPythonConfig);

@@ -1,8 +1,9 @@
+import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createAsyncLock } from "@openclaw/fs-safe/advanced";
-import { configureFsSafePython, getFsSafePythonConfig } from "@openclaw/fs-safe/config";
+import { promisify } from "node:util";
+import { getFsSafePythonConfig } from "@openclaw/fs-safe/config";
 import { resolveStateDir } from "../config/paths.js";
 import { formatErrorMessage } from "./errors.js";
 import { FsSafeError, root as openFsRoot } from "./fs-safe.js";
@@ -318,18 +319,54 @@ async function writeFileWithMode(
 }
 
 type LocalOverridePackageRoot = Awaited<ReturnType<typeof openFsRoot>>;
-const withRequiredFsSafePythonLock = createAsyncLock();
+const execFileAsync = promisify(execFile);
+// fs-safe's helper mode is process-global, so fail-closed replay operations run
+// in an isolated process instead of changing the parent configuration.
+const REQUIRED_FS_SAFE_OPERATION_SCRIPT = `
+const [configUrl, rootUrl, operation, rootDir, sourcePath, relativePath, pythonPath] =
+  process.argv.slice(1);
+const { configureFsSafePython } = await import(configUrl);
+configureFsSafePython({ mode: "require", ...(pythonPath ? { pythonPath } : {}) });
+const { root } = await import(rootUrl);
+const packageFs = await root(rootDir, { hardlinks: "reject", symlinks: "reject" });
+if (operation === "stat") {
+  await packageFs.stat(".");
+} else if (operation === "move") {
+  await packageFs.move(sourcePath, relativePath, { overwrite: false });
+} else {
+  throw new Error("unsupported required fs-safe operation");
+}
+`;
 
-async function runWithRequiredFsSafePython<T>(operation: () => Promise<T>): Promise<T> {
-  return await withRequiredFsSafePythonLock(async () => {
-    const previousPythonConfig = getFsSafePythonConfig();
-    configureFsSafePython({ mode: "require" });
-    try {
-      return await operation();
-    } finally {
-      configureFsSafePython(previousPythonConfig);
-    }
-  });
+async function runRequiredFsSafePythonOperation(
+  params:
+    | { operation: "stat"; packageFs: LocalOverridePackageRoot }
+    | {
+        operation: "move";
+        packageFs: LocalOverridePackageRoot;
+        sourcePath: string;
+        relativePath: string;
+      },
+): Promise<void> {
+  const pythonPath = getFsSafePythonConfig().pythonPath ?? "";
+  const sourcePath = params.operation === "move" ? params.sourcePath : "";
+  const relativePath = params.operation === "move" ? params.relativePath : "";
+  await execFileAsync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "--eval",
+      REQUIRED_FS_SAFE_OPERATION_SCRIPT,
+      import.meta.resolve("@openclaw/fs-safe/config"),
+      import.meta.resolve("@openclaw/fs-safe/root"),
+      params.operation,
+      params.packageFs.rootReal,
+      sourcePath,
+      relativePath,
+      pythonPath,
+    ],
+    { timeout: 30_000, windowsHide: true },
+  );
 }
 
 class LocalOverrideRollbackError extends Error {
@@ -364,9 +401,7 @@ async function moveLocalOverrideTargetNoReplace(params: {
   }
   // Executable override replay fails closed instead of using fs-safe's path-based
   // Node fallback for the final no-clobber publish.
-  await runWithRequiredFsSafePython(() =>
-    params.packageFs.move(params.sourcePath, params.relativePath, { overwrite: false }),
-  );
+  await runRequiredFsSafePythonOperation({ operation: "move", ...params });
 }
 
 async function writeRollbackBackup(params: {
@@ -467,7 +502,7 @@ async function moveExpectedLocalOverrideTarget(params: {
   try {
     if (process.platform !== "win32") {
       // Verify the required publish/restore backend before moving the target aside.
-      await runWithRequiredFsSafePython(() => params.packageFs.stat("."));
+      await runRequiredFsSafePythonOperation({ operation: "stat", packageFs: params.packageFs });
     }
     await params.packageFs.move(params.relativePath, movedPath);
     targetMoved = true;
