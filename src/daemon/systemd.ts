@@ -52,7 +52,6 @@ import {
 } from "./systemd-unavailable.js";
 import {
   buildSystemdUnit,
-  parseSystemdEnvAssignment,
   parseSystemdEnvAssignments,
   parseSystemdExecStart,
   renderSystemdEnvAssignment,
@@ -360,9 +359,7 @@ async function readSystemdServiceCommandConfigFromUnitPath(params: {
       } else if (line.startsWith("WorkingDirectory=")) {
         workingDirectory = line.slice("WorkingDirectory=".length).trim();
       } else if (line.startsWith("Environment=")) {
-        const raw = line.slice("Environment=".length).trim();
-        const parsed = parseSystemdEnvAssignment(raw);
-        if (parsed) {
+        for (const parsed of parseSystemdEnvAssignments(line.slice("Environment=".length).trim())) {
           inlineEnvironment[parsed.key] = parsed.value;
         }
       } else if (line.startsWith("EnvironmentFile=")) {

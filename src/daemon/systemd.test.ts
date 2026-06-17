@@ -781,6 +781,36 @@ describe("system-scope gateway unit detection (openclaw#87577)", () => {
     });
   });
 
+  it("findInstalledSystemdGatewayScope parses multiple inline Environment assignments for custom identity", async () => {
+    mockUnitFileLayout({ system: false });
+    findSystemGatewayServicesMock.mockResolvedValueOnce([
+      {
+        platform: "linux",
+        label: "openclaw-inline-env.service",
+        detail: "unit: /etc/systemd/system/openclaw-inline-env.service",
+        scope: "system",
+        marker: "openclaw",
+      },
+    ]);
+    mockSystemUnitFiles({
+      "/etc/systemd/system/openclaw-inline-env.service": [
+        "[Service]",
+        "WorkingDirectory=/tmp/openclaw-custom-unit",
+        "Environment=OPENCLAW_SERVICE_MARKER=openclaw OPENCLAW_SERVICE_KIND=gateway OPENCLAW_PROFILE=default OPENCLAW_GATEWAY_PORT=18789",
+        "ExecStart=/usr/bin/openclaw gateway run",
+        "",
+      ].join("\n"),
+    });
+
+    const result = await findInstalledSystemdGatewayScope({ HOME: TEST_MANAGED_HOME });
+
+    expect(result).toEqual({
+      scope: "system",
+      unitName: "openclaw-inline-env.service",
+      unitPath: "/etc/systemd/system/openclaw-inline-env.service",
+    });
+  });
+
   it("findInstalledSystemdGatewayScope ignores marker-owned custom system units with a different gateway port", async () => {
     mockUnitFileLayout({ system: false });
     findSystemGatewayServicesMock.mockResolvedValueOnce([
