@@ -37,7 +37,7 @@ import {
   normalizeSecretsPlanOptions,
   resolveValidatedPlanTarget,
 } from "./plan.js";
-import { listKnownSecretEnvVarNames } from "./provider-env-vars.js";
+import { getProviderEnvVars, listKnownSecretEnvVarNames } from "./provider-env-vars.js";
 import { resolveSecretRefValue } from "./resolve.js";
 import { prepareSecretsRuntimeSnapshot } from "./runtime.js";
 import { assertExpectedResolvedSecretValue } from "./secret-value.js";
@@ -89,8 +89,10 @@ type ResolvedPlanTargetEntry = {
 
 type ConfigTargetMutationResult = {
   resolvedTargets: ResolvedPlanTargetEntry[];
-  scrubbedValues: Set<string>;
+  scrubbedValuesByProvider: Map<string, Set<string>>;
+  scrubbedValuesByTarget: Map<SecretsPlanTarget, Set<string>>;
   providerTargets: Set<string>;
+  authProfileProviderByTarget: Map<SecretsPlanTarget, string>;
   configChanged: boolean;
   authStoreByPath: Map<string, Record<string, unknown>>;
   authStoreAgentDirByPath: Map<string, string>;
@@ -132,15 +134,23 @@ function resolveTarget(
   return resolved;
 }
 
+function appendKeyedValue<K>(map: Map<K, Set<string>>, key: K, value: string): void {
+  const existing = map.get(key);
+  if (existing) {
+    existing.add(value);
+    return;
+  }
+  map.set(key, new Set([value]));
+}
+
 function scrubEnvRaw(
   raw: string,
-  migratedValues: Set<string>,
-  allowedEnvKeys: Set<string>,
+  scrubByEnvKey: Map<string, Set<string>>,
 ): {
   nextRaw: string;
   removed: number;
 } {
-  if (migratedValues.size === 0 || allowedEnvKeys.size === 0) {
+  if (scrubByEnvKey.size === 0) {
     return { nextRaw: raw, removed: 0 };
   }
   const lines = raw.split(/\r?\n/);
@@ -153,12 +163,13 @@ function scrubEnvRaw(
       continue;
     }
     const envKey = match[1] ?? "";
-    if (!allowedEnvKeys.has(envKey)) {
+    const ownedValues = scrubByEnvKey.get(envKey);
+    if (!ownedValues) {
       nextLines.push(line);
       continue;
     }
     const parsedValue = parseEnvAssignmentValue(match[2] ?? "");
-    if (migratedValues.has(parsedValue)) {
+    if (ownedValues.has(parsedValue)) {
       removed += 1;
       continue;
     }
@@ -261,7 +272,7 @@ async function projectPlanState(params: {
     nextConfig,
     stateDir,
     providerTargets: targetMutations.providerTargets,
-    scrubbedValues: targetMutations.scrubbedValues,
+    scrubbedValuesByProvider: targetMutations.scrubbedValuesByProvider,
     authStoreByPath: targetMutations.authStoreByPath,
     authStoreAgentDirByPath: targetMutations.authStoreAgentDirByPath,
     changedFiles,
@@ -275,9 +286,46 @@ async function projectPlanState(params: {
     enabled: options.scrubLegacyAuthJson,
   });
 
+  const knownSecretEnvKeys = new Set(listKnownSecretEnvVarNames());
+  const scrubByEnvKey = new Map<string, Set<string>>();
+  for (const { resolved, target } of targetMutations.resolvedTargets) {
+    const migratesProviderAuth =
+      resolved.entry.trackProviderShadowing === true || resolved.entry.authProfileType != null;
+    if (migratesProviderAuth) {
+      const providerId = (
+        resolved.providerId ??
+        target.providerId ??
+        target.authProfileProvider ??
+        targetMutations.authProfileProviderByTarget.get(target) ??
+        ""
+      ).trim();
+      if (providerId) {
+        const normalizedProvider = normalizeProviderId(providerId);
+        const providerValues = targetMutations.scrubbedValuesByProvider.get(normalizedProvider);
+        if (providerValues) {
+          for (const envKey of getProviderEnvVars(normalizedProvider)) {
+            for (const value of providerValues) {
+              appendKeyedValue(scrubByEnvKey, envKey, value);
+            }
+          }
+        }
+      }
+    }
+    const targetOwnsRefEnvVar = migratesProviderAuth || resolved.providerId == null;
+    const envRefId = target.ref.source === "env" ? target.ref.id.trim() : "";
+    if (envRefId && targetOwnsRefEnvVar && knownSecretEnvKeys.has(envRefId)) {
+      const targetValues = targetMutations.scrubbedValuesByTarget.get(target);
+      if (targetValues) {
+        for (const value of targetValues) {
+          appendKeyedValue(scrubByEnvKey, envRefId, value);
+        }
+      }
+    }
+  }
+
   const envRawByPath = scrubEnvFiles({
     env: params.env,
-    scrubbedValues: targetMutations.scrubbedValues,
+    scrubByEnvKey,
     changedFiles,
     enabled: options.scrubEnv,
   });
@@ -322,22 +370,41 @@ function applyConfigTargetMutations(params: {
     target,
     resolved: resolveTarget(target),
   }));
-  const scrubbedValues = new Set<string>();
+  const scrubbedValuesByProvider = new Map<string, Set<string>>();
+  const scrubbedValuesByTarget = new Map<SecretsPlanTarget, Set<string>>();
   const providerTargets = new Set<string>();
+  const authProfileProviderByTarget = new Map<SecretsPlanTarget, string>();
   let configChanged = false;
+
+  const recordMigratedValue = (
+    target: SecretsPlanTarget,
+    provider: string,
+    value: string,
+  ): void => {
+    const trimmed = value.trim();
+    appendKeyedValue(scrubbedValuesByTarget, target, trimmed);
+    if (provider) {
+      appendKeyedValue(scrubbedValuesByProvider, normalizeProviderId(provider), trimmed);
+    }
+  };
 
   for (const { target, resolved } of resolvedTargets) {
     if (resolved.entry.configFile === "auth-profiles.json") {
-      const authStoreChanged = applyAuthProfileTargetMutation({
+      const authProfileMutation = applyAuthProfileTargetMutation({
         target,
         resolved,
         nextConfig: params.nextConfig,
         stateDir: params.stateDir,
         authStoreByPath: params.authStoreByPath,
         authStoreAgentDirByPath: params.authStoreAgentDirByPath,
-        scrubbedValues,
       });
-      if (authStoreChanged) {
+      for (const migratedValue of authProfileMutation.migratedValues) {
+        recordMigratedValue(target, authProfileMutation.provider, migratedValue);
+      }
+      if (authProfileMutation.provider) {
+        authProfileProviderByTarget.set(target, authProfileMutation.provider);
+      }
+      if (authProfileMutation.changed) {
         const agentId = (target.agentId ?? "").trim();
         if (!agentId) {
           throw new Error(`Missing required agentId for auth-profiles target ${target.path}.`);
@@ -358,7 +425,7 @@ function applyConfigTargetMutations(params: {
     if (usesSiblingRef) {
       const previous = getPath(params.nextConfig, targetPathSegments);
       if (isNonEmptyString(previous)) {
-        scrubbedValues.add(previous.trim());
+        recordMigratedValue(target, resolved.providerId ?? "", previous);
       }
       const refPathSegments = resolved.refPathSegments;
       if (!refPathSegments) {
@@ -374,7 +441,7 @@ function applyConfigTargetMutations(params: {
 
     const previous = getPath(params.nextConfig, targetPathSegments);
     if (isNonEmptyString(previous)) {
-      scrubbedValues.add(previous.trim());
+      recordMigratedValue(target, resolved.providerId ?? "", previous);
     }
     const wroteRef = setPathCreateStrict(params.nextConfig, targetPathSegments, target.ref);
     if (wroteRef) {
@@ -387,8 +454,10 @@ function applyConfigTargetMutations(params: {
 
   return {
     resolvedTargets,
-    scrubbedValues,
+    scrubbedValuesByProvider,
+    scrubbedValuesByTarget,
     providerTargets,
+    authProfileProviderByTarget,
     configChanged,
     authStoreByPath: params.authStoreByPath,
     authStoreAgentDirByPath: params.authStoreAgentDirByPath,
@@ -399,7 +468,7 @@ function scrubAuthStoresForProviderTargets(params: {
   nextConfig: OpenClawConfig;
   stateDir: string;
   providerTargets: Set<string>;
-  scrubbedValues: Set<string>;
+  scrubbedValuesByProvider: Map<string, Set<string>>;
   authStoreByPath: Map<string, Record<string, unknown>>;
   authStoreAgentDirByPath: Map<string, string>;
   changedFiles: Set<string>;
@@ -433,7 +502,7 @@ function scrubAuthStoresForProviderTargets(params: {
       }
       if (profile.kind === "api_key" || profile.kind === "token") {
         if (isNonEmptyString(profile.value)) {
-          params.scrubbedValues.add(profile.value.trim());
+          appendKeyedValue(params.scrubbedValuesByProvider, provider, profile.value.trim());
         }
         if (profile.valueField in profile.profile) {
           delete profile.profile[profile.valueField];
@@ -586,6 +655,14 @@ function ensureAuthProfileContainer(params: {
   return changed;
 }
 
+function resolveAuthProfileTargetProvider(
+  store: MutableAuthProfileStore,
+  resolved: ResolvedPlanTargetEntry["resolved"],
+): string {
+  const provider = getPath(store, [...resolved.pathSegments.slice(0, 2), "provider"]);
+  return isNonEmptyString(provider) ? provider.trim() : "";
+}
+
 function applyAuthProfileTargetMutation(params: {
   target: SecretsPlanTarget;
   resolved: ResolvedPlanTargetEntry["resolved"];
@@ -593,10 +670,9 @@ function applyAuthProfileTargetMutation(params: {
   stateDir: string;
   authStoreByPath: Map<string, Record<string, unknown>>;
   authStoreAgentDirByPath: Map<string, string>;
-  scrubbedValues: Set<string>;
-}): boolean {
+}): { changed: boolean; provider: string; migratedValues: string[] } {
   if (params.resolved.entry.configFile !== "auth-profiles.json") {
-    return false;
+    return { changed: false, provider: "", migratedValues: [] };
   }
   const { store } = resolveAuthStoreForTarget({
     target: params.target,
@@ -610,12 +686,14 @@ function applyAuthProfileTargetMutation(params: {
     resolved: params.resolved,
     store,
   });
+  const provider = resolveAuthProfileTargetProvider(store, params.resolved);
+  const migratedValues: string[] = [];
   const targetPathSegments = params.resolved.pathSegments;
   const usesSiblingRef = params.resolved.entry.secretShape === "sibling_ref"; // pragma: allowlist secret
   if (usesSiblingRef) {
     const previous = getPath(store, targetPathSegments);
     if (isNonEmptyString(previous)) {
-      params.scrubbedValues.add(previous.trim());
+      migratedValues.push(previous.trim());
     }
     const refPathSegments = params.resolved.refPathSegments;
     if (!refPathSegments) {
@@ -624,15 +702,15 @@ function applyAuthProfileTargetMutation(params: {
     const wroteRef = setPathCreateStrict(store, refPathSegments, params.target.ref);
     const deletedPlaintext = deletePathStrict(store, targetPathSegments);
     changed = changed || wroteRef || deletedPlaintext;
-    return changed;
+    return { changed, provider, migratedValues };
   }
   const previous = getPath(store, targetPathSegments);
   if (isNonEmptyString(previous)) {
-    params.scrubbedValues.add(previous.trim());
+    migratedValues.push(previous.trim());
   }
   const wroteRef = setPathCreateStrict(store, targetPathSegments, params.target.ref);
   changed = changed || wroteRef;
-  return changed;
+  return { changed, provider, migratedValues };
 }
 
 function scrubLegacyAuthJsonStores(params: {
@@ -671,12 +749,12 @@ function scrubLegacyAuthJsonStores(params: {
 
 function scrubEnvFiles(params: {
   env: NodeJS.ProcessEnv;
-  scrubbedValues: Set<string>;
+  scrubByEnvKey: Map<string, Set<string>>;
   changedFiles: Set<string>;
   enabled: boolean;
 }): Map<string, string> {
   const envRawByPath = new Map<string, string>();
-  if (!params.enabled || params.scrubbedValues.size === 0) {
+  if (!params.enabled || params.scrubByEnvKey.size === 0) {
     return envRawByPath;
   }
   const envPath = path.join(resolveConfigDir(params.env, os.homedir), ".env");
@@ -684,11 +762,7 @@ function scrubEnvFiles(params: {
     return envRawByPath;
   }
   const current = fs.readFileSync(envPath, "utf8");
-  const scrubbed = scrubEnvRaw(
-    current,
-    params.scrubbedValues,
-    new Set(listKnownSecretEnvVarNames()),
-  );
+  const scrubbed = scrubEnvRaw(current, params.scrubByEnvKey);
   if (scrubbed.removed > 0 && scrubbed.nextRaw !== current) {
     envRawByPath.set(envPath, scrubbed.nextRaw);
     params.changedFiles.add(envPath);
