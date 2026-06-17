@@ -275,6 +275,26 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expect(payloads).toEqual([]);
   });
 
+  it("suppresses stale tool-error warnings when message-tool delivery already occurred", () => {
+    // GitHub issue #93875 / PR #93925: Discord message_tool_only turns that
+    // deliver the visible reply via message(action=send) can still append a
+    // stale tool-failed warning because deliveredSourceReplyViaMessageTool was
+    // not counted as a user-facing assistant reply in the hasUserFacingAssistantReply
+    // initialization.
+    const payloads = buildPayloads({
+      didDeliverSourceReplyViaMessageTool: true,
+      sourceReplyDeliveryMode: "message_tool_only",
+      messagingToolSourceReplyPayloads: [],
+      lastToolError: { toolName: "read", error: "file not found" },
+    });
+
+    // With the fix, hasUserFacingAssistantReply starts as true because
+    // deliveredSourceReplyViaMessageTool is included. Without it, the tool error
+    // would be surfaced as a stale warning even though the reply was already
+    // successfully delivered via the message tool.
+    expect(payloads).toHaveLength(0);
+  });
+
   it("preserves rich-only internal message-tool source replies", () => {
     const presentation = {
       blocks: [
