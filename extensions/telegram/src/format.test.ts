@@ -435,6 +435,10 @@ describe("markdownToTelegramHtml", () => {
       expect(containsLoneSurrogate(chunk)).toBe(false);
     }
   });
+
+  it("keeps an astral char whole when a positive limit starts on its pair", () => {
+    expect(splitTelegramHtmlChunks("A😀B", 1)).toEqual(["A", "😀", "B"]);
+  });
 });
 
 function containsLoneSurrogate(text: string): boolean {
