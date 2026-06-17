@@ -600,4 +600,111 @@ describe("normalizeStoredCronJobs", () => {
     expect("command" in job).toBe(false);
     expect("timeout" in job).toBe(false);
   });
+
+  it("normalizes missing agentId to configured defaultAgentId", () => {
+    const jobs = [
+      {
+        id: "job-no-agent-id",
+        name: "Job without agentId",
+        schedule: { kind: "every", everyMs: 60_000 },
+        payload: { kind: "systemEvent", text: "tick" },
+        sessionTarget: "main",
+      },
+    ] as Array<Record<string, unknown>>;
+
+    const result = normalizeStoredCronJobs(jobs, { defaultAgentId: "ops" });
+
+    expect(result.mutated).toBe(true);
+    expect(jobs[0]?.agentId).toBe("ops");
+  });
+
+  it("normalizes empty string agentId to configured defaultAgentId", () => {
+    const jobs = [
+      {
+        id: "job-empty-agent-id",
+        name: "Job with empty agentId",
+        schedule: { kind: "every", everyMs: 60_000 },
+        payload: { kind: "systemEvent", text: "tick" },
+        agentId: "",
+        sessionTarget: "main",
+      },
+    ] as Array<Record<string, unknown>>;
+
+    const result = normalizeStoredCronJobs(jobs, { defaultAgentId: "main" });
+
+    expect(result.mutated).toBe(true);
+    expect(jobs[0]?.agentId).toBe("main");
+  });
+
+  it("trims whitespace from agentId", () => {
+    const jobs = [
+      {
+        id: "job-spaces-agent-id",
+        name: "Job with whitespace agentId",
+        schedule: { kind: "every", everyMs: 60_000 },
+        payload: { kind: "systemEvent", text: "tick" },
+        agentId: "  ops  ",
+        sessionTarget: "main",
+      },
+    ] as Array<Record<string, unknown>>;
+
+    const result = normalizeStoredCronJobs(jobs);
+
+    expect(result.mutated).toBe(true);
+    expect(jobs[0]?.agentId).toBe("ops");
+  });
+
+  it("preserves explicit non-default agentId", () => {
+    const jobs = [
+      {
+        id: "job-custom-agent",
+        name: "Job with custom agent",
+        schedule: { kind: "every", everyMs: 60_000 },
+        payload: { kind: "systemEvent", text: "tick" },
+        agentId: "custom-agent",
+        sessionTarget: "main",
+      },
+    ] as Array<Record<string, unknown>>;
+
+    const result = normalizeStoredCronJobs(jobs, { defaultAgentId: "main" });
+
+    // Note: sessionTarget normalization may cause mutation even when agentId is preserved
+    expect(jobs[0]?.agentId).toBe("custom-agent");
+  });
+
+  it("preserves agentId when already set to default", () => {
+    const jobs = [
+      {
+        id: "job-normalized",
+        name: "Normalized job",
+        schedule: { kind: "every", everyMs: 60_000 },
+        payload: { kind: "systemEvent", text: "tick" },
+        agentId: "main",
+        sessionTarget: "main",
+      },
+    ] as Array<Record<string, unknown>>;
+
+    const result = normalizeStoredCronJobs(jobs, { defaultAgentId: "main" });
+
+    // Note: other normalizations may cause mutation, but agentId should be preserved
+    expect(jobs[0]?.agentId).toBe("main");
+  });
+
+  it("preserves agentId when already set to default", () => {
+    const jobs = [
+      {
+        id: "job-normalized",
+        name: "Normalized job",
+        schedule: { kind: "every", everyMs: 60_000 },
+        payload: { kind: "systemEvent", text: "tick" },
+        agentId: "main",
+        sessionTarget: "main",
+      },
+    ] as Array<Record<string, unknown>>;
+
+    normalizeStoredCronJobs(jobs, { defaultAgentId: "main" });
+
+    // Other normalizations may cause mutation, but agentId should be preserved
+    expect(jobs[0]?.agentId).toBe("main");
+  });
 });

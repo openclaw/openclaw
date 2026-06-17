@@ -1,6 +1,7 @@
 // Doctor cron repair orchestration for legacy stores, run logs, payloads, and warnings.
 import { normalizeOptionalString } from "../../../../packages/normalization-core/src/string-coerce.js";
 import { note } from "../../../../packages/terminal-core/src/note.js";
+import { resolveDefaultAgentId } from "../../../agents/agent-scope-config.js";
 import { formatCliCommand } from "../../../cli/command-format.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
@@ -133,7 +134,9 @@ async function applyLegacyCronStoreRepair(params: {
   const { state } = params;
   const changes: string[] = [];
   const warnings: string[] = [];
-  const normalized = params.normalized ?? normalizeStoredCronJobs(state.rawJobs);
+  const defaultAgentId = resolveDefaultAgentId(params.cfg);
+  const normalized =
+    params.normalized ?? normalizeStoredCronJobs(state.rawJobs, { defaultAgentId });
   const legacyWebhook = normalizeOptionalString(params.cfg.cron?.webhook);
   const notifyMigration = migrateLegacyNotifyFallback({
     jobs: state.rawJobs,

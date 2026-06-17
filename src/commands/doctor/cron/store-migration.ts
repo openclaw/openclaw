@@ -241,9 +241,14 @@ function stripLegacyTopLevelFields(raw: Record<string, unknown>) {
   }
 }
 
+type NormalizeCronJobsOptions = {
+  defaultAgentId?: string;
+};
+
 /** Normalize persisted cron jobs in place and report issues plus rows to quarantine. */
 export function normalizeStoredCronJobs(
   jobs: Array<Record<string, unknown>>,
+  opts?: NormalizeCronJobsOptions,
 ): NormalizeCronStoreJobsResult {
   const issues: CronStoreIssues = {};
   const unresolvedAgentTurnShellToolPromptJobs: string[] = [];
@@ -598,6 +603,21 @@ export function normalizeStoredCronJobs(
     } else if (normalizedLegacy.mutated && normalizedLegacy.delivery) {
       raw.delivery = normalizedLegacy.delivery;
       mutated = true;
+    }
+
+    // Normalize agentId: use configured default for missing/empty agentId
+    const defaultAgentId = opts?.defaultAgentId;
+    if (!raw.agentId || typeof raw.agentId !== "string" || !raw.agentId.trim()) {
+      if (defaultAgentId) {
+        raw.agentId = defaultAgentId;
+        mutated = true;
+      }
+    } else if (typeof raw.agentId === "string") {
+      const normalizedAgentId = raw.agentId.trim();
+      if (raw.agentId !== normalizedAgentId) {
+        raw.agentId = normalizedAgentId;
+        mutated = true;
+      }
     }
 
     const invalidPersistedReason = getInvalidPersistedCronJobReason(raw);
