@@ -55,15 +55,17 @@ Docker is **optional**. Use it only if you want a containerized gateway or to va
     ./scripts/docker/setup.sh --offline
     ```
 
-    `--offline` verifies that `OPENCLAW_IMAGE` already exists locally, skips
-    Docker build and pull, then runs the normal setup flow such as `.env`
-    synchronization, permission fixes, onboarding, gateway config sync, and
-    Compose startup.
+    `--offline` verifies that `OPENCLAW_IMAGE` already exists locally, disables
+    implicit Compose pulls and builds, then runs the normal setup flow such as
+    `.env` synchronization, permission fixes, onboarding, gateway config sync,
+    and Compose startup.
 
-    If `OPENCLAW_SANDBOX=1`, offline setup also checks for
-    `openclaw-sandbox:bookworm-slim`. A missing sandbox image is a warning
-    because some deployments use sandbox config without preloading that
-    optional image.
+    If `OPENCLAW_SANDBOX=1`, offline setup also checks the configured default
+    and active per-agent sandbox images on the daemon behind
+    `OPENCLAW_DOCKER_SOCKET`. Docker-backed browser images must also carry the
+    current OpenClaw browser contract label. When a required image is missing or
+    incompatible, setup exits without changing sandbox configuration instead of
+    reporting success with an unusable sandbox.
 
   </Step>
 
