@@ -188,6 +188,11 @@ export interface SimpleStreamOptions extends StreamOptions {
   reasoning?: ThinkingLevel;
   /** Custom token budgets for thinking levels (token-based providers only) */
   thinkingBudgets?: ThinkingBudgets;
+  /**
+   * Runtime context forwarded to the model endpoint as opt-in request headers
+   * when the model config includes `requestContextHeaders`.
+   */
+  runContext?: { runId?: string; messageChannel?: string; runKind?: string };
 }
 
 // Generic StreamFunction with typed options.
