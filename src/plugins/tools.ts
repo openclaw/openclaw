@@ -1373,6 +1373,7 @@ export function resolvePluginTools(params: {
             pluginId: entry.pluginId,
             tool,
             optional,
+            logger: context.logger,
           }),
         );
         capturedDescriptorsByPluginId.set(entry.pluginId, capturedDescriptors);

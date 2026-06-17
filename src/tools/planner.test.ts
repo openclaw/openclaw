@@ -113,6 +113,22 @@ describe("buildToolPlan", () => {
     ]);
   });
 
+  it("hides descriptors with malformed empty anyOf availability", () => {
+    const plan = buildToolPlan({
+      descriptors: [descriptor("malformed", { availability: { anyOf: [] } })],
+    });
+
+    expect(plan.visible).toStrictEqual([]);
+    const hiddenTool = expectHiddenTool(plan, 0);
+    expect(hiddenTool.descriptor.name).toBe("malformed");
+    expect(hiddenTool.diagnostics).toEqual([
+      {
+        reason: "unsupported-signal",
+        message: "Empty availability anyOf group",
+      },
+    ]);
+  });
+
   it("keeps protocol conversion separate from executor refs and model normalization", () => {
     const plan = buildToolPlan({
       descriptors: [

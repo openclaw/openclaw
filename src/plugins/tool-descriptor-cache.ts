@@ -2,7 +2,12 @@
 import fs from "node:fs";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { resolveRuntimeConfigCacheKey } from "../config/runtime-snapshot.js";
-import type { JsonObject, ToolDescriptor } from "../tools/types.js";
+import { evaluateEmptyAvailabilityGroupDiagnostics } from "../tools/availability.js";
+import type {
+  JsonObject,
+  ToolAvailabilityExpression,
+  ToolDescriptor,
+} from "../tools/types.js";
 import type { PluginLoadOptions } from "./loader.js";
 import type { OpenClawPluginToolContext } from "./types.js";
 
@@ -144,13 +149,97 @@ function asJsonObject(value: unknown): JsonObject {
   return value as JsonObject;
 }
 
+function isStringArray(value: unknown): value is readonly string[] {
+  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
+}
+
+function isJsonPrimitive(value: unknown): boolean {
+  return value === null || ["boolean", "number", "string"].includes(typeof value);
+}
+
+function isToolAvailabilitySignal(value: { readonly kind?: unknown }): boolean {
+  switch (value.kind) {
+    case "always":
+      return true;
+    case "auth":
+      return typeof (value as { providerId?: unknown }).providerId === "string";
+    case "config": {
+      const check = (value as { check?: unknown }).check;
+      return (
+        isStringArray((value as { path?: unknown }).path) &&
+        (check === undefined || check === "exists" || check === "non-empty" || check === "available")
+      );
+    }
+    case "env":
+      return typeof (value as { name?: unknown }).name === "string";
+    case "plugin-enabled":
+      return typeof (value as { pluginId?: unknown }).pluginId === "string";
+    case "context": {
+      const equals = (value as { equals?: unknown }).equals;
+      return (
+        typeof (value as { key?: unknown }).key === "string" &&
+        (equals === undefined || isJsonPrimitive(equals))
+      );
+    }
+    default:
+      return false;
+  }
+}
+
+function isToolAvailabilityExpression(value: unknown): value is ToolAvailabilityExpression {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  if ("kind" in value) {
+    return isToolAvailabilitySignal(value);
+  }
+  if ("allOf" in value) {
+    const entries = (value as { allOf?: unknown }).allOf;
+    return Array.isArray(entries) && entries.every(isToolAvailabilityExpression);
+  }
+  if ("anyOf" in value) {
+    const entries = (value as { anyOf?: unknown }).anyOf;
+    return Array.isArray(entries) && entries.every(isToolAvailabilityExpression);
+  }
+  return false;
+}
+
+type PluginToolDescriptorLogger = {
+  warn(message: string): void;
+};
+
+function warnEmptyAvailabilityGroups(params: {
+  availability: ToolAvailabilityExpression | undefined;
+  logger: PluginToolDescriptorLogger | undefined;
+  pluginId: string;
+  toolName: string;
+}): void {
+  if (!params.availability || !params.logger) {
+    return;
+  }
+  for (const diagnostic of evaluateEmptyAvailabilityGroupDiagnostics(params.availability)) {
+    params.logger.warn(
+      `plugin tool availability diagnostic (${params.pluginId}/${params.toolName}): ${diagnostic.message}`,
+    );
+  }
+}
+
 export function capturePluginToolDescriptor(params: {
   pluginId: string;
   tool: AnyAgentTool;
   optional: boolean;
+  logger?: PluginToolDescriptorLogger;
 }): CachedPluginToolDescriptor {
   const label = (params.tool as { label?: unknown }).label;
   const title = typeof label === "string" && label.trim() ? label.trim() : undefined;
+  const availabilityRaw = (params.tool as { availability?: unknown }).availability;
+  const availability = isToolAvailabilityExpression(availabilityRaw) ? availabilityRaw : undefined;
+  warnEmptyAvailabilityGroups({
+    availability,
+    logger: params.logger,
+    pluginId: params.pluginId,
+    toolName: params.tool.name,
+  });
   return {
     ...(params.tool.displaySummary ? { displaySummary: params.tool.displaySummary } : {}),
     optional: params.optional,
@@ -161,6 +250,7 @@ export function capturePluginToolDescriptor(params: {
       inputSchema: asJsonObject(params.tool.parameters),
       owner: { kind: "plugin", pluginId: params.pluginId },
       executor: { kind: "plugin", pluginId: params.pluginId, toolName: params.tool.name },
+      ...(availability ? { availability } : {}),
     },
   };
 }

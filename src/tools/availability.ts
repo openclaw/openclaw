@@ -166,6 +166,16 @@ function evaluateExpression(
   ];
 }
 
+/** Collect authoring diagnostics for empty boolean groups without reporting runtime-missing signals. */
+export function evaluateEmptyAvailabilityGroupDiagnostics(
+  availability: ToolAvailabilityExpression,
+): readonly ToolAvailabilityDiagnostic[] {
+  return evaluateExpression(availability, {}).filter(
+    (entry) =>
+      entry.reason === "unsupported-signal" && entry.message.startsWith("Empty availability "),
+  );
+}
+
 /** Evaluate one descriptor against runtime context and return hidden-tool diagnostics. */
 export function evaluateToolAvailability(params: {
   descriptor: ToolDescriptor;

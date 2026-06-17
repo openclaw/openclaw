@@ -17,9 +17,11 @@ vi.mock("../config/runtime-snapshot.js", () => ({
 
 import {
   buildPluginToolDescriptorCacheKey,
+  capturePluginToolDescriptor,
   createPluginToolDescriptorConfigCacheKeyMemo,
   resetPluginToolDescriptorCache,
 } from "./tool-descriptor-cache.js";
+import type { AnyAgentTool } from "../agents/tools/common.js";
 
 describe("plugin tool descriptor cache keys", () => {
   afterEach(() => {
@@ -168,5 +170,112 @@ describe("plugin tool descriptor cache keys", () => {
     });
 
     expect(firstKey).toBe(secondKey);
+  });
+});
+
+describe("capturePluginToolDescriptor", () => {
+  it("preserves tool availability on captured plugin descriptors", () => {
+    const tool = {
+      name: "needs_secret",
+      label: "Needs secret",
+      description: "Needs secret description",
+      parameters: { type: "object" },
+      availability: { kind: "env", name: "OPENCLAW_PLUGIN_SECRET" },
+      async execute() {
+        return { content: [], details: undefined };
+      },
+    } satisfies AnyAgentTool & {
+      availability: { kind: "env"; name: string };
+    };
+
+    const captured = capturePluginToolDescriptor({
+      pluginId: "demo",
+      tool,
+      optional: false,
+    });
+
+    expect(captured.descriptor.availability).toStrictEqual({
+      kind: "env",
+      name: "OPENCLAW_PLUGIN_SECRET",
+    });
+  });
+
+  it("warns during capture when a plugin tool declares an empty availability group", () => {
+    const logger = { warn: vi.fn() };
+    const tool = {
+      name: "broken_tool",
+      label: "Broken tool",
+      description: "Broken tool description",
+      parameters: { type: "object" },
+      availability: { anyOf: [] },
+      async execute() {
+        return { content: [], details: undefined };
+      },
+    } satisfies AnyAgentTool & {
+      availability: { anyOf: [] };
+    };
+
+    capturePluginToolDescriptor({
+      pluginId: "demo",
+      tool,
+      optional: false,
+      logger,
+    });
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      "plugin tool availability diagnostic (demo/broken_tool): Empty availability anyOf group",
+    );
+  });
+
+  it("ignores malformed non-contract availability group fields during capture", () => {
+    const logger = { warn: vi.fn() };
+    const tool = {
+      name: "incidental_tool",
+      label: "Incidental tool",
+      description: "Incidental tool description",
+      parameters: { type: "object" },
+      availability: { anyOf: null },
+      async execute() {
+        return { content: [], details: undefined };
+      },
+    } satisfies AnyAgentTool & {
+      availability: { anyOf: null };
+    };
+
+    const captured = capturePluginToolDescriptor({
+      pluginId: "demo",
+      tool,
+      optional: false,
+      logger,
+    });
+
+    expect(captured.descriptor.availability).toBeUndefined();
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it("ignores malformed non-contract availability signal fields during capture", () => {
+    const logger = { warn: vi.fn() };
+    const tool = {
+      name: "incidental_signal_tool",
+      label: "Incidental signal tool",
+      description: "Incidental signal tool description",
+      parameters: { type: "object" },
+      availability: { kind: "config" },
+      async execute() {
+        return { content: [], details: undefined };
+      },
+    } satisfies AnyAgentTool & {
+      availability: { kind: "config" };
+    };
+
+    const captured = capturePluginToolDescriptor({
+      pluginId: "demo",
+      tool,
+      optional: false,
+      logger,
+    });
+
+    expect(captured.descriptor.availability).toBeUndefined();
+    expect(logger.warn).not.toHaveBeenCalled();
   });
 });
