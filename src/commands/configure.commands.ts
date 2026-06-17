@@ -6,7 +6,24 @@ import type { WizardSection } from "./configure.shared.js";
 import { CONFIGURE_WIZARD_SECTIONS, parseConfigureWizardSections } from "./configure.shared.js";
 import { runConfigureWizard } from "./configure.wizard.js";
 
+function requireInteractiveConfigureTty(runtime: RuntimeEnv): boolean {
+  if (process.stdin.isTTY && process.stdout.isTTY) {
+    return true;
+  }
+  runtime.error(
+    [
+      "Configure needs an interactive TTY.",
+      `Use \`${formatCliCommand("openclaw config get")}\`, \`${formatCliCommand("openclaw config set")}\`, \`${formatCliCommand("openclaw config patch")}\`, or \`${formatCliCommand("openclaw config validate")}\` for non-interactive config changes.`,
+    ].join(" "),
+  );
+  runtime.exit(1);
+  return false;
+}
+
 async function configureCommand(runtime: RuntimeEnv = defaultRuntime) {
+  if (!requireInteractiveConfigureTty(runtime)) {
+    return;
+  }
   await runConfigureWizard({ command: "configure" }, runtime);
 }
 
@@ -14,6 +31,9 @@ async function configureCommandWithSections(
   sections: WizardSection[],
   runtime: RuntimeEnv = defaultRuntime,
 ) {
+  if (!requireInteractiveConfigureTty(runtime)) {
+    return;
+  }
   await runConfigureWizard({ command: "configure", sections }, runtime);
 }
 
