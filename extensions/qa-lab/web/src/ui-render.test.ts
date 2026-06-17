@@ -150,6 +150,13 @@ describe("QA Lab UI evidence render", () => {
                 {
                   artifactKinds: ["screenshot"],
                   artifactPaths: ["screenshot.png"],
+                  coverageIds: ["ui.control"],
+                  runner: {
+                    availability: "local",
+                    command: "pnpm ux:matrix -- --once",
+                    lane: "web-ui-playwright",
+                    workflow: "qa/scenarios/ui/ux-matrix-evidence-dashboard.yaml",
+                  },
                   stage: "first-run",
                   status: "pass",
                   surface: "web-ui",
@@ -159,6 +166,13 @@ describe("QA Lab UI evidence render", () => {
                 {
                   artifactKinds: [],
                   artifactPaths: [],
+                  coverageIds: ["cli-entrypoint"],
+                  runner: {
+                    availability: "local",
+                    command: "pnpm ux:matrix -- --once",
+                    lane: "cli-status",
+                    workflow: "qa/scenarios/ui/ux-matrix-evidence-dashboard.yaml",
+                  },
                   stage: "first-run",
                   status: "proof-gap",
                   surface: "cli",
@@ -186,6 +200,8 @@ describe("QA Lab UI evidence render", () => {
     expect(html).toContain('data-evidence-entry-id="ux-matrix.web-ui.first-run"');
     expect(html).toContain("evidence-matrix-cell-proof-gap");
     expect(html).toContain("not executed in this run");
+    expect(html).toContain("Coverage: cli-entrypoint");
+    expect(html).toContain("Runner: cli-status");
     expect(html).toContain("Open media artifact");
     expect(html).toContain("Open video artifact");
     expect(html).not.toContain('src="/api/evidence/artifact?artifactPath=recording.gif"');

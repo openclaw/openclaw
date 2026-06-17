@@ -151,8 +151,30 @@ describe("evidence gallery", () => {
         { id: "cli", label: "CLI" },
       ],
       cells: [
-        { stage: "first-run", status: "pass", surface: "web-ui" },
-        { stage: "first-run", status: "proof-gap", surface: "cli" },
+        {
+          coverageIds: ["ui.control"],
+          runner: {
+            availability: "local",
+            command: "pnpm ux:matrix -- --once",
+            lane: "web-ui-playwright",
+            workflow: "qa/scenarios/ui/ux-matrix-evidence-dashboard.yaml",
+          },
+          stage: "first-run",
+          status: "pass",
+          surface: "web-ui",
+        },
+        {
+          coverageIds: ["cli-entrypoint"],
+          runner: {
+            availability: "local",
+            command: "pnpm ux:matrix -- --once",
+            lane: "cli-status",
+            workflow: "qa/scenarios/ui/ux-matrix-evidence-dashboard.yaml",
+          },
+          stage: "first-run",
+          status: "proof-gap",
+          surface: "cli",
+        },
         { stage: "error-state", status: "blocked", surface: "cli" },
       ],
     });
@@ -287,6 +309,13 @@ describe("evidence gallery", () => {
         artifactPaths: [
           ".artifacts/qa-e2e/suite/script/ux-matrix-evidence-dashboard/run-1/surfaces/web-ui/stages/first-run/screenshot.png",
         ],
+        coverageIds: ["ui.control"],
+        runner: {
+          availability: "local",
+          command: "pnpm ux:matrix -- --once",
+          lane: "web-ui-playwright",
+          workflow: "qa/scenarios/ui/ux-matrix-evidence-dashboard.yaml",
+        },
         stage: "first-run",
         status: "pass",
         surface: "web-ui",
@@ -296,6 +325,13 @@ describe("evidence gallery", () => {
       {
         artifactKinds: [],
         artifactPaths: [],
+        coverageIds: ["cli-entrypoint"],
+        runner: {
+          availability: "local",
+          command: "pnpm ux:matrix -- --once",
+          lane: "cli-status",
+          workflow: "qa/scenarios/ui/ux-matrix-evidence-dashboard.yaml",
+        },
         stage: "first-run",
         status: "proof-gap",
         surface: "cli",
@@ -307,6 +343,8 @@ describe("evidence gallery", () => {
         artifactPaths: [
           ".artifacts/qa-e2e/suite/script/ux-matrix-evidence-dashboard/run-1/surfaces/cli/stages/error-state/logs.txt",
         ],
+        coverageIds: [],
+        runner: null,
         stage: "error-state",
         status: "blocked",
         surface: "cli",

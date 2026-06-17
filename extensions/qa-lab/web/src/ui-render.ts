@@ -284,6 +284,13 @@ type EvidenceProducerContextFile = {
 type EvidenceMatrixCell = {
   artifactKinds: string[];
   artifactPaths: string[];
+  coverageIds: string[];
+  runner: {
+    availability: string | null;
+    command: string | null;
+    lane: string | null;
+    workflow: string | null;
+  } | null;
   stage: string;
   status: string;
   surface: string;
@@ -1845,7 +1852,12 @@ function renderEvidenceMatrixCell(
     cell.artifactKinds.length > 0
       ? ` Proof: ${cell.artifactKinds.join(" + ")} (${cell.artifactPaths.length})`
       : "";
-  const title = `${surface} / ${stage}: ${cell.status}${isProofGap ? " (not executed in this run)" : ""}.${proofText}${artifactText}`;
+  const coverageText =
+    cell.coverageIds.length > 0 ? ` Coverage: ${cell.coverageIds.join(", ")}` : "";
+  const runnerText = cell.runner?.lane
+    ? ` Runner: ${cell.runner.lane}${cell.runner.workflow ? ` via ${cell.runner.workflow}` : ""}${cell.runner.command ? `; ${cell.runner.command}` : ""}`
+    : "";
+  const title = `${surface} / ${stage}: ${cell.status}${isProofGap ? " (not executed in this run)" : ""}.${coverageText}${runnerText ? ` ${runnerText}` : ""}${proofText}${artifactText}`;
   const className = `evidence-matrix-cell evidence-matrix-cell-${matrixCellClass(cell.status)}${cell.testId ? " evidence-matrix-cell-action" : ""}`;
   const label = isProofGap ? "gap" : cell.status;
   if (!cell.testId) {

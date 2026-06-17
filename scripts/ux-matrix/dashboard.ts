@@ -33,6 +33,17 @@ type CellStatus =
 
 type AutomationReadiness = "now-local" | "now-ci" | "later-heavy" | "manual-only";
 
+type RunnerAvailability = "local" | "ci-available" | "manual-live" | "planned";
+
+type RunnerPlan = {
+  availability: RunnerAvailability;
+  command: string;
+  labels: string[];
+  lane: string;
+  notes: string;
+  workflow?: string;
+};
+
 type SurfaceId =
   | "android"
   | "ios-simulator"
@@ -74,8 +85,10 @@ type ProofArtifacts = {
 
 type MatrixCell = {
   automation: AutomationReadiness;
+  coverageIds?: string[];
   proof: ProofArtifacts;
   reason: string;
+  runner?: RunnerPlan;
   stage: StageId;
   status: CellStatus;
   surface: SurfaceId;
@@ -214,13 +227,13 @@ const stages: Array<{ id: StageId; label: string }> = [
 
 const surfaces: Array<{ id: SurfaceId; label: string; readiness: AutomationReadiness }> = [
   { id: "web-ui", label: "Web UI", readiness: "now-local" },
-  { id: "android", label: "Android", readiness: "later-heavy" },
-  { id: "ios-simulator", label: "iPhone Simulator", readiness: "later-heavy" },
-  { id: "ipad-simulator", label: "iPad Simulator", readiness: "later-heavy" },
-  { id: "macos-app", label: "macOS app", readiness: "later-heavy" },
+  { id: "android", label: "Android", readiness: "now-ci" },
+  { id: "ios-simulator", label: "iPhone Simulator", readiness: "now-ci" },
+  { id: "ipad-simulator", label: "iPad Simulator", readiness: "now-ci" },
+  { id: "macos-app", label: "macOS app", readiness: "now-ci" },
   { id: "cli", label: "CLI", readiness: "now-local" },
   { id: "tui", label: "TUI", readiness: "now-local" },
-  { id: "watchos", label: "watchOS", readiness: "later-heavy" },
+  { id: "watchos", label: "watchOS", readiness: "now-ci" },
   { id: "matrix-live", label: "Matrix live", readiness: "manual-only" },
 ];
 
@@ -359,27 +372,223 @@ async function writeText(filePath: string, value: string): Promise<void> {
   await writeFile(filePath, value);
 }
 
+function uxMatrixCoverageIdsForCell(cell: Pick<MatrixCell, "stage" | "surface">): string[] {
+  const ids = new Set<string>();
+  const add = (...coverageIds: string[]) => {
+    for (const coverageId of coverageIds) {
+      ids.add(coverageId);
+    }
+  };
+
+  if (cell.stage === "install-or-build") {
+    switch (cell.surface) {
+      case "android":
+        add("android-talk-mode");
+        break;
+      case "cli":
+        add("cli-entrypoint");
+        break;
+      case "ios-simulator":
+      case "ipad-simulator":
+        add("ios-talk-mode");
+        break;
+      case "macos-app":
+        add("native-swiftui-webchat-window");
+        break;
+      case "tui":
+        add("gateway-tui-launch", "terminal-alias-launch");
+        break;
+      case "watchos":
+        add("watch-app-entry-point");
+        break;
+      case "web-ui":
+        add("ui.control");
+        break;
+      case "matrix-live":
+        break;
+    }
+  }
+  if (cell.stage === "gateway-discovery" || cell.stage === "gateway-connected-healthy") {
+    add("health-apis", "gateway.sessions-list", "tools.session-status");
+  }
+  if (cell.stage === "setup-code-entry") {
+    add("setup-code-bootstrap", "device-tokens");
+  }
+  if (cell.stage === "permission-setup" && cell.surface === "macos-app") {
+    add("grant-macos-permissions");
+  }
+  if (cell.stage === "error-state" || cell.stage === "disconnect-recovery") {
+    add("status-snapshots");
+  }
+
+  switch (cell.surface) {
+    case "web-ui":
+      add("ui.control", "authenticated-control-ui-access");
+      break;
+    case "cli":
+      add("cli-entrypoint");
+      break;
+    case "tui":
+      add("gateway-tui-launch", "terminal-alias-launch", "terminal-rendering-primitives");
+      break;
+    case "android":
+      add("android-talk-mode");
+      break;
+    case "ios-simulator":
+      add("ios-talk-mode", "gateway-side-ios-exec-approval");
+      break;
+    case "ipad-simulator":
+      add("ios-talk-mode", "gateway-side-ios-exec-approval");
+      break;
+    case "macos-app":
+      add("macos-native-talk-mode", "native-swiftui-webchat-window", "macos-webchat-transport");
+      break;
+    case "watchos":
+      add(
+        "watch-app-entry-point",
+        "watch-status",
+        "watch-exec-approval-prompt",
+        "iphone-side-watchconnectivity-transport",
+        "watch-side-receiver-activation",
+      );
+      if (cell.stage === "active-chat-session") {
+        add("watch-live-messages");
+      }
+      if (cell.stage === "history-completed-session") {
+        add("persistent-watch-inbox-state");
+      }
+      break;
+    case "matrix-live":
+      add("ui.control", "health-apis", "status-snapshots");
+      break;
+  }
+  return [...ids];
+}
+
+function runnerPlanForCell(cell: Pick<MatrixCell, "stage" | "surface">): RunnerPlan {
+  if (cell.surface === "web-ui") {
+    return {
+      availability: "local",
+      command: "pnpm ux:matrix -- --once --recording-ms <ms>",
+      labels: ["local-mac", "ubuntu-24.04", "blacksmith-4vcpu-ubuntu-2404"],
+      lane: "web-ui-playwright",
+      notes:
+        "Runs the mocked Control UI through Playwright and emits screenshots, video, GIF, logs, and machine validation.",
+      workflow: "qa/scenarios/ui/ux-matrix-evidence-dashboard.yaml",
+    };
+  }
+  if (cell.surface === "cli") {
+    return {
+      availability: "local",
+      command: "pnpm ux:matrix -- --once --recording-ms <ms>",
+      labels: ["local-mac", "ubuntu-24.04", "windows-2025", "macos-15"],
+      lane: "cli-status",
+      notes:
+        "Runs Node CLI entrypoint and isolated gateway-status recovery probes without launching heavyweight app surfaces.",
+      workflow: "qa/scenarios/ui/ux-matrix-evidence-dashboard.yaml",
+    };
+  }
+  if (cell.surface === "tui") {
+    return {
+      availability: "ci-available",
+      command: "node scripts/run-vitest.mjs run --config test/vitest/vitest.tui-pty.config.ts",
+      labels: ["ubuntu-24.04", "blacksmith-4vcpu-ubuntu-2404"],
+      lane: "tui-pty",
+      notes:
+        "Use the existing TUI PTY lane for launch/rendering proof, then import logs and terminal captures as QA evidence.",
+      workflow: ".github/workflows/tui-pty.yml",
+    };
+  }
+  if (cell.surface === "android") {
+    return {
+      availability: "ci-available",
+      command: "pnpm android:test && pnpm android:assemble",
+      labels: ["ubuntu-24.04", "blacksmith-8vcpu-ubuntu-2404"],
+      lane: "android-ci",
+      notes:
+        "Use the existing Android CI job for build/unit coverage; emulator screenshot/GIF proof should be added as the UX lane matures.",
+      workflow: ".github/workflows/ci.yml#android",
+    };
+  }
+  if (cell.surface === "ios-simulator" || cell.surface === "ipad-simulator") {
+    return {
+      availability: "ci-available",
+      command: "pnpm ios:build",
+      labels: ["macos-26", "blacksmith-12vcpu-macos-26"],
+      lane: cell.surface === "ipad-simulator" ? "ipad-simulator-ci" : "ios-simulator-ci",
+      notes:
+        "Use the existing macOS Swift/Xcode CI runner; simulator launch/screenshot/GIF proof should be attached through QA evidence artifacts.",
+      workflow: ".github/workflows/ci.yml#macos-swift",
+    };
+  }
+  if (cell.surface === "macos-app") {
+    return {
+      availability: "ci-available",
+      command: "pnpm test:macos:ci && swift build --package-path apps/macos --product OpenClaw",
+      labels: ["macos-15", "macos-26", "blacksmith-6vcpu-macos-15"],
+      lane: "macos-app-ci",
+      notes:
+        "Use the existing macOS Node/Swift CI lanes for build/runtime proof; UI proof can be layered on with macOS screenshots.",
+      workflow: ".github/workflows/ci.yml#macos-node, .github/workflows/ci.yml#macos-swift",
+    };
+  }
+  if (cell.surface === "watchos") {
+    return {
+      availability: "ci-available",
+      command: "pnpm ios:build",
+      labels: ["macos-26", "blacksmith-12vcpu-macos-26"],
+      lane: "watchos-ci",
+      notes:
+        "Use the Apple simulator runner family for WatchConnectivity and approval/status proof once watch UI capture is wired.",
+      workflow: ".github/workflows/ci.yml#macos-swift",
+    };
+  }
+  return {
+    availability: "manual-live",
+    command: "pnpm openclaw qa suite --provider-mode live-frontier --scenario <live-scenario>",
+    labels: ["live-gateway", "manual-approval"],
+    lane: "matrix-live",
+    notes:
+      "Requires a real gateway/live credential lane; evidence should include redacted gateway logs and screenshots.",
+    workflow: ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml",
+  };
+}
+
+function initialReasonForCell(cell: Pick<MatrixCell, "stage" | "surface">): string {
+  const plan = runnerPlanForCell(cell);
+  if (plan.availability === "local") {
+    return `Queued for local ${plan.lane} evidence.`;
+  }
+  if (plan.availability === "ci-available") {
+    return `Proof gap: schedulable on ${plan.lane} via ${plan.workflow}.`;
+  }
+  if (plan.availability === "manual-live") {
+    return "Proof gap: requires a live gateway or approval lane before evidence can be claimed.";
+  }
+  return `Proof gap: planned lane ${plan.lane} is not wired yet.`;
+}
+
 function createInitialCells(): MatrixCell[] {
   return surfaces.flatMap((surface) =>
-    stages.map((stage) => ({
-      automation: surface.readiness,
-      proof: {},
-      reason:
-        surface.id === "web-ui"
-          ? "Queued for the MVP mocked web UI lane."
-          : surface.id === "cli"
-            ? "Queued for the MVP serial CLI status lane."
-            : "Represented in MVP shell; not executed in this local low-memory slice.",
-      stage: stage.id,
-      status: "proof-gap" as CellStatus,
-      surface: surface.id,
-    })),
+    stages.map((stage) => {
+      const cell = { stage: stage.id, surface: surface.id };
+      return {
+        automation: surface.readiness,
+        coverageIds: uxMatrixCoverageIdsForCell(cell),
+        proof: {},
+        reason: initialReasonForCell(cell),
+        runner: runnerPlanForCell(cell),
+        stage: stage.id,
+        status: "proof-gap" as CellStatus,
+        surface: surface.id,
+      };
+    }),
   );
 }
 
 function replaceCell(cells: MatrixCell[], result: MatrixCell): MatrixCell[] {
   return cells.map((cell) =>
-    cell.surface === result.surface && cell.stage === result.stage ? result : cell,
+    cell.surface === result.surface && cell.stage === result.stage ? { ...cell, ...result } : cell,
   );
 }
 
@@ -435,6 +644,46 @@ function countIssueStatuses(counts: Record<CellStatus, number>): number {
   return counts.fail + counts.blocked + counts["environment-issue"] + counts["automation-issue"];
 }
 
+function summarizeRunnerPlans(cells: MatrixCell[]) {
+  const lanes = new Map<
+    string,
+    {
+      availability: RunnerAvailability;
+      cellCount: number;
+      command: string;
+      labels: string[];
+      lane: string;
+      notes: string;
+      surfaces: string[];
+      workflow?: string;
+    }
+  >();
+  for (const cell of cells) {
+    if (!cell.runner) {
+      continue;
+    }
+    const existing = lanes.get(cell.runner.lane);
+    if (existing) {
+      existing.cellCount += 1;
+      if (!existing.surfaces.includes(cell.surface)) {
+        existing.surfaces.push(cell.surface);
+      }
+      continue;
+    }
+    lanes.set(cell.runner.lane, {
+      availability: cell.runner.availability,
+      cellCount: 1,
+      command: cell.runner.command,
+      labels: cell.runner.labels,
+      lane: cell.runner.lane,
+      notes: cell.runner.notes,
+      surfaces: [cell.surface],
+      workflow: cell.runner.workflow,
+    });
+  }
+  return [...lanes.values()].sort((a, b) => a.lane.localeCompare(b.lane));
+}
+
 function isCellStatus(value: unknown): value is CellStatus {
   return (
     value === "pass" ||
@@ -483,16 +732,14 @@ function qaStatusToCellStatus(entry: QaEvidenceEntry): CellStatus {
 }
 
 function uxMatrixCoverageForCell(cell: MatrixCell): QaEvidenceEntry["coverage"] {
-  if (cell.surface === "web-ui") {
-    return [{ id: "ui.control", role: "primary" }];
-  }
-  if (cell.surface === "cli" && cell.stage === "install-or-build") {
-    return [{ id: "cli-entrypoint", role: "primary" }];
-  }
-  if (cell.surface === "cli" && cell.stage === "error-state") {
-    return [{ id: "status-snapshots", role: "primary" }];
-  }
-  return [];
+  const coverageIds =
+    cell.coverageIds && cell.coverageIds.length > 0
+      ? cell.coverageIds
+      : uxMatrixCoverageIdsForCell(cell);
+  return coverageIds.map((id, index) => ({
+    id,
+    role: index === 0 ? "primary" : "secondary",
+  }));
 }
 
 function proofToQaArtifacts(proof: ProofArtifacts, source: string): QaEvidenceArtifact[] {
@@ -1223,6 +1470,7 @@ async function writeRunFiles(
 ): Promise<void> {
   const counts = countStatuses(cells);
   const generatedAt = new Date().toISOString();
+  const runnerPlans = summarizeRunnerPlans(cells);
   const releaseLedger = {
     schemaVersion: 1,
     generatedAt,
@@ -1244,6 +1492,7 @@ async function writeRunFiles(
       automationIssue: counts["automation-issue"],
     },
     notes: [],
+    runnerPlans,
   };
   const manifest = {
     schemaVersion: 1,
@@ -1272,6 +1521,7 @@ async function writeRunFiles(
     counts,
     generatedAt,
     run: summary,
+    runnerPlans,
     stages,
     surfaces,
   };
@@ -1305,8 +1555,16 @@ function renderScorecard(
   preflightResult: unknown,
 ): string {
   const counts = countStatuses(cells);
+  const runnerPlans = summarizeRunnerPlans(cells);
+  const executedCells = cells.filter(isExecutedUxMatrixCell);
+  const plannedCiCells = cells.filter(
+    (cell) => cell.status === "proof-gap" && cell.runner?.availability === "ci-available",
+  );
+  const manualLiveCells = cells.filter(
+    (cell) => cell.status === "proof-gap" && cell.runner?.availability === "manual-live",
+  );
   const lines = [
-    "# OpenClaw UX Matrix MVP",
+    "# OpenClaw UX Matrix",
     "",
     `- Run: \`${summary.runId}\``,
     `- Status: \`${summary.status}\``,
@@ -1318,12 +1576,28 @@ function renderScorecard(
     "",
     ...Object.entries(counts).map(([status, count]) => `- \`${status}\`: ${count}`),
     "",
-    "## MVP Execution",
+    "## Executed Evidence",
     "",
-    "- Executed: `web-ui` / `first-run` and `gateway-connected-healthy`.",
-    "- Executed: `cli` / `install-or-build` and `error-state`.",
-    "- Not executed: Android, iOS, iPad, macOS, TUI, watchOS, and Matrix live cells are represented as proof gaps for future serial lanes.",
-    "- Memory rule: this MVP does not launch Android, Apple simulators, Docker, or a real gateway.",
+    ...(executedCells.length > 0
+      ? executedCells.map(
+          (cell) =>
+            `- \`${cell.surface}\` / \`${cell.stage}\`: \`${cell.status}\` (${(cell.coverageIds ?? []).join(", ") || "no coverage id"})`,
+        )
+      : ["- No cells executed in this run."]),
+    "",
+    "## Actionable Proof Gaps",
+    "",
+    `- CI-schedulable gaps: ${plannedCiCells.length}. These map to existing runner lanes but did not execute in this run.`,
+    `- Manual/live gaps: ${manualLiveCells.length}. These need a real gateway, approval, or live credential lane.`,
+    "- Proof gaps are not failures; they are cells without evidence artifacts for this run.",
+    "- Current local memory rule: the default run does not launch Android emulator, Apple simulators, Docker, or a real gateway.",
+    "",
+    "## Runner Plan",
+    "",
+    ...runnerPlans.map(
+      (plan) =>
+        `- \`${plan.lane}\` (${plan.availability}, ${plan.cellCount} cells): ${plan.workflow ?? "no workflow"} -> \`${plan.command}\``,
+    ),
     "",
     "## Preflight",
     "",
@@ -1356,8 +1630,12 @@ async function runMatrix(options: RunnerOptions): Promise<RunSummary> {
     `node --import tsx scripts/ux-matrix/dashboard.ts --once --recording-ms ${options.recordingMs}`,
     `node --import tsx scripts/ux-matrix/dashboard.ts --port <port> --recording-ms ${options.recordingMs}`,
     `POST /api/runs`,
-    "MVP lane: mocked Control UI via ui/src/test-helpers/control-ui-e2e.ts",
-    "MVP lane: CLI version and isolated gateway status recovery via scripts/run-node.mjs",
+    "local lane: mocked Control UI via ui/src/test-helpers/control-ui-e2e.ts",
+    "local lane: CLI version and isolated gateway status recovery via scripts/run-node.mjs",
+    "CI lane: TUI PTY via .github/workflows/tui-pty.yml",
+    "CI lane: Android via .github/workflows/ci.yml#android",
+    "CI lane: Apple simulator/macOS/watch surfaces via .github/workflows/ci.yml macOS jobs",
+    "live lane: gateway/live/provider suites via openclaw-live-and-e2e-checks-reusable.yml",
   ];
   await writeText(path.join(runRoot, "commands.txt"), `${commands.join("\n")}\n`);
   const preflightResult = await preflight(runRoot);

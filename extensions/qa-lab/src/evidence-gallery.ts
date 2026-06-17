@@ -22,6 +22,13 @@ export type QaEvidenceProducerContextFile = {
 export type QaEvidenceMatrixCellView = {
   artifactKinds: string[];
   artifactPaths: string[];
+  coverageIds: string[];
+  runner: {
+    availability: string | null;
+    command: string | null;
+    lane: string | null;
+    workflow: string | null;
+  } | null;
   stage: string;
   status: string;
   surface: string;
@@ -405,10 +412,20 @@ function readMatrixCells(params: {
     const entry =
       status === "proof-gap" ? null : (entriesByCell.get(`${surface}:${stage}`) ?? null);
     const artifacts = entry?.execution?.artifacts ?? [];
+    const runner = readRecord(cell.runner);
     return [
       {
         artifactKinds: readStringArray(artifacts.map((artifact) => artifact.kind)),
         artifactPaths: artifacts.map((artifact) => artifact.path),
+        coverageIds: readStringArray(Array.isArray(cell.coverageIds) ? cell.coverageIds : []),
+        runner: runner
+          ? {
+              availability: readString(runner.availability),
+              command: readString(runner.command),
+              lane: readString(runner.lane),
+              workflow: readString(runner.workflow),
+            }
+          : null,
         stage,
         status,
         surface,
