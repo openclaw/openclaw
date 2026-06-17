@@ -1899,6 +1899,43 @@ export async function runHeartbeatOnce(opts: {
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
+    // When visibleReplies is explicitly "message_tool" and the agent was
+    // given the heartbeat_respond tool but didn't call it, don't deliver
+    // raw text to the channel. The reply should remain private when the
+    // model didn't call the notification tool with notify=true.
+    const heartbeatVisibleReplies: string | undefined =
+      normalizeChatType(delivery.chatType) === "group" ||
+      normalizeChatType(delivery.chatType) === "channel"
+        ? (cfg.messages?.groupChat?.visibleReplies ?? cfg.messages?.visibleReplies)
+        : cfg.messages?.visibleReplies;
+    if (
+      heartbeatVisibleReplies === "message_tool" &&
+      usesHeartbeatResponseTool &&
+      !heartbeatToolResponse
+    ) {
+      await restoreHeartbeatUpdatedAt({ storePath, sessionKey, updatedAt: previousUpdatedAt });
+      const okSent = await maybeSendHeartbeatOk();
+      emitHeartbeatEvent({
+        status: "ok-token",
+        reason: opts.reason,
+        preview: replyPayload?.text?.slice(0, 200),
+        durationMs: Date.now() - startedAt,
+        channel: delivery.channel !== "none" ? delivery.channel : undefined,
+        accountId: delivery.accountId,
+        silent: !okSent,
+        indicatorType: visibility.useIndicator ? resolveIndicatorType("ok-token") : undefined,
+      });
+      await markCommitmentsStatus({
+        cfg,
+        ids: dueCommitmentIds,
+        status: "dismissed",
+        nowMs: startedAt,
+      });
+      await updateTaskTimestamps();
+      consumeInspectedSystemEvents();
+      return { status: "ran", durationMs: Date.now() - startedAt };
+    }
+
     const normalized = heartbeatToolResponse
       ? normalizeHeartbeatToolNotification(heartbeatToolResponse, responsePrefix)
       : replyPayload
