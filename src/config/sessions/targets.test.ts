@@ -208,6 +208,34 @@ describe("resolveAgentSessionStoreTargetsSync", () => {
     });
   });
 
+  it("derives literal agent-tree store ownership from the on-disk path", async () => {
+    await withTempHome(async (home) => {
+      const customRoot = path.join(home, "custom-state");
+      const storePaths = await createAgentSessionStores(customRoot, ["main", "codex"]);
+      const cfg: OpenClawConfig = {
+        session: {
+          store: path.join(customRoot, "agents", "codex", "sessions", "sessions.json"),
+        },
+        agents: {
+          list: [{ id: "main", default: true }],
+        },
+      };
+
+      expect(
+        resolveAgentSessionStoreTargetsSync(cfg, "codex", { env: process.env }),
+      ).toContainEqual({
+        agentId: "codex",
+        storePath: storePaths.codex,
+      });
+      expect(resolveAgentSessionStoreTargetsSync(cfg, "main", { env: process.env })).toEqual([
+        {
+          agentId: "main",
+          storePath: storePaths.main,
+        },
+      ]);
+    });
+  });
+
   it("finds discovered directories whose names normalize to the requested agent", async () => {
     await withTempHome(async (home) => {
       const customRoot = path.join(home, "custom-state");
@@ -253,6 +281,36 @@ describe("resolveAllAgentSessionStoreTargets", () => {
       expect(countMatching(targets, (target) => target.storePath === storePaths.ops)).toBe(1);
     });
   });
+
+  for (const resolver of discoveryResolvers) {
+    it(`derives configured literal agent-tree ownership from the store path (${resolver.label})`, async () => {
+      await withTempHome(async (home) => {
+        const customRoot = path.join(home, "custom-state");
+        const storePaths = await createAgentSessionStores(customRoot, ["main", "codex"]);
+        const cfg: OpenClawConfig = {
+          session: {
+            store: path.join(customRoot, "agents", "codex", "sessions", "sessions.json"),
+          },
+          agents: {
+            list: [{ id: "main", default: true }],
+          },
+        };
+
+        const targets = await resolver.resolve(cfg, process.env);
+
+        expect(
+          targets.some(
+            (target) => target.agentId === "codex" && target.storePath === storePaths.codex,
+          ),
+        ).toBe(true);
+        expect(
+          targets.some(
+            (target) => target.agentId === "main" && target.storePath === storePaths.codex,
+          ),
+        ).toBe(false);
+      });
+    });
+  }
 
   it("keeps the actual on-disk store path for discovered retired agents", async () => {
     await withTempHome(async (home) => {

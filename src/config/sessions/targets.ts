@@ -215,7 +215,10 @@ export function resolveAllAgentSessionStoreTargetsSync(
       agentsRoot,
       realAgentsRoot,
     });
-    return validatedStorePath ? [{ ...target, storePath: validatedStorePath }] : [];
+    const derivedTarget = validatedStorePath
+      ? toDiscoveredSessionStoreTarget(path.dirname(validatedStorePath), validatedStorePath)
+      : undefined;
+    return derivedTarget ? [derivedTarget] : [];
   });
   const discoveredTargets = agentsRoots.flatMap((agentsDir) => {
     try {
@@ -290,8 +293,11 @@ export function resolveAgentSessionStoreTargetsSync(
       agentsRoot,
       realAgentsRoot,
     });
-    if (validatedStorePath) {
-      targets.push({ agentId: requested, storePath: validatedStorePath });
+    const target = validatedStorePath
+      ? toDiscoveredSessionStoreTarget(path.dirname(validatedStorePath), validatedStorePath)
+      : undefined;
+    if (target && normalizeAgentId(target.agentId) === requested) {
+      targets.push(target);
     }
   }
 
@@ -372,7 +378,7 @@ export async function resolveAllAgentSessionStoreTargets(
           realAgentsRoot,
         });
         return validatedStorePath
-          ? Object.assign({}, target, { storePath: validatedStorePath })
+          ? toDiscoveredSessionStoreTarget(path.dirname(validatedStorePath), validatedStorePath)
           : undefined;
       }),
     )

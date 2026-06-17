@@ -16,19 +16,14 @@ describe("loadCombinedSessionStoreForGateway", () => {
     await withTempHome(async (home) => {
       const customRoot = path.join(home, "custom-state");
       const mainStorePath = path.join(customRoot, "agents", "main", "sessions", "sessions.json");
-      const codexStorePath = path.join(
-        customRoot,
-        "agents",
-        "codex",
-        "sessions",
-        "sessions.json",
-      );
+      const codexStorePath = path.join(customRoot, "agents", "codex", "sessions", "sessions.json");
 
       await writeStore(mainStorePath, {
         "agent:main:main": { sessionId: "s-main", updatedAt: 100 },
       });
       await writeStore(codexStorePath, {
-        "agent:codex:acp-task": { sessionId: "s-codex", updatedAt: 200 },
+        main: { sessionId: "s-codex-main", updatedAt: 200 },
+        "agent:codex:acp-task": { sessionId: "s-codex", updatedAt: 150 },
       });
       await writeStore(
         path.join(home, ".openclaw", "agents", "other", "sessions", "sessions.json"),
@@ -50,7 +45,13 @@ describe("loadCombinedSessionStoreForGateway", () => {
       const { store, storePath } = loadCombinedSessionStoreForGateway(cfg);
 
       expect(storePath).toBe(mainStorePath);
-      expect(Object.keys(store).toSorted()).toEqual(["agent:codex:acp-task", "agent:main:main"]);
+      expect(Object.keys(store).toSorted()).toEqual([
+        "agent:codex:acp-task",
+        "agent:codex:main",
+        "agent:main:main",
+      ]);
+      expect(store["agent:codex:main"]?.sessionId).toBe("s-codex-main");
+      expect(store["agent:main:main"]?.sessionId).toBe("s-main");
       expect(store["agent:other:leaked"]).toBeUndefined();
     });
   });
