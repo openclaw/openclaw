@@ -109,13 +109,14 @@ export default defineSingleProviderPluginEntry({
       order: "simple",
       run: async (ctx) => {
         const auth = ctx.resolveProviderApiKey(PROVIDER_ID);
-        if (!auth.apiKey) {
+        const apiKey = auth.apiKey;
+        if (!apiKey) {
           return null;
         }
         return {
           provider: {
-            ...(await buildAdorbisProvider(auth)),
-            apiKey: auth.apiKey,
+            ...(await buildAdorbisProvider({ ...auth, apiKey })),
+            apiKey,
           },
         };
       },
