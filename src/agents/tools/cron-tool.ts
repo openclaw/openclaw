@@ -1086,7 +1086,7 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
             throw new Error("jobId required (id accepted for backward compatibility)");
           }
           const runMode =
-            params.runMode === "due" || params.runMode === "force" ? params.runMode : "force";
+            params.runMode === "due" || params.runMode === "force" ? params.runMode : "due";
           return jsonResult(await callGateway("cron.run", gatewayOpts, { id, mode: runMode }));
         }
         case "runs": {
