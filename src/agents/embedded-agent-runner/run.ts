@@ -1853,6 +1853,10 @@ async function runEmbeddedAgentInternal(
           } else {
             parentAbortSignal?.addEventListener("abort", relayParentAbort, { once: true });
           }
+          // Periodically report progress during long-running tool execution
+          // so the lane timeout does not expire while a tool is still running
+          // (e.g., exec commands taking >5 minutes) (#94033).
+          const progressInterval = setInterval(() => noteLaneTaskProgress(), 30_000);
           const rawAttempt = await runEmbeddedAttemptWithBackend({
             sessionId: activeSessionId,
             sessionKey: resolvedSessionKey,
@@ -2011,6 +2015,7 @@ async function runEmbeddedAgentInternal(
               throw postCompactionAbortError ?? err;
             })
             .finally(() => {
+              clearInterval(progressInterval);
               parentAbortSignal?.removeEventListener?.("abort", relayParentAbort);
               if (postCompactionAbortController === attemptAbortController) {
                 postCompactionAbortController = undefined;
