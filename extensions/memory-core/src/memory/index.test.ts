@@ -341,7 +341,13 @@ describe("memory index", () => {
         };
       }
     ).db;
-    for (const table of ["files", "chunks", "embedding_cache", "chunks_fts", "chunks_vec"]) {
+    for (const table of [
+      "memory_index_sources",
+      "memory_index_chunks",
+      "memory_embedding_cache",
+      "memory_index_chunks_fts",
+      "memory_index_chunks_vec",
+    ]) {
       const existingTable = db
         .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
         .get(table);
@@ -452,18 +458,18 @@ describe("memory index", () => {
         run: (...params: unknown[]) => void;
       };
     };
-    const metaRow = db.prepare("SELECT value FROM meta WHERE key = ?").get("memory_index_meta_v1");
+    const metaRow = db
+      .prepare("SELECT value FROM memory_index_meta WHERE key = ?")
+      .get("memory_index_meta_v1");
     const meta = JSON.parse(metaRow?.value ?? "{}") as MemoryIndexMeta;
-    db.prepare("UPDATE meta SET value = ? WHERE key = ?").run(
+    db.prepare("UPDATE memory_index_meta SET value = ? WHERE key = ?").run(
       JSON.stringify({ ...meta, model, providerKey }),
       "memory_index_meta_v1",
     );
-    db.prepare("UPDATE chunks SET model = ?").run(model);
-    db.prepare("UPDATE embedding_cache SET model = ?, provider_key = ? WHERE provider = ?").run(
-      model,
-      providerKey,
-      identityAliasFixture.provider,
-    );
+    db.prepare("UPDATE memory_index_chunks SET model = ?").run(model);
+    db.prepare(
+      "UPDATE memory_embedding_cache SET model = ?, provider_key = ? WHERE provider = ?",
+    ).run(model, providerKey, identityAliasFixture.provider);
   }
 
   async function expectHybridKeywordSearchFindsMemory(cfg: TestCfg) {
@@ -634,7 +640,7 @@ describe("memory index", () => {
           db: { prepare: (sql: string) => { get: (...args: unknown[]) => unknown } };
         }
       ).db
-        .prepare("SELECT embedding FROM chunks WHERE path LIKE ? AND source = ?")
+        .prepare("SELECT embedding FROM memory_index_chunks WHERE path LIKE ? AND source = ?")
         .get("%2026-01-13.md", "memory") as { embedding: string } | undefined;
 
       expect(betaRow).toBeDefined();
@@ -1009,7 +1015,7 @@ describe("memory index", () => {
         nextManager as unknown as {
           db: { exec: (sql: string) => void };
         }
-      ).db.exec(`DELETE FROM meta WHERE key = 'memory_index_meta_v1'`);
+      ).db.exec(`DELETE FROM memory_index_meta WHERE key = 'memory_index_meta_v1'`);
       expect(nextManager.status().custom?.indexIdentity).toEqual({
         status: "missing",
         reason: "index metadata is missing",
@@ -1086,7 +1092,7 @@ describe("memory index", () => {
           };
         }
       ).db;
-      db.exec(`DELETE FROM meta WHERE key = 'memory_index_meta_v1'`);
+      db.exec(`DELETE FROM memory_index_meta WHERE key = 'memory_index_meta_v1'`);
 
       await nextManager.sync({ reason: "test" });
 
@@ -1095,7 +1101,7 @@ describe("memory index", () => {
         status: "missing",
         reason: "index metadata is missing",
       });
-      const row = db.prepare("SELECT model FROM chunks LIMIT 1").get();
+      const row = db.prepare("SELECT model FROM memory_index_chunks LIMIT 1").get();
       expect(row?.model).toBe("semantic-embed");
     } finally {
       await nextManager.close?.();
@@ -1197,7 +1203,7 @@ describe("memory index", () => {
           nextManager as unknown as {
             db: { exec: (sql: string) => void };
           }
-        ).db.exec(`DELETE FROM meta WHERE key = 'memory_index_meta_v1'`);
+        ).db.exec(`DELETE FROM memory_index_meta WHERE key = 'memory_index_meta_v1'`);
 
         const status = nextManager.status();
 
@@ -1627,7 +1633,10 @@ describe("memory index", () => {
     const originalPrepare = db.prepare.bind(db);
     let ftsSelects = 0;
     const prepareSpy = vi.spyOn(db, "prepare").mockImplementation((sql: string) => {
-      if (sql.includes("FROM chunks_fts") && sql.includes("WHERE chunks_fts MATCH ?")) {
+      if (
+        sql.includes("FROM memory_index_chunks_fts") &&
+        sql.includes("WHERE memory_index_chunks_fts MATCH ?")
+      ) {
         ftsSelects += 1;
       }
       return originalPrepare(sql);

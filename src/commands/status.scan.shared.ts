@@ -18,7 +18,12 @@ import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
 import { resolveGatewayProbeTarget } from "../gateway/probe-target.js";
 import type { GatewayProbeResult, probeGateway as probeGatewayFn } from "../gateway/probe.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import type { MemoryProviderStatus } from "../memory-host-sdk/engine-storage.js";
+import {
+  MEMORY_INDEX_CHUNKS_TABLE,
+  MEMORY_INDEX_META_TABLE,
+  MEMORY_INDEX_SOURCES_TABLE,
+  type MemoryProviderStatus,
+} from "../memory-host-sdk/engine-storage.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { resolveTailscalePublishedHost } from "../shared/tailscale-status.js";
@@ -51,24 +56,29 @@ function hasBuiltInMemoryState(databasePath: string): boolean {
   let db: DatabaseSync | undefined;
   try {
     db = new DatabaseSync(databasePath, { readOnly: true });
+    const builtInMemoryTables = [
+      MEMORY_INDEX_META_TABLE,
+      MEMORY_INDEX_SOURCES_TABLE,
+      MEMORY_INDEX_CHUNKS_TABLE,
+    ] as const;
     const tableNames = new Set(
       (
         db
-          .prepare(
-            "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('meta', 'files', 'chunks')",
-          )
-          .all() as Array<{ name?: unknown }>
+          .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (?, ?, ?)`)
+          .all(...builtInMemoryTables) as Array<{ name?: unknown }>
       )
         .map((row) => row.name)
         .filter((name): name is string => typeof name === "string"),
     );
     if (
-      tableNames.has("meta") &&
-      db.prepare("SELECT 1 AS ok FROM meta WHERE key = ? LIMIT 1").get(MEMORY_INDEX_META_KEY)
+      tableNames.has(MEMORY_INDEX_META_TABLE) &&
+      db
+        .prepare(`SELECT 1 AS ok FROM ${MEMORY_INDEX_META_TABLE} WHERE key = ? LIMIT 1`)
+        .get(MEMORY_INDEX_META_KEY)
     ) {
       return true;
     }
-    for (const tableName of ["files", "chunks"] as const) {
+    for (const tableName of [MEMORY_INDEX_SOURCES_TABLE, MEMORY_INDEX_CHUNKS_TABLE] as const) {
       if (
         tableNames.has(tableName) &&
         db.prepare(`SELECT 1 AS ok FROM ${tableName} LIMIT 1`).get()

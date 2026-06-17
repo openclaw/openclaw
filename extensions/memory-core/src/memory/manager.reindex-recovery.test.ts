@@ -179,7 +179,7 @@ describe("memory manager reindex recovery", () => {
 
     const harness = memoryManager as unknown as ReindexHarness;
     const publishedRows = harness.db
-      .prepare("SELECT path, text FROM chunks ORDER BY path, start_line")
+      .prepare("SELECT path, text FROM memory_index_chunks ORDER BY path, start_line")
       .all();
     expect(publishedRows.length).toBeGreaterThan(0);
 
@@ -192,7 +192,9 @@ describe("memory manager reindex recovery", () => {
       "late shadow failure",
     );
     expect(
-      harness.db.prepare("SELECT path, text FROM chunks ORDER BY path, start_line").all(),
+      harness.db
+        .prepare("SELECT path, text FROM memory_index_chunks ORDER BY path, start_line")
+        .all(),
     ).toEqual(publishedRows);
   });
 
@@ -245,7 +247,7 @@ describe("memory manager reindex recovery", () => {
     const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
     await fs.mkdir(path.dirname(databasePath), { recursive: true });
     const db = new DatabaseSync(databasePath);
-    db.exec("CREATE TABLE chunks (id TEXT PRIMARY KEY)");
+    db.exec("CREATE TABLE memory_index_chunks (id TEXT PRIMARY KEY)");
     db.close();
 
     const { getMemorySearchManager } = await import("./index.js");
@@ -275,7 +277,7 @@ describe("memory manager reindex recovery", () => {
 
     harness.db
       .prepare(
-        `INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+        `INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
