@@ -182,8 +182,9 @@ describe("deliverMatrixReplies", () => {
       cfg,
       replies: [
         { text: "Reasoning:\n_hidden_" },
+        { text: "<mm:think>secret</mm:think>" },
         { text: "<think>still hidden</think>" },
-        { text: "Visible answer" },
+        { text: "thinking about it" },
       ],
       roomId: "room:5",
       client: {} as MatrixClient,
@@ -194,7 +195,7 @@ describe("deliverMatrixReplies", () => {
 
     expect(sendMessageMatrixMock).toHaveBeenCalledTimes(1);
     expect(sendCall(0)[0]).toBe("room:5");
-    expect(sendCall(0)[1]).toBe("Visible answer");
+    expect(sendCall(0)[1]).toBe("thinking about it");
     expect(sendOptions(0).cfg).toBe(cfg);
   });
 
