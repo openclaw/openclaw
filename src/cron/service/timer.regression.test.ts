@@ -2906,14 +2906,8 @@ describe("cron service timer regressions", () => {
               agentId: "main",
               sessionId: "cron-run-session",
               sessionKey: "agent:main:cron:isolated-pre-model-timeout-74803:run:cron-run-session",
-              phase: "runner_entered",
-            });
-            onExecutionPhase?.({
-              jobId: "isolated-pre-model-timeout-74803",
-              agentId: "main",
-              sessionId: "cron-run-session",
-              sessionKey: "agent:main:cron:isolated-pre-model-timeout-74803:run:cron-run-session",
-              phase: "context_engine",
+              // No phase — any phase signal now clears the pre-execution watchdog,
+              // so a pure stall (no phases emitted) is needed to trigger it.
             });
             started.resolve();
             abortSignal?.addEventListener(
@@ -2939,10 +2933,8 @@ describe("cron service timer regressions", () => {
       expect(abortObserved).toBe(true);
       expect(job.state.lastStatus).toBe("error");
       expect(job.state.lastError).toContain("stalled before execution start");
-      expect(job.state.lastError).toContain("context-engine");
       expect(abortReason).toMatchObject({
         name: "TimeoutError",
-        message: expect.stringContaining("context-engine"),
       });
       expect(cleanupTimedOutAgentRun).toHaveBeenCalledTimes(1);
       const cleanupArgs = requireRecord(firstMockArg(cleanupTimedOutAgentRun));
@@ -2950,7 +2942,6 @@ describe("cron service timer regressions", () => {
       expect(cleanupArgs.timeoutMs).toBe(1_200_000);
       const execution = requireRecord(cleanupArgs.execution);
       expect(execution.jobId).toBe("isolated-pre-model-timeout-74803");
-      expect(execution.phase).toBe("context_engine");
       expect(onIsolatedAgentSetupTimeout).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
