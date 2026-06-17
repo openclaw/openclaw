@@ -1401,6 +1401,13 @@ export async function runEmbeddedPiAgent(
           } else {
             parentAbortSignal?.addEventListener("abort", relayParentAbort, { once: true });
           }
+          // Keep the lane timeout alive during long tool execution (e.g. exec
+          // commands that run 5+ minutes). Without this heartbeat the sliding
+          // lane-task timeout window expires and kills the cron run even though
+          // the configured timeoutSeconds has not been reached.
+          const laneProgressInterval = setInterval(() => {
+            noteLaneTaskProgress();
+          }, 30_000);
           const rawAttempt = await runEmbeddedAttemptWithBackend({
             sessionId: activeSessionId,
             sessionKey: resolvedSessionKey,
@@ -1540,6 +1547,7 @@ export async function runEmbeddedPiAgent(
               throw postCompactionAbortError ?? err;
             })
             .finally(() => {
+              clearInterval(laneProgressInterval);
               parentAbortSignal?.removeEventListener?.("abort", relayParentAbort);
               if (postCompactionAbortController === attemptAbortController) {
                 postCompactionAbortController = undefined;
