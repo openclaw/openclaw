@@ -11,7 +11,7 @@ import {
   shouldUseConfiguredLocalOriginManagedProxyBypass,
   type ConfiguredLocalOriginManagedProxyBypass,
 } from "./configured-local-origin-bypass.js";
-import { hasProxyEnvConfigured, shouldUseEnvHttpProxyForUrl } from "./proxy-env.js";
+import { hasProxyEnvConfigured, matchesNoProxy, shouldUseEnvHttpProxyForUrl } from "./proxy-env.js";
 import { retainSafeHeadersForCrossOriginRedirect as retainSafeRedirectHeaders } from "./redirect-headers.js";
 import {
   fetchWithRuntimeDispatcher,
@@ -502,17 +502,34 @@ async function fetchWithSsrFGuardInternal(
         usesTrustedExplicitProxyMode ? false : params.pinDns,
       );
       await assertExplicitProxyAllowed(dispatcherPolicy, params.lookupFn, params.policy);
+      const isTrustedEnvProxyMode =
+        mode === GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY ||
+        (params.useEnvProxyForEligibleUrls === true &&
+          !(
+            mode === GUARDED_FETCH_MODE.STRICT &&
+            isManagedProxyActive() &&
+            hasProxyEnvConfigured()
+          ));
       const canUseManagedProxy =
         mode === GUARDED_FETCH_MODE.STRICT && isManagedProxyActive() && hasProxyEnvConfigured();
       const canUseTrustedEnvProxy =
-        (mode === GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY ||
-          (params.useEnvProxyForEligibleUrls === true && !canUseManagedProxy)) &&
+        isTrustedEnvProxyMode &&
         !dispatcherPolicy &&
         shouldUseEnvHttpProxyForUrl(parsedUrl.toString());
+      // When NO_PROXY excludes the URL in trusted env-proxy mode, go direct
+      // (bypass proxy). Without this, the request falls through to SSRF or
+      // the global EnvHttpProxyAgent dispatcher — both of which route local
+      // addresses through the proxy or block them outright.
+      const canUseDirectNoProxy =
+        isTrustedEnvProxyMode &&
+        !dispatcherPolicy &&
+        hasProxyEnvConfigured() &&
+        matchesNoProxy(parsedUrl.toString());
       const canUseMockedFetchWithoutDns =
         isUsingMockedFetch &&
         params.lookupFn === undefined &&
         !canUseTrustedEnvProxy &&
+        !canUseDirectNoProxy &&
         !canUseManagedProxy &&
         !usesTrustedExplicitProxyMode &&
         params.pinDns !== false;
@@ -520,12 +537,14 @@ async function fetchWithSsrFGuardInternal(
 
       // Trusted env-proxy and pinDns=false can skip local DNS pinning, so keep
       // the pre-DNS hostname/IP policy checks from the pinned path.
-      if (canUseTrustedEnvProxy || params.pinDns === false) {
+      if (canUseTrustedEnvProxy || canUseDirectNoProxy || params.pinDns === false) {
         assertHostnameAllowedWithPolicy(parsedUrl.hostname, policyForUrl);
       }
 
       if (canUseTrustedEnvProxy) {
         dispatcher = createHttp1EnvHttpProxyAgent(undefined, timeoutMs);
+      } else if (canUseDirectNoProxy) {
+        dispatcher = createHttp1Agent(undefined, timeoutMs);
       } else if (canUseManagedProxy) {
         const pinned = await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
           lookupFn: params.lookupFn,
