@@ -5,6 +5,7 @@
  */
 import type { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
 import { getRuntimeConfig } from "../config/config.js";
+import { MIN_SESSION_CLEANUP_CANDIDATE_AGE_MS } from "../config/sessions/maintenance-age.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ResolveContextEngineOptions } from "../context-engine/registry.js";
 import type { ContextEngine, SubagentEndReason } from "../context-engine/types.js";
@@ -55,6 +56,7 @@ import {
 } from "./subagent-registry-helpers.js";
 import { createSubagentRegistryLifecycleController } from "./subagent-registry-lifecycle.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
+import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
 import {
   countActiveDescendantRunsFromRuns,
   countActiveRunsForSessionFromRuns,
@@ -1004,25 +1006,28 @@ async function sweepSubagentRuns() {
       if (entry.archiveAtMs > now) {
         continue;
       }
-      clearPendingLifecycleError(runId);
-      try {
-        await subagentRegistryDeps.callGateway({
-          method: "sessions.delete",
-          params: {
-            key: entry.childSessionKey,
-            deleteTranscript: true,
-            emitLifecycleHooks: false,
-          },
-          timeoutMs: 10_000,
-        });
-      } catch (err) {
-        log.warn("sessions.delete failed during subagent sweep; keeping run for retry", {
-          runId,
-          childSessionKey: entry.childSessionKey,
-          err,
-        });
+      let deleteFailed = false;
+      const deleted = await deleteSubagentSessionForCleanup({
+        callGateway: subagentRegistryDeps.callGateway,
+        childSessionKey: entry.childSessionKey,
+        nowMs: now,
+        onError: (err) => {
+          deleteFailed = true;
+          log.warn("sessions.delete failed during subagent sweep; keeping run for retry", {
+            runId,
+            childSessionKey: entry.childSessionKey,
+            err,
+          });
+        },
+      });
+      if (!deleted) {
+        if (!deleteFailed) {
+          entry.archiveAtMs = now + MIN_SESSION_CLEANUP_CANDIDATE_AGE_MS;
+          mutated = true;
+        }
         continue;
       }
+      clearPendingLifecycleError(runId);
       subagentRuns.delete(runId);
       mutated = true;
       // Archive/purge is terminal for the run record; remove any retained attachments too.

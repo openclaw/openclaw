@@ -16,6 +16,7 @@ import { capEntryCount, getActiveSessionMaintenanceWarning, pruneStaleEntries } 
 import type { SessionEntry } from "./types.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const FIVE_HOURS_MS = 5 * 60 * 60 * 1000;
 
 const fixtureSuite = createFixtureSuite("openclaw-pruning-suite-");
 
@@ -53,6 +54,34 @@ describe("pruneStaleEntries", () => {
     expect(pruned).toBe(1);
     expect(store.old).toBeUndefined();
     expect(store).toHaveProperty("fresh");
+  });
+
+  it("does not remove entries under the universal cleanup age floor even with an aggressive max age", () => {
+    const now = Date.now();
+    const store = makeStore([["young", makeEntry(now - 60_000)]]);
+
+    const pruned = pruneStaleEntries(store, 1_000, { nowMs: now });
+
+    expect(pruned).toBe(0);
+    expect(store).toHaveProperty("young");
+  });
+
+  it("quarantines entries whose timestamp is missing or in the future", () => {
+    const now = Date.now();
+    const quarantined: string[] = [];
+    const store = makeStore([
+      ["missing-updated-at", { sessionId: crypto.randomUUID() } as SessionEntry],
+      ["future", makeEntry(now + 60_000)],
+    ]);
+
+    const pruned = pruneStaleEntries(store, DAY_MS, {
+      nowMs: now,
+      onQuarantinedAge: ({ key }) => quarantined.push(key),
+    });
+
+    expect(pruned).toBe(0);
+    expect(Object.keys(store)).toHaveLength(2);
+    expect(quarantined.toSorted()).toEqual(["future", "missing-updated-at"]);
   });
 
   it("preserves durable external conversation entries", () => {
@@ -147,12 +176,13 @@ describe("resolveQuotaSuspensionEntryMaintenance", () => {
 describe("capEntryCount", () => {
   it("over limit: keeps N most recent by updatedAt, deletes rest", () => {
     const now = Date.now();
+    const oldEnough = now - FIVE_HOURS_MS;
     const store = makeStore([
-      ["oldest", makeEntry(now - 4 * DAY_MS)],
-      ["old", makeEntry(now - 3 * DAY_MS)],
-      ["mid", makeEntry(now - 2 * DAY_MS)],
-      ["recent", makeEntry(now - DAY_MS)],
-      ["newest", makeEntry(now)],
+      ["oldest", makeEntry(oldEnough - 4_000)],
+      ["old", makeEntry(oldEnough - 3_000)],
+      ["mid", makeEntry(oldEnough - 2_000)],
+      ["recent", makeEntry(oldEnough - 1_000)],
+      ["newest", makeEntry(oldEnough)],
     ]);
 
     const evicted = capEntryCount(store, 3);
@@ -168,13 +198,14 @@ describe("capEntryCount", () => {
 
   it("preserves durable external conversation entries when capping", () => {
     const now = Date.now();
+    const oldEnough = now - FIVE_HOURS_MS;
     const threadKey = "agent:main:discord:channel:123456:thread:987654";
     const store = makeStore([
-      [threadKey, makeEntry(now - 5 * DAY_MS)],
-      ["oldest", makeEntry(now - 4 * DAY_MS)],
-      ["old", makeEntry(now - 3 * DAY_MS)],
-      ["recent", makeEntry(now - DAY_MS)],
-      ["newest", makeEntry(now)],
+      [threadKey, makeEntry(oldEnough - 4_000)],
+      ["oldest", makeEntry(oldEnough - 3_000)],
+      ["old", makeEntry(oldEnough - 2_000)],
+      ["recent", makeEntry(oldEnough - 1_000)],
+      ["newest", makeEntry(oldEnough)],
     ]);
 
     const evicted = capEntryCount(store, 3);
@@ -190,12 +221,13 @@ describe("capEntryCount", () => {
 
   it("preserves runtime-provided pending subagent sessions when capping", () => {
     const now = Date.now();
+    const oldEnough = now - FIVE_HOURS_MS;
     const childKey = "agent:main:subagent:child";
     const store = makeStore([
       [childKey, { ...makeEntry(now - 10 * DAY_MS), spawnedBy: "agent:main:slack:direct:U1" }],
-      ["recent-1", makeEntry(now)],
-      ["recent-2", makeEntry(now - 1)],
-      ["old", makeEntry(now - 2)],
+      ["recent-1", makeEntry(oldEnough)],
+      ["recent-2", makeEntry(oldEnough - 1)],
+      ["old", makeEntry(oldEnough - 2)],
     ]);
     const unregister = registerSessionMaintenancePreserveKeysProvider(() => [childKey]);
 
@@ -217,11 +249,12 @@ describe("capEntryCount", () => {
 
   it("normalizes runtime-provided preserve keys to match lowercased store keys", () => {
     const now = Date.now();
+    const oldEnough = now - FIVE_HOURS_MS;
     const childKey = "agent:main:subagent:child";
     const store = makeStore([
       [childKey, { ...makeEntry(now - 10 * DAY_MS), spawnedBy: "agent:main:slack:direct:U1" }],
-      ["recent-1", makeEntry(now)],
-      ["old", makeEntry(now - 1)],
+      ["recent-1", makeEntry(oldEnough)],
+      ["old", makeEntry(oldEnough - 1)],
     ]);
     // Provider returns the key in mixed case + with surrounding whitespace;
     // normalization must match the lowercased store key during maintenance.
@@ -262,6 +295,42 @@ describe("capEntryCount", () => {
     } finally {
       unregister();
     }
+  });
+
+  it("preserves entries under the universal cleanup age floor when capping", () => {
+    const now = Date.now();
+    const underAge: string[] = [];
+    const store = makeStore([
+      ["young-a", makeEntry(now - 30_000)],
+      ["young-b", makeEntry(now - 60_000)],
+    ]);
+
+    const evicted = capEntryCount(store, 1, {
+      nowMs: now,
+      onPreservedUnderAge: ({ key }) => underAge.push(key),
+    });
+
+    expect(evicted).toBe(0);
+    expect(Object.keys(store)).toHaveLength(2);
+    expect(underAge.toSorted()).toEqual(["young-a", "young-b"]);
+  });
+
+  it("quarantines entries whose age cannot be proven when capping", () => {
+    const now = Date.now();
+    const quarantined: string[] = [];
+    const store = makeStore([
+      ["missing-updated-at", { sessionId: crypto.randomUUID() } as SessionEntry],
+      ["future", makeEntry(now + 60_000)],
+    ]);
+
+    const evicted = capEntryCount(store, 1, {
+      nowMs: now,
+      onQuarantinedAge: ({ key }) => quarantined.push(key),
+    });
+
+    expect(evicted).toBe(0);
+    expect(Object.keys(store)).toHaveLength(2);
+    expect(quarantined.toSorted()).toEqual(["future", "missing-updated-at"]);
   });
 });
 

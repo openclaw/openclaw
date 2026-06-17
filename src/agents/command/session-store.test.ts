@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionStore } from "../../config/sessions.js";
+import { MIN_SESSION_CLEANUP_CANDIDATE_AGE_MS } from "../../config/sessions/store-maintenance.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import {
   clearCliSessionInStore,
@@ -194,7 +195,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
             `agent:main:stale:${index}`,
             {
               sessionId: `stale-${index}`,
-              updatedAt: now - index - 1,
+              updatedAt: now - MIN_SESSION_CLEANUP_CANDIDATE_AGE_MS - index - 1,
             } satisfies SessionEntry,
           ]),
         ),

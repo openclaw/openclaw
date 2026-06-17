@@ -4,10 +4,12 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { MIN_SESSION_CLEANUP_CANDIDATE_AGE_MS } from "../config/sessions/maintenance-age.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 
 const noop = () => {};
-let currentConfig = {
+let currentConfig: OpenClawConfig = {
   agents: { defaults: { subagents: { archiveAfterMinutes: 60 } } },
 };
 const loadConfigMock = vi.fn(() => currentConfig);
@@ -129,9 +131,31 @@ describe("subagent registry archive behavior", () => {
     });
 
     const initialRun = mod.listSubagentRunsForRequester("agent:main:main")[0];
-    expect(initialRun?.archiveAtMs).toBe(Date.now() + 60_000);
+    expect(initialRun?.archiveAtMs).toBe(Date.now() + MIN_SESSION_CLEANUP_CANDIDATE_AGE_MS);
+
+    mod.resetSubagentRegistryForTests({ persist: false });
+    mod.addSubagentRunForTests({
+      runId: "run-delete-due",
+      childSessionKey: "agent:main:subagent:delete-due",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "ephemeral-run-due",
+      cleanup: "delete",
+      createdAt: Date.now(),
+      endedAt: Date.now(),
+      archiveAtMs: Date.now() + MIN_SESSION_CLEANUP_CANDIDATE_AGE_MS,
+    });
+
+    await mod.testing.sweepOnceForTests();
+    expect(mod.listSubagentRunsForRequester("agent:main:main")).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(MIN_SESSION_CLEANUP_CANDIDATE_AGE_MS - 60_000);
+    await mod.testing.sweepOnceForTests();
+
+    expect(mod.listSubagentRunsForRequester("agent:main:main")).toHaveLength(1);
 
     await vi.advanceTimersByTimeAsync(60_000);
+    await mod.testing.sweepOnceForTests();
 
     expect(mod.listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
   });
@@ -256,6 +280,50 @@ describe("subagent registry archive behavior", () => {
     });
   });
 
+  it("preserves due delete-mode runs when the child session row is under the cleanup age floor", async () => {
+    const sessionsDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-underage-subagent-"));
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const childSessionKey = "agent:main:subagent:delete-underage";
+    currentConfig = {
+      ...currentConfig,
+      session: { store: storePath },
+    };
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [childSessionKey]: {
+          sessionId: "delete-underage",
+          updatedAt: Date.now(),
+        },
+      }),
+      "utf-8",
+    );
+    mod.addSubagentRunForTests({
+      runId: "run-delete-underage",
+      childSessionKey,
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "under-age delete",
+      cleanup: "delete",
+      createdAt: Date.now() - 60_000,
+      endedAt: Date.now() - 1,
+      archiveAtMs: Date.now(),
+    });
+
+    await mod.testing.sweepOnceForTests();
+
+    expect(
+      vi
+        .mocked(callGateway)
+        .mock.calls.filter(
+          ([request]) => (request as { method?: string } | undefined)?.method === "sessions.delete",
+        ),
+    ).toHaveLength(0);
+    const run = mod.listSubagentRunsForRequester("agent:main:main")[0];
+    expect(run?.runId).toBe("run-delete-underage");
+    expect(run?.archiveAtMs).toBe(Date.now() + MIN_SESSION_CLEANUP_CANDIDATE_AGE_MS);
+  });
+
   it("does not set archiveAtMs for persistent session-mode runs", () => {
     mod.registerSubagentRun({
       runId: "run-session-1",
@@ -321,7 +389,7 @@ describe("subagent registry archive behavior", () => {
     const run = mod
       .listSubagentRunsForRequester("agent:main:main")
       .find((entry) => entry.runId === "run-delete-new");
-    expect(run?.archiveAtMs).toBe(Date.now() + 60_000);
+    expect(run?.archiveAtMs).toBe(Date.now() + MIN_SESSION_CLEANUP_CANDIDATE_AGE_MS);
   });
 
   it("removes attachments for the replaced run after steer restart", async () => {

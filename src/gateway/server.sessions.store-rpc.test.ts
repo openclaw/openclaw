@@ -39,7 +39,7 @@ test("lists and patches session store via sessions.* RPC", async () => {
   const { dir, storePath } = await createSessionStoreDir();
   const now = Date.now();
   const recent = now - 30_000;
-  const stale = now - 15 * 60_000;
+  const stale = now - 5 * 60 * 60_000;
 
   await fs.writeFile(
     path.join(dir, "sess-main.jsonl"),
@@ -329,22 +329,54 @@ test("lists and patches session store via sessions.* RPC", async () => {
   });
   expect(spawnedPatchedInvalidKey.ok).toBe(false);
 
+  const storeBeforeCleanup = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    Record<string, unknown>
+  >;
+  storeBeforeCleanup["agent:main:cron:cleanup:run:old-missing"] = {
+    sessionId: "sess-old-missing",
+    updatedAt: stale,
+    spawnedBy: "agent:main:main",
+  };
+  await fs.writeFile(storePath, JSON.stringify(storeBeforeCleanup, null, 2), "utf-8");
+
   const cleaned = await directSessionReq<{
     applied: true;
     missing: number;
+    pruned: number;
     appliedCount: number;
+    minCandidateAgeMs: number;
+    underAgePreservedCount: number;
+    candidateActionCounts?: {
+      "prune-missing"?: number;
+      "prune-stale"?: number;
+    };
   }>("sessions.cleanup", {
     enforce: true,
     fixMissing: true,
   });
   expect(cleaned.ok).toBe(true);
-  expect(cleaned.payload?.missing).toBeGreaterThanOrEqual(1);
+  expect(cleaned.payload?.minCandidateAgeMs).toBeGreaterThanOrEqual(4 * 60 * 60 * 1000);
+  expect((cleaned.payload?.missing ?? 0) + (cleaned.payload?.pruned ?? 0)).toBeGreaterThanOrEqual(1);
+  expect(
+    (cleaned.payload?.candidateActionCounts?.["prune-missing"] ?? 0) +
+      (cleaned.payload?.candidateActionCounts?.["prune-stale"] ?? 0),
+  ).toBeGreaterThanOrEqual(1);
+  expect(cleaned.payload?.underAgePreservedCount).toBeGreaterThanOrEqual(1);
   const listAfterCleanup = await directSessionReq<{
     sessions: Array<{ key: string }>;
   }>("sessions.list", {});
   expect(listAfterCleanup.payload?.sessions.map((session) => session.key)).not.toContain(
+    "agent:main:cron:cleanup:run:old-missing",
+  );
+  expect(listAfterCleanup.payload?.sessions.map((session) => session.key)).toContain(
     "agent:main:subagent:one",
   );
+  const persistedAfterCleanup = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    unknown
+  >;
+  expect(persistedAfterCleanup).toHaveProperty("global");
 
   agentDiscoveryMock.enabled = true;
   agentDiscoveryMock.models = [{ id: "gpt-test-a", name: "A", provider: "openai" }];

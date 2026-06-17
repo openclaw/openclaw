@@ -110,6 +110,7 @@ Run maintenance now (instead of waiting for the next write cycle):
 openclaw sessions cleanup --dry-run
 openclaw sessions cleanup --agent work --dry-run
 openclaw sessions cleanup --all-agents --dry-run
+openclaw sessions cleanup --all-agents --synthetic-only --protect-main --dry-run --json
 openclaw sessions cleanup --enforce
 openclaw sessions cleanup --enforce --active-key "agent:main:telegram:direct:123"
 openclaw sessions cleanup --dry-run --fix-dm-scope
@@ -120,12 +121,21 @@ openclaw sessions cleanup --json
 
 - Scope note: `openclaw sessions cleanup` maintains session stores, transcripts, and trajectory sidecars. It does not prune cron run history, which is managed by `cron.runLog.keepLines` in [Cron configuration](/automation/cron-jobs#configuration) and explained in [Cron maintenance](/automation/cron-jobs#maintenance).
 - Cleanup also prunes unreferenced primary transcripts, compaction checkpoints, and trajectory sidecars older than `session.maintenance.pruneAfter`; files still referenced by `sessions.json` are preserved.
+- Automatic cleanup has a hard 4-hour candidate age floor. Session rows, transcripts, reset/deleted archives, prompt blobs, trajectory sidecars, store temp files, and lifecycle repair targets younger than 4 hours are preserved even when a cleanup command or background save runs more frequently. Missing, invalid, or future timestamps are preserved for quarantine review; if disk or count pressure remains after preserving protected, under-age, or unknown-age items, cleanup reports `blocked` instead of deleting younger material.
 
 - `--dry-run`: preview how many entries would be pruned/capped without writing.
   - In text mode, dry-run prints a per-session action table (`Action`, `Key`, `Age`, `Model`, `Flags`) plus a summary grouped by session label so you can see what would be kept vs removed.
 - `--enforce`: apply maintenance even when `session.maintenance.mode` is `warn`.
-- `--fix-missing`: remove entries whose transcript files are missing or header-only/empty, even if they would not normally age/count out yet.
-- `--fix-dm-scope`: when `session.dmScope` is `main`, retire stale peer-keyed direct-DM rows left behind by earlier `per-peer`, `per-channel-peer`, or `per-account-channel-peer` routing. Use `--dry-run` first; applying the cleanup removes those rows from `sessions.json` and preserves their transcripts as deleted archives.
+- `--fix-missing`: remove entries whose transcript files are missing or header-only/empty after the 4-hour age floor is satisfied. Missing, invalid, or future timestamps are preserved for quarantine review.
+- `--fix-dm-scope`: legacy diagnostic/repair mode for peer-keyed direct-DM rows left behind by earlier `per-peer`, `per-channel-peer`, or `per-account-channel-peer` routing. Main and direct customer sessions remain protected by automatic cleanup; retire those rows only through a separately approved explicit migration.
+- `--synthetic-only`: limit cleanup candidates to synthetic subagent, ACP, cron,
+  hook, node, or heartbeat-style sessions. Orphan artifact sweeping is skipped
+  in this mode because an unreferenced file has no reliable session-key
+  classification.
+- `--protect-main`: explicit fleet-audit flag for main/direct protection. Main
+  and direct customer sessions are protected by default; use this with
+  `--synthetic-only` when collecting fleet-safe dry-run proof before replacing
+  custom session archive cron jobs.
 - `--active-key <key>`: protect a specific active key from disk-budget eviction. Durable external conversation pointers, such as group sessions and thread-scoped chat sessions, are also kept by age/count/disk-budget maintenance.
 - `--agent <id>`: run cleanup for one configured agent store.
 - `--all-agents`: run cleanup for all configured agent stores.
@@ -136,7 +146,7 @@ When a Gateway is reachable, non-dry-run cleanup for configured agent stores is
 sent through the Gateway so it shares the same session-store writer as runtime
 traffic. Use `--store <path>` for explicit offline repair of a store file.
 
-`openclaw sessions cleanup --all-agents --dry-run --json`:
+`openclaw sessions cleanup --all-agents --synthetic-only --protect-main --dry-run --json`:
 
 ```json
 {
@@ -152,7 +162,34 @@ traffic. Use `--store <path>` for explicit offline repair of a store file.
       "missing": 0,
       "dmScopeRetired": 0,
       "pruned": 40,
-      "capped": 0
+      "capped": 0,
+      "minCandidateAgeMs": 14400000,
+      "underAgePreservedCount": 0,
+      "ageUnknownQuarantineCount": 0,
+      "candidateCounts": {
+        "preserve": 80,
+        "archive_candidate": 40,
+        "blocked": 0,
+        "quarantine_review": 0
+      },
+      "candidateActionCounts": {
+        "prune-missing": 0,
+        "retire-dm-scope": 0,
+        "prune-stale": 40,
+        "cap-overflow": 0,
+        "evict-budget": 0,
+        "prune-unreferenced-artifact": 0
+      },
+      "safety": {
+        "syntheticOnly": true,
+        "protectMain": true,
+        "protectedMainCount": 1,
+        "protectedDirectCount": 2,
+        "protectedMainAgentIds": ["main"],
+        "syntheticOnlyPreservedCount": 37,
+        "blockedCount": 0,
+        "quarantineCount": 0
+      }
     },
     {
       "agentId": "work",
@@ -162,7 +199,34 @@ traffic. Use `--store <path>` for explicit offline repair of a store file.
       "missing": 0,
       "dmScopeRetired": 0,
       "pruned": 0,
-      "capped": 0
+      "capped": 0,
+      "minCandidateAgeMs": 14400000,
+      "underAgePreservedCount": 0,
+      "ageUnknownQuarantineCount": 0,
+      "candidateCounts": {
+        "preserve": 18,
+        "archive_candidate": 0,
+        "blocked": 0,
+        "quarantine_review": 0
+      },
+      "candidateActionCounts": {
+        "prune-missing": 0,
+        "retire-dm-scope": 0,
+        "prune-stale": 0,
+        "cap-overflow": 0,
+        "evict-budget": 0,
+        "prune-unreferenced-artifact": 0
+      },
+      "safety": {
+        "syntheticOnly": true,
+        "protectMain": true,
+        "protectedMainCount": 1,
+        "protectedDirectCount": 0,
+        "protectedMainAgentIds": ["work"],
+        "syntheticOnlyPreservedCount": 0,
+        "blockedCount": 0,
+        "quarantineCount": 0
+      }
     }
   ]
 }

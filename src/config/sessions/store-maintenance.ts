@@ -13,6 +13,12 @@ import {
   parseAgentSessionKey,
 } from "../../sessions/session-key-utils.js";
 import type { SessionMaintenanceConfig, SessionMaintenanceMode } from "../types.base.js";
+import {
+  MIN_SESSION_CLEANUP_CANDIDATE_AGE_MS,
+  resolveSessionCleanupCandidateAge,
+  resolveSessionCleanupMinCandidateAgeMs,
+} from "./maintenance-age.js";
+import { normalizeStoreSessionKey } from "./store-entry.js";
 import { parseSessionThreadInfoFast } from "./thread-info.js";
 import type { SessionEntry } from "./types.js";
 
@@ -45,6 +51,8 @@ export type ResolvedSessionMaintenanceConfig = {
   highWaterBytes: number | null;
 };
 
+export { MIN_SESSION_CLEANUP_CANDIDATE_AGE_MS };
+
 function resolvePruneAfterMs(maintenance?: SessionMaintenanceConfig): number {
   const raw = maintenance?.pruneAfter ?? maintenance?.pruneDays;
   const normalized = normalizeStringifiedOptionalString(raw);
@@ -68,12 +76,12 @@ function resolveResetArchiveRetentionMs(
   }
   const normalized = normalizeStringifiedOptionalString(raw);
   if (!normalized) {
-    return pruneAfterMs;
+    return resolveSessionCleanupMinCandidateAgeMs(pruneAfterMs);
   }
   try {
-    return parseDurationMs(normalized, { defaultUnit: "d" });
+    return resolveSessionCleanupMinCandidateAgeMs(parseDurationMs(normalized, { defaultUnit: "d" }));
   } catch {
-    return pruneAfterMs;
+    return resolveSessionCleanupMinCandidateAgeMs(pruneAfterMs);
   }
 }
 
@@ -132,7 +140,7 @@ function resolveHighWaterBytes(
 export function resolveMaintenanceConfigFromInput(
   maintenance?: SessionMaintenanceConfig,
 ): ResolvedSessionMaintenanceConfig {
-  const pruneAfterMs = resolvePruneAfterMs(maintenance);
+  const pruneAfterMs = resolveSessionCleanupMinCandidateAgeMs(resolvePruneAfterMs(maintenance));
   const maxDiskBytes = resolveMaxDiskBytes(maintenance);
   return {
     mode: maintenance?.mode ?? DEFAULT_SESSION_MAINTENANCE_MODE,
@@ -181,17 +189,36 @@ export function pruneStaleEntries(
   opts: {
     log?: boolean;
     onPruned?: (params: { key: string; entry: SessionEntry }) => void;
+    onQuarantinedAge?: (params: { key: string; entry: SessionEntry }) => void;
     preserveKeys?: ReadonlySet<string>;
+    nowMs?: number;
+    minCandidateAgeMs?: number;
   } = {},
 ): number {
-  const maxAgeMs = overrideMaxAgeMs ?? resolveMaintenanceConfigFromInput().pruneAfterMs;
-  const cutoffMs = Date.now() - maxAgeMs;
+  const maxAgeMs = resolveSessionCleanupMinCandidateAgeMs(
+    overrideMaxAgeMs ?? resolveMaintenanceConfigFromInput().pruneAfterMs,
+  );
+  const nowMs = opts.nowMs ?? Date.now();
+  const cutoffMs = nowMs - maxAgeMs;
   let pruned = 0;
   for (const [key, entry] of Object.entries(store)) {
     if (shouldPreserveMaintenanceEntry({ key, entry, preserveKeys: opts.preserveKeys })) {
       continue;
     }
-    if (entry?.updatedAt != null && entry.updatedAt < cutoffMs) {
+    const age = resolveSessionCleanupCandidateAge({
+      entry,
+      nowMs,
+      minCandidateAgeMs: opts.minCandidateAgeMs,
+    });
+    if (!age.eligible && age.reason === "age-unknown") {
+      opts.onQuarantinedAge?.({ key, entry });
+      continue;
+    }
+    if (
+      entry?.updatedAt != null &&
+      entry.updatedAt < cutoffMs &&
+      age.eligible
+    ) {
       opts.onPruned?.({ key, entry });
       delete store[key];
       pruned++;
@@ -305,7 +332,7 @@ function getEntryUpdatedAt(entry?: SessionEntry): number {
   return entry?.updatedAt ?? Number.NEGATIVE_INFINITY;
 }
 
-function isSyntheticSessionMaintenanceKey(sessionKey: string): boolean {
+export function isSyntheticSessionMaintenanceKey(sessionKey: string): boolean {
   const parsed = parseAgentSessionKey(sessionKey);
   const rest = normalizeLowercaseStringOrEmpty(parsed?.rest ?? sessionKey);
   // ACP bridge sessions use normal model dispatch, but remain synthetic and disposable.
@@ -326,6 +353,16 @@ function isTelegramTopicSessionKey(sessionKey: string): boolean {
   const parsed = parseAgentSessionKey(sessionKey);
   const rest = normalizeLowercaseStringOrEmpty(parsed?.rest ?? sessionKey);
   return /^telegram:(?:group|channel|direct|dm):.+:topic:[^:]+$/.test(rest);
+}
+
+function isMainOrDirectSessionKey(sessionKey: string): boolean {
+  const parsed = parseAgentSessionKey(sessionKey);
+  const rest = normalizeLowercaseStringOrEmpty(parsed?.rest ?? sessionKey);
+  if (rest === "main") {
+    return true;
+  }
+  const parts = rest.split(":").filter(Boolean);
+  return parts.some((part, index) => (part === "direct" || part === "dm") && index < parts.length - 1);
 }
 
 function isExternalGroupOrChannelSessionKey(sessionKey: string): boolean {
@@ -355,6 +392,20 @@ export function isProtectedSessionMaintenanceEntry(
   return chatType === "group" || chatType === "channel" || chatType === "thread";
 }
 
+export function isProtectedMainOrDirectSessionMaintenanceEntry(
+  sessionKey: string,
+  entry: SessionEntry | undefined,
+): boolean {
+  if (isSyntheticSessionMaintenanceKey(sessionKey)) {
+    return false;
+  }
+  if (isMainOrDirectSessionKey(sessionKey)) {
+    return true;
+  }
+  const chatType = normalizeLowercaseStringOrEmpty(entry?.chatType ?? entry?.origin?.chatType);
+  return chatType === "direct" || chatType === "dm";
+}
+
 export function shouldPreserveMaintenanceEntry(params: {
   key: string;
   entry: SessionEntry | undefined;
@@ -362,6 +413,7 @@ export function shouldPreserveMaintenanceEntry(params: {
 }): boolean {
   return (
     params.preserveKeys?.has(params.key) === true ||
+    params.preserveKeys?.has(normalizeStoreSessionKey(params.key)) === true ||
     isProtectedSessionMaintenanceEntry(params.key, params.entry)
   );
 }
@@ -469,23 +521,49 @@ export function capEntryCount(
   opts: {
     log?: boolean;
     onCapped?: (params: { key: string; entry: SessionEntry }) => void;
+    onPreservedUnderAge?: (params: { key: string; entry: SessionEntry }) => void;
+    onQuarantinedAge?: (params: { key: string; entry: SessionEntry | undefined }) => void;
     preserveKeys?: ReadonlySet<string>;
+    nowMs?: number;
+    minCandidateAgeMs?: number;
   } = {},
 ): number {
   const maxEntries = overrideMax ?? resolveMaintenanceConfigFromInput().maxEntries;
   const preservedCount = Object.entries(store).filter(([key, entry]) =>
     shouldPreserveMaintenanceEntry({ key, entry, preserveKeys: opts.preserveKeys }),
   ).length;
-  const maxRemovableEntries = Math.max(0, maxEntries - preservedCount);
   // Protected entries reduce the removable budget instead of being counted as deletion targets.
-  const keys = Object.keys(store).filter(
-    (key) =>
-      !shouldPreserveMaintenanceEntry({
+  let retainedNonCandidateCount = preservedCount;
+  const nowMs = opts.nowMs ?? Date.now();
+  const keys: string[] = [];
+  for (const key of Object.keys(store)) {
+    const entry = store[key];
+    if (
+      shouldPreserveMaintenanceEntry({
         key,
-        entry: store[key],
+        entry,
         preserveKeys: opts.preserveKeys,
-      }),
-  );
+      })
+    ) {
+      continue;
+    }
+    const age = resolveSessionCleanupCandidateAge({
+      entry,
+      nowMs,
+      minCandidateAgeMs: opts.minCandidateAgeMs,
+    });
+    if (!age.eligible) {
+      if (age.reason === "under-age" && entry) {
+        opts.onPreservedUnderAge?.({ key, entry });
+      } else {
+        opts.onQuarantinedAge?.({ key, entry });
+      }
+      retainedNonCandidateCount += 1;
+      continue;
+    }
+    keys.push(key);
+  }
+  const maxRemovableEntries = Math.max(0, maxEntries - retainedNonCandidateCount);
   if (keys.length <= maxRemovableEntries) {
     return 0;
   }

@@ -2,6 +2,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  resolveFileCleanupCandidateAge,
+  resolveSessionCleanupMinCandidateAgeMs,
+} from "../config/sessions/maintenance-age.js";
 import { resolveSessionFilePath } from "../config/sessions/paths.js";
 import { isPathInside } from "../infra/path-guards.js";
 import {
@@ -127,8 +131,25 @@ function runtimeFileStartsWithSessionEvent(filePath: string, sessionId: string):
 async function removeRegularFile(
   filePath: string,
   kind: RemovedTrajectoryArtifact["kind"],
+  params?: {
+    nowMs?: number;
+    minCandidateAgeMs?: number;
+  },
 ): Promise<RemovedTrajectoryArtifact | null> {
   if (!isRegularNonSymlinkFile(filePath)) {
+    return null;
+  }
+  const stat = await fs.promises.stat(filePath).catch(() => null);
+  if (!stat?.isFile()) {
+    return null;
+  }
+  if (
+    !resolveFileCleanupCandidateAge({
+      mtimeMs: stat.mtimeMs,
+      nowMs: params?.nowMs,
+      minCandidateAgeMs: resolveSessionCleanupMinCandidateAgeMs(params?.minCandidateAgeMs),
+    }).eligible
+  ) {
     return null;
   }
   await fs.promises.rm(filePath, { force: true });
@@ -178,6 +199,8 @@ export async function removeSessionTrajectoryArtifacts(params: {
   sessionFile?: string;
   storePath: string;
   restrictToStoreDir?: boolean;
+  nowMs?: number;
+  minCandidateAgeMs?: number;
 }): Promise<RemovedTrajectoryArtifact[]> {
   const sessionFile = resolveRemovedSessionFile(params);
   if (!sessionFile) {
@@ -185,6 +208,8 @@ export async function removeSessionTrajectoryArtifacts(params: {
   }
   const storeDir = path.dirname(path.resolve(params.storePath));
   const restrictToStoreDir = params.restrictToStoreDir === true;
+  const nowMs = params.nowMs ?? Date.now();
+  const minCandidateAgeMs = resolveSessionCleanupMinCandidateAgeMs(params.minCandidateAgeMs);
   const removed: RemovedTrajectoryArtifact[] = [];
   const pointerPath = resolveTrajectoryPointerFilePath(sessionFile);
   const pointer = readTrajectoryPointerFile(pointerPath, params.sessionId);
@@ -210,14 +235,20 @@ export async function removeSessionTrajectoryArtifacts(params: {
     ) {
       continue;
     }
-    const deleted = await removeRegularFile(runtimePath, "runtime");
+    const deleted = await removeRegularFile(runtimePath, "runtime", {
+      nowMs,
+      minCandidateAgeMs,
+    });
     if (deleted) {
       removed.push(deleted);
     }
   }
 
   if (!restrictToStoreDir || isPathWithinDir(storeDir, pointerPath)) {
-    const deletedPointer = await removeRegularFile(pointerPath, "pointer");
+    const deletedPointer = await removeRegularFile(pointerPath, "pointer", {
+      nowMs,
+      minCandidateAgeMs,
+    });
     if (deletedPointer) {
       removed.push(deletedPointer);
     }
@@ -231,6 +262,8 @@ export async function removeRemovedSessionTrajectoryArtifacts(params: {
   referencedSessionIds: ReadonlySet<string>;
   storePath: string;
   restrictToStoreDir?: boolean;
+  nowMs?: number;
+  minCandidateAgeMs?: number;
 }): Promise<RemovedTrajectoryArtifact[]> {
   const removed: RemovedTrajectoryArtifact[] = [];
   for (const [sessionId, sessionFile] of params.removedSessionFiles) {
@@ -243,6 +276,8 @@ export async function removeRemovedSessionTrajectoryArtifacts(params: {
         sessionFile,
         storePath: params.storePath,
         restrictToStoreDir: params.restrictToStoreDir,
+        nowMs: params.nowMs,
+        minCandidateAgeMs: params.minCandidateAgeMs,
       })),
     );
   }

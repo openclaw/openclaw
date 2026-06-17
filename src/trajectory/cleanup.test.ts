@@ -9,6 +9,8 @@ import {
 } from "./cleanup.js";
 import { resolveTrajectoryFilePath, resolveTrajectoryPointerFilePath } from "./paths.js";
 
+const FIVE_HOURS_MS = 5 * 60 * 60 * 1000;
+
 function runtimeEvent(sessionId: string): string {
   return `${JSON.stringify({
     traceSchema: "openclaw-trajectory",
@@ -42,6 +44,13 @@ async function expectPathMissing(targetPath: string): Promise<void> {
   expect((statError as NodeJS.ErrnoException | undefined)?.code).toBe("ENOENT");
 }
 
+async function agePaths(paths: string[]): Promise<void> {
+  const old = new Date(Date.now() - FIVE_HOURS_MS);
+  for (const targetPath of paths) {
+    await fs.utimes(targetPath, old, old);
+  }
+}
+
 describe("trajectory cleanup", () => {
   it("removes adjacent trajectory sidecars for a deleted session", async () => {
     await withTempDir({ prefix: "openclaw-trajectory-cleanup-" }, async (dir) => {
@@ -52,6 +61,7 @@ describe("trajectory cleanup", () => {
       const pointerPath = resolveTrajectoryPointerFilePath(sessionFile);
       await fs.writeFile(runtimeFile, runtimeEvent(sessionId), "utf8");
       await fs.writeFile(pointerPath, pointerFile(sessionId, runtimeFile), "utf8");
+      await agePaths([runtimeFile, pointerPath]);
 
       const removed = await removeSessionTrajectoryArtifacts({
         sessionId,
@@ -105,6 +115,7 @@ describe("trajectory cleanup", () => {
 
       const pointerPath = resolveTrajectoryPointerFilePath(sessionFile);
       await fs.writeFile(pointerPath, pointerFile(sessionId, safeExternalRuntime), "utf8");
+      await agePaths([safeExternalRuntime, pointerPath]);
       await removeSessionTrajectoryArtifacts({
         sessionId,
         sessionFile,
@@ -116,6 +127,7 @@ describe("trajectory cleanup", () => {
       await expectPathMissing(pointerPath);
 
       await fs.writeFile(pointerPath, pointerFile(sessionId, unsafeExternalRuntime), "utf8");
+      await agePaths([pointerPath]);
       await removeSessionTrajectoryArtifacts({
         sessionId,
         sessionFile,
@@ -124,6 +136,29 @@ describe("trajectory cleanup", () => {
       });
 
       expect((await fs.stat(unsafeExternalRuntime)).isFile()).toBe(true);
+    });
+  });
+
+  it("preserves trajectory sidecars under the cleanup age floor", async () => {
+    await withTempDir({ prefix: "openclaw-trajectory-cleanup-" }, async (dir) => {
+      const sessionId = "fresh-session";
+      const storePath = path.join(dir, "sessions.json");
+      const sessionFile = path.join(dir, `${sessionId}.jsonl`);
+      const runtimeFile = resolveTrajectoryFilePath({ env: {}, sessionFile, sessionId });
+      const pointerPath = resolveTrajectoryPointerFilePath(sessionFile);
+      await fs.writeFile(runtimeFile, runtimeEvent(sessionId), "utf8");
+      await fs.writeFile(pointerPath, pointerFile(sessionId, runtimeFile), "utf8");
+
+      const removed = await removeSessionTrajectoryArtifacts({
+        sessionId,
+        sessionFile,
+        storePath,
+        restrictToStoreDir: true,
+      });
+
+      expect(removed).toStrictEqual([]);
+      expect((await fs.stat(runtimeFile)).isFile()).toBe(true);
+      expect((await fs.stat(pointerPath)).isFile()).toBe(true);
     });
   });
 });

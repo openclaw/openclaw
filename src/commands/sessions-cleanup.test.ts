@@ -288,6 +288,8 @@ describe("sessionsCleanupCommand", () => {
     const gatewayCall = mocks.callGateway.mock.calls[0]?.[0];
     expect(gatewayCall?.method).toBe("sessions.cleanup");
     expect(gatewayCall?.params.enforce).toBe(true);
+    expect(gatewayCall?.params.syntheticOnly).toBeUndefined();
+    expect(gatewayCall?.params.protectMain).toBeUndefined();
     expect(gatewayCall?.requiredMethods).toEqual(["sessions.cleanup"]);
     expect(mocks.updateSessionStore).not.toHaveBeenCalled();
     expect(logs).toHaveLength(1);
@@ -309,6 +311,40 @@ describe("sessionsCleanupCommand", () => {
     });
   });
 
+  it("forwards cleanup safety flags to the Gateway writer", async () => {
+    mocks.callGateway.mockResolvedValue({
+      agentId: "main",
+      storePath: "/resolved/sessions.json",
+      mode: "enforce",
+      dryRun: false,
+      beforeCount: 3,
+      afterCount: 3,
+      missing: 0,
+      dmScopeRetired: 0,
+      pruned: 0,
+      capped: 0,
+      diskBudget: null,
+      wouldMutate: false,
+      applied: true,
+      appliedCount: 3,
+    });
+
+    const { runtime } = makeRuntime();
+    await sessionsCleanupCommand(
+      {
+        json: true,
+        enforce: true,
+        syntheticOnly: true,
+        protectMain: true,
+      },
+      runtime,
+    );
+
+    const gatewayCall = mocks.callGateway.mock.calls[0]?.[0];
+    expect(gatewayCall?.params.syntheticOnly).toBe(true);
+    expect(gatewayCall?.params.protectMain).toBe(true);
+  });
+
   it("returns dry-run JSON without mutating the store", async () => {
     mocks.runSessionsCleanup.mockResolvedValue({
       mode: "warn",
@@ -325,6 +361,15 @@ describe("sessionsCleanupCommand", () => {
             dmScopeRetired: 0,
             pruned: 1,
             capped: 0,
+            minCandidateAgeMs: 14_400_000,
+            underAgePreservedCount: 2,
+            ageUnknownQuarantineCount: 1,
+            candidateCounts: {
+              preserve: 1,
+              archive_candidate: 1,
+              blocked: 1,
+              quarantine_review: 1,
+            },
             diskBudget: {
               totalBytesBefore: 1000,
               totalBytesAfter: 700,
@@ -369,6 +414,15 @@ describe("sessionsCleanupCommand", () => {
       dmScopeRetired: 0,
       pruned: 1,
       capped: 0,
+      minCandidateAgeMs: 14_400_000,
+      underAgePreservedCount: 2,
+      ageUnknownQuarantineCount: 1,
+      candidateCounts: {
+        preserve: 1,
+        archive_candidate: 1,
+        blocked: 1,
+        quarantine_review: 1,
+      },
       diskBudget: {
         totalBytesBefore: 1000,
         totalBytesAfter: 700,

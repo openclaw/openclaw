@@ -198,6 +198,8 @@ export const SessionsCleanupParamsSchema = Type.Object(
     activeKey: Type.Optional(NonEmptyString),
     fixMissing: Type.Optional(Type.Boolean()),
     fixDmScope: Type.Optional(Type.Boolean()),
+    syntheticOnly: Type.Optional(Type.Boolean()),
+    protectMain: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );

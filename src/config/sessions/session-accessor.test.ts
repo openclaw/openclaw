@@ -414,7 +414,7 @@ describe("session accessor file-backed seam", () => {
 
   it("cleans scoped lifecycle entries and unreferenced transcript artifacts", async () => {
     const nowMs = Date.now();
-    const oldDate = new Date(nowMs - 600_000);
+    const oldDate = new Date(nowMs - 5 * 60 * 60 * 1000);
     const lifecycleSessionsDir = path.join(tempDir, "state", "agents", "main", "sessions");
     const lifecycleStorePath = path.join(lifecycleSessionsDir, "sessions.json");
     const removedTranscriptPath = path.join(lifecycleSessionsDir, "removed-lifecycle.jsonl");
@@ -433,17 +433,21 @@ describe("session accessor file-backed seam", () => {
       JSON.stringify({
         "agent:main:lifecycle-cleanup-removed": {
           sessionId: "removed-lifecycle",
+          updatedAt: nowMs - 5 * 60 * 60 * 1000,
         },
         "agent:main:lifecycle-cleanup-fresh": {
           sessionId: "fresh-lifecycle",
+          updatedAt: nowMs,
         },
         "agent:main:lifecycle-cleanup-custom": {
           sessionFile: "custom-lifecycle-old.jsonl",
           sessionId: "custom-lifecycle",
+          updatedAt: nowMs - 5 * 60 * 60 * 1000,
         },
         "agent:main:lifecycle-cleanup-sibling": {
           sessionFile: siblingTranscriptPath,
           sessionId: "sibling-lifecycle",
+          updatedAt: nowMs - 5 * 60 * 60 * 1000,
         },
         "agent:main:telegram:group:lifecycle-cleanup-room": {
           sessionId: "kept-by-segment",

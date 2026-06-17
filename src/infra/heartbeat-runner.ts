@@ -27,6 +27,7 @@ import { resolveModelRefFromString, type ModelRef } from "../agents/model-select
 import { resolvePersistedSessionRuntimeId } from "../agents/session-runtime-compat.js";
 import { DEFAULT_HEARTBEAT_FILENAME } from "../agents/workspace.js";
 import { resolveHeartbeatReplyPayload } from "../auto-reply/heartbeat-reply-payload.js";
+import { resolveSessionCleanupCandidateAge } from "../config/sessions/maintenance-age.js";
 import {
   getHeartbeatToolNotificationText,
   resolveHeartbeatToolResponseFromReplyResult,
@@ -1617,10 +1618,14 @@ export async function runHeartbeatOnce(opts: {
       });
       if (staleIsolatedSessionKey) {
         const staleEntry = store[staleIsolatedSessionKey];
-        if (staleEntry?.sessionId) {
+        const staleAge = resolveSessionCleanupCandidateAge({
+          entry: staleEntry,
+          nowMs: startedAt,
+        });
+        if (staleEntry?.sessionId && staleAge.eligible) {
           removedSessionFiles.set(staleEntry.sessionId, staleEntry.sessionFile);
+          delete store[staleIsolatedSessionKey];
         }
-        delete store[staleIsolatedSessionKey];
       }
       store[isolatedSessionKey] = {
         ...cronSession.sessionEntry,
@@ -1640,6 +1645,7 @@ export async function runHeartbeatOnce(opts: {
           storePath: isolatedStorePath,
           reason: "deleted",
           restrictToStoreDir: true,
+          nowMs: startedAt,
         });
       } catch (err) {
         log.warn("heartbeat: failed to archive stale isolated session transcript", {

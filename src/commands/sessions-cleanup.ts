@@ -236,6 +236,8 @@ async function maybeRunGatewayCleanup(
         activeKey: opts.activeKey,
         fixMissing: opts.fixMissing,
         fixDmScope: opts.fixDmScope,
+        syntheticOnly: opts.syntheticOnly,
+        protectMain: opts.protectMain,
       },
       mode: GATEWAY_CLIENT_MODES.CLI,
       clientName: GATEWAY_CLIENT_NAMES.CLI,

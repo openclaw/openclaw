@@ -26,9 +26,9 @@ describe("resolveRetentionMs", () => {
   });
 
   it("parses duration string", () => {
-    expect(resolveRetentionMs({ sessionRetention: "1h" })).toBe(3_600_000);
+    expect(resolveRetentionMs({ sessionRetention: "1h" })).toBe(4 * 3_600_000);
     expect(resolveRetentionMs({ sessionRetention: "7d" })).toBe(7 * 86_400_000);
-    expect(resolveRetentionMs({ sessionRetention: "30m" })).toBe(30 * 60_000);
+    expect(resolveRetentionMs({ sessionRetention: "30m" })).toBe(4 * 3_600_000);
   });
 
   it("returns null when disabled", () => {
@@ -142,6 +142,8 @@ describe("sweepCronRunSessions", () => {
     const runSessionId = "old-run";
     const runTranscript = path.join(tmpDir, `${runSessionId}.jsonl`);
     fs.writeFileSync(runTranscript, '{"type":"session"}\n');
+    const oldDate = new Date(now - 25 * 3_600_000);
+    fs.utimesSync(runTranscript, oldDate, oldDate);
     const store: Record<string, { sessionId: string; updatedAt: number }> = {
       "agent:main:cron:job1:run:old-run": {
         sessionId: runSessionId,
@@ -198,9 +200,13 @@ describe("sweepCronRunSessions", () => {
   it("respects custom retention", async () => {
     const now = Date.now();
     const store: Record<string, { sessionId: string; updatedAt: number }> = {
-      "agent:main:cron:job1:run:run1": {
-        sessionId: "run1",
+      "agent:main:cron:job1:run:fresh-run": {
+        sessionId: "fresh-run",
         updatedAt: now - 2 * 3_600_000, // 2h ago
+      },
+      "agent:main:cron:job1:run:old-run": {
+        sessionId: "old-run",
+        updatedAt: now - 5 * 3_600_000, // 5h ago
       },
     };
     fs.writeFileSync(storePath, JSON.stringify(store));
@@ -214,6 +220,36 @@ describe("sweepCronRunSessions", () => {
     });
 
     expect(result.pruned).toBe(1);
+    const persisted = JSON.parse(fs.readFileSync(storePath, "utf-8")) as Record<string, unknown>;
+    expect(persisted).toHaveProperty("agent:main:cron:job1:run:fresh-run");
+    expect(persisted).not.toHaveProperty("agent:main:cron:job1:run:old-run");
+  });
+
+  it("preserves cron run sessions when age is missing or unknown", async () => {
+    const now = Date.now();
+    const store: Record<string, { sessionId: string; updatedAt?: number }> = {
+      "agent:main:cron:job1:run:missing-age": {
+        sessionId: "missing-age",
+      },
+      "agent:main:cron:job1:run:future-age": {
+        sessionId: "future-age",
+        updatedAt: now + 60_000,
+      },
+    };
+    fs.writeFileSync(storePath, JSON.stringify(store));
+
+    const result = await sweepCronRunSessions({
+      cronConfig: { sessionRetention: "1m" },
+      sessionStorePath: storePath,
+      nowMs: now,
+      log,
+      force: true,
+    });
+
+    expect(result.pruned).toBe(0);
+    const persisted = JSON.parse(fs.readFileSync(storePath, "utf-8")) as Record<string, unknown>;
+    expect(persisted).toHaveProperty("agent:main:cron:job1:run:missing-age");
+    expect(persisted).toHaveProperty("agent:main:cron:job1:run:future-age");
   });
 
   it("does nothing when pruning is disabled", async () => {

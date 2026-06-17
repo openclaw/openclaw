@@ -165,7 +165,7 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
     });
   });
 
-  it("stays stable even with multiply-accumulated suffixes", async () => {
+  it("stays stable while preserving fresh multiply-accumulated suffix rows", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
       const cfg = makeIsolatedHeartbeatConfig(tmpDir, storePath);
       const baseSessionKey = resolveMainSessionKey(cfg);
@@ -186,6 +186,51 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
       // A deeply accumulated key converges to "<base>:heartbeat" in one call.
       expect(ctx?.SessionKey).toBe(`${baseSessionKey}:heartbeat`);
 
+      const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+        string,
+        { heartbeatIsolatedBaseSessionKey?: string }
+      >;
+      expect(store[deeplyAccumulatedKey]).toBeDefined();
+      expect(store[`${baseSessionKey}:heartbeat`]?.heartbeatIsolatedBaseSessionKey).toBe(
+        baseSessionKey,
+      );
+    });
+  });
+
+  it("removes age-proven multiply-accumulated suffix rows", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
+      const cfg = makeIsolatedHeartbeatConfig(tmpDir, storePath);
+      const baseSessionKey = resolveMainSessionKey(cfg);
+      const nowMs = Date.now();
+      const deeplyAccumulatedKey = `${baseSessionKey}:heartbeat:heartbeat:heartbeat`;
+
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [deeplyAccumulatedKey]: {
+            sessionId: "old-heartbeat",
+            updatedAt: nowMs - 5 * 60 * 60 * 1000,
+            lastChannel: "whatsapp",
+            lastProvider: "whatsapp",
+            lastTo: "+1555",
+            heartbeatIsolatedBaseSessionKey: baseSessionKey,
+          },
+        }),
+        "utf-8",
+      );
+      const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+
+      await runHeartbeatOnce({
+        cfg,
+        sessionKey: deeplyAccumulatedKey,
+        deps: {
+          getQueueSize: () => 0,
+          nowMs: () => nowMs,
+        },
+      });
+
+      expect(replyCall(replySpy).SessionKey).toBe(`${baseSessionKey}:heartbeat`);
       const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
         string,
         { heartbeatIsolatedBaseSessionKey?: string }
