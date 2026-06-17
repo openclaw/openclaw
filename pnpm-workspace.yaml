@@ -119,7 +119,7 @@ overrides:
   tar: 7.5.16
   tough-cookie: 4.1.3
   yauzl: 3.2.1
-  protobufjs: 8.6.0
+  protobufjs: 7.6.3
   uuid: 14.0.0
 
 allowBuilds:
