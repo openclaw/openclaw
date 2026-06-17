@@ -127,17 +127,6 @@ function stripRuntimeModelState(entry?: SessionEntry): SessionEntry | undefined 
   };
 }
 
-export function archiveSessionTranscriptsForSession(params: {
-  sessionId: string | undefined;
-  storePath: string;
-  sessionFile?: string;
-  agentId?: string;
-  reason: "reset" | "deleted";
-  onArchiveError?: (err: unknown, sourcePath: string) => void;
-}): string[] {
-  return archiveSessionTranscriptsForSessionDetailed(params).map((entry) => entry.archivedPath);
-}
-
 export function archiveSessionTranscriptsForSessionDetailed(params: {
   sessionId: string | undefined;
   storePath: string;

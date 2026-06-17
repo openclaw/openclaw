@@ -2,6 +2,7 @@
  * Tests QA runtime command loading and private CLI gating.
  */
 import { Command } from "commander";
+import { createServer } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cleanupTempDirs,
@@ -35,6 +36,29 @@ describe("plugin-sdk qa-runtime", () => {
     cleanupTempDirs(tempDirs);
     restorePrivateQaCliEnv(originalPrivateQaCli);
   });
+
+  async function occupyLoopbackPort(): Promise<{ close: () => Promise<void>; port: number }> {
+    const server = createServer();
+    const port = await new Promise<number>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => {
+        const address = server.address();
+        if (!address || typeof address === "string") {
+          reject(new Error("test server address unavailable"));
+          return;
+        }
+        resolve(address.port);
+      });
+    });
+    return {
+      port,
+      close: async () => {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      },
+    };
+  }
 
   it("stays cold until the runtime seam is used", async () => {
     const module = await import("./qa-runtime.js");
@@ -272,5 +296,20 @@ describe("plugin-sdk qa-runtime", () => {
 
     expect(runCommand).toHaveBeenCalledTimes(2);
     expect(sleepImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves an unpinned QA Docker host port away from an occupied loopback default", async () => {
+    const module = await import("./qa-runtime.js");
+    const reservation = await occupyLoopbackPort();
+    try {
+      await expect(module.resolveQaDockerHostPort(reservation.port, true)).resolves.toBe(
+        reservation.port,
+      );
+      const fallbackPort = await module.resolveQaDockerHostPort(reservation.port, false);
+      expect(fallbackPort).toBeGreaterThan(0);
+      expect(fallbackPort).not.toBe(reservation.port);
+    } finally {
+      await reservation.close();
+    }
   });
 });

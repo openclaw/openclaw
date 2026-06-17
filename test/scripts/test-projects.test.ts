@@ -967,6 +967,18 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
+  it("routes the src scripts test root to the tooling shard", () => {
+    expect(findUnmatchedExplicitTestTargets(["src/scripts"], process.cwd())).toEqual([]);
+    expect(buildVitestRunPlans(["src/scripts"], process.cwd())).toEqual([
+      {
+        config: "test/vitest/vitest.tooling.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/scripts/**/*.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
   it("includes the isolated tooling shard for broad shell helper globs", () => {
     expect(buildVitestRunPlans(["test/scripts/*.test.ts"], process.cwd())).toEqual([
       {
@@ -1711,6 +1723,24 @@ describe("scripts/test-projects changed-target routing", () => {
         config: "test/vitest/vitest.commands-light.config.ts",
         forwardedArgs: [],
         includePatterns: ["src/commands/status-json-runtime.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes the full commands test root to both command shards", () => {
+    expect(findUnmatchedExplicitTestTargets(["src/commands"])).toEqual([]);
+    expect(buildVitestRunPlans(["src/commands"], process.cwd())).toEqual([
+      {
+        config: "test/vitest/vitest.commands-light.config.ts",
+        forwardedArgs: [],
+        includePatterns: null,
+        watchMode: false,
+      },
+      {
+        config: "test/vitest/vitest.commands.config.ts",
+        forwardedArgs: [],
+        includePatterns: null,
         watchMode: false,
       },
     ]);

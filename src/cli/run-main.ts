@@ -2,14 +2,12 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import { fileURLToPath } from "node:url";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command as CommanderCommand, Option as CommanderOption } from "commander";
 import { resolveStateDir } from "../config/paths.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { FLAG_TERMINATOR, isValueToken } from "../infra/cli-root-options.js";
 import { isTruthyEnvValue, normalizeEnv } from "../infra/env.js";
-import { isMainModule } from "../infra/is-main.js";
 import type { ProxyHandle } from "../infra/net/proxy/proxy-lifecycle.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
@@ -1118,8 +1116,4 @@ export async function runCli(argv: string[] = process.argv) {
     await closeCliMemoryManagers();
     pauseNonTtyStdinForCliExit();
   }
-}
-
-export function isCliMainModule(): boolean {
-  return isMainModule({ currentFile: fileURLToPath(import.meta.url) });
 }

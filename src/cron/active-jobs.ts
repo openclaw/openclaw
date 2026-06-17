@@ -139,17 +139,6 @@ export function isCronActiveJobMarkerCurrent(marker: CronActiveJobMarker | undef
   );
 }
 
-/** Returns whether any other cron run is active in this process. */
-export function hasOtherActiveCronJobs(jobId: string) {
-  const state = getCronActiveJobState();
-  for (const [activeJobId, marker] of state.activeJobs) {
-    if (activeJobId !== jobId && isMarkerActiveInGeneration(marker, state.generation)) {
-      return true;
-    }
-  }
-  return false;
-}
-
 /** Returns whether any cron run is active in this process. */
 export function hasActiveCronJobs() {
   return getActiveCronJobCountForGeneration(getCronActiveJobState()) > 0;

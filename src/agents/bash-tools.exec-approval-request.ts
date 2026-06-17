@@ -326,13 +326,6 @@ async function buildHostApprovalDecisionParams(
   };
 }
 
-/** Requests and waits for an approval decision for host/node exec. */
-export async function requestExecApprovalDecisionForHost(
-  params: HostExecApprovalParams,
-): Promise<string | null> {
-  return await requestExecApprovalDecision(await buildHostApprovalDecisionParams(params));
-}
-
 /** Registers a host/node approval request without waiting for a decision. */
 export async function registerExecApprovalRequestForHost(
   params: HostExecApprovalParams,

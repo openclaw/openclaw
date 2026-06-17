@@ -806,6 +806,36 @@ setInterval(() => {}, 1000);
     expect(result.stderr).toContain("--limit must be a positive integer");
   });
 
+  it("documents gauntlet guardrail options and env defaults in help", () => {
+    const result = spawnSync(
+      process.execPath,
+      [path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"), "--help"],
+      {
+        cwd: path.resolve("."),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    for (const text of [
+      "--wall-anomaly-multiplier",
+      "--rss-anomaly-multiplier",
+      "--qa-cpu-regression-multiplier",
+      "--qa-wall-regression-multiplier",
+      "--command-timeout-ms",
+      "--build-timeout-ms",
+      "--qa-timeout-ms",
+      "OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_IDS",
+      "OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_TOTAL",
+      "OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_INDEX",
+      "OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_FAIL_ON_OBSERVATION",
+      "OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_KEEP_RUN_ROOT",
+      "OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_QA_SUMMARY_MAX_BYTES",
+    ]) {
+      expect(result.stdout).toContain(text);
+    }
+  });
+
   it("parses observation failure mode from CLI and env", () => {
     expect(parseArgs(["--fail-on-observation", "--allow-empty"])).toMatchObject({
       allowEmpty: true,
