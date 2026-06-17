@@ -293,6 +293,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
       }
     : removeLifecycleStateFromMetadataPatch(next);
   const maintenanceConfig = resolveMaintenanceConfigFromInput(cfg.session?.maintenance);
+  let deletedDuringRun = false;
   const persisted = await patchSessionEntry(
     {
       storePath,
@@ -302,6 +303,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
       if (!context.existingEntry && sessionStore[sessionKey]) {
         // sessions.delete removed the persisted row while this run retained an old snapshot.
         // Do not let the stale finalizer recreate the deleted key.
+        deletedDuringRun = true;
         return null;
       }
       return metadataPatch;
@@ -311,6 +313,12 @@ export async function updateSessionStoreAfterAgentRun(params: {
       maintenanceConfig,
     },
   );
+  // State-preserving turns have no fallback entry, so patchSessionEntry skips
+  // the callback when deletion wins. Treat that stale in-memory row the same way.
+  const sessionDeletedDuringRun = deletedDuringRun || (!persisted && sessionStore[sessionKey]);
+  if (sessionDeletedDuringRun) {
+    return { kind: "deleted" } as const;
+  }
   if (persisted) {
     sessionStore[sessionKey] = persisted;
   }

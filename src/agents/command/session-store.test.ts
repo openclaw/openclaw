@@ -1867,7 +1867,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       };
       await fs.writeFile(storePath, JSON.stringify({}, null, 2), "utf8");
 
-      await updateSessionStoreAfterAgentRun({
+      const outcome = await updateSessionStoreAfterAgentRun({
         cfg,
         sessionId,
         sessionKey,
@@ -1895,6 +1895,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
         model: "gpt-5.5",
       });
       expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).toBeUndefined();
+      expect(outcome).toEqual({ kind: "deleted" });
     });
   });
 
@@ -1906,7 +1907,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       const sessionStore: Record<string, SessionEntry> = {};
       await fs.writeFile(storePath, JSON.stringify({}, null, 2), "utf8");
 
-      await updateSessionStoreAfterAgentRun({
+      const outcome = await updateSessionStoreAfterAgentRun({
         cfg,
         sessionId,
         sessionKey,
@@ -1930,6 +1931,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).toMatchObject({
         sessionId,
       });
+      expect(outcome).toBeUndefined();
     });
   });
 

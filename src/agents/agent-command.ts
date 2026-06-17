@@ -891,6 +891,7 @@ async function agentCommandInternal(
   assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
   const effectiveCwd = cwd ? resolveUserPath(cwd) : workspaceDir;
   let sessionEntry = prepared.sessionEntry;
+  let sessionDeletedDuringRun = false;
   let trackedRestartRecoveryDeliveryContext = false;
   let currentRunDeliveryContext: DeliveryContext | undefined;
 
@@ -2136,7 +2137,7 @@ async function agentCommandInternal(
       // Update token+model fields in the session store.
       if (sessionStore && sessionKey && !suppressVisibleSessionEffects) {
         const { updateSessionStoreAfterAgentRun } = await loadSessionStoreRuntime();
-        await updateSessionStoreAfterAgentRun({
+        const updateOutcome = await updateSessionStoreAfterAgentRun({
           cfg,
           contextTokensOverride: agentCfg?.contextTokens,
           sessionId: effectiveSessionId,
@@ -2158,7 +2159,10 @@ async function agentCommandInternal(
             preserveUserFacingSessionModelState,
           preserveUserFacingSessionModelState,
         });
-        sessionEntry = sessionStore[sessionKey] ?? sessionEntry;
+        sessionDeletedDuringRun = updateOutcome?.kind === "deleted";
+        if (!sessionDeletedDuringRun) {
+          sessionEntry = sessionStore[sessionKey] ?? sessionEntry;
+        }
       }
 
       const transcriptPersistenceRunner = result.meta.executionTrace?.runner;
@@ -2166,7 +2170,10 @@ async function agentCommandInternal(
         transcriptPersistenceRunner === "embedded" ||
         (transcriptPersistenceRunner === undefined &&
           Boolean(result.meta.finalAssistantVisibleText?.trim()));
-      if (transcriptPersistenceRunner === "cli" || embeddedAssistantGapFill) {
+      if (
+        !sessionDeletedDuringRun &&
+        (transcriptPersistenceRunner === "cli" || embeddedAssistantGapFill)
+      ) {
         let persistedCliTurnTranscript = false;
         try {
           const transcriptSessionEntry: SessionEntry | undefined = suppressVisibleSessionEffects
@@ -2240,6 +2247,7 @@ async function agentCommandInternal(
         sessionStore &&
         sessionKey &&
         !suppressVisibleSessionEffects &&
+        !sessionDeletedDuringRun &&
         payloads.length > 0 &&
         !isSubagentSessionKey(sessionKey)
       ) {
@@ -2316,7 +2324,8 @@ async function agentCommandInternal(
         sessionStore &&
         sessionKey &&
         !isSubagentSessionKey(sessionKey) &&
-        !suppressVisibleSessionEffects
+        !suppressVisibleSessionEffects &&
+        !sessionDeletedDuringRun
       ) {
         const entry = sessionStore[sessionKey] ?? sessionEntry;
         const noPendingTextForThisRun =
@@ -2348,7 +2357,12 @@ async function agentCommandInternal(
       throw error;
     }
   } finally {
-    if (trackedRestartRecoveryDeliveryContext && sessionStore && sessionKey) {
+    if (
+      !sessionDeletedDuringRun &&
+      trackedRestartRecoveryDeliveryContext &&
+      sessionStore &&
+      sessionKey
+    ) {
       try {
         const entry = sessionStore[sessionKey] ?? sessionEntry;
         if (entry?.restartRecoveryDeliveryContext && entry.restartRecoveryDeliveryRunId === runId) {

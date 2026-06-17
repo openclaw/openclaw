@@ -1813,6 +1813,33 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     });
   });
 
+  it("skips post-run persistence after the session is deleted", async () => {
+    setupSingleAttemptFallback();
+    setupSessionTouchStore();
+    const result = makeSuccessResult("openai", "gpt-5.4") as ReturnType<
+      typeof makeSuccessResult
+    > & {
+      meta: Record<string, unknown> & { executionTrace: Record<string, unknown> };
+    };
+    result.meta.executionTrace = {
+      runner: "cli",
+      fallbackUsed: false,
+      winnerProvider: "openai",
+      winnerModel: "gpt-5.4",
+    };
+    state.runAgentAttemptMock.mockResolvedValue(result);
+    state.updateSessionStoreAfterAgentRunMock.mockImplementation(async () => {
+      delete (state.sessionStoreMock as Record<string, SessionEntry>)["agent:main:main"];
+      return { kind: "deleted" };
+    });
+
+    await runBasicAgentCommand();
+
+    expect(state.persistCliTurnTranscriptMock).not.toHaveBeenCalled();
+    expect(state.runCliTurnCompactionLifecycleMock).not.toHaveBeenCalled();
+    expect(state.deliverAgentCommandResultMock).toHaveBeenCalledTimes(1);
+  });
+
   it("does not treat backend CLI session id as OpenClaw session identity", async () => {
     setupSingleAttemptFallback();
     setupSessionTouchStore();
