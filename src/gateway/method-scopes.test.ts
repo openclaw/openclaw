@@ -3,11 +3,16 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  pinActivePluginChannelRegistry,
+  pinActivePluginHttpRouteRegistry,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
 import {
   authorizeOperatorScopesForMethod,
   isGatewayMethodClassified,
   resolveLeastPrivilegeOperatorScopesForMethod,
+  resolveRequiredOperatorScopeForMethod,
 } from "./method-scopes.js";
 import { createPluginGatewayMethodDescriptor } from "./methods/registry.js";
 import { listGatewayMethods } from "./server-methods-list.js";
@@ -224,6 +229,144 @@ describe("method scope resolution", () => {
     expect(resolveLeastPrivilegeOperatorScopesForMethod(RESERVED_ADMIN_PLUGIN_METHOD)).toEqual([
       "operator.admin",
     ]);
+  });
+
+  // Regression coverage for #92044: plugin-registered gateway methods were
+  // silently requiring operator.admin because resolveScopedMethod only looked at
+  // activeRegistry.gatewayMethodDescriptors. The plugin descriptors can live in
+  // the http-route or channel surface instead, and a request entering through
+  // those surfaces must still see the plugin-declared scope.
+  it("resolves a plugin method scope when its descriptor lives on the http route surface", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.gatewayHandlers["workboard.cards.dispatch"] = pluginHandler;
+    registry.gatewayMethodDescriptors.push(
+      createPluginGatewayMethodDescriptor({
+        pluginId: "workboard",
+        name: "workboard.cards.dispatch",
+        handler: pluginHandler,
+        scope: "operator.write",
+      }),
+    );
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    pinActivePluginHttpRouteRegistry(registry);
+
+    expect(resolveRequiredOperatorScopeForMethod("workboard.cards.dispatch")).toBe(
+      "operator.write",
+    );
+    expect(
+      authorizeOperatorScopesForMethod("workboard.cards.dispatch", ["operator.write"]),
+    ).toEqual({ allowed: true });
+    expect(authorizeOperatorScopesForMethod("workboard.cards.dispatch", ["operator.read"])).toEqual(
+      { allowed: false, missingScope: "operator.write" },
+    );
+  });
+
+  it("resolves a plugin method scope when its descriptor lives on the channel surface", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.gatewayHandlers["workboard.cards.dispatch"] = pluginHandler;
+    registry.gatewayMethodDescriptors.push(
+      createPluginGatewayMethodDescriptor({
+        pluginId: "workboard",
+        name: "workboard.cards.dispatch",
+        handler: pluginHandler,
+        scope: "operator.write",
+      }),
+    );
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    pinActivePluginChannelRegistry(registry);
+
+    expect(resolveRequiredOperatorScopeForMethod("workboard.cards.dispatch")).toBe(
+      "operator.write",
+    );
+    expect(
+      authorizeOperatorScopesForMethod("workboard.cards.dispatch", ["operator.write"]),
+    ).toEqual({ allowed: true });
+  });
+
+  it("prefers the active surface over http-route or channel surfaces for plugin scopes", () => {
+    const httpRouteRegistry = createEmptyPluginRegistry();
+    httpRouteRegistry.gatewayHandlers["workboard.cards.dispatch"] = pluginHandler;
+    httpRouteRegistry.gatewayMethodDescriptors.push(
+      createPluginGatewayMethodDescriptor({
+        pluginId: "workboard",
+        name: "workboard.cards.dispatch",
+        handler: pluginHandler,
+        scope: "operator.read",
+      }),
+    );
+    const activeRegistry = createEmptyPluginRegistry();
+    activeRegistry.gatewayHandlers["workboard.cards.dispatch"] = pluginHandler;
+    activeRegistry.gatewayMethodDescriptors.push(
+      createPluginGatewayMethodDescriptor({
+        pluginId: "workboard",
+        name: "workboard.cards.dispatch",
+        handler: pluginHandler,
+        scope: "operator.write",
+      }),
+    );
+    setActivePluginRegistry(activeRegistry);
+    pinActivePluginHttpRouteRegistry(httpRouteRegistry);
+
+    expect(resolveRequiredOperatorScopeForMethod("workboard.cards.dispatch")).toBe(
+      "operator.write",
+    );
+  });
+
+  it("still returns the admin-scope default for an unknown method when surfaces are empty", () => {
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    pinActivePluginHttpRouteRegistry(createEmptyPluginRegistry());
+    pinActivePluginChannelRegistry(createEmptyPluginRegistry());
+
+    // Unknown method should fall through to admin via authorizeOperatorScopesForMethod
+    // (resolveScopedMethod returns undefined, then the auth check defaults to admin).
+    expect(authorizeOperatorScopesForMethod("totally.unknown.method", ["operator.write"])).toEqual({
+      allowed: false,
+      missingScope: "operator.admin",
+    });
+  });
+
+  // Sibling coverage for #78894 (memory-core dream-promotion cron, same root-cause
+  // shape): a memory-core style plugin that registers its method via
+  // api.registerGatewayMethod should resolve to its declared scope through the same
+  // cross-surface path.
+  it("resolves a memory-core style plugin descriptor from the active registry", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.gatewayHandlers["memory.dream.promote"] = pluginHandler;
+    registry.gatewayMethodDescriptors.push(
+      createPluginGatewayMethodDescriptor({
+        pluginId: "memory-core",
+        name: "memory.dream.promote",
+        handler: pluginHandler,
+        scope: "operator.write",
+      }),
+    );
+    setActivePluginRegistry(registry);
+
+    expect(resolveRequiredOperatorScopeForMethod("memory.dream.promote")).toBe("operator.write");
+    expect(authorizeOperatorScopesForMethod("memory.dream.promote", ["operator.write"])).toEqual({
+      allowed: true,
+    });
+    expect(authorizeOperatorScopesForMethod("memory.dream.promote", ["operator.read"])).toEqual({
+      allowed: false,
+      missingScope: "operator.write",
+    });
+  });
+
+  it("resolves a memory-core style plugin descriptor from the channel surface", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.gatewayHandlers["memory.dream.promote"] = pluginHandler;
+    registry.gatewayMethodDescriptors.push(
+      createPluginGatewayMethodDescriptor({
+        pluginId: "memory-core",
+        name: "memory.dream.promote",
+        handler: pluginHandler,
+        scope: "operator.write",
+      }),
+    );
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    pinActivePluginChannelRegistry(registry);
+
+    expect(resolveRequiredOperatorScopeForMethod("memory.dream.promote")).toBe("operator.write");
   });
 });
 
