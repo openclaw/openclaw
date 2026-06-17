@@ -183,7 +183,7 @@ describe("monitorWebhook", () => {
     await server.stop();
   });
 
-  it("does not treat //host/path request targets as matching the configured webhook path", async () => {
+  it("rejects //host/path request targets before matching the configured webhook path", async () => {
     const accountId = "account-path-network-reference";
     const port = await getFreePort();
     const path = "/expected-feishu-hook";
@@ -211,8 +211,39 @@ describe("monitorWebhook", () => {
       body: JSON.stringify(payload),
     });
 
-    expect(response.status).toBe(404);
-    expect(await response.text()).toBe("Not Found");
+    expect(response.status).toBe(400);
+    expect(await response.text()).toBe("Bad Request");
+    expect(invokeMock).not.toHaveBeenCalled();
+
+    await server.stop();
+  });
+
+  it("does not canonicalize dot-segment request targets into configured webhook path matches", async () => {
+    const accountId = "account-path-dot-segment";
+    const port = await getFreePort();
+    const path = "/expected-feishu-hook";
+    const encryptKey = "encrypt_test"; // pragma: allowlist secret
+
+    const invokeMock = vi.fn(async () => ({ ok: true }));
+    const server = await startWebhookServer({
+      accountId,
+      port,
+      path,
+      encryptKey,
+      eventDispatcherInvoke: invokeMock,
+    });
+
+    const response = await sendRawHttpRequest({
+      port,
+      request:
+        `POST /wrong/..${path}?source=test HTTP/1.1\r\n` +
+        `Host: 127.0.0.1:${port}\r\n` +
+        "Connection: close\r\n" +
+        "Content-Length: 0\r\n\r\n",
+    });
+
+    expect(response).toContain("HTTP/1.1 404 Not Found");
+    expect(response).toContain("Not Found");
     expect(invokeMock).not.toHaveBeenCalled();
 
     await server.stop();

@@ -96,14 +96,14 @@ function respondText(res: http.ServerResponse, statusCode: number, body: string)
 function getWebhookRequestPath(req: http.IncomingMessage): string | null {
   const rawUrl = req.url ?? "/";
 
-  // Only accept origin-form request targets (`/path?query`).
-  // This avoids treating `//evil/path` as a network-path reference when using `new URL()`.
-  if (!rawUrl.startsWith("/")) {
+  // Compare the raw origin-form path only; URL parsing would canonicalize crafted
+  // targets such as network-path or dot-segment inputs before the path gate.
+  if (!rawUrl.startsWith("/") || rawUrl.startsWith("//")) {
     return null;
   }
 
   const pathname = rawUrl.split("?", 1)[0] ?? "/";
-  return normalizeWebhookPath(pathname);
+  return pathname || null;
 }
 
 function normalizeFeishuWebhookRateLimitClient(clientIp: string | undefined): string {
