@@ -69,8 +69,6 @@ vi.mock("../video-generation-task-status.js", () => ({
   buildVideoGenerationTaskStatusDetails: vi.fn(() => ({})),
   buildVideoGenerationTaskStatusText: vi.fn(() => ""),
   findActiveVideoGenerationTaskForSession: vi.fn(() => undefined),
-  getVideoGenerationTaskProviderId: vi.fn(() => undefined),
-  isActiveVideoGenerationTask: vi.fn(() => false),
 }));
 
 vi.mock("../image-generation-task-status.js", () => ({
