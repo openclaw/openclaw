@@ -771,6 +771,112 @@ function stripRelevantMemoriesTags(text: string): string {
   return result;
 }
 
+/**
+ * Heuristic detector for plain-text reasoning emitted by models that do not
+ * wrap their chain-of-thought in <thinking>/<thought> tags (notably GLM-5.x
+ * via Ollama). The model writes meta-commentary about what it plans to say
+ * before the actual response, e.g.:
+ *
+ *   "The user is asking about X. I should check Y. Let me respond. Hey! ..."
+ *
+ * This function strips the reasoning prefix and returns only the response.
+ *
+ * Tracking: https://github.com/openclaw/openclaw/issues/91804
+ */
+const PLAIN_TEXT_REASONING_START_PATTERNS: RegExp[] = [
+  /^(?:The\s+user|The\s+human)\s+(?:is\s+)?(?:asking|saying|wanting|looking|requesting|wondering|trying|responding|making|doing|talking|mentioning|pointing|referring|hinting|suggesting|expressing|feeling|thinking)\b/i,
+  /^[A-Z][a-z]+\s+is\s+saying\s+["']/,
+  /^I\s+(?:should|need\s+to|will|can|might|would|could|want\s+to|have\s+to|must|think|decide|choose|prefer|consider)\b/i,
+  /^Let\s+me\b/i,
+  /^(?:Looking\s+at|Analyzing|Based\s+on|Given\s+the|After\s+reviewing|After\s+analyzing|From\s+the|Considering|Examining)\b/i,
+  /^This\s+(?:is\s+)?(?:a\s+)?(?:message|question|request|response|query|task|prompt)\b/i,
+];
+
+const PLAIN_TEXT_REASONING_INDICATORS = /\b(should|need\s+to|let\s+me|I'll|I\s+can|saying|asking|respond|response|context|want\s+to|think|decide|choose|prefer|consider|careful|just|after|because|going\s+to|about\s+to|plan\s+to)\b/i;
+
+const PLAIN_TEXT_RESPONSE_START_PATTERNS = /^(?:Hey|Hi|Hello|Oh|Sure|Yes|No|OK|Okay|Alright|Well|Actually|So|Here|This|That|It|The|There|I\b(?:'m|am|have|was|don|can|will|just)\b|```|[-*\u2022]|\d+\.)/i;
+
+export function stripPlainTextReasoning(text: string): string {
+  if (!text || typeof text !== "string") return text;
+  const trimmed = text.trim();
+  if (!trimmed) return text;
+
+  let startsWithReasoning = false;
+  for (const pattern of PLAIN_TEXT_REASONING_START_PATTERNS) {
+    if (pattern.test(trimmed)) {
+      startsWithReasoning = true;
+      break;
+    }
+  }
+  if (!startsWithReasoning) return text;
+
+  // Heuristic 1: period followed by a greeting (".Hey", ".\nHey")
+  const greetingAfterPeriod = /\.\s*(Hey|Hi|Hello|Oh|Sure|Yes|No|OK|Okay|Alright|Well|Actually|So)\b/i;
+  const greetingMatch = trimmed.match(greetingAfterPeriod);
+  if (greetingMatch && greetingMatch.index > 0) {
+    const beforeGreeting = trimmed.slice(0, greetingMatch.index + 1);
+    const afterGreeting = trimmed.slice(greetingMatch.index + 1).trimStart();
+    if (PLAIN_TEXT_REASONING_INDICATORS.test(beforeGreeting)) {
+      const leadingWs = text.length - text.trimStart().length;
+      return " ".repeat(leadingWs) + afterGreeting;
+    }
+  }
+
+  // Heuristic 2: last "Let me X." followed by actual content
+  const letMeEndPattern = /Let\s+me\s+[^.]+\.\s*/gi;
+  let letMeMatch: RegExpExecArray | null;
+  let lastLetMeEnd = -1;
+  while ((letMeMatch = letMeEndPattern.exec(trimmed)) !== null) {
+    lastLetMeEnd = letMeMatch.index + letMeMatch[0].length;
+  }
+  if (lastLetMeEnd > 0 && lastLetMeEnd < trimmed.length) {
+    const afterLetMe = trimmed.slice(lastLetMeEnd).trimStart();
+    if (afterLetMe.length > 10) {
+      const leadingWs = text.length - text.trimStart().length;
+      return " ".repeat(leadingWs) + afterLetMe;
+    }
+  }
+
+  // Heuristic 3: iteratively strip reasoning sentences from the beginning
+  const sentencePattern = /[^.!?]+[.!?]+\s*/g;
+  const sentences: { text: string; end: number }[] = [];
+  let sMatch: RegExpExecArray | null;
+  while ((sMatch = sentencePattern.exec(trimmed)) !== null) {
+    sentences.push({ text: sMatch[0], end: sMatch.index + sMatch[0].length });
+  }
+  if (sentences.length > 0) {
+    const lastEnd = sentences[sentences.length - 1].end;
+    if (lastEnd < trimmed.length) {
+      sentences.push({ text: trimmed.slice(lastEnd), end: trimmed.length });
+    }
+  } else if (trimmed.length > 0) {
+    sentences.push({ text: trimmed, end: trimmed.length });
+  }
+  if (sentences.length <= 1) return text;
+
+  let responseStartIdx = -1;
+  for (let i = 0; i < sentences.length; i++) {
+    const s = sentences[i].text.trim();
+    if (i === 0 && startsWithReasoning) continue;
+    if (PLAIN_TEXT_RESPONSE_START_PATTERNS.test(s)) {
+      responseStartIdx = i;
+      break;
+    }
+    if (!PLAIN_TEXT_REASONING_INDICATORS.test(s) && i > 0) {
+      responseStartIdx = i;
+      break;
+    }
+  }
+  if (responseStartIdx === -1) return text;
+
+  const responsePart = sentences.slice(responseStartIdx).map((s) => s.text).join("").trim();
+  const reasoningPart = sentences.slice(0, responseStartIdx).map((s) => s.text).join("").trim();
+  if (responsePart.length < 10 && reasoningPart.length > 20) return text;
+
+  const leadingWs = text.length - text.trimStart().length;
+  return " ".repeat(leadingWs) + responsePart;
+}
+
 export function stripAssistantInternalTraceLines(text: string): string {
   if (!text || !INTERNAL_TRACE_LINE_QUICK_RE.test(text)) {
     return text;
@@ -897,10 +1003,10 @@ function applyAssistantVisibleTextStagePipeline(
   };
 
   if (options.stageOrder === "reasoning-first") {
-    return applyFinalTrim(stripNonReasoningStages(stripReasoning(text)));
+    return applyFinalTrim(stripNonReasoningStages(stripReasoning(stripPlainTextReasoning(text))));
   }
 
-  return applyFinalTrim(stripReasoning(stripNonReasoningStages(text)));
+  return applyFinalTrim(stripReasoning(stripPlainTextReasoning(stripNonReasoningStages(text))));
 }
 
 export function sanitizeAssistantVisibleTextWithProfile(
