@@ -423,7 +423,7 @@ export async function processMessage(params: {
 
   const sender = getSenderIdentity(params.msg);
   const senderGroup = inboundPolicy.resolveSenderGroup(
-    sender.e164 ?? (params.msg.chatType === "group" ? undefined : params.msg.from),
+    sender.e164 ?? (conversationKind === "group" ? undefined : conversationId),
   );
   const dmRouteTarget = resolveWhatsAppDmRouteTarget({
     msg: params.msg,
