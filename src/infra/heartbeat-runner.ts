@@ -1842,6 +1842,44 @@ export async function runHeartbeatOnce(opts: {
     const ackMaxChars = resolveHeartbeatAckMaxChars(cfg, heartbeat);
     const responsePrefix = resolveHeartbeatResponsePrefix();
 
+    // When message_tool_only delivery mode is active but the model did not call
+    // the heartbeat response tool, treat the reply as a silent heartbeat to
+    // prevent private final text from leaking to the channel.
+    const isMessageToolOnly =
+      usesHeartbeatResponseTool &&
+      !heartbeatToolResponse &&
+      (delivery.chatType === "group" || delivery.chatType === "channel"
+        ? (cfg.messages?.groupChat?.visibleReplies ?? cfg.messages?.visibleReplies)
+        : cfg.messages?.visibleReplies) === "message_tool";
+    if (isMessageToolOnly) {
+      await restoreHeartbeatUpdatedAt({
+        storePath,
+        sessionKey,
+        updatedAt: previousUpdatedAt,
+      });
+
+      const okSent = await maybeSendHeartbeatOk();
+      emitHeartbeatEvent({
+        status: "ok-token",
+        reason: opts.reason,
+        preview: replyPayload?.text?.slice(0, 200) ?? "",
+        durationMs: Date.now() - startedAt,
+        channel: delivery.channel !== "none" ? delivery.channel : undefined,
+        accountId: delivery.accountId,
+        silent: !okSent,
+        indicatorType: visibility.useIndicator ? resolveIndicatorType("ok-token") : undefined,
+      });
+      await markCommitmentsStatus({
+        cfg,
+        ids: dueCommitmentIds,
+        status: "dismissed",
+        nowMs: startedAt,
+      });
+      await updateTaskTimestamps();
+      consumeInspectedSystemEvents();
+      return { status: "ran", durationMs: Date.now() - startedAt };
+    }
+
     if (heartbeatToolResponse && !heartbeatToolResponse.notify) {
       await restoreHeartbeatUpdatedAt({
         storePath,
