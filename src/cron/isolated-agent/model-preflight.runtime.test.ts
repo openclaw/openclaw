@@ -25,6 +25,7 @@ function requireFetchPreflightRequest(): {
   url?: string;
   timeoutMs?: number;
   auditContext?: string;
+  init?: { method?: string; headers?: Record<string, string> };
 } {
   const request = fetchWithSsrFGuardMock.mock.calls[0]?.[0] as
     | { url?: string; timeoutMs?: number; auditContext?: string }
@@ -170,5 +171,56 @@ describe("preflightCronModelProvider", () => {
     expect(first.status).toBe("unavailable");
     expect(second).toEqual({ status: "available" });
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("sends Authorization Bearer header when provider config has apiKey", async () => {
+    mockReachableResponse(200);
+
+    const result = await preflightCronModelProvider({
+      cfg: {
+        models: {
+          providers: {
+            litellm: {
+              api: "openai-completions",
+              baseUrl: "http://127.0.0.1:4000",
+              apiKey: "sk-test-key-12345",
+              models: [],
+            },
+          },
+        },
+      },
+      provider: "litellm",
+      model: "gpt-4",
+    });
+
+    expect(result).toEqual({ status: "available" });
+    const request = requireFetchPreflightRequest();
+    expect(request.init?.headers).toEqual({
+      Authorization: "Bearer sk-test-key-12345",
+    });
+  });
+
+  it("does not send Authorization header when no apiKey is available", async () => {
+    mockReachableResponse(200);
+
+    const result = await preflightCronModelProvider({
+      cfg: {
+        models: {
+          providers: {
+            ollama: {
+              api: "ollama",
+              baseUrl: "http://localhost:11434",
+              models: [],
+            },
+          },
+        },
+      },
+      provider: "ollama",
+      model: "llama3",
+    });
+
+    expect(result).toEqual({ status: "available" });
+    const request = requireFetchPreflightRequest();
+    expect(request.init?.headers).toBeUndefined();
   });
 });

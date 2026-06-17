@@ -1,6 +1,7 @@
-/** Preflights local model-provider endpoints before scheduled cron runner startup. */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+/** Preflights local model-provider endpoints before scheduled cron runner startup. */
+import { resolveDefaultAgentDir } from "../../agents/agent-scope-config.js";
 import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
@@ -157,13 +158,60 @@ function buildUnavailableResult(params: {
   };
 }
 
+async function resolveProbeApiKey(
+  providerCfg: ModelProviderConfig | undefined,
+  provider: string,
+  cfg: OpenClawConfig,
+): Promise<string | undefined> {
+  // Resolve API key from the same source chain as normal inference calls.
+  // Try multiple sources and return the first one found.
+
+  // 1. Direct config apiKey field
+  const configKey = providerCfg?.apiKey;
+  if (configKey && typeof configKey === "string" && configKey.trim()) {
+    return configKey.trim();
+  }
+
+  // 2. auth-profiles.json
+  try {
+    const agentDir = resolveDefaultAgentDir(cfg);
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const authPath = path.join(agentDir, "auth-profiles.json");
+    if (fs.existsSync(authPath)) {
+      const data = JSON.parse(fs.readFileSync(authPath, "utf8"));
+      if (data?.profiles) {
+        for (const [key, profile] of Object.entries(data.profiles)) {
+          const p = profile as { provider?: string; key?: string };
+          if ((key.startsWith(provider + ":") || p.provider === provider) && p.key) {
+            return p.key;
+          }
+        }
+      }
+    }
+  } catch {}
+
+  // 3. Env var: LITELLM_API_KEY, VLLM_API_KEY, SGLANG_API_KEY, etc.
+  const upperName = provider.toUpperCase().replace(/[^A-Z0-9_]/g, "");
+  const directKey = process.env[upperName + "_API_KEY"];
+  if (directKey?.trim()) {
+    return directKey.trim();
+  }
+
+  return undefined;
+}
+
 async function probeLocalProviderEndpoint(params: {
   api: PreflightApi;
   baseUrl: string;
+  apiKey?: string;
 }): Promise<void> {
+  const headers: Record<string, string> | undefined = params.apiKey
+    ? { Authorization: `Bearer ${params.apiKey}` }
+    : undefined;
   const { response, release } = await fetchWithSsrFGuard({
     url: buildProbeUrl(params.api, params.baseUrl),
-    init: { method: "GET" },
+    init: { method: "GET", ...(headers ? { headers } : {}) },
     policy: buildLocalProviderSsrFPolicy(params.baseUrl),
     timeoutMs: PREFLIGHT_TIMEOUT_MS,
     auditContext: "cron-model-provider-preflight",
@@ -216,7 +264,12 @@ export async function preflightCronModelProvider(params: {
 
   let result: EndpointPreflightResult;
   try {
-    await probeLocalProviderEndpoint({ api, baseUrl });
+    const probeApiKey = await resolveProbeApiKey(providerConfig, params.provider, params.cfg);
+    await probeLocalProviderEndpoint({
+      api,
+      baseUrl,
+      apiKey: probeApiKey,
+    });
     result = { status: "available" };
   } catch (error) {
     result = { status: "unavailable", error };
