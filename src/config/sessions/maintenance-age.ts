@@ -19,7 +19,7 @@ export type SessionCleanupAgeDecision =
     };
 
 export function resolveSessionCleanupMinCandidateAgeMs(overrideMs?: number): number {
-  return Number.isFinite(overrideMs) && overrideMs >= 0
+  return typeof overrideMs === "number" && Number.isFinite(overrideMs) && overrideMs >= 0
     ? Math.max(overrideMs, MIN_SESSION_CLEANUP_CANDIDATE_AGE_MS)
     : MIN_SESSION_CLEANUP_CANDIDATE_AGE_MS;
 }

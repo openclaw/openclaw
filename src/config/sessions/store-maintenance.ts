@@ -210,7 +210,7 @@ export function pruneStaleEntries(
       nowMs,
       minCandidateAgeMs: opts.minCandidateAgeMs,
     });
-    if (age.reason === "age-unknown") {
+    if (!age.eligible && age.reason === "age-unknown") {
       opts.onQuarantinedAge?.({ key, entry });
       continue;
     }

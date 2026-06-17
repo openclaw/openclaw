@@ -543,7 +543,7 @@ export async function cleanupArchivedSessionTranscripts(opts: {
   const rules = opts.rules
     .filter((rule) => Number.isFinite(rule.olderThanMs) && rule.olderThanMs >= 0)
     .map((rule) => ({
-      ...rule,
+      reason: rule.reason,
       olderThanMs: resolveSessionCleanupMinCandidateAgeMs(rule.olderThanMs),
     }));
   if (rules.length === 0) {
