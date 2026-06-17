@@ -74,6 +74,7 @@ export type RunCliAgentParams = {
   lane?: string;
   jobId?: string;
   extraSystemPrompt?: string;
+  extraSystemPromptDirective?: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   requireExplicitMessageTarget?: boolean;
   silentReplyPromptMode?: SilentReplyPromptMode;

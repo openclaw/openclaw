@@ -1976,6 +1976,7 @@ async function runEmbeddedAgentInternal(
               params.deferTerminalLifecycle ?? params.deferTerminalLifecycleEnd,
             onExecutionPhase: params.onExecutionPhase,
             extraSystemPrompt: params.extraSystemPrompt,
+            extraSystemPromptDirective: params.extraSystemPromptDirective,
             sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
             inputProvenance: params.inputProvenance,
             streamParams: params.streamParams,
@@ -2257,6 +2258,7 @@ async function runEmbeddedAgentInternal(
                     reasoningLevel: params.reasoningLevel,
                     bashElevated: params.bashElevated,
                     extraSystemPrompt: params.extraSystemPrompt,
+                    extraSystemPromptDirective: params.extraSystemPromptDirective,
                     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
                     ownerNumbers: params.ownerNumbers,
                     activeProcessSessions: listActiveProcessSessionReferences({
@@ -2452,6 +2454,7 @@ async function runEmbeddedAgentInternal(
                     reasoningLevel: params.reasoningLevel,
                     bashElevated: params.bashElevated,
                     extraSystemPrompt: params.extraSystemPrompt,
+                    extraSystemPromptDirective: params.extraSystemPromptDirective,
                     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
                     ownerNumbers: params.ownerNumbers,
                     activeProcessSessions: listActiveProcessSessionReferences({
