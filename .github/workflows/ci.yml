@@ -2105,7 +2105,7 @@ jobs:
           exit 1
 
       - name: Setup Java
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v5.2.0
         with:
           distribution: temurin
           # Keep sdkmanager on the stable JDK path for Linux CI runners.
