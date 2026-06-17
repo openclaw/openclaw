@@ -24,9 +24,14 @@ describe("cleanupArchivedSessionTranscripts", () => {
     await fsPromises.rm(dir, { recursive: true, force: true });
   });
 
-  async function seed(names: string[]): Promise<void> {
+  async function seed(names: string[], mtimeMs?: number): Promise<void> {
     for (const name of names) {
-      await fsPromises.writeFile(path.join(dir, name), "");
+      const filePath = path.join(dir, name);
+      await fsPromises.writeFile(filePath, "");
+      if (mtimeMs != null) {
+        const mtime = new Date(mtimeMs);
+        await fsPromises.utimes(filePath, mtime, mtime);
+      }
     }
   }
 
@@ -35,12 +40,15 @@ describe("cleanupArchivedSessionTranscripts", () => {
   }
 
   it("applies every retention rule from a single directory listing", async () => {
-    await seed([
-      `a.jsonl.deleted.${OLD_STAMP}`,
-      `b.jsonl.reset.${OLD_STAMP}`,
-      `c.jsonl.reset.${FRESH_STAMP}`,
-      "live.jsonl",
-    ]);
+    await seed(
+      [
+        `a.jsonl.deleted.${OLD_STAMP}`,
+        `b.jsonl.reset.${OLD_STAMP}`,
+        `c.jsonl.reset.${FRESH_STAMP}`,
+        "live.jsonl",
+      ],
+      NOW_MS - 5 * DAY_MS,
+    );
     const readdirSpy = vi.spyOn(fsPromises, "readdir");
 
     const result = await cleanupArchivedSessionTranscripts({
@@ -58,7 +66,7 @@ describe("cleanupArchivedSessionTranscripts", () => {
   });
 
   it("applies each rule's age threshold independently", async () => {
-    await seed([`a.jsonl.deleted.${OLD_STAMP}`, `b.jsonl.reset.${OLD_STAMP}`]);
+    await seed([`a.jsonl.deleted.${OLD_STAMP}`, `b.jsonl.reset.${OLD_STAMP}`], NOW_MS - 5 * DAY_MS);
 
     const result = await cleanupArchivedSessionTranscripts({
       directories: [dir],
@@ -71,6 +79,19 @@ describe("cleanupArchivedSessionTranscripts", () => {
 
     expect(result).toEqual({ removed: 1, scanned: 2 });
     expect(await remaining()).toEqual([`b.jsonl.reset.${OLD_STAMP}`]);
+  });
+
+  it("preserves old-named archives whose file mtime is under the cleanup age floor", async () => {
+    await seed([`a.jsonl.deleted.${OLD_STAMP}`], NOW_MS - 60_000);
+
+    const result = await cleanupArchivedSessionTranscripts({
+      directories: [dir],
+      rules: [{ reason: "deleted", olderThanMs: 30 * DAY_MS }],
+      nowMs: NOW_MS,
+    });
+
+    expect(result).toEqual({ removed: 0, scanned: 1 });
+    expect(await remaining()).toEqual([`a.jsonl.deleted.${OLD_STAMP}`]);
   });
 
   it("keeps archives whose reason has no rule", async () => {

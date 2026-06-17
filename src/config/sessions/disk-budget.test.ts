@@ -14,6 +14,8 @@ import { enforceSessionDiskBudget, pruneUnreferencedSessionArtifacts } from "./d
 import { saveSessionStore } from "./store.js";
 import type { SessionEntry } from "./types.js";
 
+const FIVE_HOURS_MS = 5 * 60 * 60 * 1000;
+
 async function expectPathExists(targetPath: string): Promise<void> {
   await expect(fs.access(targetPath)).resolves.toBeUndefined();
 }
@@ -104,6 +106,8 @@ describe("enforceSessionDiskBudget", () => {
       await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
       await fs.writeFile(transcriptPath, "k".repeat(80), "utf-8");
       await fs.writeFile(archivePath, "a".repeat(260), "utf-8");
+      const old = new Date(Date.now() - FIVE_HOURS_MS);
+      await fs.utimes(archivePath, old, old);
 
       const result = await enforceSessionDiskBudget({
         store,
@@ -143,8 +147,8 @@ describe("enforceSessionDiskBudget", () => {
       await fs.writeFile(transcriptPath, "k".repeat(80), "utf-8");
       await fs.writeFile(staleTemp, "s".repeat(300), "utf-8");
       await fs.writeFile(freshTemp, "f".repeat(300), "utf-8");
-      // Age the stale temp past the staleness window; the fresh one is in-flight.
-      const old = new Date(Date.now() - 30 * 60 * 1000);
+      // Age the stale temp past the universal cleanup floor; the fresh one is in-flight.
+      const old = new Date(Date.now() - FIVE_HOURS_MS);
       await fs.utimes(staleTemp, old, old);
 
       const result = await enforceSessionDiskBudget({
@@ -181,7 +185,7 @@ describe("enforceSessionDiskBudget", () => {
         },
         [removableKey]: {
           sessionId: "old-removable",
-          updatedAt: now,
+          updatedAt: now - FIVE_HOURS_MS,
         },
       };
       await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
@@ -293,7 +297,7 @@ describe("enforceSessionDiskBudget", () => {
       );
       await expectPathExists(oldBlob);
       await expectPathExists(activeBlob);
-      const staleBlobTime = new Date(Date.now() - 10 * 60 * 1000);
+      const staleBlobTime = new Date(Date.now() - FIVE_HOURS_MS);
       await fs.utimes(oldBlob, staleBlobTime, staleBlobTime);
 
       const result = await enforceSessionDiskBudget({
@@ -358,7 +362,7 @@ describe("enforceSessionDiskBudget", () => {
       await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
       await fs.mkdir(blobDir, { recursive: true });
       await fs.writeFile(blobPath, "stale prompt blob".repeat(200), "utf-8");
-      const staleBlobTime = new Date(Date.now() - 10 * 60 * 1000);
+      const staleBlobTime = new Date(Date.now() - FIVE_HOURS_MS);
       await fs.utimes(blobPath, staleBlobTime, staleBlobTime);
       const statSpy = refreshPathBeforeSecondStat(blobPath);
       try {
@@ -398,7 +402,7 @@ describe("enforceSessionDiskBudget", () => {
       await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
       await fs.mkdir(tempDir, { recursive: true });
       await fs.writeFile(tempPath, "t".repeat(2000), "utf-8");
-      const old = new Date(Date.now() - 30 * 60 * 1000);
+      const old = new Date(Date.now() - FIVE_HOURS_MS);
       await fs.utimes(tempPath, old, old);
 
       const result = await enforceSessionDiskBudget({
@@ -458,6 +462,8 @@ describe("enforceSessionDiskBudget", () => {
       await fs.writeFile(checkpointPath, "c".repeat(5000), "utf-8");
       await fs.writeFile(referencedCheckpointPath, "r".repeat(260), "utf-8");
       await fs.writeFile(referencedPostCompactionPath, "p".repeat(260), "utf-8");
+      const old = new Date(Date.now() - FIVE_HOURS_MS);
+      await fs.utimes(checkpointPath, old, old);
 
       const result = await enforceSessionDiskBudget({
         store,
@@ -504,6 +510,9 @@ describe("enforceSessionDiskBudget", () => {
       await fs.writeFile(referencedPointer, "p".repeat(80), "utf-8");
       await fs.writeFile(orphanRuntime, "o".repeat(5000), "utf-8");
       await fs.writeFile(orphanPointer, "q".repeat(5000), "utf-8");
+      const old = new Date(Date.now() - FIVE_HOURS_MS);
+      await fs.utimes(orphanRuntime, old, old);
+      await fs.utimes(orphanPointer, old, old);
 
       const result = await enforceSessionDiskBudget({
         store,
@@ -571,6 +580,36 @@ describe("enforceSessionDiskBudget", () => {
 });
 
 describe("pruneUnreferencedSessionArtifacts", () => {
+  it("preserves unreferenced session artifacts and temps under the cleanup age floor", async () => {
+    await withTempDir({ prefix: "openclaw-prune-young-artifacts-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const transcript = path.join(dir, "young-orphan.jsonl");
+      const runtime = path.join(dir, "young.trajectory.jsonl");
+      const pointer = path.join(dir, "young.trajectory-path.json");
+      const temp = path.join(
+        dir,
+        "sessions.json.999.44444444-4444-4444-8444-444444444444.tmp",
+      );
+      await fs.writeFile(storePath, JSON.stringify({}, null, 2), "utf-8");
+      await fs.writeFile(transcript, "young transcript", "utf-8");
+      await fs.writeFile(runtime, "young runtime", "utf-8");
+      await fs.writeFile(pointer, "young pointer", "utf-8");
+      await fs.writeFile(temp, "young temp", "utf-8");
+
+      const result = await pruneUnreferencedSessionArtifacts({
+        store: {},
+        storePath,
+        olderThanMs: 0,
+      });
+
+      expect(result.removedFiles).toBe(0);
+      await expectPathExists(transcript);
+      await expectPathExists(runtime);
+      await expectPathExists(pointer);
+      await expectPathExists(temp);
+    });
+  });
+
   it("reclaims stale store temp sidecars but preserves in-flight ones (#56827)", async () => {
     await withTempDir({ prefix: "openclaw-prune-temp-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
@@ -588,8 +627,8 @@ describe("pruneUnreferencedSessionArtifacts", () => {
       await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
       await fs.writeFile(staleTemp, "s".repeat(64), "utf-8");
       await fs.writeFile(freshTemp, "f".repeat(64), "utf-8");
-      // Age the stale temp well past the temp staleness window; keep the other in-flight.
-      const old = new Date(Date.now() - 30 * 60 * 1000);
+      // Age the stale temp well past the cleanup floor; keep the other in-flight.
+      const old = new Date(Date.now() - FIVE_HOURS_MS);
       await fs.utimes(staleTemp, old, old);
 
       const result = await pruneUnreferencedSessionArtifacts({
@@ -658,7 +697,7 @@ describe("pruneUnreferencedSessionArtifacts", () => {
       );
       await expectPathExists(oldBlob);
       await expectPathExists(keepBlob);
-      const oldMtime = new Date(Date.now() - 10 * 60 * 1000);
+      const oldMtime = new Date(Date.now() - FIVE_HOURS_MS);
       await fs.utimes(oldBlob, oldMtime, oldMtime);
       delete store[oldKey];
 
@@ -704,7 +743,7 @@ describe("pruneUnreferencedSessionArtifacts", () => {
       await fs.writeFile(storePath, JSON.stringify({}, null, 2), "utf-8");
       await fs.mkdir(blobDir, { recursive: true });
       await fs.writeFile(blobPath, "stale prompt blob".repeat(200), "utf-8");
-      const staleBlobTime = new Date(Date.now() - 10 * 60 * 1000);
+      const staleBlobTime = new Date(Date.now() - FIVE_HOURS_MS);
       await fs.utimes(blobPath, staleBlobTime, staleBlobTime);
       const statSpy = refreshPathBeforeSecondStat(blobPath);
       try {
@@ -742,7 +781,7 @@ describe("pruneUnreferencedSessionArtifacts", () => {
       await fs.mkdir(tempDir, { recursive: true });
       await fs.writeFile(staleTemp, "s".repeat(64), "utf-8");
       await fs.writeFile(freshTemp, "f".repeat(64), "utf-8");
-      const old = new Date(Date.now() - 30 * 60 * 1000);
+      const old = new Date(Date.now() - FIVE_HOURS_MS);
       await fs.utimes(staleTemp, old, old);
 
       const result = await pruneUnreferencedSessionArtifacts({

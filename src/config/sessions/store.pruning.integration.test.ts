@@ -30,6 +30,7 @@ import {
 let mockLoadConfig: ReturnType<typeof vi.fn>;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const FIVE_HOURS_MS = 5 * 60 * 60 * 1000;
 const ENFORCED_MAINTENANCE_OVERRIDE = {
   mode: "enforce" as const,
   pruneAfterMs: 7 * DAY_MS,
@@ -92,6 +93,13 @@ async function expectPathMissing(targetPath: string): Promise<void> {
     return;
   }
   throw new Error(`expected missing path: ${targetPath}`);
+}
+
+async function agePaths(paths: string[], now = Date.now(), ageMs = FIVE_HOURS_MS): Promise<void> {
+  const old = new Date(now - ageMs);
+  for (const targetPath of paths) {
+    await fs.utimes(targetPath, old, old);
+  }
 }
 
 function createStaleAndFreshStore(now = Date.now()): Record<string, SessionEntry> {
@@ -162,6 +170,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     const freshTranscript = path.join(testDir, `${freshSessionId}.jsonl`);
     await fs.writeFile(staleTranscript, '{"type":"session"}\n', "utf-8");
     await fs.writeFile(freshTranscript, '{"type":"session"}\n', "utf-8");
+    await agePaths([staleTranscript], now);
 
     await saveSessionStore(storePath, store);
 
@@ -225,6 +234,7 @@ describe("Integration: saveSessionStore with pruning", () => {
       }),
       "utf-8",
     );
+    await agePaths([staleTranscript, staleRuntime, stalePointer], now);
 
     await saveSessionStore(storePath, store);
 
@@ -232,6 +242,30 @@ describe("Integration: saveSessionStore with pruning", () => {
     await expectPathMissing(stalePointer);
     await expectPathExists(freshRuntime);
     await expectPathExists(freshPointer);
+  });
+
+  it("does not archive fresh transcript files even when their store rows are stale", async () => {
+    applyEnforcedMaintenanceConfig(mockLoadConfig);
+
+    const now = Date.now();
+    const staleSessionId = "stale-row-fresh-file";
+    const store: Record<string, SessionEntry> = {
+      stale: { sessionId: staleSessionId, updatedAt: now - 30 * DAY_MS },
+      fresh: { sessionId: "fresh-session", updatedAt: now },
+    };
+    const staleTranscript = path.join(testDir, `${staleSessionId}.jsonl`);
+    await fs.writeFile(staleTranscript, '{"type":"session"}\n', "utf-8");
+
+    await saveSessionStore(storePath, store);
+
+    const loaded = loadSessionStore(storePath, { skipCache: true });
+    expect(loaded.stale).toBeUndefined();
+    await expectPathExists(staleTranscript);
+    const dirEntries = await fs.readdir(testDir);
+    const archived = dirEntries.filter((entry) =>
+      entry.startsWith(`${staleSessionId}.jsonl.deleted.`),
+    );
+    expect(archived).toHaveLength(0);
   });
 
   it("sessions cleanup prunes old unreferenced session artifacts without touching referenced files", async () => {
@@ -385,6 +419,83 @@ describe("Integration: saveSessionStore with pruning", () => {
     expect(persisted).not.toHaveProperty(
       "agent:main:cron:wilder-mail-router:run:20260612T120000Z",
     );
+  });
+
+  it("sessions cleanup blocks pressure instead of capping young synthetic sessions", async () => {
+    mockLoadConfig.mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "365d",
+          maxEntries: 1,
+        },
+      },
+    });
+
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      "agent:main:subagent:fresh-a": makeEntry(now - 30_000),
+      "agent:main:cron:cleanup:run:fresh-b": makeEntry(now - 60_000),
+    };
+    await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+
+    const dryRun = await runSessionsCleanup({
+      cfg: {},
+      opts: { store: storePath, dryRun: true, enforce: true, syntheticOnly: true, protectMain: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+
+    const summary = dryRun.previewResults[0]?.summary;
+    expect(summary).toMatchObject({
+      minCandidateAgeMs: 4 * 60 * 60 * 1000,
+      capped: 0,
+      underAgePreservedCount: 2,
+      ageUnknownQuarantineCount: 0,
+      afterCount: 2,
+    });
+    expect(summary?.candidateCounts.archive_candidate).toBe(0);
+    expect(summary?.candidateCounts.blocked).toBe(1);
+    expect(summary?.safety.blockedCount).toBe(1);
+
+    const applied = await runSessionsCleanup({
+      cfg: {},
+      opts: { store: storePath, enforce: true, syntheticOnly: true, protectMain: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+
+    expect(applied.appliedSummaries[0]?.capped).toBe(0);
+    const persisted = loadSessionStore(storePath, { skipCache: true });
+    expect(persisted).toHaveProperty("agent:main:subagent:fresh-a");
+    expect(persisted).toHaveProperty("agent:main:cron:cleanup:run:fresh-b");
+  });
+
+  it("sessions cleanup quarantines missing and future timestamps instead of repairing them", async () => {
+    applyEnforcedMaintenanceConfig(mockLoadConfig);
+
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      "agent:main:subagent:unknown-age": {
+        sessionId: "missing-transcript",
+      } as SessionEntry,
+      "agent:main:cron:cleanup:run:future": {
+        sessionId: "future-transcript",
+        updatedAt: now + DAY_MS,
+      },
+    };
+    await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+
+    const dryRun = await runSessionsCleanup({
+      cfg: {},
+      opts: { store: storePath, dryRun: true, enforce: true, fixMissing: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+
+    const summary = dryRun.previewResults[0]?.summary;
+    expect(summary?.missing).toBe(0);
+    expect(summary?.ageUnknownQuarantineCount).toBe(2);
+    expect(summary?.candidateCounts.quarantine_review).toBe(2);
+    expect(summary?.afterCount).toBe(2);
+    expect(dryRun.previewResults[0]?.missingKeys.size).toBe(0);
   });
 
   it("protect-main preserves all agent main and direct customer sessions across cleanup modes", async () => {
@@ -553,6 +664,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     applyEnforcedMaintenanceConfig(mockLoadConfig);
 
     const now = Date.now();
+    const stale = now - 30 * DAY_MS;
     const validTranscript = path.join(testDir, "valid-present.jsonl");
     const legacyPresentTranscript = path.join(testDir, "legacy-present.jsonl");
     const emptyPresentTranscript = path.join(testDir, "empty-present.jsonl");
@@ -567,16 +679,16 @@ describe("Integration: saveSessionStore with pruning", () => {
       storePath,
       JSON.stringify(
         {
-          "invalid-no-file": { sessionId: "agent:main:main", updatedAt: now },
+          "invalid-no-file": { sessionId: "agent:main:main", updatedAt: stale },
           "invalid-bad-file": {
             sessionId: "agent:main:main",
             sessionFile: "../outside.jsonl",
-            updatedAt: now,
+            updatedAt: stale,
           },
           "invalid-missing-relative-file": {
             sessionId: "agent:main:main",
             sessionFile: "missing.jsonl",
-            updatedAt: now,
+            updatedAt: stale,
           },
           "agent:main:metadata": {
             sessionId: "agent:main:metadata",
@@ -589,8 +701,8 @@ describe("Integration: saveSessionStore with pruning", () => {
             updatedAt: now,
           },
           "valid-present": { sessionId: "valid-present", updatedAt: now },
-          "empty-present": { sessionId: "empty-present", updatedAt: now },
-          "header-only-present": { sessionId: "header-only-present", updatedAt: now },
+          "empty-present": { sessionId: "empty-present", updatedAt: stale },
+          "header-only-present": { sessionId: "header-only-present", updatedAt: stale },
           "user-only-present": { sessionId: "user-only-present", updatedAt: now },
           "legacy-role-present": { sessionId: "legacy-role-present", updatedAt: now },
           "legacy-nested-role-present": {
@@ -683,6 +795,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     applyEnforcedMaintenanceConfig(mockLoadConfig);
 
     const now = Date.now();
+    const stale = now - 30 * DAY_MS;
     const directTranscript = path.join(testDir, "direct-session.jsonl");
     await fs.writeFile(
       storePath,
@@ -694,7 +807,7 @@ describe("Integration: saveSessionStore with pruning", () => {
           },
           "agent:main:telegram:direct:6101296751": {
             sessionId: "direct-session",
-            updatedAt: now,
+            updatedAt: stale,
             lastChannel: "telegram",
             lastTo: "6101296751",
           },
@@ -725,6 +838,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     applyEnforcedMaintenanceConfig(mockLoadConfig);
 
     const now = Date.now();
+    const stale = now - 30 * DAY_MS;
     const directTranscript = path.join(testDir, "direct-session.jsonl");
     await fs.writeFile(
       storePath,
@@ -736,7 +850,7 @@ describe("Integration: saveSessionStore with pruning", () => {
           },
           "agent:main:telegram:direct:6101296751": {
             sessionId: "direct-session",
-            updatedAt: now,
+            updatedAt: stale,
             sessionFile: directTranscript,
             lastChannel: "telegram",
             lastTo: "6101296751",
@@ -749,6 +863,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     );
     await fs.writeFile(path.join(testDir, "main-session.jsonl"), "main", "utf-8");
     await fs.writeFile(directTranscript, "direct", "utf-8");
+    await agePaths([directTranscript], now);
 
     const applied = await runSessionsCleanup({
       cfg: { session: { dmScope: "main" } },
@@ -818,9 +933,15 @@ describe("Integration: saveSessionStore with pruning", () => {
 
     const now = Date.now();
     const store: Record<string, SessionEntry> = {
-      stale: { sessionId: "stale-session", updatedAt: now - 30 * DAY_MS },
-      capped: { sessionId: "capped-session", updatedAt: now - DAY_MS },
-      fresh: { sessionId: "fresh-session", updatedAt: now },
+      "agent:main:cron:cleanup:run:stale": {
+        sessionId: "stale-session",
+        updatedAt: now - 30 * DAY_MS,
+      },
+      "agent:main:cron:cleanup:run:capped": {
+        sessionId: "capped-session",
+        updatedAt: now - DAY_MS,
+      },
+      "agent:main:cron:cleanup:run:fresh": { sessionId: "fresh-session", updatedAt: now },
     };
     const staleTranscript = path.join(testDir, "stale-session.jsonl");
     const cappedTranscript = path.join(testDir, "capped-session.jsonl");
@@ -875,6 +996,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     await fs.writeFile(oldArchived, "old", "utf-8");
     await fs.writeFile(recentArchived, "recent", "utf-8");
     await fs.writeFile(bakArchived, "bak", "utf-8");
+    await agePaths([oldArchived], now);
 
     await saveSessionStore(storePath, store);
 
@@ -909,6 +1031,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     );
     await fs.writeFile(oldReset, "old", "utf-8");
     await fs.writeFile(freshReset, "fresh", "utf-8");
+    await agePaths([oldReset], now);
 
     await saveSessionStore(storePath, store);
 
@@ -940,9 +1063,9 @@ describe("Integration: saveSessionStore with pruning", () => {
   it("loadSessionStore leaves oversized stores untouched during normal reads", async () => {
     const now = Date.now();
     const store: Record<string, SessionEntry> = {
-      stale: makeEntry(now - 31 * DAY_MS),
-      recent: makeEntry(now - DAY_MS),
-      newest: makeEntry(now),
+      "agent:main:cron:cleanup:run:stale": makeEntry(now - 31 * DAY_MS),
+      "agent:main:cron:cleanup:run:recent": makeEntry(now - DAY_MS),
+      "agent:main:cron:cleanup:run:newest": makeEntry(now),
     };
     await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
 
@@ -956,17 +1079,17 @@ describe("Integration: saveSessionStore with pruning", () => {
     });
 
     expect(Object.keys(loaded)).toHaveLength(3);
-    expect(loaded).toHaveProperty("stale");
-    expect(loaded).toHaveProperty("recent");
-    expect(loaded).toHaveProperty("newest");
+    expect(loaded).toHaveProperty("agent:main:cron:cleanup:run:stale");
+    expect(loaded).toHaveProperty("agent:main:cron:cleanup:run:recent");
+    expect(loaded).toHaveProperty("agent:main:cron:cleanup:run:newest");
   });
 
   it("loadSessionStore applies maintenance only when explicitly requested", async () => {
     const now = Date.now();
     const store: Record<string, SessionEntry> = {
-      stale: makeEntry(now - 31 * DAY_MS),
-      recent: makeEntry(now - DAY_MS),
-      newest: makeEntry(now),
+      "agent:main:cron:cleanup:run:stale": makeEntry(now - 31 * DAY_MS),
+      "agent:main:cron:cleanup:run:recent": makeEntry(now - DAY_MS),
+      "agent:main:cron:cleanup:run:newest": makeEntry(now),
     };
     await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
 
@@ -980,9 +1103,9 @@ describe("Integration: saveSessionStore with pruning", () => {
       },
     });
 
-    expect(loaded.stale).toBeUndefined();
-    expect(loaded.recent).toBeUndefined();
-    expect(loaded).toHaveProperty("newest");
+    expect(loaded["agent:main:cron:cleanup:run:stale"]).toBeUndefined();
+    expect(loaded["agent:main:cron:cleanup:run:recent"]).toBeUndefined();
+    expect(loaded).toHaveProperty("agent:main:cron:cleanup:run:newest");
   });
 
   it("loadSessionStore does not cap oversized stores during normal reads", async () => {
@@ -1031,8 +1154,9 @@ describe("Integration: saveSessionStore with pruning", () => {
 
   it("explicit loadSessionStore maintenance caps production-sized stores once they reach the high-water mark", async () => {
     const now = Date.now();
+    const oldEnough = now - FIVE_HOURS_MS;
     const store = Object.fromEntries(
-      Array.from({ length: 75 }, (_, index) => [`session-${index}`, makeEntry(now - index)]),
+      Array.from({ length: 75 }, (_, index) => [`session-${index}`, makeEntry(oldEnough - index)]),
     );
     await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
 
@@ -1053,11 +1177,12 @@ describe("Integration: saveSessionStore with pruning", () => {
 
   it("explicit loadSessionStore maintenance preserves channel, thread, and topic session pointers", async () => {
     const now = Date.now();
+    const oldEnough = now - FIVE_HOURS_MS;
     const channelKey = "agent:main:slack:channel:C123";
     const threadKey = "agent:main:discord:channel:123456:thread:987654";
     const topicKey = "agent:main:telegram:group:-100123:topic:77";
     const store = Object.fromEntries(
-      Array.from({ length: 75 }, (_, index) => [`session-${index}`, makeEntry(now - index)]),
+      Array.from({ length: 75 }, (_, index) => [`session-${index}`, makeEntry(oldEnough - index)]),
     );
     store[channelKey] = makeEntry(now - 99 * DAY_MS);
     store[threadKey] = makeEntry(now - 100 * DAY_MS);
@@ -1083,9 +1208,10 @@ describe("Integration: saveSessionStore with pruning", () => {
 
   it("explicit loadSessionStore maintenance preserves runtime-provided subagent sessions", async () => {
     const now = Date.now();
+    const oldEnough = now - FIVE_HOURS_MS;
     const childKey = "agent:main:subagent:pending-delivery";
     const store = Object.fromEntries(
-      Array.from({ length: 75 }, (_, index) => [`session-${index}`, makeEntry(now - index)]),
+      Array.from({ length: 75 }, (_, index) => [`session-${index}`, makeEntry(oldEnough - index)]),
     );
     store[childKey] = {
       ...makeEntry(now - 100 * DAY_MS),
@@ -1243,19 +1369,23 @@ describe("Integration: saveSessionStore with pruning", () => {
     const oldestSessionId = "oldest-session";
     const newestSessionId = "newest-session";
     const store: Record<string, SessionEntry> = {
-      oldest: { sessionId: oldestSessionId, updatedAt: now - DAY_MS },
-      newest: { sessionId: newestSessionId, updatedAt: now },
+      "agent:main:cron:cleanup:run:oldest": {
+        sessionId: oldestSessionId,
+        updatedAt: now - DAY_MS,
+      },
+      "agent:main:cron:cleanup:run:newest": { sessionId: newestSessionId, updatedAt: now },
     };
     const oldestTranscript = path.join(testDir, `${oldestSessionId}.jsonl`);
     const newestTranscript = path.join(testDir, `${newestSessionId}.jsonl`);
     await fs.writeFile(oldestTranscript, '{"type":"session"}\n', "utf-8");
     await fs.writeFile(newestTranscript, '{"type":"session"}\n', "utf-8");
+    await agePaths([oldestTranscript], now);
 
     await saveSessionStore(storePath, store);
 
     const loaded = loadSessionStore(storePath);
-    expect(loaded.oldest).toBeUndefined();
-    expect(loaded).toHaveProperty("newest");
+    expect(loaded["agent:main:cron:cleanup:run:oldest"]).toBeUndefined();
+    expect(loaded).toHaveProperty("agent:main:cron:cleanup:run:newest");
     await expectPathMissing(oldestTranscript);
     await expectPathExists(newestTranscript);
     const files = await fs.readdir(testDir);
@@ -1273,20 +1403,20 @@ describe("Integration: saveSessionStore with pruning", () => {
     const externalTranscript = path.join(externalDir, "outside.jsonl");
     await fs.writeFile(externalTranscript, "external", "utf-8");
     const store: Record<string, SessionEntry> = {
-      oldest: {
+      "agent:main:cron:cleanup:run:oldest": {
         sessionId: "outside",
         sessionFile: externalTranscript,
         updatedAt: now - DAY_MS,
       },
-      newest: { sessionId: "inside", updatedAt: now },
+      "agent:main:cron:cleanup:run:newest": { sessionId: "inside", updatedAt: now },
     };
     await fs.writeFile(path.join(testDir, "inside.jsonl"), '{"type":"session"}\n', "utf-8");
 
     try {
       await saveSessionStore(storePath, store);
       const loaded = loadSessionStore(storePath);
-      expect(loaded.oldest).toBeUndefined();
-      expect(loaded).toHaveProperty("newest");
+      expect(loaded["agent:main:cron:cleanup:run:oldest"]).toBeUndefined();
+      expect(loaded).toHaveProperty("agent:main:cron:cleanup:run:newest");
       await expectPathExists(externalTranscript);
     } finally {
       await expectPathExists(externalTranscript);
@@ -1310,17 +1440,18 @@ describe("Integration: saveSessionStore with pruning", () => {
     const oldSessionId = "old-disk-session";
     const newSessionId = "new-disk-session";
     const store: Record<string, SessionEntry> = {
-      old: { sessionId: oldSessionId, updatedAt: now - DAY_MS },
-      recent: { sessionId: newSessionId, updatedAt: now },
+      "agent:main:cron:cleanup:run:old": { sessionId: oldSessionId, updatedAt: now - DAY_MS },
+      "agent:main:cron:cleanup:run:recent": { sessionId: newSessionId, updatedAt: now },
     };
     await fs.writeFile(path.join(testDir, `${oldSessionId}.jsonl`), "x".repeat(500), "utf-8");
     await fs.writeFile(path.join(testDir, `${newSessionId}.jsonl`), "y".repeat(500), "utf-8");
+    await agePaths([path.join(testDir, `${oldSessionId}.jsonl`)], now);
 
     await saveSessionStore(storePath, store);
 
     const loaded = loadSessionStore(storePath);
     expect(Object.keys(loaded).length).toBe(1);
-    expect(loaded).toHaveProperty("recent");
+    expect(loaded).toHaveProperty("agent:main:cron:cleanup:run:recent");
     await expectPathMissing(path.join(testDir, `${oldSessionId}.jsonl`));
     await expectPathExists(path.join(testDir, `${newSessionId}.jsonl`));
   });
@@ -1407,12 +1538,12 @@ describe("Integration: saveSessionStore with pruning", () => {
 
     const now = Date.now();
     const store: Record<string, SessionEntry> = {
-      old: {
+      "agent:main:cron:cleanup:run:old": {
         sessionId: "old-session",
         updatedAt: now - DAY_MS,
         pluginExtensions: { test: { payload: "x".repeat(1000) } },
       },
-      fresh: {
+      "agent:main:cron:cleanup:run:fresh": {
         sessionId: "fresh-session",
         updatedAt: now,
         pluginExtensions: { test: { payload: "y".repeat(1000) } },
@@ -1426,8 +1557,8 @@ describe("Integration: saveSessionStore with pruning", () => {
     const backups = files.filter((file) => file.startsWith("sessions.json.bak."));
     expect(backups).toHaveLength(0);
     const loaded = loadSessionStore(storePath, { skipCache: true });
-    expect(loaded.old).toBeUndefined();
-    expect(loaded).toHaveProperty("fresh");
+    expect(loaded["agent:main:cron:cleanup:run:old"]).toBeUndefined();
+    expect(loaded).toHaveProperty("agent:main:cron:cleanup:run:fresh");
   });
 
   it("never deletes transcripts outside the agent sessions directory during budget cleanup", async () => {

@@ -19,6 +19,11 @@ import {
 } from "./artifacts.js";
 import { resolveSessionFilePath } from "./paths.js";
 import { projectSessionStoreForPersistence } from "./skill-prompt-blobs.js";
+import {
+  resolveFileCleanupCandidateAge,
+  resolveSessionCleanupCandidateAge,
+  resolveSessionCleanupMinCandidateAgeMs,
+} from "./maintenance-age.js";
 import { shouldPreserveMaintenanceEntry } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
 
@@ -350,6 +355,7 @@ function isDiskBudgetRemovableSessionFile(
   file: Pick<SessionsDirFileStat, "canonicalPath" | "name" | "mtimeMs">,
   referencedPaths: ReadonlySet<string>,
   tempStaleCutoffMs: number,
+  cleanupCutoffMs: number,
   storeBasename: string,
 ): boolean {
   // Store temps are only removable once clearly stale, even under disk pressure:
@@ -357,6 +363,9 @@ function isDiskBudgetRemovableSessionFile(
   // so deleting a fresh in-flight temp would make another process's save fail.
   if (isSessionStoreTempArtifactName(file.name, storeBasename)) {
     return file.mtimeMs <= tempStaleCutoffMs;
+  }
+  if (file.mtimeMs > cleanupCutoffMs) {
+    return false;
   }
   return (
     isSessionArchiveArtifactName(file.name) ||
@@ -380,16 +389,32 @@ async function removeFileForBudget(params: {
   fileSizesByPath: Map<string, number>;
   simulatedRemovedPaths: Set<string>;
   onRemovedPath?: (canonicalPath: string) => void;
+  nowMs?: number;
+  minCandidateAgeMs?: number;
 }): Promise<number> {
   const resolvedPath = path.resolve(params.filePath);
   const canonicalPath = params.canonicalPath ?? canonicalizePathForComparison(resolvedPath);
+  const stat = await fs.promises.stat(resolvedPath).catch(() => null);
+  if (!stat?.isFile()) {
+    return 0;
+  }
+  if (params.minCandidateAgeMs != null) {
+    const age = resolveFileCleanupCandidateAge({
+      mtimeMs: stat.mtimeMs,
+      nowMs: params.nowMs,
+      minCandidateAgeMs: params.minCandidateAgeMs,
+    });
+    if (!age.eligible) {
+      return 0;
+    }
+  }
   if (params.dryRun) {
     // Dry-run deletion is path-deduped so a transcript and pointer alias cannot count the same
     // artifact twice against the simulated budget.
     if (params.simulatedRemovedPaths.has(canonicalPath)) {
       return 0;
     }
-    const size = params.fileSizesByPath.get(canonicalPath) ?? 0;
+    const size = params.fileSizesByPath.get(canonicalPath) ?? stat.size;
     if (size <= 0) {
       return 0;
     }
@@ -413,6 +438,8 @@ async function removePromptBlobFileForBudget(params: {
   fileSizesByPath: Map<string, number>;
   simulatedRemovedPaths: Set<string>;
   onRemovedPath?: (canonicalPath: string) => void;
+  nowMs?: number;
+  minCandidateAgeMs?: number;
 }): Promise<number> {
   let file = params.file;
   if (!params.dryRun) {
@@ -443,6 +470,8 @@ async function removePromptBlobFileForBudget(params: {
     fileSizesByPath: params.fileSizesByPath,
     simulatedRemovedPaths: params.simulatedRemovedPaths,
     onRemovedPath: params.onRemovedPath,
+    nowMs: params.nowMs,
+    minCandidateAgeMs: params.minCandidateAgeMs,
   });
 }
 
@@ -453,8 +482,10 @@ export async function pruneUnreferencedSessionArtifacts(params: {
   dryRun?: boolean;
   excludeCanonicalPaths?: ReadonlySet<string>;
 }): Promise<SessionUnreferencedArtifactSweepResult> {
-  const olderThanMs =
-    Number.isFinite(params.olderThanMs) && params.olderThanMs > 0 ? params.olderThanMs : 0;
+  const olderThanMs = resolveSessionCleanupMinCandidateAgeMs(
+    Number.isFinite(params.olderThanMs) && params.olderThanMs > 0 ? params.olderThanMs : 0,
+  );
+  const nowMs = Date.now();
   const sessionsDir = path.dirname(params.storePath);
   const files = await readSessionsDirFiles(sessionsDir);
   const promptBlobFiles = await readSessionPromptBlobFiles(sessionsDir);
@@ -474,10 +505,15 @@ export async function pruneUnreferencedSessionArtifacts(params: {
       store: params.store,
     }).store,
   );
-  const cutoffMs = Date.now() - olderThanMs;
-  const tempCutoffMs = Date.now() - SESSION_STORE_TEMP_STALE_MS;
+  const cutoffMs = nowMs - olderThanMs;
+  const tempCutoffMs =
+    nowMs - resolveSessionCleanupMinCandidateAgeMs(SESSION_STORE_TEMP_STALE_MS);
   const promptBlobCutoffMs =
-    Date.now() - Math.max(olderThanMs, SESSION_PROMPT_BLOB_UNREFERENCED_GRACE_MS);
+    nowMs -
+    Math.max(
+      olderThanMs,
+      resolveSessionCleanupMinCandidateAgeMs(SESSION_PROMPT_BLOB_UNREFERENCED_GRACE_MS),
+    );
   const storeBasename = path.basename(params.storePath);
   const removableStoreFiles = files.filter((file) => {
     if (params.excludeCanonicalPaths?.has(file.canonicalPath)) {
@@ -524,6 +560,10 @@ export async function pruneUnreferencedSessionArtifacts(params: {
             dryRun,
             fileSizesByPath,
             simulatedRemovedPaths,
+            nowMs,
+            minCandidateAgeMs: isSessionPromptBlobTempArtifactName(item.file.name)
+              ? resolveSessionCleanupMinCandidateAgeMs(SESSION_PROMPT_BLOB_UNREFERENCED_GRACE_MS)
+              : olderThanMs,
           })
         : await removeFileForBudget({
             filePath: item.file.path,
@@ -531,6 +571,10 @@ export async function pruneUnreferencedSessionArtifacts(params: {
             dryRun,
             fileSizesByPath,
             simulatedRemovedPaths,
+            nowMs,
+            minCandidateAgeMs: isSessionStoreTempArtifactName(item.file.name, storeBasename)
+              ? resolveSessionCleanupMinCandidateAgeMs(SESSION_STORE_TEMP_STALE_MS)
+              : olderThanMs,
           });
     if (deletedBytes <= 0) {
       continue;
@@ -558,6 +602,8 @@ export async function enforceSessionDiskBudget(params: {
   skipUnclassifiedArtifacts?: boolean;
   log?: SessionDiskBudgetLogger;
   onRemoveFile?: (canonicalPath: string) => void;
+  onPreservedUnderAgeEntry?: (key: string) => void;
+  onQuarantinedAgeEntry?: (key: string) => void;
 }): Promise<SessionDiskBudgetSweepResult | null> {
   const maxBytes = params.maintenance.maxDiskBytes;
   const highWaterBytes = params.maintenance.highWaterBytes;
@@ -566,6 +612,8 @@ export async function enforceSessionDiskBudget(params: {
   }
   const log = params.log ?? NOOP_LOGGER;
   const dryRun = params.dryRun === true;
+  const nowMs = Date.now();
+  const minCandidateAgeMs = resolveSessionCleanupMinCandidateAgeMs();
   const sessionsDir = path.dirname(params.storePath);
   const files = await readSessionsDirFiles(sessionsDir);
   const promptBlobFiles = await readSessionPromptBlobFiles(sessionsDir);
@@ -647,8 +695,11 @@ export async function enforceSessionDiskBudget(params: {
     sessionsDir,
     store: params.store,
   });
-  const tempStaleCutoffMs = Date.now() - SESSION_STORE_TEMP_STALE_MS;
-  const promptBlobOrphanCutoffMs = Date.now() - SESSION_PROMPT_BLOB_UNREFERENCED_GRACE_MS;
+  const tempStaleCutoffMs =
+    nowMs - resolveSessionCleanupMinCandidateAgeMs(SESSION_STORE_TEMP_STALE_MS);
+  const promptBlobOrphanCutoffMs =
+    nowMs - resolveSessionCleanupMinCandidateAgeMs(SESSION_PROMPT_BLOB_UNREFERENCED_GRACE_MS);
+  const cleanupCutoffMs = nowMs - minCandidateAgeMs;
   const storeBasename = path.basename(params.storePath);
   const unreferencedPromptBlobQueue =
     params.skipUnclassifiedArtifacts === true
@@ -677,6 +728,8 @@ export async function enforceSessionDiskBudget(params: {
       fileSizesByPath,
       simulatedRemovedPaths,
       onRemovedPath: params.onRemoveFile,
+      nowMs,
+      minCandidateAgeMs,
     });
     if (deletedBytes <= 0) {
       continue;
@@ -691,7 +744,13 @@ export async function enforceSessionDiskBudget(params: {
       ? []
       : files
           .filter((file) =>
-            isDiskBudgetRemovableSessionFile(file, referencedPaths, tempStaleCutoffMs, storeBasename),
+            isDiskBudgetRemovableSessionFile(
+              file,
+              referencedPaths,
+              tempStaleCutoffMs,
+              cleanupCutoffMs,
+              storeBasename,
+            ),
           )
           .toSorted((a, b) => a.mtimeMs - b.mtimeMs);
   // Then remove stale artifacts already detached from live entries.
@@ -706,6 +765,8 @@ export async function enforceSessionDiskBudget(params: {
       fileSizesByPath,
       simulatedRemovedPaths,
       onRemovedPath: params.onRemoveFile,
+      nowMs,
+      minCandidateAgeMs,
     });
     if (deletedBytes <= 0) {
       continue;
@@ -737,6 +798,19 @@ export async function enforceSessionDiskBudget(params: {
         continue;
       }
       if (shouldPreserveMaintenanceEntry({ key, entry, preserveKeys: params.preserveKeys })) {
+        continue;
+      }
+      const age = resolveSessionCleanupCandidateAge({
+        entry,
+        nowMs,
+        minCandidateAgeMs,
+      });
+      if (!age.eligible) {
+        if (age.reason === "under-age") {
+          params.onPreservedUnderAgeEntry?.(key);
+        } else {
+          params.onQuarantinedAgeEntry?.(key);
+        }
         continue;
       }
       const previousProjectedBytes = projectedStoreBytes;
@@ -782,6 +856,8 @@ export async function enforceSessionDiskBudget(params: {
                 fileSizesByPath,
                 simulatedRemovedPaths,
                 onRemovedPath: params.onRemoveFile,
+                nowMs,
+                minCandidateAgeMs,
               });
               if (deletedBytes > 0) {
                 total -= deletedBytes;
@@ -811,6 +887,8 @@ export async function enforceSessionDiskBudget(params: {
           fileSizesByPath,
           simulatedRemovedPaths,
           onRemovedPath: params.onRemoveFile,
+          nowMs,
+          minCandidateAgeMs,
         });
         if (deletedBytes <= 0) {
           continue;

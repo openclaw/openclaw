@@ -10,6 +10,11 @@ import {
   type SessionArchiveReason,
 } from "../config/sessions/artifacts.js";
 import {
+  MIN_SESSION_CLEANUP_CANDIDATE_AGE_MS,
+  resolveFileCleanupCandidateAge,
+  resolveSessionCleanupMinCandidateAgeMs,
+} from "../config/sessions/maintenance-age.js";
+import {
   resolveSessionFilePath,
   resolveSessionTranscriptPath,
   resolveSessionTranscriptPathInDir,
@@ -408,6 +413,8 @@ export function archiveSessionTranscripts(opts: {
    * This prevents maintenance operations from mutating paths outside the agent sessions dir.
    */
   restrictToStoreDir?: boolean;
+  minCandidateAgeMs?: number;
+  nowMs?: number;
   onArchiveError?: (err: unknown, sourcePath: string) => void;
 }): string[] {
   return archiveSessionTranscriptsDetailed(opts).map((entry) => entry.archivedPath);
@@ -424,6 +431,8 @@ export function archiveSessionTranscriptsDetailed(opts: {
    * This prevents maintenance operations from mutating paths outside the agent sessions dir.
    */
   restrictToStoreDir?: boolean;
+  minCandidateAgeMs?: number;
+  nowMs?: number;
   /**
    * Invoked when an individual transcript candidate fails to archive. The
    * caller decides whether to log, warn-deliver, or escalate.
@@ -431,6 +440,11 @@ export function archiveSessionTranscriptsDetailed(opts: {
   onArchiveError?: (err: unknown, sourcePath: string) => void;
 }): ArchivedSessionTranscript[] {
   const archived: ArchivedSessionTranscript[] = [];
+  const minCandidateAgeMs =
+    opts.minCandidateAgeMs == null
+      ? undefined
+      : resolveSessionCleanupMinCandidateAgeMs(opts.minCandidateAgeMs);
+  const nowMs = opts.nowMs ?? Date.now();
   const storeDir =
     opts.restrictToStoreDir && opts.storePath
       ? canonicalizePathForComparison(path.dirname(opts.storePath))
@@ -448,7 +462,18 @@ export function archiveSessionTranscriptsDetailed(opts: {
         continue;
       }
     }
-    if (!fs.existsSync(candidatePath)) {
+    const stat = fs.statSync(candidatePath, { throwIfNoEntry: false });
+    if (!stat?.isFile()) {
+      continue;
+    }
+    if (
+      minCandidateAgeMs != null &&
+      !resolveFileCleanupCandidateAge({
+        mtimeMs: stat.mtimeMs,
+        nowMs,
+        minCandidateAgeMs,
+      }).eligible
+    ) {
       continue;
     }
     try {
@@ -515,9 +540,12 @@ export async function cleanupArchivedSessionTranscripts(opts: {
   rules: SessionArchiveCleanupRule[];
   nowMs?: number;
 }): Promise<{ removed: number; scanned: number }> {
-  const rules = opts.rules.filter(
-    (rule) => Number.isFinite(rule.olderThanMs) && rule.olderThanMs >= 0,
-  );
+  const rules = opts.rules
+    .filter((rule) => Number.isFinite(rule.olderThanMs) && rule.olderThanMs >= 0)
+    .map((rule) => ({
+      ...rule,
+      olderThanMs: resolveSessionCleanupMinCandidateAgeMs(rule.olderThanMs),
+    }));
   if (rules.length === 0) {
     return { removed: 0, scanned: 0 };
   }
@@ -535,13 +563,19 @@ export async function cleanupArchivedSessionTranscripts(opts: {
           continue;
         }
         scanned += 1;
-        if (now - timestamp > rule.olderThanMs) {
-          const fullPath = path.join(dir, entry);
-          const stat = await fs.promises.stat(fullPath).catch(() => null);
-          if (stat?.isFile()) {
-            await fs.promises.rm(fullPath).catch(() => undefined);
-            removed += 1;
-          }
+        const fullPath = path.join(dir, entry);
+        const stat = await fs.promises.stat(fullPath).catch(() => null);
+        if (
+          stat?.isFile() &&
+          now - timestamp > rule.olderThanMs &&
+          resolveFileCleanupCandidateAge({
+            mtimeMs: stat.mtimeMs,
+            nowMs: now,
+            minCandidateAgeMs: MIN_SESSION_CLEANUP_CANDIDATE_AGE_MS,
+          }).eligible
+        ) {
+          await fs.promises.rm(fullPath).catch(() => undefined);
+          removed += 1;
         }
         // An archive name carries exactly one `.{reason}.{timestamp}` suffix,
         // so the first matching rule owns the entry.

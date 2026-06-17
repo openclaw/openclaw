@@ -361,6 +361,15 @@ describe("sessionsCleanupCommand", () => {
             dmScopeRetired: 0,
             pruned: 1,
             capped: 0,
+            minCandidateAgeMs: 14_400_000,
+            underAgePreservedCount: 2,
+            ageUnknownQuarantineCount: 1,
+            candidateCounts: {
+              preserve: 1,
+              archive_candidate: 1,
+              blocked: 1,
+              quarantine_review: 1,
+            },
             diskBudget: {
               totalBytesBefore: 1000,
               totalBytesAfter: 700,
@@ -405,6 +414,15 @@ describe("sessionsCleanupCommand", () => {
       dmScopeRetired: 0,
       pruned: 1,
       capped: 0,
+      minCandidateAgeMs: 14_400_000,
+      underAgePreservedCount: 2,
+      ageUnknownQuarantineCount: 1,
+      candidateCounts: {
+        preserve: 1,
+        archive_candidate: 1,
+        blocked: 1,
+        quarantine_review: 1,
+      },
       diskBudget: {
         totalBytesBefore: 1000,
         totalBytesAfter: 700,

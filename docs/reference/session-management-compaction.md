@@ -118,6 +118,12 @@ openclaw sessions cleanup --dry-run
 openclaw sessions cleanup --enforce
 ```
 
+Automatic cleanup also enforces a non-configurable 4-hour minimum candidate age
+floor. Cleanup cadence controls how often OpenClaw checks; eligibility still
+requires the row or file to satisfy its cleanup condition and be at least 4
+hours old. If a row or artifact timestamp is missing, invalid, or in the future,
+cleanup preserves it for quarantine review instead of deleting it.
+
 ---
 
 ## Cron sessions and run logs

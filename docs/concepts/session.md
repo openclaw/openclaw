@@ -127,6 +127,11 @@ in `enforce` mode and applies cleanup during maintenance. Set
 
 For production-sized `maxEntries` limits, Gateway runtime writes use a small high-water buffer and clean back down to the configured cap in batches. Session store reads do not prune or cap entries during Gateway startup. This avoids running full store cleanup on every startup or isolated cron session. `openclaw sessions cleanup --enforce` applies the cap immediately.
 
+Automatic cleanup has a hard 4-hour minimum candidate age floor. Running cleanup
+more frequently only checks posture; it does not make fresh session rows,
+transcripts, archives, prompt blobs, trajectory sidecars, or temp artifacts
+eligible early. Unknown or future timestamps are preserved for operator review.
+
 Maintenance preserves durable external conversation pointers, including group
 sessions and thread-scoped chat sessions, while still allowing synthetic cron,
 hook, heartbeat, ACP, and sub-agent entries to age out.

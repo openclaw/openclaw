@@ -23,6 +23,10 @@ import { cloneSessionStoreRecord } from "./store-cache.js";
 import { collectSessionMaintenancePreserveKeys } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
+  MIN_SESSION_CLEANUP_CANDIDATE_AGE_MS,
+  resolveSessionCleanupCandidateAge,
+} from "./maintenance-age.js";
+import {
   capEntryCount,
   isProtectedMainOrDirectSessionMaintenanceEntry,
   isSyntheticSessionMaintenanceKey,
@@ -84,6 +88,9 @@ export type SessionCleanupSummary = {
   capped: number;
   unreferencedArtifacts: SessionUnreferencedArtifactSweepResult;
   diskBudget: Awaited<ReturnType<typeof enforceSessionDiskBudget>>;
+  minCandidateAgeMs: number;
+  underAgePreservedCount: number;
+  ageUnknownQuarantineCount: number;
   candidateCounts: {
     preserve: number;
     archive_candidate: number;
@@ -361,8 +368,12 @@ function retireMainScopeDirectSessionEntries(params: {
   activeKey?: string;
   preserveKeys?: ReadonlySet<string>;
   onRetired?: (key: string, entry: SessionEntry) => void;
+  onPreservedUnderAge?: (key: string) => void;
+  onQuarantinedAge?: (key: string) => void;
+  nowMs?: number;
 }): number {
   let retired = 0;
+  const nowMs = params.nowMs ?? Date.now();
   for (const [key, entry] of Object.entries(params.store)) {
     if (hasPreservedSessionKey(params.preserveKeys, key)) {
       continue;
@@ -375,6 +386,15 @@ function retireMainScopeDirectSessionEntries(params: {
         activeKey: params.activeKey,
       })
     ) {
+      const age = resolveSessionCleanupCandidateAge({ entry, nowMs });
+      if (!age.eligible) {
+        if (age.reason === "under-age") {
+          params.onPreservedUnderAge?.(key);
+        } else {
+          params.onQuarantinedAge?.(key);
+        }
+        continue;
+      }
       params.onRetired?.(key, entry);
       delete params.store[key];
       retired += 1;
@@ -404,10 +424,14 @@ function pruneMissingTranscriptEntries(params: {
   storePath: string;
   preserveKeys?: ReadonlySet<string>;
   onPruned?: (key: string) => void;
+  onPreservedUnderAge?: (key: string) => void;
+  onQuarantinedAge?: (key: string) => void;
+  nowMs?: number;
 }): number {
   const sessionPathOpts = resolveSessionFilePathOptions({
     storePath: params.storePath,
   });
+  const nowMs = params.nowMs ?? Date.now();
   let removed = 0;
   for (const [key, entry] of Object.entries(params.store)) {
     if (hasPreservedSessionKey(params.preserveKeys, key)) {
@@ -416,6 +440,15 @@ function pruneMissingTranscriptEntries(params: {
     if (!entry?.sessionId) {
       if (parseAgentSessionKey(key)) {
         // Agent-scoped keys without session ids are valid routing entries; keep them.
+        continue;
+      }
+      const age = resolveSessionCleanupCandidateAge({ entry, nowMs });
+      if (!age.eligible) {
+        if (age.reason === "under-age") {
+          params.onPreservedUnderAge?.(key);
+        } else {
+          params.onQuarantinedAge?.(key);
+        }
         continue;
       }
       delete params.store[key];
@@ -434,6 +467,15 @@ function pruneMissingTranscriptEntries(params: {
       !fs.existsSync(transcriptPath) ||
       transcriptHasNoMessageRecords(transcriptPath)
     ) {
+      const age = resolveSessionCleanupCandidateAge({ entry, nowMs });
+      if (!age.eligible) {
+        if (age.reason === "under-age") {
+          params.onPreservedUnderAge?.(key);
+        } else {
+          params.onQuarantinedAge?.(key);
+        }
+        continue;
+      }
       delete params.store[key];
       removed += 1;
       params.onPruned?.(key);
@@ -491,14 +533,24 @@ async function previewStoreCleanup(params: {
   const cappedKeys = new Set<string>();
   const missingKeys = new Set<string>();
   const dmScopeRetiredKeys = new Set<string>();
+  const underAgePreservedKeys = new Set<string>();
+  const ageUnknownQuarantineKeys = new Set<string>();
+  const nowMs = Date.now();
   const missing =
     params.fixMissing === true
       ? pruneMissingTranscriptEntries({
           store: previewStore,
           storePath: params.target.storePath,
           preserveKeys: preserveSessionKeys,
+          nowMs,
           onPruned: (key) => {
             missingKeys.add(key);
+          },
+          onPreservedUnderAge: (key) => {
+            underAgePreservedKeys.add(key);
+          },
+          onQuarantinedAge: (key) => {
+            ageUnknownQuarantineKeys.add(key);
           },
         })
       : 0;
@@ -510,16 +562,27 @@ async function previewStoreCleanup(params: {
           targetAgentId: params.target.agentId,
           activeKey: params.activeKey,
           preserveKeys: preserveSessionKeys,
+          nowMs,
           onRetired: (key) => {
             dmScopeRetiredKeys.add(key);
+          },
+          onPreservedUnderAge: (key) => {
+            underAgePreservedKeys.add(key);
+          },
+          onQuarantinedAge: (key) => {
+            ageUnknownQuarantineKeys.add(key);
           },
         })
       : 0;
   const pruned = pruneStaleEntries(previewStore, params.maintenance.pruneAfterMs, {
     log: false,
     preserveKeys: preserveSessionKeys,
+    nowMs,
     onPruned: ({ key }) => {
       staleKeys.add(key);
+    },
+    onQuarantinedAge: ({ key }) => {
+      ageUnknownQuarantineKeys.add(key);
     },
   });
   const capped = capEntryCount(previewStore, params.maintenance.maxEntries, {
@@ -528,6 +591,13 @@ async function previewStoreCleanup(params: {
     onCapped: ({ key }) => {
       cappedKeys.add(key);
     },
+    onPreservedUnderAge: ({ key }) => {
+      underAgePreservedKeys.add(key);
+    },
+    onQuarantinedAge: ({ key }) => {
+      ageUnknownQuarantineKeys.add(key);
+    },
+    nowMs,
   });
   const entryCleanupArtifactPaths = new Set<string>();
   addEntryArtifactPathsToSet({
@@ -562,6 +632,12 @@ async function previewStoreCleanup(params: {
     onRemoveFile: (canonicalPath) => {
       budgetRemovedFilePaths.add(canonicalPath);
     },
+    onPreservedUnderAgeEntry: (key) => {
+      underAgePreservedKeys.add(key);
+    },
+    onQuarantinedAgeEntry: (key) => {
+      ageUnknownQuarantineKeys.add(key);
+    },
   });
   const unreferencedArtifacts =
     params.syntheticOnly === true
@@ -581,6 +657,9 @@ async function previewStoreCleanup(params: {
   }
   const beforeCount = Object.keys(beforeStore).length;
   const afterPreviewCount = Object.keys(previewStore).length;
+  const blockedCount =
+    (afterPreviewCount > params.maintenance.maxEntries ? 1 : 0) +
+    (diskBudget && diskBudget.totalBytesAfter > diskBudget.highWaterBytes ? 1 : 0);
   const wouldMutate =
     missing > 0 ||
     dmScopeRetired > 0 ||
@@ -610,11 +689,14 @@ async function previewStoreCleanup(params: {
     capped,
     unreferencedArtifacts,
     diskBudget,
+    minCandidateAgeMs: MIN_SESSION_CLEANUP_CANDIDATE_AGE_MS,
+    underAgePreservedCount: underAgePreservedKeys.size,
+    ageUnknownQuarantineCount: ageUnknownQuarantineKeys.size,
     candidateCounts: {
       preserve: afterPreviewCount,
       archive_candidate: archiveCandidateCount,
-      blocked: 0,
-      quarantine_review: 0,
+      blocked: blockedCount,
+      quarantine_review: ageUnknownQuarantineKeys.size,
     },
     candidateActionCounts: buildCandidateActionCounts({
       missing,
@@ -631,8 +713,8 @@ async function previewStoreCleanup(params: {
       protectedDirectCount: policyPreserve.protectedDirectCount,
       protectedMainAgentIds: policyPreserve.protectedMainAgentIds,
       syntheticOnlyPreservedCount: policyPreserve.syntheticOnlyPreservedCount,
-      blockedCount: 0,
-      quarantineCount: 0,
+      blockedCount,
+      quarantineCount: ageUnknownQuarantineKeys.size,
     },
     wouldMutate,
   };
@@ -701,6 +783,7 @@ export async function runSessionsCleanup(params: {
         activeKey: opts.activeKey,
         policyPreserveKeys: policyPreserve.keys,
       });
+      const nowMs = Date.now();
       await updateSessionStore(
         target.storePath,
         async (store) => {
@@ -710,6 +793,7 @@ export async function runSessionsCleanup(params: {
               store,
               storePath: target.storePath,
               preserveKeys: preserveSessionKeys,
+              nowMs,
             });
             removed += missingApplied;
           }
@@ -721,6 +805,7 @@ export async function runSessionsCleanup(params: {
               targetAgentId: target.agentId,
               activeKey: opts.activeKey,
               preserveKeys: preserveSessionKeys,
+              nowMs,
               onRetired: (_key, entry) => {
                 rememberRemovedSessionFile(dmScopeRemovedSessionFiles, entry);
               },
@@ -791,6 +876,9 @@ export async function runSessionsCleanup(params: {
                 capped: 0,
                 unreferencedArtifacts,
                 diskBudget: null,
+                minCandidateAgeMs: MIN_SESSION_CLEANUP_CANDIDATE_AGE_MS,
+                underAgePreservedCount: 0,
+                ageUnknownQuarantineCount: 0,
                 candidateCounts: {
                   preserve: 0,
                   archive_candidate: 0,
@@ -819,6 +907,10 @@ export async function runSessionsCleanup(params: {
               }),
               dryRun: false,
               unreferencedArtifacts,
+              minCandidateAgeMs:
+                preview?.summary.minCandidateAgeMs ?? MIN_SESSION_CLEANUP_CANDIDATE_AGE_MS,
+              underAgePreservedCount: preview?.summary.underAgePreservedCount ?? 0,
+              ageUnknownQuarantineCount: preview?.summary.ageUnknownQuarantineCount ?? 0,
               wouldMutate:
                 (preview?.summary.wouldMutate ?? false) || unreferencedArtifacts.removedFiles > 0,
               applied: true,
@@ -837,6 +929,10 @@ export async function runSessionsCleanup(params: {
               capped: appliedReport.capped,
               unreferencedArtifacts,
               diskBudget: appliedReport.diskBudget,
+              minCandidateAgeMs:
+                preview?.summary.minCandidateAgeMs ?? MIN_SESSION_CLEANUP_CANDIDATE_AGE_MS,
+              underAgePreservedCount: preview?.summary.underAgePreservedCount ?? 0,
+              ageUnknownQuarantineCount: preview?.summary.ageUnknownQuarantineCount ?? 0,
               candidateCounts: {
                 preserve: appliedReport.afterCount,
                 archive_candidate:
@@ -846,8 +942,8 @@ export async function runSessionsCleanup(params: {
                   appliedReport.capped +
                   unreferencedArtifacts.removedFiles +
                   (appliedReport.diskBudget?.removedEntries ?? 0),
-                blocked: 0,
-                quarantine_review: 0,
+                blocked: preview?.summary.candidateCounts.blocked ?? 0,
+                quarantine_review: preview?.summary.candidateCounts.quarantine_review ?? 0,
               },
               candidateActionCounts: buildCandidateActionCounts({
                 missing: missingApplied,
@@ -864,8 +960,8 @@ export async function runSessionsCleanup(params: {
                 protectedDirectCount: policyPreserve.protectedDirectCount,
                 protectedMainAgentIds: policyPreserve.protectedMainAgentIds,
                 syntheticOnlyPreservedCount: policyPreserve.syntheticOnlyPreservedCount,
-                blockedCount: 0,
-                quarantineCount: 0,
+                blockedCount: preview?.summary.safety.blockedCount ?? 0,
+                quarantineCount: preview?.summary.safety.quarantineCount ?? 0,
               },
               wouldMutate:
                 missingApplied > 0 ||

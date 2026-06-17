@@ -121,6 +121,7 @@ openclaw sessions cleanup --json
 
 - Scope note: `openclaw sessions cleanup` maintains session stores, transcripts, and trajectory sidecars. It does not prune cron run history, which is managed by `cron.runLog.keepLines` in [Cron configuration](/automation/cron-jobs#configuration) and explained in [Cron maintenance](/automation/cron-jobs#maintenance).
 - Cleanup also prunes unreferenced primary transcripts, compaction checkpoints, and trajectory sidecars older than `session.maintenance.pruneAfter`; files still referenced by `sessions.json` are preserved.
+- Automatic cleanup has a hard 4-hour candidate age floor. Session rows, transcripts, reset/deleted archives, prompt blobs, trajectory sidecars, store temp files, and lifecycle repair targets younger than 4 hours are preserved even when a cleanup command or background save runs more frequently. Missing, invalid, or future timestamps are preserved for quarantine review; if disk or count pressure remains after preserving protected, under-age, or unknown-age items, cleanup reports `blocked` instead of deleting younger material.
 
 - `--dry-run`: preview how many entries would be pruned/capped without writing.
   - In text mode, dry-run prints a per-session action table (`Action`, `Key`, `Age`, `Model`, `Flags`) plus a summary grouped by session label so you can see what would be kept vs removed.
@@ -161,6 +162,9 @@ traffic. Use `--store <path>` for explicit offline repair of a store file.
       "dmScopeRetired": 0,
       "pruned": 40,
       "capped": 0,
+      "minCandidateAgeMs": 14400000,
+      "underAgePreservedCount": 0,
+      "ageUnknownQuarantineCount": 0,
       "candidateCounts": {
         "preserve": 80,
         "archive_candidate": 40,
@@ -195,6 +199,9 @@ traffic. Use `--store <path>` for explicit offline repair of a store file.
       "dmScopeRetired": 0,
       "pruned": 0,
       "capped": 0,
+      "minCandidateAgeMs": 14400000,
+      "underAgePreservedCount": 0,
+      "ageUnknownQuarantineCount": 0,
       "candidateCounts": {
         "preserve": 18,
         "archive_candidate": 0,

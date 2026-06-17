@@ -22,6 +22,12 @@ import { getFileStatSnapshot } from "../cache-utils.js";
 import { getRuntimeConfig } from "../io.js";
 import { formatSessionArchiveTimestamp } from "./artifacts.js";
 import { enforceSessionDiskBudget, type SessionDiskBudgetSweepResult } from "./disk-budget.js";
+import {
+  MIN_SESSION_CLEANUP_CANDIDATE_AGE_MS,
+  resolveFileCleanupCandidateAge,
+  resolveSessionCleanupCandidateAge,
+  resolveSessionCleanupMinCandidateAgeMs,
+} from "./maintenance-age.js";
 import { deriveSessionMetaPatch } from "./metadata.js";
 import { resolveSessionFilePath, resolveStorePath } from "./paths.js";
 import {
@@ -726,20 +732,37 @@ function lifecycleTranscriptIsReclaimable(params: {
   }
   try {
     const stat = fs.statSync(params.transcriptPath);
-    return params.nowMs - stat.mtimeMs >= params.orphanTranscriptMinAgeMs;
+    return resolveFileCleanupCandidateAge({
+      mtimeMs: stat.mtimeMs,
+      nowMs: params.nowMs,
+      minCandidateAgeMs: params.orphanTranscriptMinAgeMs,
+    }).eligible;
   } catch {
-    return true;
+    return false;
   }
 }
 
 function archiveExactLifecycleTranscriptPath(params: {
   sessionsDir: string;
   transcriptPath: string;
+  nowMs: number;
+  minCandidateAgeMs: number;
 }): number {
   const resolvedSessionsDir = normalizePathForLifecycleComparison(params.sessionsDir);
   const resolvedTranscriptPath = normalizePathForLifecycleComparison(params.transcriptPath);
   const relative = path.relative(resolvedSessionsDir, resolvedTranscriptPath);
   if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+    return 0;
+  }
+  const stat = fs.statSync(resolvedTranscriptPath, { throwIfNoEntry: false });
+  if (
+    !stat?.isFile() ||
+    !resolveFileCleanupCandidateAge({
+      mtimeMs: stat.mtimeMs,
+      nowMs: params.nowMs,
+      minCandidateAgeMs: params.minCandidateAgeMs,
+    }).eligible
+  ) {
     return 0;
   }
   const archivedPath = `${resolvedTranscriptPath}.deleted.${formatSessionArchiveTimestamp()}`;
@@ -1360,7 +1383,13 @@ async function archiveUnreferencedLifecycleTranscriptArtifacts(params: {
       } catch {
         continue;
       }
-      if (params.nowMs - stat.mtimeMs < params.orphanTranscriptMinAgeMs) {
+      if (
+        !resolveFileCleanupCandidateAge({
+          mtimeMs: stat.mtimeMs,
+          nowMs: params.nowMs,
+          minCandidateAgeMs: params.orphanTranscriptMinAgeMs,
+        }).eligible
+      ) {
         continue;
       }
       let content: string;
@@ -1396,6 +1425,9 @@ export async function cleanupSessionLifecycleArtifacts(
   }
 
   const nowMs = params.nowMs ?? Date.now();
+  const orphanTranscriptMinAgeMs = resolveSessionCleanupMinCandidateAgeMs(
+    params.orphanTranscriptMinAgeMs,
+  );
   const storePath = path.resolve(params.storePath);
   const sessionsDir = path.dirname(storePath);
   const removedSessionFiles = new Map<string, string | undefined>();
@@ -1410,12 +1442,18 @@ export async function cleanupSessionLifecycleArtifacts(
     for (const [sessionKey, entry] of Object.entries(store)) {
       const transcriptPath = resolveLifecycleTranscriptPath({ entry, sessionsDir });
       const matchesLifecycle = sessionKeySegmentStartsWith(sessionKey, sessionKeySegmentPrefix);
+      const rowAge = resolveSessionCleanupCandidateAge({
+        entry,
+        nowMs,
+        minCandidateAgeMs: MIN_SESSION_CLEANUP_CANDIDATE_AGE_MS,
+      });
       if (
         matchesLifecycle &&
+        rowAge.eligible &&
         lifecycleTranscriptIsReclaimable({
           transcriptPath,
           nowMs,
-          orphanTranscriptMinAgeMs: params.orphanTranscriptMinAgeMs,
+          orphanTranscriptMinAgeMs,
         })
       ) {
         rememberRemovedSessionFile(removedSessionFiles, entry);
@@ -1447,6 +1485,8 @@ export async function cleanupSessionLifecycleArtifacts(
       archivedTranscriptArtifacts += archiveExactLifecycleTranscriptPath({
         sessionsDir,
         transcriptPath,
+        nowMs,
+        minCandidateAgeMs: orphanTranscriptMinAgeMs,
       });
     }
     const { removeRemovedSessionTrajectoryArtifacts } = await loadTrajectoryCleanupRuntime();
@@ -1455,6 +1495,8 @@ export async function cleanupSessionLifecycleArtifacts(
       referencedSessionIds,
       storePath,
       restrictToStoreDir: true,
+      nowMs,
+      minCandidateAgeMs: orphanTranscriptMinAgeMs,
     });
     await saveSessionStoreUnlocked(storePath, store, { skipMaintenance: true });
   });
@@ -1466,7 +1508,7 @@ export async function cleanupSessionLifecycleArtifacts(
       (await archiveUnreferencedLifecycleTranscriptArtifacts({
         storePath,
         transcriptContentMarker,
-        orphanTranscriptMinAgeMs: params.orphanTranscriptMinAgeMs,
+        orphanTranscriptMinAgeMs,
         nowMs,
       })),
   };
@@ -1516,9 +1558,13 @@ export async function archiveRemovedSessionTranscripts(params: {
   storePath: string;
   reason: "deleted" | "reset";
   restrictToStoreDir?: boolean;
+  minCandidateAgeMs?: number;
+  nowMs?: number;
 }): Promise<Set<string>> {
   const { archiveSessionTranscripts } = await loadSessionArchiveRuntime();
   const archivedDirs = new Set<string>();
+  const minCandidateAgeMs = resolveSessionCleanupMinCandidateAgeMs(params.minCandidateAgeMs);
+  const nowMs = params.nowMs ?? Date.now();
   for (const [sessionId, sessionFile] of params.removedSessionFiles) {
     if (params.referencedSessionIds.has(sessionId)) {
       continue;
@@ -1529,6 +1575,8 @@ export async function archiveRemovedSessionTranscripts(params: {
       sessionFile,
       reason: params.reason,
       restrictToStoreDir: params.restrictToStoreDir,
+      minCandidateAgeMs,
+      nowMs,
     });
     for (const archivedPath of archived) {
       archivedDirs.add(path.dirname(archivedPath));
