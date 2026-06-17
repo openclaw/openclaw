@@ -250,6 +250,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let snapshotBaseText = "";
   let lastSnapshotTextLength = 0;
   const deliveredFinalTexts = new Set<string>();
+  let sentBlockText = "";
   let partialUpdateQueue: Promise<void> = Promise.resolve();
   let streamingStartPromise: Promise<void> | null = null;
   let streamingClosedForReply = false;
@@ -611,6 +612,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         if (!replyLifecycleStateInitialized) {
           replyLifecycleStateInitialized = true;
           deliveredFinalTexts.clear();
+          sentBlockText = "";
           streamingClosedForReply = false;
           streamingCloseErroredForReply = false;
           visibleReplySent = false;
@@ -662,11 +664,14 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           streamingClosedForReply &&
           !streamingCloseErroredForReply &&
           finalTextWouldUseStreamingCard;
+        const skipTextForBlockStreamed =
+          info?.kind === "final" && hasText && sentBlockText !== "" && text === sentBlockText;
         const shouldDeliverText =
           hasText &&
           !hasVoiceMedia &&
           !skipTextForDuplicateFinal &&
-          !skipTextForClosedStreamingFinal;
+          !skipTextForClosedStreamingFinal &&
+          !skipTextForBlockStreamed;
         const shouldDiscardStreamingPreview =
           info?.kind === "final" &&
           (finalTextExceedsStreamingLimit ||
@@ -683,8 +688,24 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         if (shouldDeliverText) {
           if (info?.kind === "block") {
             // Drop internal block chunks unless we can safely consume them as
-            // streaming-card fallback content.
+            // streaming-card fallback content or send them as independent
+            // messages for true progressive delivery.
             if (!useStreamingCard) {
+              if (coreBlockStreamingEnabled) {
+                // Send block text as an independent Feishu message for
+                // true progressive delivery without card-side playback.
+                await sendMessageFeishu({
+                  cfg,
+                  to: chatId,
+                  text,
+                  replyToMessageId: sendReplyToMessageId,
+                  replyInThread: effectiveReplyInThread,
+                  allowTopLevelReplyFallback,
+                  accountId,
+                });
+                sentBlockText += text;
+                markVisibleReplySent();
+              }
               return;
             }
             startStreaming();
