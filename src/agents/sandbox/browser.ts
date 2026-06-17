@@ -55,6 +55,7 @@ import { resolveSandboxAgentId, slugifySessionKey } from "./shared.js";
 import { isToolAllowed } from "./tool-policy.js";
 import type { SandboxBrowserContext, SandboxConfig } from "./types.js";
 import { validateNetworkMode } from "./validate-sandbox-security.js";
+import { splitSandboxBindSpec } from "./bind-spec.js";
 import {
   appendReadOnlyWorkspaceSkillMountArgs,
   appendWorkspaceMountArgs,
@@ -362,10 +363,20 @@ export async function ensureSandboxBrowser(params: {
       readOnlyWorkspaceSkillMounts,
       includeReadOnlyWorkspaceSkillMounts: false,
     });
-    if (browserDockerCfg.binds?.length) {
-      for (const bind of browserDockerCfg.binds) {
-        args.push("-v", bind);
-      }
+    // Filter out user-defined binds whose container path conflicts with a
+    // read-only skill mount. The protected overlay takes priority: even an
+    // overlapping user bind should not make checked-in skills writable.
+    // Skipping the conflicting user bind also avoids Docker's "Duplicate mount
+    // point" error.
+    const browserSkillMountContainerPaths = new Set(
+      readOnlyWorkspaceSkillMounts.map((m) => m.containerPath),
+    );
+    const nonConflictingBrowserBinds = (browserDockerCfg.binds ?? []).filter((bind) => {
+      const parsed = splitSandboxBindSpec(bind);
+      return !(parsed && browserSkillMountContainerPaths.has(parsed.container));
+    });
+    for (const bind of nonConflictingBrowserBinds) {
+      args.push("-v", bind);
     }
     appendReadOnlyWorkspaceSkillMountArgs({
       args,

@@ -182,6 +182,7 @@ import { readRegistryEntry, updateRegistry } from "./registry.js";
 import { resolveSandboxAgentId, resolveSandboxScopeKey, slugifySessionKey } from "./shared.js";
 import type { SandboxConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
 import { validateSandboxSecurity } from "./validate-sandbox-security.js";
+import { splitSandboxBindSpec } from "./bind-spec.js";
 import {
   appendReadOnlyWorkspaceSkillMountArgs,
   appendWorkspaceMountArgs,
@@ -549,15 +550,6 @@ export function buildSandboxCreateArgs(params: {
   return args;
 }
 
-function appendCustomBinds(args: string[], cfg: SandboxDockerConfig): void {
-  if (!cfg.binds?.length) {
-    return;
-  }
-  for (const bind of cfg.binds) {
-    args.push("-v", bind);
-  }
-}
-
 async function createSandboxContainer(params: {
   name: string;
   cfg: SandboxDockerConfig;
@@ -591,7 +583,21 @@ async function createSandboxContainer(params: {
     readOnlyWorkspaceSkillMounts: params.readOnlyWorkspaceSkillMounts,
     includeReadOnlyWorkspaceSkillMounts: false,
   });
-  appendCustomBinds(args, cfg);
+  // Before adding user-defined binds, filter out any whose container path
+  // conflicts with a read-only skill mount. The protected overlay takes priority:
+  // even an overlapping user bind should not make checked-in skills writable.
+  // Skipping the conflicting user bind also avoids Docker's "Duplicate mount
+  // point" error when two -v flags target the same container path.
+  const skillMountContainerPaths = new Set(
+    params.readOnlyWorkspaceSkillMounts.map((m) => m.containerPath),
+  );
+  const nonConflictingBinds = (cfg.binds ?? []).filter((bind) => {
+    const parsed = splitSandboxBindSpec(bind);
+    return !(parsed && skillMountContainerPaths.has(parsed.container));
+  });
+  for (const bind of nonConflictingBinds) {
+    args.push("-v", bind);
+  }
   appendReadOnlyWorkspaceSkillMountArgs({
     args,
     readOnlyWorkspaceSkillMounts: params.readOnlyWorkspaceSkillMounts,

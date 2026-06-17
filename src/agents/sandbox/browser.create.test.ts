@@ -330,9 +330,11 @@ describe("ensureSandboxBrowser create args", () => {
     expect(result?.noVncUrl).toBeUndefined();
   });
 
-  it("applies read-only skill overlays after browser custom binds", async () => {
-    // Browser sandboxes share workspace mount semantics with shell sandboxes:
-    // protected skill overlays must win over custom binds.
+  it("applies read-only skill overlays in place of conflicting browser custom binds", async () => {
+    // Protected skill overlays take priority over overlapping browser custom
+    // binds: the conflicting user bind is removed and the read-only overlay is
+    // added in its place, so checked-in skills cannot be made writable and
+    // Docker's "Duplicate mount point" error is avoided.
     const workspaceDir = makeTempDir();
     const customRoot = makeTempDir();
     mkdirSync(path.join(workspaceDir, "skills", "demo"), { recursive: true });
@@ -356,9 +358,10 @@ describe("ensureSandboxBrowser create args", () => {
       `${path.join(workspaceDir, "skills")}:/workspace/skills:ro,z`,
     );
 
+    // The overlapping browser custom bind should be removed in favor of the skill overlay
     expect(workspaceMountIdx).toBeGreaterThanOrEqual(0);
-    expect(customMountIdx).toBeGreaterThan(workspaceMountIdx);
-    expect(protectedMountIdx).toBeGreaterThan(customMountIdx);
+    expect(customMountIdx).toBe(-1);
+    expect(protectedMountIdx).toBeGreaterThan(workspaceMountIdx);
   });
 
   it("includes the explicit env policy epoch in the browser config hash when needed", async () => {
