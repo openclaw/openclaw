@@ -184,6 +184,37 @@ export function slugifyWikiPageStem(raw: string): string {
   return `${slug}-${suffix}`;
 }
 
+export function readWikiPageTitle(raw: string, fallbackName?: string): string | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const parsed = parseWikiMarkdown(raw);
+  const frontmatterTitle =
+    typeof parsed.frontmatter.title === "string" ? parsed.frontmatter.title.trim() : "";
+  return (
+    (frontmatterTitle.length > 0 ? frontmatterTitle : undefined) ??
+    extractTitleFromMarkdown(parsed.body) ??
+    fallbackName
+  );
+}
+
+export async function resolveTitleKeyedWikiSlug(params: {
+  title: string;
+  baseSlug: string;
+  readExistingTitleBySlug: (slug: string) => Promise<string | undefined>;
+}): Promise<{ slug: string; suffix: string | undefined }> {
+  const canonicalTitle = params.title.trim();
+  const existingTitle = await params.readExistingTitleBySlug(params.baseSlug);
+  if (existingTitle === undefined || existingTitle.trim() === canonicalTitle) {
+    return { slug: params.baseSlug, suffix: undefined };
+  }
+  const suffix = createHash("sha1")
+    .update(canonicalTitle)
+    .digest("hex")
+    .slice(0, WIKI_SEGMENT_HASH_BYTES);
+  return { slug: `${params.baseSlug}-${suffix}`, suffix };
+}
+
 export function createWikiPageFilename(stem: string, extension = ".md"): string {
   const normalizedExtension = extension.startsWith(".") ? extension : `.${extension}`;
   const maxStemBytes = Math.max(

@@ -11,7 +11,9 @@ import { compileMemoryWikiVault, type CompileMemoryWikiResult } from "./compile.
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import {
   parseWikiMarkdown,
+  readWikiPageTitle,
   renderWikiMarkdown,
+  resolveTitleKeyedWikiSlug,
   slugifyWikiPageStem,
   slugifyWikiSegment,
   normalizeSourceIds,
@@ -245,15 +247,22 @@ async function applyCreateSynthesisMutation(params: {
   config: ResolvedMemoryWikiConfig;
   mutation: CreateSynthesisMemoryWikiMutation;
 }): Promise<{ changed: boolean; pagePath: string; pageId: string }> {
-  const slug = slugifyWikiSegment(params.mutation.title);
-  const pageStem = slugifyWikiPageStem(params.mutation.title);
-  const pagePath = path.join("syntheses", `${pageStem}.md`).replace(/\\/g, "/");
   const root = await fsRoot(params.config.vault.path);
+  const { slug: pageStem, suffix } = await resolveTitleKeyedWikiSlug({
+    title: params.mutation.title,
+    baseSlug: slugifyWikiPageStem(params.mutation.title),
+    readExistingTitleBySlug: async (candidate) =>
+      readWikiPageTitle(await readExistingWikiPage(root, `syntheses/${candidate}.md`), candidate),
+  });
+  const pagePath = path.join("syntheses", `${pageStem}.md`).replace(/\\/g, "/");
   const existing = await readExistingWikiPage(root, pagePath);
   const parsed = parseWikiMarkdown(existing);
+  const idSlug = suffix
+    ? `${slugifyWikiSegment(params.mutation.title)}-${suffix}`
+    : slugifyWikiSegment(params.mutation.title);
   const pageId =
     (typeof parsed.frontmatter.id === "string" && parsed.frontmatter.id.trim()) ||
-    `synthesis.${slug}`;
+    `synthesis.${idSlug}`;
   const changed = await writeWikiPage({
     rootDir: params.config.vault.path,
     relativePath: pagePath,
