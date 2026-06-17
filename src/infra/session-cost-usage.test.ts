@@ -1080,6 +1080,21 @@ describe("session cost usage", () => {
         expect(summary.summary?.modelUsage?.[0]?.model).toBe("gpt-5.5");
         expect(summary.summary?.dailyModelUsage?.[0]?.model).toBe("gpt-5.5");
         expect(summary.summary?.utcQuarterHourMessageCounts).toHaveLength(2);
+
+        const allRange = await loadSessionCostSummaryFromCache({
+          sessionId: "sess-cache-range",
+          sessionFile,
+          startMs: 0,
+          endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
+          requestRefresh: false,
+        });
+
+        expect(allRange.cacheStatus.status).toBe("fresh");
+        expect(allRange.summary?.totalTokens).toBe(1_030);
+        expect(allRange.summary?.modelUsage?.some((entry) => entry.model === "glm-5")).toBe(true);
+        expect(allRange.summary?.dailyModelUsage?.some((entry) => entry.model === "glm-5")).toBe(
+          false,
+        );
         expect(createReadStreamSpy).not.toHaveBeenCalled();
       } finally {
         createReadStreamSpy.mockRestore();
@@ -1326,6 +1341,16 @@ describe("session cost usage", () => {
     const allTime = await loadSessionCostSummary({ sessionFile });
     expect(allTime?.totalTokens).toBe(1_030);
     expect(allTime?.modelUsage?.some((entry) => entry.model === "glm-5")).toBe(true);
+
+    const allRange = await loadSessionCostSummary({
+      sessionFile,
+      startMs: 0,
+      endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
+    });
+
+    expect(allRange?.totalTokens).toBe(1_030);
+    expect(allRange?.modelUsage?.some((entry) => entry.model === "glm-5")).toBe(true);
+    expect(allRange?.dailyModelUsage?.some((entry) => entry.model === "glm-5")).toBe(false);
   });
 
   it("rebuilds missing session summaries synchronously when requested", async () => {

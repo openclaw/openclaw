@@ -565,6 +565,12 @@ function hasUntimestampedCachedTranscriptEntry(
   );
 }
 
+function rangeRequiresTimestampedTranscriptEntries(params: { startMs?: number }): boolean {
+  // All/range=all callers may pass startMs=0 plus a finite endMs; legacy
+  // untimestamped rows still count there, but selected bounded ranges cannot.
+  return params.startMs !== undefined && Number.isFinite(params.startMs) && params.startMs > 0;
+}
+
 function buildSessionCostSummaryFromCacheEntry(params: {
   entry: UsageCostCacheFileEntry;
   sessionId?: string;
@@ -599,7 +605,7 @@ function buildSessionCostSummaryFromCacheEntry(params: {
   let lastActivity: number | undefined;
   let lastUserTimestamp: number | undefined;
   const maxLatencyMs = 12 * 60 * 60 * 1000;
-  const requiresTimestamp = Number.isFinite(params.startMs) || Number.isFinite(params.endMs);
+  const requiresTimestamp = rangeRequiresTimestampedTranscriptEntries(params);
 
   for (const entry of params.entry.transcriptEntries) {
     const ts = entry.timestamp;
@@ -2134,7 +2140,7 @@ export async function loadSessionCostSummary(params: {
   let lastUserTimestamp: number | undefined;
   const MAX_LATENCY_MS = 12 * 60 * 60 * 1000;
   const resolveCost = createUsageCostResolver(params.config);
-  const requiresTimestamp = params.startMs !== undefined || params.endMs !== undefined;
+  const requiresTimestamp = rangeRequiresTimestampedTranscriptEntries(params);
 
   await scanTranscriptFile({
     filePath: sessionFile,
