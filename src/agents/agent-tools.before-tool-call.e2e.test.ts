@@ -305,8 +305,35 @@ describe("before_tool_call loop detection behavior", () => {
       await expectUnblockedToolExecution(tool, `poll-${i}`, params);
     }
 
-    const result = await tool.execute(`poll-${CRITICAL_THRESHOLD}`, params, undefined, undefined);
-    expectToolLoopBlockedResult(result, "CRITICAL");
+    await withDiagnosticEvents(async (emitted, flush) => {
+      const result = await tool.execute(`poll-${CRITICAL_THRESHOLD}`, params, undefined, undefined);
+      await flush();
+      expectToolLoopBlockedResult(result, "CRITICAL");
+      const securityEvent = emitted.find(
+        (event): event is Extract<DiagnosticEventPayload, { type: "security.event" }> =>
+          event.type === "security.event",
+      );
+      expect(securityEvent).toMatchObject({
+        type: "security.event",
+        category: "tool",
+        action: "tool.execution.blocked",
+        outcome: "denied",
+        reason: "tool-loop",
+        policy: {
+          id: "tool-loop-detection",
+          decision: "deny",
+          reason: "tool-loop",
+        },
+        control: {
+          id: "tool-loop-detection",
+          family: "authorization",
+        },
+        attributes: {
+          params_kind: "object",
+          tool_source: "core",
+        },
+      });
+    });
   });
 
   it("does nothing when loopDetection.enabled is false", async () => {

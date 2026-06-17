@@ -569,12 +569,30 @@ function emitSkillUsedDiagnostic(params: {
 
 function emitToolBlockedSecurityEvent(params: {
   ctx?: HookContext;
-  deniedReason: string;
+  deniedReason: HookBlockedReason;
   toolIdentity: ToolDiagnosticIdentity;
   toolName: string;
   trace?: DiagnosticTraceContext;
   paramsSummary?: DiagnosticToolParamsSummary;
 }): void {
+  const control =
+    params.deniedReason === "tool-loop"
+      ? ({
+          policyId: "tool-loop-detection",
+          controlId: "tool-loop-detection",
+          family: "authorization",
+        } as const)
+      : params.deniedReason === "plugin-approval"
+        ? ({
+            policyId: "plugin-tool-approval",
+            controlId: "plugin-tool-approval",
+            family: "approval",
+          } as const)
+        : ({
+            policyId: "plugin-before-tool-call",
+            controlId: "before-tool-call",
+            family: "approval",
+          } as const);
   emitTrustedSecurityEvent({
     category: "tool",
     action: "tool.execution.blocked",
@@ -591,13 +609,13 @@ function emitToolBlockedSecurityEvent(params: {
       ...(params.toolIdentity.toolOwner ? { owner: params.toolIdentity.toolOwner } : {}),
     },
     policy: {
-      id: "plugin-before-tool-call",
+      id: control.policyId,
       decision: "deny",
       reason: params.deniedReason,
     },
     control: {
-      id: "before-tool-call",
-      family: "approval",
+      id: control.controlId,
+      family: control.family,
     },
     attributes: {
       tool_source: params.toolIdentity.toolSource,
