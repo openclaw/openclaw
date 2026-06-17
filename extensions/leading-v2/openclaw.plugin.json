@@ -1,0 +1,76 @@
+{
+  "id": "leading-v2",
+  "name": "Leading V2 Backend",
+  "description": "Submit tasks and poll their status across leading-v2.0 backend modules (失效链接检测, 行业/舆情报告, 舆情监测, AI 文书) by calling the PHP HTTP API as the chat user via Authorization: Bearer <per-uid apiKey>. Tools are scoped to rabbitmq-<userId> agents; per-uid keys are resolved (and auto-provisioned) from the api_key table.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "backend": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "leading-v2.0 PHP backend the agent calls on behalf of the user.",
+        "properties": {
+          "baseUrl": { "type": "string", "default": "https://v2.businesstimescn.com" },
+          "timeoutMs": { "type": "number", "default": 30000 },
+          "siteId": {
+            "type": "string",
+            "default": "legal",
+            "description": "Default site/business line id sent as siteId (e.g. legal, sz)."
+          },
+          "apiKeys": {
+            "type": "object",
+            "description": "Optional explicit per-userId raw API keys; overrides the api_key lookup.",
+            "additionalProperties": { "type": "string" }
+          },
+          "db": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "Write-capable MySQL (superworker) for per-uid api_key lookup/auto-provision.",
+            "properties": {
+              "host": { "type": "string" },
+              "port": { "type": "number" },
+              "user": { "type": "string" },
+              "password": { "type": "string" },
+              "database": { "type": "string" }
+            },
+            "required": ["host", "user", "password", "database"]
+          }
+        },
+        "required": ["baseUrl"]
+      },
+      "notify": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Proactive completion notifications: poll submitted async tasks and report results when done.",
+        "properties": {
+          "enabled": { "type": "boolean", "default": true, "description": "Master switch (default on)." },
+          "pollIntervalMs": { "type": "number", "default": 30000, "description": "Backend status poll interval." },
+          "ttlMs": { "type": "number", "default": 7200000, "description": "Give up notifying after this long (default 2h)." },
+          "maxPerTick": { "type": "number", "default": 5, "description": "Max tasks polled per tick." }
+        }
+      },
+      "mercure": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Mercure hub for proactive web-chat delivery (same hub the frontend subscribes to). Falls back to MERCURE_HUB_URL / MERCURE_JWT_SECRET env.",
+        "properties": {
+          "hubUrl": { "type": "string" },
+          "jwtSecret": { "type": "string" }
+        }
+      },
+      "smtp": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Email-proxy (/api/send-email) for offline notification delivery to report subscribers. Falls back to SMTP_* env. Email address resolved from feed_report_subscriber.",
+        "properties": {
+          "host": { "type": "string" },
+          "port": { "type": "number" },
+          "from": { "type": "string" },
+          "password": { "type": "string" }
+        }
+      }
+    },
+    "required": ["backend"]
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "name": "@openclaw/leading-v2",
+  "version": "2026.4.16",
+  "private": true,
+  "description": "OpenClaw leading-v2 plugin: submit tasks and poll their status across leading-v2.0 backend modules (link/失效链接检测, industry-report, pub-opinion, ai) via the HTTP API as the chat user",
+  "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.49",
+    "mysql2": "^3.12.0"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "compat": {
+      "pluginApi": ">=2026.4.16"
+    },
+    "build": {
+      "openclawVersion": "2026.4.16"
+    }
+  }
+}
