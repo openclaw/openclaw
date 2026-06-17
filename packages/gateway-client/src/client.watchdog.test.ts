@@ -317,6 +317,27 @@ describe("GatewayClient", () => {
     }
   });
 
+  test("cleans pending request state when websocket send throws", async () => {
+    const client = new GatewayClient({
+      requestTimeoutMs: 25,
+    });
+    const sendError = new Error("synthetic send failure");
+    (
+      client as unknown as {
+        ws: WebSocket | { readyState: number; send: () => void; close: () => void };
+      }
+    ).ws = {
+      readyState: WebSocket.OPEN,
+      send: vi.fn(() => {
+        throw sendError;
+      }),
+      close: vi.fn(),
+    };
+
+    await expect(client.request("status")).rejects.toThrow("synthetic send failure");
+    expect(getPendingCount(client)).toBe(0);
+  });
+
   test("does not auto-timeout expectFinal requests", async () => {
     vi.useFakeTimers();
     try {

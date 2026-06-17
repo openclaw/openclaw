@@ -458,6 +458,10 @@ function normalizeDockerServiceStatus(row?: { Health?: string; State?: string })
   return "unknown";
 }
 
+function firstDockerOutputLine(stdout: string) {
+  return normalizeStringEntries(stdout.split("\n"))[0] ?? "";
+}
+
 function parseDockerComposePsRows(stdout: string) {
   const trimmed = stdout.trim();
   if (!trimmed) {
@@ -620,7 +624,7 @@ export function createQaDockerRuntime(params: {
       ["compose", "-f", composeFile, "ps", "-q", service],
       repoRoot,
     );
-    const containerId = containerStdout.trim();
+    const containerId = firstDockerOutputLine(containerStdout);
     if (!containerId) {
       return null;
     }
@@ -629,12 +633,12 @@ export function createQaDockerRuntime(params: {
       [
         "inspect",
         "--format",
-        "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
+        "{{range .NetworkSettings.Networks}}{{println .IPAddress}}{{end}}",
         containerId,
       ],
       repoRoot,
     );
-    const ip = ipStdout.trim();
+    const ip = firstDockerOutputLine(ipStdout);
     if (!ip) {
       return null;
     }

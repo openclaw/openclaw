@@ -1599,7 +1599,14 @@ export class GatewayClient {
       });
       signal?.addEventListener("abort", abortHandler, { once: true });
     });
-    this.ws.send(JSON.stringify(frame));
+    try {
+      this.ws.send(JSON.stringify(frame));
+    } catch (error) {
+      const pending = this.pending.get(id);
+      this.pending.delete(id);
+      pending?.cleanup?.();
+      throw error;
+    }
     return p;
   }
 }

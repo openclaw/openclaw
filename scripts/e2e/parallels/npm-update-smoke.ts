@@ -1,6 +1,7 @@
 #!/usr/bin/env -S pnpm tsx
-// Npm Update Smoke script supports OpenClaw repository automation.
 import { spawn } from "node:child_process";
+// Npm Update Smoke script supports OpenClaw repository automation.
+import { randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { copyFile, readFile, rm } from "node:fs/promises";
 import path from "node:path";
@@ -1098,7 +1099,7 @@ export class NpmUpdateSmoke {
   }
 
   private writeGuestScript(vm: string, script: string, prefix: string): string {
-    const scriptPath = `/tmp/${prefix}-${process.pid}-${Date.now()}.sh`;
+    const scriptPath = `/tmp/${prefix}-${randomUUID()}.sh`;
     const write = run("prlctl", ["exec", vm, "/usr/bin/tee", scriptPath], {
       check: false,
       input: script,

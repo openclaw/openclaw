@@ -61,7 +61,6 @@ vi.mock("./auth-choice.apply.api-providers.js", () => {
     );
   };
   return {
-    applyAuthChoiceApiProviders: vi.fn(async () => null),
     normalizeApiKeyTokenProviderAuthChoice: (params: {
       authChoice: string;
       tokenProvider?: string;

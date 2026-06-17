@@ -251,6 +251,48 @@ describe("kitchen-sink RPC gateway teardown", () => {
     expect(child.kill).toHaveBeenCalledOnce();
   });
 
+  posixIt("does not trust an exited wrapper while the gateway process group is alive", async () => {
+    const child = Object.assign(new EventEmitter(), {
+      exitCode: 0,
+      kill: vi.fn(),
+      pid: 12347,
+      signalCode: null as NodeJS.Signals | null,
+    });
+    const killProcess = vi.fn(() => true);
+
+    await stopGateway(child, { killGraceMs: 1, killProcess, teardownGraceMs: 1 });
+
+    expect(killProcess).toHaveBeenNthCalledWith(1, -12347, 0);
+    expect(killProcess).toHaveBeenNthCalledWith(2, -12347, "SIGTERM");
+    expect(killProcess).toHaveBeenCalledWith(-12347, "SIGKILL");
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  posixIt("rechecks process group liveness after the wrapper exits during teardown", async () => {
+    const child = Object.assign(new EventEmitter(), {
+      exitCode: null as number | null,
+      kill: vi.fn(),
+      pid: 12348,
+      signalCode: null as NodeJS.Signals | null,
+    });
+    const killProcess = vi.fn((_pid: number, signal: number | NodeJS.Signals) => {
+      if (signal === "SIGTERM") {
+        setTimeout(() => {
+          child.exitCode = 0;
+          child.emit("exit", 0, null);
+        }, 0);
+      }
+      return true;
+    });
+
+    await stopGateway(child, { killGraceMs: 1, killProcess, teardownGraceMs: 100 });
+
+    expect(killProcess).toHaveBeenNthCalledWith(1, -12348, 0);
+    expect(killProcess).toHaveBeenNthCalledWith(2, -12348, "SIGTERM");
+    expect(killProcess).toHaveBeenCalledWith(-12348, "SIGKILL");
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
   it("fails readiness waits before polling after signaled gateway exits", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-rpc-signal-ready-"));
     try {

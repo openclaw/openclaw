@@ -2,11 +2,13 @@
 // scripts/test-projects.mjs, and focused tests. Exports are intentionally
 // granular so project selection stays testable without spawning Vitest.
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { isChannelSurfaceTestFile } from "../test/vitest/vitest.channel-paths.mjs";
 import {
+  commandsLightTestFiles,
   isCommandsLightTarget,
   resolveCommandsLightIncludePattern,
 } from "../test/vitest/vitest.commands-light-paths.mjs";
@@ -36,11 +38,13 @@ import { isWhatsAppExtensionRoot } from "../test/vitest/vitest.extension-whatsap
 import { isZaloExtensionRoot } from "../test/vitest/vitest.extension-zalo-paths.mjs";
 import {
   isPluginSdkLightTarget,
+  pluginSdkLightTestFiles,
   resolvePluginSdkLightIncludePattern,
 } from "../test/vitest/vitest.plugin-sdk-paths.mjs";
 import { fullSuiteVitestShards } from "../test/vitest/vitest.test-shards.mjs";
 import { isUnitUiTestTarget } from "../test/vitest/vitest.ui-paths.mjs";
 import {
+  getUnitFastTestFiles,
   resolveUnitFastTestIncludePattern,
   resolveUnitFastTimerTestIncludePattern,
 } from "../test/vitest/vitest.unit-fast-paths.mjs";
@@ -252,6 +256,10 @@ function interleaveSlowAndFastSpecs(sortedSpecs) {
 
 function uniqueOrdered(values) {
   return [...new Set(values)];
+}
+
+function isPathAtOrUnder(relative, root) {
+  return relative === root || relative.startsWith(`${root}/`);
 }
 
 /**
@@ -1178,11 +1186,64 @@ function expandExplicitSourceTestTargets(targetArgs, cwd) {
     if (relative === "src/commands" && isExistingDirectoryTarget(targetArg, cwd)) {
       return [COMMANDS_LIGHT_VITEST_CONFIG, COMMANDS_VITEST_CONFIG];
     }
+    const exactDirectoryTargets = resolveExactSourceDirectoryTestTargets(targetArg, cwd);
+    if (exactDirectoryTargets) {
+      return exactDirectoryTargets;
+    }
     const targets = resolveExplicitSourceTestTargets(targetArg, cwd, {
       forceFullImportGraph,
     });
     return targets && targets.length > 0 ? targets : [targetArg];
   });
+}
+
+const exactSourceDirectoryRoots = [
+  "src/acp",
+  "src/agents",
+  "src/auto-reply",
+  "src/channels",
+  "src/cli",
+  "src/commands",
+  "src/config",
+  "src/cron",
+  "src/daemon",
+  "src/gateway",
+  "src/hooks",
+  "src/infra",
+  "src/logging",
+  "src/media",
+  "src/media-understanding",
+  "src/plugin-sdk",
+  "src/plugins",
+  "src/process",
+  "src/secrets",
+  "src/shared",
+  "src/tasks",
+  "src/tui",
+  "src/utils",
+  "src/wizard",
+  "ui/src",
+];
+
+function isExactSourceDirectoryTarget(relative) {
+  return exactSourceDirectoryRoots.some((root) => isPathAtOrUnder(relative, root));
+}
+
+function resolveExactSourceDirectoryTestTargets(targetArg, cwd) {
+  if (!isExistingDirectoryTarget(targetArg, cwd)) {
+    return null;
+  }
+  const relative = toRepoRelativeTarget(targetArg, cwd).replace(/\/+$/u, "");
+  if (!isExactSourceDirectoryTarget(relative)) {
+    return null;
+  }
+  const prefix = `${relative}/`;
+  const lightTargets = uniqueOrdered([
+    ...getUnitFastTestFiles(),
+    ...pluginSdkLightTestFiles,
+    ...commandsLightTestFiles,
+  ]).filter((file) => file.startsWith(prefix));
+  return lightTargets.length > 0 ? [...lightTargets, targetArg] : null;
 }
 
 /**
@@ -1934,7 +1995,7 @@ function classifyTarget(arg, cwd) {
   if (isControlUiE2eTarget(relative)) {
     return "uiE2e";
   }
-  if (relative.startsWith("ui/src/")) {
+  if (isPathAtOrUnder(relative, "ui/src")) {
     if (isUnitUiTestTarget(relative)) {
       return "unitUi";
     }
@@ -2065,76 +2126,76 @@ function classifyTarget(arg, cwd) {
   if (isBundledPluginDependentUnitTestFile(relative)) {
     return "bundled";
   }
-  if (relative.startsWith("src/channels/")) {
+  if (isPathAtOrUnder(relative, "src/channels")) {
     return "channel";
   }
-  if (relative.startsWith("src/gateway/")) {
+  if (isPathAtOrUnder(relative, "src/gateway")) {
     return "gateway";
   }
-  if (relative.startsWith("src/hooks/")) {
+  if (isPathAtOrUnder(relative, "src/hooks")) {
     return "hooks";
   }
-  if (relative.startsWith("src/infra/")) {
+  if (isPathAtOrUnder(relative, "src/infra")) {
     return "infra";
   }
-  if (relative.startsWith("src/config/")) {
+  if (isPathAtOrUnder(relative, "src/config")) {
     return "runtimeConfig";
   }
-  if (relative.startsWith("src/cron/")) {
+  if (isPathAtOrUnder(relative, "src/cron")) {
     return "cron";
   }
-  if (relative.startsWith("src/daemon/")) {
+  if (isPathAtOrUnder(relative, "src/daemon")) {
     return "daemon";
   }
-  if (relative.startsWith("src/media-understanding/")) {
+  if (isPathAtOrUnder(relative, "src/media-understanding")) {
     return "mediaUnderstanding";
   }
-  if (relative.startsWith("src/media/")) {
+  if (isPathAtOrUnder(relative, "src/media")) {
     return "media";
   }
-  if (relative.startsWith("src/logging/")) {
+  if (isPathAtOrUnder(relative, "src/logging")) {
     return "logging";
   }
-  if (relative.startsWith("src/plugin-sdk/")) {
+  if (isPathAtOrUnder(relative, "src/plugin-sdk")) {
     return isPluginSdkLightTarget(relative) ? "pluginSdkLight" : "pluginSdk";
   }
-  if (relative.startsWith("src/process/")) {
+  if (isPathAtOrUnder(relative, "src/process")) {
     return "process";
   }
-  if (relative.startsWith("src/secrets/")) {
+  if (isPathAtOrUnder(relative, "src/secrets")) {
     return "secrets";
   }
-  if (relative.startsWith("src/shared/")) {
+  if (isPathAtOrUnder(relative, "src/shared")) {
     return "sharedCore";
   }
-  if (relative.startsWith("src/tasks/")) {
+  if (isPathAtOrUnder(relative, "src/tasks")) {
     return "tasks";
   }
-  if (relative.startsWith("src/tui/")) {
+  if (isPathAtOrUnder(relative, "src/tui")) {
     return "tui";
   }
-  if (relative.startsWith("src/acp/")) {
+  if (isPathAtOrUnder(relative, "src/acp")) {
     return "acp";
   }
-  if (relative.startsWith("src/cli/")) {
+  if (isPathAtOrUnder(relative, "src/cli")) {
     return "cli";
   }
-  if (relative.startsWith("src/commands/")) {
+  if (isPathAtOrUnder(relative, "src/commands")) {
     return isCommandsLightTarget(relative) ? "commandLight" : "command";
   }
-  if (relative.startsWith("src/auto-reply/")) {
+  if (isPathAtOrUnder(relative, "src/auto-reply")) {
     return "autoReply";
   }
-  if (relative.startsWith("src/agents/")) {
+  if (isPathAtOrUnder(relative, "src/agents")) {
     return "agent";
   }
-  if (relative.startsWith("src/plugins/")) {
+  if (isPathAtOrUnder(relative, "src/plugins")) {
     return "plugin";
   }
-  if (relative.startsWith("src/utils/")) {
+  if (isPathAtOrUnder(relative, "src/utils")) {
     return "utils";
   }
-  if (relative.startsWith("src/wizard/")) {
+  if (isPathAtOrUnder(relative, "src/wizard")) {
     return "wizard";
   }
   return "default";
@@ -2674,7 +2735,7 @@ export function createVitestRunSpecs(args, params = {}) {
     const includeFilePath = plan.includePatterns
       ? path.join(
           params.tempDir ?? os.tmpdir(),
-          `openclaw-vitest-include-${process.pid}-${Date.now()}-${index}.json`,
+          `openclaw-vitest-include-${randomUUID()}-${index}.json`,
         )
       : null;
     return {

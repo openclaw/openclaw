@@ -229,7 +229,7 @@ describe("runQaDockerUp", () => {
         `docker compose -f ${composeFile} up -d @${repoRoot}`,
         `docker compose -f ${composeFile} ps --format json openclaw-qa-gateway @${repoRoot}`,
         `docker compose -f ${composeFile} ps -q openclaw-qa-gateway @${repoRoot}`,
-        `docker inspect --format {{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}} gateway-container @${repoRoot}`,
+        `docker inspect --format {{range .NetworkSettings.Networks}}{{println .IPAddress}}{{end}} gateway-container @${repoRoot}`,
       ]);
       expect(fetchCalls).toEqual([
         "http://127.0.0.1:43124/healthz",
