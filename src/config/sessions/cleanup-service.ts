@@ -160,10 +160,7 @@ function collectCleanupPolicyPreserveKeys(params: {
       preserve = true;
       syntheticOnlyPreservedCount += 1;
     }
-    if (
-      params.protectMain === true &&
-      isProtectedMainOrDirectSessionMaintenanceEntry(key, entry)
-    ) {
+    if (isProtectedMainOrDirectSessionMaintenanceEntry(key, entry)) {
       preserve = true;
       const parsed = parseAgentSessionKey(key);
       if (parsed && parsed.rest.toLowerCase() === "main") {
@@ -708,7 +705,7 @@ async function previewStoreCleanup(params: {
     }),
     safety: {
       syntheticOnly: params.syntheticOnly === true,
-      protectMain: params.protectMain === true,
+      protectMain: true,
       protectedMainCount: policyPreserve.protectedMainCount,
       protectedDirectCount: policyPreserve.protectedDirectCount,
       protectedMainAgentIds: policyPreserve.protectedMainAgentIds,
@@ -894,8 +891,8 @@ export async function runSessionsCleanup(params: {
                   unreferencedArtifactFiles: unreferencedArtifacts.removedFiles,
                 }),
                 safety: {
-                  syntheticOnly: opts.syntheticOnly === true,
-                  protectMain: opts.protectMain === true,
+        syntheticOnly: opts.syntheticOnly === true,
+                protectMain: true,
                   protectedMainCount: policyPreserve.protectedMainCount,
                   protectedDirectCount: policyPreserve.protectedDirectCount,
                   protectedMainAgentIds: policyPreserve.protectedMainAgentIds,
@@ -955,7 +952,7 @@ export async function runSessionsCleanup(params: {
               }),
               safety: {
                 syntheticOnly: opts.syntheticOnly === true,
-                protectMain: opts.protectMain === true,
+                protectMain: true,
                 protectedMainCount: policyPreserve.protectedMainCount,
                 protectedDirectCount: policyPreserve.protectedDirectCount,
                 protectedMainAgentIds: policyPreserve.protectedMainAgentIds,

@@ -791,7 +791,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     await expectPathExists(userOnlyPresentTranscript);
   });
 
-  it("sessions cleanup previews stale direct DM rows after dmScope returns to main", async () => {
+  it("sessions cleanup preserves stale direct DM rows after dmScope returns to main", async () => {
     applyEnforcedMaintenanceConfig(mockLoadConfig);
 
     const now = Date.now();
@@ -827,14 +827,14 @@ describe("Integration: saveSessionStore with pruning", () => {
     });
 
     const preview = dryRun.previewResults[0];
-    expect(preview?.summary.dmScopeRetired).toBe(1);
-    expect(preview?.summary.afterCount).toBe(1);
-    expect(preview?.dmScopeRetiredKeys.has("agent:main:telegram:direct:6101296751")).toBe(true);
+    expect(preview?.summary.dmScopeRetired).toBe(0);
+    expect(preview?.summary.afterCount).toBe(2);
+    expect(preview?.dmScopeRetiredKeys.has("agent:main:telegram:direct:6101296751")).toBe(false);
     expect(preview?.summary.unreferencedArtifacts.removedFiles).toBe(0);
     await expectPathExists(directTranscript);
   });
 
-  it("sessions cleanup retires stale direct DM rows and archives their transcripts", async () => {
+  it("sessions cleanup apply preserves stale direct DM rows and transcripts", async () => {
     applyEnforcedMaintenanceConfig(mockLoadConfig);
 
     const now = Date.now();
@@ -871,16 +871,16 @@ describe("Integration: saveSessionStore with pruning", () => {
       targets: [{ agentId: "main", storePath }],
     });
 
-    expect(applied.appliedSummaries[0]?.dmScopeRetired).toBe(1);
+    expect(applied.appliedSummaries[0]?.dmScopeRetired).toBe(0);
     const persisted = loadSessionStore(storePath, { skipCache: true });
     expect(persisted).toHaveProperty("agent:main:main");
-    expect(persisted["agent:main:telegram:direct:6101296751"]).toBeUndefined();
-    await expectPathMissing(directTranscript);
+    expect(persisted).toHaveProperty("agent:main:telegram:direct:6101296751");
+    await expectPathExists(directTranscript);
     const files = await fs.readdir(testDir);
     const archivedDirectTranscripts = files.filter((name) =>
       name.startsWith("direct-session.jsonl.deleted."),
     );
-    expect(archivedDirectTranscripts.length).toBeGreaterThan(0);
+    expect(archivedDirectTranscripts).toHaveLength(0);
   });
 
   it("sessions cleanup dry-run does not double-count artifacts already covered by disk budget", async () => {

@@ -8,6 +8,7 @@ import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES } from "../config/agent-limits.js";
 import { getRuntimeConfig } from "../config/config.js";
+import { resolveSessionCleanupMinCandidateAgeMs } from "../config/sessions/maintenance-age.js";
 import {
   loadSessionStore,
   resolveAgentIdFromSessionKey,
@@ -384,5 +385,5 @@ export function resolveArchiveAfterMs(cfg?: OpenClawConfig) {
   if (minutes === 0) {
     return undefined;
   }
-  return Math.max(1, Math.floor(minutes)) * 60_000;
+  return resolveSessionCleanupMinCandidateAgeMs(Math.max(1, Math.floor(minutes)) * 60_000);
 }

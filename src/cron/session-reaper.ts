@@ -1,5 +1,9 @@
 /** Prunes expired per-run cron sessions and archives unreferenced transcripts. */
 import { parseDurationMs } from "../cli/parse-duration.js";
+import {
+  resolveSessionCleanupCandidateAge,
+  resolveSessionCleanupMinCandidateAgeMs,
+} from "../config/sessions/maintenance-age.js";
 import { loadSessionStore } from "../config/sessions/store-load.js";
 import { archiveRemovedSessionTranscripts, updateSessionStore } from "../config/sessions/store.js";
 import type { CronConfig } from "../config/types.cron.js";
@@ -22,7 +26,7 @@ export function resolveRetentionMs(cronConfig?: CronConfig): number | null {
   const raw = cronConfig?.sessionRetention;
   if (typeof raw === "string" && raw.trim()) {
     try {
-      return parseDurationMs(raw.trim(), { defaultUnit: "h" });
+      return resolveSessionCleanupMinCandidateAgeMs(parseDurationMs(raw.trim(), { defaultUnit: "h" }));
     } catch {
       return DEFAULT_RETENTION_MS;
     }
@@ -79,8 +83,12 @@ export async function sweepCronRunSessions(params: {
         if (!entry) {
           continue;
         }
-        const updatedAt = entry.updatedAt ?? 0;
-        if (updatedAt < cutoff) {
+        const age = resolveSessionCleanupCandidateAge({
+          entry,
+          nowMs: now,
+          minCandidateAgeMs: retentionMs,
+        });
+        if (age.eligible && age.updatedAt < cutoff) {
           if (!prunedSessions.has(entry.sessionId) || entry.sessionFile) {
             prunedSessions.set(entry.sessionId, entry.sessionFile);
           }

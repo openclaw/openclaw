@@ -228,12 +228,12 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .option("--enforce", "Apply maintenance even when configured mode is warn", false)
     .option(
       "--fix-missing",
-      "Remove store entries whose transcript files are missing (bypasses age/count retention)",
+      "Remove age-eligible store entries whose transcript files are missing",
       false,
     )
     .option(
       "--fix-dm-scope",
-      "Retire stale direct-DM session rows that no longer match session.dmScope=main",
+      "Diagnose legacy direct-DM rows that no longer match session.dmScope=main",
       false,
     )
     .option(
@@ -243,7 +243,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     )
     .option(
       "--protect-main",
-      "Preserve main and direct customer sessions under age/count pressure",
+      "Report explicit main/direct protection proof during cleanup",
       false,
     )
     .option("--active-key <key>", "Protect this session key from budget-eviction")

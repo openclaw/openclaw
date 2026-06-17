@@ -1365,7 +1365,6 @@ async function archiveUnreferencedLifecycleTranscriptArtifacts(params: {
       return 0;
     }
 
-    const { archiveSessionTranscripts } = await loadSessionArchiveRuntime();
     let archived = 0;
     // Only archive primary transcripts that are no longer referenced by the
     // current store and still carry the lifecycle marker supplied by the caller.
@@ -1401,14 +1400,12 @@ async function archiveUnreferencedLifecycleTranscriptArtifacts(params: {
       if (!content.includes(params.transcriptContentMarker)) {
         continue;
       }
-      const sessionId = entry.name.slice(0, -".jsonl".length);
-      archived += archiveSessionTranscripts({
-        sessionId,
-        storePath: params.storePath,
-        sessionFile: transcriptPath,
-        reason: "deleted",
-        restrictToStoreDir: true,
-      }).length;
+      archived += archiveExactLifecycleTranscriptPath({
+        sessionsDir,
+        transcriptPath,
+        nowMs: params.nowMs,
+        minCandidateAgeMs: params.orphanTranscriptMinAgeMs,
+      });
     }
     return archived;
   });
