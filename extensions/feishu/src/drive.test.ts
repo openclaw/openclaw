@@ -1237,4 +1237,201 @@ describe("registerFeishuDriveTools", () => {
       "block_id is only supported for docx comments",
     );
   });
+
+  it("paginates list action returning requested page", async () => {
+    const registerTool = vi.fn();
+    registerFeishuDriveTools(
+      createDriveToolApi({
+        config: {
+          channels: {
+            feishu: {
+              enabled: true,
+              appId: "app_id",
+              appSecret: "app_secret", // pragma: allowlist secret
+              tools: { drive: true },
+            },
+          },
+        },
+        registerTool,
+      }),
+    );
+
+    const toolFactory = firstToolFactory(registerTool);
+    const tool = toolFactory({ agentAccountId: undefined });
+
+    // Mock the Lark SDK client with drive.file.list
+    const listMock = vi.fn();
+    createFeishuToolClientMock.mockReturnValue({
+      request: requestMock,
+      drive: {
+        file: {
+          list: listMock,
+        },
+      },
+    });
+
+    // Return a single page with has_more=true
+    listMock.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        has_more: true,
+        next_page_token: "page2",
+        files: [{ token: "f1", name: "file1.txt", type: "file", url: "https://example.com/f1" }],
+      },
+    });
+
+    const result = await tool.execute("call-list", {
+      action: "list",
+      folder_token: "folder_1",
+      page_token: "page2",
+    });
+
+    const details = result.details as {
+      files?: Array<{ token?: string; name?: string }>;
+      has_more?: boolean;
+      next_page_token?: string;
+    };
+    expect(details.files).toHaveLength(1);
+    expect(details.files?.[0]?.token).toBe("f1");
+    expect(details.has_more).toBe(true);
+    expect(details.next_page_token).toBe("page2");
+    // Verify page_token was passed to the SDK
+    expect(listMock).toHaveBeenCalledWith({
+      params: { folder_token: "folder_1", page_token: "page2" },
+    });
+  });
+
+  it("paginates getFileInfo through multiple pages to find file", async () => {
+    const registerTool = vi.fn();
+    registerFeishuDriveTools(
+      createDriveToolApi({
+        config: {
+          channels: {
+            feishu: {
+              enabled: true,
+              appId: "app_id",
+              appSecret: "app_secret", // pragma: allowlist secret
+              tools: { drive: true },
+            },
+          },
+        },
+        registerTool,
+      }),
+    );
+
+    const toolFactory = firstToolFactory(registerTool);
+    const tool = toolFactory({ agentAccountId: undefined });
+
+    // Mock the Lark SDK client with drive.file.list
+    const listMock = vi.fn();
+    createFeishuToolClientMock.mockReturnValue({
+      request: requestMock,
+      drive: {
+        file: {
+          list: listMock,
+        },
+      },
+    });
+
+    // Page 1: has_more=true, target file not on this page
+    listMock.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        has_more: true,
+        next_page_token: "page2",
+        files: [
+          { token: "other", name: "other.txt", type: "file", url: "https://example.com/other" },
+        ],
+      },
+    });
+    // Page 2: has_more=true, target still not here
+    listMock.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        has_more: true,
+        next_page_token: "page3",
+        files: [
+          {
+            token: "another",
+            name: "another.txt",
+            type: "file",
+            url: "https://example.com/another",
+          },
+        ],
+      },
+    });
+    // Page 3: target file found
+    listMock.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        has_more: false,
+        files: [
+          { token: "target", name: "target.txt", type: "file", url: "https://example.com/target" },
+        ],
+      },
+    });
+
+    const result = await tool.execute("call-info", {
+      action: "info",
+      file_token: "target",
+      type: "file",
+    });
+
+    const details = result.details as { token?: string; name?: string };
+    expect(details.token).toBe("target");
+    expect(details.name).toBe("target.txt");
+    expect(listMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("throws File not found after exhausting all pages", async () => {
+    const registerTool = vi.fn();
+    registerFeishuDriveTools(
+      createDriveToolApi({
+        config: {
+          channels: {
+            feishu: {
+              enabled: true,
+              appId: "app_id",
+              appSecret: "app_secret", // pragma: allowlist secret
+              tools: { drive: true },
+            },
+          },
+        },
+        registerTool,
+      }),
+    );
+
+    const toolFactory = firstToolFactory(registerTool);
+    const tool = toolFactory({ agentAccountId: undefined });
+
+    // Mock the Lark SDK client with drive.file.list
+    const listMock = vi.fn();
+    createFeishuToolClientMock.mockReturnValue({
+      request: requestMock,
+      drive: {
+        file: {
+          list: listMock,
+        },
+      },
+    });
+
+    // Single page, file not found
+    listMock.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        has_more: false,
+        files: [
+          { token: "other", name: "other.txt", type: "file", url: "https://example.com/other" },
+        ],
+      },
+    });
+
+    const result = await tool.execute("call-info-missing", {
+      action: "info",
+      file_token: "missing",
+      type: "file",
+    });
+
+    expect((result.details as { error?: string }).error).toContain("File not found: missing");
+  });
 });
