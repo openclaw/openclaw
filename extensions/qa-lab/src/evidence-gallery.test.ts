@@ -85,6 +85,7 @@ describe("evidence gallery", () => {
     });
 
     expect(model.counts).toMatchObject({ pass: 1, skipped: 1, fail: 0, blocked: 0 });
+    expect(model.evidencePath).toBe(".artifacts/qa-e2e/vitest/qa-evidence.json");
     expect(model.producerContext).toBeNull();
     expect(model.entries).toHaveLength(2);
     expect(model.entries[0]).toMatchObject({
@@ -94,6 +95,7 @@ describe("evidence gallery", () => {
         expect.objectContaining({
           exists: true,
           kind: "runner-result",
+          href: "/api/evidence/artifact?evidencePath=.artifacts%2Fqa-e2e%2Fvitest%2Fqa-evidence.json&artifactPath=runner%2Fresult.json",
           mediaKind: "json",
           preview: '{\n  "ok": true\n}',
         }),
@@ -354,6 +356,7 @@ describe("evidence gallery", () => {
     ]);
     expect(model.producerContext?.scorecard?.preview).toContain("# UX Matrix");
     expect(model.producerContext?.scorecard?.href).toContain("/api/evidence/artifact?");
+    expect(model.producerContext?.scorecard?.href).not.toContain(repoRoot);
     expect(model.producerContext?.commands?.preview).toBe("node ux matrix\n");
     expect(model.producerContext?.commands?.path).toContain("commands.txt");
     expect(model.producerContext?.manifest?.preview).toContain('"runId": "run-1"');
@@ -364,6 +367,7 @@ describe("evidence gallery", () => {
       "preflight/adb-devices.txt",
     );
     expect(model.producerContext?.preflight.adbDevices?.preview).toBe("List of devices\n");
+    expect(model.evidencePath).toBe(".artifacts/qa-e2e/suite/qa-evidence.json");
     const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "qa-evidence-outside-"));
     const outsideCommands = path.join(outsideDir, "commands.txt");
     await fs.writeFile(outsideCommands, "outside secret\n", "utf8");

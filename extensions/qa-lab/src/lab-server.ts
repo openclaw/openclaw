@@ -450,16 +450,18 @@ export async function startQaLabServer(
             evidencePath,
             repoRoot,
           });
-          const body = await fs.promises.readFile(artifactFile);
+          const artifactStats = await fs.promises.stat(artifactFile);
           res.writeHead(200, {
             "content-type": detectQaEvidenceArtifactContentType(artifactFile),
-            "content-length": body.byteLength,
+            "content-length": artifactStats.size,
           });
           if (req.method === "HEAD") {
             res.end();
             return;
           }
-          res.end(body);
+          fs.createReadStream(artifactFile)
+            .on("error", (error) => res.destroy(normalizeQaLabCleanupError(error)))
+            .pipe(res);
           return;
         }
         if (req.method === "GET" && url.pathname === "/api/capture/sessions") {

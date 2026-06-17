@@ -1073,19 +1073,7 @@ function statusTone(status: string): string {
 }
 
 function statusDotTone(status: string): string {
-  if (status === "failed") {
-    return "fail";
-  }
-  if (status === "completed") {
-    return "pass";
-  }
-  if (status === "skipped") {
-    return "skip";
-  }
-  if (status === "blocked") {
-    return "pending";
-  }
-  return status;
+  return statusTone(status);
 }
 
 function badgeHtml(status: string): string {

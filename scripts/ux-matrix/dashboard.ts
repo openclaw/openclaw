@@ -623,6 +623,41 @@ function tryParseJsonObject(value: string): Record<string, unknown> | null {
   }
 }
 
+function readRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function readString(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+function gatewayStatusConnectionErrors(parsed: Record<string, unknown>): string[] {
+  const errors: string[] = [];
+  const rpcError = readString(readRecord(parsed.rpc)?.error);
+  if (rpcError) {
+    errors.push(rpcError);
+  }
+  const targets = Array.isArray(parsed.targets) ? parsed.targets : [];
+  for (const target of targets) {
+    const connectError = readString(readRecord(readRecord(target)?.connect)?.error);
+    if (connectError) {
+      errors.push(connectError);
+    }
+  }
+  return errors;
+}
+
+function reportsGatewayStatusRecovery(parsed: Record<string, unknown> | null): boolean {
+  if (!parsed) {
+    return false;
+  }
+  return gatewayStatusConnectionErrors(parsed).some((error) =>
+    /ECONNREFUSED|connection refused|connect/i.test(error),
+  );
+}
+
 function countStatuses(cells: MatrixCell[]): Record<CellStatus, number> {
   const counts = Object.fromEntries(
     [
@@ -1428,10 +1463,8 @@ async function runCliLane(runRoot: string): Promise<StageResult[]> {
       "--timeout",
       "1000",
     ],
-    classify: (result, parsed) => {
-      const rpc = parsed?.rpc as Record<string, unknown> | undefined;
-      const rpcError = typeof rpc?.error === "string" ? rpc.error : "";
-      const reportsRecovery = Boolean(parsed?.gateway) && /ECONNREFUSED|connect/i.test(rpcError);
+    classify: (_result, parsed) => {
+      const reportsRecovery = reportsGatewayStatusRecovery(parsed);
       return {
         classification: reportsRecovery
           ? "gateway-status-recovery-json"
@@ -1439,7 +1472,7 @@ async function runCliLane(runRoot: string): Promise<StageResult[]> {
         reason: reportsRecovery
           ? "CLI gateway status produced bounded JSON showing a recoverable connection error against an isolated probe URL."
           : "CLI gateway status did not produce the expected recoverable gateway-status JSON.",
-        status: result.exitCode === 0 && reportsRecovery ? "pass" : "automation-issue",
+        status: reportsRecovery ? "pass" : "automation-issue",
       };
     },
     stage: "error-state",

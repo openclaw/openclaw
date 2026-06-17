@@ -355,8 +355,8 @@ function artifactHref(evidencePath: string, artifactPath: string) {
 async function buildProducerContextFile(params: {
   allowedRoots: readonly string[];
   artifactPath: string;
-  evidencePath: string;
   filePath: string;
+  hrefEvidencePath: string;
   previewKind: "json" | "text";
   repoRoot: string;
 }): Promise<QaEvidenceProducerContextFile | null> {
@@ -366,7 +366,7 @@ async function buildProducerContextFile(params: {
   }
   const repoPath = toRepoRelativePath(params.repoRoot, params.filePath);
   return {
-    href: artifactHref(params.evidencePath, params.artifactPath),
+    href: artifactHref(params.hrefEvidencePath, params.artifactPath),
     path: repoPath,
     preview:
       params.previewKind === "json"
@@ -378,6 +378,7 @@ async function buildProducerContextFile(params: {
 async function buildArtifactView(params: {
   artifact: QaEvidenceArtifact;
   evidencePath: string;
+  hrefEvidencePath: string;
   repoRoot: string;
 }): Promise<QaEvidenceArtifactView> {
   const mediaKind = classifyArtifact(params.artifact.kind, params.artifact.path);
@@ -390,7 +391,7 @@ async function buildArtifactView(params: {
     return {
       exists: true,
       error: null,
-      href: artifactHref(params.evidencePath, params.artifact.path),
+      href: artifactHref(params.hrefEvidencePath, params.artifact.path),
       kind: params.artifact.kind,
       mediaKind,
       path: params.artifact.path,
@@ -584,6 +585,7 @@ async function findUxMatrixProducerRoot(params: {
 
 async function buildProducerContext(params: {
   evidencePath: string;
+  hrefEvidencePath: string;
   repoRoot: string;
   summaryEntries: readonly QaEvidenceSummaryEntry[];
 }): Promise<QaEvidenceProducerContext | null> {
@@ -611,48 +613,48 @@ async function buildProducerContext(params: {
       buildProducerContextFile({
         allowedRoots,
         artifactPath: toRepoRelativePath(repoRoot, commandsPath),
-        evidencePath: params.evidencePath,
         filePath: commandsPath,
+        hrefEvidencePath: params.hrefEvidencePath,
         previewKind: "text",
         repoRoot,
       }),
       buildProducerContextFile({
         allowedRoots,
         artifactPath: toRepoRelativePath(repoRoot, manifestPath),
-        evidencePath: params.evidencePath,
         filePath: manifestPath,
+        hrefEvidencePath: params.hrefEvidencePath,
         previewKind: "json",
         repoRoot,
       }),
       buildProducerContextFile({
         allowedRoots,
         artifactPath: toRepoRelativePath(repoRoot, memoryPath),
-        evidencePath: params.evidencePath,
         filePath: memoryPath,
+        hrefEvidencePath: params.hrefEvidencePath,
         previewKind: "text",
         repoRoot,
       }),
       buildProducerContextFile({
         allowedRoots,
         artifactPath: toRepoRelativePath(repoRoot, adbDevicesPath),
-        evidencePath: params.evidencePath,
         filePath: adbDevicesPath,
+        hrefEvidencePath: params.hrefEvidencePath,
         previewKind: "text",
         repoRoot,
       }),
       buildProducerContextFile({
         allowedRoots,
         artifactPath: toRepoRelativePath(repoRoot, releaseLedgerPath),
-        evidencePath: params.evidencePath,
         filePath: releaseLedgerPath,
+        hrefEvidencePath: params.hrefEvidencePath,
         previewKind: "json",
         repoRoot,
       }),
       buildProducerContextFile({
         allowedRoots,
         artifactPath: toRepoRelativePath(repoRoot, scorecardPath),
-        evidencePath: params.evidencePath,
         filePath: scorecardPath,
+        hrefEvidencePath: params.hrefEvidencePath,
         previewKind: "text",
         repoRoot,
       }),
@@ -711,10 +713,12 @@ export async function buildQaEvidenceGalleryModel(params: {
   evidencePath: string;
   repoRoot: string;
 }): Promise<QaEvidenceGalleryModel> {
+  const repoRoot = await fs.realpath(path.resolve(params.repoRoot));
   const evidencePath = await resolveQaEvidenceFile({
     inputPath: params.evidencePath,
-    repoRoot: params.repoRoot,
+    repoRoot,
   });
+  const hrefEvidencePath = toRepoRelativePath(repoRoot, evidencePath);
   const summary = validateQaEvidenceSummaryJson(
     JSON.parse(await fs.readFile(evidencePath, "utf8")) as unknown,
   );
@@ -730,7 +734,7 @@ export async function buildQaEvidenceGalleryModel(params: {
       return {
         artifacts: await Promise.all(
           (entry.execution?.artifacts ?? []).map((artifact) =>
-            buildArtifactView({ artifact, evidencePath, repoRoot: params.repoRoot }),
+            buildArtifactView({ artifact, evidencePath, hrefEvidencePath, repoRoot }),
           ),
         ),
         coverage: entry.coverage,
@@ -747,12 +751,13 @@ export async function buildQaEvidenceGalleryModel(params: {
     counts,
     entries,
     evidenceMode: summary.evidenceMode,
-    evidencePath,
+    evidencePath: hrefEvidencePath,
     generatedAt: summary.generatedAt,
     profile: summary.profile ?? null,
     producerContext: await buildProducerContext({
       evidencePath,
-      repoRoot: params.repoRoot,
+      hrefEvidencePath,
+      repoRoot,
       summaryEntries: summary.entries,
     }),
     schemaVersion: summary.schemaVersion,
