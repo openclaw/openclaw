@@ -261,6 +261,18 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
       chown -R node:node "$PLAYWRIGHT_BROWSERS_PATH"; \
     fi
 
+# Optionally install Claude Code CLI for anthropic/* provider Claude CLI reuse.
+# Build with: docker build --build-arg OPENCLAW_INSTALL_CLAUDE_CLI=1 ...
+# Installs @anthropic-ai/claude-code globally via npm (~ several MB).
+# Required when using anthropic/* provider with Claude Max/Pro subscription
+# in Docker deployments. The `~/.claude` OAuth credential directory must also
+# be persisted across container upgrades via a named volume or bind mount.
+ARG OPENCLAW_INSTALL_CLAUDE_CLI=""
+RUN --mount=type=cache,id=openclaw-npm-cache,target=/root/.npm,sharing=locked \
+    if [ -n "$OPENCLAW_INSTALL_CLAUDE_CLI" ]; then \
+      npm install -g @anthropic-ai/claude-code; \
+    fi
+
 # Optionally install Docker CLI for sandbox container management.
 # Build with: docker build --build-arg OPENCLAW_INSTALL_DOCKER_CLI=1 ...
 # Adds ~50MB. Only the CLI is installed — no Docker daemon.
@@ -313,11 +325,13 @@ RUN install -d -m 0755 -o node -g node /home/node/.config && \
     install -d -m 0700 -o node -g node \
       /home/node/.openclaw \
       /home/node/.openclaw/workspace \
-      /home/node/.config/openclaw && \
+      /home/node/.config/openclaw \
+      /home/node/.claude && \
     stat -c '%U:%G %a' /home/node/.openclaw | grep -qx 'node:node 700' && \
     stat -c '%U:%G %a' /home/node/.openclaw/workspace | grep -qx 'node:node 700' && \
     stat -c '%U:%G %a' /home/node/.config | grep -qx 'node:node 755' && \
-    stat -c '%U:%G %a' /home/node/.config/openclaw | grep -qx 'node:node 700'
+    stat -c '%U:%G %a' /home/node/.config/openclaw | grep -qx 'node:node 700' && \
+    stat -c '%U:%G %a' /home/node/.claude | grep -qx 'node:node 700'
 
 ENV NODE_ENV=production
 
