@@ -98,7 +98,10 @@ function resolveGatewayDispatchEnvVars(config: unknown, env: NodeJS.ProcessEnv):
   if (isPlainRecord(config) && Object.hasOwn(config, "env")) {
     applyConfigEnvVars(config as OpenClawConfig, env);
   }
-  return resolveConfigEnvVars(config, env, { onMissing: () => undefined });
+  return resolveConfigEnvVars(config, env, {
+    onMissing: () => undefined,
+    ignorePaths: ["mcp.servers.*.env", "mcp.servers.*.headers"],
+  });
 }
 
 function readRawGatewayDispatchConfig(options: GatewayDispatchConfigReadOptions = {}): {
