@@ -25,9 +25,20 @@ export {
   scheduleGatewaySigusr1Restart,
 } from "../../infra/restart.js";
 export { writeGatewayRestartHandoffSync } from "../../infra/restart-handoff.js";
+export { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 export { markUpdateRestartSentinelFailure } from "../../infra/restart-sentinel.js";
 export { detectRespawnSupervisor } from "../../infra/supervisor-markers.js";
 export { writeDiagnosticStabilityBundleForFailureSync } from "../../logging/diagnostic-stability-bundle.js";
+export {
+  advanceCronActiveJobGeneration,
+  resetCronActiveJobs,
+  waitForActiveCronJobs,
+} from "../../cron/active-jobs.js";
+export {
+  abortActiveCronTaskRuns,
+  retireActiveCronTaskRunTracking,
+  waitForActiveCronTaskRuns,
+} from "../../tasks/cron-task-cancel.js";
 export {
   getActiveTaskCount,
   markGatewayDraining,

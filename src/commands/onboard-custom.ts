@@ -35,15 +35,6 @@ export {
   parseNonInteractiveCustomApiFlags,
   resolveCustomModelImageInputInference,
   resolveCustomProviderId,
-  type ApplyCustomApiConfigParams,
-  type CustomApiCompatibility,
-  type CustomApiErrorCode,
-  type CustomModelImageInputInference,
-  type CustomApiResult,
-  type ParseNonInteractiveCustomApiFlagsParams,
-  type ParsedNonInteractiveCustomApiFlags,
-  type ResolveCustomProviderIdParams,
-  type ResolvedCustomProviderId,
 } from "./onboard-custom-config.js";
 import type { SecretInputMode } from "./onboard-types.js";
 

@@ -78,7 +78,13 @@ export type { OutboundSendDeps } from "../infra/outbound/send-deps.js";
 export { sanitizeForPlainText } from "../infra/outbound/sanitize-text.js";
 export { logAckFailure, logTypingFailure } from "../channels/logging.js";
 export * from "../channels/streaming.js";
-export * from "../channels/progress-draft-compositor.js";
+export {
+  createChannelProgressDraftCompositor,
+  type ChannelProgressDraftCompositor,
+  type ChannelProgressDraftCompositorLine,
+  type ChannelProgressDraftMode,
+  type ChannelProgressDraftUpdateOptions,
+} from "../channels/progress-draft-compositor.js";
 export {
   classifyDurableSendRecoveryState,
   createChannelMessageAdapterFromOutbound,

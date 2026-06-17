@@ -10,6 +10,7 @@ import {
   CODEX_PLUGINS_CONFIG_KEYS,
   canUseCodexModelBackedApprovalsReviewerForModel,
   codexAppServerStartOptionsKey,
+  fingerprintCodexAppServerNetworkProxyConfigPatch,
   readCodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
   resolveCodexComputerUseConfig,
@@ -83,6 +84,21 @@ describe("Codex app-server config", () => {
         sandbox: "danger-full-access",
       }),
     ).toBe(false);
+    expect(
+      shouldAutoApproveCodexAppServerApprovals({
+        approvalPolicy: "never",
+        sandbox: "danger-full-access",
+        networkProxy: {
+          profileName: "openclaw-network",
+          configFingerprint: "network-proxy-v1",
+          configPatch: {
+            "features.network_proxy.enabled": true,
+            default_permissions: "openclaw-network",
+            permissions: {},
+          },
+        },
+      }),
+    ).toBe(false);
   });
 
   it("parses typed plugin config before falling back to environment knobs", () => {
@@ -123,6 +139,102 @@ describe("Codex app-server config", () => {
       url: "ws://127.0.0.1:39175",
       headers: { "X-Test": "yes" },
     });
+  });
+
+  it("builds Codex permissions-profile config for app-server network proxy", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {
+        appServer: {
+          sandbox: "workspace-write",
+          networkProxy: {
+            enabled: true,
+            profileName: "mock-proxy",
+            mode: "limited",
+            domains: {
+              " api.openai.com ": "allow",
+              "blocked.example.com": "deny",
+            },
+            unixSockets: {
+              " /tmp/mock-proxy.sock ": "allow",
+              "/tmp/blocked.sock": "none",
+            },
+            proxyUrl: "http://127.0.0.1:3128",
+            socksUrl: "socks5h://127.0.0.1:8081",
+            enableSocks5: true,
+            enableSocks5Udp: false,
+            allowUpstreamProxy: true,
+            allowLocalBinding: false,
+          },
+        },
+      },
+    });
+
+    const networkProxy = runtime.networkProxy;
+    if (!networkProxy) {
+      throw new Error("Expected network proxy runtime config");
+    }
+    expect(networkProxy).toEqual({
+      profileName: "mock-proxy",
+      configFingerprint: expect.any(String),
+      configPatch: {
+        "features.network_proxy.enabled": true,
+        default_permissions: "mock-proxy",
+        permissions: {
+          "mock-proxy": {
+            filesystem: {
+              ":minimal": "read",
+              ":project_roots": {
+                ".": "write",
+              },
+            },
+            network: {
+              enabled: true,
+              mode: "limited",
+              domains: {
+                "api.openai.com": "allow",
+                "blocked.example.com": "deny",
+              },
+              unix_sockets: {
+                "/tmp/mock-proxy.sock": "allow",
+                "/tmp/blocked.sock": "none",
+              },
+              proxy_url: "http://127.0.0.1:3128",
+              socks_url: "socks5h://127.0.0.1:8081",
+              enable_socks5: true,
+              enable_socks5_udp: false,
+              allow_upstream_proxy: true,
+              allow_local_binding: false,
+            },
+          },
+        },
+      },
+    });
+    expect(networkProxy.configFingerprint).toBe(
+      fingerprintCodexAppServerNetworkProxyConfigPatch(networkProxy.configPatch),
+    );
+  });
+
+  it("uses read-only filesystem rules for read-only network proxy profiles", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {
+        appServer: {
+          sandbox: "read-only",
+          networkProxy: {
+            enabled: true,
+            domains: { "example.com": "allow" },
+          },
+        },
+      },
+    });
+    const profileName = runtime.networkProxy?.profileName;
+    const permissions = runtime.networkProxy?.configPatch.permissions as Record<
+      string,
+      { filesystem: { ":project_roots": { ".": string } } }
+    >;
+
+    expect(profileName).toMatch(/^openclaw-network-[a-f0-9]{16}$/u);
+    expect(runtime.networkProxy?.configPatch.default_permissions).toBe(profileName);
+    expect(permissions[profileName ?? ""]?.filesystem[":project_roots"]["."]).toBe("read");
   });
 
   it("clamps oversized app-server timer config", () => {
@@ -859,6 +971,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
       configured: true,
       enabled: true,
       allowDestructiveActions: false,
+      destructiveApprovalMode: "deny",
       pluginPolicies: [
         {
           configKey: "google-calendar",
@@ -866,6 +979,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
           pluginName: "google-calendar",
           enabled: true,
           allowDestructiveActions: true,
+          destructiveApprovalMode: "allow",
         },
         {
           configKey: "slack",
@@ -873,9 +987,86 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
           pluginName: "slack",
           enabled: false,
           allowDestructiveActions: false,
+          destructiveApprovalMode: "deny",
         },
       ],
     });
+  });
+
+  it("parses auto native Codex plugin destructive policy", () => {
+    const config = readCodexPluginConfig({
+      codexPlugins: {
+        enabled: true,
+        allow_destructive_actions: "auto",
+        plugins: {
+          "google-calendar": {
+            marketplaceName: "openai-curated",
+            pluginName: "google-calendar",
+          },
+          slack: {
+            marketplaceName: "openai-curated",
+            pluginName: "slack",
+            allow_destructive_actions: false,
+          },
+          gmail: {
+            marketplaceName: "openai-curated",
+            pluginName: "gmail",
+            allow_destructive_actions: true,
+          },
+        },
+      },
+    });
+
+    expect(config.codexPlugins?.allow_destructive_actions).toBe("auto");
+    expect(resolveCodexPluginsPolicy(config)).toEqual({
+      configured: true,
+      enabled: true,
+      allowDestructiveActions: true,
+      destructiveApprovalMode: "auto",
+      pluginPolicies: [
+        {
+          configKey: "gmail",
+          marketplaceName: "openai-curated",
+          pluginName: "gmail",
+          enabled: true,
+          allowDestructiveActions: true,
+          destructiveApprovalMode: "allow",
+        },
+        {
+          configKey: "google-calendar",
+          marketplaceName: "openai-curated",
+          pluginName: "google-calendar",
+          enabled: true,
+          allowDestructiveActions: true,
+          destructiveApprovalMode: "auto",
+        },
+        {
+          configKey: "slack",
+          marketplaceName: "openai-curated",
+          pluginName: "slack",
+          enabled: true,
+          allowDestructiveActions: false,
+          destructiveApprovalMode: "deny",
+        },
+      ],
+    });
+  });
+
+  it("rejects unsupported native Codex plugin destructive policy strings", () => {
+    const config = readCodexPluginConfig({
+      codexPlugins: {
+        enabled: true,
+        allow_destructive_actions: "ask",
+        plugins: {
+          slack: {
+            marketplaceName: "openai-curated",
+            pluginName: "slack",
+          },
+        },
+      },
+    });
+
+    expect(config.codexPlugins).toBeUndefined();
   });
 
   it("defaults native Codex plugin destructive policy to enabled", () => {
@@ -895,6 +1086,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
       configured: true,
       enabled: true,
       allowDestructiveActions: true,
+      destructiveApprovalMode: "allow",
       pluginPolicies: [
         {
           configKey: "slack",
@@ -902,6 +1094,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
           pluginName: "slack",
           enabled: true,
           allowDestructiveActions: true,
+          destructiveApprovalMode: "allow",
         },
       ],
     });

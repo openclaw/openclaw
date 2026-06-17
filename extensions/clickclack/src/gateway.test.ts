@@ -190,4 +190,24 @@ describe("ClickClack gateway", () => {
     abort.abort();
     await run;
   });
+
+  it("clears running status when backlog polling fails", async () => {
+    mocks.client.events.mockRejectedValue(new Error("clickclack unavailable"));
+    const abort = new AbortController();
+    const ctx = createGatewayContext(abort.signal);
+
+    await expect(startClickClackGatewayAccount(ctx)).rejects.toThrow("clickclack unavailable");
+
+    expect(ctx.setStatus).toHaveBeenCalledWith({
+      accountId: "default",
+      running: true,
+      configured: true,
+      enabled: true,
+      baseUrl: "https://clickclack.example",
+    });
+    expect(ctx.setStatus).toHaveBeenLastCalledWith({
+      accountId: "default",
+      running: false,
+    });
+  });
 });

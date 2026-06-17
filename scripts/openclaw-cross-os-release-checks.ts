@@ -3,6 +3,7 @@
 // Executed directly via Node.js + tsx in the release workflow.
 
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import {
   appendFileSync,
   chmodSync,
@@ -25,7 +26,7 @@ import { createServer } from "node:http";
 import { createConnection as createNetConnection, createServer as createNetServer } from "node:net";
 import type { Socket } from "node:net";
 import { tmpdir } from "node:os";
-import { dirname, join, relative, resolve, win32 as pathWin32 } from "node:path";
+import { basename, dirname, join, relative, resolve, win32 as pathWin32 } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isLocalBuildMetadataDistPath } from "./lib/local-build-metadata-paths.mjs";
 import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
@@ -179,6 +180,19 @@ export const CROSS_OS_COMMAND_HEARTBEAT_SECONDS = parsePositiveIntegerEnv(
   "OPENCLAW_CROSS_OS_COMMAND_HEARTBEAT_SECONDS",
   60,
 );
+
+export function resolveNpmPackTarballFileName(value, label = "npm pack") {
+  const filename = typeof value === "string" ? value.trim() : "";
+  if (
+    !filename.endsWith(".tgz") ||
+    filename.includes("\0") ||
+    filename !== basename(filename) ||
+    filename !== pathWin32.basename(filename)
+  ) {
+    throw new Error(`${label} did not report a safe .tgz filename.`);
+  }
+  return filename;
+}
 
 if (isMainModule()) {
   try {
@@ -668,16 +682,14 @@ async function prepareCandidate(params) {
   writeFileSync(packJsonPath, packResult.stdout, "utf8");
   const parsedPack = JSON.parse(packResult.stdout);
   const lastPack = Array.isArray(parsedPack) ? parsedPack.at(-1) : null;
-  if (!lastPack?.filename) {
-    throw new Error("npm pack did not report a filename.");
-  }
+  const packFilename = resolveNpmPackTarballFileName(lastPack?.filename);
 
   return {
     sourceDir: params.sourceDir,
     sourceSha,
     candidateVersion: String(lastPack.version ?? packageJson.version ?? "").trim(),
-    candidateTgz: join(packDir, lastPack.filename),
-    candidateFileName: String(lastPack.filename).trim(),
+    candidateTgz: join(packDir, packFilename),
+    candidateFileName: packFilename,
   };
 }
 
@@ -2343,7 +2355,7 @@ async function runInstalledModelsSet(params) {
 async function runInstalledAgentTurn(params) {
   let lastError;
   for (let attempt = 1; attempt <= 2; attempt += 1) {
-    const sessionId = `cross-os-release-check-${params.label}-${Date.now()}-${attempt}`;
+    const sessionId = buildCrossOsReleaseAgentSessionId(params.label, attempt);
     try {
       const logOffset = readLogFileSize(params.logPath);
       const result = await runInstalledCli({
@@ -2745,8 +2757,7 @@ async function maybeRunDiscordRoundtrip(params) {
     return "skipped-missing-config";
   }
 
-  const outboundNonce = `native-cross-os-outbound-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
-  const inboundNonce = `native-cross-os-inbound-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+  const { outboundNonce, inboundNonce } = buildCrossOsDiscordRoundtripNonces();
   let sentMessageId = null;
   let hostMessageId = null;
   try {
@@ -3271,7 +3282,7 @@ async function runModelsSet(params) {
 async function runAgentTurn(params) {
   let lastError;
   for (let attempt = 1; attempt <= 2; attempt += 1) {
-    const sessionId = `cross-os-release-check-${params.label}-${Date.now()}-${attempt}`;
+    const sessionId = buildCrossOsReleaseAgentSessionId(params.label, attempt);
     try {
       const logOffset = readLogFileSize(params.logPath);
       const result = await runOpenClaw({
@@ -3352,6 +3363,17 @@ export function shouldSkipOptionalCrossOsAgentTurnError(error, logPath) {
   }
   const log = readLogTextTail(logPath);
   return /"status"\s*:\s*"timeout"|Request timed out before a response was generated/u.test(log);
+}
+
+export function buildCrossOsReleaseAgentSessionId(label, attempt) {
+  return `cross-os-release-check-${label}-${randomUUID()}-${attempt}`;
+}
+
+export function buildCrossOsDiscordRoundtripNonces() {
+  return {
+    outboundNonce: `native-cross-os-outbound-${randomUUID()}`,
+    inboundNonce: `native-cross-os-inbound-${randomUUID()}`,
+  };
 }
 
 function buildReleaseAgentTurnArgs(sessionId) {

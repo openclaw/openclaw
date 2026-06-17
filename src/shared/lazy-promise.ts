@@ -7,7 +7,7 @@ export type LazyPromiseLoader<T> = {
 };
 
 /** Options for controlling lazy promise cache behavior. */
-export type LazyPromiseLoaderOptions = {
+type LazyPromiseLoaderOptions = {
   /** Keep rejected promises cached instead of allowing the next caller to retry. */
   cacheRejections?: boolean;
 };

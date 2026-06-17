@@ -7,7 +7,10 @@ import {
   assertOpenAiRequestLogUsed,
 } from "../agent-turn-output.mjs";
 import { assertOpenAiEnvAuthProfileStore } from "../auth-profile-store-assertions.mjs";
-import { applyMockOpenAiModelConfig } from "../fixtures/mock-openai-config.mjs";
+import {
+  applyMockOpenAiModelConfig,
+  parseMockOpenAiPort,
+} from "../fixtures/mock-openai-config.mjs";
 import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
 import { readTextFileTail } from "../text-file-utils.mjs";
 
@@ -145,7 +148,7 @@ function readStateText() {
 }
 
 function configureMockOpenAi() {
-  const mockPort = Number(process.argv[3]);
+  const mockPort = parseMockOpenAiPort(process.argv[3]);
   const cfg = readJson(configPath());
   applyMockOpenAiModelConfig(cfg, { mockPort, includeImageDefaults: true });
   writeConfig(cfg);

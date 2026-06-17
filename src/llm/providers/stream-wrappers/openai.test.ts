@@ -147,6 +147,12 @@ describe("createCodexNativeWebSearchWrapper", () => {
           const payloadObj = payload as { tools?: unknown } | undefined;
           if (payloadObj && Array.isArray(payloadObj.tools)) {
             payloadObj.tools.push({ type: "function", name: "web_search" });
+            payloadObj.tools.push({
+              type: "function",
+              get function(): { name: string } {
+                throw new Error("code mode payload function getter exploded");
+              },
+            });
           }
         },
       },
@@ -156,6 +162,56 @@ describe("createCodexNativeWebSearchWrapper", () => {
       { type: "function", name: "exec" },
       { type: "function", name: "wait" },
     ]);
+  });
+
+  it("filters async replacement payloads when code mode owns the tool surface", async () => {
+    let observedOptions: Parameters<StreamFn>[2];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      observedOptions = options;
+      return createAssistantMessageEventStream();
+    };
+    const wrapped = createCodexNativeWebSearchWrapper(baseStreamFn, {
+      codeModeToolSurfaceEnabled: true,
+    });
+    const model = {
+      api: "openai-responses",
+      provider: "openai",
+      id: "gpt-5.5",
+    } as Model<"openai-responses">;
+
+    void wrapped(
+      model,
+      {
+        messages: [],
+        tools: [
+          { name: "exec", description: "", parameters: {} },
+          { name: "wait", description: "", parameters: {} },
+        ],
+      },
+      {
+        onPayload: async () => ({
+          tools: [
+            { type: "function", name: "exec" },
+            {
+              type: "function",
+              get function(): { name: string } {
+                throw new Error("async code mode payload function getter exploded");
+              },
+            },
+            { type: "function", name: "wait" },
+            { type: "web_search" },
+          ],
+        }),
+      },
+    );
+
+    const nextPayload = await observedOptions?.onPayload?.({ tools: [] }, model);
+    expect(nextPayload).toEqual({
+      tools: [
+        { type: "function", name: "exec" },
+        { type: "function", name: "wait" },
+      ],
+    });
   });
 
   it("does not enable code-mode transport enforcement when config is on but controls are inactive", () => {

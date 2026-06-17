@@ -142,7 +142,7 @@ export async function sendGoogleChatMessage(params: {
   thread?: string;
   cardsV2?: GoogleChatCardV2[];
   attachments?: Array<{ attachmentUploadToken: string; contentName?: string }>;
-}): Promise<{ messageName?: string } | null> {
+}): Promise<{ messageName?: string; threadName?: string } | null> {
   const { account, space, text, thread, cardsV2, attachments } = params;
   if (
     text &&
@@ -175,11 +175,11 @@ export async function sendGoogleChatMessage(params: {
     urlObj.searchParams.set("messageReplyOption", "REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD");
   }
   const url = urlObj.toString();
-  const result = await fetchJson<{ name?: string }>(account, url, {
+  const result = await fetchJson<{ name?: string; thread?: { name?: string } }>(account, url, {
     method: "POST",
     body: JSON.stringify(body),
   });
-  return result ? { messageName: result.name } : null;
+  return result ? { messageName: result.name, threadName: result.thread?.name } : null;
 }
 
 export async function updateGoogleChatMessage(params: {

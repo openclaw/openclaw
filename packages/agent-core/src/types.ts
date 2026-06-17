@@ -56,6 +56,15 @@ export interface BeforeToolCallResult {
   reason?: string;
 }
 
+export interface DeferredToolCallContext {
+  /** The assistant message that requested the deferred tool call. */
+  assistantMessage: AssistantMessage;
+  /** The raw tool call block whose authorized tool definition is deferred. */
+  toolCall: AgentToolCall;
+  /** Current agent context before the deferred tool is hydrated. */
+  context: AgentContext;
+}
+
 /**
  * Partial override returned from `afterToolCall`.
  *
@@ -264,6 +273,17 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
     context: BeforeToolCallContext,
     signal?: AbortSignal,
   ) => Promise<BeforeToolCallResult | undefined>;
+
+  /**
+   * Hydrates an already-authorized tool that was deferred out of the current
+   * provider-visible tool set. Return undefined for every other unknown name so
+   * the loop keeps the normal "Tool <name> not found" result. Thrown or rejected
+   * failures become error tool results for the requested call.
+   */
+  resolveDeferredTool?: (
+    context: DeferredToolCallContext,
+    signal?: AbortSignal,
+  ) => Promise<AgentTool | undefined> | AgentTool | undefined;
 
   /**
    * Called after a tool finishes executing, before `tool_execution_end` and tool-result message events are emitted.
@@ -508,4 +528,6 @@ export type AgentEvent =
       toolName: string;
       result: unknown;
       isError: boolean;
+      /** False when resolution, argument preparation, validation, or policy blocked execution. */
+      executionStarted?: boolean;
     };

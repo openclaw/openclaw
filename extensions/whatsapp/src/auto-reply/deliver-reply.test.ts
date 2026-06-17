@@ -9,9 +9,10 @@ import { sleep } from "openclaw/plugin-sdk/text-utility-runtime";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { createAcceptedWhatsAppSendResult } from "../inbound/send-result.test-helper.js";
 import { createTestWebInboundMessage } from "../inbound/test-message.test-helper.js";
-import type { WebInboundMessage } from "../inbound/types.js";
+import type { AdmittedWebInboundMessage } from "../inbound/types.js";
 import { loadWebMedia } from "../media.js";
 import { cacheInboundMessageMeta } from "../quoted-message.js";
+import { WhatsAppSocketOperationTimeoutError } from "../socket-timing.js";
 
 const hoisted = vi.hoisted(() => ({
   runFfmpeg: vi.fn(),
@@ -68,7 +69,7 @@ function unacceptedSendResult(kind: "media" | "text") {
   };
 }
 
-function makeMsg(): WebInboundMessage {
+function makeMsg(): AdmittedWebInboundMessage {
   return createTestWebInboundMessage({
     event: { id: "msg-1" },
     payload: { body: "latest batch body" },
@@ -79,10 +80,19 @@ function makeMsg(): WebInboundMessage {
       reply: vi.fn(async () => createAcceptedWhatsAppSendResult("text", "reply-sent-1")),
       sendMedia: vi.fn(async () => createAcceptedWhatsAppSendResult("media", "media-sent-1")),
     },
-    from: "+10000000000",
-    accountId: "work",
-    chatType: "group",
-    conversationId: "+10000000000",
+    admission: {
+      accountId: "work",
+      conversation: {
+        kind: "group",
+        id: "+10000000000",
+      },
+      sender: {
+        id: "222@s.whatsapp.net",
+      },
+      senderAccess: {
+        reasonCode: "group_policy_allowed",
+      },
+    },
   });
 }
 
@@ -96,19 +106,19 @@ function mockLoadedImageMedia() {
   });
 }
 
-function mockFirstSendMediaFailure(msg: WebInboundMessage, message: string) {
+function mockFirstSendMediaFailure(msg: AdmittedWebInboundMessage, message: string) {
   (
     msg.platform.sendMedia as unknown as { mockRejectedValueOnce: (v: unknown) => void }
   ).mockRejectedValueOnce(new Error(message));
 }
 
-function mockFirstReplyFailure(msg: WebInboundMessage, message: string) {
+function mockFirstReplyFailure(msg: AdmittedWebInboundMessage, message: string) {
   (
     msg.platform.reply as unknown as { mockRejectedValueOnce: (v: unknown) => void }
   ).mockRejectedValueOnce(new Error(message));
 }
 
-function mockFirstReplyFailureWithWrappedError(msg: WebInboundMessage, message: string) {
+function mockFirstReplyFailureWithWrappedError(msg: AdmittedWebInboundMessage, message: string) {
   (
     msg.platform.reply as unknown as { mockRejectedValueOnce: (v: unknown) => void }
   ).mockRejectedValueOnce({
@@ -116,7 +126,7 @@ function mockFirstReplyFailureWithWrappedError(msg: WebInboundMessage, message: 
   });
 }
 
-function expectFirstSendMediaPayload(msg: WebInboundMessage) {
+function expectFirstSendMediaPayload(msg: AdmittedWebInboundMessage) {
   const payload = mockCallArg(msg.platform.sendMedia, 0, 0, "sendMedia");
   if (!payload) {
     throw new Error("expected first WhatsApp sendMedia payload");
@@ -143,7 +153,7 @@ function mockCallArg(mock: unknown, callIndex: number, argIndex: number, label: 
   return call[argIndex];
 }
 
-function replyText(msg: WebInboundMessage, callIndex = 0): string {
+function replyText(msg: AdmittedWebInboundMessage, callIndex = 0): string {
   return String(mockCallArg(msg.platform.reply, callIndex, 0, "reply"));
 }
 
@@ -175,7 +185,7 @@ function expectQuotedOptions(
   expect(quoted.message).toEqual({ conversation: expected.body });
 }
 
-function mockSecondReplySuccess(msg: WebInboundMessage) {
+function mockSecondReplySuccess(msg: AdmittedWebInboundMessage) {
   (
     msg.platform.reply as unknown as { mockResolvedValueOnce: (v: unknown) => void }
   ).mockResolvedValueOnce(createAcceptedWhatsAppSendResult("text", "reply-retry-2"));
@@ -428,6 +438,29 @@ describe("deliverWebReply", () => {
     expect(sleep).toHaveBeenCalledWith(500);
   });
 
+  it("does not retry terminal socket operation timeouts", async () => {
+    const msg = makeMsg();
+    const timeout = new WhatsAppSocketOperationTimeoutError("sendMessage", 60_000);
+    (sleep as unknown as { mockClear: () => void }).mockClear();
+    (
+      msg.platform.reply as unknown as { mockRejectedValueOnce: (v: unknown) => void }
+    ).mockRejectedValueOnce(timeout);
+
+    await expect(
+      deliverWebReply({
+        replyResult: { text: "hi" },
+        msg,
+        maxMediaBytes: 1024 * 1024,
+        textLimit: 200,
+        replyLogger,
+        skipLog: true,
+      }),
+    ).rejects.toBe(timeout);
+
+    expect(msg.platform.reply).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
   it("sends image media with caption and then remaining text", async () => {
     const msg = makeMsg();
     const mediaLocalRoots = ["/tmp/workspace-work"];
@@ -647,6 +680,51 @@ describe("deliverWebReply", () => {
     expect(msg.platform.reply).toHaveBeenCalledTimes(1);
     expect(replyText(msg)).toContain("⚠️ Media failed");
     expect(replyText(msg)).not.toContain("boom");
+  });
+
+  it("notifies user when a non-first media send fails instead of dropping silently", async () => {
+    vi.clearAllMocks();
+    const msg = makeMsg();
+    // Two media items: first load succeeds and sends, second load succeeds but send fails.
+    (
+      loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
+    ).mockResolvedValueOnce({
+      buffer: Buffer.from("img1"),
+      contentType: "image/jpeg",
+      kind: "image",
+    });
+    (
+      loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
+    ).mockResolvedValueOnce({
+      buffer: Buffer.from("img2"),
+      contentType: "image/jpeg",
+      kind: "image",
+    });
+    // First sendMedia resolves; second sendMedia rejects.
+    (
+      msg.platform.sendMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
+    ).mockResolvedValueOnce(createAcceptedWhatsAppSendResult("media", "media-first-ok"));
+    (
+      msg.platform.sendMedia as unknown as { mockRejectedValueOnce: (v: unknown) => void }
+    ).mockRejectedValueOnce(new Error("upload failed"));
+
+    await deliverWebReply({
+      replyResult: {
+        text: "caption",
+        mediaUrls: ["http://example.com/img1.jpg", "http://example.com/img2.jpg"],
+      },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 200,
+      replyLogger,
+      skipLog: true,
+    });
+
+    // First media succeeded — no text reply for it.
+    // Second media failed — user must be notified, not silently dropped.
+    expect(msg.platform.reply).toHaveBeenCalledTimes(1);
+    expect(replyText(msg)).toContain("⚠️ Media unavailable");
+    expect(replyText(msg)).not.toContain("upload failed");
   });
 
   it("sanitizes XML tool-call blocks for outbound sendPayload delivery", async () => {

@@ -91,10 +91,11 @@ describe("run-additional-boundary-checks", () => {
     );
     expect(new Set(shardedLabels).size).toBe(BOUNDARY_CHECKS.length);
     expect(() => parseShardSpec("5/4")).toThrow("Invalid shard spec");
+    expect(() => parseShardSpec("9007199254740993/9007199254740994")).toThrow("Invalid shard spec");
   });
 
   it("keeps the raw HTTP/2 import guard in source boundary checks", () => {
-    expect(BOUNDARY_CHECKS[6]).toEqual({
+    expect(BOUNDARY_CHECKS).toContainEqual({
       label: "lint:tmp:no-raw-http2-imports",
       command: "pnpm",
       args: ["run", "lint:tmp:no-raw-http2-imports"],

@@ -127,6 +127,7 @@ dump_debug_logs() {
     /tmp/openclaw-plugin-enable.log \
     /tmp/openclaw-plugins-list.json \
     /tmp/openclaw-plugin-inspect.json \
+    /tmp/openclaw-live-plugin-tool-pack.log \
     /tmp/openclaw-agent.err
 }
 trap 'status=$?; dump_debug_logs "$status"; exit "$status"' ERR
@@ -142,8 +143,18 @@ fixture_dir="$(mktemp -d /tmp/openclaw-live-plugin-tool.XXXXXX)"
 plugin_dir="$fixture_dir/package"
 mkdir -p "$plugin_dir"
 node scripts/e2e/lib/live-plugin-tool/assertions.mjs write-fixture "$plugin_dir"
-plugin_pack="$(cd "$plugin_dir" && npm pack --pack-destination "$fixture_dir" --silent)"
-plugin_tgz="$fixture_dir/$plugin_pack"
+(cd "$plugin_dir" && npm pack --pack-destination "$fixture_dir" --silent) \
+  >/tmp/openclaw-live-plugin-tool-pack.log 2>&1
+plugin_tgzs=()
+while IFS= read -r packed_file; do
+  plugin_tgzs+=("$packed_file")
+done < <(find "$fixture_dir" -maxdepth 1 -type f -name '*.tgz' | sort)
+if [ "${#plugin_tgzs[@]}" -ne 1 ]; then
+  echo "Expected one packed fixture plugin tarball; found ${#plugin_tgzs[@]}." >&2
+  openclaw_e2e_dump_logs /tmp/openclaw-live-plugin-tool-pack.log
+  exit 1
+fi
+plugin_tgz="${plugin_tgzs[0]}"
 
 echo "Installing fixture plugin from npm-pack: $plugin_tgz"
 openclaw plugins install "npm-pack:$plugin_tgz" --force >/tmp/openclaw-plugin-install.log 2>&1

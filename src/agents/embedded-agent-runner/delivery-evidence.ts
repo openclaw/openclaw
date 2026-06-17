@@ -21,7 +21,7 @@ type AgentPayloadLike = {
   isReasoning?: unknown;
 };
 
-export type AgentDeliveryEvidence = {
+type AgentDeliveryEvidence = {
   payloads?: unknown;
   deliveryStatus?: {
     status?: unknown;
@@ -213,13 +213,20 @@ export function hasCommittedMessagingToolDeliveryEvidence(
   );
 }
 
-/** Returns whether any outbound side effect makes a retry unsafe. */
-export function hasOutboundDeliveryEvidence(result: AgentDeliveryEvidence): boolean {
+/** Returns whether committed outbound evidence makes replay unsafe. */
+export function hasCommittedOutboundDeliveryEvidence(result: AgentDeliveryEvidence): boolean {
   return (
     hasMessagingToolDeliveryEvidence(result) ||
     (Array.isArray(result.acceptedSessionSpawns) &&
       hasAcceptedSessionSpawn(result.acceptedSessionSpawns)) ||
-    hasPositiveNumber(result.successfulCronAdds) ||
+    hasPositiveNumber(result.successfulCronAdds)
+  );
+}
+
+/** Returns whether any tool progress or outbound side effect makes a retry unsafe. */
+export function hasOutboundDeliveryEvidence(result: AgentDeliveryEvidence): boolean {
+  return (
+    hasCommittedOutboundDeliveryEvidence(result) ||
     hasPositiveNumber(result.meta?.toolSummary?.calls)
   );
 }

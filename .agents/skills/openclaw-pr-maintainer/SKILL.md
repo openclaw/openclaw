@@ -284,7 +284,7 @@ gh search issues --repo openclaw/openclaw --match title,body --limit 50 \
 - If bot review conversations exist on your PR, address them and resolve them yourself once fixed.
 - Leave a review conversation unresolved only when reviewer or maintainer judgment is still needed.
 - Before landing any PR with non-trivial code changes, run `$autoreview` until no accepted/actionable findings remain, unless equivalent manual review already covered it, the change is trivial/docs-only, or the user opts out.
-- When landing or merging any PR, follow the global `/landpr` process.
+- When an agent is landing or merging a PR targeting `main`, use only the repo-native `scripts/pr` wrapper: run `scripts/pr review-init <PR>`, follow its emitted checkout/guard guidance, initialize and complete review artifacts with `scripts/pr review-artifacts-init <PR>`, validate them with `scripts/pr review-validate-artifacts <PR>`, then run `scripts/pr prepare-run <PR>` and `scripts/pr merge-run <PR>`.
 - Use `scripts/committer "<msg>" <file...>` for scoped commits instead of manual `git add` and `git commit`.
 - Keep commit messages concise and action-oriented.
 - Group related changes; avoid bundling unrelated refactors.

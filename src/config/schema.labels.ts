@@ -951,7 +951,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "web.whatsapp": "WhatsApp Web Socket Timing",
   "web.whatsapp.keepAliveIntervalMs": "WhatsApp Web Keepalive Interval (ms)",
   "web.whatsapp.connectTimeoutMs": "WhatsApp Web Connect Timeout (ms)",
-  "web.whatsapp.defaultQueryTimeoutMs": "WhatsApp Web Query Timeout (ms)",
+  "web.whatsapp.defaultQueryTimeoutMs": "WhatsApp Web Query/Operation Timeout (ms)",
   discovery: "Discovery",
   "discovery.wideArea": "Wide-area Discovery",
   "discovery.wideArea.enabled": "Wide-area Discovery Enabled",

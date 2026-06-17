@@ -2083,7 +2083,10 @@ export async function runSlackQaLive(params: {
       { kind: "report", path: path.basename(reportPath) },
       { kind: "transport-observations", path: path.basename(observedMessagesPath) },
     ],
-    checks: artifactScenarioResults,
+    checks: artifactScenarioResults.map(({ standardId, ...check }) => ({
+      ...check,
+      coverageIds: standardId ? [`channels.slack.${standardId}`] : undefined,
+    })),
     env: process.env,
     generatedAt: finishedAt,
     primaryModel,

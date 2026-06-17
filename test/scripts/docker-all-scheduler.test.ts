@@ -11,8 +11,10 @@ import {
   canStartSchedulerLane,
   describeDockerSchedulerLimits,
   dockerPreflightContainerNames,
+  dockerPreflightSmokeCommand,
   LOG_TAIL_MAX_BYTES,
   parseDockerAllCliArgs,
+  resolveDockerPreflightPlatform,
   runShellCommand,
   SHELL_CAPTURE_MAX_CHARS,
   tailFile,
@@ -415,6 +417,17 @@ postgres Created
       "openclaw-openwebui-gateway-567",
       "openclaw-openwebui-678",
     ]);
+  });
+
+  it("pins Docker preflight smoke to the native platform", () => {
+    expect(resolveDockerPreflightPlatform("x64")).toBe("linux/amd64");
+    expect(resolveDockerPreflightPlatform("arm64")).toBe("linux/arm64");
+    expect(dockerPreflightSmokeCommand("x64")).toBe(
+      "docker run --rm --platform 'linux/amd64' alpine:3.20 true",
+    );
+    expect(dockerPreflightSmokeCommand("arm64")).toBe(
+      "docker run --rm --platform 'linux/arm64' alpine:3.20 true",
+    );
   });
 
   it("bounds captured preflight command output while keeping the newest tail", () => {

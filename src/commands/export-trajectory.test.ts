@@ -4,12 +4,12 @@ import type { RuntimeEnv } from "../runtime.js";
 import { exportTrajectoryCommand } from "./export-trajectory.js";
 
 const mocks = vi.hoisted(() => ({
-  loadSessionStore: vi.fn(),
+  loadSessionEntry: vi.fn(),
   resolveDefaultSessionStorePath: vi.fn(),
 }));
 
-vi.mock("../config/sessions/store.js", () => ({
-  loadSessionStore: mocks.loadSessionStore,
+vi.mock("../config/sessions/session-accessor.js", () => ({
+  loadSessionEntry: mocks.loadSessionEntry,
 }));
 
 vi.mock("../config/sessions/paths.js", async (importOriginal) => {
@@ -32,7 +32,7 @@ describe("exportTrajectoryCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.resolveDefaultSessionStorePath.mockReturnValue("/tmp/openclaw/sessions.json");
-    mocks.loadSessionStore.mockReturnValue({});
+    mocks.loadSessionEntry.mockReturnValue(undefined);
   });
 
   it("points missing session key users at the sessions command", async () => {
@@ -75,8 +75,10 @@ describe("exportTrajectoryCommand", () => {
     );
 
     expect(mocks.resolveDefaultSessionStorePath).not.toHaveBeenCalled();
-    expect(mocks.loadSessionStore).toHaveBeenCalledWith("/tmp/direct-store.json", {
-      skipCache: true,
+    expect(mocks.loadSessionEntry).toHaveBeenCalledWith({
+      agentId: "main",
+      sessionKey: "agent:main:telegram:direct:123",
+      storePath: "/tmp/direct-store.json",
     });
     expect(runtime.error).toHaveBeenCalledWith(
       "Session not found: agent:main:telegram:direct:123. Run openclaw sessions to see available sessions.",

@@ -187,6 +187,39 @@ describe("normalizeCompatibilityConfigValues", () => {
     );
   });
 
+  it("removes null workspace values from agents.list entries", () => {
+    const res = normalizeCompatibilityConfigValues({
+      agents: {
+        list: [
+          { id: "main", workspace: null as unknown as string },
+          { id: "beta", workspace: "/beta" },
+          { id: "gamma" },
+        ],
+      },
+    });
+
+    expect(res.config.agents?.list).toEqual([
+      { id: "main" },
+      { id: "beta", workspace: "/beta" },
+      { id: "gamma" },
+    ]);
+    expect(res.changes).toContain("Removed null workspace value from agents.list entry.");
+  });
+
+  it("does not alter agents.list when no workspace is null", () => {
+    const res = normalizeCompatibilityConfigValues({
+      agents: {
+        list: [{ id: "main", workspace: "/main" }, { id: "beta" }],
+      },
+    });
+
+    expect(res.config.agents?.list).toEqual([
+      { id: "main", workspace: "/main" },
+      { id: "beta" },
+    ]);
+    expect(res.changes.some((change) => change.includes("workspace"))).toBe(false);
+  });
+
   it("removes bindings for missing configured agents", () => {
     const res = normalizeCompatibilityConfigValues({
       agents: {

@@ -554,30 +554,97 @@ describe("channel-streaming", () => {
     ).toBe("🛠️ Exec\n• Checking the app-server stream");
   });
 
-  it("preserves stable ids on named tool and command-output progress lines", () => {
+  it("keeps public command progress ids while replacing by command correlation", () => {
     const toolLine = buildChannelProgressDraftLine({
       event: "tool",
-      itemId: "tool:item-1",
+      itemId: "tool:call-1",
       toolCallId: "call-1",
       name: "bash",
       phase: "start",
     });
     const commandLine = buildChannelProgressDraftLine({
       event: "command-output",
-      itemId: "command:item-1",
+      itemId: "tool:call-1-output",
       toolCallId: "call-1",
       name: "bash",
       phase: "end",
       exitCode: 0,
     });
+    const itemLine = buildChannelProgressDraftLine({
+      event: "item",
+      itemId: "tool:call-1",
+      toolCallId: "call-1",
+      itemKind: "command",
+      name: "bash",
+      phase: "update",
+      progressText: "install dependencies",
+    });
 
-    expect(toolLine).toMatchObject({ id: "tool:item-1", kind: "tool", toolName: "bash" });
+    expect(toolLine).toMatchObject({ id: "tool:call-1", kind: "tool", toolName: "bash" });
+    expect(itemLine).toMatchObject({ id: "tool:call-1", kind: "item", toolName: "bash" });
     expect(commandLine).toMatchObject({
-      id: "command:item-1",
+      id: "tool:call-1-output",
       kind: "command-output",
       status: "completed",
       toolName: "bash",
     });
+
+    if (!toolLine || !itemLine || !commandLine) {
+      throw new Error("expected command progress lines");
+    }
+    const updated = [itemLine, commandLine].reduce(
+      (lines, line) => mergeChannelProgressDraftLine(lines, line, { maxLines: 4 }),
+      mergeChannelProgressDraftLine([], toolLine, { maxLines: 4 }),
+    );
+
+    expect(updated).toHaveLength(1);
+    expect(updated[0]).toMatchObject({
+      id: "tool:call-1-output",
+      kind: "command-output",
+      detail: "completed",
+      status: "completed",
+      text: "🛠️ completed",
+    });
+    expect(
+      formatChannelProgressDraftText({
+        lines: updated,
+        entry: { streaming: { progress: { label: false } } },
+      }),
+    ).toBe("🛠️ completed");
+
+    const recoveredItemLine = buildChannelProgressDraftLine({
+      event: "item",
+      itemId: "command-2",
+      itemKind: "command",
+      name: "bash",
+      phase: "end",
+      status: "failed",
+      progressText: "install dependencies failed",
+    });
+    const recoveredCommandLine = buildChannelProgressDraftLine({
+      event: "command-output",
+      itemId: "command-2",
+      toolCallId: "call-2",
+      name: "bash",
+      phase: "end",
+      exitCode: 0,
+    });
+    if (!recoveredItemLine || !recoveredCommandLine) {
+      throw new Error("expected recovered command progress lines");
+    }
+    expect(
+      mergeChannelProgressDraftLine([recoveredItemLine], recoveredCommandLine, {
+        maxLines: 4,
+      }),
+    ).toMatchObject([
+      {
+        id: "command-2",
+        kind: "command-output",
+        detail: "completed",
+        status: "completed",
+        text: "🛠️ completed",
+      },
+    ]);
   });
 
   it("starts progress drafts after five seconds or a second work event", async () => {

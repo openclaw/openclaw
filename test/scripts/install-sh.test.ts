@@ -873,22 +873,43 @@ describe("install.sh", () => {
   });
 
   it("bounds installer npm prefix probes during finalization helpers", () => {
-    const result = runInstallShell(
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-npm-probe-"));
+    const npm = join(tmp, "npm");
+    writeFileSync(
+      npm,
       [
-        `source ${JSON.stringify(SCRIPT_PATH)}`,
-        "npm() {",
-        '  if [[ "$1" == "prefix" && "$2" == "-g" ]]; then sleep 2; return 0; fi',
-        '  if [[ "$1" == "config" && "$2" == "get" && "$3" == "prefix" ]]; then printf "/tmp/openclaw-npm\\n"; return 0; fi',
-        "  return 1",
-        "}",
-        "npm_global_bin_dir",
+        "#!/usr/bin/env bash",
+        'if [[ "$1" == "prefix" && "$2" == "-g" ]]; then',
+        "  sleep 3",
+        "  exit 0",
+        "fi",
+        'if [[ "$1" == "config" && "$2" == "get" && "$3" == "prefix" ]]; then',
+        '  printf "/tmp/openclaw-npm\\n"',
+        "  exit 0",
+        "fi",
+        "exit 1",
+        "",
       ].join("\n"),
-      { OPENCLAW_INSTALL_PROBE_TIMEOUT_SECONDS: "0.1" },
     );
+    chmodSync(npm, 0o755);
 
-    expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe("/tmp/openclaw-npm/bin");
-    expect(result.stderr).toContain("timed out during installer finalization probe: npm prefix -g");
+    try {
+      const result = runInstallShell(
+        [`source ${JSON.stringify(SCRIPT_PATH)}`, "npm_global_bin_dir"].join("\n"),
+        {
+          OPENCLAW_INSTALL_PROBE_TIMEOUT_SECONDS: "1",
+          PATH: `${tmp}:${process.env.PATH ?? ""}`,
+        },
+      );
+
+      expect(result.status).toBe(0);
+      expect(result.stdout.trim()).toBe("/tmp/openclaw-npm/bin");
+      expect(result.stderr).toContain(
+        "timed out during installer finalization probe: npm prefix -g",
+      );
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
   });
 
   it("bounds daemon status probes during finalization helpers", () => {

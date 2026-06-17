@@ -12,11 +12,12 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import type { ImageContent } from "../../llm/types.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
+import type { CliBackendExecutionMode } from "../../plugins/cli-backend.types.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type {
   PersistedUserTurnMessage,
   UserTurnTranscriptRecorder,
-} from "../../sessions/user-turn-transcript.js";
+} from "../../sessions/user-turn-transcript.types.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import type { BootstrapContextMode } from "../bootstrap-files.js";
 import type { ResolvedCliBackend } from "../cli-backends.js";
@@ -43,6 +44,11 @@ export type RunCliAgentParams = {
   config?: OpenClawConfig;
   prompt: string;
   transcriptPrompt?: string;
+  /**
+   * Execution mode for the generic CLI runner. Side questions are one-shot
+   * background answers and must not reuse or mutate normal agent sessions.
+   */
+  executionMode?: CliBackendExecutionMode;
   suppressNextUserMessagePersistence?: boolean;
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
   onUserMessagePersisted?: (message: PersistedUserTurnMessage) => void | Promise<void>;
@@ -63,10 +69,13 @@ export type RunCliAgentParams = {
    */
   runTimeoutOverrideMs?: number;
   runId: string;
+  /** Immutable lifecycle ownership captured when this execution was admitted. */
+  lifecycleGeneration?: string;
   lane?: string;
   jobId?: string;
   extraSystemPrompt?: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  requireExplicitMessageTarget?: boolean;
   silentReplyPromptMode?: SilentReplyPromptMode;
   allowEmptyAssistantReplyAsSilent?: boolean;
   /** Static portion of extraSystemPrompt (excluding per-message inbound metadata) for session reuse hashing. */
@@ -179,6 +188,8 @@ export type PreparedCliRunContext = {
   authEpoch?: string;
   authEpochVersion: number;
   extraSystemPromptHash?: string;
+  messageToolPolicyHash?: string;
   promptToolNamesHash?: string;
   cwdHash?: string;
+  mcpDeliveryCapture?: true;
 };

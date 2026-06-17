@@ -10,6 +10,7 @@ import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { resetConfigRuntimeState } from "../config/config.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { IMAGE_ONLY_USER_MESSAGE } from "./agent-prompt.js";
 import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
 import {
   agentCommand,
@@ -319,6 +320,37 @@ describe("OpenResponses HTTP API (e2e)", () => {
         "webchat",
       );
       await ensureResponseConsumed(resHeader);
+
+      mockAgentOnce([{ text: "hello" }]);
+      const resSessionOverride = await postResponses(
+        port,
+        { model: "openclaw", input: "hi" },
+        {
+          "x-openclaw-agent-id": "beta",
+          "x-openclaw-session-key": "agent:beta:openresponses:custom",
+        },
+      );
+      expect(resSessionOverride.status).toBe(200);
+      expect((firstAgentOpts() as { sessionKey?: string }).sessionKey).toBe(
+        "agent:beta:openresponses:custom",
+      );
+      await ensureResponseConsumed(resSessionOverride);
+
+      agentCommand.mockClear();
+      const resReservedSessionOverride = await postResponses(
+        port,
+        { model: "openclaw", input: "hi" },
+        { "x-openclaw-session-key": "agent:main:subagent:spoofed" },
+      );
+      expect(resReservedSessionOverride.status).toBe(400);
+      const reservedSessionJson = (await resReservedSessionOverride.json()) as {
+        error?: { type?: string; message?: string };
+      };
+      expect(reservedSessionJson.error?.type).toBe("invalid_request_error");
+      expect(reservedSessionJson.error?.message).toBe(
+        "`x-openclaw-session-key` cannot use reserved internal session namespaces.",
+      );
+      expect(agentCommand).toHaveBeenCalledTimes(0);
 
       mockAgentOnce([{ text: "hello" }]);
       const resModel = await postResponses(port, { model: "openclaw/beta", input: "hi" });
@@ -1707,6 +1739,91 @@ describe("OpenResponses HTTP API (e2e)", () => {
       }),
     });
     await expectInvalidRequest(blockedScheme, /invalid request|http or https/i);
+    expect(agentCommand).not.toHaveBeenCalled();
+  });
+
+  it("accepts image-only input without text, matching /v1/chat/completions", async () => {
+    const port = enabledPort;
+    // 1x1 PNG; same fixture used by the parity schema tests.
+    const pngBase64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+
+    agentCommand.mockClear();
+    agentCommand.mockResolvedValueOnce({ payloads: [{ text: "ok" }] } as never);
+
+    const res = await postResponses(port, {
+      model: "openclaw",
+      input: [
+        {
+          type: "message",
+          role: "user",
+          content: [
+            {
+              type: "input_image",
+              source: { type: "base64", media_type: "image/png", data: pngBase64 },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(res.status).toBe(200);
+    expect(agentCommand).toHaveBeenCalledTimes(1);
+    const opts = firstAgentOpts();
+    // Image-only turn carries a non-empty placeholder so the agent command runs,
+    // with the real image attached via `images` (parity with /v1/chat/completions).
+    expect((opts as { message?: string }).message ?? "").toBe(IMAGE_ONLY_USER_MESSAGE);
+    expect((opts as { images?: unknown[] }).images?.length).toBe(1);
+    await ensureResponseConsumed(res);
+  });
+
+  it("accepts file-only input without text, matching image-only", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockResolvedValueOnce({ payloads: [{ text: "ok" }] } as never);
+
+    const res = await postResponses(port, {
+      model: "openclaw",
+      instructions: "Summarize the attached document.",
+      input: [
+        {
+          type: "message",
+          role: "user",
+          content: [
+            {
+              type: "input_file",
+              source: {
+                type: "base64",
+                media_type: "text/plain",
+                data: Buffer.from("the quick brown fox").toString("base64"),
+                filename: "doc.txt",
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(res.status).toBe(200);
+    expect(agentCommand).toHaveBeenCalledTimes(1);
+    const opts = firstAgentOpts();
+    expect((opts as { message?: string }).message ?? "").not.toBe("");
+    const extraSystemPrompt = (opts as { extraSystemPrompt?: string }).extraSystemPrompt ?? "";
+    expect(extraSystemPrompt).toContain('<file name="doc.txt">');
+    expect(extraSystemPrompt).toContain("the quick brown fox");
+    await ensureResponseConsumed(res);
+  });
+
+  it("still rejects input with neither text nor image", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+
+    const res = await postResponses(port, {
+      model: "openclaw",
+      input: [{ type: "message", role: "user", content: [] }],
+    });
+
+    await expectInvalidRequest(res, /Missing user message/i);
     expect(agentCommand).not.toHaveBeenCalled();
   });
 

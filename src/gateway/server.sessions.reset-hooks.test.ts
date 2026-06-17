@@ -217,6 +217,8 @@ async function performSessionReset(params: {
   agentId?: string;
   reason: "new" | "reset";
   commandSource: string;
+  assertCurrent?: () => void;
+  onCommitted?: (commit: { key: string; sessionId: string }) => void;
 }) {
   const { performGatewaySessionReset } = await import("./session-reset-service.js");
   return performGatewaySessionReset(params);
@@ -346,6 +348,33 @@ test("sessions.reset emits internal command hook with reason", async () => {
   expect(event.sessionKey).toBe("agent:main:main");
   expect(event.context?.commandSource).toBe("gateway:sessions.reset");
   expect(event.context?.previousSessionEntry?.sessionId).toBe("sess-main");
+});
+
+test("sessions.reset does not begin cleanup after losing lifecycle ownership", async () => {
+  const { dir } = await createSessionStoreDir();
+  await writeSingleLineSession(dir, "sess-main", "hello");
+  await writeMainSessionEntry("sess-main");
+  let ownershipChecks = 0;
+
+  await expect(
+    performSessionReset({
+      key: "main",
+      reason: "new",
+      commandSource: "gateway:agent",
+      assertCurrent: () => {
+        ownershipChecks += 1;
+        if (ownershipChecks >= 2) {
+          const error = new Error("stale lifecycle");
+          error.name = "AbortError";
+          throw error;
+        }
+      },
+    }),
+  ).rejects.toThrow("stale lifecycle");
+
+  expect(ownershipChecks).toBe(2);
+  const store = await loadGatewaySessionStoreForKey("main");
+  expect(store["agent:main:main"]?.sessionId).toBe("sess-main");
 });
 
 test("sessions.reset emits before_reset hook with transcript context", async () => {

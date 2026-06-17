@@ -223,9 +223,24 @@ jobs:
           set -euo pipefail
           PACK_OUTPUT="$RUNNER_TEMP/npm-pack-output.txt"
           npm pack --json 2>&1 | tee "$PACK_OUTPUT"
-          PACK_PATH="$(node - "$PACK_OUTPUT" <<'NODE'
+          PACK_NAME="$(node - "$PACK_OUTPUT" <<'NODE'
           const fs = require("node:fs");
+          const path = require("node:path");
           const input = fs.readFileSync(process.argv[2], "utf8");
+
+          function resolveTarballFileName(value) {
+            const fileName = typeof value === "string" ? value.trim() : "";
+            if (
+              !fileName.endsWith(".tgz") ||
+              fileName.includes("\0") ||
+              fileName !== path.basename(fileName) ||
+              fileName !== path.win32.basename(fileName)
+            ) {
+              console.error(`npm pack reported unsafe tarball filename ${JSON.stringify(fileName)}.`);
+              process.exit(1);
+            }
+            return fileName;
+          }
 
           function arrayEndFrom(start) {
             let depth = 0;
@@ -266,8 +281,8 @@ jobs:
             try {
               const parsed = JSON.parse(input.slice(start, end));
               const first = Array.isArray(parsed) ? parsed[0] : null;
-              if (first && typeof first.filename === "string" && first.filename) {
-                process.stdout.write(first.filename);
+              if (first && Object.prototype.hasOwnProperty.call(first, "filename")) {
+                process.stdout.write(resolveTarballFileName(first.filename));
                 process.exit(0);
               }
             } catch {
@@ -279,6 +294,7 @@ jobs:
           process.exit(1);
           NODE
           )"
+          PACK_PATH="$PWD/$PACK_NAME"
           if [[ -z "$PACK_PATH" || ! -f "$PACK_PATH" ]]; then
             echo "npm pack did not produce a tarball file." >&2
             exit 1
@@ -290,7 +306,7 @@ jobs:
           else
             RELEASE_TAG="${RELEASE_REF}"
           fi
-          TARBALL_NAME="$(basename "$PACK_PATH")"
+          TARBALL_NAME="$PACK_NAME"
           TARBALL_SHA256="$(sha256sum "$PACK_PATH" | awk '{print $1}')"
           ARTIFACT_DIR="$RUNNER_TEMP/openclaw-npm-preflight"
           rm -rf "$ARTIFACT_DIR"

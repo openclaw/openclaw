@@ -6,6 +6,7 @@ import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import {
+  rotateRuntimeTranscriptAfterCompaction,
   rotateTranscriptAfterCompaction,
   rotateTranscriptFileAfterCompaction,
   shouldRotateCompactionTranscript,
@@ -117,6 +118,24 @@ function createCompactedSession(sessionDir: string): {
 }
 
 describe("rotateTranscriptAfterCompaction", () => {
+  it("does not create session metadata for missing runtime transcripts", async () => {
+    const dir = await createTmpDir();
+    const storePath = path.join(dir, "sessions.json");
+    await fs.writeFile(storePath, "{}\n", "utf8");
+
+    const result = await rotateRuntimeTranscriptAfterCompaction({
+      scope: {
+        agentId: "main",
+        sessionId: "missing-session",
+        sessionKey: "agent:main:missing",
+        storePath,
+      },
+    });
+
+    expect(result.rotated).toBe(false);
+    expect(await fs.readFile(storePath, "utf8")).toBe("{}\n");
+  });
+
   it("can rotate a persisted transcript without opening a manager", async () => {
     const dir = await createTmpDir();
     const { sessionFile } = createCompactedSession(dir);

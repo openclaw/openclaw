@@ -17,6 +17,7 @@ import {
 import { defaultRuntime } from "../runtime.js";
 import {
   installSkillFromClawHub,
+  readVerifiedClawHubSkillSourceUrl,
   readTrackedClawHubSkillSlugs,
   resolveClawHubSkillVerificationTarget,
   searchSkillsFromClawHub,
@@ -151,6 +152,7 @@ function buildSkillVerificationOutput(
   result: ClawHubSkillVerificationResponse,
   target: ResolvedClawHubSkillVerificationTarget,
 ): Record<string, unknown> {
+  const verifiedSourceUrl = readVerifiedClawHubSkillSourceUrl(result.provenance);
   return {
     ...result,
     openclaw: {
@@ -160,6 +162,7 @@ function buildSkillVerificationOutput(
         registry: target.resolution.registry,
         installedVersion: target.resolution.installedVersion,
       },
+      ...(verifiedSourceUrl ? { verifiedSourceUrl } : {}),
     },
   };
 }

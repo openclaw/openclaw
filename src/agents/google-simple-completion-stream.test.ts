@@ -24,8 +24,11 @@ vi.mock("./custom-api-registry.js", () => ({
   ensureCustomApiRegistered,
 }));
 
-const { GOOGLE_SIMPLE_COMPLETION_API, prepareGoogleSimpleCompletionModel } =
-  await import("./google-simple-completion-stream.js");
+const { prepareGoogleSimpleCompletionModel } = await import(
+  "./google-simple-completion-stream.js"
+);
+
+const GOOGLE_SIMPLE_COMPLETION_API = "openclaw-google-generative-ai-simple";
 
 // Mirrors the provider catalog shape closely enough for wrapper registration
 // without pulling live Google model discovery into unit tests.

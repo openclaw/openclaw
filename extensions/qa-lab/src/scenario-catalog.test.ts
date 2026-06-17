@@ -1,8 +1,9 @@
 // Qa Lab tests cover scenario catalog plugin behavior.
+import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 import { QA_AGENTIC_PARITY_SCENARIO_IDS } from "./agentic-parity.js";
 import {
-  listQaScenarioMarkdownPaths,
+  listQaScenarioYamlPaths,
   readQaBootstrapScenarioCatalog,
   readQaScenarioById,
   readQaScenarioExecutionConfig,
@@ -10,16 +11,33 @@ import {
   validateQaScenarioExecutionConfig,
 } from "./scenario-catalog.js";
 
+function listScenarioMarkdownPaths(dir = "qa/scenarios"): string[] {
+  return fs
+    .readdirSync(dir, { withFileTypes: true })
+    .flatMap((entry) => {
+      const entryPath = `${dir}/${entry.name}`;
+      if (entry.isDirectory()) {
+        return listScenarioMarkdownPaths(entryPath);
+      }
+      return entry.isFile() && entry.name.endsWith(".md") ? [entryPath] : [];
+    })
+    .toSorted();
+}
+
 describe("qa scenario catalog", () => {
-  it("loads the markdown pack as the canonical source of truth", () => {
+  it("keeps repo-backed scenarios YAML-only", () => {
+    expect(listScenarioMarkdownPaths()).toStrictEqual([]);
+  });
+
+  it("loads the YAML pack as the canonical source of truth", () => {
     const pack = readQaScenarioPack();
 
     expect(pack.version).toBe(1);
     expect(pack.agent.identityMarkdown).toContain("Dev C-3PO");
     expect(pack.kickoffTask).toContain("Lobster Invaders");
-    expect(listQaScenarioMarkdownPaths().length).toBe(pack.scenarios.length);
-    expect(listQaScenarioMarkdownPaths()).toContain(
-      "qa/scenarios/media/image-generation-roundtrip.md",
+    expect(listQaScenarioYamlPaths().length).toBe(pack.scenarios.length);
+    expect(listQaScenarioYamlPaths()).toContain(
+      "qa/scenarios/media/image-generation-roundtrip.yaml",
     );
     const scenarioIds = pack.scenarios.map((scenario) => scenario.id);
     const requiredScenarioIds = [
@@ -48,7 +66,7 @@ describe("qa scenario catalog", () => {
     expect(readQaScenarioById("memory-recall").coverage?.primary).toContain("memory.recall");
   });
 
-  it("exposes bootstrap data from the markdown pack", () => {
+  it("exposes bootstrap data from the YAML pack", () => {
     const catalog = readQaBootstrapScenarioCatalog();
 
     expect(catalog.agentIdentityMarkdown).toContain("protocol-minded");
@@ -60,7 +78,7 @@ describe("qa scenario catalog", () => {
     ).toStrictEqual([]);
   });
 
-  it("loads scenario-specific execution config from per-scenario markdown", () => {
+  it("loads scenario-specific execution config from per-scenario YAML", () => {
     const discovery = readQaScenarioById("source-docs-discovery-report");
     const discoveryConfig = readQaScenarioExecutionConfig("source-docs-discovery-report");
     const codexLeak = readQaScenarioById("codex-harness-no-meta-leak");
@@ -82,7 +100,7 @@ describe("qa scenario catalog", () => {
 
     expect(discovery.title).toBe("Source and docs discovery report");
     expect((discoveryConfig?.requiredFiles as string[] | undefined)?.[0]).toBe(
-      "repo/qa/scenarios/index.md",
+      "repo/qa/scenarios/index.yaml",
     );
     expect(codexLeak.title).toBe("Codex harness no meta leak");
     expect(codexLeakConfig?.harnessRuntime).toBe("codex");
@@ -105,18 +123,18 @@ describe("qa scenario catalog", () => {
     expect(fanoutConfig?.expectedReplyGroups?.flat()).toContain("subagent-2: ok");
   });
 
-  it("loads scenario-declared gateway runtime options from markdown", () => {
+  it("loads scenario-declared gateway runtime options from YAML", () => {
     const scenario = readQaScenarioById("control-ui-qa-channel-image-roundtrip");
 
     expect(scenario.gatewayRuntime?.forwardHostHome).toBe(true);
   });
 
-  it("loads Playwright execution scenarios from markdown", () => {
+  it("loads native test execution scenarios from YAML", () => {
     const scenario = readQaScenarioById("control-ui-chat-flow-playwright");
 
     expect(scenario.execution.kind).toBe("playwright");
     if (scenario.execution.kind !== "playwright") {
-      throw new Error("expected Playwright scenario execution");
+      throw new Error(`expected Playwright scenario, got ${scenario.execution.kind}`);
     }
     expect(scenario.execution.path).toBe("ui/src/ui/e2e/chat-flow.e2e.test.ts");
     expect(scenario.execution.flow).toBeUndefined();
@@ -195,7 +213,7 @@ describe("qa scenario catalog", () => {
         }
       | undefined;
 
-    expect(scenario.sourcePath).toBe("qa/scenarios/runtime/codex-legacy-read-tool-vocabulary.md");
+    expect(scenario.sourcePath).toBe("qa/scenarios/runtime/codex-legacy-read-tool-vocabulary.yaml");
     expect(scenario.runtimeParityTier).toBe("live-only");
     expect(config?.runtimeParityComparison).toBe("codex-native-workspace");
     expect(config?.fixtureFile).toBe("LEGACY_READ_TOOL_FIXTURE.txt");
@@ -220,10 +238,10 @@ describe("qa scenario catalog", () => {
       expect(scenario.coverage?.primary.length).toBeGreaterThan(0);
     }
     expect(readQaScenarioById("webchat-direct-reply-routing").sourcePath).toBe(
-      "qa/scenarios/channels/webchat-direct-reply-routing.md",
+      "qa/scenarios/channels/webchat-direct-reply-routing.yaml",
     );
     expect(readQaScenarioById("long-context-progress-watchdog").sourcePath).toBe(
-      "qa/scenarios/runtime/long-context-progress-watchdog.md",
+      "qa/scenarios/runtime/long-context-progress-watchdog.yaml",
     );
     expect(
       JSON.stringify(readQaScenarioById("gateway-restart-inflight-run").execution.flow),
@@ -255,9 +273,9 @@ describe("qa scenario catalog", () => {
         }
       | undefined;
 
-    expect(scenario.sourcePath).toBe("qa/scenarios/runtime/qa-bus-tool-trace-visibility.md");
+    expect(scenario.sourcePath).toBe("qa/scenarios/runtime/qa-bus-tool-trace-visibility.yaml");
     expect(scenario.coverage?.primary).toContain("harness.tool-trace-visibility");
-    expect(scenario.coverage?.secondary).toContain("runtime.qa-bus");
+    expect(scenario.coverage?.secondary ?? []).toStrictEqual(["runtime.qa-bus", "tools.trace"]);
     expect(config?.expectedToolName).toBe("exec");
     expect(config?.expectedRedaction).toBe("[redacted]");
     expect(config?.searchQuery).toBe("exec");
@@ -277,7 +295,7 @@ describe("qa scenario catalog", () => {
         }
       | undefined;
 
-    expect(scenario.sourcePath).toBe("qa/scenarios/runtime/update-run-package-self-upgrade.md");
+    expect(scenario.sourcePath).toBe("qa/scenarios/runtime/update-run-package-self-upgrade.yaml");
     expect(scenario.coverage?.primary).toContain("runtime.update-run");
     expect(scenario.coverage?.secondary).toContain("runtime.package-update");
     expect(config?.requiredProviderMode).toBe("live-frontier");
@@ -334,13 +352,13 @@ describe("qa scenario catalog", () => {
     ).toBe(true);
   });
 
-  it("includes the codex leak scenario in the markdown pack", () => {
+  it("includes the codex leak scenario in the YAML pack", () => {
     const pack = readQaScenarioPack();
     const scenario = pack.scenarios.find(
       (candidate) => candidate.id === "codex-harness-no-meta-leak",
     );
 
-    expect(scenario?.sourcePath).toBe("qa/scenarios/models/codex-harness-no-meta-leak.md");
+    expect(scenario?.sourcePath).toBe("qa/scenarios/models/codex-harness-no-meta-leak.yaml");
     expect(scenario?.execution.flow?.steps.map((step) => step.name)).toContain(
       "keeps codex coordination chatter out of the visible reply",
     );
@@ -358,7 +376,7 @@ describe("qa scenario catalog", () => {
         }
       | undefined;
 
-    expect(scenario.sourcePath).toBe("qa/scenarios/models/gpt55-thinking-visibility-switch.md");
+    expect(scenario.sourcePath).toBe("qa/scenarios/models/gpt55-thinking-visibility-switch.yaml");
     expect(config?.requiredProvider).toBe("openai");
     expect(config?.requiredModel).toBe("gpt-5.5");
     expect(config?.offDirective).toBe("/think off");
@@ -381,7 +399,7 @@ describe("qa scenario catalog", () => {
         }
       | undefined;
 
-    expect(scenario.sourcePath).toBe("qa/scenarios/models/openai-native-web-search-live.md");
+    expect(scenario.sourcePath).toBe("qa/scenarios/models/openai-native-web-search-live.yaml");
     expect(scenario.gatewayConfigPatch?.tools).toEqual({
       web: {
         search: {
@@ -414,7 +432,7 @@ describe("qa scenario catalog", () => {
         }
       | undefined;
 
-    expect(scenario.sourcePath).toBe("qa/scenarios/plugins/kitchen-sink-live-openai.md");
+    expect(scenario.sourcePath).toBe("qa/scenarios/plugins/kitchen-sink-live-openai.yaml");
     expect(config?.requiredProviderMode).toBe("live-frontier");
     expect(config?.requiredProvider).toBe("openai");
     expect(config?.pluginSpec).toBe("npm:@openclaw/kitchen-sink@latest");
@@ -470,7 +488,7 @@ describe("qa scenario catalog", () => {
         }
       | undefined;
 
-    expect(scenario.sourcePath).toBe("qa/scenarios/models/thinking-slash-model-remap.md");
+    expect(scenario.sourcePath).toBe("qa/scenarios/models/thinking-slash-model-remap.yaml");
     expect(config?.requiredProviderMode).toBe("live-frontier");
     expect(config?.anthropicModelRef).toBe("anthropic/claude-sonnet-4-6");
     expect(config?.openAiXhighModelRef).toBe("openai/gpt-5.5");
@@ -482,7 +500,7 @@ describe("qa scenario catalog", () => {
     ]);
   });
 
-  it("includes the seeded mock-only broken-turn scenarios in the markdown pack", () => {
+  it("includes the seeded mock-only broken-turn scenarios in the YAML pack", () => {
     const scenarioIds = [
       "reasoning-only-recovery-replay-safe-read",
       "reasoning-only-no-auto-retry-after-write",
@@ -499,7 +517,7 @@ describe("qa scenario catalog", () => {
           }
         | undefined;
 
-      expect(scenario.sourcePath).toBe(`qa/scenarios/runtime/${scenarioId}.md`);
+      expect(scenario.sourcePath).toBe(`qa/scenarios/runtime/${scenarioId}.yaml`);
       expect(config?.requiredProvider).toBe("mock-openai");
       expect(config?.prompt).toContain("check");
       expect(scenario.execution.flow?.steps.length).toBeGreaterThan(0);
@@ -567,7 +585,7 @@ describe("qa scenario catalog", () => {
       | undefined;
     const flow = JSON.stringify(scenario.execution.flow);
 
-    expect(scenario.sourcePath).toBe("qa/scenarios/memory/dreaming-shadow-trial-report.md");
+    expect(scenario.sourcePath).toBe("qa/scenarios/memory/dreaming-shadow-trial-report.yaml");
     expect(scenario.coverage?.primary).toContain("memory.dreaming");
     expect(config?.prompt).toContain("Dreaming shadow trial report check");
     expect(config?.reportName).toBe("dreaming-shadow-trial-report.md");

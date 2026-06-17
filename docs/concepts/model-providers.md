@@ -99,7 +99,7 @@ Official provider plugins publish their own model catalog rows. These providers 
 - Use `params.serviceTier` when you want an explicit tier instead of the shared `/fast` toggle
 - Hidden OpenClaw attribution headers (`originator`, `version`, `User-Agent`) apply only on native OpenAI traffic to `api.openai.com`, not generic OpenAI-compatible proxies
 - Native OpenAI routes also keep Responses `store`, prompt-cache hints, and OpenAI reasoning-compat payload shaping; proxy routes do not
-- `openai/gpt-5.3-codex-spark` is intentionally suppressed in OpenClaw because live OpenAI API requests reject it and the current Codex catalog does not expose it
+- `openai/gpt-5.3-codex-spark` is available through ChatGPT/Codex OAuth subscription auth when your signed-in account exposes it; OpenClaw still suppresses direct OpenAI API-key and Azure API-key routes for this model because those transports reject it
 
 ```json5
 {
@@ -258,13 +258,15 @@ Gemini CLI OAuth is shipped as part of the bundled `google` plugin.
   </Step>
 </Steps>
 
-Gemini CLI JSON replies are parsed from `response`; usage falls back to `stats`, with `stats.cached` normalized into OpenClaw `cacheRead`.
+Gemini CLI uses `stream-json` by default. OpenClaw reads assistant stream
+messages and normalizes `stats.cached` into `cacheRead`; legacy
+`--output-format json` overrides still read reply text from `response`.
 
 ### Z.AI (GLM)
 
 - Provider: `zai`
 - Auth: `ZAI_API_KEY`
-- Example model: `zai/glm-5.1`
+- Example model: `zai/glm-5.2`
 - CLI: `openclaw onboard --auth-choice zai-api-key`
   - Model refs use the canonical `zai/*` provider ID.
   - `zai-api-key` auto-detects the matching Z.AI endpoint; `zai-coding-global`, `zai-coding-cn`, `zai-global`, and `zai-cn` force a specific surface
@@ -294,6 +296,7 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 | --------------------------------------- | -------------------------------- | ------------------------------------------------------------ | ---------------------------------------------------------- |
 | BytePlus                                | `byteplus` / `byteplus-plan`     | `BYTEPLUS_API_KEY`                                           | `byteplus-plan/ark-code-latest`                            |
 | Cerebras                                | `cerebras`                       | `CEREBRAS_API_KEY`                                           | `cerebras/zai-glm-4.7`                                     |
+| Cohere                                  | `cohere`                         | `COHERE_API_KEY`                                             | `cohere/command-a-03-2025`                                 |
 | Cloudflare AI Gateway                   | `cloudflare-ai-gateway`          | `CLOUDFLARE_AI_GATEWAY_API_KEY`                              | -                                                          |
 | DeepInfra                               | `deepinfra`                      | `DEEPINFRA_API_KEY`                                          | `deepinfra/deepseek-ai/DeepSeek-V4-Flash`                  |
 | DeepSeek                                | `deepseek`                       | `DEEPSEEK_API_KEY`                                           | `deepseek/deepseek-v4-flash`                               |

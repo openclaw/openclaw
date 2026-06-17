@@ -5,6 +5,7 @@ import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../agents/internal-runtime-context.js";
+import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import { extractCanvasFromText } from "../chat/canvas-render.js";
@@ -1595,16 +1596,119 @@ function projectSessionsSendInterSessionMessages(
   return changed ? projected : messages;
 }
 
+const GATEWAY_ASSISTANT_ERROR_FALLBACK_TEXT = "The agent run failed before producing a reply.";
+
+function sanitizeAssistantErrorDisplayMessage(
+  message: Record<string, unknown>,
+): Record<string, unknown> {
+  const { content, ...envelope } = message;
+  const next = sanitizeChatHistoryMessage(envelope, Number.MAX_SAFE_INTEGER).message as Record<
+    string,
+    unknown
+  >;
+  next.content = Array.isArray(content)
+    ? content
+        .map(
+          (block) =>
+            sanitizeChatHistoryContentBlock(block, { maxChars: Number.MAX_SAFE_INTEGER }).block,
+        )
+        .filter((block) => {
+          if (!block || typeof block !== "object" || Array.isArray(block)) {
+            return true;
+          }
+          const type = (block as { type?: unknown }).type;
+          return type !== "thinking" && type !== "reasoning" && type !== "redacted_thinking";
+        })
+    : content;
+  delete next.diagnostics;
+  delete next.errorBody;
+  delete next.errorCode;
+  delete next.errorMessage;
+  delete next.errorType;
+  return next;
+}
+
+function projectEmptyAssistantErrorMessages(
+  messages: Array<Record<string, unknown>>,
+): Array<Record<string, unknown>> {
+  let changed = false;
+  const projected = messages.map((message) => {
+    if (message.role !== "assistant" || message.stopReason !== "error") {
+      return message;
+    }
+    const hasDisplayableStructuredContent =
+      Array.isArray(message.content) &&
+      message.content.some((block) => {
+        if (!block || typeof block !== "object" || Array.isArray(block)) {
+          return false;
+        }
+        const type = (block as { type?: unknown }).type;
+        return (
+          type !== "text" &&
+          type !== "thinking" &&
+          type !== "reasoning" &&
+          type !== "redacted_thinking"
+        );
+      });
+    if (hasDisplayableStructuredContent) {
+      changed = true;
+      return sanitizeAssistantErrorDisplayMessage(message);
+    }
+    const sanitized = sanitizeChatHistoryMessage(message, Number.MAX_SAFE_INTEGER)
+      .message as Record<string, unknown>;
+    const visibleTexts: string[] = [];
+    if (typeof sanitized.content === "string") {
+      visibleTexts.push(sanitized.content);
+    } else if (Array.isArray(sanitized.content)) {
+      for (const block of sanitized.content) {
+        if (!block || typeof block !== "object" || Array.isArray(block)) {
+          continue;
+        }
+        const entry = block as { type?: unknown; text?: unknown };
+        if (entry.type === "text" && typeof entry.text === "string") {
+          visibleTexts.push(entry.text);
+        }
+      }
+    }
+    if (typeof sanitized.text === "string") {
+      visibleTexts.push(sanitized.text);
+    }
+    const nonEmptyVisibleTexts = visibleTexts.map((text) => text.trim()).filter(Boolean);
+    const hasVisibleReplyText = nonEmptyVisibleTexts.some(
+      (text) => text !== STREAM_ERROR_FALLBACK_TEXT && !isSuppressedControlReplyText(text),
+    );
+    if (!shouldDropAssistantHistoryMessage(sanitized) && hasVisibleReplyText) {
+      changed = true;
+      return sanitizeAssistantErrorDisplayMessage(message);
+    }
+    changed = true;
+    const next: Record<string, unknown> = {
+      ...sanitized,
+      content: [{ type: "text", text: GATEWAY_ASSISTANT_ERROR_FALLBACK_TEXT }],
+    };
+    delete next.diagnostics;
+    delete next.errorBody;
+    delete next.errorCode;
+    delete next.errorMessage;
+    delete next.errorType;
+    delete next.phase;
+    delete next.text;
+    return next;
+  });
+  return changed ? projected : messages;
+}
+
 export function projectChatDisplayMessages(
   messages: unknown[],
   options?: { maxChars?: number; stripEnvelope?: boolean },
 ): Array<Record<string, unknown>> {
   const source = options?.stripEnvelope === false ? messages : stripEnvelopeFromMessages(messages);
   const mirrored = mirrorMessageToolVisibleReplies(source);
+  const projectedErrors = projectEmptyAssistantErrorMessages(toProjectedMessages(mirrored));
   const projectedForwarded = mergeTtsSupplementMessages(
     filterVisibleProjectedHistoryMessages(
       projectSessionsSendInterSessionMessages(
-        toProjectedMessages(sanitizeChatHistoryMessages(mirrored, Number.MAX_SAFE_INTEGER)),
+        toProjectedMessages(sanitizeChatHistoryMessages(projectedErrors, Number.MAX_SAFE_INTEGER)),
       ),
     ),
   );

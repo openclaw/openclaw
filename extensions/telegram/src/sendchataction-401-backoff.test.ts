@@ -1,4 +1,4 @@
-// Telegram tests cover sendchataction 401 backoff plugin behavior.
+// Telegram tests cover sendchataction 401 and transient backoff plugin behavior.
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -20,6 +20,13 @@ describe("createTelegramSendChatActionHandler", () => {
 
   const make401Error = () => new Error("401 Unauthorized");
   const make500Error = () => new Error("500 Internal Server Error");
+  const makeNetworkError = () =>
+    Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" });
+  const makeTelegramError = (
+    message: string,
+    error_code: number,
+    parameters?: { retry_after?: number },
+  ) => Object.assign(new Error(message), { error_code, parameters });
 
   it("calls sendChatActionFn on success", async () => {
     const fn = vi.fn().mockResolvedValue(true);
@@ -167,6 +174,96 @@ describe("createTelegramSendChatActionHandler", () => {
     await expect(handler.sendChatAction(123, "typing")).rejects.toThrow("500");
 
     expect(handler.isSuspended()).toBe(false);
+  });
+
+  it.each([
+    ["recoverable network", () => makeNetworkError(), 1000],
+    ["Telegram 429", () => makeTelegramError("Too Many Requests", 429, { retry_after: 2 }), 2000],
+    ["Telegram 5xx", () => makeTelegramError("Bad Gateway", 502), 1000],
+  ])("cools down transient %s errors", async (_name, makeError, expectedCooldownMs) => {
+    let now = 10_000;
+    const fn = vi.fn().mockRejectedValueOnce(makeError()).mockResolvedValue(true);
+    const logger = vi.fn();
+    const handler = createTelegramSendChatActionHandler({
+      sendChatActionFn: fn,
+      logger,
+      now: () => now,
+    });
+
+    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow();
+    expect(logger.mock.calls.at(-1)).toEqual([
+      `sendChatAction transient error (1). Cooling down ${expectedCooldownMs}ms before retry.`,
+    ]);
+
+    now += expectedCooldownMs - 1;
+    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow(
+      "transient cooldown active",
+    );
+    expect(fn).toHaveBeenCalledTimes(1);
+
+    now += 1;
+    await handler.sendChatAction(123, "typing");
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects transient keepalive ticks until same-chat coalescing expires", async () => {
+    let now = 0;
+    const fn = vi
+      .fn()
+      .mockRejectedValueOnce(makeTelegramError("Bad Gateway", 502))
+      .mockResolvedValue(true);
+    const logger = vi.fn();
+    const handler = createTelegramSendChatActionHandler({
+      sendChatActionFn: fn,
+      logger,
+      minIntervalMs: 4000,
+      now: () => now,
+    });
+
+    await expect(handler.sendChatAction(-100, "typing")).rejects.toThrow("Bad Gateway");
+    expect(logger.mock.calls.at(-1)).toEqual([
+      "sendChatAction transient error (1). Cooling down 4000ms before retry.",
+    ]);
+
+    now = 3000;
+    await expect(handler.sendChatAction(-100, "typing")).rejects.toThrow(
+      "transient cooldown active",
+    );
+    expect(fn).toHaveBeenCalledTimes(1);
+
+    now = 4000;
+    await handler.sendChatAction(-100, "typing");
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+
+  it("resets transient counters on non-transient errors", async () => {
+    let now = 1000;
+    const fn = vi
+      .fn()
+      .mockRejectedValueOnce(makeTelegramError("Bad Gateway", 502))
+      .mockRejectedValueOnce(new Error("400 Bad Request"))
+      .mockRejectedValueOnce(makeTelegramError("Bad Gateway", 502));
+    const logger = vi.fn();
+    const handler = createTelegramSendChatActionHandler({
+      sendChatActionFn: fn,
+      logger,
+      now: () => now,
+    });
+
+    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow("Bad Gateway");
+    now = 2000;
+    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow("400 Bad Request");
+    now = 3000;
+    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow("Bad Gateway");
+
+    expect(
+      logger.mock.calls.filter(([message]) =>
+        String(message).startsWith("sendChatAction transient error"),
+      ),
+    ).toEqual([
+      ["sendChatAction transient error (1). Cooling down 1000ms before retry."],
+      ["sendChatAction transient error (1). Cooling down 1000ms before retry."],
+    ]);
   });
 
   it("reset() clears suspension", async () => {

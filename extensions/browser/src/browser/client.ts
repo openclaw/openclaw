@@ -18,6 +18,7 @@ import type {
 } from "./client.types.js";
 import { DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS } from "./constants.js";
 import type { BrowserDoctorReport } from "./doctor.js";
+import type { AnnotationItem } from "./screenshot-annotate.js";
 
 export type { BrowserStatus, BrowserTab, BrowserTransport } from "./client.types.js";
 export type { BrowserDoctorCheck, BrowserDoctorReport } from "./doctor.js";
@@ -124,6 +125,11 @@ export type SnapshotResult =
       labels?: boolean;
       labelsCount?: number;
       labelsSkipped?: number;
+      /**
+       * Per-ref bounding boxes when labels=true. Coordinates are in the
+       * captured image's space. Omitted when empty.
+       */
+      annotations?: AnnotationItem[];
       imagePath?: string;
       imageType?: "png" | "jpeg";
       blockedByDialog?: boolean;

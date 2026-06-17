@@ -9,6 +9,7 @@ import {
   currentRunningSnapshotInfo,
   makeTempDir,
   parseMode,
+  parsePositiveInt,
   parseProvider,
   readPositiveIntEnv,
   resolveLatestVersion,
@@ -31,9 +32,12 @@ import {
 } from "./common.ts";
 import { runWindowsBackgroundPowerShell, WindowsGuest } from "./guest-transports.ts";
 import { startHostServer } from "./host-server.ts";
-import { waitForVmStatus } from "./parallels-vm.ts";
+import { ensureVmRunning } from "./parallels-vm.ts";
 import { PhaseRunner } from "./phase-runner.ts";
-import { windowsProviderOnlyPluginIsolationScript } from "./plugin-isolation.ts";
+import {
+  windowsCodexPlatformPackageRepairFunction,
+  windowsProviderOnlyPluginIsolationScript,
+} from "./plugin-isolation.ts";
 import {
   psSingleQuote,
   windowsAgentTurnConfigPatchScript,
@@ -153,7 +157,7 @@ export function parseArgs(argv: string[]): WindowsOptions {
       options.hostIp = value;
     },
     "--host-port": (value) => {
-      options.hostPort = Number(value);
+      options.hostPort = parsePositiveInt(value, "--host-port");
       options.hostPortExplicit = true;
     },
     "--install-url": (value) => {
@@ -482,16 +486,10 @@ class WindowsSmoke extends SmokeRunController<WindowsOptions> {
       throw new Error("snapshot-switch failed after restoring-state retries");
     }
     this.waitForVmNotRestoring(240);
-    if (this.snapshot.state === "poweroff") {
-      waitForVmStatus(this.options.vmName, "stopped", 240, {
-        probeTimeoutMs: () => this.remainingPhaseTimeoutMs(30_000),
-      });
-      say(`Start restored poweroff snapshot ${this.snapshot.name}`);
-      run("prlctl", ["start", this.options.vmName], {
-        quiet: true,
-        timeoutMs: this.remainingPhaseTimeoutMs(120_000),
-      });
-    }
+    ensureVmRunning(this.options.vmName, 240, {
+      probeTimeoutMs: () => this.remainingPhaseTimeoutMs(30_000),
+      transitionTimeoutMs: () => this.remainingPhaseTimeoutMs(120_000),
+    });
   }
 
   private waitForVmNotRestoring(timeoutSeconds: number): void {
@@ -731,6 +729,7 @@ $PSNativeCommandUseErrorActionPreference = $false
 ${windowsPortableGitPathScript}
 ${windowsAgentTurnConfigPatchScript(this.auth.modelId)}
 ${windowsAgentWorkspaceScript("Parallels Windows smoke test assistant.")}
+${windowsCodexPlatformPackageRepairFunction()}
 Set-Item -Path ('Env:' + ${psSingleQuote(this.auth.apiKeyEnv)}) -Value ${psSingleQuote(this.auth.apiKeyValue)}
 $agentOk = $false
 for ($attempt = 1; $attempt -le 2; $attempt++) {
@@ -759,6 +758,10 @@ for ($attempt = 1; $attempt -le 2; $attempt++) {
   if ($agentExitCode -eq 0 -and ($output | Out-String) -match '"finalAssistant(Raw|Visible)Text":\\s*"OK"') {
     $agentOk = $true
     break
+  }
+  if ($agentExitCode -ne 0 -and $attempt -lt 2 -and (Repair-MissingCodexPlatformPackage -Output $output)) {
+    Write-Host "agent turn attempt $attempt hit a missing Codex platform package; retrying"
+    continue
   }
   if ($attempt -lt 2) {
     Write-Host "agent turn attempt $attempt failed or finished without OK response; retrying"

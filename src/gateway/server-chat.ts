@@ -29,7 +29,8 @@ import type {
 import { loadGatewaySessionRow } from "./server-chat.load-gateway-session-row.runtime.js";
 import { persistGatewaySessionLifecycleEvent } from "./server-chat.persist-session-lifecycle.runtime.js";
 import {
-  deriveGatewaySessionLifecycleSnapshot,
+  deriveGatewaySessionLifecycleProjectionPatch,
+  isRestartRecoveryLifecycleEvent,
   isStaleLifecycleEventForSession,
 } from "./session-lifecycle-state.js";
 import { loadSessionEntry } from "./session-utils.js";
@@ -271,6 +272,20 @@ export type AgentEventHandlerOptions = {
     clientRunId: string;
     sessionKey: string;
   }) => void;
+  markTrackedRunTerminalPersisted?: (params: {
+    runId: string;
+    clientRunId: string;
+    sessionKey: string;
+  }) => void;
+  trackTrackedRunTerminalPersistence?: (params: {
+    runId: string;
+    clientRunId: string;
+    sessionKey: string;
+    sessionId?: string;
+    observedAt: number;
+    persistence: Promise<void>;
+  }) => void;
+  resolveActiveLifecycleGenerationForRun?: (runId: string) => string | undefined;
 };
 
 function roundedChatSendTimingMs(value: number): number {
@@ -292,8 +307,15 @@ export function createAgentEventHandler({
   lifecycleErrorRetryGraceMs = AGENT_LIFECYCLE_ERROR_RETRY_GRACE_MS,
   isChatSendRunActive = () => false,
   clearTrackedActiveRun,
+  markTrackedRunTerminalPersisted,
+  trackTrackedRunTerminalPersistence,
+  resolveActiveLifecycleGenerationForRun = () => undefined,
 }: AgentEventHandlerOptions) {
-  type TerminalLifecycleOptions = { skipChatErrorFinal?: boolean };
+  type TerminalLifecycleOptions = {
+    skipChatErrorFinal?: boolean;
+    suppressRestartRecoveryProjection?: boolean;
+    restartRecoveryState?: { suppress: boolean };
+  };
   type PendingTerminalLifecycleError = {
     timer: NodeJS.Timeout;
     event: AgentEventPayload;
@@ -317,13 +339,36 @@ export function createAgentEventHandler({
     chatRunState.clearRun(clientRunId);
   };
 
-  const clearPendingTerminalLifecycleError = (runId: string) => {
+  const clearPendingTerminalLifecycleError = (runId: string, lifecycleGeneration?: string) => {
     const pending = pendingTerminalLifecycleErrors.get(runId);
     if (!pending) {
       return;
     }
+    if (
+      lifecycleGeneration &&
+      pending.event.lifecycleGeneration &&
+      lifecycleGeneration !== pending.event.lifecycleGeneration
+    ) {
+      return;
+    }
     clearTimeout(pending.timer);
     pendingTerminalLifecycleErrors.delete(runId);
+  };
+
+  const resolveRestartRecoveryLifecycleState = (
+    sessionKey: string,
+    agentId: string | undefined,
+    event: AgentEventPayload,
+  ): { suppress: boolean } => {
+    try {
+      const { entry } = loadSessionEntry(sessionKey, {
+        ...(agentId ? { agentId } : {}),
+        clone: false,
+      });
+      return { suppress: isRestartRecoveryLifecycleEvent({ entry, event }) };
+    } catch {
+      return { suppress: false };
+    }
   };
 
   // Only subagent/acp keys can carry spawnedBy (mirrors supportsSpawnLineage in
@@ -364,8 +409,8 @@ export function createAgentEventHandler({
         owningSessionId: evt.sessionId,
         currentSessionId: row?.sessionId,
       })
-        ? deriveGatewaySessionLifecycleSnapshot({
-            session: row
+        ? deriveGatewaySessionLifecycleProjectionPatch({
+            entry: row
               ? {
                   updatedAt: row.updatedAt ?? undefined,
                   status: row.status,
@@ -500,15 +545,20 @@ export function createAgentEventHandler({
       return;
     }
 
-    clearPendingTerminalLifecycleError(evt.runId);
+    const currentRunContext = getAgentRunContext(evt.runId);
+    const activeLifecycleGeneration = resolveActiveLifecycleGenerationForRun(evt.runId);
+    const currentLifecycleGeneration =
+      activeLifecycleGeneration ?? currentRunContext?.lifecycleGeneration;
 
     const chatLink = chatRunState.registry.peek(evt.runId);
     const sessionAgentId = chatLink?.agentId ?? evt.agentId;
     const eventSessionKey =
       typeof evt.sessionKey === "string" && evt.sessionKey.trim() ? evt.sessionKey : undefined;
-    const isControlUiVisible = getAgentRunContext(evt.runId)?.isControlUiVisible ?? true;
+    const isControlUiVisible = currentRunContext?.isControlUiVisible ?? true;
     const sessionKey =
       chatLink?.sessionKey ?? eventSessionKey ?? resolveSessionKeyForRun(evt.runId);
+    const restartRecoverySessionKey = eventSessionKey ?? sessionKey;
+    const restartRecoveryAgentId = evt.agentId ?? sessionAgentId;
     const clientRunId = chatLink?.clientRunId ?? evt.runId;
     const eventRunId = chatLink?.clientRunId ?? evt.runId;
     const isAborted =
@@ -516,8 +566,36 @@ export function createAgentEventHandler({
     const deliverySessionKey = sessionKey
       ? resolveSessionDeliveryKey(sessionKey, sessionAgentId)
       : undefined;
+    const restartRecoveryState =
+      opts?.restartRecoveryState ??
+      (restartRecoverySessionKey
+        ? resolveRestartRecoveryLifecycleState(
+            restartRecoverySessionKey,
+            restartRecoveryAgentId,
+            evt,
+          )
+        : undefined);
+    const suppressRestartRecoveryProjection =
+      opts?.suppressRestartRecoveryProjection === true ||
+      Boolean(
+        evt.lifecycleGeneration &&
+        activeLifecycleGeneration &&
+        evt.lifecycleGeneration !== activeLifecycleGeneration,
+      ) ||
+      restartRecoveryState?.suppress === true;
+    const isSupersededRestartRecoveryEvent =
+      suppressRestartRecoveryProjection &&
+      Boolean(
+        evt.lifecycleGeneration &&
+        currentLifecycleGeneration &&
+        evt.lifecycleGeneration !== currentLifecycleGeneration,
+      );
+    if (isSupersededRestartRecoveryEvent) {
+      return;
+    }
 
     if (
+      !suppressRestartRecoveryProjection &&
       sessionKey &&
       (isControlUiVisible ||
         (deliverySessionKey ? sessionMessageSubscribers.get(deliverySessionKey).size > 0 : false))
@@ -573,33 +651,68 @@ export function createAgentEventHandler({
 
     toolEventRecipients.markFinal(evt.runId);
     clearBufferedChatState(clientRunId);
+    if (suppressRestartRecoveryProjection && chatLink) {
+      chatRunState.registry.remove(evt.runId, clientRunId, sessionKey);
+    }
     clearAgentRunContext(evt.runId);
     agentRunSeq.delete(evt.runId);
     agentRunSeq.delete(clientRunId);
 
     if (sessionKey) {
       clearTrackedActiveRun?.({ runId: evt.runId, clientRunId, sessionKey });
-      void persistGatewaySessionLifecycleEvent({
-        sessionKey,
-        agentId: sessionAgentId,
-        event: evt,
-      }).catch(() => undefined);
-      const sessionEventConnIds = sessionEventSubscribers.getAll();
-      if (sessionEventConnIds.size > 0) {
-        broadcastToConnIds(
-          "sessions.changed",
-          {
-            sessionKey,
-            ...(sessionAgentId ? { agentId: sessionAgentId } : {}),
-            phase: lifecyclePhase,
+      if (!suppressRestartRecoveryProjection) {
+        const persistence = persistGatewaySessionLifecycleEvent({
+          sessionKey,
+          agentId: sessionAgentId,
+          event: evt,
+        });
+        trackTrackedRunTerminalPersistence?.({
+          runId: evt.runId,
+          clientRunId,
+          sessionKey,
+          sessionId: evt.sessionId,
+          observedAt: evt.ts,
+          persistence,
+        });
+        const broadcastSessionChange = (snapshotEvent?: AgentEventPayload) => {
+          const sessionEventConnIds = sessionEventSubscribers.getAll();
+          if (sessionEventConnIds.size === 0) {
+            return;
+          }
+          broadcastToConnIds(
+            "sessions.changed",
+            {
+              sessionKey,
+              ...(sessionAgentId ? { agentId: sessionAgentId } : {}),
+              phase: lifecyclePhase,
+              runId: evt.runId,
+              ...(eventRunId !== evt.runId ? { clientRunId: eventRunId } : {}),
+              ts: evt.ts,
+              ...buildSessionEventSnapshot(sessionKey, snapshotEvent, sessionAgentId),
+            },
+            sessionEventConnIds,
+            { dropIfSlow: true },
+          );
+        };
+        const markPersisted = () => {
+          markTrackedRunTerminalPersisted?.({
             runId: evt.runId,
-            ...(eventRunId !== evt.runId ? { clientRunId: eventRunId } : {}),
-            ts: evt.ts,
-            ...buildSessionEventSnapshot(sessionKey, evt, sessionAgentId),
-          },
-          sessionEventConnIds,
-          { dropIfSlow: true },
-        );
+            clientRunId,
+            sessionKey,
+          });
+        };
+        // Terminal writes serialize with restart markers. Reload only after the
+        // write so subscribers see the canonical post-race session state.
+        void persistence
+          .then(() => {
+            markPersisted();
+            broadcastSessionChange();
+          })
+          .catch(() => {
+            // Persistence recovery remains tracked by the controller entry, but
+            // subscribers still need a terminal projection instead of hanging.
+            broadcastSessionChange(evt);
+          });
       }
     }
   };
@@ -1018,24 +1131,48 @@ export function createAgentEventHandler({
   return (evt: AgentEventPayload) => {
     const lifecyclePhase =
       evt.stream === "lifecycle" && typeof evt.data?.phase === "string" ? evt.data.phase : null;
-    if (lifecyclePhase !== null && lifecyclePhase !== "error") {
-      clearPendingTerminalLifecycleError(evt.runId);
-    }
 
     const chatLink = chatRunState.registry.peek(evt.runId);
     const sessionAgentId = chatLink?.agentId ?? evt.agentId;
     const eventSessionKey =
       typeof evt.sessionKey === "string" && evt.sessionKey.trim() ? evt.sessionKey : undefined;
     const runContext = getAgentRunContext(evt.runId);
+    const activeLifecycleGeneration = resolveActiveLifecycleGenerationForRun(evt.runId);
     const isControlUiVisible = runContext?.isControlUiVisible ?? true;
     const isHeartbeat = runContext?.isHeartbeat;
     const sessionKey =
       chatLink?.sessionKey ?? eventSessionKey ?? resolveSessionKeyForRun(evt.runId);
+    const restartRecoverySessionKey = eventSessionKey ?? sessionKey;
+    const restartRecoveryAgentId = evt.agentId ?? sessionAgentId;
     const clientRunId = chatLink?.clientRunId ?? evt.runId;
     const eventRunId = chatLink?.clientRunId ?? evt.runId;
     const eventForClients = chatLink ? { ...evt, runId: eventRunId } : evt;
     const isAborted =
       chatRunState.abortedRuns.has(clientRunId) || chatRunState.abortedRuns.has(evt.runId);
+    const restartRecoveryState = restartRecoverySessionKey
+      ? resolveRestartRecoveryLifecycleState(restartRecoverySessionKey, restartRecoveryAgentId, evt)
+      : undefined;
+    const suppressRestartRecoveryLifecycle =
+      lifecyclePhase !== null &&
+      (Boolean(
+        evt.lifecycleGeneration &&
+        activeLifecycleGeneration &&
+        evt.lifecycleGeneration !== activeLifecycleGeneration,
+      ) ||
+        restartRecoveryState?.suppress === true);
+    if (suppressRestartRecoveryLifecycle) {
+      clearPendingTerminalLifecycleError(evt.runId, evt.lifecycleGeneration);
+      if (lifecyclePhase === "end" || lifecyclePhase === "error") {
+        finalizeLifecycleEvent(evt, {
+          suppressRestartRecoveryProjection: true,
+          restartRecoveryState,
+        });
+      }
+      return;
+    }
+    if (lifecyclePhase !== null && lifecyclePhase !== "error") {
+      clearPendingTerminalLifecycleError(evt.runId);
+    }
     // Include sessionKey so Control UI can filter tool streams per session.
     const spawnedBy = sessionKey ? resolveSpawnedBy(sessionKey) : null;
     const agentPayload = sessionKey
@@ -1263,15 +1400,15 @@ export function createAgentEventHandler({
       // the runId. Once the runner marks fallback as exhausted, clear chat state
       // immediately so webchat sessions do not stay in progress until the timer.
       if (isAborted || isFallbackExhaustedFailure || lifecycleErrorRetryGraceMs <= 0) {
-        finalizeLifecycleEvent(evt, { skipChatErrorFinal });
+        finalizeLifecycleEvent(evt, { skipChatErrorFinal, restartRecoveryState });
       } else {
-        scheduleTerminalLifecycleError(evt, { skipChatErrorFinal });
+        scheduleTerminalLifecycleError(evt, { skipChatErrorFinal, restartRecoveryState });
       }
       return;
     }
 
     if (lifecyclePhase === "end") {
-      finalizeLifecycleEvent(evt);
+      finalizeLifecycleEvent(evt, { restartRecoveryState });
       return;
     }
 
