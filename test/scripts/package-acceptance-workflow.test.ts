@@ -113,6 +113,10 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain('evidence_checksum_asset="${evidence_asset}.sha256"');
     expect(workflow).toContain('--pattern "$evidence_checksum_asset"');
     expect(workflow).toContain('fallback_package_version="${BASH_REMATCH[1]}"');
+    expect(workflow).toContain("main_ref: ${{ steps.inputs.outputs.main_ref }}");
+    expect(workflow).toContain("TRIGGER_SHA: ${{ github.sha }}");
+    expect(workflow).toContain('main_ref="$TRIGGER_SHA"');
+    expect(workflow).toContain("ref: ${{ needs.resolve.outputs.main_ref }}");
     expect(workflow).toContain("Stable closeout is required for $tag");
     expect(checksumIndex).toBeGreaterThan(-1);
     expect(evidenceReadIndex).toBeGreaterThan(checksumIndex);

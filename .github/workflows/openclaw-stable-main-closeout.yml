@@ -36,6 +36,7 @@ jobs:
       release_publish_run_id: ${{ steps.inputs.outputs.release_publish_run_id }}
       rollback_drill_date: ${{ steps.inputs.outputs.rollback_drill_date }}
       rollback_drill_id: ${{ steps.inputs.outputs.rollback_drill_id }}
+      main_ref: ${{ steps.inputs.outputs.main_ref }}
       should_closeout: ${{ steps.inputs.outputs.should_closeout }}
       tag: ${{ steps.inputs.outputs.tag }}
     steps:
@@ -55,9 +56,11 @@ jobs:
           MANUAL_TAG: ${{ inputs.tag }}
           ROLLBACK_DRILL_DATE: ${{ inputs.rollback_drill_date || vars.RELEASE_ROLLBACK_DRILL_DATE }}
           ROLLBACK_DRILL_ID: ${{ inputs.rollback_drill_id || vars.RELEASE_ROLLBACK_DRILL_ID }}
+          TRIGGER_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           if [[ "$EVENT_NAME" == "push" ]]; then
+            main_ref="$TRIGGER_SHA"
             tag="$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --limit 100 \
               --json tagName,isPrerelease,publishedAt \
               --jq '[.[] | select(.isPrerelease | not) | select(.tagName | test("^v[0-9]{4}\\.[0-9]+\\.[0-9]+(-[0-9]+)?$"))] | sort_by(.publishedAt) | last | .tagName // empty')"
@@ -98,6 +101,8 @@ jobs:
               echo "should_closeout=false" >> "$GITHUB_OUTPUT"
               exit 0
             fi
+          else
+            main_ref="main"
           fi
           evidence_dir="$RUNNER_TEMP/release-postpublish-evidence"
           mkdir -p "$evidence_dir"
@@ -130,6 +135,7 @@ jobs:
             echo "release_publish_run_id=$release_publish_run_id"
             echo "rollback_drill_date=$ROLLBACK_DRILL_DATE"
             echo "rollback_drill_id=$ROLLBACK_DRILL_ID"
+            echo "main_ref=$main_ref"
             echo "should_closeout=true"
             echo "tag=$tag"
           } >> "$GITHUB_OUTPUT"
@@ -141,10 +147,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - name: Checkout main
+      - name: Checkout resolved main state
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          ref: main
+          ref: ${{ needs.resolve.outputs.main_ref }}
           fetch-depth: 1
           persist-credentials: false
 
