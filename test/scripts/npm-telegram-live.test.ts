@@ -139,10 +139,37 @@ describe("package Telegram live Docker E2E", () => {
     expect(script).toContain(
       'OUTPUT_DIR="${OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR:-.artifacts/qa-e2e/npm-telegram-live/$RUN_ID}"',
     );
-    expect(script).toContain('-e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR"');
+    expect(script).toContain(
+      'OUTPUT_DIR_CONTAINER="/app/.artifacts/qa-e2e/npm-telegram-live-output"',
+    );
+    expect(script).toContain('-e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR_CONTAINER"');
     expect(script).not.toContain(
       'OUTPUT_DIR="${OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR:-.artifacts/qa-e2e/npm-telegram-live}"',
     );
+  });
+
+  it("mounts configured output paths before entering the container", () => {
+    const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
+    const dockerEnvStart = script.indexOf("docker_env=(");
+    const dockerEnvEnd = script.indexOf(")\n\nforward_env_if_set", dockerEnvStart);
+    const dockerEnv = script.slice(dockerEnvStart, dockerEnvEnd);
+
+    expect(script).toContain('*) OUTPUT_DIR_HOST="$ROOT_DIR/$OUTPUT_DIR" ;;');
+    expect(script).toContain('mkdir -p "$OUTPUT_DIR_HOST"');
+    expect(dockerEnv).toContain('-e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR_CONTAINER"');
+    expect(dockerEnv).not.toContain('-e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR"');
+    expect(script).toContain('-v "$OUTPUT_DIR_HOST:$OUTPUT_DIR_CONTAINER"');
+  });
+
+  it("uses the container temp root for OpenClaw runtime scratch files", () => {
+    const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
+    const dockerEnvStart = script.indexOf("docker_env=(");
+    const dockerEnvEnd = script.indexOf(")\n\nforward_env_if_set", dockerEnvStart);
+    const dockerEnv = script.slice(dockerEnvStart, dockerEnvEnd);
+
+    expect(dockerEnvStart).toBeGreaterThanOrEqual(0);
+    expect(dockerEnvEnd).toBeGreaterThan(dockerEnvStart);
+    expect(dockerEnv).toContain("-e TMPDIR=/tmp");
   });
 
   it("forwards repeated RTT controls to the package Telegram live lane", () => {

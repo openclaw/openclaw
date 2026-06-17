@@ -78,6 +78,64 @@ describe("check-workflows", () => {
     }
   });
 
+  it("bootstraps pinned pre-commit in a temporary Python venv when needed", () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "check-workflows-"));
+    try {
+      const binDir = path.join(tempDir, "bin");
+      const markerPath = path.join(tempDir, "python.txt");
+      mkdirSync(binDir);
+      writeFileSync(path.join(binDir, "node"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      writeFileSync(
+        path.join(binDir, "python3"),
+        [
+          "#!/bin/sh",
+          'if [ "$1" = "--version" ]; then exit 0; fi',
+          'if [ "$1" = "-m" ] && [ "$2" = "pre_commit" ] && [ "$3" = "--version" ]; then exit 1; fi',
+          'if [ "$1" = "-m" ] && [ "$2" = "pip" ]; then',
+          '  printf "%s\\n" "$*" >> "$PRE_COMMIT_BOOTSTRAP_MARKER"',
+          "  exit 0",
+          "fi",
+          'if [ "$1" = "-m" ] && [ "$2" = "pre_commit" ]; then',
+          '  printf "%s\\n" "$*" >> "$PRE_COMMIT_BOOTSTRAP_MARKER"',
+          "  exit 0",
+          "fi",
+          'if [ "$1" = "-m" ] && [ "$2" = "venv" ]; then',
+          '  /bin/mkdir -p "$3/bin"',
+          '  /bin/cp "$0" "$3/bin/python"',
+          '  /bin/chmod +x "$3/bin/python"',
+          "  exit 0",
+          "fi",
+          "exit 0",
+          "",
+        ].join("\n"),
+        { mode: 0o755 },
+      );
+
+      const result = spawnSync(process.execPath, [scriptPath], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          PATH: binDir,
+          PRE_COMMIT_BOOTSTRAP_MARKER: markerPath,
+        },
+      });
+
+      expect(result.status).toBe(0);
+      const pythonArgs = readFileSync(markerPath, "utf8");
+      expect(pythonArgs).toContain(
+        "-m pip install --disable-pip-version-check pre-commit==4.2.0",
+      );
+      expect(pythonArgs).toContain(
+        "-m pre_commit run --config .pre-commit-config.yaml actionlint --files",
+      );
+      expect(pythonArgs).toContain(
+        "-m pre_commit run --config .pre-commit-config.yaml zizmor --files",
+      );
+    } finally {
+      rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
   it("keeps Windows WSL2 probe output normalized through the shared wrapper", () => {
     const workflow = readFileSync(".github/workflows/windows-testbox-probe.yml", "utf8");
 
