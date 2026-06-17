@@ -331,7 +331,15 @@ async function persistTextTurnTranscript(
         if (!params.embeddedAssistantGapFill) {
           return true;
         }
-        const latest = await readTailAssistantTextFromSessionTranscript(sessionFile);
+        let latest = await readTailAssistantTextFromSessionTranscript(sessionFile);
+        // Retry once: the runtime's async file write may not have been
+        // processed by the event loop yet. setImmediate fires after I/O
+        // callbacks (libuv check phase), so pending fs.appendFile writes
+        // to the transcript complete before the retry reads it.
+        if (!latest) {
+          await new Promise<void>((r) => { setImmediate(r); });
+          latest = await readTailAssistantTextFromSessionTranscript(sessionFile);
+        }
         const normalizedReply = normalizeTranscriptMirrorText(replyText);
         const normalizedLatest = latest?.text ? normalizeTranscriptMirrorText(latest.text) : "";
         return !normalizedLatest || normalizedLatest !== normalizedReply;

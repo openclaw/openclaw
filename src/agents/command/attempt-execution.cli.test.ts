@@ -28,6 +28,7 @@ const runAgentAttempt = (
 
 const runCliAgentMock = vi.hoisted(() => vi.fn());
 const runEmbeddedAgentMock = vi.hoisted(() => vi.fn());
+const readTailSpy = vi.hoisted(() => vi.fn());
 const providerAuthAliasMocks = vi.hoisted(() => ({
   resolveProviderAuthAliasMap: vi.fn(() => ({})),
   resolveProviderIdForAuth: vi.fn(
@@ -98,6 +99,15 @@ vi.mock("../model-runtime-aliases.js", async () => {
 vi.mock("../embedded-agent.js", () => ({
   runEmbeddedAgent: runEmbeddedAgentMock,
 }));
+
+vi.mock("../../config/sessions/transcript.js", async (importOriginal) => {
+  const mod = await importOriginal<typeof import("../../config/sessions/transcript.js")>();
+  readTailSpy.mockImplementation(mod.readTailAssistantTextFromSessionTranscript);
+  return {
+    ...mod,
+    readTailAssistantTextFromSessionTranscript: readTailSpy,
+  };
+});
 
 function makeCliResult(text: string): EmbeddedAgentRunResult {
   return {
@@ -1473,6 +1483,74 @@ describe("CLI attempt execution", () => {
     expectRecordFields(requireRecord(messages[2], "deduped assistant message"), {
       content: [{ type: "text", text: "same answer" }],
     });
+  });
+
+  it("embedded assistant gap-fill retries tail read once when the runtime write has not flushed", async () => {
+    const sessionKey = "agent:main:subagent:embedded-gap-fill-retry-tail";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-embedded-gap-fill-retry-tail",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+
+    const result = makeCliResult("retry answer");
+    result.meta.executionTrace = {
+      winnerProvider: "anthropic",
+      winnerModel: "claude-opus-4-6",
+      fallbackUsed: false,
+      runner: "embedded",
+    };
+
+    // First call: writes the assistant message to the transcript
+    const updatedFirst = await persistCliTurnTranscript({
+      body: "ignored for gap fill",
+      result,
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      storePath,
+      sessionAgentId: "main",
+      sessionCwd: tmpDir,
+      config: {},
+      embeddedAssistantGapFill: true,
+    });
+    const sessionFile = updatedFirst?.sessionFile;
+    if (typeof sessionFile !== "string") {
+      throw new Error("Expected CLI transcript session file.");
+    }
+
+    let messages = await readSessionMessages(sessionFile);
+    expect(messages).toHaveLength(1);
+    expectRecordFields(requireRecord(messages[0], "assistant message"), {
+      role: "assistant",
+      content: [{ type: "text", text: "retry answer" }],
+    });
+
+    // Simulate flush race: first read returns undefined, retry reads the real value.
+    const realReadTail = readTailSpy.getMockImplementation()!;
+    readTailSpy
+      .mockImplementationOnce(async () => undefined)
+      .mockImplementationOnce(realReadTail);
+
+    await persistCliTurnTranscript({
+      body: "still ignored",
+      result,
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionEntry: updatedFirst,
+      sessionStore,
+      storePath,
+      sessionAgentId: "main",
+      sessionCwd: tmpDir,
+      config: {},
+      embeddedAssistantGapFill: true,
+    });
+
+    // Verify no duplicate was created despite the simulated flush race.
+    messages = await readSessionMessages(sessionFile);
+    expect(messages).toHaveLength(1);
   });
 
   it("persists the transcript body instead of runtime-only CLI prompt context", async () => {
