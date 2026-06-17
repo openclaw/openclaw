@@ -50,12 +50,13 @@ describe("trajectory runtime", () => {
   });
 
   it("sanitizes session ids when resolving an override directory", () => {
+    const trajectoryDir = path.resolve("/tmp/traces");
     expect(
       resolveTrajectoryFilePath({
-        env: { OPENCLAW_TRAJECTORY_DIR: "/tmp/traces" },
+        env: { OPENCLAW_TRAJECTORY_DIR: trajectoryDir },
         sessionId: "../evil/session",
       }),
-    ).toBe("/tmp/traces/___evil_session.jsonl");
+    ).toBe(path.join(trajectoryDir, "___evil_session.jsonl"));
   });
 
   it("records sanitized runtime events by default", () => {
@@ -132,6 +133,36 @@ describe("trajectory runtime", () => {
     expect(Buffer.byteLength(writes[0], "utf8")).toBeLessThanOrEqual(
       TRAJECTORY_RUNTIME_EVENT_MAX_BYTES + 1,
     );
+  });
+
+  it("clamps the configured event cap to the active runtime file budget", async () => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const maxRuntimeFileBytes = 1_200;
+    const recorder = createTrajectoryRuntimeRecorder({
+      env: { OPENCLAW_TRAJECTORY_RUNTIME_EVENT_MAX_BYTES: "1mb" },
+      sessionId: "session-1",
+      sessionFile,
+      maxRuntimeFileBytes,
+    });
+
+    const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
+    runtimeRecorder.recordEvent("context.compiled", {
+      payload: "x".repeat(2_000),
+    });
+    await runtimeRecorder.flush();
+
+    const raw = fs.readFileSync(
+      resolveTrajectoryFilePath({ sessionFile, sessionId: "session-1" }),
+      "utf8",
+    );
+    expect(Buffer.byteLength(raw, "utf8")).toBeLessThanOrEqual(maxRuntimeFileBytes);
+    const parsed = JSON.parse(raw);
+    expect(parsed.data).toMatchObject({
+      truncated: true,
+      limitBytes: maxRuntimeFileBytes - 1,
+      reason: "trajectory-event-size-limit",
+    });
   });
 
   it("rotates runtime capture at the file budget and keeps newer events", async () => {
