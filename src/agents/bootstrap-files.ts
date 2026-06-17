@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { appendAppProfileBootstrapFile } from "./app-profile-context.js";
 import { applyBootstrapHookOverrides } from "./bootstrap-hooks.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import {
@@ -35,13 +36,20 @@ export async function resolveBootstrapFilesForRun(params: {
     sessionKey,
   );
 
-  return applyBootstrapHookOverrides({
+  const withHooks = await applyBootstrapHookOverrides({
     files: bootstrapFiles,
     workspaceDir: params.workspaceDir,
     config: params.config,
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
     agentId: params.agentId,
+  });
+  // Phase 3: inject the per-user app_profile as a synthetic APP_PROFILE.md context
+  // file for app-user sessions (no-op otherwise). After hooks so it can't be
+  // stripped; before the buildBootstrapContextFiles clamp so it is budgeted too.
+  return appendAppProfileBootstrapFile(withHooks, {
+    workspaceDir: params.workspaceDir,
+    sessionKey: params.sessionKey,
   });
 }
 
