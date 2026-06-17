@@ -43,8 +43,8 @@ plus decisions locked with the owner. **It supersedes any conflicting detail in 
      if verified to belong to `currentGroupId`.
    - **Erasure = admin-only**, never model-exposed.
    - **Per-session identity handoff — pick ONE and document it** (do _not_ rely on a static
-     agent-level env var): (a) proxy resolves group*id server-side from a signed per-session
-     token *(preferred)\_, (b) bridge injects session context on every tool call, or (c) per-run
+     agent-level env var): (a) proxy resolves group\*id server-side from a signed per-session
+     token (preferred), (b) bridge injects session context on every tool call, or (c) per-run
      MCP process per session with a scoped env var. **First task: determine how mcp-bridge
      actually passes session identity** (read `docs/gateway/bridge-protocol.md` + source), then choose.
 
@@ -92,7 +92,7 @@ Concretely:
 2. The **same memory store backs all interactions** for that user, regardless of channel (Telegram _or_ app).
 3. When a user asks to "see my workspace / my files," the agent returns **only that user's own file** — never a listing of the workspace or anyone else's data.
 
-This plan is **Graphiti-based**, using the open-source code from **https://github.com/getzep/graphiti** (the `mcp_server/` component), self-hosted next to the `life` gateway.
+This plan is **Graphiti-based**, using the open-source code from **[getzep/graphiti](https://github.com/getzep/graphiti)** (the `mcp_server/` component), self-hosted next to the `life` gateway.
 
 > **Note on the original brief:** the first draft proposed AppFlowy. That is dropped — AppFlowy is an 11-service collaboration suite with no service-account model and no programmatic per-user document isolation (isolation is workspace-level, document ACLs have no public API). It is the wrong tool for programmatic agent memory. Graphiti is purpose-built for exactly this.
 

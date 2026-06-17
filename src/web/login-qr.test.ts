@@ -61,7 +61,10 @@ describe("login-qr", () => {
   it("reuses an in-progress forced login instead of resetting it on poll", async () => {
     createWaSocketMock.mockImplementationOnce(
       async (_printQr: boolean, _verbose: boolean, opts?: { onQr?: (qr: string) => void }) => {
-        const sock = { ws: { close: vi.fn() } };
+        // test mock: only the fields under test (sock.ws.close)
+        const sock = { ws: { close: vi.fn() } } as unknown as Awaited<
+          ReturnType<typeof createWaSocket>
+        >;
         setTimeout(() => opts?.onQr?.("delayed-qr"), 25);
         return sock;
       },

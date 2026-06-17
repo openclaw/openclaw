@@ -26,10 +26,10 @@ const MANIFEST_PATH = path.join(SKILLS_DIR, "manifest.json");
 // ── auth mock ─────────────────────────────────────────────────────────────────
 
 const { authorizeGatewayBearerRequestOrReplyMock } = vi.hoisted(() => ({
-  authorizeGatewayBearerRequestOrReplyMock: vi.fn<
-    [{ req: IncomingMessage; res: ServerResponse; auth: unknown }],
-    Promise<boolean>
-  >(),
+  authorizeGatewayBearerRequestOrReplyMock:
+    vi.fn<
+      (params: { req: IncomingMessage; res: ServerResponse; auth: unknown }) => Promise<boolean>
+    >(),
 }));
 
 vi.mock("../http-auth-helpers.js", () => ({

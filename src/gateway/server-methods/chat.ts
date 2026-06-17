@@ -43,6 +43,7 @@ import {
   appendMediaBlocksFromPayload,
   buildAssistantMessageFromContent,
   type AssistantContentBlock,
+  type AssistantTextContentBlock,
   resolveWebchatMediaLocalRoots,
 } from "../webchat-assistant-content.js";
 import { formatForLog } from "../ws-log.js";
@@ -379,13 +380,12 @@ function appendAssistantTranscriptMessage(params: {
 
   const now = Date.now();
   const labelPrefix = params.label ? `[${params.label}]\n\n` : "";
-  const contentBlocks: Array<Record<string, unknown>> = Array.isArray(params.content)
+  const contentBlocks: AssistantContentBlock[] = Array.isArray(params.content)
     ? params.content.map((block) => ({ ...block }))
     : [];
   if (labelPrefix) {
     const firstTextBlock = contentBlocks.find(
-      (block): block is Record<string, unknown> & { text: string } =>
-        block.type === "text" && typeof block.text === "string",
+      (block): block is AssistantTextContentBlock => block.type === "text",
     );
     if (firstTextBlock) {
       firstTextBlock.text = `${labelPrefix}${firstTextBlock.text}`;
@@ -416,7 +416,10 @@ function appendAssistantTranscriptMessage(params: {
   };
   const messageBody: AppendMessageArg & Record<string, unknown> = {
     role: "assistant",
-    content: contentBlocks,
+    // Pi's AssistantMessage.content only models text/thinking/toolCall blocks, but webchat
+    // assistant messages may also carry image blocks; the transcript JSONL stores them as-is.
+    // Narrow at this boundary so the richer (text|image) content satisfies the Pi message type.
+    content: contentBlocks as Extract<AppendMessageArg, { role: "assistant" }>["content"],
     timestamp: now,
     // Pi stopReason is a strict enum; this is not model output, but we still store it as a
     // normal assistant message so it participates in the session parentId chain.

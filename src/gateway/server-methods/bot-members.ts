@@ -1,4 +1,3 @@
-import { loadConfig } from "../../config/config.js";
 import {
   addChannelAllowFromStoreEntry,
   removeChannelAllowFromStoreEntry,

@@ -35,7 +35,7 @@ describe("self_info tool", () => {
     callGatewayMock.mockResolvedValue(identityResult);
 
     const tool = createSelfInfoTool();
-    const result = await tool.execute("call-1", { action: "identity" });
+    await tool.execute("call-1", { action: "identity" });
 
     expect(callGatewayMock).toHaveBeenCalledOnce();
     const call = callGatewayMock.mock.calls[0]?.[0] as { method?: string };
@@ -52,7 +52,8 @@ describe("self_info tool", () => {
 
     const content = result?.content;
     expect(content).toBeDefined();
-    const text = Array.isArray(content) ? content[0]?.text : undefined;
+    const firstBlock = Array.isArray(content) ? content[0] : undefined;
+    const text = firstBlock?.type === "text" ? firstBlock.text : undefined;
     expect(text).toBeDefined();
     const parsed = JSON.parse(text as string);
     expect(parsed.ok).toBe(true);
@@ -67,7 +68,8 @@ describe("self_info tool", () => {
     const result = await tool.execute("call-3", { action: "widget_link" });
 
     const content = result?.content;
-    const text = Array.isArray(content) ? content[0]?.text : undefined;
+    const firstBlock = Array.isArray(content) ? content[0] : undefined;
+    const text = firstBlock?.type === "text" ? firstBlock.text : undefined;
     const parsed = JSON.parse(text as string);
     expect(parsed.ok).toBe(false);
     expect(parsed.error).toContain("not configured");
@@ -93,7 +95,8 @@ describe("self_info tool", () => {
     const result = await tool.execute("call-5", { action: "model" });
 
     const content = result?.content;
-    const text = Array.isArray(content) ? content[0]?.text : undefined;
+    const firstBlock = Array.isArray(content) ? content[0] : undefined;
+    const text = firstBlock?.type === "text" ? firstBlock.text : undefined;
     const parsed = JSON.parse(text as string);
     expect(parsed.defaultModel).toBe("claude-sonnet-4-20250514");
   });
@@ -116,7 +119,8 @@ describe("self_info tool", () => {
     const result = await tool.execute("call-6", { action: "config_summary" });
 
     const content = result?.content;
-    const text = Array.isArray(content) ? content[0]?.text : undefined;
+    const firstBlock = Array.isArray(content) ? content[0] : undefined;
+    const text = firstBlock?.type === "text" ? firstBlock.text : undefined;
     const parsed = JSON.parse(text as string);
 
     // Safe fields should be present

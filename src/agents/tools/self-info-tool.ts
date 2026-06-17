@@ -94,11 +94,7 @@ ACTIONS:
           return jsonResult(result);
         }
         case "widget_link": {
-          const config = await callGatewayTool<Record<string, unknown>>(
-            "config.get",
-            gatewayOpts,
-            {},
-          );
+          const config = await callGatewayTool("config.get", gatewayOpts, {});
           const meta = config?.meta as Record<string, unknown> | undefined;
           const widgetBaseUrl =
             typeof meta?.widgetBaseUrl === "string" ? meta.widgetBaseUrl.trim() : undefined;
@@ -118,11 +114,7 @@ ACTIONS:
           return jsonResult(result);
         }
         case "model": {
-          const config = await callGatewayTool<Record<string, unknown>>(
-            "config.get",
-            gatewayOpts,
-            {},
-          );
+          const config = await callGatewayTool("config.get", gatewayOpts, {});
           const agents = config?.agents as Record<string, unknown> | undefined;
           const defaults = agents?.defaults as Record<string, unknown> | undefined;
           const model = defaults?.model;
@@ -141,11 +133,7 @@ ACTIONS:
           });
         }
         case "config_summary": {
-          const config = await callGatewayTool<Record<string, unknown>>(
-            "config.get",
-            gatewayOpts,
-            {},
-          );
+          const config = await callGatewayTool("config.get", gatewayOpts, {});
           const safeFields = extractSafeConfigFields(config);
           // Add channel enabled status
           const channels = config?.channels as Record<string, unknown> | undefined;

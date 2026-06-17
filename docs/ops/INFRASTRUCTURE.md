@@ -89,12 +89,12 @@ Full activation matrix + required dashboard changes:
 
 ### 2.3 Identity & user management — 4-layer model
 
-| #   | Layer                               | Who                                                | Auth (today)                            | Store                             |
-| --- | ----------------------------------- | -------------------------------------------------- | --------------------------------------- | --------------------------------- |
-| 1   | Platform                            | AgentGlob staff (`system_owner`, `platform_admin`) | NextAuth v5 JWT                         | Firestore `users`                 |
-| 2   | Org / workspace                     | Agent owners (`owner`, `admin`)                    | NextAuth v5 (Google + email/pw)         | `workspaces`, `workspace_members` |
-| 3   | Agent collaborators                 | `maintainer` / `operator` / `viewer`               | NextAuth (same session)                 | `agent_role_assignments`          |
-| 4   | **Bot members** — agents' end-users | custom `jose` HS256 JWT + bcrypt                   | `bot_members*`, `channel_verifications` |
+| #   | Layer               | Who                                                | Auth (today)                     | Store                                   |
+| --- | ------------------- | -------------------------------------------------- | -------------------------------- | --------------------------------------- |
+| 1   | Platform            | AgentGlob staff (`system_owner`, `platform_admin`) | NextAuth v5 JWT                  | Firestore `users`                       |
+| 2   | Org / workspace     | Agent owners (`owner`, `admin`)                    | NextAuth v5 (Google + email/pw)  | `workspaces`, `workspace_members`       |
+| 3   | Agent collaborators | `maintainer` / `operator` / `viewer`               | NextAuth (same session)          | `agent_role_assignments`                |
+| 4   | **Bot members**     | Agents' end-users                                  | custom `jose` HS256 JWT + bcrypt | `bot_members*`, `channel_verifications` |
 
 Layers 1–3 are stable. **Layer 4 is in PLAN:** move end-user auth to a managed IdP (Clerk, with
 **Better Auth** as the OSS/self-hosted fallback) over a 6-phase rollout; NextAuth stays for
@@ -252,7 +252,7 @@ together into one product. Architecture of record here; details live in the link
 ### 8.1 Havaya.me agent (`life`) — per-user memory (Graphiti) — US host
 
 Gives the `life` agent durable, per-user memory across Telegram and the Havaya app. Full
-deploy + runbook in [`ops/graphiti-life/`](../../ops/graphiti-life/) (compose, proxy, hook,
+deploy + runbook in `ops/graphiti-life/` (compose, proxy, hook,
 tests); plan in `docs/experiments/plans/life-per-user-memory.md`.
 
 ```
