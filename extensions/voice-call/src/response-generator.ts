@@ -318,6 +318,10 @@ export async function generateVoiceResponse(
   const runId = `voice:${callId}:${Date.now()}`;
 
   try {
+    // Collect payloads via onBlockReply callback so TTS can receive text
+    // before post-turn compaction completes (#79521).
+    const blockReplyPayloads: VoiceResponsePayload[] = [];
+
     const result = await agentRuntime.runEmbeddedAgent({
       sessionId,
       sessionKey: resolvedSessionKey,
@@ -343,9 +347,17 @@ export async function generateVoiceResponse(
       extraSystemPrompt,
       agentDir,
       toolsAllow,
+      blockReplyBreak: "text_end",
+      onBlockReply: (payload) => {
+        blockReplyPayloads.push(payload);
+      },
     });
 
-    const text = extractSpokenTextFromPayloads((result.payloads ?? []) as VoiceResponsePayload[]);
+    const text = extractSpokenTextFromPayloads(
+      blockReplyPayloads.length > 0
+        ? blockReplyPayloads
+        : ((result.payloads ?? []) as VoiceResponsePayload[]),
+    );
 
     if (!text && result.meta?.aborted) {
       return { text: null, error: "Response generation was aborted" };
