@@ -123,12 +123,12 @@ async function runCrablineJsonCommand(params: {
       env: params.env ?? process.env,
       maxBuffer: 1024 * 1024,
     });
-    const stdout = result.stdout.toString();
+    const stdout = result.stdout;
     return {
       json: JSON.parse(stdout),
       result: {
         command: displayCommand,
-        stderr: result.stderr.toString(),
+        stderr: result.stderr,
         stdout,
       },
     };
