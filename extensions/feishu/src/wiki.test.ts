@@ -14,7 +14,7 @@ vi.mock("./tool-account.js", () => ({
 let registerFeishuWikiTools: typeof import("./wiki.js").registerFeishuWikiTools;
 
 type FeishuWikiTool = {
-  name?: string;
+  parameters: { properties?: Record<string, unknown> };
   execute: (callId: string, input: Record<string, unknown>) => Promise<{ details?: unknown }>;
 };
 
@@ -45,23 +45,12 @@ function createWikiToolApi(registerTool: OpenClawPluginApi["registerTool"]): Ope
   });
 }
 
-function buildWikiTool(): { tool: FeishuWikiTool } {
+function buildWikiTool(): FeishuWikiTool {
   const registerTool = vi.fn();
   registerFeishuWikiTools(createWikiToolApi(registerTool));
   expect(registerTool).toHaveBeenCalledTimes(1);
   const factory = registerTool.mock.calls[0]?.[0] as FeishuWikiToolFactory;
-  const tool = factory({ agentAccountId: undefined });
-  return { tool };
-}
-
-function makeNodes(prefix: string, count: number) {
-  return Array.from({ length: count }, (_, i) => ({
-    node_token: `${prefix}_${i}`,
-    obj_token: `obj_${prefix}_${i}`,
-    obj_type: "docx",
-    title: `${prefix} ${i}`,
-    has_child: false,
-  }));
+  return factory({ agentAccountId: undefined });
 }
 
 describe("registerFeishuWikiTools pagination", () => {
@@ -83,97 +72,110 @@ describe("registerFeishuWikiTools pagination", () => {
     resolveAnyEnabledFeishuToolsConfigMock.mockReturnValue({ wiki: true });
   });
 
-  it("nodes: follows page_token across pages and aggregates all nodes (#37626)", async () => {
-    const spaceNodeList = vi
-      .fn()
-      .mockResolvedValueOnce({
-        code: 0,
-        data: { items: makeNodes("a", 20), has_more: true, page_token: "page-2" },
-      })
-      .mockResolvedValueOnce({
-        code: 0,
-        data: { items: makeNodes("b", 20), has_more: false, page_token: "" },
-      });
-    createFeishuToolClientMock.mockReturnValue({ wiki: { spaceNode: { list: spaceNodeList } } });
-
-    const { tool } = buildWikiTool();
-    const result = await tool.execute("call-1", { action: "nodes", space_id: "space_1" });
-
-    const details = result.details as { nodes?: unknown[] };
-    expect(details.nodes).toHaveLength(40);
-    expect(spaceNodeList).toHaveBeenCalledTimes(2);
-    // First page sends no continuation; second forwards the prior page_token.
-    expect(spaceNodeList.mock.calls[0]?.[0]?.params?.page_token).toBeUndefined();
-    expect(spaceNodeList.mock.calls[1]?.[0]?.params?.page_token).toBe("page-2");
-    // parent_node_token is forwarded on every page.
-    expect(spaceNodeList.mock.calls[0]?.[0]?.path?.space_id).toBe("space_1");
-  });
-
-  it("nodes: single page returns without an extra request", async () => {
+  it("nodes: forwards pagination and returns continuation metadata", async () => {
     const spaceNodeList = vi.fn().mockResolvedValue({
       code: 0,
-      data: { items: makeNodes("a", 5), has_more: false, page_token: "" },
+      data: {
+        items: [{ node_token: "node-1", obj_type: "docx", node_type: "origin" }],
+        has_more: true,
+        page_token: "page-2",
+      },
     });
     createFeishuToolClientMock.mockReturnValue({ wiki: { spaceNode: { list: spaceNodeList } } });
 
-    const { tool } = buildWikiTool();
-    const result = await tool.execute("call-1", { action: "nodes", space_id: "space_1" });
-
-    expect((result.details as { nodes?: unknown[] }).nodes).toHaveLength(5);
-    expect(spaceNodeList).toHaveBeenCalledTimes(1);
-  });
-
-  it("nodes: caps page count when has_more never clears", async () => {
-    const spaceNodeList = vi.fn().mockResolvedValue({
-      code: 0,
-      data: { items: makeNodes("a", 1), has_more: true, page_token: "loop" },
+    const result = await buildWikiTool().execute("call-1", {
+      action: "nodes",
+      space_id: "space-1",
+      parent_node_token: "parent-1",
+      page_size: 25,
+      page_token: "page-1",
     });
-    createFeishuToolClientMock.mockReturnValue({ wiki: { spaceNode: { list: spaceNodeList } } });
 
-    const { tool } = buildWikiTool();
-    const result = await tool.execute("call-1", { action: "nodes", space_id: "space_1" });
-
-    // 100-page safety cap: stop instead of spinning forever.
-    expect(spaceNodeList).toHaveBeenCalledTimes(100);
-    expect((result.details as { nodes?: unknown[] }).nodes).toHaveLength(100);
-  });
-
-  it("nodes: stops safely when has_more is true but page_token is missing", async () => {
-    const spaceNodeList = vi.fn().mockResolvedValue({
-      code: 0,
-      data: { items: makeNodes("a", 3), has_more: true },
+    expect(spaceNodeList).toHaveBeenCalledWith({
+      path: { space_id: "space-1" },
+      params: { parent_node_token: "parent-1", page_size: 25, page_token: "page-1" },
     });
-    createFeishuToolClientMock.mockReturnValue({ wiki: { spaceNode: { list: spaceNodeList } } });
-
-    const { tool } = buildWikiTool();
-    const result = await tool.execute("call-1", { action: "nodes", space_id: "space_1" });
-
-    expect(spaceNodeList).toHaveBeenCalledTimes(1);
-    expect((result.details as { nodes?: unknown[] }).nodes).toHaveLength(3);
+    expect(result.details).toMatchObject({
+      nodes: [{ node_token: "node-1" }],
+      has_more: true,
+      page_token: "page-2",
+    });
   });
 
-  it("spaces: follows page_token across pages (sibling endpoint)", async () => {
-    const spaceList = vi
-      .fn()
-      .mockResolvedValueOnce({
-        code: 0,
-        data: {
-          items: [{ space_id: "s1", name: "S1" }],
-          has_more: true,
-          page_token: "page-2",
-        },
-      })
-      .mockResolvedValueOnce({
-        code: 0,
-        data: { items: [{ space_id: "s2", name: "S2" }], has_more: false },
-      });
+  it("spaces: defaults page size and returns continuation metadata", async () => {
+    const spaceList = vi.fn().mockResolvedValue({
+      code: 0,
+      data: {
+        items: [{ space_id: "space-1", name: "Space 1" }],
+        has_more: false,
+      },
+    });
     createFeishuToolClientMock.mockReturnValue({ wiki: { space: { list: spaceList } } });
 
-    const { tool } = buildWikiTool();
-    const result = await tool.execute("call-1", { action: "spaces" });
+    const result = await buildWikiTool().execute("call-1", { action: "spaces" });
 
-    expect((result.details as { spaces?: unknown[] }).spaces).toHaveLength(2);
-    expect(spaceList).toHaveBeenCalledTimes(2);
-    expect(spaceList.mock.calls[1]?.[0]?.params?.page_token).toBe("page-2");
+    expect(spaceList).toHaveBeenCalledWith({
+      params: { page_size: 50, page_token: undefined },
+    });
+    expect(result.details).toMatchObject({
+      spaces: [{ space_id: "space-1" }],
+      has_more: false,
+    });
+  });
+
+  it("spaces: does not emit the access hint for an empty page with a continuation", async () => {
+    const spaceList = vi.fn().mockResolvedValue({
+      code: 0,
+      data: {
+        items: [],
+        has_more: true,
+        page_token: "page-2",
+      },
+    });
+    createFeishuToolClientMock.mockReturnValue({ wiki: { space: { list: spaceList } } });
+
+    const result = await buildWikiTool().execute("call-1", { action: "spaces" });
+
+    expect(result.details).toEqual({
+      spaces: [],
+      has_more: true,
+      page_token: "page-2",
+    });
+  });
+
+  it("spaces: does not emit the access hint on an empty terminal continuation page", async () => {
+    const spaceList = vi.fn().mockResolvedValue({
+      code: 0,
+      data: {
+        items: [],
+        has_more: false,
+      },
+    });
+    createFeishuToolClientMock.mockReturnValue({ wiki: { space: { list: spaceList } } });
+
+    const result = await buildWikiTool().execute("call-1", {
+      action: "spaces",
+      page_token: "page-2",
+    });
+
+    expect(result.details).toEqual({
+      spaces: [],
+      has_more: false,
+    });
+  });
+
+  it("rejects out-of-range page sizes before calling Feishu", async () => {
+    const spaceList = vi.fn();
+    createFeishuToolClientMock.mockReturnValue({ wiki: { space: { list: spaceList } } });
+
+    const result = await buildWikiTool().execute("call-1", {
+      action: "spaces",
+      page_size: 51,
+    });
+
+    expect(spaceList).not.toHaveBeenCalled();
+    expect(result.details).toMatchObject({
+      error: "page_size must be a positive integer between 1 and 50",
+    });
   });
 });
