@@ -56,6 +56,15 @@ function buildTelegramLink(link: MarkdownLinkSpan, text: string) {
   if (isAutoLinkedFileRef(href, label)) {
     return null;
   }
+  // Telegram's HTML renderers (both standard and rich) only support
+  // http://, https://, and tg:// links.  Local/relative paths, other
+  // schemes (file://, mailto:, javascript:), and bare hostnames cause
+  // Telegram to reject the entire message — for rich messages that
+  // means a fatal RICH_MESSAGE_URL_INVALID.  Render the label text
+  // instead so the visible content is preserved.
+  if (!/^https?:\/\//i.test(href) && !/^tg:\/\//i.test(href)) {
+    return null;
+  }
   const safeHref = escapeHtmlAttr(href);
   return {
     start: link.start,
