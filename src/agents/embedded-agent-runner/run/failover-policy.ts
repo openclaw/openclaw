@@ -4,14 +4,7 @@
 import type { FailoverReason } from "../../embedded-agent-helpers.js";
 
 /** Failover action selected for one embedded run failure decision point. */
-export type RunFailoverDecisionAction =
-  | "continue_normal"
-  | "rotate_profile"
-  | "fallback_model"
-  | "surface_error"
-  | "return_error_payload";
-
-export type RunFailoverDecision =
+type RunFailoverDecision =
   | {
       action: "continue_normal";
     }
@@ -32,7 +25,7 @@ export type RetryLimitFailoverDecision = Extract<
   { action: "fallback_model" | "return_error_payload" }
 >;
 
-export type PromptFailoverDecision = Extract<
+type PromptFailoverDecision = Extract<
   RunFailoverDecision,
   { action: "rotate_profile" | "fallback_model" | "surface_error" }
 >;
@@ -76,7 +69,7 @@ type AssistantDecisionParams = {
   profileRotated: boolean;
 };
 
-export type RunFailoverDecisionParams =
+type RunFailoverDecisionParams =
   | RetryLimitDecisionParams
   | PromptDecisionParams
   | AssistantDecisionParams;

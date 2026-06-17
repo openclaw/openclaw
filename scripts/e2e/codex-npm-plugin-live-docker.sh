@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Installs OpenClaw from a prepared package tarball, installs @openclaw/codex
 # from a registry/git/tarball spec, and verifies a live Codex app-server turn.
-set -euo pipefail
+set -Eeuo pipefail
 
 SCRIPT_ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TRUSTED_HARNESS_DIR="${OPENCLAW_LIVE_DOCKER_TRUSTED_HARNESS_DIR:-$SCRIPT_ROOT_DIR}"
@@ -131,7 +131,7 @@ if ! docker_e2e_run_with_harness \
   "${CODEX_PLUGIN_MOUNT[@]}" \
   "${PROFILE_MOUNT[@]}" \
   -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'; then
-set -euo pipefail
+set -Eeuo pipefail
 
 source scripts/lib/openclaw-e2e-instance.sh
 openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}"
@@ -147,7 +147,7 @@ for profile_path in "$HOME/.profile" /home/appuser/.profile; do
   if [ -f "$profile_path" ] && [ -r "$profile_path" ]; then
     set +e +u
     source "$profile_path"
-    set -euo pipefail
+    set -Eeuo pipefail
     break
   fi
 done
@@ -242,17 +242,30 @@ run_agent_turn() {
   local message="$3"
   local out="$4"
   local err="$5"
+  local status
 
   echo "${label}_prompt: $message"
-  openclaw agent --local \
+  if openclaw agent --local \
     --agent main \
     --session-id "$SESSION_ID" \
     --model "$MODEL_REF" \
     --message "$message" \
     --thinking low \
     --timeout 420 \
-    --json >"$out" 2>"$err" </dev/null
-  print_agent_reply "$out" "$marker" "${label}_reply"
+    --json >"$out" 2>"$err" </dev/null; then
+    status=0
+  else
+    status=$?
+  fi
+  echo "${label}_agent_status: $status stdout_bytes=$(wc -c <"$out" 2>/dev/null || printf 0) stderr_bytes=$(wc -c <"$err" 2>/dev/null || printf 0)"
+  if [ "$status" -ne 0 ]; then
+    dump_debug_logs "$status"
+    exit "$status"
+  fi
+  if ! print_agent_reply "$out" "$marker" "${label}_reply"; then
+    dump_debug_logs 1
+    exit 1
+  fi
 }
 
 echo "TRANSCRIPT_BEGIN"

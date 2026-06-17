@@ -1012,6 +1012,9 @@ describe("buildAgentSystemPrompt", () => {
     );
     expect(discordPrompt).not.toContain("Telegram rich text is available");
     expect(plainTelegramPrompt).not.toContain("Telegram rich text is available");
+    expect(plainTelegramPrompt).toContain("Telegram rich messages are disabled");
+    expect(plainTelegramPrompt).toContain("Do not claim Bot API 10.1 tables");
+    expect(plainTelegramPrompt).toContain("enable Telegram rich messages for this channel/account");
   });
 
   it("describes Telegram rich text for automatic final replies without the message tool", () => {

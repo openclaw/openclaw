@@ -166,6 +166,7 @@ export type StatusArgs = {
   taskLine?: string;
   continuationLine?: string;
   pluginHealthLine?: string;
+  channelFeatureLine?: string;
   includeTranscriptUsage?: boolean;
   now?: number;
 };
@@ -1152,6 +1153,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     args.subagentsLine,
     args.taskLine,
     args.continuationLine ?? formatContinuationStatusLine(args),
+    args.channelFeatureLine,
     `⚙️ ${optionsLine}`,
     args.pluginHealthLine,
     pluginStatusLine ? `🧩 ${pluginStatusLine}` : null,
