@@ -219,7 +219,8 @@ export function resolveGatewayScopedTools(params: {
   // browser capture flows) without a full LLM round-trip. Narrow first landing
   // of the broader direct-invoke umbrella tracked in #37131.
   //
-  // **Dual-key gating** (addresses ClawSweeper [P1] on PR #85664):
+  // **Triple-key gating** (addresses ClawSweeper [P1] + the non-owner
+  // authorization finding on PR #85664):
   // - `surface === "http"` — the **direct-invoke marker** set by
   //   `tools-invoke-shared.ts` for BOTH HTTP `POST /tools/invoke` AND SDK-facing
   //   JSON-RPC `tools.invoke` (they share the resolver). MCP loopback uses
@@ -230,9 +231,18 @@ export function resolveGatewayScopedTools(params: {
   //   unrelated reasons (e.g. an MCP/agent surface where `read` is already
   //   available) stay inert. This prevents an upgrade-time compatibility
   //   break.
+  // - `params.senderIsOwner === true` — the **owner gate**. Host-filesystem
+  //   read is an owner/admin-only capability, so it must NOT be materialized for
+  //   a non-owner direct-invoke caller. On the HTTP/RPC surface a shared-secret
+  //   bearer caller resolves to owner (`senderIsOwner === true`), while a
+  //   trusted-proxy operator without `ADMIN_SCOPE` resolves to `false`. This
+  //   mirrors the fail-closed owner semantics used for `ownerOnlyGatewayDeny`
+  //   above (line 130): on HTTP, anything other than an explicit `true` is
+  //   treated as non-owner. Without this key a `gateway.auth.mode="trusted-proxy"`
+  //   `operator.write` caller could read host files it should never reach.
   // - `gateway.tools.allow: ["read"]` — separately required, lifts `"read"`
   //   from `DEFAULT_GATEWAY_HTTP_TOOL_DENY` so the policy pipeline (line 186)
-  //   doesn't filter it out. This second key keeps the explicit operator
+  //   doesn't filter it out. This key keeps the explicit operator
   //   acceptance step visible in the standard policy surface.
   //
   // Only `read` is materialized — write/edit/exec/process are NOT exposed by
@@ -248,7 +258,9 @@ export function resolveGatewayScopedTools(params: {
   // (read/write/edit/apply_patch) — no shell (exec/process), no channel,
   // OpenClaw, or plugin tools. Then we filter to `read`.
   const allowHostFsReadOverDirectInvoke =
-    surface === "http" && params.cfg.gateway?.tools?.directInvoke?.hostFsRead === true;
+    surface === "http" &&
+    params.cfg.gateway?.tools?.directInvoke?.hostFsRead === true &&
+    params.senderIsOwner === true;
   const codingTools = allowHostFsReadOverDirectInvoke
     ? createOpenClawCodingToolsRaw({
         agentId: agentId ?? resolveDefaultAgentId(params.cfg),
