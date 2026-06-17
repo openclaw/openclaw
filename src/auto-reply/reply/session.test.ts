@@ -443,8 +443,6 @@ describe("initSessionState thread forking", () => {
     expect(result.sessionKey).toBe(threadSessionKey);
     expect(result.sessionEntry.sessionId).not.toBe(parentSessionId);
     expect(result.sessionEntry.displayName).toBe(threadLabel);
-    expect(result.sessionEntry.totalTokens).toBeUndefined();
-    expect(result.sessionEntry.totalTokensFresh).toBe(false);
 
     const newSessionFile = requireString(
       result.sessionEntry.sessionFile,
@@ -616,8 +614,6 @@ describe("initSessionState thread forking", () => {
     expect(result.sessionEntry.sessionId).not.toBe(parentSessionId);
     // Session file should NOT be the parent's file (it was not forked)
     expect(result.sessionEntry.sessionFile).not.toBe(parentSessionFile);
-    expect(result.sessionEntry.totalTokens).toBe(0);
-    expect(result.sessionEntry.totalTokensFresh).toBe(true);
   });
 
   it("skips fork when resolved parent token estimate exceeds threshold", async () => {
@@ -852,8 +848,7 @@ describe("initSessionState RawBody", () => {
     expect(result.resetTriggered).toBe(true);
     expect(result.sessionId).not.toBe(existingSessionId);
     expect(result.sessionEntry.skillsSnapshot).toBeUndefined();
-    expect(result.sessionEntry.totalTokens).toBe(0);
-    expect(result.sessionEntry.totalTokensFresh).toBe(true);
+    expect(result.sessionEntry.totalTokens).toBeUndefined();
     expect(result.sessionEntry.contextTokens).toBeUndefined();
     expect(result.sessionEntry.contextBudgetStatus).toBeUndefined();
 
@@ -862,14 +857,12 @@ describe("initSessionState RawBody", () => {
       {
         skillsSnapshot?: unknown;
         totalTokens?: number;
-        totalTokensFresh?: boolean;
         contextTokens?: number;
         contextBudgetStatus?: unknown;
       }
     >;
     expect(store[sessionKey]?.skillsSnapshot).toBeUndefined();
-    expect(store[sessionKey]?.totalTokens).toBe(0);
-    expect(store[sessionKey]?.totalTokensFresh).toBe(true);
+    expect(store[sessionKey]?.totalTokens).toBeUndefined();
     expect(store[sessionKey]?.contextTokens).toBeUndefined();
     expect(store[sessionKey]?.contextBudgetStatus).toBeUndefined();
   });
@@ -3054,9 +3047,9 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     expect(result.sessionEntry.modelOverrideSource).toBeUndefined();
     expect(result.sessionEntry.modelOverrideFallbackOriginProvider).toBeUndefined();
     expect(result.sessionEntry.modelOverrideFallbackOriginModel).toBeUndefined();
-    expect(result.sessionEntry.totalTokens).toBe(0);
+    expect(result.sessionEntry.totalTokens).toBeUndefined();
     expect(result.sessionEntry.contextTokens).toBeUndefined();
-    expect(result.sessionEntry.totalTokensFresh).toBe(true);
+    expect(result.sessionEntry.totalTokensFresh).toBeUndefined();
   });
 
   it("preserves spawned session ownership metadata across /new and /reset", async () => {
