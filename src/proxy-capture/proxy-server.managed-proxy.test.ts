@@ -5,11 +5,21 @@ import { Socket, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { assertDebugProxyDirectUpstreamAllowed, startDebugProxyServer } from "./proxy-server.js";
+import { closeDebugProxyCaptureStore } from "./store.sqlite.js";
 
 let testRoot: string | undefined;
+const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 
 async function cleanupTestDirs(): Promise<void> {
+  closeDebugProxyCaptureStore();
+  closeOpenClawStateDatabaseForTest();
+  if (originalStateDir === undefined) {
+    delete process.env.OPENCLAW_STATE_DIR;
+  } else {
+    process.env.OPENCLAW_STATE_DIR = originalStateDir;
+  }
   if (!testRoot) {
     return;
   }
@@ -24,11 +34,10 @@ async function makeSettings() {
   await mkdir(certDir, { recursive: true });
   await writeFile(join(certDir, "root-ca.pem"), "test root cert\n", "utf8");
   await writeFile(join(certDir, "root-ca-key.pem"), "test root key\n", "utf8");
+  process.env.OPENCLAW_STATE_DIR = testRoot;
   return {
     enabled: true,
     required: false,
-    dbPath: ":memory:",
-    blobDir: join(testRoot, "blobs"),
     certDir,
     sessionId: "debug-proxy-managed-proxy-test",
     sourceProcess: "test",
