@@ -386,27 +386,6 @@ export type ClawHubSkillSecurityVerdictsResponse = {
   items: ClawHubSkillSecurityVerdictItem[];
 };
 
-export type ClawHubSkillListResponse = {
-  items: Array<{
-    slug: string;
-    displayName: string;
-    summary?: string;
-    tags?: Record<string, string>;
-    latestVersion?: {
-      version: string;
-      createdAt: number;
-      changelog?: string;
-    } | null;
-    metadata?: {
-      os?: string[] | null;
-      systems?: string[] | null;
-    } | null;
-    createdAt: number;
-    updatedAt: number;
-  }>;
-  nextCursor?: string | null;
-};
-
 export type ClawHubDownloadResult = {
   archivePath: string;
   integrity: string;
@@ -1169,25 +1148,6 @@ export async function fetchClawHubSkillCard(params: {
     resourceLabel: slug ? `skill card for ${slug}` : `skill card at ${url.pathname}`,
   });
   return new TextDecoder().decode(bytes);
-}
-
-export async function listClawHubSkills(params: {
-  baseUrl?: string;
-  token?: string;
-  timeoutMs?: number;
-  fetchImpl?: FetchLike;
-  limit?: number;
-}): Promise<ClawHubSkillListResponse> {
-  return await fetchJson<ClawHubSkillListResponse>({
-    baseUrl: params.baseUrl,
-    path: "/api/v1/skills",
-    token: params.token,
-    timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
-    search: {
-      limit: params.limit ? String(params.limit) : undefined,
-    },
-  });
 }
 
 export async function downloadClawHubPackageArchive(params: {

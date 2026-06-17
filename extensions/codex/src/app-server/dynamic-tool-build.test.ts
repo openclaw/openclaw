@@ -1313,6 +1313,28 @@ describe("Codex app-server dynamic tool build", () => {
     expect(shouldForceMessageTool(params)).toBe(false);
   });
 
+  it("can retain message in the registered schema when disabled for the current turn", async () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.disableMessageTool = true;
+    params.sourceReplyDeliveryMode = "message_tool_only";
+    params.toolsAllow = [];
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    setOpenClawCodingToolsFactoryForTests((options) =>
+      options?.disableMessageTool ? [] : [createRuntimeDynamicTool("message")],
+    );
+
+    const availableTools = await buildDynamicToolsForTest(params, workspaceDir);
+    const registeredTools = await buildDynamicToolsForTest(params, workspaceDir, {
+      ignoreDisableMessageTool: true,
+      ignoreRuntimePlan: true,
+    });
+
+    expect(availableTools.map((tool) => tool.name)).not.toContain("message");
+    expect(registeredTools.map((tool) => tool.name)).toContain("message");
+  });
+
   it("passes the live run session key to Codex dynamic tools when sandbox policy uses another key", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);

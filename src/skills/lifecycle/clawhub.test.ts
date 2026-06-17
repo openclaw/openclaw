@@ -12,7 +12,6 @@ const fetchClawHubSkillVerificationMock = vi.fn();
 const downloadClawHubSkillArchiveMock = vi.fn();
 const downloadClawHubSkillArchiveUrlMock = vi.fn();
 const downloadClawHubGitHubSkillArchiveMock = vi.fn();
-const listClawHubSkillsMock = vi.fn();
 const reportClawHubSkillInstallTelemetryMock = vi.fn();
 const resolveClawHubBaseUrlMock = vi.fn(() => "https://clawhub.ai");
 const isDefaultClawHubBaseUrlMock = vi.fn((baseUrl?: string) => !baseUrl);
@@ -31,7 +30,6 @@ vi.mock("../../infra/clawhub.js", () => ({
   downloadClawHubSkillArchive: downloadClawHubSkillArchiveMock,
   downloadClawHubSkillArchiveUrl: downloadClawHubSkillArchiveUrlMock,
   downloadClawHubGitHubSkillArchive: downloadClawHubGitHubSkillArchiveMock,
-  listClawHubSkills: listClawHubSkillsMock,
   reportClawHubSkillInstallTelemetry: reportClawHubSkillInstallTelemetryMock,
   isDefaultClawHubBaseUrl: isDefaultClawHubBaseUrlMock,
   resolveClawHubBaseUrl: resolveClawHubBaseUrlMock,
@@ -180,7 +178,6 @@ describe("skills-clawhub", () => {
     downloadClawHubSkillArchiveMock.mockReset();
     downloadClawHubSkillArchiveUrlMock.mockReset();
     downloadClawHubGitHubSkillArchiveMock.mockReset();
-    listClawHubSkillsMock.mockReset();
     reportClawHubSkillInstallTelemetryMock.mockReset();
     resolveClawHubBaseUrlMock.mockReset();
     isDefaultClawHubBaseUrlMock.mockReset();
@@ -1392,7 +1389,6 @@ describe("skills-clawhub", () => {
       limit: 20,
       baseUrl: undefined,
     });
-    expect(listClawHubSkillsMock).not.toHaveBeenCalled();
   });
 });
 
