@@ -84,6 +84,18 @@ export type CodexDynamicToolNamespaceSpec = JsonObject & {
 
 export type CodexDynamicToolSpec = CodexDynamicToolFunctionSpec | CodexDynamicToolNamespaceSpec;
 
+export type CodexLegacyDynamicToolFunctionSpec = JsonObject & {
+  name: string;
+  description: string;
+  inputSchema: JsonValue;
+  deferLoading?: boolean;
+  namespace?: string;
+};
+
+export type CodexThreadStartDynamicToolSpec =
+  | CodexDynamicToolSpec
+  | CodexLegacyDynamicToolFunctionSpec;
+
 export function flattenCodexDynamicToolFunctions(
   tools: readonly CodexDynamicToolSpec[] | undefined,
 ): CodexDynamicToolFunctionSpec[] {
@@ -105,7 +117,7 @@ export type CodexThreadStartParams = JsonObject & {
   approvalsReviewer?: string | null;
   sandbox?: string;
   serviceTier?: CodexServiceTier | null;
-  dynamicTools?: CodexDynamicToolSpec[] | null;
+  dynamicTools?: CodexThreadStartDynamicToolSpec[] | null;
   developerInstructions?: string;
   experimentalRawEvents?: boolean;
   environments?: CodexTurnEnvironmentParams[] | null;

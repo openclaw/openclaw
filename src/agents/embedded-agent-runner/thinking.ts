@@ -10,7 +10,7 @@ import { log } from "./logger.js";
 type AssistantContentBlock = Extract<AgentMessage, { role: "assistant" }>["content"][number];
 type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
 type RecoveryAssessment = "valid" | "incomplete-thinking" | "incomplete-text";
-export type AnthropicThinkingRecovery = {
+type AnthropicThinkingRecovery = {
   originalMessages: AgentMessage[];
   cleanedMessages: AgentMessage[];
 };

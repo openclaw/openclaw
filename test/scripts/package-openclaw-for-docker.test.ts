@@ -13,6 +13,9 @@ import {
 } from "../../scripts/package-openclaw-for-docker.mjs";
 
 function isProcessAlive(pid: number): boolean {
+  if (!Number.isSafeInteger(pid) || pid <= 0) {
+    return false;
+  }
   try {
     process.kill(pid, 0);
     return true;
@@ -27,15 +30,18 @@ async function sleep(ms: number): Promise<void> {
   });
 }
 
-async function waitForFile(filePath: string, timeoutMs: number): Promise<void> {
+async function readPid(filePath: string, timeoutMs: number): Promise<number> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (fs.existsSync(filePath)) {
-      return;
+      const pid = Number(fs.readFileSync(filePath, "utf8").trim());
+      if (Number.isSafeInteger(pid) && pid > 0) {
+        return pid;
+      }
     }
     await sleep(25);
   }
-  throw new Error(`timeout waiting for ${filePath}`);
+  throw new Error(`timeout waiting for a positive pid in ${filePath}`);
 }
 
 async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
@@ -308,8 +314,7 @@ describe("package-openclaw-for-docker", () => {
         timeoutMs: 500,
       });
       const timeoutAssertion = expect(runPromise).rejects.toThrow(/timed out after 500ms/u);
-      await waitForFile(childPidPath, 2000);
-      childPid = Number(fs.readFileSync(childPidPath, "utf8"));
+      childPid = await readPid(childPidPath, 2000);
       await timeoutAssertion;
       await waitForDead(childPid, 2000);
     } finally {
@@ -348,8 +353,7 @@ describe("package-openclaw-for-docker", () => {
         }),
       ).rejects.toThrow(/timed out after 500ms/u);
 
-      await waitForFile(childPidPath, 2000);
-      childPid = Number(fs.readFileSync(childPidPath, "utf8"));
+      childPid = await readPid(childPidPath, 2000);
       await waitForDead(childPid, 2000);
     } finally {
       if (childPid && isProcessAlive(childPid)) {
@@ -437,8 +441,7 @@ describe("package-openclaw-for-docker", () => {
       });
       runnerPid = runner.pid ?? 0;
 
-      await waitForFile(childPidPath, 2000);
-      childPid = Number(fs.readFileSync(childPidPath, "utf8"));
+      childPid = await readPid(childPidPath, 2000);
       runner.kill("SIGTERM");
       const result = await waitForExit(runner, 5000);
 

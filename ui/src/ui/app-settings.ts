@@ -59,7 +59,11 @@ import {
 } from "./controllers/skill-workshop.ts";
 import { loadSkills, reconcileSkillsAgentId, type SkillsState } from "./controllers/skills.ts";
 import { loadUsage, type UsageState } from "./controllers/usage.ts";
-import { loadWorkboard } from "./controllers/workboard.ts";
+import {
+  loadWorkboard,
+  stopWorkboardLifecycleRefresh,
+  stopWorkboardPolling,
+} from "./controllers/workboard.ts";
 import { resolveCronJobLastRunStatus } from "./cron-status.ts";
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
 import { isMonitoredAuthProvider } from "./model-auth-helpers.ts";
@@ -450,6 +454,7 @@ export async function refreshActiveTab(host: SettingsHost, opts?: { chatStartup?
             client: app.client,
             force: true,
             requestUpdate: host.requestUpdate,
+            refreshDiagnostics: hasOperatorWriteAccess(app.hello?.auth ?? null),
           }),
         ]);
         break;
@@ -711,6 +716,12 @@ function applyTabSelection(
   (next === "debug" ? startDebugPolling : stopDebugPolling)(
     host as unknown as Parameters<typeof startDebugPolling>[0],
   );
+  if (next !== "workboard") {
+    stopWorkboardPolling(host as unknown as Parameters<typeof stopWorkboardPolling>[0]);
+    stopWorkboardLifecycleRefresh(
+      host as unknown as Parameters<typeof stopWorkboardLifecycleRefresh>[0],
+    );
+  }
 
   if (options.refreshPolicy === "always" || host.connected) {
     void refreshActiveTab(host);

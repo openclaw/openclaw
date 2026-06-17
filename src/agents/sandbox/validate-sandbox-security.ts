@@ -58,17 +58,17 @@ let blockedHostPathsCache:
     }
   | undefined;
 
-export type ValidateBindMountsOptions = {
+type ValidateBindMountsOptions = {
   allowedSourceRoots?: string[];
   allowSourcesOutsideAllowedRoots?: boolean;
   allowReservedContainerTargets?: boolean;
 };
 
-export type ValidateNetworkModeOptions = {
+type ValidateNetworkModeOptions = {
   allowContainerNamespaceJoin?: boolean;
 };
 
-export type BlockedBindReason =
+type BlockedBindReason =
   | { kind: "targets"; blockedPath: string }
   | { kind: "covers"; blockedPath: string }
   | { kind: "non_absolute"; sourcePath: string }

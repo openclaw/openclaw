@@ -1176,7 +1176,23 @@
     "target": "Control UI"
   },
   {
+    "source": "Models CLI",
+    "target": "模型 CLI"
+  },
+  {
     "source": "Z.AI (GLM)",
     "target": "Z.AI (GLM)"
+  },
+  {
+    "source": "Cohere",
+    "target": "Cohere"
+  },
+  {
+    "source": "Cohere plugin",
+    "target": "Cohere 插件"
+  },
+  {
+    "source": "cohere",
+    "target": "cohere"
   }
 ]

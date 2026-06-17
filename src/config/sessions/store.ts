@@ -1,6 +1,10 @@
 // Session store facade coordinates reads, writes, maintenance, delivery metadata, and exports.
 import fs from "node:fs";
 import path from "node:path";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { writeTextAtomic } from "../../infra/json-files.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -66,6 +70,7 @@ import {
   type SessionEntry,
   type SessionSkillPromptRef,
 } from "./types.js";
+import { CURRENT_SESSION_VERSION } from "./version.js";
 
 export {
   clearSessionStoreCacheForTest,
@@ -85,6 +90,25 @@ export type {
   SessionStoreSnapshotEntry,
 } from "./store-cache.js";
 export { normalizeStoreSessionKey, resolveSessionStoreEntry } from "./store-entry.js";
+
+export type SessionEntryPatchProjectionSnapshot = {
+  entries: ReadonlyArray<{ sessionKey: string; entry: SessionEntry }>;
+};
+
+export type SessionEntryPatchProjectionTarget = {
+  candidateKeys?: readonly string[];
+  primaryKey: string;
+};
+
+export type SessionEntryPatchProjectionContext = SessionEntryPatchProjectionSnapshot &
+  SessionEntryPatchProjectionTarget & {
+    existingEntry?: SessionEntry;
+  };
+
+export type SessionEntryPatchProjectionFailure = { ok: false };
+
+export type SessionEntryPatchProjectionResult<TFailure extends SessionEntryPatchProjectionFailure> =
+  { ok: true; entry: SessionEntry } | TFailure;
 
 const log = createSubsystemLogger("sessions/store");
 let sessionArchiveRuntimePromise: Promise<
@@ -216,6 +240,39 @@ export type SessionLifecycleArtifactCleanupParams = {
 export type SessionLifecycleArtifactCleanupResult = {
   removedEntries: number;
   archivedTranscriptArtifacts: number;
+};
+
+export type SessionLifecycleStoreTarget = {
+  /** Canonical persisted key for the entry being reset or deleted. */
+  canonicalKey: string;
+  /** Canonical key plus legacy aliases that can still identify the same entry. */
+  storeKeys: string[];
+};
+
+export type SessionLifecycleArchivedTranscript = {
+  sourcePath: string;
+  archivedPath: string;
+};
+
+export type ResetSessionEntryLifecycleResult = {
+  archivedTranscripts: SessionLifecycleArchivedTranscript[];
+  previousEntry?: SessionEntry;
+  previousSessionFile?: string;
+  previousSessionId?: string;
+  nextEntry: SessionEntry;
+};
+
+export type ResetSessionEntryLifecycleMutation = Omit<
+  ResetSessionEntryLifecycleResult,
+  "archivedTranscripts"
+>;
+
+export type DeleteSessionEntryLifecycleResult = {
+  archivedTranscripts: SessionLifecycleArchivedTranscript[];
+  deleted: boolean;
+  deletedEntry?: SessionEntry;
+  deletedSessionFile?: string;
+  deletedSessionId?: string;
 };
 
 function cloneSessionEntry(entry: SessionEntry): SessionEntry {
@@ -528,6 +585,98 @@ function sessionEntriesHaveSameSerializedForm(
   next: SessionEntry,
 ): boolean {
   return previous !== undefined && JSON.stringify(previous) === JSON.stringify(next);
+}
+
+function cloneOptionalSessionEntry(entry: SessionEntry | undefined): SessionEntry | undefined {
+  return entry ? cloneSessionEntry(entry) : undefined;
+}
+
+function resolveLifecyclePrimaryEntry(params: {
+  store: Record<string, SessionEntry>;
+  target: SessionLifecycleStoreTarget;
+}): SessionEntry | undefined {
+  const freshestMatch = resolveFreshestLifecycleStoreMatch({
+    store: params.store,
+    storeKeys: params.target.storeKeys,
+  });
+  if (freshestMatch) {
+    const currentPrimary = params.store[params.target.canonicalKey];
+    if (!currentPrimary || (freshestMatch.entry.updatedAt ?? 0) > (currentPrimary.updatedAt ?? 0)) {
+      params.store[params.target.canonicalKey] = freshestMatch.entry;
+    }
+  }
+  pruneLifecycleLegacyStoreKeys({
+    store: params.store,
+    target: params.target,
+  });
+  return params.store[params.target.canonicalKey];
+}
+
+function resolveFreshestLifecycleStoreMatch(params: {
+  store: Record<string, SessionEntry>;
+  storeKeys: string[];
+}): { key: string; entry: SessionEntry } | undefined {
+  let freshest: { key: string; entry: SessionEntry } | undefined;
+  for (const key of params.storeKeys) {
+    const entry = params.store[key];
+    if (!entry) {
+      continue;
+    }
+    const match = { key, entry };
+    if (!freshest || (entry.updatedAt ?? 0) > (freshest.entry.updatedAt ?? 0)) {
+      freshest = match;
+    }
+  }
+  return freshest;
+}
+
+function pruneLifecycleLegacyStoreKeys(params: {
+  store: Record<string, SessionEntry>;
+  target: SessionLifecycleStoreTarget;
+}): void {
+  for (const key of params.target.storeKeys) {
+    if (key !== params.target.canonicalKey) {
+      delete params.store[key];
+    }
+  }
+}
+
+async function archiveLifecycleSessionTranscripts(params: {
+  sessionId?: string;
+  storePath: string;
+  sessionFile?: string;
+  agentId?: string;
+  reason: "reset" | "deleted";
+}): Promise<SessionLifecycleArchivedTranscript[]> {
+  if (!params.sessionId) {
+    return [];
+  }
+  const { archiveSessionTranscriptsDetailed } = await loadSessionArchiveRuntime();
+  return archiveSessionTranscriptsDetailed({
+    sessionId: params.sessionId,
+    storePath: params.storePath,
+    sessionFile: params.sessionFile,
+    agentId: params.agentId,
+    reason: params.reason,
+  });
+}
+
+function ensureLifecycleTranscriptHeader(params: { sessionFile: string; sessionId: string }): void {
+  fs.mkdirSync(path.dirname(params.sessionFile), { recursive: true });
+  if (fs.existsSync(params.sessionFile)) {
+    return;
+  }
+  const header = {
+    type: "session",
+    version: CURRENT_SESSION_VERSION,
+    id: params.sessionId,
+    timestamp: new Date().toISOString(),
+    cwd: process.cwd(),
+  };
+  fs.writeFileSync(params.sessionFile, `${JSON.stringify(header)}\n`, {
+    encoding: "utf-8",
+    mode: 0o600,
+  });
 }
 
 function normalizePathForLifecycleComparison(filePath: string): string {
@@ -922,6 +1071,239 @@ export async function updateSessionStore<T>(
       ...opts,
       singleEntryPersistence: opts?.resolveSingleEntryPersistence?.(result) ?? undefined,
     });
+    return result;
+  });
+}
+
+function cloneSessionEntryProjectionSnapshot(
+  store: Record<string, SessionEntry>,
+): SessionEntryPatchProjectionSnapshot {
+  return {
+    entries: Object.entries(store).map(([sessionKey, entry]) => ({
+      sessionKey,
+      entry: cloneSessionEntry(entry),
+    })),
+  };
+}
+
+function resolveFreshestProjectedEntry(params: {
+  store: Record<string, SessionEntry>;
+  candidateKeys: readonly string[];
+}): SessionEntry | undefined {
+  let freshest: SessionEntry | undefined;
+  const keys = new Set<string>();
+  for (const candidateKey of params.candidateKeys) {
+    const trimmed = normalizeOptionalString(candidateKey) ?? "";
+    if (!trimmed) {
+      continue;
+    }
+    keys.add(trimmed);
+    for (const match of findSessionStoreKeysIgnoreCase(params.store, trimmed)) {
+      keys.add(match);
+    }
+  }
+  for (const key of keys) {
+    const entry = params.store[key];
+    if (!entry) {
+      continue;
+    }
+    if (!freshest || (entry.updatedAt ?? 0) > (freshest.updatedAt ?? 0)) {
+      freshest = entry;
+    }
+  }
+  return freshest;
+}
+
+function findSessionStoreKeysIgnoreCase(
+  store: Record<string, SessionEntry>,
+  targetKey: string,
+): string[] {
+  const lowered = normalizeLowercaseStringOrEmpty(targetKey);
+  return Object.keys(store).filter((key) => normalizeLowercaseStringOrEmpty(key) === lowered);
+}
+
+function migrateSessionEntryProjectionTarget(params: {
+  store: Record<string, SessionEntry>;
+  target: SessionEntryPatchProjectionTarget;
+}): void {
+  const candidateKeys = params.target.candidateKeys ?? [params.target.primaryKey];
+  const freshest = resolveFreshestProjectedEntry({
+    store: params.store,
+    candidateKeys,
+  });
+  const currentPrimary = params.store[params.target.primaryKey];
+  if (
+    freshest &&
+    (!currentPrimary || (freshest.updatedAt ?? 0) > (currentPrimary.updatedAt ?? 0))
+  ) {
+    params.store[params.target.primaryKey] = freshest;
+  }
+
+  const keysToDelete = new Set<string>();
+  for (const candidateKey of candidateKeys) {
+    const trimmed = normalizeOptionalString(candidateKey) ?? "";
+    if (!trimmed) {
+      continue;
+    }
+    if (trimmed !== params.target.primaryKey) {
+      keysToDelete.add(trimmed);
+    }
+    for (const match of findSessionStoreKeysIgnoreCase(params.store, trimmed)) {
+      if (match !== params.target.primaryKey) {
+        keysToDelete.add(match);
+      }
+    }
+  }
+  for (const key of keysToDelete) {
+    delete params.store[key];
+  }
+}
+
+/**
+ * Applies a storage-neutral entry projection inside the session-store writer.
+ * The projection receives a cloned snapshot and returns the replacement entry;
+ * it cannot mutate the backing whole store.
+ */
+export async function applySessionEntryPatchProjection<
+  TFailure extends SessionEntryPatchProjectionFailure,
+>(params: {
+  storePath: string;
+  resolveTarget: (
+    snapshot: SessionEntryPatchProjectionSnapshot,
+  ) => SessionEntryPatchProjectionTarget;
+  project: (
+    context: SessionEntryPatchProjectionContext,
+  ) =>
+    | Promise<SessionEntryPatchProjectionResult<TFailure>>
+    | SessionEntryPatchProjectionResult<TFailure>;
+}): Promise<SessionEntryPatchProjectionResult<TFailure>> {
+  return await runExclusiveSessionStoreWrite(params.storePath, async () => {
+    const store = loadMutableSessionStoreForWriter(params.storePath);
+    const target = params.resolveTarget(cloneSessionEntryProjectionSnapshot(store));
+    migrateSessionEntryProjectionTarget({ store, target });
+    const projected = await params.project({
+      ...target,
+      entries: cloneSessionEntryProjectionSnapshot(store).entries,
+      ...(store[target.primaryKey]
+        ? { existingEntry: cloneSessionEntry(store[target.primaryKey]) }
+        : {}),
+    });
+    if (projected.ok) {
+      store[target.primaryKey] = cloneSessionEntry(projected.entry);
+    }
+    await saveSessionStoreUnlocked(params.storePath, store, {
+      activeSessionKey: target.primaryKey,
+    });
+    return projected.ok ? { ...projected, entry: cloneSessionEntry(projected.entry) } : projected;
+  });
+}
+
+/** Resets one persisted session entry and rotates its file-backed transcript artifacts. */
+export async function resetSessionEntryLifecycle(params: {
+  afterEntryMutation?: (mutation: ResetSessionEntryLifecycleMutation) => Promise<void> | void;
+  agentId?: string;
+  buildNextEntry: (context: {
+    currentEntry?: SessionEntry;
+    primaryKey: string;
+  }) => Promise<SessionEntry> | SessionEntry;
+  storePath: string;
+  target: SessionLifecycleStoreTarget;
+}): Promise<ResetSessionEntryLifecycleResult> {
+  return await runExclusiveSessionStoreWrite(params.storePath, async () => {
+    const store = loadMutableSessionStoreForWriter(params.storePath);
+    const currentEntry = resolveLifecyclePrimaryEntry({
+      store,
+      target: params.target,
+    });
+    const previousSessionId = currentEntry?.sessionId;
+    const previousSessionFile = currentEntry?.sessionFile;
+    const nextEntry = await params.buildNextEntry({
+      currentEntry: cloneOptionalSessionEntry(currentEntry),
+      primaryKey: params.target.canonicalKey,
+    });
+    const nextSessionFile = nextEntry.sessionFile?.trim();
+    if (!nextSessionFile) {
+      throw new Error("reset session lifecycle requires next entry sessionFile");
+    }
+    store[params.target.canonicalKey] = nextEntry;
+    await saveSessionStoreUnlocked(params.storePath, store);
+    const mutation: ResetSessionEntryLifecycleMutation = {
+      nextEntry: cloneSessionEntry(nextEntry),
+    };
+    const previousEntry = cloneOptionalSessionEntry(currentEntry);
+    if (previousEntry) {
+      mutation.previousEntry = previousEntry;
+    }
+    if (previousSessionFile) {
+      mutation.previousSessionFile = previousSessionFile;
+    }
+    if (previousSessionId) {
+      mutation.previousSessionId = previousSessionId;
+    }
+    await params.afterEntryMutation?.(mutation);
+    const archivedTranscripts = await archiveLifecycleSessionTranscripts({
+      sessionId: previousSessionId,
+      storePath: params.storePath,
+      sessionFile: previousSessionFile,
+      agentId: params.agentId,
+      reason: "reset",
+    });
+    ensureLifecycleTranscriptHeader({
+      sessionFile: nextSessionFile,
+      sessionId: nextEntry.sessionId,
+    });
+    const result: ResetSessionEntryLifecycleResult = {
+      ...mutation,
+      archivedTranscripts,
+    };
+    return result;
+  });
+}
+
+/** Deletes one persisted session entry and archives its file-backed transcript artifacts. */
+export async function deleteSessionEntryLifecycle(params: {
+  agentId?: string;
+  archiveTranscript: boolean;
+  storePath: string;
+  target: SessionLifecycleStoreTarget;
+}): Promise<DeleteSessionEntryLifecycleResult> {
+  return await runExclusiveSessionStoreWrite(params.storePath, async () => {
+    const store = loadMutableSessionStoreForWriter(params.storePath);
+    const deletedEntry = resolveLifecyclePrimaryEntry({
+      store,
+      target: params.target,
+    });
+    if (!deletedEntry) {
+      restoreUnchangedSessionStoreCache(params.storePath, store);
+      return {
+        archivedTranscripts: [],
+        deleted: false,
+      };
+    }
+    const deletedSessionId = deletedEntry.sessionId;
+    const deletedSessionFile = deletedEntry.sessionFile;
+    delete store[params.target.canonicalKey];
+    await saveSessionStoreUnlocked(params.storePath, store);
+    const archivedTranscripts = params.archiveTranscript
+      ? await archiveLifecycleSessionTranscripts({
+          sessionId: deletedSessionId,
+          storePath: params.storePath,
+          sessionFile: deletedSessionFile,
+          agentId: params.agentId,
+          reason: "deleted",
+        })
+      : [];
+    const result: DeleteSessionEntryLifecycleResult = {
+      archivedTranscripts,
+      deleted: true,
+    };
+    result.deletedEntry = cloneSessionEntry(deletedEntry);
+    if (deletedSessionFile) {
+      result.deletedSessionFile = deletedSessionFile;
+    }
+    if (deletedSessionId) {
+      result.deletedSessionId = deletedSessionId;
+    }
     return result;
   });
 }

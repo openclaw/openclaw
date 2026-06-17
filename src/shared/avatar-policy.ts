@@ -30,15 +30,15 @@ const AVATAR_MIME_BY_EXT: Record<string, string> = {
 };
 
 /** Detects data URLs before image-specific avatar validation. */
-export const AVATAR_DATA_RE = /^data:/i;
+const AVATAR_DATA_RE = /^data:/i;
 /** Detects inline image data URLs that can be used as avatar sources. */
-export const AVATAR_IMAGE_DATA_RE = /^data:image\//i;
+const AVATAR_IMAGE_DATA_RE = /^data:image\//i;
 /** Detects remote avatar URLs served over HTTP(S). */
-export const AVATAR_HTTP_RE = /^https?:\/\//i;
+const AVATAR_HTTP_RE = /^https?:\/\//i;
 /** Detects URI schemes so non-path avatar values can be rejected or routed. */
-export const AVATAR_SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
+const AVATAR_SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
 /** Detects Windows absolute paths before URI-scheme classification. */
-export const WINDOWS_ABS_RE = /^[a-zA-Z]:[\\/]/;
+const WINDOWS_ABS_RE = /^[a-zA-Z]:[\\/]/;
 
 const AVATAR_PATH_EXT_RE = /\.(png|jpe?g|gif|webp|svg|ico)$/i;
 

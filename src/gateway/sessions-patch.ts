@@ -130,16 +130,22 @@ function normalizeSubagentControlScope(raw: string): "children" | "none" | undef
   return undefined;
 }
 
-/** Apply a validated gateway session patch to an in-memory session store entry. */
-export async function applySessionsPatchToStore(params: {
+type SessionPatchProjectionEntry = {
+  entry: SessionEntry;
+  sessionKey: string;
+};
+
+/** Project a validated gateway session patch for one session entry. */
+export async function projectSessionsPatchEntry(params: {
   cfg: OpenClawConfig;
-  store: Record<string, SessionEntry>;
+  entries: readonly SessionPatchProjectionEntry[];
+  existingEntry?: SessionEntry;
   storeKey: string;
   agentId?: string;
   patch: SessionsPatchParams;
   loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
 }): Promise<{ ok: true; entry: SessionEntry } | { ok: false; error: ErrorShape }> {
-  const { cfg, store, storeKey, patch } = params;
+  const { cfg, storeKey, patch } = params;
   const now = Date.now();
   const parsedAgent = parseAgentSessionKey(storeKey);
   const sessionAgentId = normalizeAgentId(
@@ -162,7 +168,7 @@ export async function applySessionsPatchToStore(params: {
     return loadedModelCatalog;
   };
 
-  const existing = store[storeKey];
+  const existing = params.existingEntry;
   // Existing entries without session ids are placeholder aliases; assigning an id makes them real.
   const next: SessionEntry = existing?.sessionId
     ? {
@@ -356,8 +362,8 @@ export async function applySessionsPatchToStore(params: {
       if (!parsed.ok) {
         return invalid(parsed.error);
       }
-      for (const [key, entry] of Object.entries(store)) {
-        if (key === storeKey) {
+      for (const { sessionKey, entry } of params.entries) {
+        if (sessionKey === storeKey) {
           continue;
         }
         if (entry?.label === parsed.label) {
@@ -642,6 +648,29 @@ export async function applySessionsPatchToStore(params: {
     }
   }
 
-  store[storeKey] = next;
   return { ok: true, entry: next };
+}
+
+/** Apply a validated gateway session patch to an in-memory session store entry. */
+export async function applySessionsPatchToStore(params: {
+  cfg: OpenClawConfig;
+  store: Record<string, SessionEntry>;
+  storeKey: string;
+  agentId?: string;
+  patch: SessionsPatchParams;
+  loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
+}): Promise<{ ok: true; entry: SessionEntry } | { ok: false; error: ErrorShape }> {
+  const projected = await projectSessionsPatchEntry({
+    cfg: params.cfg,
+    entries: Object.entries(params.store).map(([sessionKey, entry]) => ({ sessionKey, entry })),
+    existingEntry: params.store[params.storeKey],
+    storeKey: params.storeKey,
+    agentId: params.agentId,
+    patch: params.patch,
+    loadGatewayModelCatalog: params.loadGatewayModelCatalog,
+  });
+  if (projected.ok) {
+    params.store[params.storeKey] = projected.entry;
+  }
+  return projected;
 }
