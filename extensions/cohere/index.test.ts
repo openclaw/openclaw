@@ -35,7 +35,11 @@ function captureCoherePayload(context: Context): Record<string, unknown> {
     return {} as ReturnType<StreamFn>;
   };
 
-  void createCohereCompletionsWrapper(baseStreamFn)(requireCohereModel(), context, {
+  const wrappedStreamFn = createCohereCompletionsWrapper(baseStreamFn);
+  if (!wrappedStreamFn) {
+    throw new Error("Cohere wrapper did not return a stream function");
+  }
+  void wrappedStreamFn(requireCohereModel(), context, {
     onPayload: (payload) => {
       captured = payload as Record<string, unknown>;
     },
