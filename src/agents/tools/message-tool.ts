@@ -50,7 +50,10 @@ import {
   runMessageAction,
   type MessageActionRunResult,
 } from "../../infra/outbound/message-action-runner.js";
-import { resolveAllowedMessageActions } from "../../infra/outbound/outbound-policy.js";
+import {
+  resolveAllowedMessageActions,
+  shouldApplyCrossContextMarker,
+} from "../../infra/outbound/outbound-policy.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { POLL_CREATION_PARAM_DEFS, SHARED_POLL_CREATION_PARAM_NAMES } from "../../poll-params.js";
@@ -83,18 +86,8 @@ import {
 const AllMessageActions = CHANNEL_MESSAGE_ACTION_NAMES;
 const MESSAGE_TOOL_THREAD_READ_HINT =
   ' Use action="read" with threadId to fetch prior messages in a thread when you need conversation context you do not have yet.';
-const EXPLICIT_TARGET_ACTIONS = new Set<ChannelMessageActionName>([
-  "send",
-  "sendWithEffect",
-  "sendAttachment",
-  "upload-file",
-  "reply",
-  "thread-reply",
-  "broadcast",
-]);
-
 function actionNeedsExplicitTarget(action: ChannelMessageActionName): boolean {
-  return EXPLICIT_TARGET_ACTIONS.has(action);
+  return action === "broadcast" || shouldApplyCrossContextMarker(action);
 }
 
 function normalizeMessageToolIdempotencyKeyPart(value: unknown): string | undefined {
@@ -827,6 +820,7 @@ type MessageToolOptions = {
   resolveCommandSecretRefsViaGateway?: typeof resolveCommandSecretRefsViaGateway;
   runMessageAction?: typeof runMessageAction;
   currentChannelId?: string;
+  currentMessagingTarget?: string;
   currentChannelProvider?: string;
   currentThreadTs?: string;
   agentThreadId?: string | number;
@@ -925,6 +919,7 @@ function inferDeliveryFromSessionKey(
 function resolveEffectiveCurrentChannelContext(options?: MessageToolOptions): {
   accountId?: string;
   currentChannelId?: string;
+  currentMessagingTarget?: string;
   currentChannelProvider?: string;
   currentThreadTs?: string;
 } {
@@ -939,12 +934,17 @@ function resolveEffectiveCurrentChannelContext(options?: MessageToolOptions): {
     Boolean(sessionDelivery?.to);
 
   if (!preferSessionDeliveryContext) {
-    return { currentChannelProvider, currentChannelId };
+    return {
+      currentChannelProvider,
+      currentChannelId,
+      currentMessagingTarget: options?.currentMessagingTarget,
+    };
   }
   return {
     accountId: sessionDelivery?.accountId,
     currentChannelProvider: sessionDeliveryChannel,
     currentChannelId: sessionDelivery?.to,
+    currentMessagingTarget: sessionDelivery?.to,
     currentThreadTs: sessionDelivery?.threadId,
   };
 }
@@ -1356,6 +1356,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       const toolContext =
         effectiveCurrentChannel.currentChannelId ||
         effectiveCurrentChannel.currentChannelProvider ||
+        effectiveCurrentChannel.currentMessagingTarget ||
         currentThreadTs ||
         hasCurrentMessageId ||
         replyToMode ||
@@ -1363,6 +1364,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         options?.sameChannelThreadRequired
           ? {
               currentChannelId: effectiveCurrentChannel.currentChannelId,
+              currentMessagingTarget: effectiveCurrentChannel.currentMessagingTarget,
               currentChannelProvider: effectiveCurrentChannel.currentChannelProvider,
               currentThreadTs,
               currentMessageId: options?.currentMessageId,

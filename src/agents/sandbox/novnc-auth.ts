@@ -22,7 +22,7 @@ type NoVncObserverTokenEntry = {
   expiresAt: number;
 };
 
-export type NoVncObserverTokenPayload = {
+type NoVncObserverTokenPayload = {
   noVncPort: number;
   password?: string;
 };

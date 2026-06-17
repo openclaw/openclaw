@@ -283,11 +283,6 @@ export function registerCodeModeNamespaceForPlugin(
   registryState.registrations.set(normalized.id, normalized);
 }
 
-/** Removes one namespace registration by id. */
-export function unregisterCodeModeNamespace(namespaceId: string): boolean {
-  return registryState.registrations.delete(namespaceId.trim());
-}
-
 /** Lists registered namespaces in deterministic id order. */
 export function listCodeModeNamespaces(): RegisteredCodeModeNamespace[] {
   return [...registryState.registrations.values()].toSorted((a, b) => a.id.localeCompare(b.id));

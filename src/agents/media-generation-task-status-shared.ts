@@ -141,19 +141,6 @@ function findPersistedTaskForRecentMediaGenerationStart(params: {
   });
 }
 
-/** Returns whether a task is an active session-scoped media generation task. */
-export function isActiveMediaGenerationTask(params: {
-  task: TaskRecord;
-  taskKind: string;
-}): boolean {
-  return (
-    params.task.runtime === "cli" &&
-    params.task.scopeKind === "session" &&
-    params.task.taskKind === params.taskKind &&
-    (params.task.status === "queued" || params.task.status === "running")
-  );
-}
-
 /** Records a just-started media task so duplicate guards work before persistence. */
 export function recordRecentMediaGenerationTaskStartForSession(params: {
   sessionKey?: string;
@@ -294,7 +281,7 @@ export function resetRecentMediaGenerationDuplicateGuardsForTests() {
 }
 
 /** Extracts a provider id from a media task source id with the given prefix. */
-export function getMediaGenerationTaskProviderId(
+function getMediaGenerationTaskProviderId(
   task: TaskRecord,
   sourcePrefix: string,
 ): string | undefined {

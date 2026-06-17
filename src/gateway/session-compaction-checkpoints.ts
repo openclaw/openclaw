@@ -15,7 +15,12 @@ import type {
   SessionEntry,
 } from "../config/sessions.js";
 import { isCompactionCheckpointTranscriptFileName } from "../config/sessions/artifacts.js";
+import {
+  resolveSessionTranscriptRuntimeReadTarget,
+  type SessionTranscriptRuntimeScope,
+} from "../config/sessions/session-accessor.js";
 import { streamSessionTranscriptLines } from "../config/sessions/transcript-stream.js";
+import { scanSessionTranscriptTree } from "../config/sessions/transcript-tree.js";
 import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -30,7 +35,25 @@ export type CapturedCompactionCheckpointSnapshot = {
   sessionId: string;
   sessionFile?: string;
   leafId: string;
+  entryId?: string;
 };
+
+type SessionLeafState = {
+  leafId: string | null;
+  entryId: string;
+};
+
+export function resolveCompactionCheckpointTranscriptPosition(params: {
+  preferredLeafId?: string | null;
+  transcriptState?: SessionLeafState | null;
+}): { leafId?: string; entryId?: string } {
+  const leafId = params.preferredLeafId ?? params.transcriptState?.leafId ?? undefined;
+  const entryId = params.transcriptState?.entryId ?? leafId;
+  return {
+    ...(leafId ? { leafId } : {}),
+    ...(entryId ? { entryId } : {}),
+  };
+}
 
 type ForkedCompactionCheckpointTranscript = {
   sessionId: string;
@@ -197,21 +220,16 @@ async function readSessionIdFromTranscriptHeaderAsync(sessionFile: string): Prom
   return (await readSessionHeaderFromTranscriptAsync(sessionFile))?.id ?? null;
 }
 
-function parseTranscriptLineId(
-  line: string,
-): { kind: "session" } | { kind: "entry"; id: string } | null {
+function parseTranscriptLine(line: string): Record<string, unknown> | null {
   try {
-    const parsed = JSON.parse(line) as { type?: unknown; id?: unknown };
-    if (parsed.type === "session") {
-      return { kind: "session" };
+    const parsed = JSON.parse(line) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return null;
     }
-    if (typeof parsed.id === "string" && parsed.id.trim()) {
-      return { kind: "entry", id: parsed.id.trim() };
-    }
+    return parsed as Record<string, unknown>;
   } catch {
     return null;
   }
-  return null;
 }
 
 async function readTranscriptEntriesForForkAsync(params: {
@@ -271,10 +289,10 @@ function trimTranscriptEntriesThroughLeaf(
   return entries.slice(0, leafIndex + 1);
 }
 
-export async function readSessionLeafIdFromTranscriptAsync(
+export async function readSessionLeafStateFromTranscriptAsync(
   sessionFile: string,
   maxBytes = MAX_COMPACTION_CHECKPOINT_LEAF_SCAN_BYTES,
-): Promise<string | null> {
+): Promise<{ entryId: string; leafId: string | null } | null> {
   let fileHandle: AsyncTranscriptFileHandle | undefined;
   try {
     fileHandle = await fs.open(sessionFile, "r");
@@ -296,19 +314,29 @@ export async function readSessionLeafIdFromTranscriptAsync(
       // a larger JSONL entry. Ignore it and grow the window if no complete entry
       // is found.
       const candidateLines = readStart > 0 ? lines.slice(1) : lines;
-      for (let i = candidateLines.length - 1; i >= 0; i -= 1) {
-        const line = candidateLines[i]?.trim();
+      const records: Record<string, unknown>[] = [];
+      let latestEntryId: string | undefined;
+      for (const candidateLine of candidateLines) {
+        const line = candidateLine.trim();
         if (!line) {
           continue;
         }
-        const parsed = parseTranscriptLineId(line);
+        const parsed = parseTranscriptLine(line);
         if (!parsed) {
           continue;
         }
-        if (parsed.kind === "session") {
-          return null;
+        records.push(parsed);
+        if (parsed.type === "session") {
+          continue;
         }
-        return parsed.id;
+        const entryId = typeof parsed.id === "string" ? parsed.id.trim() : "";
+        if (entryId) {
+          latestEntryId = entryId;
+        }
+      }
+      const tree = scanSessionTranscriptTree(records);
+      if (latestEntryId && tree.hasLeafUpdate && (!tree.hasInvalidLeafControl || readStart === 0)) {
+        return { entryId: latestEntryId, leafId: tree.leafId };
       }
 
       if (readStart === 0) {
@@ -316,7 +344,10 @@ export async function readSessionLeafIdFromTranscriptAsync(
       }
       const nextReadLength = Math.min(maxReadableBytes, readLength * 2);
       if (nextReadLength === readLength) {
-        return null;
+        // The selected leaf can precede the bounded window on very large
+        // transcripts. Keep a stable raw truncation point; reopening the full
+        // fork will resolve its actual active branch.
+        return latestEntryId ? { entryId: latestEntryId, leafId: latestEntryId } : null;
       }
       readLength = nextReadLength;
     }
@@ -328,6 +359,24 @@ export async function readSessionLeafIdFromTranscriptAsync(
     }
   }
   return null;
+}
+
+export async function readSessionLeafIdFromTranscriptAsync(
+  sessionFile: string,
+  maxBytes = MAX_COMPACTION_CHECKPOINT_LEAF_SCAN_BYTES,
+): Promise<string | null> {
+  return (await readSessionLeafStateFromTranscriptAsync(sessionFile, maxBytes))?.leafId ?? null;
+}
+
+/**
+ * Reads the latest leaf id for a runtime transcript scope.
+ */
+export async function readRuntimeSessionLeafIdFromTranscriptAsync(
+  scope: SessionTranscriptRuntimeScope,
+  maxBytes = MAX_COMPACTION_CHECKPOINT_LEAF_SCAN_BYTES,
+): Promise<string | null> {
+  const target = await resolveSessionTranscriptRuntimeReadTarget(scope);
+  return await readSessionLeafIdFromTranscriptAsync(target.sessionFile, maxBytes);
 }
 
 export async function forkCompactionCheckpointTranscriptAsync(params: {
@@ -416,14 +465,36 @@ export async function captureCompactionCheckpointSnapshotAsync(params: {
   }
   const maxBytes = params.maxBytes ?? MAX_COMPACTION_CHECKPOINT_LEAF_SCAN_BYTES;
   const sessionId = await readSessionIdFromTranscriptHeaderAsync(sessionFile);
-  const leafId = liveLeafId ?? (await readSessionLeafIdFromTranscriptAsync(sessionFile, maxBytes));
+  const transcriptState = await readSessionLeafStateFromTranscriptAsync(sessionFile, maxBytes);
+  const position = resolveCompactionCheckpointTranscriptPosition({
+    preferredLeafId: liveLeafId,
+    transcriptState,
+  });
+  const leafId = position.leafId;
   if (!sessionId || !leafId) {
     return null;
   }
   return {
     sessionId,
     leafId,
+    ...(position.entryId ? { entryId: position.entryId } : {}),
   };
+}
+
+/**
+ * Captures checkpoint metadata for a runtime transcript scope.
+ */
+export async function captureRuntimeCompactionCheckpointSnapshotAsync(params: {
+  sessionManager?: Pick<SessionManager, "getLeafId">;
+  scope: SessionTranscriptRuntimeScope;
+  maxBytes?: number;
+}): Promise<CapturedCompactionCheckpointSnapshot | null> {
+  const target = await resolveSessionTranscriptRuntimeReadTarget(params.scope);
+  return await captureCompactionCheckpointSnapshotAsync({
+    sessionManager: params.sessionManager,
+    sessionFile: target.sessionFile,
+    maxBytes: params.maxBytes,
+  });
 }
 
 export async function cleanupCompactionCheckpointSnapshot(
@@ -490,7 +561,7 @@ export async function persistSessionCompactionCheckpoint(params: {
 }): Promise<SessionCompactionCheckpoint | null> {
   const snapshotSessionFile = params.snapshot.sessionFile?.trim();
   const postSessionFile = params.postSessionFile?.trim();
-  const postSourceLeafId = params.postLeafId?.trim() || params.postEntryId?.trim();
+  const postSourceLeafId = params.postEntryId?.trim() || params.postLeafId?.trim();
   if (!snapshotSessionFile && (!postSessionFile || !postSourceLeafId)) {
     log.warn("skipping compaction checkpoint persist: missing stable fork source", {
       sessionKey: params.sessionKey,
@@ -521,6 +592,7 @@ export async function persistSessionCompactionCheckpoint(params: {
         ? { sessionFile: params.snapshot.sessionFile.trim() }
         : {}),
       leafId: params.snapshot.leafId,
+      ...(params.snapshot.entryId?.trim() ? { entryId: params.snapshot.entryId.trim() } : {}),
     },
     postCompaction: {
       sessionId: params.sessionId,

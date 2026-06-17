@@ -16,7 +16,7 @@ import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 const TASK_FLOW_RETENTION_MS = 7 * 24 * 60 * 60_000;
 
 /** Counts task-flow registry maintenance actions without exposing individual records. */
-export type TaskFlowRegistryMaintenanceSummary = {
+type TaskFlowRegistryMaintenanceSummary = {
   reconciled: number;
   pruned: number;
 };

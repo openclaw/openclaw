@@ -510,6 +510,15 @@ describe("buildAuthChoiceOptions", () => {
         groupId: "byteplus",
         groupLabel: "BytePlus",
       },
+      {
+        pluginId: "openrouter",
+        providerId: "openrouter",
+        methodId: "oauth",
+        choiceId: "openrouter-oauth",
+        choiceLabel: "OpenRouter OAuth",
+        groupId: "openrouter",
+        groupLabel: "OpenRouter",
+      },
     ]);
 
     const { groups } = buildAuthChoiceGroups({
@@ -522,6 +531,7 @@ describe("buildAuthChoiceOptions", () => {
       "Anthropic",
       "xAI (Grok)",
       "Google",
+      "OpenRouter",
       "BytePlus",
       "Custom Provider",
       "LiteLLM",

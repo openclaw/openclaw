@@ -23,12 +23,20 @@ function firstBeforeAgentReplyCall() {
 }
 
 function firstAttemptParams(): {
+  cleanupBundleMcpOnRunEnd?: boolean;
   modelRun?: boolean;
   promptMode?: string;
   promptCacheKey?: string;
 } {
   const call = mockedRunEmbeddedAttempt.mock.calls[0] as
-    | [{ modelRun?: boolean; promptMode?: string; promptCacheKey?: string }]
+    | [
+        {
+          cleanupBundleMcpOnRunEnd?: boolean;
+          modelRun?: boolean;
+          promptMode?: string;
+          promptCacheKey?: string;
+        },
+      ]
     | undefined;
   if (!call) {
     throw new Error("expected embedded attempt call");
@@ -153,6 +161,17 @@ describe("runEmbeddedAgent cron before_agent_reply seam", () => {
     const attemptParams = firstAttemptParams();
     expect(attemptParams.modelRun).toBe(true);
     expect(attemptParams.promptMode).toBe("none");
+  });
+
+  it("forwards one-shot bundle MCP cleanup into the embedded attempt", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      cleanupBundleMcpOnRunEnd: true,
+    });
+
+    expect(firstAttemptParams().cleanupBundleMcpOnRunEnd).toBe(true);
   });
 
   it("forwards prompt cache identity into the embedded attempt", async () => {

@@ -19,7 +19,9 @@ import {
   type ExecTarget,
 } from "../infra/exec-approvals.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
-import { isDangerousHostInheritedEnvVarName } from "../infra/host-env-security.js";
+import {
+  sanitizeHostInheritedEnvEntry,
+} from "../infra/host-env-security.js";
 import { findPathKey, mergePathPrepend, removePathPrepend } from "../infra/path-prepend.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { isSubagentSessionKey } from "../sessions/session-key-utils.js";
@@ -93,38 +95,14 @@ export function detectCursorKeyMode(raw: string): "application" | "normal" | nul
 export function sanitizeHostBaseEnv(env: Record<string, string>): Record<string, string> {
   const sanitized: Record<string, string> = {};
   for (const [key, value] of Object.entries(env)) {
-    const upperKey = key.toUpperCase();
-    if (upperKey === "PATH") {
-      sanitized[key] = value;
+    const sanitizedEntry = sanitizeHostInheritedEnvEntry(key, value);
+    if (!sanitizedEntry) {
       continue;
     }
-    if (isDangerousHostInheritedEnvVarName(upperKey)) {
-      continue;
-    }
-    sanitized[key] = value;
+    const [sanitizedKey, sanitizedValue] = sanitizedEntry;
+    sanitized[sanitizedKey] = sanitizedValue;
   }
   return sanitized;
-}
-/** Validates caller-provided host env, rejecting dangerous vars and PATH overrides. */
-export function validateHostEnv(env: Record<string, string>): void {
-  for (const key of Object.keys(env)) {
-    const upperKey = key.toUpperCase();
-
-    // 1. Block known dangerous variables (Fail Closed)
-    if (isDangerousHostInheritedEnvVarName(upperKey)) {
-      throw new Error(
-        `Security Violation: Environment variable '${key}' is forbidden during host execution.`,
-      );
-    }
-
-    // 2. Strictly block PATH modification on host
-    // Allowing custom PATH on the gateway/node can lead to binary hijacking.
-    if (upperKey === "PATH") {
-      throw new Error(
-        "Security Violation: Custom 'PATH' variable is forbidden during host execution.",
-      );
-    }
-  }
 }
 /** Default retained aggregate output cap for exec sessions. */
 export const DEFAULT_MAX_OUTPUT = clampWithDefault(

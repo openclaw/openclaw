@@ -438,7 +438,7 @@ function resolveConfigAuditAppendRecord(params: ConfigAuditAppendParams): Config
   return redactSecrets(record as ConfigAuditRecord);
 }
 
-export type ConfigAuditScrubResult = {
+type ConfigAuditScrubResult = {
   scanned: number;
   rewritten: number;
   skipped: number;

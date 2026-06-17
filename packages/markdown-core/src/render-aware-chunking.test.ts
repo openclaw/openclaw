@@ -84,4 +84,40 @@ describe("renderMarkdownIRChunksWithinLimit", () => {
     expect(chunks.map((chunk) => chunk.source.text)).toEqual(["a", "b", "c"]);
     expect(chunks.every((chunk) => chunk.rendered.length <= 1)).toBe(true);
   });
+
+  it("keeps astral characters whole when a positive limit reaches their pair", () => {
+    const chunks = renderMarkdownIRChunksWithinLimit({
+      ir: markdownToIR("A😀B"),
+      limit: 1,
+      renderChunk: (chunk) => chunk.text,
+      measureRendered: (rendered) => rendered.length,
+    });
+
+    expect(chunks.map((chunk) => chunk.source.text)).toEqual(["A", "😀", "B"]);
+  });
+
+  it("keeps astral characters whole when rendered size requires a retry split", () => {
+    const chunks = renderMarkdownIRChunksWithinLimit({
+      ir: markdownToIR("A😀"),
+      limit: 3,
+      renderChunk: (chunk) => (chunk.text === "A😀" ? "too long" : chunk.text),
+      measureRendered: (rendered) => rendered.length,
+    });
+
+    expect(chunks.map((chunk) => chunk.source.text)).toEqual(["A", "😀"]);
+  });
+
+  it("treats Infinity as no size cap and returns a single chunk", () => {
+    const text = "one two three four five six seven eight nine ten";
+    const ir = markdownToIR(text);
+    const chunks = renderMarkdownIRChunksWithinLimit({
+      ir,
+      limit: Number.POSITIVE_INFINITY,
+      renderChunk: renderEscapedHtml,
+      measureRendered: (rendered) => rendered.length,
+    });
+
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0]?.source.text).toBe(text);
+  });
 });

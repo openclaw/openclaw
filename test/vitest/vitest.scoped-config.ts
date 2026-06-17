@@ -150,6 +150,7 @@ const SCOPED_PROJECT_GROUP_ORDER_BY_NAME = new Map(
     "secrets",
     "shared-core",
     "tasks",
+    "tooling-docker",
     "tooling-isolated",
     "tooling",
     "tui",
@@ -219,7 +220,9 @@ export function createScopedVitestConfig(
   const resolvedScopedDir = scopedDir ? path.join(repoRoot, scopedDir) : undefined;
   const env = options?.env;
   const includeFromEnv = loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
-  const cliInclude = narrowIncludePatternsForCli(include, options?.argv);
+  const cliInclude = narrowIncludePatternsForCli(include, options?.argv, {
+    scopedDir,
+  });
   const unitFastExcludePatterns =
     options?.excludeUnitFastTests === false ? [] : getUnitFastTestFiles();
   const exclude = relativizeScopedPatterns(

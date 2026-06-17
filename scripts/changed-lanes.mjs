@@ -30,7 +30,10 @@ const PUBLIC_EXTENSION_CONTRACT_RE =
  */
 export const RELEASE_METADATA_PATHS = new Set([
   "CHANGELOG.md",
-  "apps/android/app/build.gradle.kts",
+  "apps/android/CHANGELOG.md",
+  "apps/android/Config/Version.properties",
+  "apps/android/fastlane/metadata/android/en-US/release_notes.txt",
+  "apps/android/version.json",
   "apps/ios/CHANGELOG.md",
   "apps/ios/Config/Version.xcconfig",
   "apps/ios/fastlane/metadata/en-US/release_notes.txt",
@@ -79,6 +82,10 @@ export function createEmptyChangedLanes() {
     releaseMetadata: false,
     all: false,
   };
+}
+
+export function isChangedLaneTestPath(changedPath) {
+  return TEST_PATH_RE.test(normalizeChangedPath(changedPath));
 }
 
 /**
@@ -165,7 +172,7 @@ export function detectChangedLanes(changedPaths, options = {}) {
     }
 
     if (EXTENSION_PATH_RE.test(changedPath)) {
-      if (TEST_PATH_RE.test(changedPath)) {
+      if (isChangedLaneTestPath(changedPath)) {
         lanes.extensionTests = true;
         reasons.push(`${changedPath}: extension test`);
       } else {
@@ -177,7 +184,7 @@ export function detectChangedLanes(changedPaths, options = {}) {
     }
 
     if (CORE_PATH_RE.test(changedPath)) {
-      if (TEST_PATH_RE.test(changedPath)) {
+      if (isChangedLaneTestPath(changedPath)) {
         lanes.coreTests = true;
         reasons.push(`${changedPath}: core test`);
       } else {

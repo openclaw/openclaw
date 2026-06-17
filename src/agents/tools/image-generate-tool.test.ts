@@ -1,6 +1,7 @@
 // image_generate tool tests cover provider/model selection, edit inputs,
 // background task handling, media saving, and duplicate-generation guards.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 const taskRuntimeInternalMocks = vi.hoisted(() => {
   const mocks = {
@@ -699,6 +700,80 @@ describe("createImageGenerateTool", () => {
     expect(text).toContain('path="/tmp/generated-1.png"');
     expect(text).toContain('path="/tmp/generated-2.png"');
     expect(text).not.toMatch(/^MEDIA:/m);
+  });
+
+  it("runs explicit deployment refs and preserves timeout-only image defaults", async () => {
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      {
+        id: "microsoft-foundry",
+        models: [],
+        isConfigured: () => true,
+        capabilities: {
+          generate: {
+            maxCount: 1,
+            supportsSize: true,
+          },
+          edit: {
+            enabled: true,
+            maxInputImages: 1,
+            supportsSize: false,
+          },
+        },
+        generateImage: vi.fn(async () => {
+          throw new Error("not used");
+        }),
+      },
+    ]);
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+      provider: "microsoft-foundry",
+      model: "prod-image",
+      attempts: [],
+      ignoredOverrides: [],
+      images: [
+        {
+          buffer: Buffer.from("png-out"),
+          mimeType: "image/png",
+          fileName: "foundry.png",
+        },
+      ],
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
+      path: "/tmp/foundry.png",
+      id: "foundry.png",
+      size: 7,
+      contentType: "image/png",
+    });
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: {
+          imageGenerationModel: {
+            primary: "bootstrap/unused",
+          },
+        },
+      },
+    };
+    const tool = requireImageGenerateTool(createImageGenerateTool({ config }));
+    config.agents!.defaults!.imageGenerationModel = { timeoutMs: 180_000 };
+
+    const result = await tool.execute("call-explicit-foundry", {
+      prompt: "A product render",
+      model: "microsoft-foundry/prod-image",
+      size: "800x1000",
+    });
+
+    const generateArgs = mockCallArg(generateImage, 0, "generateImage");
+    expect(generateArgs.modelOverride).toBe("microsoft-foundry/prod-image");
+    const cfg = requireRecord(generateArgs.cfg, "generateImage config");
+    const agents = requireRecord(cfg.agents, "generateImage agents config");
+    const defaults = requireRecord(agents.defaults, "generateImage defaults config");
+    expect(defaults.imageGenerationModel).toEqual({
+      primary: "microsoft-foundry/prod-image",
+      timeoutMs: 180_000,
+    });
+    expect(generateArgs.timeoutMs).toBe(180_000);
+    expect(resultDetails(result).provider).toBe("microsoft-foundry");
+    expect(resultDetails(result).model).toBe("prod-image");
+    expect(resultDetails(result).timeoutMs).toBe(180_000);
   });
 
   it("starts image generation asynchronously when a session delivery context is available", async () => {

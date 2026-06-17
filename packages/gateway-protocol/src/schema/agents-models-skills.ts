@@ -18,6 +18,7 @@ export const ModelChoiceSchema = Type.Object(
     name: NonEmptyString,
     provider: NonEmptyString,
     alias: Type.Optional(NonEmptyString),
+    available: Type.Optional(Type.Boolean()),
     contextWindow: Type.Optional(Type.Integer({ minimum: 1 })),
     reasoning: Type.Optional(Type.Boolean()),
   },
@@ -322,6 +323,7 @@ export const SkillsUploadCommitParamsSchema = Type.Object(
 export const SkillsInstallParamsSchema = Type.Union([
   Type.Object(
     {
+      agentId: Type.Optional(NonEmptyString),
       name: NonEmptyString,
       installId: NonEmptyString,
       dangerouslyForceUnsafeInstall: Type.Optional(
@@ -337,6 +339,7 @@ export const SkillsInstallParamsSchema = Type.Union([
   ),
   Type.Object(
     {
+      agentId: Type.Optional(NonEmptyString),
       source: Type.Literal("clawhub"),
       slug: NonEmptyString,
       version: Type.Optional(NonEmptyString),
@@ -347,6 +350,7 @@ export const SkillsInstallParamsSchema = Type.Union([
   ),
   Type.Object(
     {
+      agentId: Type.Optional(NonEmptyString),
       source: Type.Literal("upload"),
       uploadId: NonEmptyString,
       slug: NonEmptyString,
@@ -371,6 +375,7 @@ export const SkillsUpdateParamsSchema = Type.Union([
   ),
   Type.Object(
     {
+      agentId: Type.Optional(NonEmptyString),
       source: Type.Literal("clawhub"),
       slug: Type.Optional(NonEmptyString),
       all: Type.Optional(Type.Boolean()),

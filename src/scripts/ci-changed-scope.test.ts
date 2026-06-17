@@ -6,33 +6,43 @@ import path from "node:path";
 import { bundledPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
 
-const { detectChangedScope, detectInstallSmokeScope, detectNodeFastScope, listChangedPaths } =
-  (await import("../../scripts/ci-changed-scope.mjs")) as unknown as {
-    detectChangedScope: (paths: string[]) => {
-      runNode: boolean;
-      runMacos: boolean;
-      runAndroid: boolean;
-      runWindows: boolean;
-      runSkillsPython: boolean;
-      runChangedSmoke: boolean;
-      runControlUiI18n: boolean;
-    };
-    detectInstallSmokeScope: (paths: string[]) => {
-      runFastInstallSmoke: boolean;
-      runFullInstallSmoke: boolean;
-    };
-    detectNodeFastScope: (paths: string[]) => {
-      runFastOnly: boolean;
-      runPluginContracts: boolean;
-      runCiRouting: boolean;
-    };
-    listChangedPaths: (
-      base: string,
-      head?: string,
-      cwd?: string,
-      preferMergeHeadFirstParent?: boolean,
-    ) => string[];
+const {
+  detectChangedScope,
+  detectInstallSmokeScope,
+  detectNodeFastScope,
+  listChangedPaths,
+  parseArgs,
+} = (await import("../../scripts/ci-changed-scope.mjs")) as unknown as {
+  detectChangedScope: (paths: string[]) => {
+    runNode: boolean;
+    runMacos: boolean;
+    runAndroid: boolean;
+    runWindows: boolean;
+    runSkillsPython: boolean;
+    runChangedSmoke: boolean;
+    runControlUiI18n: boolean;
   };
+  detectInstallSmokeScope: (paths: string[]) => {
+    runFastInstallSmoke: boolean;
+    runFullInstallSmoke: boolean;
+  };
+  detectNodeFastScope: (paths: string[]) => {
+    runFastOnly: boolean;
+    runPluginContracts: boolean;
+    runCiRouting: boolean;
+  };
+  listChangedPaths: (
+    base: string,
+    head?: string,
+    cwd?: string,
+    preferMergeHeadFirstParent?: boolean,
+  ) => string[];
+  parseArgs: (argv: string[]) => {
+    base: string;
+    head: string;
+    mergeHeadFirstParent: boolean;
+  };
+};
 
 const markerPaths: string[] = [];
 const tempDirs: string[] = [];
@@ -97,6 +107,22 @@ function createSyntheticMergeRepo(prefix: string): { repoDir: string; staleBase:
 
   return { repoDir, staleBase };
 }
+
+describe("parseArgs", () => {
+  it("parses CI diff refs", () => {
+    expect(parseArgs(["--base", "origin/main", "--head", "HEAD"])).toEqual({
+      base: "origin/main",
+      head: "HEAD",
+      mergeHeadFirstParent: false,
+    });
+  });
+
+  it("rejects missing CI diff refs", () => {
+    expect(() => parseArgs(["--base", "--head", "HEAD"])).toThrow("--base requires a value");
+    expect(() => parseArgs(["--head"])).toThrow("--head requires a value");
+    expect(() => parseArgs(["--base", ""])).toThrow("--base requires a value");
+  });
+});
 
 describe("detectChangedScope", () => {
   it("fails safe when no paths are provided", () => {
@@ -263,6 +289,30 @@ describe("detectChangedScope", () => {
       runMacos: false,
       runAndroid: false,
       runWindows: true,
+      runSkillsPython: false,
+      runChangedSmoke: false,
+      runControlUiI18n: false,
+    });
+  });
+
+  it("runs macOS CI for macOS packaging scripts with Darwin-only tests", () => {
+    expect(detectChangedScope(["scripts/create-dmg.sh"])).toEqual({
+      runNode: true,
+      runMacos: true,
+      runAndroid: false,
+      runWindows: false,
+      runSkillsPython: false,
+      runChangedSmoke: false,
+      runControlUiI18n: false,
+    });
+  });
+
+  it("runs macOS CI for the Darwin-only DMG owner test", () => {
+    expect(detectChangedScope(["test/scripts/create-dmg.test.ts"])).toEqual({
+      runNode: true,
+      runMacos: true,
+      runAndroid: false,
+      runWindows: false,
       runSkillsPython: false,
       runChangedSmoke: false,
       runControlUiI18n: false,
@@ -639,7 +689,6 @@ describe("detectChangedScope", () => {
   it("identifies CI routing changes as fast Node-only CI scope", () => {
     expect(
       detectNodeFastScope([
-        ".github/workflows/ci.yml",
         "scripts/check-changed.mjs",
         "scripts/ci-changed-scope.mjs",
         "scripts/run-vitest.mjs",
@@ -655,6 +704,14 @@ describe("detectChangedScope", () => {
       runFastOnly: true,
       runPluginContracts: false,
       runCiRouting: true,
+    });
+  });
+
+  it("keeps CI workflow edits off fast-only scope so native lanes can run", () => {
+    expect(detectNodeFastScope([".github/workflows/ci.yml"])).toEqual({
+      runFastOnly: false,
+      runPluginContracts: false,
+      runCiRouting: false,
     });
   });
 

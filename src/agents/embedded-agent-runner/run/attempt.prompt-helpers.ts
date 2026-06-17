@@ -33,7 +33,7 @@ import { log } from "../logger.js";
 import { shouldInjectHeartbeatPromptForTrigger } from "./trigger-policy.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
-export type PromptBuildHookRunner = {
+type PromptBuildHookRunner = {
   hasHooks: (
     hookName:
       | "agent_turn_prepare"
@@ -257,7 +257,7 @@ export function shouldWarnOnOrphanedUserRepair(
   return trigger === "user" || trigger === "manual";
 }
 
-export type PromptSubmissionSkipReason = "blank_user_prompt" | "empty_prompt_history_images";
+type PromptSubmissionSkipReason = "blank_user_prompt" | "empty_prompt_history_images";
 
 /**
  * Distinguishes a truly empty prompt/history from a blank follow-up in a visible

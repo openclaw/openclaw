@@ -45,7 +45,7 @@ type LegacyOAuthUnreferencedSidecar = {
   sidecarPath: string;
 };
 
-export type LegacyOAuthSidecarRepairResult = {
+type LegacyOAuthSidecarRepairResult = {
   detected: string[];
   changes: string[];
   warnings: string[];
@@ -334,4 +334,3 @@ export const testing = {
   buildLegacyOAuthSecretAad: legacyOAuthSidecarTestUtils.buildLegacyOAuthSecretAad,
   buildLegacyOAuthSecretKey: legacyOAuthSidecarTestUtils.buildLegacyOAuthSecretKey,
 };
-export { testing as __testing };

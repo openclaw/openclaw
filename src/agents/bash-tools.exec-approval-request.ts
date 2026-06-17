@@ -42,7 +42,7 @@ function loadExecApprovalCommandSpansRuntime(): Promise<ExecApprovalCommandSpans
 }
 
 /** Gateway payload fields used to register or wait for an exec approval decision. */
-export type RequestExecApprovalDecisionParams = {
+type RequestExecApprovalDecisionParams = {
   id: string;
   command?: string;
   commandArgv?: string[];
@@ -324,13 +324,6 @@ async function buildHostApprovalDecisionParams(
     suppressDelivery: params.suppressDelivery,
     ...buildExecApprovalTurnSourceContext(params),
   };
-}
-
-/** Requests and waits for an approval decision for host/node exec. */
-export async function requestExecApprovalDecisionForHost(
-  params: HostExecApprovalParams,
-): Promise<string | null> {
-  return await requestExecApprovalDecision(await buildHostApprovalDecisionParams(params));
 }
 
 /** Registers a host/node approval request without waiting for a decision. */

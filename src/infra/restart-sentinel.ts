@@ -124,6 +124,9 @@ export async function finalizeUpdateRestartSentinelRunningVersion(
     }
     const stats = payload.stats ? { ...payload.stats } : {};
     const after = isPlainRecord(stats.after) ? { ...stats.after } : {};
+    if (after.version === version) {
+      return null;
+    }
     after.version = version;
     stats.after = after;
     return {
@@ -232,7 +235,8 @@ export function summarizeRestartSentinel(payload: RestartSentinelPayload): strin
   const kind = payload.kind;
   const status = payload.status;
   const mode = payload.stats?.mode ? ` (${payload.stats.mode})` : "";
-  return `Gateway restart ${kind} ${status}${mode}`.trim();
+  const kindSegment = kind === "restart" ? "" : ` ${kind}`;
+  return `Gateway restart${kindSegment} ${status}${mode}`.trim();
 }
 
 export function trimLogTail(input?: string | null, maxChars = 8000) {

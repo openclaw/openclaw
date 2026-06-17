@@ -5,7 +5,6 @@ import os from "node:os";
 import path from "node:path";
 import JSON5 from "json5";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { CONFIG_CLOBBER_SNAPSHOT_LIMIT } from "./io.clobber-snapshot.js";
 import { createConfigIO } from "./io.js";
 import {
   maybeRecoverSuspiciousConfigRead,
@@ -16,6 +15,8 @@ import {
   type ObserveRecoveryDeps,
 } from "./io.observe-recovery.js";
 import type { ConfigFileSnapshot } from "./types.js";
+
+const CONFIG_CLOBBER_SNAPSHOT_LIMIT = 32;
 
 describe("config observe recovery", () => {
   let fixtureRoot = "";
@@ -548,6 +549,87 @@ describe("config observe recovery", () => {
     });
   });
 
+  it("does not auto-restore backup candidates rejected by the caller", async () => {
+    await withSuiteHome(async (home) => {
+      const { io, configPath } = createTestConfigIO(home);
+      await seedConfigBackup(configPath, recoverableTelegramConfig);
+      const clobbered = await writeConfigRaw(configPath, {
+        meta: { lastTouchedVersion: "2026.5.28" },
+      });
+      const allowSuspiciousRecovery = vi.fn(() => false);
+
+      const snapshot = await io.readConfigFileSnapshot({
+        recoverSuspicious: true,
+        allowSuspiciousRecovery,
+      });
+      await io.readConfigFileSnapshot({ recoverSuspicious: true, allowSuspiciousRecovery });
+
+      expect(snapshot.valid).toBe(true);
+      expect(snapshot.config.gateway?.mode).toBeUndefined();
+      expect(allowSuspiciousRecovery).toHaveBeenCalledTimes(2);
+      await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(clobbered.raw);
+      await expect(listClobberFiles(configPath)).resolves.toHaveLength(0);
+    });
+  });
+
+  it("passes the resolved backup candidate to caller recovery policy", async () => {
+    await withSuiteHome(async (home) => {
+      const { io, configPath } = createTestConfigIO(home);
+      await fsp.mkdir(path.dirname(configPath), { recursive: true });
+      await fsp.writeFile(
+        path.join(path.dirname(configPath), "future-meta.json5"),
+        '{ meta: { lastTouchedVersion: "9999.1.1" } }\n',
+        "utf-8",
+      );
+      await seedConfigBackup(configPath, {
+        $include: "./future-meta.json5",
+        gateway: { mode: "local" },
+      });
+      const clobbered = await writeConfigRaw(configPath, {});
+      let candidateVersion: string | undefined;
+      let currentConfig: Record<string, unknown> | undefined;
+
+      await io.readConfigFileSnapshot({
+        recoverSuspicious: true,
+        allowSuspiciousRecovery: (candidate, current) => {
+          candidateVersion = candidate.meta?.lastTouchedVersion;
+          currentConfig = current;
+          return false;
+        },
+      });
+
+      expect(candidateVersion).toBe("9999.1.1");
+      expect(currentConfig).toBeDefined();
+      expect(currentConfig?.meta).toBeUndefined();
+      await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(clobbered.raw);
+    });
+  });
+
+  it("does not inspect caller policy for backup candidates ineligible for restoration", async () => {
+    await withSuiteHome(async (home) => {
+      const { io, configPath } = createTestConfigIO(home);
+      await seedConfigBackup(configPath, {
+        meta: { lastTouchedVersion: "9999.1.1" },
+        channels: {
+          telegram: {
+            enabled: true,
+            allowFrom: Array.from({ length: 60 }, (_, index) => `telegram-user-${index}`),
+          },
+        },
+      });
+      const clobbered = await writeConfigRaw(configPath, {});
+      const allowSuspiciousRecovery = vi.fn(() => false);
+
+      await io.readConfigFileSnapshot({
+        recoverSuspicious: true,
+        allowSuspiciousRecovery,
+      });
+
+      expect(allowSuspiciousRecovery).not.toHaveBeenCalled();
+      await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(clobbered.raw);
+    });
+  });
+
   it("validates backup candidates without leaking their env into live state", async () => {
     await withSuiteHome(async (home) => {
       const env = {} as NodeJS.ProcessEnv;
@@ -585,18 +667,20 @@ describe("config observe recovery", () => {
     });
   });
 
-  it("records copyFile failure instead of falsely claiming restore succeeded", async () => {
+  it("records writeFile failure instead of falsely claiming restore succeeded", async () => {
     await withSuiteHome(async (home) => {
       const { deps, configPath, auditPath, warn } = makeDeps(home);
       await seedConfigBackup(configPath, recoverableTelegramConfig);
       const clobbered = await writeClobberedUpdateChannel(configPath);
 
       const copyError = Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+      const writeFile = deps.fs.promises.writeFile.bind(deps.fs.promises);
       const failingFs: ObserveRecoveryDeps["fs"] = {
         ...deps.fs,
         promises: {
           ...deps.fs.promises,
-          copyFile: () => Promise.reject(copyError),
+          writeFile: (target, data, options) =>
+            target === configPath ? Promise.reject(copyError) : writeFile(target, data, options),
         },
       };
       const recovered = await maybeRecoverSuspiciousConfigRead({
@@ -619,17 +703,21 @@ describe("config observe recovery", () => {
     });
   });
 
-  it("sync recovery records copyFileSync failure instead of falsely claiming restore succeeded", async () => {
+  it("sync recovery records writeFileSync failure instead of falsely claiming restore succeeded", async () => {
     await withSuiteHome(async (home) => {
       const { deps, configPath, auditPath, warn } = makeDeps(home);
       await seedConfigBackup(configPath, recoverableTelegramConfig);
       const clobbered = await writeClobberedUpdateChannel(configPath);
 
       const copyError = Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+      const writeFileSync = deps.fs.writeFileSync.bind(deps.fs);
       const failingFs: ObserveRecoveryDeps["fs"] = {
         ...deps.fs,
-        copyFileSync: () => {
-          throw copyError;
+        writeFileSync: (target, data, options) => {
+          if (target === configPath) {
+            throw copyError;
+          }
+          return writeFileSync(target, data, options);
         },
       };
       const recovered = maybeRecoverSuspiciousConfigReadSync({
@@ -653,18 +741,20 @@ describe("config observe recovery", () => {
     });
   });
 
-  it("retries recovery on next launch after a failed copyFile restore", async () => {
+  it("retries recovery on next launch after a failed writeFile restore", async () => {
     await withSuiteHome(async (home) => {
       const { deps, configPath, auditPath, warn } = makeDeps(home);
       await seedConfigBackup(configPath, recoverableTelegramConfig);
       const clobbered = await writeClobberedUpdateChannel(configPath);
 
       const copyError = Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+      const writeFile = deps.fs.promises.writeFile.bind(deps.fs.promises);
       const failingFs: ObserveRecoveryDeps["fs"] = {
         ...deps.fs,
         promises: {
           ...deps.fs.promises,
-          copyFile: () => Promise.reject(copyError),
+          writeFile: (target, data, options) =>
+            target === configPath ? Promise.reject(copyError) : writeFile(target, data, options),
         },
       };
       await maybeRecoverSuspiciousConfigRead({
@@ -694,17 +784,21 @@ describe("config observe recovery", () => {
     });
   });
 
-  it("sync recovery retries on next launch after a failed copyFileSync restore", async () => {
+  it("sync recovery retries on next launch after a failed writeFileSync restore", async () => {
     await withSuiteHome(async (home) => {
       const { deps, configPath, auditPath, warn } = makeDeps(home);
       await seedConfigBackup(configPath, recoverableTelegramConfig);
       const clobbered = await writeClobberedUpdateChannel(configPath);
 
       const copyError = Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+      const writeFileSync = deps.fs.writeFileSync.bind(deps.fs);
       const failingFs: ObserveRecoveryDeps["fs"] = {
         ...deps.fs,
-        copyFileSync: () => {
-          throw copyError;
+        writeFileSync: (target, data, options) => {
+          if (target === configPath) {
+            throw copyError;
+          }
+          return writeFileSync(target, data, options);
         },
       };
       maybeRecoverSuspiciousConfigReadSync({
@@ -731,6 +825,56 @@ describe("config observe recovery", () => {
       const retryEvents = await readObserveEvents(auditPath);
       expect(retryEvents).toHaveLength(2);
       expect(retryEvents[1]?.restoredFromBackup).toBe(true);
+    });
+  });
+
+  it("restores the exact async backup bytes approved by validation", async () => {
+    await withSuiteHome(async (home) => {
+      const { deps, configPath } = makeDeps(home);
+      await seedConfigBackup(configPath, recoverableTelegramConfig);
+      const backupPath = `${configPath}.bak`;
+      const approvedRaw = await fsp.readFile(backupPath, "utf-8");
+      const replacementRaw = `${JSON.stringify({ gateway: { mode: "remote" } }, null, 2)}\n`;
+      const clobbered = await writeClobberedUpdateChannel(configPath);
+
+      await maybeRecoverSuspiciousConfigRead({
+        deps,
+        configPath,
+        raw: clobbered.raw,
+        parsed: clobbered.parsed,
+        validateBackup: async () => {
+          await fsp.writeFile(backupPath, replacementRaw, "utf-8");
+          return true;
+        },
+      });
+
+      await expect(fsp.readFile(backupPath, "utf-8")).resolves.toBe(replacementRaw);
+      await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(approvedRaw);
+    });
+  });
+
+  it("restores the exact sync backup bytes approved by validation", async () => {
+    await withSuiteHome(async (home) => {
+      const { deps, configPath } = makeDeps(home);
+      await seedConfigBackup(configPath, recoverableTelegramConfig);
+      const backupPath = `${configPath}.bak`;
+      const approvedRaw = await fsp.readFile(backupPath, "utf-8");
+      const replacementRaw = `${JSON.stringify({ gateway: { mode: "remote" } }, null, 2)}\n`;
+      const clobbered = await writeClobberedUpdateChannel(configPath);
+
+      maybeRecoverSuspiciousConfigReadSync({
+        deps,
+        configPath,
+        raw: clobbered.raw,
+        parsed: clobbered.parsed,
+        validateBackupSync: () => {
+          fs.writeFileSync(backupPath, replacementRaw, "utf-8");
+          return true;
+        },
+      });
+
+      await expect(fsp.readFile(backupPath, "utf-8")).resolves.toBe(replacementRaw);
+      await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(approvedRaw);
     });
   });
 

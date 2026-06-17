@@ -245,6 +245,16 @@ describe("formatAssistantErrorText", () => {
     });
     expect(result).toBe(formatBillingErrorMessage("openrouter", "openai/gpt-5.5"));
   });
+  it("returns billing guidance for Volcengine Coding Plan subscription failures", () => {
+    const msg = makeAssistantError(
+      'HTTP 400 Bad Request: {"error":{"code":"InvalidSubscription","message":"Your account does not have a valid CodingPlan subscription, or your subscription has expired."}}',
+    );
+    const result = formatAssistantErrorText(msg, {
+      provider: "volcengine-plan",
+      model: "ark-code-latest",
+    });
+    expect(result).toBe(formatBillingErrorMessage("volcengine-plan", "ark-code-latest"));
+  });
   it("returns a friendly message for rate limit errors", () => {
     const msg = makeAssistantError("429 rate limit reached");
     expect(formatAssistantErrorText(msg)).toContain("rate limit reached");
@@ -561,6 +571,23 @@ describe("formatAssistantErrorText", () => {
       "LLM request failed: provider rejected the request schema or tool payload.",
     );
   });
+
+  it("uses structured error body detail for model-not-found copy", () => {
+    const msg = makeAssistantMessageFixture({
+      errorMessage: "400 Param Incorrect",
+      errorCode: "400",
+      errorBody:
+        '{"code":"400","message":"Param Incorrect","param":"Not supported model some-model-id"}',
+      content: [],
+    });
+
+    expect(formatAssistantErrorText(msg)).toBe(
+      "The selected model was not found by the provider. Check the model id or choose a different model.",
+    );
+    expect(formatUserFacingAssistantErrorText(msg)).toBe(
+      "The selected model was not found by the provider. Check the model id or choose a different model.",
+    );
+  });
 });
 
 describe("formatRawAssistantErrorForUi", () => {
@@ -643,6 +670,38 @@ describe("raw API error payload helpers", () => {
     expect(formatRawAssistantErrorForUi(raw)).toBe(
       "LLM error insufficient_balance: Insufficient MBT balance. Top up or upgrade your subscription to continue.",
     );
+  });
+});
+
+describe("formatBillingErrorMessage — authMode neutral copy (#80877)", () => {
+  // OAuth/Max users should NOT see "API key" or "top up" language.
+  it("returns neutral copy for oauth authMode — no 'API key' text", () => {
+    const result = formatBillingErrorMessage("Anthropic", "claude-sonnet-4-5", "oauth");
+    expect(result).not.toMatch(/api key/i);
+    expect(result).not.toMatch(/top up/i);
+    expect(result).toContain("check your account");
+  });
+
+  it("returns neutral copy for token authMode — no 'API key' text", () => {
+    const result = formatBillingErrorMessage("Anthropic", "claude-sonnet-4-5", "token");
+    expect(result).not.toMatch(/api key/i);
+    expect(result).not.toMatch(/top up/i);
+  });
+
+  it("REGRESSION: api_key authMode still returns 'API key' copy", () => {
+    const result = formatBillingErrorMessage("Anthropic", "claude-sonnet-4-5", "api_key");
+    expect(result).toMatch(/api key/i);
+    expect(result).toMatch(/top up/i);
+  });
+
+  it("REGRESSION: undefined authMode (legacy call-sites) still returns 'API key' copy", () => {
+    const result = formatBillingErrorMessage("Anthropic", "claude-sonnet-4-5");
+    expect(result).toMatch(/api key/i);
+  });
+
+  it("REGRESSION: no-provider call still returns generic 'API key' copy", () => {
+    const result = formatBillingErrorMessage();
+    expect(result).toMatch(/api key/i);
   });
 });
 

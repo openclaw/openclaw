@@ -188,6 +188,65 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
     vi.stubGlobal("RTCPeerConnection", FakePeerConnection as unknown as typeof RTCPeerConnection);
   });
 
+  it("does not continue WebRTC setup when stopped while microphone access is pending", async () => {
+    const fetchMock = vi.fn(async () => new Response("answer-sdp"));
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const stopTrack = vi.fn();
+    const track = { stop: stopTrack } as unknown as MediaStreamTrack;
+    const stream = {
+      getAudioTracks: () => [track],
+      getTracks: () => [track],
+    } as unknown as MediaStream;
+    let resolveMedia: (stream: MediaStream) => void = () => undefined;
+    Object.defineProperty(globalThis.navigator, "mediaDevices", {
+      configurable: true,
+      value: {
+        getUserMedia: vi.fn(
+          () =>
+            new Promise<MediaStream>((resolve) => {
+              resolveMedia = resolve;
+            }),
+        ),
+      },
+    });
+    const transport = createOpenAiTransport();
+
+    const startPromise = transport.start();
+    const peer = FakePeerConnection.instances[0];
+    transport.stop();
+    resolveMedia(stream);
+
+    await expect(startPromise).resolves.toBeUndefined();
+    expect(peer?.addTrack).not.toHaveBeenCalled();
+    expect(stopTrack).toHaveBeenCalledTimes(1);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("suppresses pending setup errors after stop", async () => {
+    const fetchMock = vi.fn(async () => new Response("answer-sdp"));
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    let rejectOffer: (error: Error) => void = () => undefined;
+    const transport = createOpenAiTransport();
+
+    const startPromise = transport.start();
+    const peer = FakePeerConnection.instances[0];
+    if (!peer) {
+      throw new Error("expected WebRTC peer");
+    }
+    const createOfferSpy = vi.spyOn(peer, "createOffer").mockImplementation(
+      () =>
+        new Promise<RTCSessionDescriptionInit>((_, reject) => {
+          rejectOffer = reject;
+        }),
+    );
+    await vi.waitFor(() => expect(createOfferSpy).toHaveBeenCalled());
+    transport.stop();
+    rejectOffer(new Error("closed peer rejected offer creation"));
+
+    await expect(startPromise).resolves.toBeUndefined();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("sends provider offer headers with the WebRTC SDP request", async () => {
     const fetchMock = vi.fn(async () => new Response("answer-sdp"));
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
@@ -370,6 +429,78 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
     expect(assistantTranscriptEvent.transport).toBe("webrtc");
     transport.stop();
   });
+
+  // Audio output sends the final string in `transcript`; text output sends it in
+  // `text`. Both must surface the same assistant transcript + talk events.
+  it.each([
+    {
+      label: "audio output",
+      deltaType: "response.output_audio_transcript.delta",
+      doneType: "response.output_audio_transcript.done",
+      doneField: { transcript: "hi there" },
+    },
+    {
+      label: "text output",
+      deltaType: "response.output_text.delta",
+      doneType: "response.output_text.done",
+      doneField: { text: "hi there" },
+    },
+  ])(
+    "emits assistant transcripts from OpenAI Realtime $label events",
+    async ({ deltaType, doneType, doneField }) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => new Response("answer-sdp")) as unknown as typeof fetch,
+      );
+      const onTranscript = vi.fn();
+      const onTalkEvent = vi.fn();
+      const transport = new WebRtcSdpRealtimeTalkTransport(
+        {
+          provider: "openai",
+          transport: "webrtc",
+          clientSecret: "client-secret-123",
+        },
+        {
+          client: {} as never,
+          sessionKey: "main",
+          callbacks: { onTranscript, onTalkEvent },
+        },
+      );
+
+      await transport.start();
+      const peer = FakePeerConnection.instances[0];
+      peer?.channel.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({ type: deltaType, item_id: "response-1", delta: "hi" }),
+        }),
+      );
+      peer?.channel.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({ type: doneType, item_id: "response-1", ...doneField }),
+        }),
+      );
+
+      expect(onTranscript).toHaveBeenCalledWith({
+        role: "assistant",
+        text: "hi",
+        final: false,
+      });
+      expect(onTranscript).toHaveBeenCalledWith({
+        role: "assistant",
+        text: "hi there",
+        final: true,
+      });
+      expect(onTalkEvent.mock.calls.map(([event]) => event.type)).toEqual([
+        "output.text.delta",
+        "output.text.done",
+      ]);
+      expect(onTalkEvent.mock.calls.map(([event]) => event.payload)).toEqual([
+        { text: "hi" },
+        { text: "hi there" },
+      ]);
+      transport.stop();
+    },
+  );
 
   it("aborts an in-flight OpenAI tool consult when the transport stops", async () => {
     vi.stubGlobal(

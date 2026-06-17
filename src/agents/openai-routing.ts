@@ -78,11 +78,6 @@ export function parseModelRefProvider(value: unknown): string | undefined {
   return normalizeProviderId(value.trim().slice(0, slashIndex));
 }
 
-/** Returns true when a model ref is explicitly OpenAI-qualified. */
-export function modelRefUsesOpenAIProvider(value: unknown): boolean {
-  return parseModelRefProvider(value) === OPENAI_PROVIDER_ID;
-}
-
 /** Returns true when selected model config should ensure the Codex plugin exists. */
 export function modelSelectionShouldEnsureCodexPlugin(params: {
   model?: string;

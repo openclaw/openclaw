@@ -7,9 +7,12 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  ARTIFACT_TARBALL_SCAN_MAX_ENTRIES,
   cleanupPackageSourceWorktreeForTest,
   downloadUrl,
+  findSingleTarballForTest,
   loadTrustedPackageSource,
+  moveNewestPackedTarballForTest,
   parseArgs,
   readArtifactPackageCandidateMetadata,
   readPackageBuildSourceSha,
@@ -163,6 +166,23 @@ describe("resolve-openclaw-package-candidate", () => {
     });
   });
 
+  it("rejects package candidate output names that escape the output directory", () => {
+    for (const outputName of [
+      "../openclaw-current.tgz",
+      "nested/openclaw-current.tgz",
+      "openclaw-current.zip",
+      ".openclaw-current.tgz",
+    ]) {
+      expect(() => parseArgs(["--output-name", outputName])).toThrow(
+        `--output-name must be a tarball filename, not a path: ${outputName}`,
+      );
+    }
+
+    expect(parseArgs(["--output-name", "openclaw-current.tar.gz"]).outputName).toBe(
+      "openclaw-current.tar.gz",
+    );
+  });
+
   it("resolves npm package candidates through the Windows npm.cmd toolchain shim", () => {
     const execPath = "C:\\nodejs\\node.exe";
     const npmCmdPath = path.win32.resolve(path.win32.dirname(execPath), "npm.cmd");
@@ -190,6 +210,57 @@ describe("resolve-openclaw-package-candidate", () => {
       shell: false,
       windowsVerbatimArguments: true,
     });
+  });
+
+  it("keeps npm pack filenames inside the package candidate output directory", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-npm-pack-"));
+    tempDirs.push(dir);
+    await writeFile(path.join(dir, "openclaw-2026.6.17.tgz"), "package");
+
+    await expect(
+      moveNewestPackedTarballForTest(
+        dir,
+        JSON.stringify([{ filename: "openclaw-2026.6.17.tgz" }]),
+        "openclaw-current.tgz",
+      ),
+    ).resolves.toBe(path.join(dir, "openclaw-current.tgz"));
+    await expect(readFile(path.join(dir, "openclaw-current.tgz"), "utf8")).resolves.toBe("package");
+  });
+
+  it("rejects path-like npm pack filenames instead of renaming outside the output directory", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-npm-pack-"));
+    tempDirs.push(dir);
+
+    const unsafeFilenames = [
+      "../openclaw-2026.6.17.tgz",
+      "nested/openclaw-2026.6.17.tgz",
+      "nested\\openclaw-2026.6.17.tgz",
+      "/tmp/openclaw-2026.6.17.tgz",
+      "C:\\temp\\openclaw-2026.6.17.tgz",
+      "openclaw-2026.6.17.tar.gz",
+    ];
+
+    for (const filename of unsafeFilenames) {
+      await expect(
+        moveNewestPackedTarballForTest(dir, JSON.stringify([{ filename }]), "openclaw-current.tgz"),
+      ).rejects.toThrow("npm pack reported unsafe OpenClaw tarball filename");
+    }
+  });
+
+  it("rejects unsafe text npm pack filenames instead of using loose stdout fallback", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-npm-pack-"));
+    tempDirs.push(dir);
+    await writeFile(path.join(dir, "openclaw-2026.6.17.tgz"), "safe fallback");
+
+    for (const filename of ["../openclaw-2026.6.17.tgz", "C:openclaw-2026.6.17.tgz"]) {
+      await expect(
+        moveNewestPackedTarballForTest(
+          dir,
+          ["npm notice", filename].join("\n"),
+          "openclaw-current.tgz",
+        ),
+      ).rejects.toThrow("npm pack reported unsafe OpenClaw tarball filename");
+    }
   });
 
   it("bounds captured command stderr tails on failures", async () => {
@@ -370,6 +441,45 @@ describe("resolve-openclaw-package-candidate", () => {
     });
     await expect(loadTrustedPackageSource("missing", policy)).rejects.toThrow(
       "Unknown trusted package source: missing",
+    );
+  });
+
+  it("rejects loose trusted package source port values", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-trusted-package-source-"));
+    tempDirs.push(dir);
+    const policy = path.join(dir, "trusted-sources.json");
+    await writeFile(
+      policy,
+      JSON.stringify({
+        schemaVersion: 1,
+        sources: {
+          exponent: {
+            hosts: ["packages.example"],
+            pathPrefixes: ["/openclaw/"],
+            ports: ["1e3"],
+          },
+          fractional: {
+            hosts: ["packages.example"],
+            pathPrefixes: ["/openclaw/"],
+            ports: [443.5],
+          },
+          hex: {
+            hosts: ["packages.example"],
+            pathPrefixes: ["/openclaw/"],
+            ports: ["0x1bb"],
+          },
+        },
+      }),
+    );
+
+    await expect(loadTrustedPackageSource("exponent", policy)).rejects.toThrow(
+      "trusted package source exponent has invalid ports",
+    );
+    await expect(loadTrustedPackageSource("fractional", policy)).rejects.toThrow(
+      "trusted package source fractional has invalid ports",
+    );
+    await expect(loadTrustedPackageSource("hex", policy)).rejects.toThrow(
+      "trusted package source hex has invalid ports",
     );
   });
 
@@ -671,6 +781,31 @@ describe("resolve-openclaw-package-candidate", () => {
       packageTrustedReason: "repository-branch-history",
       sha256: "a".repeat(64),
     });
+  });
+
+  it("rejects source artifact scans that exceed the filesystem entry limit", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-artifact-scan-"));
+    tempDirs.push(dir);
+
+    for (let index = 0; index <= ARTIFACT_TARBALL_SCAN_MAX_ENTRIES; index += 1) {
+      await writeFile(path.join(dir, `not-a-package-${index}.txt`), "x");
+    }
+
+    await expect(findSingleTarballForTest(dir)).rejects.toThrow(
+      `source=artifact scan exceeded ${ARTIFACT_TARBALL_SCAN_MAX_ENTRIES} filesystem entries`,
+    );
+  });
+
+  it("rejects source artifact directories with multiple tarballs", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-artifact-duplicates-"));
+    tempDirs.push(dir);
+
+    await writeFile(path.join(dir, "openclaw-a.tgz"), "a");
+    await writeFile(path.join(dir, "nested.tar.gz"), "b");
+
+    await expect(findSingleTarballForTest(dir)).rejects.toThrow(
+      "source=artifact requires exactly one .tgz",
+    );
   });
 
   it("reads the source SHA from packed npm build metadata", async () => {

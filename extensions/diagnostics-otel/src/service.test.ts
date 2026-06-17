@@ -171,7 +171,9 @@ import {
   type DiagnosticEventPrivateData,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import {
+  emitDiagnosticEventWithTrustedTraceContext,
   emitInternalDiagnosticEventForTest,
+  emitTrustedSecurityEvent,
   logMessageDispatchStarted,
   logMessageProcessed,
   onTrustedInternalDiagnosticEvent,
@@ -362,7 +364,11 @@ function histogramCreateOptions(name: string) {
 
 async function emitAndCaptureLog(
   event: Omit<Extract<Parameters<typeof emitDiagnosticEvent>[0], { type: "log.record" }>, "type">,
-  options: { captureContent?: OtelContextFlags["captureContent"]; trusted?: boolean } = {},
+  options: {
+    captureContent?: OtelContextFlags["captureContent"];
+    trusted?: boolean;
+    trustedTraceContext?: boolean;
+  } = {},
 ) {
   const service = createDiagnosticsOtelService();
   const ctx = createOtelContext(OTEL_TEST_ENDPOINT, {
@@ -370,7 +376,11 @@ async function emitAndCaptureLog(
     ...(options.captureContent !== undefined ? { captureContent: options.captureContent } : {}),
   });
   await service.start(ctx);
-  const emit = options.trusted ? emitTrustedDiagnosticEvent : emitDiagnosticEvent;
+  const emit = options.trusted
+    ? emitTrustedDiagnosticEvent
+    : options.trustedTraceContext
+      ? emitDiagnosticEventWithTrustedTraceContext
+      : emitDiagnosticEvent;
   emit({
     type: "log.record",
     ...event,
@@ -405,6 +415,22 @@ function emitTrustedModelCallCompletedWithContent(
       ...event,
     },
     { modelContent },
+  );
+}
+
+function emitTrustedToolExecutionCompletedWithContent(
+  event: Omit<
+    Extract<Parameters<typeof emitDiagnosticEvent>[0], { type: "tool.execution.completed" }>,
+    "type"
+  >,
+  toolContent: NonNullable<DiagnosticEventPrivateData["toolContent"]>,
+) {
+  emitTrustedDiagnosticEventWithPrivateData(
+    {
+      type: "tool.execution.completed",
+      ...event,
+    },
+    { toolContent },
   );
 }
 
@@ -928,6 +954,119 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
+  test("exports trusted security events as bounded OTLP logs", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { logs: true });
+    const trace = createDiagnosticTraceContext({
+      traceId: TRACE_ID,
+      spanId: SPAN_ID,
+      traceFlags: "01",
+    });
+
+    await service.start(ctx);
+    emitTrustedSecurityEvent({
+      eventId: "security-event-1",
+      category: "tool",
+      action: "tool.execution.blocked",
+      outcome: "denied",
+      severity: "medium",
+      reason: "tools.deny",
+      actor: {
+        kind: "agent",
+        idHash: "agent-hash-1",
+        role: "operator",
+        scopes: ["operator.read", "operator.approvals"],
+      },
+      target: {
+        kind: "plugin",
+        name: "@acme/security-event-plugin",
+        owner: "plugin-installer",
+      },
+      policy: {
+        id: "tools.exec",
+        decision: "deny",
+        reason: "allowlist.miss",
+      },
+      control: {
+        id: "exec-approval",
+        family: "approval",
+      },
+      attributes: {
+        params_kind: "object",
+        secretish: "token sk-test-secret",
+        [PROTO_KEY]: "blocked",
+      },
+      trace,
+    });
+    await flushDiagnosticEvents();
+
+    const emitCall = mockCallArg(logEmit, 0) as {
+      attributes?: Record<string, unknown>;
+      body?: string;
+      context?: unknown;
+      severityNumber?: number;
+      severityText?: string;
+    };
+    expect(emitCall.body).toBe("openclaw.security.event");
+    expect(emitCall.severityText).toBe("WARN");
+    expect(emitCall.severityNumber).toBe(13);
+    expect(emitCall.attributes).toMatchObject({
+      "openclaw.security.event_id": "security-event-1",
+      "openclaw.security.category": "tool",
+      "openclaw.security.action": "tool.execution.blocked",
+      "openclaw.security.outcome": "denied",
+      "openclaw.security.severity": "medium",
+      "openclaw.security.reason": "tools.deny",
+      "openclaw.security.actor.kind": "agent",
+      "openclaw.security.actor.id_hash": "agent-hash-1",
+      "openclaw.security.actor.role": "operator",
+      "openclaw.security.actor.scopes": "operator.read,operator.approvals",
+      "openclaw.security.target.kind": "plugin",
+      "openclaw.security.target.name": "@acme/security-event-plugin",
+      "openclaw.security.target.owner": "plugin-installer",
+      "openclaw.security.policy.id": "tools.exec",
+      "openclaw.security.policy.decision": "deny",
+      "openclaw.security.policy.reason": "allowlist.miss",
+      "openclaw.security.control.id": "exec-approval",
+      "openclaw.security.control.family": "approval",
+      "openclaw.security.attribute.params_kind": "object",
+      "openclaw.security.attribute.secretish": "unknown",
+    });
+    expect(emitCall.context).toEqual({
+      spanContext: {
+        traceId: TRACE_ID,
+        spanId: SPAN_ID,
+        traceFlags: 1,
+        isRemote: true,
+      },
+    });
+    expect(Object.hasOwn(emitCall.attributes ?? {}, "openclaw.security.attribute.__proto__")).toBe(
+      false,
+    );
+    expect(JSON.stringify(emitCall)).not.toContain("sk-test-secret");
+
+    await service.stop?.(ctx);
+  });
+
+  test("does not export security events when OTLP logs are disabled", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { logs: false, metrics: true });
+
+    await service.start(ctx);
+    emitTrustedSecurityEvent({
+      eventId: "security-event-logs-disabled",
+      category: "auth",
+      action: "gateway.auth.failed",
+      outcome: "failure",
+      severity: "high",
+    });
+    await flushDiagnosticEvents();
+
+    expect(logEmit).not.toHaveBeenCalled();
+
+    await service.stop?.(ctx);
+  });
+
   test("records liveness warning diagnostics", async () => {
     const service = createDiagnosticsOtelService();
     const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
@@ -1373,6 +1512,28 @@ describe("diagnostics-otel service", () => {
     expect(Object.hasOwn(emitCall?.attributes ?? {}, "openclaw.traceFlags")).toBe(false);
     expect(telemetryState.tracer.setSpanContext).not.toHaveBeenCalled();
     expect(emitCall?.context).toBeUndefined();
+  });
+
+  test("attaches trace-only trusted context to exported logs", async () => {
+    const emitCall = await emitAndCaptureLog(
+      {
+        level: "INFO",
+        message: "traceable log",
+        trace: {
+          traceId: TRACE_ID,
+          spanId: SPAN_ID,
+          traceFlags: "01",
+        },
+      },
+      { trustedTraceContext: true },
+    );
+
+    expect(emitCall?.body).toBe("log");
+    expect(telemetryState.tracer.setSpanContext).toHaveBeenCalledTimes(1);
+    const emitContext = emitCall?.context as { spanContext?: Record<string, unknown> } | undefined;
+    const emitSpanContext = emitContext?.spanContext;
+    expect(emitSpanContext?.traceId).toBe(TRACE_ID);
+    expect(emitSpanContext?.spanId).toBe(SPAN_ID);
   });
 
   test("attaches trusted diagnostic trace context to exported logs", async () => {
@@ -3991,15 +4152,18 @@ describe("diagnostics-otel service", () => {
         systemPrompt: "private system prompt",
       },
     );
-    emitDiagnosticEvent({
-      type: "tool.execution.completed",
-      runId: "run-1",
-      toolName: "read",
-      toolCallId: "tool-1",
-      durationMs: 20,
-      toolInput: "private tool input",
-      toolOutput: "private tool output",
-    } as Parameters<typeof emitDiagnosticEvent>[0]);
+    emitTrustedToolExecutionCompletedWithContent(
+      {
+        runId: "run-1",
+        toolName: "read",
+        toolCallId: "tool-1",
+        durationMs: 20,
+      },
+      {
+        toolInput: "private tool input",
+        toolOutput: "private tool output",
+      },
+    );
     await flushDiagnosticEvents();
 
     const modelOptions = startedSpanOptions("openclaw.model.call");
@@ -4052,15 +4216,18 @@ describe("diagnostics-otel service", () => {
         systemPrompt: "system prompt",
       },
     );
-    emitDiagnosticEvent({
-      type: "tool.execution.completed",
-      runId: "run-1",
-      toolName: "read",
-      toolCallId: "tool-1",
-      durationMs: 20,
-      toolInput: "tool input",
-      toolOutput: `${"x".repeat(4077)} Bearer ${"a".repeat(80)}`, // pragma: allowlist secret
-    } as Parameters<typeof emitDiagnosticEvent>[0]);
+    emitTrustedToolExecutionCompletedWithContent(
+      {
+        runId: "run-1",
+        toolName: "read",
+        toolCallId: "tool-1",
+        durationMs: 20,
+      },
+      {
+        toolInput: "tool input",
+        toolOutput: `${"x".repeat(4077)} Bearer ${"a".repeat(80)}`, // pragma: allowlist secret
+      },
+    );
     await flushDiagnosticEvents();
 
     const modelCall = telemetryState.tracer.startSpan.mock.calls.find(

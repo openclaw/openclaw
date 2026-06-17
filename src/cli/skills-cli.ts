@@ -17,6 +17,7 @@ import {
 import { defaultRuntime } from "../runtime.js";
 import {
   installSkillFromClawHub,
+  readVerifiedClawHubSkillSourceUrl,
   readTrackedClawHubSkillSlugs,
   resolveClawHubSkillVerificationTarget,
   searchSkillsFromClawHub,
@@ -151,6 +152,7 @@ function buildSkillVerificationOutput(
   result: ClawHubSkillVerificationResponse,
   target: ResolvedClawHubSkillVerificationTarget,
 ): Record<string, unknown> {
+  const verifiedSourceUrl = readVerifiedClawHubSkillSourceUrl(result.provenance);
   return {
     ...result,
     openclaw: {
@@ -160,6 +162,7 @@ function buildSkillVerificationOutput(
         registry: target.resolution.registry,
         installedVersion: target.resolution.installedVersion,
       },
+      ...(verifiedSourceUrl ? { verifiedSourceUrl } : {}),
     },
   };
 }
@@ -734,8 +737,8 @@ export function registerSkillsCli(program: Command) {
     .action(
       async (proposalId: string, opts: { json?: boolean; agent?: string }, command: Command) => {
         try {
-          const { workspaceDir } = resolveSkillsWorkspaceForCommand(command.parent, opts);
-          const applied = await applySkillProposal({ workspaceDir, proposalId });
+          const { config, workspaceDir } = resolveSkillsWorkspaceForCommand(command.parent, opts);
+          const applied = await applySkillProposal({ workspaceDir, config, proposalId });
           if (opts.json) {
             defaultRuntime.writeJson(applied);
             return;

@@ -5,6 +5,7 @@ import {
   existsSync,
   lstatSync,
   mkdtempSync,
+  opendirSync,
   readdirSync,
   readFileSync,
   realpathSync,
@@ -60,7 +61,8 @@ const PUBLISHED_BUNDLED_RUNTIME_SIDECAR_PATHS = BUNDLED_RUNTIME_SIDECAR_PATHS.fi
 const NODE_BUILTIN_MODULES = new Set(builtinModules.map((name) => name.replace(/^node:/u, "")));
 const MAX_INSTALLED_ROOT_PACKAGE_JSON_BYTES = 1024 * 1024;
 const MAX_INSTALLED_ROOT_DIST_JS_BYTES = 6 * 1024 * 1024;
-const MAX_INSTALLED_ROOT_DIST_JS_FILES = 5000;
+// Keep the dependency scan bounded while allowing headroom for generated root chunks.
+const MAX_INSTALLED_ROOT_DIST_JS_FILES = 10_000;
 const ROOT_DIST_JAVASCRIPT_MODULE_FILE_RE = /\.(?:c|m)?js$/u;
 const OPTIONAL_OR_EXTERNALIZED_RUNTIME_IMPORTS = new Set([
   // Optional A2UI markdown renderer. The Canvas host bundle catches the missing
@@ -84,6 +86,10 @@ const OPTIONAL_OR_EXTERNALIZED_RUNTIME_IMPORTS = new Set([
 ]);
 const require = createRequire(import.meta.url);
 const acorn = require("acorn") as typeof import("acorn");
+
+type DistJavaScriptFileListResult =
+  | { files: string[]; limitExceeded: false }
+  | { files: string[]; limit: number; limitExceeded: true };
 
 export type PublishedInstallScenario = {
   name: string;
@@ -178,11 +184,14 @@ export function normalizeInstalledBinaryVersion(output: string): string {
 
 function listDistJavaScriptFiles(
   packageRoot: string,
-  opts: { skipRelativePath?: (relativePath: string) => boolean } = {},
-): string[] {
+  opts: {
+    maxFiles?: number;
+    skipRelativePath?: (relativePath: string) => boolean;
+  } = {},
+): DistJavaScriptFileListResult {
   const distDir = join(packageRoot, "dist");
   if (!existsSync(distDir)) {
-    return [];
+    return { files: [], limitExceeded: false };
   }
 
   const pending = [distDir];
@@ -192,28 +201,56 @@ function listDistJavaScriptFiles(
     if (!currentDir) {
       continue;
     }
-    for (const entry of readdirSync(currentDir, { withFileTypes: true })) {
-      const entryPath = join(currentDir, entry.name);
-      const relativePath = relative(distDir, entryPath).replaceAll("\\", "/");
-      if (opts.skipRelativePath?.(relativePath)) {
-        continue;
+    const dir = opendirSync(currentDir);
+    try {
+      while (true) {
+        const entry = dir.readSync();
+        if (!entry) {
+          break;
+        }
+
+        const entryPath = join(currentDir, entry.name);
+        const relativePath = relative(distDir, entryPath).replaceAll("\\", "/");
+        if (opts.skipRelativePath?.(relativePath)) {
+          continue;
+        }
+        if (entry.isDirectory()) {
+          pending.push(entryPath);
+          continue;
+        }
+        if (entry.isFile() && ROOT_DIST_JAVASCRIPT_MODULE_FILE_RE.test(entry.name)) {
+          files.push(entryPath);
+          if (opts.maxFiles !== undefined && files.length > opts.maxFiles) {
+            return {
+              files,
+              limit: opts.maxFiles,
+              limitExceeded: true,
+            };
+          }
+        }
       }
-      if (entry.isDirectory()) {
-        pending.push(entryPath);
-        continue;
-      }
-      if (entry.isFile() && ROOT_DIST_JAVASCRIPT_MODULE_FILE_RE.test(entry.name)) {
-        files.push(entryPath);
-      }
+    } finally {
+      dir.closeSync();
     }
   }
 
-  return files;
+  return { files, limitExceeded: false };
+}
+
+function formatInstalledDistFileScanLimitError(scope: string, limit: number): string {
+  return `installed package ${scope} contains more than ${limit} JavaScript files; refusing to scan unbounded package contents.`;
 }
 
 export function collectInstalledContextEngineRuntimeErrors(packageRoot: string): string[] {
   const errors: string[] = [];
-  for (const filePath of listDistJavaScriptFiles(packageRoot)) {
+  const distFiles = listDistJavaScriptFiles(packageRoot, {
+    maxFiles: MAX_INSTALLED_ROOT_DIST_JS_FILES,
+  });
+  if (distFiles.limitExceeded) {
+    return [formatInstalledDistFileScanLimitError("dist", distFiles.limit)];
+  }
+
+  for (const filePath of distFiles.files) {
     const contents = readFileSync(filePath, "utf8");
     if (contents.includes(LEGACY_CONTEXT_ENGINE_UNRESOLVED_RUNTIME_MARKER)) {
       errors.push(
@@ -344,9 +381,11 @@ export function collectInstalledPluginSdkDeclarationErrors(packageRoot: string):
   return errors;
 }
 
-function listInstalledRootDistJavaScriptFiles(packageRoot: string): string[] {
+function listInstalledRootDistJavaScriptFiles(packageRoot: string): DistJavaScriptFileListResult {
   return listDistJavaScriptFiles(packageRoot, {
-    skipRelativePath: (relativePath) => relativePath.startsWith("extensions/"),
+    maxFiles: MAX_INSTALLED_ROOT_DIST_JS_FILES,
+    skipRelativePath: (relativePath) =>
+      relativePath === "extensions" || relativePath.startsWith("extensions/"),
   });
 }
 
@@ -449,16 +488,14 @@ export function collectInstalledRootDependencyManifestErrors(packageRoot: string
     ...Object.keys(rootPackageJson.optionalDependencies ?? {}),
   ]);
   const distFiles = listInstalledRootDistJavaScriptFiles(packageRoot);
-  if (distFiles.length > MAX_INSTALLED_ROOT_DIST_JS_FILES) {
-    return [
-      `installed package root dist contains ${distFiles.length} JavaScript files, exceeding the ${MAX_INSTALLED_ROOT_DIST_JS_FILES} file scan limit.`,
-    ];
+  if (distFiles.limitExceeded) {
+    return [formatInstalledDistFileScanLimitError("root dist", distFiles.limit)];
   }
   const missingImporters = new Map<string, Set<string>>();
   const bundledExtensionRuntimeDependencyOwners =
     collectBundledExtensionRuntimeDependencyOwners(packageRoot);
 
-  for (const filePath of distFiles) {
+  for (const filePath of distFiles.files) {
     const fileStat = lstatSync(filePath);
     if (!fileStat.isFile() || fileStat.size > MAX_INSTALLED_ROOT_DIST_JS_BYTES) {
       const relativePath = relative(join(packageRoot, "dist"), filePath).replaceAll("\\", "/");

@@ -18,7 +18,7 @@ import { buildAgentHookContext, type AgentHarnessHookContext } from "./hook-cont
 const log = createSubsystemLogger("agents/harness");
 
 /** Prompt/developer-instruction pair after harness prompt-build hooks run. */
-export type AgentHarnessPromptBuildResult = {
+type AgentHarnessPromptBuildResult = {
   prompt: string;
   developerInstructions: string;
 };

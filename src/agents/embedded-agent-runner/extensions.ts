@@ -2,7 +2,6 @@
  * Builds extension factories available to embedded-agent runtime sessions.
  */
 import { randomUUID } from "node:crypto";
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { setCompactionSafeguardRuntime } from "../agent-hooks/compaction-safeguard-runtime.js";
@@ -11,17 +10,20 @@ import contextPruningExtension from "../agent-hooks/context-pruning.js";
 import { setContextPruningRuntime } from "../agent-hooks/context-pruning/runtime.js";
 import { computeEffectiveSettings } from "../agent-hooks/context-pruning/settings.js";
 import { makeToolPrunablePredicate } from "../agent-hooks/context-pruning/tools.js";
+import { resolveEffectiveCompactionMode } from "../agent-settings.js";
 import {
-  ensureAgentCompactionReserveTokens,
-  resolveEffectiveCompactionMode,
-} from "../agent-settings.js";
+  finalizeToolTerminalPresentation,
+  peekAdjustedParamsForToolCall,
+} from "../agent-tools.before-tool-call.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { createAgentToolResultMiddlewareRunner } from "../harness/tool-result-middleware.js";
 import type { AgentToolResult } from "../runtime/index.js";
 import type { ExtensionFactory, SessionManager } from "../sessions/index.js";
+import { isToolResultError } from "../tool-result-error.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "./cache-ttl.js";
+import { recordEmbeddedToolSendReceipt } from "./tool-send-receipts.js";
 
 type AgentToolResultEvent = {
   threadId?: string;
@@ -40,17 +42,17 @@ function recordFromUnknown(value: unknown): Record<string, unknown> {
     : {};
 }
 
-// Only checks "error" and "timeout" — the status values emitted by the
-// adapter's buildToolExecutionErrorResult. The subscribe-side classifier
-// (isErrorLikeStatus) uses a broader regex because it handles arbitrary
-// external tool results; this bridge only elevates adapter-produced statuses.
-function hasErrorToolResultStatus(result: AgentToolResult<unknown>): boolean {
-  const details = recordFromUnknown(result.details);
-  const status = normalizeOptionalLowercaseString(details.status);
-  return status === "error" || status === "timeout";
+function snapshotToolSendReceipt(details: unknown): unknown {
+  const toolSend = recordFromUnknown(details).toolSend;
+  return toolSend && typeof toolSend === "object" && !Array.isArray(toolSend)
+    ? { ...(toolSend as Record<string, unknown>) }
+    : toolSend;
 }
 
-function buildAgentToolResultMiddlewareFactory(): ExtensionFactory {
+function buildAgentToolResultMiddlewareFactory(
+  sessionManager: SessionManager,
+  runId?: string,
+): ExtensionFactory {
   const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" });
   return (agent) => {
     agent.on("tool_result", async (rawEvent: unknown, ctx: { cwd?: string }) => {
@@ -58,28 +60,44 @@ function buildAgentToolResultMiddlewareFactory(): ExtensionFactory {
       if (!event.toolName) {
         return undefined;
       }
-      const toolCallId =
+      const eventToolCallId =
         typeof event.toolCallId === "string" && event.toolCallId.trim()
           ? event.toolCallId
-          : `openclaw-${randomUUID()}`;
+          : undefined;
+      const toolCallId = eventToolCallId ?? `openclaw-${randomUUID()}`;
       const content = Array.isArray(event.content) ? event.content : [];
       const current = {
         content,
         details: event.details,
       } satisfies AgentToolResult<unknown>;
-      const inputHadErrorStatus = hasErrorToolResultStatus(current);
+      const rawToolSend = snapshotToolSendReceipt(current.details);
+      if (eventToolCallId && rawToolSend !== undefined) {
+        // Routing evidence stays private so middleware may fully replace result details.
+        recordEmbeddedToolSendReceipt(sessionManager, eventToolCallId, rawToolSend);
+      }
+      const inputHadErrorStatus = isToolResultError(current);
+      const adjustedInput = eventToolCallId
+        ? peekAdjustedParamsForToolCall(eventToolCallId, runId)
+        : undefined;
       const result = await runner.applyToolResultMiddleware({
         threadId: event.threadId,
         turnId: event.turnId,
         toolCallId,
         toolName: event.toolName,
-        args: recordFromUnknown(event.input),
+        args: recordFromUnknown(adjustedInput ?? event.input),
         cwd: ctx.cwd,
         isError: event.isError,
         result: current,
       });
-      const isError =
-        event.isError === true || inputHadErrorStatus || hasErrorToolResultStatus(result);
+      const isError = event.isError === true || inputHadErrorStatus || isToolResultError(result);
+      if (eventToolCallId) {
+        finalizeToolTerminalPresentation({
+          toolCallId: eventToolCallId,
+          runId,
+          result,
+          isError,
+        });
+      }
       return {
         content: result.content,
         details: result.details,
@@ -151,6 +169,7 @@ export function buildEmbeddedExtensionFactories(params: {
   provider: string;
   modelId: string;
   model: ProviderRuntimeModel | undefined;
+  runId?: string;
 }): ExtensionFactory[] {
   const factories: ExtensionFactory[] = [];
   if (resolveEffectiveCompactionMode(params.cfg) === "safeguard") {
@@ -184,8 +203,6 @@ export function buildEmbeddedExtensionFactories(params: {
   if (pruningFactory) {
     factories.push(pruningFactory);
   }
-  factories.push(buildAgentToolResultMiddlewareFactory());
+  factories.push(buildAgentToolResultMiddlewareFactory(params.sessionManager, params.runId));
   return factories;
 }
-
-export { ensureAgentCompactionReserveTokens };
