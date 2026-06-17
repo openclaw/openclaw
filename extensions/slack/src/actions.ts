@@ -10,7 +10,7 @@ import { createSlackWebClient, getSlackWriteClient } from "./client.js";
 import { buildSlackEditTextPayload } from "./edit-text.js";
 import { resolveSlackMedia } from "./monitor/media.js";
 import type { SlackMediaResult } from "./monitor/media.js";
-import { sendMessageSlack } from "./send.js";
+import { sendMessageSlack, type SlackSendIdentity } from "./send.js";
 import { resolveSlackBotToken } from "./token.js";
 
 export type SlackActionClientOpts = {
@@ -272,15 +272,32 @@ export async function editSlackMessage(
   channelId: string,
   messageId: string,
   content: string,
-  opts: SlackActionClientOpts & { blocks?: (Block | KnownBlock)[] } = {},
+  opts: SlackActionClientOpts & {
+    blocks?: (Block | KnownBlock)[];
+    identity?: SlackSendIdentity;
+  } = {},
 ) {
   const client = await getClient(opts, "write");
   const blocks = opts.blocks == null ? undefined : validateSlackBlocksArray(opts.blocks);
+  const identity = opts.identity;
   await client.chat.update({
     channel: channelId,
     ts: messageId,
     text: buildSlackEditTextPayload(content, blocks),
     ...(blocks ? { blocks } : {}),
+    ...(identity?.iconUrl
+      ? {
+          ...(identity.username ? { username: identity.username } : {}),
+          icon_url: identity.iconUrl,
+        }
+      : identity?.iconEmoji
+        ? {
+            ...(identity.username ? { username: identity.username } : {}),
+            icon_emoji: identity.iconEmoji,
+          }
+        : identity?.username
+          ? { username: identity.username }
+          : {}),
   });
 }
 
