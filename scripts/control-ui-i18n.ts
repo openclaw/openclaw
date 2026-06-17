@@ -113,6 +113,7 @@ const SOURCE_LOCALE_PATH = path.join(LOCALES_DIR, "en.ts");
 const SOURCE_LOCALE = "en";
 const CONTROL_UI_RAW_COPY_SOURCE_DIRS = [
   path.join(ROOT, "ui", "src", "app"),
+  path.join(ROOT, "ui", "src", "features"),
   path.join(ROOT, "ui", "src", "routes"),
   path.join(ROOT, "ui", "src", "ui"),
 ] as const;

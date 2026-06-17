@@ -6,6 +6,10 @@ import {
   loadCron as loadCronInternal,
   loadOverview as loadOverviewInternal,
 } from "../app/active-route.ts";
+import {
+  loadSkillWorkshopMode,
+  loadSkillWorkshopUseCurrentChatForRevisions,
+} from "../features/skill-workshop/skill-workshop.ts";
 import { i18n, I18nController, isSupportedLocale, t } from "../i18n/index.ts";
 import type { Tab } from "../routes/route-registry.ts";
 import type { ActivityEntry, ActivityStatus } from "./activity-model.ts";
@@ -49,11 +53,7 @@ import {
 } from "./app-lifecycle.ts";
 import { initNativeBridge } from "./app-native-bridge.ts";
 import { createChatSession as createChatSessionInternal } from "./app-render.helpers.ts";
-import {
-  loadSkillWorkshopMode,
-  loadSkillWorkshopUseCurrentChatForRevisions,
-  renderApp,
-} from "./app-render.ts";
+import { renderApp } from "./app-render.ts";
 import {
   exportLogs as exportLogsInternal,
   handleActivityScroll as handleActivityScrollInternal,
