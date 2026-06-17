@@ -189,6 +189,10 @@ release state.
    more-than-90-day-old drill record blocks closeout; private recovery commands
    remain in the maintainer-only runbook. Use its manual dispatch only to
    repair or replay a completed stable closeout.
+   A legacy fallback correction tag may reuse base-package evidence only when
+   the correction tag resolves to the same source commit as the base stable tag.
+   A correction with different source must publish and verify its own package
+   evidence.
 
 ## Release preflight
 

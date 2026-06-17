@@ -36,6 +36,8 @@ jobs:
       release_publish_run_id: ${{ steps.inputs.outputs.release_publish_run_id }}
       rollback_drill_date: ${{ steps.inputs.outputs.rollback_drill_date }}
       rollback_drill_id: ${{ steps.inputs.outputs.rollback_drill_id }}
+      evidence_tag: ${{ steps.inputs.outputs.evidence_tag }}
+      fallback_correction: ${{ steps.inputs.outputs.fallback_correction }}
       main_ref: ${{ steps.inputs.outputs.main_ref }}
       should_closeout: ${{ steps.inputs.outputs.should_closeout }}
       tag: ${{ steps.inputs.outputs.tag }}
@@ -85,7 +87,20 @@ jobs:
           if [[ "$release_package_version" =~ ^(.+)-[0-9]+$ ]]; then
             fallback_package_version="${BASH_REMATCH[1]}"
           fi
-          evidence_asset="openclaw-${release_asset_version}-postpublish-evidence.json"
+          tag_package_version="$(gh api "repos/$GITHUB_REPOSITORY/contents/package.json?ref=$tag" \
+            --jq '.content' | tr -d '\n' | base64 --decode | jq -r '.version // empty')"
+          fallback_correction=false
+          evidence_source_tag="$tag"
+          if [[ "$release_package_version" != "$fallback_package_version" &&
+            "$tag_package_version" == "$fallback_package_version" ]]; then
+            fallback_correction=true
+            evidence_source_tag="v$fallback_package_version"
+          elif [[ "$tag_package_version" != "$release_package_version" ]]; then
+            echo "Stable closeout requires $tag package.json to match $release_package_version, or the legacy fallback package version $fallback_package_version." >&2
+            exit 1
+          fi
+          evidence_version="${evidence_source_tag#v}"
+          evidence_asset="openclaw-${evidence_version}-postpublish-evidence.json"
           evidence_checksum_asset="${evidence_asset}.sha256"
           closeout_asset="openclaw-${release_asset_version}-stable-main-closeout.json"
           if [[ "$EVENT_NAME" == "push" ]] && gh release view "$tag" --repo "$GITHUB_REPOSITORY" \
@@ -106,9 +121,9 @@ jobs:
           fi
           evidence_dir="$RUNNER_TEMP/release-postpublish-evidence"
           mkdir -p "$evidence_dir"
-          if ! gh release download "$tag" --repo "$GITHUB_REPOSITORY" \
+          if ! gh release download "$evidence_source_tag" --repo "$GITHUB_REPOSITORY" \
             --pattern "$evidence_asset" --pattern "$evidence_checksum_asset" --dir "$evidence_dir"; then
-            echo "Stable closeout is required for $tag, but its immutable postpublish evidence asset is missing." >&2
+            echo "Stable closeout is required for $tag, but immutable postpublish evidence from $evidence_source_tag is missing." >&2
             exit 1
           fi
           evidence_path="$evidence_dir/$evidence_asset"
@@ -119,11 +134,11 @@ jobs:
             echo "Postpublish evidence checksum failed for $tag." >&2
             exit 1
           fi
-          evidence_tag="$(jq -r '.releaseTag // empty' "$evidence_path")"
+          evidence_release_tag="$(jq -r '.releaseTag // empty' "$evidence_path")"
           full_release_validation_run_id="$(jq -r '[.workflowRuns[]? | select(.label == "Full Release Validation") | .id] | if length == 1 then .[0] else empty end' "$evidence_path")"
           release_publish_run_id="$(jq -r '.releasePublishRunId // empty' "$evidence_path")"
-          if [[ "$evidence_tag" != "$tag" || -z "$full_release_validation_run_id" || -z "$release_publish_run_id" ]]; then
-            echo "Stable closeout is required for $tag, but postpublish evidence does not bind it to exactly one Full Release Validation run and its Publish run." >&2
+          if [[ "$evidence_release_tag" != "$evidence_source_tag" || -z "$full_release_validation_run_id" || -z "$release_publish_run_id" ]]; then
+            echo "Stable closeout is required for $tag, but postpublish evidence does not bind $evidence_source_tag to exactly one Full Release Validation run and its Publish run." >&2
             exit 1
           fi
           if [[ -z "$ROLLBACK_DRILL_ID" || -z "$ROLLBACK_DRILL_DATE" ]]; then
@@ -135,6 +150,8 @@ jobs:
             echo "release_publish_run_id=$release_publish_run_id"
             echo "rollback_drill_date=$ROLLBACK_DRILL_DATE"
             echo "rollback_drill_id=$ROLLBACK_DRILL_ID"
+            echo "evidence_tag=$evidence_source_tag"
+            echo "fallback_correction=$fallback_correction"
             echo "main_ref=$main_ref"
             echo "should_closeout=true"
             echo "tag=$tag"
@@ -161,6 +178,26 @@ jobs:
           path: release-tag
           fetch-depth: 1
           persist-credentials: false
+
+      - name: Checkout fallback evidence tag
+        if: ${{ needs.resolve.outputs.fallback_correction == 'true' }}
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: refs/tags/${{ needs.resolve.outputs.evidence_tag }}
+          path: evidence-tag
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Bind fallback correction to the published package source
+        if: ${{ needs.resolve.outputs.fallback_correction == 'true' }}
+        run: |
+          set -euo pipefail
+          correction_sha="$(git -C "$GITHUB_WORKSPACE/release-tag" rev-parse HEAD)"
+          evidence_sha="$(git -C "$GITHUB_WORKSPACE/evidence-tag" rev-parse HEAD)"
+          if [[ "$correction_sha" != "$evidence_sha" ]]; then
+            echo "Fallback correction ${{ needs.resolve.outputs.tag }} must point to the same source commit as ${{ needs.resolve.outputs.evidence_tag }} to reuse immutable package evidence." >&2
+            exit 1
+          fi
 
       - name: Verify release workflow evidence
         env:

@@ -104,15 +104,27 @@ describe("package acceptance workflow", () => {
     const checksumIndex = workflow.indexOf(
       'sha256sum --strict --status -c "$evidence_checksum_asset"',
     );
-    const evidenceReadIndex = workflow.indexOf('evidence_tag="$(jq -r');
+    const evidenceReadIndex = workflow.indexOf('evidence_release_tag="$(jq -r');
     const releaseVersionGateIndex = workflow.indexOf(
       'if [[ "$main_version" != "$release_package_version" &&',
     );
-    const evidenceDownloadIndex = workflow.indexOf('if ! gh release download "$tag"');
+    const evidenceDownloadIndex = workflow.indexOf(
+      'if ! gh release download "$evidence_source_tag"',
+    );
 
     expect(workflow).toContain('evidence_checksum_asset="${evidence_asset}.sha256"');
     expect(workflow).toContain('--pattern "$evidence_checksum_asset"');
     expect(workflow).toContain('fallback_package_version="${BASH_REMATCH[1]}"');
+    expect(workflow).toContain(
+      'tag_package_version="$(gh api "repos/$GITHUB_REPOSITORY/contents/package.json?ref=$tag"',
+    );
+    expect(workflow).toContain('evidence_source_tag="v$fallback_package_version"');
+    expect(workflow).toContain('gh release download "$evidence_source_tag"');
+    expect(workflow).toContain("Checkout fallback evidence tag");
+    expect(workflow).toContain("Bind fallback correction to the published package source");
+    expect(workflow).toContain(
+      "Fallback correction ${{ needs.resolve.outputs.tag }} must point to the same source commit",
+    );
     expect(workflow).toContain("main_ref: ${{ steps.inputs.outputs.main_ref }}");
     expect(workflow).toContain("TRIGGER_SHA: ${{ github.sha }}");
     expect(workflow).toContain('main_ref="$TRIGGER_SHA"');
