@@ -299,7 +299,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
       sessionKey,
     },
     (_currentEntry, context) => {
-      if (preserveUserFacingRunState && !context.existingEntry) {
+      if (!context.existingEntry && sessionStore[sessionKey]) {
         return null;
       }
       return metadataPatch;
