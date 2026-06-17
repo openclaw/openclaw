@@ -15,6 +15,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { isOpenClawOrgNpmSpec, parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { normalizeUpdateChannel, resolveRegistryUpdateChannel } from "../infra/update-channels.js";
+import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
+import { resolvePackagedBundledLoadPathAlias } from "../plugins/bundled-load-path-aliases.js";
 import {
   findBundledPluginSourceInMap,
   resolveBundledPluginSources,
@@ -182,6 +184,20 @@ function hasGitWorkspace(workspaceDir?: string): boolean {
 }
 
 function addPluginLoadPath(cfg: OpenClawConfig, pluginPath: string): OpenClawConfig {
+  // Skip paths that resolve to OpenClaw's bundled plugin directory —
+  // bundled plugins are discovered automatically and do not need a
+  // plugins.load.paths entry (which would produce a redundant-path warning).
+  const bundledRoot = resolveBundledPluginsDir();
+  if (bundledRoot) {
+    const bundledAlias = resolvePackagedBundledLoadPathAlias({
+      bundledRoot,
+      loadPath: pluginPath,
+    });
+    if (bundledAlias) {
+      return cfg;
+    }
+  }
+
   const existing = cfg.plugins?.load?.paths ?? [];
   const merged = uniqueStrings([...existing, pluginPath]);
   return {
