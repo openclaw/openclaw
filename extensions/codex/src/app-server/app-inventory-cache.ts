@@ -25,6 +25,7 @@ export type CodexAppInventoryRequest = (
 export type CodexAppInventoryCacheKeyInput = {
   codexHome?: string;
   endpoint?: string;
+  runtimeIdentity?: Record<string, string | undefined>;
   authProfileId?: string;
   accountId?: string;
   envApiKeyFingerprint?: string;
@@ -251,11 +252,27 @@ export function buildCodexAppInventoryCacheKey(input: CodexAppInventoryCacheKeyI
   return JSON.stringify({
     codexHome: input.codexHome ?? null,
     endpoint: input.endpoint ?? null,
+    runtimeIdentity: normalizeRuntimeIdentityForCacheKey(input.runtimeIdentity),
     authProfileId: input.authProfileId ?? null,
     accountId: input.accountId ?? null,
     envApiKeyFingerprint: input.envApiKeyFingerprint ?? null,
     appServerVersion: input.appServerVersion ?? null,
   });
+}
+
+function normalizeRuntimeIdentityForCacheKey(
+  value: Record<string, string | undefined> | undefined,
+): Record<string, string> | null {
+  if (!value) {
+    return null;
+  }
+  const entries = Object.entries(value)
+    .flatMap(([key, rawValue]) => {
+      const normalized = rawValue?.trim();
+      return normalized ? ([[key, normalized]] as const) : [];
+    })
+    .toSorted(([left], [right]) => left.localeCompare(right));
+  return entries.length > 0 ? Object.fromEntries(entries) : null;
 }
 
 async function listAllApps(

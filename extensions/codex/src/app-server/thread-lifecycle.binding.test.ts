@@ -13,7 +13,10 @@ import {
   writeCodexAppServerBinding as writeRawCodexAppServerBinding,
 } from "./session-binding.js";
 import { fingerprintCodexAppServerNetworkProxyConfigPatch } from "./config.js";
-import { startOrResumeThread } from "./thread-lifecycle.js";
+import {
+  shouldRotateCodexAppServerBindingForRuntime,
+  startOrResumeThread,
+} from "./thread-lifecycle.js";
 
 function createThreadLifecycleAppServerOptions(): Parameters<
   typeof startOrResumeThread
@@ -31,6 +34,9 @@ function createThreadLifecycleAppServerOptions(): Parameters<
     approvalsReviewer: "user",
     sandbox: "workspace-write",
     codeModeOnly: false,
+    connectionClass: "local-loopback",
+    remoteAppsSubstrate: "preconfigured",
+    remoteMutationPolicy: "install-and-refresh",
   };
 }
 
@@ -249,6 +255,35 @@ function createTwoCalendarAppPolicyContext() {
 setupRunAttemptTestHooks();
 
 describe("Codex app-server thread lifecycle bindings", () => {
+  it("rotates remote runtime bindings when the app-server fingerprint is missing or changed", () => {
+    expect(
+      shouldRotateCodexAppServerBindingForRuntime({
+        connectionClass: "remote",
+        current: "remote-runtime-v1",
+      }),
+    ).toBe(true);
+    expect(
+      shouldRotateCodexAppServerBindingForRuntime({
+        connectionClass: "remote",
+        current: "remote-runtime-v1",
+        binding: "remote-runtime-v0",
+      }),
+    ).toBe(true);
+    expect(
+      shouldRotateCodexAppServerBindingForRuntime({
+        connectionClass: "remote",
+        current: "remote-runtime-v1",
+        binding: "remote-runtime-v1",
+      }),
+    ).toBe(false);
+    expect(
+      shouldRotateCodexAppServerBindingForRuntime({
+        connectionClass: "local-loopback",
+        current: "local-runtime-v1",
+      }),
+    ).toBe(false);
+  });
+
   it("does not write a binding when thread start resolves after abort", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -2239,6 +2274,9 @@ describe("Codex app-server thread lifecycle bindings", () => {
         approvalPolicy: "never",
         approvalsReviewer: "user",
         sandbox: "workspace-write",
+        connectionClass: "local-loopback",
+        remoteAppsSubstrate: "preconfigured",
+        remoteMutationPolicy: "install-and-refresh",
       },
     });
 

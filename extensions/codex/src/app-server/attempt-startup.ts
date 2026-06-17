@@ -30,7 +30,10 @@ import {
   resolveCodexSandboxEnvironmentSelection,
   shouldRequireCodexSandboxExecServerEnvironment,
 } from "./dynamic-tool-build.js";
-import { buildCodexPluginAppCacheKey } from "./plugin-app-cache-key.js";
+import {
+  buildCodexAppServerRuntimeFingerprint,
+  buildCodexPluginAppCacheKey,
+} from "./plugin-app-cache-key.js";
 import {
   buildCodexPluginThreadConfig,
   buildCodexPluginThreadConfigInputFingerprint,
@@ -148,20 +151,6 @@ export async function startCodexAttemptThread(params: {
         const pluginThreadConfigPluginConfig = params.nativeToolSurfaceEnabled
           ? params.pluginConfig
           : disableCodexPluginThreadConfig(params.pluginConfig);
-        const pluginAppCacheKeyInput = {
-          appServer: params.appServer,
-          agentDir: params.agentDir,
-          authProfileId: params.startupAuthProfileId,
-          accountId: params.startupAuthAccountCacheKey,
-          envApiKeyFingerprint: params.startupEnvApiKeyCacheKey,
-        };
-        const pluginAppCacheKey = buildCodexPluginAppCacheKey(pluginAppCacheKeyInput);
-        const pluginThreadConfigInputFingerprint = pluginThreadConfigRequired
-          ? buildCodexPluginThreadConfigInputFingerprint({
-              pluginConfig: pluginThreadConfigPluginConfig,
-              appCacheKey: pluginAppCacheKey,
-            })
-          : undefined;
         const resolvedPluginPolicy = pluginThreadConfigRequired
           ? resolveCodexPluginsPolicy(pluginThreadConfigPluginConfig)
           : undefined;
@@ -174,20 +163,6 @@ export async function startCodexAttemptThread(params: {
               .map((plugin) => plugin.configKey)
               .toSorted()
           : undefined;
-        const attemptParams = params.buildAttemptParams();
-        embeddedAgentLog.debug(
-          "codex plugin thread config eligibility",
-          buildCodexPluginThreadConfigEligibilityLogData({
-            sessionId: attemptParams.sessionId,
-            sessionKey: attemptParams.sessionKey ?? "",
-            pluginThreadConfigRequired,
-            resolvedPluginPolicy,
-            enabledPluginConfigKeys,
-            pluginAppCacheKey,
-            startupAuthProfileId: params.startupAuthProfileId,
-            appServer: params.appServer,
-          }),
-        );
         pluginAppServer = mcpElicitationDelegationRequired
           ? {
               ...params.appServer,
@@ -243,6 +218,42 @@ export async function startCodexAttemptThread(params: {
               timeoutMs: params.appServer.requestTimeoutMs,
               signal: startupAbandonController.signal,
             });
+            const startupRuntimeIdentity = activeStartupClient.getRuntimeIdentity();
+            const pluginAppCacheKey = buildCodexPluginAppCacheKey({
+              appServer: params.appServer,
+              agentDir: params.agentDir,
+              authProfileId: params.startupAuthProfileId,
+              accountId: params.startupAuthAccountCacheKey,
+              envApiKeyFingerprint: params.startupEnvApiKeyCacheKey,
+              appServerVersion: activeStartupClient.getServerVersion(),
+              runtimeIdentity: startupRuntimeIdentity,
+            });
+            const appServerRuntimeFingerprint = buildCodexAppServerRuntimeFingerprint({
+              appServer: params.appServer,
+              appServerVersion: activeStartupClient.getServerVersion(),
+              runtimeIdentity: startupRuntimeIdentity,
+            });
+            const pluginThreadConfigInputFingerprint = pluginThreadConfigRequired
+              ? buildCodexPluginThreadConfigInputFingerprint({
+                  pluginConfig: pluginThreadConfigPluginConfig,
+                  appCacheKey: pluginAppCacheKey,
+                  mutationPolicy: params.appServer.remoteMutationPolicy,
+                })
+              : undefined;
+            const attemptParams = params.buildAttemptParams();
+            embeddedAgentLog.debug(
+              "codex plugin thread config eligibility",
+              buildCodexPluginThreadConfigEligibilityLogData({
+                sessionId: attemptParams.sessionId,
+                sessionKey: attemptParams.sessionKey ?? "",
+                pluginThreadConfigRequired,
+                resolvedPluginPolicy,
+                enabledPluginConfigKeys,
+                pluginAppCacheKey,
+                startupAuthProfileId: params.startupAuthProfileId,
+                appServer: params.appServer,
+              }),
+            );
             let startupSandboxEnvironment: CodexSandboxExecEnvironment | undefined;
             let startupSandboxEnvironmentAcquired = false;
             const releaseStartupSandboxEnvironment = async () => {
@@ -293,6 +304,7 @@ export async function startCodexAttemptThread(params: {
               effectiveCwd: params.effectiveCwd,
               environment: startupSandboxEnvironment,
               nativeToolSurfaceEnabled: params.nativeToolSurfaceEnabled,
+              remoteWorkspace: params.appServer.remoteWorkspace,
             });
             const startupSandboxPolicy = startupSandboxEnvironment
               ? resolveCodexExternalSandboxPolicyForOpenClawSandbox(params.sandbox)
@@ -319,6 +331,7 @@ export async function startCodexAttemptThread(params: {
                 mcpServersFingerprint: params.bundleMcpThreadConfig.fingerprint,
                 mcpServersFingerprintEvaluated: params.bundleMcpThreadConfig.evaluated,
                 environmentSelection: startupEnvironmentSelection,
+                appServerRuntimeFingerprint,
                 contextEngineProjection: params.contextEngineProjection,
                 signal,
                 pluginThreadConfig: pluginThreadConfigRequired
@@ -333,9 +346,10 @@ export async function startCodexAttemptThread(params: {
                             activeStartupClient.request(method, requestParams, {
                               timeoutMs: params.appServer.requestTimeoutMs,
                               signal,
-                            }),
+                          }),
                           appCache: defaultCodexAppInventoryCache,
                           appCacheKey: pluginAppCacheKey,
+                          mutationPolicy: params.appServer.remoteMutationPolicy,
                         }),
                     }
                   : undefined,

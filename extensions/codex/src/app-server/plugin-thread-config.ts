@@ -13,6 +13,7 @@ import {
 } from "./app-inventory-cache.js";
 import {
   resolveCodexPluginsPolicy,
+  type CodexAppServerRemoteMutationPolicy,
   type CodexPluginDestructiveApprovalMode,
   type ResolvedCodexPluginPolicy,
   type ResolvedCodexPluginsPolicy,
@@ -74,6 +75,7 @@ export type BuildCodexPluginThreadConfigParams = {
   request: CodexPluginRuntimeRequest;
   appCache?: CodexAppInventoryCache;
   appCacheKey: string;
+  mutationPolicy?: CodexAppServerRemoteMutationPolicy;
   nowMs?: number;
 };
 
@@ -89,12 +91,14 @@ export function shouldBuildCodexPluginThreadConfig(pluginConfig?: unknown): bool
 export function buildCodexPluginThreadConfigInputFingerprint(params: {
   pluginConfig?: unknown;
   appCacheKey?: string;
+  mutationPolicy?: CodexAppServerRemoteMutationPolicy;
 }): string {
   const policy = resolveCodexPluginsPolicy(params.pluginConfig);
   return fingerprintJson({
     version: CODEX_PLUGIN_THREAD_CONFIG_INPUT_FINGERPRINT_VERSION,
     policy: policyFingerprint(policy),
     appCacheKey: params.appCacheKey ?? null,
+    mutationPolicy: params.mutationPolicy ?? "install-and-refresh",
   });
 }
 
@@ -106,6 +110,7 @@ export async function buildCodexPluginThreadConfig(
   let inputFingerprint = buildCodexPluginThreadConfigInputFingerprint({
     pluginConfig: params.pluginConfig,
     appCacheKey: params.appCacheKey,
+    mutationPolicy: params.mutationPolicy,
   });
   const policy = resolveCodexPluginsPolicy(params.pluginConfig);
   if (!policy.enabled) {
@@ -141,6 +146,7 @@ export async function buildCodexPluginThreadConfig(
     inputFingerprint = buildCodexPluginThreadConfigInputFingerprint({
       pluginConfig: params.pluginConfig,
       appCacheKey: params.appCacheKey,
+      mutationPolicy: params.mutationPolicy,
     });
   }
   const activationDiagnostics: CodexPluginThreadConfigDiagnostic[] = [];
@@ -154,6 +160,7 @@ export async function buildCodexPluginThreadConfig(
       request: params.request,
       appCache,
       appCacheKey: params.appCacheKey,
+      mutationPolicy: params.mutationPolicy,
     });
     activationResults.push(activation);
     if (!activation.ok) {
@@ -180,6 +187,7 @@ export async function buildCodexPluginThreadConfig(
     inputFingerprint = buildCodexPluginThreadConfigInputFingerprint({
       pluginConfig: params.pluginConfig,
       appCacheKey: params.appCacheKey,
+      mutationPolicy: params.mutationPolicy,
     });
   }
   if (shouldForceRefreshForNotReadyPluginApps(params, policy, inventory)) {
@@ -198,6 +206,7 @@ export async function buildCodexPluginThreadConfig(
     inputFingerprint = buildCodexPluginThreadConfigInputFingerprint({
       pluginConfig: params.pluginConfig,
       appCacheKey: params.appCacheKey,
+      mutationPolicy: params.mutationPolicy,
     });
   }
 

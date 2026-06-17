@@ -159,6 +159,9 @@ function createThreadLifecycleAppServerOptions(): Parameters<
     approvalPolicy: "never",
     approvalsReviewer: "user",
     sandbox: "workspace-write",
+    connectionClass: "local-loopback",
+    remoteAppsSubstrate: "preconfigured",
+    remoteMutationPolicy: "install-and-refresh",
   };
 }
 
@@ -830,6 +833,9 @@ describe("Codex app-server turn params", () => {
       approvalPolicy: "on-request" as const,
       approvalsReviewer: "guardian_subagent" as const,
       sandbox: "danger-full-access" as const,
+      connectionClass: "local-loopback" as const,
+      remoteAppsSubstrate: "preconfigured" as const,
+      remoteMutationPolicy: "install-and-refresh" as const,
       serviceTier: "flex" as const,
     };
 

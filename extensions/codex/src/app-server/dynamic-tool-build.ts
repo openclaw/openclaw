@@ -19,7 +19,11 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { isToolAllowed } from "openclaw/plugin-sdk/sandbox";
-import { readCodexPluginConfig, type CodexPluginConfig } from "./config.js";
+import {
+  readCodexPluginConfig,
+  type CodexAppServerRemoteWorkspaceMapping,
+  type CodexPluginConfig,
+} from "./config.js";
 import {
   filterCodexDynamicTools,
   isForcedPrivateQaCodexRuntime,
@@ -587,10 +591,41 @@ export function resolveCodexAppServerExecutionCwd(params: {
   effectiveCwd: string;
   environment?: CodexSandboxExecEnvironment;
   nativeToolSurfaceEnabled: boolean;
+  remoteWorkspace?: CodexAppServerRemoteWorkspaceMapping;
 }): string {
-  return params.environment && params.nativeToolSurfaceEnabled
+  const cwd = params.environment && params.nativeToolSurfaceEnabled
     ? params.environment.cwd
     : params.effectiveCwd;
+  return mapCodexAppServerRemoteWorkspacePath(cwd, params.remoteWorkspace);
+}
+
+/** Maps a local OpenClaw workspace path to the equivalent remote Codex app-server path. */
+export function mapCodexAppServerRemoteWorkspacePath(
+  value: string,
+  remoteWorkspace?: CodexAppServerRemoteWorkspaceMapping,
+): string {
+  if (!remoteWorkspace) {
+    return value;
+  }
+  const localRoot = normalizeRemoteWorkspaceMatchPath(remoteWorkspace.localRoot);
+  const remoteRoot = normalizeRemoteWorkspaceMatchPath(remoteWorkspace.remoteRoot);
+  const normalizedValue = normalizeRemoteWorkspaceMatchPath(value);
+  if (normalizedValue === localRoot) {
+    return remoteRoot;
+  }
+  const prefix = `${localRoot}/`;
+  if (!normalizedValue.startsWith(prefix)) {
+    return value;
+  }
+  return `${remoteRoot}/${normalizedValue.slice(prefix.length)}`;
+}
+
+function normalizeRemoteWorkspaceMatchPath(value: string): string {
+  return trimTrailingPathSeparator(value.replace(/\\/gu, "/"));
+}
+
+function trimTrailingPathSeparator(value: string): string {
+  return value.length > 1 ? value.replace(/[\\/]+$/u, "") : value;
 }
 
 /** Converts OpenClaw sandbox networking into Codex's external-sandbox policy shape. */

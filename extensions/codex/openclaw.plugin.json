@@ -161,6 +161,27 @@
             "type": "array",
             "items": { "type": "string" }
           },
+          "connectionClass": {
+            "type": "string",
+            "enum": ["local-loopback", "remote"]
+          },
+          "remoteAppsSubstrate": {
+            "type": "string",
+            "enum": ["preconfigured", "verify"]
+          },
+          "remoteMutationPolicy": {
+            "type": "string",
+            "enum": ["read-only", "install-and-refresh"]
+          },
+          "remoteWorkspace": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "localRoot": { "type": "string" },
+              "remoteRoot": { "type": "string" }
+            },
+            "required": ["localRoot", "remoteRoot"]
+          },
           "codeModeOnly": {
             "type": "boolean",
             "default": false
@@ -384,6 +405,26 @@
     "appServer.clearEnv": {
       "label": "Clear Environment",
       "help": "Environment variable names removed from the spawned stdio app-server process after overrides are applied.",
+      "advanced": true
+    },
+    "appServer.connectionClass": {
+      "label": "Connection Class",
+      "help": "Classifies the app-server endpoint as local-loopback or remote. Remote WebSocket app-servers require identity-bearing auth.",
+      "advanced": true
+    },
+    "appServer.remoteAppsSubstrate": {
+      "label": "Remote Apps Substrate",
+      "help": "Declares how OpenClaw should treat the remote Codex app-server plugin/app substrate. Use preconfigured; verify is reserved until Codex exposes remote substrate verification.",
+      "advanced": true
+    },
+    "appServer.remoteMutationPolicy": {
+      "label": "Remote Mutation Policy",
+      "help": "Controls whether OpenClaw may install or refresh plugins on the remote Codex app-server. Use read-only for preconfigured remote servers.",
+      "advanced": true
+    },
+    "appServer.remoteWorkspace": {
+      "label": "Remote Workspace",
+      "help": "Maps a local OpenClaw workspace path prefix to the equivalent remote Codex app-server path prefix.",
       "advanced": true
     },
     "appServer.codeModeOnly": {
