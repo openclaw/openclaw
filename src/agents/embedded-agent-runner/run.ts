@@ -1853,6 +1853,16 @@ async function runEmbeddedAgentInternal(
           } else {
             parentAbortSignal?.addEventListener("abort", relayParentAbort, { once: true });
           }
+          // Periodically report lane progress during tool execution so the
+          // lane timeout sliding window does not expire while a long-running
+          // tool (e.g. exec, data processing) is in flight. Without this,
+          // isolated cron jobs with tool execution exceeding ~10 minutes
+          // fail with CommandLaneTaskTimeoutError even when timeoutSeconds
+          // is set appropriately. See #94033.
+          const laneProgressInterval = setInterval(() => {
+            noteLaneTaskProgress();
+          }, 30_000);
+
           const rawAttempt = await runEmbeddedAttemptWithBackend({
             sessionId: activeSessionId,
             sessionKey: resolvedSessionKey,
@@ -2011,6 +2021,7 @@ async function runEmbeddedAgentInternal(
               throw postCompactionAbortError ?? err;
             })
             .finally(() => {
+              clearInterval(laneProgressInterval);
               parentAbortSignal?.removeEventListener?.("abort", relayParentAbort);
               if (postCompactionAbortController === attemptAbortController) {
                 postCompactionAbortController = undefined;
