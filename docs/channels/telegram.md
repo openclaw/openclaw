@@ -442,7 +442,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     This keeps model text away from Telegram Rich Markdown sigils, so currency like `$400-600K` is not parsed as math. Long rich text is split automatically across Telegram's rich text and rich block limits. Tables over Telegram's column limit are sent as code blocks.
 
-    Rich messages require compatible Telegram clients. Some current Desktop, Web, Android, and third-party clients display accepted rich messages as unsupported, so keep this option disabled unless every client used with the bot can render them.
+    **Troubleshooting:** If you or your users see "This message is not supported by your version of Telegram Desktop" errors, set `richMessages: false` (or remove the key entirely, as false is the default). This falls back to standard Telegram HTML formatting that works across all clients. Only enable rich messages when you have verified that all clients accessing the bot support Bot API 10.1+.
 
     Link previews are enabled by default. `channels.telegram.linkPreview: false` skips automatic entity detection for rich text.
 
