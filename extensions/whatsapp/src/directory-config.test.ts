@@ -83,7 +83,7 @@ describe("whatsapp directory groups live", () => {
 
   function mockController(sock: unknown) {
     vi.mocked(getRegisteredWhatsAppConnectionController).mockReturnValue({
-      getCurrentSock: () => sock,
+      getCurrentSock: () => sock as never,
       getActiveListener: () => null,
       getSelfIdentity: () => null,
     });
@@ -204,8 +204,8 @@ describe("whatsapp directory groups live", () => {
     } as never);
 
     expect(result).toHaveLength(2);
-    expect(result[0]!.id).toBe("120363111111111111@g.us");
-    expect(result[1]!.id).toBe("120363222222222222@g.us");
+    expect(result[0].id).toBe("120363111111111111@g.us");
+    expect(result[1].id).toBe("120363222222222222@g.us");
   });
 
   it("falls back to config when socket throws", async () => {
