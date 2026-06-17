@@ -38,3 +38,13 @@ diff --git a/dist/acp-agent.js b/dist/acp-agent.js
                          break;
                      }
                      case "stream_event": {
+@@ -798,7 +805,7 @@
+                             // the current loop stops with end_turn,
+                             // the loop of the next prompt continues running
+                             return { stopReason: "end_turn", usage: sessionUsage(session) };
+                         }
+-                        if ("isReplay" in message && message.isReplay) {
++                        if (typeof message === "object" && message !== null && "isReplay" in message && message.isReplay) {
+                             // not pending or unrelated replay message
+                             break;
+                         }
