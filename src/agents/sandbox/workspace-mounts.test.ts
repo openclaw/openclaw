@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { appendWorkspaceMountArgs } from "./workspace-mounts.js";
+import { appendWorkspaceMountArgs, appendReadOnlyWorkspaceSkillMountArgs, resolveUserBindContainerPaths } from "./workspace-mounts.js";
 
 const tmpDirs: string[] = [];
 
@@ -248,5 +248,78 @@ describe("appendWorkspaceMountArgs", () => {
     expect(mounts).not.toContain(
       `${path.join(sandboxWorkspaceDir, "skills")}:/workspace/skills:ro,z`,
     );
+  });
+});
+
+describe("resolveUserBindContainerPaths", () => {
+  it("returns empty set for undefined binds", () => {
+    expect(resolveUserBindContainerPaths(undefined)).toEqual(new Set());
+  });
+
+  it("returns empty set for empty binds", () => {
+    expect(resolveUserBindContainerPaths([])).toEqual(new Set());
+  });
+
+  it("extracts container paths from standard bind specs", () => {
+    const result = resolveUserBindContainerPaths([
+      "/host/path:/container/path:ro",
+      "/host/other:/container/other",
+    ]);
+    expect(result).toEqual(new Set(["/container/path", "/container/other"]));
+  });
+
+  it("strips trailing slashes from container paths", () => {
+    const result = resolveUserBindContainerPaths([
+      "/host/path:/container/path/:ro",
+    ]);
+    expect(result).toEqual(new Set(["/container/path"]));
+  });
+
+  it("ignores malformed specs", () => {
+    const result = resolveUserBindContainerPaths([
+      "",
+      "  ",
+      "no-colon-spec",
+      "/host:container-no-leading-slash",
+    ]);
+    expect(result).toEqual(new Set());
+  });
+});
+
+describe("appendReadOnlyWorkspaceSkillMountArgs with skipContainerPaths", () => {
+  it("skips skill mounts whose container path is in skipContainerPaths", () => {
+    const args: string[] = [];
+    appendReadOnlyWorkspaceSkillMountArgs({
+      args,
+      readOnlyWorkspaceSkillMounts: [
+        { hostPath: "/host/skills", containerPath: "/workspace/.agents/skills" },
+        { hostPath: "/host/other", containerPath: "/workspace/other" },
+      ],
+      skipContainerPaths: new Set(["/workspace/.agents/skills"]),
+    });
+    expect(args).toEqual(["-v", "/host/other:/workspace/other:ro,z"]);
+  });
+
+  it("appends all mounts when skipContainerPaths is empty", () => {
+    const args: string[] = [];
+    appendReadOnlyWorkspaceSkillMountArgs({
+      args,
+      readOnlyWorkspaceSkillMounts: [
+        { hostPath: "/host/skills", containerPath: "/workspace/.agents/skills" },
+      ],
+      skipContainerPaths: new Set(),
+    });
+    expect(args).toEqual(["-v", "/host/skills:/workspace/.agents/skills:ro,z"]);
+  });
+
+  it("appends all mounts when skipContainerPaths is undefined", () => {
+    const args: string[] = [];
+    appendReadOnlyWorkspaceSkillMountArgs({
+      args,
+      readOnlyWorkspaceSkillMounts: [
+        { hostPath: "/host/skills", containerPath: "/workspace/.agents/skills" },
+      ],
+    });
+    expect(args).toEqual(["-v", "/host/skills:/workspace/.agents/skills:ro,z"]);
   });
 });
