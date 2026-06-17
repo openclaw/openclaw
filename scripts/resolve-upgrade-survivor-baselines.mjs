@@ -3,6 +3,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { normalizeUpgradeSurvivorBaselineSpec } from "./lib/docker-e2e-plan.mjs";
+import { compareReleaseVersions, parseReleaseVersion } from "./lib/npm-publish-plan.mjs";
 
 function parseArgs(argv) {
   const args = new Map();
@@ -58,33 +59,23 @@ function readPublishedVersions(file) {
 
 function stableVersionFromTag(tagName) {
   const version = String(tagName ?? "").replace(/^v/u, "");
-  if (!/^[0-9]{4}\.[0-9]+\.[0-9]+(?:-[0-9]+)?$/u.test(version)) {
-    return undefined;
-  }
-  return version;
+  return parseStableVersion(version) ? version : undefined;
 }
 
 function parseStableVersion(version) {
-  const match = /^([0-9]{4})\.([0-9]+)\.([0-9]+)(?:-([0-9]+))?$/u.exec(String(version ?? ""));
-  if (!match) {
-    return undefined;
-  }
-  return match.slice(1).map((part) => Number.parseInt(part ?? "0", 10));
+  const parsed = parseReleaseVersion(String(version ?? ""));
+  return parsed?.channel === "stable" ? parsed : undefined;
 }
 
 function compareStableVersions(left, right) {
-  const leftParts = parseStableVersion(left);
-  const rightParts = parseStableVersion(right);
-  if (!leftParts || !rightParts) {
+  if (!parseStableVersion(left) || !parseStableVersion(right)) {
     throw new Error(`cannot compare release versions: ${left} ${right}`);
   }
-  for (let index = 0; index < Math.max(leftParts.length, rightParts.length); index += 1) {
-    const delta = (leftParts[index] ?? 0) - (rightParts[index] ?? 0);
-    if (delta !== 0) {
-      return delta;
-    }
+  const comparison = compareReleaseVersions(left, right);
+  if (comparison === null) {
+    throw new Error(`cannot compare release versions: ${left} ${right}`);
   }
-  return 0;
+  return comparison;
 }
 
 function npmPublishedVersion(version, publishedVersions) {

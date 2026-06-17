@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   canonicalAndroidVersionCode,
   normalizeGatewayVersionToPinnedAndroidVersion,
+  normalizePinnedAndroidVersion,
   renderAndroidVersionProperties,
   resolveAndroidVersion,
   resolveGatewayVersionForAndroidRelease,
@@ -52,6 +53,15 @@ describe("resolveAndroidVersion", () => {
     );
   });
 
+  it("rejects impossible pinned release versions", () => {
+    expect(() => normalizePinnedAndroidVersion("2026.13.2")).toThrow(
+      "Expected pinned release version like 2026.6.5",
+    );
+    expect(() => normalizePinnedAndroidVersion("2026.6.9007199254740993")).toThrow(
+      "Expected pinned release version like 2026.6.5",
+    );
+  });
+
   it("rejects version codes that do not match the pinned version date", () => {
     const rootDir = writeAndroidFixture({
       version: "2026.6.2",
@@ -76,6 +86,21 @@ describe("gateway version normalization", () => {
 
   it("derives the default Play-compatible versionCode from the pinned version", () => {
     expect(canonicalAndroidVersionCode("2026.6.2")).toBe(2026060201);
+  });
+
+  it("rejects pinned versions that cannot derive Play-compatible version codes", () => {
+    expect(() => canonicalAndroidVersionCode("2026.6.100")).toThrow(
+      "Unable to derive Android versionCode from 2026.6.100",
+    );
+  });
+
+  it("rejects impossible gateway release versions", () => {
+    expect(() => normalizeGatewayVersionToPinnedAndroidVersion("2026.13.2-beta.1")).toThrow(
+      "Expected YYYY.M.PATCH",
+    );
+    expect(() =>
+      normalizeGatewayVersionToPinnedAndroidVersion("2026.6.2-beta.9007199254740993"),
+    ).toThrow("Expected YYYY.M.PATCH");
   });
 
   it("reads and normalizes the root package version for Android releases", () => {

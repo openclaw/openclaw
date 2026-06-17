@@ -1379,6 +1379,51 @@ describe("kitchen-sink RPC process sampling", () => {
     expect(sample).toBeNull();
   });
 
+  posixIt("rejects malformed POSIX process rows before sampling RSS", async () => {
+    const badRows = [
+      "  5678  1234  9007199254740993  0.2 child",
+      "  5678x  1234  2048  0.2 child",
+      "  5678  1234x  2048  0.2 child",
+    ];
+
+    for (const badRow of badRows) {
+      const sample = await sampleProcess(1234, {
+        platform: "linux",
+        runCommand: async () => ({
+          stdout: [
+            "  PID  PPID   RSS %CPU COMMAND",
+            "  1234     1  2048  0.1 openclaw-gateway",
+            badRow,
+          ].join("\n"),
+          stderr: "",
+        }),
+      });
+
+      expect(sample).toBeNull();
+    }
+  });
+
+  posixIt("ignores malformed POSIX process rows outside the sampled tree", async () => {
+    const sample = await sampleProcess(1234, {
+      platform: "linux",
+      runCommand: async () => ({
+        stdout: [
+          "  PID  PPID   RSS %CPU COMMAND",
+          "  1234     1  2048  0.1 openclaw-gateway",
+          "  5678  1234  4096  0.2 child",
+          "  9999  9998  9007199254740993  0.2 unrelated",
+        ].join("\n"),
+        stderr: "",
+      }),
+    });
+
+    expect(sample).toMatchObject({
+      aggregateRssMiB: 6,
+      processId: 1234,
+      rssMiB: 2,
+    });
+  });
+
   it("samples the Windows gateway process by listening port", async () => {
     const calls: Array<{ command: string; args: string[] }> = [];
     const sample = await sampleWindowsProcessByPort(19675, {

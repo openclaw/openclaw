@@ -125,6 +125,10 @@ describe("parseReleaseVersion", () => {
     expect(parseReleaseVersion("2026.13.1")).toBeNull();
     expect(parseReleaseVersion("2026.3.0")).toBeNull();
     expect(parseReleaseVersion("2026.3.10-0")).toBeNull();
+    expect(parseReleaseVersion("2026.3.9007199254740993")).toBeNull();
+    expect(parseReleaseVersion("2026.3.10-beta.9007199254740993")).toBeNull();
+    expect(parseReleaseVersion("2026.3.10-alpha.9007199254740993")).toBeNull();
+    expect(parseReleaseVersion("2026.3.10-9007199254740993")).toBeNull();
     expect(parseReleaseVersion("2.0.0-beta2")).toBeNull();
   });
 });

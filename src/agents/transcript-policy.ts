@@ -16,7 +16,7 @@ import { normalizeProviderId } from "./model-selection.js";
 import type { ToolCallIdMode } from "./tool-call-id.js";
 
 /** Scope of transcript content sanitization before provider replay. */
-export type TranscriptSanitizeMode = "full" | "images-only";
+type TranscriptSanitizeMode = "full" | "images-only";
 
 /** Effective replay policy applied before sending transcript history to a provider. */
 export type TranscriptPolicy = {

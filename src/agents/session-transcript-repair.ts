@@ -284,7 +284,7 @@ function normalizeLegacyToolResultId(
   return { ...message, toolCallId: toolCall.id, isError: true };
 }
 
-export { DEFAULT_MISSING_TOOL_RESULT_TEXT, makeMissingToolResult };
+export { makeMissingToolResult };
 
 type ToolCallInputRepairReport = {
   messages: AgentMessage[];
