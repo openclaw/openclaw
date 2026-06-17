@@ -25,6 +25,7 @@ import type {
   MediaUnderstandingModelConfig,
 } from "../config/types.tools.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
+import { hasErrnoCode } from "../infra/errors.js";
 import { writeExternalFileWithinRoot } from "../infra/fs-safe.js";
 import { resolveProxyFetchFromEnv } from "../infra/net/proxy-fetch.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
@@ -38,7 +39,6 @@ import {
   MIN_AUDIO_FILE_BYTES,
 } from "./defaults.constants.js";
 import { MediaUnderstandingSkipError } from "./errors.js";
-import { fileExists } from "./fs.js";
 import { normalizeImageDescriptionInput } from "./image-input-normalize.js";
 import { describeImageWithModel } from "./image-runtime.js";
 import { resolveOpenAiAudioAuthModelApi } from "./openai-audio-api.js";
@@ -203,11 +203,31 @@ function resolveParakeetOutputPath(args: string[], mediaPath: string): string | 
   if (!outputDir) {
     return null;
   }
-  if (outputFormat && outputFormat !== "txt") {
+  if (outputFormat?.toLowerCase() !== "txt") {
     return null;
   }
-  const base = path.parse(mediaPath).name;
-  return path.join(outputDir, `${base}.txt`);
+  return resolveOutputDirTxtPath(outputDir, mediaPath);
+}
+
+function resolveOutputDirTxtPath(outputDir: string, mediaPath: string): string {
+  return path.join(outputDir, `${path.parse(mediaPath).name}.txt`);
+}
+
+function isLocalWhisperTranscribeScript(scriptPath: string): boolean {
+  const parts = scriptPath.split(/[\\/]+/);
+  return parts.at(-1) === "transcribe.js" && parts.includes("local-whisper");
+}
+
+function resolveNodeWhisperWrapperOutputPath(args: string[], mediaPath: string): string | null {
+  const script = args.find(isLocalWhisperTranscribeScript);
+  if (!script) {
+    return null;
+  }
+  const outputDir = findArgValue(args, ["--output-dir", "--output", "-o"]);
+  if (!outputDir) {
+    return null;
+  }
+  return resolveOutputDirTxtPath(outputDir, mediaPath);
 }
 
 async function resolveCliOutput(params: {
@@ -217,21 +237,31 @@ async function resolveCliOutput(params: {
   mediaPath: string;
 }): Promise<string> {
   const commandId = commandBase(params.command);
-  const fileOutput =
+  const fileOutputPath =
     commandId === "whisper-cli"
       ? resolveWhisperCppOutputPath(params.args)
       : commandId === "whisper"
         ? resolveWhisperOutputPath(params.args, params.mediaPath)
         : commandId === "parakeet-mlx"
           ? resolveParakeetOutputPath(params.args, params.mediaPath)
-          : null;
-  if (fileOutput && (await fileExists(fileOutput))) {
+          : commandId === "node"
+            ? resolveNodeWhisperWrapperOutputPath(params.args, params.mediaPath)
+            : null;
+  const fileOutputAuthoritative = fileOutputPath !== null;
+  if (fileOutputPath) {
     try {
-      const content = await fs.readFile(fileOutput, "utf8");
-      if (content.trim()) {
-        return content.trim();
+      const content = (await fs.readFile(fileOutputPath, "utf8")).trim();
+      if (content || fileOutputAuthoritative) {
+        return content;
       }
-    } catch {}
+    } catch (error) {
+      if (fileOutputAuthoritative && hasErrnoCode(error, "ENOENT")) {
+        return "";
+      }
+      if (fileOutputAuthoritative) {
+        throw error;
+      }
+    }
   }
 
   if (commandId === "gemini") {

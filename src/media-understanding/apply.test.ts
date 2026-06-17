@@ -224,7 +224,7 @@ async function createAudioCtx(params?: {
   } satisfies MsgContext;
 }
 
-async function setupAudioAutoDetectCase(stdout: string): Promise<{
+async function setupAudioAutoDetectCase(stdout?: string): Promise<{
   ctx: MsgContext;
   cfg: OpenClawConfig;
 }> {
@@ -234,11 +234,23 @@ async function setupAudioAutoDetectCase(stdout: string): Promise<{
     content: createSafeAudioFixtureBuffer(2048),
   });
   const cfg: OpenClawConfig = { tools: { media: { audio: {} } } };
-  mockedRunExec.mockResolvedValueOnce({
-    stdout,
-    stderr: "",
-  });
+  if (stdout !== undefined) {
+    mockedRunExec.mockResolvedValueOnce({
+      stdout,
+      stderr: "",
+    });
+  }
   return { ctx, cfg };
+}
+
+async function writeWhisperCliTranscriptFromArgs(args: unknown[], content: string): Promise<void> {
+  const argv = args as string[];
+  const outputBaseIndex = argv.indexOf("-of");
+  const outputBase = outputBaseIndex >= 0 ? argv[outputBaseIndex + 1] : undefined;
+  if (!outputBase) {
+    throw new Error("expected whisper-cli -of output base");
+  }
+  await fs.writeFile(`${outputBase}.txt`, content);
 }
 
 async function applyWithDisabledMedia(params: {
@@ -825,7 +837,14 @@ describe("applyMediaUnderstanding", () => {
     const modelPath = path.join(modelDir, "tiny.bin");
     await fs.writeFile(modelPath, "model");
 
-    const { ctx, cfg } = await setupAudioAutoDetectCase("whisper cpp ok\n");
+    const { ctx, cfg } = await setupAudioAutoDetectCase();
+    mockedRunExec.mockImplementationOnce(async (_cmd, args) => {
+      await writeWhisperCliTranscriptFromArgs(args as unknown[], "whisper cpp ok\n");
+      return {
+        stdout: "whisper progress\n",
+        stderr: "",
+      };
+    });
 
     await withMediaAutoDetectEnv(
       {
@@ -874,9 +893,12 @@ describe("applyMediaUnderstanding", () => {
       await fs.writeFile(wavPath, Buffer.from("RIFF"));
       return "";
     });
-    mockedRunExec.mockResolvedValueOnce({
-      stdout: "whisper cpp ogg ok\n",
-      stderr: "",
+    mockedRunExec.mockImplementationOnce(async (_cmd, args) => {
+      await writeWhisperCliTranscriptFromArgs(args as unknown[], "whisper cpp ogg ok\n");
+      return {
+        stdout: "whisper progress\n",
+        stderr: "",
+      };
     });
 
     await withMediaAutoDetectEnv(

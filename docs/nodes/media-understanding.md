@@ -297,7 +297,7 @@ For CLI entries, **set `capabilities` explicitly** to avoid surprising matches. 
 - For tool-enabled agents handling untrusted inputs, avoid older/weaker media models.
 - Keep at least one fallback per capability for availability (quality model + faster/cheaper model).
 - CLI fallbacks (`whisper-cli`, `whisper`, `gemini`) are useful when provider APIs are unavailable.
-- `parakeet-mlx` note: with `--output-dir`, OpenClaw reads `<output-dir>/<media-basename>.txt` when output format is `txt` (or unspecified); non-`txt` formats fall back to stdout.
+- `parakeet-mlx` note: with `--output-dir`, OpenClaw reads `<output-dir>/<media-basename>.txt` only when `--output-format txt` is explicit; omitted or non-`txt` output formats fall back to stdout.
 
 ## Attachment policy
 
