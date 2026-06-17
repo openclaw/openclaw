@@ -5,6 +5,7 @@ import {
   type EmbeddingProvider as GenericEmbeddingProvider,
   type EmbeddingProviderRuntime as GenericEmbeddingProviderRuntime,
 } from "openclaw/plugin-sdk/embedding-providers";
+import { ssrfPolicyFromDangerouslyAllowPrivateNetwork } from "openclaw/plugin-sdk/ssrf-policy";
 import {
   getMemoryEmbeddingProvider as getLegacyMemoryEmbeddingProvider,
   type MemoryEmbeddingProvider,
@@ -242,7 +243,25 @@ export async function createEmbeddingProvider(
 ): Promise<EmbeddingProviderResult> {
   const provider =
     options.provider === "auto" ? DEFAULT_MEMORY_EMBEDDING_PROVIDER : options.provider;
-  const primaryAdapter = getAdapter(provider, options.config);
+
+  // Extract private network opt-in from memorySearch.remote.network
+  const memorySearchConfig = (options.config as any)?.agents?.defaults?.memorySearch;
+  const remoteNetworkConfig = memorySearchConfig?.remote?.network;
+  const allowPrivateNetwork =
+    remoteNetworkConfig?.dangerouslyAllowPrivateNetwork === true ||
+    // Legacy flat allowPrivateNetwork at old location (decade-old configs)
+    (memorySearchConfig?.remote as any)?.allowPrivateNetwork === true;
+
+  // Inject SSRF policy into config for embedding providers
+  const enhancedConfig = options.config && allowPrivateNetwork
+    ? {
+        ...options.config,
+        // Use a private symbol-like key to avoid config schema interference
+        _memoryEmbeddingSsrFPolicy: { allowPrivateNetwork: true },
+      }
+    : options.config;
+
+  const primaryAdapter = getAdapter(provider, enhancedConfig);
   try {
     return await createWithAdapter(primaryAdapter, {
       ...options,

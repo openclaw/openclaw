@@ -465,6 +465,18 @@ export type MemorySearchConfig = {
     baseUrl?: string;
     apiKey?: SecretInput;
     headers?: Record<string, string>;
+    /**
+     * Network request policy for embedding fetches.
+     * Controls SSRF protection behavior for private/internal endpoints.
+     */
+    network?: {
+      /**
+       * Explicitly opt-in to private/internal network targets.
+       * Only set to true for self-hosted endpoints that resolve to private IPs.
+       * Default: false (SSRF guard blocks private network access).
+       */
+      dangerouslyAllowPrivateNetwork?: boolean;
+    };
     /** Max concurrent non-batch embedding tasks during indexing. Useful for slower local providers such as Ollama. */
     nonBatchConcurrency?: number;
     batch?: {

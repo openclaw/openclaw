@@ -345,6 +345,16 @@ export async function createOpenAICompatibleEmbeddingClient(
   const inputType = normalizeOptionalInputType(options.inputType);
   const queryInputType = normalizeOptionalInputType(options.queryInputType);
   const documentInputType = normalizeOptionalInputType(options.documentInputType);
+
+  // Build base SSRF policy from hostname allowlist
+  let ssrfPolicy = ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl);
+
+  // Merge in memory embedding SSRF policy from config (for private network opt-in)
+  const memorySsrFPolicy = (options.config as any)?._memoryEmbeddingSsrFPolicy;
+  if (memorySsrFPolicy) {
+    ssrfPolicy = { ...(ssrfPolicy ?? {}), ...memorySsrFPolicy };
+  }
+
   return {
     baseUrl,
     headers: await buildHeaders({
@@ -355,7 +365,7 @@ export async function createOpenAICompatibleEmbeddingClient(
         ...options.remote?.headers,
       },
     }),
-    ssrfPolicy: ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl),
+    ssrfPolicy,
     model,
     ...(options.dimensions !== undefined
       ? { dimensions: normalizeDimensions(options.dimensions) }
