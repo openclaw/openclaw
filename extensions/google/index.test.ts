@@ -1,5 +1,5 @@
 // Google tests cover index plugin behavior.
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
@@ -15,7 +15,6 @@ import {
 import { createCapturedThinkingConfigStream } from "openclaw/plugin-sdk/provider-test-contracts";
 import type { RealtimeVoiceProviderPlugin } from "openclaw/plugin-sdk/realtime-voice";
 import { describe, expect, it, vi } from "vitest";
-import { resolveGeminiCliProfileHome } from "./gemini-cli-auth-home.js";
 import { registerGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
 import googlePlugin from "./index.js";
 import googleProviderDiscovery from "./provider-discovery.js";
@@ -35,72 +34,6 @@ vi.mock("./oauth.runtime.js", () => ({
 }));
 
 describe("google provider plugin hooks", () => {
-  it("exposes staged Gemini CLI OAuth homes as runtime external auth profiles", async () => {
-    const agentDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-cli-auth-"));
-    const profileId = "google-gemini-cli:user@example.test";
-    const credentialsDir = path.join(resolveGeminiCliProfileHome(agentDir, profileId), ".gemini");
-    const idTokenPayload = Buffer.from(
-      JSON.stringify({ sub: "google-account-42", email: "user@example.test" }),
-    ).toString("base64url");
-    const cfg = {
-      auth: {
-        profiles: {
-          [profileId]: {
-            provider: "google-gemini-cli",
-            mode: "oauth",
-            email: "user@example.test",
-          },
-        },
-      },
-    };
-    try {
-      await mkdir(credentialsDir, { recursive: true, mode: 0o700 });
-      await writeFile(
-        path.join(credentialsDir, "oauth_creds.json"),
-        `${JSON.stringify({
-          access_token: "gemini-access",
-          refresh_token: "gemini-refresh",
-          id_token: `header.${idTokenPayload}.signature`,
-          expiry_date: 1_800_000_000_000,
-        })}\n`,
-        "utf8",
-      );
-
-      const { providers } = await registerProviderPlugin({
-        plugin: googleProviderPlugin,
-        id: "google",
-        name: "Google Provider",
-      });
-      const cliProvider = requireRegisteredProvider(providers, "google-gemini-cli");
-      const profiles = cliProvider.resolveExternalAuthProfiles?.({
-        config: cfg,
-        agentDir,
-        workspaceDir: undefined,
-        env: process.env,
-        store: { version: 1, profiles: {} },
-      } as never);
-
-      expect(profiles).toEqual([
-        {
-          profileId,
-          persistence: "runtime-only",
-          credential: {
-            type: "oauth",
-            provider: "google-gemini-cli",
-            access: "gemini-access",
-            refresh: "gemini-refresh",
-            expires: 1_800_000_000_000,
-            idToken: `header.${idTokenPayload}.signature`,
-            accountId: "google-account-42",
-            email: "user@example.test",
-          },
-        },
-      ]);
-    } finally {
-      await rm(agentDir, { recursive: true, force: true });
-    }
-  });
-
   it("owns replay policy and reasoning mode for the direct Gemini provider", async () => {
     const { providers } = await registerProviderPlugin({
       plugin: googleProviderPlugin,

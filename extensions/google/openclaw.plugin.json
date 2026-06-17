@@ -666,7 +666,6 @@
     }
   },
   "contracts": {
-    "externalAuthProviders": ["google-gemini-cli"],
     "mediaUnderstandingProviders": ["google"],
     "memoryEmbeddingProviders": ["gemini"],
     "imageGenerationProviders": ["google"],
