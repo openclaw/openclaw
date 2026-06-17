@@ -85,6 +85,12 @@ Use this skill for release and publish-time workflow. Load `$release-private` if
   Treat a red Docker, package, or release workflow lane as a release-branch
   defect until the smallest correct fix is landed and proven; do not waive it
   because npm preflight or another sibling lane passed.
+- Keep the canonical `scripts/pr` runner authoritative for prepare and merge
+  artifacts. A release-gate policy change may use focused candidate tests and
+  exact-SHA hosted CI for proof, but never route `prepare-*` or `merge-*`
+  through PR-controlled scripts or synthesize prepare artifacts to bootstrap
+  the change. If the current canonical gate cannot validate the new policy,
+  stop for explicit maintainer direction rather than weakening that boundary.
 - Generate the changelog before every beta, beta rerun, stable release, or
   stable rerun, before version/tag preparation. Use
   `$openclaw-changelog-update` for the rewrite. Do not continue release prep if
