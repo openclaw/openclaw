@@ -1068,8 +1068,37 @@ describe("POST /tools/invoke", () => {
       execute: async () => ({ ok: true, result: "BUILTIN-read" }),
     };
 
-    it("resolves `read` to the opted-in built-in over a same-named plugin", async () => {
+    it("resolves `read` to the opted-in built-in over a same-named plugin for an owner caller", async () => {
       // Mark the mocked `read` entry as plugin-originated.
+      pluginToolMetaState.set("read", { pluginId: "test-plugin", optional: false });
+      vi.mocked(createOpenClawCodingToolsRaw).mockReturnValueOnce([builtinRead] as never);
+      cfg = {
+        agents: { list: [{ id: "main", default: true, tools: { allow: ["read"] } }] },
+        gateway: {
+          tools: { allow: ["read"], directInvoke: { hostFsRead: true } },
+        },
+      };
+
+      // Owner caller (operator.admin → senderIsOwner === true): the host-read
+      // opt-in materializes the built-in, which wins the name collision.
+      const res = await invokeTool({
+        port: sharedPort,
+        headers: gatewayAdminHeaders(),
+        tool: "read",
+        sessionKey: "main",
+      });
+      const body = await expectOkInvokeResponse(res);
+      expect(body.result?.result).toBe("BUILTIN-read");
+      expect(lastCreateOpenClawToolsContext?.senderIsOwner).toBe(true);
+    });
+
+    it("does not materialize the built-in read for a non-owner caller even with the opt-in ON", async () => {
+      // Owner gate (PR #85664 non-owner finding): both opt-in keys are set, but
+      // the caller is a non-owner operator.write trusted-proxy principal
+      // (senderIsOwner === false), so the host-FS read built-in is NOT
+      // materialized — the factory is never invoked — and the same-named plugin
+      // executes instead. This closes the gap where a non-owner direct-invoke
+      // caller could reach host filesystem read.
       pluginToolMetaState.set("read", { pluginId: "test-plugin", optional: false });
       vi.mocked(createOpenClawCodingToolsRaw).mockReturnValueOnce([builtinRead] as never);
       cfg = {
@@ -1081,7 +1110,9 @@ describe("POST /tools/invoke", () => {
 
       const res = await invokeToolAuthed({ tool: "read", sessionKey: "main" });
       const body = await expectOkInvokeResponse(res);
-      expect(body.result?.result).toBe("BUILTIN-read");
+      expect(body.result?.result).toBe("PLUGIN-read");
+      expect(lastCreateOpenClawToolsContext?.senderIsOwner).toBe(false);
+      expect(vi.mocked(createOpenClawCodingToolsRaw)).not.toHaveBeenCalled();
     });
 
     it("leaves the same-named plugin reachable when the hostFsRead opt-in is OFF", async () => {
@@ -1171,6 +1202,34 @@ describe("tools.invoke Gateway RPC", () => {
     expect(call?.[1]?.toolName).toBe("nodes");
     expect(call?.[1]?.output).toEqual({ ok: true, result: "nodes" });
     expect(lastCreateOpenClawToolsContext?.senderIsOwner).toBe(true);
+  });
+
+  it("does not materialize the built-in read for a non-owner RPC caller even with the opt-in ON", async () => {
+    // Owner gate (PR #85664 non-owner finding) on the SDK-facing RPC surface:
+    // both opt-in keys are set, but the default RPC caller carries operator.write
+    // (senderIsOwner === false), so the host-FS read built-in is NOT materialized
+    // — the factory is never invoked — and the same-named plugin executes.
+    pluginToolMetaState.set("read", { pluginId: "test-plugin", optional: false });
+    vi.mocked(createOpenClawCodingToolsRaw).mockReturnValueOnce([
+      {
+        name: "read",
+        parameters: { type: "object", properties: {} },
+        execute: async () => ({ ok: true, result: "BUILTIN-read" }),
+      },
+    ] as never);
+    cfg = {
+      agents: { list: [{ id: "main", default: true, tools: { allow: ["read"] } }] },
+      gateway: { tools: { allow: ["read"], directInvoke: { hostFsRead: true } } },
+    };
+
+    const call = await invokeToolsRpc({ name: "read", args: {}, sessionKey: "main" });
+
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]?.ok).toBe(true);
+    expect(call?.[1]?.toolName).toBe("read");
+    expect(call?.[1]?.output).toEqual({ ok: true, result: "PLUGIN-read" });
+    expect(lastCreateOpenClawToolsContext?.senderIsOwner).toBe(false);
+    expect(vi.mocked(createOpenClawCodingToolsRaw)).not.toHaveBeenCalled();
   });
 
   it("returns typed approval-needed refusal when the policy hook blocks", async () => {
