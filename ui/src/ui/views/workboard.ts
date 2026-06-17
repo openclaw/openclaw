@@ -1601,7 +1601,9 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
     <article
       class="workboard-card priority-${card.priority} ${busy
         ? "workboard-card--busy"
-        : ""} ${archived ? "workboard-card--archived" : ""} workboard-card--openable"
+        : ""} ${archived ? "workboard-card--archived" : ""} ${state.draggedCardId === card.id
+        ? "workboard-card--dragging"
+        : ""} workboard-card--openable"
       role="button"
       tabindex="0"
       title=${t("workboard.viewDetails")}

@@ -176,6 +176,7 @@ export type AppViewState = {
   nodes: Array<Record<string, unknown>>;
   chatNewMessagesBelow: boolean;
   navDrawerOpen: boolean;
+  shortcutLegendOpen: boolean;
   sidebarOpen: boolean;
   sidebarContent: SidebarContent | null;
   sidebarError: string | null;

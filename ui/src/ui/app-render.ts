@@ -218,6 +218,7 @@ import { renderGatewayUrlConfirmation } from "./views/gateway-url-confirmation.t
 import { renderLoginGate } from "./views/login-gate.ts";
 import { renderMcp } from "./views/mcp.ts";
 import { renderOverview } from "./views/overview.ts";
+import { renderShortcutLegend } from "./views/shortcut-legend.ts";
 
 let pendingUpdate: (() => void) | undefined;
 
@@ -2479,6 +2480,12 @@ export function renderApp(state: AppViewState) {
       onSlashCommand: (cmd) => {
         state.setTab("chat" as import("./navigation.ts").Tab);
         state.handleChatDraftChange(cmd.endsWith(" ") ? cmd : `${cmd} `);
+      },
+    })}
+    ${renderShortcutLegend({
+      open: state.shortcutLegendOpen,
+      onClose: () => {
+        state.shortcutLegendOpen = false;
       },
     })}
     <div

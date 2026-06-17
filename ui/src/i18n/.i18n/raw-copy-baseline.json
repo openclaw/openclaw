@@ -4611,6 +4611,146 @@
       "count": 1,
       "kind": "html-attribute",
       "name": "aria-label",
+      "path": "ui/src/ui/views/shortcut-legend.ts",
+      "text": "Close keyboard shortcuts"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/shortcut-legend.ts",
+      "text": "Keyboard shortcuts"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/shortcut-legend.ts",
+      "text": "Keyboard Shortcuts"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/ui/views/shortcut-legend.ts",
+      "text": "Close overlay / cancel"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/ui/views/shortcut-legend.ts",
+      "text": "Edit last message (empty input)"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/ui/views/shortcut-legend.ts",
+      "text": "Move card between columns"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/ui/views/shortcut-legend.ts",
+      "text": "Move focus backward"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/ui/views/shortcut-legend.ts",
+      "text": "Move focus forward"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/ui/views/shortcut-legend.ts",
+      "text": "New line in composer"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/ui/views/shortcut-legend.ts",
+      "text": "Open card details"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/ui/views/shortcut-legend.ts",
+      "text": "Open command palette"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/ui/views/shortcut-legend.ts",
+      "text": "Scroll to next message"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/ui/views/shortcut-legend.ts",
+      "text": "Scroll to previous message"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/ui/views/shortcut-legend.ts",
+      "text": "Send message"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/ui/views/shortcut-legend.ts",
+      "text": "Show keyboard shortcuts"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/ui/views/shortcut-legend.ts",
+      "text": "Undo (where supported)"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/shortcut-legend.ts",
+      "text": "Board / Workboard"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/shortcut-legend.ts",
+      "text": "Chat"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/shortcut-legend.ts",
+      "text": "General"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/shortcut-legend.ts",
+      "text": "Navigation"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
       "path": "ui/src/ui/views/skill-workshop.ts",
       "text": "Close"
     },
