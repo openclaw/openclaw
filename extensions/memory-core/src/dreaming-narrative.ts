@@ -770,7 +770,81 @@ export async function appendNarrativeEntry(params: {
 
 // ── Orchestrator ───────────────────────────────────────────────────────
 
-async function scrubDreamingNarrativeArtifacts(logger: Logger): Promise<void> {
+function normalizeComparablePath(pathname: string): string {
+  return process.platform === "win32" ? pathname.toLowerCase() : pathname;
+}
+
+async function normalizeSessionFileForComparison(params: {
+  sessionsDir: string;
+  sessionFile: string;
+}): Promise<string | null> {
+  const trimmed = params.sessionFile.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const resolved = path.isAbsolute(trimmed) ? trimmed : path.resolve(params.sessionsDir, trimmed);
+  try {
+    return normalizeComparablePath(await fs.realpath(resolved));
+  } catch {
+    return normalizeComparablePath(path.resolve(resolved));
+  }
+}
+
+function isDreamingSessionStoreKey(sessionKey: string): boolean {
+  const firstSeparator = sessionKey.indexOf(":");
+  if (firstSeparator < 0) {
+    return sessionKey.startsWith(DREAMING_SESSION_KEY_PREFIX);
+  }
+  const secondSeparator = sessionKey.indexOf(":", firstSeparator + 1);
+  const sessionSegment = secondSeparator < 0 ? sessionKey : sessionKey.slice(secondSeparator + 1);
+  return sessionSegment.startsWith(DREAMING_SESSION_KEY_PREFIX);
+}
+
+// A dreaming store row is reclaimable once its narrative run is finished. The
+// happy path deletes the session in `finally`, but when `deleteSession` throws
+// (e.g. request-scoped subagent runtime) the row is left behind referencing a
+// still-present transcript, so the missing-transcript check alone never reaps
+// it and the session lingers in the sidebar forever (issue #88322). Reclaim a
+// dreaming row when its transcript is missing, or when the transcript has aged
+// past the orphan threshold (a live narrative refreshes its transcript well
+// within that window, so active runs are never reaped).
+async function isReclaimableDreamingStoreEntry(
+  normalizedSessionFile: string | null,
+): Promise<boolean> {
+  if (!normalizedSessionFile || !(await pathExists(normalizedSessionFile))) {
+    return true;
+  }
+  try {
+    const stat = await fs.stat(normalizedSessionFile);
+    return Date.now() - stat.mtimeMs >= DREAMING_ORPHAN_MIN_AGE_MS;
+  } catch {
+    return true;
+  }
+}
+
+async function normalizeSessionEntryPathForComparison(params: {
+  sessionsDir: string;
+  entry: { sessionFile?: string; sessionId?: string } | undefined;
+}): Promise<string | null> {
+  const sessionFile = typeof params.entry?.sessionFile === "string" ? params.entry.sessionFile : "";
+  if (sessionFile) {
+    return normalizeSessionFileForComparison({
+      sessionsDir: params.sessionsDir,
+      sessionFile,
+    });
+  }
+  const sessionId =
+    typeof params.entry?.sessionId === "string" ? params.entry.sessionId.trim() : "";
+  if (!SAFE_SESSION_ID_RE.test(sessionId)) {
+    return null;
+  }
+  return normalizeSessionFileForComparison({
+    sessionsDir: params.sessionsDir,
+    sessionFile: `${sessionId}.jsonl`,
+  });
+}
+
+export async function scrubDreamingNarrativeArtifacts(logger: Logger): Promise<void> {
   const cfg = getRuntimeConfig();
   const agentsDir = path.join(resolveStateDir(), "agents");
   let agentEntries: Dirent[];

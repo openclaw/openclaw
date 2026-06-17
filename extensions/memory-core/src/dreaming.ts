@@ -27,7 +27,10 @@ import {
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { peekSystemEventEntries } from "openclaw/plugin-sdk/system-event-runtime";
-import type { NarrativePhaseData } from "./dreaming-narrative.js";
+import {
+  scrubDreamingNarrativeArtifacts,
+  type NarrativePhaseData,
+} from "./dreaming-narrative.js";
 import {
   formatErrorMessage,
   includesSystemEventToken,
@@ -903,6 +906,16 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
     runtimeCronReconcileTimer.unref?.();
   };
 
+  const scrubStartupDreamingArtifacts = async (): Promise<void> => {
+    try {
+      await scrubDreamingNarrativeArtifacts(api.logger);
+    } catch (err) {
+      api.logger.warn(
+        `memory-core: dreaming startup cleanup failed: ${formatErrorMessage(err)}`,
+      );
+    }
+  };
+
   api.on("gateway_start", async (_event, ctx) => {
     disposed = false;
     // Store the gateway context for runtime cron resolution retries.
@@ -915,6 +928,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
       });
       startRuntimeCronReconcileTimer();
       scheduleStartupCronRetry();
+      await scrubStartupDreamingArtifacts();
     } catch (err) {
       api.logger.error(
         `memory-core: dreaming startup reconciliation failed: ${formatErrorMessage(err)}`,

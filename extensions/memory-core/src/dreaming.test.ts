@@ -2,6 +2,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import * as memoryCoreHostRuntimeCoreModule from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import * as runtimeConfigSnapshotModule from "openclaw/plugin-sdk/runtime-config-snapshot";
+import * as sessionStoreRuntimeModule from "openclaw/plugin-sdk/session-store-runtime";
 import {
   enqueueSystemEvent,
   resetSystemEventsForTest,
@@ -969,6 +972,112 @@ describe("gateway startup reconciliation", () => {
       expect(addCall.delivery?.mode).toBe("none");
       expectLogContains(logger.info, "created managed dreaming cron job");
     } finally {
+      clearInternalHooks();
+    }
+  });
+
+  it("scrubs aged dreaming narrative sessions during gateway startup", async () => {
+    clearInternalHooks();
+    const logger = createLogger();
+    const harness = createCronHarness();
+    const onMock = vi.fn();
+    const stateDir = await createTempWorkspace("openclaw-dreaming-state-");
+    const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const orphanTranscript = path.join(sessionsDir, "orphan-dreaming.jsonl");
+    const liveTranscript = path.join(sessionsDir, "live-dreaming.jsonl");
+    const keptTranscript = path.join(sessionsDir, "still-live.jsonl");
+    const updatedAt = Date.now();
+    await sessionStoreRuntimeModule.saveSessionStore(
+      storePath,
+      {
+        "agent:main:dreaming-narrative-light-orphan": {
+          sessionId: "orphan-dreaming",
+          updatedAt,
+        },
+        "agent:main:dreaming-narrative-light-live": {
+          sessionId: "live-dreaming",
+          updatedAt,
+        },
+        "agent:main:kept-session": {
+          sessionId: "still-live",
+          updatedAt,
+        },
+      },
+      { skipMaintenance: true },
+    );
+    await fs.writeFile(orphanTranscript, '{"runId":"dreaming-narrative-light-orphan"}\n', "utf-8");
+    await fs.writeFile(liveTranscript, '{"runId":"dreaming-narrative-light-live"}\n', "utf-8");
+    await fs.writeFile(keptTranscript, "{}\n", "utf-8");
+    const aged = new Date(Date.now() - 600_000);
+    await fs.utimes(orphanTranscript, aged, aged);
+
+    const runtimeConfigSpy = vi
+      .spyOn(runtimeConfigSnapshotModule, "getRuntimeConfig")
+      .mockReturnValue({ session: {} } as never);
+    const resolveStorePathSpy = vi
+      .spyOn(sessionStoreRuntimeModule, "resolveStorePath")
+      .mockImplementation(((
+        _store: string | undefined,
+        { agentId }: { agentId: string },
+      ) => {
+        expect(agentId).toBe("main");
+        return storePath;
+      }) as typeof sessionStoreRuntimeModule.resolveStorePath);
+    const resolveStateDirSpy = vi
+      .spyOn(memoryCoreHostRuntimeCoreModule, "resolveStateDir")
+      .mockReturnValue(stateDir);
+    const api: DreamingPluginApiTestDouble = {
+      config: {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  frequency: "0 2 * * *",
+                  timezone: "UTC",
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      pluginConfig: {},
+      logger,
+      runtime: {},
+      on: onMock,
+    };
+
+    try {
+      registerShortTermPromotionDreamingForTest(api);
+      await triggerGatewayStart(onMock, {
+        config: api.config,
+        getCron: () => harness.cron,
+      });
+
+      const updatedStore = sessionStoreRuntimeModule.loadSessionStore(storePath, {
+        skipCache: true,
+      }) as Record<string, unknown>;
+      expect(updatedStore).not.toHaveProperty("agent:main:dreaming-narrative-light-orphan");
+      expect(updatedStore).toHaveProperty("agent:main:dreaming-narrative-light-live");
+      expect(updatedStore).toHaveProperty("agent:main:kept-session");
+
+      await expectPathMissing(orphanTranscript);
+      const sessionFiles = await fs.readdir(sessionsDir);
+      const archivedOrphans = sessionFiles.filter((file) =>
+        file.startsWith("orphan-dreaming.jsonl.deleted."),
+      );
+      expect(archivedOrphans).not.toEqual([]);
+      expect(sessionFiles).toContain("live-dreaming.jsonl");
+      expect(sessionFiles).toContain("still-live.jsonl");
+      expectLogContains(logger.info, "dreaming cleanup scrubbed");
+    } finally {
+      await triggerGatewayStop(onMock).catch(() => undefined);
+      runtimeConfigSpy.mockRestore();
+      resolveStorePathSpy.mockRestore();
+      resolveStateDirSpy.mockRestore();
       clearInternalHooks();
     }
   });
