@@ -10,6 +10,7 @@ import type { ReplyDispatcherWithTypingOptions } from "../../auto-reply/reply/re
 import type { ReplyDispatchKind } from "../../auto-reply/reply/reply-dispatcher.types.js";
 import type {
   FinalizedMsgContext,
+  InboundSourceModality,
   MentionSource,
   MsgContext,
 } from "../../auto-reply/templating.js";
@@ -207,6 +208,7 @@ export type MessageFacts = {
   senderLabel?: string;
   preview?: string;
   inboundHistory?: HistoryEntry[];
+  sourceModality?: InboundSourceModality;
 };
 
 /** Parsed command facts for command-like channel turns. */

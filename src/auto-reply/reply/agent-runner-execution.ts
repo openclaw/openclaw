@@ -30,6 +30,7 @@ import { getCliSessionBinding } from "../../agents/cli-session.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
+  formatBillingErrorMessage,
   formatRateLimitOrOverloadedErrorCopy,
   isCompactionFailureError,
   isContextOverflowError,
@@ -853,6 +854,29 @@ function buildRateLimitCooldownMessage(err: unknown): string {
   return "⚠️ All models are temporarily rate-limited. Please try again in a few minutes.";
 }
 
+function resolveBillingFailureReplyText(err: unknown): string {
+  const billingFailure = isFallbackSummaryError(err)
+    ? err.attempts.find(
+        (attempt) =>
+          attempt.reason === "billing" &&
+          (attempt.authMode === "oauth" || attempt.authMode === "token"),
+      )
+    : isFailoverError(err) && err.reason === "billing"
+      ? err
+      : undefined;
+  if (
+    !billingFailure ||
+    (billingFailure.authMode !== "oauth" && billingFailure.authMode !== "token")
+  ) {
+    return BILLING_ERROR_USER_MESSAGE;
+  }
+  return formatBillingErrorMessage(
+    billingFailure.provider,
+    billingFailure.model,
+    billingFailure.authMode,
+  );
+}
+
 function extractCodexUsageLimitErrorMessage(err: unknown): string | undefined {
   if (isFallbackSummaryError(err)) {
     for (const attempt of err.attempts) {
@@ -1161,11 +1185,13 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
   const isFallbackSummary = isFallbackSummaryError(params.err);
   const isBilling = isFallbackSummary
     ? hasBillingAttemptSummary(params.err)
-    : isBillingErrorMessage(message);
+    : isFailoverError(params.err)
+      ? params.err.reason === "billing"
+      : isBillingErrorMessage(message);
   if (isBilling) {
     return markAgentRunFailureReplyPayload({
       text: resolveExternalRunFailureTextForConversation({
-        text: BILLING_ERROR_USER_MESSAGE,
+        text: resolveBillingFailureReplyText(params.err),
         sessionCtx: params.sessionCtx,
         isGenericRunnerFailure: false,
         cfg: params.cfg,
@@ -3389,7 +3415,9 @@ export async function runAgentTurnWithFallback(params: {
       });
       const isBilling = isFallbackSummaryError(err)
         ? hasBillingAttemptSummary(err)
-        : isBillingErrorMessage(message);
+        : isFailoverError(err)
+          ? err.reason === "billing"
+          : isBillingErrorMessage(message);
       const isContextOverflow = !isBilling && isLikelyContextOverflowError(message);
       const isCompactionFailure = !isBilling && isCompactionFailureError(message);
       const isSessionCorruption = /function call turn comes immediately after/i.test(message);
@@ -3589,7 +3617,7 @@ export async function runAgentTurnWithFallback(params: {
         ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
         : GENERIC_EXTERNAL_RUN_FAILURE_TEXT;
       const fallbackText = isBilling
-        ? BILLING_ERROR_USER_MESSAGE
+        ? resolveBillingFailureReplyText(err)
         : isRateLimit && !isOverloadedErrorMessage(message)
           ? buildRateLimitCooldownMessage(err)
           : rateLimitOrOverloadedCopy

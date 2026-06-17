@@ -165,6 +165,23 @@ describe("resolve-openclaw-package-candidate", () => {
     });
   });
 
+  it("rejects package candidate output names that escape the output directory", () => {
+    for (const outputName of [
+      "../openclaw-current.tgz",
+      "nested/openclaw-current.tgz",
+      "openclaw-current.zip",
+      ".openclaw-current.tgz",
+    ]) {
+      expect(() => parseArgs(["--output-name", outputName])).toThrow(
+        `--output-name must be a tarball filename, not a path: ${outputName}`,
+      );
+    }
+
+    expect(parseArgs(["--output-name", "openclaw-current.tar.gz"]).outputName).toBe(
+      "openclaw-current.tar.gz",
+    );
+  });
+
   it("resolves npm package candidates through the Windows npm.cmd toolchain shim", () => {
     const execPath = "C:\\nodejs\\node.exe";
     const npmCmdPath = path.win32.resolve(path.win32.dirname(execPath), "npm.cmd");
@@ -372,6 +389,45 @@ describe("resolve-openclaw-package-candidate", () => {
     });
     await expect(loadTrustedPackageSource("missing", policy)).rejects.toThrow(
       "Unknown trusted package source: missing",
+    );
+  });
+
+  it("rejects loose trusted package source port values", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-trusted-package-source-"));
+    tempDirs.push(dir);
+    const policy = path.join(dir, "trusted-sources.json");
+    await writeFile(
+      policy,
+      JSON.stringify({
+        schemaVersion: 1,
+        sources: {
+          exponent: {
+            hosts: ["packages.example"],
+            pathPrefixes: ["/openclaw/"],
+            ports: ["1e3"],
+          },
+          fractional: {
+            hosts: ["packages.example"],
+            pathPrefixes: ["/openclaw/"],
+            ports: [443.5],
+          },
+          hex: {
+            hosts: ["packages.example"],
+            pathPrefixes: ["/openclaw/"],
+            ports: ["0x1bb"],
+          },
+        },
+      }),
+    );
+
+    await expect(loadTrustedPackageSource("exponent", policy)).rejects.toThrow(
+      "trusted package source exponent has invalid ports",
+    );
+    await expect(loadTrustedPackageSource("fractional", policy)).rejects.toThrow(
+      "trusted package source fractional has invalid ports",
+    );
+    await expect(loadTrustedPackageSource("hex", policy)).rejects.toThrow(
+      "trusted package source hex has invalid ports",
     );
   });
 

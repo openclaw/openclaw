@@ -131,7 +131,14 @@ export function parseArgs(argv) {
       throw new Error(`unknown argument: ${arg}`);
     }
   }
+  validateOutputName(options.outputName);
   return options;
+}
+
+function validateOutputName(value) {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*\.t(?:ar\.)?gz$/u.test(value)) {
+    throw new Error(`--output-name must be a tarball filename, not a path: ${value}`);
+  }
 }
 
 export function validateOpenClawPackageSpec(spec) {
@@ -714,11 +721,21 @@ function toTrustedPorts(value, sourceId) {
   if (!Array.isArray(ports) || ports.length === 0) {
     throw new Error(`trusted package source ${sourceId} must define non-empty ports`);
   }
-  const normalized = ports.map((port) => Number(port));
+  const normalized = ports.map((port) => parseTrustedPort(port));
   if (normalized.some((port) => !Number.isInteger(port) || port < 1 || port > 65535)) {
     throw new Error(`trusted package source ${sourceId} has invalid ports`);
   }
   return [...new Set(normalized)].toSorted((a, b) => a - b);
+}
+
+function parseTrustedPort(value) {
+  if (typeof value === "number") {
+    return value;
+  }
+  if (typeof value === "string" && /^[0-9]+$/u.test(value)) {
+    return Number(value);
+  }
+  return Number.NaN;
 }
 
 function toPathPrefixes(value, sourceId) {

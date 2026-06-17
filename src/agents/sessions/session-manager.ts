@@ -2113,6 +2113,14 @@ export class SessionManager {
       this.sessionFileSnapshot = rememberedAppend.snapshot;
       if (rememberedAppend.ownedAppendVerified && publishSnapshot) {
         publishRememberedSessionFileSnapshot(this.sessionFile, rememberedAppend.snapshot);
+      } else if (cacheOwnedAppend) {
+        this.setLoadedSessionFile(
+          this.sessionFile,
+          revalidateLoadedSessionFile(this.sessionFile, {
+            entries: this.fileEntries,
+            snapshot: beforeAppendSnapshot,
+          }),
+        );
       }
     }
   }

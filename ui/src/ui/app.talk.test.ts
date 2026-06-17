@@ -212,4 +212,73 @@ describe("OpenClawApp Talk controls", () => {
 
     expect(guardHost.realtimeTalkOptionsOpen).toBe(false);
   });
+
+  it("clears stale Talk catalog providers but preserves selection when a refresh fails", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        realtime: {
+          providers: [
+            {
+              id: "plugin-realtime",
+              label: "Plugin realtime",
+              configured: true,
+            },
+          ],
+        },
+      })
+      .mockRejectedValueOnce(new Error("talk.catalog unavailable"));
+    const { OpenClawApp } = await import("./app.ts");
+    const app = Object.create(OpenClawApp.prototype) as {
+      client: { request: typeof request };
+      connected: boolean;
+      realtimeTalkCatalogProviders: unknown[] | null;
+      realtimeTalkOptions: { provider: string; transport: string };
+    };
+    Object.defineProperties(app, {
+      client: { value: { request }, writable: true },
+      connected: { value: true, writable: true },
+      realtimeTalkCatalogProviders: {
+        value: [{ id: "stale", label: "Stale provider" }],
+        writable: true,
+      },
+      realtimeTalkOptions: {
+        value: { provider: "plugin-realtime", transport: "webrtc" },
+        writable: true,
+      },
+    });
+
+    await OpenClawApp.prototype.fetchRealtimeTalkCatalog.call(app as never);
+    expect(app.realtimeTalkCatalogProviders).toMatchObject([{ id: "plugin-realtime" }]);
+    expect(app.realtimeTalkOptions).toEqual({ provider: "plugin-realtime", transport: "" });
+
+    await OpenClawApp.prototype.fetchRealtimeTalkCatalog.call(app as never);
+    expect(app.realtimeTalkCatalogProviders).toBeNull();
+    expect(app.realtimeTalkOptions).toEqual({ provider: "plugin-realtime", transport: "" });
+  });
+
+  it("clears a Talk provider removed by a successful catalog refresh", async () => {
+    const request = vi.fn().mockResolvedValueOnce({ realtime: { providers: [] } });
+    const { OpenClawApp } = await import("./app.ts");
+    const app = Object.create(OpenClawApp.prototype) as {
+      client: { request: typeof request };
+      connected: boolean;
+      realtimeTalkCatalogProviders: unknown[] | null;
+      realtimeTalkOptions: { provider: string; transport: string };
+    };
+    Object.defineProperties(app, {
+      client: { value: { request }, writable: true },
+      connected: { value: true, writable: true },
+      realtimeTalkCatalogProviders: { value: null, writable: true },
+      realtimeTalkOptions: {
+        value: { provider: "removed-plugin", transport: "gateway-relay" },
+        writable: true,
+      },
+    });
+
+    await OpenClawApp.prototype.fetchRealtimeTalkCatalog.call(app as never);
+
+    expect(app.realtimeTalkCatalogProviders).toEqual([]);
+    expect(app.realtimeTalkOptions).toEqual({ provider: "", transport: "" });
+  });
 });

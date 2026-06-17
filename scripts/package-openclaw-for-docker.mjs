@@ -53,11 +53,14 @@ function resolveTimeoutMs(envName, defaultValue) {
   if (raw === undefined || raw === "") {
     return defaultValue;
   }
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
+  if (!/^[0-9]+$/u.test(raw)) {
     throw new Error(`${envName} must be a positive timeout in milliseconds`);
   }
-  return Math.trunc(parsed);
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`${envName} must be a positive timeout in milliseconds`);
+  }
+  return parsed;
 }
 
 function readOptionValue(argv, index, optionName) {
@@ -73,6 +76,12 @@ function readEqualsOptionValue(value, optionName) {
     throw new Error(`${optionName} requires a value`);
   }
   return value;
+}
+
+function validateOutputName(value) {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*\.t(?:ar\.)?gz$/u.test(value)) {
+    throw new Error(`--output-name must be a tarball filename, not a path: ${value}`);
+  }
 }
 
 export function parseArgs(argv) {
@@ -107,6 +116,9 @@ export function parseArgs(argv) {
     } else {
       throw new Error(`unknown argument: ${arg}`);
     }
+  }
+  if (options.outputName) {
+    validateOutputName(options.outputName);
   }
   return options;
 }

@@ -72,6 +72,21 @@ function readPositiveInt(raw, fallback, name) {
   return parsed;
 }
 
+function readNonNegativeInt(raw, fallback, name) {
+  const text = String(raw ?? "").trim();
+  if (!text) {
+    return fallback;
+  }
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`invalid ${name}: ${text}`);
+  }
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error(`invalid ${name}: ${text}`);
+  }
+  return parsed;
+}
+
 function readJson(file) {
   return JSON.parse(fs.readFileSync(file, "utf8"));
 }
@@ -1427,7 +1442,7 @@ function tailText(text) {
 export async function main(argv = process.argv.slice(2)) {
   const [command, pluginId, pluginDir, requiresConfigRaw, pluginIndexRaw, pluginRoot, provider] =
     argv;
-  const pluginIndex = Number.parseInt(pluginIndexRaw || "0", 10);
+  const pluginIndex = readNonNegativeInt(pluginIndexRaw, 0, "bundled plugin runtime index");
 
   if (command === "plugin") {
     await smokePlugin(pluginId, pluginDir, requiresConfigRaw === "1", pluginIndex, pluginRoot);

@@ -30,6 +30,7 @@ import {
   OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
 } from "../../../context-engine/host-compat.js";
 import { resolveContextEngineOwnerPluginId } from "../../../context-engine/registry.js";
+import { buildContextEngineRuntimeSettings } from "../../../context-engine/runtime-settings.js";
 import type { AssembleResult } from "../../../context-engine/types.js";
 import { emitTrustedDiagnosticEvent } from "../../../infra/diagnostic-events.js";
 import { resolveDiagnosticModelContentCapturePolicy } from "../../../infra/diagnostic-llm-content.js";
@@ -2272,6 +2273,12 @@ export async function runEmbeddedAttempt(
             activeAgentId: sessionAgentId,
             contextEnginePluginId: resolveActiveContextEnginePluginId(),
           }),
+          contextEngineHostSupport: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
+          providerId: params.provider,
+          requestedModelId: params.requestedModelId,
+          modelId: params.modelId,
+          fallbackReason: params.fallbackReason,
+          degradedReason: params.degradedReason,
           runMaintenance: async (contextParams) =>
             await runContextEngineMaintenance({
               contextEngine: contextParams.contextEngine as never,
@@ -2281,6 +2288,7 @@ export async function runEmbeddedAttempt(
               reason: contextParams.reason,
               sessionManager: contextParams.sessionManager as never,
               runtimeContext: contextParams.runtimeContext,
+              runtimeSettings: contextParams.runtimeSettings,
               config: params.config,
               agentId: sessionAgentId,
             }),
@@ -2684,6 +2692,19 @@ export async function runEmbeddedAttempt(
           }
         : {};
       if (activeContextEngine?.info.ownsCompaction === true) {
+        const selectedContextEngineId = activeContextEngine.info.id;
+        const contextEngineLoopRuntimeSettings = buildContextEngineRuntimeSettings({
+          contextEngineHost: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
+          provider: params.provider,
+          requestedModel: params.requestedModelId,
+          resolvedModel: params.modelId,
+          selectedContextEngineId,
+          contextEngineSelectionSource:
+            selectedContextEngineId === "legacy" ? "default" : "configured",
+          promptTokenBudget: params.contextTokenBudget,
+          fallbackReason: params.fallbackReason,
+          degradedReason: params.degradedReason,
+        });
         const removeContextEngineLoopHook = installContextEngineLoopHook({
           agent: activeSession.agent,
           contextEngine: activeContextEngine,
@@ -2721,6 +2742,7 @@ export async function runEmbeddedAttempt(
                   }),
                 }),
             }),
+          runtimeSettings: contextEngineLoopRuntimeSettings,
           isHeartbeat: params.bootstrapContextRunKind === "heartbeat",
         });
         const removeGuard = installToolResultContextGuard({
@@ -3334,6 +3356,11 @@ export async function runEmbeddedAttempt(
               availableTools: new Set(capabilityToolNames),
               citationsMode: params.config?.memory?.citations,
               modelId: params.modelId,
+              contextEngineHostSupport: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
+              providerId: params.provider,
+              requestedModelId: params.requestedModelId,
+              fallbackReason: params.fallbackReason,
+              degradedReason: params.degradedReason,
               ...(params.prompt !== undefined ? { prompt: params.prompt } : {}),
             });
             if (!assembled) {
@@ -5122,6 +5149,12 @@ export async function runEmbeddedAttempt(
             prePromptMessageCount: contextEngineAfterTurnCheckpoint ?? prePromptMessageCount,
             tokenBudget: params.contextTokenBudget,
             runtimeContext: afterTurnRuntimeContext,
+            contextEngineHostSupport: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
+            providerId: params.provider,
+            requestedModelId: params.requestedModelId,
+            modelId: params.modelId,
+            fallbackReason: params.fallbackReason,
+            degradedReason: params.degradedReason,
             runMaintenance: async (contextParams) =>
               await runContextEngineMaintenance({
                 contextEngine: contextParams.contextEngine as never,
@@ -5133,6 +5166,7 @@ export async function runEmbeddedAttempt(
                 withSessionManagerRewriteLock: async (operation) =>
                   await withOwnedSessionWriteLock(operation),
                 runtimeContext: contextParams.runtimeContext,
+                runtimeSettings: contextParams.runtimeSettings,
                 config: params.config,
                 agentId: sessionAgentId,
               }),

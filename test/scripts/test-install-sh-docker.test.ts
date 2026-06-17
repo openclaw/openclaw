@@ -93,6 +93,39 @@ function runDefaultSmokePlatform(env: Record<string, string>, hostArch: string):
   return result.stdout;
 }
 
+function extractReadPackTarballFilename(): string {
+  const script = readFileSync(SCRIPT_PATH, "utf8");
+  const match = script.match(/(read_pack_tarball_filename\(\) \{[\s\S]*?\n\})\n\nSMOKE_IMAGE/u);
+  if (!match) {
+    throw new Error("read_pack_tarball_filename helper was not found");
+  }
+  return match[1];
+}
+
+function runReadPackTarballFilename(filename: string) {
+  return spawnSync(
+    "bash",
+    [
+      "--noprofile",
+      "--norc",
+      "-c",
+      `${extractReadPackTarballFilename()}
+pack_json_file="$(mktemp)"
+trap 'rm -f "$pack_json_file"' EXIT
+printf '%s' "$PACK_JSON" >"$pack_json_file"
+read_pack_tarball_filename "$pack_json_file"`,
+    ],
+    {
+      encoding: "utf8",
+      env: {
+        HOME: "/tmp",
+        PACK_JSON: JSON.stringify([{ filename }]),
+        PATH: process.env.PATH ?? "",
+      },
+    },
+  );
+}
+
 describe("test-install-sh-docker", () => {
   it("defaults ARM hosts to native arm64 while keeping x64 CI on amd64", () => {
     expect(runDefaultSmokePlatform({ CI: "true" }, "aarch64")).toBe("linux/arm64");
@@ -332,6 +365,42 @@ describe("test-install-sh-docker", () => {
     expect(script).toContain('assert_pack_unpacked_size_budget "update" "$pack_json_file"');
     expect(script).toContain('from "./scripts/lib/npm-pack-budget.mjs"');
     expect(script).toContain("install smoke cannot verify pack budget");
+  });
+
+  it("keeps npm pack tarball filenames local before serving update artifacts", () => {
+    const script = readFileSync(SCRIPT_PATH, "utf8");
+
+    expect(script).toContain("read_pack_tarball_filename()");
+    expect(script).toContain('UPDATE_TGZ_FILE="$(read_pack_tarball_filename "$pack_json_file")"');
+    expect(script).toContain(
+      'BASELINE_TGZ_FILE="$(read_pack_tarball_filename "$baseline_pack_json_file")"',
+    );
+    expect(script).toContain("filename !== path.basename(filename)");
+    expect(script).toContain("filename !== path.win32.basename(filename)");
+    expect(script).toContain("npm pack reported unsafe tarball filename");
+  });
+
+  it("rejects path-like npm pack tarball filenames in update smoke metadata", () => {
+    expect(runReadPackTarballFilename("openclaw-2026.6.17.tgz")).toMatchObject({
+      status: 0,
+      stdout: "openclaw-2026.6.17.tgz",
+    });
+
+    const unsafeFilenames = [
+      "../openclaw.tgz",
+      "nested/openclaw.tgz",
+      "nested\\openclaw.tgz",
+      "/tmp/openclaw.tgz",
+      "C:\\temp\\openclaw.tgz",
+      "openclaw.tar.gz",
+    ];
+
+    for (const filename of unsafeFilenames) {
+      const result = runReadPackTarballFilename(filename);
+
+      expect(result.status, filename).not.toBe(0);
+      expect(result.stderr, filename).toContain("npm pack reported unsafe tarball filename");
+    }
   });
 
   it("writes the package dist inventory before packing ignore-scripts tarballs", () => {
