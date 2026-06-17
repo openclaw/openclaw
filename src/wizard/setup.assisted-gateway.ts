@@ -3,10 +3,12 @@ import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { resolveControlUiLinks, waitForGatewayReachable } from "../commands/onboard-helpers.js";
 import { DEFAULT_GATEWAY_PORT, resolveConfigPath } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
+import { resolveGatewayAuth } from "../gateway/auth.js";
 import { defaultGatewayBindMode } from "../gateway/net.js";
 import { probeGateway } from "../gateway/probe.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -41,27 +43,80 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
+type GatewayConfig = NonNullable<OpenClawConfig["gateway"]>;
+
+function resolveEffectiveGatewaySecurityPolicy(params: {
+  gateway: GatewayConfig | undefined;
+  authMode?: GatewayWizardSettings["authMode"];
+  tailscaleMode: GatewayWizardSettings["tailscaleMode"];
+}) {
+  const authConfig = params.authMode
+    ? { ...params.gateway?.auth, mode: params.authMode }
+    : params.gateway?.auth;
+  const auth = resolveGatewayAuth({
+    authConfig,
+    tailscaleMode: params.tailscaleMode,
+  });
+  const trustedProxy = auth.mode === "trusted-proxy" ? auth.trustedProxy : undefined;
+  const rateLimit = authConfig?.rateLimit;
+  return {
+    auth: {
+      mode: auth.mode,
+      allowTailscale: auth.allowTailscale,
+      rateLimit: {
+        maxAttempts: rateLimit?.maxAttempts ?? 10,
+        windowMs: rateLimit?.windowMs ?? 60_000,
+        lockoutMs: rateLimit?.lockoutMs ?? 300_000,
+        exemptLoopback: rateLimit?.exemptLoopback ?? true,
+      },
+      trustedProxy: trustedProxy
+        ? {
+            userHeader: trustedProxy.userHeader,
+            requiredHeaders: [...(trustedProxy.requiredHeaders ?? [])].toSorted(),
+            allowUsers: [...(trustedProxy.allowUsers ?? [])].toSorted(),
+            allowLoopback: trustedProxy.allowLoopback === true,
+          }
+        : undefined,
+    },
+    trustedProxies: [...(params.gateway?.trustedProxies ?? [])].toSorted(),
+    allowRealIpFallback: params.gateway?.allowRealIpFallback === true,
+  };
+}
+
 function snapshotMatchesGatewaySettings(params: {
   configSnapshot: unknown;
+  config: OpenClawConfig;
   settings: GatewayWizardSettings;
 }): boolean {
   const snapshot = asRecord(params.configSnapshot);
   const config = asRecord(snapshot?.config);
   const gateway = asRecord(config?.gateway);
-  const auth = asRecord(gateway?.auth);
   const tailscale = asRecord(gateway?.tailscale);
-  const tailscaleMode = tailscale?.mode ?? "off";
-  const bind =
-    gateway?.bind ??
-    defaultGatewayBindMode(typeof tailscaleMode === "string" ? tailscaleMode : undefined);
+  const tailscaleMode =
+    tailscale?.mode === undefined || tailscale.mode === "off"
+      ? "off"
+      : tailscale.mode === "serve" || tailscale.mode === "funnel"
+        ? tailscale.mode
+        : undefined;
+  const bind = gateway?.bind ?? defaultGatewayBindMode(tailscaleMode);
   return (
     typeof snapshot?.path === "string" &&
     path.resolve(snapshot.path) === path.resolve(resolveConfigPath()) &&
     (gateway?.port ?? DEFAULT_GATEWAY_PORT) === params.settings.port &&
     bind === params.settings.bind &&
     gateway?.customBindHost === params.settings.customBindHost &&
-    auth?.mode === params.settings.authMode &&
     tailscaleMode === params.settings.tailscaleMode &&
+    isDeepStrictEqual(
+      resolveEffectiveGatewaySecurityPolicy({
+        gateway: gateway as GatewayConfig | undefined,
+        tailscaleMode,
+      }),
+      resolveEffectiveGatewaySecurityPolicy({
+        gateway: params.config.gateway,
+        authMode: params.settings.authMode,
+        tailscaleMode: params.settings.tailscaleMode,
+      }),
+    ) &&
     (tailscale?.resetOnExit === true) === params.settings.tailscaleResetOnExit
   );
 }
@@ -86,6 +141,7 @@ function buildInvalidProbeAuth(
 async function probeVerifiedExistingGateway(params: {
   url: string;
   auth: GatewayProbeAuth;
+  config: OpenClawConfig;
   settings: GatewayWizardSettings;
 }): Promise<boolean> {
   // Do not let cached device credentials prove a listener that rejects the
@@ -105,6 +161,7 @@ async function probeVerifiedExistingGateway(params: {
     !expected.ok ||
     !snapshotMatchesGatewaySettings({
       configSnapshot: expected.configSnapshot,
+      config: params.config,
       settings: params.settings,
     })
   ) {
@@ -235,6 +292,7 @@ export async function ensureAgentAssistedGatewayRuntime(params: {
       (await probeVerifiedExistingGateway({
         url: links.wsUrl,
         auth,
+        config: params.config,
         settings: params.settings,
       }));
     if (

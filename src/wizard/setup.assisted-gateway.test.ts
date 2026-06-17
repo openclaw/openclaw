@@ -236,6 +236,36 @@ describe("agent-assisted Gateway runtime", () => {
     expect(spawn).not.toHaveBeenCalled();
   });
 
+  it("rejects a verified Gateway whose effective allowTailscale policy does not match", async () => {
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4321]);
+    probeGateway
+      .mockResolvedValueOnce({
+        ok: true,
+        configSnapshot: {
+          path: "/tmp/openclaw.json",
+          config: {
+            gateway: {
+              port: 18789,
+              bind: "loopback",
+              auth: { mode: "token", allowTailscale: true },
+              tailscale: { mode: "off" },
+            },
+          },
+        },
+      })
+      .mockResolvedValueOnce({ ok: false });
+
+    await expect(
+      ensureAgentAssistedGatewayRuntime({
+        config: { gateway: { auth: { mode: "token", allowTailscale: false } } },
+        settings,
+        prompter: createWizardPrompter(),
+      }),
+    ).rejects.toThrow("cannot verify that it matches the active Gateway security settings");
+
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
   it("rejects an unverifiable existing trusted-proxy Gateway", async () => {
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4321]);
 
@@ -263,6 +293,57 @@ describe("agent-assisted Gateway runtime", () => {
     expect(spawn).not.toHaveBeenCalled();
   });
 
+  it("rejects a verified trusted-proxy Gateway whose proxy policy does not match", async () => {
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4321]);
+    probeGateway
+      .mockResolvedValueOnce({
+        ok: true,
+        configSnapshot: {
+          path: "/tmp/openclaw.json",
+          config: {
+            gateway: {
+              port: 18789,
+              bind: "loopback",
+              auth: {
+                mode: "trusted-proxy",
+                trustedProxy: {
+                  userHeader: "x-forwarded-user",
+                  allowLoopback: true,
+                },
+              },
+              tailscale: { mode: "off" },
+            },
+          },
+        },
+      })
+      .mockResolvedValueOnce({ ok: false });
+
+    await expect(
+      ensureAgentAssistedGatewayRuntime({
+        config: {
+          gateway: {
+            auth: {
+              mode: "trusted-proxy",
+              password: "fallback-password",
+              trustedProxy: {
+                userHeader: "x-forwarded-user",
+                allowLoopback: false,
+              },
+            },
+          },
+        },
+        settings: {
+          ...settings,
+          authMode: "trusted-proxy",
+          gatewayToken: undefined,
+        },
+        prompter: createWizardPrompter(),
+      }),
+    ).rejects.toThrow("cannot verify that it matches the active Gateway security settings");
+
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
   it("reuses a verified existing trusted-proxy Gateway with a password fallback", async () => {
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4321]);
     probeGateway
@@ -274,7 +355,10 @@ describe("agent-assisted Gateway runtime", () => {
             gateway: {
               port: 18789,
               bind: "loopback",
-              auth: { mode: "trusted-proxy" },
+              auth: {
+                mode: "trusted-proxy",
+                trustedProxy: { userHeader: "x-forwarded-user" },
+              },
               tailscale: { mode: "off" },
             },
           },
@@ -324,7 +408,10 @@ describe("agent-assisted Gateway runtime", () => {
             gateway: {
               port: 18789,
               bind: "loopback",
-              auth: { mode: "trusted-proxy" },
+              auth: {
+                mode: "trusted-proxy",
+                trustedProxy: { userHeader: "x-forwarded-user" },
+              },
               tailscale: { mode: "off" },
             },
           },
