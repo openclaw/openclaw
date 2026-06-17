@@ -11,9 +11,11 @@ export {
   browserArmDialog,
   browserArmFileChooser,
   browserConsoleMessages,
+  browserDownload,
   browserNavigate,
   browserPdfSave,
   browserScreenshotAction,
+  browserWaitForDownload,
 } from "./browser/client-actions.js";
 export {
   browserCloseTab,

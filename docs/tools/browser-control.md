@@ -252,6 +252,12 @@ Notes:
   traversal, symlinks, hardlinks, and arbitrary local paths are still rejected.
 - `upload` can also set file inputs directly via `--input-ref` or `--element`.
 
+The agent-facing `browser` tool exposes the same explicit managed-download
+helpers as actions: `action="download"` clicks a snapshot ref and saves the
+resulting file, while `action="waitfordownload"` waits for the next download
+without clicking. Existing-session profiles still follow the managed-only
+download interception limit described in [Browser](/tools/browser#existing-session-feature-limitations).
+
 Stable tab ids and labels survive Chromium raw-target replacement when OpenClaw
 can prove the replacement tab, such as same URL or a single old tab becoming a
 single new tab after form submission. Raw target ids are still volatile; prefer
