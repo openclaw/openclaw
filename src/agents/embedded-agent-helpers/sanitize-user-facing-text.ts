@@ -21,6 +21,7 @@ import {
   stripAssistantInternalTraceLines,
   stripLegacyBracketToolCallBlocks,
   stripMinimaxToolCallXml,
+  stripRelevantMemoriesTags,
   stripToolCallXmlTags,
 } from "../../shared/text/assistant-visible-text.js";
 import { stripFinalTags } from "../../shared/text/final-tags.js";
@@ -430,7 +431,7 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
     return raw;
   }
   const errorContext = opts?.errorContext ?? false;
-  const stripped = stripInboundMetadata(stripInternalRuntimeContext(stripFinalTagsFromText(raw)));
+  const stripped = stripRelevantMemoriesTags(stripInboundMetadata(stripInternalRuntimeContext(stripFinalTagsFromText(raw))));
   const withoutToolCallXml = stripToolCallXmlTags(stripMinimaxToolCallXml(stripped), {
     stripFunctionCallsXmlPayloads: true,
   });

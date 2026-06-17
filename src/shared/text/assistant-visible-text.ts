@@ -734,7 +734,7 @@ export function stripDowngradedToolCallText(text: string): string {
   return cleaned.trim();
 }
 
-function stripRelevantMemoriesTags(text: string): string {
+export function stripRelevantMemoriesTags(text: string): string {
   if (!text || !MEMORY_TAG_QUICK_RE.test(text)) {
     return text;
   }
