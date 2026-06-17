@@ -47,7 +47,10 @@ const rawSqliteAllowPathGroups = {
   "backup snapshot maintenance": ["src/commands/backup-verify.ts", "src/infra/backup-create.ts"],
   "agent auth profile read-only bootstrap": ["src/agents/auth-profiles/sqlite.ts"],
   "read-only SQLite status probes": ["src/commands/status.scan.shared.ts"],
-  "doctor legacy state migration": ["src/infra/state-migrations.ts"],
+  "doctor legacy state migration": [
+    "src/infra/state-migrations.ts",
+    "src/infra/state-migrations.debug-proxy.ts",
+  ],
   "shared database stores with direct DatabaseSync access": ["src/proxy-capture/store.sqlite.ts"],
   "Kysely-backed stores that own a DatabaseSync boundary": [
     "src/acp/event-ledger.ts",

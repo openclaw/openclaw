@@ -145,6 +145,7 @@ type MemoryReindexRetryState = {
 
 const META_KEY = "memory_index_meta_v1";
 const VECTOR_TABLE = MEMORY_INDEX_VECTOR_TABLE;
+const LEGACY_VECTOR_TABLE = "chunks_vec";
 const FTS_TABLE = MEMORY_INDEX_FTS_TABLE;
 const EMBEDDING_CACHE_TABLE = MEMORY_EMBEDDING_CACHE_TABLE;
 const SESSION_DIRTY_DEBOUNCE_MS = 5000;
@@ -166,6 +167,12 @@ const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
 const log = createSubsystemLogger("memory");
 const TEST_MEMORY_WATCH_FACTORY_KEY = Symbol.for("openclaw.test.memoryWatchFactory");
 const TEST_MEMORY_NATIVE_WATCH_FACTORY_KEY = Symbol.for("openclaw.test.memoryNativeWatchFactory");
+
+function memoryTableExists(db: DatabaseSync, tableName: string): boolean {
+  return Boolean(
+    db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(tableName),
+  );
+}
 
 type NativeMemoryWatchPair = {
   dir: string;
@@ -642,6 +649,9 @@ export abstract class MemoryManagerSyncOps {
       }
       this.vector.extensionPath = loaded.extensionPath;
       this.vector.available = true;
+      if (this.dropLegacyVectorTable()) {
+        this.dirty = true;
+      }
       return true;
     } catch (err) {
       const message = formatErrorMessage(err);
@@ -653,7 +663,7 @@ export abstract class MemoryManagerSyncOps {
   }
 
   private ensureVectorTable(dimensions: number): void {
-    if (this.vector.dims === dimensions) {
+    if (this.vector.dims === dimensions && memoryTableExists(this.db, VECTOR_TABLE)) {
       return;
     }
     if (!this.dropVectorTable()) {
@@ -666,6 +676,19 @@ export abstract class MemoryManagerSyncOps {
         `)`,
     );
     this.vector.dims = dimensions;
+  }
+
+  private dropLegacyVectorTable(): boolean {
+    if (!memoryTableExists(this.db, LEGACY_VECTOR_TABLE)) {
+      return false;
+    }
+    try {
+      this.db.exec(`DROP TABLE ${LEGACY_VECTOR_TABLE}`);
+      return true;
+    } catch (err) {
+      log.debug(`Failed to drop ${LEGACY_VECTOR_TABLE}: ${formatErrorMessage(err)}`);
+      return false;
+    }
   }
 
   private dropVectorTable(): boolean {

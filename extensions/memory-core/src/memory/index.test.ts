@@ -1669,6 +1669,24 @@ describe("memory index", () => {
     expect(status.vector?.available).toBe(available);
   });
 
+  it("drops the shipped legacy vector table after loading sqlite-vec", async () => {
+    const cfg = createCfg({ vectorEnabled: true });
+    const manager = await getPersistentManager(cfg);
+    const db = Reflect.get(manager, "db") as DatabaseSync;
+    db.exec("CREATE TABLE chunks_vec (id TEXT PRIMARY KEY, embedding BLOB)");
+
+    const available = await manager.probeVectorStoreAvailability?.();
+    if (!available) {
+      return;
+    }
+
+    expect(
+      db
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'chunks_vec'")
+        .get(),
+    ).toBeUndefined();
+  });
+
   it("probes sqlite vector store availability without initializing embeddings", async () => {
     forceNoProvider = true;
     const cfg = createCfg({
