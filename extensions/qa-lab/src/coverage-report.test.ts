@@ -18,6 +18,7 @@ const TEST_WEBCHAT_COVERAGE_ID = "ui.webchat";
 function testMaturityTaxonomy(params?: {
   categoryId?: string;
   coverageIds?: readonly string[];
+  featureCoverageIds?: readonly (readonly string[])[];
   includeAllCategories?: boolean;
   profileCategoryIds?: readonly string[];
 }) {
@@ -52,9 +53,14 @@ function testMaturityTaxonomy(params?: {
           {
             id: categoryLocalId,
             name: "Test category",
-            features: (params?.coverageIds ?? [TEST_EXECUTABLE_COVERAGE_ID]).map((coverageId) => ({
-              name: coverageId,
-              coverageIds: [coverageId],
+            features: (
+              params?.featureCoverageIds ??
+              (params?.coverageIds ?? [TEST_EXECUTABLE_COVERAGE_ID]).map((coverageId) => [
+                coverageId,
+              ])
+            ).map((coverageIds) => ({
+              name: coverageIds.join(" + "),
+              coverageIds: [...coverageIds],
             })),
           },
         ],
@@ -328,6 +334,33 @@ describe("qa coverage report", () => {
         scenarioRefs: ["qa/scenarios/ui/control-ui-chat-flow-playwright.yaml"],
       },
     ]);
+  });
+
+  it("requires every coverage ID on a taxonomy feature to have primary evidence", () => {
+    const report = buildQaScorecardTaxonomyReport({
+      taxonomy: testMaturityTaxonomy({
+        featureCoverageIds: [[TEST_EXECUTABLE_COVERAGE_ID, TEST_WEBCHAT_COVERAGE_ID]],
+      }),
+      repoRoot: process.cwd(),
+      scenarios: [
+        scenarioWithCoverage({
+          primary: [TEST_EXECUTABLE_COVERAGE_ID],
+          secondary: [TEST_WEBCHAT_COVERAGE_ID],
+          sourcePath: "qa/scenarios/channels/dm-chat-baseline.yaml",
+        }),
+      ],
+    });
+
+    expect(report.fulfilledCategoryCount).toBe(0);
+    expect(report.fulfilledFeatureCount).toBe(0);
+    expect(report.categories[0]?.coverageStatus).toBe("partial");
+    expect(report.categories[0]?.fulfilledCoverageIds).toStrictEqual([TEST_EXECUTABLE_COVERAGE_ID]);
+    expect(report.validationIssues).toContainEqual(
+      expect.objectContaining({
+        code: "coverage-id-missing-primary-evidence",
+        ref: TEST_WEBCHAT_COVERAGE_ID,
+      }),
+    );
   });
 
   it("uses script producer evidence as coverage fulfillment", () => {

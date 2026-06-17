@@ -364,24 +364,21 @@ function pushMissingPrimaryIssues(params: {
   coverageIdsWithSecondaryEvidence: ReadonlySet<string>;
 }) {
   for (const feature of params.category.features) {
-    if (
-      feature.coverageIds.some((coverageId) =>
-        params.coverageIdsWithPrimaryEvidence.has(coverageId),
-      )
-    ) {
-      continue;
+    for (const coverageId of feature.coverageIds) {
+      if (params.coverageIdsWithPrimaryEvidence.has(coverageId)) {
+        continue;
+      }
+      const reason = params.coverageIdsWithSecondaryEvidence.has(coverageId)
+        ? "only has secondary evidence"
+        : "has no primary evidence";
+      params.issues.push({
+        code: "coverage-id-missing-primary-evidence",
+        severity: "warning",
+        categoryId: params.category.id,
+        ref: coverageId,
+        message: `${params.category.id} feature ${feature.name} coverage ID ${coverageId} ${reason}`,
+      });
     }
-    const hasSecondaryEvidence = feature.coverageIds.some((coverageId) =>
-      params.coverageIdsWithSecondaryEvidence.has(coverageId),
-    );
-    const reason = hasSecondaryEvidence ? "only has secondary evidence" : "has no primary evidence";
-    params.issues.push({
-      code: "coverage-id-missing-primary-evidence",
-      severity: "warning",
-      categoryId: params.category.id,
-      ref: feature.coverageIds.join(", ") || feature.name,
-      message: `${params.category.id} feature ${feature.name} ${reason}`,
-    });
   }
 }
 
@@ -582,8 +579,10 @@ export function buildQaScorecardTaxonomyReport(params: {
       }
     }
 
-    const fulfilledFeatureCountForCategory = category.features.filter((feature) =>
-      feature.coverageIds.some((coverageId) => fulfilledCoverageIds.has(coverageId)),
+    const fulfilledFeatureCountForCategory = category.features.filter(
+      (feature) =>
+        feature.coverageIds.length > 0 &&
+        feature.coverageIds.every((coverageId) => fulfilledCoverageIds.has(coverageId)),
     ).length;
     if (required) {
       requiredFeatureCount += category.features.length;
