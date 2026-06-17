@@ -1304,6 +1304,9 @@ describe("createOpenClawCodingTools", () => {
     });
     const names = new Set(tools.map((tool) => tool.name));
     expect(names.has("read")).toBe(true);
+    expect(names.has("grep")).toBe(true);
+    expect(names.has("find")).toBe(true);
+    expect(names.has("ls")).toBe(true);
     expect(names.has("write")).toBe(true);
     expect(names.has("edit")).toBe(true);
     expect(names.has("exec")).toBe(false);
@@ -1316,6 +1319,9 @@ describe("createOpenClawCodingTools", () => {
     });
     const names = new Set(tools.map((tool) => tool.name));
     expect(names.has("read")).toBe(false);
+    expect(names.has("grep")).toBe(false);
+    expect(names.has("find")).toBe(false);
+    expect(names.has("ls")).toBe(false);
     expect(names.has("write")).toBe(false);
     expect(names.has("edit")).toBe(false);
     expect(names.has("exec")).toBe(true);
