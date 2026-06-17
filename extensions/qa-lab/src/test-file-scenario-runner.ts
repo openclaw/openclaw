@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -6,11 +7,13 @@ import { toRepoRelativePath } from "./cli-paths.js";
 import { QaSuiteArtifactError } from "./errors.js";
 import {
   buildPlaywrightEvidenceSummary,
+  buildScriptEvidenceSummary,
   buildVitestEvidenceSummary,
   QA_EVIDENCE_FILENAME,
   QA_EVIDENCE_SUMMARY_KIND,
   QA_EVIDENCE_SUMMARY_SCHEMA_VERSION,
   type QaEvidenceStatus,
+  type QaEvidenceSummaryJson,
   validateQaEvidenceSummaryJson,
 } from "./evidence-summary.js";
 import type { QaProviderMode } from "./providers/index.js";
@@ -19,10 +22,13 @@ import type { QaScorecardEvidenceMode } from "./scorecard-taxonomy.js";
 import { shellQuote } from "./shell-quote.js";
 
 export type QaTestFileScenario = QaSeedScenarioWithSource & {
-  execution: Extract<QaSeedScenarioWithSource["execution"], { kind: "vitest" | "playwright" }>;
+  execution: Extract<
+    QaSeedScenarioWithSource["execution"],
+    { kind: "script" | "vitest" | "playwright" }
+  >;
 };
 
-export type QaTestFileExecutionKind = "vitest" | "playwright";
+export type QaTestFileExecutionKind = "script" | "vitest" | "playwright";
 
 export type QaTestFileScenarioRunParams = {
   evidenceMode?: QaScorecardEvidenceMode;
@@ -61,7 +67,9 @@ type QaScenarioCommandStep = {
 type QaTestFileScenarioResult = {
   durationMs: number;
   failureMessage?: string;
+  includeFallbackEvidence?: boolean;
   logPath: string;
+  producerEvidence?: QaEvidenceSummaryJson;
   scenario: QaTestFileScenario;
   status: QaEvidenceStatus;
 };
@@ -75,13 +83,17 @@ export type QaTestFileScenarioRunResult = {
 
 type QaTestFileRunnerDefinition = {
   buildEvidenceSummary: typeof buildVitestEvidenceSummary;
-  buildSteps(scenario: QaTestFileScenario): QaScenarioCommandStep[];
+  buildSteps(scenario: QaTestFileScenario, context: { outputDir: string }): QaScenarioCommandStep[];
 };
 
 export function isQaTestFileScenario(
   scenario: QaSeedScenarioWithSource,
 ): scenario is QaTestFileScenario {
-  return scenario.execution.kind === "vitest" || scenario.execution.kind === "playwright";
+  return (
+    scenario.execution.kind === "vitest" ||
+    scenario.execution.kind === "playwright" ||
+    scenario.execution.kind === "script"
+  );
 }
 
 function vitestSteps(scenario: QaTestFileScenario): QaScenarioCommandStep[] {
@@ -115,7 +127,42 @@ function playwrightSteps(scenario: QaTestFileScenario): QaScenarioCommandStep[] 
   ];
 }
 
+function replaceScriptArgTokens(
+  args: readonly string[] | undefined,
+  context: { outputDir: string; scenarioId: string },
+) {
+  return (args ?? []).map((arg) =>
+    arg
+      .replaceAll("${outputDir}", context.outputDir)
+      .replaceAll("${scenarioId}", context.scenarioId),
+  );
+}
+
+function scriptSteps(
+  scenario: QaTestFileScenario,
+  context: { outputDir: string },
+): QaScenarioCommandStep[] {
+  const scenarioOutputDir = path.join(context.outputDir, scenario.id);
+  const scriptArgs =
+    scenario.execution.kind === "script"
+      ? replaceScriptArgTokens(scenario.execution.args, {
+          outputDir: scenarioOutputDir,
+          scenarioId: scenario.id,
+        })
+      : [];
+  return [
+    {
+      command: process.execPath,
+      args: ["--import", "tsx", scenario.execution.path, ...scriptArgs],
+    },
+  ];
+}
+
 const testFileRunnerDefinitions: Record<QaTestFileExecutionKind, QaTestFileRunnerDefinition> = {
+  script: {
+    buildEvidenceSummary: buildScriptEvidenceSummary,
+    buildSteps: scriptSteps,
+  },
   vitest: {
     buildEvidenceSummary: buildVitestEvidenceSummary,
     buildSteps: vitestSteps,
@@ -230,16 +277,64 @@ async function runQaTestFileScenario(params: {
   scenario: QaTestFileScenario;
 }) {
   const definition = testFileRunnerDefinitions[params.scenario.execution.kind];
-  return await runScenarioCommandSteps({
+  const result = await runScenarioCommandSteps({
     ...params,
-    steps: definition.buildSteps(params.scenario),
+    steps: definition.buildSteps(params.scenario, { outputDir: params.outputDir }),
   });
+  if (params.scenario.execution.kind !== "script") {
+    return result;
+  }
+  const producerEvidenceResult = await readScriptProducerEvidence({
+    outputDir: params.outputDir,
+    repoRoot: params.repoRoot,
+    scenario: params.scenario,
+  });
+  if (!producerEvidenceResult.producerEvidence) {
+    return result;
+  }
+  if (result.status !== "pass") {
+    return {
+      ...result,
+      ...producerEvidenceResult,
+      includeFallbackEvidence: true,
+    };
+  }
+  return {
+    ...result,
+    ...producerEvidenceResult,
+    ...statusFromProducerEvidence(producerEvidenceResult.producerEvidence),
+  };
+}
+
+function statusFromProducerEvidence(
+  producerEvidence: QaEvidenceSummaryJson | undefined,
+): Pick<QaTestFileScenarioResult, "failureMessage" | "status"> {
+  if (!producerEvidence || producerEvidence.entries.length === 0) {
+    return { status: "pass" };
+  }
+  const blockingEntry = producerEvidence.entries.find(
+    (entry) => entry.result.status === "fail" || entry.result.status === "blocked",
+  );
+  if (blockingEntry) {
+    return {
+      failureMessage:
+        blockingEntry.result.failure?.reason ??
+        `${blockingEntry.test.id} reported ${blockingEntry.result.status}`,
+      status: blockingEntry.result.status,
+    };
+  }
+  if (producerEvidence.entries.every((entry) => entry.result.status === "skipped")) {
+    return { status: "skipped" };
+  }
+  return { status: "pass" };
 }
 
 function resolveTestFileExecutionKind(scenarios: readonly QaTestFileScenario[]) {
   const kinds = new Set(scenarios.map((scenario) => scenario.execution.kind));
   if (kinds.size > 1) {
-    throw new Error("qa suite cannot mix Vitest and Playwright scenarios in one invocation.");
+    throw new Error(
+      "qa suite cannot mix script, Vitest, and Playwright scenarios in one invocation.",
+    );
   }
   const [kind] = kinds;
   return kind;
@@ -255,6 +350,54 @@ function buildTestFileEvidence(params: {
   evidenceMode?: QaScorecardEvidenceMode;
   env?: NodeJS.ProcessEnv;
 }) {
+  const producerEntries = params.results.flatMap(
+    (result) => result.producerEvidence?.entries ?? [],
+  );
+  if (producerEntries.length > 0) {
+    const definition = testFileRunnerDefinitions[params.kind];
+    const fallbackResults = params.results.filter(
+      (result) => !result.producerEvidence || result.includeFallbackEvidence,
+    );
+    const fallbackEvidence =
+      fallbackResults.length > 0
+        ? definition.buildEvidenceSummary({
+            artifactPaths: params.artifactPaths,
+            evidenceMode: params.evidenceMode,
+            env: params.env,
+            generatedAt: params.generatedAt,
+            primaryModel: params.primaryModel,
+            providerMode: params.providerMode,
+            targets: fallbackResults.map((result) => buildScenarioEvidenceTarget(result.scenario)),
+            results: fallbackResults.map((result) => ({
+              id: result.scenario.id,
+              status: result.status,
+              durationMs: result.durationMs,
+              failureMessage: result.failureMessage,
+            })),
+          })
+        : undefined;
+    const evidenceMode =
+      params.evidenceMode ??
+      (params.results.every((result) => result.producerEvidence?.evidenceMode === "slim")
+        ? "slim"
+        : "full");
+    return validateQaEvidenceSummaryJson({
+      kind: QA_EVIDENCE_SUMMARY_KIND,
+      schemaVersion: QA_EVIDENCE_SUMMARY_SCHEMA_VERSION,
+      generatedAt: params.generatedAt,
+      evidenceMode,
+      entries: [
+        ...producerEntries.map((entry) => {
+          if (evidenceMode !== "slim") {
+            return entry;
+          }
+          const { execution: _execution, ...withoutExecution } = entry;
+          return withoutExecution;
+        }),
+        ...(fallbackEvidence?.entries ?? []),
+      ],
+    });
+  }
   const definition = testFileRunnerDefinitions[params.kind];
   const evidence = definition.buildEvidenceSummary({
     artifactPaths: params.artifactPaths,
@@ -279,6 +422,121 @@ function buildTestFileEvidence(params: {
     profile: evidence.profile,
     entries: evidence.entries,
   });
+}
+
+async function readJsonFileIfExists(filePath: string): Promise<unknown> {
+  let text: string;
+  try {
+    text = await fs.readFile(filePath, "utf8");
+  } catch (error) {
+    if (
+      error &&
+      typeof error === "object" &&
+      "code" in error &&
+      (error as { code?: unknown }).code === "ENOENT"
+    ) {
+      return undefined;
+    }
+    throw error;
+  }
+  try {
+    return JSON.parse(text) as unknown;
+  } catch (error) {
+    throw new Error(`invalid JSON in ${filePath}: ${formatErrorMessage(error)}`, { cause: error });
+  }
+}
+
+function looksRepoRelativeArtifactPath(artifactPath: string) {
+  return (
+    artifactPath.startsWith(".artifacts/") ||
+    artifactPath.startsWith("artifacts/") ||
+    artifactPath.startsWith("qa/") ||
+    artifactPath.startsWith("extensions/") ||
+    artifactPath.startsWith("scripts/") ||
+    artifactPath.startsWith("ui/")
+  );
+}
+
+function resolveScriptProducerArtifactPath(params: {
+  evidenceDir: string;
+  repoRoot: string;
+  artifactPath: string;
+}) {
+  if (path.isAbsolute(params.artifactPath)) {
+    return toRepoRelativePath(params.repoRoot, params.artifactPath);
+  }
+  const evidenceRelativePath = path.join(params.evidenceDir, params.artifactPath);
+  if (existsSync(evidenceRelativePath)) {
+    return toRepoRelativePath(params.repoRoot, evidenceRelativePath);
+  }
+  if (looksRepoRelativeArtifactPath(params.artifactPath)) {
+    return params.artifactPath;
+  }
+  if (existsSync(path.join(params.repoRoot, params.artifactPath))) {
+    return params.artifactPath;
+  }
+  return toRepoRelativePath(params.repoRoot, evidenceRelativePath);
+}
+
+function normalizeScriptProducerEvidence(params: {
+  evidence: QaEvidenceSummaryJson;
+  evidencePath: string;
+  repoRoot: string;
+}): QaEvidenceSummaryJson {
+  const evidenceDir = path.dirname(params.evidencePath);
+  return validateQaEvidenceSummaryJson({
+    ...params.evidence,
+    entries: params.evidence.entries.map((entry) => ({
+      ...entry,
+      execution: entry.execution
+        ? {
+            ...entry.execution,
+            artifacts: entry.execution.artifacts.map((artifact) => ({
+              ...artifact,
+              path: resolveScriptProducerArtifactPath({
+                artifactPath: artifact.path,
+                evidenceDir,
+                repoRoot: params.repoRoot,
+              }),
+            })),
+          }
+        : undefined,
+    })),
+  });
+}
+
+async function readScriptProducerEvidence(params: {
+  outputDir: string;
+  repoRoot: string;
+  scenario: QaTestFileScenario;
+}): Promise<Pick<QaTestFileScenarioResult, "producerEvidence">> {
+  const scenarioOutputDir = path.join(params.outputDir, params.scenario.id);
+  const latestRun = (await readJsonFileIfExists(
+    path.join(scenarioOutputDir, "latest-run.json"),
+  )) as { qaEvidence?: unknown } | undefined;
+  const candidates = [
+    typeof latestRun?.qaEvidence === "string" ? latestRun.qaEvidence : undefined,
+    path.join(scenarioOutputDir, QA_EVIDENCE_FILENAME),
+  ].filter((candidate): candidate is string => Boolean(candidate));
+
+  for (const candidate of candidates) {
+    const evidencePath = path.isAbsolute(candidate)
+      ? candidate
+      : path.join(scenarioOutputDir, candidate);
+    const rawEvidence = await readJsonFileIfExists(evidencePath);
+    if (!rawEvidence) {
+      continue;
+    }
+    const evidence = validateQaEvidenceSummaryJson(rawEvidence);
+    return {
+      producerEvidence: normalizeScriptProducerEvidence({
+        evidence,
+        evidencePath,
+        repoRoot: params.repoRoot,
+      }),
+    };
+  }
+  return {};
 }
 
 function buildScenarioArtifactPaths(params: {
@@ -319,7 +577,7 @@ export async function runQaTestFileScenarios(
   const scenarios = params.scenarios.filter(isQaTestFileScenario);
   const kind = resolveTestFileExecutionKind(scenarios);
   if (!kind) {
-    throw new Error("qa suite found no Vitest or Playwright scenarios to run.");
+    throw new Error("qa suite found no script, Vitest, or Playwright scenarios to run.");
   }
   await fs.mkdir(params.outputDir, { recursive: true });
   const runCommand = params.runCommand ?? runQaScenarioCommand;

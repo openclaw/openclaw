@@ -67,11 +67,13 @@ function scenarioWithCoverage(params: {
   primary?: readonly string[];
   secondary?: readonly string[];
   sourcePath?: string;
-  executionKind?: "flow" | "vitest" | "playwright";
+  executionKind?: "flow" | "script" | "vitest" | "playwright";
   executionPath?: string;
 }): QaSeedScenarioWithSource {
   const execution =
-    params.executionKind === "vitest" || params.executionKind === "playwright"
+    params.executionKind === "script" ||
+    params.executionKind === "vitest" ||
+    params.executionKind === "playwright"
       ? {
           kind: params.executionKind,
           path: params.executionPath ?? "src/test.test.ts",
@@ -324,6 +326,37 @@ describe("qa coverage report", () => {
         path: "ui/src/ui/e2e/chat-flow.e2e.test.ts",
         role: "primary",
         scenarioRefs: ["qa/scenarios/ui/control-ui-chat-flow-playwright.yaml"],
+      },
+    ]);
+  });
+
+  it("uses script producer evidence as coverage fulfillment", () => {
+    const report = buildQaScorecardTaxonomyReport({
+      taxonomy: testMaturityTaxonomy({
+        categoryId: TEST_BROWSER_CATEGORY_ID,
+        coverageIds: [TEST_BROWSER_COVERAGE_ID],
+      }),
+      repoRoot: process.cwd(),
+      scenarios: [
+        scenarioWithCoverage({
+          primary: [TEST_BROWSER_COVERAGE_ID],
+          sourcePath: "qa/scenarios/ui/script-evidence-producer.yaml",
+          executionKind: "script",
+          executionPath: "scripts/check-no-conflict-markers.mjs",
+        }),
+      ],
+    });
+
+    expect(report.validationIssues).toStrictEqual([]);
+    expect(report.fulfilledCategoryCount).toBe(1);
+    expect(report.fulfilledFeatureCount).toBe(1);
+    expect(report.categories[0]?.evidence).toStrictEqual([
+      {
+        coverageId: TEST_BROWSER_COVERAGE_ID,
+        kind: "script",
+        path: "scripts/check-no-conflict-markers.mjs",
+        role: "primary",
+        scenarioRefs: ["qa/scenarios/ui/script-evidence-producer.yaml"],
       },
     ]);
   });
