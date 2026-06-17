@@ -91,7 +91,7 @@ export function readMemoryDatabaseRevision(db: DatabaseSync): number {
 
 function replaceVirtualTable(params: {
   db: DatabaseSync;
-  tableName: "chunks_fts" | "chunks_vec";
+  tableName: "memory_index_chunks_fts" | "memory_index_chunks_vec";
   columns: string;
   ignoreDropErrorWhenSourceMissing?: boolean;
 }): void {
@@ -126,7 +126,7 @@ export async function publishMemoryDatabaseTables(params: {
   params.targetDb.prepare(`ATTACH DATABASE ? AS ${MEMORY_REINDEX_SCHEMA}`).run(params.sourcePath);
   try {
     if (
-      tableExists(params.targetDb, MEMORY_REINDEX_SCHEMA, "chunks_vec") &&
+      tableExists(params.targetDb, MEMORY_REINDEX_SCHEMA, "memory_index_chunks_vec") &&
       !hasSqliteVecExtension(params.targetDb)
     ) {
       const loaded = await loadSqliteVecExtension({
@@ -148,47 +148,49 @@ export async function publishMemoryDatabaseTables(params: {
             `(expected revision ${params.expectedRevision}, found ${liveRevision}); retry the full reindex.`,
         );
       }
-      params.targetDb.prepare("DELETE FROM main.meta WHERE key = ?").run(params.metaKey);
+      params.targetDb
+        .prepare("DELETE FROM main.memory_index_meta WHERE key = ?")
+        .run(params.metaKey);
       params.targetDb
         .prepare(
-          `INSERT INTO main.meta (key, value)
-           SELECT key, value FROM ${MEMORY_REINDEX_SCHEMA}.meta WHERE key = ?`,
+          `INSERT INTO main.memory_index_meta (key, value)
+           SELECT key, value FROM ${MEMORY_REINDEX_SCHEMA}.memory_index_meta WHERE key = ?`,
         )
         .run(params.metaKey);
 
       params.targetDb.exec(`
-        DELETE FROM main.files;
-        INSERT INTO main.files (path, source, hash, mtime, size)
-        SELECT path, source, hash, mtime, size FROM ${MEMORY_REINDEX_SCHEMA}.files;
+        DELETE FROM main.memory_index_sources;
+        INSERT INTO main.memory_index_sources (path, source, hash, mtime, size)
+        SELECT path, source, hash, mtime, size FROM ${MEMORY_REINDEX_SCHEMA}.memory_index_sources;
 
-        DELETE FROM main.chunks;
-        INSERT INTO main.chunks (
+        DELETE FROM main.memory_index_chunks;
+        INSERT INTO main.memory_index_chunks (
           id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
         )
         SELECT
           id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
-        FROM ${MEMORY_REINDEX_SCHEMA}.chunks;
+        FROM ${MEMORY_REINDEX_SCHEMA}.memory_index_chunks;
       `);
 
-      if (tableExists(params.targetDb, MEMORY_REINDEX_SCHEMA, "embedding_cache")) {
+      if (tableExists(params.targetDb, MEMORY_REINDEX_SCHEMA, "memory_embedding_cache")) {
         params.targetDb.exec(`
-          DELETE FROM main.embedding_cache;
-          INSERT INTO main.embedding_cache (
+          DELETE FROM main.memory_embedding_cache;
+          INSERT INTO main.memory_embedding_cache (
             provider, model, provider_key, hash, embedding, dims, updated_at
           )
           SELECT provider, model, provider_key, hash, embedding, dims, updated_at
-          FROM ${MEMORY_REINDEX_SCHEMA}.embedding_cache;
+          FROM ${MEMORY_REINDEX_SCHEMA}.memory_embedding_cache;
         `);
       }
 
       replaceVirtualTable({
         db: params.targetDb,
-        tableName: "chunks_fts",
+        tableName: "memory_index_chunks_fts",
         columns: "text, id, path, source, model, start_line, end_line",
       });
       replaceVirtualTable({
         db: params.targetDb,
-        tableName: "chunks_vec",
+        tableName: "memory_index_chunks_vec",
         columns: "id, embedding",
         // A vector-disabled connection may not have sqlite-vec loaded and cannot
         // drop an old virtual table. Missing vector metadata forces a strict

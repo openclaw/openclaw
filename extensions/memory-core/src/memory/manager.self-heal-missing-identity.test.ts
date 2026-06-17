@@ -104,8 +104,8 @@ describe("memory manager self-heal missing identity with FTS-only chunks", () =>
     await fs.mkdir(path.dirname(indexPath), { recursive: true });
     const db = new DatabaseSync(indexPath);
     db.exec(`
-      CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS chunks (
+      CREATE TABLE IF NOT EXISTS memory_index_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS memory_index_chunks (
         id TEXT PRIMARY KEY,
         path TEXT NOT NULL,
         source TEXT NOT NULL DEFAULT 'memory',
@@ -117,16 +117,16 @@ describe("memory manager self-heal missing identity with FTS-only chunks", () =>
         embedding TEXT NOT NULL,
         updated_at INTEGER NOT NULL
       );
-      CREATE TABLE IF NOT EXISTS files (
+      CREATE TABLE IF NOT EXISTS memory_index_sources (
         path TEXT PRIMARY KEY,
         source TEXT NOT NULL DEFAULT 'memory',
         hash TEXT NOT NULL,
         mtime INTEGER NOT NULL,
         size INTEGER NOT NULL
       );
-      INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+      INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
         VALUES ('chunk-1', 'MEMORY.md', 'memory', 1, 3, 'hash-1', '${model}', 'Alpha topic keep note', '[]', ${Date.now()});
-      INSERT INTO files (path, source, hash, mtime, size)
+      INSERT INTO memory_index_sources (path, source, hash, mtime, size)
         VALUES ('MEMORY.md', 'memory', 'hash-1', ${Date.now()}, 100);
     `);
     db.close();
