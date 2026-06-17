@@ -510,12 +510,23 @@ export async function backfillMattermostThreadHistory(params: {
   historyLimit: number;
   currentPostId?: string;
   resolveUserInfo: (userId: string) => Promise<MattermostUser | null>;
+  /** Current agent session id for this thread; backfill runs at most once per session id. */
+  sessionId?: string;
+  /** Per-historyKey record of the session id last backfilled (recovery-gate state). */
+  backfilledSessionIds: Map<string, string>;
   log?: (message: string) => void;
 }): Promise<void> {
   if (params.historyLimit <= 0) {
     return;
   }
   if ((params.channelHistories.get(params.historyKey)?.length ?? 0) > 0) {
+    return;
+  }
+  // Recovery gate: the in-memory window is cleared after every turn, so "window empty" also
+  // matches normal active-thread follow-ups. The agent session id only rotates on /new or a
+  // restart — exactly when the thread context is actually missing — so backfill at most once
+  // per session id and skip the server fetch while it is unchanged.
+  if (params.sessionId && params.backfilledSessionIds.get(params.historyKey) === params.sessionId) {
     return;
   }
   try {
@@ -541,6 +552,11 @@ export async function backfillMattermostThreadHistory(params: {
     }
     if (entries.length > 0) {
       params.channelHistories.set(params.historyKey, entries.slice(-params.historyLimit));
+    }
+    // Record even when the server thread had no extra posts, so the same session is not
+    // refetched on every follow-up turn within its lifetime.
+    if (params.sessionId) {
+      params.backfilledSessionIds.set(params.historyKey, params.sessionId);
     }
   } catch (err) {
     params.log?.(
@@ -929,6 +945,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     cfg.messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
   );
   const channelHistories = new Map<string, HistoryEntry[]>();
+  // Tracks the agent session id last backfilled per thread historyKey so thread history is
+  // seeded once per session (on /new or restart) instead of on every active-thread follow-up.
+  const backfilledSessionIds = new Map<string, string>();
   const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
   const dmPolicy = account.config.dmPolicy ?? "pairing";
   const { groupPolicy, providerMissingFallbackApplied } =
@@ -1617,6 +1636,14 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           sender: { name: senderName, id: senderId },
         });
         if (historyKey && threadRootId) {
+          const threadStorePath = core.channel.session.resolveStorePath(cfg.session?.store, {
+            agentId: route.agentId,
+          });
+          const threadSessionId = core.agent.session.getSessionEntry({
+            storePath: threadStorePath,
+            sessionKey: historyKey,
+            agentId: route.agentId,
+          })?.sessionId;
           await backfillMattermostThreadHistory({
             client,
             threadRootId,
@@ -1625,6 +1652,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             historyLimit,
             currentPostId: post.id ?? undefined,
             resolveUserInfo,
+            sessionId: threadSessionId,
+            backfilledSessionIds,
             log: (message) => logVerboseMessage(message),
           });
         }

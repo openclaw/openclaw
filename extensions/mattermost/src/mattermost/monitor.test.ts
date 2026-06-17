@@ -1101,6 +1101,7 @@ describe("backfillMattermostThreadHistory", () => {
       historyLimit: 10,
       currentPostId: "p3",
       resolveUserInfo,
+      backfilledSessionIds: new Map(),
     });
 
     expect(client.request).toHaveBeenCalledWith("/posts/root-1/thread");
@@ -1129,6 +1130,7 @@ describe("backfillMattermostThreadHistory", () => {
       historyLimit: 1,
       currentPostId: "p3",
       resolveUserInfo,
+      backfilledSessionIds: new Map(),
     });
 
     const seeded = channelHistories.get("channel:chan-1");
@@ -1147,6 +1149,7 @@ describe("backfillMattermostThreadHistory", () => {
       channelHistories,
       historyLimit: 10,
       resolveUserInfo,
+      backfilledSessionIds: new Map(),
     });
 
     expect(client.request).not.toHaveBeenCalled();
@@ -1170,11 +1173,85 @@ describe("backfillMattermostThreadHistory", () => {
       channelHistories,
       historyLimit: 10,
       resolveUserInfo,
+      backfilledSessionIds: new Map(),
       log,
     });
 
     expect(channelHistories.has("channel:chan-1")).toBe(false);
     expect(log).toHaveBeenCalledTimes(1);
     expect(String(log.mock.calls[0]?.[0])).toContain("boom");
+  });
+
+  it("skips the server fetch when the thread session was already backfilled (active thread)", async () => {
+    const channelHistories = new Map();
+    const client = threadClientMock({ order: ["p1"], posts: { p1: { id: "p1", message: "x" } } });
+    const backfilledSessionIds = new Map([["channel:chan-1", "session-1"]]);
+
+    await backfillMattermostThreadHistory({
+      client,
+      threadRootId: "root-1",
+      historyKey: "channel:chan-1",
+      channelHistories,
+      historyLimit: 10,
+      currentPostId: "p2",
+      resolveUserInfo,
+      sessionId: "session-1",
+      backfilledSessionIds,
+    });
+
+    expect(client.request).not.toHaveBeenCalled();
+    expect(channelHistories.has("channel:chan-1")).toBe(false);
+  });
+
+  it("backfills again when the session id rotated (e.g. after /new)", async () => {
+    const channelHistories = new Map();
+    const client = threadClientMock({
+      order: ["p1", "p2"],
+      posts: {
+        p1: { id: "p1", user_id: "u1", message: "first", create_at: 100 },
+        p2: { id: "p2", user_id: "u2", message: "second", create_at: 200 },
+      },
+    });
+    const backfilledSessionIds = new Map([["channel:chan-1", "session-1"]]);
+
+    await backfillMattermostThreadHistory({
+      client,
+      threadRootId: "root-1",
+      historyKey: "channel:chan-1",
+      channelHistories,
+      historyLimit: 10,
+      currentPostId: "p3",
+      resolveUserInfo,
+      sessionId: "session-2",
+      backfilledSessionIds,
+    });
+
+    expect(client.request).toHaveBeenCalledWith("/posts/root-1/thread");
+    expect(channelHistories.get("channel:chan-1")).toHaveLength(2);
+    expect(backfilledSessionIds.get("channel:chan-1")).toBe("session-2");
+  });
+
+  it("records the session id after seeding so the same session is not refetched", async () => {
+    const channelHistories = new Map();
+    const client = threadClientMock({
+      order: ["p1"],
+      posts: { p1: { id: "p1", user_id: "u1", message: "first", create_at: 100 } },
+    });
+    const backfilledSessionIds = new Map();
+
+    await backfillMattermostThreadHistory({
+      client,
+      threadRootId: "root-1",
+      historyKey: "channel:chan-1",
+      channelHistories,
+      historyLimit: 10,
+      currentPostId: "p2",
+      resolveUserInfo,
+      sessionId: "session-1",
+      backfilledSessionIds,
+    });
+
+    expect(client.request).toHaveBeenCalledTimes(1);
+    expect(backfilledSessionIds.get("channel:chan-1")).toBe("session-1");
   });
 });
