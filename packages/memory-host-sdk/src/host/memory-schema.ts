@@ -21,6 +21,8 @@ const LEGACY_MEMORY_INDEX_TRIGGERS = [
   "memory_chunks_revision_after_delete",
 ] as const;
 
+const MEMORY_INDEX_SOURCE_COLUMNS = ["path", "source", "hash", "mtime", "size"] as const;
+
 function tableHasExactColumns(
   db: DatabaseSync,
   tableName: string,
@@ -31,10 +33,77 @@ function tableHasExactColumns(
   return columns.size === expected.length && expected.every((column) => columns.has(column));
 }
 
+function tablePrimaryKeyColumns(db: DatabaseSync, tableName: string): string[] {
+  const rows = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{
+    name?: unknown;
+    pk?: unknown;
+  }>;
+  return rows
+    .flatMap((row) =>
+      typeof row.name === "string" && typeof row.pk === "number" && row.pk > 0
+        ? [{ name: row.name, pk: row.pk }]
+        : [],
+    )
+    .toSorted((left, right) => left.pk - right.pk)
+    .map((row) => row.name);
+}
+
+function tableHasPrimaryKey(
+  db: DatabaseSync,
+  tableName: string,
+  expectedColumns: readonly string[],
+): boolean {
+  const columns = tablePrimaryKeyColumns(db, tableName);
+  return (
+    columns.length === expectedColumns.length &&
+    columns.every((column, index) => column === expectedColumns[index])
+  );
+}
+
 function assertLegacyRowsCopied(db: DatabaseSync, query: string, tableName: string): void {
   const row = db.prepare(query).get() as { missing?: unknown } | undefined;
   if (Number(row?.missing ?? 0) > 0) {
     throw new Error(`legacy memory ${tableName} rows conflict with canonical memory index rows`);
+  }
+}
+
+function migrateCanonicalMemoryIndexSourcesPrimaryKey(db: DatabaseSync): void {
+  if (
+    !tableHasExactColumns(db, MEMORY_INDEX_SOURCES_TABLE, MEMORY_INDEX_SOURCE_COLUMNS) ||
+    tableHasPrimaryKey(db, MEMORY_INDEX_SOURCES_TABLE, ["path", "source"])
+  ) {
+    return;
+  }
+  if (!tableHasPrimaryKey(db, MEMORY_INDEX_SOURCES_TABLE, ["path"])) {
+    return;
+  }
+
+  db.exec("SAVEPOINT migrate_memory_index_sources_primary_key");
+  try {
+    db.exec(`
+      DROP TRIGGER IF EXISTS memory_index_sources_revision_after_insert;
+      DROP TRIGGER IF EXISTS memory_index_sources_revision_after_update;
+      DROP TRIGGER IF EXISTS memory_index_sources_revision_after_delete;
+
+      ALTER TABLE ${MEMORY_INDEX_SOURCES_TABLE}
+        RENAME TO memory_index_sources_path_pk_migration;
+      CREATE TABLE ${MEMORY_INDEX_SOURCES_TABLE} (
+        path TEXT NOT NULL,
+        source TEXT NOT NULL DEFAULT 'memory',
+        hash TEXT NOT NULL,
+        mtime INTEGER NOT NULL,
+        size INTEGER NOT NULL,
+        PRIMARY KEY (path, source)
+      );
+      INSERT INTO ${MEMORY_INDEX_SOURCES_TABLE} (path, source, hash, mtime, size)
+      SELECT path, source, hash, mtime, size FROM memory_index_sources_path_pk_migration;
+      DROP TABLE memory_index_sources_path_pk_migration;
+      RELEASE migrate_memory_index_sources_primary_key;
+    `);
+  } catch (err) {
+    db.exec("ROLLBACK TO migrate_memory_index_sources_primary_key");
+    db.exec("RELEASE migrate_memory_index_sources_primary_key");
+    throw err;
   }
 }
 
@@ -218,6 +287,9 @@ export function ensureMemoryIndexSchema(params: {
       revision INTEGER NOT NULL
     );
     INSERT OR IGNORE INTO ${MEMORY_INDEX_STATE_TABLE} (id, revision) VALUES (1, 0);
+  `);
+  migrateCanonicalMemoryIndexSourcesPrimaryKey(params.db);
+  params.db.exec(`
 
     CREATE TRIGGER IF NOT EXISTS memory_index_sources_revision_after_insert
     AFTER INSERT ON ${MEMORY_INDEX_SOURCES_TABLE}

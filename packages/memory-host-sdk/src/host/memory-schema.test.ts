@@ -111,6 +111,41 @@ describe("memory index schema", () => {
     }
   });
 
+  it("upgrades canonical source tables keyed only by path", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      db.exec(`
+        CREATE TABLE memory_index_sources (
+          path TEXT PRIMARY KEY,
+          source TEXT NOT NULL DEFAULT 'memory',
+          hash TEXT NOT NULL,
+          mtime INTEGER NOT NULL,
+          size INTEGER NOT NULL
+        );
+        INSERT INTO memory_index_sources VALUES ('shared.md', 'memory', 'memory-hash', 10, 20);
+      `);
+
+      ensureMemoryIndexSchema({
+        db,
+        cacheEnabled: false,
+        ftsEnabled: false,
+      });
+
+      db.prepare(
+        "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES (?, ?, ?, ?, ?)",
+      ).run("shared.md", "sessions", "session-hash", 30, 40);
+
+      expect(
+        db.prepare("SELECT path, source, hash FROM memory_index_sources ORDER BY source").all(),
+      ).toEqual([
+        { path: "shared.md", source: "memory", hash: "memory-hash" },
+        { path: "shared.md", source: "sessions", hash: "session-hash" },
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
   it("leaves unrelated generic tables untouched", () => {
     const db = new DatabaseSync(":memory:");
     try {
