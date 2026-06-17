@@ -307,6 +307,16 @@ export function normalizeClawRouterResolvedModel(
     ...model,
     api: route.api,
     baseUrl: route.baseUrl,
+  };
+}
+
+export function prepareClawRouterRequestModel(model: ProviderRuntimeModel): ProviderRuntimeModel {
+  const route = readRouteMetadata(model.params);
+  if (!route) {
+    return model;
+  }
+  return {
+    ...model,
     params: stripRouteMetadata(model.params),
     ...(route.upstreamModel && route.upstreamModel !== model.id ? { id: route.upstreamModel } : {}),
   };

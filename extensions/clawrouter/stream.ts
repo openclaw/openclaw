@@ -1,5 +1,6 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
+import { prepareClawRouterRequestModel } from "./provider-catalog.js";
 
 const ENV_API_KEY_MARKER = "CLAWROUTER_API_KEY";
 
@@ -30,10 +31,10 @@ export function wrapClawRouterProviderStream(
       return underlying(model, context, options);
     }
     return underlying(
-      {
+      prepareClawRouterRequestModel({
         ...model,
         headers: withBearerAuthorization(model.headers, apiKey),
-      },
+      }),
       context,
       options,
     );

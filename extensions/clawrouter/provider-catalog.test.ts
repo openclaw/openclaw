@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi, type MockedFunction } from "vites
 import {
   buildClawRouterProviderConfig,
   normalizeClawRouterResolvedModel,
+  prepareClawRouterRequestModel,
 } from "./provider-catalog.js";
 
 const CATALOG = {
@@ -156,11 +157,29 @@ describe("clawrouter provider catalog", () => {
       provider: "clawrouter",
     } as ProviderRuntimeModel);
     expect(normalized).toMatchObject({
-      id: "claude-sonnet-4-5-20250929",
+      id: "anthropic/default",
       api: "anthropic-messages",
       baseUrl: "https://clawrouter.example/v1/native/anthropic",
     });
-    expect(normalized?.params).toBeUndefined();
+    expect(prepareClawRouterRequestModel(normalized as ProviderRuntimeModel)).toMatchObject({
+      id: "claude-sonnet-4-5-20250929",
+      params: undefined,
+    });
+    const gemini = provider.models.find((model) => model.id === "google/gemini-default");
+    const normalizedGemini = normalizeClawRouterResolvedModel({
+      ...gemini,
+      baseUrl: provider.baseUrl,
+      provider: "clawrouter",
+    } as ProviderRuntimeModel);
+    expect(normalizedGemini).toMatchObject({
+      id: "google/gemini-default",
+      api: "google-generative-ai",
+      baseUrl: "https://clawrouter.example/v1/native/google-gemini/v1beta",
+    });
+    expect(prepareClawRouterRequestModel(normalizedGemini as ProviderRuntimeModel)).toMatchObject({
+      id: "gemini",
+      params: undefined,
+    });
     expect(JSON.stringify(provider.models)).not.toContain("clawrouter-test-key");
   });
 
@@ -203,18 +222,22 @@ describe("clawrouter provider catalog", () => {
     const secondAnthropic = secondProvider.models.find((model) => model.id === "anthropic/default");
 
     expect(
-      normalizeClawRouterResolvedModel({
-        ...firstAnthropic,
-        baseUrl: firstProvider.baseUrl,
-        provider: "clawrouter",
-      } as ProviderRuntimeModel)?.id,
+      prepareClawRouterRequestModel(
+        normalizeClawRouterResolvedModel({
+          ...firstAnthropic,
+          baseUrl: firstProvider.baseUrl,
+          provider: "clawrouter",
+        } as ProviderRuntimeModel) as ProviderRuntimeModel,
+      ).id,
     ).toBe("first-upstream");
     expect(
-      normalizeClawRouterResolvedModel({
-        ...secondAnthropic,
-        baseUrl: secondProvider.baseUrl,
-        provider: "clawrouter",
-      } as ProviderRuntimeModel)?.id,
+      prepareClawRouterRequestModel(
+        normalizeClawRouterResolvedModel({
+          ...secondAnthropic,
+          baseUrl: secondProvider.baseUrl,
+          provider: "clawrouter",
+        } as ProviderRuntimeModel) as ProviderRuntimeModel,
+      ).id,
     ).toBe("second-upstream");
   });
 });

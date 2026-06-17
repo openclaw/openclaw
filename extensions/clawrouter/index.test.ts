@@ -89,6 +89,13 @@ describe("clawrouter provider plugin", () => {
         api: "anthropic-messages",
         id: "anthropic/default",
         headers: { "X-Request-ID": "request-1" },
+        params: {
+          clawrouterRoute: {
+            api: "anthropic-messages",
+            baseUrl: "https://clawrouter.example/v1/native/anthropic",
+            upstreamModel: "claude-sonnet-4-5-20250929",
+          },
+        },
       } as never,
       {} as never,
       { apiKey: "runtime-proxy-key" } as never,
@@ -107,6 +114,8 @@ describe("clawrouter provider plugin", () => {
       "X-Request-ID": "request-1",
       Authorization: "Bearer runtime-proxy-key",
     });
+    expect(calls[0]?.id).toBe("claude-sonnet-4-5-20250929");
+    expect(calls[0]?.params).toBeUndefined();
     expect(calls[1]?.headers).toBeUndefined();
   });
 
