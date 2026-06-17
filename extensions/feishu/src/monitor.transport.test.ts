@@ -97,7 +97,7 @@ async function sendRawHttpRequest(params: { port: number; request: string }): Pr
     let response = "";
     socket.setEncoding("utf8");
     socket.on("data", (chunk) => {
-      response += chunk;
+      response += typeof chunk === "string" ? chunk : chunk.toString("utf8");
     });
     socket.on("end", () => resolve(response));
     socket.on("error", reject);
