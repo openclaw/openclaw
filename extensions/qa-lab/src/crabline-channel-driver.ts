@@ -1,10 +1,10 @@
 // Qa Lab plugin module models SDK-backed Crabline channel-driver metadata.
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 
 const execFileAsync = promisify(execFile);
 
@@ -170,7 +170,9 @@ function readCrablineSupportedChannels(payload: unknown): QaCrablineChannelId[] 
 }
 
 async function readSupportedCrablineChannels(): Promise<QaCrablineChannelId[]> {
-  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "qa-crabline-catalog-"));
+  const tempDir = await fs.mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "qa-crabline-catalog-"),
+  );
   try {
     const manifestPath = path.join(tempDir, "crabline-catalog.json");
     await fs.writeFile(
