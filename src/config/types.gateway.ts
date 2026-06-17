@@ -474,8 +474,12 @@ export type GatewayToolsConfig = {
 
 /**
  * Direct-invoke surface-specific opt-ins. Currently only `hostFsRead` is
- * defined (gates the `read` tool). Future opt-ins for write/exec/process
- * primitives will follow the same dual-key gating pattern.
+ * defined (gates the `read` tool). Each opt-in is one key of a THREE-key
+ * gate: the class opt-in here, the matching tool name in
+ * `gateway.tools.allow`, AND an owner/admin sender (`senderIsOwner === true`)
+ * at request time — all three are required before the tool is materialized.
+ * Future opt-ins for write/exec/process primitives will follow the same
+ * gating pattern.
  */
 export type GatewayDirectInvokeOptIns = {
   /**
@@ -484,9 +488,11 @@ export type GatewayDirectInvokeOptIns = {
    * `tools.invoke`, which share the resolver). Defaults to `false`.
    *
    * Even when set to `true`, the operator MUST also include `"read"` in
-   * `gateway.tools.allow` for the tool to actually be reachable; this
-   * dual-key gating is intentional, see GatewayToolsConfig.directInvoke
-   * docs.
+   * `gateway.tools.allow` AND the request MUST come from an owner/admin
+   * sender (`senderIsOwner === true`) for the tool to actually be reachable;
+   * this triple-key gating is intentional, see GatewayToolsConfig.directInvoke
+   * docs. A non-owner trusted-proxy caller (e.g. `operator.write`) is refused
+   * even when both config keys are set.
    *
    * Exposes host filesystem reads outside the workspace unless
    * `tools.fs.workspaceOnly` is also enabled.
