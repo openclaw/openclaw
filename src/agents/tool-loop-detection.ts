@@ -449,6 +449,46 @@ function getNoProgressStreak(
   return { count: streak, latestResultHash };
 }
 
+function getGlobalNoProgressStreak(history: Array<{ argsHash: string; resultHash?: string }>): {
+  count: number;
+  latestResultHash?: string;
+  patternCount: number;
+} {
+  const patterns = new Map<string, { resultHash: string; count: number }>();
+  let latestResultHash: string | undefined;
+
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const record = history[i];
+    if (typeof record?.resultHash !== "string" || !record.resultHash) {
+      continue;
+    }
+
+    const existing = patterns.get(record.argsHash);
+    if (!existing) {
+      patterns.set(record.argsHash, { resultHash: record.resultHash, count: 1 });
+      continue;
+    }
+    if (existing.resultHash !== record.resultHash) {
+      break;
+    }
+
+    existing.count += 1;
+    latestResultHash ??= record.resultHash;
+  }
+
+  let count = 0;
+  let patternCount = 0;
+  for (const pattern of patterns.values()) {
+    if (pattern.count < 2) {
+      continue;
+    }
+    count += pattern.count;
+    patternCount += 1;
+  }
+
+  return { count, latestResultHash, patternCount };
+}
+
 function getPingPongStreak(
   history: Array<{ toolName: string; argsHash: string; resultHash?: string }>,
   currentSignature: string,
@@ -575,6 +615,10 @@ export function detectToolCallLoop(
   const unknownToolStreak = getUnknownToolRepeatStreak(history, toolName);
   const noProgress = getNoProgressStreak(history, toolName, currentHash);
   const noProgressStreak = noProgress.count;
+  // The global breaker is session-scoped: it aggregates repeated stable outcomes
+  // across patterns, while one-off tools are not no-progress evidence by themselves.
+  const globalNoProgress = getGlobalNoProgressStreak(history);
+  const globalNoProgressStreak = globalNoProgress.count;
   const knownPollTool = isKnownPollToolCall(toolName, params);
   const pingPong = getPingPongStreak(history, currentHash);
 
@@ -589,17 +633,17 @@ export function detectToolCallLoop(
     };
   }
 
-  if (noProgressStreak >= resolvedConfig.globalCircuitBreakerThreshold) {
+  if (globalNoProgressStreak >= resolvedConfig.globalCircuitBreakerThreshold) {
     log.error(
-      `Global circuit breaker triggered: ${toolName} repeated ${noProgressStreak} times with no progress`,
+      `Global circuit breaker triggered: session repeated ${globalNoProgressStreak} no-progress outcomes across ${globalNoProgress.patternCount} tool pattern(s)`,
     );
     return {
       stuck: true,
       level: "critical",
       detector: "global_circuit_breaker",
-      count: noProgressStreak,
-      message: `CRITICAL: ${toolName} has repeated identical no-progress outcomes ${noProgressStreak} times. Session execution blocked by global circuit breaker to prevent runaway loops.`,
-      warningKey: `global:${toolName}:${currentHash}:${noProgress.latestResultHash ?? "none"}`,
+      count: globalNoProgressStreak,
+      message: `CRITICAL: Session tool calls have repeated identical no-progress outcomes ${globalNoProgressStreak} times across tools. Session execution blocked by global circuit breaker to prevent runaway loops.`,
+      warningKey: `global:session:${globalNoProgress.latestResultHash ?? "none"}`,
     };
   }
 

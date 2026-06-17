@@ -372,6 +372,8 @@ function cloneParamsForAdjustedReplay(
   try {
     return { ok: true, value: structuredClone(params) };
   } catch {
+    // Execution already uses executeParams; replay bookkeeping is best-effort
+    // for cloneable hook-adjusted values only.
     return { ok: false };
   }
 }

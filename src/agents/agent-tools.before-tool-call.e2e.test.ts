@@ -27,7 +27,7 @@ import {
   runBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
-import { CRITICAL_THRESHOLD } from "./tool-loop-detection.js";
+import { CRITICAL_THRESHOLD, GLOBAL_CIRCUIT_BREAKER_THRESHOLD } from "./tool-loop-detection.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
@@ -356,6 +356,40 @@ describe("before_tool_call loop detection behavior", () => {
 
     const result = await tool.execute(`read-${CRITICAL_THRESHOLD}`, params, undefined, undefined);
     expectToolLoopBlockedResult(result, "identical outcomes");
+  });
+
+  it("blocks a different tool after the global breaker threshold is reached", async () => {
+    const globalBreakerContext = {
+      ...enabledLoopDetectionContext,
+      loopDetection: {
+        enabled: true,
+        detectors: { genericRepeat: false, knownPollNoProgress: true, pingPong: true },
+      },
+    };
+    const readExecute = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: "same output" }],
+      details: { ok: true },
+    });
+    const searchExecute = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: "search output" }],
+      details: { ok: true },
+    });
+    const readTool = createWrappedTool("read", readExecute, globalBreakerContext);
+    const searchTool = createWrappedTool("memory_search", searchExecute, globalBreakerContext);
+    const readParams = { path: "/tmp/file" };
+
+    for (let i = 0; i < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; i += 1) {
+      await expectUnblockedToolExecution(readTool, `read-${i}`, readParams);
+    }
+
+    const result = await searchTool.execute(
+      "search-after-global-breaker",
+      { query: "still looping" },
+      undefined,
+      undefined,
+    );
+    expectToolLoopBlockedResult(result, "global circuit breaker");
+    expect(searchExecute).not.toHaveBeenCalled();
   });
 
   it("does not carry loop history across run ids", async () => {
@@ -909,6 +943,8 @@ describe("before_tool_call loop detection behavior", () => {
       await tool.execute("tool-call-proxy", params, undefined, undefined);
       await flush();
 
+      expect(execute).toHaveBeenCalledTimes(1);
+      expect(execute.mock.calls[0]?.[1]).toBe(params);
       const started = expectEventFields(emitted[0], {
         type: "tool.execution.started",
       });

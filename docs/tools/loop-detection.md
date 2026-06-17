@@ -87,6 +87,8 @@ Per-agent override (optional):
 
 For `exec`, no-progress checks compare stable command outcomes and ignore volatile runtime metadata such as duration, PID, session ID, and working directory. When a run id is available, recent tool-call history is evaluated only within that run so scheduled heartbeat cycles and fresh runs do not inherit stale loop counts from earlier runs.
 
+`globalCircuitBreakerThreshold` is session scoped. It aggregates repeated stable no-progress outcomes across tool patterns in the same run-scoped history, so once the threshold is reached the next tool call is blocked even when it uses a different tool or arguments. Individual detector toggles control their own warning and critical detectors; they do not opt out of the global breaker. One-off tool calls are not counted as no-progress evidence by themselves.
+
 ## Recommended setup
 
 - For smaller models, set `enabled: true` and leave the thresholds at their defaults. Flagship models rarely need rolling-history detection and can leave the master switch at `false` while still benefiting from the post-compaction guard.
