@@ -33,7 +33,6 @@ scenario:
     - extensions/qa-channel/src/inbound.ts
   execution:
     kind: flow
-    channel: telegram
     summary: Verify message_tool visible replies degrade to automatic delivery when the active group policy removes message.
     config:
       conversationId: qa-fallback-room

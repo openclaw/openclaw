@@ -22,7 +22,6 @@ scenario:
     - extensions/qa-lab/src/lab-server.ts
   execution:
     kind: flow
-    channel: telegram
     summary: Verify the QA agent can chat coherently in a DM, explain the QA setup, and stay in character.
     config:
       expectedMarker: QA-DM-BASELINE-OK

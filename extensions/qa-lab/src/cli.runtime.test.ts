@@ -566,7 +566,7 @@ describe("qa cli runtime", () => {
     });
   });
 
-  it("resolves Crabline channel-driver channel from selected scenario execution", async () => {
+  it("uses the Crabline default channel when selected scenarios do not request one", async () => {
     await runQaSuiteCommand({
       repoRoot: "/tmp/openclaw-repo",
       outputDir: ".artifacts/qa/multipass-telegram",
