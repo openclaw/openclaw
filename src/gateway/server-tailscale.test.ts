@@ -39,7 +39,7 @@ afterEach(() => {
 });
 
 describe("startGatewayTailscaleExposure preserveFunnel", () => {
-  it("calls enableTailscaleServe in serve mode when preserveFunnel is unset", async () => {
+  it("calls disableTailscaleServe then enableTailscaleServe in serve mode when preserveFunnel is unset", async () => {
     const logTailscale = createLogger();
 
     await startGatewayTailscaleExposure({
@@ -48,7 +48,12 @@ describe("startGatewayTailscaleExposure preserveFunnel", () => {
       logTailscale,
     });
 
+    expect(mocks.disableTailscaleServe).toHaveBeenCalledWith();
     expect(mocks.enableTailscaleServe).toHaveBeenCalledWith(18789);
+    // disableTailscaleServe must be called before enableTailscaleServe
+    expect(mocks.disableTailscaleServe.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.enableTailscaleServe.mock.invocationCallOrder[0],
+    );
     expect(mocks.hasTailscaleFunnelRouteForPort).not.toHaveBeenCalled();
   });
 
@@ -64,6 +69,7 @@ describe("startGatewayTailscaleExposure preserveFunnel", () => {
     });
 
     expect(mocks.hasTailscaleFunnelRouteForPort).toHaveBeenCalledWith(18789);
+    expect(mocks.disableTailscaleServe).not.toHaveBeenCalled();
     expect(mocks.enableTailscaleServe).not.toHaveBeenCalled();
     expect(logTailscale.info.mock.calls).toEqual([
       ["serve skipped: preserving externally configured Tailscale Funnel for port 18789"],
@@ -102,6 +108,7 @@ describe("startGatewayTailscaleExposure preserveFunnel", () => {
     });
 
     expect(mocks.hasTailscaleFunnelRouteForPort).toHaveBeenCalledWith(18789);
+    expect(mocks.disableTailscaleServe).toHaveBeenCalledWith();
     expect(mocks.enableTailscaleServe).toHaveBeenCalledWith(18789);
   });
 
@@ -117,6 +124,7 @@ describe("startGatewayTailscaleExposure preserveFunnel", () => {
       logTailscale,
     });
 
+    expect(mocks.disableTailscaleServe).toHaveBeenCalledWith(undefined, "svc:openclaw");
     expect(mocks.enableTailscaleServe).toHaveBeenCalledWith(18789, undefined, "svc:openclaw");
     expect(logTailscale.info).toHaveBeenCalledWith(
       "serve enabled for svc:openclaw: https://openclaw.tailnet.ts.net/ (WS via wss://openclaw.tailnet.ts.net)",
@@ -165,6 +173,7 @@ describe("startGatewayTailscaleExposure preserveFunnel", () => {
       logTailscale,
     });
 
+    expect(mocks.disableTailscaleServe).toHaveBeenCalledWith(undefined, "svc:openclaw");
     expect(mocks.enableTailscaleServe).toHaveBeenCalledWith(18789, undefined, "svc:openclaw");
     expect(logTailscale.info).toHaveBeenCalledWith("serve enabled");
   });

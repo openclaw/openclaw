@@ -43,6 +43,14 @@ export async function startGatewayTailscaleExposure(params: {
           return null;
         }
       }
+      // Clear stale serve entries before setting up new ones. Tailscale serve is
+      // append-only — it never cleans up old entries, so each restart accumulates
+      // duplicates. Resetting before setup ensures a clean state every time.
+      if (serviceName) {
+        await disableTailscaleServe(undefined, serviceName);
+      } else {
+        await disableTailscaleServe();
+      }
       if (serviceName) {
         await enableTailscaleServe(params.port, undefined, serviceName);
       } else {
