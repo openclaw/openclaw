@@ -30,9 +30,11 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   stop and use the repo remote changed gate or a full task worktree. When the
   inputs are present and a release fix changes `package.json` or
   `pnpm-lock.yaml`, rebuild only the task-owned disposable box with
-  `pnpm install --frozen-lockfile`, then run an explicit `require.resolve()`
-  probe before Docker or focused tests. Do not weaken the lockfile or label
-  sparse-checkout failures as product/Docker failures.
+  `CI=true pnpm install --frozen-lockfile`, then run an explicit
+  `require.resolve()` probe before Docker or focused tests. The CI flag permits
+  pnpm to recreate a prewarmed modules directory without an interactive
+  confirmation. Do not weaken the lockfile or label sparse-checkout failures
+  as product/Docker failures.
 
 ## Preflight
 
