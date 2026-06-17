@@ -68,42 +68,87 @@ function rewritePluginSlots(value: unknown): boolean {
   return changed;
 }
 
+function areJsonValuesEqual(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) {
+    return true;
+  }
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return (
+      Array.isArray(left) &&
+      Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((entry, index) => areJsonValuesEqual(entry, right[index]))
+    );
+  }
+  if (isRecord(left) || isRecord(right)) {
+    if (!isRecord(left) || !isRecord(right)) {
+      return false;
+    }
+    const leftKeys = Object.keys(left).toSorted();
+    const rightKeys = Object.keys(right).toSorted();
+    return (
+      leftKeys.length === rightKeys.length &&
+      leftKeys.every(
+        (key, index) => key === rightKeys[index] && areJsonValuesEqual(left[key], right[key]),
+      )
+    );
+  }
+  return false;
+}
+
 function deepMergePluginEntry(
   existing: JsonRecord,
   legacy: JsonRecord,
-): JsonRecord {
+  path: string[] = ["plugins", "entries", OPENAI_PLUGIN_ID],
+): { merged: JsonRecord; conflicts: string[] } {
   const merged = { ...existing };
+  const conflicts: string[] = [];
   for (const key of Object.keys(legacy)) {
     const legacyVal = legacy[key];
     const existingVal = merged[key];
     if (!(key in merged)) {
       merged[key] = legacyVal;
     } else if (isRecord(existingVal) && isRecord(legacyVal)) {
-      merged[key] = deepMergePluginEntry(existingVal, legacyVal);
+      const nested = deepMergePluginEntry(existingVal, legacyVal, [...path, key]);
+      merged[key] = nested.merged;
+      conflicts.push(...nested.conflicts);
+    } else if (!areJsonValuesEqual(existingVal, legacyVal)) {
+      conflicts.push([...path, key].join("."));
     }
-    // When canonical already has the key, it wins (no overwrite).
+    // When canonical already has a conflicting key, it wins (no overwrite).
   }
-  return merged;
+  return { merged, conflicts };
 }
 
-function rewritePluginEntries(value: unknown): boolean {
+type PluginEntriesRewriteResult =
+  | { kind: "unchanged" }
+  | { kind: "rewritten" }
+  | { kind: "merged"; conflicts: string[] };
+
+function rewritePluginEntries(value: unknown): PluginEntriesRewriteResult {
   if (!isRecord(value) || !(LEGACY_OPENAI_CODEX_PLUGIN_ID in value)) {
-    return false;
+    return { kind: "unchanged" };
   }
   if (!(OPENAI_PLUGIN_ID in value)) {
     value[OPENAI_PLUGIN_ID] = value[LEGACY_OPENAI_CODEX_PLUGIN_ID];
+    delete value[LEGACY_OPENAI_CODEX_PLUGIN_ID];
+    return { kind: "rewritten" };
+  }
+
+  const existing = value[OPENAI_PLUGIN_ID];
+  const legacy = value[LEGACY_OPENAI_CODEX_PLUGIN_ID];
+  let conflicts: string[] = [];
+  if (isRecord(existing) && isRecord(legacy)) {
+    const merged = deepMergePluginEntry(existing, legacy);
+    value[OPENAI_PLUGIN_ID] = merged.merged;
+    conflicts = merged.conflicts;
+  } else if (!areJsonValuesEqual(existing, legacy)) {
+    conflicts = ["plugins.entries.openai"];
   } else {
-    // When openai already exists, deep-merge the legacy entry so
-    // non-conflicting keys (including nested config) survive.
-    // Canonical entry wins on true conflicts.
-    const existing = value[OPENAI_PLUGIN_ID];
-    const legacy = value[LEGACY_OPENAI_CODEX_PLUGIN_ID];
-    if (isRecord(existing) && isRecord(legacy)) {
-      value[OPENAI_PLUGIN_ID] = deepMergePluginEntry(existing, legacy);
-    }
+    value[OPENAI_PLUGIN_ID] = existing;
   }
   delete value[LEGACY_OPENAI_CODEX_PLUGIN_ID];
-  return true;
+  return { kind: "merged", conflicts };
 }
 
 function rewriteLegacyOpenAICodexPluginPolicy(raw: Record<string, unknown>): string[] {
@@ -119,8 +164,16 @@ function rewriteLegacyOpenAICodexPluginPolicy(raw: Record<string, unknown>): str
       changes.push(`Rewrote plugins.${key} openai-codex references to openai.`);
     }
   }
-  if (rewritePluginEntries(plugins.entries)) {
+  const entriesRewrite = rewritePluginEntries(plugins.entries);
+  if (entriesRewrite.kind === "rewritten") {
     changes.push("Rewrote plugins.entries.openai-codex to plugins.entries.openai.");
+  } else if (entriesRewrite.kind === "merged") {
+    changes.push("Merged plugins.entries.openai-codex into plugins.entries.openai.");
+    if (entriesRewrite.conflicts.length > 0) {
+      changes.push(
+        `plugins.entries.openai-codex had conflicting values already set on plugins.entries.openai; kept plugins.entries.openai values and review manually: ${entriesRewrite.conflicts.join(", ")}.`,
+      );
+    }
   }
   if (rewritePluginSlots(plugins.slots)) {
     changes.push("Rewrote plugins.slots openai-codex references to openai.");

@@ -1920,6 +1920,87 @@ describe("legacy bundled provider discovery migrate", () => {
     expect(res.changes).toContain("Rewrote plugins.slots openai-codex references to openai.");
   });
 
+  it("merges dual OpenAI Codex plugin entries without losing non-conflicting legacy fields", () => {
+    const res = migrateLegacyConfigForTest({
+      plugins: {
+        entries: {
+          openai: {
+            enabled: true,
+            config: {
+              apiKey: "openai-key",
+              organization: "org_123",
+            },
+          },
+          "openai-codex": {
+            enabled: true,
+            config: {
+              baseUrl: "https://chatgpt.com/backend-api/codex",
+            },
+            install: {
+              source: "bundled",
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.config?.plugins?.entries?.openai).toEqual({
+      enabled: true,
+      config: {
+        apiKey: "openai-key",
+        organization: "org_123",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+      },
+      install: {
+        source: "bundled",
+      },
+    });
+    expect(res.config?.plugins?.entries?.["openai-codex"]).toBeUndefined();
+    expect(res.changes).toContain(
+      "Merged plugins.entries.openai-codex into plugins.entries.openai.",
+    );
+    expect(res.changes).not.toContain(
+      "Rewrote plugins.entries.openai-codex to plugins.entries.openai.",
+    );
+  });
+
+  it("reports dual OpenAI Codex plugin entry conflicts that need manual review", () => {
+    const res = migrateLegacyConfigForTest({
+      plugins: {
+        entries: {
+          openai: {
+            enabled: true,
+            config: {
+              apiKey: "openai-key",
+            },
+          },
+          "openai-codex": {
+            enabled: false,
+            config: {
+              apiKey: "codex-key",
+              baseUrl: "https://chatgpt.com/backend-api/codex",
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.config?.plugins?.entries?.openai).toEqual({
+      enabled: true,
+      config: {
+        apiKey: "openai-key",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+      },
+    });
+    expect(res.config?.plugins?.entries?.["openai-codex"]).toBeUndefined();
+    expect(res.changes).toContain(
+      "Merged plugins.entries.openai-codex into plugins.entries.openai.",
+    );
+    expect(res.changes).toContain(
+      "plugins.entries.openai-codex had conflicting values already set on plugins.entries.openai; kept plugins.entries.openai values and review manually: plugins.entries.openai.enabled, plugins.entries.openai.config.apiKey.",
+    );
+  });
+
   it("sets compat mode for existing restrictive plugin allowlists", () => {
     const res = migrateLegacyConfigForTest({
       plugins: {
