@@ -215,6 +215,13 @@ export function createEmbeddedRunAuthController(params: {
     });
   };
 
+  // Single hard-deadline backstop applied at EVERY auth boundary that can block
+  // on a provider hook, keychain read, or cross-agent lock/gate. Without it, any
+  // one of those hanging leaves the model-turn lane deadlocked (the rh-bot
+  // freeze). Covers the refresh path AND the cold-start/profile-rotation path.
+  const withAuthDeadline = <T>(work: Promise<T>, label: string): Promise<T> =>
+    withRuntimeAuthRefreshDeadline(work, RUNTIME_AUTH_REFRESH_HARD_TIMEOUT_MS, label);
+
   const clearRuntimeAuthRefreshTimer = () => {
     const runtimeAuthState = params.getRuntimeAuthState();
     if (!runtimeAuthState?.refreshTimer) {
@@ -292,9 +299,8 @@ export function createEmbeddedRunAuthController(params: {
     // Hard backstop: a provider auth hook, keychain read, or cross-agent lock
     // wait that never settles must not leave `refreshInFlight` pending forever,
     // or every later model turn deadlocks awaiting it (see #88xx rh-bot freeze).
-    const refreshPromise: Promise<void> = withRuntimeAuthRefreshDeadline(
+    const refreshPromise: Promise<void> = withAuthDeadline(
       refreshOperation,
-      RUNTIME_AUTH_REFRESH_HARD_TIMEOUT_MS,
       params.getRuntimeModel().provider,
     )
       .catch((err: unknown) => {
@@ -470,10 +476,13 @@ export function createEmbeddedRunAuthController(params: {
 
   const applyApiKeyInfo = async (candidate?: string, attemptIndex?: number): Promise<void> => {
     const preparedModel = await params.prepareModelForAuthProfile?.(candidate, attemptIndex);
-    const apiKeyInfo = await resolveApiKeyForCandidate(
-      candidate,
-      preparedModel?.runtimeModel,
-      preparedModel?.allowAuthProfileFallback,
+    const apiKeyInfo = await withAuthDeadline(
+      resolveApiKeyForCandidate(
+        candidate,
+        preparedModel?.runtimeModel,
+        preparedModel?.allowAuthProfileFallback,
+      ),
+      `${params.getRuntimeModel().provider} credential resolution`,
     );
     if (
       preparedModel?.authRequirement &&
@@ -505,12 +514,15 @@ export function createEmbeddedRunAuthController(params: {
       const runtimeModel = params.getRuntimeModel();
       const AWS_SDK_AUTH_SENTINEL = "__aws_sdk_auth__";
       try {
-        const preparedAuth = await prepareRuntimeAuthForModel({
-          runtimeModel,
-          apiKey: AWS_SDK_AUTH_SENTINEL,
-          authMode: apiKeyInfo.mode,
-          profileId: apiKeyInfo.profileId,
-        });
+        const preparedAuth = await withAuthDeadline(
+          prepareRuntimeAuthForModel({
+            runtimeModel,
+            apiKey: AWS_SDK_AUTH_SENTINEL,
+            authMode: apiKeyInfo.mode,
+            profileId: apiKeyInfo.profileId,
+          }),
+          `${runtimeModel.provider} runtime auth`,
+        );
         applyPreparedRuntimeRequestOverrides({ runtimeModel, preparedAuth: preparedAuth ?? {} });
         if (preparedAuth?.apiKey) {
           clearRuntimeAuthRefreshTimer();
@@ -545,12 +557,15 @@ export function createEmbeddedRunAuthController(params: {
     commitPreparedModel(preparedModel);
     let runtimeAuthHandled = false;
     const runtimeModel = params.getRuntimeModel();
-    const preparedAuth = await prepareRuntimeAuthForModel({
-      runtimeModel,
-      apiKey: apiKeyInfo.apiKey,
-      authMode: apiKeyInfo.mode,
-      profileId: apiKeyInfo.profileId,
-    });
+    const preparedAuth = await withAuthDeadline(
+      prepareRuntimeAuthForModel({
+        runtimeModel,
+        apiKey: apiKeyInfo.apiKey,
+        authMode: apiKeyInfo.mode,
+        profileId: apiKeyInfo.profileId,
+      }),
+      `${runtimeModel.provider} runtime auth`,
+    );
     applyPreparedRuntimeRequestOverrides({ runtimeModel, preparedAuth: preparedAuth ?? {} });
     if (preparedAuth?.apiKey) {
       clearRuntimeAuthRefreshTimer();

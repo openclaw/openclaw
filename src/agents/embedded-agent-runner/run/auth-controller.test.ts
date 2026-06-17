@@ -814,6 +814,40 @@ describe("createEmbeddedRunAuthController", () => {
     }
   });
 
+  it("fails over instead of hanging when cold-start auth prep exceeds the hard deadline", async () => {
+    // The #93952 deadline originally covered only refreshRuntimeAuth. The
+    // cold-start / profile-rotation path (initializeAuthProfile -> applyApiKeyInfo
+    // -> prepareProviderRuntimeAuth) is the exact hook that hung in the rh-bot
+    // incident AND the path a watchdog kickstart lands on first. It must also be
+    // backstopped so a fresh boot can never re-wedge the lane.
+    vi.useFakeTimers();
+    try {
+      const harness = createMutableAuthControllerHarness();
+      const setRuntimeApiKey = vi.fn<(provider: string, apiKey: string) => void>();
+      mocks.getApiKeyForModel.mockResolvedValue({
+        apiKey: "source-api-key",
+        mode: "api-key",
+        profileId: "default",
+        source: "env",
+      });
+      // The provider auth hook hangs forever on cold start.
+      mocks.prepareProviderRuntimeAuth.mockImplementation(() => new Promise(() => {}));
+
+      const controller = createMutableEmbeddedRunAuthController({
+        harness,
+        setRuntimeApiKey,
+        profileCandidates: ["default"],
+      });
+
+      const init = controller.initializeAuthProfile();
+      const rejection = expect(init).rejects.toBeTruthy();
+      await vi.advanceTimersByTimeAsync(RUNTIME_AUTH_REFRESH_HARD_TIMEOUT_MS);
+      await rejection;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   describe("aws-sdk auth without explicit API key (IMDS / instance role)", () => {
     it("injects runtime auth when prepareProviderRuntimeAuth resolves credentials", async () => {
       const harness = createMutableAuthControllerHarness();
