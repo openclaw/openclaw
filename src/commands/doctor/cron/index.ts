@@ -1,6 +1,7 @@
 // Doctor cron repair orchestration for legacy stores, run logs, payloads, and warnings.
 import { normalizeOptionalString } from "../../../../packages/normalization-core/src/string-coerce.js";
 import { note } from "../../../../packages/terminal-core/src/note.js";
+import { resolveDefaultAgentId } from "../../../agents/agent-scope-config.js";
 import { formatCliCommand } from "../../../cli/command-format.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
@@ -130,10 +131,12 @@ async function applyLegacyCronStoreRepair(params: {
   state: LegacyCronRepairState;
   normalized?: ReturnType<typeof normalizeStoredCronJobs>;
 }): Promise<LegacyCronRepairResult> {
-  const { state } = params;
+  const { state, cfg } = params;
   const changes: string[] = [];
   const warnings: string[] = [];
-  const normalized = params.normalized ?? normalizeStoredCronJobs(state.rawJobs);
+  const defaultAgentId = resolveDefaultAgentId(cfg);
+  const normalized =
+    params.normalized ?? normalizeStoredCronJobs(state.rawJobs, { defaultAgentId });
   const legacyWebhook = normalizeOptionalString(params.cfg.cron?.webhook);
   const notifyMigration = migrateLegacyNotifyFallback({
     jobs: state.rawJobs,
@@ -333,7 +336,8 @@ export async function maybeRepairLegacyCronStore(params: {
   }
   noteCronModelOverrides({ cfg: params.cfg, jobs: rawJobs, storePath });
 
-  const normalized = normalizeStoredCronJobs(rawJobs);
+  const defaultAgentId = resolveDefaultAgentId(params.cfg);
+  const normalized = normalizeStoredCronJobs(rawJobs, { defaultAgentId });
   const notifyCount = rawJobs.filter((job) => job.notify === true).length;
   const dreamingStaleCount = countStaleDreamingJobs(rawJobs);
   const previewLines = formatLegacyIssuePreview(normalized.issues, {

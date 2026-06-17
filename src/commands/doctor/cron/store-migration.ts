@@ -242,8 +242,13 @@ function stripLegacyTopLevelFields(raw: Record<string, unknown>) {
 }
 
 /** Normalize persisted cron jobs in place and report issues plus rows to quarantine. */
+type NormalizeCronJobsOptions = {
+  defaultAgentId?: string;
+};
+
 export function normalizeStoredCronJobs(
   jobs: Array<Record<string, unknown>>,
+  opts?: NormalizeCronJobsOptions,
 ): NormalizeCronStoreJobsResult {
   const issues: CronStoreIssues = {};
   const unresolvedAgentTurnShellToolPromptJobs: string[] = [];
@@ -578,6 +583,22 @@ export function normalizeStoredCronJobs(
       sessionTarget === "current" ||
       sessionTarget.startsWith("session:") ||
       (sessionTarget === "" && (payloadKind === "agentTurn" || payloadKind === "command"));
+
+    // Normalize agentId: use configured default for missing/empty agentId
+    const defaultAgentId = opts?.defaultAgentId;
+    if (!raw.agentId || typeof raw.agentId !== "string" || !raw.agentId.trim()) {
+      if (defaultAgentId) {
+        raw.agentId = defaultAgentId;
+        mutated = true;
+      }
+    } else if (typeof raw.agentId === "string") {
+      const normalizedAgentId = raw.agentId.trim();
+      if (raw.agentId !== normalizedAgentId) {
+        raw.agentId = normalizedAgentId;
+        mutated = true;
+      }
+    }
+
     const hasDelivery = delivery && typeof delivery === "object" && !Array.isArray(delivery);
     const normalizedLegacy = normalizeLegacyDeliveryInput({
       delivery: hasDelivery ? (delivery as Record<string, unknown>) : null,
