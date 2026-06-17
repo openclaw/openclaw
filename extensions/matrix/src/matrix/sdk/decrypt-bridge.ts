@@ -34,6 +34,18 @@ const MATRIX_DECRYPT_RETRY_BASE_DELAY_MS = 1_500;
 const MATRIX_DECRYPT_RETRY_MAX_DELAY_MS = 30_000;
 const MATRIX_DECRYPT_RETRY_MAX_ATTEMPTS = 8;
 
+/**
+ * Resolves the maximum number of decryption retry attempts for a given event.
+ * For missing-key errors (MEGOLM_UNKNOWN_INBOUND_SESSION_ID), keys were never shared,
+ * so retrying is futile. Limit retries to 2 to avoid wasting ~2.5 minutes.
+ */
+function resolveDecryptRetryMaxAttempts(event: MatrixEvent, reason: DecryptionFailureCode | null): number {
+  if (reason === DecryptionFailureCode.MEGOLM_UNKNOWN_INBOUND_SESSION_ID) {
+    return 2;
+  }
+  return MATRIX_DECRYPT_RETRY_MAX_ATTEMPTS;
+}
+
 function resolveDecryptRetryKey(roomId: string, eventId: string): string | null {
   if (!roomId || !eventId) {
     return null;
@@ -271,7 +283,9 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
       return;
     }
     const attempts = (existing?.attempts ?? 0) + 1;
-    if (attempts > MATRIX_DECRYPT_RETRY_MAX_ATTEMPTS) {
+    const reason = getDecryptionFailureReason(params.event);
+    const maxAttempts = resolveDecryptRetryMaxAttempts(params.event, reason);
+    if (attempts > maxAttempts) {
       const retry = this.decryptRetries.get(retryKey);
       if (retry?.timer) {
         clearTimeout(retry.timer);
