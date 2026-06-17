@@ -350,7 +350,7 @@ export type ChatAbortOps = {
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
 };
 
-export type TrackedChatRunAbortOps = {
+type TrackedChatRunAbortOps = {
   chatAbortControllers: ChatAbortOps["chatAbortControllers"];
   chatRunBuffers: ChatAbortOps["chatRunBuffers"];
   chatRunState: {

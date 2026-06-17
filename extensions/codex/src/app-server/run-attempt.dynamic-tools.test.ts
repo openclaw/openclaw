@@ -23,7 +23,11 @@ import {
   emitDynamicToolTerminalDiagnostic,
 } from "./dynamic-tool-diagnostics.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
-import type { CodexDynamicToolCallParams } from "./protocol.js";
+import {
+  flattenCodexDynamicToolFunctions,
+  type CodexDynamicToolCallParams,
+  type CodexDynamicToolSpec,
+} from "./protocol.js";
 import {
   createParams,
   createCodexRuntimePlanFixture,
@@ -37,6 +41,10 @@ import { testing } from "./run-attempt.js";
 
 function flushDiagnosticEvents() {
   return waitForDiagnosticEventsDrained();
+}
+
+function specNames(specs: readonly CodexDynamicToolSpec[]): string[] {
+  return flattenCodexDynamicToolFunctions(specs).map((tool) => tool.name);
 }
 
 function activeDiagnosticToolKeys(events: DiagnosticEventPayload[]): Set<string> {
@@ -366,7 +374,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
             "features.code_mode_only"?: boolean;
             mcp_servers?: Record<string, unknown>;
           };
-          dynamicTools?: Array<{ name: string }>;
+          dynamicTools?: CodexDynamicToolSpec[];
           environments?: unknown[];
         }
       | undefined;
@@ -382,7 +390,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
       },
     });
     expect(startParams?.environments).toBeUndefined();
-    expect(startParams?.dynamicTools?.map((tool) => tool.name)).toEqual([
+    expect(specNames(startParams?.dynamicTools ?? [])).toEqual([
       "message",
       "node_exec",
       "node_process",

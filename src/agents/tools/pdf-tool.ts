@@ -82,12 +82,6 @@ export const PdfToolSchema = Type.Object({
   maxBytesMb: optionalFiniteNumberSchema({ exclusiveMinimum: 0 }),
 });
 
-// ---------------------------------------------------------------------------
-// Model resolution (mirrors image tool pattern)
-// ---------------------------------------------------------------------------
-
-export { resolvePdfModelConfigForTool } from "./pdf-tool.model-config.js";
-
 function hasExplicitPdfToolModelConfig(config?: OpenClawConfig): boolean {
   return (
     hasToolModelConfig(coercePdfModelConfig(config)) ||

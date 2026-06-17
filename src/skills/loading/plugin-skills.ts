@@ -292,4 +292,3 @@ export const testing = {
   publishPluginSkills,
   resolvePluginSkillLinkType,
 };
-export { testing as __testing };

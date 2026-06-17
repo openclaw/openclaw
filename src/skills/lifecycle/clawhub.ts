@@ -72,7 +72,7 @@ type ClawHubSkillLockEntry = {
   verification?: ClawHubSkillVerificationLock;
 };
 
-export type ClawHubSkillOrigin = {
+type ClawHubSkillOrigin = {
   version: 1;
   registry: string;
   slug: string;
@@ -83,7 +83,7 @@ export type ClawHubSkillOrigin = {
   skillFile?: ClawHubSkillFileLock;
 };
 
-export type ClawHubSkillsLockfile = {
+type ClawHubSkillsLockfile = {
   version: 1;
   skills: Record<string, ClawHubSkillLockEntry>;
 };
@@ -129,7 +129,7 @@ type LocalSkillCardRead = LocalSkillCardStatus & {
   content?: string;
 };
 
-export type InstallClawHubSkillResult =
+type InstallClawHubSkillResult =
   | {
       ok: true;
       slug: string;
@@ -139,7 +139,7 @@ export type InstallClawHubSkillResult =
     }
   | { ok: false; error: string };
 
-export type UpdateClawHubSkillResult =
+type UpdateClawHubSkillResult =
   | {
       ok: true;
       slug: string;
@@ -192,10 +192,10 @@ type TrackedUpdateTarget =
       error: string;
     };
 
-export type ClawHubSkillVerificationResolutionSource = "installed" | "registry";
-export type ClawHubSkillVerificationSelector = "installed-version" | "version" | "tag" | "latest";
+type ClawHubSkillVerificationResolutionSource = "installed" | "registry";
+type ClawHubSkillVerificationSelector = "installed-version" | "version" | "tag" | "latest";
 
-export type ClawHubSkillVerificationTargetResult =
+type ClawHubSkillVerificationTargetResult =
   | {
       ok: true;
       slug: string;
@@ -215,7 +215,7 @@ export type ClawHubSkillVerificationTargetResult =
       error: string;
     };
 
-export async function readClawHubSkillsLockfile(
+async function readClawHubSkillsLockfile(
   workspaceDir: string,
 ): Promise<ClawHubSkillsLockfile> {
   const candidates = [

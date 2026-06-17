@@ -6,7 +6,7 @@ import { resolveBootstrapMode } from "../../bootstrap-mode.js";
 import { DEFAULT_BOOTSTRAP_FILENAME, type WorkspaceBootstrapFile } from "../../workspace.js";
 
 /** Inputs that decide whether this attempt should inject workspace bootstrap context. */
-export type AttemptBootstrapRoutingInput = {
+type AttemptBootstrapRoutingInput = {
   workspaceBootstrapPending: boolean;
   bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
   trigger?: string;
@@ -19,13 +19,13 @@ export type AttemptBootstrapRoutingInput = {
 };
 
 /** Bootstrap placement decision consumed by system/runtime context assembly. */
-export type AttemptBootstrapRouting = {
+type AttemptBootstrapRouting = {
   bootstrapMode: BootstrapMode;
   includeBootstrapInSystemContext: boolean;
   includeBootstrapInRuntimeContext: boolean;
 };
 
-export type AttemptWorkspaceBootstrapRoutingInput = Omit<
+type AttemptWorkspaceBootstrapRoutingInput = Omit<
   AttemptBootstrapRoutingInput,
   "workspaceBootstrapPending"
 > & {

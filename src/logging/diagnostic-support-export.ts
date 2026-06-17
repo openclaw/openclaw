@@ -42,7 +42,7 @@ const SUPPORT_EXPORT_SUFFIX = ".zip";
 type Awaitable<T> = T | Promise<T>;
 type SupportSnapshotReader = () => Awaitable<unknown>;
 
-export type DiagnosticSupportExportOptions = {
+type DiagnosticSupportExportOptions = {
   outputPath?: string;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
@@ -56,7 +56,7 @@ export type DiagnosticSupportExportOptions = {
   readHealthSnapshot?: SupportSnapshotReader;
 };
 
-export type DiagnosticSupportExportManifest = {
+type DiagnosticSupportExportManifest = {
   version: typeof DIAGNOSTIC_SUPPORT_EXPORT_VERSION;
   generatedAt: string;
   openclawVersion: string;
@@ -72,9 +72,9 @@ export type DiagnosticSupportExportManifest = {
   };
 };
 
-export type DiagnosticSupportExportFile = DiagnosticSupportBundleFile;
+type DiagnosticSupportExportFile = DiagnosticSupportBundleFile;
 
-export type DiagnosticSupportExportArtifact = {
+type DiagnosticSupportExportArtifact = {
   manifest: DiagnosticSupportExportManifest;
   files: DiagnosticSupportExportFile[];
 };
