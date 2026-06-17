@@ -307,8 +307,8 @@ export function parseLineDirectives(payload: ReplyPayload): ReplyPayload {
 
   // Validate Flex Message byte size: LINE API silently rejects payloads > 32KB
   if (lineData.flexMessage) {
-    const payload = JSON.stringify(lineData.flexMessage.contents);
-    const byteSize = new TextEncoder().encode(payload).length;
+    const payloadJson = JSON.stringify(lineData.flexMessage.contents);
+    const byteSize = new TextEncoder().encode(payloadJson).length;
     if (byteSize > 32768) {
       console.warn(
         `[LINE] FlexMessage byte size ${byteSize} exceeds 32KB limit. Falling back to plain text message.`,
