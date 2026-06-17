@@ -35,6 +35,10 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   pnpm to recreate a prewarmed modules directory without an interactive
   confirmation. Do not weaken the lockfile or label sparse-checkout failures
   as product/Docker failures.
+- If the candidate is rebased or its base SHA changes after warmup, stop the
+  task-owned box and warm a fresh one before testing. Testbox source sync is
+  relative to the warmed source tree; continuing can mix an old base file with
+  a new candidate diff and produce false lockfile or Docker failures.
 
 ## Preflight
 
