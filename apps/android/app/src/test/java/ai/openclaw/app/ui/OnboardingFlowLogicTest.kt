@@ -1,6 +1,10 @@
 package ai.openclaw.app.ui
 
 import ai.openclaw.app.GatewayConnectionProblem
+import ai.openclaw.app.GatewayNodeApprovalState
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -9,22 +13,48 @@ import org.junit.Test
 class OnboardingFlowLogicTest {
   @Test
   fun blocksFinishWhenOnlyOperatorIsConnected() {
-    assertFalse(canFinishOnboarding(isConnected = true, isNodeConnected = false))
+    assertFalse(canFinishOnboarding(isConnected = true, isNodeConnected = false, nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved))
   }
 
   @Test
   fun blocksFinishWhenDisconnected() {
-    assertFalse(canFinishOnboarding(isConnected = false, isNodeConnected = false))
+    assertFalse(canFinishOnboarding(isConnected = false, isNodeConnected = false, nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved))
   }
 
   @Test
   fun blocksFinishWhenOnlyNodeIsConnected() {
-    assertFalse(canFinishOnboarding(isConnected = false, isNodeConnected = true))
+    assertFalse(canFinishOnboarding(isConnected = false, isNodeConnected = true, nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved))
   }
 
   @Test
-  fun allowsFinishOnlyWhenOperatorAndNodeAreConnected() {
-    assertTrue(canFinishOnboarding(isConnected = true, isNodeConnected = true))
+  fun blocksFinishWhenNodeCapabilityApprovalIsPending() {
+    assertFalse(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApprovalState = GatewayNodeApprovalState.PendingApproval))
+    assertFalse(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApprovalState = GatewayNodeApprovalState.PendingReapproval))
+    assertFalse(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApprovalState = GatewayNodeApprovalState.Unapproved))
+  }
+
+  @Test
+  fun allowsFinishWhenOperatorNodeAndCapabilityApprovalAreReady() {
+    assertTrue(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved))
+  }
+
+  @Test
+  fun blocksFinishWhileDelayedNodeListResolvesPendingApproval() =
+    runTest {
+      val delayedNodeList = CompletableDeferred<GatewayNodeApprovalState>()
+      var approvalState = GatewayNodeApprovalState.Loading
+      val refresh = launch { approvalState = delayedNodeList.await() }
+
+      assertFalse(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApprovalState = approvalState))
+
+      delayedNodeList.complete(GatewayNodeApprovalState.PendingApproval)
+      refresh.join()
+      assertFalse(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApprovalState = approvalState))
+    }
+
+  @Test
+  fun allowsFinishWhenSuccessfulLegacyNodeListOmitsApprovalState() {
+    assertTrue(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApprovalState = GatewayNodeApprovalState.Unsupported))
   }
 
   @Test
@@ -94,6 +124,32 @@ class OnboardingFlowLogicTest {
         ready = true,
         statusText = "Gateway error: pairing required",
         connectSettling = false,
+      ),
+    )
+  }
+
+  @Test
+  fun showsNodeApprovalStateWhenCapabilityApprovalIsPending() {
+    assertEquals(
+      GatewayRecoveryUiState.NodeCapabilityApprovalPending,
+      gatewayRecoveryUiState(
+        ready = false,
+        statusText = "Connected",
+        connectSettling = false,
+        nodeCapabilityApprovalState = GatewayNodeApprovalState.PendingApproval,
+      ),
+    )
+  }
+
+  @Test
+  fun showsFinishingStateWhileNodeApprovalLoads() {
+    assertEquals(
+      GatewayRecoveryUiState.Finishing,
+      gatewayRecoveryUiState(
+        ready = false,
+        statusText = "Connected",
+        connectSettling = false,
+        nodeCapabilityApprovalState = GatewayNodeApprovalState.Loading,
       ),
     )
   }

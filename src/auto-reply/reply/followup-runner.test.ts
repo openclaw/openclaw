@@ -3362,6 +3362,7 @@ describe("createFollowupRunner compaction", () => {
       main: sessionEntry,
     };
     registerFollowupTestSessionStore(storePath, sessionStore);
+    const persistSpy = vi.spyOn(sessionRunAccounting, "persistRunSessionUsage");
 
     compactEmbeddedAgentSessionMock.mockResolvedValueOnce({
       ok: true,
@@ -3450,6 +3451,8 @@ describe("createFollowupRunner compaction", () => {
     expect(embeddedCalls[0]?.extraSystemPrompt).toContain("Post-compaction context refresh");
     expect(embeddedCalls[0]?.extraSystemPrompt).toContain("Read AGENTS.md before replying.");
     expect(sessionStore.main?.compactionCount).toBe(2);
+    expect(requireMockCallArg(persistSpy, 0).preserveFreshTotalTokensOnStaleUsage).toBe(true);
+    persistSpy.mockRestore();
   });
 
   it("registers the post-preflight session id for lifecycle event stamping", async () => {

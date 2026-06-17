@@ -10,7 +10,6 @@ import { describe, expect, it } from "vitest";
 import {
   applyPluginTextReplacements,
   mergePluginTextTransforms,
-  transformStreamContextText,
   wrapStreamFnTextTransforms,
 } from "./plugin-text-transforms.js";
 
@@ -72,7 +71,24 @@ describe("plugin text transforms", () => {
   });
 
   it("rewrites system prompt and message text content before transport", () => {
-    const context = transformStreamContextText(
+    let capturedContext: Context | undefined;
+    const wrapped = wrapStreamFnTextTransforms({
+      streamFn: (_model, context) => {
+        capturedContext = context;
+        const stream = createAssistantMessageEventStream();
+        stream.end();
+        return stream;
+      },
+      input: [
+        {
+          from: /orchid mailbox/g,
+          to: "pine mailbox",
+        },
+        { from: /red basket/g, to: "blue basket" },
+      ],
+    });
+    wrapped(
+      model,
       {
         systemPrompt: "Use orchid mailbox inside north tower",
         messages: [
@@ -85,14 +101,13 @@ describe("plugin text transforms", () => {
           },
         ],
       } as Context,
-      [
-        {
-          from: /orchid mailbox/g,
-          to: "pine mailbox",
-        },
-        { from: /red basket/g, to: "blue basket" },
-      ],
-    ) as unknown as { systemPrompt: string; messages: Array<{ content: unknown[] }> };
+      undefined,
+    );
+
+    const context = capturedContext as unknown as {
+      systemPrompt: string;
+      messages: Array<{ content: unknown[] }>;
+    };
 
     expect(context.systemPrompt).toBe("Use pine mailbox inside north tower");
     const textContent = context.messages[0]?.content[0] as

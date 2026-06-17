@@ -691,6 +691,8 @@ export function createFollowupRunner(params: {
           isControlUiVisible: shouldSurfaceToControlUi,
         });
       }
+      const prePreflightCompactionCount = activeSessionEntry?.compactionCount ?? 0;
+      let preflightCompactionApplied;
       try {
         activeSessionEntry = await runPreflightCompactionIfNeeded({
           cfg: runtimeConfig,
@@ -706,6 +708,8 @@ export function createFollowupRunner(params: {
           replyOperation,
           onCompactionNotice: notifyPreflightCompaction,
         });
+        preflightCompactionApplied =
+          (activeSessionEntry?.compactionCount ?? 0) > prePreflightCompactionCount;
       } catch (err) {
         clearAgentRunContext(runId, lifecycleGeneration);
         const message = formatErrorMessage(err);
@@ -1592,6 +1596,7 @@ export function createFollowupRunner(params: {
           cliSessionBinding: runResult.meta?.agentMeta?.cliSessionBinding,
           clearCliSessionBinding:
             usedCliProvider && runResult.meta?.agentMeta?.clearCliSessionBinding === true,
+          preserveFreshTotalTokensOnStaleUsage: preflightCompactionApplied,
           logLabel: "followup",
         });
       }

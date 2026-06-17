@@ -123,7 +123,12 @@ import { runAgentCleanupStep } from "../run-cleanup-timeout.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
-import { resolveSessionSuspensionReason, suspendSession } from "../session-suspension.js";
+import {
+  resolveSessionSuspensionReason,
+  resolveSessionSuspensionTarget,
+  suspendSession,
+  type SessionSuspensionParams,
+} from "../session-suspension.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
@@ -621,6 +626,17 @@ async function runEmbeddedAgentInternal(
   }
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
   const globalLane = resolveGlobalLane(params.lane);
+  // Outer fallback attempts defer session suspension only while another
+  // candidate remains. Direct and final-candidate runs suspend normally.
+  const failureSuspension = resolveSessionSuspensionTarget();
+  const suspendForFailure = (suspensionParams: Omit<SessionSuspensionParams, "laneId">) => {
+    const suspension = { ...suspensionParams, laneId: globalLane };
+    if (failureSuspension.mode === "defer") {
+      failureSuspension.defer(suspension);
+      return;
+    }
+    void suspendSession(suspension);
+  };
   const sessionQueuePriority = resolveEmbeddedRunSessionQueuePriority(params.trigger);
   const laneTaskTimeoutMs = resolveEmbeddedRunLaneTimeoutMs(params.timeoutMs);
   let laneTaskProgressAtMs = Date.now();
@@ -2837,11 +2853,10 @@ async function runEmbeddedAgentInternal(
               ? describeFailoverError(normalizedPromptFailover)
               : describeFailoverError(promptError);
             if (normalizedPromptFailover?.suspend) {
-              void suspendSession({
+              suspendForFailure({
                 cfg: params.config,
                 agentDir,
                 sessionId: activeSessionId ?? params.sessionId,
-                laneId: globalLane,
                 reason: resolveSessionSuspensionReason(normalizedPromptFailover.reason),
                 failedProvider: normalizedPromptFailover.provider ?? provider,
                 failedModel: normalizedPromptFailover.model ?? modelId,
@@ -3311,11 +3326,10 @@ async function runEmbeddedAgentInternal(
                 : {}),
             });
             if (assistantFailoverOutcome.error.suspend) {
-              void suspendSession({
+              suspendForFailure({
                 cfg: params.config,
                 agentDir,
                 sessionId: activeSessionId ?? params.sessionId,
-                laneId: globalLane,
                 reason: resolveSessionSuspensionReason(assistantFailoverOutcome.error.reason),
                 failedProvider: assistantFailoverOutcome.error.provider ?? provider,
                 failedModel: assistantFailoverOutcome.error.model ?? modelId,

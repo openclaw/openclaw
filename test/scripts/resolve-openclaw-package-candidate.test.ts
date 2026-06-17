@@ -12,6 +12,7 @@ import {
   downloadUrl,
   findSingleTarballForTest,
   loadTrustedPackageSource,
+  moveNewestPackedTarballForTest,
   parseArgs,
   readArtifactPackageCandidateMetadata,
   readPackageBuildSourceSha,
@@ -209,6 +210,57 @@ describe("resolve-openclaw-package-candidate", () => {
       shell: false,
       windowsVerbatimArguments: true,
     });
+  });
+
+  it("keeps npm pack filenames inside the package candidate output directory", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-npm-pack-"));
+    tempDirs.push(dir);
+    await writeFile(path.join(dir, "openclaw-2026.6.17.tgz"), "package");
+
+    await expect(
+      moveNewestPackedTarballForTest(
+        dir,
+        JSON.stringify([{ filename: "openclaw-2026.6.17.tgz" }]),
+        "openclaw-current.tgz",
+      ),
+    ).resolves.toBe(path.join(dir, "openclaw-current.tgz"));
+    await expect(readFile(path.join(dir, "openclaw-current.tgz"), "utf8")).resolves.toBe("package");
+  });
+
+  it("rejects path-like npm pack filenames instead of renaming outside the output directory", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-npm-pack-"));
+    tempDirs.push(dir);
+
+    const unsafeFilenames = [
+      "../openclaw-2026.6.17.tgz",
+      "nested/openclaw-2026.6.17.tgz",
+      "nested\\openclaw-2026.6.17.tgz",
+      "/tmp/openclaw-2026.6.17.tgz",
+      "C:\\temp\\openclaw-2026.6.17.tgz",
+      "openclaw-2026.6.17.tar.gz",
+    ];
+
+    for (const filename of unsafeFilenames) {
+      await expect(
+        moveNewestPackedTarballForTest(dir, JSON.stringify([{ filename }]), "openclaw-current.tgz"),
+      ).rejects.toThrow("npm pack reported unsafe OpenClaw tarball filename");
+    }
+  });
+
+  it("rejects unsafe text npm pack filenames instead of using loose stdout fallback", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-npm-pack-"));
+    tempDirs.push(dir);
+    await writeFile(path.join(dir, "openclaw-2026.6.17.tgz"), "safe fallback");
+
+    for (const filename of ["../openclaw-2026.6.17.tgz", "C:openclaw-2026.6.17.tgz"]) {
+      await expect(
+        moveNewestPackedTarballForTest(
+          dir,
+          ["npm notice", filename].join("\n"),
+          "openclaw-current.tgz",
+        ),
+      ).rejects.toThrow("npm pack reported unsafe OpenClaw tarball filename");
+    }
   });
 
   it("bounds captured command stderr tails on failures", async () => {

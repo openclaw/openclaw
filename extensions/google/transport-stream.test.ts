@@ -284,6 +284,35 @@ function toolResultTurn(toolCallId = "call_1", timestamp = 1): Record<string, un
   };
 }
 
+function parallelGoogleToolCallAssistantTurn(): Record<string, unknown> {
+  return {
+    role: "assistant",
+    provider: "google",
+    api: "google-generative-ai",
+    model: "gemini-2.5-flash",
+    stopReason: "toolUse",
+    timestamp: 0,
+    content: [
+      { type: "toolCall", id: "call_1", name: "screenshot", arguments: {} },
+      { type: "toolCall", id: "call_2", name: "weather", arguments: {} },
+    ],
+  };
+}
+
+function googleToolResultMessage(name: "screenshot" | "weather"): Record<string, unknown> {
+  return {
+    role: "toolResult",
+    toolCallId: name === "screenshot" ? "call_1" : "call_2",
+    toolName: name,
+    content:
+      name === "screenshot"
+        ? [{ type: "image", mimeType: "image/png", data: "png-bytes" }]
+        : [{ type: "text", text: "Sunny, 21C" }],
+    isError: false,
+    timestamp: 1,
+  };
+}
+
 describe("google transport stream", () => {
   beforeAll(async () => {
     ({
@@ -2041,6 +2070,49 @@ describe("google transport stream", () => {
 
     expect(params.contents).toEqual([{ role: "user", parts: [{ text: " " }] }]);
   });
+
+  it.each([
+    ["image first", ["screenshot", "weather"]],
+    ["image last", ["weather", "screenshot"]],
+  ] as const)(
+    "keeps parallel function responses immediate and retains the deferred %s result",
+    (_label, resultOrder) => {
+      const params = buildGoogleGenerativeAiParams(
+        buildGeminiModel({ id: "gemini-2.5-flash", input: ["text", "image"] }),
+        {
+          messages: [
+            { role: "user", content: "Screenshot the page and check the weather.", timestamp: 0 },
+            parallelGoogleToolCallAssistantTurn(),
+            ...resultOrder.map(googleToolResultMessage),
+          ],
+        } as never,
+      );
+
+      expect(params.contents.map((content) => content.role)).toEqual([
+        "user",
+        "model",
+        "user",
+        "user",
+      ]);
+      expect(params.contents[2]).toEqual({
+        role: "user",
+        parts: resultOrder.map((name) => ({
+          functionResponse: {
+            name,
+            response:
+              name === "screenshot" ? { output: "(see attached image)" } : { output: "Sunny, 21C" },
+          },
+        })),
+      });
+      expect(params.contents[3]).toEqual({
+        role: "user",
+        parts: [
+          { text: "Tool result image:" },
+          { inlineData: { mimeType: "image/png", data: "png-bytes" } },
+        ],
+      });
+    },
+  );
 
   it.each([
     ["gemini-2.5-flash-lite", "minimal", 512],
