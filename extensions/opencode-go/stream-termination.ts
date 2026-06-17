@@ -257,7 +257,13 @@ export function createOpencodeGoStalledStreamWrapper(
 
       void (async () => {
         try {
-          armIdleTimer();
+          // Arm the idle timer only AFTER the first upstream event. The
+          // reported bug is a stall AFTER provider progress, and arming
+          // earlier would abort slow time-to-first-byte requests that the
+          // runtime deliberately leaves uncapped for cron runs
+          // (`resolveLlmIdleTimeoutMs` returns 0 for cron without explicit
+          // timeout). The runtime's own first-event timeout governs the
+          // pre-progress window.
           for await (const event of baseStream) {
             if (event.type === "done" || event.type === "error") {
               trackPartial(event);

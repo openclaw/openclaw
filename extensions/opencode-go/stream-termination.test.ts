@@ -162,6 +162,64 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
     await consumer;
   });
 
+  it("does not abort during slow time-to-first-byte (idle timer arms only after first event)", async () => {
+    // Regression for the timer-lifecycle bug: arming the idle timer before
+    // the first upstream event would abort slow time-to-first-byte requests
+    // (e.g. opencode-go cron runs that deliberately leave the runtime's
+    // first-event watchdog uncapped via resolveLlmIdleTimeoutMs). The
+    // wrapper must not arm its own idle timer until an upstream event has
+    // been observed and forwarded.
+    const { stream: baseStream, controller } = createFakeBaseStream();
+    void baseStream;
+    let abortCalled = false;
+    const capturedSignals: AbortSignal[] = [];
+
+    const underlying = vi.fn((_model, _context, options) => {
+      if (options?.signal) {
+        capturedSignals.push(options.signal);
+        options.signal.addEventListener("abort", () => {
+          abortCalled = true;
+        });
+      }
+      return baseStream;
+    });
+
+    const wrapper = createOpencodeGoStalledStreamWrapper(underlying as any, {
+      provider: "opencode-go",
+      idleTimeoutMs: 5_000,
+    });
+
+    const downstream = await Promise.resolve(
+      wrapper(
+        { provider: "opencode-go", id: "deepseek-v4-flash" } as any,
+        {} as any,
+        {} as any,
+      ),
+    );
+    expect(downstream).toBeDefined();
+    if (!downstream) {
+      return;
+    }
+
+    const received: AnyEvent[] = [];
+    const consumer = (async () => {
+      for await (const event of downstream) {
+        received.push(event);
+      }
+    })();
+
+    // Advance wall clock well beyond idleTimeoutMs WITHOUT any upstream
+    // event. The wrapper must not have armed the timer yet.
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(abortCalled).toBe(false);
+    expect(received).toHaveLength(0);
+
+    // Cleanup
+    controller.end();
+    await consumer;
+  });
+
   it("preserves normal delayed usage-only completion without aborting", async () => {
     // Arrange: a fake base stream that streams a normal completion, including
     // a long quiet gap before the final usage-only delta — but well within the
