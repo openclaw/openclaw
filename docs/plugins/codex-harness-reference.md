@@ -94,6 +94,8 @@ Supported `appServer` fields:
 | `authToken`                                   | unset                                                  | Bearer token for WebSocket transport.                                                                                                                                                                                                                                                                                                                            |
 | `headers`                                     | `{}`                                                   | Extra WebSocket headers.                                                                                                                                                                                                                                                                                                                                         |
 | `clearEnv`                                    | `[]`                                                   | Extra environment variable names removed from the spawned stdio app-server process after OpenClaw builds its inherited environment.                                                                                                                                                                                                                              |
+| `remoteMutationPolicy`                        | `"read-only"` for remote WebSocket, `"install-and-refresh"` otherwise | Controls whether OpenClaw may mutate native Codex plugin state on the connected app-server. `"read-only"` requires configured plugins to already be installed and enabled on the app-server; missing plugins fail closed after an inventory refresh. `"install-and-refresh"` lets OpenClaw call Codex plugin install and refresh app inventory. Use it only for trusted app-server connections that intentionally allow plugin mutation. |
+| `remoteWorkspace`                             | unset                                                  | Maps local OpenClaw workspace path prefixes to equivalent remote app-server path prefixes before OpenClaw sends working directories to Codex. Configure both `localRoot` and `remoteRoot` when the gateway and app-server see the same checkout at different filesystem paths.                                                                                   |
 | `requestTimeoutMs`                            | `60000`                                                | Timeout for app-server control-plane calls.                                                                                                                                                                                                                                                                                                                      |
 | `turnCompletionIdleTimeoutMs`                 | `60000`                                                | Quiet window after Codex accepts a turn or after a turn-scoped app-server request while OpenClaw waits for `turn/completed`.                                                                                                                                                                                                                                     |
 | `postToolRawAssistantCompletionIdleTimeoutMs` | `300000`                                               | Completion-idle and progress guard used after a tool handoff, native tool completion, post-tool raw assistant progress, raw reasoning completion, or reasoning progress while OpenClaw waits for `turn/completed`. Use this for trusted or heavy workloads where post-tool synthesis can legitimately stay quiet longer than the final assistant release budget. |
@@ -145,6 +147,15 @@ so a full-access profile would not protect outbound traffic.
 
 The plugin blocks older or unversioned app-server handshakes. Codex app-server
 must report stable version `0.125.0` or newer.
+
+OpenClaw treats non-loopback WebSocket app-server URLs as remote and requires
+identity-bearing WebSocket auth through `appServer.authToken` or an
+`Authorization` header. Remote app-server plugin mutation defaults to
+`remoteMutationPolicy: "read-only"` so remote setups fail closed unless the
+remote Codex app-server already has the configured native plugins installed and
+enabled. Set `remoteMutationPolicy: "install-and-refresh"` only when that
+remote app-server is trusted to accept OpenClaw-managed plugin installs and app
+inventory refreshes.
 
 ## Approval and sandbox modes
 
