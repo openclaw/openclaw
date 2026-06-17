@@ -193,7 +193,7 @@ async function isSameOpenClawGatewaySystemdIdentity(params: {
   ) {
     return false;
   }
-  if (!environment.OPENCLAW_PROFILE?.trim() || !environment.OPENCLAW_GATEWAY_PORT?.trim()) {
+  if (!environment.OPENCLAW_GATEWAY_PORT?.trim()) {
     return false;
   }
   if (

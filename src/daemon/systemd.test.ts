@@ -838,19 +838,19 @@ describe("system-scope gateway unit detection (openclaw#87577)", () => {
     expect(result).toBeNull();
   });
 
-  it("findInstalledSystemdGatewayScope ignores marker-owned custom system units missing OPENCLAW_PROFILE", async () => {
+  it("findInstalledSystemdGatewayScope matches omitted OPENCLAW_PROFILE with the current default profile", async () => {
     mockUnitFileLayout({ system: false });
     findSystemGatewayServicesMock.mockResolvedValueOnce([
       {
         platform: "linux",
-        label: "openclaw-missing-profile.service",
-        detail: "unit: /etc/systemd/system/openclaw-missing-profile.service",
+        label: "openclaw-default.service",
+        detail: "unit: /etc/systemd/system/openclaw-default.service",
         scope: "system",
         marker: "openclaw",
       },
     ]);
     mockSystemUnitFiles({
-      "/etc/systemd/system/openclaw-missing-profile.service": renderCustomGatewayUnit({
+      "/etc/systemd/system/openclaw-default.service": renderCustomGatewayUnit({
         OPENCLAW_SERVICE_MARKER: "openclaw",
         OPENCLAW_SERVICE_KIND: "gateway",
         OPENCLAW_GATEWAY_PORT: "18789",
@@ -858,6 +858,37 @@ describe("system-scope gateway unit detection (openclaw#87577)", () => {
     });
 
     const result = await findInstalledSystemdGatewayScope({ HOME: TEST_MANAGED_HOME });
+
+    expect(result).toEqual({
+      scope: "system",
+      unitName: "openclaw-default.service",
+      unitPath: "/etc/systemd/system/openclaw-default.service",
+    });
+  });
+
+  it("findInstalledSystemdGatewayScope ignores omitted OPENCLAW_PROFILE for a non-default current profile", async () => {
+    mockUnitFileLayout({ system: false });
+    findSystemGatewayServicesMock.mockResolvedValueOnce([
+      {
+        platform: "linux",
+        label: "openclaw-default.service",
+        detail: "unit: /etc/systemd/system/openclaw-default.service",
+        scope: "system",
+        marker: "openclaw",
+      },
+    ]);
+    mockSystemUnitFiles({
+      "/etc/systemd/system/openclaw-default.service": renderCustomGatewayUnit({
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+        OPENCLAW_GATEWAY_PORT: "18789",
+      }),
+    });
+
+    const result = await findInstalledSystemdGatewayScope({
+      HOME: TEST_MANAGED_HOME,
+      OPENCLAW_PROFILE: "work",
+    });
 
     expect(result).toBeNull();
   });
