@@ -17,6 +17,9 @@ function runBenchTestChanged(args: string[]) {
 describe("bench-test-changed script", () => {
   it("formats macOS time RSS bytes as MiB", () => {
     expect(parseMaxRssBytes("  2097152  maximum resident set size\n")).toBe(2_097_152);
+    expect(parseMaxRssBytes("  2097152kb  maximum resident set size\n")).toBeNull();
+    expect(parseMaxRssBytes("  9007199254740993  maximum resident set size\n")).toBeNull();
+    expect(parseMaxRssBytes("2097152\nmaximum resident set size\n")).toBeNull();
     expect(formatRss(2_097_152)).toBe("2.0MB");
     expect(formatRss(-1_048_576)).toBe("-1.0MB");
   });

@@ -1567,6 +1567,27 @@ describe("package artifact reuse", () => {
     expect(workflow).not.toContain("timeout-minutes: 360");
   });
 
+  it("keeps OpenClaw npm release pack tarball paths local before preflight upload", () => {
+    const npmWorkflow = readFileSync(".github/workflows/openclaw-npm-release.yml", "utf8");
+    const packStepIndex = npmWorkflow.indexOf("- name: Pack prepared npm tarball");
+    const copyIndex = npmWorkflow.indexOf('cp "$PACK_PATH" "$ARTIFACT_DIR/"');
+    const uploadIndex = npmWorkflow.indexOf("- name: Upload prepared npm publish bundle");
+
+    expect(packStepIndex).toBeGreaterThan(-1);
+    expect(copyIndex).toBeGreaterThan(packStepIndex);
+    expect(uploadIndex).toBeGreaterThan(packStepIndex);
+    expect(npmWorkflow).toContain('PACK_NAME="$(node - "$PACK_OUTPUT"');
+    expect(npmWorkflow).toContain("function resolveTarballFileName");
+    expect(npmWorkflow).toContain('fileName.includes("\\0")');
+    expect(npmWorkflow).toContain("fileName !== path.basename(fileName)");
+    expect(npmWorkflow).toContain("fileName !== path.win32.basename(fileName)");
+    expect(npmWorkflow).toContain("npm pack reported unsafe tarball filename");
+    expect(npmWorkflow).toContain('PACK_PATH="$PWD/$PACK_NAME"');
+    expect(npmWorkflow).toContain('TARBALL_NAME="$PACK_NAME"');
+    expect(npmWorkflow).not.toContain("process.stdout.write(first.filename)");
+    expect(npmWorkflow).not.toContain('TARBALL_NAME="$(basename "$PACK_PATH")"');
+  });
+
   it("gates stable GitHub publication on the Windows Hub release asset contract", () => {
     const releaseWorkflow = readFileSync(RELEASE_PUBLISH_WORKFLOW, "utf8");
     const windowsWorkflow = readFileSync(WINDOWS_NODE_RELEASE_WORKFLOW, "utf8");

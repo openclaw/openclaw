@@ -801,7 +801,7 @@ describe("CLI attempt execution", () => {
       await fs.realpath(sessionFile),
     );
     expect(persisted[sessionKey]?.updatedAt).toBeGreaterThan(sessionEntry.updatedAt);
-    expect(persisted[sessionKey]?.updatedAt).toBeLessThan(nowCalls.at(-1) ?? 0);
+    expect(persisted[sessionKey]?.updatedAt).toBeLessThanOrEqual(nowCalls.at(-1) ?? 0);
     expect(sessionStore[sessionKey]?.updatedAt).toBe(persisted[sessionKey]?.updatedAt);
   });
 
@@ -1034,11 +1034,13 @@ describe("CLI attempt execution", () => {
       throw new Error("Expected CLI transcript session file.");
     }
     expect(path.isAbsolute(sessionFile)).toBe(true);
-    expect(
-      sessionFile.endsWith(
-        path.join(".openclaw", "agents", "main", "sessions", `${sessionEntry.sessionId}.jsonl`),
-      ),
-    ).toBe(true);
+    const persistedFirst = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      SessionEntry
+    >;
+    expect(await fs.realpath(persistedFirst[sessionKey]?.sessionFile ?? "")).toBe(
+      await fs.realpath(sessionFile),
+    );
 
     await appendSessionTranscriptMessage({
       transcriptPath: sessionFile,

@@ -345,6 +345,18 @@ describe("ci workflow guards", () => {
     });
   });
 
+  it("keeps workflow guards in fast CI-routing checks", () => {
+    const workflow = readCiWorkflow();
+    const fastCoreJob = workflow.jobs["checks-fast-core"];
+    const runStep = fastCoreJob.steps.find(
+      (step) => step.name === "Run ${{ matrix.task }} (${{ matrix.runtime }})",
+    );
+
+    expect(runStep.run).toContain("contracts-plugins-ci-routing)");
+    expect(runStep.run).toContain("ci-routing)");
+    expect(runStep.run.match(/test\/scripts\/ci-workflow-guards\.test\.ts/g)?.length).toBe(2);
+  });
+
   it("keeps push docs validation ClawHub-backed", () => {
     const workflow = readFileSync(".github/workflows/docs.yml", "utf8");
 

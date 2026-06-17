@@ -8,7 +8,10 @@ import {
 } from "../agent-turn-output.mjs";
 import { assertOpenAiEnvAuthProfileStore } from "../auth-profile-store-assertions.mjs";
 import { readPositiveIntEnv } from "../env-limits.mjs";
-import { applyMockOpenAiModelConfig } from "../fixtures/mock-openai-config.mjs";
+import {
+  applyMockOpenAiModelConfig,
+  parseMockOpenAiPort,
+} from "../fixtures/mock-openai-config.mjs";
 import { readTextFileBounded, readTextFileTail } from "../text-file-utils.mjs";
 
 const command = process.argv[2];
@@ -117,7 +120,7 @@ function assertOnboardState() {
 }
 
 function configureMockModel() {
-  const mockPort = Number(process.argv[3]);
+  const mockPort = parseMockOpenAiPort(process.argv[3]);
   const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
   const cfg = readJson(configPath);
   applyMockOpenAiModelConfig(cfg, { mockPort });
@@ -125,7 +128,7 @@ function configureMockModel() {
 }
 
 function assertMockModelConfig() {
-  const mockPort = Number(process.argv[3]);
+  const mockPort = parseMockOpenAiPort(process.argv[3]);
   const expectedModelRef = "openai/gpt-5.5";
   const expectedBaseUrl = `http://127.0.0.1:${mockPort}/v1`;
   const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");

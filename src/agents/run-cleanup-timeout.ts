@@ -9,8 +9,8 @@ import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 // Cleanup steps must not block run completion forever. This module bounds each
 // cleanup step and logs enough context to debug late failures.
 export const AGENT_CLEANUP_STEP_TIMEOUT_MS = 10_000;
-export const AGENT_CLEANUP_STEP_TIMEOUT_ENV = "OPENCLAW_AGENT_CLEANUP_TIMEOUT_MS";
-export const TRAJECTORY_FLUSH_TIMEOUT_ENV = "OPENCLAW_TRAJECTORY_FLUSH_TIMEOUT_MS";
+const AGENT_CLEANUP_STEP_TIMEOUT_ENV = "OPENCLAW_AGENT_CLEANUP_TIMEOUT_MS";
+const TRAJECTORY_FLUSH_TIMEOUT_ENV = "OPENCLAW_TRAJECTORY_FLUSH_TIMEOUT_MS";
 export const CLEANUP_TIMEOUT_DETAILS_MAX_CHARS = 512;
 
 const CLEANUP_TIMEOUT_DETAILS_TRUNCATED_SUFFIX = "...[truncated]";
