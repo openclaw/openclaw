@@ -1082,6 +1082,12 @@ function classifyFailoverClassificationFromMessage(
   if (isExactUnknownNoDetailsError(raw)) {
     return toReasonClassification("no_error_details");
   }
+  // Generic "LLM request failed" from local/downstream providers (e.g. LM Studio
+  // when the model is unavailable) should be treated as a transient server error
+  // so cron retry and model fallback engagement can fire (#93931).
+  if (raw.includes("LLM request failed")) {
+    return toReasonClassification("server_error");
+  }
   if (isTimeoutErrorMessage(raw)) {
     return toReasonClassification("timeout");
   }
