@@ -125,14 +125,38 @@ function shouldPreserveZaiThinking(extraParams?: Record<string, unknown>): boole
 }
 
 function isDisabledThinkingLevel(thinkingLevel: ProviderWrapStreamFnContext["thinkingLevel"]) {
-  return thinkingLevel === "off";
+  return thinkingLevel === "off" || thinkingLevel === "minimal";
+}
+
+function isGlm52ModelId(modelId?: string | null): boolean {
+  return normalizeLowercaseStringOrEmpty(modelId).startsWith("glm-5.2");
+}
+
+function mapThinkingLevelToZaiReasoningEffort(
+  thinkingLevel: ProviderWrapStreamFnContext["thinkingLevel"],
+): "high" | "max" | undefined {
+  switch (thinkingLevel) {
+    case "low":
+    case "medium":
+    case "high":
+    case "adaptive":
+      return "high";
+    case "xhigh":
+    case "max":
+      return "max";
+    default:
+      return undefined;
+  }
 }
 
 function wrapZaiStreamFn(ctx: ProviderWrapStreamFnContext) {
   let streamFn = createToolStreamWrapper(ctx.streamFn, ctx.extraParams?.tool_stream !== false);
   const preserveThinking = shouldPreserveZaiThinking(ctx.extraParams);
+  const reasoningEffort = isGlm52ModelId(ctx.modelId)
+    ? mapThinkingLevelToZaiReasoningEffort(ctx.thinkingLevel)
+    : undefined;
 
-  if (!isDisabledThinkingLevel(ctx.thinkingLevel) && !preserveThinking) {
+  if (!isDisabledThinkingLevel(ctx.thinkingLevel) && !preserveThinking && !reasoningEffort) {
     return streamFn;
   }
 
@@ -144,6 +168,10 @@ function wrapZaiStreamFn(ctx: ProviderWrapStreamFnContext) {
     if (isDisabledThinkingLevel(ctx.thinkingLevel)) {
       payload.thinking = { type: "disabled" };
       return;
+    }
+
+    if (reasoningEffort) {
+      payload.reasoning_effort = reasoningEffort;
     }
 
     if (preserveThinking) {
@@ -366,13 +394,24 @@ export default definePluginEntry({
       }),
       prepareExtraParams: (ctx) => defaultToolStreamExtraParams(ctx.extraParams),
       wrapStreamFn: (ctx) => wrapZaiStreamFn(ctx),
-      resolveThinkingProfile: () => ({
-        levels: [
-          { id: "off", label: "off" },
-          { id: "low", label: "on" },
-        ],
-        defaultLevel: "off",
-      }),
+      resolveThinkingProfile: (ctx) =>
+        isGlm52ModelId(ctx.modelId)
+          ? {
+              levels: [
+                { id: "off", label: "off" },
+                { id: "low", label: "low" },
+                { id: "high", label: "high" },
+                { id: "max", label: "max" },
+              ],
+              defaultLevel: "off",
+            }
+          : {
+              levels: [
+                { id: "off", label: "off" },
+                { id: "low", label: "on" },
+              ],
+              defaultLevel: "off",
+            },
       isModernModelRef: ({ modelId }) => {
         const lower = normalizeLowercaseStringOrEmpty(modelId);
         return (
