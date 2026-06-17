@@ -3,6 +3,17 @@ import { createHash } from "node:crypto";
 const STABLE_RELEASE_TAG_RE = /^v(?<version>\d{4}\.\d{1,2}\.\d{1,2})(?:-\d+)?$/u;
 const MAX_ROLLBACK_DRILL_AGE_MS = 90 * 24 * 60 * 60 * 1000;
 
+function parseStableReleaseTagDetails(tag) {
+  const match = STABLE_RELEASE_TAG_RE.exec(tag);
+  if (!match?.groups?.version) {
+    throw new Error(`expected a stable release tag, got ${tag}`);
+  }
+  return {
+    baseVersion: match.groups.version,
+    tagVersion: tag.slice(1),
+  };
+}
+
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
@@ -12,11 +23,7 @@ function sha256(value) {
 }
 
 export function parseStableReleaseTag(tag) {
-  const match = STABLE_RELEASE_TAG_RE.exec(tag);
-  if (!match?.groups?.version) {
-    throw new Error(`expected a stable release tag, got ${tag}`);
-  }
-  return match.groups.version;
+  return parseStableReleaseTagDetails(tag).baseVersion;
 }
 
 export function extractStableChangelogSection(changelog, version) {
@@ -77,19 +84,22 @@ function verifyRollbackDrill(params, errors) {
 }
 
 export function verifyStableMainCloseout(params) {
-  const version = parseStableReleaseTag(params.tag);
+  const { baseVersion, tagVersion } = parseStableReleaseTagDetails(params.tag);
   const errors = [];
   const mainVersion = readVersion(params.mainPackageJson, "main", errors);
-  const tagVersion = readVersion(params.tagPackageJson, "release tag", errors);
+  const tagPackageVersion = readVersion(params.tagPackageJson, "release tag", errors);
+  const fallbackCorrection =
+    tagVersion !== baseVersion && mainVersion === baseVersion && tagPackageVersion === baseVersion;
+  const version = fallbackCorrection ? baseVersion : tagVersion;
 
   if (mainVersion && mainVersion !== version) {
     errors.push(
       `main package.json version is ${mainVersion}, expected shipped version ${version}.`,
     );
   }
-  if (tagVersion && tagVersion !== version) {
+  if (tagPackageVersion && tagPackageVersion !== version) {
     errors.push(
-      `release tag package.json version is ${tagVersion}, expected shipped version ${version}.`,
+      `release tag package.json version is ${tagPackageVersion}, expected shipped version ${version}.`,
     );
   }
 
@@ -153,7 +163,7 @@ export function verifyStableMainCloseout(params) {
       releaseTagSha: params.releaseTagSha,
       mainSha: params.mainSha,
       mainPackageVersion: mainVersion,
-      releaseTagPackageVersion: tagVersion,
+      releaseTagPackageVersion: tagPackageVersion,
       changelogSha256: sha256(mainChangelog),
       appcastSha256: sha256(params.mainAppcast),
       fullReleaseValidationRunId: params.fullReleaseValidationRunId,

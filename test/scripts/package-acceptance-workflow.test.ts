@@ -106,13 +106,13 @@ describe("package acceptance workflow", () => {
     );
     const evidenceReadIndex = workflow.indexOf('evidence_tag="$(jq -r');
     const releaseVersionGateIndex = workflow.indexOf(
-      'if [[ "$main_version" != "$release_package_version" ]]; then',
+      'if [[ "$main_version" != "$release_package_version" &&',
     );
     const evidenceDownloadIndex = workflow.indexOf('if ! gh release download "$tag"');
 
     expect(workflow).toContain('evidence_checksum_asset="${evidence_asset}.sha256"');
     expect(workflow).toContain('--pattern "$evidence_checksum_asset"');
-    expect(workflow).toContain('release_package_version="${BASH_REMATCH[1]}"');
+    expect(workflow).toContain('fallback_package_version="${BASH_REMATCH[1]}"');
     expect(workflow).toContain("Stable closeout is required for $tag");
     expect(checksumIndex).toBeGreaterThan(-1);
     expect(evidenceReadIndex).toBeGreaterThan(checksumIndex);

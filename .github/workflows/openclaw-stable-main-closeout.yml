@@ -78,8 +78,9 @@ jobs:
           fi
           release_asset_version="${tag#v}"
           release_package_version="$release_asset_version"
+          fallback_package_version="$release_asset_version"
           if [[ "$release_package_version" =~ ^(.+)-[0-9]+$ ]]; then
-            release_package_version="${BASH_REMATCH[1]}"
+            fallback_package_version="${BASH_REMATCH[1]}"
           fi
           evidence_asset="openclaw-${release_asset_version}-postpublish-evidence.json"
           evidence_checksum_asset="${evidence_asset}.sha256"
@@ -92,7 +93,8 @@ jobs:
           fi
           if [[ "$EVENT_NAME" == "push" ]]; then
             main_version="$(jq -r '.version // empty' package.json)"
-            if [[ "$main_version" != "$release_package_version" ]]; then
+            if [[ "$main_version" != "$release_package_version" &&
+              "$main_version" != "$fallback_package_version" ]]; then
               echo "should_closeout=false" >> "$GITHUB_OUTPUT"
               exit 0
             fi

@@ -108,21 +108,55 @@ describe("stable release closeout", () => {
     );
   });
 
-  it("uses the shipped package version in correction-release asset names", () => {
+  it("uses exact correction versions for correction-release state and assets", () => {
     const correctionRelease = {
       ...release,
       tagName: "v2026.6.8-2",
+      assets: release.assets.map((asset) => ({
+        ...asset,
+        name: asset.name.replaceAll("2026.6.8", "2026.6.8-2"),
+      })),
     };
     const result = verifyStableMainCloseout({
       ...validCloseoutParams,
       tag: "v2026.6.8-2",
+      mainPackageJson: { version: "2026.6.8-2" },
+      tagPackageJson: { version: "2026.6.8-2" },
+      mainChangelog: changelog.replaceAll("2026.6.8", "2026.6.8-2"),
+      tagChangelog: changelog.replaceAll("2026.6.8", "2026.6.8-2"),
       release: correctionRelease,
+      mainAppcast:
+        "https://github.com/openclaw/openclaw/releases/download/v2026.6.8-2/OpenClaw-2026.6.8-2.zip\n",
+      nowMs: Date.parse("2026-06-17T00:00:00Z"),
+    });
+
+    expect(result.errors).toEqual([]);
+    expect(result.manifest).toMatchObject({
+      releaseVersion: "2026.6.8-2",
+      mainPackageVersion: "2026.6.8-2",
+      releaseTagPackageVersion: "2026.6.8-2",
+    });
+  });
+
+  it("allows a fallback correction tag for an existing base stable package", () => {
+    const result = verifyStableMainCloseout({
+      ...validCloseoutParams,
+      tag: "v2026.6.8-2",
+      release: {
+        ...release,
+        tagName: "v2026.6.8-2",
+      },
       mainAppcast:
         "https://github.com/openclaw/openclaw/releases/download/v2026.6.8-2/OpenClaw-2026.6.8.zip\n",
       nowMs: Date.parse("2026-06-17T00:00:00Z"),
     });
 
     expect(result.errors).toEqual([]);
+    expect(result.manifest).toMatchObject({
+      releaseVersion: "2026.6.8",
+      mainPackageVersion: "2026.6.8",
+      releaseTagPackageVersion: "2026.6.8",
+    });
   });
 
   it("rejects speculative main state, appcast drift, and stale rollback drills", () => {
