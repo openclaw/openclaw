@@ -1613,7 +1613,7 @@ async function installPluginFromManagedNpmRoot(
       beforeInstallPackageNames: preInstallRootPackageNames,
       npmRoot,
     });
-    const result = await installPluginFromInstalledPackageDir({
+    const result = await installPluginFromInstalledPackageDirInternal({
       dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
       config: params.config,
       additionalDependencyPackageDirs: newRootPackageDirs,
@@ -1624,6 +1624,7 @@ async function installPluginFromManagedNpmRoot(
       trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
       mode: effectiveMode,
       installPolicyRequest: params.installPolicyRequest,
+      emitSuccessSecurityEvent: false,
     });
     if (!result.ok) {
       return await rollbackFailedManagedNpmInstall(result);
@@ -2399,6 +2400,17 @@ export async function installPluginFromInstalledPackageDir(
     dependencyScanRootDir?: string;
   } & PackageInstallCommonParams,
 ): Promise<InstallPluginResult> {
+  return await installPluginFromInstalledPackageDirInternal(params);
+}
+
+async function installPluginFromInstalledPackageDirInternal(
+  params: {
+    additionalDependencyPackageDirs?: string[];
+    emitSuccessSecurityEvent?: boolean;
+    packageDir: string;
+    dependencyScanRootDir?: string;
+  } & PackageInstallCommonParams,
+): Promise<InstallPluginResult> {
   const runtime = await loadPluginInstallRuntime();
   const { logger } = runtime.resolveTimedInstallModeOptions(params, defaultLogger);
   const validated = await validatePackagePluginInstallSource({
@@ -2445,12 +2457,14 @@ export async function installPluginFromInstalledPackageDir(
     version: validated.plugin.version,
     extensions: validated.plugin.extensions,
   });
-  emitSuccessfulPluginInstallSecurityEvent(result, {
-    dryRun: params.dryRun,
-    mode: params.mode ?? "install",
-    sourceFamily: "installed-package",
-    trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
-  });
+  if (params.emitSuccessSecurityEvent !== false) {
+    emitSuccessfulPluginInstallSecurityEvent(result, {
+      dryRun: params.dryRun,
+      mode: params.mode ?? "install",
+      sourceFamily: "installed-package",
+      trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
+    });
+  }
   return result;
 }
 

@@ -421,6 +421,51 @@ function mockNpmViewMetadata(params: { name: string; version?: string }) {
   });
 }
 
+function mockSuccessfulManagedNpmInstall(params: { packageName: string; version?: string }) {
+  vi.mocked(runCommandWithTimeout).mockImplementation(async (args, options) => {
+    if (args[0] !== "npm" || args[1] !== "install") {
+      throw new Error(`unexpected command: ${args.join(" ")}`);
+    }
+    if (!args.includes("--package-lock-only")) {
+      const npmRoot = options.cwd;
+      if (!npmRoot) {
+        throw new Error("expected npm install cwd");
+      }
+      const packageDir = path.join(npmRoot, "node_modules", ...params.packageName.split("/"));
+      fs.mkdirSync(packageDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(packageDir, "package.json"),
+        JSON.stringify({
+          name: params.packageName,
+          version: params.version ?? "1.0.0",
+          openclaw: { extensions: ["index.js"] },
+        }),
+      );
+      fs.writeFileSync(path.join(packageDir, "index.js"), "export {};\n");
+      fs.writeFileSync(
+        path.join(npmRoot, "package-lock.json"),
+        JSON.stringify({
+          packages: {
+            [`node_modules/${params.packageName}`]: {
+              version: params.version ?? "1.0.0",
+              integrity: "sha512-test",
+              resolved: `https://registry.npmjs.org/${params.packageName}/-/${params.packageName.split("/").at(-1)}-${params.version ?? "1.0.0"}.tgz`,
+            },
+          },
+        }),
+      );
+    }
+    return {
+      code: 0,
+      killed: false,
+      signal: null,
+      stderr: "",
+      termination: "exit",
+      stdout: "",
+    };
+  });
+}
+
 async function installFromArchiveWithWarnings(params: {
   archivePath: string;
   extensionsDir: string;
@@ -2412,6 +2457,40 @@ describe("installPluginFromArchive", () => {
 });
 
 describe("installPluginFromNpmSpec", () => {
+  it("emits one npm security event after installing from npm", async () => {
+    const root = suiteTempRootTracker.makeTempDir();
+    const npmDir = path.join(root, "npm");
+    const extensionsDir = path.join(root, "extensions");
+    const packageName = "@acme/security-event-plugin";
+    mockNpmViewMetadata({ name: packageName, version: "1.2.3" });
+    mockSuccessfulManagedNpmInstall({ packageName, version: "1.2.3" });
+    const captured = captureSecurityEvents();
+
+    let result: Awaited<ReturnType<typeof installPluginFromNpmSpec>>;
+    try {
+      result = await installPluginFromNpmSpec({
+        spec: `${packageName}@1.2.3`,
+        extensionsDir,
+        npmDir,
+      });
+    } finally {
+      captured.stop();
+    }
+
+    expect(result!.ok).toBe(true);
+    expect(captured.events).toHaveLength(1);
+    expect(captured.events[0]).toMatchObject({
+      category: "plugin",
+      action: "plugin.installed",
+      outcome: "success",
+      target: { kind: "plugin", name: packageName },
+      attributes: {
+        source_family: "npm",
+        mode: "install",
+      },
+    });
+  });
+
   it("runs operator policy before npm install mutates the managed root", async () => {
     const root = suiteTempRootTracker.makeTempDir();
     const npmDir = path.join(root, "npm");
