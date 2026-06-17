@@ -840,10 +840,12 @@ if (isMainModule()) {
     console.log(tsdownBuildUsage());
     process.exit(0);
   }
-  pruneSourceCheckoutBundledPluginNodeModules();
-  pruneUntrackedGeneratedSourceDeclarations();
-  pruneStaleRuntimeSymlinks();
-  cleanTsdownOutputRoots();
+  if (process.env.CI !== "true") {
+    pruneSourceCheckoutBundledPluginNodeModules();
+    pruneUntrackedGeneratedSourceDeclarations();
+    pruneStaleRuntimeSymlinks();
+    cleanTsdownOutputRoots();
+  }
   const invocation = resolveTsdownBuildInvocation({ args: args.forwardedArgs });
   const result = await runTsdownBuildInvocation(invocation);
 
