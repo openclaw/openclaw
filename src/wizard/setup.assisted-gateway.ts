@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { resolveControlUiLinks, waitForGatewayReachable } from "../commands/onboard-helpers.js";
+import { resolveConfigPath } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
 import { probeGateway } from "../gateway/probe.js";
@@ -28,9 +29,53 @@ export type AgentAssistedGatewayRuntime = {
   stop: () => Promise<void>;
 };
 
-async function probeExistingGateway(params: {
+const NOOP_GATEWAY_RUNTIME: AgentAssistedGatewayRuntime = {
+  temporary: false,
+  stop: async () => {},
+};
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function snapshotMatchesGatewaySettings(params: {
+  configSnapshot: unknown;
+  settings: GatewayWizardSettings;
+}): boolean {
+  const snapshot = asRecord(params.configSnapshot);
+  const config = asRecord(snapshot?.config);
+  const gateway = asRecord(config?.gateway);
+  const auth = asRecord(gateway?.auth);
+  const tailscale = asRecord(gateway?.tailscale);
+  return (
+    typeof snapshot?.path === "string" &&
+    path.resolve(snapshot.path) === path.resolve(resolveConfigPath()) &&
+    gateway?.port === params.settings.port &&
+    gateway.bind === params.settings.bind &&
+    gateway.customBindHost === params.settings.customBindHost &&
+    auth?.mode === params.settings.authMode &&
+    (tailscale?.mode ?? "off") === params.settings.tailscaleMode &&
+    (tailscale?.resetOnExit === true) === params.settings.tailscaleResetOnExit
+  );
+}
+
+function buildInvalidProbeAuth(settings: GatewayWizardSettings): GatewayProbeAuth | undefined {
+  const invalidSecret = `openclaw-setup-invalid-${randomUUID()}`;
+  if (settings.authMode === "token") {
+    return { token: invalidSecret };
+  }
+  if (settings.authMode === "password") {
+    return { password: invalidSecret };
+  }
+  return undefined;
+}
+
+async function probeVerifiedExistingGateway(params: {
   url: string;
   auth: GatewayProbeAuth;
+  settings: GatewayWizardSettings;
 }): Promise<boolean> {
   // Do not let cached device credentials prove a listener that rejects the
   // active config's shared secret. The synthetic state path is never created.
@@ -42,10 +87,30 @@ async function probeExistingGateway(params: {
     url: params.url,
     auth: params.auth,
     timeoutMs: 1500,
+    detailLevel: "full",
+    env,
+  });
+  if (
+    !expected.ok ||
+    !snapshotMatchesGatewaySettings({
+      configSnapshot: expected.configSnapshot,
+      settings: params.settings,
+    })
+  ) {
+    return false;
+  }
+  const invalidAuth = buildInvalidProbeAuth(params.settings);
+  if (!invalidAuth) {
+    return true;
+  }
+  const invalid = await probeGateway({
+    url: params.url,
+    auth: invalidAuth,
+    timeoutMs: 1500,
     detailLevel: "none",
     env,
   });
-  return expected.ok;
+  return !invalid.ok;
 }
 
 function collectOutputTail(child: ChildProcess): () => string {
@@ -132,14 +197,24 @@ export async function ensureAgentAssistedGatewayRuntime(params: {
     });
   };
 
-  const existingReachable = await probeExistingGateway({
-    url: links.wsUrl,
-    auth,
-  });
-  if (
-    existingReachable ||
-    findVerifiedGatewayListenerPidsOnPortSync(params.settings.port).length > 0
-  ) {
+  // Never send active Gateway credentials until the listener owner is verified.
+  const existingListenerPids = findVerifiedGatewayListenerPidsOnPortSync(params.settings.port);
+  if (existingListenerPids.length > 0) {
+    const existingMatches =
+      params.settings.authMode !== "trusted-proxy" &&
+      (await probeVerifiedExistingGateway({
+        url: links.wsUrl,
+        auth,
+        settings: params.settings,
+      }));
+    if (
+      existingMatches &&
+      findVerifiedGatewayListenerPidsOnPortSync(params.settings.port).some((pid) =>
+        existingListenerPids.includes(pid),
+      )
+    ) {
+      return NOOP_GATEWAY_RUNTIME;
+    }
     throw new Error(
       `An existing Gateway is listening on port ${params.settings.port}, but setup cannot verify that it matches the active Gateway security settings. Stop the existing Gateway, then rerun onboarding.`,
     );
@@ -185,21 +260,27 @@ export async function ensureAgentAssistedGatewayRuntime(params: {
   };
 
   try {
-    const directReady = await probe(15_000);
     const childAlive = child.exitCode === null && child.signalCode === null;
-    const ownedReady =
-      !directReady.ok && params.settings.authMode === "trusted-proxy" && child.pid
-        ? await waitForOwnedGatewayListener({
-            port: params.settings.port,
-            pid: child.pid,
-            deadlineMs: 15_000,
-          })
-        : { ok: false, detail: "The temporary OpenClaw Gateway process has no PID." };
-    // Trusted-proxy policy can reject direct local RPCs, so that mode falls back
-    // to proving the listener belongs to the process started by this setup run.
+    // A competing process can win the port bind after the initial listener check.
+    const ownedReady = child.pid
+      ? await waitForOwnedGatewayListener({
+          port: params.settings.port,
+          pid: child.pid,
+          deadlineMs: 15_000,
+        })
+      : { ok: false, detail: "The temporary OpenClaw Gateway process has no PID." };
+    const directReady =
+      ownedReady.ok && params.settings.authMode !== "trusted-proxy"
+        ? await probe(15_000)
+        : { ok: false, detail: ownedReady.detail };
+    // Trusted-proxy policy can reject direct local RPCs, so that mode relies on
+    // proving the listener belongs to the process started by this setup run.
     const ready = {
-      ok: (directReady.ok && childAlive) || ownedReady.ok,
-      detail: directReady.detail ?? ownedReady.detail,
+      ok:
+        childAlive &&
+        ownedReady.ok &&
+        (params.settings.authMode === "trusted-proxy" || directReady.ok),
+      detail: ownedReady.detail ?? directReady.detail,
     };
     if (!ready.ok) {
       const detail = outputTail() || ready.detail || "Gateway did not become reachable.";

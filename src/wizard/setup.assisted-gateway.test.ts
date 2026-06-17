@@ -33,6 +33,10 @@ vi.mock("../gateway/probe.js", () => ({
   probeGateway,
 }));
 
+vi.mock("../config/paths.js", () => ({
+  resolveConfigPath: () => "/tmp/openclaw.json",
+}));
+
 vi.mock("../process/kill-tree.js", () => ({
   killProcessTree,
 }));
@@ -79,15 +83,21 @@ describe("agent-assisted Gateway runtime", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    probeGateway.mockResolvedValue({ ok: false });
+    spawn.mockReset();
+    waitForGatewayReachable.mockReset();
+    probeGateway.mockReset().mockResolvedValue({ ok: false });
+    resolveGatewayProgramArguments.mockReset();
+    killProcessTree.mockReset();
+    detach.mockReset();
+    findVerifiedGatewayListenerPidsOnPortSync.mockReset().mockReturnValue([]);
     resolveGatewayProgramArguments.mockResolvedValue({
       programArguments: ["/usr/bin/node", "/app/openclaw.mjs", "gateway", "--port", "18789"],
       workingDirectory: "/app",
     });
   });
 
-  it("rejects an already reachable Gateway whose active security policy cannot be verified", async () => {
-    probeGateway.mockResolvedValueOnce({ ok: true });
+  it("does not send active auth to an unverified listener before starting a Gateway", async () => {
+    resolveGatewayProgramArguments.mockRejectedValueOnce(new Error("program lookup stopped"));
 
     await expect(
       ensureAgentAssistedGatewayRuntime({
@@ -95,14 +105,55 @@ describe("agent-assisted Gateway runtime", () => {
         settings,
         prompter: createWizardPrompter(),
       }),
-    ).rejects.toThrow("cannot verify that it matches the active Gateway security settings");
+    ).rejects.toThrow("program lookup stopped");
 
+    expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(18789);
+    expect(probeGateway).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
+    expect(waitForGatewayReachable).not.toHaveBeenCalled();
+  });
+
+  it("reuses a verified existing Gateway that accepts the active security settings", async () => {
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4321]);
+    probeGateway
+      .mockResolvedValueOnce({
+        ok: true,
+        configSnapshot: {
+          path: "/tmp/openclaw.json",
+          config: {
+            gateway: {
+              port: 18789,
+              bind: "loopback",
+              auth: { mode: "token" },
+              tailscale: { mode: "off" },
+            },
+          },
+        },
+      })
+      .mockResolvedValueOnce({ ok: false });
+
+    const result = await ensureAgentAssistedGatewayRuntime({
+      config: {},
+      settings,
+      prompter: createWizardPrompter(),
+    });
+
+    expect(result.temporary).toBe(false);
+    expect(findVerifiedGatewayListenerPidsOnPortSync.mock.invocationCallOrder[0]).toBeLessThan(
+      probeGateway.mock.invocationCallOrder[0] ?? 0,
+    );
+    expect(probeGateway.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        auth: { token: "test-token" },
+        detailLevel: "full",
+      }),
+    );
     expect(spawn).not.toHaveBeenCalled();
     expect(waitForGatewayReachable).not.toHaveBeenCalled();
   });
 
   it("rejects a verified Gateway listener that does not accept the active auth", async () => {
-    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValueOnce([4321]);
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4321]);
 
     await expect(
       ensureAgentAssistedGatewayRuntime({
@@ -114,11 +165,43 @@ describe("agent-assisted Gateway runtime", () => {
 
     expect(probeGateway).toHaveBeenCalledOnce();
     expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(18789);
+    expect(findVerifiedGatewayListenerPidsOnPortSync.mock.invocationCallOrder[0]).toBeLessThan(
+      probeGateway.mock.invocationCallOrder[0] ?? 0,
+    );
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("rejects a verified Gateway whose runtime settings do not match", async () => {
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4321]);
+    probeGateway.mockResolvedValueOnce({
+      ok: true,
+      configSnapshot: {
+        path: "/tmp/openclaw.json",
+        config: {
+          gateway: {
+            port: 18789,
+            bind: "loopback",
+            auth: { mode: "token" },
+            tailscale: { mode: "serve" },
+          },
+        },
+      },
+    });
+
+    await expect(
+      ensureAgentAssistedGatewayRuntime({
+        config: {},
+        settings,
+        prompter: createWizardPrompter(),
+      }),
+    ).rejects.toThrow("cannot verify that it matches the active Gateway security settings");
+
+    expect(probeGateway).toHaveBeenCalledOnce();
     expect(spawn).not.toHaveBeenCalled();
   });
 
   it("rejects an unverifiable existing trusted-proxy Gateway", async () => {
-    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValueOnce([4321]);
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4321]);
 
     await expect(
       ensureAgentAssistedGatewayRuntime({
@@ -140,6 +223,7 @@ describe("agent-assisted Gateway runtime", () => {
     ).rejects.toThrow("cannot verify that it matches the active Gateway security settings");
 
     expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(18789);
+    expect(probeGateway).not.toHaveBeenCalled();
     expect(spawn).not.toHaveBeenCalled();
   });
 
@@ -178,7 +262,7 @@ describe("agent-assisted Gateway runtime", () => {
     const child = createMockChild();
     spawn.mockReturnValueOnce(child);
     waitForGatewayReachable.mockResolvedValueOnce({ ok: true });
-    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValueOnce([]);
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValueOnce([]).mockReturnValue([4321]);
     const prompter = createWizardPrompter();
 
     const result = await ensureAgentAssistedGatewayRuntime({
@@ -197,6 +281,10 @@ describe("agent-assisted Gateway runtime", () => {
       }),
     );
     expect(prompter.note).toHaveBeenCalled();
+    expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledTimes(2);
+    expect(findVerifiedGatewayListenerPidsOnPortSync.mock.invocationCallOrder[1]).toBeLessThan(
+      waitForGatewayReachable.mock.invocationCallOrder[0] ?? 0,
+    );
 
     const stop = result.stop();
     child.emit("exit", 0, null);
@@ -230,31 +318,11 @@ describe("agent-assisted Gateway runtime", () => {
     expect(detach).not.toHaveBeenCalled();
   });
 
-  it("does not require listener discovery after the temporary Gateway responds", async () => {
-    const child = createMockChild();
-    spawn.mockReturnValueOnce(child);
-    waitForGatewayReachable.mockResolvedValueOnce({ ok: true });
-    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([]);
-
-    const result = await ensureAgentAssistedGatewayRuntime({
-      config: {},
-      settings,
-      prompter: createWizardPrompter(),
-    });
-
-    expect(result.temporary).toBe(true);
-    expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledOnce();
-
-    const stop = result.stop();
-    child.emit("exit", 0, null);
-    await stop;
-  });
-
   it("stops the temporary Gateway when post-spawn setup fails", async () => {
     const child = createMockChild();
     spawn.mockReturnValueOnce(child);
     waitForGatewayReachable.mockResolvedValueOnce({ ok: true });
-    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValueOnce([]);
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValueOnce([]).mockReturnValue([4321]);
     killProcessTree.mockImplementationOnce(() => queueMicrotask(() => child.emit("exit", 0, null)));
     const prompter = createWizardPrompter({
       note: vi.fn(async () => {
