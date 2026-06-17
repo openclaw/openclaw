@@ -26,11 +26,18 @@ export const FeishuDriveSchema = Type.Union([
     folder_token: Type.Optional(
       Type.String({ description: "Folder token (optional, omit for root directory)" }),
     ),
+    page_size: Type.Optional(
+      Type.Integer({ minimum: 1, maximum: 200, description: "Page size (default 50)" }),
+    ),
+    page_token: Type.Optional(Type.String({ description: "Page token for fetching next page" })),
   }),
   Type.Object({
     action: Type.Literal("info"),
     file_token: Type.String({ description: "File or folder token" }),
     type: FileType,
+    folder_token: Type.Optional(
+      Type.String({ description: "Parent folder token to narrow the search scope" }),
+    ),
   }),
   Type.Object({
     action: Type.Literal("create_folder"),
