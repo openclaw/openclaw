@@ -66,6 +66,7 @@ import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.j
 import {
   applySessionPatchProjection,
   createSessionEntryWithTranscript,
+  readTranscriptTailLines,
   trimSessionTranscriptForManualCompact,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -107,7 +108,6 @@ import {
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import {
   readRecentSessionMessagesWithStatsAsync,
-  readRecentSessionTranscriptLines,
   readSessionMessageCountAsync,
   readSessionPreviewItemsFromTranscript,
 } from "../session-transcript-readers.js";
@@ -1385,12 +1385,12 @@ function summarizeDiagnose(params: {
   };
 }
 
-function buildDiagnoseResult(params: {
+async function buildDiagnoseResult(params: {
   cfg: OpenClawConfig;
   context: GatewayRequestContext;
   p: DiagnoseParams;
   target: DiagnoseTarget;
-}): SessionsDiagnoseResult {
+}): Promise<SessionsDiagnoseResult> {
   const { cfg, context, p, target } = params;
   const now = Date.now();
   const defaultAgentId = resolveDefaultAgentId(cfg);
@@ -1451,7 +1451,7 @@ function buildDiagnoseResult(params: {
   };
   const lane = getCommandLaneSnapshot(resolveSessionLane(target.key));
   const tail = target.entry.sessionId
-    ? readRecentSessionTranscriptLines({
+    ? await readTranscriptTailLines({
         sessionId: target.entry.sessionId,
         storePath: target.storePath,
         sessionFile: target.entry.sessionFile,
@@ -1863,7 +1863,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      respond(true, buildDiagnoseResult({ cfg, context, p, target }), undefined);
+      respond(true, await buildDiagnoseResult({ cfg, context, p, target }), undefined);
     } catch (error) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatErrorMessage(error)));
     }
