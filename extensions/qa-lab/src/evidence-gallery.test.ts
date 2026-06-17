@@ -424,6 +424,54 @@ describe("evidence gallery", () => {
         repoRoot,
       }),
     ).resolves.toBe(await fs.realpath(path.join(outputDir, "artifact.log")));
+    await fs.mkdir(path.join(repoRoot, "runner"), { recursive: true });
+    await fs.mkdir(path.join(outputDir, "runner"), { recursive: true });
+    await fs.writeFile(path.join(repoRoot, "runner", "result.json"), '{"from":"repo"}\n', "utf8");
+    await fs.writeFile(
+      path.join(outputDir, "runner", "result.json"),
+      '{"from":"evidence"}\n',
+      "utf8",
+    );
+    const collisionEvidence = {
+      kind: "openclaw.qa.evidence-summary",
+      schemaVersion: 2,
+      generatedAt: "2026-06-17T12:00:00.000Z",
+      evidenceMode: "full",
+      entries: [
+        {
+          test: {
+            kind: "vitest-test",
+            id: "qa-lab.colliding-artifact",
+            title: "Colliding artifact",
+          },
+          coverage: [{ id: "qa.artifact", role: "primary" }],
+          execution: {
+            runner: "vitest",
+            environment: {
+              ref: "gallery-test",
+              os: "darwin",
+              nodeVersion: "v24.0.0",
+            },
+            provider: {
+              id: "mock-openai",
+              live: false,
+              model: { name: "mock-openai/gpt-5.5", ref: "mock-openai/gpt-5.5" },
+            },
+            packageSource: { kind: "source-checkout" },
+            artifacts: [{ kind: "runner-result", path: "runner/result.json", source: "vitest" }],
+          },
+          result: { status: "pass" },
+        },
+      ],
+    };
+    await writeJson(evidencePath, collisionEvidence);
+    await expect(
+      resolveQaEvidenceArtifactFile({
+        artifactPath: "runner/result.json",
+        evidencePath,
+        repoRoot,
+      }),
+    ).resolves.toBe(await fs.realpath(path.join(outputDir, "runner", "result.json")));
     await expect(
       resolveQaEvidenceArtifactFile({
         artifactPath: "package.json",

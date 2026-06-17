@@ -175,7 +175,7 @@ async function resolveExistingQaEvidenceArtifactFile(params: {
   }
   const candidates = path.isAbsolute(raw)
     ? [raw]
-    : [path.resolve(repoRoot, raw), path.resolve(evidenceDir, raw)];
+    : [path.resolve(evidenceDir, raw), path.resolve(repoRoot, raw)];
   for (const candidate of candidates) {
     const realCandidate = await realpathIfExists(candidate);
     if (!realCandidate) {
