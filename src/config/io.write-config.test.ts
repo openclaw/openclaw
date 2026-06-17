@@ -1087,6 +1087,139 @@ describe("config io write", () => {
     });
   });
 
+  it("accepts canonical config writes after PowerShell-style verbose JSON formatting", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      const original = {
+        meta: { lastTouchedVersion: "2026.4.23" },
+        gateway: { mode: "local" },
+        channels: {
+          telegram: {
+            enabled: true,
+            allowFrom: Array.from({ length: 60 }, (_, index) => `telegram:${index}`),
+          },
+        },
+      } satisfies ConfigFileSnapshot["config"];
+      const powerShellRaw = `\uFEFF${JSON.stringify(original, null, 12)}\n`;
+      const canonicalOriginalRaw = `${JSON.stringify(original, null, 2)}\n`;
+      expect(Buffer.byteLength(powerShellRaw, "utf-8")).toBeGreaterThan(
+        Buffer.byteLength(canonicalOriginalRaw, "utf-8") * 2,
+      );
+      await fs.writeFile(configPath, powerShellRaw, "utf-8");
+      const io = createConfigIO({
+        env: { VITEST: "true" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+      const baseSnapshot = {
+        path: configPath,
+        exists: true,
+        raw: powerShellRaw,
+        parsed: original,
+        sourceConfig: original,
+        resolved: original,
+        valid: true,
+        runtimeConfig: original,
+        config: original,
+        issues: [],
+        warnings: [],
+        legacyIssues: [],
+      } satisfies ConfigFileSnapshot;
+
+      await io.writeConfigFile(
+        {
+          ...original,
+          gateway: { mode: "local", port: 18789 },
+        },
+        { baseSnapshot },
+      );
+
+      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as OpenClawConfig;
+      expect(persisted.gateway).toEqual({ mode: "local", port: 18789 });
+    });
+  });
+
+  it("still rejects destructive writes after PowerShell-style verbose JSON formatting", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      const original = {
+        meta: { lastTouchedVersion: "2026.4.23" },
+        gateway: { mode: "local" },
+        channels: {
+          telegram: {
+            enabled: true,
+            allowFrom: Array.from({ length: 80 }, (_, index) => `telegram:${index}`),
+          },
+        },
+      } satisfies ConfigFileSnapshot["config"];
+      const powerShellRaw = `\uFEFF${JSON.stringify(original, null, 12)}\n`;
+      const canonicalOriginalRaw = `${JSON.stringify(original, null, 2)}\n`;
+      expect(Buffer.byteLength(powerShellRaw, "utf-8")).toBeGreaterThan(
+        Buffer.byteLength(canonicalOriginalRaw, "utf-8") * 2,
+      );
+      await fs.writeFile(configPath, powerShellRaw, "utf-8");
+      const io = createConfigIO({
+        env: { VITEST: "true" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+      const baseSnapshot = {
+        path: configPath,
+        exists: true,
+        raw: powerShellRaw,
+        parsed: original,
+        sourceConfig: original,
+        resolved: original,
+        valid: true,
+        runtimeConfig: original,
+        config: original,
+        issues: [],
+        warnings: [],
+        legacyIssues: [],
+      } satisfies ConfigFileSnapshot;
+
+      await expectConfigWriteRejected(
+        io.writeConfigFile({ meta: original.meta, gateway: { mode: "local" } }, { baseSnapshot }),
+      );
+      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(powerShellRaw);
+    });
+  });
+
+  it("uses raw bytes for size-drop protection when the existing config is invalid", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      const invalidRaw = `not-json\n${"x".repeat(2048)}\n`;
+      await fs.writeFile(configPath, invalidRaw, "utf-8");
+      const io = createConfigIO({
+        env: { VITEST: "true" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+      const baseSnapshot = {
+        path: configPath,
+        exists: true,
+        raw: invalidRaw,
+        parsed: {},
+        sourceConfig: {},
+        resolved: {},
+        valid: false,
+        runtimeConfig: {},
+        config: {},
+        issues: [],
+        warnings: [],
+        legacyIssues: [],
+      } satisfies ConfigFileSnapshot;
+
+      await expectConfigWriteRejected(
+        io.writeConfigFile({ gateway: { mode: "local" } }, { baseSnapshot }),
+      );
+      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(invalidRaw);
+    });
+  });
+
   it("allows intentional size-drop writes without disabling gateway-mode protection", async () => {
     await withSuiteHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");

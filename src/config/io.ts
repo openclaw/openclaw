@@ -527,6 +527,7 @@ function resolveConfigStatMetadata(
 function resolveConfigWriteSuspiciousReasons(params: {
   existsBefore: boolean;
   previousBytes: number | null;
+  previousCanonicalBytes: number | null;
   nextBytes: number | null;
   hasMetaBefore: boolean;
   gatewayModeBefore: string | null;
@@ -536,13 +537,14 @@ function resolveConfigWriteSuspiciousReasons(params: {
   if (!params.existsBefore) {
     return reasons;
   }
+  const sizeBaselineBytes = params.previousCanonicalBytes ?? params.previousBytes;
   if (
-    typeof params.previousBytes === "number" &&
+    typeof sizeBaselineBytes === "number" &&
     typeof params.nextBytes === "number" &&
-    params.previousBytes >= 512 &&
-    params.nextBytes < Math.floor(params.previousBytes * 0.5)
+    sizeBaselineBytes >= 512 &&
+    params.nextBytes < Math.floor(sizeBaselineBytes * 0.5)
   ) {
-    reasons.push(`size-drop:${params.previousBytes}->${params.nextBytes}`);
+    reasons.push(`size-drop:${sizeBaselineBytes}->${params.nextBytes}`);
   }
   if (!params.hasMetaBefore) {
     reasons.push("missing-meta-before-write");
@@ -636,6 +638,21 @@ function setConfigHealthEntry(
       [configPath]: entry,
     },
   };
+}
+
+function resolvePreviousCanonicalConfigBytes(
+  snapshot: ConfigFileSnapshot,
+  options: Pick<ConfigWriteOptions, "lastTouchedVersionOverride">,
+): number | null {
+  if (!snapshot.exists || !snapshot.valid) {
+    return null;
+  }
+  const stamped = stampConfigVersion(
+    coerceConfig(snapshot.parsed),
+    options.lastTouchedVersionOverride,
+  );
+  const json = JSON.stringify(stamped, null, 2).trimEnd().concat("\n");
+  return Buffer.byteLength(json, "utf-8");
 }
 
 function isUpdateChannelOnlyRoot(value: unknown): boolean {
@@ -2564,6 +2581,9 @@ export function createConfigIO(
     const changedPathCount = changedPaths?.size;
     const previousBytes =
       typeof snapshot.raw === "string" ? Buffer.byteLength(snapshot.raw, "utf-8") : null;
+    // Size-drop protection is semantic, not an editor-format detector. Compare
+    // against canonical previous config so BOM/verbose JSON writers stay safe.
+    const previousCanonicalBytes = resolvePreviousCanonicalConfigBytes(snapshot, options);
     const nextBytes = Buffer.byteLength(json, "utf-8");
     const previousStat = snapshot.exists
       ? await deps.fs.promises.stat(configPath).catch(() => null)
@@ -2575,6 +2595,7 @@ export function createConfigIO(
     const suspiciousReasons = resolveConfigWriteSuspiciousReasons({
       existsBefore: snapshot.exists,
       previousBytes,
+      previousCanonicalBytes,
       nextBytes,
       hasMetaBefore,
       gatewayModeBefore,
