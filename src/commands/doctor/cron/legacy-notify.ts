@@ -77,22 +77,20 @@ export function migrateLegacyNotifyFallback(params: {
       continue;
     }
 
-    if ((mode === undefined && !hasLegacyChatDelivery) || mode === "none" || mode === "webhook") {
-      if (!legacyWebhook) {
-        if (configuredLegacyWebhook) {
-          // cron.webhook is set but not a valid HTTP(S) URL: surface the actionable
-          // warning so the operator can fix the URL, rather than discarding intent.
-          warnMissingLegacyWebhook(jobName);
-          continue;
-        }
-        // cron.webhook is unset and none/webhook/no-delivery jobs never consume the
-        // top-level `notify` flag (delivery is driven by `raw.delivery`, not `notify`),
-        // so it is inert legacy metadata. Drop it so `doctor --fix` stops looping on the
-        // same job on every run (#44460).
-        delete raw.notify;
-        changed = true;
+    if (!legacyWebhook) {
+      if (configuredLegacyWebhook) {
+        // Keep the marker when the configured target is invalid so doctor can retry
+        // after the operator fixes it.
+        warnMissingLegacyWebhook(jobName);
         continue;
       }
+      // Without a configured target, the top-level marker cannot affect delivery.
+      delete raw.notify;
+      changed = true;
+      continue;
+    }
+
+    if ((mode === undefined && !hasLegacyChatDelivery) || mode === "none" || mode === "webhook") {
       raw.delivery = {
         ...delivery,
         mode: "webhook",
@@ -103,31 +101,15 @@ export function migrateLegacyNotifyFallback(params: {
       continue;
     }
 
-    if (legacyWebhook) {
-      raw.delivery = {
-        ...delivery,
-        ...(hasLegacyChatDelivery ? { mode: "announce" } : {}),
-        completionDestination: {
-          ...completionDestination,
-          mode: "webhook",
-          to: legacyWebhook,
-        },
-      };
-      delete raw.notify;
-      changed = true;
-      continue;
-    }
-
-    if (configuredLegacyWebhook) {
-      // cron.webhook is set but invalid: keep the actionable warning.
-      warnMissingLegacyWebhook(jobName);
-      continue;
-    }
-
-    // Existing announce / legacy chat delivery with cron.webhook unset: the top-level
-    // `notify` flag is inert because notifications are driven by `raw.delivery`, not
-    // `notify`. Drop the dead flag — the existing delivery is preserved unchanged — so
-    // doctor stops looping on the same job every run (#44460).
+    raw.delivery = {
+      ...delivery,
+      ...(hasLegacyChatDelivery ? { mode: "announce" } : {}),
+      completionDestination: {
+        ...completionDestination,
+        mode: "webhook",
+        to: legacyWebhook,
+      },
+    };
     delete raw.notify;
     changed = true;
   }

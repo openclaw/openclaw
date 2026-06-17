@@ -850,33 +850,15 @@ describe("maybeRepairLegacyCronStore", () => {
 
   it("removes inert legacy notify:true for delivery.mode none when cron.webhook is unset and stops looping (#44460)", async () => {
     const storePath = await makeTempStorePath();
-    await fs.mkdir(path.dirname(storePath), { recursive: true });
-    await fs.writeFile(
-      storePath,
-      JSON.stringify(
-        {
-          version: 1,
-          jobs: [
-            {
-              id: "notify-none-unset",
-              name: "Notify none unset",
-              notify: true,
-              createdAtMs: Date.parse("2026-02-01T00:00:00.000Z"),
-              updatedAtMs: Date.parse("2026-02-02T00:00:00.000Z"),
-              schedule: { kind: "every", everyMs: 60_000 },
-              payload: { kind: "systemEvent", text: "Status" },
-              delivery: { mode: "none" },
-              state: {},
-            },
-          ],
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    await writeCronStore(storePath, [
+      createCurrentCronJob({
+        id: "notify-none-unset",
+        name: "Notify none unset",
+        notify: true,
+        delivery: { mode: "none" },
+      }),
+    ]);
 
-    // cron.webhook is UNSET: top-level notify is inert metadata for delivery.mode "none".
     const cfg = { cron: { store: storePath } } as OpenClawConfig;
     await maybeRepairLegacyCronStore({
       cfg,
@@ -884,20 +866,16 @@ describe("maybeRepairLegacyCronStore", () => {
       prompter: makePrompter(true),
     });
 
-    // The dead notify flag is dropped from the persisted config-JSON layer (what doctor
-    // re-reads each run), not merely warned about, and the delivery is preserved unchanged.
     const reloaded = await loadCronJobsStoreWithConfigJobs(storePath);
     const persisted = reloaded.configJobs as unknown as Array<Record<string, unknown>>;
     expect(persisted).toHaveLength(1);
     expect(persisted[0]?.notify).toBeUndefined();
     expect(requireRecord(persisted[0]?.delivery, "cron delivery").mode).toBe("none");
-    // An unset cron.webhook must not emit the "cannot migrate" warning for inert notify.
     expectNoNoteContaining(
       "cron.webhook is unset so doctor cannot migrate it automatically",
       "Doctor warnings",
     );
 
-    // A second doctor --fix pass no longer sees the legacy notify flag: the loop is broken.
     noteMock.mockClear();
     await maybeRepairLegacyCronStore({
       cfg,
@@ -909,31 +887,15 @@ describe("maybeRepairLegacyCronStore", () => {
 
   it("drops inert legacy notify alongside existing announce delivery without changing it when cron.webhook is unset (#44460)", async () => {
     const storePath = await makeTempStorePath();
-    await fs.mkdir(path.dirname(storePath), { recursive: true });
-    await fs.writeFile(
-      storePath,
-      JSON.stringify(
-        {
-          version: 1,
-          jobs: [
-            {
-              id: "notify-announce-unset",
-              name: "Notify announce unset",
-              notify: true,
-              createdAtMs: Date.parse("2026-02-01T00:00:00.000Z"),
-              updatedAtMs: Date.parse("2026-02-02T00:00:00.000Z"),
-              schedule: { kind: "every", everyMs: 60_000 },
-              payload: { kind: "agentTurn", message: "Status" },
-              delivery: { mode: "announce", to: "telegram:123" },
-              state: {},
-            },
-          ],
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    await writeCronStore(storePath, [
+      createCurrentCronJob({
+        id: "notify-announce-unset",
+        name: "Notify announce unset",
+        notify: true,
+        payload: { kind: "agentTurn", message: "Status" },
+        delivery: { mode: "announce", to: "telegram:123" },
+      }),
+    ]);
 
     const cfg = { cron: { store: storePath } } as OpenClawConfig;
     await maybeRepairLegacyCronStore({
@@ -942,8 +904,6 @@ describe("maybeRepairLegacyCronStore", () => {
       prompter: makePrompter(true),
     });
 
-    // notify is removed, but the existing announce delivery is left exactly as-is
-    // (no silent change of delivery semantics).
     const reloaded = await loadCronJobsStoreWithConfigJobs(storePath);
     const persisted = reloaded.configJobs as unknown as Array<Record<string, unknown>>;
     expect(persisted).toHaveLength(1);
