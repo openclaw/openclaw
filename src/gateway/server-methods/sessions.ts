@@ -63,10 +63,9 @@ import {
   applySessionPatchProjection,
   createSessionEntryWithTranscript,
   preflightSessionTranscriptForManualCompact,
+  patchSessionEntry,
   trimSessionTranscriptForManualCompact,
 } from "../../config/sessions/session-accessor.js";
-import { loadSessionStore } from "../../config/sessions/store-load.js";
-import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   createInternalHookEvent,
@@ -2183,19 +2182,10 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const requestedAgentId = requestedAgent.agentId;
-    const { target, storePath } = resolveGatewaySessionTargetFromKey(key, cfg, {
-      agentId: requestedAgentId,
-    });
+    const sessionLoadOptions = requestedAgentId ? { agentId: requestedAgentId } : undefined;
 
     if (action === "list") {
-      const store = loadSessionStore(storePath);
-      const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
-        cfg,
-        key,
-        store,
-        agentId: requestedAgentId,
-      });
-      const entry = store[primaryKey];
+      const { entry } = loadSessionEntry(key, sessionLoadOptions);
       respond(true, { echoTargets: entry?.echoTargets ?? [] }, undefined);
       return;
     }
@@ -2214,87 +2204,91 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const pChannel = p.channel;
     const pTo = p.to;
 
+    const { storePath, canonicalKey } = loadSessionEntry(key, sessionLoadOptions);
+
     let changed = false;
     let atLimit = false;
     let notParticipant = false;
     const MAX_ECHO_TARGETS = 16;
-    const updated = await updateSessionStore(storePath, (store) => {
-      const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
-        cfg,
-        key,
-        store,
-        agentId: requestedAgentId,
-      });
-      const entry = store[primaryKey];
-      if (!entry) {
-        return null;
-      }
-      const existing = entry.echoTargets ?? [];
+    // patchSessionEntry returns null only when no entry exists for the key (no
+    // fallbackEntry is supplied); a no-op update returns the unchanged entry, so
+    // the not-found vs no-change distinction the flags rely on is preserved.
+    // replaceEntry keeps the original `delete entry.echoTargets` semantic for the
+    // empty-after-remove case: the returned entry is persisted as-is, so the key
+    // is genuinely absent rather than left as a stale empty array.
+    const updated = await patchSessionEntry(
+      { sessionKey: canonicalKey, ...sessionLoadOptions, storePath },
+      (entry) => {
+        const existing = entry.echoTargets ?? [];
 
-      if (action === "add") {
-        // A mirror recipient must be a verified participant of this session, not
-        // an arbitrary chat id. Anything that is not the session's known bound
-        // thread is rejected; opt other threads in with /pin from that thread.
-        if (
-          !targetMatchesSessionParticipant(entry, {
-            channel: pChannel,
-            to: pTo,
-            accountId: p.accountId,
-            threadId: p.threadId,
-          })
-        ) {
-          notParticipant = true;
-          return entry;
-        }
-        if (existing.length >= MAX_ECHO_TARGETS) {
-          atLimit = true;
-          return entry;
-        }
-        const duplicate = existing.find(
-          (t) =>
-            t.channel === p.channel &&
-            normalizeEchoTargetId(t.channel, t.to) === normalizeEchoTargetId(pChannel, pTo) &&
-            (t.accountId ?? "") === (p.accountId ?? "") &&
-            String(t.threadId ?? "") === String(p.threadId ?? ""),
-        );
-        if (duplicate) {
-          return entry;
-        }
-        changed = true;
-        entry.echoTargets = [
-          ...existing,
-          {
-            channel: pChannel,
-            to: pTo,
-            accountId: p.accountId,
-            threadId: p.threadId,
-            label: p.label,
-            echoUser: p.echoUser,
-            echoAssistant: p.echoAssistant,
-            addedAt: Date.now(),
-          },
-        ];
-      } else if (action === "remove") {
-        const filtered = existing.filter(
-          (t) =>
-            !(
+        if (action === "add") {
+          // A mirror recipient must be a verified participant of this session, not
+          // an arbitrary chat id. Anything that is not the session's known bound
+          // thread is rejected; opt other threads in with /pin from that thread.
+          if (
+            !targetMatchesSessionParticipant(entry, {
+              channel: pChannel,
+              to: pTo,
+              accountId: p.accountId,
+              threadId: p.threadId,
+            })
+          ) {
+            notParticipant = true;
+            return null;
+          }
+          if (existing.length >= MAX_ECHO_TARGETS) {
+            atLimit = true;
+            return null;
+          }
+          const duplicate = existing.find(
+            (t) =>
               t.channel === p.channel &&
               normalizeEchoTargetId(t.channel, t.to) === normalizeEchoTargetId(pChannel, pTo) &&
               (t.accountId ?? "") === (p.accountId ?? "") &&
-              String(t.threadId ?? "") === String(p.threadId ?? "")
-            ),
-        );
-        if (filtered.length !== existing.length) {
+              String(t.threadId ?? "") === String(p.threadId ?? ""),
+          );
+          if (duplicate) {
+            return null;
+          }
           changed = true;
-          if (filtered.length > 0) {
-            entry.echoTargets = filtered;
+          entry.echoTargets = [
+            ...existing,
+            {
+              channel: pChannel,
+              to: pTo,
+              accountId: p.accountId,
+              threadId: p.threadId,
+              label: p.label,
+              echoUser: p.echoUser,
+              echoAssistant: p.echoAssistant,
+              addedAt: Date.now(),
+            },
+          ];
+        } else if (action === "remove") {
+          const filtered = existing.filter(
+            (t) =>
+              !(
+                t.channel === p.channel &&
+                normalizeEchoTargetId(t.channel, t.to) === normalizeEchoTargetId(pChannel, pTo) &&
+                (t.accountId ?? "") === (p.accountId ?? "") &&
+                String(t.threadId ?? "") === String(p.threadId ?? "")
+              ),
+          );
+          if (filtered.length !== existing.length) {
+            changed = true;
+            if (filtered.length > 0) {
+              entry.echoTargets = filtered;
+            } else {
+              delete entry.echoTargets;
+            }
           } else {
-            delete entry.echoTargets;
+            return null;
           }
         }
-      }
-      return entry;
-    });
+        return entry;
+      },
+      { replaceEntry: true },
+    );
 
     if (!updated) {
       respond(
@@ -2329,10 +2323,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     respond(true, { changed, echoTargets: updated.echoTargets ?? [] }, undefined);
     if (changed) {
       emitSessionsChanged(context, {
-        sessionKey: target.canonicalKey ?? key,
-        ...(target.canonicalKey === "global" && requestedAgentId
-          ? { agentId: requestedAgentId }
-          : {}),
+        sessionKey: canonicalKey ?? key,
+        ...(canonicalKey === "global" && requestedAgentId ? { agentId: requestedAgentId } : {}),
         reason: "echo",
       });
     }
