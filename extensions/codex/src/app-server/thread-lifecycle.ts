@@ -42,7 +42,6 @@ import {
   type CodexDynamicToolFunctionSpec,
   type CodexDynamicToolSpec,
   type CodexLegacyDynamicToolFunctionSpec,
-  type CodexPermissionProfileSelection,
   type CodexSandboxPolicy,
   type CodexThreadResumeParams,
   type CodexThreadStartParams,
