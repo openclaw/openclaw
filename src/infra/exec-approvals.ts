@@ -854,29 +854,93 @@ export function saveExecApprovals(file: ExecApprovalsFile) {
   writeExecApprovalsRaw(filePath, raw);
 }
 
+function acquireExecApprovalsLock(dir: string): { release: () => void } {
+  const lockPath = path.join(dir, ".exec-approvals.lock");
+  const maxRetries = 50;
+  const retryDelayMs = 40;
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const fd = fs.openSync(lockPath, "wx");
+      fs.writeSync(fd, `${process.pid}\n`);
+      return {
+        release: () => {
+          try {
+            fs.closeSync(fd);
+          } catch {
+            // ignore
+          }
+          try {
+            fs.rmSync(lockPath, { force: true });
+          } catch {
+            // ignore — another process may have already removed it
+          }
+        },
+      };
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code !== "EEXIST") {
+        throw err;
+      }
+      // Lock held by another process — wait and retry
+      const lockAge = readLockFileAgeMs(lockPath);
+      if (lockAge !== null && lockAge > 10_000) {
+        // Stale lock (>10s) — break it
+        fs.rmSync(lockPath, { force: true });
+        continue;
+      }
+      if (attempt < maxRetries - 1) {
+        sleepSync(retryDelayMs);
+      }
+    }
+  }
+  throw new Error(
+    `Could not acquire exec-approvals lock after ${maxRetries} attempts (${lockPath})`,
+  );
+}
+
+function readLockFileAgeMs(lockPath: string): number | null {
+  try {
+    const stat = fs.statSync(lockPath);
+    return Date.now() - stat.mtimeMs;
+  } catch {
+    return null;
+  }
+}
+
+function sleepSync(ms: number): void {
+  const end = Date.now() + Math.min(ms, 100);
+  while (Date.now() < end) {
+    // busy-wait — short duration for lock contention only
+  }
+}
+
 function writeExecApprovalsRaw(filePath: string, raw: string) {
   const dir = ensureDir(filePath);
   assertSafeExecApprovalsDestination(filePath);
-  const tempPath = path.join(dir, `.exec-approvals.${process.pid}.${crypto.randomUUID()}.tmp`);
-  let tempWritten = false;
+  const lock = acquireExecApprovalsLock(dir);
   try {
-    fs.writeFileSync(tempPath, raw, { mode: 0o600, flag: "wx" });
+    const tempPath = path.join(dir, `.exec-approvals.${process.pid}.${crypto.randomUUID()}.tmp`);
+    let tempWritten = false;
     try {
-      fs.chmodSync(tempPath, 0o600);
+      fs.writeFileSync(tempPath, raw, { mode: 0o600, flag: "wx" });
+      try {
+        fs.chmodSync(tempPath, 0o600);
+      } catch {
+        // best-effort on platforms without chmod
+      }
+      tempWritten = true;
+      renameExecApprovalsWithFallback(tempPath, filePath);
+    } finally {
+      if (tempWritten && fs.existsSync(tempPath)) {
+        fs.rmSync(tempPath, { force: true });
+      }
+    }
+    try {
+      fs.chmodSync(filePath, 0o600);
     } catch {
       // best-effort on platforms without chmod
     }
-    tempWritten = true;
-    renameExecApprovalsWithFallback(tempPath, filePath);
   } finally {
-    if (tempWritten && fs.existsSync(tempPath)) {
-      fs.rmSync(tempPath, { force: true });
-    }
-  }
-  try {
-    fs.chmodSync(filePath, 0o600);
-  } catch {
-    // best-effort on platforms without chmod
+    lock.release();
   }
 }
 
