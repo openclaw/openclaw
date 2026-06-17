@@ -1193,8 +1193,13 @@ describe("deviceHandlers", () => {
         }),
       },
     );
+    const captured = captureSecurityEvents();
 
-    await deviceHandlers["device.pair.reject"](opts);
+    try {
+      await deviceHandlers["device.pair.reject"](opts);
+    } finally {
+      captured.stop();
+    }
 
     expect(rejectDevicePairingMock).toHaveBeenCalledWith("req-2");
     expect(opts.respond).toHaveBeenCalledWith(
@@ -1202,5 +1207,21 @@ describe("deviceHandlers", () => {
       { requestId: "req-2", deviceId: "device-2", rejectedAtMs: 456 },
       undefined,
     );
+    expect(captured.events).toHaveLength(1);
+    expect(captured.events[0]).toMatchObject({
+      action: "device.pairing.rejected",
+      outcome: "success",
+      severity: "low",
+      actor: {
+        kind: "operator",
+        role: "admin",
+      },
+      target: { kind: "device", idHash: expect.stringMatching(/^sha256:[a-f0-9]{12}$/u) },
+      policy: { id: "gateway.device-pairing", decision: "allow" },
+      control: { id: "device.pair.reject", family: "auth" },
+    });
+    const serialized = JSON.stringify(captured.events);
+    expect(serialized).not.toContain("device-1");
+    expect(serialized).not.toContain("device-2");
   });
 });

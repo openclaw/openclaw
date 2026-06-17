@@ -256,7 +256,7 @@ function emitDevicePairingDeniedSecurityEvent(params: {
 }
 
 function emitDevicePairingLifecycleSecurityEvent(params: {
-  action: "device.pairing.approved" | "device.pairing.removed";
+  action: "device.pairing.approved" | "device.pairing.rejected" | "device.pairing.removed";
   severity: DiagnosticSecurityEventInput["severity"];
   authz: DeviceSessionAuthz;
   targetDeviceId: string;
@@ -513,11 +513,11 @@ export const deviceHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown requestId"));
       return;
     }
-    emitDevicePairingDeniedSecurityEvent({
+    emitDevicePairingLifecycleSecurityEvent({
+      action: "device.pairing.rejected",
       authz,
       targetDeviceId: rejected.deviceId,
       controlId: "device.pair.reject",
-      reason: "operator-rejected",
       severity: "low",
     });
     context.broadcast(
