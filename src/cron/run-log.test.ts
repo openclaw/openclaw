@@ -241,6 +241,7 @@ describe("cron run log", () => {
           cache_read_tokens: 2,
           cache_write_tokens: 1,
         },
+        estimated_cost_usd: 0.0123,
       });
 
       await fs.appendFile(
@@ -267,6 +268,7 @@ describe("cron run log", () => {
         cache_read_tokens: 2,
         cache_write_tokens: 1,
       });
+      expect(entries[0]?.estimated_cost_usd).toBe(0.0123);
       expect(entries[1]?.model).toBeUndefined();
       expect(entries[1]?.provider).toBeUndefined();
       expect(entries[1]?.usage?.input_tokens).toBeUndefined();

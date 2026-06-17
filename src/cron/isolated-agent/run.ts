@@ -594,8 +594,18 @@ async function finalizeCronRun(params: {
       prepared.cronSession.sessionEntry.totalTokens = undefined;
       prepared.cronSession.sessionEntry.totalTokensFresh = false;
     }
-    prepared.cronSession.sessionEntry.cacheRead = usage.cacheRead ?? 0;
-    prepared.cronSession.sessionEntry.cacheWrite = usage.cacheWrite ?? 0;
+    const cacheRead = Math.max(0, Math.trunc(usage.cacheRead ?? 0));
+    const cacheWrite = Math.max(0, Math.trunc(usage.cacheWrite ?? 0));
+    prepared.cronSession.sessionEntry.cacheRead = cacheRead;
+    prepared.cronSession.sessionEntry.cacheWrite = cacheWrite;
+    // Log cache tokens so downstream usage/consumption reports can account for
+    // billable cache reads/writes instead of undercounting input.
+    if (cacheRead > 0) {
+      telemetryUsage.cache_read_tokens = cacheRead;
+    }
+    if (cacheWrite > 0) {
+      telemetryUsage.cache_write_tokens = cacheWrite;
+    }
     // Snapshot cost like tokens (runEstimatedCostUsd is already computed from
     // cumulative run usage, so assign directly instead of accumulating).
     // Fixes #69347: cost was inflated 1x-72x by accumulating on every persist.
@@ -607,6 +617,10 @@ async function finalizeCronRun(params: {
       provider: providerUsed,
       usage: telemetryUsage,
     };
+    // Persist per-run estimated cost so consumption reports can sum actual $.
+    if (runEstimatedCostUsd !== undefined && Number.isFinite(runEstimatedCostUsd)) {
+      telemetry.estimated_cost_usd = runEstimatedCostUsd;
+    }
   } else {
     telemetry = { model: modelUsed, provider: providerUsed };
   }

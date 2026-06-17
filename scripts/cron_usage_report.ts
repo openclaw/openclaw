@@ -17,6 +17,7 @@ type CronRunLogEntry = {
   model?: string;
   provider?: string;
   usage?: Usage;
+  estimated_cost_usd?: number;
 };
 
 function parseArgs(argv: string[]) {
@@ -95,6 +96,37 @@ function fmtInt(n: number) {
   return new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(n);
 }
 
+function fmtUsd(n: number) {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 4,
+  }).format(n);
+}
+
+type UsageTotals = {
+  runs: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  total_tokens: number;
+  cost_usd: number;
+  missingUsageRuns: number;
+};
+
+function newUsageTotals(): Omit<UsageTotals, "runs" | "missingUsageRuns"> {
+  return {
+    input_tokens: 0,
+    output_tokens: 0,
+    cache_read_tokens: 0,
+    cache_write_tokens: 0,
+    total_tokens: 0,
+    cost_usd: 0,
+  };
+}
+
 export async function main() {
   const args = parseArgs(process.argv);
   const store = typeof args.store === "string" ? args.store : undefined;
@@ -126,23 +158,8 @@ export async function main() {
     string,
     {
       jobId: string;
-      runs: number;
-      models: Record<
-        string,
-        {
-          model: string;
-          runs: number;
-          input_tokens: number;
-          output_tokens: number;
-          total_tokens: number;
-          missingUsageRuns: number;
-        }
-      >;
-      input_tokens: number;
-      output_tokens: number;
-      total_tokens: number;
-      missingUsageRuns: number;
-    }
+      models: Record<string, { model: string } & UsageTotals>;
+    } & UsageTotals
   > = {};
 
   for (const file of files) {
@@ -177,22 +194,25 @@ export async function main() {
         jobId,
         runs: 0,
         models: {},
-        input_tokens: 0,
-        output_tokens: 0,
-        total_tokens: 0,
         missingUsageRuns: 0,
+        ...newUsageTotals(),
       });
       jobAgg.runs++;
 
       const modelAgg = (jobAgg.models[model] ??= {
         model,
         runs: 0,
-        input_tokens: 0,
-        output_tokens: 0,
-        total_tokens: 0,
         missingUsageRuns: 0,
+        ...newUsageTotals(),
       });
       modelAgg.runs++;
+
+      // Cost is snapshotted per run, so it is meaningful even when token usage
+      // is absent (e.g. provider returned cost without token counts).
+      const rawCost = entry.estimated_cost_usd ?? 0;
+      const cost = Number.isFinite(rawCost) ? Math.max(0, rawCost) : 0;
+      jobAgg.cost_usd += cost;
+      modelAgg.cost_usd += cost;
 
       if (!hasUsage) {
         jobAgg.missingUsageRuns++;
@@ -202,14 +222,27 @@ export async function main() {
 
       const input = Math.max(0, Math.trunc(usage?.input_tokens ?? 0));
       const output = Math.max(0, Math.trunc(usage?.output_tokens ?? 0));
-      const total = Math.max(0, Math.trunc(usage?.total_tokens ?? input + output));
+      const cacheRead = Math.max(0, Math.trunc(usage?.cache_read_tokens ?? 0));
+      const cacheWrite = Math.max(0, Math.trunc(usage?.cache_write_tokens ?? 0));
+      // The logged `total_tokens` is a prompt/context snapshot (input + cache,
+      // excludes output). Billable consumption = prompt side + output. Fall
+      // back to the component sum for older logs without `total_tokens`.
+      const promptSide =
+        usage?.total_tokens !== undefined
+          ? Math.max(0, Math.trunc(usage.total_tokens))
+          : input + cacheRead + cacheWrite;
+      const total = promptSide + output;
 
       jobAgg.input_tokens += input;
       jobAgg.output_tokens += output;
+      jobAgg.cache_read_tokens += cacheRead;
+      jobAgg.cache_write_tokens += cacheWrite;
       jobAgg.total_tokens += total;
 
       modelAgg.input_tokens += input;
       modelAgg.output_tokens += output;
+      modelAgg.cache_read_tokens += cacheRead;
+      modelAgg.cache_write_tokens += cacheWrite;
       modelAgg.total_tokens += total;
     }
   }
@@ -254,19 +287,34 @@ export async function main() {
     return;
   }
 
+  const grand = rows.reduce(
+    (acc, r) => {
+      acc.runs += r.runs;
+      acc.total_tokens += r.total_tokens;
+      acc.cost_usd += r.cost_usd;
+      return acc;
+    },
+    { runs: 0, total_tokens: 0, cost_usd: 0 },
+  );
+
   for (const job of rows) {
     console.log(`jobId: ${job.jobId}`);
     console.log(`  runs: ${fmtInt(job.runs)} (missing usage: ${fmtInt(job.missingUsageRuns)})`);
+    console.log(`  cost: ${fmtUsd(job.cost_usd)}`);
     console.log(
-      `  tokens: total ${fmtInt(job.total_tokens)} (in ${fmtInt(job.input_tokens)} / out ${fmtInt(job.output_tokens)})`,
+      `  tokens: total ${fmtInt(job.total_tokens)} (in ${fmtInt(job.input_tokens)} / out ${fmtInt(job.output_tokens)} / cache ${fmtInt(job.cache_read_tokens)} read + ${fmtInt(job.cache_write_tokens)} write)`,
     );
     for (const m of job.models) {
       console.log(
-        `    model ${m.model}: runs ${fmtInt(m.runs)} (missing usage: ${fmtInt(m.missingUsageRuns)}), total ${fmtInt(m.total_tokens)} (in ${fmtInt(m.input_tokens)} / out ${fmtInt(m.output_tokens)})`,
+        `    model ${m.model}: runs ${fmtInt(m.runs)} (missing usage: ${fmtInt(m.missingUsageRuns)}), cost ${fmtUsd(m.cost_usd)}, total ${fmtInt(m.total_tokens)} (in ${fmtInt(m.input_tokens)} / out ${fmtInt(m.output_tokens)} / cache ${fmtInt(m.cache_read_tokens)} read + ${fmtInt(m.cache_write_tokens)} write)`,
       );
     }
     console.log("");
   }
+
+  console.log(
+    `TOTAL: ${fmtUsd(grand.cost_usd)} across ${fmtInt(grand.runs)} runs, ${fmtInt(grand.total_tokens)} tokens`,
+  );
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

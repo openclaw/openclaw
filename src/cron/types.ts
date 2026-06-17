@@ -58,6 +58,8 @@ export type CronRunTelemetry = {
   model?: string;
   provider?: string;
   usage?: CronUsageSummary;
+  /** Estimated cost in USD for this run, snapshotted (not accumulated). */
+  estimated_cost_usd?: number;
 };
 
 export type CronRunOutcome = {

@@ -325,6 +325,9 @@ function parseAllRunLogEntries(raw: string, opts?: { jobId?: string }): CronRunL
       if (typeof obj.sessionKey === "string" && obj.sessionKey.trim().length > 0) {
         entry.sessionKey = obj.sessionKey;
       }
+      if (typeof obj.estimated_cost_usd === "number" && Number.isFinite(obj.estimated_cost_usd)) {
+        entry.estimated_cost_usd = obj.estimated_cost_usd;
+      }
       parsed.push(entry);
     } catch {
       // ignore invalid lines
