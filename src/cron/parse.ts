@@ -43,17 +43,18 @@ function isValidIsoAbsolute(raw: string) {
   const minute = Number(minuteRaw);
   const second = Number(secondRaw);
   const millisecond = fractionRaw ? Number(fractionRaw.slice(1, 4).padEnd(3, "0")) : 0;
+  const isEndOfDay = hour === 24 && minute === 0 && second === 0 && millisecond === 0;
 
   // Date.parse rolls invalid calendar dates; cron must reject them before scheduling.
   const probe = new Date(0);
   probe.setUTCFullYear(year, month - 1, day);
-  probe.setUTCHours(hour, minute, second, millisecond);
+  probe.setUTCHours(isEndOfDay ? 0 : hour, minute, second, millisecond);
 
   return (
     probe.getUTCFullYear() === year &&
     probe.getUTCMonth() === month - 1 &&
     probe.getUTCDate() === day &&
-    probe.getUTCHours() === hour &&
+    probe.getUTCHours() === (isEndOfDay ? 0 : hour) &&
     probe.getUTCMinutes() === minute &&
     probe.getUTCSeconds() === second &&
     probe.getUTCMilliseconds() === millisecond

@@ -16,6 +16,7 @@ describe("parseAbsoluteTimeMs", () => {
     expect(parseAbsoluteTimeMs("2026-02-28T12:34:56.789Z")).toBe(
       Date.parse("2026-02-28T12:34:56.789Z"),
     );
+    expect(parseAbsoluteTimeMs("2026-02-28T24:00:00Z")).toBe(Date.parse("2026-02-28T24:00:00Z"));
     expect(parseAbsoluteTimeMs("2026-02-28T12:34:56+08:00")).toBe(
       Date.parse("2026-02-28T12:34:56+08:00"),
     );
