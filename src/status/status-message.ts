@@ -914,17 +914,11 @@ export function buildStatusMessage(args: StatusArgs): string {
     ? (args.groupActivation ?? entry?.groupActivation ?? "mention")
     : undefined;
 
-  // A fresh session has no persisted total yet (totalTokens == null) but is not
-  // explicitly stale, so its context usage is a known zero — render 0/… instead
-  // of ?/…. Sessions flagged totalTokensFresh === false keep ? because their
-  // cumulative total is intentionally unknown (see the stale-total guard).
-  const freshSessionTotalTokens =
-    totalTokens == null && entry?.totalTokensFresh !== false ? 0 : totalTokens;
   const contextUsageLabel =
-    freshSessionTotalTokens == null || freshSessionTotalTokens === 0
+    totalTokens == null || totalTokens === 0
       ? (formatEstimatedContextBudgetTokens(entry?.contextBudgetStatus, contextTokens) ??
-        formatTokens(freshSessionTotalTokens, contextTokens ?? null))
-      : formatTokens(freshSessionTotalTokens, contextTokens ?? null);
+        formatTokens(totalTokens, contextTokens ?? null))
+      : formatTokens(totalTokens, contextTokens ?? null);
   const contextLine = [
     `Context: ${contextUsageLabel}`,
     `🧹 Compactions: ${entry?.compactionCount ?? 0}`,
