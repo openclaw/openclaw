@@ -148,6 +148,16 @@ vi.mock("../agents/openclaw-tools.js", () => {
       execute: async () => ({ ok: true, result: "PLUGIN-read" }),
     },
     {
+      // A same-named PLUGIN `write` tool. `write` is HTTP-denied by default, so
+      // this is only reachable once `gateway.tools.allow: ["write"]` lifts it.
+      // The collision-precedence tests (PR #63919) assert that the opted-in
+      // BUILT-IN writer wins over this plugin when both are present, and that a
+      // non-owner caller falls through to this plugin (built-in not materialized).
+      name: "write",
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({ ok: true, result: "PLUGIN-write" }),
+    },
+    {
       name: "nodes",
       parameters: { type: "object", properties: {} },
       execute: async () => ({ ok: true, result: "nodes" }),
@@ -1129,6 +1139,79 @@ describe("POST /tools/invoke", () => {
       const res = await invokeToolAuthed({ tool: "read", sessionKey: "main" });
       const body = await expectOkInvokeResponse(res);
       expect(body.result?.result).toBe("PLUGIN-read");
+    });
+  });
+
+  // PR #63919: the write-class extension. `write`/`edit` are materialized only
+  // behind `gateway.tools.directInvoke.hostFsWrite: true` AND the per-tool
+  // `allow` entry AND the owner gate — exactly mirroring read's triple-key
+  // gating. Host-FS write is materially more dangerous than read, so the
+  // non-owner denial is the load-bearing case here.
+  describe("write coding-tool collision precedence", () => {
+    const builtinWrite = {
+      name: "write",
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({ ok: true, result: "BUILTIN-write" }),
+    };
+
+    it("resolves `write` to the opted-in built-in over a same-named plugin for an owner caller", async () => {
+      pluginToolMetaState.set("write", { pluginId: "test-plugin", optional: false });
+      vi.mocked(createOpenClawCodingToolsRaw).mockReturnValueOnce([builtinWrite] as never);
+      cfg = {
+        agents: { list: [{ id: "main", default: true, tools: { allow: ["write"] } }] },
+        gateway: {
+          tools: { allow: ["write"], directInvoke: { hostFsWrite: true } },
+        },
+      };
+
+      // Owner caller (operator.admin → senderIsOwner === true): the host-write
+      // opt-in materializes the built-in, which wins the name collision.
+      const res = await invokeTool({
+        port: sharedPort,
+        headers: gatewayAdminHeaders(),
+        tool: "write",
+        sessionKey: "main",
+      });
+      const body = await expectOkInvokeResponse(res);
+      expect(body.result?.result).toBe("BUILTIN-write");
+      expect(lastCreateOpenClawToolsContext?.senderIsOwner).toBe(true);
+    });
+
+    it("does not materialize the built-in write for a non-owner caller even with the opt-in ON", async () => {
+      // Owner gate: both opt-in keys are set, but the caller is a non-owner
+      // operator.write trusted-proxy principal (senderIsOwner === false), so the
+      // host-FS write built-in is NOT materialized — the factory is never
+      // invoked — and the same-named plugin executes instead. This closes the
+      // gap where a non-owner direct-invoke caller could mutate host files.
+      pluginToolMetaState.set("write", { pluginId: "test-plugin", optional: false });
+      vi.mocked(createOpenClawCodingToolsRaw).mockReturnValueOnce([builtinWrite] as never);
+      cfg = {
+        agents: { list: [{ id: "main", default: true, tools: { allow: ["write"] } }] },
+        gateway: {
+          tools: { allow: ["write"], directInvoke: { hostFsWrite: true } },
+        },
+      };
+
+      const res = await invokeToolAuthed({ tool: "write", sessionKey: "main" });
+      const body = await expectOkInvokeResponse(res);
+      expect(body.result?.result).toBe("PLUGIN-write");
+      expect(lastCreateOpenClawToolsContext?.senderIsOwner).toBe(false);
+      expect(vi.mocked(createOpenClawCodingToolsRaw)).not.toHaveBeenCalled();
+    });
+
+    it("leaves the same-named plugin reachable when the hostFsWrite opt-in is OFF", async () => {
+      // No opt-in → built-in is not materialized (default mock returns []), so
+      // the same-named plugin executes. This is the exposure that the config
+      // audit's `dangerous_allow` finding now warns about.
+      pluginToolMetaState.set("write", { pluginId: "test-plugin", optional: false });
+      cfg = {
+        agents: { list: [{ id: "main", default: true, tools: { allow: ["write"] } }] },
+        gateway: { tools: { allow: ["write"] } },
+      };
+
+      const res = await invokeToolAuthed({ tool: "write", sessionKey: "main" });
+      const body = await expectOkInvokeResponse(res);
+      expect(body.result?.result).toBe("PLUGIN-write");
     });
   });
 });

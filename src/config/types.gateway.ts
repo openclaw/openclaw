@@ -473,13 +473,13 @@ export type GatewayToolsConfig = {
 };
 
 /**
- * Direct-invoke surface-specific opt-ins. Currently only `hostFsRead` is
- * defined (gates the `read` tool). Each opt-in is one key of a THREE-key
- * gate: the class opt-in here, the matching tool name in
+ * Direct-invoke surface-specific opt-ins. `hostFsRead` gates the `read` tool;
+ * `hostFsWrite` gates the `write`/`edit` tools. Each opt-in is one key of a
+ * THREE-key gate: the class opt-in here, the matching tool name in
  * `gateway.tools.allow`, AND an owner/admin sender (`senderIsOwner === true`)
  * at request time — all three are required before the tool is materialized.
- * Future opt-ins for write/exec/process primitives will follow the same
- * gating pattern.
+ * Future opt-ins for exec/process primitives will follow the same gating
+ * pattern.
  */
 export type GatewayDirectInvokeOptIns = {
   /**
@@ -501,6 +501,34 @@ export type GatewayDirectInvokeOptIns = {
    * `tools.fs.workspaceOnly` is also enabled.
    */
   hostFsRead?: boolean;
+  /**
+   * Allow the host-filesystem write coding tools (`write`, `edit`) to be
+   * materialized for the gateway direct-invoke surfaces. Defaults to `false`.
+   *
+   * Even when set to `true`, the operator MUST also include the specific
+   * write tool name(s) in `gateway.tools.allow` (e.g. `["write", "edit"]`)
+   * AND the request MUST come from an owner/admin sender (`senderIsOwner ===
+   * true`) for each one to actually be reachable; a non-owner trusted-proxy
+   * caller (e.g. `operator.write`) is refused even when both config keys are
+   * set. Operators can enable any subset of write tools by including only
+   * those names in `allow`.
+   *
+   * Exposes host filesystem writes outside the workspace unless
+   * `tools.fs.workspaceOnly` is also enabled. STRONGLY recommend
+   * `tools.fs.workspaceOnly: true` whenever this opt-in is set.
+   *
+   * `apply_patch` is in `DEFAULT_GATEWAY_HTTP_TOOL_DENY` for future-proofing
+   * but is intentionally NOT included in the materialized set yet — the
+   * coding tool factory does not produce an `apply_patch` entry for the
+   * direct-invoke surface. Operators including `"apply_patch"` in `allow`
+   * see no effect on the direct-invoke surface until a follow-up PR wires
+   * the factory entry.
+   *
+   * `exec`/`process`/`spawn`/`shell` (RCE-class) are intentionally NOT
+   * controlled by this flag — they need a separate owner/admin enforcement
+   * model and are deferred to a follow-up PR.
+   */
+  hostFsWrite?: boolean;
 };
 
 export type GatewayConfig = {

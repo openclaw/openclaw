@@ -174,4 +174,118 @@ describe("security audit gateway HTTP tool findings", () => {
       expect(hasFinding(findings, "gateway.tools_invoke_http.dangerous_allow", "warn")).toBe(true);
     });
   });
+
+  // PR #63919: host_write_allow mirrors host_read_allow. Fires only when BOTH
+  // `directInvoke.hostFsWrite: true` AND at least one write-class name
+  // (`write`/`edit`) is in `allow`. write-class is more dangerous than read so
+  // it escalates to critical on any non-loopback bind.
+  describe("host_write_allow finding (dual-key opt-in)", () => {
+    it("fires (warn) when both directInvoke.hostFsWrite AND allow include write on loopback bind", () => {
+      const cfg: OpenClawConfig = {
+        gateway: {
+          bind: "loopback",
+          auth: { token: "secret" },
+          tools: {
+            allow: ["write"],
+            directInvoke: { hostFsWrite: true },
+          },
+        },
+      };
+      const findings = collectGatewayConfigFindings(cfg, cfg, {});
+      expect(hasFinding(findings, "gateway.tools_invoke_http.host_write_allow", "warn")).toBe(true);
+    });
+
+    it("fires for edit (subset) and escalates to critical when bind is lan", () => {
+      const cfg: OpenClawConfig = {
+        gateway: {
+          bind: "lan",
+          auth: { token: "secret" },
+          tools: {
+            allow: ["edit"],
+            directInvoke: { hostFsWrite: true },
+          },
+        },
+      };
+      const findings = collectGatewayConfigFindings(cfg, cfg, {});
+      expect(hasFinding(findings, "gateway.tools_invoke_http.host_write_allow", "critical")).toBe(
+        true,
+      );
+    });
+
+    it("does NOT fire when only allow includes write (legacy config; write still default-deny)", () => {
+      const cfg: OpenClawConfig = {
+        gateway: {
+          bind: "loopback",
+          auth: { token: "secret" },
+          tools: { allow: ["write"] },
+        },
+      };
+      const findings = collectGatewayConfigFindings(cfg, cfg, {});
+      expect(hasFinding(findings, "gateway.tools_invoke_http.host_write_allow")).toBe(false);
+    });
+
+    it("does NOT fire when only directInvoke.hostFsWrite is true (write still default-deny)", () => {
+      const cfg: OpenClawConfig = {
+        gateway: {
+          bind: "loopback",
+          auth: { token: "secret" },
+          tools: { directInvoke: { hostFsWrite: true } },
+        },
+      };
+      const findings = collectGatewayConfigFindings(cfg, cfg, {});
+      expect(hasFinding(findings, "gateway.tools_invoke_http.host_write_allow")).toBe(false);
+    });
+
+    it("does NOT fire for apply_patch alone even with hostFsWrite (factory does not produce it)", () => {
+      const cfg: OpenClawConfig = {
+        gateway: {
+          bind: "loopback",
+          auth: { token: "secret" },
+          tools: { allow: ["apply_patch"], directInvoke: { hostFsWrite: true } },
+        },
+      };
+      const findings = collectGatewayConfigFindings(cfg, cfg, {});
+      expect(hasFinding(findings, "gateway.tools_invoke_http.host_write_allow")).toBe(false);
+    });
+  });
+
+  // PR #63919: `dangerous_allow` suppression for `write`/`edit` is source-aware,
+  // mirroring read. Suppress ONLY when the `hostFsWrite` class opt-in is active.
+  describe("dangerous_allow source-aware suppression for write", () => {
+    it("fires dangerous_allow when only allow:['write'] is set (no hostFsWrite opt-in)", () => {
+      const cfg: OpenClawConfig = {
+        gateway: {
+          bind: "lan",
+          auth: { token: "secret" },
+          tools: { allow: ["write"] },
+        },
+      };
+      const findings = collectGatewayConfigFindings(cfg, cfg, {});
+      expect(hasFinding(findings, "gateway.tools_invoke_http.dangerous_allow")).toBe(true);
+    });
+
+    it("does NOT fire dangerous_allow when allow:['write','edit'] AND hostFsWrite opt-in is set", () => {
+      const cfg: OpenClawConfig = {
+        gateway: {
+          bind: "lan",
+          auth: { token: "secret" },
+          tools: { allow: ["write", "edit"], directInvoke: { hostFsWrite: true } },
+        },
+      };
+      const findings = collectGatewayConfigFindings(cfg, cfg, {});
+      expect(hasFinding(findings, "gateway.tools_invoke_http.dangerous_allow")).toBe(false);
+    });
+
+    it("still fires dangerous_allow for apply_patch even with hostFsWrite (never suppressed)", () => {
+      const cfg: OpenClawConfig = {
+        gateway: {
+          bind: "lan",
+          auth: { token: "secret" },
+          tools: { allow: ["apply_patch"], directInvoke: { hostFsWrite: true } },
+        },
+      };
+      const findings = collectGatewayConfigFindings(cfg, cfg, {});
+      expect(hasFinding(findings, "gateway.tools_invoke_http.dangerous_allow")).toBe(true);
+    });
+  });
 });

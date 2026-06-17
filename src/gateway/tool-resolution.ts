@@ -214,40 +214,46 @@ export function resolveGatewayScopedTools(params: {
     inheritedToolDenylist,
   });
 
-  // Wire the `read` coding tool into the gateway direct-invoke surfaces so it
-  // is reachable for deterministic automation (CI/preflight checks, lint,
-  // browser capture flows) without a full LLM round-trip. Narrow first landing
-  // of the broader direct-invoke umbrella tracked in #37131.
+  // Wire the `read`/`write`/`edit` coding tools into the gateway direct-invoke
+  // surfaces so they are reachable for deterministic automation (CI/preflight
+  // checks, lint, browser capture flows) without a full LLM round-trip. Part of
+  // the broader direct-invoke umbrella tracked in #37131; `read` is the narrow
+  // landing on PR #85664, `write`/`edit` the write-class extension on #63919.
   //
   // **Triple-key gating** (addresses ClawSweeper [P1] + the non-owner
-  // authorization finding on PR #85664):
+  // authorization finding on PR #85664/#63919). For each tool ALL THREE hold:
   // - `surface === "http"` — the **direct-invoke marker** set by
   //   `tools-invoke-shared.ts` for BOTH HTTP `POST /tools/invoke` AND SDK-facing
   //   JSON-RPC `tools.invoke` (they share the resolver). MCP loopback uses
   //   `surface === "loopback"` and is unaffected.
-  // - `gateway.tools.directInvoke.hostFsRead: true` — the NEW distinct opt-in.
-  //   Without this, the read tool is NOT materialized into the candidate set,
-  //   so existing configs that have `gateway.tools.allow: ["read"]` for
-  //   unrelated reasons (e.g. an MCP/agent surface where `read` is already
-  //   available) stay inert. This prevents an upgrade-time compatibility
-  //   break.
+  // - the per-class opt-in — `gateway.tools.directInvoke.hostFsRead: true` for
+  //   `read`, `gateway.tools.directInvoke.hostFsWrite: true` for `write`/`edit`.
+  //   Without it the tool is NOT materialized into the candidate set, so
+  //   existing configs that have `gateway.tools.allow: ["read"]` (or `write`)
+  //   for unrelated reasons stay inert. This prevents an upgrade-time
+  //   compatibility break.
   // - `params.senderIsOwner === true` — the **owner gate**. Host-filesystem
-  //   read is an owner/admin-only capability, so it must NOT be materialized for
-  //   a non-owner direct-invoke caller. On the HTTP/RPC surface a shared-secret
-  //   bearer caller resolves to owner (`senderIsOwner === true`), while a
-  //   trusted-proxy operator without `ADMIN_SCOPE` resolves to `false`. This
-  //   mirrors the fail-closed owner semantics used for `ownerOnlyGatewayDeny`
+  //   read/write is an owner/admin-only capability, so it must NOT be
+  //   materialized for a non-owner direct-invoke caller. On the HTTP/RPC surface
+  //   a shared-secret bearer caller resolves to owner (`senderIsOwner === true`),
+  //   while a trusted-proxy operator without `ADMIN_SCOPE` resolves to `false`.
+  //   This mirrors the fail-closed owner semantics used for `ownerOnlyGatewayDeny`
   //   above (line 130): on HTTP, anything other than an explicit `true` is
   //   treated as non-owner. Without this key a `gateway.auth.mode="trusted-proxy"`
-  //   `operator.write` caller could read host files it should never reach.
-  // - `gateway.tools.allow: ["read"]` — separately required, lifts `"read"`
-  //   from `DEFAULT_GATEWAY_HTTP_TOOL_DENY` so the policy pipeline (line 186)
-  //   doesn't filter it out. This key keeps the explicit operator
-  //   acceptance step visible in the standard policy surface.
+  //   `operator.write` caller could read/write host files it should never reach.
+  // - `gateway.tools.allow: ["read"]` (or `["write","edit"]`) — separately
+  //   required, lifts the name(s) from `DEFAULT_GATEWAY_HTTP_TOOL_DENY` so the
+  //   policy pipeline (line 186) doesn't filter them out. This key keeps the
+  //   explicit operator acceptance step visible in the standard policy surface.
   //
-  // Only `read` is materialized — write/edit/exec/process are NOT exposed by
-  // this PR. Maintainer approval for opt-in mutating coding primitives is
-  // deferred to a follow-up PR.
+  // `read` is materialized behind `directInvoke.hostFsRead`; `write`/`edit`
+  // behind `directInvoke.hostFsWrite` (PR #63919). Each class opt-in is
+  // independent, and BOTH are owner-gated and `surface === "http"`-gated.
+  // `exec`/`process`/`spawn`/`shell` (RCE-class) are intentionally NOT
+  // materialized here — they need a separate owner/admin model and are
+  // deferred to a follow-up PR. `apply_patch` is in the HTTP deny list for
+  // future-proofing but is not produced by the factory yet, so `hostFsWrite`
+  // has no effect on it.
   //
   // Uses `createOpenClawCodingToolsRaw` (unwrapped) — `handleToolsInvokeHttp`
   // already calls `runBeforeToolCallHook` itself before dispatch, so the
@@ -256,32 +262,52 @@ export function resolveGatewayScopedTools(params: {
   //
   // Construction plan limits the factory to just the base coding tool family
   // (read/write/edit/apply_patch) — no shell (exec/process), no channel,
-  // OpenClaw, or plugin tools. Then we filter to `read`.
+  // OpenClaw, or plugin tools. Then we filter to the opted-in names.
   const allowHostFsReadOverDirectInvoke =
     surface === "http" &&
     params.cfg.gateway?.tools?.directInvoke?.hostFsRead === true &&
     params.senderIsOwner === true;
-  const codingTools = allowHostFsReadOverDirectInvoke
-    ? createOpenClawCodingToolsRaw({
-        agentId: agentId ?? resolveDefaultAgentId(params.cfg),
-        sessionKey: params.sessionKey,
-        workspaceDir,
-        agentDir: resolveAgentDir(params.cfg, agentId ?? resolveDefaultAgentId(params.cfg)),
-        config: params.cfg,
-        toolConstructionPlan: {
-          includeBaseCodingTools: true,
-          includeShellTools: false,
-          includeChannelTools: false,
-          includeOpenClawTools: false,
-          includePluginTools: false,
-        },
-      }).filter((tool) => tool.name === "read")
-    : [];
+  // Host-filesystem WRITE is materially more dangerous than read, so it carries
+  // the same owner gate (a trusted-proxy `operator.write` caller is refused
+  // even with `hostFsWrite: true` + `tools.allow` set) plus its own opt-in.
+  const allowHostFsWriteOverDirectInvoke =
+    surface === "http" &&
+    params.cfg.gateway?.tools?.directInvoke?.hostFsWrite === true &&
+    params.senderIsOwner === true;
+  const directInvokeCodingToolNames = new Set<string>();
+  if (allowHostFsReadOverDirectInvoke) {
+    directInvokeCodingToolNames.add("read");
+  }
+  if (allowHostFsWriteOverDirectInvoke) {
+    // `write` + `edit` are produced by the base coding tool factory.
+    // `apply_patch` is currently a host-tool name that lives only in
+    // DEFAULT_GATEWAY_HTTP_TOOL_DENY (no factory entry yet) so adding it here
+    // would be a no-op for now; deferred until upstream adds the factory entry.
+    directInvokeCodingToolNames.add("write");
+    directInvokeCodingToolNames.add("edit");
+  }
+  const codingTools =
+    directInvokeCodingToolNames.size > 0
+      ? createOpenClawCodingToolsRaw({
+          agentId: agentId ?? resolveDefaultAgentId(params.cfg),
+          sessionKey: params.sessionKey,
+          workspaceDir,
+          agentDir: resolveAgentDir(params.cfg, agentId ?? resolveDefaultAgentId(params.cfg)),
+          config: params.cfg,
+          toolConstructionPlan: {
+            includeBaseCodingTools: true,
+            includeShellTools: false,
+            includeChannelTools: false,
+            includeOpenClawTools: false,
+            includePluginTools: false,
+          },
+        }).filter((tool) => directInvokeCodingToolNames.has(tool.name))
+      : [];
 
-  // Coding built-ins take precedence on name collision when the host-read
-  // opt-in is active, ensuring `read` resolves to the built-in filesystem tool
-  // documented by the opt-in/audit surface rather than a same-named plugin.
-  // When the opt-in is inactive, `codingTools` is empty so `allTools` is
+  // Coding built-ins take precedence on name collision when a class opt-in is
+  // active, ensuring `read`/`write`/`edit` resolves to the built-in filesystem
+  // tool documented by the opt-in/audit surface rather than a same-named plugin.
+  // When no class opt-in is active, `codingTools` is empty so `allTools` is
   // returned unchanged (no behavior change for existing configs).
   const codingToolNames = new Set(codingTools.map((t) => t.name));
   const allToolsWithCoding = [
