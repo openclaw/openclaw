@@ -1,0 +1,37 @@
+{
+  "id": "clawrouter",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": ["clawrouter"],
+  "setup": {
+    "providers": [
+      {
+        "id": "clawrouter",
+        "envVars": ["CLAWROUTER_API_KEY"]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "clawrouter",
+      "method": "api-key",
+      "choiceId": "clawrouter-api-key",
+      "choiceLabel": "ClawRouter proxy key",
+      "choiceHint": "Approved providers through one managed key",
+      "groupId": "clawrouter",
+      "groupLabel": "ClawRouter",
+      "groupHint": "Managed provider access",
+      "optionKey": "clawrouterApiKey",
+      "cliFlag": "--clawrouter-api-key",
+      "cliOption": "--clawrouter-api-key <key>",
+      "cliDescription": "ClawRouter proxy key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

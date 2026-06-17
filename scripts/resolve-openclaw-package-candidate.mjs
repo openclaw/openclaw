@@ -131,7 +131,29 @@ export function parseArgs(argv) {
       throw new Error(`unknown argument: ${arg}`);
     }
   }
+  validateOutputName(options.outputName);
   return options;
+}
+
+function validateOutputName(value) {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*\.t(?:ar\.)?gz$/u.test(value)) {
+    throw new Error(`--output-name must be a tarball filename, not a path: ${value}`);
+  }
+}
+
+function resolvePackedOpenClawTarballFilename(value) {
+  const filename = typeof value === "string" ? value.trim() : "";
+  if (
+    !/^openclaw-[A-Za-z0-9._-]+\.tgz$/u.test(filename) ||
+    filename.includes("\0") ||
+    filename !== path.basename(filename) ||
+    filename !== path.win32.basename(filename)
+  ) {
+    throw new Error(
+      `npm pack reported unsafe OpenClaw tarball filename: ${JSON.stringify(filename)}`,
+    );
+  }
+  return filename;
 }
 
 export function validateOpenClawPackageSpec(spec) {
@@ -495,24 +517,41 @@ async function installPackageSourceDeps(sourceDir) {
 
 async function moveNewestPackedTarball(outputDir, packOutput, outputName) {
   let filename = "";
+  let parsed;
   try {
-    const parsed = JSON.parse(packOutput);
-    if (Array.isArray(parsed)) {
-      filename = parsed.find((entry) => typeof entry?.filename === "string")?.filename ?? "";
-    }
+    parsed = JSON.parse(packOutput);
   } catch {}
+  if (Array.isArray(parsed)) {
+    const packedFilename =
+      parsed.find((entry) => typeof entry?.filename === "string")?.filename ?? "";
+    if (packedFilename) {
+      filename = resolvePackedOpenClawTarballFilename(packedFilename);
+    }
+  }
   if (!filename) {
     for (const line of packOutput.split(/\r?\n/u)) {
       const trimmed = line.trim();
-      if (/^openclaw-.*\.tgz$/u.test(trimmed)) {
-        filename = trimmed;
+      if (
+        trimmed.endsWith(".tgz") &&
+        (trimmed.startsWith("openclaw-") ||
+          trimmed.includes(":") ||
+          trimmed.includes("/") ||
+          trimmed.includes("\\"))
+      ) {
+        filename = resolvePackedOpenClawTarballFilename(trimmed);
       }
     }
   }
   if (!filename) {
     const entries = await fs.readdir(outputDir);
     filename = entries
-      .filter((entry) => /^openclaw-.*\.tgz$/u.test(entry))
+      .filter((entry) => {
+        try {
+          return resolvePackedOpenClawTarballFilename(entry) === entry;
+        } catch {
+          return false;
+        }
+      })
       .toSorted((a, b) => a.localeCompare(b))
       .at(-1);
   }
@@ -527,6 +566,8 @@ async function moveNewestPackedTarball(outputDir, packOutput, outputName) {
   }
   return target;
 }
+
+export const moveNewestPackedTarballForTest = moveNewestPackedTarball;
 
 function normalizeUrlHostname(hostname) {
   return hostname.replace(/^\[/u, "").replace(/\]$/u, "").replace(/\.+$/u, "").toLowerCase();
@@ -714,11 +755,21 @@ function toTrustedPorts(value, sourceId) {
   if (!Array.isArray(ports) || ports.length === 0) {
     throw new Error(`trusted package source ${sourceId} must define non-empty ports`);
   }
-  const normalized = ports.map((port) => Number(port));
+  const normalized = ports.map((port) => parseTrustedPort(port));
   if (normalized.some((port) => !Number.isInteger(port) || port < 1 || port > 65535)) {
     throw new Error(`trusted package source ${sourceId} has invalid ports`);
   }
   return [...new Set(normalized)].toSorted((a, b) => a - b);
+}
+
+function parseTrustedPort(value) {
+  if (typeof value === "number") {
+    return value;
+  }
+  if (typeof value === "string" && /^[0-9]+$/u.test(value)) {
+    return Number(value);
+  }
+  return Number.NaN;
 }
 
 function toPathPrefixes(value, sourceId) {

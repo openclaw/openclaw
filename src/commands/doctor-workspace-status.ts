@@ -13,7 +13,7 @@ import { listTasksForFlowId } from "../tasks/runtime-internal.js";
 import { listTaskFlowRecords } from "../tasks/task-flow-runtime-internal.js";
 import { detectLegacyWorkspaceDirs, formatLegacyWorkspaceWarning } from "./doctor-workspace.js";
 
-export type NoteWorkspaceStatusOptions = {
+type NoteWorkspaceStatusOptions = {
   pluginVersionDrift?: PluginVersionDriftReport;
 };
 

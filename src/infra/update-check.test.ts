@@ -1,5 +1,7 @@
 // Covers update status, dependency status, and registry fetch helpers.
 import fs from "node:fs/promises";
+import http from "node:http";
+import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -43,38 +45,185 @@ describe("compareSemverStrings", () => {
 });
 
 describe("resolveNpmChannelTag", () => {
+  type NpmMetadataCommandRunner = NonNullable<
+    Parameters<typeof fetchNpmPackageTargetStatus>[0]["runCommand"]
+  >;
+
   let versionByTag: Record<string, string | null>;
+  let runCommand: NpmMetadataCommandRunner;
+  let runCommandMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     versionByTag = {};
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: RequestInfo | URL) => {
-        const url =
-          typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-        const tag = decodeURIComponent(url.split("/").pop() ?? "");
-        const version = versionByTag[tag] ?? null;
-        return {
-          ok: version != null,
-          status: version != null ? 200 : 404,
-          json: async () => ({
-            version,
-            engines: version != null ? { node: ">=22.19.0" } : undefined,
-          }),
-        } as Response;
-      }),
-    );
+    runCommandMock = vi.fn(async (argv: string[]) => {
+      const spec = argv[2] ?? "";
+      const tag = spec.slice(spec.lastIndexOf("@") + 1);
+      const version = versionByTag[tag] ?? null;
+      return {
+        stdout:
+          version == null
+            ? ""
+            : JSON.stringify({
+                version,
+                "engines.node": ">=22.19.0",
+              }),
+        stderr: version == null ? "npm ERR! 404 Not Found" : "",
+        code: version == null ? 1 : 0,
+      };
+    });
+    runCommand = runCommandMock as unknown as NpmMetadataCommandRunner;
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
+  it("delegates package target metadata to npm view with global config scope", async () => {
+    versionByTag.latest = "1.0.4";
+    const env = { ...process.env, NPM_CONFIG_USERCONFIG: "/tmp/openclaw-user-npmrc" };
+
+    await expect(
+      fetchNpmPackageTargetStatus({
+        target: "latest",
+        spec: "openclaw@latest",
+        command: "/opt/openclaw/node/bin/npm",
+        timeoutMs: 1000,
+        cwd: "/tmp/openclaw-project",
+        env,
+        runCommand,
+      }),
+    ).resolves.toEqual({
+      target: "latest",
+      version: "1.0.4",
+      nodeEngine: ">=22.19.0",
+    });
+
+    expect(runCommandMock).toHaveBeenCalledWith(
+      [
+        "/opt/openclaw/node/bin/npm",
+        "view",
+        "openclaw@latest",
+        "version",
+        "engines.node",
+        "--json",
+        "--global",
+      ],
+      expect.objectContaining({
+        timeoutMs: 1000,
+        cwd: "/tmp/openclaw-project",
+        env,
+      }),
+    );
+  });
+
+  it("uses npm global scope, user config auth, and ignores project npmrc for real metadata", async () => {
+    await withTempDir({ prefix: "openclaw-update-check-npm-view-" }, async (base) => {
+      const requests: Array<{ url: string; authorization?: string }> = [];
+      const server = http.createServer((req, res) => {
+        requests.push({
+          url: req.url ?? "",
+          authorization: req.headers.authorization,
+        });
+        res.setHeader("content-type", "application/json");
+        res.end(
+          JSON.stringify({
+            name: "openclaw",
+            "dist-tags": { latest: "2026.6.6" },
+            versions: {
+              "2026.6.6": {
+                name: "openclaw",
+                version: "2026.6.6",
+                engines: { node: ">=22.19.0" },
+                dist: {
+                  tarball: "http://example.invalid/openclaw-2026.6.6.tgz",
+                  shasum: "0".repeat(40),
+                },
+              },
+            },
+          }),
+        );
+      });
+
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      try {
+        const address = server.address() as AddressInfo;
+        const registry = `http://127.0.0.1:${address.port}/user/`;
+        const project = path.join(base, "project");
+        const home = path.join(base, "home");
+        const userConfig = path.join(home, ".npmrc");
+        await fs.mkdir(project, { recursive: true });
+        await fs.mkdir(home, { recursive: true });
+        await fs.writeFile(path.join(project, ".npmrc"), "registry=http://127.0.0.1:9/project/\n");
+        await fs.writeFile(
+          userConfig,
+          [`registry=${registry}`, `//127.0.0.1:${address.port}/user/:_authToken=test-token`].join(
+            "\n",
+          ),
+        );
+
+        await expect(
+          fetchNpmPackageTargetStatus({
+            target: "latest",
+            command: "npm",
+            timeoutMs: 10_000,
+            cwd: project,
+            env: {
+              ...process.env,
+              HOME: home,
+              NPM_CONFIG_USERCONFIG: userConfig,
+            },
+          }),
+        ).resolves.toEqual({
+          target: "latest",
+          version: "2026.6.6",
+          nodeEngine: ">=22.19.0",
+        });
+
+        expect(requests.some((request) => request.url.startsWith("/user/openclaw"))).toBe(true);
+        expect(requests.some((request) => request.url.startsWith("/project/"))).toBe(false);
+        expect(requests.some((request) => request.authorization === "Bearer test-token")).toBe(
+          true,
+        );
+      } finally {
+        await new Promise<void>((resolve, reject) => {
+          server.close((err) => (err ? reject(err) : resolve()));
+        });
+      }
+    });
+  });
+
+  it("uses the public registry when no npm command is available", async () => {
+    const fetch = vi.fn(async () => {
+      return {
+        ok: true,
+        json: async () => ({
+          version: "2026.6.8",
+          engines: { node: ">=22.19.0" },
+        }),
+      } as Response;
+    });
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(
+      fetchNpmPackageTargetStatus({ target: "latest", timeoutMs: 1000 }),
+    ).resolves.toEqual({
+      target: "latest",
+      version: "2026.6.8",
+      nodeEngine: ">=22.19.0",
+    });
+    expect(fetch).toHaveBeenCalledWith(
+      "https://registry.npmjs.org/openclaw/latest",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+  });
+
   it("falls back to latest when beta is older", async () => {
     versionByTag.beta = "1.0.0-beta.1";
     versionByTag.latest = "1.0.1-1";
 
-    const resolved = await resolveNpmChannelTag({ channel: "beta", timeoutMs: 1000 });
+    const resolved = await resolveNpmChannelTag({ channel: "beta", timeoutMs: 1000, runCommand });
 
     expect(resolved).toEqual({ tag: "latest", version: "1.0.1-1" });
   });
@@ -83,7 +232,7 @@ describe("resolveNpmChannelTag", () => {
     versionByTag.beta = "1.0.2-beta.1";
     versionByTag.latest = "1.0.1-1";
 
-    const resolved = await resolveNpmChannelTag({ channel: "beta", timeoutMs: 1000 });
+    const resolved = await resolveNpmChannelTag({ channel: "beta", timeoutMs: 1000, runCommand });
 
     expect(resolved).toEqual({ tag: "beta", version: "1.0.2-beta.1" });
   });
@@ -92,7 +241,7 @@ describe("resolveNpmChannelTag", () => {
     versionByTag.beta = "1.0.1-beta.2";
     versionByTag.latest = "1.0.1";
 
-    const resolved = await resolveNpmChannelTag({ channel: "beta", timeoutMs: 1000 });
+    const resolved = await resolveNpmChannelTag({ channel: "beta", timeoutMs: 1000, runCommand });
 
     expect(resolved).toEqual({ tag: "latest", version: "1.0.1" });
   });
@@ -100,7 +249,9 @@ describe("resolveNpmChannelTag", () => {
   it("keeps non-beta channels unchanged", async () => {
     versionByTag.latest = "1.0.3";
 
-    await expect(resolveNpmChannelTag({ channel: "stable", timeoutMs: 1000 })).resolves.toEqual({
+    await expect(
+      resolveNpmChannelTag({ channel: "stable", timeoutMs: 1000, runCommand }),
+    ).resolves.toEqual({
       tag: "latest",
       version: "1.0.3",
     });
@@ -110,36 +261,42 @@ describe("resolveNpmChannelTag", () => {
     versionByTag.latest = "1.0.4";
 
     await expect(
-      fetchNpmPackageTargetStatus({ target: "latest", timeoutMs: 1000 }),
+      fetchNpmPackageTargetStatus({ target: "latest", timeoutMs: 1000, runCommand }),
     ).resolves.toEqual({
       target: "latest",
       version: "1.0.4",
       nodeEngine: ">=22.19.0",
     });
-    await expect(fetchNpmTagVersion({ tag: "latest", timeoutMs: 1000 })).resolves.toEqual({
+    await expect(
+      fetchNpmTagVersion({ tag: "latest", timeoutMs: 1000, runCommand }),
+    ).resolves.toEqual({
       tag: "latest",
       version: "1.0.4",
     });
-    await expect(fetchNpmLatestVersion({ timeoutMs: 1000 })).resolves.toEqual({
+    await expect(fetchNpmLatestVersion({ timeoutMs: 1000, runCommand })).resolves.toEqual({
       latestVersion: "1.0.4",
       error: undefined,
     });
     versionByTag.beta = "1.0.5-beta.1";
     await expect(
-      fetchNpmRegistryVersionForChannel({ channel: "beta", timeoutMs: 1000 }),
+      fetchNpmRegistryVersionForChannel({ channel: "beta", timeoutMs: 1000, runCommand }),
     ).resolves.toEqual({
       latestVersion: "1.0.5-beta.1",
       tag: "beta",
     });
-    await expect(fetchNpmTagVersion({ tag: "beta", timeoutMs: 1000 })).resolves.toEqual({
-      tag: "beta",
-      version: "1.0.5-beta.1",
-      error: undefined,
-    });
-    await expect(fetchNpmTagVersion({ tag: "missing", timeoutMs: 1000 })).resolves.toEqual({
+    await expect(fetchNpmTagVersion({ tag: "beta", timeoutMs: 1000, runCommand })).resolves.toEqual(
+      {
+        tag: "beta",
+        version: "1.0.5-beta.1",
+        error: undefined,
+      },
+    );
+    await expect(
+      fetchNpmTagVersion({ tag: "missing", timeoutMs: 1000, runCommand }),
+    ).resolves.toEqual({
       tag: "missing",
       version: null,
-      error: "HTTP 404",
+      error: "npm view failed: npm ERR! 404 Not Found",
     });
   });
 });

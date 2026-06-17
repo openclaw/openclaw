@@ -125,6 +125,12 @@ describe("package scripts", () => {
     );
   });
 
+  it("gives the plugin SDK usage scan enough heap for repository-wide analysis", () => {
+    expect(readPackageJson().scripts["plugin-sdk:usage"]).toBe(
+      "node --max-old-space-size=8192 --import tsx scripts/analyze-plugin-sdk-usage.ts",
+    );
+  });
+
   it("uses the shipped package launcher for npm start", () => {
     expect(readPackageJson().scripts.start).toBe("node openclaw.mjs");
   });

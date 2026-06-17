@@ -93,6 +93,7 @@ import {
   type RealtimeTalkStatus,
 } from "./chat/realtime-talk.ts";
 import type { ChatRunUiStatus } from "./chat/run-lifecycle.ts";
+import type { ChatMessageCache } from "./chat/session-message-cache.ts";
 import type { ChatSideResult } from "./chat/side-result.ts";
 import {
   loadToolsEffective as loadToolsEffectiveInternal,
@@ -112,7 +113,10 @@ import {
   type ExecApprovalRequest,
 } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
-import type { SkillWorkshopState } from "./controllers/skill-workshop.ts";
+import {
+  loadSkillWorkshopProposals,
+  type SkillWorkshopState,
+} from "./controllers/skill-workshop.ts";
 import type {
   ClawHubSearchResult,
   ClawHubSkillSecurityVerdict,
@@ -305,6 +309,7 @@ export class OpenClawApp extends LitElement {
   } | null = null;
   @state() chatQueue: ChatQueueItem[] = [];
   @state() chatQueueBySession: Record<string, ChatQueueItem[]> = {};
+  @state() chatMessagesBySession: ChatMessageCache = new Map();
   @state() chatAttachments: ChatAttachment[] = [];
   @state() realtimeTalkActive = false;
   @state() realtimeTalkStatus: RealtimeTalkStatus = "idle";
@@ -641,6 +646,7 @@ export class OpenClawApp extends LitElement {
   @state() skillCardLoadingKey: string | null = null;
   @state() skillCardErrors: Record<string, string> = {};
   @state() skillWorkshopLoading = false;
+  @state() skillWorkshopAgentId: string | null = null;
   @state() skillWorkshopLoaded = false;
   @state() skillWorkshopError: string | null = null;
   @state() skillWorkshopInspectingKey: string | null = null;
@@ -860,6 +866,12 @@ export class OpenClawApp extends LitElement {
     // Some render callbacks assign tab directly while preparing nested panel state.
     if (changed.has("tab") && this.tab !== "chat" && this.chatMobileControlsOpen) {
       this.setChatMobileControlsOpen(false);
+    }
+    if (
+      this.tab === "skillWorkshop" &&
+      (changed.has("sessionKey") || changed.has("assistantAgentId"))
+    ) {
+      void loadSkillWorkshopProposals(this, { force: true });
     }
     if (!changed.has("sessionKey") || this.agentsPanel !== "tools") {
       return;

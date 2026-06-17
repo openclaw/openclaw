@@ -719,6 +719,7 @@ export async function runBtwSideQuestion(
     agentDir: params.agentDir,
     workspaceDir,
     env: process.env,
+    applyProviderWrapper: true,
   });
   const streamFn = resolveEmbeddedAgentStreamFn({
     currentStreamFn: streamSimple,

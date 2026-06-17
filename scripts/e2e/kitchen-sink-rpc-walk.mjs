@@ -1677,12 +1677,20 @@ async function samplePosixProcessWithDescendants(pid, run) {
     const { stdout } = await run("ps", POSIX_PROCESS_SNAPSHOT_ARGS, {
       timeoutMs: 5000,
     });
-    const rows = parsePosixProcessRows(stdout);
+    const snapshot = parsePosixProcessRows(stdout);
+    if (!snapshot) {
+      return null;
+    }
+    const { malformedRows, rows } = snapshot;
     const selected = rows.find((row) => row.processId === safePid);
     if (!selected) {
       return null;
     }
-    return formatPosixProcessTreeSample(selected, collectPosixProcessTree(rows, safePid));
+    const treeRows = collectPosixProcessTree(rows, safePid);
+    if (hasMalformedProcessTreeRows(malformedRows, treeRows)) {
+      return null;
+    }
+    return formatPosixProcessTreeSample(selected, treeRows);
   } catch {
     return null;
   }
@@ -1697,10 +1705,16 @@ async function samplePosixProcessTree(pid, run, commandLineNeedles) {
     const { stdout } = await run("ps", POSIX_PROCESS_SNAPSHOT_ARGS, {
       timeoutMs: 5000,
     });
-    const rows = parsePosixProcessRows(stdout);
-    const descendants = collectPosixProcessTree(rows, safePid).filter(
-      (row) => row.processId !== safePid,
-    );
+    const snapshot = parsePosixProcessRows(stdout);
+    if (!snapshot) {
+      return null;
+    }
+    const { malformedRows, rows } = snapshot;
+    const rootTreeRows = collectPosixProcessTree(rows, safePid);
+    if (hasMalformedProcessTreeRows(malformedRows, rootTreeRows)) {
+      return null;
+    }
+    const descendants = rootTreeRows.filter((row) => row.processId !== safePid);
     const commandMatches = descendants.filter((row) =>
       commandLineNeedles.every((needle) =>
         row.command.toLowerCase().includes(needle.toLowerCase()),
@@ -1729,34 +1743,41 @@ async function samplePosixProcessTree(pid, run, commandLineNeedles) {
 }
 
 function parsePosixProcessRows(stdout) {
-  return stdout
-    .split(/\r?\n/u)
-    .map((line) => {
-      const match = line.match(/^\s*(\d+)\s+(\d+)\s+(\d+)\s+([0-9.]+)\s+(.*)$/u);
-      if (!match) {
-        return null;
-      }
-      const [, pidRaw, ppidRaw, rssKbRaw, cpuRaw, command] = match;
-      const processId = Number.parseInt(pidRaw, 10);
-      const parentProcessId = Number.parseInt(ppidRaw, 10);
-      const rssKb = Number.parseInt(rssKbRaw, 10);
-      const cpuPercent = parseStrictNonNegativeDecimal(cpuRaw);
-      if (
-        !Number.isInteger(processId) ||
-        !Number.isInteger(parentProcessId) ||
-        !Number.isFinite(rssKb)
-      ) {
-        return null;
-      }
-      return {
-        processId,
-        parentProcessId,
-        rssKb,
-        cpuPercent,
-        command: command ?? "",
-      };
-    })
-    .filter(Boolean);
+  const rows = [];
+  const malformedRows = [];
+  for (const line of stdout.split(/\r?\n/u)) {
+    const match = line.match(/^\s*(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(.*)$/u);
+    if (!match) {
+      continue;
+    }
+    const [, pidRaw, ppidRaw, rssKbRaw, cpuRaw, command] = match;
+    if (!/^\d/u.test(pidRaw) && !/^\d/u.test(ppidRaw)) {
+      continue;
+    }
+    const processId = parseStrictPositiveInteger(pidRaw);
+    const parentProcessId = parseStrictUnsignedInteger(ppidRaw);
+    const rssKb = parseStrictPositiveInteger(rssKbRaw);
+    const cpuPercent = parseStrictNonNegativeDecimal(cpuRaw);
+    if (
+      !Number.isInteger(processId) ||
+      !Number.isInteger(parentProcessId) ||
+      !Number.isInteger(rssKb)
+    ) {
+      malformedRows.push({
+        pidRaw,
+        ppidRaw,
+      });
+      continue;
+    }
+    rows.push({
+      processId,
+      parentProcessId,
+      rssKb,
+      cpuPercent,
+      command: command ?? "",
+    });
+  }
+  return { malformedRows, rows };
 }
 
 function parseStrictNonNegativeDecimal(raw) {
@@ -1775,6 +1796,11 @@ function parseStrictUnsignedInteger(raw) {
   }
   const parsed = Number(text);
   return Number.isSafeInteger(parsed) ? parsed : null;
+}
+
+function parseStrictPositiveInteger(raw) {
+  const parsed = parseStrictUnsignedInteger(raw);
+  return parsed && parsed > 0 ? parsed : null;
 }
 
 function parseTasklistMemoryKiB(raw) {
@@ -1805,6 +1831,32 @@ function collectPosixProcessTree(rows, rootPid) {
     }
   }
   return collected;
+}
+
+function hasMalformedProcessTreeRows(malformedRows, treeRows) {
+  if (malformedRows.length === 0 || treeRows.length === 0) {
+    return false;
+  }
+  const treePids = new Set(treeRows.map((row) => row.processId));
+  return malformedRows.some(
+    (row) =>
+      rawProcessTokenMatchesTree(row.pidRaw, treePids) ||
+      rawProcessTokenMatchesTree(row.ppidRaw, treePids),
+  );
+}
+
+function rawProcessTokenMatchesTree(raw, treePids) {
+  const text = String(raw ?? "").trim();
+  for (const pid of treePids) {
+    const pidText = String(pid);
+    if (text === pidText) {
+      return true;
+    }
+    if (text.startsWith(pidText) && !/\d/u.test(text.at(pidText.length) ?? "")) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function selectPeakRssProcess(rows) {

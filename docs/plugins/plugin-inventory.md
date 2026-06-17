@@ -51,7 +51,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Core npm package
 
-90 plugins
+91 plugins
 
 - **[admin-http-rpc](/plugins/reference/admin-http-rpc)** (`@openclaw/admin-http-rpc`) - included in OpenClaw. OpenClaw admin HTTP RPC endpoint.
 
@@ -74,6 +74,8 @@ Each entry lists the package, distribution route, and description.
 - **[cerebras](/plugins/reference/cerebras)** (`@openclaw/cerebras-provider`) - included in OpenClaw. Adds Cerebras model provider support to OpenClaw.
 
 - **[chutes](/plugins/reference/chutes)** (`@openclaw/chutes-provider`) - included in OpenClaw. Adds Chutes model provider support to OpenClaw.
+
+- **[clawrouter](/plugins/reference/clawrouter)** (`@openclaw/clawrouter-provider`) - included in OpenClaw. Adds ClawRouter model provider support to OpenClaw.
 
 - **[clickclack](/plugins/reference/clickclack)** (`@openclaw/clickclack`) - included in OpenClaw. Adds the Clickclack channel surface for sending and receiving OpenClaw messages.
 

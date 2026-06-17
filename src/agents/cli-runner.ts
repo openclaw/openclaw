@@ -4,6 +4,7 @@
 import { setReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { appendExactAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
+import { buildGenericCliContextEngineHostSupport } from "../context-engine/host-compat.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   captureAgentRunLifecycleGeneration,
@@ -98,6 +99,25 @@ function shouldRetryFreshCliSessionAfterFailover(params: {
     default:
       return false;
   }
+}
+
+function formatCliEmptyOutputDiagnostics(output: CliOutput): string | undefined {
+  const process = output.diagnostics?.process;
+  if (!process) {
+    return undefined;
+  }
+  return [
+    `backend=${process.backendId}`,
+    `reason=${process.processReason}`,
+    `exitCode=${process.exitCode ?? "null"}`,
+    `exitSignal=${process.exitSignal ?? "null"}`,
+    `durationMs=${process.durationMs}`,
+    `stdoutBytes=${process.stdoutBytes}`,
+    `stdoutHash=${process.stdoutHash}`,
+    `stderrBytes=${process.stderrBytes}`,
+    `stderrHash=${process.stderrHash}`,
+    `useResume=${process.useResume ? "true" : "false"}`,
+  ].join(" ");
 }
 
 /** Checks whether a Claude CLI session binding has reached its transcript file. */
@@ -333,6 +353,9 @@ async function finalizeCliContextEngineTurn(params: {
   }
 
   let deferredTurnMaintenance: Promise<void> | undefined;
+  const contextEngineHostSupport = buildGenericCliContextEngineHostSupport({
+    backendId: context.backendResolved.id,
+  });
   const result = await finalizeHarnessContextEngineTurn({
     contextEngine: context.contextEngine,
     promptError: false,
@@ -345,6 +368,9 @@ async function finalizeCliContextEngineTurn(params: {
     messagesSnapshot: [...prePromptMessages, ...turnMessages],
     prePromptMessageCount: prePromptMessages.length,
     config: context.contextEngineConfig,
+    contextEngineHostSupport,
+    providerId: runParams.provider,
+    modelId: context.modelId,
     runMaintenance: async (maintenanceParams) =>
       await runHarnessContextEngineMaintenance({
         ...maintenanceParams,
@@ -773,6 +799,10 @@ export async function runPreparedCliAgent(
       !output.didSendViaMessagingTool &&
       params.allowEmptyAssistantReplyAsSilent !== true
     ) {
+      const emptyOutputDiagnostics = formatCliEmptyOutputDiagnostics(output);
+      if (emptyOutputDiagnostics) {
+        cliBackendLog.warn(`cli empty response diagnostics: ${emptyOutputDiagnostics}`);
+      }
       throw attachCliMessagingDeliveryEvidence(
         new FailoverError("CLI backend returned an empty response.", {
           reason: "empty_response",
@@ -970,6 +1000,11 @@ export async function runPreparedCliAgent(
       sessionKey: params.sessionKey,
       sessionFile: params.sessionFile,
       config: context.contextEngineConfig,
+      contextEngineHostSupport: buildGenericCliContextEngineHostSupport({
+        backendId: context.backendResolved.id,
+      }),
+      providerId: params.provider,
+      modelId: context.modelId,
       warn: (message) => log.warn(message),
     });
     const contextEngineHistoryMessages = context.contextEngine

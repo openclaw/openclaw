@@ -2422,7 +2422,10 @@ export function renderChat(props: ChatProps) {
   const handleInput = (e: InputEvent) => {
     const target = e.target as HTMLTextAreaElement;
     if (vs.composerComposing || e.isComposing) {
-      adjustTextareaHeight(target);
+      // Skip adjustTextareaHeight during IME composition — each pinyin
+      // keystroke fires `input` and the height read/write forces a
+      // synchronous reflow that blocks the composition thread.
+      // Resize runs once in handleCompositionEnd → syncComposerValue.
       draftMirror.value = target.value;
       return;
     }

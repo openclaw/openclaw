@@ -284,6 +284,33 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     });
   });
 
+  it("reports hook-selected models as normal selected models, not fallbacks", async () => {
+    mockedGlobalHookRunner.hasHooks.mockImplementation(
+      (hookName) => hookName === "before_model_resolve",
+    );
+    mockedGlobalHookRunner.runBeforeModelResolve.mockResolvedValueOnce({
+      providerOverride: "openai",
+      modelOverride: "hook-selected-model",
+    });
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "anthropic",
+      model: "initial-model",
+      runId: "run-before-model-resolve-runtime-settings",
+    });
+
+    expect(mockedGlobalHookRunner.runBeforeModelResolve).toHaveBeenCalledTimes(1);
+    expectMockCallFields(mockedRunEmbeddedAttempt, {
+      provider: "openai",
+      modelId: "hook-selected-model",
+      requestedModelId: "hook-selected-model",
+      fallbackActive: false,
+      fallbackReason: null,
+    });
+  });
+
   it("passes resolved auth profile into run attempts for context-engine afterTurn propagation", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
 
@@ -2471,6 +2498,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
         onSessionIdChanged,
       });
 
+      const compactParams = expectMockCallFields(mockedCompactDirect, {});
       expectMockCallFields(
         mockedRunEmbeddedAttempt,
         {
@@ -2479,9 +2507,17 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
         },
         1,
       );
-      expectMockCallFields(mockedRunContextEngineMaintenance, {
+      const maintenanceParams = expectMockCallFields(mockedRunContextEngineMaintenance, {
         sessionId: "rotated-session",
         sessionFile: "/tmp/rotated-session.json",
+      });
+      expect(maintenanceParams.runtimeSettings).toBe(compactParams.runtimeSettings);
+      const runtimeSettings = expectRecordFields(maintenanceParams.runtimeSettings, {});
+      expectRecordFields(runtimeSettings.runtime, {
+        mode: "degraded",
+      });
+      expectRecordFields(runtimeSettings.diagnostics, {
+        degradedReason: "context_overflow",
       });
       expect(replyOperation.sessionId).toBe("rotated-session");
       expect(onSessionIdChanged).toHaveBeenCalledWith("rotated-session");
@@ -2624,6 +2660,14 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     });
 
     mockedRunEmbeddedAttempt.mockResolvedValue(makeAttemptResult({ promptError }));
+    mockedEnsureAuthProfileStoreWithoutExternalProfiles.mockReturnValue({
+      profiles: {
+        "test-profile": {
+          provider: "anthropic",
+          type: "oauth",
+        },
+      },
+    });
     mockedCoerceToFailoverError.mockReturnValue(normalized);
     mockedDescribeFailoverError.mockImplementation((err: unknown) => ({
       message: err instanceof Error ? err.message : String(err),
@@ -2653,6 +2697,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       provider: "anthropic",
       model: "test-model",
       profileId: "test-profile",
+      authMode: "oauth",
     });
     expect(mockedResolveFailoverStatus).toHaveBeenCalledWith("rate_limit");
   });

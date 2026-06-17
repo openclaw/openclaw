@@ -630,7 +630,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     }
     const cleaned = preflight.normalizedQuery;
     void this.warmSession(opts?.sessionKey);
-    startAsyncSearchSync({
+    await startAsyncSearchSync({
       enabled: this.settings.sync.onSearch,
       dirty: this.dirty,
       sessionsDirty: this.sessionsDirty,

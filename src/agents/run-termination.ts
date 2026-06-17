@@ -5,7 +5,7 @@
  * controller aborts without matching free-form error text.
  */
 /** Stop reason emitted when an agent run is aborted. */
-export const AGENT_RUN_ABORTED_STOP_REASON = "aborted" as const;
+const AGENT_RUN_ABORTED_STOP_REASON = "aborted" as const;
 /** Error text used for aborted agent runs. */
 export const AGENT_RUN_ABORTED_ERROR = "agent run aborted" as const;
 export const AGENT_RUN_RESTART_ABORT_STOP_REASON = "restart" as const;

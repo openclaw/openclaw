@@ -45,8 +45,8 @@ const MAX_TOOL_RESULT_CONTEXT_SHARE = 0.3;
  * request-local ceiling so oversized tool output cannot dominate the next turn.
  */
 export const DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS = 16_000;
-export const LARGE_CONTEXT_MAX_LIVE_TOOL_RESULT_CHARS = 32_000;
-export const XL_CONTEXT_MAX_LIVE_TOOL_RESULT_CHARS = 64_000;
+const LARGE_CONTEXT_MAX_LIVE_TOOL_RESULT_CHARS = 32_000;
+const XL_CONTEXT_MAX_LIVE_TOOL_RESULT_CHARS = 64_000;
 const LARGE_CONTEXT_TOOL_RESULT_TOKENS = 100_000;
 const XL_CONTEXT_TOOL_RESULT_TOKENS = 200_000;
 
@@ -389,7 +389,7 @@ function calculateRecoveryAggregateToolResultChars(
   );
 }
 
-export type ToolResultReductionPotential = {
+type ToolResultReductionPotential = {
   maxChars: number;
   aggregateBudgetChars: number;
   toolResultCount: number;

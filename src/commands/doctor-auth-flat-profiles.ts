@@ -73,7 +73,7 @@ type RawAuthProfileImportStore = {
   order?: Record<string, string[]>;
 };
 
-export type LegacyFlatAuthProfileRepairResult = {
+type LegacyFlatAuthProfileRepairResult = {
   detected: string[];
   changes: string[];
   configChanged?: boolean;
