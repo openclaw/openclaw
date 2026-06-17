@@ -8,6 +8,7 @@ function createDraft(overrides: Partial<CronQuickCreateDraft> = {}): CronQuickCr
     name: "Inbox check",
     schedulePreset: "every-morning",
     deliveryPreset: "notify",
+    model: "",
     ...overrides,
   };
 }

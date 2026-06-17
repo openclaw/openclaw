@@ -390,6 +390,7 @@ describe("cron view", () => {
         onCreate: () => undefined,
         onCancel: () => undefined,
         onAdvancedCreate,
+        modelSuggestions: [],
       }),
       container,
     );
