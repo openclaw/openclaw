@@ -4,7 +4,7 @@ import {
   type LegacyConfigMigrationSpec,
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
-import { isRecord } from "./legacy-config-record-shared.js";
+import { isRecord, type JsonRecord } from "./legacy-config-record-shared.js";
 import { migrateLegacyXSearchConfig } from "./legacy-x-search-migrate.js";
 
 const LEGACY_OPENAI_CODEX_PLUGIN_ID = "openai-codex";
@@ -68,12 +68,39 @@ function rewritePluginSlots(value: unknown): boolean {
   return changed;
 }
 
+function deepMergePluginEntry(
+  existing: JsonRecord,
+  legacy: JsonRecord,
+): JsonRecord {
+  const merged = { ...existing };
+  for (const key of Object.keys(legacy)) {
+    const legacyVal = legacy[key];
+    const existingVal = merged[key];
+    if (!(key in merged)) {
+      merged[key] = legacyVal;
+    } else if (isRecord(existingVal) && isRecord(legacyVal)) {
+      merged[key] = deepMergePluginEntry(existingVal, legacyVal);
+    }
+    // When canonical already has the key, it wins (no overwrite).
+  }
+  return merged;
+}
+
 function rewritePluginEntries(value: unknown): boolean {
   if (!isRecord(value) || !(LEGACY_OPENAI_CODEX_PLUGIN_ID in value)) {
     return false;
   }
   if (!(OPENAI_PLUGIN_ID in value)) {
     value[OPENAI_PLUGIN_ID] = value[LEGACY_OPENAI_CODEX_PLUGIN_ID];
+  } else {
+    // When openai already exists, deep-merge the legacy entry so
+    // non-conflicting keys (including nested config) survive.
+    // Canonical entry wins on true conflicts.
+    const existing = value[OPENAI_PLUGIN_ID];
+    const legacy = value[LEGACY_OPENAI_CODEX_PLUGIN_ID];
+    if (isRecord(existing) && isRecord(legacy)) {
+      value[OPENAI_PLUGIN_ID] = deepMergePluginEntry(existing, legacy);
+    }
   }
   delete value[LEGACY_OPENAI_CODEX_PLUGIN_ID];
   return true;
