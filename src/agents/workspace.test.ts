@@ -713,6 +713,56 @@ describe("ensureAgentWorkspace", () => {
       "# Add tasks below when you want the agent to check something periodically.",
     );
   });
+
+  it("does not recreate optional bootstrap files when workspace setup is already completed", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+
+    // First call: set up the workspace and complete setup by customizing profile files.
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+    await writeWorkspaceFile({
+      dir: tempDir,
+      name: DEFAULT_IDENTITY_FILENAME,
+      content: "custom identity",
+    });
+    await writeWorkspaceFile({
+      dir: tempDir,
+      name: DEFAULT_USER_FILENAME,
+      content: "custom user",
+    });
+    // Delete BOOTSTRAP.md to trigger completion on next ensure call.
+    await fs.unlink(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+
+    // Verify setup is completed.
+    const state = await readWorkspaceState(tempDir);
+    expect(state.setupCompletedAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
+
+    // Delete optional bootstrap files and customize AGENTS.md to simulate
+    // a repository workspace where optional files only exist under agent
+    // subdirectories but the root still has customized required files.
+    await fs.unlink(path.join(tempDir, DEFAULT_SOUL_FILENAME));
+    await fs.unlink(path.join(tempDir, DEFAULT_IDENTITY_FILENAME));
+    await fs.unlink(path.join(tempDir, DEFAULT_USER_FILENAME));
+    await fs.unlink(path.join(tempDir, DEFAULT_HEARTBEAT_FILENAME));
+    await writeWorkspaceFile({
+      dir: tempDir,
+      name: DEFAULT_AGENTS_FILENAME,
+      content: "custom agents instructions\n",
+    });
+
+    // Third call: should NOT recreate optional files for an already-configured workspace.
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+
+    // Verify optional files are NOT recreated at the root level.
+    await expectPathMissing(path.join(tempDir, DEFAULT_SOUL_FILENAME));
+    await expectPathMissing(path.join(tempDir, DEFAULT_IDENTITY_FILENAME));
+    await expectPathMissing(path.join(tempDir, DEFAULT_USER_FILENAME));
+    await expectPathMissing(path.join(tempDir, DEFAULT_HEARTBEAT_FILENAME));
+
+    // Verify required files (AGENTS.md, TOOLS.md) still exist.
+    await expect(fs.access(path.join(tempDir, DEFAULT_AGENTS_FILENAME))).resolves.toBeUndefined();
+    await expect(fs.access(path.join(tempDir, DEFAULT_TOOLS_FILENAME))).resolves.toBeUndefined();
+  });
 });
 
 describe("loadWorkspaceBootstrapFiles", () => {

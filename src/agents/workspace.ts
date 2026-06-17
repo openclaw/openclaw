@@ -954,6 +954,15 @@ export async function ensureAgentWorkspace(params?: {
   const userTemplate = await loadTemplate(DEFAULT_USER_FILENAME);
   const heartbeatTemplate = await loadTemplate(DEFAULT_HEARTBEAT_FILENAME);
   const skipOptionalBootstrapFiles = new Set(params?.skipOptionalBootstrapFiles ?? []);
+  // When the workspace is already configured, skip optional bootstrap files to
+  // prevent subagent spawns from recreating root-level SOUL.md, USER.md,
+  // IDENTITY.md, or HEARTBEAT.md that were removed intentionally or only exist
+  // under agent-specific subdirectories.
+  if (await isWorkspaceSetupCompleted(dir)) {
+    for (const filename of OPTIONAL_BOOTSTRAP_FILENAMES) {
+      skipOptionalBootstrapFiles.add(filename);
+    }
+  }
   const shouldWriteBootstrapFile = (fileName: string): boolean =>
     !OPTIONAL_BOOTSTRAP_FILENAMES.has(fileName) || !skipOptionalBootstrapFiles.has(fileName);
 
