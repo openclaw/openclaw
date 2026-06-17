@@ -644,6 +644,20 @@ export async function processGatewayAllowlist(
       });
 
       if (strictInlineEvalDecision.deniedReason || !strictInlineEvalDecision.approvedByAsk) {
+        const inlineDeniedReason = strictInlineEvalDecision.deniedReason ?? "approval-required";
+        emitGatewayExecApprovalSecurityEvent({
+          action: "exec.approval.denied",
+          outcome: "denied",
+          severity: "medium",
+          agentId: params.agentId,
+          reason: inlineDeniedReason,
+          hostSecurity,
+          hostAsk,
+          host: "gateway",
+          segmentCount: allowlistEval.segments.length,
+          trigger: params.trigger,
+          decision: preResolvedDecision,
+        });
         throw new Error(
           buildHeadlessExecApprovalDeniedMessage({
             trigger: params.trigger,
@@ -655,6 +669,18 @@ export async function processGatewayAllowlist(
         );
       }
 
+      emitGatewayExecApprovalSecurityEvent({
+        action: "exec.approval.approved",
+        outcome: "success",
+        severity: "medium",
+        agentId: params.agentId,
+        hostSecurity,
+        hostAsk,
+        host: "gateway",
+        segmentCount: allowlistEval.segments.length,
+        trigger: params.trigger,
+        decision: preResolvedDecision,
+      });
       recordMatchedAllowlistUse(
         resolveApprovalAuditTrustPath(
           allowlistEval.segments[0]?.resolution ?? null,
