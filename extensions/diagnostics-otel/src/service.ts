@@ -1044,7 +1044,7 @@ function assignOtelSecurityEventAttributes(
 
 function securitySeverityText(
   severity: Extract<DiagnosticEventPayload, { type: "security.event" }>["severity"],
-) {
+): LogRecord["severityText"] {
   switch (severity) {
     case "critical":
       return "FATAL";
@@ -1056,6 +1056,8 @@ function securitySeverityText(
     case "low":
       return "INFO";
   }
+  const unreachable: never = severity;
+  return unreachable;
 }
 
 function assignOtelSecurityAttributes(
