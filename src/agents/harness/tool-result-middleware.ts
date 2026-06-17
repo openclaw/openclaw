@@ -286,6 +286,17 @@ function coerceMiddlewareContentBlocks(
   }
   const normalizedType = value.type.toLowerCase();
   if (!NESTED_TOOL_RESULT_BLOCK_TYPES.has(normalizedType)) {
+    // For top-level text blocks that exceed MAX_MIDDLEWARE_TEXT_CHARS,
+    // truncate instead of silently dropping — otherwise large tool results
+    // (e.g. gateway config.get snapshot) are discarded as invalid.
+    if (normalizedType === "text" && typeof value.text === "string") {
+      return [
+        {
+          type: "text",
+          text: truncateUtf16Safe(value.text, MAX_MIDDLEWARE_TEXT_CHARS),
+        } as MiddlewareContentBlock,
+      ];
+    }
     return [];
   }
   const content = value.content;
