@@ -4,7 +4,12 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 
-export const OPTIONAL_HOSTED_WORKFLOWS = ["Blacksmith Testbox", "Workflow Sanity"];
+export const SCHEDULED_HOSTED_WORKFLOWS = [
+  "Blacksmith Testbox",
+  "Blacksmith ARM Testbox",
+  "Blacksmith Build Artifacts Testbox",
+  "Workflow Sanity",
+];
 
 function readOptionValue(argv, index, optionName) {
   const value = argv[index + 1];
@@ -97,7 +102,7 @@ export function collectHostedGateEvidence({ sha, workflowRuns, changelogOnly = f
   if (!changelogOnly) {
     workflows.push(successfulRunOrThrow(workflowRuns, "CI", sha));
   }
-  for (const workflowName of OPTIONAL_HOSTED_WORKFLOWS) {
+  for (const workflowName of SCHEDULED_HOSTED_WORKFLOWS) {
     const matchingRuns = matchingPullRequestRuns(workflowRuns, workflowName, sha);
     if (matchingRuns.length > 0) {
       workflows.push(successfulRunOrThrow(workflowRuns, workflowName, sha));

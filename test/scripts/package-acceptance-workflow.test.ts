@@ -473,6 +473,10 @@ describe("package acceptance workflow", () => {
   it("requires pinned full release child workflows to run at the resolved target SHA", () => {
     const workflow = readFileSync(FULL_RELEASE_VALIDATION_WORKFLOW, "utf8");
     const releaseChecksWorkflow = readFileSync(RELEASE_CHECKS_WORKFLOW, "utf8");
+    const performanceJob = workflow.slice(
+      workflow.indexOf("  performance:\n"),
+      workflow.indexOf("\n  summary:"),
+    );
 
     expect(workflow).toContain("TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}");
     expect(workflow).toContain("CHILD_WORKFLOW_REF: ${{ github.ref_name }}");
@@ -497,10 +501,19 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain(
       'gh_with_retry workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@"',
     );
-    expect(workflow).toContain(
+    expect(performanceJob).toContain(
+      'dispatch_id="full-release-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"',
+    );
+    expect(performanceJob).toContain('-f dispatch_id="$dispatch_id"');
+    expect(performanceJob).toContain(
+      'DISPATCH_RUN_NAME="$dispatch_run_name" gh_with_retry api -X GET',
+    );
+    expect(performanceJob).toContain(".display_title == env.DISPATCH_RUN_NAME");
+    expect(performanceJob).toContain("Could not find dispatched run for ${dispatch_run_name}.");
+    expect(performanceJob).not.toContain("BEFORE_IDS=");
+    expect(performanceJob).not.toContain(
       "did not return an Actions run URL; refusing to guess from recent workflow_dispatch runs",
     );
-    expect(workflow).not.toContain("BEFORE_IDS=");
     expect(workflow).toContain("child run used ${head_sha}, expected ${TARGET_SHA}");
     expect(workflow).toContain(
       "Dispatch Full Release Validation from a ref pinned to the target SHA",

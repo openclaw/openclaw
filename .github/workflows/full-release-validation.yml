@@ -1020,6 +1020,9 @@ jobs:
             echo "- Release impact: blocking"
           } >> "$GITHUB_STEP_SUMMARY"
 
+          dispatch_id="full-release-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          dispatch_run_name="OpenClaw Performance ${dispatch_id}"
+
           dispatch_output="$(gh_with_retry workflow run openclaw-performance.yml \
             --ref "$CHILD_WORKFLOW_REF" \
             -f target_ref="$TARGET_SHA" \
@@ -1027,16 +1030,26 @@ jobs:
             -f repeat=3 \
             -f deep_profile=false \
             -f live_openai_candidate=false \
-            -f fail_on_regression=true)"
+            -f fail_on_regression=true \
+            -f dispatch_id="$dispatch_id")"
           printf '%s\n' "$dispatch_output"
-          run_id="$(
-            printf '%s\n' "$dispatch_output" |
-              sed -nE 's#.*actions/runs/([0-9]+).*#\1#p' |
-              tail -n 1
-          )"
+
+          run_id=""
+          for _ in $(seq 1 60); do
+            run_id="$(
+              DISPATCH_RUN_NAME="$dispatch_run_name" gh_with_retry api -X GET "repos/${GITHUB_REPOSITORY}/actions/workflows/openclaw-performance.yml/runs" \
+                -F event=workflow_dispatch \
+                -F per_page=100 \
+                --jq '.workflow_runs | map(select(.display_title == env.DISPATCH_RUN_NAME)) | sort_by(.created_at) | reverse | .[0].id // empty'
+            )"
+            if [[ -n "$run_id" ]]; then
+              break
+            fi
+            sleep 5
+          done
 
           if [[ -z "$run_id" ]]; then
-            echo "::error::gh workflow run openclaw-performance.yml did not return an Actions run URL; refusing to guess from recent workflow_dispatch runs." >&2
+            echo "::error::Could not find dispatched run for ${dispatch_run_name}." >&2
             exit 1
           fi
 

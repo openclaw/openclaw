@@ -3,7 +3,7 @@ import {
   collectHostedGateEvidence,
   parseArgs,
   parseWorkflowRunPages,
-  OPTIONAL_HOSTED_WORKFLOWS,
+  SCHEDULED_HOSTED_WORKFLOWS,
 } from "../../scripts/verify-pr-hosted-gates.mjs";
 
 const sha = "773ffd87a1e1e34451ad6e38fda37380c2569a50";
@@ -33,7 +33,9 @@ describe("verify-pr-hosted-gates", () => {
           event: "workflow_dispatch",
         },
         successfulRun("Blacksmith Testbox", 3, "2026-06-17T10:48:00Z"),
-        successfulRun("Workflow Sanity", 4, "2026-06-17T10:49:00Z"),
+        successfulRun("Blacksmith ARM Testbox", 4, "2026-06-17T10:49:00Z"),
+        successfulRun("Blacksmith Build Artifacts Testbox", 5, "2026-06-17T10:50:00Z"),
+        successfulRun("Workflow Sanity", 6, "2026-06-17T10:51:00Z"),
       ],
     });
 
@@ -42,23 +44,25 @@ describe("verify-pr-hosted-gates", () => {
       workflows: [
         expect.objectContaining({ name: "CI", id: 1 }),
         expect.objectContaining({ name: "Blacksmith Testbox", id: 3 }),
-        expect.objectContaining({ name: "Workflow Sanity", id: 4 }),
+        expect.objectContaining({ name: "Blacksmith ARM Testbox", id: 4 }),
+        expect.objectContaining({ name: "Blacksmith Build Artifacts Testbox", id: 5 }),
+        expect.objectContaining({ name: "Workflow Sanity", id: 6 }),
       ],
     });
   });
 
   it("rejects a failed rerun of a workflow that was scheduled for the exact head", () => {
-    const workflowRuns = ["CI", ...OPTIONAL_HOSTED_WORKFLOWS].map((name, index) =>
+    const workflowRuns = ["CI", ...SCHEDULED_HOSTED_WORKFLOWS].map((name, index) =>
       successfulRun(name, index + 1, `2026-06-17T10:4${index}:00Z`),
     );
-    workflowRuns[1] = {
-      ...workflowRuns[1],
+    workflowRuns[2] = {
+      ...workflowRuns[2],
       conclusion: "failure",
       updated_at: "2026-06-17T10:50:00Z",
     };
 
     expect(() => collectHostedGateEvidence({ sha, workflowRuns })).toThrow(
-      "Missing successful exact-head Blacksmith Testbox workflow",
+      "Missing successful exact-head Blacksmith ARM Testbox workflow",
     );
   });
 

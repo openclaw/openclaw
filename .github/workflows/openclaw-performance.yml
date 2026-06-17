@@ -1,5 +1,7 @@
 name: OpenClaw Performance
 
+run-name: ${{ inputs.dispatch_id != '' && format('OpenClaw Performance {0}', inputs.dispatch_id) || 'OpenClaw Performance' }}
+
 on:
   schedule:
     - cron: "11 5 * * *"
@@ -44,6 +46,11 @@ on:
         description: openclaw/Kova Git ref to install
         required: false
         default: b63b6f9e20efb23641df00487e982230d81a90ac
+        type: string
+      dispatch_id:
+        description: Optional parent workflow dispatch identifier
+        required: false
+        default: ""
         type: string
 
 permissions:
