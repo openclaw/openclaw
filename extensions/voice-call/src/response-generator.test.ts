@@ -36,7 +36,10 @@ type EmbeddedAgentArgs = {
   blockReplyBreak?: string;
 };
 
-function createAgentRuntime(payloads: Array<Record<string, unknown>>) {
+function createAgentRuntime(
+  payloads: Array<Record<string, unknown>>,
+  options?: { blockReplyPayloads?: Array<Record<string, unknown>> },
+) {
   const sessionStore: Record<string, TestSessionEntry> = {};
   const saveSessionStore = vi.fn(async () => {});
   const updateSessionStore = vi.fn(
@@ -203,6 +206,19 @@ describe("generateVoiceResponse", () => {
     expect(args.extraSystemPrompt).toContain('{"spoken":"..."}');
     expect(args.provider).toBe("together");
     expect(args.model).toBe("Qwen/Qwen2.5-7B-Instruct-Turbo");
+    expect(args.blockReplyBreak).toBe("text_end");
+    expect(typeof runEmbeddedAgent.mock.calls[0][0]?.onBlockReply).toBe("function");
+  });
+
+  it("prefers fresh block reply spoken output over stale completed payloads", async () => {
+    const { runtime, runEmbeddedAgent } = createAgentRuntime([{ text: '{"spoken":""}' }], {
+      blockReplyPayloads: [{ text: '{"spoken":"Fresh callback response."}' }],
+    });
+
+    const { result } = await runGenerateVoiceResponse([], { runtime });
+
+    expect(result.text).toBe("Fresh callback response.");
+    const args = requireEmbeddedAgentArgs(runEmbeddedAgent);
     expect(args.blockReplyBreak).toBe("text_end");
     expect(typeof runEmbeddedAgent.mock.calls[0][0]?.onBlockReply).toBe("function");
   });
