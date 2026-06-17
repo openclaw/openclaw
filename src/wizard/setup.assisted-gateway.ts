@@ -4,9 +4,10 @@ import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { resolveControlUiLinks, waitForGatewayReachable } from "../commands/onboard-helpers.js";
-import { resolveConfigPath } from "../config/paths.js";
+import { DEFAULT_GATEWAY_PORT, resolveConfigPath } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
+import { defaultGatewayBindMode } from "../gateway/net.js";
 import { probeGateway } from "../gateway/probe.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { findVerifiedGatewayListenerPidsOnPortSync } from "../infra/gateway-processes.js";
@@ -49,14 +50,18 @@ function snapshotMatchesGatewaySettings(params: {
   const gateway = asRecord(config?.gateway);
   const auth = asRecord(gateway?.auth);
   const tailscale = asRecord(gateway?.tailscale);
+  const tailscaleMode = tailscale?.mode ?? "off";
+  const bind =
+    gateway?.bind ??
+    defaultGatewayBindMode(typeof tailscaleMode === "string" ? tailscaleMode : undefined);
   return (
     typeof snapshot?.path === "string" &&
     path.resolve(snapshot.path) === path.resolve(resolveConfigPath()) &&
-    gateway?.port === params.settings.port &&
-    gateway.bind === params.settings.bind &&
-    gateway.customBindHost === params.settings.customBindHost &&
+    (gateway?.port ?? DEFAULT_GATEWAY_PORT) === params.settings.port &&
+    bind === params.settings.bind &&
+    gateway?.customBindHost === params.settings.customBindHost &&
     auth?.mode === params.settings.authMode &&
-    (tailscale?.mode ?? "off") === params.settings.tailscaleMode &&
+    tailscaleMode === params.settings.tailscaleMode &&
     (tailscale?.resetOnExit === true) === params.settings.tailscaleResetOnExit
   );
 }
@@ -160,13 +165,30 @@ async function resolveGatewayProbeAuth(params: {
 
 async function waitForOwnedGatewayListener(params: {
   port: number;
-  pid: number;
+  child: ChildProcess;
   deadlineMs: number;
 }): Promise<{ ok: boolean; detail?: string }> {
+  const pid = params.child.pid;
+  if (!pid) {
+    return { ok: false, detail: "The temporary OpenClaw Gateway process has no PID." };
+  }
+  const resolveExitDetail = () => {
+    return params.child.exitCode !== null || params.child.signalCode !== null
+      ? `The temporary OpenClaw Gateway process exited before listening on port ${params.port}.`
+      : undefined;
+  };
   const startedAt = Date.now();
   while (Date.now() - startedAt < params.deadlineMs) {
-    if (findVerifiedGatewayListenerPidsOnPortSync(params.port).includes(params.pid)) {
+    const exitDetail = resolveExitDetail();
+    if (exitDetail) {
+      return { ok: false, detail: exitDetail };
+    }
+    if (findVerifiedGatewayListenerPidsOnPortSync(params.port).includes(pid)) {
       return { ok: true };
+    }
+    const postCheckExitDetail = resolveExitDetail();
+    if (postCheckExitDetail) {
+      return { ok: false, detail: postCheckExitDetail };
     }
     await sleep(Math.max(0, Math.min(200, params.deadlineMs - (Date.now() - startedAt))));
   }
@@ -261,13 +283,11 @@ export async function ensureAgentAssistedGatewayRuntime(params: {
 
   try {
     // A competing process can win the port bind after the initial listener check.
-    const ownedReady = child.pid
-      ? await waitForOwnedGatewayListener({
-          port: params.settings.port,
-          pid: child.pid,
-          deadlineMs: 15_000,
-        })
-      : { ok: false, detail: "The temporary OpenClaw Gateway process has no PID." };
+    const ownedReady = await waitForOwnedGatewayListener({
+      port: params.settings.port,
+      child,
+      deadlineMs: 15_000,
+    });
     const directReady =
       ownedReady.ok && params.settings.authMode !== "trusted-proxy"
         ? await probe(15_000)

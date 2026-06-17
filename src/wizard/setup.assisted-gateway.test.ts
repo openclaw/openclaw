@@ -11,6 +11,7 @@ const resolveGatewayProgramArguments = vi.hoisted(() => vi.fn());
 const killProcessTree = vi.hoisted(() => vi.fn());
 const detach = vi.hoisted(() => vi.fn());
 const findVerifiedGatewayListenerPidsOnPortSync = vi.hoisted(() => vi.fn(() => [] as number[]));
+const defaultGatewayBindMode = vi.hoisted(() => vi.fn(() => "loopback"));
 
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
@@ -34,7 +35,12 @@ vi.mock("../gateway/probe.js", () => ({
 }));
 
 vi.mock("../config/paths.js", () => ({
+  DEFAULT_GATEWAY_PORT: 18789,
   resolveConfigPath: () => "/tmp/openclaw.json",
+}));
+
+vi.mock("../gateway/net.js", () => ({
+  defaultGatewayBindMode,
 }));
 
 vi.mock("../process/kill-tree.js", () => ({
@@ -150,6 +156,32 @@ describe("agent-assisted Gateway runtime", () => {
     );
     expect(spawn).not.toHaveBeenCalled();
     expect(waitForGatewayReachable).not.toHaveBeenCalled();
+  });
+
+  it("reuses a verified existing Gateway whose omitted settings use runtime defaults", async () => {
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4321]);
+    probeGateway
+      .mockResolvedValueOnce({
+        ok: true,
+        configSnapshot: {
+          path: "/tmp/openclaw.json",
+          config: {
+            gateway: {
+              auth: { mode: "token" },
+            },
+          },
+        },
+      })
+      .mockResolvedValueOnce({ ok: false });
+
+    const result = await ensureAgentAssistedGatewayRuntime({
+      config: {},
+      settings,
+      prompter: createWizardPrompter(),
+    });
+
+    expect(result.temporary).toBe(false);
+    expect(spawn).not.toHaveBeenCalled();
   });
 
   it("rejects a verified Gateway listener that does not accept the active auth", async () => {
@@ -288,6 +320,42 @@ describe("agent-assisted Gateway runtime", () => {
     expect(waitForGatewayReachable).not.toHaveBeenCalled();
     expect(killProcessTree).not.toHaveBeenCalled();
     expect(detach).toHaveBeenCalledOnce();
+  });
+
+  it("stops waiting when the temporary Gateway exits before binding", async () => {
+    vi.useFakeTimers();
+    try {
+      const child = createMockChild();
+      spawn.mockReturnValueOnce(child);
+      findVerifiedGatewayListenerPidsOnPortSync.mockReturnValueOnce([]).mockImplementation(() => {
+        child.exitCode = 1;
+        return [];
+      });
+
+      let settled = false;
+      const result = ensureAgentAssistedGatewayRuntime({
+        config: {},
+        settings,
+        prompter: createWizardPrompter(),
+      })
+        .catch((error: unknown) => error)
+        .finally(() => {
+          settled = true;
+        });
+
+      await vi.advanceTimersByTimeAsync(200);
+      const settledAfterExit = settled;
+      await vi.runAllTimersAsync();
+
+      expect(settledAfterExit).toBe(true);
+      await expect(result).resolves.toEqual(
+        expect.objectContaining({
+          message: expect.stringContaining("exited before listening"),
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("runs a temporary Gateway when none is reachable", async () => {
