@@ -570,6 +570,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             return;
           }
 
+          let trackedPromise: Promise<unknown>;
+          const isCurrentTask = () => store.tasks.get(id) === trackedPromise;
           scopedChannelRuntime = await measureStartup(`channels.${channelId}.runtime`, async () =>
             createTaskScopedChannelRuntime({
               channelRuntime: await getChannelRuntime(),
@@ -628,7 +630,10 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                   abortSignal: abort.signal,
                   log,
                   getStatus: () => getRuntime(channelId, id),
-                  setStatus: (next) => setRuntimeFromTaskStatus(channelId, id, next, abort.signal),
+                  setStatus: (next) =>
+                    isCurrentTask()
+                      ? setRuntimeFromTaskStatus(channelId, id, next, abort.signal)
+                      : getRuntime(channelId, id),
                   ...(channelRuntimeForTask ? { channelRuntime: channelRuntimeForTask } : {}),
                 });
               const routeRegistry = getPluginHttpRouteRegistry?.();
@@ -641,9 +646,11 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             }
             await startAccountTask;
           });
-          const trackedPromise = task
+          // Recovery can replace a timed-out task before the old promise settles.
+          // Only the task that still owns the store slot may write lifecycle state.
+          trackedPromise = task
             .then(() => {
-              if (abort.signal.aborted || manuallyStopped.has(rKey)) {
+              if (abort.signal.aborted || manuallyStopped.has(rKey) || !isCurrentTask()) {
                 return;
               }
               const message = "channel exited without an error";
@@ -651,17 +658,26 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               log.error?.(`[${id}] ${message}`);
             })
             .catch((err: unknown) => {
+              if (!isCurrentTask()) {
+                return;
+              }
               const message = formatErrorMessage(err);
               setRuntime(channelId, id, { accountId: id, lastError: message });
               log.error?.(`[${id}] channel exited: ${message}`);
             })
             .then(async () => {
               await cleanupTaskScopedApprovalRuntime("channel cleanup failed");
+              if (!isCurrentTask()) {
+                return;
+              }
               setStoppedRuntime(channelId, id, {
                 lastStopAt: Date.now(),
               });
             })
             .then(async () => {
+              if (!isCurrentTask()) {
+                return;
+              }
               if (manuallyStopped.has(rKey)) {
                 recoveryStopTimedOut.delete(rKey);
                 recoveryStartRequested.delete(rKey);
