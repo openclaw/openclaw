@@ -80,7 +80,7 @@ function transformMessageText(message: unknown, replacements?: PluginTextReplace
 }
 
 /** Apply input text replacements to a stream context. */
-export function transformStreamContextText(
+function transformStreamContextText(
   context: Parameters<StreamFn>[1],
   replacements?: PluginTextReplacement[],
   options?: { systemPrompt?: boolean },

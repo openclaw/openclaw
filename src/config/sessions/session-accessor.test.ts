@@ -7,6 +7,7 @@ import {
   appendTranscriptMessage,
   appendTranscriptEvent,
   cleanupSessionLifecycleArtifacts,
+  createSessionEntryWithTranscript,
   listSessionEntries,
   loadExactSessionEntry,
   loadSessionEntry,
@@ -91,6 +92,57 @@ describe("session accessor file-backed seam", () => {
     );
     expect(inserted?.sessionId).not.toBe(scope.sessionKey);
     expect(loadSessionEntry(scope)?.sessionId).toBe(inserted?.sessionId);
+  });
+
+  it("creates entries with initialized transcripts and normalized sessionFile metadata", async () => {
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+
+    const created = await createSessionEntryWithTranscript(scope, ({ sessionEntries }) => {
+      expect(sessionEntries).toEqual({});
+      return {
+        ok: true,
+        entry: {
+          sessionId: "session-1",
+          updatedAt: 10,
+        },
+      };
+    });
+
+    expect(created.ok).toBe(true);
+    if (!created.ok) {
+      throw new Error("expected session creation to succeed");
+    }
+    expect(path.basename(created.sessionFile)).toBe("session-1.jsonl");
+    expect(created.entry.sessionFile).toBe(created.sessionFile);
+  });
+
+  it("rolls back the entry when transcript initialization fails", async () => {
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+    fs.writeFileSync(path.join(tempDir, "blocked"), "not a directory", "utf8");
+
+    const created = await createSessionEntryWithTranscript(scope, () => ({
+      ok: true,
+      entry: {
+        sessionFile: "blocked/session-1.jsonl",
+        sessionId: "session-1",
+        updatedAt: 10,
+      },
+    }));
+
+    expect(created).toMatchObject({
+      ok: false,
+      phase: "transcript",
+    });
+    expect(loadSessionEntry(scope)).toBeUndefined();
+    expect(loadSessionStore(storePath, { skipCache: true })[scope.sessionKey]).toBeUndefined();
   });
 
   it("can borrow cached entry objects for read-only hot paths", async () => {

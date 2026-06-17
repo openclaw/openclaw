@@ -68,6 +68,9 @@ const STREAM_STRIPPED_BLOCK_TAG_NAMES = [
   "antml:think",
   "antml:thinking",
   "antml:thought",
+  "mm:think",
+  "mm:thinking",
+  "mm:thought",
 ] as const;
 const embeddedLog = createSubsystemLogger("agent/embedded");
 

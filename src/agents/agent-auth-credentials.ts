@@ -17,10 +17,10 @@ type AgentOAuthCredential = {
 };
 
 /** Credential value shape consumed by agent runtimes after auth-profile normalization. */
-export type AgentCredential = AgentApiKeyCredential | AgentOAuthCredential;
+type AgentCredential = AgentApiKeyCredential | AgentOAuthCredential;
 export type AgentCredentialMap = Record<string, AgentCredential>;
 
-export type ResolveAgentCredentialMapOptions = {
+type ResolveAgentCredentialMapOptions = {
   includeSecretRefPlaceholders?: boolean;
 };
 
