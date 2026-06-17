@@ -276,12 +276,17 @@ async function resolveGatewayProbeAuth(params: {
   if (params.settings.authMode !== "password" && params.settings.authMode !== "trusted-proxy") {
     return {};
   }
-  const password = await resolveSetupSecretInputString({
+  const configuredPassword = await resolveSetupSecretInputString({
     config: params.config,
     value: params.config.gateway?.auth?.password,
     path: "gateway.auth.password",
     env: process.env,
   });
+  const password = resolveGatewayAuth({
+    authConfig: { ...params.config.gateway?.auth, password: configuredPassword },
+    tailscaleMode: params.settings.tailscaleMode,
+    env: process.env,
+  }).password;
   return password ? { password } : {};
 }
 
@@ -333,6 +338,9 @@ export async function ensureAgentAssistedGatewayRuntime(params: {
     tlsEnabled: params.config.gateway?.tls?.enabled === true,
   });
   const auth = await resolveGatewayProbeAuth(params);
+  // Assisted setup invokes the Gateway directly, so trusted-proxy mode needs
+  // its documented local password fallback before the agent can use it.
+  const hasDirectAuth = params.settings.authMode !== "trusted-proxy" || Boolean(auth.password);
   const probe = async (deadlineMs: number) => {
     return await waitForGatewayReachable({
       url: links.wsUrl,
@@ -348,8 +356,7 @@ export async function ensureAgentAssistedGatewayRuntime(params: {
       runtimeExposureMatchesGatewaySettings({
         listenerPids: existingListenerPids,
         settings: params.settings,
-      }) &&
-      (params.settings.authMode !== "trusted-proxy" || Boolean(auth.password));
+      }) && hasDirectAuth;
     const existingMatches =
       canVerifyExisting &&
       (await probeVerifiedExistingGateway({
@@ -368,6 +375,11 @@ export async function ensureAgentAssistedGatewayRuntime(params: {
     }
     throw new Error(
       `An existing Gateway is listening on port ${params.settings.port}, but setup cannot verify that it matches the active Gateway security settings. Stop the existing Gateway, then rerun onboarding.`,
+    );
+  }
+  if (!hasDirectAuth) {
+    throw new Error(
+      "Agent-assisted setup requires gateway.auth.password or OPENCLAW_GATEWAY_PASSWORD when using trusted-proxy Gateway auth so local setup tasks can authenticate. Configure a password fallback, then rerun onboarding.",
     );
   }
 
@@ -417,18 +429,11 @@ export async function ensureAgentAssistedGatewayRuntime(params: {
       child,
       deadlineMs: 15_000,
     });
-    const directReady =
-      ownedReady.ok && params.settings.authMode !== "trusted-proxy"
-        ? await probe(15_000)
-        : { ok: false, detail: ownedReady.detail };
     const childAlive = child.exitCode === null && child.signalCode === null;
-    // Trusted-proxy policy can reject direct local RPCs, so that mode relies on
-    // proving the listener belongs to the process started by this setup run.
+    const directReady =
+      ownedReady.ok && childAlive ? await probe(15_000) : { ok: false, detail: ownedReady.detail };
     const ready = {
-      ok:
-        childAlive &&
-        ownedReady.ok &&
-        (params.settings.authMode === "trusted-proxy" || directReady.ok),
+      ok: childAlive && ownedReady.ok && directReady.ok,
       detail: ownedReady.detail ?? directReady.detail,
     };
     if (!ready.ok) {

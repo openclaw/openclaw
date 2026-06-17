@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { ensureAgentAssistedGatewayRuntime } from "./setup.assisted-gateway.js";
 
@@ -92,6 +92,7 @@ describe("agent-assisted Gateway runtime", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "");
     spawn.mockReset();
     waitForGatewayReachable.mockReset();
     probeGateway.mockReset().mockResolvedValue({ ok: false });
@@ -111,6 +112,10 @@ describe("agent-assisted Gateway runtime", () => {
       programArguments: ["/usr/bin/node", "/app/openclaw.mjs", "gateway", "--port", "18789"],
       workingDirectory: "/app",
     });
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it("does not send active auth to an unverified listener before starting a Gateway", async () => {
@@ -555,10 +560,35 @@ describe("agent-assisted Gateway runtime", () => {
     expect(spawn).not.toHaveBeenCalled();
   });
 
-  it("accepts only the temporary trusted-proxy Gateway listener it started", async () => {
+  it("rejects trusted-proxy assisted setup without a local password fallback", async () => {
+    await expect(
+      ensureAgentAssistedGatewayRuntime({
+        config: {
+          gateway: {
+            auth: {
+              mode: "trusted-proxy",
+              trustedProxy: { userHeader: "x-forwarded-user" },
+            },
+          },
+        },
+        settings: {
+          ...settings,
+          authMode: "trusted-proxy",
+          gatewayToken: undefined,
+        },
+        prompter: createWizardPrompter(),
+      }),
+    ).rejects.toThrow("requires gateway.auth.password or OPENCLAW_GATEWAY_PASSWORD");
+
+    expect(spawn).not.toHaveBeenCalled();
+    expect(waitForGatewayReachable).not.toHaveBeenCalled();
+  });
+
+  it("probes a temporary trusted-proxy Gateway through its password fallback", async () => {
+    vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "fallback-password");
     const child = createMockChild();
     spawn.mockReturnValueOnce(child);
-    waitForGatewayReachable.mockResolvedValueOnce({ ok: false, detail: "trusted proxy required" });
+    waitForGatewayReachable.mockResolvedValueOnce({ ok: true });
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValueOnce([]).mockReturnValueOnce([4321]);
 
     const result = await ensureAgentAssistedGatewayRuntime({
@@ -580,6 +610,9 @@ describe("agent-assisted Gateway runtime", () => {
 
     expect(result.temporary).toBe(true);
     expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenLastCalledWith(18789);
+    expect(waitForGatewayReachable).toHaveBeenCalledWith(
+      expect.objectContaining({ password: "fallback-password" }),
+    );
 
     const stop = result.stop();
     child.emit("exit", 0, null);
@@ -600,6 +633,7 @@ describe("agent-assisted Gateway runtime", () => {
           gateway: {
             auth: {
               mode: "trusted-proxy",
+              password: "fallback-password",
               trustedProxy: { userHeader: "x-forwarded-user" },
             },
           },
