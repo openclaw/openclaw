@@ -1899,6 +1899,37 @@ export async function runHeartbeatOnce(opts: {
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
+    // When message_tool_only mode is active but the model did not call the
+    // heartbeat_respond tool, keep the response private instead of falling
+    // through to public channel delivery.
+    if (usesHeartbeatResponseTool && !heartbeatToolResponse) {
+      await restoreHeartbeatUpdatedAt({
+        storePath,
+        sessionKey,
+        updatedAt: previousUpdatedAt,
+      });
+      const okSent = await maybeSendHeartbeatOk();
+      emitHeartbeatEvent({
+        status: "ok-token",
+        reason: opts.reason,
+        preview: replyPayload?.text?.slice(0, 200) ?? "",
+        durationMs: Date.now() - startedAt,
+        channel: delivery.channel !== "none" ? delivery.channel : undefined,
+        accountId: delivery.accountId,
+        silent: !okSent,
+        indicatorType: visibility.useIndicator ? resolveIndicatorType("ok-token") : undefined,
+      });
+      await markCommitmentsStatus({
+        cfg,
+        ids: dueCommitmentIds,
+        status: "dismissed",
+        nowMs: startedAt,
+      });
+      await updateTaskTimestamps();
+      consumeInspectedSystemEvents();
+      return { status: "ran", durationMs: Date.now() - startedAt };
+    }
+
     const normalized = heartbeatToolResponse
       ? normalizeHeartbeatToolNotification(heartbeatToolResponse, responsePrefix)
       : replyPayload
