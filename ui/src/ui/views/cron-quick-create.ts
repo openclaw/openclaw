@@ -22,6 +22,7 @@ export type CronQuickCreateProps = {
   onCreate: () => void;
   onCancel: () => void;
   onAdvancedCreate?: () => void;
+  modelSuggestions: string[];
 };
 
 export type CronQuickCreateStep = "what" | "when" | "how";
@@ -31,6 +32,7 @@ export type CronQuickCreateDraft = {
   name: string;
   schedulePreset: SchedulePresetId | "custom";
   deliveryPreset: DeliveryPresetId;
+  model: string;
 };
 
 type SchedulePresetId =
@@ -123,6 +125,7 @@ export function createDefaultDraft(): CronQuickCreateDraft {
     name: "",
     schedulePreset: "every-morning",
     deliveryPreset: "notify",
+    model: "",
   };
 }
 
@@ -179,6 +182,11 @@ export function draftToCronFormPatch(draft: CronQuickCreateDraft): Partial<CronF
       break;
     default:
       break;
+  }
+
+  // Model
+  if (draft.model && draft.model.trim()) {
+    patch.payloadModel = draft.model.trim();
   }
 
   // Delivery
@@ -344,6 +352,22 @@ function renderHowStep(props: CronQuickCreateProps) {
             </label>
           `,
         )}
+      </div>
+      <div class="cqc-field" style="margin-top: 16px;">
+        <label class="cqc-field__label">${t("cron.form.model")}</label>
+        <input
+          class="cqc-input"
+          type="text"
+          list="cqc-model-suggestions"
+          placeholder=${t("cron.form.modelPlaceholder")}
+          .value=${props.draft.model}
+          @input=${(e: Event) =>
+            props.onDraftChange({ model: (e.target as HTMLInputElement).value })}
+        />
+        <datalist id="cqc-model-suggestions">
+          ${props.modelSuggestions.map((m) => html`<option value=${m}></option>`)}
+        </datalist>
+        <div class="cqc-field__hint muted">${t("cron.form.modelHelp")}</div>
       </div>
     </div>
     <div class="cqc-actions">

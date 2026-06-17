@@ -1618,6 +1618,7 @@ function renderJob(job: CronJob, props: CronProps) {
                 ${t("cron.jobDetail.agent")}: ${job.agentId}
               </div>`
             : nothing}
+          ${renderJobModel(job)}
         </div>
         <div class="list-meta">${renderJobState(job)}</div>
       </div>
@@ -1705,6 +1706,17 @@ function renderJob(job: CronJob, props: CronProps) {
       </div>
     </div>
   `;
+}
+
+function renderJobModel(job: CronJob) {
+  const payload = getCronJobPayload(job);
+  if (!payload || payload.kind !== "agentTurn") {
+    return nothing;
+  }
+  if (typeof payload.model === "string" && payload.model.trim()) {
+    return html`<div class="muted cron-job-agent">${t("cron.form.model")}: ${payload.model}</div>`;
+  }
+  return html`<div class="muted cron-job-agent">${t("cron.form.model")}: default</div>`;
 }
 
 function renderJobPayload(job: CronJob) {

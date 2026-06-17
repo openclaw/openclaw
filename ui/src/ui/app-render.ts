@@ -1248,11 +1248,13 @@ function resolveQuickSettingsSessionRow(state: AppViewState) {
 function renderCronQuickCreateForTab(
   state: AppViewState,
   requestHostUpdate: (() => void) | undefined,
+  modelSuggestions: string[],
 ) {
   return renderCronQuickCreate({
     open: state.cronQuickCreateOpen,
     step: state.cronQuickCreateStep,
     draft: state.cronQuickCreateDraft ?? createDefaultDraft(),
+    modelSuggestions,
     onDraftChange: (patch) => {
       state.cronQuickCreateDraft = {
         ...(state.cronQuickCreateDraft ?? createDefaultDraft()),
@@ -3049,7 +3051,7 @@ export function renderApp(state: AppViewState) {
             })
           : nothing}
         ${renderUsageTab(state, lazyUsage)}
-        ${state.tab === "cron" ? renderCronQuickCreateForTab(state, requestHostUpdate) : nothing}
+        ${state.tab === "cron" ? renderCronQuickCreateForTab(state, requestHostUpdate, cronModelSuggestions) : nothing}
         ${state.tab === "cron"
           ? renderLazyView(lazyCron, (m) =>
               m.renderCron({
