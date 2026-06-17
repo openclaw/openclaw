@@ -5,13 +5,19 @@ export type PluginSecuritySourceFamily =
   | "archive"
   | "directory"
   | "file"
+  | "git"
   | "installed-package"
   | "npm";
 
 type PluginSecurityMode = "install" | "update";
+type PluginAuditReason = "security_scan_blocked" | "security_scan_failed";
 
 function pluginLifecycleAction(mode: PluginSecurityMode): "plugin.installed" | "plugin.updated" {
   return mode === "update" ? "plugin.updated" : "plugin.installed";
+}
+
+export function pluginAuditOutcomeForReason(reason: PluginAuditReason): "denied" | "error" {
+  return reason === "security_scan_failed" ? "error" : "denied";
 }
 
 export function emitPluginInstallSecurityEvent(params: {
@@ -54,7 +60,7 @@ export function emitPluginInstallSecurityEvent(params: {
 
 export function emitPluginAuditSecurityEvent(params: {
   outcome: "denied" | "error";
-  reason: "security_scan_blocked" | "security_scan_failed";
+  reason: PluginAuditReason;
   pluginId?: string;
   mode?: PluginSecurityMode;
   sourceFamily?: PluginSecuritySourceFamily;

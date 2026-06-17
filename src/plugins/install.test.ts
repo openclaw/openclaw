@@ -1016,6 +1016,44 @@ describe("installPluginFromArchive", () => {
     expect(updatedVersion).toBe("0.0.2");
   });
 
+  it("emits effective install mode when requested archive update creates a new target", async () => {
+    const stateDir = suiteTempRootTracker.makeTempDir();
+    const extensionsDir = path.join(stateDir, "extensions");
+    const archivePath = await ensureDynamicArchiveTemplate({
+      outName: "archive-security-event-update.tgz",
+      packageJson: {
+        name: "archive-security-event-update",
+        version: "1.0.0",
+        openclaw: { extensions: ["./dist/index.js"] },
+      },
+      withDistIndex: true,
+    });
+    const captured = captureSecurityEvents();
+
+    let result: Awaited<ReturnType<typeof installPluginFromArchive>>;
+    try {
+      result = await installPluginFromArchive({
+        archivePath,
+        extensionsDir,
+        mode: "update",
+      });
+    } finally {
+      captured.stop();
+    }
+
+    expect(result!.ok).toBe(true);
+    expect(captured.events).toHaveLength(1);
+    expect(captured.events[0]).toMatchObject({
+      action: "plugin.installed",
+      outcome: "success",
+      target: { kind: "plugin", name: "archive-security-event-update" },
+      attributes: {
+        source_family: "archive",
+        mode: "install",
+      },
+    });
+  });
+
   it("rejects native plugin zip archives without openclaw.plugin.json", async () => {
     const stateDir = suiteTempRootTracker.makeTempDir();
     const archivePath = getArchiveFixturePath({
@@ -2019,8 +2057,15 @@ describe("installPluginFromArchive", () => {
       JSON.stringify({ name: "plain-crypto-js", version: "4.2.1" }),
       "utf-8",
     );
+    const captured = captureSecurityEvents();
 
-    const { result, warnings } = await installFromDirWithWarnings({ pluginDir, extensionsDir });
+    let installed: Awaited<ReturnType<typeof installFromDirWithWarnings>>;
+    try {
+      installed = await installFromDirWithWarnings({ pluginDir, extensionsDir });
+    } finally {
+      captured.stop();
+    }
+    const { result, warnings } = installed!;
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -2032,6 +2077,16 @@ describe("installPluginFromArchive", () => {
     expect(warnings.some((warning) => warning.includes('"plain-crypto-js" as package name'))).toBe(
       true,
     );
+    expect(captured.events).toHaveLength(1);
+    expect(captured.events[0]).toMatchObject({
+      action: "plugin.audit.failed",
+      outcome: "denied",
+      target: { kind: "plugin", name: "denied-dependency-bundle" },
+      attributes: {
+        source_family: "directory",
+        mode: "install",
+      },
+    });
   });
 
   it("surfaces plugin lifecycle findings from before_install", async () => {
@@ -2219,8 +2274,15 @@ describe("installPluginFromArchive", () => {
 
     const { pluginDir, extensionsDir } = setupPluginInstallDirs();
     writeMinimalPackagePlugin(pluginDir, "hook-failure-plugin");
+    const captured = captureSecurityEvents();
 
-    const { result, warnings } = await installFromDirWithWarnings({ pluginDir, extensionsDir });
+    let installed: Awaited<ReturnType<typeof installFromDirWithWarnings>>;
+    try {
+      installed = await installFromDirWithWarnings({ pluginDir, extensionsDir });
+    } finally {
+      captured.stop();
+    }
+    const { result, warnings } = installed!;
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -2234,6 +2296,16 @@ describe("installPluginFromArchive", () => {
         warning.includes("blocked by plugin hook failure: Installation blocked"),
       ),
     ).toBe(true);
+    expect(captured.events).toHaveLength(1);
+    expect(captured.events[0]).toMatchObject({
+      action: "plugin.audit.failed",
+      outcome: "error",
+      target: { kind: "plugin", name: "hook-failure-plugin" },
+      attributes: {
+        source_family: "directory",
+        mode: "install",
+      },
+    });
   });
 
   it("reports install mode to before_install when force-style update runs against a missing target", async () => {
@@ -2491,6 +2563,40 @@ describe("installPluginFromNpmSpec", () => {
     });
   });
 
+  it("emits effective install mode when requested npm update creates a new target", async () => {
+    const root = suiteTempRootTracker.makeTempDir();
+    const npmDir = path.join(root, "npm");
+    const extensionsDir = path.join(root, "extensions");
+    const packageName = "@acme/security-event-update-plugin";
+    mockNpmViewMetadata({ name: packageName, version: "1.2.3" });
+    mockSuccessfulManagedNpmInstall({ packageName, version: "1.2.3" });
+    const captured = captureSecurityEvents();
+
+    let result: Awaited<ReturnType<typeof installPluginFromNpmSpec>>;
+    try {
+      result = await installPluginFromNpmSpec({
+        spec: `${packageName}@1.2.3`,
+        extensionsDir,
+        npmDir,
+        mode: "update",
+      });
+    } finally {
+      captured.stop();
+    }
+
+    expect(result!.ok).toBe(true);
+    expect(captured.events).toHaveLength(1);
+    expect(captured.events[0]).toMatchObject({
+      action: "plugin.installed",
+      outcome: "success",
+      target: { kind: "plugin", name: packageName },
+      attributes: {
+        source_family: "npm",
+        mode: "install",
+      },
+    });
+  });
+
   it("runs operator policy before npm install mutates the managed root", async () => {
     const root = suiteTempRootTracker.makeTempDir();
     const npmDir = path.join(root, "npm");
@@ -2734,6 +2840,34 @@ describe("installPluginFromDir", () => {
     expect(serialized).not.toContain(extensionsDir);
   });
 
+  it("emits effective install mode when requested directory update creates a new target", async () => {
+    const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture();
+    const captured = captureSecurityEvents();
+
+    let res: Awaited<ReturnType<typeof installPluginFromDir>>;
+    try {
+      res = await installPluginFromDir({
+        dirPath: pluginDir,
+        extensionsDir,
+        mode: "update",
+      });
+    } finally {
+      captured.stop();
+    }
+
+    expect(res!.ok).toBe(true);
+    expect(captured.events).toHaveLength(1);
+    expect(captured.events[0]).toMatchObject({
+      action: "plugin.installed",
+      outcome: "success",
+      target: { kind: "plugin", name: "@openclaw/test-plugin" },
+      attributes: {
+        source_family: "directory",
+        mode: "install",
+      },
+    });
+  });
+
   it("copies optional-only local package dependencies without installing them", async () => {
     const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture({
       omitDependencies: true,
@@ -2863,6 +2997,40 @@ describe("installPluginFromDir", () => {
     if (result.ok) {
       expect(result.pluginId).toBe("new-managed-plugin");
     }
+  });
+
+  it("emits git source family for git-backed installed package installs", async () => {
+    const caseDir = suiteTempRootTracker.makeTempDir();
+    const pluginDir = path.join(caseDir, "repo");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    writeMinimalPackagePlugin(pluginDir, "git-backed-plugin");
+    const captured = captureSecurityEvents();
+
+    let result: Awaited<ReturnType<typeof installPluginFromInstalledPackageDir>>;
+    try {
+      result = await installPluginFromInstalledPackageDir({
+        packageDir: pluginDir,
+        installPolicyRequest: {
+          kind: "plugin-git",
+          requestedSpecifier: "git:https://github.com/acme/git-backed-plugin.git",
+          source: { kind: "git", authority: "third-party", mutable: true, network: true },
+        },
+      });
+    } finally {
+      captured.stop();
+    }
+
+    expect(result!.ok).toBe(true);
+    expect(captured.events).toHaveLength(1);
+    expect(captured.events[0]).toMatchObject({
+      action: "plugin.installed",
+      outcome: "success",
+      target: { kind: "plugin", name: "git-backed-plugin" },
+      attributes: {
+        source_family: "git",
+        mode: "install",
+      },
+    });
   });
 
   it("ignores flattened managed npm dependency code during install-time code scans", async () => {
