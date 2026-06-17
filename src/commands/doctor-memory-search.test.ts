@@ -431,9 +431,8 @@ describe("noteMemorySearchHealth", () => {
 
     await noteMemorySearchHealth(cfg, {
       gatewayMemoryProbe: {
-        checked: false,
-        ready: false,
-        skipped: true,
+        checked: true,
+        ready: true,
         dreaming: buildGatewayDreamingStatus(nextRunAtMs),
       },
     });
@@ -529,7 +528,7 @@ describe("noteMemorySearchHealth", () => {
     expect(firstNoteMessage()).toContain("No active memory plugin is registered");
   });
 
-  it("does not warn when CLI backend resolution is missing but gateway memory probe is ready", async () => {
+  it("warns when CLI backend resolution is missing even if gateway memory probe is ready", async () => {
     resolveActiveMemoryBackendConfig.mockReturnValue(null);
     resolveMemorySearchConfig.mockReturnValue({
       provider: "auto",
@@ -543,7 +542,8 @@ describe("noteMemorySearchHealth", () => {
 
     expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
     expect(checkQmdBinaryAvailability).not.toHaveBeenCalled();
-    expect(note).not.toHaveBeenCalled();
+    expect(note).toHaveBeenCalledTimes(1);
+    expect(firstNoteMessage()).toContain("No active memory plugin is registered");
   });
 
   it("warns when CLI backend resolution is missing and gateway memory probe was skipped", async () => {
