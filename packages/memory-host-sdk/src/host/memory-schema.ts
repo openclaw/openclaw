@@ -194,11 +194,12 @@ export function ensureMemoryIndexSchema(params: {
       value TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS ${MEMORY_INDEX_SOURCES_TABLE} (
-      path TEXT PRIMARY KEY,
+      path TEXT NOT NULL,
       source TEXT NOT NULL DEFAULT 'memory',
       hash TEXT NOT NULL,
       mtime INTEGER NOT NULL,
-      size INTEGER NOT NULL
+      size INTEGER NOT NULL,
+      PRIMARY KEY (path, source)
     );
     CREATE TABLE IF NOT EXISTS ${MEMORY_INDEX_CHUNKS_TABLE} (
       id TEXT PRIMARY KEY,
@@ -250,6 +251,10 @@ export function ensureMemoryIndexSchema(params: {
       UPDATE ${MEMORY_INDEX_STATE_TABLE} SET revision = revision + 1 WHERE id = 1;
     END;
 
+    CREATE INDEX IF NOT EXISTS idx_memory_index_sources_source
+      ON ${MEMORY_INDEX_SOURCES_TABLE}(source);
+    CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_path_source
+      ON ${MEMORY_INDEX_CHUNKS_TABLE}(path, source);
     CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_path
       ON ${MEMORY_INDEX_CHUNKS_TABLE}(path);
     CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_source

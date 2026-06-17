@@ -118,11 +118,12 @@ describe("memory manager self-heal missing identity with FTS-only chunks", () =>
         updated_at INTEGER NOT NULL
       );
       CREATE TABLE IF NOT EXISTS memory_index_sources (
-        path TEXT PRIMARY KEY,
+        path TEXT NOT NULL,
         source TEXT NOT NULL DEFAULT 'memory',
         hash TEXT NOT NULL,
         mtime INTEGER NOT NULL,
-        size INTEGER NOT NULL
+        size INTEGER NOT NULL,
+        PRIMARY KEY (path, source)
       );
       INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
         VALUES ('chunk-1', 'MEMORY.md', 'memory', 1, 3, 'hash-1', '${model}', 'Alpha topic keep note', '[]', ${Date.now()});

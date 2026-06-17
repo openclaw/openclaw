@@ -84,6 +84,33 @@ describe("memory index schema", () => {
     }
   });
 
+  it("stores source records with the same path in separate sources", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      ensureMemoryIndexSchema({
+        db,
+        cacheEnabled: false,
+        ftsEnabled: false,
+      });
+
+      db.prepare(
+        "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES (?, ?, ?, ?, ?)",
+      ).run("shared.md", "memory", "memory-hash", 10, 20);
+      db.prepare(
+        "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES (?, ?, ?, ?, ?)",
+      ).run("shared.md", "sessions", "session-hash", 30, 40);
+
+      expect(
+        db.prepare("SELECT path, source, hash FROM memory_index_sources ORDER BY source").all(),
+      ).toEqual([
+        { path: "shared.md", source: "memory", hash: "memory-hash" },
+        { path: "shared.md", source: "sessions", hash: "session-hash" },
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
   it("leaves unrelated generic tables untouched", () => {
     const db = new DatabaseSync(":memory:");
     try {

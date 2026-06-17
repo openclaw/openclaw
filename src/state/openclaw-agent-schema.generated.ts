@@ -48,11 +48,12 @@ CREATE TABLE IF NOT EXISTS memory_index_meta (
 );
 
 CREATE TABLE IF NOT EXISTS memory_index_sources (
-  path TEXT PRIMARY KEY,
+  path TEXT NOT NULL,
   source TEXT NOT NULL DEFAULT 'memory',
   hash TEXT NOT NULL,
   mtime INTEGER NOT NULL,
-  size INTEGER NOT NULL
+  size INTEGER NOT NULL,
+  PRIMARY KEY (path, source)
 );
 
 CREATE TABLE IF NOT EXISTS memory_index_chunks (
@@ -124,6 +125,12 @@ END;
 
 CREATE INDEX IF NOT EXISTS idx_memory_embedding_cache_updated_at
   ON memory_embedding_cache(updated_at);
+
+CREATE INDEX IF NOT EXISTS idx_memory_index_sources_source
+  ON memory_index_sources(source);
+
+CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_path_source
+  ON memory_index_chunks(path, source);
 
 CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_path
   ON memory_index_chunks(path);
