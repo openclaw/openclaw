@@ -17,7 +17,7 @@ import {
   isMediaPayload,
   type MediaPayload,
 } from "../utils/payload.js";
-import { normalizePath, resolveQQBotPayloadLocalFilePath } from "../utils/platform.js";
+import { normalizePath } from "../utils/platform.js";
 import { normalizeLowercaseStringOrEmpty } from "../utils/string-normalize.js";
 import { sanitizeFileName } from "../utils/string-normalize.js";
 import { openLocalFile } from "./media-source.js";
@@ -28,6 +28,7 @@ import {
   buildDeliveryTarget,
   accountToCreds,
 } from "./sender.js";
+import { resolveTrustedOutboundMediaPath } from "./trusted-media-path.js";
 
 // ---- Injected dependencies ----
 
@@ -207,7 +208,7 @@ function validateStructuredPayloadLocalPath(
   payloadPath: string,
   mediaType: StructuredPayloadMediaType,
 ): string | null {
-  const allowedPath = resolveQQBotPayloadLocalFilePath(payloadPath);
+  const allowedPath = resolveTrustedOutboundMediaPath(payloadPath);
   if (allowedPath) {
     return allowedPath;
   }

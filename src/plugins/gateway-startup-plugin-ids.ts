@@ -113,15 +113,85 @@ function isGatewayStartupMemoryPlugin(plugin: InstalledPluginIndexRecord): boole
   return plugin.startup.memory;
 }
 
-function resolveGatewayStartupDreamingPluginIds(config: OpenClawConfig): Set<string> {
+function resolveGatewayStartupDreamingEngineId(config: OpenClawConfig): string | undefined {
   const dreamingConfig = resolveMemoryDreamingConfig({
     pluginConfig: resolveMemoryDreamingPluginConfig(config),
     cfg: config,
   });
   if (!dreamingConfig.enabled) {
+    return undefined;
+  }
+  if (!resolveGatewayStartupDreamingSelectedPluginId(config)) {
+    return undefined;
+  }
+  return DEFAULT_MEMORY_DREAMING_PLUGIN_ID;
+}
+
+function resolveGatewayStartupDreamingSelectedPluginId(config: OpenClawConfig): string | undefined {
+  const selectedPluginId = normalizeOptionalLowercaseString(resolveMemoryDreamingPluginId(config));
+  return selectedPluginId && selectedPluginId !== DEFAULT_MEMORY_DREAMING_PLUGIN_ID
+    ? selectedPluginId
+    : undefined;
+}
+
+function blocksPluginStartup(params: {
+  pluginId: string;
+  pluginsConfig: NormalizedPluginsConfig;
+  activationSourcePlugins: NormalizedPluginsConfig;
+}): boolean {
+  return (
+    params.pluginsConfig.deny.includes(params.pluginId) ||
+    params.activationSourcePlugins.deny.includes(params.pluginId) ||
+    params.pluginsConfig.entries[params.pluginId]?.enabled === false ||
+    params.activationSourcePlugins.entries[params.pluginId]?.enabled === false
+  );
+}
+
+function resolveAuthorizedGatewayStartupDreamingPluginIds(params: {
+  config: OpenClawConfig;
+  pluginsConfig: NormalizedPluginsConfig;
+  activationSource: {
+    plugins: NormalizedPluginsConfig;
+    rootConfig?: OpenClawConfig;
+  };
+  activationSourcePlugins: NormalizedPluginsConfig;
+  selectedMemoryPluginId?: string;
+  index: { plugins: readonly InstalledPluginIndexRecord[] };
+  platform?: NodeJS.Platform;
+}): Set<string> {
+  const engineId = resolveGatewayStartupDreamingEngineId(params.config);
+  const dreamingSelectedPluginId = resolveGatewayStartupDreamingSelectedPluginId(params.config);
+  if (!engineId || !params.pluginsConfig.enabled || !params.activationSourcePlugins.enabled) {
     return new Set();
   }
-  return new Set([DEFAULT_MEMORY_DREAMING_PLUGIN_ID, resolveMemoryDreamingPluginId(config)]);
+  if (
+    !params.selectedMemoryPluginId ||
+    params.selectedMemoryPluginId !== dreamingSelectedPluginId ||
+    params.selectedMemoryPluginId === engineId ||
+    blocksPluginStartup({
+      pluginId: engineId,
+      pluginsConfig: params.pluginsConfig,
+      activationSourcePlugins: params.activationSourcePlugins,
+    })
+  ) {
+    return new Set();
+  }
+  const selectedPlugin = params.index.plugins.find(
+    (plugin) => plugin.pluginId === params.selectedMemoryPluginId,
+  );
+  const sidecarPlugin = params.index.plugins.find((plugin) => plugin.pluginId === engineId);
+  if (!selectedPlugin?.startup.memory || !sidecarPlugin?.startup.memory) {
+    return new Set();
+  }
+  const activationState = resolveEffectivePluginActivationState({
+    id: selectedPlugin.pluginId,
+    origin: selectedPlugin.origin,
+    config: params.pluginsConfig,
+    rootConfig: params.config,
+    enabledByDefault: isPluginEnabledByDefaultForPlatform(selectedPlugin, params.platform),
+    activationSource: params.activationSource,
+  });
+  return activationState.enabled ? new Set([engineId]) : new Set();
 }
 
 function resolveMemorySlotStartupPluginId(params: {
@@ -913,12 +983,28 @@ export function resolveGatewayStartupMetadataPluginIds(params: {
   addPluginConfigEntryIds(scope, pluginsConfig);
   addPluginConfigEntryIds(scope, activationSourcePlugins);
 
+  const memorySlotStartupPluginId = resolveMemorySlotStartupPluginId({
+    activationSourceConfig,
+    activationSourcePlugins,
+    normalizePluginId: lookup.normalizePluginId,
+  });
   addConfiguredSlotPluginIds(scope, {
     activationSourceConfig,
     activationSourcePlugins,
     lookup,
   });
-  for (const pluginId of resolveGatewayStartupDreamingPluginIds(params.config)) {
+  for (const pluginId of resolveAuthorizedGatewayStartupDreamingPluginIds({
+    config: params.config,
+    pluginsConfig,
+    activationSource: {
+      plugins: activationSourcePlugins,
+      rootConfig: activationSourceConfig,
+    },
+    activationSourcePlugins,
+    selectedMemoryPluginId: memorySlotStartupPluginId,
+    index: params.index,
+    platform: params.platform,
+  })) {
     scope.add(pluginId);
   }
   if (!lookup.hasCompleteConfigPathActivationMetadata()) {
@@ -1900,7 +1986,6 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
   const requiredAgentHarnessRuntimes = new Set(
     collectConfiguredAgentHarnessRuntimes(activationSourceConfig),
   );
-  const startupDreamingPluginIds = resolveGatewayStartupDreamingPluginIds(params.config);
   const configuredSpeechProviderIds = collectConfiguredSpeechProviderIds(activationSourceConfig);
   const configuredWebSearchProviderIds =
     collectConfiguredWebSearchProviderIds(activationSourceConfig);
@@ -1920,6 +2005,15 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
     activationSourceConfig,
     activationSourcePlugins,
     normalizePluginId,
+  });
+  const startupDreamingPluginIds = resolveAuthorizedGatewayStartupDreamingPluginIds({
+    config: params.config,
+    pluginsConfig,
+    activationSource,
+    activationSourcePlugins,
+    selectedMemoryPluginId: memorySlotStartupPluginId,
+    index: params.index,
+    platform: params.platform,
   });
   const contextEngineSlotStartupPluginId = resolveContextEngineSlotStartupPluginId({
     activationSourceConfig,
@@ -2114,6 +2208,10 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
         contextEngineSlotStartupPluginId,
       })
     ) {
+      continue;
+    }
+    if (startupDreamingPluginIds.has(plugin.pluginId)) {
+      pluginIds.push(plugin.pluginId);
       continue;
     }
     const activationState = resolveEffectivePluginActivationState({

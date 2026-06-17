@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OAuthRefreshFailureError } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.js";
+import { formatBillingErrorMessage } from "../../agents/embedded-agent-helpers.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { MissingProviderAuthError } from "../../agents/model-auth.js";
@@ -157,6 +158,7 @@ vi.mock("../../agents/embedded-agent-helpers.js", async () => {
   );
   return {
     BILLING_ERROR_USER_MESSAGE: "billing",
+    formatBillingErrorMessage: actual.formatBillingErrorMessage,
     formatRateLimitOrOverloadedErrorCopy: (message: string) => {
       if (/model\s+(?:is\s+)?at capacity/i.test(message)) {
         return "⚠️ Selected model is at capacity. Try a different model, or wait and retry.";
@@ -6502,6 +6504,55 @@ describe("runAgentTurnWithFallback", () => {
     if (result.kind === "final") {
       expect(result.payload.text).toBe("billing");
       expect(result.payload.text).not.toBe(GENERIC_RUN_FAILURE_TEXT);
+    }
+  });
+
+  it("preserves neutral billing guidance for OAuth failover errors", async () => {
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(
+      new FailoverError(formatBillingErrorMessage("Anthropic", "claude-sonnet-4-5", "oauth"), {
+        reason: "billing",
+        provider: "Anthropic",
+        model: "claude-sonnet-4-5",
+        authMode: "oauth",
+      }),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toContain("check your account for subscription or usage limits");
+      expect(result.payload.text).not.toContain("API key");
+      expect(result.payload.text).not.toContain("top up");
+    }
+  });
+
+  it("preserves neutral billing guidance after fallback exhaustion", async () => {
+    state.runWithModelFallbackMock.mockRejectedValueOnce(
+      Object.assign(new Error("All models failed (1): openai/gpt-5.5: billing"), {
+        name: "FallbackSummaryError",
+        attempts: [
+          {
+            provider: "openai",
+            model: "gpt-5.5",
+            error: "billing",
+            reason: "billing",
+            authMode: "oauth",
+          },
+        ],
+        soonestCooldownExpiry: null,
+      }),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toContain("check your account for subscription or usage limits");
+      expect(result.payload.text).not.toContain("API key");
+      expect(result.payload.text).not.toContain("top up");
     }
   });
 

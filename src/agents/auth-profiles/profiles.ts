@@ -17,7 +17,11 @@ import {
   updateAuthProfileStoreWithLock,
 } from "./store.js";
 import type { AuthProfileCredential, AuthProfileStore, ProfileUsageStats } from "./types.js";
-export { dedupeProfileIds, listProfilesForProvider } from "./profile-list.js";
+export {
+  dedupeProfileIds,
+  listProfilesForProvider,
+  resolveSubscriptionAuthModeForProfiles,
+} from "./profile-list.js";
 
 // Auth profile order/lastGood keys may be stored as aliases. Resolve through
 // auth provider normalization before updating per-provider state.

@@ -268,6 +268,86 @@ function resolveDreamingSidecarEngineId(params: {
   return dreamingConfig.enabled ? DEFAULT_MEMORY_DREAMING_PLUGIN_ID : null;
 }
 
+type AuthorizedDreamingSidecar = {
+  engineId: string;
+  selectedMemoryPluginId: string;
+};
+
+function resolveAuthorizedDreamingSidecar(params: {
+  cfg: OpenClawConfig;
+  normalized: NormalizedPluginsConfig;
+  activationSource: PluginActivationConfigSource;
+  manifestRegistry: PluginManifestRegistry;
+  memorySlot: string | null | undefined;
+}): AuthorizedDreamingSidecar | null {
+  const engineId = resolveDreamingSidecarEngineId({
+    cfg: params.cfg,
+    memorySlot: params.memorySlot,
+  });
+  if (!engineId || !params.normalized.enabled || !params.activationSource.plugins.enabled) {
+    return null;
+  }
+  const selectedMemoryPluginId = normalizeLowercaseStringOrEmpty(params.memorySlot);
+  if (!selectedMemoryPluginId || selectedMemoryPluginId === engineId) {
+    return null;
+  }
+  if (
+    params.normalized.deny.includes(engineId) ||
+    params.activationSource.plugins.deny.includes(engineId) ||
+    params.normalized.entries[engineId]?.enabled === false ||
+    params.activationSource.plugins.entries[engineId]?.enabled === false
+  ) {
+    return null;
+  }
+  const selectedMemoryPlugin = params.manifestRegistry.plugins.find(
+    (plugin) => plugin.id === selectedMemoryPluginId,
+  );
+  const sidecarPlugin = params.manifestRegistry.plugins.find((plugin) => plugin.id === engineId);
+  if (
+    !selectedMemoryPlugin ||
+    !sidecarPlugin ||
+    !hasKind(selectedMemoryPlugin.kind, "memory") ||
+    !hasKind(sidecarPlugin.kind, "memory")
+  ) {
+    return null;
+  }
+  const selectedEnableState = resolveEffectiveEnableState({
+    id: selectedMemoryPlugin.id,
+    origin: selectedMemoryPlugin.origin,
+    config: params.normalized,
+    rootConfig: params.cfg,
+    enabledByDefault: isPluginEnabledByDefaultForPlatform(selectedMemoryPlugin),
+    activationSource: params.activationSource,
+  });
+  return selectedEnableState.enabled ? { engineId, selectedMemoryPluginId } : null;
+}
+
+function isAuthorizedDreamingSidecarPlugin(params: {
+  sidecar: AuthorizedDreamingSidecar | null;
+  pluginId: string;
+}): boolean {
+  return params.sidecar?.engineId === params.pluginId;
+}
+
+function matchesScopedPluginOrDreamingSidecar(params: {
+  onlyPluginIdSet: ReadonlySet<string> | null;
+  pluginId: string;
+  sidecar: AuthorizedDreamingSidecar | null;
+}): boolean {
+  if (
+    matchesScopedPluginRequest({
+      onlyPluginIdSet: params.onlyPluginIdSet,
+      pluginId: params.pluginId,
+    })
+  ) {
+    return true;
+  }
+  return (
+    params.pluginId === params.sidecar?.engineId &&
+    params.onlyPluginIdSet?.has(params.sidecar.selectedMemoryPluginId) === true
+  );
+}
+
 export class PluginLoadFailureError extends Error {
   readonly pluginIds: string[];
   readonly registry: PluginRegistry;
@@ -1979,7 +2059,13 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     const memorySlot = normalized.slots.memory;
     let selectedMemoryPluginId: string | null = null;
     let memorySlotMatched = false;
-    const dreamingEngineId = resolveDreamingSidecarEngineId({ cfg, memorySlot });
+    const dreamingSidecar = resolveAuthorizedDreamingSidecar({
+      cfg,
+      normalized,
+      activationSource,
+      manifestRegistry,
+      memorySlot,
+    });
     const pluginLoadStartMs = performance.now();
     let pluginLoadAttemptCount = 0;
 
@@ -1989,24 +2075,37 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         continue;
       }
       const pluginId = manifestRecord.id;
-      const matchesRequestedScope = matchesScopedPluginRequest({
+      const matchesRequestedScope = matchesScopedPluginOrDreamingSidecar({
         onlyPluginIdSet,
         pluginId,
+        sidecar: dreamingSidecar,
       });
       // Filter again at import time as a final guard. The earlier manifest filter keeps
       // warnings scoped; this one prevents loading/registering anything outside the scope.
       if (!matchesRequestedScope) {
         continue;
       }
-      const activationState = resolveEffectivePluginActivationState({
-        id: pluginId,
-        origin: candidate.origin,
-        config: normalized,
-        rootConfig: cfg,
-        enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
-        activationSource,
-        autoEnabledReason: formatAutoEnabledActivationReason(autoEnabledReasons[pluginId]),
+      const isDreamingSidecar = isAuthorizedDreamingSidecarPlugin({
+        sidecar: dreamingSidecar,
+        pluginId,
       });
+      const activationState = isDreamingSidecar
+        ? {
+            enabled: true,
+            activated: true,
+            explicitlyEnabled: false,
+            source: "auto" as const,
+            reason: `dreaming sidecar for selected memory slot "${dreamingSidecar?.selectedMemoryPluginId ?? ""}"`,
+          }
+        : resolveEffectivePluginActivationState({
+            id: pluginId,
+            origin: candidate.origin,
+            config: normalized,
+            rootConfig: cfg,
+            enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
+            activationSource,
+            autoEnabledReason: formatAutoEnabledActivationReason(autoEnabledReasons[pluginId]),
+          });
       const existingOrigin = seenIds.get(pluginId);
       if (existingOrigin) {
         const record = createPluginRecord({
@@ -2039,14 +2138,16 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         continue;
       }
 
-      const enableState = resolveEffectiveEnableState({
-        id: pluginId,
-        origin: candidate.origin,
-        config: normalized,
-        rootConfig: cfg,
-        enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
-        activationSource,
-      });
+      const enableState = isDreamingSidecar
+        ? { enabled: true }
+        : resolveEffectiveEnableState({
+            id: pluginId,
+            origin: candidate.origin,
+            config: normalized,
+            rootConfig: cfg,
+            enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
+            activationSource,
+          });
       const entry = normalized.entries[pluginId];
       const record = createPluginRecord({
         id: pluginId,
@@ -2250,7 +2351,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         candidate.origin === "bundled" &&
         hasKind(manifestRecord.kind, "memory")
       ) {
-        if (pluginId !== dreamingEngineId) {
+        if (!isDreamingSidecar) {
           const earlyMemoryDecision = resolveMemorySlotDecision({
             id: record.id,
             kind: manifestRecord.kind,
@@ -2282,7 +2383,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           selectedId: selectedMemoryPluginId,
         });
 
-        if (!memoryDecision.enabled && pluginId !== dreamingEngineId) {
+        if (!memoryDecision.enabled && !isDreamingSidecar) {
           record.enabled = false;
           record.status = "disabled";
           record.error = memoryDecision.reason;
@@ -2665,7 +2766,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       }
 
       if (registrationPlan.runRuntimeCapabilityPolicy) {
-        if (pluginId !== dreamingEngineId) {
+        if (!isDreamingSidecar) {
           const memoryDecision = resolveMemorySlotDecision({
             id: record.id,
             kind: record.kind,
@@ -2949,7 +3050,13 @@ export async function loadOpenClawPluginCliRegistry(
   const seenIds = new Map<string, PluginRecord["origin"]>();
   const memorySlot = normalized.slots.memory;
   let selectedMemoryPluginId: string | null = null;
-  const dreamingEngineId = resolveDreamingSidecarEngineId({ cfg, memorySlot });
+  const dreamingSidecar = resolveAuthorizedDreamingSidecar({
+    cfg,
+    normalized,
+    activationSource,
+    manifestRegistry,
+    memorySlot,
+  });
 
   for (const candidate of orderedCandidates) {
     const manifestRecord = manifestByRoot.get(candidate.rootDir);
@@ -2958,22 +3065,35 @@ export async function loadOpenClawPluginCliRegistry(
     }
     const pluginId = manifestRecord.id;
     if (
-      !matchesScopedPluginRequest({
+      !matchesScopedPluginOrDreamingSidecar({
         onlyPluginIdSet,
         pluginId,
+        sidecar: dreamingSidecar,
       })
     ) {
       continue;
     }
-    const activationState = resolveEffectivePluginActivationState({
-      id: pluginId,
-      origin: candidate.origin,
-      config: normalized,
-      rootConfig: cfg,
-      enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
-      activationSource,
-      autoEnabledReason: formatAutoEnabledActivationReason(autoEnabledReasons[pluginId]),
+    const isDreamingSidecar = isAuthorizedDreamingSidecarPlugin({
+      sidecar: dreamingSidecar,
+      pluginId,
     });
+    const activationState = isDreamingSidecar
+      ? {
+          enabled: true,
+          activated: true,
+          explicitlyEnabled: false,
+          source: "auto" as const,
+          reason: `dreaming sidecar for selected memory slot "${dreamingSidecar?.selectedMemoryPluginId ?? ""}"`,
+        }
+      : resolveEffectivePluginActivationState({
+          id: pluginId,
+          origin: candidate.origin,
+          config: normalized,
+          rootConfig: cfg,
+          enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
+          activationSource,
+          autoEnabledReason: formatAutoEnabledActivationReason(autoEnabledReasons[pluginId]),
+        });
     const existingOrigin = seenIds.get(pluginId);
     if (existingOrigin) {
       const record = createPluginRecord({
@@ -3006,14 +3126,16 @@ export async function loadOpenClawPluginCliRegistry(
       continue;
     }
 
-    const enableState = resolveEffectiveEnableState({
-      id: pluginId,
-      origin: candidate.origin,
-      config: normalized,
-      rootConfig: cfg,
-      enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
-      activationSource,
-    });
+    const enableState = isDreamingSidecar
+      ? { enabled: true }
+      : resolveEffectiveEnableState({
+          id: pluginId,
+          origin: candidate.origin,
+          config: normalized,
+          rootConfig: cfg,
+          enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
+          activationSource,
+        });
     const entry = normalized.entries[pluginId];
     const record = createPluginRecord({
       id: pluginId,
@@ -3168,7 +3290,7 @@ export async function loadOpenClawPluginCliRegistry(
     }
     record.kind = definition?.kind ?? record.kind;
 
-    if (pluginId !== dreamingEngineId) {
+    if (!isDreamingSidecar) {
       const memoryDecision = resolveMemorySlotDecision({
         id: record.id,
         kind: record.kind,
