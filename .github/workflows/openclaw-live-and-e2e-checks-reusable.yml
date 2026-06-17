@@ -229,8 +229,6 @@ on:
         required: false
       ANTHROPIC_API_TOKEN:
         required: false
-      ANTHROPIC_OAUTH_TOKEN:
-        required: false
       FACTORY_API_KEY:
         required: false
       BYTEPLUS_API_KEY:
@@ -521,7 +519,6 @@ jobs:
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-      ANTHROPIC_OAUTH_TOKEN: ${{ secrets.ANTHROPIC_OAUTH_TOKEN }}
       OPENCLAW_LIVE_CACHE_TEST: "1"
       OPENCLAW_LIVE_TEST: "1"
     steps:
@@ -544,12 +541,9 @@ jobs:
             echo "Missing OPENAI_API_KEY secret for live-cache validation." >&2
             exit 1
           fi
-          if [[ -z "${ANTHROPIC_OAUTH_TOKEN:-}" && -z "${ANTHROPIC_API_KEY:-}" ]]; then
-            echo "Missing ANTHROPIC_OAUTH_TOKEN or ANTHROPIC_API_KEY secret for live-cache validation." >&2
+          if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
+            echo "Missing ANTHROPIC_API_KEY secret for live-cache validation." >&2
             exit 1
-          fi
-          if [[ -n "${ANTHROPIC_OAUTH_TOKEN:-}" ]]; then
-            echo "ANTHROPIC_API_KEY=" >> "$GITHUB_ENV"
           fi
 
       - name: Verify live prompt cache floors
@@ -686,7 +680,6 @@ jobs:
       OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       ANTHROPIC_API_TOKEN: ${{ secrets.ANTHROPIC_API_TOKEN }}
-      ANTHROPIC_OAUTH_TOKEN: ${{ secrets.ANTHROPIC_OAUTH_TOKEN }}
       ANTHROPIC_API_KEY_OLD: ${{ secrets.ANTHROPIC_API_KEY_OLD }}
       FACTORY_API_KEY: ${{ secrets.FACTORY_API_KEY }}
       BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
@@ -951,7 +944,6 @@ jobs:
       OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       ANTHROPIC_API_TOKEN: ${{ secrets.ANTHROPIC_API_TOKEN }}
-      ANTHROPIC_OAUTH_TOKEN: ${{ secrets.ANTHROPIC_OAUTH_TOKEN }}
       ANTHROPIC_API_KEY_OLD: ${{ secrets.ANTHROPIC_API_KEY_OLD }}
       FACTORY_API_KEY: ${{ secrets.FACTORY_API_KEY }}
       BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
@@ -1663,7 +1655,6 @@ jobs:
       OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       ANTHROPIC_API_TOKEN: ${{ secrets.ANTHROPIC_API_TOKEN }}
-      ANTHROPIC_OAUTH_TOKEN: ${{ secrets.ANTHROPIC_OAUTH_TOKEN }}
       ANTHROPIC_API_KEY_OLD: ${{ secrets.ANTHROPIC_API_KEY_OLD }}
       BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
       CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
@@ -1755,7 +1746,7 @@ jobs:
           }
 
           case "${LIVE_MODEL_PROVIDERS}" in
-            anthropic) require_any Anthropic ANTHROPIC_OAUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_API_KEY_OLD ANTHROPIC_API_TOKEN ;;
+            anthropic) require_any Anthropic ANTHROPIC_API_KEY ANTHROPIC_API_KEY_OLD ANTHROPIC_API_TOKEN ;;
             google) require_any Google GEMINI_API_KEY GOOGLE_API_KEY ;;
             minimax) require_any MiniMax MINIMAX_API_KEY ;;
             moonshot) require_any Moonshot MOONSHOT_API_KEY KIMI_API_KEY ;;
@@ -1787,7 +1778,6 @@ jobs:
       OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       ANTHROPIC_API_TOKEN: ${{ secrets.ANTHROPIC_API_TOKEN }}
-      ANTHROPIC_OAUTH_TOKEN: ${{ secrets.ANTHROPIC_OAUTH_TOKEN }}
       ANTHROPIC_API_KEY_OLD: ${{ secrets.ANTHROPIC_API_KEY_OLD }}
       BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
       CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
@@ -1931,7 +1921,7 @@ jobs:
           IFS=',' read -r -a providers <<<"${OPENCLAW_LIVE_PROVIDERS}"
           for provider in "${providers[@]}"; do
             case "$provider" in
-              anthropic) require_any Anthropic ANTHROPIC_OAUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_API_KEY_OLD ANTHROPIC_API_TOKEN ;;
+              anthropic) require_any Anthropic ANTHROPIC_API_KEY ANTHROPIC_API_KEY_OLD ANTHROPIC_API_TOKEN ;;
               google) require_any Google GEMINI_API_KEY GOOGLE_API_KEY ;;
               minimax) require_any MiniMax MINIMAX_API_KEY ;;
               moonshot) require_any Moonshot MOONSHOT_API_KEY KIMI_API_KEY ;;
@@ -2150,7 +2140,6 @@ jobs:
       OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       ANTHROPIC_API_TOKEN: ${{ secrets.ANTHROPIC_API_TOKEN }}
-      ANTHROPIC_OAUTH_TOKEN: ${{ secrets.ANTHROPIC_OAUTH_TOKEN }}
       ANTHROPIC_API_KEY_OLD: ${{ secrets.ANTHROPIC_API_KEY_OLD }}
       BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
       CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
@@ -2371,7 +2360,6 @@ jobs:
       OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       ANTHROPIC_API_TOKEN: ${{ secrets.ANTHROPIC_API_TOKEN }}
-      ANTHROPIC_OAUTH_TOKEN: ${{ secrets.ANTHROPIC_OAUTH_TOKEN }}
       ANTHROPIC_API_KEY_OLD: ${{ secrets.ANTHROPIC_API_KEY_OLD }}
       BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
       CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
@@ -2588,7 +2576,6 @@ jobs:
       OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       ANTHROPIC_API_TOKEN: ${{ secrets.ANTHROPIC_API_TOKEN }}
-      ANTHROPIC_OAUTH_TOKEN: ${{ secrets.ANTHROPIC_OAUTH_TOKEN }}
       ANTHROPIC_API_KEY_OLD: ${{ secrets.ANTHROPIC_API_KEY_OLD }}
       BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
       CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}

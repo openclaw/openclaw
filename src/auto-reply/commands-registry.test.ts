@@ -246,6 +246,31 @@ describe("commands registry", () => {
     );
   });
 
+  it("preserves multiline payloads for skill slash commands", () => {
+    expect(normalizeCommandBody("/skill demo_skill first line\nsecond line")).toBe(
+      "/skill demo_skill first line\nsecond line",
+    );
+    expect(
+      normalizeCommandBody("/skill@openclaw: demo_skill first line\nsecond line", {
+        botUsername: "openclaw",
+      }),
+    ).toBe("/skill demo_skill first line\nsecond line");
+    expect(resolveTextCommand("/skill demo_skill first line\nsecond line")?.args).toBe(
+      "demo_skill first line\nsecond line",
+    );
+  });
+
+  it("preserves multiline payloads for direct skill slash aliases only when unregistered", () => {
+    expect(normalizeCommandBody("/demo_skill first line\nsecond line")).toBe(
+      "/demo_skill first line\nsecond line",
+    );
+    expect(normalizeCommandBody("/reset soft\nre-read persona files")).toBe(
+      "/reset soft re-read persona files",
+    );
+    expect(normalizeCommandBody("/side first line\nsecond line")).toBe("/btw first line");
+    expect(normalizeCommandBody("/id\nignored")).toBe("/whoami");
+  });
+
   it("filters commands based on config flags", () => {
     const disabled = listChatCommandsForConfig({
       commands: { config: false, plugins: false, debug: false },

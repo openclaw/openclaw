@@ -594,7 +594,9 @@ export function registerBrowserAgentSnapshotRoutes(
       });
 
       try {
-        const tab = await profileCtx.ensureTabAvailable(targetId || undefined);
+        const tab = await profileCtx.ensureTabAvailable(targetId || undefined, {
+          allowPlaywrightFallback: hasPlaywright,
+        });
         const usesChromeMcp = getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp;
         const ssrfPolicyOpts = browserNavigationPolicyForProfile(ctx, profileCtx);
         if ((plan.labels || plan.mode === "efficient") && plan.format === "aria") {

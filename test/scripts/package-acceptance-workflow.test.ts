@@ -991,14 +991,11 @@ describe("package artifact reuse", () => {
     const providerVerifier = readFileSync(VERIFY_PROVIDER_SECRETS_SCRIPT, "utf8");
 
     expect(hydrateScript).toContain("  FACTORY_API_KEY \\");
-    expect(hydrateScript).toContain("  ANTHROPIC_OAUTH_TOKEN \\");
-    expect(providerVerifier).toContain(
-      'env: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_API_TOKEN"]',
-    );
-    expect(providerVerifier).toContain('"anthropic-beta": "oauth-2025-04-20"');
-    expect(providerVerifier).toContain("authorization: `Bearer ${value}`");
+    expect(providerVerifier).toContain('url: "https://api.anthropic.com/v1/messages"');
+    expect(providerVerifier).toContain('model: "claude-haiku-4-5"');
+    expect(providerVerifier).toContain("validateResponse:");
+    expect(providerVerifier).not.toContain("ANTHROPIC_OAUTH_TOKEN");
     expect(dockerPlanAction).toContain('if [[ "$credentials" == *",factory,"* ]]; then');
-    expect(dockerPlanAction).not.toContain("require_any Anthropic ANTHROPIC_OAUTH_TOKEN");
     expectTextToIncludeAll(dockerPlanAction, [
       'if [[ "$credentials" == *",openai,"* ]]; then',
       "require_any OpenAI OPENAI_API_KEY",
@@ -1021,12 +1018,9 @@ describe("package artifact reuse", () => {
       testboxWorkflow,
     ]) {
       expect(workflow).toContain("FACTORY_API_KEY: ${{ secrets.FACTORY_API_KEY }}");
-      expect(workflow).toContain("ANTHROPIC_OAUTH_TOKEN: ${{ secrets.ANTHROPIC_OAUTH_TOKEN }}");
     }
     expect(reusableWorkflow).toContain("FACTORY_API_KEY:\n        required: false");
-    expect(reusableWorkflow).toContain("ANTHROPIC_OAUTH_TOKEN:\n        required: false");
     expect(packageAcceptanceWorkflow).toContain("FACTORY_API_KEY:\n        required: false");
-    expect(packageAcceptanceWorkflow).toContain("ANTHROPIC_OAUTH_TOKEN:\n        required: false");
     expectTextToIncludeAll(reusableWorkflow, [
       'if [[ "$credentials" == *",openai,"* ]]; then',
       "require_any OpenAI OPENAI_API_KEY",
@@ -1037,10 +1031,6 @@ describe("package artifact reuse", () => {
       'if [[ "$credentials" == *",opencode,"* ]]; then',
       "require_any OpenCode OPENCODE_API_KEY OPENCODE_ZEN_API_KEY",
     ]);
-    expect(reusableWorkflow).toContain(
-      "anthropic) require_any Anthropic ANTHROPIC_OAUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_API_KEY_OLD ANTHROPIC_API_TOKEN ;;",
-    );
-    expect(reusableWorkflow).toContain('echo "ANTHROPIC_API_KEY=" >> "$GITHUB_ENV"');
     expect(reusableWorkflow.match(/OPENCLAW_LIVE_CLI_BACKEND_AUTH=subscription/g)).toHaveLength(2);
     expect(
       reusableWorkflow.match(
@@ -1118,7 +1108,6 @@ describe("package artifact reuse", () => {
     );
     expect(workflow).toContain("ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}");
     expect(workflow).toContain("ANTHROPIC_API_TOKEN: ${{ secrets.ANTHROPIC_API_TOKEN }}");
-    expect(workflow).toContain("ANTHROPIC_OAUTH_TOKEN: ${{ secrets.ANTHROPIC_OAUTH_TOKEN }}");
     expect(workflow).toContain(
       "OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}",
     );
@@ -1576,6 +1565,27 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("Unreleased prerelease fallback");
     expect(workflow).not.toContain("gh api --repo");
     expect(workflow).not.toContain("timeout-minutes: 360");
+  });
+
+  it("keeps OpenClaw npm release pack tarball paths local before preflight upload", () => {
+    const npmWorkflow = readFileSync(".github/workflows/openclaw-npm-release.yml", "utf8");
+    const packStepIndex = npmWorkflow.indexOf("- name: Pack prepared npm tarball");
+    const copyIndex = npmWorkflow.indexOf('cp "$PACK_PATH" "$ARTIFACT_DIR/"');
+    const uploadIndex = npmWorkflow.indexOf("- name: Upload prepared npm publish bundle");
+
+    expect(packStepIndex).toBeGreaterThan(-1);
+    expect(copyIndex).toBeGreaterThan(packStepIndex);
+    expect(uploadIndex).toBeGreaterThan(packStepIndex);
+    expect(npmWorkflow).toContain('PACK_NAME="$(node - "$PACK_OUTPUT"');
+    expect(npmWorkflow).toContain("function resolveTarballFileName");
+    expect(npmWorkflow).toContain('fileName.includes("\\0")');
+    expect(npmWorkflow).toContain("fileName !== path.basename(fileName)");
+    expect(npmWorkflow).toContain("fileName !== path.win32.basename(fileName)");
+    expect(npmWorkflow).toContain("npm pack reported unsafe tarball filename");
+    expect(npmWorkflow).toContain('PACK_PATH="$PWD/$PACK_NAME"');
+    expect(npmWorkflow).toContain('TARBALL_NAME="$PACK_NAME"');
+    expect(npmWorkflow).not.toContain("process.stdout.write(first.filename)");
+    expect(npmWorkflow).not.toContain('TARBALL_NAME="$(basename "$PACK_PATH")"');
   });
 
   it("gates stable GitHub publication on the Windows Hub release asset contract", () => {

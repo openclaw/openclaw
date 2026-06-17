@@ -860,7 +860,7 @@ export type EmbeddedAttemptSessionFileOwner = {
   release(): void;
 };
 
-export class EmbeddedAttemptSessionFileOwnerTimeoutError extends Error {
+class EmbeddedAttemptSessionFileOwnerTimeoutError extends Error {
   constructor(sessionFile: string, timeoutMs: number) {
     super(`timed out waiting for embedded session file owner after ${timeoutMs}ms: ${sessionFile}`);
     this.name = "EmbeddedAttemptSessionFileOwnerTimeoutError";
@@ -1669,6 +1669,13 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     }
   }
 
+  async function releaseHeldLockAfterTakeover(): Promise<void> {
+    if (!takeoverDetected) {
+      return;
+    }
+    await disposeHeldLockAfterRetainedIdle();
+  }
+
   async function acquireCleanupLock(): Promise<SessionLock | undefined> {
     const retainedLock = await takeHeldLockAfterRetainedIdle();
     if (retainedLock) {
@@ -1709,6 +1716,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
         }
       }
     }
+    await releaseHeldLockAfterTakeover();
     if (!outcome.ok) {
       throw outcome.error;
     }

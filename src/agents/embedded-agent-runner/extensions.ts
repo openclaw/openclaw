@@ -10,10 +10,7 @@ import contextPruningExtension from "../agent-hooks/context-pruning.js";
 import { setContextPruningRuntime } from "../agent-hooks/context-pruning/runtime.js";
 import { computeEffectiveSettings } from "../agent-hooks/context-pruning/settings.js";
 import { makeToolPrunablePredicate } from "../agent-hooks/context-pruning/tools.js";
-import {
-  ensureAgentCompactionReserveTokens,
-  resolveEffectiveCompactionMode,
-} from "../agent-settings.js";
+import { resolveEffectiveCompactionMode } from "../agent-settings.js";
 import {
   finalizeToolTerminalPresentation,
   peekAdjustedParamsForToolCall,
@@ -209,5 +206,3 @@ export function buildEmbeddedExtensionFactories(params: {
   factories.push(buildAgentToolResultMiddlewareFactory(params.sessionManager, params.runId));
   return factories;
 }
-
-export { ensureAgentCompactionReserveTokens };

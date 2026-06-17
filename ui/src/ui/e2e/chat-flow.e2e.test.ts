@@ -221,6 +221,64 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
+  it("copies a code block over a non-secure context via the execCommand fallback", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    // Simulate a plain-HTTP (non-secure) deployment: navigator.clipboard is
+    // undefined there, so the Clipboard API path throws. Capture the legacy
+    // execCommand copy the fallback should use instead.
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
+      (globalThis as unknown as { copiedViaExec: string[] }).copiedViaExec = [];
+      document.execCommand = ((command: string) => {
+        if (command !== "copy") {
+          return false;
+        }
+        // execCommand("copy") copies the active selection; the fallback selects
+        // its off-screen scratch textarea, so the focused element holds the text.
+        const active = document.activeElement as HTMLTextAreaElement | null;
+        (globalThis as unknown as { copiedViaExec: string[] }).copiedViaExec.push(
+          active?.value ?? "",
+        );
+        return true;
+      }) as typeof document.execCommand;
+    });
+    const code = "const hello = 1;";
+    const gateway = await installMockGateway(page, {
+      historyMessages: [
+        {
+          content: [{ text: `\`\`\`js\n${code}\n\`\`\``, type: "text" }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+      ],
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const copyButton = page.locator(".code-block-copy").first();
+      await copyButton.waitFor({ timeout: 10_000 });
+      await copyButton.click();
+
+      await expect
+        .poll(() => copyButton.evaluate((el) => el.classList.contains("copied")), {
+          timeout: 10_000,
+        })
+        .toBe(true);
+      const copied = await page.evaluate(
+        () => (globalThis as unknown as { copiedViaExec: string[] }).copiedViaExec,
+      );
+      expect(copied).toContain(code);
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("starts the workspace files panel collapsed and toggles it open", async () => {
     const context = await browser.newContext({
       locale: "en-US",

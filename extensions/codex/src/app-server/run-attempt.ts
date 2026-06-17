@@ -149,7 +149,6 @@ import {
   filterCodexDynamicToolsForAllowlist,
   formatCodexDynamicToolBuildStageSummary,
   includeForcedCodexDynamicToolAllow,
-  isCodexNativeExecutionBlockedByNodeExecHost,
   resolveCodexAppServerHookChannelId,
   resolveCodexMessageToolProvider,
   resolveOpenClawCodingToolsSessionKeys,
@@ -207,6 +206,7 @@ import {
   readCodexDynamicToolCallParams,
 } from "./protocol-validators.js";
 import {
+  flattenCodexDynamicToolFunctions,
   isJsonObject,
   type CodexSandboxPolicy,
   type CodexTurnEnvironmentParams,
@@ -632,18 +632,12 @@ export async function runCodexAppServerAttempt(
         startOptions: appServer.start,
       });
   preDynamicStartupStages.mark("auth-cache");
-  const nodeExecBlocksNativeExecution = isCodexNativeExecutionBlockedByNodeExecHost(params, {
-    agentId: sessionAgentId,
-    runtimeSessionKey: sandboxSessionKey,
-    sandbox,
-  });
-  preDynamicStartupStages.mark("native-exec-policy");
   const bundleMcpThreadConfig = await loadCodexBundleMcpThreadConfig({
     workspaceDir: effectiveWorkspace,
     cfg: params.config,
     toolsEnabled: supportsModelTools(params.model),
     disableTools: params.disableTools,
-    toolsAllow: nodeExecBlocksNativeExecution ? [] : params.toolsAllow,
+    toolsAllow: params.toolsAllow,
   });
   preDynamicStartupStages.mark("bundle-mcp");
   const sandboxExecServerEnabled = isCodexSandboxExecServerEnabled(pluginConfig);
@@ -861,6 +855,12 @@ export async function runCodexAppServerAttempt(
       sessionKey: contextSessionKey,
       sessionFile: activeSessionFile,
       runtimeContext: buildActiveContextEngineRuntimeContext(),
+      contextEngineHostSupport: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
+      providerId: params.provider,
+      requestedModelId: params.requestedModelId,
+      modelId: params.modelId,
+      fallbackReason: params.fallbackReason,
+      degradedReason: params.degradedReason,
       runMaintenance: runHarnessContextEngineMaintenance,
       config: params.config,
       warn: (message) => embeddedAgentLog.warn(message),
@@ -921,10 +921,17 @@ export async function runCodexAppServerAttempt(
       messages: historyMessages,
       tokenBudget: params.contextTokenBudget,
       availableTools: new Set(
-        toolBridge.availableSpecs.map((tool) => tool.name).filter(isNonEmptyString),
+        flattenCodexDynamicToolFunctions(toolBridge.availableSpecs)
+          .map((tool) => tool.name)
+          .filter(isNonEmptyString),
       ),
       citationsMode: params.config?.memory?.citations,
       modelId: params.modelId,
+      contextEngineHostSupport: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
+      providerId: params.provider,
+      requestedModelId: params.requestedModelId,
+      fallbackReason: params.fallbackReason,
+      degradedReason: params.degradedReason,
       prompt: params.prompt,
     });
     if (!assembled) {
@@ -1351,7 +1358,7 @@ export async function runCodexAppServerAttempt(
     threadId: thread.threadId,
     authProfileId: startupAuthProfileId,
     workspaceDir: effectiveWorkspace,
-    toolCount: toolBridge.specs.length,
+    toolCount: flattenCodexDynamicToolFunctions(toolBridge.specs).length,
   });
   recordCodexTrajectoryContext(trajectoryRecorder, {
     attempt: params,
@@ -2800,6 +2807,12 @@ export async function runCodexAppServerAttempt(
           lastCallUsage: result.attemptUsage,
           promptCache: result.promptCache,
         }),
+        contextEngineHostSupport: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
+        providerId: params.provider,
+        requestedModelId: params.requestedModelId,
+        modelId: params.modelId,
+        fallbackReason: params.fallbackReason,
+        degradedReason: params.degradedReason,
         runMaintenance: runHarnessContextEngineMaintenance,
         config: params.config,
         warn: (message) => embeddedAgentLog.warn(message),

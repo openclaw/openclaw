@@ -352,13 +352,27 @@ export function recordAdjustedParamsForToolCall(
   if (!toolCallId) {
     return;
   }
+  const cloneResult = cloneParamsForAdjustedReplay(params);
+  if (!cloneResult.ok) {
+    return;
+  }
   const adjustedParamsKey = buildAdjustedParamsKey({ runId, toolCallId });
-  adjustedParamsByToolCallId.set(adjustedParamsKey, structuredClone(params));
+  adjustedParamsByToolCallId.set(adjustedParamsKey, cloneResult.value);
   if (adjustedParamsByToolCallId.size > MAX_TRACKED_ADJUSTED_PARAMS) {
     const oldest = adjustedParamsByToolCallId.keys().next().value;
     if (oldest) {
       adjustedParamsByToolCallId.delete(oldest);
     }
+  }
+}
+
+function cloneParamsForAdjustedReplay(
+  params: unknown,
+): { ok: true; value: unknown } | { ok: false } {
+  try {
+    return { ok: true, value: structuredClone(params) };
+  } catch {
+    return { ok: false };
   }
 }
 

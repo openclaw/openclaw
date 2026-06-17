@@ -27,7 +27,7 @@ import {
 } from "./plugins/session-conversation.js";
 
 /** Resolved model override for a channel conversation plus the config key that matched. */
-export type ChannelModelOverride = {
+type ChannelModelOverride = {
   channel: string;
   model: string;
   matchKey?: string;

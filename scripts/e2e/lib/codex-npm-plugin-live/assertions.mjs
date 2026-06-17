@@ -417,7 +417,7 @@ function assertAgentTurn() {
 
   const bindingPath = `${entry.sessionFile}.codex-app-server.json`;
   const binding = readJson(bindingPath);
-  if (binding.schemaVersion !== 1 || typeof binding.threadId !== "string") {
+  if (![1, 2].includes(binding.schemaVersion) || typeof binding.threadId !== "string") {
     throw new Error(`invalid Codex app-server binding: ${JSON.stringify(binding)}`);
   }
   if (binding.model !== modelRef.split("/").slice(1).join("/")) {

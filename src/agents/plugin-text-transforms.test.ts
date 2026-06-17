@@ -10,7 +10,6 @@ import { describe, expect, it } from "vitest";
 import {
   applyPluginTextReplacements,
   mergePluginTextTransforms,
-  transformStreamContextText,
   wrapStreamFnTextTransforms,
 } from "./plugin-text-transforms.js";
 
@@ -71,28 +70,46 @@ describe("plugin text transforms", () => {
     ).toBe("counter receipt on the right shelf");
   });
 
-  it("rewrites system prompt and message text content before transport", () => {
-    const context = transformStreamContextText(
-      {
-        systemPrompt: "Use orchid mailbox inside north tower",
-        messages: [
-          {
-            role: "user",
-            content: [
-              { type: "text", text: "Please use the red basket" },
-              { type: "image", url: "data:image/png;base64,abc" },
-            ],
-          },
-        ],
-      } as Context,
-      [
+  it("rewrites system prompt and message text content before transport", async () => {
+    let capturedContext: Context | undefined;
+    const wrapped = wrapStreamFnTextTransforms({
+      streamFn: (_model, context) => {
+        capturedContext = context;
+        const stream = createAssistantMessageEventStream();
+        stream.end();
+        return stream;
+      },
+      input: [
         {
           from: /orchid mailbox/g,
           to: "pine mailbox",
         },
         { from: /red basket/g, to: "blue basket" },
       ],
-    ) as unknown as { systemPrompt: string; messages: Array<{ content: unknown[] }> };
+    });
+    await Promise.resolve(
+      wrapped(
+        model,
+        {
+          systemPrompt: "Use orchid mailbox inside north tower",
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: "Please use the red basket" },
+                { type: "image", url: "data:image/png;base64,abc" },
+              ],
+            },
+          ],
+        } as Context,
+        undefined,
+      ),
+    );
+
+    const context = capturedContext as unknown as {
+      systemPrompt: string;
+      messages: Array<{ content: unknown[] }>;
+    };
 
     expect(context.systemPrompt).toBe("Use pine mailbox inside north tower");
     const textContent = context.messages[0]?.content[0] as
