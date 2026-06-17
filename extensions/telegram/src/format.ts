@@ -157,7 +157,9 @@ function preserveTelegramListBoundarySpacing(markdown: string): string {
  *    can trigger unintended italic/variable rendering in Telegram.
  */
 export function escapeTelegramProblematicMarkdown(text: string): string {
-  if (!text) return text;
+  if (!text) {
+    return text;
+  }
   return (
     text
       // Escape # at line-start followed by digit: "#12345" → "\#12345"
@@ -175,7 +177,9 @@ export function escapeTelegramProblematicMarkdown(text: string): string {
  */
 export function lintTelegramMarkdown(text: string): string[] {
   const warnings: string[] = [];
-  if (!text) return warnings;
+  if (!text) {
+    return warnings;
+  }
 
   // Check for $ followed by digit/uppercase not inside backticks
   const segments = text.split("`");
@@ -184,7 +188,8 @@ export function lintTelegramMarkdown(text: string): string[] {
     const seg = segments[i] ?? "";
     const dollarHits = [...seg.matchAll(/\$(\d|[A-Z]{2,})/g)];
     for (const hit of dollarHits) {
-      const ctx = seg.slice(Math.max(0, hit.index! - 10), hit.index! + hit[0].length + 10);
+      const idx = hit.index ?? 0;
+      const ctx = seg.slice(Math.max(0, idx - 10), idx + hit[0].length + 10);
       warnings.push(
         `\`$\` followed by digit/uppercase may trigger Telegram variable rendering: \`...${ctx}...\` — consider wrapping in backticks`,
       );
@@ -201,9 +206,9 @@ export function lintTelegramMarkdown(text: string): string[] {
       boldRanges.push([m.index, m.index + m[0].length]);
     }
     if (boldRanges.length > 0) {
-      const withoutBold =
-        line.slice(0, boldRanges[0]![0]) +
-        line.slice(boldRanges[boldRanges.length - 1]![1]);
+      const first = boldRanges[0] ?? [0, 0];
+      const last = boldRanges[boldRanges.length - 1] ?? [0, 0];
+      const withoutBold = line.slice(0, first[0]) + line.slice(last[1]);
       if (withoutBold.trim().length > 0) {
         warnings.push(
           `Inline bold mixed with regular text may cause font-size inconsistency in Telegram: "${line.trim().slice(0, 80)}"`,
