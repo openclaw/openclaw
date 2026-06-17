@@ -65,8 +65,18 @@ describe("ollama provider policy public artifact", () => {
       levels: [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }, { id: "max" }],
       defaultLevel: "off",
     });
+  });
+
+  it("keeps off-only thinking for catalog non-reasoning models", () => {
     expect(resolveThinkingProfile({ reasoning: false })).toEqual({
       levels: [{ id: "off" }],
+      defaultLevel: "off",
+    });
+  });
+
+  it("falls back to model heuristics when catalog reasoning is not available", () => {
+    expect(resolveThinkingProfile({ modelId: "deepseek-r1:14b" })).toEqual({
+      levels: [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }, { id: "max" }],
       defaultLevel: "off",
     });
   });

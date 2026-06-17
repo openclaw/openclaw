@@ -8,6 +8,9 @@ import {
   OLLAMA_DEFAULT_COST,
   OLLAMA_DEFAULT_MAX_TOKENS,
 } from "./defaults.js";
+import { isReasoningModelHeuristic } from "./reasoning-models.js";
+
+export { isReasoningModelHeuristic } from "./reasoning-models.js";
 
 export type OllamaTagModel = {
   name: string;
@@ -236,10 +239,6 @@ export async function enrichOllamaModelsWithContext(
     enriched.push(...batchResults);
   }
   return enriched;
-}
-
-export function isReasoningModelHeuristic(modelId: string): boolean {
-  return /r1|reasoning|think|reason/i.test(modelId);
 }
 
 function isKnownOllamaCloudReasoningModel(modelId: string): boolean {
