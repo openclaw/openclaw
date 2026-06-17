@@ -412,6 +412,7 @@ export async function maybeRepairGatewayDaemon(params: {
       {
         message: "Start gateway service now?",
         initialValue: true,
+        requiresInteractiveConfirmation: true,
       },
       serviceRepairPolicy,
     );
@@ -465,6 +466,7 @@ export async function maybeRepairGatewayDaemon(params: {
       {
         message: "Restart gateway service now?",
         initialValue: false,
+        requiresInteractiveConfirmation: true,
       },
       serviceRepairPolicy,
     );
