@@ -1171,6 +1171,10 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain(
       "(needs.resolve_target.outputs.rerun_group == 'live-e2e' || (needs.resolve_target.outputs.rerun_group == 'all' && needs.resolve_target.outputs.run_release_soak == 'true')) && needs.resolve_target.outputs.live_suite_filter == ''",
     );
+    expect(workflow).toContain(
+      'if [[ "$release_profile" == "stable" || "$release_profile" == "full" ]]; then\n            run_release_soak=true',
+    );
+    expect(workflow).toContain("forced on for release_profile=stable and full");
     expect(workflow).toContain("- live-e2e");
     expect(workflow).toContain("- qa-live");
     expect(workflow).toContain("disabled_required_lanes=()");

@@ -40,7 +40,7 @@ on:
           - stable
           - full
       run_release_soak:
-        description: Run exhaustive live/Docker and upgrade-survivor soak lanes; forced on for release_profile=full
+        description: Run exhaustive live/Docker and upgrade-survivor soak lanes; forced on for release_profile=stable and full
         required: false
         default: false
         type: boolean
@@ -330,7 +330,7 @@ jobs:
               exit 1
               ;;
           esac
-          if [[ "$release_profile" == "full" ]]; then
+          if [[ "$release_profile" == "stable" || "$release_profile" == "full" ]]; then
             run_release_soak=true
           fi
           codex_plugin_spec="$RELEASE_CODEX_PLUGIN_SPEC_INPUT"

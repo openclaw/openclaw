@@ -39,6 +39,10 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   task-owned box and warm a fresh one before testing. Testbox source sync is
   relative to the warmed source tree; continuing can mix an old base file with
   a new candidate diff and produce false lockfile or Docker failures.
+- For a committed release candidate, warm the box with
+  `blacksmith testbox warmup ... --ref <candidate-branch-or-sha>`. Do not rely
+  on source sync to overlay committed branch changes onto the workflow's
+  default ref.
 
 ## Preflight
 

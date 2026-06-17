@@ -159,6 +159,16 @@ describe("stable release closeout", () => {
     });
   });
 
+  it("rejects calendar-normalized rollback drill dates", () => {
+    const result = verifyStableMainCloseout({
+      ...validCloseoutParams,
+      rollbackDrillDate: "2026-02-31",
+      nowMs: Date.parse("2026-06-17T00:00:00Z"),
+    });
+
+    expect(result.errors).toContain("rollback drill date is invalid: 2026-02-31.");
+  });
+
   it("rejects speculative main state, appcast drift, and stale rollback drills", () => {
     const result = verifyStableMainCloseout({
       ...validCloseoutParams,
