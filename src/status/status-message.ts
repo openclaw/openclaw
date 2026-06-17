@@ -914,19 +914,11 @@ export function buildStatusMessage(args: StatusArgs): string {
     ? (args.groupActivation ?? entry?.groupActivation ?? "mention")
     : undefined;
 
-  // systemSent flips before the first agent run. Until then, a non-forked
-  // session has an empty transcript and its missing usage is a known zero.
-  const freshEmptySession =
-    totalTokens == null &&
-    entry?.totalTokensFresh !== false &&
-    entry?.systemSent === false &&
-    entry?.forkedFromParent !== true;
-  const contextTotalTokens = freshEmptySession ? 0 : totalTokens;
   const contextUsageLabel =
-    contextTotalTokens == null || contextTotalTokens === 0
+    totalTokens == null || totalTokens === 0
       ? (formatEstimatedContextBudgetTokens(entry?.contextBudgetStatus, contextTokens) ??
-        formatTokens(contextTotalTokens, contextTokens ?? null))
-      : formatTokens(contextTotalTokens, contextTokens ?? null);
+        formatTokens(totalTokens, contextTokens ?? null))
+      : formatTokens(totalTokens, contextTokens ?? null);
   const contextLine = [
     `Context: ${contextUsageLabel}`,
     `🧹 Compactions: ${entry?.compactionCount ?? 0}`,

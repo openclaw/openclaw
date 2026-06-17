@@ -253,42 +253,6 @@ describe("buildStatusMessage", () => {
     expect(normalized).not.toContain("Context: ?/1.0m");
   });
 
-  it("renders missing usage as zero only before a non-forked session's first run (#93771)", () => {
-    const renderContext = (sessionEntry: {
-      systemSent?: boolean;
-      forkedFromParent?: boolean;
-      totalTokensFresh?: boolean;
-    }) => {
-      const text = buildStatusMessage({
-        agent: {
-          model: "anthropic/test:opus",
-          contextTokens: 1_000_000,
-        },
-        sessionEntry: {
-          sessionId: "fresh-session",
-          updatedAt: 0,
-          contextTokens: 1_000_000,
-          ...sessionEntry,
-        },
-        sessionKey: "agent:main:main",
-        sessionScope: "per-sender",
-        queue: { mode: "collect", depth: 0 },
-        modelAuth: "api-key",
-        now: 10 * 60_000,
-      });
-      return normalizeTestText(text);
-    };
-
-    expect(renderContext({ systemSent: false })).toContain("Context: 0/1.0m");
-    expect(renderContext({})).toContain("Context: ?/1.0m");
-    expect(renderContext({ systemSent: false, forkedFromParent: true })).toContain(
-      "Context: ?/1.0m",
-    );
-    expect(renderContext({ systemSent: false, totalTokensFresh: false })).toContain(
-      "Context: ?/1.0m",
-    );
-  });
-
   it("uses estimated context budget status when fresh totalTokens are unavailable", () => {
     const text = buildStatusMessage({
       agent: {
