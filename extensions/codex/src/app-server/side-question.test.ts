@@ -1151,6 +1151,53 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(config?.["features.code_mode_only"]).toBe(true);
   });
 
+  it("applies network-proxy config to side-thread forks", async () => {
+    const client = createFakeClient();
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+
+    await expect(
+      runCodexAppServerSideQuestion(sideParams(), {
+        pluginConfig: {
+          appServer: {
+            networkProxy: {
+              enabled: true,
+              profileName: "side-proxy",
+              domains: { "api.openai.com": "allow" },
+              unixSockets: { "/tmp/proxy.sock": "allow" },
+              allowUpstreamProxy: true,
+              proxyUrl: "http://127.0.0.1:3128",
+            },
+          },
+        },
+      }),
+    ).resolves.toEqual({ text: "Side answer." });
+
+    const forkParams = mockCall(client.request)[1] as Record<string, unknown> | undefined;
+    const config = forkParams?.config as Record<string, unknown> | undefined;
+    expect(forkParams).not.toHaveProperty("sandbox");
+    expect(config).toMatchObject({
+      "features.network_proxy.enabled": true,
+      default_permissions: "side-proxy",
+      permissions: {
+        "side-proxy": {
+          filesystem: {
+            ":minimal": "read",
+            ":workspace_roots": { ".": "write" },
+          },
+          network: {
+            enabled: true,
+            domains: { "api.openai.com": "allow" },
+            unix_sockets: { "/tmp/proxy.sock": "allow" },
+            allow_upstream_proxy: true,
+            proxy_url: "http://127.0.0.1:3128",
+          },
+        },
+      },
+    });
+    expect(config?.["features.code_mode"]).toBe(true);
+    expect(config?.["features.code_mode_only"]).toBe(false);
+  });
+
   it("keeps Codex code-mode-only while disabling Guardian for provider-qualified local models", async () => {
     const client = createFakeClient();
     getSharedCodexAppServerClientMock.mockResolvedValue(client);

@@ -136,17 +136,22 @@ def android_release_notes_path
   File.join(__dir__, "metadata", "android", "en-US", "release_notes.txt")
 end
 
+def validate_android_release_notes!
+  release_notes_path = android_release_notes_path
+  UI.user_error!("Missing Android release notes at #{release_notes_path}. Run `pnpm android:version:sync`.") unless File.exist?(release_notes_path)
+  UI.user_error!("Android release notes at #{release_notes_path} are empty.") unless env_present?(File.read(release_notes_path))
+end
+
 def android_changelog_path(version_code)
   File.join(__dir__, "metadata", "android", "en-US", "changelogs", "#{version_code}.txt")
 end
 
 def sync_android_changelog!(version_code)
-  release_notes_path = android_release_notes_path
-  UI.user_error!("Missing Android release notes at #{release_notes_path}.") unless File.exist?(release_notes_path)
+  validate_android_release_notes!
 
   changelog_path = android_changelog_path(version_code)
   FileUtils.mkdir_p(File.dirname(changelog_path))
-  File.write(changelog_path, File.read(release_notes_path))
+  File.write(changelog_path, File.read(android_release_notes_path))
   changelog_path
 end
 
@@ -176,6 +181,29 @@ end
 
 def capture_android_screenshots!
   sh(shell_join(["bash", File.join(repo_root, "scripts", "android-screenshots.sh")]))
+end
+
+def validate_android_release_signing!
+  Dir.chdir(android_root) do
+    sh(shell_join(["./gradlew", ":app:bundlePlayRelease", "--dry-run"]))
+  end
+end
+
+def print_android_release_plan!(version_metadata)
+  UI.message("Android Play release plan:")
+  UI.message("  package: #{play_package_name}")
+  UI.message("  track: #{play_track}")
+  UI.message("  release_status: #{play_release_status}")
+  UI.message("  validate_only: #{play_validate_only?}")
+  UI.message("  versionName: #{version_metadata.fetch(:version)}")
+  UI.message("  versionCode: #{version_metadata.fetch(:version_code)}")
+end
+
+def validate_android_release_preflight!(version_metadata)
+  validate_play_auth!
+  validate_android_release_signing!
+  validate_android_release_notes!
+  print_android_release_plan!(version_metadata)
 end
 
 def upload_play_store_metadata!(version_metadata)
@@ -230,6 +258,14 @@ platform :android do
     UI.success("Google Play API credentials are valid.")
   end
 
+  desc "Validate Android Play release auth, signing, versioning, and release notes"
+  lane :release_preflight do
+    sync_android_versioning!
+    version_metadata = read_android_version_metadata
+    validate_android_release_preflight!(version_metadata)
+    UI.success("Android Play release preflight passed for #{version_metadata[:version]} (#{version_metadata[:version_code]}).")
+  end
+
   desc "Upload Google Play metadata, changelog, and optional screenshots"
   lane :metadata do
     sync_android_versioning!
@@ -260,9 +296,9 @@ platform :android do
 
   desc "Upload Android metadata, archive release artifacts, then upload the Play AAB"
   lane :release_upload do
-    auth_check
     sync_android_versioning!
     version_metadata = read_android_version_metadata
+    validate_android_release_preflight!(version_metadata)
     screenshots
     ENV["SUPPLY_UPLOAD_METADATA"] = "1"
     ENV["SUPPLY_UPLOAD_SCREENSHOTS"] = "1"

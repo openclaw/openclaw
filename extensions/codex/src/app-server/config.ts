@@ -1,5 +1,5 @@
 // Codex helper module supports config behavior.
-import { createHmac, randomBytes } from "node:crypto";
+import { createHash, createHmac, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { hostname as readHostName } from "node:os";
 import path from "node:path";
@@ -16,7 +16,7 @@ import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { normalizeTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { detectWindowsSpawnCommandInlineArgs } from "openclaw/plugin-sdk/windows-spawn";
 import { z } from "zod";
-import type { CodexSandboxPolicy, CodexServiceTier } from "./protocol.js";
+import type { CodexSandboxPolicy, CodexServiceTier, JsonObject, JsonValue } from "./protocol.js";
 
 const START_OPTIONS_KEY_SECRET_SYMBOL = Symbol.for("openclaw.codexAppServerStartOptionsKeySecret");
 const START_OPTIONS_KEY_SECRET = getStartOptionsKeySecret();
@@ -111,6 +111,34 @@ export type CodexAppServerExperimentalConfig = {
   sandboxExecServer?: boolean;
 };
 
+export type CodexAppServerNetworkProxyDomainPermission = "allow" | "deny";
+export type CodexAppServerNetworkProxyUnixSocketPermission = "allow" | "deny";
+export type CodexAppServerNetworkProxyBaseProfile = "read-only" | "workspace";
+export type CodexAppServerNetworkProxyMode = "limited" | "full";
+
+export type CodexAppServerNetworkProxyConfig = {
+  enabled?: boolean;
+  profileName?: string;
+  baseProfile?: CodexAppServerNetworkProxyBaseProfile;
+  mode?: CodexAppServerNetworkProxyMode;
+  domains?: Record<string, CodexAppServerNetworkProxyDomainPermission>;
+  unixSockets?: Record<string, CodexAppServerNetworkProxyUnixSocketPermission>;
+  proxyUrl?: string;
+  socksUrl?: string;
+  enableSocks5?: boolean;
+  enableSocks5Udp?: boolean;
+  allowUpstreamProxy?: boolean;
+  allowLocalBinding?: boolean;
+  dangerouslyAllowNonLoopbackProxy?: boolean;
+  dangerouslyAllowAllUnixSockets?: boolean;
+};
+
+export type ResolvedCodexAppServerNetworkProxyConfig = {
+  profileName: string;
+  configFingerprint: string;
+  configPatch: JsonObject;
+};
+
 export type ResolvedCodexPluginPolicy = {
   configKey: string;
   marketplaceName: typeof CODEX_PLUGINS_MARKETPLACE_NAME;
@@ -151,6 +179,7 @@ export type CodexAppServerRuntimeOptions = {
   sandbox: CodexAppServerSandboxMode;
   approvalsReviewer: CodexAppServerApprovalsReviewer;
   serviceTier?: CodexServiceTier;
+  networkProxy?: ResolvedCodexAppServerNetworkProxyConfig;
 };
 
 export type CodexModelBackedReviewerContext = {
@@ -188,15 +217,20 @@ export type CodexPluginConfig = {
     sandbox?: CodexAppServerSandboxMode;
     approvalsReviewer?: CodexAppServerApprovalsReviewer;
     serviceTier?: CodexServiceTier | null;
+    networkProxy?: CodexAppServerNetworkProxyConfig;
     defaultWorkspaceDir?: string;
     experimental?: CodexAppServerExperimentalConfig;
   };
 };
 
 export function shouldAutoApproveCodexAppServerApprovals(
-  appServer: Pick<CodexAppServerRuntimeOptions, "approvalPolicy" | "sandbox">,
+  appServer: Pick<CodexAppServerRuntimeOptions, "approvalPolicy" | "networkProxy" | "sandbox">,
 ): boolean {
-  return appServer.approvalPolicy === "never" && appServer.sandbox === "danger-full-access";
+  return (
+    appServer.networkProxy === undefined &&
+    appServer.approvalPolicy === "never" &&
+    appServer.sandbox === "danger-full-access"
+  );
 }
 
 export const CODEX_APP_SERVER_CONFIG_KEYS = [
@@ -216,6 +250,7 @@ export const CODEX_APP_SERVER_CONFIG_KEYS = [
   "sandbox",
   "approvalsReviewer",
   "serviceTier",
+  "networkProxy",
   "defaultWorkspaceDir",
   "experimental",
 ] as const;
@@ -249,6 +284,7 @@ export const CODEX_PLUGIN_ENTRY_CONFIG_KEYS = [
 const DEFAULT_CODEX_COMPUTER_USE_PLUGIN_NAME = "computer-use";
 const DEFAULT_CODEX_COMPUTER_USE_MCP_SERVER_NAME = "computer-use";
 const DEFAULT_CODEX_COMPUTER_USE_MARKETPLACE_DISCOVERY_TIMEOUT_MS = 60_000;
+const DEFAULT_CODEX_APP_SERVER_NETWORK_PROXY_PROFILE_PREFIX = "openclaw-network";
 
 const codexAppServerTransportSchema = z.enum(["stdio", "websocket"]);
 const codexAppServerPolicyModeSchema = z.enum(["yolo", "guardian"]);
@@ -271,6 +307,26 @@ const codexAppServerServiceTierSchema = z
 const codexAppServerExperimentalSchema = z
   .object({
     sandboxExecServer: z.boolean().optional(),
+  })
+  .strict();
+const codexAppServerNetworkProxyDomainPermissionSchema = z.enum(["allow", "deny"]);
+const codexAppServerNetworkProxyUnixSocketPermissionSchema = z.enum(["allow", "deny"]);
+const codexAppServerNetworkProxySchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    profileName: z.string().trim().min(1).optional(),
+    baseProfile: z.enum(["read-only", "workspace"]).optional(),
+    mode: z.enum(["limited", "full"]).optional(),
+    domains: z.record(z.string(), codexAppServerNetworkProxyDomainPermissionSchema).optional(),
+    unixSockets: z.record(z.string(), codexAppServerNetworkProxyUnixSocketPermissionSchema).optional(),
+    proxyUrl: z.string().trim().min(1).optional(),
+    socksUrl: z.string().trim().min(1).optional(),
+    enableSocks5: z.boolean().optional(),
+    enableSocks5Udp: z.boolean().optional(),
+    allowUpstreamProxy: z.boolean().optional(),
+    allowLocalBinding: z.boolean().optional(),
+    dangerouslyAllowNonLoopbackProxy: z.boolean().optional(),
+    dangerouslyAllowAllUnixSockets: z.boolean().optional(),
   })
   .strict();
 
@@ -334,6 +390,7 @@ const codexPluginConfigSchema = z
         sandbox: codexAppServerSandboxSchema.optional(),
         approvalsReviewer: codexAppServerApprovalsReviewerSchema.optional(),
         serviceTier: codexAppServerServiceTierSchema,
+        networkProxy: codexAppServerNetworkProxySchema.optional(),
         defaultWorkspaceDir: z.string().optional(),
         experimental: codexAppServerExperimentalSchema.optional(),
       })
@@ -549,6 +606,11 @@ export function resolveCodexAppServerRuntimeOptions(
     ? normalizedPolicyMode
     : (explicitPolicyMode ?? normalizedPolicyMode ?? defaultPolicy?.mode ?? "yolo");
   const serviceTier = normalizeCodexServiceTier(config.serviceTier);
+  const resolvedSandbox =
+    forcedPolicy?.sandbox ??
+    configuredSandbox ??
+    defaultPolicy?.sandbox ??
+    (policyMode === "guardian" ? "workspace-write" : "danger-full-access");
   if (transport === "websocket" && !url) {
     throw new Error(
       "plugins.entries.codex.config.appServer.url is required when appServer.transport is websocket",
@@ -597,17 +659,14 @@ export function resolveCodexAppServerRuntimeOptions(
       : {}),
     approvalPolicy: forcedPolicy?.approvalPolicy ?? approvalPolicy,
     approvalPolicySource,
-    sandbox:
-      forcedPolicy?.sandbox ??
-      configuredSandbox ??
-      defaultPolicy?.sandbox ??
-      (policyMode === "guardian" ? "workspace-write" : "danger-full-access"),
+    sandbox: resolvedSandbox,
     approvalsReviewer:
       forcedPolicy?.approvalsReviewer ??
       explicitApprovalsReviewer ??
       defaultPolicy?.approvalsReviewer ??
       (policyMode === "guardian" ? "auto_review" : "user"),
     ...(serviceTier ? { serviceTier } : {}),
+    ...resolveCodexAppServerNetworkProxy(config.networkProxy, resolvedSandbox),
   };
 }
 
@@ -819,6 +878,104 @@ export function codexSandboxPolicyForTurn(
     excludeTmpdirEnvVar: false,
     excludeSlashTmp: false,
   };
+}
+
+function resolveCodexAppServerNetworkProxy(
+  config: CodexAppServerNetworkProxyConfig | undefined,
+  sandbox: CodexAppServerSandboxMode,
+): { networkProxy?: ResolvedCodexAppServerNetworkProxyConfig } {
+  if (config?.enabled !== true) {
+    return {};
+  }
+  const fileSystemMode =
+    config.baseProfile === "read-only" || (!config.baseProfile && sandbox === "read-only")
+      ? "read"
+      : "write";
+  const networkConfig = removeUndefinedJsonFields({
+    enabled: true,
+    mode: config.mode,
+    domains: normalizeNetworkProxyPermissionMap(config.domains),
+    unix_sockets: normalizeNetworkProxyPermissionMap(config.unixSockets),
+    proxy_url: readNonEmptyString(config.proxyUrl),
+    socks_url: readNonEmptyString(config.socksUrl),
+    enable_socks5: config.enableSocks5,
+    enable_socks5_udp: config.enableSocks5Udp,
+    allow_upstream_proxy: config.allowUpstreamProxy,
+    allow_local_binding: config.allowLocalBinding,
+    dangerously_allow_non_loopback_proxy: config.dangerouslyAllowNonLoopbackProxy,
+    dangerously_allow_all_unix_sockets: config.dangerouslyAllowAllUnixSockets,
+  });
+  const profile = {
+    filesystem: {
+      ":minimal": "read",
+      ":workspace_roots": {
+        ".": fileSystemMode,
+      },
+    },
+    network: networkConfig,
+  };
+  const profileName = resolveNetworkProxyPermissionProfileName(config, profile);
+  const configPatch: JsonObject = {
+    "features.network_proxy.enabled": true,
+    default_permissions: profileName,
+    permissions: {
+      [profileName]: profile,
+    },
+  };
+  return {
+    networkProxy: {
+      profileName,
+      configFingerprint: fingerprintCodexAppServerNetworkProxyConfigPatch(configPatch),
+      configPatch,
+    },
+  };
+}
+
+function resolveNetworkProxyPermissionProfileName(
+  config: CodexAppServerNetworkProxyConfig,
+  profile: JsonObject,
+): string {
+  const explicitProfileName = readNonEmptyString(config.profileName);
+  if (explicitProfileName) {
+    return explicitProfileName;
+  }
+  const suffix = createHash("sha256")
+    .update(stableStringifyJson({ version: 1, profile }))
+    .digest("hex")
+    .slice(0, 16);
+  return `${DEFAULT_CODEX_APP_SERVER_NETWORK_PROXY_PROFILE_PREFIX}-${suffix}`;
+}
+
+export function fingerprintCodexAppServerNetworkProxyConfigPatch(configPatch: JsonObject): string {
+  return createHash("sha256").update(stableStringifyJson(configPatch)).digest("hex");
+}
+
+function normalizeNetworkProxyPermissionMap<TPermission extends string>(
+  value: Record<string, TPermission> | undefined,
+): Record<string, TPermission> | undefined {
+  const entries = Object.entries(value ?? {})
+    .map(([key, permission]) => [key.trim(), permission] as const)
+    .filter(([key]) => key.length > 0);
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
+function removeUndefinedJsonFields(value: Record<string, JsonValue | undefined>): JsonObject {
+  return Object.fromEntries(
+    Object.entries(value).filter((entry): entry is [string, JsonValue] => entry[1] !== undefined),
+  );
+}
+
+function stableStringifyJson(value: JsonValue): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableStringifyJson(item)).join(",")}]`;
+  }
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value)
+      .toSorted(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => `${JSON.stringify(key)}:${stableStringifyJson(item)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
 }
 
 export function withMcpElicitationsApprovalPolicy(

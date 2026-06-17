@@ -561,7 +561,51 @@ Supported `appServer` fields:
 | `sandbox`                                     | `"danger-full-access"` or an allowed guardian sandbox  | Native Codex sandbox mode sent to thread start/resume. Guardian defaults prefer `"workspace-write"` when allowed, otherwise `"read-only"`. When an OpenClaw sandbox is active, `danger-full-access` turns use Codex `workspace-write` with network access derived from the OpenClaw sandbox egress setting.                                                      |
 | `approvalsReviewer`                           | `"user"` or an allowed guardian reviewer               | Use `"auto_review"` to let Codex review native approval prompts when allowed, otherwise `guardian_subagent` or `user`. `guardian_subagent` remains a legacy alias.                                                                                                                                                                                               |
 | `serviceTier`                                 | unset                                                  | Optional Codex app-server service tier. `"priority"` enables fast-mode routing, `"flex"` requests flex processing, `null` clears the override, and legacy `"fast"` is accepted as `"priority"`.                                                                                                                                                                  |
+| `networkProxy`                                | disabled                                               | Opt into Codex permissions-profile networking for app-server commands. OpenClaw defines the selected `permissions.<profile>.network` config and selects it with `default_permissions` instead of sending `sandbox`.                                                                                                                                              |
 | `experimental.sandboxExecServer`              | `false`                                                | Preview opt-in that registers an OpenClaw sandbox-backed Codex environment with Codex app-server 0.132.0 or newer so native Codex execution can run inside the active OpenClaw sandbox.                                                                                                                                                                          |
+
+`appServer.networkProxy` is explicit because it changes the Codex sandbox
+contract. When enabled, OpenClaw also sets `features.network_proxy.enabled` and
+`default_permissions` in the Codex thread config so the generated permission
+profile can start Codex managed networking. By default, OpenClaw generates a
+collision-resistant `openclaw-network-<fingerprint>` profile name from the
+profile body; use `profileName` only when a stable local name is required.
+
+```js
+export default {
+  plugins: {
+    entries: {
+      codex: {
+        config: {
+          appServer: {
+            sandbox: "workspace-write",
+            networkProxy: {
+              enabled: true,
+              domains: {
+                "api.openai.com": "allow",
+                "blocked.example.com": "deny",
+              },
+              unixSockets: {
+                "/tmp/proxy.sock": "allow",
+                "/tmp/blocked.sock": "deny",
+              },
+              allowUpstreamProxy: true,
+              proxyUrl: "http://127.0.0.1:3128",
+            },
+          },
+        },
+      },
+    },
+  },
+};
+```
+
+If the normal app-server runtime would be `danger-full-access`, enabling
+`networkProxy` uses workspace-style filesystem access for the generated
+permission profile. Codex managed network enforcement is sandboxed networking,
+so a full-access profile would not protect outbound traffic.
+Domain entries use `allow` or `deny`; Unix socket entries use Codex's
+`allow` or `deny` values.
 
 OpenClaw-owned dynamic tool calls are bounded independently from
 `appServer.requestTimeoutMs`: Codex `item/tool/call` requests use a 90 second

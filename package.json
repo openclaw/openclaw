@@ -1444,6 +1444,7 @@
     "android:release:archive": "bun apps/android/scripts/build-release-artifacts.ts",
     "android:release:auth:check": "bash -lc 'source ./scripts/lib/android-fastlane.sh && cd apps/android && run_android_fastlane android auth_check'",
     "android:release:metadata": "bash -lc 'source ./scripts/lib/android-fastlane.sh && cd apps/android && run_android_fastlane android metadata'",
+    "android:release:preflight": "bash -lc 'source ./scripts/lib/android-fastlane.sh && cd apps/android && run_android_fastlane android release_preflight'",
     "android:release:upload": "bash scripts/android-release-upload.sh",
     "android:screenshots": "bash scripts/android-screenshots.sh",
     "android:test": "node scripts/run-android-gradle.mjs :app:testPlayDebugUnitTest",
