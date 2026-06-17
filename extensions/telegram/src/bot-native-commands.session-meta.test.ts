@@ -657,6 +657,75 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
   });
 
+  it("resolves /think menu choices against the runtime catalog for live-discovered models", async () => {
+    // #93835: a wildcard-allowed Ollama model is reasoning-capable per live
+    // /api/show discovery, but the configured catalog carries no reasoning flag.
+    // The menu must resolve choices against the runtime catalog, not config-only.
+    const cfg = {
+      agents: { defaults: { models: { "ollama/*": {} } } },
+    } as OpenClawConfig;
+    sessionMocks.loadSessionStore.mockReturnValue({
+      "agent:main:main": {
+        providerOverride: "ollama",
+        modelOverride: "glm-5.2:cloud",
+        modelOverrideSource: "user",
+        updatedAt: 0,
+      },
+    });
+    const runtimeCatalog = [
+      { provider: "ollama", id: "glm-5.2:cloud", name: "glm-5.2:cloud", reasoning: true },
+    ];
+    agentRuntimeMocks.loadModelCatalog.mockClear().mockResolvedValue(runtimeCatalog);
+
+    const { handler } = registerAndResolveCommandHandler({
+      commandName: "think",
+      cfg,
+      allowFrom: ["*"],
+    });
+    await handler(createTelegramPrivateCommandContext());
+
+    const menuCall = commandAuthMocks.resolveCommandArgMenu.mock.calls.find(
+      ([params]) => params.command.key === "think" && params.provider === "ollama",
+    )?.[0];
+    const menuRecord = expectRecordFields(
+      menuCall,
+      { provider: "ollama", model: "glm-5.2:cloud" },
+      "ollama thinking menu call",
+    );
+    expect(agentRuntimeMocks.loadModelCatalog).toHaveBeenCalled();
+    expect(menuRecord.catalog).toEqual(runtimeCatalog);
+  });
+
+  it("loads the runtime catalog for /think when no session model override is set", async () => {
+    // #93835 default-model gap: when the agent default is a live-discovered
+    // Ollama reasoning model and the user has not picked one via /model, the
+    // menu context has no provider. The catalog must still load so the default
+    // model's reasoning levels survive instead of the configured-only fallback.
+    const cfg = {
+      agents: { defaults: { model: "ollama/glm-5.2:cloud", models: { "ollama/*": {} } } },
+    } as OpenClawConfig;
+    sessionMocks.loadSessionStore.mockReturnValue({});
+    const runtimeCatalog = [
+      { provider: "ollama", id: "glm-5.2:cloud", name: "glm-5.2:cloud", reasoning: true },
+    ];
+    agentRuntimeMocks.loadModelCatalog.mockClear().mockResolvedValue(runtimeCatalog);
+
+    const { handler } = registerAndResolveCommandHandler({
+      commandName: "think",
+      cfg,
+      allowFrom: ["*"],
+    });
+    await handler(createTelegramPrivateCommandContext());
+
+    expect(agentRuntimeMocks.loadModelCatalog).toHaveBeenCalled();
+    const menuCall = commandAuthMocks.resolveCommandArgMenu.mock.calls.find(
+      ([params]) => params.command.key === "think",
+    )?.[0];
+    const menuRecord = expectRecordFields(menuCall, {}, "default-model thinking menu call");
+    expect(menuRecord.provider).toBeUndefined();
+    expect(menuRecord.catalog).toEqual(runtimeCatalog);
+  });
+
   it("inherits the parent session model when building DM thread native argument menus", async () => {
     const cfg: OpenClawConfig = {};
     sessionMocks.loadSessionStore.mockReturnValue({

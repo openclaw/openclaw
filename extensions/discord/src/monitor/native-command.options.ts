@@ -1,5 +1,6 @@
 // Discord plugin module implements native command.options behavior.
 import { ApplicationCommandOptionType } from "discord-api-types/v10";
+import { loadModelCatalog } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   resolveCommandArgChoices,
@@ -117,12 +118,16 @@ export function buildDiscordCommandOptions(params: {
               ? await resolveChoiceContext(interaction)
               : null;
           const currentCfg = resolveConfig?.() ?? cfg;
+          // Load the runtime catalog for /think (default model can be live-discovered, e.g. Ollama reasoning); empty keeps the configured fallback.
+          const choiceCatalog =
+            command.key === "think" ? await loadModelCatalog({ config: currentCfg }) : undefined;
           const choices = resolveCommandArgChoices({
             command,
             arg,
             cfg: currentCfg,
             provider: context?.provider,
             model: context?.model,
+            ...(choiceCatalog?.length ? { catalog: choiceCatalog } : {}),
           });
           const filtered = focusValue
             ? choices.filter((choice) =>

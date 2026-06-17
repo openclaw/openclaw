@@ -1135,12 +1135,18 @@ export const registerTelegramNativeCommands = ({
                 sessionKey: await resolveTargetSessionKey(),
               })
             : {};
+        // Load the runtime catalog for /think (default model can be live-discovered, e.g. Ollama reasoning); empty keeps the configured fallback.
+        const menuModelCatalog =
+          commandDefinition?.key === "think"
+            ? await loadModelCatalog({ config: runtimeCfg })
+            : undefined;
         const menu = commandDefinition
           ? resolveCommandArgMenu({
               command: commandDefinition,
               args: commandArgs,
               cfg: runtimeCfg,
               ...menuModelContext,
+              ...(menuModelCatalog?.length ? { catalog: menuModelCatalog } : {}),
             })
           : null;
         if (menu && commandDefinition) {
