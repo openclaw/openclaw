@@ -5,7 +5,10 @@ run_prepare_push_retry_gates() {
   run_quiet_logged "pnpm build (lease-retry)" ".local/lease-retry-build.log" pnpm build
   run_quiet_logged "pnpm check (lease-retry)" ".local/lease-retry-check.log" pnpm check
   if [ "$docs_only" != "true" ]; then
-    run_quiet_logged "pnpm test (lease-retry)" ".local/lease-retry-test.log" pnpm test
+    run_quiet_logged \
+      "pnpm test:changed (lease-retry)" \
+      ".local/lease-retry-test.log" \
+      env OPENCLAW_TEST_CHANGED_BROAD=1 pnpm test:changed
   fi
 }
 
@@ -76,15 +79,13 @@ prepare_gates() {
   local current_head
   current_head=$(git rev-parse HEAD)
   local previous_last_verified_head=""
-  local previous_full_gates_head=""
   if [ -s .local/gates.env ]; then
     # shellcheck disable=SC1091
     source .local/gates.env
     previous_last_verified_head="${LAST_VERIFIED_HEAD_SHA:-}"
-    previous_full_gates_head="${FULL_GATES_HEAD_SHA:-}"
   fi
 
-  local gates_mode="full"
+  local gates_mode="changed"
   local reuse_gates=false
   if [ "$docs_only" = "true" ] && [ -n "$previous_last_verified_head" ] && git merge-base --is-ancestor "$previous_last_verified_head" HEAD 2>/dev/null; then
     local delta_since_verified
@@ -103,20 +104,14 @@ prepare_gates() {
 
     if [ "$docs_only" = "true" ]; then
       gates_mode="docs_only"
-      echo "Docs-only change detected with high confidence; skipping pnpm test."
+      echo "Docs-only change detected with high confidence; skipping pnpm test:changed."
     else
-      gates_mode="full"
-      if [ -n "${OPENCLAW_VITEST_MAX_WORKERS:-}" ]; then
-        echo "Running pnpm test with OPENCLAW_VITEST_MAX_WORKERS=$OPENCLAW_VITEST_MAX_WORKERS."
-        run_quiet_logged \
-          "pnpm test" \
-          ".local/gates-test.log" \
-          env OPENCLAW_VITEST_MAX_WORKERS="$OPENCLAW_VITEST_MAX_WORKERS" pnpm test
-      else
-        echo "Running pnpm test with host-aware scheduling defaults."
-        run_quiet_logged "pnpm test" ".local/gates-test.log" pnpm test
-      fi
-      previous_full_gates_head="$current_head"
+      gates_mode="changed"
+      echo "Running pnpm test:changed with broad fallback for Vitest coverage."
+      run_quiet_logged \
+        "pnpm test:changed" \
+        ".local/gates-test.log" \
+        env OPENCLAW_TEST_CHANGED_BROAD=1 pnpm test:changed
     fi
   fi
 
@@ -127,7 +122,6 @@ prepare_gates() {
     CHANGELOG_REQUIRED "$changelog_required" \
     GATES_MODE "$gates_mode" \
     LAST_VERIFIED_HEAD_SHA "$current_head" \
-    FULL_GATES_HEAD_SHA "${previous_full_gates_head:-}" \
     GATES_PASSED_AT "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     > .local/gates.env
 

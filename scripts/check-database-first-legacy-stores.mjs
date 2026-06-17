@@ -163,6 +163,15 @@ const sourceTestSuffixes = [
   "test-utils.ts",
 ];
 
+const ignoredSourceDirectories = new Set(["node_modules"]);
+// Browser bundles written by build-diffs-viewer-runtime and bundle-a2ui are
+// minified client payloads, not Node runtime source for this state policy.
+const generatedStaticBundlePathSuffixes = [
+  "/extensions/canvas/src/host/a2ui/a2ui.bundle.js",
+  "/extensions/diffs/assets/viewer-runtime.js",
+  "/extensions/diffs-language-pack/assets/viewer-runtime.js",
+];
+
 function isAllowedLegacyOwnerPath(relativePath) {
   return (
     allowedFixturePaths.has(relativePath) ||
@@ -216,7 +225,12 @@ function consumeAllowedCurrentLegacyViolation(
 }
 
 function isSourceFile(filePath) {
-  return sourceFileExtensions.has(path.extname(filePath));
+  return (
+    sourceFileExtensions.has(path.extname(filePath)) &&
+    !generatedStaticBundlePathSuffixes.some((suffix) =>
+      filePath.replaceAll(path.sep, "/").endsWith(suffix),
+    )
+  );
 }
 
 function isTestLikeSourceFile(filePath) {
@@ -241,7 +255,7 @@ async function collectSourceFiles(targetPath) {
   const entries = await fs.readdir(targetPath, { withFileTypes: true });
   const files = [];
   for (const entry of entries) {
-    if (entry.name === "node_modules") {
+    if (ignoredSourceDirectories.has(entry.name)) {
       continue;
     }
     const entryPath = path.join(targetPath, entry.name);

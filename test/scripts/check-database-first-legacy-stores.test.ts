@@ -9,24 +9,53 @@ import {
 } from "../../scripts/check-database-first-legacy-stores.mjs";
 
 describe("check-database-first-legacy-stores", () => {
-  it("collects JavaScript runtime source files", async () => {
+  it("collects runtime source files without generated static bundles", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-db-first-guard-"));
     try {
       await fs.mkdir(path.join(root, "src"), { recursive: true });
+      await fs.mkdir(path.join(root, "src", "assets"), { recursive: true });
+      await fs.mkdir(path.join(root, "src", "dist"), { recursive: true });
+      await fs.mkdir(path.join(root, "extensions", "canvas", "src", "host", "a2ui"), {
+        recursive: true,
+      });
+      await fs.mkdir(path.join(root, "extensions", "diffs", "assets"), { recursive: true });
+      await fs.mkdir(path.join(root, "extensions", "diffs-language-pack", "assets"), {
+        recursive: true,
+      });
       await fs.writeFile(path.join(root, "src", "runtime.js"), "export {};\n");
       await fs.writeFile(path.join(root, "src", "worker.mjs"), "export {};\n");
       await fs.writeFile(path.join(root, "src", "types.ts"), "export {};\n");
+      await fs.writeFile(path.join(root, "src", "assets", "runtime.js"), "export {};\n");
+      await fs.writeFile(path.join(root, "src", "dist", "runtime.js"), "export {};\n");
+      await fs.writeFile(
+        path.join(root, "extensions", "canvas", "src", "host", "a2ui", "a2ui.bundle.js"),
+        "export {};\n",
+      );
+      await fs.writeFile(
+        path.join(root, "extensions", "diffs", "assets", "viewer-runtime.js"),
+        "export {};\n",
+      );
+      await fs.writeFile(
+        path.join(root, "extensions", "diffs-language-pack", "assets", "viewer-runtime.js"),
+        "export {};\n",
+      );
       await fs.writeFile(path.join(root, "src", "runtime.test.js"), "export {};\n");
       await fs.writeFile(path.join(root, "src", "test-helpers.ts"), "export {};\n");
       await fs.writeFile(path.join(root, "src", "test-support.ts"), "export {};\n");
       await fs.writeFile(path.join(root, "src", "worker.test-helpers.ts"), "export {};\n");
 
-      const files = await collectDatabaseFirstLegacyStoreSourceFiles([path.join(root, "src")]);
+      const files = await collectDatabaseFirstLegacyStoreSourceFiles([root]);
       const relativeFiles = files
         .map((file) => path.relative(root, file).replaceAll(path.sep, "/"))
         .toSorted();
 
-      expect(relativeFiles).toEqual(["src/runtime.js", "src/types.ts", "src/worker.mjs"]);
+      expect(relativeFiles).toEqual([
+        "src/assets/runtime.js",
+        "src/dist/runtime.js",
+        "src/runtime.js",
+        "src/types.ts",
+        "src/worker.mjs",
+      ]);
     } finally {
       await fs.rm(root, { force: true, recursive: true });
     }
