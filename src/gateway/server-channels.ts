@@ -449,6 +449,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       tasks: accountIds.map((id) => async () => {
         const rKey = restartKey(channelId, id);
         if (store.tasks.has(id)) {
+          let clearedTimedOutRecoveryTask = false;
           if (recoveryStopTimedOut.has(rKey)) {
             if (!preserveManualStop) {
               manuallyStopped.delete(rKey);
@@ -465,6 +466,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               restartAttempts.delete(rKey);
               store.aborts.delete(id);
               store.tasks.delete(id);
+              clearedTimedOutRecoveryTask = true;
               setRuntime(channelId, id, {
                 accountId: id,
                 restartPending: false,
@@ -476,7 +478,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               return;
             }
           }
-          return;
+          if (!clearedTimedOutRecoveryTask) {
+            return;
+          }
         }
         const existingStart = store.starting.get(id);
         if (existingStart) {
