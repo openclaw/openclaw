@@ -84,6 +84,14 @@ function inboundMessage(onMessage: ReturnType<typeof vi.fn>, index = 0): WebInbo
   return msg as WebInboundMessage;
 }
 
+function expectDeprecatedAdmissionAliases(inbound: WebInboundMessage) {
+  expect(inbound.from).toBe(inbound.admission?.conversation.id);
+  expect(inbound.conversationId).toBe(inbound.admission?.conversation.id);
+  expect(inbound.accountId).toBe(inbound.admission?.accountId);
+  expect(inbound.chatType).toBe(inbound.admission?.conversation.kind);
+  expect(inbound.accessControlPassed).toBe(inbound.admission?.ingress.decision === "allow");
+}
+
 async function expectSocketOperationTimeout(
   operation: "sendMessage" | "sendPresenceUpdate",
   promise: Promise<unknown>,
@@ -224,7 +232,6 @@ describe("web monitor inbox", () => {
 
     const inbound = inboundMessage(onMessage);
     expect(inbound.payload.body).toBe("ping");
-    expect(inbound.from).toBe("+999");
     expect(inbound.platform.recipientJid).toBe("+123");
     expect(inbound.admission).toMatchObject({
       accountId: DEFAULT_ACCOUNT_ID,
@@ -240,8 +247,7 @@ describe("web monitor inbox", () => {
         decision: "allow",
       },
     });
-    expect(inbound.accountId).toBe(inbound.admission?.accountId);
-    expect(inbound.chatType).toBe(inbound.admission?.conversation.kind);
+    expectDeprecatedAdmissionAliases(inbound);
     expect(sock.readMessages).toHaveBeenCalledWith([
       {
         remoteJid: "999@s.whatsapp.net",
@@ -417,7 +423,7 @@ describe("web monitor inbox", () => {
 
     await waitForMessageCalls(onMessage, 1);
     const inbound = inboundMessage(onMessage);
-    expect(inbound.chatType).toBe("group");
+    expect(inbound.admission?.conversation.kind).toBe("group");
     expect(inbound.group).toBeUndefined();
 
     await listener.close();
@@ -465,10 +471,10 @@ describe("web monitor inbox", () => {
     await waitForMessageCalls(onMessage, 1);
     const inbound = inboundMessage(onMessage);
     expect(inbound.payload.body).toBe("ping");
-    expect(inbound.from).toBe("123@g.us");
+    expect(inbound.admission?.conversation.id).toBe("123@g.us");
     expect(inbound.group?.subject).toBe("Recovered Group");
     expect(inbound.platform.senderE164).toBe("+444");
-    expect(inbound.chatType).toBe("group");
+    expect(inbound.admission?.conversation.kind).toBe("group");
     expect(inbound.group?.participants).toBeUndefined();
 
     await second.listener.close();
@@ -718,7 +724,7 @@ describe("web monitor inbox", () => {
       await waitForMessageCalls(onMessage, 1);
       const inbound = inboundMessage(onMessage);
       expect(inbound.payload.body).toBe("first\nsecond");
-      expect(inbound.chatType).toBe("direct");
+      expect(inbound.admission?.conversation.kind).toBe("direct");
     } finally {
       vi.useRealTimers();
     }
@@ -1339,7 +1345,7 @@ describe("web monitor inbox", () => {
     expect(getPNForLID).toHaveBeenCalledWith("999@lid");
     const inbound = inboundMessage(onMessage);
     expect(inbound.payload.body).toBe("ping");
-    expect(inbound.from).toBe("+999");
+    expect(inbound.admission?.conversation.id).toBe("+999");
     expect(inbound.platform.recipientJid).toBe("+123");
 
     await listener.close();
@@ -1367,7 +1373,7 @@ describe("web monitor inbox", () => {
 
     const inbound = inboundMessage(onMessage);
     expect(inbound.payload.body).toBe("ping");
-    expect(inbound.from).toBe("+1555");
+    expect(inbound.admission?.conversation.id).toBe("+1555");
     expect(inbound.platform.recipientJid).toBe("+123");
     expect(getPNForLID).not.toHaveBeenCalled();
 
@@ -1394,9 +1400,9 @@ describe("web monitor inbox", () => {
     expect(getPNForLID).toHaveBeenCalledWith("444@lid");
     const inbound = inboundMessage(onMessage);
     expect(inbound.payload.body).toBe("ping");
-    expect(inbound.from).toBe("123@g.us");
+    expect(inbound.admission?.conversation.id).toBe("123@g.us");
     expect(inbound.platform.senderE164).toBe("+444");
-    expect(inbound.chatType).toBe("group");
+    expect(inbound.admission?.conversation.kind).toBe("group");
 
     await listener.close();
   });

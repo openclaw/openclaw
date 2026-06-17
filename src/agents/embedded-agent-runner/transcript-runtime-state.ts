@@ -3,36 +3,21 @@ import type {
   SessionTranscriptRuntimeScope,
   SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
-import {
-  resolveSessionTranscriptRuntimeReadTarget,
-  resolveSessionTranscriptRuntimeTarget,
-} from "../../config/sessions/session-accessor.js";
-import type { SessionEntry, SessionHeader } from "../sessions/index.js";
+import { resolveSessionTranscriptRuntimeReadTarget } from "../../config/sessions/session-accessor.js";
 import {
   persistTranscriptStateMutation,
   readTranscriptFileState,
   type TranscriptFileState,
   type TranscriptPersistedEntry,
-  writeTranscriptFileAtomic,
 } from "./transcript-file-state.js";
 
 export type RuntimeTranscriptScope = SessionTranscriptRuntimeScope;
-export type RuntimeTranscriptTarget = SessionTranscriptRuntimeTarget;
+type RuntimeTranscriptTarget = SessionTranscriptRuntimeTarget;
 
-export type RuntimeTranscriptState = {
+type RuntimeTranscriptState = {
   state: TranscriptFileState;
   target: RuntimeTranscriptTarget;
 };
-
-/**
- * Resolves the current file-backed transcript target for runtime state
- * operations. The returned path is an implementation detail, not identity.
- */
-export async function resolveRuntimeTranscriptTarget(
-  scope: RuntimeTranscriptScope,
-): Promise<RuntimeTranscriptTarget> {
-  return await resolveSessionTranscriptRuntimeTarget(scope);
-}
 
 /**
  * Resolves the runtime transcript target for read/probe operations without
@@ -70,16 +55,6 @@ export async function persistRuntimeTranscriptStateMutation(params: {
     state: params.state,
     appendedEntries: params.appendedEntries,
   });
-}
-
-/**
- * Atomically replaces the file-backed transcript for a runtime transcript.
- */
-export async function replaceRuntimeTranscriptEntries(params: {
-  entries: Array<SessionHeader | SessionEntry>;
-  target: RuntimeTranscriptTarget;
-}): Promise<void> {
-  await writeTranscriptFileAtomic(params.target.sessionFile, params.entries);
 }
 
 /**

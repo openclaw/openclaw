@@ -26,7 +26,7 @@ export type ToolDisplaySpec = {
 };
 
 /** Normalized display target for code/search bridge tools. */
-export type ToolSearchCodeDisplayTarget = {
+type ToolSearchCodeDisplayTarget = {
   toolName: string;
   displayToolName?: string;
   displayArgs?: Record<string, unknown>;

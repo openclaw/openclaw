@@ -36,6 +36,7 @@ import {
   resolveChatAgentFilterOptions,
   resolvePreferredSessionForAgent,
 } from "./chat/session-controls.ts";
+import { clearChatMessagesFromCache } from "./chat/session-message-cache.ts";
 import {
   controlUiNowMs,
   recordControlUiRenderTiming,
@@ -2982,6 +2983,9 @@ export function renderApp(state: AppViewState) {
                     const next = new Set(state.sessionsSelectedKeys);
                     for (const k of deleted) {
                       next.delete(k);
+                      clearChatMessagesFromCache(state.chatMessagesBySession, state, {
+                        sessionKey: k,
+                      });
                     }
                     state.sessionsSelectedKeys = next;
                   }
@@ -3867,6 +3871,9 @@ export function renderApp(state: AppViewState) {
                         ...scopedAgentParamsForSession(state, state.sessionKey),
                       });
                       state.chatMessages = [];
+                      clearChatMessagesFromCache(state.chatMessagesBySession, state, {
+                        sessionKey: state.sessionKey,
+                      });
                       state.chatSideResult = null;
                       reconcileChatRunLifecycle(
                         state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0],

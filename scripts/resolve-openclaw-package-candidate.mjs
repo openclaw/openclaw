@@ -141,6 +141,21 @@ function validateOutputName(value) {
   }
 }
 
+function resolvePackedOpenClawTarballFilename(value) {
+  const filename = typeof value === "string" ? value.trim() : "";
+  if (
+    !/^openclaw-[A-Za-z0-9._-]+\.tgz$/u.test(filename) ||
+    filename.includes("\0") ||
+    filename !== path.basename(filename) ||
+    filename !== path.win32.basename(filename)
+  ) {
+    throw new Error(
+      `npm pack reported unsafe OpenClaw tarball filename: ${JSON.stringify(filename)}`,
+    );
+  }
+  return filename;
+}
+
 export function validateOpenClawPackageSpec(spec) {
   if (!OPENCLAW_PACKAGE_SPEC_RE.test(spec)) {
     throw new Error(
@@ -502,24 +517,41 @@ async function installPackageSourceDeps(sourceDir) {
 
 async function moveNewestPackedTarball(outputDir, packOutput, outputName) {
   let filename = "";
+  let parsed;
   try {
-    const parsed = JSON.parse(packOutput);
-    if (Array.isArray(parsed)) {
-      filename = parsed.find((entry) => typeof entry?.filename === "string")?.filename ?? "";
-    }
+    parsed = JSON.parse(packOutput);
   } catch {}
+  if (Array.isArray(parsed)) {
+    const packedFilename =
+      parsed.find((entry) => typeof entry?.filename === "string")?.filename ?? "";
+    if (packedFilename) {
+      filename = resolvePackedOpenClawTarballFilename(packedFilename);
+    }
+  }
   if (!filename) {
     for (const line of packOutput.split(/\r?\n/u)) {
       const trimmed = line.trim();
-      if (/^openclaw-.*\.tgz$/u.test(trimmed)) {
-        filename = trimmed;
+      if (
+        trimmed.endsWith(".tgz") &&
+        (trimmed.startsWith("openclaw-") ||
+          trimmed.includes(":") ||
+          trimmed.includes("/") ||
+          trimmed.includes("\\"))
+      ) {
+        filename = resolvePackedOpenClawTarballFilename(trimmed);
       }
     }
   }
   if (!filename) {
     const entries = await fs.readdir(outputDir);
     filename = entries
-      .filter((entry) => /^openclaw-.*\.tgz$/u.test(entry))
+      .filter((entry) => {
+        try {
+          return resolvePackedOpenClawTarballFilename(entry) === entry;
+        } catch {
+          return false;
+        }
+      })
       .toSorted((a, b) => a.localeCompare(b))
       .at(-1);
   }
@@ -534,6 +566,8 @@ async function moveNewestPackedTarball(outputDir, packOutput, outputName) {
   }
   return target;
 }
+
+export const moveNewestPackedTarballForTest = moveNewestPackedTarball;
 
 function normalizeUrlHostname(hostname) {
   return hostname.replace(/^\[/u, "").replace(/\]$/u, "").replace(/\.+$/u, "").toLowerCase();

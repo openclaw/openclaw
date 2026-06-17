@@ -2136,6 +2136,18 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
     expect(runner.slice(dumpLogsStart, dumpLogsEnd)).not.toContain("/tmp/openclaw-agent.json");
   });
 
+  it("keeps live plugin tool npm pack tarball paths inside the fixture directory", () => {
+    const runner = readFileSync(LIVE_PLUGIN_TOOL_DOCKER_E2E_PATH, "utf8");
+
+    expect(runner).toContain('npm pack --pack-destination "$fixture_dir" --silent');
+    expect(runner).toContain("/tmp/openclaw-live-plugin-tool-pack.log");
+    expect(runner).toContain("find \"$fixture_dir\" -maxdepth 1 -type f -name '*.tgz' | sort");
+    expect(runner).toContain("Expected one packed fixture plugin tarball");
+    expect(runner).toContain("openclaw_e2e_dump_logs /tmp/openclaw-live-plugin-tool-pack.log");
+    expect(runner).toContain('plugin_tgz="${plugin_tgzs[0]}"');
+    expect(runner).not.toContain('plugin_tgz="$fixture_dir/$plugin_pack"');
+  });
+
   it("cleans every prepared Docker package tarball on every runner exit path", () => {
     const paths = packageBackedDockerRunnerPaths();
 

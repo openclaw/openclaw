@@ -166,7 +166,7 @@ type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
   seed?: number;
   stop?: string[];
 };
-export type SupportedTransport = AgentRuntimeTransport;
+type SupportedTransport = AgentRuntimeTransport;
 
 function resolveSupportedTransport(value: unknown): SupportedTransport | undefined {
   return value === "sse" || value === "websocket" || value === "auto" ? value : undefined;
@@ -1135,4 +1135,3 @@ export function applyExtraParamsToAgent(
 
   return { effectiveExtraParams };
 }
-export { testing as __testing };

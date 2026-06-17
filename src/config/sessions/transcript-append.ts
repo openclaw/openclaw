@@ -464,7 +464,7 @@ export async function appendSessionTranscriptMessageWithOwnedWriteLock<TMessage>
   return await activeLockRunner(() => appendSessionTranscriptMessageLocked(params));
 }
 
-export type AppendSessionTranscriptEventParams = {
+type AppendSessionTranscriptEventParams = {
   config?: OpenClawConfig;
   event: unknown;
   transcriptPath: string;

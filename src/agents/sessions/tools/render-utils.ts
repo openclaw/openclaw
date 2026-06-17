@@ -5,7 +5,6 @@
  */
 import * as os from "node:os";
 import { getCapabilities, getImageDimensions, imageFallback } from "@earendil-works/pi-tui";
-import type { ImageContent, TextContent } from "../../../llm/types.js";
 import type { Theme } from "../../modes/interactive/theme/theme.js";
 import { sanitizeBinaryOutput } from "../../shell-utils.js";
 import { stripAnsi } from "../../utils/ansi.js";
@@ -79,12 +78,6 @@ export function getTextOutput(
 
   return output;
 }
-
-/** Minimal shape shared by renderers that carry typed tool details. */
-export type ToolRenderResultLike<TDetails> = {
-  content: (TextContent | ImageContent)[];
-  details: TDetails;
-};
 
 /** Formats the invalid-argument marker with the active theme. */
 export function invalidArgText(theme: Pick<Theme, "fg">): string {

@@ -7,6 +7,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { describeInterpreterInlineEval } from "../infra/command-analysis/inline-eval.js";
 import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
+import { emitTrustedSecurityEvent } from "../infra/diagnostic-events.js";
 import {
   addDurableCommandApproval,
   commandRequiresSecurityAuditSuppressionApproval,
@@ -62,7 +63,7 @@ import type {
 import type { AgentToolResult } from "./runtime/index.js";
 
 /** Full input bundle for gateway-host allowlist and approval processing. */
-export type ProcessGatewayAllowlistParams = {
+type ProcessGatewayAllowlistParams = {
   command: string;
   workdir: string;
   env: Record<string, string>;
@@ -104,7 +105,7 @@ export type ProcessGatewayAllowlistParams = {
 };
 
 /** Gateway allowlist outcome before command execution continues. */
-export type ProcessGatewayAllowlistResult = {
+type ProcessGatewayAllowlistResult = {
   execCommandOverride?: string;
   allowWithoutEnforcedCommand?: boolean;
   pendingResult?: AgentToolResult<ExecToolDetails>;
@@ -248,6 +249,59 @@ function formatDiagnosticsExportSuccess(aggregated: string): string {
   } catch {
     return trimmed;
   }
+}
+
+function emitGatewayExecApprovalSecurityEvent(params: {
+  action: "exec.approval.requested" | "exec.approval.approved" | "exec.approval.denied";
+  outcome: "success" | "denied" | "error";
+  severity: "low" | "medium" | "high";
+  agentId?: string | null;
+  reason?: string;
+  hostSecurity: ExecSecurity;
+  hostAsk: ExecAsk;
+  host: "gateway";
+  segmentCount: number;
+  trigger?: string;
+  decision?: string | null;
+}) {
+  emitTrustedSecurityEvent({
+    category: "approval",
+    action: params.action,
+    outcome: params.outcome,
+    severity: params.severity,
+    actor: {
+      kind: "agent",
+    },
+    target: {
+      kind: "tool",
+      name: "system.exec",
+      owner: params.host,
+    },
+    policy: {
+      id: "exec.approval",
+      decision:
+        params.action === "exec.approval.requested"
+          ? "ask"
+          : params.outcome === "success"
+            ? "allow"
+            : "deny",
+      ...(params.reason ? { reason: params.reason } : {}),
+    },
+    control: {
+      id: "exec.approval",
+      family: "approval",
+    },
+    ...(params.reason ? { reason: params.reason } : {}),
+    attributes: {
+      host: params.host,
+      security: params.hostSecurity,
+      ask: params.hostAsk,
+      segment_count: params.segmentCount,
+      has_agent_id: Boolean(params.agentId?.trim()),
+      ...(params.trigger ? { trigger: params.trigger } : {}),
+      ...(params.decision ? { decision: params.decision } : {}),
+    },
+  });
 }
 
 function formatDiagnosticsExportFailure(params: {
@@ -559,6 +613,17 @@ export async function processGatewayAllowlist(
       ...requestArgs,
       register: registerGatewayApproval,
     });
+    emitGatewayExecApprovalSecurityEvent({
+      action: "exec.approval.requested",
+      outcome: "success",
+      severity: "low",
+      agentId: params.agentId,
+      hostSecurity,
+      hostAsk,
+      host: "gateway",
+      segmentCount: allowlistEval.segments.length,
+      trigger: params.trigger,
+    });
     if (
       shouldResolveExecApprovalUnavailableInline({
         trigger: params.trigger,
@@ -579,6 +644,20 @@ export async function processGatewayAllowlist(
       });
 
       if (strictInlineEvalDecision.deniedReason || !strictInlineEvalDecision.approvedByAsk) {
+        const inlineDeniedReason = strictInlineEvalDecision.deniedReason ?? "approval-required";
+        emitGatewayExecApprovalSecurityEvent({
+          action: "exec.approval.denied",
+          outcome: "denied",
+          severity: "medium",
+          agentId: params.agentId,
+          reason: inlineDeniedReason,
+          hostSecurity,
+          hostAsk,
+          host: "gateway",
+          segmentCount: allowlistEval.segments.length,
+          trigger: params.trigger,
+          decision: preResolvedDecision,
+        });
         throw new Error(
           buildHeadlessExecApprovalDeniedMessage({
             trigger: params.trigger,
@@ -590,6 +669,18 @@ export async function processGatewayAllowlist(
         );
       }
 
+      emitGatewayExecApprovalSecurityEvent({
+        action: "exec.approval.approved",
+        outcome: "success",
+        severity: "medium",
+        agentId: params.agentId,
+        hostSecurity,
+        hostAsk,
+        host: "gateway",
+        segmentCount: allowlistEval.segments.length,
+        trigger: params.trigger,
+        decision: preResolvedDecision,
+      });
       recordMatchedAllowlistUse(
         resolveApprovalAuditTrustPath(
           allowlistEval.segments[0]?.resolution ?? null,
@@ -612,6 +703,18 @@ export async function processGatewayAllowlist(
         onFailure,
       });
       if (decision === undefined) {
+        emitGatewayExecApprovalSecurityEvent({
+          action: "exec.approval.denied",
+          outcome: "error",
+          severity: "high",
+          agentId: params.agentId,
+          reason: "approval-request-failed",
+          hostSecurity,
+          hostAsk,
+          host: "gateway",
+          segmentCount: allowlistEval.segments.length,
+          trigger: params.trigger,
+        });
         return { deniedReason: "approval-request-failed", requestFailed: true };
       }
 
@@ -678,6 +781,19 @@ export async function processGatewayAllowlist(
         deniedReason = deniedReason ?? "allowlist-miss";
       }
 
+      emitGatewayExecApprovalSecurityEvent({
+        action: deniedReason ? "exec.approval.denied" : "exec.approval.approved",
+        outcome: deniedReason ? "denied" : "success",
+        severity: "medium",
+        agentId: params.agentId,
+        reason: deniedReason ?? undefined,
+        hostSecurity,
+        hostAsk,
+        host: "gateway",
+        segmentCount: allowlistEval.segments.length,
+        trigger: params.trigger,
+        decision,
+      });
       return { deniedReason, requestFailed: false };
     };
 

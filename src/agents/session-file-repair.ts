@@ -18,8 +18,8 @@ import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-
  * Preserves the user turn so strict providers that require at least one user
  * message do not reject the transcript.
  */
-export const BLANK_USER_FALLBACK_TEXT = "(continue)";
-export const CORRUPTED_IMAGE_FALLBACK_TEXT = "[image omitted: corrupted base64 payload]";
+const BLANK_USER_FALLBACK_TEXT = "(continue)";
+const CORRUPTED_IMAGE_FALLBACK_TEXT = "[image omitted: corrupted base64 payload]";
 
 type RepairReport = {
   repaired: boolean;

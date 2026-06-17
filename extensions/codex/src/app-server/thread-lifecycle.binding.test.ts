@@ -1,6 +1,7 @@
 // Codex tests cover thread lifecycle.binding plugin behavior.
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import type { CodexDynamicToolFunctionSpec } from "./protocol.js";
 import {
   createParams as createRunAttemptParams,
   setupRunAttemptTestHooks,
@@ -66,8 +67,9 @@ function writeCodexAppServerBinding(...args: Parameters<typeof writeRawCodexAppS
 function createMessageDynamicTool(
   description: string,
   actions: string[] = ["send"],
-): Parameters<typeof startOrResumeThread>[0]["dynamicTools"][number] {
+): CodexDynamicToolFunctionSpec {
   return {
+    type: "function",
     name: "message",
     description,
     inputSchema: {
@@ -84,10 +86,9 @@ function createMessageDynamicTool(
   };
 }
 
-function createNamedDynamicTool(
-  name: string,
-): Parameters<typeof startOrResumeThread>[0]["dynamicTools"][number] {
+function createNamedDynamicTool(name: string): CodexDynamicToolFunctionSpec {
   return {
+    type: "function",
     name,
     description: `${name} test tool`,
     inputSchema: {
@@ -102,9 +103,10 @@ function createDeferredNamedDynamicTool(
   name: string,
 ): Parameters<typeof startOrResumeThread>[0]["dynamicTools"][number] {
   return {
-    ...createNamedDynamicTool(name),
-    namespace: "openclaw",
-    deferLoading: true,
+    type: "namespace",
+    name: "openclaw",
+    description: "",
+    tools: [{ ...createNamedDynamicTool(name), deferLoading: true }],
   };
 }
 
@@ -286,6 +288,47 @@ describe("Codex app-server thread lifecycle bindings", () => {
 
     expect(binding.threadId).toBe("thread-existing");
     expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start", "thread/resume"]);
+  });
+
+  it("sends legacy flat dynamic tools on thread start", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    const appServer = createThreadLifecycleAppServerOptions();
+    const request = vi.fn(async (method: string, _requestParams?: unknown) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-flat-tools");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [
+        createMessageDynamicTool("Send a message."),
+        createDeferredNamedDynamicTool("web_search"),
+      ],
+      appServer,
+    });
+
+    const startParams = request.mock.calls.find(([method]) => method === "thread/start")?.[1] as
+      | { dynamicTools?: unknown[] }
+      | undefined;
+    expect(startParams?.dynamicTools).toEqual([
+      expect.objectContaining({
+        name: "message",
+        description: "Send a message.",
+      }),
+      expect.objectContaining({
+        name: "web_search",
+        namespace: "openclaw",
+        deferLoading: true,
+      }),
+    ]);
+    expect(startParams?.dynamicTools?.[0]).not.toHaveProperty("type");
+    expect(startParams?.dynamicTools?.[1]).not.toHaveProperty("type");
   });
 
   it("keeps the bound local provider when recoverable resume failure starts a fresh thread", async () => {
