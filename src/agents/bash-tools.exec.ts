@@ -1535,7 +1535,7 @@ export function createExecTool(
         throw new Error(
           [
             "exec host=sandbox requires a sandbox runtime for this session.",
-            'Enable sandbox mode (`agents.defaults.sandbox.mode="non-main"` or `"all"`) or use host=auto/gateway/node.',
+            "Ask the operator to enable sandbox mode, or use host=auto/gateway/node.",
           ].join("\n"),
         );
       }

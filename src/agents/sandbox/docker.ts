@@ -122,7 +122,7 @@ export function execDockerRaw(
       ) {
         const friendly = Object.assign(
           new Error(
-            'Sandbox mode requires Docker, but the "docker" command was not found in PATH. Install Docker (and ensure "docker" is available), or set `agents.defaults.sandbox.mode=off` to disable sandboxing.',
+            'Sandbox mode requires Docker, but the "docker" command was not found in PATH. Install Docker, or ask the operator to disable sandbox mode.',
           ),
           { code: "INVALID_CONFIG", cause: error },
         );
@@ -330,7 +330,7 @@ export function formatDockerDaemonUnavailableError(stderr: string): string {
   const detail = stderr.trim();
   return [
     "Sandbox mode requires Docker, but the Docker daemon is not available.",
-    "Start Docker, or set `agents.defaults.sandbox.mode=off` to disable sandboxing.",
+    "Start Docker, or ask the operator to disable sandbox mode.",
     detail ? `Docker said: ${detail}` : undefined,
   ]
     .filter((line): line is string => Boolean(line))
