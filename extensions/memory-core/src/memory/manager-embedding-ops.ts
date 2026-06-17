@@ -22,6 +22,7 @@ import {
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { MAX_TIMER_TIMEOUT_MS, resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { runSqliteImmediateTransactionSync } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   MEMORY_BATCH_FAILURE_LIMIT,
   recordMemoryBatchFailure,
@@ -747,53 +748,56 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     vectorReady: boolean,
   ): void {
     const now = Date.now();
-    this.clearIndexedFileData(entry.path, source);
-    for (let i = 0; i < chunks.length; i++) {
-      const chunk = chunks[i];
-      const embedding = embeddings[i] ?? [];
-      const id = hashText(
-        `${source}:${entry.path}:${chunk.startLine}:${chunk.endLine}:${chunk.hash}:${model}`,
-      );
-      this.db
-        .prepare(
-          `INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(id) DO UPDATE SET
-             hash=excluded.hash,
-             model=excluded.model,
-             text=excluded.text,
-             embedding=excluded.embedding,
-             updated_at=excluded.updated_at`,
-        )
-        .run(
-          id,
-          entry.path,
-          source,
-          chunk.startLine,
-          chunk.endLine,
-          chunk.hash,
-          model,
-          chunk.text,
-          JSON.stringify(embedding),
-          now,
+    runSqliteImmediateTransactionSync(this.db, () => {
+      this.clearIndexedFileData(entry.path, source);
+      for (let i = 0; i < chunks.length; i++) {
+        const chunk = chunks[i];
+        const embedding = embeddings[i] ?? [];
+        const id = hashText(
+          `${source}:${entry.path}:${chunk.startLine}:${chunk.endLine}:${chunk.hash}:${model}`,
         );
-      if (vectorReady && embedding.length > 0) {
-        replaceMemoryVectorRow({
-          db: this.db,
-          tableName: VECTOR_TABLE,
-          id,
-          embedding,
-        });
-      }
-      if (this.fts.enabled && this.fts.available) {
         this.db
           .prepare(
-            `INSERT INTO ${FTS_TABLE} (text, id, path, source, model, start_line, end_line)\n` +
-              ` VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET
+               hash=excluded.hash,
+               model=excluded.model,
+               text=excluded.text,
+               embedding=excluded.embedding,
+               updated_at=excluded.updated_at`,
           )
-          .run(chunk.text, id, entry.path, source, model, chunk.startLine, chunk.endLine);
+          .run(
+            id,
+            entry.path,
+            source,
+            chunk.startLine,
+            chunk.endLine,
+            chunk.hash,
+            model,
+            chunk.text,
+            JSON.stringify(embedding),
+            now,
+          );
+        if (vectorReady && embedding.length > 0) {
+          replaceMemoryVectorRow({
+            db: this.db,
+            tableName: VECTOR_TABLE,
+            id,
+            embedding,
+          });
+        }
+        if (this.fts.enabled && this.fts.available) {
+          this.db
+            .prepare(
+              `INSERT INTO ${FTS_TABLE} (text, id, path, source, model, start_line, end_line)\n` +
+                ` VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            )
+            .run(chunk.text, id, entry.path, source, model, chunk.startLine, chunk.endLine);
+        }
       }
-    }
+      this.upsertFileRecord(entry, source);
+    });
     this.vectorDegradedWriteWarningShown = logMemoryVectorDegradedWrite({
       vectorEnabled: this.vector.enabled,
       vectorReady,
@@ -802,7 +806,6 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       loadError: this.vector.loadError,
       warn: (message) => log.warn(message),
     });
-    this.upsertFileRecord(entry, source);
   }
 
   private async prepareIndexEntry(
