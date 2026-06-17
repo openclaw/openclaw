@@ -569,7 +569,9 @@ export function createSessionMcpRuntime(params: {
         for (const [serverName, rawServer] of Object.entries(loaded.mcpServers)) {
           failIfDisposed();
           const resolved = resolveMcpTransport(serverName, rawServer);
-          if (!resolved) continue;
+          if (!resolved) {
+            continue;
+          }
           const safeServerName = sanitizeServerName(serverName, usedServerNames);
           if (safeServerName !== serverName) {
             logWarn(
@@ -689,7 +691,9 @@ export function createSessionMcpRuntime(params: {
               const toolEntries: McpCatalogTool[] = [];
               for (const tool of exposedTools) {
                 const toolName = tool.name.trim();
-                if (!toolName) continue;
+                if (!toolName) {
+                  continue;
+                }
                 toolEntries.push({
                   serverName,
                   safeServerName,
