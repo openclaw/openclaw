@@ -27,7 +27,7 @@ export function truncateErrorDetail(detail: string, limit = 220): string {
 }
 
 /** Redacts secrets before preserving a bounded provider error body preview. */
-export function redactProviderErrorBody(body: string): string {
+function redactProviderErrorBody(body: string): string {
   return truncateErrorDetail(redactSensitiveText(body), ERROR_BODY_METADATA_LIMIT);
 }
 
@@ -145,7 +145,7 @@ function extractProviderErrorPayloadMetadata(payload: unknown): ProviderErrorPay
 }
 
 /** Metadata extracted from a non-2xx provider response body and headers. */
-export type ProviderHttpErrorInfo = {
+type ProviderHttpErrorInfo = {
   detail?: string;
   code?: string;
   type?: string;

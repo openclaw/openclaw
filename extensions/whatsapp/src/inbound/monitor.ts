@@ -43,6 +43,10 @@ import {
   type AcceptedInboundAccessControlResult,
 } from "./access-control.js";
 import {
+  requireAdmittedWhatsAppInboundMessage,
+  requireWhatsAppInboundAdmission,
+} from "./admission.js";
+import {
   claimRecentInboundMessageDelivery,
   commitRecentInboundMessage,
   isRecentOutboundMessage,
@@ -84,7 +88,12 @@ import {
 import { DisconnectReason, isJidGroup } from "./runtime-api.js";
 import { createWebSendApi } from "./send-api.js";
 import { normalizeWhatsAppSendResult } from "./send-result.js";
-import type { WebInboundMessageInput, WebInboundMessage, WebListenerCloseReason } from "./types.js";
+import type {
+  AdmittedWebInboundMessage,
+  WebInboundMessage,
+  WebInboundMessageInput,
+  WebListenerCloseReason,
+} from "./types.js";
 
 const LOGGED_OUT_STATUS = DisconnectReason?.loggedOut ?? 401;
 const RECONNECT_IN_PROGRESS_ERROR = "no active socket - reconnection in progress";
@@ -196,6 +205,10 @@ function isNonEmptyString(value: string | undefined): value is string {
   return Boolean(value);
 }
 
+type AdmittedWebInboundCallbackMessage = WebInboundMessage & {
+  admission: AdmittedWebInboundMessage["admission"];
+};
+
 type MonitorWebInboxOptions = {
   cfg: OpenClawConfig;
   loadConfig?: () => OpenClawConfig;
@@ -203,7 +216,7 @@ type MonitorWebInboxOptions = {
   verbose: boolean;
   accountId: string;
   authDir: string;
-  onMessage: (msg: WebInboundMessage) => Promise<void>;
+  onMessage: (msg: AdmittedWebInboundCallbackMessage) => Promise<void>;
   mediaMaxMb?: number;
   /** Keep the global presence unavailable so self-chat sessions do not mute phone pushes. */
   selfChatMode?: boolean;
@@ -212,7 +225,7 @@ type MonitorWebInboxOptions = {
   /** Debounce window (ms) for batching rapid consecutive messages from the same sender (0 to disable). */
   debounceMs?: number;
   /** Optional debounce gating predicate. */
-  shouldDebounce?: (msg: WebInboundMessage) => boolean;
+  shouldDebounce?: (msg: AdmittedWebInboundCallbackMessage) => boolean;
   /** Optional shared socket reference so reply closures can follow reconnects. */
   socketRef?: { current: WASocket | null };
   /** Whether send retries should wait for a reconnect. */
@@ -323,35 +336,35 @@ export async function attachWebInboxToSocket(
     return successor.getCurrentSock();
   };
   type QueuedInboundMessageMetadata = {
-    admission: NonNullable<WebInboundMessage["admission"]>;
+    admission: AdmittedWebInboundCallbackMessage["admission"];
     dedupeKey?: string;
     debounceKey?: string;
     durableId?: string;
     readReceipt?: WhatsAppReadReceiptTarget;
     receiveOrder?: number;
   };
-  type QueuedInboundMessage = WebInboundMessage & QueuedInboundMessageMetadata;
+  type QueuedInboundMessage = AdmittedWebInboundCallbackMessage & QueuedInboundMessageMetadata;
   const durableInboundJournal = createWhatsAppDurableInboundReceiveJournal(options.accountId);
   const inboundDebounceMs = Math.max(0, Math.trunc(options.debounceMs ?? 0));
   const pendingDebounceKeys = new Set<string>();
   const activeInboundFlushes = new Set<Promise<void>>();
-  const buildInboundDebounceKey = (msg: WebInboundMessage): string | null => {
+  const buildInboundDebounceKey = (msg: QueuedInboundMessage): string | null => {
+    const admission = requireWhatsAppInboundAdmission(msg);
     const sender = msg.platform.sender;
     const senderKey =
-      msg.chatType === "group"
+      admission.conversation.kind === "group"
         ? (getPrimaryIdentityId(sender ?? null) ??
           msg.platform.senderJid ??
           msg.platform.senderE164 ??
           msg.platform.senderName ??
-          msg.from)
-        : msg.from;
+          admission.sender.id)
+        : admission.conversation.id;
     if (!senderKey) {
       return null;
     }
-    const conversationKey = msg.chatType === "group" ? msg.platform.chatJid : msg.from;
-    return `${msg.accountId}:${conversationKey}:${senderKey}`;
+    return `${admission.accountId}:${admission.conversation.id}:${senderKey}`;
   };
-  const shouldDebounceInboundMessage = (msg: WebInboundMessage): boolean =>
+  const shouldDebounceInboundMessage = (msg: AdmittedWebInboundCallbackMessage): boolean =>
     options.shouldDebounce?.(msg) ?? true;
   const orderDebouncedInboundEntries = (entries: QueuedInboundMessage[]) =>
     entries.toSorted((a, b) => {
@@ -1197,11 +1210,6 @@ export async function attachWebInboxToSocket(
         reply,
         sendMedia,
       },
-      from: inbound.from,
-      conversationId: inbound.from,
-      accountId: inbound.access.resolvedAccountId,
-      accessControlPassed: true,
-      chatType: inbound.group ? "group" : "direct",
       quote: enriched.replyContext
         ? {
             context: enriched.replyContext,
@@ -1228,14 +1236,17 @@ export async function attachWebInboxToSocket(
       }
     }
     if (inboundMessage.event.id) {
+      const admission = requireWhatsAppInboundAdmission(inboundMessage);
       cacheInboundMessageMeta(
-        inboundMessage.accountId,
+        admission.accountId,
         inboundMessage.platform.chatJid,
         inboundMessage.event.id,
         {
           participant: inboundMessage.platform.senderJid,
           participantE164:
-            inboundMessage.chatType === "direct" ? inboundMessage.platform.senderE164 : undefined,
+            admission.conversation.kind === "direct"
+              ? inboundMessage.platform.senderE164
+              : undefined,
           body: inboundMessage.payload.body,
           fromMe: inboundMessage.platform.fromMe,
         },
@@ -1453,13 +1464,19 @@ export async function monitorWebInbox(options: MonitorWebInboxOptions) {
     throw err;
   }
   const shouldDebounce = options.shouldDebounce;
+  const normalizeAdmittedWebInboundMessage = (
+    msg: WebInboundMessageInput,
+  ): AdmittedWebInboundCallbackMessage =>
+    requireAdmittedWhatsAppInboundMessage(
+      normalizeWebInboundMessage(msg),
+    ) as AdmittedWebInboundCallbackMessage;
   return attachWebInboxToSocket({
     ...options,
     onMessage: async (msg) => {
-      await options.onMessage(normalizeWebInboundMessage(msg));
+      await options.onMessage(normalizeAdmittedWebInboundMessage(msg));
     },
     shouldDebounce: shouldDebounce
-      ? (msg) => shouldDebounce(normalizeWebInboundMessage(msg))
+      ? (msg) => shouldDebounce(normalizeAdmittedWebInboundMessage(msg))
       : undefined,
     socketTiming,
     sock,

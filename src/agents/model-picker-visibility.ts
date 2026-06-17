@@ -31,21 +31,3 @@ export function createModelPickerVisibleProviderPredicate(
     return !isRetiredModelPickerProvider(normalized) && !cliRuntimeProviders.has(normalized);
   };
 }
-
-/** Returns whether a provider id should appear in the model picker. */
-export function isModelPickerVisibleProvider(provider: string): boolean {
-  const normalized = normalizeProviderId(provider);
-  return (
-    !isRetiredModelPickerProvider(normalized) &&
-    !isCliRuntimeProvider(normalized, { includeSetupRegistry: true })
-  );
-}
-
-/** Returns whether a provider/model ref should appear in the model picker. */
-export function isModelPickerVisibleModelRef(ref: string): boolean {
-  const separatorIndex = ref.indexOf("/");
-  if (separatorIndex <= 0) {
-    return true;
-  }
-  return isModelPickerVisibleProvider(ref.slice(0, separatorIndex));
-}

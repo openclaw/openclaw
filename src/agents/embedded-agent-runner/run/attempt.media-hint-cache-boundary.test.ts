@@ -10,8 +10,6 @@ const imageGenerationTaskStatusMocks = vi.hoisted(() => ({
   buildImageGenerationTaskStatusDetails: vi.fn(() => ({})),
   buildImageGenerationTaskStatusText: vi.fn(() => "Image generation task status"),
   findActiveImageGenerationTaskForSession: vi.fn(),
-  getImageGenerationTaskProviderId: vi.fn(),
-  isActiveImageGenerationTask: vi.fn(() => false),
   IMAGE_GENERATION_TASK_KIND: "image_generation",
 }));
 const videoGenerationTaskStatusMocks = vi.hoisted(() => ({

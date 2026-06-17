@@ -121,7 +121,12 @@ import { runAgentCleanupStep } from "../run-cleanup-timeout.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
-import { resolveSessionSuspensionReason, suspendSession } from "../session-suspension.js";
+import {
+  resolveSessionSuspensionReason,
+  resolveSessionSuspensionTarget,
+  suspendSession,
+  type SessionSuspensionParams,
+} from "../session-suspension.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
@@ -619,6 +624,17 @@ async function runEmbeddedAgentInternal(
   }
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
   const globalLane = resolveGlobalLane(params.lane);
+  // Outer fallback attempts defer session suspension only while another
+  // candidate remains. Direct and final-candidate runs suspend normally.
+  const failureSuspension = resolveSessionSuspensionTarget();
+  const suspendForFailure = (suspensionParams: Omit<SessionSuspensionParams, "laneId">) => {
+    const suspension = { ...suspensionParams, laneId: globalLane };
+    if (failureSuspension.mode === "defer") {
+      failureSuspension.defer(suspension);
+      return;
+    }
+    void suspendSession(suspension);
+  };
   const sessionQueuePriority = resolveEmbeddedRunSessionQueuePriority(params.trigger);
   const laneTaskTimeoutMs = resolveEmbeddedRunLaneTimeoutMs(params.timeoutMs);
   let laneTaskProgressAtMs = Date.now();
@@ -2142,6 +2158,9 @@ async function runEmbeddedAgentInternal(
                 sessionKey: resolvedSessionKey ?? params.sessionId,
                 provider: activeErrorContext.provider,
                 model: activeErrorContext.model,
+                authMode: lastProfileId
+                  ? attemptAuthProfileStore.profiles?.[lastProfileId]?.type
+                  : undefined,
               })
             : undefined;
           const assistantErrorText =
@@ -2766,10 +2785,14 @@ async function runEmbeddedAgentInternal(
             // promptErrorSource === "compaction" means the model call already completed and the
             // abort happened only while waiting for compaction/retry cleanup. Retrying from here
             // would replay that completed tool turn as a fresh prompt attempt.
+            const promptAuthMode = lastProfileId
+              ? attemptAuthProfileStore.profiles?.[lastProfileId]?.type
+              : undefined;
             const normalizedPromptFailover = coerceToFailoverError(promptError, {
               provider: activeErrorContext.provider,
               model: activeErrorContext.model,
               profileId: lastProfileId,
+              authMode: promptAuthMode,
               sessionId: sessionIdUsed,
               lane: globalLane,
             });
@@ -2777,11 +2800,10 @@ async function runEmbeddedAgentInternal(
               ? describeFailoverError(normalizedPromptFailover)
               : describeFailoverError(promptError);
             if (normalizedPromptFailover?.suspend) {
-              void suspendSession({
+              suspendForFailure({
                 cfg: params.config,
                 agentDir,
                 sessionId: activeSessionId ?? params.sessionId,
-                laneId: globalLane,
                 reason: resolveSessionSuspensionReason(normalizedPromptFailover.reason),
                 failedProvider: normalizedPromptFailover.provider ?? provider,
                 failedModel: normalizedPromptFailover.model ?? modelId,
@@ -2999,6 +3021,7 @@ async function runEmbeddedAgentInternal(
                   provider,
                   model: modelId,
                   profileId: lastProfileId,
+                  authMode: promptAuthMode,
                   sessionId: sessionIdUsed,
                   lane: globalLane,
                   status,
@@ -3185,6 +3208,9 @@ async function runEmbeddedAgentInternal(
             authFailure,
             rateLimitFailure,
             billingFailure,
+            authMode: lastProfileId
+              ? attemptAuthProfileStore.profiles?.[lastProfileId]?.type
+              : undefined,
             cloudCodeAssistFormatError,
             isProbeSession,
             overloadProfileRotations,
@@ -3247,11 +3273,10 @@ async function runEmbeddedAgentInternal(
                 : {}),
             });
             if (assistantFailoverOutcome.error.suspend) {
-              void suspendSession({
+              suspendForFailure({
                 cfg: params.config,
                 agentDir,
                 sessionId: activeSessionId ?? params.sessionId,
-                laneId: globalLane,
                 reason: resolveSessionSuspensionReason(assistantFailoverOutcome.error.reason),
                 failedProvider: assistantFailoverOutcome.error.provider ?? provider,
                 failedModel: assistantFailoverOutcome.error.model ?? modelId,
@@ -3300,6 +3325,9 @@ async function runEmbeddedAgentInternal(
             sessionKey: params.sessionKey ?? params.sessionId,
             provider: activeErrorContext.provider,
             model: activeErrorContext.model,
+            authMode: lastProfileId
+              ? attemptAuthProfileStore.profiles?.[lastProfileId]?.type
+              : undefined,
             verboseLevel: params.verboseLevel,
             reasoningLevel: params.reasoningLevel,
             thinkingLevel: params.thinkLevel,

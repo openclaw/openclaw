@@ -15,7 +15,7 @@ import { ensureCustomApiRegistered } from "./custom-api-registry.js";
 import type { StreamFn } from "./runtime/index.js";
 
 /** Custom API id for the Google simple-completion stream adapter. */
-export const GOOGLE_SIMPLE_COMPLETION_API: Api = "openclaw-google-generative-ai-simple";
+const GOOGLE_SIMPLE_COMPLETION_API: Api = "openclaw-google-generative-ai-simple";
 
 const SOURCE_API: Api = "google-generative-ai";
 

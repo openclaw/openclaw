@@ -79,8 +79,6 @@ vi.mock("../image-generation-task-status.js", () => ({
   buildImageGenerationTaskStatusDetails: vi.fn(() => ({})),
   buildImageGenerationTaskStatusText: vi.fn(() => ""),
   findActiveImageGenerationTaskForSession: vi.fn(() => undefined),
-  getImageGenerationTaskProviderId: vi.fn(() => undefined),
-  isActiveImageGenerationTask: vi.fn(() => false),
 }));
 
 vi.mock("../music-generation-task-status.js", () => ({
