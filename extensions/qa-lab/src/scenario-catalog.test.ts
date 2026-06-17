@@ -56,6 +56,7 @@ describe("qa scenario catalog", () => {
     ).toStrictEqual(
       [
         "control-ui-chat-flow-playwright",
+        "gateway-smoke",
         "package-openclaw-for-docker",
         "plugin-lifecycle-probe",
       ].toSorted(),

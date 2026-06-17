@@ -641,6 +641,13 @@ describe("scripts/test-projects changed-target routing", () => {
     }
   });
 
+  it("keeps QA Lab gateway smoke script edits on QA e2e tests", () => {
+    expect(resolveChangedTestTargetPlan(["scripts/dev/gateway-smoke.ts"])).toEqual({
+      mode: "targets",
+      targets: ["test/e2e/qa-lab/runtime/gateway-smoke.e2e.test.ts"],
+    });
+  });
+
   it("keeps shared script library edits on owner tests", () => {
     const expectedTargets = new Map([
       [
