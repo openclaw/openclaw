@@ -43,6 +43,6 @@ docker_e2e_run_with_harness \
   "${DOCKER_ENV_ARGS[@]}" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   "$IMAGE_NAME" \
-  tsx test/e2e/qa-lab/plugins/plugin-lifecycle-probe.e2e.test.ts --lifecycle-matrix
+  tsx test/e2e/qa-lab/plugins/plugin-lifecycle-probe-runtime.ts --lifecycle-matrix
 
 echo "Plugin lifecycle matrix Docker E2E passed."
