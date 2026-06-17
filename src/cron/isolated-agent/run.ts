@@ -1178,12 +1178,17 @@ async function finalizeCronRun(params: {
     delivered?: boolean;
     deliveryAttempted?: boolean;
     delivery?: CronDeliveryTrace;
-  }) =>
-    prepared.withRunSession({
+    deliveryError?: string;
+    deliveryDiagnostics?: RunCronAgentTurnResult["diagnostics"];
+  }) => {
+    const deliveryError = normalizeOptionalString(result?.deliveryError);
+    return prepared.withRunSession({
       status: hasFatalErrorPayload ? "error" : "ok",
       ...(hasFatalErrorPayload
         ? { error: embeddedRunError ?? "cron isolated run returned an error payload" }
-        : {}),
+        : deliveryError
+          ? { error: deliveryError }
+          : {}),
       summary,
       outputText,
       delivered: result?.delivered,
@@ -1192,14 +1197,16 @@ async function finalizeCronRun(params: {
       diagnostics: hasFatalErrorPayload
         ? mergeCronRunDiagnostics(
             agentDiagnostics,
+            result?.deliveryDiagnostics,
             createCronRunDiagnosticsFromError(
               "agent-run",
               embeddedRunError ?? "cron isolated run returned an error payload",
             ),
           )
-        : agentDiagnostics,
+        : mergeCronRunDiagnostics(agentDiagnostics, result?.deliveryDiagnostics),
       ...telemetry,
     });
+  };
   const failPendingPresentationWarningUnlessDelivered = (delivered?: boolean) => {
     if (pendingPresentationWarningError && delivered !== true) {
       hasFatalErrorPayload = true;
@@ -1295,13 +1302,26 @@ async function finalizeCronRun(params: {
     failPendingPresentationWarningUnlessDelivered(
       resultWithDeliveryMeta.delivered ?? deliveryResult.delivered,
     );
-    if (!hasFatalErrorPayload || deliveryResult.result.status !== "ok") {
+    if (!hasFatalErrorPayload) {
+      if (deliveryResult.result.status === "error" && !params.isAborted()) {
+        return resolveRunOutcome({
+          delivered: resultWithDeliveryMeta.delivered ?? deliveryResult.delivered,
+          deliveryAttempted: resultWithDeliveryMeta.deliveryAttempted,
+          delivery: deliveryTrace,
+          deliveryError: deliveryResult.result.error,
+          deliveryDiagnostics: resultWithDeliveryMeta.diagnostics,
+        });
+      }
+      return resultWithDeliveryMeta;
+    }
+    if (deliveryResult.result.status !== "ok") {
       return resultWithDeliveryMeta;
     }
     return resolveRunOutcome({
       delivered: deliveryResult.result.delivered,
       deliveryAttempted: resultWithDeliveryMeta.deliveryAttempted,
       delivery: deliveryTrace,
+      deliveryDiagnostics: resultWithDeliveryMeta.diagnostics,
     });
   }
   summary = deliveryResult.summary;
