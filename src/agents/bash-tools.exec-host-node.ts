@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import { APPROVALS_SCOPE, WRITE_SCOPE } from "../gateway/operator-scopes.js";
 import type { InterpreterInlineEvalHit } from "../infra/command-analysis/inline-eval.js";
 import {
+  type ExecAsk,
   type ExecSecurity,
   requiresExecApproval,
   resolveExecApprovalAllowedDecisions,
@@ -75,10 +76,16 @@ function execSecurityFloorRank(security: ExecSecurity): number {
 
 function nodePolicyBlocksAutoReview(params: {
   hostSecurity: ExecSecurity;
+  hostAsk: ExecAsk;
   nodeApprovalPolicyKnown: boolean;
   nodeSecurity?: ExecSecurity;
   nodeAsk?: "off" | "on-miss" | "always";
 }): boolean {
+  // When the Gateway explicitly opts into full-trust mode, respect that decision
+  // even when the node's approval policy snapshot is unavailable.
+  if (params.hostSecurity === "full" && params.hostAsk === "off") {
+    return false;
+  }
   // Remote node policy can be stricter than local host policy; do not auto-approve across that gap.
   return (
     !params.nodeApprovalPolicyKnown ||
@@ -183,6 +190,7 @@ export async function executeNodeHostCommand(
       hostAsk !== "always" &&
       nodePolicyBlocksAutoReview({
         hostSecurity,
+        hostAsk,
         nodeApprovalPolicyKnown,
         nodeSecurity,
         nodeAsk,
