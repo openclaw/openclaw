@@ -462,6 +462,26 @@ export function formatTargetCronDeliveryAwarenessText(text: string): string {
   return `A scheduled cron job delivered this message to this channel:\n${text}`;
 }
 
+function formatTargetCronDeliveryFailureAwarenessText(params: {
+  job: CronJob;
+  channel: string;
+  to: string;
+  threadId?: string;
+  error: unknown;
+}): string {
+  const targetParts = [`${params.channel}:${params.to}`];
+  if (params.threadId) {
+    targetParts.push(`thread ${params.threadId}`);
+  }
+  return [
+    "A scheduled cron job attempted to deliver to this channel, but delivery failed.",
+    `Job: ${params.job.name || params.job.id}`,
+    `Target: ${targetParts.join(" ")}`,
+    `Delivery error: ${formatErrorMessage(params.error)}`,
+    "No scheduled message was delivered.",
+  ].join("\n");
+}
+
 async function queueCronAwarenessSystemEvent(params: {
   cfg: OpenClawConfig;
   jobId: string;
@@ -470,6 +490,7 @@ async function queueCronAwarenessSystemEvent(params: {
   queueMainSession: boolean;
   targetSessionKey?: string;
   text: string;
+  targetText?: string;
 }): Promise<void> {
   try {
     const { enqueueSystemEvent } = await loadDeliveryOutboundRuntime();
@@ -488,7 +509,7 @@ async function queueCronAwarenessSystemEvent(params: {
       targetSessionKey &&
       (!isSameSessionKey(targetSessionKey, mainSessionKey) || !params.queueMainSession);
     if (shouldQueueTargetSession) {
-      enqueueSystemEvent(formatTargetCronDeliveryAwarenessText(params.text), {
+      enqueueSystemEvent(params.targetText ?? formatTargetCronDeliveryAwarenessText(params.text), {
         sessionKey: targetSessionKey,
         contextKey: params.deliveryIdempotencyKey,
       });
@@ -1098,13 +1119,35 @@ export async function dispatchCronDelivery(
         }
         return send.status === "sent" || send.status === "partial_failed" ? send.results : [];
       };
-      const deliveryResults = options?.retryTransient
-        ? await retryTransientDirectCronDelivery({
-            jobId: params.job.id,
-            signal: params.abortSignal,
-            run: runDelivery,
-          })
-        : await runDelivery();
+      let deliveryResults: OutboundDeliveryResult[];
+      try {
+        deliveryResults = options?.retryTransient
+          ? await retryTransientDirectCronDelivery({
+              jobId: params.job.id,
+              signal: params.abortSignal,
+              run: runDelivery,
+            })
+          : await runDelivery();
+      } catch (err) {
+        const failureAwarenessText = formatTargetCronDeliveryFailureAwarenessText({
+          job: params.job,
+          channel: delivery.channel,
+          to: delivery.to,
+          threadId: stringifyRouteThreadId(delivery.threadId),
+          error: err,
+        });
+        await queueCronAwarenessSystemEvent({
+          cfg: params.cfgWithAgentDefaults,
+          jobId: params.job.id,
+          agentId: params.agentId,
+          deliveryIdempotencyKey: `${deliveryIdempotencyKey}:failure`,
+          queueMainSession: false,
+          targetSessionKey: deliverySessionKey,
+          text: failureAwarenessText,
+          targetText: failureAwarenessText,
+        });
+        throw err;
+      }
       // Only mark delivered when ALL payloads succeeded (no partial failure).
       delivered = deliveryResults.length > 0 && !hadPartialFailure;
       // Intentionally leave partial success uncached: replay may duplicate the

@@ -1487,6 +1487,45 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     });
   });
 
+  it("queues target-session awareness when direct cron delivery fails", async () => {
+    mockResolvedOutboundRoute({
+      sessionKey: "agent:main:telegram:direct:123456:thread:42",
+      baseSessionKey: "agent:main:telegram:direct:123456",
+      to: "telegram:123456",
+      threadId: "42",
+    });
+    const deliveryError = new Error(
+      "Call to 'sendMessage' failed! (400: Bad Request: message thread not found)",
+    );
+    vi.mocked(deliverOutboundPayloads).mockRejectedValue(deliveryError);
+
+    const params = makeBaseParams({
+      synthesizedText: "This delivery will fail.",
+      runStartedAt: 1_000,
+    });
+    params.resolvedDelivery = makeResolvedDelivery({ threadId: "42" });
+    const state = await dispatchCronDelivery(params);
+
+    expectResultFields(state.result, {
+      status: "error",
+      error: String(deliveryError),
+      deliveryAttempted: true,
+    });
+    expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
+      [
+        "A scheduled cron job attempted to deliver to this channel, but delivery failed.",
+        "Job: Test Job",
+        "Target: telegram:123456 thread 42",
+        "Delivery error: Call to 'sendMessage' failed! (400: Bad Request: message thread not found)",
+        "No scheduled message was delivered.",
+      ].join("\n"),
+      {
+        sessionKey: "agent:main:telegram:direct:123456:thread:42",
+        contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:42:failure",
+      },
+    );
+  });
+
   it("surfaces structured direct delivery failures without retry when best-effort is disabled", async () => {
     vi.mocked(deliverOutboundPayloads).mockRejectedValue(new Error("boom"));
 
