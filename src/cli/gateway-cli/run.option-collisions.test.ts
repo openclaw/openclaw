@@ -1,7 +1,9 @@
 // Gateway run option collision tests cover gateway run flag registration boundaries.
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConfigFileSnapshot } from "../../config/types.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../../daemon/constants.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../../infra/supervisor-markers.js";
@@ -64,6 +66,7 @@ const gatewayLogMessages = vi.hoisted(() => [] as string[]);
 const configState = vi.hoisted(() => ({
   cfg: {} as Record<string, unknown>,
   snapshot: { config: {}, exists: false, sourceConfig: {}, valid: true } as Record<string, unknown>,
+  stateDir: "/tmp",
 }));
 const readBestEffortConfig = vi.fn(async () => configState.cfg);
 type ConfigSnapshotReadOptionsStub = {
@@ -145,7 +148,7 @@ vi.mock("../../config/paths.js", () => ({
   CONFIG_PATH: "/tmp/openclaw-test-missing-config.json",
   normalizeStateDirEnv: (env?: NodeJS.ProcessEnv) => normalizeStateDirEnv(env),
   pinRuntimePaths: (env?: NodeJS.ProcessEnv) => pinRuntimePaths(env),
-  resolveStateDir: () => "/tmp",
+  resolveStateDir: () => configState.stateDir,
   resolveGatewayPort: (cfg?: { gateway?: { port?: number } }) => cfg?.gateway?.port ?? 18789,
 }));
 
@@ -345,6 +348,7 @@ describe("gateway run option collisions", () => {
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
     deleteTestEnvValue(GATEWAY_SERVICE_RUNTIME_PID_ENV);
     resetRuntimeCapture();
+    configState.stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-run-"));
     configState.cfg = {};
     configState.snapshot = { config: {}, exists: false, sourceConfig: {}, valid: true };
     netState.autoBindHost = "127.0.0.1";
@@ -382,6 +386,10 @@ describe("gateway run option collisions", () => {
     shouldEnableShellEnvFallback.mockReset();
     shouldEnableShellEnvFallback.mockReturnValue(false);
     callOrder.length = 0;
+  });
+
+  afterEach(() => {
+    fs.rmSync(configState.stateDir, { recursive: true, force: true });
   });
 
   async function runGatewayCli(argv: string[]) {
@@ -1488,10 +1496,33 @@ describe("gateway run option collisions", () => {
       "Gateway start blocked: existing config is missing gateway.mode. Treat this as suspicious or clobbered config. Re-run `openclaw onboard --mode local` or `openclaw setup`, set gateway.mode=local manually, or pass --allow-unconfigured.",
     );
     expect(runtimeErrors).toContain(
-      `Config write audit: ${path.join("/tmp", "logs", "config-audit.jsonl")}`,
+      `Config write audit: ${path.join(configState.stateDir, "logs", "config-audit.jsonl")}`,
     );
     expect(startGatewayServer).not.toHaveBeenCalled();
     expect(readBestEffortConfig).not.toHaveBeenCalled();
+  });
+
+  it("points missing gateway.mode users at sibling moltbot config recovery (#54200)", async () => {
+    const siblingConfigPath = path.join(configState.stateDir, "moltbot.json");
+    fs.writeFileSync(siblingConfigPath, '{"gateway":{"mode":"local"}}\n');
+    configState.cfg = {
+      gateway: {
+        mode: "local",
+      },
+    };
+    configState.snapshot = {
+      exists: true,
+      valid: true,
+      config: {},
+      parsed: {},
+    };
+
+    await expect(runGatewayCli(["gateway", "run"])).rejects.toThrow("__exit__:78");
+
+    expect(runtimeErrors).toContain(
+      `Gateway start blocked: existing config is missing gateway.mode. Treat this as suspicious or clobbered config. Found legacy sibling config at ${siblingConfigPath}. Run \`openclaw doctor --fix\` to recover it into openclaw.json if this was an upgrade from moltbot.json. Re-run \`openclaw onboard --mode local\` or \`openclaw setup\`, set gateway.mode=local manually, or pass --allow-unconfigured.`,
+    );
+    expect(startGatewayServer).not.toHaveBeenCalled();
   });
 
   it("blocks invalid startup config without automatic recovery", async () => {
@@ -1512,7 +1543,7 @@ describe("gateway run option collisions", () => {
       "Gateway start blocked: existing config is missing gateway.mode. Treat this as suspicious or clobbered config. Re-run `openclaw onboard --mode local` or `openclaw setup`, set gateway.mode=local manually, or pass --allow-unconfigured.",
     );
     expect(runtimeErrors).toContain(
-      `Config write audit: ${path.join("/tmp", "logs", "config-audit.jsonl")}`,
+      `Config write audit: ${path.join(configState.stateDir, "logs", "config-audit.jsonl")}`,
     );
     expect(readConfigFileSnapshotWithPluginMetadata).toHaveBeenCalledOnce();
     expect(startGatewayServer).not.toHaveBeenCalled();

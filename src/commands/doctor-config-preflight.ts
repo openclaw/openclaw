@@ -24,47 +24,161 @@ const loadDoctorStateMigrations = createLazyRuntimeModule(
 
 const loadDoctorCron = createLazyRuntimeModule(() => import("./doctor/cron/index.js"));
 
-async function maybeMigrateLegacyConfig(): Promise<string[]> {
+// A canonical openclaw.json whose only top-level keys are auto-generated skeleton metadata
+// (no channels/agents/gateway bindings) is treated as "skeletal" — i.e. the user's real config
+// was never migrated into it. This is the upgrade layout from #54200: ~/.openclaw/openclaw.json
+// exists as a bare skeleton while the user's real legacy config still lives in moltbot.json.
+const SKELETAL_CONFIG_TOP_LEVEL_KEYS = new Set(["$schema", "_meta", "meta", "update"]);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isSkeletalOpenClawConfig(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+  const keys = Object.keys(value);
+  return keys.length > 0 && keys.every((key) => SKELETAL_CONFIG_TOP_LEVEL_KEYS.has(key));
+}
+
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** True when the canonical config is present but carries only skeleton metadata. */
+async function isSkeletalCanonicalConfig(targetPath: string): Promise<boolean> {
+  try {
+    const raw = await fs.readFile(targetPath, "utf-8");
+    return isSkeletalOpenClawConfig(JSON.parse(raw));
+  } catch {
+    return false;
+  }
+}
+
+function legacyConfigBackupPath(targetPath: string): string {
+  const stamp = new Date().toISOString().replace(/[:.]/gu, "-");
+  return `${targetPath}.pre-moltbot-migration.${stamp}`;
+}
+
+function legacyConfigTempPath(targetPath: string): string {
+  const stamp = new Date().toISOString().replace(/[:.]/gu, "-");
+  return `${targetPath}.moltbot-migration.${stamp}.tmp`;
+}
+
+/**
+ * Atomically copies a legacy config into the canonical path. When the canonical config already
+ * exists (skeletal), it is renamed aside to `backupPath` first and restored on copy failure. The
+ * recovered file is staged through a temp file and chmod'd 0600 so recovered credentials/keys are
+ * not left world-readable. Missing-canonical recovery uses COPYFILE_EXCL so a canonical config
+ * created concurrently is never clobbered.
+ */
+async function copyLegacyConfigIntoPlace(params: {
+  backupPath?: string;
+  legacyPath: string;
+  targetPath: string;
+}): Promise<void> {
+  const tempPath = legacyConfigTempPath(params.targetPath);
+  let backedUp = false;
+  await fs.copyFile(params.legacyPath, tempPath);
+  await fs.chmod(tempPath, 0o600).catch(() => {});
+  try {
+    if (params.backupPath) {
+      await fs.rename(params.targetPath, params.backupPath);
+      backedUp = true;
+      await fs.rename(tempPath, params.targetPath);
+    } else {
+      await fs.copyFile(tempPath, params.targetPath, fs.constants.COPYFILE_EXCL);
+      await fs.unlink(tempPath).catch(() => {});
+    }
+  } catch (error) {
+    await fs.unlink(tempPath).catch(() => {});
+    if (backedUp && params.backupPath) {
+      await fs.rename(params.backupPath, params.targetPath).catch(() => {});
+    }
+    throw error;
+  }
+}
+
+/**
+ * Recovers legacy config into the canonical openclaw.json.
+ *
+ * The retired `moltbot.json` sibling (next to ~/.openclaw/openclaw.json) is recovered ONLY under
+ * `doctor --fix` (`allowSkeletalReplacement`): read-only doctor warns so users learn their real
+ * config still lives in moltbot.json, but never mutates. The pre-existing `.clawdbot/clawdbot.json`
+ * missing-canonical copy path is preserved unchanged. Normal runtime config resolution stays
+ * canonical — moltbot.json is never re-added to the config candidate list.
+ */
+async function maybeMigrateLegacyConfig(options: {
+  allowSkeletalReplacement: boolean;
+}): Promise<{ changes: string[]; warnings: string[] }> {
   const changes: string[] = [];
+  const warnings: string[] = [];
   const home = resolveHomeDir();
   if (!home) {
-    return changes;
+    return { changes, warnings };
   }
 
   const targetDir = path.join(home, ".openclaw");
   const targetPath = path.join(targetDir, "openclaw.json");
-  try {
-    await fs.access(targetPath);
-    return changes;
-  } catch {
-    // missing config
+  const siblingMoltbotPath = path.join(targetDir, "moltbot.json");
+
+  const targetExists = await pathExists(targetPath);
+  const siblingMoltbotExists = await pathExists(siblingMoltbotPath);
+  const targetIsSkeletal =
+    targetExists && siblingMoltbotExists && (await isSkeletalCanonicalConfig(targetPath));
+
+  // Skeletal canonical config (real config still in moltbot.json): read-only doctor warns so the
+  // upgrade surfaces a recovery hint instead of a silent crash-loop; only `doctor --fix` mutates.
+  if (targetIsSkeletal && !options.allowSkeletalReplacement) {
+    warnings.push(
+      `Found legacy sibling config at ${siblingMoltbotPath}; run openclaw doctor --fix to recover it into ${targetPath}.`,
+    );
   }
 
-  const legacyCandidates = [path.join(home, ".clawdbot", "clawdbot.json")];
+  // Build the legacy candidate list. A skeletal canonical config is replaced from moltbot.json
+  // only under --fix. A MISSING canonical config recovers moltbot.json (then .clawdbot) in both
+  // modes, matching the existing clawdbot missing-canonical copy path.
+  const legacyCandidates: string[] = [];
+  if (targetIsSkeletal && options.allowSkeletalReplacement) {
+    legacyCandidates.push(siblingMoltbotPath);
+  }
+  if (!targetExists) {
+    legacyCandidates.push(siblingMoltbotPath);
+    legacyCandidates.push(path.join(home, ".clawdbot", "clawdbot.json"));
+  }
 
   let legacyPath: string | null = null;
   for (const candidate of legacyCandidates) {
-    try {
-      await fs.access(candidate);
+    if (await pathExists(candidate)) {
       legacyPath = candidate;
       break;
-    } catch {
-      // continue
     }
   }
   if (!legacyPath) {
-    return changes;
+    return { changes, warnings };
   }
 
   await fs.mkdir(targetDir, { recursive: true });
+  const backupPath = targetExists ? legacyConfigBackupPath(targetPath) : undefined;
   try {
-    await fs.copyFile(legacyPath, targetPath, fs.constants.COPYFILE_EXCL);
+    await copyLegacyConfigIntoPlace({ backupPath, legacyPath, targetPath });
+    if (backupPath) {
+      changes.push(`Backed up skeletal config: ${targetPath} -> ${backupPath}`);
+    }
     changes.push(`Migrated legacy config: ${legacyPath} -> ${targetPath}`);
   } catch {
-    // If it already exists, skip silently.
+    if (targetExists) {
+      warnings.push(`Skipped legacy config migration after copy failed: ${legacyPath}`);
+    }
   }
 
-  return changes;
+  return { changes, warnings };
 }
 
 export type DoctorConfigPreflightResult = {
@@ -231,9 +345,17 @@ export async function runDoctorConfigPreflight(
     }
 
     if (options.migrateLegacyConfig !== false) {
-      const legacyConfigChanges = await maybeMigrateLegacyConfig();
-      if (legacyConfigChanges.length > 0) {
-        note(legacyConfigChanges.map((entry) => `- ${entry}`).join("\n"), "Doctor changes");
+      const legacyConfigResult = await maybeMigrateLegacyConfig({
+        allowSkeletalReplacement: options.repairPrefixedConfig === true,
+      });
+      if (legacyConfigResult.changes.length > 0) {
+        note(legacyConfigResult.changes.map((entry) => `- ${entry}`).join("\n"), "Doctor changes");
+      }
+      if (legacyConfigResult.warnings.length > 0) {
+        note(
+          legacyConfigResult.warnings.map((entry) => `- ${entry}`).join("\n"),
+          "Config warnings",
+        );
       }
     }
 

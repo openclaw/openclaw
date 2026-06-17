@@ -229,6 +229,7 @@ function getGatewayStartGuardErrors(params: {
   allowUnconfigured?: boolean;
   configExists: boolean;
   configAuditPath: string;
+  siblingMoltbotConfigPath?: string;
   mode: string | undefined;
 }): string[] {
   if (params.allowUnconfigured || params.mode === "local") {
@@ -240,10 +241,20 @@ function getGatewayStartGuardErrors(params: {
     ];
   }
   if (params.mode === undefined) {
+    // Surface a sibling moltbot.json (retired config filename) when gateway.mode is missing: this
+    // is the #54200 upgrade layout where the user's real config was never migrated out of moltbot.json.
+    const siblingMoltbotHint =
+      params.siblingMoltbotConfigPath && fs.existsSync(params.siblingMoltbotConfigPath)
+        ? [
+            `Found legacy sibling config at ${params.siblingMoltbotConfigPath}.`,
+            `Run \`${formatCliCommand("openclaw doctor --fix")}\` to recover it into openclaw.json if this was an upgrade from moltbot.json.`,
+          ].join(" ")
+        : null;
     return [
       [
         "Gateway start blocked: existing config is missing gateway.mode.",
         "Treat this as suspicious or clobbered config.",
+        ...(siblingMoltbotHint ? [siblingMoltbotHint] : []),
         `Re-run \`${formatCliCommand("openclaw onboard --mode local")}\` or \`${formatCliCommand("openclaw setup")}\`, set gateway.mode=local manually, or pass --allow-unconfigured.`,
       ].join(" "),
       `Config write audit: ${params.configAuditPath}`,
@@ -849,6 +860,7 @@ export async function runGatewayCommand(opts: GatewayRunOpts, hooks: GatewayRunR
     allowUnconfigured: opts.allowUnconfigured,
     configExists,
     configAuditPath,
+    siblingMoltbotConfigPath: path.join(resolveStateDir(process.env), "moltbot.json"),
     mode,
   });
   if (guardErrors.length > 0) {
