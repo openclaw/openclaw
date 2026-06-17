@@ -2,12 +2,14 @@
 import { describe, expect, it } from "vitest";
 import {
   sanitizeAssistantVisibleText,
+  sanitizeAssistantVisibleTextWithOptions,
   sanitizeAssistantVisibleTextWithProfile,
   stripAssistantInternalScaffolding,
   stripMinimaxToolCallXml,
   stripToolCallXmlTags,
 } from "./assistant-visible-text.js";
 import { stripModelSpecialTokens } from "./model-special-tokens.js";
+import { RTL_ISOLATION_MARKERS } from "./rtl-isolation.js";
 
 describe("stripAssistantInternalScaffolding", () => {
   function expectVisibleText(input: string, expected: string) {
@@ -927,8 +929,7 @@ describe("sanitizeAssistantVisibleTextWithProfile", () => {
   // and runtime profiles still pass through unchanged so transcripts and
   // internal inspection paths stay byte-for-byte with the model output.
   describe("RTL bidi isolation on outbound delivery", () => {
-    const RLI = "\u2067";
-    const PDI = "\u2069";
+    const { start: RLI, end: PDI } = RTL_ISOLATION_MARKERS;
 
     it("wraps Hebrew lines on the delivery profile so trailing punctuation visually trails", () => {
       const input = "שלום?";
@@ -944,6 +945,11 @@ describe("sanitizeAssistantVisibleTextWithProfile", () => {
     it("does not wrap RTL lines on the history profile (transcript storage stays byte-clean)", () => {
       const input = "שלום?";
       expect(sanitizeAssistantVisibleTextWithProfile(input, "history")).toBe(input);
+    });
+
+    it("does not wrap RTL lines through the legacy trim-none history wrapper", () => {
+      const input = "שלום?";
+      expect(sanitizeAssistantVisibleTextWithOptions(input, { trim: "none" })).toBe(input);
     });
 
     it("does not wrap RTL lines on the internal-scaffolding profile", () => {
