@@ -141,6 +141,75 @@ to callers that do not have owner/admin identity (`operator.admin`) even when
 they are listed in `gateway.tools.allow`. Shared-secret bearer auth still follows
 the full trusted-operator rule above.
 
+### Opt-in: coding tool `read` over direct-invoke
+
+The `read` coding tool can be exposed for deterministic automation (CI/preflight
+checks, lint pipelines, browser capture flows) without an LLM round-trip. This
+applies to BOTH `POST /tools/invoke` AND the SDK-facing JSON-RPC `tools.invoke`
+(they share the same direct-invoke resolver).
+
+**`read` is denied by default.** Reaching it requires TWO distinct config keys
+(set intentionally) AND an owner/admin sender at request time. The two config
+keys:
+
+```json5
+{
+  gateway: {
+    tools: {
+      // (1) Lift `read` from the HTTP default deny list (same opt-in shape as
+      // the other dangerous-by-default tools).
+      allow: ["read"],
+      // (2) NEW: distinct direct-invoke opt-in. Without this, the `read` tool
+      // is not materialized into the candidate set even if `allow` includes it.
+      // This dual-key gating prevents an upgrade-time compatibility break for
+      // pre-existing configs that already include `"read"` in `allow` for
+      // unrelated reasons (e.g. for an MCP/agent surface where `read` is
+      // already available).
+      directInvoke: {
+        hostFsRead: true,
+      },
+    },
+  },
+}
+```
+
+**Neither config key alone — nor both together — is sufficient.** All three
+gates must hold: both config keys AND an owner/admin sender (`senderIsOwner ===
+true`, evaluated per request). A non-owner trusted-proxy caller (e.g.
+`operator.write`) is refused the **built-in** `read` coding tool even when both
+config keys are set — the owner gate scopes only built-in host-FS
+materialization; a same-named allowlisted plugin tool, if any, is unaffected and
+resolves under the normal `gateway.tools.allow`/`deny` policy (see _Plugin name
+collision_ below):
+
+| `tools.allow` includes `"read"` | `directInvoke.hostFsRead` | sender is owner/admin | built-in `read` reachable                   |
+| ------------------------------- | ------------------------- | --------------------- | ------------------------------------------- |
+| no                              | no                        | —                     | ❌                                          |
+| yes                             | no                        | yes                   | ❌ (tool not materialized)                  |
+| no                              | yes                       | yes                   | ❌ (filtered by HTTP deny)                  |
+| yes                             | yes                       | no                    | ❌ (owner gate — built-in not materialized) |
+| yes                             | yes                       | yes                   | ✅                                          |
+
+**Plugin name collision:** The owner gate and the dual-key opt-in apply only to
+the **built-in** `read` coding tool. For a non-owner caller the built-in is never
+materialized, so a same-named tool from an allowlisted plugin (if any) is not
+additionally gated by `senderIsOwner` — it resolves under the normal
+`gateway.tools.allow`/`deny` policy. When all three gates hold and both a plugin
+and the built-in share the name `read`, the built-in takes precedence on the
+direct-invoke surface, so the documented filesystem behavior holds regardless of
+installed plugins.
+
+**Security:** When enabled, `read` can access any file the gateway process can
+open, **outside the configured workspace** unless `tools.fs.workspaceOnly: true`
+is set. The config audit (`gateway.tools_invoke_http.host_read_allow`) warns
+whenever both keys are set — regardless of `tools.fs.workspaceOnly` — so the
+exposure is always visible in audit output; workspace confinement is the
+recommended remediation, not a condition that silences the warning.
+
+Only the `read` tool is exposed via this mechanism. Mutating coding primitives
+(`write`/`edit`/`apply_patch`/`exec`/`process`) remain unavailable on the
+direct-invoke surface in this release.
+
 To help group policies resolve context, you can optionally set:
 
 - `x-openclaw-message-channel: <channel>` (example: `slack`, `telegram`)
