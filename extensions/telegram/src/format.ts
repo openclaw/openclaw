@@ -1070,6 +1070,18 @@ function findTelegramHtmlEntityEnd(text: string, start: number): number {
   return text[index] === ";" ? index : -1;
 }
 
+function avoidTelegramSurrogateSplit(text: string, idx: number): number {
+  if (idx <= 0 || idx >= text.length) {
+    return idx;
+  }
+  const prev = text.charCodeAt(idx - 1);
+  const next = text.charCodeAt(idx);
+  if (prev >= 0xd800 && prev <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) {
+    return idx - 1;
+  }
+  return idx;
+}
+
 function findTelegramHtmlSafeSplitIndex(text: string, maxLength: number): number {
   if (text.length <= maxLength) {
     return text.length;
@@ -1077,15 +1089,15 @@ function findTelegramHtmlSafeSplitIndex(text: string, maxLength: number): number
   const normalizedMaxLength = Math.max(1, Math.floor(maxLength));
   const lastAmpersand = text.lastIndexOf("&", normalizedMaxLength - 1);
   if (lastAmpersand === -1) {
-    return normalizedMaxLength;
+    return avoidTelegramSurrogateSplit(text, normalizedMaxLength);
   }
   const lastSemicolon = text.lastIndexOf(";", normalizedMaxLength - 1);
   if (lastAmpersand < lastSemicolon) {
-    return normalizedMaxLength;
+    return avoidTelegramSurrogateSplit(text, normalizedMaxLength);
   }
   const entityEnd = findTelegramHtmlEntityEnd(text, lastAmpersand);
   if (entityEnd === -1 || entityEnd < normalizedMaxLength) {
-    return normalizedMaxLength;
+    return avoidTelegramSurrogateSplit(text, normalizedMaxLength);
   }
   return lastAmpersand;
 }
