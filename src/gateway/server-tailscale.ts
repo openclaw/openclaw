@@ -43,6 +43,9 @@ export async function startGatewayTailscaleExposure(params: {
           return null;
         }
       }
+      // Reset all previous serve entries to prevent duplicates on restart;
+      // tailscale serve is append-only and never cleans up old entries.
+      await disableTailscaleServe();
       if (serviceName) {
         await enableTailscaleServe(params.port, undefined, serviceName);
       } else {
