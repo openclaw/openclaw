@@ -7,6 +7,14 @@ import {
   scopedAgentListParamsForSession,
 } from "./app-chat.ts";
 import {
+  inferBasePathFromPathname,
+  normalizeBasePath,
+  normalizePath,
+  pathForTab,
+  tabFromPath,
+  type Tab,
+} from "../routes/route-registry.ts";
+import {
   startLogsPolling,
   startNodesPolling,
   stopLogsPolling,
@@ -71,14 +79,6 @@ import {
 import { isCronJobActiveFailure } from "./cron-status.ts";
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
 import { isMonitoredAuthProvider } from "./model-auth-helpers.ts";
-import {
-  inferBasePathFromPathname,
-  normalizeBasePath,
-  normalizePath,
-  pathForTab,
-  tabFromPath,
-  type Tab,
-} from "./navigation.ts";
 import { normalizeAgentId, parseAgentSessionKey } from "./session-key.ts";
 import {
   normalizeTextScale,

@@ -1,7 +1,7 @@
-// Control UI module implements navigation behavior.
+// Control UI route registry defines tab ids, paths, and navigation metadata.
 import { t } from "../i18n/index.ts";
-import type { IconName } from "./icons.js";
-import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
+import type { IconName } from "../ui/icons.js";
+import { normalizeLowercaseStringOrEmpty } from "../ui/string-coerce.ts";
 
 export const TAB_GROUPS = [
   { label: "chat", tabs: ["chat"] },

@@ -1,7 +1,7 @@
+import type { Tab } from "../routes/route-registry.ts";
 // Control UI module implements control ui performance behavior.
 import type { EventLogEntry } from "./app-events.ts";
 import type { GatewayConnectTiming, GatewayRequestTiming } from "./gateway.ts";
-import type { Tab } from "./navigation.ts";
 
 type ControlUiPerformanceHost = {
   tab: Tab;

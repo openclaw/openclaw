@@ -3,6 +3,7 @@ import { html, nothing } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { t } from "../../i18n/index.ts";
+import { pathForTab } from "../../routes/route-registry.ts";
 import type {
   CronFieldErrors,
   CronFieldKey,
@@ -13,7 +14,6 @@ import { getCronJobPayload } from "../cron-payload.ts";
 import { resolveCronJobLastRunStatus } from "../cron-status.ts";
 import { formatRelativeTimestamp, formatMs } from "../format.ts";
 import { toSanitizedMarkdownHtml } from "../markdown.ts";
-import { pathForTab } from "../navigation.ts";
 import { formatCronSchedule, formatNextRun } from "../presenter.ts";
 import { normalizeStringEntries, uniqueStrings } from "../string-coerce.ts";
 import type { ChannelUiMetaEntry, CronJob, CronRunLogEntry, CronStatus } from "../types.ts";

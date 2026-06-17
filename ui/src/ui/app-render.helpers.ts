@@ -2,6 +2,13 @@
 import { html, nothing } from "lit";
 import { t } from "../i18n/index.ts";
 import {
+  iconForTab,
+  isSettingsTab,
+  pathForTab,
+  titleForTab,
+  type Tab,
+} from "../routes/route-registry.ts";
+import {
   createChatSessionsLoadOverrides,
   flushChatQueueAfterIdleSessionReconciliation,
   refreshChat,
@@ -33,7 +40,6 @@ import {
 } from "./controllers/sessions.ts";
 import { isGatewayMethodAdvertised } from "./gateway-methods.ts";
 import { icons } from "./icons.ts";
-import { iconForTab, isSettingsTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
 import { isCronSessionKey, parseSessionKey, resolveSessionDisplayName } from "./session-display.ts";
 import {
   areUiSessionKeysEquivalent,

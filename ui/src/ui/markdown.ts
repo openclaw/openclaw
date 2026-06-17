@@ -23,8 +23,12 @@ import {
   blockArtCodeBlockCopyPayloadEncoding,
   encodeBlockArtCodeBlockCopyPayload,
 } from "./chat/code-block-copy-payload.ts";
+import {
+  inferBasePathFromPathname,
+  normalizeBasePath,
+  tabFromPath,
+} from "../routes/route-registry.ts";
 import { truncateText } from "./format.ts";
-import { inferBasePathFromPathname, normalizeBasePath, tabFromPath } from "./navigation.ts";
 import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 
 const allowedTags = [

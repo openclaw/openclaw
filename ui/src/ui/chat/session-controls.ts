@@ -2,6 +2,7 @@
 import { html } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { t } from "../../i18n/index.ts";
+import { pathForTab } from "../../routes/route-registry.ts";
 import {
   createChatSessionsLoadOverrides,
   scopedAgentListParamsForSession,
@@ -18,7 +19,6 @@ import { loadSessions, patchSession } from "../controllers/sessions.ts";
 import { formatDateTimeMs, formatRelativeTimestamp } from "../format.ts";
 import { icons } from "../icons.ts";
 import { isMonitoredAuthProvider } from "../model-auth-helpers.ts";
-import { pathForTab } from "../navigation.ts";
 import { collectQuotaWindowsFromAuthStatus, formatQuotaReset } from "../provider-quota-summary.ts";
 import { pushUniqueTrimmedSelectOption } from "../select-options.ts";
 import { isCronSessionKey, resolveSessionDisplayName } from "../session-display.ts";

@@ -6,7 +6,7 @@ import {
   isSettingsTab,
   isTabInGroup,
   tabFromPath,
-} from "./navigation.ts";
+} from "../routes/route-registry.ts";
 
 describe("TAB_GROUPS", () => {
   it("collapses detailed settings slices into one sidebar entry", () => {

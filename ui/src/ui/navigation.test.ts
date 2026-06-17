@@ -13,7 +13,7 @@ import {
   tabFromPath,
   titleForTab,
   type Tab,
-} from "./navigation.ts";
+} from "../routes/route-registry.ts";
 
 /** All valid tab identifiers derived from visible groups plus routed settings slices. */
 const ALL_TABS: Tab[] = Array.from(
