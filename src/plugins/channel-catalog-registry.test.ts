@@ -403,4 +403,37 @@ describe("listChannelCatalogEntries", () => {
       })[0]?.trustedSourceLinkedOfficialInstall,
     ).toBeUndefined();
   });
+
+  it("does not trust an official package candidate rooted above the recorded install", async () => {
+    const { module } = await loadWithMocks({});
+    const rootDir = "/tmp/openclaw-test-plugins";
+    const candidate = {
+      ...createChannelCandidate({ idHint: "slack" }),
+      source: `${rootDir}/index.js`,
+      rootDir,
+      packageName: "@openclaw/slack",
+      packageManifest: {
+        channel: {
+          id: "slack",
+          label: "Slack",
+          blurb: "Slack channel",
+        },
+      },
+    } satisfies PluginCandidate;
+
+    expect(
+      module.listChannelCatalogEntries({
+        env: ENV,
+        installRecords: {
+          slack: {
+            source: "npm",
+            spec: "@openclaw/slack@2026.6.2",
+            resolvedName: "@openclaw/slack",
+            installPath: `${rootDir}/slack`,
+          } as PluginInstallRecord,
+        },
+        discovery: { candidates: [candidate], diagnostics: [] },
+      })[0]?.trustedSourceLinkedOfficialInstall,
+    ).toBeUndefined();
+  });
 });

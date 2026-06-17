@@ -24,33 +24,33 @@ export function matchesInstalledPluginRecord(params: {
   if (!record) {
     return false;
   }
-  const candidatePaths = [
-    params.candidate.rootDir,
-    params.candidate.packageDir,
-    params.candidate.source,
-    params.candidate.setupSource,
-  ]
+  const resolveCanonicalPath = (entry: string): string => {
+    const resolved = resolveUserPath(entry, params.env);
+    return safeRealpathSync(resolved) ?? resolved;
+  };
+  const candidateRoots = [params.candidate.rootDir, params.candidate.packageDir]
     .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
-    .map((entry) => {
-      const resolved = resolveUserPath(entry, params.env);
-      return safeRealpathSync(resolved) ?? resolved;
-    });
-  const trackedPaths = [record.installPath, record.sourcePath]
+    .map(resolveCanonicalPath);
+  const candidateSources = [params.candidate.source, params.candidate.setupSource]
     .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
-    .map((entry) => {
-      const resolved = resolveUserPath(entry, params.env);
-      return safeRealpathSync(resolved) ?? resolved;
-    });
-  if (candidatePaths.length === 0 || trackedPaths.length === 0) {
-    return false;
-  }
-  return trackedPaths.some((trackedPath) =>
-    candidatePaths.some(
-      (candidatePath) =>
-        candidatePath === trackedPath ||
-        isPathInside(trackedPath, candidatePath) ||
-        isPathInside(candidatePath, trackedPath),
-    ),
+    .map(resolveCanonicalPath);
+  const installPath =
+    typeof record.installPath === "string" && record.installPath.trim()
+      ? resolveCanonicalPath(record.installPath)
+      : undefined;
+  const sourcePath =
+    typeof record.sourcePath === "string" && record.sourcePath.trim()
+      ? resolveCanonicalPath(record.sourcePath)
+      : undefined;
+  const sourceMatchesRoot = (rootPath: string): boolean =>
+    candidateSources.some(
+      (candidateSource) => candidateSource === rootPath || isPathInside(rootPath, candidateSource),
+    );
+  return Boolean(
+    (installPath &&
+      (candidateRoots.some((candidateRoot) => candidateRoot === installPath) ||
+        sourceMatchesRoot(installPath))) ||
+    (sourcePath && sourceMatchesRoot(sourcePath)),
   );
 }
 
