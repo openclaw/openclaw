@@ -204,6 +204,20 @@ If Telegram ambient rooms do not trigger at all, check BotFather privacy mode an
 
 If Slack ambient rooms do not trigger, verify the channel key is the Slack channel ID and the app has the required `channels:history` or `groups:history` scope for that room type.
 
+## System-originated events
+
+`system_event` is a first-class `InboundEventKind` value for background or system-originated inbounds — reactions, cron callbacks, heartbeats. It is valid in **any** conversation type, including direct chats. This is distinct from `room_event`, which models unmentioned group or channel chatter: `system_event` carries no group/channel constraint.
+
+It is set explicitly by the integration at ingress: the `x-openclaw-inbound-event-kind` header on the MCP HTTP path, or the `inboundEventKind` field on a channel inbound object. It is never inferred, and it does not change the session's `ChatType`.
+
+A `system_event` turn is permitted to end silently. An explicit `NO_REPLY` (the `SILENT_REPLY_TOKEN`) is treated as deliberate silence and never surfaces the incomplete-turn warning. `user_request` turns are unchanged: they must reply, or the warning fires.
+
+Silence is honored only for an explicit token. A `system_event` turn that ran a side-effecting tool and then produced an **implicit** empty result — no `NO_REPLY` token, the provider just returned nothing — still surfaces the incomplete-turn warning. Only an explicit `NO_REPLY` token is honored as intentional silence. Genuine failure signals always warn regardless of any token: tool error (`lastToolError`), abort, timeout, client tool calls, or an accepted session spawn.
+
+Delivery is normal and automatic. `system_event` does **not** inherit `room_event`'s message-tool-only ambient delivery. A `system_event` turn that sends a reply delivers it through the normal reply path.
+
+This is the exception to "direct messages stay user requests" above: a direct inbound tagged `system_event` is the one case where direct-chat traffic is not a user request.
+
 ## Related
 
 - [Groups](/channels/groups)
