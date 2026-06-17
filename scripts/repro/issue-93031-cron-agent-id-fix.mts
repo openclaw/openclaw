@@ -83,7 +83,9 @@ const mixedJobs = [
 
 normalizeStoredCronJobs(mixedJobs, { defaultAgentId: "main" });
 mixedJobs.forEach((job, i) => {
-  console.log(`   ${i + 1}. ${job.name}: agentId = "${job.agentId}"`);
+  const agentId = typeof job.agentId === "string" ? job.agentId : "undefined";
+  const name = typeof job.name === "string" ? job.name : "unknown";
+  console.log(`   ${i + 1}. ${name}: agentId = "${agentId}"`);
 });
 
 console.log("\n=== Summary ===");

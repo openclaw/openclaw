@@ -666,7 +666,7 @@ describe("normalizeStoredCronJobs", () => {
       },
     ] as Array<Record<string, unknown>>;
 
-    const result = normalizeStoredCronJobs(jobs, { defaultAgentId: "main" });
+    normalizeStoredCronJobs(jobs, { defaultAgentId: "main" });
 
     // Note: sessionTarget normalization may cause mutation even when agentId is preserved
     expect(jobs[0]?.agentId).toBe("custom-agent");
@@ -684,7 +684,7 @@ describe("normalizeStoredCronJobs", () => {
       },
     ] as Array<Record<string, unknown>>;
 
-    const result = normalizeStoredCronJobs(jobs, { defaultAgentId: "main" });
+    normalizeStoredCronJobs(jobs, { defaultAgentId: "main" });
 
     // Note: other normalizations may cause mutation, but agentId should be preserved
     expect(jobs[0]?.agentId).toBe("main");
