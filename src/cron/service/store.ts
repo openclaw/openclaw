@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 /** Loads, normalizes, quarantines, and persists cron service store state. */
 import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
 import { normalizeCronJobInput } from "../normalize.js";
@@ -13,6 +14,21 @@ import {
 import type { CronJob } from "../types.js";
 import { recomputeNextRuns } from "./jobs.js";
 import type { CronServiceState } from "./state.js";
+
+/** Infer sessionTarget from payload.kind for legacy jobs missing the field. */
+export function inferSessionTargetFromPayload(payload: unknown): string | null {
+  if (!isRecord(payload)) {
+    return null;
+  }
+  const kind = typeof payload.kind === "string" ? payload.kind : "";
+  if (kind === "systemEvent") {
+    return "main";
+  }
+  if (kind === "agentTurn" || kind === "command") {
+    return "isolated";
+  }
+  return null;
+}
 
 function invalidateStaleNextRunOnScheduleChange(params: {
   previousJobsById: ReadonlyMap<string, CronJob>;
@@ -128,6 +144,31 @@ export async function ensureLoaded(
         { storePath: state.deps.storePath, jobId: typeof raw.id === "string" ? raw.id : undefined },
         "cron: job has invalid persisted sessionTarget; run openclaw doctor --fix to repair",
       );
+    }
+    // If normalization returned null due to a missing sessionTarget on a
+    // legacy job, infer the default from payload.kind before quarantine.
+    // This prevents silent job loss when hot-reloading mid split-migration
+    // where old jobs.json rows lack the sessionTarget field.
+    if (!normalized && !raw.sessionTarget && isRecord(raw.payload)) {
+      const inferred = inferSessionTargetFromPayload(raw.payload);
+      if (inferred) {
+        const patched = { ...raw };
+        patched.sessionTarget = inferred;
+        try {
+          normalized = normalizeCronJobInput(patched);
+          if (normalized) {
+            state.deps.log.info(
+              {
+                storePath: state.deps.storePath,
+                jobId: typeof raw.id === "string" ? raw.id : undefined,
+              },
+              "cron: inferred missing sessionTarget from payload.kind during legacy load",
+            );
+          }
+        } catch {
+          // Inference failed; fall through to quarantine.
+        }
+      }
     }
     const hydratedRaw = normalized ?? raw;
     const invalidReason = getInvalidPersistedCronJobReason(hydratedRaw);
