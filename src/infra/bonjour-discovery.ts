@@ -1,3 +1,4 @@
+// Discovers gateways over Bonjour and normalizes service records.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
   normalizeStringEntries,
@@ -69,7 +70,7 @@ export function pickResolvedGatewayPort(beacon: GatewayBonjourBeacon): number | 
   return resolveGatewayDiscoveryEndpoint(beacon)?.port ?? null;
 }
 
-export type GatewayBonjourDiscoverOpts = {
+type GatewayBonjourDiscoverOpts = {
   timeoutMs?: number;
   domains?: string[];
   wideAreaDomain?: string | null;

@@ -1,3 +1,4 @@
+// Chat command tests cover discovery and invocation of skill-provided commands.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -187,6 +188,24 @@ describe("resolveSkillCommandInvocation", () => {
     });
     expect(invocation?.command.name).toBe("demo_skill");
     expect(invocation?.args).toBe("do the thing");
+  });
+
+  it("preserves multiline args for /skill invocations", () => {
+    const invocation = resolveSkillCommandInvocation({
+      commandBodyNormalized: "/skill demo_skill first line\nsecond line",
+      skillCommands: [{ name: "demo_skill", skillName: "demo-skill", description: "Demo" }],
+    });
+    expect(invocation?.command.name).toBe("demo_skill");
+    expect(invocation?.args).toBe("first line\nsecond line");
+  });
+
+  it("preserves multiline args for direct skill slash invocations", () => {
+    const invocation = resolveSkillCommandInvocation({
+      commandBodyNormalized: "/demo_skill first line\nsecond line",
+      skillCommands: [{ name: "demo_skill", skillName: "demo-skill", description: "Demo" }],
+    });
+    expect(invocation?.command.name).toBe("demo_skill");
+    expect(invocation?.args).toBe("first line\nsecond line");
   });
 
   it("normalizes /skill lookup names", () => {

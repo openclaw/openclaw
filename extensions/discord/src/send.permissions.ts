@@ -1,3 +1,4 @@
+// Discord plugin module implements send.permissions behavior.
 import type { APIChannel, APIGuild, APIGuildMember, APIRole } from "discord-api-types/v10";
 import { ChannelType, PermissionFlagsBits } from "discord-api-types/v10";
 import { resolveDiscordRest } from "./client.js";
@@ -387,8 +388,10 @@ export async function fetchChannelPermissionsDiscord(
   channelId: string,
   opts: DiscordReactOpts,
 ): Promise<DiscordPermissionsSummary> {
+  opts.signal?.throwIfAborted();
   const rest = resolveDiscordRest(opts);
   const channel = await getChannel(rest, channelId);
+  opts.signal?.throwIfAborted();
   const channelType = "type" in channel ? channel.type : undefined;
   const guildId = "guild_id" in channel ? channel.guild_id : undefined;
   if (!guildId) {
@@ -402,10 +405,12 @@ export async function fetchChannelPermissionsDiscord(
   }
 
   const botId = await fetchBotUserId(rest);
+  opts.signal?.throwIfAborted();
   const [guild, member] = await Promise.all([
     getGuild(rest, guildId),
     getGuildMember(rest, guildId, botId),
   ]);
+  opts.signal?.throwIfAborted();
 
   const permissions = resolveMemberChannelPermissionBits({
     guildId,

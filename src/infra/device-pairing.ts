@@ -1,3 +1,4 @@
+// Manages device pairing requests, approvals, and token issuance.
 import { randomUUID } from "node:crypto";
 import { normalizeUniqueSingleOrTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { normalizeDeviceAuthScopes } from "../shared/device-auth.js";
@@ -232,21 +233,8 @@ function normalizeRole(role: string | undefined): string | null {
 function mergeRoles(...items: Array<string | string[] | undefined>): string[] | undefined {
   const roles = new Set<string>();
   for (const item of items) {
-    if (!item) {
-      continue;
-    }
-    if (Array.isArray(item)) {
-      for (const role of item) {
-        const trimmed = role.trim();
-        if (trimmed) {
-          roles.add(trimmed);
-        }
-      }
-    } else {
-      const trimmed = item.trim();
-      if (trimmed) {
-        roles.add(trimmed);
-      }
+    for (const role of normalizeUniqueSingleOrTrimmedStringList(item)) {
+      roles.add(role);
     }
   }
   if (roles.size === 0) {
@@ -309,15 +297,12 @@ function mergeScopes(...items: Array<string[] | undefined>): string[] | undefine
   const scopes = new Set<string>();
   let sawExplicitScopeList = false;
   for (const item of items) {
-    if (!item) {
+    if (!Array.isArray(item)) {
       continue;
     }
     sawExplicitScopeList = true;
-    for (const scope of item) {
-      const trimmed = scope.trim();
-      if (trimmed) {
-        scopes.add(trimmed);
-      }
+    for (const scope of normalizeUniqueSingleOrTrimmedStringList(item)) {
+      scopes.add(scope);
     }
   }
   if (scopes.size === 0) {

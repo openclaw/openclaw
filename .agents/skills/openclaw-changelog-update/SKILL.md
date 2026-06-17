@@ -19,7 +19,7 @@ attribution.
 
 ## Inputs
 
-- Target base version: `YYYY.M.D`, without beta suffix.
+- Target base version: `YYYY.M.PATCH`, without beta suffix.
 - Base tag: last reachable shipped release tag, usually the previous stable or
   the previous beta train requested by the operator.
 - Target ref: exact branch/SHA being released.
@@ -37,7 +37,7 @@ attribution.
 3. Read linked PRs/issues or diffs for ambiguous commits. Direct commits matter;
    infer notes from subject, body, touched files, tests, and nearby commits.
 4. Rewrite one stable-base section only:
-   - use `## YYYY.M.D`
+   - use `## YYYY.M.PATCH`
    - do not create beta-specific headings
    - do not leave a stale `## Unreleased` section above the target release
    - if `Unreleased` contains release-bound notes, fold them into the target
@@ -91,9 +91,35 @@ attribution.
    - if any compatibility `removeAfter` is on/before release date, resolve it
      or explicitly record the blocker before shipping
 10. Validate and ship:
+   - generate and verify the complete contribution ledger before committing:
+     ```bash
+     node .agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs \
+       --base <base-tag> \
+       --target <target-ref> \
+       --version <YYYY.M.PATCH> \
+       --write-ledger
+     ```
+   - the command fails when any `#NNN` reference in release history or the
+     rendered release section is absent from the ledger, when reverted work is
+     presented as shipped, or when an eligible PR author, issue reporter, or
+     known co-author is missing from that entry's `Thanks @...` credit
+   - after the GitHub release or prerelease is published, verify every matching
+     release page against the same source section:
+     ```bash
+     node .agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs \
+       --base <base-tag> \
+       --target <target-ref> \
+       --version <YYYY.M.PATCH> \
+       --release-tag v<YYYY.M.PATCH> \
+       --check-github
+     ```
+   - add one `--release-tag` for every beta and stable page in the train; a
+     `### Release verification` tail is permitted, but any other body drift
+     fails the check; the GitHub body must begin with the complete
+     `## YYYY.M.PATCH` changelog section, including its heading
    - `git diff --check`
    - for docs/changelog-only changes, no broad tests are required
-   - commit with `scripts/committer "docs(changelog): refresh YYYY.M.D notes" CHANGELOG.md`
+   - commit with `scripts/committer "docs(changelog): refresh YYYY.M.PATCH notes" CHANGELOG.md`
    - push, pull/rebase if needed, then branch/rebase release from latest `main`
 
 ## Quota / API Outage Rule

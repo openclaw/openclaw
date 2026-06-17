@@ -1,3 +1,4 @@
+// Bootstraps device identity and trust state on first run.
 import path from "node:path";
 import {
   asDateTimestampMs,
@@ -22,7 +23,7 @@ import { generatePairingToken, verifyPairingToken } from "./pairing-token.js";
 export const DEVICE_BOOTSTRAP_TOKEN_TTL_MS = 10 * 60 * 1000;
 
 /** Persisted bootstrap token state, including binding and role/scope redemption progress. */
-export type DeviceBootstrapTokenRecord = {
+type DeviceBootstrapTokenRecord = {
   token: string;
   ts: number;
   deviceId?: string;

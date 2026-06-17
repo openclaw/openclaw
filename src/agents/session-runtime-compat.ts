@@ -1,15 +1,19 @@
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+/**
+ * Session runtime compatibility helpers.
+ *
+ * Resolves persisted runtime overrides without leaking provider-specific CLI runtime bindings across model routes.
+ */
 import type { SessionEntry } from "../config/sessions.js";
 import { isDefaultAgentRuntimeId } from "./agent-runtime-id.js";
 import { normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
-import { resolveCliRuntimeModelBackendBinding } from "./cli-backends.js";
-import { resolveContextConfigProviderForRuntime } from "./openai-routing.js";
 
-export type SessionRuntimeCompatEntry = Pick<
+/** Persisted runtime fields used to recover session runtime compatibility. */
+type SessionRuntimeCompatEntry = Pick<
   SessionEntry,
   "agentHarnessId" | "agentRuntimeOverride"
 >;
 
+/** Resolves the persisted runtime id, preferring explicit overrides. */
 export function resolvePersistedSessionRuntimeId(
   entry?: SessionRuntimeCompatEntry,
 ): string | undefined {
@@ -18,35 +22,4 @@ export function resolvePersistedSessionRuntimeId(
     return runtimeOverride;
   }
   return normalizeOptionalAgentRuntimeId(entry?.agentHarnessId);
-}
-
-export function resolveSessionRuntimeOverrideForProvider(params: {
-  provider: string;
-  entry?: Pick<SessionEntry, "agentRuntimeOverride">;
-}): string | undefined {
-  const provider = normalizeLowercaseStringOrEmpty(params.provider);
-  const runtime = normalizeOptionalAgentRuntimeId(params.entry?.agentRuntimeOverride);
-  if (!runtime || isDefaultAgentRuntimeId(runtime)) {
-    return undefined;
-  }
-  if (runtime === "openclaw") {
-    return "openclaw";
-  }
-  if (provider === "openai" && runtime === "codex") {
-    return "codex";
-  }
-  return resolveCliRuntimeModelBackendBinding({ provider, runtime })?.runtime;
-}
-
-export function resolveContextConfigProviderForSessionRuntime(params: {
-  provider: string;
-  entry?: SessionRuntimeCompatEntry;
-}): string | undefined {
-  const runtimeId = resolvePersistedSessionRuntimeId(params.entry);
-  return runtimeId
-    ? resolveContextConfigProviderForRuntime({
-        provider: params.provider,
-        runtimeId,
-      })
-    : undefined;
 }

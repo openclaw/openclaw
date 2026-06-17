@@ -25,6 +25,7 @@ less like a pile of Markdown files.
 - Page-level provenance, confidence, contradictions, and open questions
 - Compiled digests for agent/runtime consumers
 - Wiki-native search/get/apply/lint tools
+- Open Knowledge Format imports into compiled wiki concepts
 - Optional bridge mode that imports public artifacts from the active memory plugin
 - Optional Obsidian-friendly render mode and CLI integration
 
@@ -129,18 +130,52 @@ Managed content stays inside generated blocks. Human note blocks are preserved.
 
 The main page groups are:
 
-- `sources/` for structured source pages that wrap imported material and
-  bridge-backed pages
+- `sources/` for source evidence, including structured imported source-page
+  wrappers and explicitly marked unmanaged raw Markdown
 - `entities/` for durable things, people, systems, projects, and objects
 - `concepts/` for ideas, abstractions, patterns, and policies
 - `syntheses/` for compiled summaries and maintained rollups
 - `reports/` for generated dashboards
 
-Source pages still use frontmatter. Ingest and bridge import preserve the raw
-imported content inside a source-page body while the wrapper frontmatter records
-identity, page type, freshness, and provenance for lint, compile, and search.
-Do not place arbitrary bare Markdown under `sources/` unless you plan to add the
-same source-page metadata yourself.
+Managed imports still use source-page frontmatter. Ingest, bridge import, and
+unsafe-local import preserve the imported content inside a source-page body
+while wrapper frontmatter records identity, page type, freshness, and
+provenance for lint, compile, and search.
+
+Unmanaged raw Markdown can also live under `sources/` when you add
+`<!-- openclaw:wiki:raw-source -->` near the top of the page. That marker tells
+lint to treat the file as raw source evidence without requiring `id`,
+`pageType`, or freshness frontmatter. Unmarked bare Markdown remains visible to
+structure lint so malformed imports and accidental raw files are not silently
+accepted.
+
+## Open Knowledge Format imports
+
+`memory-wiki` can import unpacked Open Knowledge Format bundles with:
+
+```bash
+openclaw wiki okf import ./bundles/ga4
+```
+
+This is the cleanest fit when a data catalog, documentation crawler, or
+enrichment agent already produces OKF: keep OKF as the portable exchange
+artifact, then let `memory-wiki` turn it into OpenClaw-native concept pages and
+compiled digests.
+
+The importer follows the OKF v0.1 shape:
+
+- non-reserved `.md` files are concept documents
+- each imported concept needs a non-empty `type` frontmatter field
+- unknown OKF `type` values are accepted
+- reserved `index.md` and `log.md` files are not imported as concepts
+- broken or external markdown links are preserved
+
+Imported concept pages are flattened under `concepts/` so the existing compile,
+search, get, dashboard, and prompt-digest paths see them without adding a second
+wiki tree. Each page keeps the original OKF concept ID, source path, `type`,
+`resource`, `tags`, timestamp, and full producer frontmatter. Internal OKF links
+are rewritten to the generated wiki concept pages and also emitted as structured
+`relationships` entries with `kind: okf-link`.
 
 ## Structured claims and evidence
 

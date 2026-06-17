@@ -1,3 +1,4 @@
+// Bridges TUI chat requests to gateway session APIs.
 import { randomUUID } from "node:crypto";
 import {
   GATEWAY_CLIENT_CAPS,
@@ -183,6 +184,10 @@ export class GatewayChatClient implements TuiBackend {
 
   stop() {
     this.client.stop();
+  }
+
+  async subscribeSessionEvents() {
+    return await this.client.request("sessions.subscribe", {});
   }
 
   async waitForReady() {

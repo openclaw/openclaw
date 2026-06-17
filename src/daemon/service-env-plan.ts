@@ -1,6 +1,8 @@
+/** Builds normalized environment plans for managed daemon service rendering. */
 import { normalizeEnvVarKey } from "../infra/host-env-security.js";
 import type { GatewayServiceEnvironmentValueSource } from "./service-types.js";
 
+/** Provenance labels for environment values rendered into managed services. */
 export type ServiceEnvSource =
   | "state-dotenv"
   | "config-env"
@@ -52,6 +54,8 @@ export function addServiceEnvPlanEntries(
   for (const [rawKey, rawValue] of Object.entries(entries)) {
     if (typeof rawValue !== "string" || !rawValue.trim()) {
       if (options.includeRawKeys) {
+        // Preserve explicit blank raw keys only when callers need round-trip
+        // visibility in generated service env.
         plan.environment[rawKey] = rawValue;
         plan.environmentValueSources[rawKey] = "inline";
       }
@@ -68,6 +72,8 @@ export function addServiceEnvPlanEntries(
         ? options.valueSource({ rawKey, normalizedKey })
         : options.valueSource;
     plan.environmentValueSources[rawKey] = valueSource ?? "inline";
+    // Last writer wins per normalized key so later, higher-priority env sources
+    // can decide render policy without scanning duplicate casing.
     plan.entriesByNormalizedKey.set(normalizedKey, {
       rawKey,
       normalizedKey,

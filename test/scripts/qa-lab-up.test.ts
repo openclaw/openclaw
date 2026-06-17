@@ -1,3 +1,4 @@
+// Qa Lab Up tests cover qa lab up script behavior.
 import { describe, expect, it, vi } from "vitest";
 import { qaLabUpTesting } from "../../scripts/qa-lab-up.js";
 
@@ -31,5 +32,18 @@ describe("scripts/qa-lab-up", () => {
     expect(runQaDockerUpCommand).toHaveBeenCalledWith(
       expect.objectContaining({ gatewayPort: 4100 }),
     );
+  });
+
+  it.each([
+    [["--gateway-port", "1.5"], "--gateway-port must be a positive integer."],
+    [["--gateway-port", "0x1000"], "--gateway-port must be a positive integer."],
+    [["--gateway-port", "0"], "--gateway-port must be a positive integer."],
+    [["--qa-lab-port", "1e4"], "--qa-lab-port must be a positive integer."],
+  ])("rejects non-decimal positive integer ports: %j", async (args, errorMessage) => {
+    const loadRuntime = vi.fn(async () => ({ runQaDockerUpCommand: vi.fn(async () => {}) }));
+
+    await expect(qaLabUpTesting.runQaLabUp(args, { loadRuntime })).rejects.toThrow(errorMessage);
+
+    expect(loadRuntime).not.toHaveBeenCalled();
   });
 });

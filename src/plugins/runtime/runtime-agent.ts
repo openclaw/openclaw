@@ -1,3 +1,4 @@
+// Runtime agent helpers resolve agent-scoped directories and config for plugin execution.
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { resolveAgentIdentity } from "../../agents/identity.js";
@@ -11,8 +12,10 @@ import { normalizeThinkLevel, resolveThinkingProfile } from "../../auto-reply/th
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveSessionFilePath, resolveStorePath } from "../../config/sessions/paths.js";
 import {
-  getSessionEntry,
   listSessionEntries,
+  loadSessionEntry as getSessionEntry,
+} from "../../config/sessions/session-accessor.js";
+import {
   loadSessionStore,
   patchSessionEntry,
   saveSessionStore,
@@ -38,6 +41,7 @@ function resolveRuntimeThinkingCatalog(
   return configuredCatalog.length > 0 ? configuredCatalog : undefined;
 }
 
+/** Creates the plugin runtime agent facade with lazy embedded-agent/session helpers. */
 export function createRuntimeAgent(): PluginRuntime["agent"] {
   const agentRuntime = {
     defaults: {

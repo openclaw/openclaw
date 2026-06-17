@@ -1,3 +1,6 @@
+/**
+ * Rotates compacted sessions into successor transcript files when configured.
+ */
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { resolveTimestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
@@ -5,11 +8,16 @@ import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CompactionEntry, SessionEntry, SessionHeader } from "../sessions/index.js";
 import { collectDuplicateUserMessageEntryIdsForCompaction } from "./compaction-duplicate-user-messages.js";
+import { stripThinkingSignaturesFromMessage } from "./thinking.js";
 import {
   readTranscriptFileState,
   TranscriptFileState,
   writeTranscriptFileAtomic,
 } from "./transcript-file-state.js";
+import {
+  resolveRuntimeTranscriptReadTarget,
+  type RuntimeTranscriptScope,
+} from "./transcript-runtime-state.js";
 
 type ReadonlySessionManagerForRotation = Pick<
   TranscriptFileState,
@@ -95,6 +103,33 @@ export async function rotateTranscriptFileAfterCompaction(params: {
   });
 }
 
+/**
+ * Rotates a runtime transcript after compaction using agent/session identity.
+ */
+export async function rotateRuntimeTranscriptAfterCompaction(params: {
+  sessionManager?: ReadonlySessionManagerForRotation;
+  scope: RuntimeTranscriptScope;
+  now?: () => Date;
+}): Promise<CompactionTranscriptRotation> {
+  const target = await resolveRuntimeTranscriptReadTarget(params.scope);
+  let sessionManager = params.sessionManager;
+  if (!sessionManager) {
+    try {
+      sessionManager = await readTranscriptFileState(target.sessionFile);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        return { rotated: false, reason: "missing session file" };
+      }
+      throw err;
+    }
+  }
+  return await rotateTranscriptAfterCompaction({
+    sessionManager,
+    sessionFile: target.sessionFile,
+    ...(params.now ? { now: params.now } : {}),
+  });
+}
+
 function findLatestCompactionIndex(entries: SessionEntry[]): number {
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     if (entries[index]?.type === "compaction") {
@@ -113,15 +148,21 @@ function buildSuccessorEntries(params: {
   const compaction = branch[latestCompactionIndex] as CompactionEntry;
 
   const summarizedBranchIds = new Set<string>();
+  const preCompactionKeptBranchIds = new Set<string>();
+  let foundFirstKept = false;
   for (let index = 0; index < latestCompactionIndex; index += 1) {
     const entry = branch[index];
     if (!entry) {
       continue;
     }
     if (compaction.firstKeptEntryId && entry.id === compaction.firstKeptEntryId) {
-      break;
+      foundFirstKept = true;
     }
-    summarizedBranchIds.add(entry.id);
+    if (foundFirstKept) {
+      preCompactionKeptBranchIds.add(entry.id);
+    } else {
+      summarizedBranchIds.add(entry.id);
+    }
   }
 
   const latestStateEntryIds = collectLatestStateEntryIds(branch.slice(0, latestCompactionIndex));
@@ -133,7 +174,9 @@ function buildSuccessorEntries(params: {
   }
 
   const removedIds = new Set<string>();
-  const duplicateUserMessageIds = collectDuplicateUserMessageEntryIdsForCompaction(branch);
+  const keptBranchEntries = branch.filter((entry) => !summarizedBranchIds.has(entry.id));
+  const duplicateUserMessageIds =
+    collectDuplicateUserMessageEntryIdsForCompaction(keptBranchEntries);
   for (const entry of allEntries) {
     if (
       (summarizedBranchIds.has(entry.id) && entry.type === "message") ||
@@ -171,9 +214,17 @@ function buildSuccessorEntries(params: {
       parentId = entryById.get(parentId)?.parentId ?? null;
     }
 
-    keptEntries.push(
-      parentId === entry.parentId ? entry : ({ ...entry, parentId } as SessionEntry),
-    );
+    const reparented =
+      parentId === entry.parentId ? entry : ({ ...entry, parentId } as SessionEntry);
+    // Strip thinking signatures only from pre-compaction kept entries. Pre-compaction
+    // signatures are bound to the original context prefix; the successor file has a different
+    // prefix so those signatures would cause Anthropic "Invalid signature in thinking block".
+    // Post-compaction entries were generated in the new context and have valid signatures.
+    const transformed =
+      reparented.type === "message" && preCompactionKeptBranchIds.has(reparented.id)
+        ? { ...reparented, message: stripThinkingSignaturesFromMessage(reparented.message) }
+        : reparented;
+    keptEntries.push(transformed);
   }
 
   return orderSuccessorEntries({

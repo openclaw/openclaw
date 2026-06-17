@@ -1,15 +1,32 @@
+// Cron doctor repair planning helpers for previewing and merging legacy rows.
 import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "../../../../packages/normalization-core/src/string-coerce.js";
 import { normalizeCronJobInput } from "../../../cron/normalize.js";
 import type { CronJob } from "../../../cron/types.js";
 
-export type CronLegacyIssueCounts = Partial<Record<string, number>>;
+type CronLegacyIssueCounts = Partial<Record<string, number>>;
+type CronLegacyIssueDetails = {
+  unresolvedAgentTurnShellToolPrompt?: string[];
+};
 
 function pluralize(count: number, noun: string) {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
-export function formatLegacyIssuePreview(issues: CronLegacyIssueCounts): string[] {
+function formatJobNameList(names: string[] | undefined): string {
+  if (!names || names.length === 0) {
+    return "";
+  }
+  const preview = names.slice(0, 5).map((name) => `\`${name}\``);
+  const remaining = names.length - preview.length;
+  return remaining > 0 ? `: ${preview.join(", ")} (+${remaining} more)` : `: ${preview.join(", ")}`;
+}
+
+/** Convert legacy cron issue counts into doctor preview lines. */
+export function formatLegacyIssuePreview(
+  issues: CronLegacyIssueCounts,
+  details: CronLegacyIssueDetails = {},
+): string[] {
   const lines: string[] = [];
   if (issues.jobId) {
     lines.push(`- ${pluralize(issues.jobId, "job")} still uses legacy \`jobId\``);
@@ -34,6 +51,16 @@ export function formatLegacyIssuePreview(issues: CronLegacyIssueCounts): string[
   if (issues.legacyPayloadCodexModel) {
     lines.push(
       `- ${pluralize(issues.legacyPayloadCodexModel, "job")} still uses legacy \`openai-codex/*\` cron model refs`,
+    );
+  }
+  if (issues.legacyAgentTurnCommandPayload) {
+    lines.push(
+      `- ${pluralize(issues.legacyAgentTurnCommandPayload, "job")} uses an agent prompt to run a shell command`,
+    );
+  }
+  if (issues.unresolvedAgentTurnShellToolPrompt) {
+    lines.push(
+      `- ${pluralize(issues.unresolvedAgentTurnShellToolPrompt, "job")} asks an isolated agent for shell/process tools and needs manual command conversion${formatJobNameList(details.unresolvedAgentTurnShellToolPrompt)}`,
     );
   }
   if (issues.legacyPayloadProvider) {
@@ -73,6 +100,7 @@ function cronJobMigrationKey(job: Record<string, unknown>): string | undefined {
   return normalizeOptionalString(job.id) ?? normalizeOptionalString(job.jobId);
 }
 
+/** Merge legacy JSON jobs into current jobs without duplicating matching ids/jobIds. */
 export function mergeLegacyCronJobs(params: {
   currentJobs: Array<Record<string, unknown>>;
   legacyJobs: Array<Record<string, unknown>>;
@@ -98,6 +126,7 @@ export function mergeLegacyCronJobs(params: {
   return { jobs: merged, importedCount };
 }
 
+/** Attach runtime SQLite state columns back onto a config-defined cron job row. */
 export function mergeRuntimeEntryIntoConfigJob(params: {
   job: Record<string, unknown>;
   runtimeEntry?: { updatedAtMs?: number; state?: Record<string, unknown> };
@@ -111,6 +140,7 @@ export function mergeRuntimeEntryIntoConfigJob(params: {
   };
 }
 
+/** Return true when a SQLite cron projection row no longer matches config JSON. */
 export function needsSqliteProjectionBackfill(params: {
   configJob: Record<string, unknown>;
   projectedJob?: CronJob;

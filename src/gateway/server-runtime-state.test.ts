@@ -1,11 +1,17 @@
+/**
+ * Gateway runtime state construction tests.
+ */
 import { afterEach, describe, expect, it } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import {
   getActivePluginChannelRegistry,
+  getActivePluginSessionExtensionRegistry,
   pinActivePluginHttpRouteRegistry,
   pinActivePluginChannelRegistry,
+  pinActivePluginSessionExtensionRegistry,
   releasePinnedPluginChannelRegistry,
   releasePinnedPluginHttpRouteRegistry,
+  releasePinnedPluginSessionExtensionRegistry,
   resetPluginRuntimeStateForTest,
   resolveActivePluginHttpRouteRegistry,
   setActivePluginRegistry,
@@ -29,6 +35,7 @@ describe("createGatewayRuntimeState", () => {
   afterEach(() => {
     releasePinnedPluginHttpRouteRegistry();
     releasePinnedPluginChannelRegistry();
+    releasePinnedPluginSessionExtensionRegistry();
     resetPluginRuntimeStateForTest();
   });
 
@@ -41,13 +48,16 @@ describe("createGatewayRuntimeState", () => {
     const runtimeState = await createGatewayRuntimeStateForTest(startupRegistry);
 
     pinActivePluginHttpRouteRegistry(loadedRegistry);
+    pinActivePluginSessionExtensionRegistry(loadedRegistry);
     pinActivePluginChannelRegistry(loadedRegistry);
     expect(resolveActivePluginHttpRouteRegistry(fallbackRegistry)).toBe(loadedRegistry);
+    expect(getActivePluginSessionExtensionRegistry()).toBe(loadedRegistry);
     expect(getActivePluginChannelRegistry()).toBe(loadedRegistry);
 
     runtimeState.releasePluginRouteRegistry();
 
     expect(resolveActivePluginHttpRouteRegistry(fallbackRegistry)).toBe(startupRegistry);
+    expect(getActivePluginSessionExtensionRegistry()).toBe(startupRegistry);
     expect(getActivePluginChannelRegistry()).toBe(startupRegistry);
   });
 });

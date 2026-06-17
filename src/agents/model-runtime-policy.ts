@@ -1,3 +1,9 @@
+/**
+ * Model runtime policy resolution.
+ *
+ * Agent execution uses this to choose a model/provider-specific runtime policy
+ * from agent entries, model catalog config, provider config, or QA overrides.
+ */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { AgentModelEntryConfig } from "../config/types.agent-defaults.js";
 import type { AgentRuntimePolicyConfig } from "../config/types.agents-shared.js";
@@ -6,9 +12,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { listAgentEntries, resolveSessionAgentIds } from "./agent-scope.js";
 
-export type ModelRuntimePolicySource = "model" | "provider";
+/** Config surface that supplied a resolved model runtime policy. */
+type ModelRuntimePolicySource = "model" | "provider";
 
-export type ResolvedModelRuntimePolicy = {
+/** Runtime policy plus the config surface that supplied it. */
+type ResolvedModelRuntimePolicy = {
   policy?: AgentRuntimePolicyConfig;
   source?: ModelRuntimePolicySource;
   matchedProvider?: string;
@@ -197,6 +205,8 @@ function resolveAgentModelEntryRuntimePolicy(params: {
       }
       scopeMatches.push({ provider: parseProviderModelKey(key)?.provider ?? "", policy });
     }
+    // Unqualified model ids can match multiple provider-qualified entries; avoid
+    // choosing an arbitrary runtime when the provider is unknown.
     const resolved = resolvePolicyMatch(scopeMatches, callerProvider);
     if (resolved.policy || resolved.ambiguous) {
       return resolved;
@@ -219,6 +229,7 @@ function resolveModelConfig(params: {
   );
 }
 
+/** Resolves the effective runtime policy for an agent/model/provider selection. */
 export function resolveModelRuntimePolicy(params: {
   config?: OpenClawConfig;
   provider?: string;

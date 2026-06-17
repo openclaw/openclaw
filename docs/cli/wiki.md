@@ -35,6 +35,7 @@ openclaw wiki status
 openclaw wiki doctor
 openclaw wiki init
 openclaw wiki ingest ./notes/alpha.md
+openclaw wiki okf import ./knowledge-catalog/okf/bundles/ga4
 openclaw wiki compile
 openclaw wiki lint
 openclaw wiki search "alpha"
@@ -104,7 +105,35 @@ Notes:
 - imported source pages are structured wrappers: frontmatter keeps identity,
   page type, freshness, and provenance while the body preserves the imported
   content
+- unmanaged raw Markdown kept directly under `sources/` should include
+  `<!-- openclaw:wiki:raw-source -->` near the top of the page; unmarked bare
+  source files remain visible to structure lint
 - auto-compile can run after ingest when enabled
+
+### `wiki okf import <path>`
+
+Import an unpacked Open Knowledge Format bundle into wiki concept pages.
+
+The importer reads every non-reserved `.md` concept document in the OKF
+directory tree, requires a non-empty `type` field, and treats unknown OKF
+`type` values as generic concepts. Reserved OKF `index.md` and `log.md` files
+are not imported as concepts.
+
+Imported pages are flattened under `concepts/` so existing wiki compile,
+search, get, digest, and dashboard flows see them immediately. The original OKF
+concept ID, `type`, `resource`, `tags`, timestamp, source path, and full
+frontmatter are preserved in the page frontmatter. Internal OKF markdown links
+are rewritten to the generated wiki pages; broken or external links are left
+unchanged.
+
+Examples:
+
+```bash
+openclaw wiki okf import ./bundles/ga4
+openclaw wiki okf import ./bundles/ga4 --json
+openclaw wiki search "BigQuery Table" --mode source-evidence --json
+openclaw wiki get <path-from-json-result>
+```
 
 ### `wiki compile`
 
@@ -235,6 +264,8 @@ These require the official `obsidian` CLI on `PATH` when
 - Use `wiki lint` before trusting contradictory or low-confidence content.
 - Use `wiki compile` after bulk imports or source changes when you want fresh
   dashboards and compiled digests immediately.
+- Use `wiki okf import` when a data catalog, documentation export, or agent
+  enrichment pipeline already emits OKF markdown bundles.
 - Use `wiki bridge import` when bridge mode depends on newly exported memory
   artifacts.
 

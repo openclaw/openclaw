@@ -1,3 +1,4 @@
+// Tracks host hook state and scheduled turn identifiers.
 import { randomUUID } from "node:crypto";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -28,7 +29,7 @@ import {
   type PluginSessionExtensionProjection,
   type PluginSessionExtensionRegistration,
 } from "./host-hooks.js";
-import { getActivePluginRegistry } from "./runtime.js";
+import { getActivePluginRegistry, getActivePluginSessionExtensionRegistry } from "./runtime.js";
 import { normalizeSessionEntrySlotKey } from "./session-entry-slot-keys.js";
 
 const log = createSubsystemLogger("plugins/host-hook-state");
@@ -457,7 +458,7 @@ export async function patchPluginSessionExtension(params: {
     return { ok: false, error: "plugin session extension value is required unless unset is true" };
   }
   const nextPluginValue = params.value as PluginJsonValue;
-  const registry = getActivePluginRegistry();
+  const registry = getActivePluginSessionExtensionRegistry();
   const registration = (registry?.sessionExtensions ?? []).find(
     (entry) => entry.pluginId === pluginId && entry.extension.namespace === namespace,
   );
@@ -590,7 +591,7 @@ function collectPluginSessionExtensionProjections(params: {
   sessionKey: string;
   entry: SessionEntry;
 }): PluginSessionExtensionProjection[] {
-  const registry = getActivePluginRegistry();
+  const registry = getActivePluginSessionExtensionRegistry();
   const extensions = registry?.sessionExtensions ?? [];
   if (extensions.length === 0) {
     return [];

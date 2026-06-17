@@ -1,3 +1,4 @@
+// TTS directive number helpers parse strict numeric directive values.
 import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type {
   SpeechDirectiveTokenParseContext,
@@ -5,6 +6,7 @@ import type {
   SpeechProviderOverrides,
 } from "./provider-types.js";
 
+/** Numeric directive parsing shared by speech providers with bounded knobs. */
 type DirectiveNumberRange = {
   min?: number;
   max?: number;
@@ -22,6 +24,7 @@ function isInDirectiveNumberRange(value: number, range: DirectiveNumberRange): b
   return true;
 }
 
+/** Parse a numeric speech directive token and return provider overrides when policy allows it. */
 export function parseSpeechDirectiveNumberOverride(params: {
   ctx: SpeechDirectiveTokenParseContext;
   overrideKey: string;

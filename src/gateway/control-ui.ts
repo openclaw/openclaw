@@ -1,3 +1,5 @@
+// Gateway Control UI HTTP handler.
+// Serves bundled UI assets, bootstrap config, avatars, assistant media, and auth checks.
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -69,7 +71,7 @@ const CONTROL_UI_OPERATOR_READ_SCOPE = "operator.read";
 const CONTROL_UI_OPERATOR_ROLE = "operator";
 const controlUiAssistantMediaTicketSecret = randomBytes(32);
 
-export type ControlUiRequestOptions = {
+type ControlUiRequestOptions = {
   basePath?: string;
   config?: OpenClawConfig;
   agentId?: string;
@@ -152,7 +154,7 @@ const CONTROL_UI_ROOT_PUBLIC_ASSETS = new Set([
   "sw.js",
 ]);
 
-export type ControlUiAvatarResolution =
+type ControlUiAvatarResolution =
   | { kind: "none"; reason: string; source?: string | null }
   | { kind: "local"; filePath: string; source?: string | null }
   | { kind: "remote"; url: string; source?: string | null }
@@ -833,6 +835,64 @@ function isSafeRelativePath(relPath: string) {
   return true;
 }
 
+// Path served by the gateway under the default Control UI namespace when no
+// `gateway.controlUi.basePath` is configured. The SPA is mounted at
+// `/__openclaw__/`, so a browser that opens the default entry infers
+// `/__openclaw__` as its base path (see `inferBasePathFromPathname`) and fetches
+// `/__openclaw__/control-ui-config.json`. Accept that namespaced alias so the
+// default entry resolves its bootstrap config instead of 404ing.
+const CONTROL_UI_DEFAULT_NAMESPACE_BOOTSTRAP_CONFIG_PATH = `${CONTROL_UI_NAMESPACE_PREFIX.replace(
+  /\/$/,
+  "",
+)}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`;
+
+// Single-underscore `/__openclaw` prefix used by the pre-base-path-relative
+// bootstrap endpoint. Before #66946 made the config path base-path-relative,
+// `CONTROL_UI_BOOTSTRAP_CONFIG_PATH` was hard-coded to
+// `/__openclaw/control-ui-config.json`, so current main and the v2026.6.1
+// release serve and document that exact path under an empty base path.
+const LEGACY_CONTROL_UI_NAMESPACE_PREFIX = "/__openclaw";
+
+// The old documented no-base-path bootstrap endpoint
+// (`/__openclaw/control-ui-config.json`, single underscore). It is derived from
+// the legacy `/__openclaw` namespace joined with the canonical config constant
+// so it tracks any rename of the config filename. Kept as an empty-base-path
+// compatibility alias so older bundles and clients that fetch the previously
+// documented endpoint keep receiving config after upgrading instead of 404ing.
+const LEGACY_BOOTSTRAP_CONFIG_PATH = `${LEGACY_CONTROL_UI_NAMESPACE_PREFIX}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`;
+
+/**
+ * Whether `pathname` should be served the Control UI bootstrap config payload.
+ *
+ * The canonical endpoint is the configured base path joined with the shared
+ * bootstrap constant (or the bare constant when no base path is configured).
+ * For every base path (configured or empty) we additionally accept the legacy
+ * single-underscore suffix `${basePath}/__openclaw/control-ui-config.json` that
+ * current main and v2026.6.1 serve and document, so older bundles and clients
+ * that still request the pre-#66946 endpoint keep receiving config after an
+ * upgrade instead of 404ing. When no base path is configured we further accept
+ * the default-namespace alias `/__openclaw__/control-ui-config.json`, which is
+ * what the default `/__openclaw__/` entry requests after inferring its base path
+ * from the URL. All compatibility endpoints are preserved; no path is removed.
+ */
+function matchesControlUiBootstrapConfigPath(pathname: string, basePath: string): boolean {
+  // Canonical and legacy suffixes apply under both an empty and a configured
+  // base path. `LEGACY_BOOTSTRAP_CONFIG_PATH` already starts with the legacy
+  // `/__openclaw` namespace, so joining it with the base path yields
+  // `${basePath}/__openclaw/control-ui-config.json` (or the bare legacy path
+  // when no base path is configured).
+  if (
+    pathname === `${basePath}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}` ||
+    pathname === `${basePath}${LEGACY_BOOTSTRAP_CONFIG_PATH}`
+  ) {
+    return true;
+  }
+  // The default `/__openclaw__/` namespace alias only applies when no base path
+  // is configured; with a configured base path the canonical endpoint already
+  // lives under that base path and this inferred alias does not apply.
+  return basePath === "" && pathname === CONTROL_UI_DEFAULT_NAMESPACE_BOOTSTRAP_CONFIG_PATH;
+}
+
 export async function handleControlUiHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -869,10 +929,7 @@ export async function handleControlUiHttpRequest(
 
   applyControlUiSecurityHeaders(res);
 
-  const bootstrapConfigPath = basePath
-    ? `${basePath}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`
-    : CONTROL_UI_BOOTSTRAP_CONFIG_PATH;
-  if (pathname === bootstrapConfigPath) {
+  if (matchesControlUiBootstrapConfigPath(pathname, basePath)) {
     if (
       !(await authorizeControlUiReadRequest(req, res, {
         auth: opts?.auth,
@@ -922,6 +979,7 @@ export async function handleControlUiHttpRequest(
             : "scripts",
       allowExternalEmbedUrls: config?.gateway?.controlUi?.allowExternalEmbedUrls === true,
       chatMessageMaxWidth: config?.gateway?.controlUi?.chatMessageMaxWidth,
+      timeFormat: config?.agents?.defaults?.timeFormat,
     } satisfies ControlUiBootstrapConfig);
     return true;
   }

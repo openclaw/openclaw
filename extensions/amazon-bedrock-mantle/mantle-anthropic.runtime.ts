@@ -1,3 +1,7 @@
+/**
+ * Anthropic Messages stream adapter for Bedrock Mantle. It rewrites Mantle
+ * endpoints to Anthropic-compatible URLs and adjusts thinking-token budgets.
+ */
 import Anthropic from "@anthropic-ai/sdk";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { stream, type Model, type SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
@@ -7,6 +11,7 @@ type AnthropicOptions = ConstructorParameters<typeof Anthropic>[0];
 type MantleAnthropicStream = typeof stream;
 type AnthropicStreamClient = Anthropic;
 
+/** Resolve the Anthropic-compatible Mantle base URL from a provider base URL. */
 export function resolveMantleAnthropicBaseUrl(baseUrl: string): string {
   const trimmed = baseUrl.replace(/\/+$/, "");
   if (trimmed.endsWith("/anthropic")) {
@@ -20,6 +25,36 @@ export function resolveMantleAnthropicBaseUrl(baseUrl: string): string {
 
 function requiresDefaultSampling(modelId: string): boolean {
   return modelId.includes("claude-opus-4-7");
+}
+
+function isClaudeMythosPreviewModel(model: Model): boolean {
+  return [model.id, model.name, model.params?.canonicalModelId]
+    .filter((value): value is string => typeof value === "string")
+    .some((value) =>
+      /(?:^|-)claude-mythos-preview(?=$|[^a-z0-9])/.test(
+        value
+          .trim()
+          .toLowerCase()
+          .replace(/[\s_.:]+/g, "-"),
+      ),
+    );
+}
+
+function resolveMantleReasoning(
+  model: Model,
+  options: SimpleStreamOptions | undefined,
+): NonNullable<SimpleStreamOptions["reasoning"]> | undefined {
+  if (requiresDefaultSampling(model.id)) {
+    return undefined;
+  }
+  const reasoning = options?.reasoning ?? (isClaudeMythosPreviewModel(model) ? "high" : undefined);
+  if (!isClaudeMythosPreviewModel(model)) {
+    return reasoning;
+  }
+  if (reasoning === "minimal") {
+    return "low";
+  }
+  return reasoning === "xhigh" || reasoning === "max" ? "high" : reasoning;
 }
 
 function mergeHeaders(
@@ -76,6 +111,7 @@ function adjustMaxTokensForThinking(
   return { maxTokens, thinkingBudget };
 }
 
+/** Create the Mantle Anthropic Messages stream function. */
 export function createMantleAnthropicStreamFn(deps?: {
   createClient?: (options: AnthropicOptions) => Anthropic;
   stream?: MantleAnthropicStream;
@@ -103,7 +139,8 @@ export function createMantleAnthropicStreamFn(deps?: {
     // Plugin package deps can give this plugin a distinct physical SDK copy.
     // The client API is the same, but the SDK class private field makes types nominal.
     const streamClient = client as unknown as AnthropicStreamClient;
-    if (!options?.reasoning || requiresDefaultSampling(model.id)) {
+    const reasoning = resolveMantleReasoning(model, options);
+    if (!reasoning) {
       return streamFn(model as Model<"anthropic-messages">, context, {
         ...base,
         client: streamClient,
@@ -114,14 +151,15 @@ export function createMantleAnthropicStreamFn(deps?: {
     const adjusted = adjustMaxTokensForThinking(
       base.maxTokens || 0,
       model.maxTokens,
-      options.reasoning,
-      options.thinkingBudgets,
+      reasoning,
+      options?.thinkingBudgets,
     );
     return streamFn(model as Model<"anthropic-messages">, context, {
       ...base,
       client: streamClient,
       maxTokens: adjusted.maxTokens,
       thinkingEnabled: true,
+      ...(isClaudeMythosPreviewModel(model) ? { effort: reasoning } : {}),
       thinkingBudgetTokens: adjusted.thinkingBudget,
     });
   };

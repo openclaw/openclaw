@@ -9,18 +9,18 @@
 # Build stages use full bookworm; the runtime image is always bookworm-slim.
 ARG OPENCLAW_EXTENSIONS=""
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR=extensions
-ARG OPENCLAW_NODE_BOOKWORM_IMAGE="node:24-bookworm@sha256:8530f76a96d88820d288761f022e318970dda93d01536919fbc16076b7983e63"
-ARG OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE="node:24-bookworm-slim@sha256:242549cd46785b480c832479a730f4f2a20865d61ea2e404fdb2a5c3d3b73ecf"
+ARG OPENCLAW_NODE_BOOKWORM_IMAGE="docker.io/library/node:24-bookworm@sha256:8530f76a96d88820d288761f022e318970dda93d01536919fbc16076b7983e63"
+ARG OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE="docker.io/library/node:24-bookworm-slim@sha256:242549cd46785b480c832479a730f4f2a20865d61ea2e404fdb2a5c3d3b73ecf"
 ARG OPENCLAW_NODE_BOOKWORM_SLIM_DIGEST="sha256:242549cd46785b480c832479a730f4f2a20865d61ea2e404fdb2a5c3d3b73ecf"
 # Keep in sync with .github/actions/setup-node-env/action.yml bun-version.
-# To update: docker buildx imagetools inspect oven/bun:<version> and use the manifest-list digest.
-ARG OPENCLAW_BUN_IMAGE="oven/bun:1.3.13@sha256:87416c977a612a204eb54ab9f3927023c2a3c971f4f345a01da08ea6262ae30e"
+# To update: docker buildx imagetools inspect docker.io/oven/bun:<version> and use the manifest-list digest.
+ARG OPENCLAW_BUN_IMAGE="docker.io/oven/bun:1.3.13@sha256:87416c977a612a204eb54ab9f3927023c2a3c971f4f345a01da08ea6262ae30e"
 
 # Base images are pinned to SHA256 digests for reproducible builds.
 # Dependabot refreshes these blessed digests; release builds consume the
 # reviewed base snapshot instead of mutating distro state on every build.
-# To update, run: docker buildx imagetools inspect node:24-bookworm and
-# node:24-bookworm-slim (or podman) and replace the digests below with the
+# To update, run: docker buildx imagetools inspect docker.io/library/node:24-bookworm and
+# docker.io/library/node:24-bookworm-slim (or podman) and replace the digests below with the
 # current multi-arch manifest list entries.
 
 FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS workspace-deps
@@ -116,11 +116,19 @@ RUN pnpm_config_verify_deps_before_run=false pnpm canvas:a2ui:bundle || \
      echo "/* A2UI bundle unavailable in this build */" > extensions/canvas/src/host/a2ui/a2ui.bundle.js && \
      echo "stub" > extensions/canvas/src/host/a2ui/.bundle.hash && \
      rm -rf vendor/a2ui apps/shared/OpenClawKit/Tools/CanvasA2UI)
-RUN NODE_OPTIONS=--max-old-space-size=8192 pnpm_config_verify_deps_before_run=false pnpm build:docker
+RUN if printf '%s\n' "$OPENCLAW_EXTENSIONS" | tr ',' ' ' | tr ' ' '\n' | grep -qx 'qa-lab'; then \
+      export OPENCLAW_BUILD_PRIVATE_QA=1 OPENCLAW_ENABLE_PRIVATE_QA_CLI=1; \
+    fi && \
+    NODE_OPTIONS=--max-old-space-size=8192 pnpm_config_verify_deps_before_run=false pnpm build:docker
 # Force pnpm for UI build (Bun may fail on ARM/Synology architectures)
 ENV OPENCLAW_PREFER_PNPM=1
 RUN pnpm_config_verify_deps_before_run=false pnpm ui:build
-RUN pnpm_config_verify_deps_before_run=false pnpm qa:lab:build
+RUN if printf '%s\n' "$OPENCLAW_EXTENSIONS" | tr ',' ' ' | tr ' ' '\n' | grep -qx 'qa-lab'; then \
+      pnpm_config_verify_deps_before_run=false pnpm qa:lab:build && \
+      mkdir -p dist/extensions/qa-lab/web && \
+      rm -rf dist/extensions/qa-lab/web/dist && \
+      cp -R extensions/qa-lab/web/dist dist/extensions/qa-lab/web/dist; \
+    fi
 
 # Prune dev dependencies, omitted plugin runtime packages, and build-only
 # metadata before copying runtime assets into the final image.
@@ -130,7 +138,7 @@ ARG OPENCLAW_BUNDLED_PLUGIN_DIR
 # BuildKit cache mounts are not part of cached layers; seed tarballs for the
 # installed prod graph in the same step that runs offline prune.
 RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \
-    pnpm list --prod --depth Infinity --json | node scripts/list-prod-store-packages.mjs | xargs -r pnpm store add && \
+    node scripts/list-prod-store-packages.mjs | xargs -r pnpm store add && \
     CI=true pnpm prune --prod \
       --config.offline=true \
       --config.supportedArchitectures.os=linux \
@@ -139,6 +147,10 @@ RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/sto
     OPENCLAW_EXTENSIONS="$OPENCLAW_EXTENSIONS" OPENCLAW_BUNDLED_PLUGIN_DIR="$OPENCLAW_BUNDLED_PLUGIN_DIR" node scripts/prune-docker-plugin-dist.mjs && \
     node scripts/postinstall-bundled-plugins.mjs && \
     find dist -type f \( -name '*.d.ts' -o -name '*.d.mts' -o -name '*.d.cts' -o -name '*.map' \) -delete && \
+    rm -rf \
+      /app/node_modules/openclaw \
+      /app/node_modules/.bin/openclaw \
+      /app/node_modules/.pnpm/openclaw@*/node_modules/openclaw && \
     node scripts/check-package-dist-imports.mjs /app
 
 # ── Runtime base image ──────────────────────────────────────────

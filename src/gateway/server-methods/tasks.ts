@@ -1,3 +1,5 @@
+// Task gateway methods expose detached task list/get/cancel operations with
+// bounded public summaries over the runtime task registry.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -112,15 +114,18 @@ function taskMatchesSession(task: TaskRecord, sessionKey: string | undefined): b
   );
 }
 
-// Some records predate a direct `agentId`, so task listings still recover the
-// owning agent from session-style keys instead of hiding those tasks.
+// Explicit `task.agentId` is authoritative: a task that records its own agent
+// must not also match other agents through the session-key fallback. Only
+// records that predate a direct `agentId` recover the owning agent from
+// session-style keys instead of being hidden.
 function taskMatchesAgent(task: TaskRecord, agentId: string | undefined): boolean {
   const normalized = normalizeOptionalString(agentId);
   if (!normalized) {
     return true;
   }
-  if (normalizeOptionalString(task.agentId) === normalized) {
-    return true;
+  const explicitAgentId = normalizeOptionalString(task.agentId);
+  if (explicitAgentId) {
+    return explicitAgentId === normalized;
   }
   return [task.requesterSessionKey, task.childSessionKey, task.ownerKey].some(
     (candidate) => parseAgentSessionKey(candidate)?.agentId === normalized,

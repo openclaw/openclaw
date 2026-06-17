@@ -1,3 +1,4 @@
+/** Session update helpers for skill snapshots, compaction, and lifecycle hooks. */
 import crypto from "node:crypto";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -9,8 +10,8 @@ import {
   resolveSessionFilePathOptions,
   rewriteSessionFileForNewSessionId,
   type SessionEntry,
-  updateSessionStore,
 } from "../../config/sessions.js";
+import { patchSessionEntry, upsertSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   forgetActiveSessionForShutdown,
@@ -42,17 +43,12 @@ async function persistSessionEntryUpdate(params: {
   if (!params.storePath) {
     return;
   }
-  await updateSessionStore(
-    params.storePath,
-    (store) => {
-      const next = { ...store[params.sessionKey!], ...params.nextEntry };
-      store[params.sessionKey!] = next;
-      return next;
-    },
+  await upsertSessionEntry(
     {
-      resolveSingleEntryPersistence: (entry) =>
-        entry && params.sessionKey ? { sessionKey: params.sessionKey, entry } : null,
+      storePath: params.storePath,
+      sessionKey: params.sessionKey,
     },
+    params.nextEntry,
   );
 }
 
@@ -121,6 +117,7 @@ function resolveNonNegativeTokenCount(value: number | undefined): number | undef
     : undefined;
 }
 
+/** Ensures a session entry has the reusable skill snapshot needed for reply runs. */
 export async function ensureSkillSnapshot(params: {
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
@@ -236,6 +233,7 @@ export async function ensureSkillSnapshot(params: {
   return { sessionEntry: nextEntry, skillsSnapshot, systemSent };
 }
 
+/** Increments compaction count and persists the updated session entry. */
 export async function incrementCompactionCount(params: {
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
@@ -312,17 +310,18 @@ export async function incrementCompactionCount(params: {
   } else if (incrementBy > 0) {
     updates.totalTokensFresh = false;
   }
-  sessionStore[sessionKey] = {
+  const nextEntry = {
     ...entry,
     ...updates,
   };
+  sessionStore[sessionKey] = nextEntry;
   if (storePath) {
-    await updateSessionStore(storePath, (store) => {
-      store[sessionKey] = {
-        ...store[sessionKey],
-        ...updates,
-      };
+    const persistedEntry = await patchSessionEntry({ storePath, sessionKey }, () => updates, {
+      fallbackEntry: nextEntry,
     });
+    if (persistedEntry) {
+      sessionStore[sessionKey] = persistedEntry;
+    }
   }
   if ((sessionIdChanged || sessionFileChanged) && cfg) {
     emitCompactionSessionLifecycleHooks({

@@ -1,3 +1,5 @@
+// SecretRef-aware Gateway config string resolver.
+// Resolves configured secret inputs and fallback values without leaking values.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
@@ -88,6 +90,34 @@ export async function resolveConfiguredSecretInputString(params: {
   }
 }
 
+async function resolveConfiguredSecretRefOnlyInputString(params: {
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  value: unknown;
+  path: string;
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
+  unresolvedReasonStyle?: SecretInputUnresolvedReasonStyle;
+}): Promise<{ refConfigured: boolean; value?: string; unresolvedRefReason?: string }> {
+  const { ref } = resolveSecretInputRef({
+    value: params.value,
+    defaults: params.config.secrets?.defaults,
+  });
+  if (!ref) {
+    return { refConfigured: false };
+  }
+  return {
+    refConfigured: true,
+    ...(await resolveConfiguredSecretInputString({
+      config: params.config,
+      env: params.env,
+      value: params.value,
+      path: params.path,
+      ...(params.manifestRegistry ? { manifestRegistry: params.manifestRegistry } : {}),
+      unresolvedReasonStyle: params.unresolvedReasonStyle,
+    })),
+  };
+}
+
 export async function resolveConfiguredSecretInputWithFallback(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -102,11 +132,8 @@ export async function resolveConfiguredSecretInputWithFallback(params: {
   unresolvedRefReason?: string;
   secretRefConfigured: boolean;
 }> {
-  const { ref } = resolveSecretInputRef({
-    value: params.value,
-    defaults: params.config.secrets?.defaults,
-  });
-  const configValue = !ref ? normalizeOptionalString(params.value) : undefined;
+  const resolved = await resolveConfiguredSecretRefOnlyInputString(params);
+  const configValue = !resolved.refConfigured ? normalizeOptionalString(params.value) : undefined;
   if (configValue) {
     return {
       value: configValue,
@@ -114,9 +141,11 @@ export async function resolveConfiguredSecretInputWithFallback(params: {
       secretRefConfigured: false,
     };
   }
-  if (!ref) {
+  if (!resolved.refConfigured) {
     const fallback = params.readFallback?.();
     if (fallback) {
+      // Fallbacks are only returned after direct config is absent, preserving
+      // explicit config precedence while still allowing credential stores.
       return {
         value: fallback,
         source: "fallback",
@@ -126,14 +155,6 @@ export async function resolveConfiguredSecretInputWithFallback(params: {
     return { secretRefConfigured: false };
   }
 
-  const resolved = await resolveConfiguredSecretInputString({
-    config: params.config,
-    env: params.env,
-    value: params.value,
-    path: params.path,
-    ...(params.manifestRegistry ? { manifestRegistry: params.manifestRegistry } : {}),
-    unresolvedReasonStyle: params.unresolvedReasonStyle,
-  });
   if (resolved.value) {
     return {
       value: resolved.value,
@@ -144,6 +165,8 @@ export async function resolveConfiguredSecretInputWithFallback(params: {
 
   const fallback = params.readFallback?.();
   if (fallback) {
+    // An unresolved SecretRef does not block fallback credentials. Callers get
+    // both the source and secretRefConfigured flag for warning policy.
     return {
       value: fallback,
       source: "fallback",
@@ -165,22 +188,10 @@ export async function resolveRequiredConfiguredSecretRefInputString(params: {
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
   unresolvedReasonStyle?: SecretInputUnresolvedReasonStyle;
 }): Promise<string | undefined> {
-  const { ref } = resolveSecretInputRef({
-    value: params.value,
-    defaults: params.config.secrets?.defaults,
-  });
-  if (!ref) {
+  const resolved = await resolveConfiguredSecretRefOnlyInputString(params);
+  if (!resolved.refConfigured) {
     return undefined;
   }
-
-  const resolved = await resolveConfiguredSecretInputString({
-    config: params.config,
-    env: params.env,
-    value: params.value,
-    path: params.path,
-    ...(params.manifestRegistry ? { manifestRegistry: params.manifestRegistry } : {}),
-    unresolvedReasonStyle: params.unresolvedReasonStyle,
-  });
   if (resolved.value) {
     return resolved.value;
   }

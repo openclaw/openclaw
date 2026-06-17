@@ -1,3 +1,8 @@
+/**
+ * Tool description summary helpers.
+ *
+ * Produces compact one-line summaries for verbose tool descriptions in inventory/list views.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 
@@ -35,10 +40,11 @@ function isToolDocBlockStart(line: string): boolean {
     return true;
   }
   return (
-    normalized.endsWith(":") && normalized === normalized.toUpperCase() && normalized.length > 12
+    normalized.endsWith(":") && line.trim() === line.trim().toUpperCase() && normalized.length > 12
   );
 }
 
+/** Build a short one-line summary from a tool description. */
 export function summarizeToolDescriptionText(params: {
   rawDescription?: string | null;
   displaySummary?: string | null;
@@ -84,6 +90,7 @@ export function summarizeToolDescriptionText(params: {
   return firstLine ? truncateSummary(normalizeSummaryWhitespace(firstLine), params.maxLen) : "Tool";
 }
 
+/** Build a longer verbose description while excluding schema/action blocks. */
 export function describeToolForVerbose(params: {
   rawDescription?: string | null;
   fallback: string;

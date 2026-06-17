@@ -1,3 +1,6 @@
+/**
+ * Gateway session reset model-selection tests.
+ */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test } from "vitest";
@@ -367,6 +370,56 @@ test("sessions.reset rotates generated topic transcript files with the new sessi
   const persistedEntry = store["agent:main:telegram:group:123:topic:456"];
   expect(persistedEntry?.sessionId).toBe(nextSessionId);
   expect(path.basename(persistedEntry?.sessionFile ?? "")).toBe(`${nextSessionId}-topic-456.jsonl`);
+});
+
+test("sessions.reset rotates an already-stale generated transcript file to the new session id", async () => {
+  const { dir, storePath } = await createSessionStoreDir();
+  // Post-upgrade state: the stored sessionFile still embeds an OLDER generated id
+  // that no longer matches the entry's logical sessionId, so rotation must key off
+  // the file's embedded id rather than the current sessionId (issue #77770).
+  const staleFileSessionId = "11111111-1111-4111-8111-111111111111";
+  const currentSessionId = "22222222-2222-4222-8222-222222222222";
+  const staleSessionFile = path.join(dir, `${staleFileSessionId}.jsonl`);
+  await fs.writeFile(staleSessionFile, `${JSON.stringify({ role: "user", content: "old" })}\n`);
+
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry(currentSessionId, {
+        sessionFile: staleSessionFile,
+      }),
+    },
+  });
+
+  const reset = await directSessionReq<{
+    ok: true;
+    key: string;
+    entry: {
+      sessionId: string;
+      sessionFile?: string;
+    };
+  }>("sessions.reset", { key: "main" });
+
+  expect(reset.ok).toBe(true);
+  const nextSessionId = reset.payload?.entry.sessionId;
+  const nextSessionFile = reset.payload?.entry.sessionFile;
+  if (!nextSessionId || !nextSessionFile) {
+    throw new Error("expected reset session id and file");
+  }
+  expect(nextSessionId).not.toBe(currentSessionId);
+  // The new session must adopt the new session id, not keep the stale generated name.
+  expect(path.basename(nextSessionFile)).toBe(`${nextSessionId}.jsonl`);
+  expect(path.basename(nextSessionFile)).not.toBe(`${staleFileSessionId}.jsonl`);
+
+  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    {
+      sessionId?: string;
+      sessionFile?: string;
+    }
+  >;
+  const persistedEntry = store["agent:main:main"];
+  expect(persistedEntry?.sessionId).toBe(nextSessionId);
+  expect(path.basename(persistedEntry?.sessionFile ?? "")).toBe(`${nextSessionId}.jsonl`);
 });
 
 test("sessions.reset preserves legacy explicit model overrides without modelOverrideSource", async () => {

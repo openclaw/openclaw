@@ -1,3 +1,4 @@
+// Control UI module implements app settings behavior.
 import { roleScopesAllow } from "../../../src/shared/operator-scope-compat.js";
 import { t } from "../i18n/index.ts";
 import { refreshChat } from "./app-chat.ts";
@@ -56,7 +57,7 @@ import {
   loadSkillWorkshopProposals,
   type SkillWorkshopState,
 } from "./controllers/skill-workshop.ts";
-import { loadSkills, type SkillsState } from "./controllers/skills.ts";
+import { loadSkills, reconcileSkillsAgentId, type SkillsState } from "./controllers/skills.ts";
 import { loadUsage, type UsageState } from "./controllers/usage.ts";
 import { loadWorkboard } from "./controllers/workboard.ts";
 import { resolveCronJobLastRunStatus } from "./cron-status.ts";
@@ -468,6 +469,8 @@ export async function refreshActiveTab(host: SettingsHost, opts?: { chatStartup?
         await loadCron(host);
         break;
       case "skills":
+        await loadAgents(app);
+        reconcileSkillsAgentId(app, app.agentsList);
         await loadSkills(app);
         break;
       case "skillWorkshop":

@@ -1,14 +1,16 @@
+// Legacy cron `notify: true` migration to explicit webhook/completion delivery.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeHttpWebhookUrl } from "../../../cron/webhook-url.js";
 
-export type LegacyNotifyMigrationOutcome = {
+type LegacyNotifyMigrationOutcome = {
   changed: boolean;
   warnings: string[];
 };
 
+/** Migrate legacy notify fallback flags into explicit delivery destinations when possible. */
 export function migrateLegacyNotifyFallback(params: {
   jobs: Array<Record<string, unknown>>;
   legacyWebhook?: string;

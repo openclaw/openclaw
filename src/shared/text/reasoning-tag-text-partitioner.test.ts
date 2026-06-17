@@ -1,3 +1,4 @@
+// Reasoning tag partitioner tests cover splitting reasoning and visible text segments.
 import { describe, expect, it } from "vitest";
 import { createReasoningTagTextPartitioner } from "./reasoning-tag-text-partitioner.js";
 
@@ -88,6 +89,21 @@ describe("createReasoningTagTextPartitioner", () => {
     const deltas = [
       ...partitioner.pushVisible("Before <antml:reas"),
       ...partitioner.pushVisible("oning>secret</antml:reasoning> after"),
+      ...partitioner.flush(),
+    ];
+
+    expect(deltas).toEqual([
+      { kind: "text", text: "Before " },
+      { kind: "thinking", text: "secret" },
+      { kind: "text", text: " after" },
+    ]);
+  });
+
+  it("keeps split mm reasoning tags out of visible text", () => {
+    const partitioner = createReasoningTagTextPartitioner();
+    const deltas = [
+      ...partitioner.push("Before <mm:thi"),
+      ...partitioner.push("nk>secret</mm:think> after"),
       ...partitioner.flush(),
     ];
 

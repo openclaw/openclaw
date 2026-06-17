@@ -1,3 +1,4 @@
+/** CLI entrypoint for non-mutating doctor lint health checks. */
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { registerBundledHealthChecks } from "../flows/bundled-health-checks.js";
@@ -18,7 +19,7 @@ import {
 } from "../flows/health-checks.js";
 import type { RuntimeEnv } from "../runtime.js";
 
-export interface DoctorLintCliOptions {
+interface DoctorLintCliOptions {
   readonly json?: boolean;
   readonly severityMin?: string;
   readonly skipIds?: readonly string[];
@@ -33,6 +34,12 @@ function detectMode(opts: DoctorLintCliOptions): "human" | "json" {
   return process.stdout.isTTY ? "human" : "json";
 }
 
+/**
+ * Runs registered doctor health checks in human or JSON mode and returns the lint exit code.
+ *
+ * Invalid config is reported before regular health checks because most checks need a parsed config
+ * and workspace root.
+ */
 export async function runDoctorLintCli(
   runtime: RuntimeEnv,
   opts: DoctorLintCliOptions,

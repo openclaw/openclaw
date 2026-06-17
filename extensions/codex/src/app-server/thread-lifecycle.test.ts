@@ -1,6 +1,11 @@
+// Codex tests cover thread lifecycle plugin behavior.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "../../prompt-overlay.js";
+import { createCodexTestModel } from "./test-support.js";
 import {
   buildDeveloperInstructions,
   buildTurnCollaborationMode,
@@ -8,8 +13,15 @@ import {
   buildThreadResumeParams,
   buildThreadStartParams,
   codexDynamicToolsFingerprint,
+  formatCodexThreadLifecycleTimingSummary,
+  resolveCodexAppServerThreadModelSelection,
   resolveReasoningEffort,
+  shouldWarnCodexThreadLifecycleTimingSummary,
+  startOrResumeThread,
+  type CodexThreadLifecycleTimingLogger,
 } from "./thread-lifecycle.js";
+
+let tempDir: string;
 
 function createAttemptParams(params: {
   provider: string;
@@ -74,6 +86,102 @@ function createAppServerOptions() {
   } as const;
 }
 
+function createThreadLifecycleParams(
+  sessionFile: string,
+  workspaceDir: string,
+): EmbeddedRunAttemptParams {
+  return {
+    prompt: "hello",
+    sessionId: "session-1",
+    sessionKey: "agent:main:session-1",
+    sessionFile,
+    workspaceDir,
+    runId: "run-1",
+    provider: "codex",
+    modelId: "gpt-5.4-codex",
+    model: createCodexTestModel("codex"),
+    thinkLevel: "medium",
+    disableTools: true,
+    timeoutMs: 5_000,
+    authStorage: {} as never,
+    authProfileStore: { version: 1, profiles: {} },
+    modelRegistry: {} as never,
+  } as EmbeddedRunAttemptParams;
+}
+
+function createThreadLifecycleAppServerOptions(): Parameters<
+  typeof startOrResumeThread
+>[0]["appServer"] {
+  return {
+    start: {
+      transport: "stdio",
+      command: "codex",
+      args: ["app-server"],
+      headers: {},
+    },
+    codeModeOnly: false,
+    requestTimeoutMs: 60_000,
+    turnCompletionIdleTimeoutMs: 60_000,
+    approvalPolicy: "never",
+    approvalsReviewer: "user",
+    sandbox: "workspace-write",
+  };
+}
+
+function threadStartResult(threadId = "thread-1") {
+  return {
+    thread: {
+      id: threadId,
+      sessionId: "session-1",
+      forkedFromId: null,
+      preview: "",
+      ephemeral: false,
+      modelProvider: "openai",
+      createdAt: 1,
+      updatedAt: 1,
+      status: { type: "idle" },
+      path: null,
+      cwd: tempDir,
+      cliVersion: "0.125.0",
+      source: "unknown",
+      agentNickname: null,
+      agentRole: null,
+      gitInfo: null,
+      name: null,
+      turns: [],
+    },
+    model: "gpt-5.4-codex",
+    modelProvider: "openai",
+    serviceTier: null,
+    cwd: tempDir,
+    instructionSources: [],
+    approvalPolicy: "never",
+    approvalsReviewer: "user",
+    sandbox: { type: "dangerFullAccess" },
+    permissionProfile: null,
+    reasoningEffort: null,
+  };
+}
+
+function createTimingLogger(traceEnabled: boolean): CodexThreadLifecycleTimingLogger {
+  return {
+    isEnabled: vi.fn((level: "trace") => level === "trace" && traceEnabled),
+    trace: vi.fn(),
+    warn: vi.fn(),
+  };
+}
+
+function expectSingleLogMessage(
+  log: CodexThreadLifecycleTimingLogger,
+  level: "trace" | "warn",
+): string {
+  const mock = log[level] as ReturnType<typeof vi.fn>;
+  expect(mock).toHaveBeenCalledTimes(1);
+  const message = mock.mock.calls[0]?.[0];
+  expect(typeof message).toBe("string");
+  return message as string;
+}
+
 describe("Codex app-server native code mode config", () => {
   it("keeps Codex-native subagents primary while limiting OpenClaw spawn to OpenClaw delegation", () => {
     const instructions = buildDeveloperInstructions(createAttemptParams({ provider: "openai" }));
@@ -88,23 +196,31 @@ describe("Codex app-server native code mode config", () => {
     const instructions = buildDeveloperInstructions(createAttemptParams({ provider: "openai" }), {
       dynamicTools: [
         {
+          type: "function",
           name: "message",
           description: "Send a message",
           inputSchema: { type: "object" },
         },
         {
-          name: "music_generate",
-          description: "Create music",
-          inputSchema: { type: "object" },
-          namespace: "openclaw",
-          deferLoading: true,
-        },
-        {
-          name: "image_generate",
-          description: "Create images",
-          inputSchema: { type: "object" },
-          namespace: "openclaw",
-          deferLoading: true,
+          type: "namespace",
+          name: "openclaw",
+          description: "",
+          tools: [
+            {
+              type: "function",
+              name: "music_generate",
+              description: "Create music",
+              inputSchema: { type: "object" },
+              deferLoading: true,
+            },
+            {
+              type: "function",
+              name: "image_generate",
+              description: "Create images",
+              inputSchema: { type: "object" },
+              deferLoading: true,
+            },
+          ],
         },
       ],
     });
@@ -120,11 +236,18 @@ describe("Codex app-server native code mode config", () => {
     const instructions = buildDeveloperInstructions(createAttemptParams({ provider: "openai" }), {
       dynamicTools: [
         {
-          name: "skill_workshop",
-          description: "Manage skill proposals",
-          inputSchema: { type: "object" },
-          namespace: "openclaw",
-          deferLoading: true,
+          type: "namespace",
+          name: "openclaw",
+          description: "",
+          tools: [
+            {
+              type: "function",
+              name: "skill_workshop",
+              description: "Manage skill proposals",
+              inputSchema: { type: "object" },
+              deferLoading: true,
+            },
+          ],
         },
       ],
     });
@@ -142,6 +265,7 @@ describe("Codex app-server native code mode config", () => {
     const instructions = buildDeveloperInstructions(createAttemptParams({ provider: "openai" }), {
       dynamicTools: [
         {
+          type: "function",
           name: "message",
           description: "Send a message",
           inputSchema: { type: "object" },
@@ -163,6 +287,7 @@ describe("Codex app-server native code mode config", () => {
     };
     const directFingerprint = codexDynamicToolsFingerprint([
       {
+        type: "function",
         name: "message",
         description: "Send a visible message",
         inputSchema,
@@ -170,11 +295,18 @@ describe("Codex app-server native code mode config", () => {
     ]);
     const searchableFingerprint = codexDynamicToolsFingerprint([
       {
-        name: "message",
-        description: "Load and send a visible message",
-        inputSchema,
-        namespace: "openclaw",
-        deferLoading: true,
+        type: "namespace",
+        name: "openclaw",
+        description: "",
+        tools: [
+          {
+            type: "function",
+            name: "message",
+            description: "Load and send a visible message",
+            inputSchema,
+            deferLoading: true,
+          },
+        ],
       },
     ]);
 
@@ -211,8 +343,84 @@ describe("Codex app-server native code mode config", () => {
       "features.code_mode": true,
       "features.code_mode_only": false,
       "features.apply_patch_streaming_events": true,
+      "features.standalone_web_search": false,
+      web_search: "cached",
     });
     expect(request.personality).toBe("none");
+  });
+
+  it("enables hosted Codex web search on thread/start by default", () => {
+    const request = buildThreadStartParams(createAttemptParams({ provider: "codex" }), {
+      cwd: "/repo",
+      dynamicTools: [],
+      appServer: createAppServerOptions() as never,
+      developerInstructions: "test instructions",
+    });
+
+    expect(request.config).toMatchObject({
+      "features.standalone_web_search": false,
+      web_search: "cached",
+    });
+  });
+
+  it("disables hosted Codex web search for tool-disabled runs", () => {
+    const params = createAttemptParams({ provider: "codex" });
+    params.disableTools = true;
+    const request = buildThreadStartParams(params, {
+      cwd: "/repo",
+      dynamicTools: [],
+      appServer: createAppServerOptions() as never,
+      developerInstructions: "test instructions",
+    });
+
+    expect(request.config).toMatchObject({
+      "features.standalone_web_search": false,
+      web_search: "disabled",
+    });
+  });
+
+  it("disables hosted Codex web search when effective tool policy denies web_search", () => {
+    const request = buildThreadStartParams(createAttemptParams({ provider: "codex" }), {
+      cwd: "/repo",
+      dynamicTools: [],
+      webSearchAllowed: false,
+      appServer: createAppServerOptions() as never,
+      developerInstructions: "test instructions",
+    });
+
+    expect(request.config).toMatchObject({
+      "features.standalone_web_search": false,
+      web_search: "disabled",
+    });
+  });
+
+  it("disables native Codex search when runtime policy disables native tools", () => {
+    const request = buildThreadResumeParams(createAttemptParams({ provider: "codex" }), {
+      threadId: "thread-1",
+      appServer: createAppServerOptions() as never,
+      developerInstructions: "test instructions",
+      nativeCodeModeEnabled: false,
+    });
+
+    expect(request.config).toMatchObject({
+      "features.standalone_web_search": false,
+      web_search: "disabled",
+    });
+  });
+
+  it("disables hosted Codex web search when the active provider lacks support", () => {
+    const request = buildThreadStartParams(createAttemptParams({ provider: "codex" }), {
+      cwd: "/repo",
+      dynamicTools: [],
+      appServer: createAppServerOptions() as never,
+      developerInstructions: "test instructions",
+      nativeProviderWebSearchSupport: "unsupported",
+    });
+
+    expect(request.config).toMatchObject({
+      "features.standalone_web_search": false,
+      web_search: "disabled",
+    });
   });
 
   it("disables Codex tool-search features for nano models", () => {
@@ -231,6 +439,8 @@ describe("Codex app-server native code mode config", () => {
       "features.code_mode_only": false,
       "features.apply_patch_streaming_events": true,
       "features.multi_agent": false,
+      "features.standalone_web_search": false,
+      web_search: "cached",
     });
   });
 
@@ -269,6 +479,8 @@ describe("Codex app-server native code mode config", () => {
       "features.code_mode": true,
       "features.code_mode_only": true,
       "features.apply_patch_streaming_events": true,
+      "features.standalone_web_search": false,
+      web_search: "cached",
     });
   });
 
@@ -288,6 +500,8 @@ describe("Codex app-server native code mode config", () => {
       "features.code_mode": true,
       "features.code_mode_only": true,
       "features.apply_patch_streaming_events": true,
+      "features.standalone_web_search": false,
+      web_search: "cached",
     });
   });
 
@@ -302,6 +516,8 @@ describe("Codex app-server native code mode config", () => {
       "features.code_mode": true,
       "features.code_mode_only": false,
       "features.apply_patch_streaming_events": true,
+      "features.standalone_web_search": false,
+      web_search: "cached",
     });
   });
 
@@ -323,6 +539,8 @@ describe("Codex app-server native code mode config", () => {
     expect(request.config).toEqual({
       "features.code_mode": false,
       "features.code_mode_only": false,
+      "features.standalone_web_search": false,
+      web_search: "disabled",
     });
   });
 
@@ -340,6 +558,8 @@ describe("Codex app-server native code mode config", () => {
     expect(request.config).toEqual({
       "features.code_mode": false,
       "features.code_mode_only": false,
+      "features.standalone_web_search": false,
+      web_search: "disabled",
     });
   });
 
@@ -368,6 +588,8 @@ describe("Codex app-server native code mode config", () => {
       "features.code_mode": true,
       "features.code_mode_only": false,
       "features.apply_patch_streaming_events": true,
+      "features.standalone_web_search": false,
+      web_search: "cached",
     });
   });
 
@@ -389,6 +611,8 @@ describe("Codex app-server native code mode config", () => {
       "features.code_mode": true,
       "features.code_mode_only": false,
       "features.apply_patch_streaming_events": true,
+      "features.standalone_web_search": false,
+      web_search: "cached",
     });
   });
 });
@@ -507,6 +731,8 @@ describe("Codex app-server turn params", () => {
         "features.code_mode": true,
         "features.code_mode_only": false,
         "features.apply_patch_streaming_events": true,
+        "features.standalone_web_search": false,
+        web_search: "cached",
       },
       sandbox: "danger-full-access",
       serviceTier: "flex",
@@ -691,6 +917,252 @@ describe("Codex app-server model provider selection", () => {
     });
 
     expect(request.modelProvider).toBe("openai");
+  });
+
+  it("splits provider-qualified model refs for app-server thread/start", () => {
+    const request = buildThreadStartParams(
+      createAttemptParams({ provider: "codex", modelId: "lmstudio/local-model" }),
+      {
+        cwd: "/repo",
+        dynamicTools: [],
+        appServer: createAppServerOptions() as never,
+        developerInstructions: "test instructions",
+      },
+    );
+
+    expect(request.model).toBe("local-model");
+    expect(request.modelProvider).toBe("lmstudio");
+  });
+
+  it("uses provider-qualified model refs for thread capability selection", () => {
+    expect(
+      resolveCodexAppServerThreadModelSelection({
+        provider: "codex",
+        model: "amazon-bedrock/local-model",
+      }),
+    ).toEqual({
+      model: "local-model",
+      modelProvider: "amazon-bedrock",
+    });
+  });
+
+  it("uses a matching bound provider for thread capability selection", () => {
+    expect(
+      resolveCodexAppServerThreadModelSelection({
+        provider: "codex",
+        model: "local-model",
+        binding: {
+          threadId: "thread-1",
+          model: "local-model",
+          modelProvider: "amazon-bedrock",
+        },
+      }),
+    ).toEqual({
+      model: "local-model",
+      modelProvider: "amazon-bedrock",
+    });
+  });
+
+  it("prefers provider-qualified models over bound providers for thread capability selection", () => {
+    expect(
+      resolveCodexAppServerThreadModelSelection({
+        provider: "codex",
+        model: "openai/gpt-5.5",
+        binding: {
+          threadId: "thread-1",
+          model: "local-model",
+          modelProvider: "amazon-bedrock",
+        },
+      }),
+    ).toEqual({
+      model: "gpt-5.5",
+      modelProvider: "openai",
+    });
+  });
+
+  it("normalizes provider-qualified model refs for turn/start metadata", () => {
+    const request = buildTurnStartParams(
+      createAttemptParams({ provider: "codex", modelId: "lmstudio/local-model" }),
+      {
+        threadId: "thread-1",
+        cwd: "/repo",
+        appServer: createAppServerOptions() as never,
+      },
+    );
+
+    const collaborationMode = request.collaborationMode as { settings?: Record<string, unknown> };
+    expect(request.model).toBe("local-model");
+    expect(collaborationMode.settings?.model).toBe("local-model");
+  });
+});
+
+describe("Codex app-server thread lifecycle timing", () => {
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-thread-lifecycle-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  it("formats stage summaries with run, session, action, and elapsed timing", () => {
+    const message = formatCodexThreadLifecycleTimingSummary({
+      runId: "run-a",
+      sessionId: "session-a",
+      sessionKey: "agent:main:session-a",
+      action: "started",
+      summary: {
+        totalMs: 12,
+        spans: [
+          { name: "read-binding", durationMs: 4, elapsedMs: 4 },
+          { name: "thread-start-request", durationMs: 8, elapsedMs: 12 },
+        ],
+      },
+    });
+
+    expect(message).toBe(
+      "[trace:codex-app-server] thread lifecycle: runId=run-a sessionId=session-a " +
+        "sessionKey=agent:main:session-a action=started totalMs=12 " +
+        "stages=read-binding:4ms@4ms,thread-start-request:8ms@12ms",
+    );
+  });
+
+  it("warns when the total or a single stage crosses the lifecycle threshold", () => {
+    expect(
+      shouldWarnCodexThreadLifecycleTimingSummary(
+        {
+          totalMs: 9,
+          spans: [{ name: "thread-start-request", durationMs: 10, elapsedMs: 10 }],
+        },
+        { totalThresholdMs: 50, stageThresholdMs: 10 },
+      ),
+    ).toBe(true);
+    expect(
+      shouldWarnCodexThreadLifecycleTimingSummary(
+        {
+          totalMs: 50,
+          spans: [{ name: "thread-start-request", durationMs: 1, elapsedMs: 1 }],
+        },
+        { totalThresholdMs: 50, stageThresholdMs: 10 },
+      ),
+    ).toBe(true);
+  });
+
+  it("emits a trace stage summary when starting a new thread with trace enabled", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    let nowMs = 0;
+    const log = createTimingLogger(true);
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        nowMs += 17;
+        return threadStartResult("thread-started");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params: createThreadLifecycleParams(sessionFile, workspaceDir),
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+      timing: {
+        enabled: true,
+        now: () => nowMs,
+        log,
+        totalThresholdMs: 1_000,
+        stageThresholdMs: 1_000,
+      },
+    });
+
+    const message = expectSingleLogMessage(log, "trace");
+    expect(log.warn).not.toHaveBeenCalled();
+    expect(message).toContain("action=started");
+    expect(message).toContain("thread-start-request:17ms@17ms");
+    expect(message).toContain("thread-ready:0ms@17ms");
+  });
+
+  it("emits a trace stage summary when resuming an existing thread", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    let nowMs = 0;
+    const log = createTimingLogger(true);
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-existing");
+      }
+      if (method === "thread/resume") {
+        nowMs += 9;
+        return threadStartResult("thread-existing");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const commonParams = {
+      client: { request } as never,
+      params: createThreadLifecycleParams(sessionFile, workspaceDir),
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+    };
+
+    await startOrResumeThread({
+      ...commonParams,
+      timing: {
+        enabled: true,
+        now: () => nowMs,
+        log: createTimingLogger(false),
+      },
+    });
+    await startOrResumeThread({
+      ...commonParams,
+      timing: {
+        enabled: true,
+        now: () => nowMs,
+        log,
+        totalThresholdMs: 1_000,
+        stageThresholdMs: 1_000,
+      },
+    });
+
+    const message = expectSingleLogMessage(log, "trace");
+    expect(message).toContain("action=resumed");
+    expect(message).toContain("thread-resume-request:9ms@9ms");
+  });
+
+  it("warns on slow start even when trace logging is disabled", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    let nowMs = 0;
+    const log = createTimingLogger(false);
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        nowMs += 25;
+        return threadStartResult("thread-slow");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params: createThreadLifecycleParams(sessionFile, workspaceDir),
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+      timing: {
+        enabled: true,
+        now: () => nowMs,
+        log,
+        totalThresholdMs: 10,
+        stageThresholdMs: 10,
+      },
+    });
+
+    const message = expectSingleLogMessage(log, "warn");
+    expect(log.trace).not.toHaveBeenCalled();
+    expect(message).toContain("action=started");
+    expect(message).toContain("thread-start-request:25ms@25ms");
   });
 });
 

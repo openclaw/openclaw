@@ -1,3 +1,4 @@
+// Memory Wiki plugin module implements cli behavior.
 import fs from "node:fs/promises";
 import type { Command } from "commander";
 import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
@@ -32,6 +33,7 @@ import {
   runObsidianOpen,
   runObsidianSearch,
 } from "./obsidian.js";
+import { formatOkfImportSummary, importMemoryWikiOkfBundle } from "./okf.js";
 import {
   getMemoryWikiPage,
   searchMemoryWiki,
@@ -85,6 +87,10 @@ type WikiLintCommandOptions = {
 type WikiIngestCommandOptions = {
   json?: boolean;
   title?: string;
+};
+
+type WikiOkfImportCommandOptions = {
+  json?: boolean;
 };
 
 type WikiSearchCommandOptions = {
@@ -589,6 +595,24 @@ export async function runWikiIngest(params: {
   });
 }
 
+export async function runWikiOkfImport(params: {
+  config: ResolvedMemoryWikiConfig;
+  bundlePath: string;
+  json?: boolean;
+  stdout?: Pick<NodeJS.WriteStream, "write">;
+}) {
+  return runWikiCommandWithSummary({
+    json: params.json,
+    stdout: params.stdout,
+    run: () =>
+      importMemoryWikiOkfBundle({
+        config: params.config,
+        bundlePath: params.bundlePath,
+      }),
+    render: formatOkfImportSummary,
+  });
+}
+
 export async function runWikiSearch(params: {
   config: ResolvedMemoryWikiConfig;
   appConfig?: OpenClawConfig;
@@ -962,6 +986,16 @@ export function registerWikiCli(
     .option("--json", "Print JSON")
     .action(async (inputPath: string, opts: WikiIngestCommandOptions) => {
       await runWikiIngest({ config, inputPath, title: opts.title, json: opts.json });
+    });
+
+  const okf = wiki.command("okf").description("Import Open Knowledge Format bundles");
+  okf
+    .command("import")
+    .description("Import an unpacked OKF bundle into wiki concept pages")
+    .argument("<path>", "OKF bundle directory")
+    .option("--json", "Print JSON")
+    .action(async (bundlePath: string, opts: WikiOkfImportCommandOptions) => {
+      await runWikiOkfImport({ config, bundlePath, json: opts.json });
     });
 
   addWikiSearchConfigOptions(

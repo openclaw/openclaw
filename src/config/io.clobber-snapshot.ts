@@ -1,5 +1,7 @@
+// Detects suspicious config clobbers and finds recovery snapshots.
 import path from "node:path";
 
+/** Maximum retained clobbered-config snapshots per config file. */
 export const CONFIG_CLOBBER_SNAPSHOT_LIMIT = 32;
 
 const CONFIG_CLOBBER_LOCK_STALE_MS = 30_000;
@@ -32,7 +34,7 @@ type ConfigClobberSnapshotFs = {
   ): unknown;
 };
 
-export type ConfigClobberSnapshotDeps = {
+type ConfigClobberSnapshotDeps = {
   fs: ConfigClobberSnapshotFs;
   logger: Pick<typeof console, "warn">;
 };

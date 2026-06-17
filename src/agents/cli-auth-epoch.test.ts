@@ -1,3 +1,4 @@
+/** Tests CLI auth epoch stability across token refreshes and identity changes. */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import {
@@ -15,6 +16,8 @@ describe("resolveCliAuthEpoch", () => {
     epoch: Awaited<ReturnType<typeof resolveCliAuthEpoch>>,
     label = "auth epoch",
   ): asserts epoch is string {
+    // Epochs are cache/session keys, so tests assert hash shape without caring
+    // about the exact digest value.
     expect(typeof epoch, label).toBe("string");
     expect(epoch, label).toMatch(/^[a-f0-9]{64}$/);
   }
@@ -42,6 +45,140 @@ describe("resolveCliAuthEpoch", () => {
         authProfileId: "google:work",
       }),
     ).resolves.toBeUndefined();
+  });
+
+  it("loads auth-profile epochs from the selected agent directory", async () => {
+    const stores: Record<string, AuthProfileStore> = {
+      "/agents/work/agent": {
+        version: 1,
+        profiles: {
+          "google-gemini-cli:default": {
+            type: "oauth",
+            provider: "google-gemini-cli",
+            access: "work-access",
+            refresh: "work-refresh",
+            expires: 1,
+            email: "work@example.test",
+            projectId: "work-project",
+          },
+        },
+      },
+      "/agents/personal/agent": {
+        version: 1,
+        profiles: {
+          "google-gemini-cli:default": {
+            type: "oauth",
+            provider: "google-gemini-cli",
+            access: "personal-access",
+            refresh: "personal-refresh",
+            expires: 1,
+            email: "personal@example.test",
+            projectId: "personal-project",
+          },
+        },
+      },
+    };
+    const loadAuthProfileStoreForRuntime = vi.fn((agentDir?: string) => {
+      return stores[agentDir ?? ""] ?? { version: 1, profiles: {} };
+    });
+    setCliAuthEpochTestDeps({
+      readGeminiCliCredentialsCached: () => null,
+      loadAuthProfileStoreForRuntime,
+    });
+
+    const work = await resolveCliAuthEpoch({
+      provider: "google-gemini-cli",
+      agentDir: "/agents/work/agent",
+      authProfileId: "google-gemini-cli:default",
+      skipLocalCredential: true,
+    });
+    const personal = await resolveCliAuthEpoch({
+      provider: "google-gemini-cli",
+      agentDir: "/agents/personal/agent",
+      authProfileId: "google-gemini-cli:default",
+      skipLocalCredential: true,
+    });
+
+    expectCliAuthEpoch(work);
+    expectCliAuthEpoch(personal);
+    expect(work).not.toBe(personal);
+    expect(loadAuthProfileStoreForRuntime).toHaveBeenCalledWith("/agents/work/agent", {
+      readOnly: true,
+      allowKeychainPrompt: false,
+    });
+    expect(loadAuthProfileStoreForRuntime).toHaveBeenCalledWith("/agents/personal/agent", {
+      readOnly: true,
+      allowKeychainPrompt: false,
+    });
+  });
+
+  it("separates Gemini CLI OAuth profile epochs by profile id", async () => {
+    let access = "access-a";
+    let refresh = "refresh-a";
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "google-gemini-cli:primary": {
+          type: "oauth",
+          provider: "google-gemini-cli",
+          access,
+          refresh,
+          expires: 1,
+          email: "user@example.test",
+          accountId: "google-account-1",
+          projectId: "project-1",
+        },
+        "google-gemini-cli:renamed": {
+          type: "oauth",
+          provider: "google-gemini-cli",
+          access,
+          refresh,
+          expires: 1,
+          email: "user@example.test",
+          accountId: "google-account-1",
+          projectId: "project-1",
+        },
+      },
+    };
+    setCliAuthEpochTestDeps({
+      readGeminiCliCredentialsCached: () => null,
+      loadAuthProfileStoreForRuntime: () => store,
+    });
+
+    const primary = await resolveCliAuthEpoch({
+      provider: "google-gemini-cli",
+      agentDir: "/agents/main/agent",
+      authProfileId: "google-gemini-cli:primary",
+      skipLocalCredential: true,
+    });
+    access = "access-b";
+    refresh = "refresh-b";
+    store.profiles["google-gemini-cli:primary"] = {
+      type: "oauth",
+      provider: "google-gemini-cli",
+      access,
+      refresh,
+      expires: 2,
+      email: "user@example.test",
+      accountId: "google-account-1",
+      projectId: "project-1",
+    };
+    const primaryAfterRefresh = await resolveCliAuthEpoch({
+      provider: "google-gemini-cli",
+      agentDir: "/agents/main/agent",
+      authProfileId: "google-gemini-cli:primary",
+      skipLocalCredential: true,
+    });
+    const renamed = await resolveCliAuthEpoch({
+      provider: "google-gemini-cli",
+      agentDir: "/agents/main/agent",
+      authProfileId: "google-gemini-cli:renamed",
+      skipLocalCredential: true,
+    });
+
+    expectCliAuthEpoch(primary);
+    expect(primaryAfterRefresh).toBe(primary);
+    expect(renamed).not.toBe(primary);
   });
 
   it("keeps identity-less claude cli oauth epochs stable across token changes", async () => {

@@ -1,3 +1,4 @@
+// Skill upload store persists uploaded skill archives before installation.
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
@@ -13,6 +14,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { createAsyncLock, readDurableJsonFile, writeJsonAtomic } from "../../infra/json-files.js";
 import { validateRequestedSkillSlug } from "./archive-install.js";
 
+/** Time window in which uploaded skill archive chunks may be committed. */
 export const SKILL_UPLOAD_TTL_MS = 60 * 60 * 1000;
 export const MAX_SKILL_UPLOAD_CHUNK_BYTES = 4 * 1024 * 1024;
 export const MAX_SKILL_UPLOAD_BASE64_LENGTH = Math.ceil(MAX_SKILL_UPLOAD_CHUNK_BYTES / 3) * 4;
@@ -419,7 +421,13 @@ export function createSkillUploadStore(options?: {
                 if (record) {
                   await removeRecordFiles(rootDir, record);
                 } else {
+                  // Mirror removeRecordFiles for the corrupt/missing-metadata branch.
+                  // The idempotency pointer still references this now-deleted upload,
+                  // so drop it too. Otherwise, if the active-upload cap throws below
+                  // before the pointer is rewritten, it strands an orphan idempotency
+                  // file pointing at a ghost uploadId.
                   await removeUploadDir(rootDir, existingUploadId);
+                  await fs.rm(resolveIdempotencyPath(rootDir, keyHash), { force: true });
                 }
                 return null;
               },

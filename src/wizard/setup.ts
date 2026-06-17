@@ -1,3 +1,4 @@
+// Setup wizard orchestrates onboarding prompts and generated OpenClaw config.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
@@ -727,6 +728,7 @@ export async function runSetupWizard(
       prompter,
       runtime,
       setDefaultModel: true,
+      preserveExistingDefaultModel: true,
       opts: {
         ...opts,
         token: opts.authChoice === "apiKey" && opts.token ? opts.token : undefined,

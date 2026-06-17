@@ -1,3 +1,4 @@
+// Covers provider plugin registration and runtime composition.
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
@@ -850,6 +851,23 @@ describe("resolvePluginProviders", () => {
     expect(
       resolveCatalogHookProviderPluginIds({ config: {}, env: {} as NodeJS.ProcessEnv }),
     ).toEqual(["runtime-bundled"]);
+  });
+
+  it("loads bundled Ollama catalog augment hooks from the manifest runtime flag", () => {
+    setManifestPlugins([
+      createManifestProviderPlugin({
+        id: "ollama",
+        providerIds: ["ollama", "ollama-cloud"],
+        enabledByDefault: true,
+        modelCatalog: {
+          runtimeAugment: true,
+        },
+      }),
+    ]);
+
+    expect(
+      resolveCatalogHookProviderPluginIds({ config: {}, env: {} as NodeJS.ProcessEnv }),
+    ).toEqual(["ollama"]);
   });
 
   it("resolves external auth hook plugin ids from manifest contracts without runtime loading", () => {

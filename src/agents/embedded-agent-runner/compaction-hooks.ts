@@ -1,3 +1,6 @@
+/**
+ * Runs compaction hooks and post-compaction side effects for embedded sessions.
+ */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -79,10 +82,12 @@ function syncPostCompactionSessionMemory(params: {
   if (params.mode === "await") {
     return syncTask;
   }
+  // Async mode should never hold the user turn open; failures are logged inside the task.
   void syncTask;
   return Promise.resolve();
 }
 
+/** Emits post-compaction transcript and memory-index side effects for a compacted session file. */
 export async function runPostCompactionSideEffects(params: {
   config?: OpenClawConfig;
   sessionKey?: string;
@@ -107,6 +112,7 @@ export async function runPostCompactionSideEffects(params: {
   });
 }
 
+/** Narrow adapter over the global hook runner methods used by compaction. */
 export type CompactionHookRunner = {
   hasHooks?: (hookName?: string) => boolean;
   runBeforeCompaction?: (
@@ -136,6 +142,7 @@ export type CompactionHookRunner = {
   ) => Promise<void> | void;
 };
 
+/** Converts the global hook runner into the compaction-specific hook shape. */
 export function asCompactionHookRunner(
   hookRunner: ReturnType<typeof getGlobalHookRunner> | null | undefined,
 ): CompactionHookRunner | null {
@@ -164,6 +171,7 @@ function estimateTokenCountSafe(
   }
 }
 
+/** Builds before-hook metrics while tolerating providers that cannot estimate all messages. */
 export function buildBeforeCompactionHookMetrics(params: {
   originalMessages: AgentMessage[];
   currentMessages: AgentMessage[];
@@ -180,6 +188,7 @@ export function buildBeforeCompactionHookMetrics(params: {
   };
 }
 
+/** Runs internal and plugin before-compaction hooks, forwarding hook-produced messages. */
 export async function runBeforeCompactionHooks(params: {
   hookRunner?: CompactionHookRunner | null;
   sessionId: string;
@@ -249,6 +258,7 @@ export async function runBeforeCompactionHooks(params: {
   };
 }
 
+/** Estimates compacted-session token count and rejects impossible growth from stale estimates. */
 export function estimateTokensAfterCompaction(params: {
   messagesAfter: AgentMessage[];
   observedTokenCount?: number;
@@ -270,6 +280,7 @@ export function estimateTokensAfterCompaction(params: {
   return tokensAfter;
 }
 
+/** Runs internal and plugin after-compaction hooks with the final compacted metrics. */
 export async function runAfterCompactionHooks(params: {
   hookRunner?: CompactionHookRunner | null;
   sessionId: string;

@@ -1,3 +1,4 @@
+// Model auth-list tests cover provider auth listing and output formatting.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -21,7 +22,7 @@ vi.mock("../../agents/auth-profiles.js", () => ({
   ensureAuthProfileStore: mocks.ensureAuthProfileStore,
   externalCliDiscoveryForProviderAuth: mocks.externalCliDiscoveryForProviderAuth,
   resolveAuthProfileDisplayLabel: mocks.resolveAuthProfileDisplayLabel,
-  resolveAuthStatePathForDisplay: (agentDir: string) => `${agentDir}/auth-state.json`,
+  resolveAuthStatePathForDisplay: (agentDir: string) => `${agentDir}/openclaw-agent.sqlite`,
 }));
 
 vi.mock("./load-config.js", () => ({
@@ -98,7 +99,7 @@ describe("modelsAuthListCommand", () => {
       {
         agentDir: "/tmp/openclaw/agents/coder",
         agentId: "coder",
-        authStatePath: "/tmp/openclaw/agents/coder/auth-state.json",
+        authStatePath: "/tmp/openclaw/agents/coder/openclaw-agent.sqlite",
         profiles: [
           {
             cooldownUntil: "2027-01-15T08:00:10.000Z",
@@ -153,7 +154,7 @@ describe("modelsAuthListCommand", () => {
       {
         agentDir: "/tmp/openclaw/agents/main",
         agentId: "main",
-        authStatePath: "/tmp/openclaw/agents/main/auth-state.json",
+        authStatePath: "/tmp/openclaw/agents/main/openclaw-agent.sqlite",
         profiles: [
           {
             id: "openai:api-key-backup",
@@ -184,7 +185,7 @@ describe("modelsAuthListCommand", () => {
 
     expect(runtime.logs).toEqual([
       "Agent: main",
-      "Auth state file: /tmp/openclaw/agents/main/auth-state.json",
+      "Auth state store: /tmp/openclaw/agents/main/openclaw-agent.sqlite",
       "Profiles: (none)",
     ]);
   });
@@ -217,7 +218,7 @@ describe("modelsAuthListCommand", () => {
       {
         agentDir: "/tmp/openclaw/agents/main",
         agentId: "main",
-        authStatePath: "/tmp/openclaw/agents/main/auth-state.json",
+        authStatePath: "/tmp/openclaw/agents/main/openclaw-agent.sqlite",
         profiles: [
           {
             email: "user@example.com",

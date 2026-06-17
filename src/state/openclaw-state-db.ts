@@ -1,5 +1,6 @@
+// OpenClaw state database manages shared persisted state and migrations.
 import { randomUUID } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import {
@@ -8,8 +9,14 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { applyPrivateModeSync } from "../infra/private-mode.js";
+import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
-import { configureSqliteWalMaintenance, type SqliteWalMaintenance } from "../infra/sqlite-wal.js";
+import {
+  configureSqliteConnectionPragmas,
+  type SqliteWalMaintenance,
+} from "../infra/sqlite-wal.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
   resolveOpenClawStateSqliteDir,
@@ -17,26 +24,43 @@ import {
 } from "./openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.generated.js";
 
+/**
+ * Shared OpenClaw SQLite state database lifecycle and metadata writers.
+ *
+ * This module owns schema creation, additive migrations for released state
+ * tables, private file permissions, cached handles, and audit rows for
+ * migrations/backups that operate on local state.
+ */
 const OPENCLAW_STATE_SCHEMA_VERSION = 1;
+/** Shared timeout used by state and agent SQLite handles before surfacing busy errors. */
 export const OPENCLAW_SQLITE_BUSY_TIMEOUT_MS = 30_000;
 const OPENCLAW_STATE_DIR_MODE = 0o700;
 const OPENCLAW_STATE_FILE_MODE = 0o600;
-const OPENCLAW_STATE_SIDECAR_SUFFIXES = ["", "-shm", "-wal"] as const;
 
+/** Open shared SQLite database handle plus WAL maintenance lifecycle. */
 export type OpenClawStateDatabase = {
   db: DatabaseSync;
   path: string;
   walMaintenance: SqliteWalMaintenance;
 };
 
+/** Options for resolving or overriding the shared state database path. */
 export type OpenClawStateDatabaseOptions = {
   env?: NodeJS.ProcessEnv;
   path?: string;
 };
 
+/** Status stored for a state migration run. */
 export type OpenClawMigrationRunStatus = "completed" | "warning" | "failed";
+/** Status stored for a state backup run. */
 export type OpenClawBackupRunStatus = "completed" | "failed";
 
+export type OpenClawStateDatabaseSchemaMigration = {
+  kind: "agent-databases-composite-primary-key";
+  path: string;
+};
+
+/** Input for recording one state migration run summary. */
 export type RecordOpenClawStateMigrationRunOptions = OpenClawStateDatabaseOptions & {
   id?: string;
   startedAt: number;
@@ -45,6 +69,7 @@ export type RecordOpenClawStateMigrationRunOptions = OpenClawStateDatabaseOption
   report: Record<string, unknown>;
 };
 
+/** Input for recording one migrated source file/table pair. */
 export type RecordOpenClawStateMigrationSourceOptions = OpenClawStateDatabaseOptions & {
   runId: string;
   migrationKind: string;
@@ -60,6 +85,7 @@ export type RecordOpenClawStateMigrationSourceOptions = OpenClawStateDatabaseOpt
   report: Record<string, unknown>;
 };
 
+/** Input for recording one state backup archive. */
 export type RecordOpenClawStateBackupRunOptions = OpenClawStateDatabaseOptions & {
   id?: string;
   createdAt: number;
@@ -89,6 +115,24 @@ function assertSupportedSchemaVersion(db: DatabaseSync, pathname: string): void 
   }
 }
 
+const stateDbLog = createSubsystemLogger("state/db");
+
+/** Targets already warned about, so chmod-less filesystems warn once per path. */
+const chmodWarnedTargets = new Set<string>();
+
+// Permission hardening is best-effort only on filesystems that cannot apply
+// it: the database stays usable without the chmod, and crashing at open would
+// take the gateway down on Azure Files/NFS/Docker volumes (#91919). Unexpected
+// chmod failures still throw so credentials-adjacent hardening stays loud.
+function bestEffortChmodSync(target: string, mode: number): void {
+  const result = applyPrivateModeSync(target, mode);
+  if (result.applied || chmodWarnedTargets.has(target)) {
+    return;
+  }
+  chmodWarnedTargets.add(target);
+  stateDbLog.warn(`skipped permission hardening for ${target}: ${String(result.error)}`);
+}
+
 function ensureOpenClawStatePermissions(pathname: string, env: NodeJS.ProcessEnv): void {
   const dir = path.dirname(pathname);
   const defaultDir = resolveOpenClawStateSqliteDir(env);
@@ -99,13 +143,13 @@ function ensureOpenClawStatePermissions(pathname: string, env: NodeJS.ProcessEnv
   }
   const dirExisted = existsSync(dir);
   mkdirSync(dir, { recursive: true, mode: OPENCLAW_STATE_DIR_MODE });
+  // Default state contains credentials-adjacent metadata; custom existing dirs keep caller modes.
   if (isDefaultStateDatabase || !dirExisted) {
-    chmodSync(dir, OPENCLAW_STATE_DIR_MODE);
+    bestEffortChmodSync(dir, OPENCLAW_STATE_DIR_MODE);
   }
-  for (const suffix of OPENCLAW_STATE_SIDECAR_SUFFIXES) {
-    const candidate = `${pathname}${suffix}`;
+  for (const candidate of resolveSqliteDatabaseFilePaths(pathname)) {
     if (existsSync(candidate)) {
-      chmodSync(candidate, OPENCLAW_STATE_FILE_MODE);
+      bestEffortChmodSync(candidate, OPENCLAW_STATE_FILE_MODE);
     }
   }
 }
@@ -115,6 +159,17 @@ function tableHasColumn(db: DatabaseSync, tableName: string, columnName: string)
   return rows.some((row) => row.name === columnName);
 }
 
+function tablePrimaryKeyColumns(db: DatabaseSync, tableName: string): string[] {
+  const rows = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{
+    name?: unknown;
+    pk?: unknown;
+  }>;
+  return rows
+    .filter((row) => Number(row.pk ?? 0) > 0 && typeof row.name === "string")
+    .toSorted((left, right) => Number(left.pk ?? 0) - Number(right.pk ?? 0))
+    .map((row) => row.name as string);
+}
+
 function tableExists(db: DatabaseSync, tableName: string): boolean {
   const row = db
     .prepare("SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = ?")
@@ -122,12 +177,181 @@ function tableExists(db: DatabaseSync, tableName: string): boolean {
   return row?.ok === 1;
 }
 
-function ensureColumn(db: DatabaseSync, tableName: string, columnSql: string): void {
+function ensureColumn(db: DatabaseSync, tableName: string, columnSql: string): boolean {
   const columnName = columnSql.trim().split(/\s+/, 1)[0];
   if (!columnName || !tableExists(db, tableName) || tableHasColumn(db, tableName, columnName)) {
+    return false;
+  }
+  // State migrations are additive here; destructive or shape-changing repairs belong in doctor.
+  db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnSql};`);
+  return true;
+}
+
+function repairLegacyTaskAgentAttribution(db: DatabaseSync): void {
+  if (!tableExists(db, "task_runs") || !tableHasColumn(db, "task_runs", "requester_agent_id")) {
     return;
   }
-  db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnSql};`);
+  // Before requester_agent_id existed, scoped subagent/ACP rows stored the
+  // requester in agent_id. Repair only rows with recoverable requester
+  // provenance; global legacy rows must keep the existing fallback behavior.
+  db.exec(`
+    UPDATE task_runs
+    SET
+      requester_agent_id = CASE
+        WHEN owner_key GLOB 'agent:*:*' THEN substr(
+          owner_key,
+          7,
+          instr(substr(owner_key, 7), ':') - 1
+        )
+        WHEN requester_session_key GLOB 'agent:*:*' THEN substr(
+          requester_session_key,
+          7,
+          instr(substr(requester_session_key, 7), ':') - 1
+        )
+        WHEN agent_id <> substr(
+          child_session_key,
+          7,
+          instr(substr(child_session_key, 7), ':') - 1
+        ) THEN agent_id
+        ELSE NULL
+      END,
+      agent_id = substr(
+        child_session_key,
+        7,
+        instr(substr(child_session_key, 7), ':') - 1
+      )
+    WHERE requester_agent_id IS NULL
+      AND runtime IN ('subagent', 'acp')
+      AND child_session_key GLOB 'agent:*:*'
+      AND instr(substr(child_session_key, 7), ':') > 1
+      AND (
+        owner_key GLOB 'agent:*:*'
+        OR requester_session_key GLOB 'agent:*:*'
+        OR (
+          agent_id IS NOT NULL
+          AND agent_id <> substr(
+            child_session_key,
+            7,
+            instr(substr(child_session_key, 7), ':') - 1
+          )
+        )
+      );
+  `);
+}
+
+function hasCanonicalAgentDatabasesPrimaryKey(db: DatabaseSync): boolean {
+  if (!tableExists(db, "agent_databases")) {
+    return true;
+  }
+  const primaryKey = tablePrimaryKeyColumns(db, "agent_databases");
+  return primaryKey.length === 2 && primaryKey[0] === "agent_id" && primaryKey[1] === "path";
+}
+
+function canRepairAgentDatabasesPrimaryKey(db: DatabaseSync): boolean {
+  if (!tableExists(db, "agent_databases")) {
+    return false;
+  }
+  const requiredColumns = ["agent_id", "path", "schema_version", "last_seen_at", "size_bytes"];
+  return requiredColumns.every((column) => tableHasColumn(db, "agent_databases", column));
+}
+
+function repairAgentDatabasesCompositePrimaryKey(db: DatabaseSync): boolean {
+  if (hasCanonicalAgentDatabasesPrimaryKey(db) || !canRepairAgentDatabasesPrimaryKey(db)) {
+    return false;
+  }
+  // Released DBs may have PRIMARY KEY(agent_id); current registration upserts by
+  // (agent_id,path) so explicit relocated agent DBs do not overwrite each other.
+  db.exec(`
+    DROP TABLE IF EXISTS agent_databases_migration_new;
+    CREATE TABLE agent_databases_migration_new (
+      agent_id TEXT NOT NULL,
+      path TEXT NOT NULL,
+      schema_version INTEGER NOT NULL,
+      last_seen_at INTEGER NOT NULL,
+      size_bytes INTEGER,
+      PRIMARY KEY (agent_id, path)
+    );
+    INSERT OR REPLACE INTO agent_databases_migration_new (
+      agent_id,
+      path,
+      schema_version,
+      last_seen_at,
+      size_bytes
+    )
+    SELECT
+      agent_id,
+      path,
+      schema_version,
+      last_seen_at,
+      size_bytes
+    FROM agent_databases
+    WHERE agent_id IS NOT NULL AND path IS NOT NULL;
+    DROP TABLE agent_databases;
+    ALTER TABLE agent_databases_migration_new RENAME TO agent_databases;
+  `);
+  return true;
+}
+
+function assertCanonicalStateSchemaShape(db: DatabaseSync, pathname: string): void {
+  if (hasCanonicalAgentDatabasesPrimaryKey(db)) {
+    return;
+  }
+  throw new Error(
+    `OpenClaw state database ${pathname} has a legacy agent database registry schema; run openclaw doctor --fix to migrate it.`,
+  );
+}
+
+export function detectOpenClawStateDatabaseSchemaMigrations(
+  options: OpenClawStateDatabaseOptions = {},
+): OpenClawStateDatabaseSchemaMigration[] {
+  const pathname = resolveDatabasePath(options);
+  if (!existsSync(pathname)) {
+    return [];
+  }
+  const sqlite = requireNodeSqlite();
+  const db = new sqlite.DatabaseSync(pathname, { readOnly: true });
+  try {
+    return hasCanonicalAgentDatabasesPrimaryKey(db)
+      ? []
+      : [{ kind: "agent-databases-composite-primary-key", path: pathname }];
+  } finally {
+    db.close();
+  }
+}
+
+export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabaseOptions = {}): {
+  changes: string[];
+  warnings: string[];
+} {
+  const env = options.env ?? process.env;
+  const pathname = resolveDatabasePath(options);
+  if (!existsSync(pathname)) {
+    return { changes: [], warnings: [] };
+  }
+  ensureOpenClawStatePermissions(pathname, env);
+  const sqlite = requireNodeSqlite();
+  const db = new sqlite.DatabaseSync(pathname);
+  db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
+  try {
+    assertSupportedSchemaVersion(db, pathname);
+    const repaired = runSqliteImmediateTransactionSync(db, () =>
+      repairAgentDatabasesCompositePrimaryKey(db),
+    );
+    return repaired
+      ? {
+          changes: [`Migrated shared state agent database registry primary key → agent_id,path`],
+          warnings: [],
+        }
+      : { changes: [], warnings: [] };
+  } catch (err) {
+    return {
+      changes: [],
+      warnings: [`Failed migrating shared state database schema at ${pathname}: ${String(err)}`],
+    };
+  } finally {
+    db.close();
+    ensureOpenClawStatePermissions(pathname, env);
+  }
 }
 
 function backfillCronRunLogEntryJson(db: DatabaseSync): void {
@@ -312,6 +536,7 @@ function backfillCronJobsFromJobJson(db: DatabaseSync): void {
     if (!job) {
       continue;
     }
+    // Legacy cron rows kept the contract in job_json; columns are a queryable projection of it.
     const schedule = recordField(job, "schedule");
     const payload = recordField(job, "payload");
     const scheduleKind = textField(schedule ?? {}, "kind");
@@ -456,6 +681,7 @@ function backfillDeliveryQueueEntriesFromEntryJson(db: DatabaseSync): void {
     if (!entry) {
       continue;
     }
+    // Queue metadata is denormalized for recovery queries but entry_json remains source of truth.
     const session = recordField(entry, "session");
     const route = recordField(entry, "route");
     const deliveryContext = recordField(entry, "deliveryContext");
@@ -631,12 +857,19 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "gateway_restart_sentinel", "continuation_json TEXT");
   ensureColumn(db, "gateway_restart_sentinel", "doctor_hint TEXT");
   ensureColumn(db, "gateway_restart_sentinel", "stats_json TEXT");
+  runSqliteImmediateTransactionSync(db, () => {
+    const addedTaskRequesterAgentId = ensureColumn(db, "task_runs", "requester_agent_id TEXT");
+    if (addedTaskRequesterAgentId) {
+      repairLegacyTaskAgentAttribution(db);
+    }
+  });
   ensureColumn(db, "subagent_runs", "task_name TEXT");
 }
 
 function ensureSchema(db: DatabaseSync, pathname: string): void {
   assertSupportedSchemaVersion(db, pathname);
   ensureAdditiveStateColumns(db);
+  assertCanonicalStateSchemaShape(db, pathname);
   db.exec(OPENCLAW_STATE_SCHEMA_SQL);
   ensureAdditiveStateColumns(db);
   db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};`);
@@ -668,9 +901,10 @@ function ensureSchema(db: DatabaseSync, pathname: string): void {
 }
 
 function resolveDatabasePath(options: OpenClawStateDatabaseOptions = {}): string {
-  return options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env);
+  return path.resolve(options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env));
 }
 
+/** Open or return a cached shared state database after schema and migration checks. */
 export function openOpenClawStateDatabase(
   options: OpenClawStateDatabaseOptions = {},
 ): OpenClawStateDatabase {
@@ -681,6 +915,7 @@ export function openOpenClawStateDatabase(
     return cached;
   }
   if (cached) {
+    // A closed handle can leave Kysely and WAL helpers cached; clear both before reopening.
     cached.walMaintenance.close();
     clearNodeSqliteKyselyCacheForDatabase(cached.db);
     cachedDatabases.delete(pathname);
@@ -689,26 +924,31 @@ export function openOpenClawStateDatabase(
   ensureOpenClawStatePermissions(pathname, env);
   const sqlite = requireNodeSqlite();
   const db = new sqlite.DatabaseSync(pathname);
-  const walMaintenance = configureSqliteWalMaintenance(db, {
-    databaseLabel: "openclaw-state",
-    databasePath: pathname,
-  });
-  db.exec("PRAGMA synchronous = NORMAL;");
-  db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
-  db.exec("PRAGMA foreign_keys = ON;");
-  try {
-    ensureSchema(db, pathname);
-  } catch (err) {
-    walMaintenance.close();
-    db.close();
-    throw err;
-  }
+  const walMaintenance = (() => {
+    let maintenance: SqliteWalMaintenance | undefined;
+    try {
+      maintenance = configureSqliteConnectionPragmas(db, {
+        busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+        databaseLabel: "openclaw-state",
+        databasePath: pathname,
+        foreignKeys: true,
+        synchronous: "NORMAL",
+      });
+      ensureSchema(db, pathname);
+      return maintenance;
+    } catch (err) {
+      maintenance?.close();
+      db.close();
+      throw err;
+    }
+  })();
   ensureOpenClawStatePermissions(pathname, env);
   const database = { db, path: pathname, walMaintenance };
   cachedDatabases.set(pathname, database);
   return database;
 }
 
+/** Run a synchronous immediate transaction against the shared state database. */
 export function runOpenClawStateWriteTransaction<T>(
   operation: (database: OpenClawStateDatabase) => T,
   options: OpenClawStateDatabaseOptions = {},
@@ -724,6 +964,7 @@ export function runOpenClawStateWriteTransaction<T>(
   return result;
 }
 
+/** Record a state migration run and return its stable run id. */
 export function recordOpenClawStateMigrationRun(
   options: RecordOpenClawStateMigrationRunOptions,
 ): string {
@@ -744,6 +985,7 @@ export function recordOpenClawStateMigrationRun(
   return id;
 }
 
+/** Upsert the per-source audit row for a state migration. */
 export function recordOpenClawStateMigrationSource(
   options: RecordOpenClawStateMigrationSourceOptions,
 ): void {
@@ -786,6 +1028,7 @@ export function recordOpenClawStateMigrationSource(
   }, options);
 }
 
+/** Record a state backup archive and return its stable backup id. */
 export function recordOpenClawStateBackupRun(options: RecordOpenClawStateBackupRunOptions): string {
   const id = options.id ?? randomUUID();
   runOpenClawStateWriteTransaction((database) => {
@@ -804,6 +1047,7 @@ export function recordOpenClawStateBackupRun(options: RecordOpenClawStateBackupR
   return id;
 }
 
+/** Close all cached shared state database handles. */
 export function closeOpenClawStateDatabase(): void {
   for (const database of cachedDatabases.values()) {
     database.walMaintenance.close();
@@ -815,8 +1059,10 @@ export function closeOpenClawStateDatabase(): void {
   cachedDatabases.clear();
 }
 
+/** Test whether any cached shared state database handle is still open. */
 export function isOpenClawStateDatabaseOpen(): boolean {
   return Array.from(cachedDatabases.values()).some((database) => database.db.isOpen);
 }
 
+/** Test alias for closing shared state handles from teardown code. */
 export const closeOpenClawStateDatabaseForTest = closeOpenClawStateDatabase;

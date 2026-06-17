@@ -1,3 +1,6 @@
+/**
+ * HTTP session history revocation tests.
+ */
 import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -90,8 +93,13 @@ vi.mock("./session-utils.js", () => ({
     sessionId: "session-1",
     sessionFile: "/tmp/session-1.jsonl",
   }),
-  readSessionMessagesAsync: async () => [],
   resolveSessionTranscriptCandidates: () => ["/tmp/session-1.jsonl"],
+}));
+
+vi.mock("./session-transcript-readers.js", () => ({
+  readRecentSessionMessagesWithStatsAsync: async () => ({ messages: [], totalMessages: 0 }),
+  readSessionMessagesAsync: async () => [],
+  readSessionMessagesWithSourceAsync: async () => ({ messages: [] }),
 }));
 
 vi.mock("./session-history-state.js", () => ({
@@ -106,6 +114,7 @@ vi.mock("./session-history-state.js", () => ({
         messageSeq: 1,
         messageId,
       }),
+      shouldRefreshForTranscriptPath: () => false,
       refreshAsync: async () => ({ items: [], nextCursor: null, messages: [] }),
     }),
   },

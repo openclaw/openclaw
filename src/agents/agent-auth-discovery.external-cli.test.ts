@@ -1,3 +1,4 @@
+/** Tests external CLI scoping during agent auth-profile credential discovery. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
@@ -15,7 +16,6 @@ const credentialMocks = vi.hoisted(() => ({
 
 const discoveryCoreMocks = vi.hoisted(() => ({
   addEnvBackedAgentCredentials: vi.fn((credentials: unknown) => credentials),
-  scrubLegacyStaticAuthJsonEntriesForDiscovery: vi.fn(),
 }));
 
 const syntheticAuthMocks = vi.hoisted(() => ({

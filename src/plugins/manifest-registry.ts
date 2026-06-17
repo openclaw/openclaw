@@ -1,3 +1,4 @@
+// Maintains plugin manifest lookup tables for discovery and runtime planning.
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -382,6 +383,7 @@ function mergeManifestContracts(
   for (const key of [
     "embeddedExtensionFactories",
     "agentToolResultMiddleware",
+    "trustedToolPolicies",
     "externalAuthProviders",
     "embeddingProviders",
     "memoryEmbeddingProviders",
@@ -1202,3 +1204,8 @@ export function loadPluginManifestRegistry(
   const registry = { plugins: records, diagnostics: dedupePluginDiagnostics(diagnostics) };
   return registry;
 }
+
+export const testing = {
+  mergeManifestContracts,
+};
+export { testing as __testing };

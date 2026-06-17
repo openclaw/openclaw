@@ -1,3 +1,6 @@
+/**
+ * Installs bundled plugin registration contract cases used across provider tests.
+ */
 import { describePluginRegistrationContract } from "./plugin-registration-contract.js";
 
 type PluginRegistrationContractParams = Parameters<typeof describePluginRegistrationContract>[0];
@@ -181,6 +184,10 @@ export const pluginRegistrationContractCases = {
     requireDescribeImages: true,
     requireGenerateImage: true,
     requireGenerateVideo: true,
+  },
+  parallel: {
+    pluginId: "parallel",
+    webSearchProviderIds: ["parallel", "parallel-free"],
   },
   perplexity: {
     pluginId: "perplexity",

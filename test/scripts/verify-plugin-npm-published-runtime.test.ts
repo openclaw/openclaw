@@ -1,3 +1,4 @@
+// Verify Plugin Npm Published Runtime tests cover verify plugin npm published runtime script behavior.
 import { describe, expect, it } from "vitest";
 import {
   collectPluginNpmPublishedRuntimeErrors,
@@ -276,6 +277,23 @@ describe("resolveNpmPackFilename", () => {
     ].join("\n");
 
     expect(resolveNpmPackFilename(noisyOutput)).toBe("openclaw-msteams-2026.5.24-beta.1.tgz");
+  });
+
+  it("rejects path-like tarball output instead of reading outside the pack directory", () => {
+    const unsafeOutputs = [
+      "../openclaw-msteams.tgz",
+      "nested/openclaw-msteams.tgz",
+      "nested\\openclaw-msteams.tgz",
+      "/tmp/openclaw-msteams.tgz",
+      "C:\\temp\\openclaw-msteams.tgz",
+      "openclaw-msteams\u0000.tgz",
+    ];
+
+    for (const output of unsafeOutputs) {
+      expect(() => resolveNpmPackFilename(output)).toThrow(
+        "npm pack did not report a tarball filename",
+      );
+    }
   });
 });
 

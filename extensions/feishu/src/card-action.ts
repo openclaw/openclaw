@@ -1,3 +1,4 @@
+// Feishu plugin module implements card action behavior.
 import {
   asDateTimestampMs,
   isFutureDateTimestampMs,
@@ -135,6 +136,12 @@ function buildSyntheticMessageEvent(
   chatType: "p2p" | "group",
 ): FeishuMessageEvent {
   const replyTargetMessageId = event.context.open_message_id ?? event.open_message_id;
+  // card-action-c-* IDs are temporary callback tokens, not valid Feishu message IDs.
+  // Using them as reply targets causes "Invalid ids" errors from the streaming reply API.
+  const isTemporaryCardActionId = replyTargetMessageId?.startsWith("card-action-c-");
+  const validReplyTargetId = replyTargetMessageId && !isTemporaryCardActionId
+    ? replyTargetMessageId
+    : undefined;
   return {
     sender: {
       sender_id: {
@@ -145,8 +152,9 @@ function buildSyntheticMessageEvent(
     },
     message: {
       message_id: `card-action-${event.token}`,
-      ...(replyTargetMessageId ? { reply_target_message_id: replyTargetMessageId } : {}),
-      ...(!replyTargetMessageId ? { suppress_reply_target: true } : {}),
+      ...(validReplyTargetId ? { reply_target_message_id: validReplyTargetId } : {}),
+      ...(validReplyTargetId ? { typing_target_message_id: validReplyTargetId } : {}),
+      ...(!validReplyTargetId ? { suppress_reply_target: true } : {}),
       chat_id: event.context.chat_id || event.operator.open_id,
       chat_type: chatType,
       message_type: "text",

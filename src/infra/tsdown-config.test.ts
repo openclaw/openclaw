@@ -1,3 +1,4 @@
+// Covers bundling rules encoded in the root tsdown config.
 import { readFileSync } from "node:fs";
 import { bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
@@ -222,8 +223,10 @@ describe("tsdown config", () => {
       expect(neverBundle("@slack/bolt")).toBe(true);
       expect(neverBundle("@slack/web-api")).toBe(true);
       expect(neverBundle("@vitest/expect")).toBe(true);
+      expect(neverBundle("jimp")).toBe(true);
       expect(neverBundle("matrix-js-sdk/lib/client.js")).toBe(true);
       expect(neverBundle("qrcode-terminal/lib/main.js")).toBe(true);
+      expect(neverBundle("sharp")).toBe(true);
       expect(neverBundle("vitest")).toBe(true);
       expect(neverBundle("not-a-runtime-dependency")).toBe(false);
     } else {
@@ -235,8 +238,10 @@ describe("tsdown config", () => {
         "@slack/bolt",
         "@slack/web-api",
         "@vitest/expect",
+        "jimp",
         "matrix-js-sdk",
         "qrcode-terminal",
+        "sharp",
         "vitest",
       ]) {
         expect(neverBundle).toContain(dependency);
@@ -246,7 +251,9 @@ describe("tsdown config", () => {
       throw new Error("expected unified graph external predicate");
     }
     const externalize = external;
+    expect(externalize("jimp", undefined, false)).toBe(true);
     expect(externalize("qrcode-terminal/lib/main.js", undefined, false)).toBe(true);
+    expect(externalize("sharp", undefined, false)).toBe(true);
   });
 
   it("always bundles plugin SDK package-local runtime dependencies", () => {

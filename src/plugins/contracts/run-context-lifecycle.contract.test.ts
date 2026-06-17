@@ -1,3 +1,4 @@
+// Run context lifecycle contract tests cover plugin run context setup and cleanup.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -9,7 +10,6 @@ import { loadSessionStore, updateSessionStore } from "../../config/sessions.js";
 import { withTempConfig } from "../../gateway/test-temp-config.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
-import { PLUGIN_HOST_CLEANUP_TIMEOUT_MS } from "../host-hook-cleanup-timeout.js";
 import { runPluginHostCleanup } from "../host-hook-cleanup.js";
 import {
   clearPluginHostRuntimeState,
@@ -24,6 +24,8 @@ import { createEmptyPluginRegistry } from "../registry-empty.js";
 import { setActivePluginRegistry } from "../runtime.js";
 import { createPluginRecord } from "../status.test-helpers.js";
 import type { OpenClawPluginApi } from "../types.js";
+
+const PLUGIN_HOST_CLEANUP_TIMEOUT_MS = 5_000;
 
 async function waitForPluginEventHandlers(): Promise<void> {
   await new Promise<void>((resolve) => {

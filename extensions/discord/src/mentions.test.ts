@@ -1,3 +1,4 @@
+// Discord tests cover mentions plugin behavior.
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   resetDiscordDirectoryCacheForTest,
@@ -100,6 +101,19 @@ describe("rewriteDiscordKnownMentions", () => {
       },
     );
     expect(rewritten).toBe("inline `@alice` fence ```\n@alice\n``` text <@123456789>");
+  });
+
+  it("does not end longer code fences at triple-backtick literals inside the body", () => {
+    rememberDiscordDirectoryUser({
+      accountId: "default",
+      userId: "123456789",
+      handles: ["alice"],
+    });
+    const text = '````ts\nconst fence = "```";\n@alice\n```` text @alice';
+    const rewritten = rewriteDiscordKnownMentions(text, {
+      accountId: "default",
+    });
+    expect(rewritten).toBe('````ts\nconst fence = "```";\n@alice\n```` text <@123456789>');
   });
 
   it("is account-scoped", () => {

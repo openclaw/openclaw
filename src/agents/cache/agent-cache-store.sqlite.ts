@@ -1,3 +1,6 @@
+/**
+ * SQLite implementation of the agent runtime cache store.
+ */
 import {
   MAX_DATE_TIMESTAMP_MS,
   asDateTimestampMs,
@@ -24,11 +27,13 @@ import type {
   AgentRuntimeCacheWriteOptions,
 } from "./agent-cache-store.js";
 
+/** Options for an agent/scope-scoped SQLite runtime cache. */
 export type SqliteAgentCacheStoreOptions = OpenClawAgentDatabaseOptions & {
   scope: string;
   now?: () => number;
 };
 
+/** Options for writing a single SQLite agent cache entry. */
 export type WriteSqliteAgentCacheEntryOptions = SqliteAgentCacheStoreOptions &
   AgentRuntimeCacheWriteOptions;
 
@@ -48,6 +53,8 @@ function normalizeScopeValue(value: string): string {
 }
 
 function normalizeKey(value: string): string {
+  // Scope/key values become SQLite unique keys; reject empty/NUL values before
+  // they reach the database layer.
   const key = value.trim();
   if (!key) {
     throw new Error("SQLite agent cache key is required.");
@@ -138,6 +145,7 @@ function resolveExpiresAt(options: AgentRuntimeCacheWriteOptions, now: number): 
   return null;
 }
 
+/** Upsert one SQLite cache entry and return the normalized cache value. */
 export function writeSqliteAgentCacheEntry(
   options: WriteSqliteAgentCacheEntryOptions,
 ): AgentRuntimeCacheValue {
@@ -187,6 +195,7 @@ export function writeSqliteAgentCacheEntry(
   };
 }
 
+/** Read one non-expired SQLite cache entry by key. */
 export function readSqliteAgentCacheEntry(
   options: SqliteAgentCacheStoreOptions & { key: string },
 ): AgentRuntimeCacheValue | null {
@@ -209,6 +218,7 @@ export function readSqliteAgentCacheEntry(
   return rowToCacheValue(row, scope);
 }
 
+/** List non-expired SQLite cache entries for the configured scope. */
 export function listSqliteAgentCacheEntries(
   options: SqliteAgentCacheStoreOptions,
 ): AgentRuntimeCacheValue[] {
@@ -228,6 +238,7 @@ export function listSqliteAgentCacheEntries(
     .map((row) => rowToCacheValue(row, scope));
 }
 
+/** Delete one SQLite cache entry by key. */
 export function deleteSqliteAgentCacheEntry(
   options: SqliteAgentCacheStoreOptions & { key: string },
 ): boolean {
@@ -243,6 +254,7 @@ export function deleteSqliteAgentCacheEntry(
   }, toDatabaseOptions(options));
 }
 
+/** Clear all SQLite cache entries for the configured scope. */
 export function clearSqliteAgentCacheEntries(options: SqliteAgentCacheStoreOptions): number {
   const scope = normalizeScope(options);
   return runOpenClawAgentWriteTransaction((database) => {
@@ -255,6 +267,7 @@ export function clearSqliteAgentCacheEntries(options: SqliteAgentCacheStoreOptio
   }, toDatabaseOptions(options));
 }
 
+/** Delete expired or invalid-expiration SQLite cache entries for the scope. */
 export function clearExpiredSqliteAgentCacheEntries(
   options: SqliteAgentCacheStoreOptions & { currentTime?: number },
 ): number {
@@ -283,6 +296,7 @@ export function clearExpiredSqliteAgentCacheEntries(
   }, toDatabaseOptions(options));
 }
 
+/** Agent runtime cache store implementation backed by OpenClaw's SQLite DB. */
 export class SqliteAgentCacheStore implements AgentRuntimeCacheStore {
   readonly #options: SqliteAgentCacheStoreOptions;
 
@@ -332,6 +346,7 @@ export class SqliteAgentCacheStore implements AgentRuntimeCacheStore {
   }
 }
 
+/** Create a SQLite-backed agent runtime cache store. */
 export function createSqliteAgentCacheStore(
   options: SqliteAgentCacheStoreOptions,
 ): SqliteAgentCacheStore {

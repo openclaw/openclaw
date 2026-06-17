@@ -1,3 +1,4 @@
+// Ensure Cli Startup Build tests cover ensure cli startup build script behavior.
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -168,14 +169,18 @@ describe("ensure-cli-startup-build", () => {
 
 describe("resolveCliStartupBuildTimeoutMs", () => {
   it("parses only positive integer environment timeouts", () => {
-    for (const [raw, expected] of [
-      ["4321", 4321],
-      ["nope", 10 * 60 * 1000],
-      ["10m", 10 * 60 * 1000],
-    ] as const) {
-      expect(resolveCliStartupBuildTimeoutMs({ OPENCLAW_CLI_STARTUP_BUILD_TIMEOUT_MS: raw })).toBe(
-        expected,
-      );
+    expect(resolveCliStartupBuildTimeoutMs({})).toBe(10 * 60 * 1000);
+    expect(resolveCliStartupBuildTimeoutMs({ OPENCLAW_CLI_STARTUP_BUILD_TIMEOUT_MS: "" })).toBe(
+      10 * 60 * 1000,
+    );
+    expect(resolveCliStartupBuildTimeoutMs({ OPENCLAW_CLI_STARTUP_BUILD_TIMEOUT_MS: "4321" })).toBe(
+      4321,
+    );
+
+    for (const raw of ["nope", "10m", "1e3", "0", "-1", "9007199254740992"]) {
+      expect(() =>
+        resolveCliStartupBuildTimeoutMs({ OPENCLAW_CLI_STARTUP_BUILD_TIMEOUT_MS: raw }),
+      ).toThrow(`invalid OPENCLAW_CLI_STARTUP_BUILD_TIMEOUT_MS: ${raw}`);
     }
   });
 });

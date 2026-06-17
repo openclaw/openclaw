@@ -1,11 +1,13 @@
+// Googlechat API module exposes the plugin public contract.
 import crypto from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseMediaContentLength } from "openclaw/plugin-sdk/media-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
+import { shouldSuppressGoogleChatManualExecApprovalFollowupText } from "./approval-card-actions.js";
 import { getGoogleChatAccessToken } from "./auth.js";
-import type { GoogleChatReaction } from "./types.js";
+import type { GoogleChatCardV2, GoogleChatReaction } from "./types.js";
 
 const CHAT_API_BASE = "https://chat.googleapis.com/v1";
 const CHAT_UPLOAD_BASE = "https://chat.googleapis.com/upload/v1";
@@ -138,12 +140,24 @@ export async function sendGoogleChatMessage(params: {
   space: string;
   text?: string;
   thread?: string;
+  cardsV2?: GoogleChatCardV2[];
   attachments?: Array<{ attachmentUploadToken: string; contentName?: string }>;
-}): Promise<{ messageName?: string } | null> {
-  const { account, space, text, thread, attachments } = params;
+}): Promise<{ messageName?: string; threadName?: string } | null> {
+  const { account, space, text, thread, cardsV2, attachments } = params;
+  if (
+    text &&
+    (!cardsV2 || cardsV2.length === 0) &&
+    (!attachments || attachments.length === 0) &&
+    shouldSuppressGoogleChatManualExecApprovalFollowupText(text)
+  ) {
+    return null;
+  }
   const body: Record<string, unknown> = {};
   if (text) {
     body.text = text;
+  }
+  if (cardsV2 && cardsV2.length > 0) {
+    body.cardsV2 = cardsV2;
   }
   if (thread) {
     body.thread = { name: thread };
@@ -161,23 +175,38 @@ export async function sendGoogleChatMessage(params: {
     urlObj.searchParams.set("messageReplyOption", "REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD");
   }
   const url = urlObj.toString();
-  const result = await fetchJson<{ name?: string }>(account, url, {
+  const result = await fetchJson<{ name?: string; thread?: { name?: string } }>(account, url, {
     method: "POST",
     body: JSON.stringify(body),
   });
-  return result ? { messageName: result.name } : null;
+  return result ? { messageName: result.name, threadName: result.thread?.name } : null;
 }
 
 export async function updateGoogleChatMessage(params: {
   account: ResolvedGoogleChatAccount;
   messageName: string;
-  text: string;
+  text?: string;
+  cardsV2?: GoogleChatCardV2[];
 }): Promise<{ messageName?: string }> {
-  const { account, messageName, text } = params;
-  const url = `${CHAT_API_BASE}/${messageName}?updateMask=text`;
+  const { account, messageName, text, cardsV2 } = params;
+  const updateMask = [
+    ...(text !== undefined ? ["text"] : []),
+    ...(cardsV2 !== undefined ? ["cardsV2"] : []),
+  ];
+  if (updateMask.length === 0) {
+    throw new Error("Google Chat message update requires text or cardsV2.");
+  }
+  const url = `${CHAT_API_BASE}/${messageName}?updateMask=${updateMask.join(",")}`;
+  const body: Record<string, unknown> = {};
+  if (text !== undefined) {
+    body.text = text;
+  }
+  if (cardsV2 !== undefined) {
+    body.cardsV2 = cardsV2;
+  }
   const result = await fetchJson<{ name?: string }>(account, url, {
     method: "PATCH",
-    body: JSON.stringify({ text }),
+    body: JSON.stringify(body),
   });
   return { messageName: result.name };
 }

@@ -1,3 +1,5 @@
+// Bridges OpenClaw-managed proxy TLS trust into Undici EnvHttpProxyAgent and
+// explicit ProxyAgent options without changing unrelated operator proxies.
 import { isRecord as isProxyTlsRecord } from "@openclaw/normalization-core/record-coerce";
 import type { EnvHttpProxyAgent } from "undici";
 import { resolveEnvHttpProxyAgentOptions, resolveEnvHttpProxyUrl } from "../proxy-env.js";
@@ -8,7 +10,7 @@ import {
   type ManagedProxyTlsOptions,
 } from "./proxy-tls.js";
 
-export type ManagedEnvHttpProxyAgentOptions = ConstructorParameters<typeof EnvHttpProxyAgent>[0];
+type ManagedEnvHttpProxyAgentOptions = ConstructorParameters<typeof EnvHttpProxyAgent>[0];
 
 function readProxyTlsRecord(options: object | undefined): Record<string, unknown> | undefined {
   if (!options || !("proxyTls" in options)) {

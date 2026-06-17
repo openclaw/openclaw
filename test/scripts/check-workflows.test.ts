@@ -1,3 +1,4 @@
+// Check Workflows tests cover check workflows script behavior.
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -75,5 +76,19 @@ describe("check-workflows", () => {
     } finally {
       rmSync(tempDir, { force: true, recursive: true });
     }
+  });
+
+  it("keeps Windows WSL2 probe output normalized through the shared wrapper", () => {
+    const workflow = readFileSync(".github/workflows/windows-testbox-probe.yml", "utf8");
+
+    expect(workflow).toContain(
+      '$import = Invoke-WslText -Arguments @("--import", "UbuntuProbe", $wslRoot, $rootfs, "--version", "2")',
+    );
+    expect(workflow).toContain('Write-Host "wsl_import_exit=$($import.Code)"');
+    expect(workflow).toContain(
+      '$exec = Invoke-WslText -Arguments @("-d", $distro, "--exec", "bash", "-lc"',
+    );
+    expect(workflow).toContain('Write-Host "wsl_exec_exit=$($exec.Code)"');
+    expect(workflow).not.toContain("wsl.exe --import UbuntuProbe");
   });
 });

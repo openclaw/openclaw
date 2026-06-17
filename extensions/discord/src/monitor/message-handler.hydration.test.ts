@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { MessageReferenceType, MessageType } from "discord-api-types/v10";
+import { describe, expect, it, vi } from "vitest";
 import { Message } from "../internal/discord.js";
 import {
   createFakeRestClient,
@@ -6,13 +7,65 @@ import {
 } from "../internal/test-builders.test-support.js";
 import { hydrateDiscordMessageIfNeeded } from "./message-handler.hydration.js";
 
+const TEST_TIMESTAMP = "2026-01-01T00:00:00.000Z";
+
+function createMessagePayload(overrides = {}) {
+  return {
+    id: "m1",
+    channel_id: "c1",
+    content: "what did this mean?",
+    attachments: [],
+    embeds: [],
+    mentions: [],
+    mention_roles: [],
+    mention_everyone: false,
+    timestamp: TEST_TIMESTAMP,
+    edited_timestamp: null,
+    author: {
+      id: "u1",
+      username: "alice",
+      global_name: null,
+      discriminator: "0",
+      avatar: null,
+    },
+    type: MessageType.Default,
+    tts: false,
+    pinned: false,
+    flags: 0,
+    ...overrides,
+  };
+}
+
+function createDefaultReplyPayload(overrides = {}) {
+  return createMessagePayload({
+    message_reference: {
+      type: MessageReferenceType.Default,
+      message_id: "m0",
+      channel_id: "c1",
+    },
+    type: MessageType.Reply,
+    ...overrides,
+  });
+}
+
+function createReferencedMessagePayload(content: string) {
+  return createMessagePayload({
+    id: "m0",
+    content,
+    author: {
+      id: "u2",
+      username: "bob",
+      discriminator: "0",
+      avatar: null,
+    },
+  });
+}
+
 describe("hydrateDiscordMessageIfNeeded", () => {
   it("hydrates partial internal messages without assigning over getters", async () => {
     const client = createInternalTestClient();
     const rest = createFakeRestClient([
-      {
-        id: "m1",
-        channel_id: "c1",
+      createMessagePayload({
         content: "hello <@u2>",
         attachments: [{ id: "a1", filename: "note.txt" }],
         embeds: [{ title: "Embed" }],
@@ -27,39 +80,17 @@ describe("hydrateDiscordMessageIfNeeded", () => {
         ],
         mention_roles: ["role1"],
         mention_everyone: false,
-        timestamp: new Date().toISOString(),
-        author: {
-          id: "u1",
-          username: "alice",
-          discriminator: "0",
-          avatar: null,
-        },
-        referenced_message: {
+        referenced_message: createMessagePayload({
           id: "m0",
-          channel_id: "c1",
           content: "earlier",
-          attachments: [],
-          embeds: [],
-          mentions: [],
-          mention_roles: [],
-          mention_everyone: false,
-          timestamp: new Date().toISOString(),
           author: {
             id: "u3",
             username: "carol",
             discriminator: "0",
             avatar: null,
           },
-          type: 0,
-          tts: false,
-          pinned: false,
-          flags: 0,
-        },
-        type: 0,
-        tts: false,
-        pinned: false,
-        flags: 0,
-      },
+        }),
+      }),
     ]);
     const message = new Message<true>(client, { id: "m1", channelId: "c1" }) as unknown as Message;
 
@@ -76,5 +107,78 @@ describe("hydrateDiscordMessageIfNeeded", () => {
     expect(hydrated.mentionedUsers[0]?.globalName).toBe("Bob Builder");
     expect(hydrated.mentionedRoles).toEqual(["role1"]);
     expect(hydrated.referencedMessage?.content).toBe("earlier");
+  });
+
+  it("hydrates reply references when Discord omits referenced_message", async () => {
+    const client = createInternalTestClient();
+    const rest = createFakeRestClient([
+      createDefaultReplyPayload({
+        referenced_message: createReferencedMessagePayload("the replied-to message"),
+      }),
+    ]);
+    const message = new Message(client, createDefaultReplyPayload());
+
+    const hydrated = await hydrateDiscordMessageIfNeeded({
+      client: { rest },
+      message,
+      messageChannelId: "c1",
+    });
+
+    expect(rest.calls).toHaveLength(1);
+    expect(hydrated.referencedMessage?.content).toBe("the replied-to message");
+  });
+
+  it("keeps the original reply message when hydration fetch fails", async () => {
+    const client = createInternalTestClient();
+    const rest = createFakeRestClient();
+    const get = vi.fn(async () => {
+      throw Object.assign(new Error("Missing Access"), { status: 403 });
+    });
+    rest.get = get;
+    const message = new Message(client, createDefaultReplyPayload());
+
+    const hydrated = await hydrateDiscordMessageIfNeeded({
+      client: { rest },
+      message,
+      messageChannelId: "c1",
+    });
+
+    expect(get).toHaveBeenCalledOnce();
+    expect(hydrated).toBe(message);
+    expect(hydrated.referencedMessage).toBeNull();
+  });
+
+  it("does not hydrate known-deleted or forwarded references", async () => {
+    const client = createInternalTestClient();
+    const rest = createFakeRestClient();
+    const deletedReply = new Message(
+      client,
+      createDefaultReplyPayload({
+        referenced_message: null,
+      }),
+    );
+    const forwardedMessage = new Message(
+      client,
+      createMessagePayload({
+        message_reference: {
+          type: MessageReferenceType.Forward,
+          message_id: "m0",
+          channel_id: "c1",
+        },
+      }),
+    );
+
+    await hydrateDiscordMessageIfNeeded({
+      client: { rest },
+      message: deletedReply,
+      messageChannelId: "c1",
+    });
+    await hydrateDiscordMessageIfNeeded({
+      client: { rest },
+      message: forwardedMessage,
+      messageChannelId: "c1",
+    });
+
+    expect(rest.calls).toHaveLength(0);
   });
 });
