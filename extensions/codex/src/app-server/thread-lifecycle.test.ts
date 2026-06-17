@@ -5,6 +5,7 @@ import path from "node:path";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "../../prompt-overlay.js";
+import { fingerprintCodexAppServerNetworkProxyConfigPatch } from "./config.js";
 import { createCodexTestModel } from "./test-support.js";
 import {
   buildDeveloperInstructions,
@@ -83,6 +84,39 @@ function createAppServerOptions() {
     approvalPolicy: "on-request",
     approvalsReviewer: "user",
     sandbox: "workspace-write",
+  };
+}
+
+function createNetworkProxyAppServerOptions() {
+  const configPatch = {
+    "features.network_proxy.enabled": true,
+    default_permissions: "mock-proxy",
+    permissions: {
+      "mock-proxy": {
+        filesystem: {
+          ":minimal": "read",
+          ":workspace_roots": {
+            ".": "write",
+          },
+        },
+        network: {
+          enabled: true,
+          domains: {
+            "api.openai.com": "allow",
+          },
+          allow_upstream_proxy: true,
+          proxy_url: "http://127.0.0.1:3128",
+        },
+      },
+    },
+  } as const;
+  return {
+    ...createAppServerOptions(),
+    networkProxy: {
+      profileName: "mock-proxy",
+      configFingerprint: fingerprintCodexAppServerNetworkProxyConfigPatch(configPatch),
+      configPatch,
+    },
   } as const;
 }
 
@@ -423,6 +457,55 @@ describe("Codex app-server native code mode config", () => {
     });
   });
 
+  it("selects the Codex network-proxy permissions profile in thread/start config", () => {
+    const request = buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
+      cwd: "/repo",
+      dynamicTools: [],
+      appServer: createNetworkProxyAppServerOptions() as never,
+      developerInstructions: "test instructions",
+    });
+
+    expect(request).not.toHaveProperty("permissions");
+    expect(request).not.toHaveProperty("sandbox");
+    expect(request.config).toMatchObject({
+      "features.network_proxy.enabled": true,
+      default_permissions: "mock-proxy",
+      permissions: {
+        "mock-proxy": {
+          network: {
+            enabled: true,
+            allow_upstream_proxy: true,
+            proxy_url: "http://127.0.0.1:3128",
+          },
+        },
+      },
+    });
+  });
+
+  it("selects the Codex network-proxy permissions profile in thread/resume config", () => {
+    const request = buildThreadResumeParams(createAttemptParams({ provider: "openai" }), {
+      threadId: "thread-1",
+      appServer: createNetworkProxyAppServerOptions() as never,
+      developerInstructions: "test instructions",
+    });
+
+    expect(request).not.toHaveProperty("permissions");
+    expect(request).not.toHaveProperty("sandbox");
+    expect(request.config).toMatchObject({
+      "features.network_proxy.enabled": true,
+      default_permissions: "mock-proxy",
+      permissions: {
+        "mock-proxy": {
+          network: {
+            domains: {
+              "api.openai.com": "allow",
+            },
+          },
+        },
+      },
+    });
+  });
+
   it("disables Codex tool-search features for nano models", () => {
     const request = buildThreadStartParams(
       createAttemptParams({ provider: "openai", modelId: "gpt-5.4-nano" }),
@@ -638,6 +721,35 @@ describe("Codex app-server turn input image sanitizing", () => {
       networkAccess: true,
       excludeTmpdirEnvVar: false,
       excludeSlashTmp: false,
+    });
+  });
+
+  it("uses Codex permissions for network-proxy turn/start requests", () => {
+    const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
+      threadId: "thread-1",
+      cwd: "/repo",
+      appServer: createNetworkProxyAppServerOptions() as never,
+    });
+
+    expect(request).not.toHaveProperty("permissions");
+    expect(request).not.toHaveProperty("sandboxPolicy");
+  });
+
+  it("keeps explicit sandbox policy overrides ahead of network-proxy turn permissions", () => {
+    const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
+      threadId: "thread-1",
+      cwd: "/repo",
+      appServer: createNetworkProxyAppServerOptions() as never,
+      sandboxPolicy: {
+        type: "externalSandbox",
+        networkAccess: "enabled",
+      },
+    });
+
+    expect(request).not.toHaveProperty("permissions");
+    expect(request.sandboxPolicy).toEqual({
+      type: "externalSandbox",
+      networkAccess: "enabled",
     });
   });
 
