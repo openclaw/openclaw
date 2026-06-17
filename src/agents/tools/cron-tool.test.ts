@@ -710,8 +710,8 @@ describe("cron tool", () => {
     ],
     ["remove", { action: "remove", jobId: "job-1" }, { id: "job-1" }],
     ["remove", { action: "remove", id: "job-2" }, { id: "job-2" }],
-    ["run", { action: "run", jobId: "job-1" }, { id: "job-1", mode: "force" }],
-    ["run", { action: "run", id: "job-2" }, { id: "job-2", mode: "force" }],
+    ["run", { action: "run", jobId: "job-1" }, { id: "job-1", mode: "due" }],
+    ["run", { action: "run", id: "job-2" }, { id: "job-2", mode: "due" }],
     ["get", { action: "get", jobId: "job-1" }, { id: "job-1" }],
     ["get", { action: "get", id: "job-2" }, { id: "job-2" }],
     ["runs", { action: "runs", jobId: "job-1" }, { id: "job-1" }],
@@ -732,7 +732,7 @@ describe("cron tool", () => {
       id: "job-legacy",
     });
 
-    expect(readGatewayCall().params).toEqual({ id: "job-primary", mode: "force" });
+    expect(readGatewayCall().params).toEqual({ id: "job-primary", mode: "due" });
   });
 
   it("supports due-only run mode", async () => {
