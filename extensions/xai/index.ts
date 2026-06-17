@@ -262,6 +262,12 @@ export default defineSingleProviderPluginEntry({
     resolveThinkingProfile,
     isModernModelRef: ({ modelId }) => isModernXaiModel(modelId),
     classifyFailoverReason: ({ errorMessage }) => classifyXaiFailoverReason(errorMessage),
+    buildUnknownModelHint: ({ modelId }) => {
+      if (modelId.toLowerCase().includes("multi-agent")) {
+        return "xAI multi-agent models are not supported on the standard xAI API-key provider path. See https://docs.openclaw.ai/providers/xai for supported models.";
+      }
+      return undefined;
+    },
   },
   register(api) {
     api.registerWebSearchProvider(createXaiWebSearchProvider());
